@@ -1,14 +1,18 @@
-/* Product composition of the approved BoardUI settings rows and PW-03 Affect
- * ModelPicker. The original controls, focus behavior and source motion remain
- * in forms-library/library; this file assigns their roles on phone screens. */
+/* Product layouts around the approved BoardUI fields, disclosures, tabs and
+ * Affect ModelPicker. Their control skins and source motion stay in the
+ * library modules; these rules establish reading and management hierarchy. */
 .pw-secondary-refactor {
-  background: var(--pw-canvas, #fff);
+  background: var(--pw-surface, #fff);
+  color: var(--pw-ink, #202020);
+  font-family: var(--pw-font, sans-serif);
 }
 .pw-secondary-refactor .pw-secondary-header {
   height: auto;
   min-height: 64px;
-  padding-block: 8px;
-  gap: 10px;
+  padding: 8px 12px;
+  gap: 8px;
+  background: var(--pw-surface, #fff);
+  border-color: var(--pw-edge, #e5e5e5);
 }
 .pw-secondary-refactor .pw-secondary-header h1 {
   white-space: normal;
@@ -16,125 +20,156 @@
   font-size: 18px;
   line-height: 26px;
 }
-.pw-secondary-refactor .pw-secondary-scroll {
-  padding-top: 16px;
-  scroll-padding-block: 16px 32px;
-}
-.pw-secondary-refactor button {
-  min-height: 48px;
-  touch-action: manipulation;
-}
 .pw-secondary-refactor .pw-secondary-header > button {
   flex: none;
   min-width: 48px;
 }
-.pw-secondary-refactor .pw-section-heading {
-  margin-bottom: 12px;
+.pw-secondary-refactor .pw-secondary-scroll {
+  padding: 12px 20px max(32px, env(safe-area-inset-bottom));
+  scroll-padding-block: 12px 40px;
 }
-.pw-secondary-refactor .pw-section-heading p {
-  font-size: 13px;
-  line-height: 21px;
+.pw-secondary-refactor .pw-secondary-page { max-width: 760px; }
+.pw-secondary.pw-secondary-refactor button,
+.pw-secondary.pw-secondary-refactor [role="tab"] {
+  min-height: 48px;
+  touch-action: manipulation;
+}
+.pw-secondary.pw-secondary-refactor [role="tab"] { min-width: 72px; }
+.pw-secondary.pw-secondary-refactor [data-input-size] > [role="group"] {
+  min-height: 48px;
+  padding-block: 0;
+}
+.pw-secondary.pw-secondary-refactor [data-input-size] input { min-height: 48px; }
+.pw-secondary-refactor .pw-radio-option,
+.pw-secondary-refactor label:has(input[type="checkbox"]) { min-height: 48px; }
+.pw-secondary-refactor .pw-stretch-hit { width: 48px; height: 48px; min-width: 48px; }
+.pw-secondary-refactor :is(.pw-model-list, .pw-model-catalog)[hidden] { display: none; }
+.pw-secondary-refactor .pw-reading-lead {
+  margin: 12px 0 20px;
   color: var(--pw-copy, #555);
+  font-size: 13px;
+  line-height: 22px;
 }
-.pw-secondary-refactor .pw-domain-link {
-  min-height: 64px;
-}
+.pw-secondary-refactor .pw-domain-link { min-height: 64px; }
 .pw-secondary-refactor .pw-domain-link small {
   color: var(--pw-copy, #555);
   line-height: 20px;
 }
-.pw-secondary-refactor .pw-settings-index {
-  padding: 0;
-  margin-block: 24px 0;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  background: transparent;
+.pw-secondary-refactor .pw-settings-frequent {
+  margin: 14px 0 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--pw-edge, #e5e5e5);
 }
-.pw-secondary-refactor .pw-settings-index > .pw-section-heading {
-  margin-bottom: 6px;
+.pw-secondary-refactor .pw-settings-frequent .pw-domain-link { padding-inline: 0; }
+.pw-secondary-refactor .pw-settings-groups { margin-top: 8px; }
+.pw-secondary-refactor .pw-settings-group > h2 > button {
+  min-height: 76px;
+  padding-block: 15px;
 }
-.pw-secondary-refactor .pw-settings-index > .pw-section-heading h2 {
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--pw-muted, #737373);
+.pw-secondary-refactor .pw-settings-group .pw-settings-links {
+  padding-left: 18px;
+  margin-left: 9px;
+  border-left: 1px solid var(--pw-edge, #e5e5e5);
 }
-.pw-secondary-refactor .pw-settings-frequent .pw-settings-links {
-  border: 1px solid var(--pw-edge, #e5e5e5);
-  border-radius: 14px;
-  padding-inline: 12px;
-  background: var(--pw-surface, #fff);
-  box-shadow: var(--pw-shadow-input, 0 1px 2px #0000000a);
-}
+.pw-secondary-refactor .pw-settings-results,
+.pw-secondary-refactor .pw-settings-group-page { padding-top: 12px; }
+
+/* The model directory is the working view. Connection management is a separate
+ * layer, so no credential fields or connection action wall surround the picker. */
 .pw-secondary-refactor .pw-model-list {
   background: transparent;
   border-radius: 0;
   overflow: visible;
 }
-.pw-secondary-refactor .pw-model-list > .pw-model-current {
-  padding: 20px;
-  border: 1px solid var(--pw-edge, #e5e5e5) !important;
-  border-radius: 16px;
-  box-shadow: 0 2px 6px #00000005, 0 8px 24px #00000005;
-}
-.pw-secondary-refactor .pw-model-current-heading {
+.pw-secondary-refactor .pw-model-current {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px 16px;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0 16px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--pw-edge, #e5e5e5) !important;
 }
-.pw-secondary-refactor .pw-model-origin {
-  color: var(--pw-copy, #555);
-  font-size: 12px;
-  line-height: 18px;
+.pw-secondary-refactor .pw-model-current > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: 8px;
+  row-gap: 2px;
+  min-width: 0;
 }
-.pw-secondary-refactor .pw-model-current h2 {
-  font-size: 22px;
-  line-height: 30px;
-  margin-top: 12px;
-  letter-spacing: -.02em;
-}
-.pw-secondary-refactor .pw-model-current .pw-form-actions {
-  margin-top: 18px;
-}
-.pw-secondary-refactor .pw-model-list > .pw-model-connections {
-  padding: 0;
-  margin-top: 28px;
-  background: transparent;
-}
-.pw-secondary-refactor .pw-model-connections .pw-section-heading h2 {
-  font-size: 13px;
-  line-height: 20px;
+.pw-secondary-refactor .pw-model-eyebrow {
   color: var(--pw-muted, #737373);
+  font-size: 12px;
+  line-height: 20px;
 }
-.pw-secondary-refactor .pw-model-catalog {
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-.pw-secondary-refactor .pw-model-catalog .cb-model2-menu {
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-}
-.pw-secondary-refactor .pw-model-catalog .cb-model2-options {
-  max-height: none;
-  overflow: visible;
-}
-.pw-secondary-refactor .pw-model-catalog .cb-model2-name {
+.pw-secondary-refactor .pw-model-current strong {
+  min-width: 0;
+  color: var(--pw-ink, #202020);
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
-.pw-secondary-refactor .pw-model-catalog .cb-search input {
-  min-height: 48px;
-  font-size: 16px;
+.pw-secondary-refactor .pw-model-origin {
+  grid-column: 2;
+  color: var(--pw-copy, #555);
+  font-size: 12px;
+  line-height: 20px;
 }
+.pw-secondary-refactor .pw-model-current > button { flex: none; padding-inline: 8px; }
+.pw-secondary-refactor .pw-model-catalog { padding: 0; margin: 0; }
+.pw-secondary-refactor .pw-model-catalog .cb-model2-options { max-height: none; overflow: visible; }
+.pw-secondary-refactor .pw-model-catalog .cb-model2-name { overflow-wrap: anywhere; }
+.pw-secondary-refactor .pw-model-catalog .cb-search input { min-height: 48px; font-size: 16px; }
+.pw-secondary-refactor .pw-model-directory-empty { padding: 28px 0 36px; }
+.pw-secondary-refactor .pw-model-directory-empty h2 {
+  font-size: 21px;
+  line-height: 30px;
+  letter-spacing: -.02em;
+}
+.pw-secondary-refactor .pw-model-directory-empty p {
+  max-width: 34em;
+  margin: 10px 0 0;
+  color: var(--pw-copy, #555);
+  font-size: 14px;
+  line-height: 24px;
+}
+.pw-secondary-refactor .pw-account-model-entry { margin-bottom: 20px; }
+.pw-secondary-refactor .pw-model-connections { padding: 0; }
+.pw-secondary-refactor .pw-connection-add { padding-top: 24px; }
+.pw-secondary-refactor .pw-model-connection-detail,
+.pw-secondary-refactor .pw-model-detail { padding: 12px 0 24px; }
+.pw-secondary-refactor .pw-model-editor { max-width: 620px; margin-inline: auto; padding: 0; }
 .pw-secondary-refactor .pw-model-editor-context {
+  margin: 0 0 24px;
   color: var(--pw-copy, #555);
   font-size: 13px;
-  line-height: 21px;
+  line-height: 22px;
+}
+.pw-secondary-refactor .pw-model-form-section { margin: 0 0 28px; }
+.pw-secondary-refactor .pw-model-form-section > h2 {
+  margin-bottom: 12px;
+  color: var(--pw-muted, #737373);
+  font-size: 12px;
+  line-height: 20px;
+  font-weight: 500;
+}
+.pw-secondary-refactor .pw-model-editor .pw-form-grid { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+.pw-secondary-refactor .pw-model-advanced {
+  margin-top: 4px;
+  border-top: 1px solid var(--pw-edge, #e5e5e5);
+  border-bottom: 1px solid var(--pw-edge, #e5e5e5);
+}
+.pw-secondary-refactor .pw-model-save-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  justify-content: flex-end;
+  padding-block: 12px;
+  margin: 20px 0 0;
+  background: var(--pw-surface, #fff);
+  border-top: 1px solid var(--pw-edge, #e5e5e5);
 }
 .pw-model-switch-summary h3 {
   font-size: 20px;
@@ -142,53 +177,129 @@
   margin: 4px 0 16px;
   overflow-wrap: anywhere;
 }
-.pw-secondary-refactor .pw-source-record header {
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 12px;
+
+/* Shared work is selected as an object, then read at full width. Administrative
+ * actions stay in that object's detail instead of repeating on every row. */
+.pw-secondary-refactor .pw-team-tabs { gap: 20px; }
+.pw-secondary-refactor .pw-object-list { padding-top: 12px; }
+.pw-secondary-refactor .pw-object-row {
+  display: flex;
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 84px;
+  padding: 18px 0;
+  gap: 12px;
+  border-radius: 0;
+  border-bottom: 1px solid var(--pw-edge, #e5e5e5);
+  text-align: start;
 }
-.pw-secondary-refactor .pw-source-record h3 {
-  flex-basis: 65%;
+.pw-secondary-refactor .pw-object-row > span { flex: 1; min-width: 0; justify-content: flex-start; }
+.pw-secondary-refactor .pw-object-row-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  gap: 4px;
 }
-.pw-secondary-refactor .pw-source-record > p {
+.pw-secondary-refactor .pw-object-row-title {
+  color: var(--pw-ink, #202020);
+  font-size: 16px;
+  line-height: 25px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.pw-secondary-refactor .pw-object-row-copy small {
+  color: var(--pw-muted, #737373);
+  font-size: 12px;
+  line-height: 19px;
+  font-weight: 400;
+}
+.pw-secondary-refactor .pw-object-row-summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin-top: 3px;
   color: var(--pw-copy, #555);
   font-size: 14px;
   line-height: 23px;
+  font-weight: 400;
 }
-.pw-secondary-refactor .pw-source-record .pw-form-actions {
-  margin-top: 10px;
-  gap: 8px;
-}
-.pw-secondary-refactor .pw-source-record .pw-record-context {
+.pw-secondary-refactor .pw-team-reading { padding: 8px 0 24px; }
+.pw-secondary-refactor .pw-detail-location {
+  margin: 0 0 12px;
   color: var(--pw-muted, #737373);
   font-size: 12px;
   line-height: 20px;
-  margin-top: 8px;
 }
-.pw-secondary-refactor .pw-record-context:empty {
-  display: none;
+.pw-secondary-refactor .pw-team-reading h2 {
+  font-size: 24px;
+  line-height: 34px;
+  letter-spacing: -.02em;
+  overflow-wrap: anywhere;
 }
-.pw-secondary-refactor .pw-record-version {
-  display: block;
-  color: var(--pw-muted, #737373);
-  font-size: 12px;
-  line-height: 20px;
-  margin-top: 6px;
+.pw-secondary-refactor .pw-detail-status {
+  margin: 8px 0 0;
+  color: var(--pw-copy, #555);
+  font-size: 13px;
+  line-height: 21px;
 }
-.pw-secondary-refactor .pw-collection-group + .pw-collection-group {
-  margin-top: 28px;
-  padding-top: 20px;
+.pw-secondary-refactor .pw-reading-copy {
+  margin: 20px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--pw-ink, #202020);
+  font-size: 15px;
+  line-height: 27px;
+}
+.pw-secondary-refactor .pw-team-members { margin-top: 28px; }
+.pw-secondary-refactor .pw-team-members h3 { color: var(--pw-copy, #555); font-size: 13px; line-height: 21px; }
+.pw-secondary-refactor .pw-team-members ul { margin: 8px 0 0; padding: 0; list-style: none; }
+.pw-secondary-refactor .pw-team-members li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 20px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--pw-edge, #e5e5e5);
+  font-size: 15px;
+  line-height: 24px;
+}
+.pw-secondary-refactor .pw-team-members small { color: var(--pw-muted, #737373); font-size: 12px; }
+.pw-secondary-refactor .pw-object-decisions,
+.pw-secondary-refactor .pw-record-decisions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 18px;
+  margin-top: 20px;
   border-top: 1px solid var(--pw-edge, #e5e5e5);
 }
-.pw-secondary-refactor .pw-collection-group > h3 {
+.pw-secondary-refactor .pw-memory-category { margin-top: 28px; }
+.pw-secondary-refactor .pw-memory-category > h2 {
+  margin: 0 0 4px;
   color: var(--pw-muted, #737373);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
   font-weight: 500;
 }
+.pw-secondary-refactor .pw-memory-record > h3 > button { padding-block: 16px; min-height: 68px; }
+.pw-secondary-refactor .pw-memory-record > h3 > button > span { overflow-wrap: anywhere; }
+.pw-secondary-refactor .pw-memory-source {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.pw-secondary-refactor .pw-memory-reading { padding: 0 0 10px; }
+.pw-secondary-refactor .pw-memory-reading .pw-reading-copy { margin-top: 8px; }
+.pw-secondary-refactor .pw-source-record header { flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.pw-secondary-refactor .pw-source-record h3 { flex-basis: 65%; }
+@media (min-width: 720px) {
+  .pw-secondary-refactor .pw-secondary-scroll { padding-inline: 32px; }
+  .pw-secondary-refactor .pw-secondary-header { padding-inline: 24px; }
+}
 @media (max-width: 480px) {
-  .pw-secondary-refactor .pw-secondary-header { padding-inline: 8px; }
-  .pw-secondary-refactor .pw-secondary-scroll { padding-inline: 20px; }
   .pw-secondary-refactor .pw-form-actions .pw-press-label { white-space: normal; }
 }
 @media (prefers-reduced-motion: reduce) {

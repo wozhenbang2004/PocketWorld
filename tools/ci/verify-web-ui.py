@@ -33,20 +33,30 @@ CAPTURE_SYSTEM_IMAGE = "system-images;android-35;google_apis;x86_64"
 WEB_ERROR_PATTERN = r"PocketWebUi.*(?:resource-error|console-error|renderer-exit|render-process-gone|main-frame-error)"
 SCENE_LABELS = {
     "workroom": ("全部工作", "工作输入"),
-    "work-menu": ("关闭全部工作", "设置与连接"),
-    "settings": ("设置", "模型与连接", "设备与执行"),
-    "model-purpose": ("模型与连接", "ChatGPT 账号"),
-    "model-list": ("当前模型", "管理连接", "添加 API 连接"),
-    "model-editor": ("返回模型与连接", "接口协议", "接口地址", "模型名称", "API 密钥", "高级设置"),
-    "model-advanced": ("返回模型与连接", "高级设置", "每次回复的输出上限"),
+    "workroom-ime": ("全部工作", "工作输入"),
+    "work-menu": ("关闭全部工作", "最近工作", "设置与连接"),
+    "tasks": ("每件事，都有去处", "暂时没有这类任务"),
+    "projects": ("选择项目继续", "从顶部打开项目，或新建一份项目。"),
+    "settings": ("设置", "当前模型", "手机能力", "模型与连接"),
+    "model-purpose": ("设置", "选择模型", "ChatGPT 账号"),
+    "model-list": ("模型与连接", "当前模型", "管理连接"),
+    "model-connections": ("管理连接", "返回模型与连接", "添加 API 连接"),
+    "model-editor": ("返回连接管理", "接口协议", "接口地址", "模型名称", "API 密钥", "高级设置"),
+    "model-advanced": ("返回连接管理", "高级设置", "每次回复的输出上限"),
 }
+PRIMARY_TABS = ("工作", "任务", "项目")
 CAPTURE_SCENES = (
     ("01-workroom.png", "entry.xml", "workroom"),
     ("02-all-work.png", "all-work.xml", "work-menu"),
     ("03-workroom-return.png", "return.xml", "workroom"),
+    ("11-tasks.png", "tasks-root.xml", "tasks"),
+    ("12-projects.png", "projects-root.xml", "projects"),
+    ("13-workroom-ime.png", "workroom-ime.xml", "workroom-ime"),
+    ("14-workroom-ime-return.png", "workroom-ime-return.xml", "workroom"),
     ("05-settings.png", "settings.xml", "settings"),
     ("06-model-purpose.png", "model-purpose.xml", "model-purpose"),
-    ("07-model-connections.png", "model-list.xml", "model-list"),
+    ("07-model-directory.png", "model-list.xml", "model-list"),
+    ("15-connection-management.png", "model-connections.xml", "model-connections"),
     ("08-model-editor.png", "model-editor.xml", "model-editor"),
     ("09-model-advanced.png", "model-advanced.xml", "model-advanced"),
     ("10-workroom-final.png", "workroom-final.xml", "workroom"),
@@ -247,6 +257,75 @@ def accessible_values(node):
     return [" ".join(node.get(key, "").split()) for key in ("text", "content-desc") if node.get(key)]
 
 
+def accessible_controls(root, label, match="exact"):
+    """Locate the real clickable ancestor; headings with the same text are not controls."""
+    parents = {child: parent for parent in root.iter() for child in parent}
+    unique = {}
+    for node in root.iter("node"):
+        if not any(value == label or match == "prefix" and value.startswith(label)
+                   for value in accessible_values(node)):
+            continue
+        control = node
+        while control is not None and control.get("clickable") != "true":
+            control = parents.get(control)
+        if control is None or control.get("package") != APP_ID or control.get("enabled") != "true" or control.get("class") == "android.webkit.WebView":
+            continue
+        try:
+            bounds = parse_bounds(control.get("bounds"))
+        except ValueError:
+            continue
+        unique[bounds] = control
+    return unique
+
+
+def navigation_identity(root, visible):
+    controls = {label: accessible_controls(root, label) for label in PRIMARY_TABS}
+    if not visible:
+        assert not any(controls.values()), "The primary navigation remained accessible while the real IME was visible"
+        return {"visible": False, "labels": list(PRIMARY_TABS)}
+    assert all(len(items) == 1 for items in controls.values()), "Expected exactly three distinct clickable primary tabs: 工作 / 任务 / 项目"
+    bounds = [next(iter(items)) for items in controls.values()]
+    assert all(bounds[i][2] <= bounds[i + 1][0] for i in range(2)), "Primary tabs are not arranged in their actual horizontal navigation row"
+    assert max(item[1] for item in bounds) < min(item[3] for item in bounds), "Primary tabs do not share one visible row"
+    parents = {child: parent for parent in root.iter() for child in parent}
+    viewport = next(iter(controls[PRIMARY_TABS[0]].values()))
+    while viewport is not None and viewport.get("class") != "android.webkit.WebView":
+        viewport = parents.get(viewport)
+    assert viewport is not None and viewport.get("package") == APP_ID, "Primary navigation is not in the actual app WebView"
+    left, top, right, bottom = parse_bounds(viewport.get("bounds"))
+    for item in bounds:
+        assert left <= item[0] < item[2] <= right and top <= item[1] < item[3] <= bottom, "Primary navigation is clipped outside the observed WebView"
+        assert item[1] >= (top + bottom) // 2, "Expected the primary tabs in the lower navigation area"
+    return {"visible": True, "labels": list(PRIMARY_TABS), "bounds": [list(item) for item in bounds],
+            "viewport_bounds": [left, top, right, bottom], "method": "actual clickable app controls and observed WebView bounds"}
+
+
+def ime_identity(xml, dump, visible):
+    """Use Android's current IME service state, never focus or viewport-height heuristics."""
+    root = ET.parse(xml).getroot()
+    assert root.tag == "hierarchy", "Not an Android accessibility hierarchy"
+    fields = {}
+    # AOSP InputMethodManagerService / ImeVisibilityStateComputer and
+    # InputMethodService.dump expose the requested and actual decor visibility.
+    # Missing or conflicting observed fields fail instead of guessing another signal.
+    for field in ("mInputShown", "mDecorViewVisible"):
+        matches = re.findall(r"\b" + field + r"=(true|false)\b", dump)
+        assert len(matches) == 1, "Expected one current Android IME field: " + field
+        fields[field] = matches[0] == "true"
+        assert fields[field] == visible, "Android IME visibility has not reached the expected state: " + field
+    if visible:
+        focused = [node for node in root.iter("node") if node.get("package") == APP_ID
+                   and node.get("class") == "android.widget.EditText" and node.get("focused") == "true"]
+        assert len(focused) == 1 and focused[0].get("password") != "true", "Expected the actual non-secret work input to retain focus under the IME"
+        parse_bounds(focused[0].get("bounds"))
+    return {"visible": visible, "android_fields": fields, "navigation": navigation_identity(root, not visible),
+            "method": "Android input_method current service visibility plus actual application accessibility hierarchy"}
+
+
+def verify_ime(args):
+    write_json(args.out, ime_identity(args.xml, pathlib.Path(args.dump).read_text(errors="replace"), args.visible == "true"))
+
+
 def scene_identity(xml, scene):
     root = ET.parse(xml).getroot()
     assert root.tag == "hierarchy", "Not an Android accessibility hierarchy"
@@ -262,12 +341,12 @@ def scene_identity(xml, scene):
         visible_nodes.append(node)
         values.extend(accessible_values(node))
     required = SCENE_LABELS[scene]
-    if scene == "workroom":
+    if scene in ("workroom", "workroom-ime"):
         assert not any("正在恢复当前工作" in value for value in values), "The fresh workroom is still restoring; not a ready product scene"
     for label in required:
         assert any(label in value for value in values), "Expected " + scene + " accessibility content: " + label
     search_input = None
-    if scene == "settings":
+    if scene in ("settings", "model-purpose"):
         assert any(node.get("class") == "android.widget.TextView" and "设置" in accessible_values(node)
                    for node in visible_nodes), "Expected the actual settings title"
         inputs = [node for node in visible_nodes if node.get("class") == "android.widget.EditText"]
@@ -290,7 +369,7 @@ def scene_identity(xml, scene):
                         "observed_content_description": node.get("content-desc", ""), "observed_hint": node.get("hint"),
                         "accessible_name_verified_by_xml": False,
                         "limitation": "Stock uiautomator XML does not establish the WebView input hint or DOM accessible name; no native name is inferred. The browser capture checks the real searchbox accessible name separately."}
-    if scene in ("model-list", "model-purpose", "settings"):
+    if scene in ("model-list", "model-connections", "model-purpose", "settings"):
         model_fields = {"接口地址", "模型名称", "API 密钥", "每次回复的输出上限"}
         for node in visible_nodes:
             editable = node.get("editable") == "true" or node.get("class") in (
@@ -300,9 +379,20 @@ def scene_identity(xml, scene):
             assert not (node.get("password") == "true" or model_input), "The model editor leaked into its parent directory"
     if scene == "model-editor":
         assert not any("每次回复的输出上限" in value for value in values), "Advanced settings were expanded before selection"
+        secret_inputs = [node for node in visible_nodes if node.get("class") == "android.widget.EditText" and node.get("password") == "true"]
+        assert len(secret_inputs) == 1, "Expected one actual password field in the API editor"
+        assert secret_inputs[0].get("enabled") == "true" and secret_inputs[0].get("focusable") == "true", "The API password field is not an actual usable input"
     if scene == "model-purpose":
-        assert not any("当前模型" in value for value in values), "Expected the source settings group, not the model list"
+        assert not accessible_controls(root, "管理连接"), "Expected the expanded settings purpose group, not the model directory"
+    if scene == "work-menu":
+        assert not any(accessible_controls(root, label) for label in ("继续当前工作", "全部任务", "项目与文件")), "The history drawer duplicated the primary navigation"
+    if scene == "settings":
+        assert not accessible_controls(root, "全部设置"), "The settings root still requires an intermediate all-settings card"
     identity = {"scene": scene, "method": "actual Android accessibility hierarchy", "required_labels": required}
+    if scene in ("workroom", "tasks", "projects"):
+        identity["primary_navigation"] = navigation_identity(root, True)
+    elif scene == "workroom-ime":
+        identity["primary_navigation"] = navigation_identity(root, False)
     if search_input is not None:
         identity["search_input"] = search_input
     return identity
@@ -315,29 +405,12 @@ def verify_scene(args):
 
 def target(args):
     root = ET.parse(args.xml).getroot()
-    parents = {child: parent for parent in root.iter() for child in parent}
     unique = {}
     selected_label = args.label
     for label in (args.label, args.fallback_label):
         if not label:
             continue
-        candidates = []
-        for node in root.iter("node"):
-            values = accessible_values(node)
-            if not any(value == label or args.match == "prefix" and value.startswith(label) for value in values):
-                continue
-            button = node
-            while button is not None and button.attrib.get("clickable") != "true":
-                button = parents.get(button)
-            if button is None or button.attrib.get("enabled") != "true" or button.attrib.get("class") == "android.webkit.WebView":
-                continue
-            try:
-                bounds = parse_bounds(button.attrib.get("bounds"))
-            except ValueError:
-                continue
-            if button.attrib.get("package") == APP_ID:
-                candidates.append((button, bounds))
-        unique = {bounds: node for node, bounds in candidates}
+        unique = accessible_controls(root, label, args.match)
         if unique:
             selected_label = label
             break
@@ -345,6 +418,7 @@ def target(args):
     bounds, node = next(iter(unique.items()))
     point = [(bounds[0] + bounds[2]) // 2, (bounds[1] + bounds[3]) // 2]
     write_json(args.out, {"label": selected_label, "match": args.match, "bounds": bounds, "point": point,
+                          "source_xml": pathlib.Path(args.xml).name,
                           "method": "Android accessibility bounds", "class": node.attrib.get("class")})
     print(*point)
 
@@ -516,20 +590,42 @@ def verify_capture(args):
         dimensions.add((width, height))
         files.append({"file": name, "bytes": path.stat().st_size, "sha256": sha256(path), "width": width, "height": height})
     assert len(dimensions) == 1, "Viewport changed during the captured journey"
-    for xml, scene in (("model-list-return.xml", "model-list"), ("model-purpose-return.xml", "model-purpose"), ("settings-return.xml", "settings")):
+    for xml, scene in (("primary-work-return.xml", "workroom"), ("model-connections-return.xml", "model-connections"),
+                       ("model-list-return.xml", "model-list"), ("settings-return.xml", "model-purpose")):
         scenes.append({"xml": xml, **scene_identity(root / xml, scene)})
+    ime_checks = []
+    for name, visible in (("workroom-ime", True), ("workroom-ime-return", False)):
+        observed = ime_identity(root / (name + ".xml"), (root / (name + "-input-method.txt")).read_text(errors="replace"), visible)
+        assert json.loads((root / (name + "-ime.json")).read_text()) == observed, "IME receipt differs from actual Android visibility and navigation evidence"
+        ime_checks.append({"xml": name + ".xml", "input_method_dump": name + "-input-method.txt", **observed})
     target_labels = {
-        "open-work-target.json": ("全部工作",), "close-work-target.json": ("关闭全部工作",),
-        "return-work-target.json": ("全部工作",), "settings-work-target.json": ("全部工作",),
-        "settings-target.json": ("设置与连接",), "models-group-target.json": ("模型与连接",),
-        "models-list-target.json": ("模型与连接",),
-        "model-editor-target.json": ("编辑当前 API 连接", "添加 API 连接"),
-        "model-advanced-target.json": ("高级设置",),
+        "open-work-target.json": ("entry.xml", ("全部工作",)),
+        "close-work-target.json": ("all-work.xml", ("关闭全部工作",)),
+        "return-work-target.json": ("return.xml", ("全部工作",)),
+        "primary-tasks-target.json": ("return.xml", ("任务",)),
+        "primary-projects-target.json": ("tasks-root.xml", ("项目",)),
+        "primary-work-target.json": ("projects-root.xml", ("工作",)),
+        "work-input-target.json": ("primary-work-return.xml", ("工作输入",)),
+        "settings-work-target.json": ("workroom-ime-return.xml", ("全部工作",)),
+        "settings-target.json": ("settings-menu.xml", ("设置与连接",)),
+        "models-group-target.json": ("settings.xml", ("模型与连接",)),
+        "models-list-target.json": ("model-purpose.xml", ("选择模型",)),
+        "model-connections-target.json": ("model-list.xml", ("管理连接",)),
+        "model-editor-target.json": ("model-connections.xml", ("编辑当前 API 连接", "添加 API 连接")),
+        "model-advanced-target.json": ("model-editor.xml", ("高级设置",)),
     }
-    for name, labels in target_labels.items():
+    for name, (xml, labels) in target_labels.items():
         target_data = json.loads((root / name).read_text())
         assert target_data["method"] == "Android accessibility bounds", "Unverified coordinate fallback"
         assert target_data["label"] in labels, "Unexpected business action in the navigation journey"
+        assert target_data["source_xml"] == xml, "Action target is not tied to its actual preceding scene"
+        assert target_data["match"] in ("exact", "prefix"), "Unexpected accessibility target matching mode"
+        controls = accessible_controls(ET.parse(root / xml).getroot(), target_data["label"], target_data["match"])
+        assert len(controls) == 1, "Action target is no longer unique in its captured scene"
+        bounds, node = next(iter(controls.items()))
+        assert target_data["bounds"] == list(bounds) and target_data["class"] == node.get("class"), "Action coordinates differ from the observed accessibility node"
+        assert target_data["point"] == [(bounds[0] + bounds[2]) // 2, (bounds[1] + bounds[3]) // 2], "Action point differs from the observed control center"
+    assert {path.name for path in root.glob("*-target.json")} == set(target_labels), "The capture includes an unreviewed action target; no model save/test or task execution is permitted"
     mp4 = root / "04-interaction.mp4"
     content = mp4.read_bytes()
     assert len(content) > 10000 and content[4:8] == b"ftyp", "Screen recording is missing or invalid"
@@ -539,15 +635,15 @@ def verify_capture(args):
         "commit": current_commit(), "run_id": os.environ.get("GITHUB_RUN_ID"),
         "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"), "application_id": APP_ID,
         "source": "formal Android WebView application with transplanted library UI",
-        "device": device, "apk": identity, "captures": files, "scenes": scenes,
+        "device": device, "apk": identity, "captures": files, "scenes": scenes, "ime_checks": ime_checks,
         "non_mock": True,
-        "interaction_scope": "fresh app, work menu, settings group, actual model list, unsaved editor, advanced settings, Android back through original layers; no task or model save/test",
+        "interaction_scope": "fresh app; persistent work/tasks/projects navigation; actual work-input IME hides navigation and Android Back restores it; history drawer; settings purpose accordion; actual model directory; connection management; unsaved API editor/password field; advanced settings; Android Back through management, directory, settings and work; no model save/test or task execution action invoked",
         "limitations": ["Android 15/API35 emulator capture, not a physical phone",
                        "Minimum supported Android 11/API30 runtime compatibility remains unverified by this capture", "No model or phone-execution task initiated by the capture script",
                        "Does not prove every business journey, touch performance, accessibility or visual acceptance"],
         "status": "capture integrity and startup checks passed; inspect PNG/MP4 for design acceptance",
     })
-    print("Verified nine device PNGs, actual navigation scenes and one app screen recording")
+    print("Verified", len(CAPTURE_SCENES), "device PNGs, primary navigation, actual IME visibility/return, model purpose layers and one app screen recording")
 
 
 def main():
@@ -573,6 +669,12 @@ def main():
     scene.add_argument("--scene", choices=tuple(SCENE_LABELS), required=True)
     scene.add_argument("--out", required=True)
     scene.set_defaults(function=verify_scene)
+    ime = commands.add_parser("ime")
+    ime.add_argument("--xml", required=True)
+    ime.add_argument("--dump", required=True)
+    ime.add_argument("--visible", choices=("true", "false"), required=True)
+    ime.add_argument("--out", required=True)
+    ime.set_defaults(function=verify_ime)
     provider = commands.add_parser("provider")
     provider.add_argument("--dump", required=True)
     provider.add_argument("--out", required=True)

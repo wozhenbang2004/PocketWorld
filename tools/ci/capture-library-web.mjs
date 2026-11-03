@@ -29,7 +29,7 @@ const manifest = {
     'Only components actually mounted and checked below are evidenced; no claim of all 42 groups.',
     'Browser pointer gestures are scripted; Android touch/IME/accessibility remain separate checks.',
   ],
-  fixture: { version: 3, bridgeProtocol: 'v1/id/documentId/state/revision', persistence: 'none', externalCalls: 'blocked',
+  fixture: { version: 4, bridgeProtocol: 'v1/id/documentId/state/revision', persistence: 'none', externalCalls: 'blocked',
     taskSchema: 'PocketWebState UiTask + TaskStore bounded history pages; no synthetic agent tree or future steps',
     content: 'Representative project-material review, synthetic content; no file or task is changed' },
   startedAt: new Date().toISOString(), viewports: [], captures: [], errors: [], requests: [], assets: [],
@@ -123,6 +123,32 @@ function populatedSnapshot() {
     },
   };
   Object.assign(value.state, {
+    features: { teams: {
+      teams: [{ id: 'fixture-team-a', name: '项目伙伴', revision: 1, members: [
+        { id: 'fixture-member-a', name: '资料整理', role: '研究' },
+        { id: 'fixture-member-b', name: '内容检查', role: '复核' },
+      ] }],
+      runs: [{ id: 'fixture-team-run-a', goal: '整理发布前资料', status: 'paused',
+        summary: '测试记录：已列出待核对资料，尚未提交任何修改。', revision: 1,
+        generation: 1, taskId: 'visual-fixture-task-review' }],
+    } },
+    // MemoryModule.snapshot contains counts only. The read-only list response
+    // belongs to moduleResults, with MemoryBook's actual layer/source fields.
+    moduleResults: { 'memory.list': { records: [
+      { id: 'fixture-memory-a', ownerId: 'fixture-owner', spaceId: 'fixture-space',
+        layer: 'preference', text: '会议记录按日期保留。\n需求草稿先保留独立文件，核对后再决定是否合并。',
+        source: '测试对话：项目资料整理', revision: 1, core: false, active: true,
+        sourceIds: [], sourceRefs: [], createdAt: at, updatedAt: at + 2000 },
+      { id: 'fixture-memory-b', ownerId: 'fixture-owner', spaceId: 'fixture-space',
+        layer: 'fact', text: '当前项目的资料包含需求、会议和参考资料。',
+        source: '测试记录：项目资料', revision: 1, core: false, active: true,
+        sourceIds: [], sourceRefs: [], createdAt: at, updatedAt: at + 1000 },
+    ] } },
+    modelConnections: { models: [
+      { modelId: 'gpt-4.1-mini', name: 'gpt-4.1-mini', catalogFresh: true,
+        facts: { CONTEXT_WINDOW: { known: true, value: { tokens: 128000 } }, IMAGE_INPUT: { known: true, value: true } } },
+      { modelId: 'fixture-reasoning-model', name: 'Fixture reasoning model', catalogFresh: true, facts: {} },
+    ] },
     modelName: 'gpt-4.1-mini', baseUrl: 'https://api.example.invalid/v1', hasApiKey: true,
     conversations: [{ id: 'visual-fixture-conversation', title: '项目资料整理', updatedAt: at + 90_000 }],
     conversationId: 'visual-fixture-conversation',
@@ -222,7 +248,7 @@ function installFixture(options) {
     'tasks.refresh', 'tasks.open', 'tasks.close', 'tasks.review', 'tasks.confirm', 'tasks.scope',
     'projects.refresh', 'projects.select', 'projects.open', 'projects.close', 'projects.create',
     'projects.newFile', 'connections.enter', 'connections.leave',
-    'settings.saveModel', 'settings.testModel',
+    'settings.saveModel', 'settings.testModel', 'memory.list',
   ];
   const badge = () => {
     if (!document.body) return;
@@ -291,6 +317,9 @@ function installFixture(options) {
             case 'tasks.close': focusedTaskId = null; break;
             case 'connections.leave': break;
             case 'connections.enter': snapshot.view.section = args.section; break;
+            case 'memory.list':
+              if (snapshot.view.section !== 'memory') throw new Error('Memory read outside its original section');
+              publish(); break;
             case 'tasks.review': {
               const task = snapshot.state.tasks.find(row => row.id === args.id);
               if (!task) throw new Error('Unknown fixture review target');
@@ -392,7 +421,7 @@ async function verifyBundle() {
   manifest.sourceFiles = [];
   for (const file of ['web-ui/src/App.tsx', 'web-ui/src/Secondary.tsx', 'web-ui/src/app.css', 'web-ui/src/secondary.css',
     'web-ui/src/product.css', 'web-ui/src/task-presentation.ts', 'web-ui/src/bridge.ts',
-    'web-ui/src/TaskOutcome.tsx', 'web-ui/src/task-outcome.ts', 'web-ui/src/secondary-refactor.css',
+    'web-ui/src/TaskOutcome.tsx', 'web-ui/src/task-outcome.ts', 'web-ui/src/secondary-refactor.css', 'web-ui/src/workspace-refactor.css', 'web-ui/src/main.tsx', 'web-ui/src/shell-library/DecisionInbox.tsx',
     'app/src/main/kotlin/dev/pocketengine/ui/web/PocketWebState.kt']) {
     manifest.sourceFiles.push({ path: file, sha256: sha256(await fs.readFile(path.join(repo, file))) });
   }
@@ -535,6 +564,16 @@ async function capture(page, viewport, name, selectors, options = {}) {
 }
 
 async function navigate(page, name) {
+  const roots = { '继续当前工作': '工作', '全部任务': '任务', '项目与文件': '项目' };
+  if (roots[name]) {
+    const nav = page.getByRole('tablist', { name: '主导航', exact: true });
+    const target = nav.getByRole('tab', { name: roots[name], exact: true });
+    await reachable(target, { minSize: 48 }); await target.click();
+    assert.equal(await target.getAttribute('aria-selected'), 'true', 'Root navigation lost its selected page');
+    const controlled = await target.getAttribute('aria-controls');
+    assert(controlled && await page.locator(`[id="${controlled}"][role="tabpanel"]`).count() === 1, 'Root navigation has no actual controlled page');
+    await settle(page); return;
+  }
   const open = page.getByRole('button', { name: '全部工作', exact: true });
   await reachable(open, { minSize: 44 }); await open.click();
   const content = page.locator('.pw-work-drawer');
@@ -578,7 +617,7 @@ async function runViewport(origin, viewport) {
   try {
     await page.goto(origin + '/', { waitUntil: 'networkidle' });
     await page.waitForFunction(() => document.documentElement.dataset.pocketUi === 'ready');
-    await page.getByRole('heading', { name: '连接模型，开始工作', exact: true }).waitFor();
+    await page.getByRole('heading', { name: '先连接你的模型。', exact: true }).waitFor();
     const fonts = await page.evaluate(async () => {
       const faces = await Promise.all(['Inter', 'Noto Sans SC', 'JetBrains Mono'].map(family => document.fonts.load(`400 16px "${family}"`, '工作PocketWorld')));
       await document.fonts.ready;
@@ -621,6 +660,15 @@ async function runViewport(origin, viewport) {
       kind: 'explicit-isolated-fixture-injection', connectedOrSavedByUi: false };
     record.checks.push({ stage: 'fixture-scenario-change', ...fixtureTransition });
     await editor.fill(emptyDraft);
+    // Explicit host configuration exercises layout only; the Android gate uses real IME insets.
+    await page.evaluate(() => window.PocketWeb.hostConfiguration({ keyboardVisible: true }));
+    await page.getByRole('tablist', { name: '主导航', exact: true }).waitFor({ state: 'hidden' });
+    await reachable(editor, { minSize: 30 }); await reachable(send, { minSize: 44 });
+    await page.evaluate(() => window.PocketWeb.hostConfiguration({ fontScale: 1 }));
+    assert.equal(await page.locator('html').getAttribute('data-pocket-keyboard'), 'true', 'Unrelated host config cleared IME state');
+    await page.evaluate(() => window.PocketWeb.hostConfiguration({ keyboardVisible: false }));
+    await page.getByRole('tablist', { name: '主导航', exact: true }).waitFor({ state: 'visible' });
+    record.checks.push({ stage: 'host-keyboard-layout', nativeSource: false, hiddenWhileReportedVisible: true, restored: true, inputAndSendReachable: true });
     const geometry = await reachable(send, { minSize: 44 });
     await page.mouse.move(geometry.x + geometry.width / 2, geometry.y + geometry.height / 2);
     await page.mouse.down();
@@ -650,12 +698,16 @@ async function runViewport(origin, viewport) {
     await allWork.click();
     await capture(page, viewport, '04-work-menu', ['.pw-work-drawer', '.pw-work-sidebar']);
     const workMenu = page.locator('.pw-work-drawer');
-    await workMenu.getByRole('link', { name: '全部任务', exact: true }).click();
+    assert.equal(await workMenu.getByRole('link', { name: /^(继续当前工作|全部任务|项目与文件)$/ }).count(), 0, 'The work drawer duplicates persistent root navigation');
+    await workMenu.getByRole('button', { name: '关闭全部工作', exact: true }).click();
     await workMenu.waitFor({ state: 'hidden' });
-    await settle(page);
-    const taskRow = page.locator('.pw-task-row').filter({ hasText: '整理项目资料' });
+    await navigate(page, '全部任务');
+    const taskDecision = page.locator('.pw-priority-decisions [data-task-id="visual-fixture-task-review"]');
+    const taskRow = taskDecision.getByRole('button', { name: '查看任务', exact: true });
+    await reachable(taskDecision.getByRole('button', { name: '核对结果', exact: true }), { minSize: 48 });
+    assert.equal(await page.locator('.pw-priority-decisions .ui-dic__row').count(), 2, 'Tasks waiting on the user are not grouped together');
     const rowBefore = await reachable(taskRow, { minSize: 44 });
-    await capture(page, viewport, '05-task-list', ['.pw-task-list .pw-task-row', '[role="tablist"]']);
+    await capture(page, viewport, '05-task-list', ['.pw-priority-decisions', '.pw-workspace [role="tablist"][aria-label="主导航"]']);
     await taskRow.click();
     const drawer = page.locator('.pw-task-drawer');
     const primary = page.getByTestId('task-primary-action');
@@ -666,7 +718,15 @@ async function runViewport(origin, viewport) {
       const document = outcome.locator('.pw-outcome-document');
       assert((await document.textContent()).includes('需求草稿保留为独立文件'), 'The task outcome omitted the original evidence body');
       assert.equal(await document.locator('textarea,input').count(), 0, 'Task evidence was replaced by a feedback form');
-      assert((await outcome.locator('.pw-outcome-conversation').textContent()).includes('需求草稿不会合并'), 'The linked answer was lost');
+      const related = outcome.getByRole('button', { name: /^对话中的相关答复/ });
+      assert.equal(await related.getAttribute('aria-expanded'), 'false', 'Related conversation competes with the result by default');
+      await related.click();
+      await outcome.locator('.pw-outcome-conversation').waitFor({ state: 'visible' });
+      assert((await outcome.locator('.pw-outcome-conversation').textContent()).includes('需求草稿不会合并'), 'Disclosure lost the original linked answer');
+      await related.click();
+      await outcome.locator('.pw-outcome-conversation').waitFor({ state: 'hidden' });
+      await drawer.locator('.pw-task-body').evaluate(node => { node.scrollTop = 0; });
+      await settle(page);
       if (hasFeedback) {
         const precedesFeedback = await drawer.getByRole('textbox', { name: '本次结果反馈', exact: true }).evaluate(field => {
           const result = field.closest('.pw-task-review')?.querySelector('.pw-task-outcome');
@@ -792,6 +852,14 @@ async function runViewport(origin, viewport) {
     const rowAfter = await reachable(taskRow, { minSize: 44 });
     assert(Math.abs(rowAfter.y - rowBefore.y) <= 2, 'Closing a task lost its task-list position');
     record.checks.push({ stage: 'return-to-list', rowBefore, rowAfter });
+    await taskDecision.getByRole('button', { name: '核对结果', exact: true }).click();
+    await page.locator('.pw-task-drawer[data-task-layer="review"]').waitFor({ state: 'visible' });
+    await feedback.waitFor({ state: 'visible' });
+    await assertReadableResult(true);
+    await drawer.getByRole('button', { name: '返回原工作', exact: true }).click();
+    await drawer.waitFor({ state: 'hidden' });
+    await reachable(taskRow, { minSize: 48 });
+    record.checks.push({ stage: 'task-priority-direct-review', directEntry: true, returnToOriginalList: true, submitted: false });
 
     await navigate(page, '继续当前工作');
     const returnedReading = await reading();
@@ -864,14 +932,27 @@ async function runViewport(origin, viewport) {
     record.checks.push({ stage: 'settings-search-dom-semantics', role: 'searchbox', accessibleName: '搜索设置',
       geometry: await reachable(settingsSearch),
       limitation: 'Chromium DOM accessible-name evidence; native uiautomator hint export and TalkBack behavior are separate evidence' });
+    await capture(page, viewport, '17-settings', ['.pw-secondary-header', '.pw-settings-frequent', '.pw-settings-groups']);
     await page.getByRole('button', { name: /^模型与连接/ }).click();
-    await page.locator('.pw-secondary-header').getByRole('heading', { name: '模型与连接', exact: true }).waitFor();
-    await page.getByRole('button', { name: /^模型与连接/ }).click();
-    await page.locator('.pw-model-list').waitFor({ state: 'visible' });
-    assert.equal(await page.getByLabel('API 密钥', { exact: true }).count(), 0, 'Model list renders the secret editor before selection');
-    assert.equal(await page.locator('.pw-model-list').getByText('gpt-4.1-mini', { exact: true }).count(), 1, 'The model list repeats its current model');
-    assert(!(await page.locator('.pw-model-list').textContent()).includes('https://api.example.invalid/v1'), 'The connection directory repeats the editor endpoint');
-    await capture(page, viewport, '12-model-connections', ['.pw-model-list', '.pw-model-current', '.pw-model-connections']);
+    const sourceModelEntry = page.getByRole('button', { name: '选择模型', exact: true });
+    await sourceModelEntry.click();
+    const modelCatalogue = page.locator('.pw-model-list[data-model-layer="list"]');
+    const connectionDirectory = page.locator('.pw-model-connections[data-model-layer="connections"]');
+    await modelCatalogue.waitFor({ state: 'visible' });
+    assert.equal(await page.getByLabel('API 密钥', { exact: true }).count(), 0, 'Model catalogue renders the secret editor before selection');
+    assert.equal(await modelCatalogue.locator('.pw-model-current strong').filter({ hasText: /^gpt-4\.1-mini$/ }).count(), 1, 'The current model identity is not singular');
+    assert(!(await modelCatalogue.textContent()).includes('https://api.example.invalid/v1'), 'The model catalogue is mixed with connection endpoint editing');
+    const modelSearch = page.getByRole('textbox', { name: '搜索模型', exact: true });
+    const modelOptions = page.getByRole('listbox', { name: '选择工作模型', exact: true });
+    await modelSearch.fill('reasoning');
+    assert.equal(await modelOptions.getByRole('option').count(), 1, 'Model search did not narrow the actual catalogue');
+    await modelSearch.fill('');
+    await capture(page, viewport, '12-model-catalogue', ['.pw-model-list', '.pw-model-current', '.cb-model2-options']);
+    await modelSearch.fill('gpt');
+    await page.getByRole('button', { name: '管理连接', exact: true }).click();
+    await connectionDirectory.waitFor({ state: 'visible' });
+    await modelCatalogue.waitFor({ state: 'hidden' });
+    await capture(page, viewport, '18-connection-management', ['.pw-model-connections[data-model-layer="connections"]']);
     const editConnection = page.getByRole('button', { name: '编辑当前 API 连接', exact: true });
     await reachable(editConnection, { minSize: 44 }); await editConnection.click();
     const url = page.getByRole('textbox', { name: '接口地址', exact: true });
@@ -896,12 +977,10 @@ async function runViewport(origin, viewport) {
     await toggle.click();
     await capture(page, viewport, '14-model-advanced', ['.pw-model-advanced', '[role="switch"]']);
     const modelDraftScreenshots = await toggle.getAttribute('aria-checked');
-    // Ordinary values survive subpage returns. The secret remains local to one
-    // editor mount and no save/test is sent to the fixture host.
     await key.fill('fixture-unsaved-secret');
-    const backModels = page.getByRole('button', { name: '返回模型与连接', exact: true });
-    await backModels.scrollIntoViewIfNeeded(); await backModels.click();
-    await page.locator('.pw-model-list').waitFor({ state: 'visible' });
+    const backConnections = page.getByRole('button', { name: '返回连接管理', exact: true });
+    await backConnections.scrollIntoViewIfNeeded(); await backConnections.click();
+    await connectionDirectory.waitFor({ state: 'visible' });
     await editConnection.click();
     assert.equal(await key.inputValue(), '', 'Cancelled credential draft survived a fresh editor');
     assert.equal(await url.inputValue(), modelDraftUrl, 'Page back lost the ordinary model URL draft');
@@ -917,24 +996,26 @@ async function runViewport(origin, viewport) {
       await settle(page, 80);
     };
     await nativeBack();
-    await page.locator('.pw-model-list').waitFor({ state: 'visible' });
+    await connectionDirectory.waitFor({ state: 'visible' });
     await editConnection.click();
     assert.equal(await key.inputValue(), '', 'Host back kept a secret in the next editor mount');
     assert.equal(await url.inputValue(), modelDraftUrl, 'Host back lost the ordinary model URL draft');
     await advanced.click();
     assert.equal(await outputLimit.inputValue(), '8192', 'Host back lost the advanced output draft');
     await nativeBack();
-    await page.locator('.pw-model-list').waitFor({ state: 'visible' });
+    await connectionDirectory.waitFor({ state: 'visible' });
     await nativeBack();
-    assert.equal(await page.locator('.pw-model-list').count(), 0, 'Host back remained in the model list instead of its source directory');
-    await page.locator('.pw-secondary-header').getByRole('heading', { name: '模型与连接', exact: true }).waitFor();
-    const sourceModelEntry = page.getByRole('button', { name: /^模型与连接/ });
+    await modelCatalogue.waitFor({ state: 'visible' });
+    assert.equal(await modelSearch.inputValue(), 'gpt', 'Returning from connection management lost the model search');
+    await nativeBack();
+    await settingsSearch.waitFor({ state: 'visible' });
     await sourceModelEntry.waitFor({ state: 'visible' });
     record.checks.push({ stage: 'model-draft-and-host-back', urlDraftPreserved: true, providerDraftPreserved: true,
-      advancedOutput: '8192', screenshotDraftPreserved: true, secretClearedOnPageBack: true, secretClearedOnHostBack: true,
-      hostBack: 'window.PocketWeb.handleBack: edit → list → original settings directory', saved: false });
+      advancedOutput: '8192', screenshotDraftPreserved: true, modelSearchPreserved: true,
+      secretClearedOnPageBack: true, secretClearedOnHostBack: true,
+      hostBack: 'window.PocketWeb.handleBack: edit → connections → catalogue → original settings root', saved: false });
     await sourceModelEntry.click();
-    await page.locator('.pw-model-list').waitFor({ state: 'visible' });
+    await modelCatalogue.waitFor({ state: 'visible' });
     await page.keyboard.press('Tab');
     await page.locator('.pw-secondary-header').getByRole('button', { name: '返回', exact: true }).focus();
     const focus = await page.locator('.pw-secondary-header').getByRole('button', { name: '返回', exact: true }).evaluate(node => {
@@ -945,22 +1026,59 @@ async function runViewport(origin, viewport) {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await settle(page);
     assert(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches));
-    await reachable(editConnection, { minSize: 44 });
+    await reachable(page.getByRole('button', { name: '管理连接', exact: true }), { minSize: 44 });
     record.checks.push({ stage: 'keyboard-and-reduced-motion', focus, reducedMotion: true,
       limitation: 'Browser preference and reachable focus only; Android accessibility and subjective motion review remain separate' });
-    await nativeBack();
-    await sourceModelEntry.waitFor({ state: 'visible' });
     await nativeBack();
     await settingsSearch.waitFor({ state: 'visible' });
     const directModelEntry = page.getByRole('button', { name: /^当前模型/ });
     await reachable(directModelEntry, { minSize: 44 }); await directModelEntry.click();
-    await page.locator('.pw-model-list').waitFor({ state: 'visible' });
+    await modelCatalogue.waitFor({ state: 'visible' });
     await nativeBack();
     await settingsSearch.waitFor({ state: 'visible' });
-    assert.equal(await page.locator('.pw-model-list').count(), 0, 'The direct model entry did not return to its original settings root');
+    assert.equal(await modelCatalogue.isVisible(), false, 'The direct model entry did not return to its original settings root');
     await page.locator('.pw-secondary-header').getByRole('heading', { name: '设置', exact: true }).waitFor();
     record.checks.push({ stage: 'settings-model-shortcut', directEntry: true, returnToOriginalRoot: true,
-      hostBack: 'window.PocketWeb.handleBack: root → model list → root', saved: false });
+      hostBack: 'window.PocketWeb.handleBack: root → catalogue → root', saved: false });
+    await nativeBack();
+    await page.getByRole('tablist', { name: '主导航', exact: true }).waitFor();
+    stage = `${viewport.width}:team-workspace`;
+    await navigate(page, '团队协作');
+    const teamList = page.locator('.pw-team-workspace[data-team-layer="list"]');
+    const teamDetail = page.locator('.pw-team-workspace[data-team-layer="detail"]');
+    await teamList.waitFor({ state: 'visible' });
+    const teamSearch = page.getByRole('textbox', { name: '搜索共同工作', exact: true });
+    await teamSearch.fill('发布');
+    const sharedWork = teamList.locator('.pw-object-row').filter({ hasText: '整理发布前资料' });
+    await reachable(sharedWork, { minSize: 48 });
+    await capture(page, viewport, '19-team-workspace', ['.pw-team-tabs', '.pw-object-list']);
+    await sharedWork.click();
+    await teamDetail.waitFor({ state: 'visible' });
+    await teamDetail.getByText('测试记录：已列出待核对资料，尚未提交任何修改。', { exact: true }).waitFor();
+    await nativeBack();
+    assert.equal(await teamSearch.inputValue(), '发布', 'Team detail lost its original search');
+    await teamList.getByRole('tab', { name: '团队', exact: true }).click();
+    await teamList.locator('.pw-object-row').filter({ hasText: '项目伙伴' }).click();
+    await teamDetail.getByRole('region', { name: '当前已读取成员' }).waitFor();
+    await capture(page, viewport, '20-team-detail', ['.pw-team-reading', '.pw-team-members']);
+    await nativeBack();
+    assert.equal(await teamList.getByRole('tab', { name: '团队', exact: true }).getAttribute('aria-selected'), 'true', 'Team detail lost its list category');
+    await nativeBack();
+    stage = `${viewport.width}:memory-reading`;
+    await navigate(page, '记忆');
+    await page.locator('.pw-memory-record').first().waitFor();
+    assert.equal(await page.locator('.pw-memory-record').count(), 2, 'Native-shaped memory list is not projected');
+    const memoryDisclosure = page.getByRole('button', { name: /会议记录按日期保留/ });
+    assert.equal(await memoryDisclosure.getAttribute('aria-expanded'), 'false', 'Memory should start as a readable list');
+    await memoryDisclosure.click();
+    await page.locator('.pw-memory-reading').getByText('需求草稿先保留独立文件，核对后再决定是否合并。', { exact: false }).waitFor();
+    await page.locator('.pw-memory-reading').getByText('测试对话：项目资料整理', { exact: true }).waitFor();
+    await capture(page, viewport, '21-memory-reading', ['.pw-memory-category', '.pw-memory-reading']);
+    await page.getByRole('button', { name: '刷新当前状态', exact: true }).click();
+    await page.locator('.pw-memory-record').first().waitFor();
+    record.checks.push({ stage: 'team-and-memory-reading', teamSearchRestored: true, teamCategoryRestored: true,
+      memorySource: "moduleResults['memory.list'].records; layer/source/ownerId/spaceId", memoryRecords: 2,
+      synthetic: true, mutations: false });
     record.fixture = await page.evaluate(() => window.__POCKET_VISUAL_FIXTURE__.summary());
     assert(record.fixture.requests.some(request => request.action === 'app.ready'), 'No actual bridge handshake');
     assert(!record.fixture.requests.some(request => ['composer.send', 'tasks.confirm', 'tasks.scope', 'settings.saveModel', 'settings.testModel', 'projects.create', 'projects.newFile'].includes(request.action)), 'A business action was dispatched');

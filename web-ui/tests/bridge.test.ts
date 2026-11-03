@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 test('document-fenced requests keep native acceptance separate from durable input state', async () => {
   const sent: any[] = [];
+  const rootDataset: Record<string, string> = {};
+  (globalThis as any).document = { documentElement: { dataset: rootDataset } };
   (globalThis as any).window = {
     PocketNative: { postMessage: (raw: string) => { sent.push(JSON.parse(raw)); } },
   };
@@ -58,7 +60,14 @@ test('document-fenced requests keep native acceptance separate from durable inpu
   assert.equal(bridge.getState().composer?.epoch, 8);
   unsubscribe();
   const before = changes;
-  receiver.hostConfiguration({ fontScale: 1.2 });
+  receiver.hostConfiguration({ fontScale: 1.2, keyboardVisible: true });
+  assert.equal(rootDataset.pocketKeyboard, 'true');
+  assert.equal(bridge.getState().host?.keyboardVisible, true);
+  receiver.hostConfiguration({ fontScale: 1.3 });
+  assert.equal(rootDataset.pocketKeyboard, 'true', 'an unrelated host update must not dismiss the IME signal');
+  receiver.hostConfiguration({ keyboardVisible: false });
+  assert.equal(rootDataset.pocketKeyboard, 'false');
+  assert.equal(bridge.getState().host?.keyboardVisible, false);
   assert.equal(changes, before, 'closed subscribers do not keep receiving UI updates');
 
   let returns = 0;

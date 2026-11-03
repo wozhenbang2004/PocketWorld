@@ -26,6 +26,8 @@ export type Decision = {
 
 export type DecisionInboxProps = {
   decisions: Decision[];
+  /** Product section title; omit to retain the source's count heading. */
+  heading?: string;
   /** Called with the decision and the chosen answer */
   onDecide?: (decision: Decision, answer: "primary" | "secondary") => void | Promise<void>;
   className?: string;
@@ -33,7 +35,7 @@ export type DecisionInboxProps = {
 
 type State = { open: boolean; pending?: boolean; error?: string };
 
-export function DecisionInbox({ decisions, onDecide, className }: DecisionInboxProps) {
+export function DecisionInbox({ decisions, onDecide, className, heading }: DecisionInboxProps) {
   const [state, setState] = useState<Record<string, State>>(() =>
     Object.fromEntries(decisions.map((d) => [d.id, { open: !d.collapsed }])),
   );
@@ -63,7 +65,7 @@ export function DecisionInbox({ decisions, onDecide, className }: DecisionInboxP
             <>
               <AlertIcon />
               <span>
-                {count} 项待你处理
+                {heading || `${count} 项待你处理`}
               </span>
             </>
           ) : (
@@ -79,7 +81,7 @@ export function DecisionInbox({ decisions, onDecide, className }: DecisionInboxP
             const s = state[d.id] ?? { open: !d.collapsed };
             const answered = d.resolved;
             return (
-              <div key={d.id} className="ui-dic__row" data-gone={undefined}>
+              <div key={d.id} className="ui-dic__row" data-task-id={d.id} data-gone={undefined}>
                 <div className="ui-dic__row-inner">
                   <div className="ui-dic__item" data-open={s.open || undefined} data-answered={answered ? true : undefined}>
                     {s.open ? (

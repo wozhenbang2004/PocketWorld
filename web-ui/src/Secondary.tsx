@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   RiAddLine, RiArrowLeftLine, RiArrowRightSLine, RiCheckLine, RiComputerLine, RiDatabase2Line,
   RiFileList3Line, RiKey2Line, RiLink, RiMicLine, RiPuzzle2Line, RiRefreshLine,
@@ -6,6 +6,7 @@ import {
 } from '@remixicon/react';
 import { bridge } from './bridge';
 import { ModelPicker, PressButton } from './library';
+import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import {
   Accordion, AccordionItem, Button, CheckboxField, HostFileUpload,
   IconButton, RadioOptions, SearchField, SelectField, SettingsDialog,
@@ -195,15 +196,17 @@ function ModelSettings({ state, supported, run, adding = false, draft, onDraftCh
     finally { if (alive.current) setRequesting(false); }
   };
   return <div data-model-layer="edit" className="pw-model-edit-layer">
-    <Card className="pw-model-editor">
+    <section className="pw-model-editor" aria-label={adding ? '新连接配置' : '当前连接配置'}>
       <p className="pw-model-editor-context">{adding ? '保存后使用这项 API 配置。已有工作保留原连接。' : '修改当前 API 配置；测试连接不会切换模型。'}</p>
-      <div className="pw-form-grid">
+      <section className="pw-model-form-section" aria-label="连接身份"><h2>连接</h2><div className="pw-form-grid">
         <SelectField label="接口协议" options={providers} value={form.provider} onChange={value => change('provider', value)} />
         <TextField label="接口地址" type="url" value={form.url} onChange={value => change('url', value)} placeholder="https://…" autoComplete="off" />
         <TextField label="模型名称" value={form.model} onChange={value => change('model', value)} autoComplete="off" />
+      </div></section>
+      <section className="pw-model-form-section" aria-label="连接凭据"><h2>凭据</h2><div className="pw-form-grid">
         <TextField label="API 密钥" type="password" value={form.apiKey} onChange={value => change('apiKey', value)} autoComplete="new-password"
           hint={!adding && state.hasApiKey && form.provider === state.modelProvider && form.url.trim() === state.baseUrl ? '此协议与地址已有密钥；留空继续使用原密钥。' : '更换协议或地址时，请填写对应的密钥。'} />
-      </div>
+      </div></section>
       <Accordion className="pw-model-advanced" variant="divided">
         <AccordionItem id="advanced" title="高级设置" description="输出上限、图像输入与截图">
           <div className="pw-form-grid">
@@ -215,11 +218,11 @@ function ModelSettings({ state, supported, run, adding = false, draft, onDraftCh
         </AccordionItem>
       </Accordion>
       {formError && <p role="alert" className="pw-field-error">{formError}</p>}
-      <div className="pw-form-actions"><Button variant="secondary" disabled={requesting || state.modelTesting || !supported('settings.testModel')} onClick={() => request('settings.testModel')}>{state.modelTesting ? '测试中…' : '测试连接'}</Button><PressButton compact disabled={requesting || state.modelSaving || !supported('settings.saveModel')} onClick={() => request('settings.saveModel')}>{state.modelSaving ? '保存中…' : state.modelRoute === 'account' ? '保存并切换 API 模型' : '保存连接'}</PressButton></div>
       {state.modelTest && <p className="pw-receipt-copy" aria-live="polite">{text(state.modelTest)}</p>}
       {state.modelTestTaskId && <CapabilityAction action="tasks.open" supported={supported} run={run} args={{ id: state.modelTestTaskId }}>查看本次实际调用与用量</CapabilityAction>}
       {state.error && <p className="pw-field-error" role="alert">{text(state.error)}</p>}
-    </Card>
+      <div className="pw-form-actions pw-model-save-actions"><Button variant="secondary" disabled={requesting || state.modelTesting || !supported('settings.testModel')} onClick={() => request('settings.testModel')}>{state.modelTesting ? '测试中…' : '测试连接'}</Button><PressButton compact disabled={requesting || state.modelSaving || !supported('settings.saveModel')} onClick={() => request('settings.saveModel')}>{state.modelSaving ? '保存中…' : state.modelRoute === 'account' ? '保存并切换 API 模型' : '保存连接'}</PressButton></div>
+    </section>
     <SettingsDialog isOpen={Boolean(transport)} title="允许这个明文模型连接？" onClose={clearSecret}>
       {transport && <><Facts items={[[ '协议', providers.find(x => x.id === transport.provider)?.label ], ['地址', transport.displayTarget || transport.url]]} />
         <p>凭据、文本和按需截图将通过 HTTP 明文传输。更换协议或地址后需要重新核对。</p>
@@ -229,7 +232,7 @@ function ModelSettings({ state, supported, run, adding = false, draft, onDraftCh
   </div>;
 }
 
-type ModelView = { kind: 'list' | 'edit' | 'add' | 'connection' | 'catalog' | 'model'; id?: string };
+type ModelView = { kind: 'list' | 'connections' | 'edit' | 'add' | 'connection' | 'catalog' | 'model'; id?: string };
 const modelConnectionRows = (data: Data) => Array.isArray(data.connections)
   ? list(data.connections) : list(object(data.connections).connections);
 const MODEL_PROVIDERS: Record<string, string> = { openai_chat: 'OpenAI Chat', openai_responses: 'OpenAI Responses', anthropic: 'Anthropic', gemini: 'Gemini' };
@@ -243,16 +246,8 @@ function ModelConnections({ state, data, supported, run, navigate, open }: { sta
   const selectedConnection = profiles.find(row => recordId(row) === selectedId);
   const account = state.modelRoute === 'account';
   const configured = Boolean(text(state.baseUrl).trim());
-  return <div className="pw-model-list" data-model-layer="list">
-    <Card className="pw-model-current">
-      <div className="pw-model-current-heading"><span className="pw-model-eyebrow">当前模型</span><span className="pw-model-origin">{account ? 'ChatGPT 账号' : MODEL_PROVIDERS[text(state.modelProvider)] || text(state.modelProvider, 'API 连接')}</span></div>
-      <h2>{text(state.modelName, '选择一个模型，开始工作')}</h2>
-      <div className="pw-form-actions">
-        <Button variant="secondary" trailingIcon={RiArrowRightSLine} onClick={() => account ? navigate('accounts') : open({ kind: 'catalog' })}>{state.modelName ? '更换模型' : '选择模型'}</Button>
-        {account && configured && <CapabilityAction action="settings.useApiKeyModel" supported={supported} run={run} disabled={Boolean(state.modelSaving)}>使用保留的 API 模型</CapabilityAction>}
-      </div>
-    </Card>
-    <Card title="管理连接" className="pw-model-connections">
+  return <section className="pw-model-connections" data-model-layer="connections" aria-label="连接列表">
+      <p className="pw-reading-lead">连接提供模型。选择一项，查看账号或修改 API 配置。</p>
       <div className="pw-settings-links">
         {configured && <Button variant="ghost" aria-label="编辑当前 API 连接" leadingIcon={RiLink} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => open({ kind: 'edit' })}>
           <span><span>{first(selectedConnection || {}, ['name', 'label'], 'API 连接设置')}</span><small>{account ? '保留的连接' : '当前使用'}{' · '}{state.hasApiKey ? '凭据已保存' : '地址、凭据与能力'}</small></span>
@@ -261,19 +256,18 @@ function ModelConnections({ state, data, supported, run, navigate, open }: { sta
           <span><span>{first(row, ['name', 'label', 'id'], '已保存连接')}</span><small>{MODEL_PROVIDERS[text(row.provider)] || first(row, ['provider', 'protocol'], 'API')}{row.enabled === false ? ' · 已停用' : ' · 已保存'}</small></span>
         </Button>)}
         <Button variant="ghost" leadingIcon={RiKey2Line} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate('accounts')}><span><span>ChatGPT 账号</span><small>授权、账号模型与套餐用量</small></span></Button>
-        {account && <Button variant="ghost" leadingIcon={RiFileList3Line} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => open({ kind: 'catalog' })}><span><span>API 模型目录</span><small>查看保留连接的模型与能力</small></span></Button>}
-        <Button variant="ghost" leadingIcon={RiAddLine} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" disabled={!supported('settings.saveModel')} onClick={() => open({ kind: 'add' })}><span><span>添加 API 连接</span><small>配置并使用一项 API 连接</small></span></Button>
       </div>
+      {account && configured && <div className="pw-form-actions"><CapabilityAction action="settings.useApiKeyModel" supported={supported} run={run} disabled={Boolean(state.modelSaving)}>使用保留的 API 模型</CapabilityAction></div>}
       {!configured && profiles.length === 0 && <Empty>还没有 API 连接。添加后可以测试并保存。</Empty>}
-    </Card>
-  </div>;
+      <div className="pw-connection-add"><Button variant="secondary" leadingIcon={RiAddLine} disabled={!supported('settings.saveModel')} onClick={() => open({ kind: 'add' })}>添加 API 连接</Button></div>
+  </section>;
 }
 
 function ModelConnectionDetail({ connection }: { connection: Data | undefined }) {
-  return connection ? <Card className="pw-model-connection-detail">
+  return connection ? <section className="pw-model-connection-detail" aria-label="连接详情">
     <Facts items={[[ '名称', first(connection, ['name', 'label', 'id']) ], ['协议', first(connection, ['provider', 'protocol']) ], ['模型', connection.model], ['地址', first(connection, ['baseUrl', 'endpoint']) ], ['状态', connection.enabled === false ? '已停用' : '已启用'], ['凭据', connection.hasApiKey || connection.credentialsConfigured ? '已配置' : '未配置']]} />
     <p className="pw-field-hint">此页面可查看已保存连接。当前版本尚未接入这项连接的独立编辑与切换。</p>
-  </Card> : <Empty>这项连接已不在当前目录，请返回后刷新。</Empty>;
+  </section> : <Empty>这项连接已不在当前目录，请返回后刷新。</Empty>;
 }
 
 const modelFactText = (value: any) => {
@@ -285,14 +279,16 @@ const modelFactText = (value: any) => {
   return text(fact.value, '未知');
 };
 
-function ModelCatalog({ state, data, selectedId, supported, run, open, registerTransientBack }: { state: Data; data: Data; selectedId?: string; supported: (action: string) => boolean; run: Run; open: (view: ModelView) => void; registerTransientBack: BackHandlerRegistration }) {
+function ModelCatalog({ state, data, selectedId, active = true, supported, run, open, registerTransientBack }: { state: Data; data: Data; selectedId?: string; active?: boolean; supported: (action: string) => boolean; run: Run; open: (view: ModelView) => void; registerTransientBack: BackHandlerRegistration }) {
   const [modelReview, setModelReview] = useState<Data | null>(null);
   const [reviewing, setReviewing] = useState(false), [selecting, setSelecting] = useState(false);
   const alive = useRef(true), request = useRef(0);
   useEffect(() => {
+    if (!active) return;
     registerTransientBack(modelReview ? () => { setModelReview(null); return true; } : null);
     return () => registerTransientBack(null);
-  }, [modelReview, registerTransientBack]);
+  }, [modelReview, registerTransientBack, active]);
+  useEffect(() => { if (!active) { request.current++; setModelReview(null); setReviewing(false); } }, [active]);
   useEffect(() => { alive.current = true; return () => { alive.current = false; request.current++; }; }, []);
   const models = list(data.models);
   const model = models.find(row => first(row, ['modelId', 'id', 'name']) === selectedId);
@@ -312,23 +308,23 @@ function ModelCatalog({ state, data, selectedId, supported, run, open, registerT
   const reviewedModel = models.find(row => first(row, ['modelId', 'id', 'name']) === text(modelReview?.modelId));
   const modelFacts = (record: Data) => <Facts items={[[ '上下文容量', modelFactText(object(record.facts).CONTEXT_WINDOW) ], ['输出上限', modelFactText(object(record.facts).OUTPUT_TOKENS) ], ['图像输入', modelFactText(object(record.facts).IMAGE_INPUT) ], ['工具调用', modelFactText(object(record.facts).TOOL_CALLS) ], ['目录状态', record.catalogFresh ? '已读取' : '未读取或已过期']]} />;
   return <>
-    {!selectedId ? <Card className="pw-model-catalog">
-      <div className="pw-model-catalog-heading"><p>当前 API 连接</p><CapabilityAction action="models.snapshot" supported={supported} run={run}>刷新目录</CapabilityAction></div>
+    <section className="pw-model-catalog" hidden={Boolean(selectedId)} aria-label="API 模型目录">
       {models.length > 0 ? <ModelPicker label="选择工作模型" value={state.modelRoute === 'account' ? undefined : text(state.modelName)} models={models.map(row => {
         const id = first(row, ['modelId', 'id', 'name']);
         const current = state.modelRoute !== 'account' && id === text(state.modelName);
-        return { id, name: first(row, ['name', 'label', 'modelId', 'id']), description: current ? '当前使用 · 查看能力' : locked || !canSelect ? '查看能力与参数' : row.catalogFresh ? '已读取的模型 · 选择前核对' : '目录待更新 · 选择前核对', disabled: reviewing || selecting };
+        return { id, name: first(row, ['name', 'label', 'modelId', 'id']), description: current ? '当前使用 · 查看能力' : locked || !canSelect ? '查看能力与参数' : row.catalogFresh ? '查看能力并切换' : '目录待更新 · 选择前核对', disabled: reviewing || selecting };
       })} onChange={id => { if (state.modelRoute !== 'account' && id === text(state.modelName)) open({ kind: 'model', id }); else void prepare(id); }} />
-        : <Empty>{Array.isArray(data.models) ? '当前连接还没有可选模型。可返回连接设置填写模型名称，或刷新目录。' : '正在读取模型目录…'}</Empty>}
+        : <div className="pw-model-directory-empty"><h2>{Array.isArray(data.models) ? '目录中还没有模型' : state.baseUrl ? '正在读取模型目录' : '先连接一个模型'}</h2><p>{state.baseUrl ? '可以刷新目录，或在管理连接中填写模型名称。' : '在管理连接中添加 API，或授权你的 ChatGPT 账号。'}</p></div>}
       {(reviewing || selecting) && <p className="pw-field-hint" role="status">{selecting ? '正在提交模型选择…' : '正在核对模型能力与连接…'}</p>}
       {locked && <p className="pw-field-hint">当前工作结束或设置保存后可切换模型。你仍可查看模型能力。</p>}
       {!canSelect && models.length > 0 && <p className="pw-field-hint">当前目录可供查看；完成连接配置后再切换模型。</p>}
-    </Card> : model ? <Card className="pw-model-detail">
+    </section>
+    {selectedId && (model ? <section className="pw-model-detail" aria-label="模型能力">
       {modelFacts(model)}
       <div className="pw-form-actions"><Button variant="secondary" disabled={!canSelect || reviewing || locked || (state.modelRoute !== 'account' && selectedId === text(state.modelName))} onClick={() => { void prepare(selectedId); }}>{state.modelRoute !== 'account' && selectedId === text(state.modelName) ? '正在使用此模型' : reviewing ? '核对中…' : '选择此模型'}</Button></div>
       {locked && <p className="pw-field-hint">当前工作结束或设置保存后可切换模型。</p>}
-    </Card> : <Empty>这个模型已不在当前目录，请返回重新选择。</Empty>}
-    <SettingsDialog isOpen={modelReview !== null} title="切换工作模型" onClose={() => setModelReview(null)}>{modelReview && <>
+    </section> : <Empty>这个模型已不在当前目录，请返回重新选择。</Empty>)}
+    <SettingsDialog isOpen={active && modelReview !== null} title="切换工作模型" onClose={() => setModelReview(null)}>{modelReview && <>
       <div className="pw-model-switch-summary"><span className="pw-field-hint">{text(state.modelName, '尚未选择')} →</span><h3>{text(modelReview.modelId)}</h3></div>
       {reviewedModel && modelFacts(reviewedModel)}
       <Facts items={[[ '本次输出上限', modelReview.outputTokens ], ['图像预算预留', modelReview.imageTokenReserve ]]} />
@@ -519,15 +515,97 @@ function Collection({ data, keys, label, children, titleKeys }: { data: Data; ke
   return <>{!loaded ? <Empty>{'尚未读取' + label + '。'}</Empty> : records.length === 0 ? <Empty>{'当前读取窗口没有' + label + '。'}</Empty> : records.map((row, index) => <SourceRecord key={recordId(row, String(index))} item={row} titleKeys={titleKeys}>{children?.(row)}</SourceRecord>)}</>;
 }
 
+/** BoardUI disclosures keep the record itself primary and its review actions local. */
+function MemoryRecords({ domain, data, supported, run }: { domain: string; data: Data; supported: (action: string) => boolean; run: Run }) {
+  const [query, setQuery] = useState('');
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const keys = domain === 'memory' ? ['records'] : ['records', 'memories', 'candidates', 'jobs'];
+  const loaded = hasRows(data, keys);
+  const bodyOf = (row: Data) => first(row, ['text', 'content', 'body', 'summary', 'description', 'message']);
+  const titleOf = (row: Data) => first(row, ['title', 'name']) || bodyOf(row).split('\n')[0].slice(0, 72) || '未命名记录';
+  const layerOf = (row: Data) => ({ fact: '事实', preference: '偏好', episodic: '经历', procedural: '方法' } as Record<string, string>)[text(row.layer)] || text(row.layer) || '其他记录';
+  const sourceOf = (row: Data) => first(row, ['source', 'sourceLabel', 'sourceKind']);
+  const contextOf = (row: Data) => [sourceOf(row), row.core === true ? '核心记忆' : '', row.status || row.state ? statusText(row.status || row.state) : row.active === false ? '已停用' : ''].filter(Boolean).join(' · ');
+  const records = list(rowsAt(data, keys)).filter(row => [titleOf(row), bodyOf(row), layerOf(row), sourceOf(row), recordId(row)].join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const layers = [...new Set(records.map(layerOf))];
+  return <section className="pw-memory-collection" aria-label={domain === 'memory' ? '记住的内容' : '待核对内容'}>
+    <SearchField aria-label="筛选当前读取的记录" placeholder={domain === 'memory' ? '查找记住的内容' : '查找待核对内容'} value={query} onChange={setQuery} shape="rounded" />
+    <p className="pw-reading-lead">{domain === 'memory' ? '按内容类型阅读。展开一条，核对内容和来源。' : '先阅读内容与来源，再决定是否采用。'}</p>
+    {!loaded ? <Empty>尚未读取当前记录。</Empty> : !records.length ? <Empty>{query.trim() ? '当前读取窗口没有匹配的内容。' : '当前读取窗口没有记录。'}</Empty> : layers.map(layer => <section className="pw-memory-category" key={layer} aria-label={layer}>
+      <h2>{layer}</h2>
+      <Accordion variant="divided" expandedKeys={expanded} onExpandedChange={values => setExpanded(new Set([...values].map(String)))} allowsMultipleExpanded>
+        {records.filter(row => layerOf(row) === layer).map((row, index) => <AccordionItem key={recordId(row, String(index))} id={`${layer}:${recordId(row, String(index))}`} className="pw-memory-record" headingLevel={3}
+          title={titleOf(row)} description={contextOf(row) ? <span className="pw-memory-source">{contextOf(row)}</span> : undefined}>
+          <div className="pw-memory-reading">
+            {bodyOf(row) && <p className="pw-reading-copy">{bodyOf(row)}</p>}
+            <Facts items={[[ '内容类型', layerOf(row) ], ['来源', sourceOf(row) ], ['所属用户', row.ownerId ], ['记忆空间', row.spaceId ], ['版本', row.revision]]} />
+            <div className="pw-record-decisions"><CapabilityAction action={domain + '.review'} args={{ id: recordId(row), expectedRevision: row.revision }} supported={supported} run={run}>{domain === 'memory' ? '核对与纠正' : '核对这条内容'}</CapabilityAction><CapabilityAction action={domain + '.openSource'} args={{ id: recordId(row), expectedRevision: row.revision }} supported={supported} run={run}>查看来源</CapabilityAction></div>
+          </div>
+        </AccordionItem>)}
+      </Accordion>
+    </section>)}
+    {domain === 'learning' && <p className="pw-field-hint">经验导入后保持停用；完整阅读当前 SKILL.md 并取得真实阅读回执后，才允许启用。</p>}
+  </section>;
+}
+
+/** BoardUI Tabs and object rows separate shared work from team administration. */
+function TeamWorkspace({ domain, data, supported, run, registerTransientBack }: { domain: string; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration }) {
+  const [tab, setTab] = useState<'runs' | 'definitions'>('runs');
+  const [queries, setQueries] = useState({ runs: '', definitions: '' });
+  const [selected, setSelected] = useState<{ kind: 'runs' | 'definitions'; id: string } | null>(null);
+  const root = useRef<HTMLElement>(null), listPositions = useRef({ runs: 0, definitions: 0 });
+  const runKeys = ['runs', 'taskRequests'], definitionKeys = domain === 'teams' ? ['teams', 'definitions'] : ['groups'];
+  const runs = list(rowsAt(data, runKeys)), definitions = list(rowsAt(data, definitionKeys));
+  const titleOf = (row: Data, kind = tab) => first(row, kind === 'runs' ? ['goal', 'title', 'name', 'label'] : ['name', 'title', 'label', 'goal'], '未命名记录');
+  const summaryOf = (row: Data) => first(row, ['summary', 'message', 'description', 'text']);
+  const membersOf = (row: Data) => list(row.members).map(member => first(member, ['name', 'label', 'role'])).filter(Boolean).join('、');
+  const sourceOf = (row: Data) => first(row, ['teamName', 'groupName', 'sourceLabel', 'originKind']);
+  const objects = tab === 'runs' ? runs : definitions;
+  const filtered = objects.filter(row => [titleOf(row), summaryOf(row), sourceOf(row), membersOf(row)].join(' ').toLocaleLowerCase().includes(queries[tab].trim().toLocaleLowerCase()));
+  const current = selected ? (selected.kind === 'runs' ? runs : definitions).find((row, index) => recordId(row, String(index)) === selected.id) : undefined;
+  const remember = () => { listPositions.current[tab] = root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop || 0; };
+  useEffect(() => {
+    registerTransientBack(selected ? () => { setSelected(null); return true; } : null);
+    return () => registerTransientBack(null);
+  }, [selected, registerTransientBack]);
+  useEffect(() => {
+    const scroll = root.current?.closest<HTMLElement>('.pw-secondary-scroll');
+    if (scroll) scroll.scrollTop = selected ? 0 : listPositions.current[tab];
+  }, [selected, tab]);
+  const act = (action: string, args: Data, label: string, primary = false) => <CapabilityAction action={action} args={args} supported={supported} run={run} primary={primary}>{label}</CapabilityAction>;
+  return <section ref={root} className="pw-team-workspace" data-team-layer={selected ? 'detail' : 'list'}>
+    {selected ? current ? <article className="pw-team-reading">
+      <header><p className="pw-detail-location">{selected.kind === 'runs' ? '共同工作' : domain === 'teams' ? '团队' : '群'}{sourceOf(current) ? ` · ${sourceOf(current)}` : ''}</p><h2>{titleOf(current, selected.kind)}</h2>{(current.status || current.state) && <p className="pw-detail-status">{statusText(current.status || current.state)}</p>}</header>
+      {summaryOf(current) && summaryOf(current) !== titleOf(current, selected.kind) && <p className="pw-reading-copy">{summaryOf(current)}</p>}
+      {selected.kind === 'definitions' && <section className="pw-team-members" aria-label="当前已读取成员"><h3>成员</h3>{list(current.members).length ? <ul>{list(current.members).map((member, index) => <li key={recordId(member, String(index))}><span>{first(member, ['name', 'label', 'id'], '未命名成员')}</span>{member.role && <small>{text(member.role)}</small>}</li>)}</ul> : <Empty>当前记录没有提供成员详情。</Empty>}</section>}
+      <Facts items={[[ '版本', current.revision ], ['工作代次', selected.kind === 'runs' ? current.generation : undefined ]]} />
+      <div className="pw-object-decisions">{selected.kind === 'runs' ? <>{act(domain + '.openRun', { runId: current.runId || recordId(current), expectedGeneration: current.generation, expectedRevision: current.revision }, '查看消息与成果', true)}{current.taskId && act('tasks.open', { id: current.taskId }, '打开原任务')}</> : <>{act(domain + '.open', { id: recordId(current), expectedRevision: current.revision }, '打开共同工作', true)}{act(domain + '.reviewDefinition', { id: recordId(current), expectedRevision: current.revision }, '查看成员与范围')}</>}</div>
+    </article> : <Empty>这项记录已不在当前读取窗口，请返回后刷新。</Empty> : <Tabs selectedKey={tab} onSelectionChange={value => { if (value === 'runs' || value === 'definitions') { remember(); setTab(value); } }} className="pw-team-tabs">
+      <TabList aria-label={domain === 'teams' ? '团队视图' : '群协作视图'}><Tab id="runs">共同工作</Tab><Tab id="definitions">{domain === 'teams' ? '团队' : '群'}</Tab></TabList>
+      <TabPanel id={tab}>
+        <SearchField aria-label={tab === 'runs' ? '搜索共同工作' : '搜索团队与群'} placeholder={tab === 'runs' ? '查找目标或共同工作' : '查找名称或成员'} value={queries[tab]} onChange={value => setQueries(current => ({ ...current, [tab]: value }))} shape="rounded" />
+        <div className="pw-object-list">{!hasRows(data, tab === 'runs' ? runKeys : definitionKeys) ? <Empty>尚未读取{tab === 'runs' ? '共同工作' : '团队记录'}。</Empty> : !filtered.length ? <Empty>{queries[tab].trim() ? '当前读取窗口没有匹配项。' : tab === 'runs' ? '当前读取窗口没有共同工作。' : '当前读取窗口没有团队记录。'}</Empty> : filtered.map(row => {
+          const position = objects.indexOf(row), id = recordId(row, String(position));
+          const context = tab === 'runs' ? sourceOf(row) : membersOf(row) || sourceOf(row);
+          return <Button key={id} variant="ghost" trailingIcon={RiArrowRightSLine} className="pw-object-row h-auto whitespace-normal" onClick={() => { remember(); setSelected({ kind: tab, id }); }}>
+            <span className="pw-object-row-copy"><span className="pw-object-row-title">{titleOf(row)}</span>{(row.status || row.state) && <small className="pw-object-row-status">{statusText(row.status || row.state)}</small>}{context && <small>{context}</small>}{tab === 'runs' && summaryOf(row) && summaryOf(row) !== titleOf(row) && <span className="pw-object-row-summary">{summaryOf(row)}</span>}</span>
+          </Button>;
+        })}</div>
+      </TabPanel>
+    </Tabs>}
+  </section>;
+}
+
 function DomainPage({ domain, state, data, supported, run, registerTransientBack }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration }) {
-  const [query, setQuery] = useState(''), [entry, setEntry] = useState<Data | null>(null);
+  const [entry, setEntry] = useState<Data | null>(null);
   const [draft, setDraft] = useState<Data>({});
   const clearProfileSecrets = () => setDraft(current => ({ ...current, token: '', password: '', privateKey: '', passphrase: '' }));
   const closeProfile = () => { clearProfileSecrets(); setEntry(null); };
   useEffect(() => {
+    if (domain === 'teams' || domain === 'groups') return;
     registerTransientBack(entry ? () => { closeProfile(); return true; } : null);
     return () => registerTransientBack(null);
-  }, [entry, registerTransientBack]);
+  }, [entry, registerTransientBack, domain]);
   useEffect(() => {
     if (domain !== 'ssh' && domain !== 'remote') return;
     const hide = () => { if (document.visibilityState !== 'visible') clearProfileSecrets(); };
@@ -576,15 +654,7 @@ function DomainPage({ domain, state, data, supported, run, registerTransientBack
       </div><div className="pw-form-actions"><Button variant="secondary" onClick={closeProfile}>取消</Button><CapabilityAction action={domain + '.saveProfile'} args={connectionProfilePayload(domain, draft, entry)} supported={supported} run={async (action, args) => { clearProfileSecrets(); return run(action, args); }} disabled={(Array.isArray(state.moduleBusy) && state.moduleBusy.includes(domain + '.saveProfile')) || !text(draft.name).trim() || (domain === 'remote' ? !text(draft.baseUrl).trim() : !text(draft.host).trim() || !text(draft.username).trim() || !text(draft.workspace).trim().startsWith('/') || wirelessPort(text(draft.port)) == null)} primary>保存连接</CapabilityAction></div>
     </SettingsDialog>
   </>;
-  if (domain === 'memory' || domain === 'memoryReview' || domain === 'learning') return <Card className="pw-memory-collection" description={domain === 'memory' ? '查看已记住的内容，核对来源或纠正。' : '核对候选内容和来源，再决定是否采用。'} title={title}>
-    <SearchField aria-label="筛选当前读取的记录" placeholder={domain === 'memory' ? '查找记住的内容' : '查找待核对内容'} value={query} onChange={setQuery} shape="rounded" />
-    <Collection data={{ ...data, ...(hasRows(data, ['records', 'memories', 'candidates', 'jobs']) ? { displayRecords: list(rowsAt(data, ['records', 'memories', 'candidates', 'jobs'])).filter(row => (first(row, ['title', 'name', 'text', 'summary']) + recordId(row)).toLocaleLowerCase().includes(query.toLocaleLowerCase())) } : {}) }} keys={['displayRecords']} label="记录" titleKeys={['title', 'name', 'text', 'summary']}>{row => <>
-      <p className="pw-record-context">{[first(row, ['scope', 'layer']), first(row, ['sourceLabel', 'sourceKind']), row.core === true ? '核心记忆' : ''].filter(Boolean).join(' · ')}</p>
-      <div className="pw-form-actions">{act(domain + '.review', { id: recordId(row), expectedRevision: row.revision }, domain === 'memory' ? '核对与纠正' : '核对这条内容')}{act(domain + '.openSource', { id: recordId(row), expectedRevision: row.revision }, '查看来源')}</div>
-      {row.revision != null && <span className="pw-record-version">版本 {text(row.revision)}</span>}
-    </>}</Collection>
-    {domain === 'learning' && <p className="pw-field-hint">经验导入后保持停用；完整阅读当前 SKILL.md 并取得真实阅读回执后，才允许启用。</p>}
-  </Card>;
+  if (domain === 'memory' || domain === 'memoryReview' || domain === 'learning') return <MemoryRecords domain={domain} data={data} supported={supported} run={run} />;
   if (domain === 'automation' || domain === 'commitments') return <>
     <Card title={title} description="时间、时区、原目标与发生回执绑定；打开目标不自动执行。">
       <Collection data={data} keys={domain === 'automation' ? ['rules', 'reminders'] : ['commitments']} label={domain === 'automation' ? '提醒规则' : '承诺'}>{row => <>
@@ -613,16 +683,7 @@ function DomainPage({ domain, state, data, supported, run, registerTransientBack
     </Card>
     <Collection data={data} keys={['pendingOperations', 'previews']} label="当前准备与审阅记录">{row => <div className="pw-form-actions">{act(domain + '.openReview', { id: recordId(row), expectedRevision: row.revision }, '打开原审阅')}{act(domain + '.cancel', { operationId: row.operationId || recordId(row) }, '取消本次准备')}</div>}</Collection>
   </>;
-  if (domain === 'teams' || domain === 'groups') return <Card title={title} className="pw-team-collection" description="继续共同工作，查看消息与成果。">
-    <section className="pw-collection-group" aria-label="当前共同工作"><h3>当前工作</h3><Collection data={data} keys={['runs', 'taskRequests']} label="当前工作">{row => <div className="pw-form-actions">{act(domain + '.openRun', { runId: row.runId || recordId(row), expectedGeneration: row.generation, expectedRevision: row.revision }, '查看消息与成果')}{row.taskId && act('tasks.open', { id: row.taskId }, '打开原任务')}</div>}</Collection></section>
-    <section className="pw-collection-group" aria-label={domain === 'teams' ? '我的团队' : '我的群'}><h3>{domain === 'teams' ? '我的团队' : '我的群'}</h3>
-    <Collection data={data} keys={domain === 'teams' ? ['teams', 'definitions'] : ['groups']} label={domain === 'teams' ? '团队' : '群'}>{row => <>
-      <p className="pw-record-context">{list(row.members).map(member => first(member, ['name', 'label', 'role'])).filter(Boolean).join('、') || first(row, ['sourceLabel', 'originKind'])}</p>
-      <div className="pw-form-actions">{act(domain + '.open', { id: recordId(row), expectedRevision: row.revision }, '打开共同工作')}{act(domain + '.reviewDefinition', { id: recordId(row), expectedRevision: row.revision }, '查看成员与范围')}</div>
-      {row.revision != null && <span className="pw-record-version">版本 {text(row.revision)}</span>}
-    </>}</Collection>
-    </section>
-  </Card>;
+  if (domain === 'teams' || domain === 'groups') return <TeamWorkspace domain={domain} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'media' || domain === 'realtime') return <Card title={title} description="请求准备、实际提交、等待结果与未知提交分开；不会因界面动效宣称已完成。">
     <Facts items={[[ '提供方', first(data, ['provider', 'providerName']) ], ['凭据', typeof data.configured === 'boolean' ? data.configured ? '已配置' : '未配置' : undefined], ['当前会话', first(object(data.session), ['state', 'stage']) ]]} />
     {domain === 'realtime' && <div className="pw-form-actions">{act('realtime.requestMicrophonePermission', {}, '麦克风权限')}{act('realtime.requestCameraPermission', {}, '摄像头权限')}{act('realtime.prepareCall', {}, '准备通话', true)}{act('realtime.disconnect', { sessionId: data.session?.id }, '结束当前通话')}</div>}
@@ -667,7 +728,7 @@ const SETTINGS_GROUPS = [
   { id: 'media', title: '语音与媒体', detail: '语音文件、实时通话与本机服务', icon: RiMicLine, entries: ['media', 'realtime', 'proxy'] },
 ];
 const COMMON_SETTINGS = [
-  { id: 'model-settings', title: '模型与连接', detail: '选择模型或修改当前 API 配置', icon: RiKey2Line },
+  { id: 'model-settings', title: '选择模型', detail: '模型能力、API 与账号连接', icon: RiKey2Line },
   { id: 'phone', title: '手机能力', detail: '观察、执行、后台与通知', icon: RiSmartphoneLine },
   { id: 'history', title: '任务历史', detail: '查看原任务与结果', icon: RiFileList3Line },
   { id: 'usage', title: '模型调用记录', detail: '查看实际调用与用量', icon: RiFileList3Line },
@@ -682,13 +743,15 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const normalize = (next: string) => (next || 'settings').replace(/^connections[:/]/, '').replace(/^settings[:/]/, '');
   const [page, setPage] = useState(normalize(route));
   const [modelView, setModelView] = useState<ModelView>({ kind: 'list' });
+  const modelTrail = useRef<ModelView[]>([]);
   const modelDrafts = useRef<Partial<Record<'edit' | 'add', ModelDraft>>>({});
   const transientBack = useRef<(() => boolean) | null>(null);
-  const registerTransientBack: BackHandlerRegistration = handler => { transientBack.current = handler; };
+  const registerTransientBack = useCallback<BackHandlerRegistration>(handler => { transientBack.current = handler; }, []);
   const [query, setQuery] = useState(''), [notice, setNotice] = useState(''), [error, setError] = useState('');
-  const trail = useRef<string[]>([]), scroll = useRef<HTMLDivElement>(null), scrollPositions = useRef(new Map<string, number>());
+  const [expandedSettings, setExpandedSettings] = useState<Set<string>>(new Set());
+  const trail = useRef<Array<{ page: string; query: string; modelView: ModelView; modelTrail: ModelView[] }>>([]), scroll = useRef<HTMLDivElement>(null), scrollPositions = useRef(new Map<string, number>());
   const mounted = useRef(true), generation = useRef(0);
-  useEffect(() => { generation.current++; trail.current = []; setPage(normalize(route)); setModelView({ kind: 'list' }); setNotice(''); setError(''); }, [route]);
+  useEffect(() => { generation.current++; trail.current = []; modelTrail.current = []; setPage(normalize(route)); setModelView({ kind: 'list' }); setNotice(''); setError(''); }, [route]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; }; }, []);
   const run: Run = async (action, args = {}) => {
     if (!supported(action)) throw new Error('当前页面尚未开放此操作。');
@@ -703,8 +766,8 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
     }
   };
   const rememberScroll = () => scrollPositions.current.set(page + ((page === 'models' || page === 'model-settings') ? ':' + modelView.kind + ':' + (modelView.id || '') : ''), scroll.current?.scrollTop || 0);
-  const navigate = (next: string) => { rememberScroll(); generation.current++; trail.current.push(page); setNotice(''); setError(''); setQuery(''); setModelView({ kind: 'list' }); setPage(next); };
-  const openModel = (view: ModelView) => { rememberScroll(); generation.current++; setNotice(''); setError(''); setModelView(view); };
+  const navigate = (next: string) => { rememberScroll(); generation.current++; trail.current.push({ page, query, modelView, modelTrail: [...modelTrail.current] }); modelTrail.current = []; setNotice(''); setError(''); setQuery(''); setModelView({ kind: 'list' }); setPage(next); };
+  const openModel = (view: ModelView) => { rememberScroll(); generation.current++; modelTrail.current.push(modelView); setNotice(''); setError(''); setModelView(view); };
   const isModelPage = page === 'models' || page === 'model-settings';
   const domain = SECONDARY_DOMAINS.find(x => x.id === page);
   const hostSection = isModelPage ? 'models' : domain?.id;
@@ -731,19 +794,26 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const feature = object(object(state.features)[dataPage === 'commitments' ? 'automation' : dataPage]);
   const owner = object(object(state.ownerSnapshots)[dataPage]);
   const specialized = isModelPage ? object(state.modelConnections) : page === 'devices' ? object(state.deviceWorkspace) : {};
-  const data = { ...feature, ...owner, ...specialized };
+  // MemoryModule.snapshot is summary-only. Its actual list reply lives in
+  // moduleResults; an in-flight or failed reread must not present an old list.
+  const memoryListReady = !object(state.moduleErrors)['memory.list'] && !(Array.isArray(state.moduleBusy) && state.moduleBusy.includes('memory.list'));
+  const memoryList = memoryListReady ? object(object(state.moduleResults)['memory.list']) : {};
+  const data = { ...feature, ...owner, ...specialized, ...(page === 'memory' ? { records: memoryList.records } : {}) };
   const domainError = text(object(state.ownerErrors)[dataPage]) || Object.entries(object(state.moduleErrors)).filter(([key]) => key.startsWith(dataPage + '.')).map(([, value]) => text(value)).filter(Boolean).join('\n');
   const settingsGroup = SETTINGS_GROUPS.find(group => page === 'group:' + group.id);
   const connection = modelConnectionRows(data).find(row => recordId(row) === modelView.id);
-  const pageTitle = isModelPage ? ({ list: '模型与连接', edit: '编辑 API 连接', add: '添加 API 连接', connection: first(connection || {}, ['name', 'label'], '已保存连接'), catalog: '模型目录', model: modelView.id || '模型详情' }[modelView.kind])
+  const pageTitle = isModelPage ? ({ list: '模型与连接', connections: '管理连接', edit: '编辑 API 连接', add: '添加 API 连接', connection: first(connection || {}, ['name', 'label'], '已保存连接'), catalog: '模型目录', model: modelView.id || '模型详情' }[modelView.kind])
     : settingsGroup?.title || (page === 'settings' || page === 'connections' ? '设置' : page === 'phone' ? '手机能力' : page === 'background' ? '后台运行设置' : page === 'history' ? '任务历史' : page === 'usage' ? '模型调用记录' : page === 'archives' ? '备份与迁移' : page === 'storage' ? '项目存储' : domain?.title || '设置');
   const settingsEntries = [...COMMON_SETTINGS, ...SECONDARY_DOMAINS.filter(item => item.id !== 'models')];
-  const filtered = settingsEntries.filter(item => (item.title + item.detail).includes(query.trim()));
+  const filtered = settingsEntries.filter(item => (item.title + item.detail).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const frequentSettings = [
-    { id: 'model-settings', title: '当前模型', detail: text(state.modelName, '连接模型，开始工作'), icon: RiKey2Line },
+    { id: 'model-settings', title: '当前模型', detail: text(state.modelName) || '连接模型，开始工作', icon: RiKey2Line },
     { id: 'phone', title: '手机能力', detail: '权限、后台连接与执行方式', icon: RiSmartphoneLine },
   ];
   const viewKey = page + (isModelPage ? ':' + modelView.kind + ':' + (modelView.id || '') : '');
+  const modelBrowseActive = ['list', 'catalog', 'model'].includes(modelView.kind);
+  const modelParent = modelTrail.current.at(-1)?.kind;
+  const modelBackLabel = modelParent === 'connections' ? '返回连接管理' : modelParent === 'catalog' ? '返回模型目录' : '返回模型与连接';
   useEffect(() => {
     const element = scroll.current;
     if (!element) return;
@@ -752,9 +822,10 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const consumeBack = () => {
     if (transientBack.current?.()) return true;
     rememberScroll();
-    if (isModelPage && modelView.kind !== 'list') { openModel({ kind: modelView.kind === 'model' ? 'catalog' : 'list' }); return true; }
+    if (isModelPage && modelView.kind !== 'list') { generation.current++; setNotice(''); setError(''); setModelView(modelTrail.current.pop() || { kind: 'list' }); return true; }
     const previous = trail.current.pop();
-    if (previous) { generation.current++; setNotice(''); setError(''); setPage(previous); setModelView({ kind: 'list' }); return true; }
+    if (previous) { generation.current++; setNotice(''); setError(''); setPage(previous.page); setQuery(previous.query); modelTrail.current = previous.modelTrail; setModelView(previous.modelView); return true; }
+    if (page === normalize(route)) return false;
     if (page === 'settings' || page === 'connections') return false;
     generation.current++; setPage(page === 'background' ? 'phone' : 'settings'); setModelView({ kind: 'list' }); return true;
   };
@@ -768,22 +839,28 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   }, [registerBackHandler]);
   const back = () => { if (!consumeBack()) onBack(); };
   const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof RiKey2Line }>) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate(item.id)}><span><span>{item.title}</span><small>{item.detail}</small></span></Button>)}</div>;
-  const refreshAction = page === 'background' ? 'background.refresh' : isModelPage ? 'models.snapshot' : 'app.refresh';
+  const refreshAction = page === 'background' ? 'background.refresh' : isModelPage ? 'models.snapshot' : page === 'memory' ? 'memory.list' : 'app.refresh';
   return <section className="pw-secondary pw-secondary-refactor" data-secondary-page={page} aria-label={pageTitle}>
-    <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label={isModelPage && modelView.kind !== 'list' ? modelView.kind === 'model' ? '返回模型目录' : '返回模型与连接' : '返回'} onClick={back} /><div><h1>{pageTitle}</h1></div><IconButton icon={RiRefreshLine} aria-label="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} /></header>
+    <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label={isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} onClick={back} /><div><h1>{pageTitle}</h1></div><IconButton icon={RiRefreshLine} aria-label="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} /></header>
     <div className="pw-secondary-scroll" ref={scroll}>
       {notice && <p className="pw-request-notice" role="status">{notice}</p>}
       {(error || domainError) && <p className="pw-field-error" role="alert">{error || domainError}</p>}
-      <div className="pw-secondary-page" key={viewKey}>
+      <div className="pw-secondary-page" data-secondary-view={viewKey}>
         {(page === 'settings' || page === 'connections') ? <>
           <SearchField aria-label="搜索设置" placeholder="搜索设置" value={query} onChange={setQuery} shape="rounded" />
-          {query.trim() ? <Card className="pw-settings-index">{settingRows(filtered)}{filtered.length === 0 && <Empty>没有匹配的设置。</Empty>}</Card>
-            : <><Card title="常用" className="pw-settings-index pw-settings-frequent">{settingRows(frequentSettings)}</Card><Card title="全部设置" className="pw-settings-index"><div className="pw-settings-links">{SETTINGS_GROUPS.map(group => <Button key={group.id} variant="ghost" leadingIcon={group.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate('group:' + group.id)}><span><span>{group.title}</span><small>{group.detail}</small></span></Button>)}</div></Card></>}
-        </> : settingsGroup ? <Card className="pw-settings-index">{settingRows(settingsGroup.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</Card>
-          : isModelPage ? modelView.kind === 'list' ? <ModelConnections state={state} data={data} supported={supported} run={run} navigate={navigate} open={openModel} />
-            : modelView.kind === 'edit' || modelView.kind === 'add' ? <ModelSettings key={modelView.kind} state={state} supported={supported} run={run} adding={modelView.kind === 'add'} draft={modelDrafts.current[modelView.kind]} onDraftChange={value => { if (value) modelDrafts.current[modelView.kind as 'edit' | 'add'] = value; else delete modelDrafts.current[modelView.kind as 'edit' | 'add']; }} registerTransientBack={registerTransientBack} />
-            : modelView.kind === 'connection' ? <ModelConnectionDetail connection={connection} />
-            : <ModelCatalog key={modelView.kind + ':' + modelView.id} state={state} data={data} selectedId={modelView.kind === 'model' ? modelView.id : undefined} supported={supported} run={run} open={openModel} registerTransientBack={registerTransientBack} />
+          {query.trim() ? <section className="pw-settings-results" aria-label="匹配的设置">{settingRows(filtered)}{filtered.length === 0 && <Empty>没有匹配的设置。</Empty>}</section>
+            : <><section className="pw-settings-frequent" aria-label="常用设置">{settingRows(frequentSettings)}</section><Accordion variant="divided" className="pw-settings-groups" aria-label="按目的浏览设置" expandedKeys={expandedSettings} onExpandedChange={values => setExpandedSettings(new Set([...values].map(String)))} allowsMultipleExpanded>{SETTINGS_GROUPS.map(group => <AccordionItem id={group.id} key={group.id} title={group.title} description={group.detail} icon={group.icon} headingLevel={2} className="pw-settings-group">{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</AccordionItem>)}</Accordion></>}
+        </> : settingsGroup ? <section className="pw-settings-group-page">{settingRows(settingsGroup.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</section>
+          : isModelPage ? <>
+            <div className="pw-model-list" data-model-layer={modelView.kind === 'model' ? 'model' : 'list'} hidden={!modelBrowseActive}>
+              {modelView.kind !== 'model' && <header className="pw-model-current"><div><span className="pw-model-eyebrow">当前模型</span><strong>{text(state.modelName) || '尚未连接'}</strong><span className="pw-model-origin">{state.modelRoute === 'account' ? 'ChatGPT 账号' : MODEL_PROVIDERS[text(state.modelProvider)] || 'API 连接'}</span></div><Button variant="ghost" leadingIcon={RiSettings3Line} onClick={() => openModel({ kind: 'connections' })}>管理连接</Button></header>}
+              {modelView.kind !== 'model' && state.modelRoute === 'account' && <div className="pw-account-model-entry"><Button variant="secondary" trailingIcon={RiArrowRightSLine} onClick={() => navigate('accounts')}>打开账号模型</Button><p className="pw-field-hint">下面是保留的 API 模型目录。</p></div>}
+              <ModelCatalog key={page} state={state} data={data} active={modelBrowseActive} selectedId={modelView.kind === 'model' ? modelView.id : undefined} supported={supported} run={run} open={openModel} registerTransientBack={registerTransientBack} />
+            </div>
+            {modelView.kind === 'connections' ? <ModelConnections state={state} data={data} supported={supported} run={run} navigate={navigate} open={openModel} />
+              : modelView.kind === 'edit' || modelView.kind === 'add' ? <ModelSettings key={modelView.kind} state={state} supported={supported} run={run} adding={modelView.kind === 'add'} draft={modelDrafts.current[modelView.kind]} onDraftChange={value => { if (value) modelDrafts.current[modelView.kind as 'edit' | 'add'] = value; else delete modelDrafts.current[modelView.kind as 'edit' | 'add']; }} registerTransientBack={registerTransientBack} />
+              : modelView.kind === 'connection' ? <ModelConnectionDetail connection={connection} /> : null}
+          </>
           : page === 'phone' ? <PhoneSettings state={state} supported={supported} run={run} navigate={navigate} />
           : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} navigate={navigate} />
           : page === 'history' || page === 'usage' ? <HistoryPage key={page} usage={page === 'usage'} supported={supported} run={run} />

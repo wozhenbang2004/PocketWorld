@@ -192,7 +192,7 @@ PY
 }
 
 pw_scene() {
-    local name=$1 scene=$2 started=$SECONDS attempt=0
+    local name=$1 scene=$2 expected_ime=${3:-} started=$SECONDS attempt=0
     local PW_ADB_DEADLINE=$((SECONDS + 20))
     local attempt_error="$PW_CAPTURE_DIR/$name-scene-attempt-error.tmp"
     local last_error="$PW_CAPTURE_DIR/$name-scene-last-error.txt"
@@ -201,7 +201,13 @@ pw_scene() {
         attempt=$((attempt + 1))
         if pw_dump_layout "$name.xml" > "$attempt_error" 2>&1 &&
             python3 tools/ci/verify-web-ui.py scene --xml "$PW_CAPTURE_DIR/$name.xml" \
-                --scene "$scene" --out "$PW_CAPTURE_DIR/$name-scene.json" > "$attempt_error" 2>&1; then
+                --scene "$scene" --out "$PW_CAPTURE_DIR/$name-scene.json" > "$attempt_error" 2>&1 &&
+            { [[ -z "$expected_ime" ]] || {
+                pw_adb shell dumpsys input_method > "$PW_CAPTURE_DIR/$name-input-method.txt" 2>> "$attempt_error" &&
+                python3 tools/ci/verify-web-ui.py ime --xml "$PW_CAPTURE_DIR/$name.xml" \
+                    --dump "$PW_CAPTURE_DIR/$name-input-method.txt" --visible "$expected_ime" \
+                    --out "$PW_CAPTURE_DIR/$name-ime.json" >> "$attempt_error" 2>&1;
+            }; }; then
             printf 'scene=%s attempt=%s elapsed=%ss result=accepted-by-original-scene-assertion\n' \
                 "$scene" "$attempt" "$((SECONDS - started))" >> "$wait_log"
             rm -f "$attempt_error"
@@ -237,7 +243,7 @@ sleep 1
 pw_scene entry workroom
 pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/01-workroom.png"
 PW_STAGE=screen-recording
-timeout 135s "$PW_ADB" -s "$PW_SERIAL" shell screenrecord --time-limit 120 --bit-rate 4000000 \
+timeout 195s "$PW_ADB" -s "$PW_SERIAL" shell screenrecord --time-limit 180 --bit-rate 4000000 \
     --size 720x1480 /sdcard/pocketworld-web-interaction.mp4 \
     > "$PW_CAPTURE_DIR/screenrecord.txt" 2>&1 &
 PW_RECORD_PID=$!
@@ -271,8 +277,35 @@ python3 tools/ci/verify-web-ui.py target --xml "$PW_CAPTURE_DIR/return.xml" \
     --label '全部工作' --out "$PW_CAPTURE_DIR/return-work-target.json" > /dev/null
 pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/03-workroom-return.png"
 
+PW_STAGE=primary-task-navigation
+pw_tap return '任务' primary-tasks-target
+pw_scene tasks-root tasks
+pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/11-tasks.png"
+
+PW_STAGE=primary-project-navigation
+pw_tap tasks-root '项目' primary-projects-target
+pw_scene projects-root projects
+pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/12-projects.png"
+
+PW_STAGE=primary-work-navigation
+pw_tap projects-root '工作' primary-work-target
+pw_scene primary-work-return workroom
+
+PW_STAGE=work-input-real-ime
+# Focus the actual editable work input without entering or sending a draft.
+# Native current IME service state and app XML jointly verify the hidden tabs.
+pw_tap primary-work-return '工作输入' work-input-target
+pw_scene workroom-ime workroom-ime true
+pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/13-workroom-ime.png"
+
+PW_STAGE=work-input-ime-back
+pw_adb shell input keyevent KEYCODE_BACK
+sleep 1
+pw_scene workroom-ime-return workroom false
+pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/14-workroom-ime-return.png"
+
 PW_STAGE=settings-root
-pw_tap return '全部工作' settings-work-target
+pw_tap workroom-ime-return '全部工作' settings-work-target
 pw_scene settings-menu work-menu
 pw_tap settings-menu '设置与连接' settings-target
 pw_scene settings settings
@@ -283,15 +316,20 @@ pw_tap settings '模型与连接' models-group-target --match prefix
 pw_scene model-purpose model-purpose
 pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/06-model-purpose.png"
 
-PW_STAGE=model-connections-list
-pw_tap model-purpose '模型与连接' models-list-target --match prefix
+PW_STAGE=model-directory
+pw_tap model-purpose '选择模型' models-list-target --match prefix
 pw_scene model-list model-list
-pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/07-model-connections.png"
+pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/07-model-directory.png"
+
+PW_STAGE=model-connection-management
+pw_tap model-list '管理连接' model-connections-target
+pw_scene model-connections model-connections
+pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/15-connection-management.png"
 
 PW_STAGE=model-unsaved-editor
 # A fresh install normally has no API profile. Use the real add editor then;
 # never seed a connection merely to make an edit-only selector pass.
-pw_tap model-list '编辑当前 API 连接' model-editor-target --match prefix --fallback-label '添加 API 连接'
+pw_tap model-connections '编辑当前 API 连接' model-editor-target --match prefix --fallback-label '添加 API 连接'
 pw_scene model-editor model-editor
 pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/08-model-editor.png"
 
@@ -304,13 +342,13 @@ PW_STAGE=return-through-native-back
 # Exercise the real Android Back delivery; no JavaScript fixture/bridge injection.
 pw_adb shell input keyevent KEYCODE_BACK
 sleep 1
+pw_scene model-connections-return model-connections
+pw_adb shell input keyevent KEYCODE_BACK
+sleep 1
 pw_scene model-list-return model-list
 pw_adb shell input keyevent KEYCODE_BACK
 sleep 1
-pw_scene model-purpose-return model-purpose
-pw_adb shell input keyevent KEYCODE_BACK
-sleep 1
-pw_scene settings-return settings
+pw_scene settings-return model-purpose
 pw_adb shell input keyevent KEYCODE_BACK
 sleep 1
 pw_scene workroom-final workroom
@@ -318,7 +356,8 @@ pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/10-workroom-final.png"
 
 PW_STAGE=finalize-recording
 # End this script-owned recording at the actual journey end, retaining MP4
-# finalization. The 120s native limit/135s timeout remain hard upper bounds.
+# finalization. The added root-navigation and real IME legs use the native
+# 180s recording limit and a 195s host timeout; neither can run indefinitely.
 kill -0 "$PW_RECORD_PID" 2>/dev/null || { echo "Screen recording ended before the navigation journey completed" >&2; exit 1; }
 pw_adb shell pkill -INT screenrecord
 wait "$PW_RECORD_PID"

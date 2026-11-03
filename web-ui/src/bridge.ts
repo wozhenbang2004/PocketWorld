@@ -5,7 +5,7 @@ export type PocketSnapshot = {
   state: Record<string, any>;
   composer: Record<string, any> | null;
   capabilities: { commands: string[] };
-  host?: { connected?: boolean; [key: string]: unknown };
+  host?: { connected?: boolean; keyboardVisible?: boolean; [key: string]: unknown };
   [key: string]: unknown;
 };
 
@@ -126,6 +126,9 @@ window.PocketWeb = {
   handleBack() { return Boolean(backHandler?.()); },
   hostConfiguration(value) {
     current = { ...current, host: { ...current.host, ...value } };
+    if (typeof value.keyboardVisible === 'boolean') {
+      document.documentElement.dataset.pocketKeyboard = String(value.keyboardVisible);
+    }
     publish();
   },
 };

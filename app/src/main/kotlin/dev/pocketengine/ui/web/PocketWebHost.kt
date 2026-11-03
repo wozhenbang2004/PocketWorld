@@ -54,6 +54,8 @@ internal class PocketWebHost(
     private val web = WebView(activity)
     private var closed = false
     private var documentLoaded = false
+    private var documentCommandSeen = false
+    private var keyboardVisible = false
     private var pendingState: JSONObject? = null
     private val bridge = PocketWebBridge(controller, ::send)
     private val loader = WebViewAssetLoader.Builder().setDomain(HOST)
@@ -96,6 +98,7 @@ internal class PocketWebHost(
             override fun shouldInterceptRequest(view: WebView, url: String): WebResourceResponse = response(Uri.parse(url), "GET")
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                 documentLoaded = false
+                documentCommandSeen = false
             }
             override fun onPageFinished(view: WebView, url: String) {
                 if (closed || !trusted(Uri.parse(url))) return
@@ -140,6 +143,7 @@ internal class PocketWebHost(
             val bars = insets.getInsets(WindowInsets.Type.systemBars())
             val keyboard = insets.getInsets(WindowInsets.Type.ime())
             target.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, keyboard.bottom))
+            if (keyboardVisible != insets.isVisible(WindowInsets.Type.ime())) sendConfiguration(insets)
             insets
         }
         view.requestApplyInsets()
@@ -167,6 +171,11 @@ internal class PocketWebHost(
                         documentLoaded = true
                         pendingState?.let { pendingState = null; send(it) }
                     }
+                    // The first command also repairs configuration sent before the receiver mounted.
+                    if (!documentCommandSeen) {
+                        documentCommandSeen = true
+                        sendConfiguration()
+                    }
                     bridge.postMessage(raw)
                 }
             }
@@ -184,10 +193,15 @@ internal class PocketWebHost(
         web.evaluateJavascript("window.PocketWeb&&window.PocketWeb.receive($encoded)", null)
     }
 
-    private fun sendConfiguration() {
+    private fun sendConfiguration(insets: WindowInsets? = null) {
+        if (closed) return
+        // Keep the actual IME state even while a new document is still loading.
+        (insets ?: view.rootWindowInsets)?.let { keyboardVisible = it.isVisible(WindowInsets.Type.ime()) }
+        if (!documentLoaded || !trusted(Uri.parse(web.url ?: ""))) return
         val version = WebView.getCurrentWebViewPackage()?.versionName.orEmpty()
         Log.i(TAG, "host source=library-web provider=$version")
         val values = JSONObject().put("webViewVersion", version).put("fontScale", activity.resources.configuration.fontScale)
+            .put("keyboardVisible", keyboardVisible)
         web.evaluateJavascript("window.PocketWeb&&window.PocketWeb.hostConfiguration(${values})", null)
     }
 
@@ -198,7 +212,7 @@ internal class PocketWebHost(
         }
     }
 
-    fun resume() { if (!closed) { web.onResume(); sendConfiguration() } }
+    fun resume() { if (!closed) { web.onResume(); view.requestApplyInsets(); sendConfiguration() } }
     fun pause() { if (!closed) web.onPause() }
     fun savePresentationState(): String = bridge.savePresentationState().toString()
     fun close() {

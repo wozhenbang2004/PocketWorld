@@ -21,3 +21,17 @@ The current composition contract is [DESIGN.md](../DESIGN.md). CI20 remains reje
 Colors are solid white/neutral gray; alpha is used only for shadows. This is a role-based theme: ordinary content stays on its page surface; field shells have low elevation; temporary popup surfaces have stronger elevation; the selected physical primary action retains its own source material stack. The file does not add a global animation, universal grayscale filter, layout card, clipping rule, fake status, or hidden information.
 
 Validation for this file is limited to balanced CSS delimiter/quote checks, neutral-color and ownership checks plus source-hook inspection. No full CSS parser or browser was available locally. A fresh GitHub CI rendering and a human review of the composed 360px / 412px screens and motion are still required. This document does not claim aesthetic acceptance, Android device validation, or real-task integration from those checks.
+
+## 2026-11-03 complete composition adaptation
+
+`workspace-refactor.css` and `secondary-refactor.css` are consumer composition layers loaded after the retained source styles. They implement the revised contract in `DESIGN.md`, beyond the earlier theme-only scope above:
+
+- The existing Ovio `LiquidTabs` owns three real root panels. Consumer flex order places its original tab bar below those panels; application typography, spacing and opacity replace demo presentation. Original spring, clipped dual labels and moving indicator remain unchanged.
+- The existing Affect `DecisionInbox` accepts an optional heading and exposes its original task identity on each row. Waiting tasks use specific primary actions and an overview secondary action; no local click fabricates task completion.
+- `TaskOutcome` composes the existing Answer and BoardUI Accordion. The result reads as one document; related replies and their attachments remain available in a default-collapsed disclosure.
+- `FilesBrowser` reuses its existing `FileArt` inside list rows and shows parent paths in grid metadata. Artwork indicates type, not invented file contents. Existing file identities, menus and list/tree/grid selection remain.
+- Vaul's existing background-scale behavior is enabled for work and task drawers. Input, decision and reading surfaces have distinct roles; no replacement drawer animation is introduced.
+- Settings uses retained BoardUI Accordion and Button entries. Model browsing uses retained Affect ModelPicker; connection editing remains BoardUI forms. Team object views use retained BoardUI Tabs and Buttons; memory uses retained Accordion with real `memory.list` records and source fields.
+- The Android host sends actual IME visibility through its existing configuration channel. It changes root-navigation visibility, without introducing a new bridge command, viewport heuristic or second inset application.
+
+These are project adaptations of the identities above. Their current visual and interaction status is tracked in `DESIGN.md` and the matching CI artifacts, separately from upstream identity and the user's approval of the selected components.
