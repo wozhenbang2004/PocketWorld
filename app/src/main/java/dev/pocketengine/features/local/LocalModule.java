@@ -7,6 +7,7 @@ import dev.pocketengine.features.workspace.VersionedWorkspace;
 import dev.pocketengine.features.local.project.ProjectDevelopment;
 import dev.pocketengine.features.local.project.ProjectSources;
 import dev.pocketengine.features.local.project.ProjectFileBytes;
+import dev.pocketengine.features.local.project.ProjectTextImport;
 import dev.pocketengine.features.local.runtime.ProjectRuntime;
 import dev.pocketengine.features.local.runtime.RuntimeExecutionRef;
 import dev.pocketengine.features.local.runtime.RuntimeInvocation;
@@ -902,21 +903,33 @@ public final class LocalModule implements EngineModule {
     }
     private JSONObject review(String id,String path)throws Exception {
         requireIdle(id);JSONObject checkout=checkout(id);JSONObject byteReview=binaryReview(id,path,checkout);if(byteReview!=null)return byteReview;JSONObject file=localFile(id,path),target=target(checkout.getString("projectId"),path);
-        if(file.optBoolean("deleted")&&!byPath(checkout.getJSONArray("files")).containsKey(path))throw new IllegalArgumentException("工作副本没有这个文件");
+        JSONObject baseline=byPath(checkout.getJSONArray("files")).get(path);if(file.optBoolean("deleted")&&baseline==null)throw new IllegalArgumentException("工作副本没有这个文件");
         boolean same=file.optBoolean("deleted")==target.optBoolean("deleted")&&file.getString("content").equals(target.getString("content"));
+        boolean baselineCurrent=baseline!=null&&baseline.optInt("sourceVersion",-1)==target.getInt("version")&&file.getString("sha256").equals(baseline.optString("sha256")),reconcile=same&&!baselineCurrent;
+        String targetHash=target.optBoolean("deleted")?"absent":hash(target.getString("content").getBytes(StandardCharsets.UTF_8));
         JSONObject result=VersionedWorkspace.compare(path,target.getString("content"),file.getString("content"),"项目v"+target.getInt("version"),"工作副本");
-        return result.put("checkoutId",id).put("projectId",checkout.getString("projectId")).put("content",file.getString("content")).put("expectedHash",file.getString("sha256")).put("expectedVersion",target.getInt("version")).put("deleted",file.optBoolean("deleted")).put("targetDeleted",target.optBoolean("deleted")).put("same",same).put("importable",!same&&!result.optBoolean("truncated")&&file.getString("content").length()<=65536).put("message",same?"项目与副本内容一致":file.getString("content").length()>65536?"正式项目单文件最多65536字符，请缩小内容":"确认此差异后，按看到的本地摘要与项目版本导回；任一变化都会拒绝");
+        return result.put("format",ProjectTextImport.REVIEW).put("checkoutId",id).put("projectId",checkout.getString("projectId")).put("content",file.getString("content")).put("expectedHash",file.getString("sha256")).put("expectedVersion",target.getInt("version")).put("expectedTargetHash",targetHash).put("deleted",file.optBoolean("deleted")).put("targetDeleted",target.optBoolean("deleted")).put("same",same).put("baselineNeedsRefresh",reconcile).put("importable",reconcile||!same&&!result.optBoolean("truncated")&&file.getString("content").length()<=65536).put("atomicSourceFence",false).put("message",same?reconcile?"正式版本与副本内容已一致；可明确只登记副本基线，不重写正式版本":"项目与副本内容、版本基线均一致":file.getString("content").length()>65536?"正式项目单文件最多65536字符，请缩小内容":"确认此差异后，按看到的本地摘要与项目版本导回；任一变化都会拒绝");
     }
     private JSONObject importToProject(JSONObject input)throws Exception {
         String id=JsonFiles.text(input,"checkoutId",80),path=JsonFiles.text(input,"path",240);requireIdle(id);requireCheckoutWritable(id);
         Object rawVersion=input.opt("expectedVersion");if(!(rawVersion instanceof Integer||rawVersion instanceof Long)||((Number)rawVersion).longValue()<0||((Number)rawVersion).longValue()>Integer.MAX_VALUE)throw new IllegalArgumentException("请先审阅差异，并提交看到的整数项目版本");
         JSONObject checkout=checkout(id);JSONObject bytesImported=importBinaryToProject(input,id,path,checkout);if(bytesImported!=null)return bytesImported;JSONObject file=localFile(id,path);requireHash(input,file.getString("sha256"));
-        JSONArray files=checkout.getJSONArray("files");if(file.optBoolean("deleted")&&!byPath(files).containsKey(path))throw new IllegalArgumentException("工作副本没有这个文件");
-        JSONObject result=projects.handle(file.optBoolean("deleted")?"removeFile":"write",new JSONObject().put("projectId",checkout.getString("projectId")).put("path",path).put("content",file.getString("content")).put("expectedVersion",((Number)rawVersion).intValue()));
-        boolean found=false;for(int i=0;i<files.length();i++)if(path.equals(files.getJSONObject(i).getString("path"))){files.getJSONObject(i).put("sourceVersion",result.getInt("version")).put("sha256",file.getString("sha256"));found=true;}
-        if(!found)files.put(new JSONObject().put("path",path).put("sourceVersion",result.getInt("version")).put("sha256",file.getString("sha256")));
-        JsonFiles.write(new File(content(id).getParentFile(),"checkout.json"),checkout);
-        return result.put("projectId",checkout.getString("projectId")).put("checkoutId",id).put("importedHash",file.getString("sha256"));
+        JSONArray files=checkout.getJSONArray("files");JSONObject baseline=byPath(files).get(path);if(file.optBoolean("deleted")&&baseline==null)throw new IllegalArgumentException("工作副本没有这个文件");
+        String project=checkout.getString("projectId");File baselineRecord=new File(content(id).getParentFile(),"checkout.json");JSONObject target=target(project,path);boolean onlyBaseline=input.has("reconcileBaselineOnly")||input.has("textReviewContract");
+        JSONObject result;
+        if(onlyBaseline){
+            ProjectTextImport.requireReconciliation(input,project,file,target);
+            if(baseline!=null&&baseline.optInt("sourceVersion",-1)==target.getInt("version")&&file.getString("sha256").equals(baseline.optString("sha256")))throw new IllegalStateException("正式版本与副本基线已一致，未重复登记或写入版本");
+            // A second observation narrows the race, but this is not an atomic source/project fence.
+            JSONObject currentCheckout=checkout(id);if(!project.equals(currentCheckout.getString("projectId")))throw new SecurityException("原副本项目归属已变化，未登记基线");
+            ProjectTextImport.requireReconciliation(input,project,localFile(id,path),target(project,path));result=target;
+        }else{
+            if(file.optBoolean("deleted")==target.optBoolean("deleted")&&file.getString("content").equals(target.getString("content")))throw new IllegalStateException("正式内容已一致；请刷新核对，再明确只登记副本基线，不能重复写版本");
+            result=projects.handle(file.optBoolean("deleted")?"removeFile":"write",new JSONObject().put("projectId",project).put("path",path).put("content",file.getString("content")).put("expectedVersion",((Number)rawVersion).intValue()));
+        }
+        if(baseline==null){baseline=new JSONObject().put("path",path);files.put(baseline);}baseline.put("sourceVersion",result.getInt("version")).put("sha256",file.getString("sha256")).put("binary",false).put("bytes",file.optLong("bytes"));
+        boolean baselineUpdated=true;try{JsonFiles.write(baselineRecord,checkout);}catch(Exception baselineUnknown){baselineUpdated=false;}
+        return result.put("format",ProjectTextImport.RECEIPT).put("projectId",project).put("checkoutId",id).put("path",path).put("importedHash",file.getString("sha256")).put("projectVersionCommitted",!onlyBaseline).put("contentWritten",!onlyBaseline).put("alreadyMatchingVersionObserved",onlyBaseline).put("checkoutBaselineUpdated",baselineUpdated).put("baselineUpdateStatus",baselineUpdated?"observed":"unknown").put("status",baselineUpdated?onlyBaseline?"baseline_reconciled":"completed":onlyBaseline?"baseline_update_unknown":"project_committed_baseline_unknown").put("businessVerified",false).put("replayAllowed",false).put("atomicSourceFence",false).put("message",baselineUpdated?onlyBaseline?"正式版本已核对一致，仅登记副本基线，没有重复写版本":"已按审阅导回正式版本并登记副本基线":onlyBaseline?"正式版本已核对一致，但副本基线登记未确认；请刷新核对，不自动重发":"正式版本已确证保存，但副本基线登记未确认；请刷新核对后明确只登记已一致基线，不重写正式版本");
     }
     private dev.pocketengine.features.local.project.ProjectBinaryImport.Current binaryImportCurrent(){return ()->{if(closed||Thread.currentThread().isInterrupted())throw new java.io.InterruptedIOException("原字节读取/导回已取消");};}
     private boolean byteContext(dev.pocketengine.features.local.project.ProjectBinaryImport.Source source,dev.pocketengine.features.workspace.VersionedWorkspace.FileSnapshot target,JSONObject baseline){return source.binary||"binary".equals(target.kind)||source.deleted&&baseline!=null&&baseline.optBoolean("binary");}

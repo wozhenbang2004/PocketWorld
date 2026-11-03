@@ -24,6 +24,11 @@ public final class LocalWorkbenchGuardTest {
         assertThrows(IllegalArgumentException.class,()->LocalWorkbenchGuard.importPayload(binary));
         assertEquals(4,LocalWorkbenchGuard.importPayload(review()).length());
     }
+    @Test public void matchingTextReviewSubmitsOnlyBaselineReconciliationAndPinsProjectAndTarget()throws Exception {
+        JSONObject reviewed=review().put("format",dev.pocketengine.features.local.project.ProjectTextImport.REVIEW).put("projectId","project-a").put("same",true).put("baselineNeedsRefresh",true).put("expectedTargetHash","a".repeat(64)).put("targetDeleted",false);
+        JSONObject input=LocalWorkbenchGuard.importPayload(reviewed);assertTrue(input.getBoolean("reconcileBaselineOnly"));assertEquals("project-a",input.getString("projectId"));assertEquals("a".repeat(64),input.getString("expectedTargetHash"));assertFalse(input.getBoolean("expectedTargetDeleted"));assertFalse(input.has("content"));
+        assertThrows(Exception.class,()->LocalWorkbenchGuard.importPayload(reviewed.put("same",false)));
+    }
     @Test public void argumentsAreLiteralLinesNotShellSyntax()throws Exception {
         JSONArray argv=LocalWorkbenchGuard.argv("python3","main file.py\n$(touch never)\n");assertEquals(3,argv.length());assertEquals("main file.py",argv.getString(1));assertEquals("$(touch never)",argv.getString(2));
     }
