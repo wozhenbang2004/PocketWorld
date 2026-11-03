@@ -26,7 +26,7 @@ public final class BrowserArtifactInputTest {
             assertTrue("Repository fixture must be available",Files.isRegularFile(runner));
             process=new ProcessBuilder(node,runner.toAbsolutePath().toString(),input.toString()).redirectErrorStream(true).redirectOutput(output.toFile()).start();
             assertTrue("File input programs exceeded 20 seconds",process.waitFor(20,TimeUnit.SECONDS));
-            String observed=Files.readString(output,StandardCharsets.UTF_8);assertEquals(observed,0,process.exitValue());
+            String observed=new String(Files.readAllBytes(output),StandardCharsets.UTF_8);assertEquals(observed,0,process.exitValue());
             JSONObject result=new JSONObject(observed.trim());assertEquals("passed",result.getString("status"));assertEquals(13,result.getInt("checks"));assertFalse(result.getBoolean("rendererVerified"));
         } finally {
             if(process!=null&&process.isAlive()){process.destroyForcibly();process.waitFor(5,TimeUnit.SECONDS);}
