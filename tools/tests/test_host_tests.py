@@ -90,7 +90,7 @@ class HostTestEntrypointTest(unittest.TestCase):
             sources = [path for path in matches if path.is_file()]
             self.assertEqual(1, len(sources))
             methods += len(re.findall(r'@Test\s+public\s+void\s+\w+\s*\(', sources[0].read_text()))
-        self.assertEqual(15, methods)
+        self.assertEqual(23, methods)
         helper = (HOST.ROOT / 'app/src/hostTest/java/dev/pocketengine/features/local/project/ProjectManagedRunnerJourneyTest.java').read_text()
         self.assertIn('createFixture(true)', helper)
         self.assertIn('createTerminalFixture()throws Exception {createFixture(false);}', helper)
@@ -99,7 +99,9 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertIn('automaticProjectLogPolicyForHost', terminal)
         self.assertIn('cursor,pageBytes', terminal)
         ui = (HOST.ROOT / 'app/src/main/kotlin/dev/pocketengine/ui/ProjectTerminalSection.kt').read_text()
-        self.assertIn('key(task.id, execution, metadata)', ui)
+        self.assertIn('key(taskId, execution, metadata)', ui)
+        self.assertIn('NativeProjectExecutionObservation(task.id, execution)', ui)
+        self.assertIn('app.features.openProjectExecutionForOwner(taskId, execution, observation)', ui)
         self.assertIn('logPolicy = page.optJSONObject("logObservationPolicy")', ui)
         self.assertNotIn('metadata = page', ui)
 
@@ -108,11 +110,16 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertTrue(entry['native'])
         self.assertTrue(entry['robolectric'])
         self.assertEqual(['dev.pocketengine.ui.RuntimeActivityCaptionTest',
-                          'dev.pocketengine.features.local.project.ProjectCommandSpecTest'], entry.get('additionalClasses', []))
-        self.assertEqual(['dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest'], entry['helpers'])
+                          'dev.pocketengine.features.local.project.ProjectCommandSpecTest',
+                          'dev.pocketengine.ui.TaskExecutionPresentationTest',
+                          'dev.pocketengine.store.TaskAuditStoreTest',
+                          'dev.pocketengine.store.TaskJobProjectionTest',
+                          'dev.pocketengine.ui.TaskJobMountedTest'], entry.get('additionalClasses', []))
+        self.assertEqual(['dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest',
+                          'dev.pocketengine.testutil.HttpServer'], entry['helpers'])
         self.assertEqual(['runtime-development-continuity'], HOST.select(REGISTRY, [], [entry['class']]))
         source = (HOST.ROOT / 'app/src/hostTest/java' / (entry['class'].replace('.', '/') + '.java')).read_text()
-        self.assertEqual(3, len(re.findall(r'@Test\s+public\s+void\s+\w+\s*\(', source)))
+        self.assertEqual(5, len(re.findall(r'@Test\s+public\s+void\s+\w+\s*\(', source)))
         self.assertNotIn('@Ignore', source)
 
     def test_owner_diagnostic_metadata_is_explicit_and_consumes_the_shared_phone_whitelist(self):
@@ -342,33 +349,37 @@ class HostTestEntrypointTest(unittest.TestCase):
         host = workflow.split('  host-tests:\n', 1)[1]
         selection = re.search(r"HOST_TEST_GROUPS: \$\{\{ (.*) \}\}", host)
         self.assertIsNotNone(selection)
+        guard = re.search(r'(?m)^    if: \$\{\{ (.*) \}\}$', host).group(1)
         def batch(event='pull_request', branch='pro/workpack-02-phone-control', same_repo=True, manual=''):
             repository = 'owner/private-pocketworld'
             github = SimpleNamespace(event_name=event, repository=repository, head_ref=branch,
-                event=SimpleNamespace(pull_request=SimpleNamespace(head=SimpleNamespace(
+                event=SimpleNamespace(repository=SimpleNamespace(private=True),pull_request=SimpleNamespace(head=SimpleNamespace(
                     repo=SimpleNamespace(full_name=repository if same_repo else 'fork/other')))))
-            return eval(selection.group(1).replace('&&', ' and ').replace('||', ' or '),
-                        {'__builtins__': {}}, {'github': github, 'inputs': SimpleNamespace(host_groups=manual)})
+            context = {'github': github, 'inputs': SimpleNamespace(host_groups=manual, target='host-tests')}
+            if not eval(guard.replace('&&', ' and ').replace('||', ' or '), {'__builtins__': {}}, context):
+                return None
+            return eval(selection.group(1).replace('&&', ' and ').replace('||', ' or '), {'__builtins__': {}}, context)
         groups = batch().split(',')
         self.assertEqual(['phone-setup-recovery', 'phone-input-extensions', 'phone-semantic-profile', 'phone-access-history',
                           'phone-observation-boundaries', 'phone-sensitive-owner', 'local-phone-leases', 'phone-audio-owner',
-                          'phone-task-platform', 'aion-conversations'], groups)
+                          'phone-task-platform', 'aion-conversations', 'model-quality-routing', 'model-quality-observability',
+                          'model-quality-sources', 'model-evaluation', 'gateway-continuation', 'runner-budget-stream'], groups)
         self.assertEqual(groups, HOST.select(REGISTRY, groups, []))
         main_groups = ['phone-task-platform', 'memory-recall-quality', 'memory-evidence-plan', 'memory-method-quality']
         self.assertEqual(main_groups, HOST.select(REGISTRY, main_groups, []))
         self.assertEqual(main_groups, batch(branch='pro/workpack-03-phone-api-cli').split(','))
         self.assertEqual(main_groups[1:], batch(branch='pro/workpack-05-memory-quality').split(','))
-        self.assertEqual(main_groups[1:], batch(branch='uiux/workroom-20261102').split(','))
+        self.assertIsNone(batch(branch='uiux/workroom-20261102'))
         model = ['model-quality-routing', 'model-quality-observability', 'model-quality-sources',
                  'model-evaluation', 'gateway-continuation', 'runner-budget-stream']
         self.assertEqual(model, batch(branch='pro/workpack-06-model-quality').split(','))
         self.assertEqual(model, HOST.select(REGISTRY, model, []))
-        takeover = groups + main_groups[1:] + ['model-quality-routing', 'model-quality-sources', 'gateway-continuation']
+        takeover = groups[:10] + main_groups[1:] + ['model-quality-routing', 'model-quality-sources', 'gateway-continuation']
         self.assertEqual(takeover, batch(branch='pro/mika-full-takeover-20261103').split(','))
         self.assertEqual(takeover, HOST.select(REGISTRY, takeover, []))
         self.assertEqual(16, len(takeover))
-        self.assertEqual('', batch(branch='pro/mika-full-takeover-20261103', same_repo=False))
-        self.assertEqual('', batch(same_repo=False))
+        self.assertIsNone(batch(branch='pro/mika-full-takeover-20261103', same_repo=False))
+        self.assertIsNone(batch(same_repo=False))
         self.assertEqual('request-clock', batch(event='workflow_dispatch', manual='request-clock'))
         self.assertNotIn('matrix:', host)
         for field in ('testedCommit', 'prBaseCommit', 'prHeadCommit', 'deviceTestsPerformed', 'apkBuiltOrSigned'):

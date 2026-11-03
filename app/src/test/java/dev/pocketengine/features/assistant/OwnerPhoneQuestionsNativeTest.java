@@ -21,6 +21,7 @@ import dev.pocketengine.phone.PhoneNotificationControls;
 import dev.pocketengine.store.TaskStore;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.TimeZone;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -148,6 +149,28 @@ public final class OwnerPhoneQuestionsNativeTest {
         assertEquals(0,f.tasks.pollPhoneOwnerInputs(f.id,f.run,f.epoch,new JSONArray().put(saved.getString("messageId")),true,false,f.original).length());
         assertTrue(f.consume("Original phone answer").getBoolean("duplicate"));assertEquals(1,f.savedCount());assertEquals(0,f.continuationRequests);assertEquals(grant,f.grant());
     }}
+
+    @Test public void answerAdmissionKeepsItsOriginalClockAcrossDuplicateAndLegacyProjection()throws Exception{
+        TimeZone previous=TimeZone.getDefault();
+        try{
+            TimeZone.setDefault(TimeZone.getTimeZone("Asia/Shanghai"));
+            try(Fixture f=new Fixture()){
+                TimeZone.setDefault(TimeZone.getTimeZone("America/New_York"));JSONObject saved=f.consume("Keep the original admission time");
+                JSONObject row=f.tasks.get(f.id,false).getJSONArray("ownerInputs").getJSONObject(0),fact=row.getJSONObject("inputOriginClock");String originalFact=fact.toString();
+                assertEquals("America/New_York",fact.getString("ianaZoneId"));assertEquals(row.getLong("acceptedAt"),fact.getLong("receivedAtEpochMillis"));
+                assertEquals(java.time.Instant.ofEpochMilli(row.getLong("acceptedAt")).toString(),fact.getString("receivedAtUtc"));
+                TimeZone.setDefault(TimeZone.getTimeZone("Asia/Tokyo"));assertTrue(f.consume("Keep the original admission time").getBoolean("duplicate"));
+                assertEquals(originalFact,f.tasks.get(f.id,false).getJSONArray("ownerInputs").getJSONObject(0).getJSONObject("inputOriginClock").toString());assertEquals(1,f.savedCount());f.requireUnclaimed();
+                f.tasks.resumeOwnerPhoneQuestionRun(f.held);f.original.resumeAtPauseRevision(f.held.pauseRevision());assertTrue(f.questions.take(f.held));
+                JSONObject mixed=f.tasks.ownerInputClockContext(f.id,f.run,f.epoch,java.util.List.of(saved.getString("messageId")),f.original,true);
+                assertEquals("mixed",mixed.getString("status"));assertEquals(2,mixed.getInt("knownInputCount"));assertEquals(0,mixed.getInt("missingInputCount"));assertTrue(mixed.isNull("canonicalZoneId"));assertFalse(mixed.getBoolean("executionAuthorized"));
+                f.changeTask(task->task.getJSONArray("ownerInputs").getJSONObject(0).remove("inputOriginClock"));
+                JSONObject legacy=f.tasks.ownerInputClockContext(f.id,f.run,f.epoch,java.util.List.of(saved.getString("messageId")),f.original,true);
+                assertEquals("missing",legacy.getString("status"));assertEquals(1,legacy.getInt("knownInputCount"));assertEquals(1,legacy.getInt("missingInputCount"));assertTrue(legacy.isNull("canonicalZoneId"));
+                assertFalse(f.tasks.get(f.id,false).getJSONArray("ownerInputs").getJSONObject(0).has("inputOriginClock"));assertEquals(0,f.count("assistant_sources"));assertEquals(0,f.count("operations"));
+            }
+        }finally{TimeZone.setDefault(previous);}
+    }
 
     @Test public void concurrentExactAnswersSaveOnceAndConflictingBindingsCannotReplaceTheAnswer()throws Exception{try(Fixture f=new Fixture()){
         ExecutorService workers=Executors.newFixedThreadPool(2);CountDownLatch start=new CountDownLatch(1);

@@ -48,6 +48,8 @@ public final class AgentRunner {
     /** The existing task store owns admission, dedup and the atomic terminal/send fence. */
     public interface OwnerInputs {
         JSONArray poll(JSONArray includedMessageIds,boolean turnBoundary,boolean closeIfEmpty,RunControl control)throws Exception;
+        /** Native provenance for already included rows only; default is missing, never host-zone inference. */
+        default JSONObject clockContext(java.util.List<String> includedMessageIds,RunControl control)throws Exception{return null;}
         /** Called only after this actual request completed and its text reached the original journal. */
         default void completed(OwnerReply reply,RunControl original)throws Exception { }
     }
@@ -294,7 +296,8 @@ public final class AgentRunner {
                 emit(taskId, "model", "running", "正在决定下一步操作。", null, null, config, sink);
                 JSONArray requestHistory=history;
                 JSONObject memoryDependency=null;
-                String nativeReference=clean(requestClock.referenceData(),config);
+                JSONObject inputClock=ownerInputs==null?null:ownerInputs.clockContext(ownerMessageIds(history),control);
+                control.check();String nativeReference=clean(requestClock.referenceData(inputClock),config);
                 String repeatNotice=repeatedTools.referenceData();if(!repeatNotice.isEmpty())nativeReference+="\n\n"+repeatNotice;
                 if(!recovery.referenceData().isEmpty())nativeReference+="\n\n"+recovery.referenceData();
                 JSONArray tools=phone==null||!control.phoneSurfaceActive()?new JSONArray():tools();
@@ -383,11 +386,11 @@ public final class AgentRunner {
                     final PhoneRouteSession currentRoutes=routes;
                     dev.pocketengine.runtime.usage.InferenceCapture.Target originalMain=journal==null?dev.pocketengine.runtime.usage.InferenceCapture.unattributed():journal.inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN,"");
                     if(currentRoutes!=null)originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,()->currentRoutes.requireCurrentSources(control));
+                    if(stepRouting.selectedLight())originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,stepRouting::requireLightCurrent);
                     if(screens!=null)originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,()->{
                         if(!historyTurnPrepared.get())throw new ModelGateway.RequestRefreshRequired();
                         try{screens.requireUploads(nativeProvenance,control);}catch(SecurityException withdrawn){throw new ModelGateway.RequestRefreshRequired();}
                     });
-                    if(stepRouting.selectedLight())originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,stepRouting::requireLightCurrent);
                     final JSONArray originalHistory=history,retryProjection=requestHistory;final JSONArray[] retryOwnerInputs={null};final boolean retryAfterContextRepair=!contextRecoveryUsed;
                     // Each physical call gets a fresh target/receipt and rechecks the original native
                     // task/epoch/scope. No tool has been admitted from this incomplete response.

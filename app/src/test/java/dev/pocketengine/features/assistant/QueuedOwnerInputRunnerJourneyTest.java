@@ -2,7 +2,7 @@ package dev.pocketengine.features.assistant;
 
 import android.app.Application;
 import android.database.sqlite.SQLiteDatabase;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.*;
 import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.runtime.AgentRunner;
@@ -31,11 +31,10 @@ public final class QueuedOwnerInputRunnerJourneyTest {
     private static String id(){return UUID.randomUUID().toString();}
     private static final class Server implements AutoCloseable {
         final HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
-        final ExecutorService workers=Executors.newCachedThreadPool();
         final List<JSONObject> bodies=new CopyOnWriteArrayList<>();
         final CountDownLatch first=new CountDownLatch(1),second=new CountDownLatch(1),release=new CountDownLatch(1);
         Server()throws Exception{
-            server.setExecutor(workers);server.createContext("/",exchange->{try{
+            server.createContext("/",exchange->{try{
                 int index=bodies.size();bodies.add(new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8)));if(index==1)second.countDown();
                 if(index==0){first.countDown();if(!release.await(15,TimeUnit.SECONDS))throw new AssertionError("first physical response gate timed out");}
                 byte[] bytes=new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("message",new JSONObject().put("role","assistant").put("content",index==0?"FIRST-ANSWER":"UPDATED-ANSWER")).put("finish_reason","stop"))).toString().getBytes(StandardCharsets.UTF_8);
@@ -43,7 +42,7 @@ public final class QueuedOwnerInputRunnerJourneyTest {
             }catch(Exception failure){throw new RuntimeException(failure);}finally{exchange.close();}});server.start();
         }
         String base(){return "http://127.0.0.1:"+server.getAddress().getPort();}
-        public void close(){release.countDown();server.stop(0);workers.shutdownNow();}
+        public void close(){release.countDown();server.stop(0);}
     }
     private static final class Fixture implements AutoCloseable,AssistantModule.NativeInputHost,AgentRunner.OwnerInputs {
         final Application android=RuntimeEnvironment.getApplication();final TaskStore tasks;final AssistantModule assistant;final SQLiteDatabase db;
@@ -77,6 +76,7 @@ public final class QueuedOwnerInputRunnerJourneyTest {
             if(holdClaim&&boundary&&rows.length()>0){claimed.countDown();if(!releaseClaim.await(15,TimeUnit.SECONDS))throw new AssertionError("claim gate timed out");}
             return rows;
         }
+        public JSONObject clockContext(List<String> included,RunControl original)throws Exception{assertSame(control,original);return tasks.ownerInputClockContext(binding.getString("taskId"),binding.getString("runId"),binding.getInt("epoch"),included,original,false);}
         public void completed(AgentRunner.OwnerReply reply,RunControl original)throws Exception{replies.add(reply);assistant.acceptTaskOwnerReply(reply,captured,original);}
         JSONObject execute(String conversation,String goal,JSONArray initial,ModelConfig config,RunControl original)throws Exception{
             captured=config;RunJournal journal=tasks.journal(binding.getString("taskId"),binding.getString("runId"),binding.getInt("epoch"),original);if(initial!=null)journal.checkpoint(initial,0,new JSONObject());
@@ -108,6 +108,7 @@ public final class QueuedOwnerInputRunnerJourneyTest {
         void execute()throws Exception{
             CapabilityPort port=new CapabilityPort(){public JSONArray tools(){return new JSONArray();}public boolean supports(String name){return false;}public boolean sideEffecting(String name){return false;}public JSONObject execute(String name,JSONObject args,RunControl original){throw new AssertionError("cold resume has no native effect tools");}};
             AgentRunner.OwnerInputs inputs=new AgentRunner.OwnerInputs(){
+                public JSONObject clockContext(List<String> included,RunControl original)throws Exception{assertSame(control,original);return tasks.ownerInputClockContext(task,run,epoch,included,original,false);}
                 public JSONArray poll(JSONArray included,boolean boundary,boolean close,RunControl original)throws Exception{assertSame(control,original);return tasks.pollOwnerInputs(task,run,epoch,included,boundary,close,original);}
                 public void completed(AgentRunner.OwnerReply completed,RunControl original)throws Exception{reply=completed;assistant.acceptTaskOwnerReply(completed,captured,original);}
             };
@@ -212,5 +213,16 @@ public final class QueuedOwnerInputRunnerJourneyTest {
             JSONObject actual=f.assistant.readOriginalConversation(other,"",40);assertEquals(other,actual.getString("conversationId"));assertEquals("B-ONLY-OWNER-ARCHIVE-NOT-A-INSTRUCTION",actual.getJSONArray("messages").getJSONObject(0).getString("content"));composer.reading(reading.key,0,0,message,message,false);
             assertTrue(f.assistant.snapshot().getBoolean("running"));assertEquals(draft.key,composer.activeKey());assertEquals("A-UNSENT-DRAFT-REMAINS",composer.active().text);assertEquals("A-anchor",composer.active().anchorMessage);JSONObject extra=f.append("A-EXACT-SAFE-BOUNDARY-INPUT","steer");server.release.countDown();f.idle();assertEquals(2,server.bodies.size());assertTrue(server.bodies.get(1).toString().contains("A-EXACT-SAFE-BOUNDARY-INPUT"));assertFalse(server.bodies.toString().contains("B-ONLY-OWNER-ARCHIVE-NOT-A-INSTRUCTION"));assertEquals(original.getString("taskId"),f.binding.getString("taskId"));assertEquals(original.getString("runId"),f.binding.getString("runId"));assertEquals("consumed",f.assistant.handle("getSubmission",new JSONObject().put("clientMessageId",extra.getString("clientMessageId"))).getString("status"));assertEquals("A-UNSENT-DRAFT-REMAINS",composer.active().text);assertEquals(message,composer.draft(reading.key).anchorMessage);
         }
+    }
+    private static JSONObject clock(JSONObject request)throws Exception{
+        JSONArray messages=request.getJSONArray("messages");for(int i=0;i<messages.length();i++){String content=messages.getJSONObject(i).optString("content"),open="<native_request_clock>\n",end="\n</native_request_clock>";int at=content.indexOf(open);if(at>=0)return new JSONObject(content.substring(at+open.length(),content.indexOf(end,at)));}throw new AssertionError("Actual HTTP request lacks original clock projection");
+    }
+    @Test public void originalNativeAdmissionsReachActualRequestsAsUniqueThenMixedWithoutCheckpointCopies()throws Exception{
+        TimeZone previous=TimeZone.getDefault();try(Server server=new Server();Fixture f=new Fixture(server)){
+            TimeZone.setDefault(TimeZone.getTimeZone("Asia/Shanghai"));JSONObject first=f.first();assertTrue(server.first.await(5,TimeUnit.SECONDS));JSONObject firstClock=clock(server.bodies.get(0));assertEquals("unique",firstClock.getString("inputOriginTimeZones"));assertEquals("Asia/Shanghai",firstClock.getJSONObject("inputOrigins").getString("canonicalZoneId"));
+            TimeZone.setDefault(TimeZone.getTimeZone("America/New_York"));JSONObject next=f.append("FOLLOW-UP-AFTER-OS-ZONE-CHANGE");server.release.countDown();f.idle();assertEquals(2,server.bodies.size());JSONObject second=clock(server.bodies.get(1));assertEquals("mixed",second.getString("inputOriginTimeZones"));assertTrue(second.getJSONObject("inputOrigins").isNull("canonicalZoneId"));assertEquals(2,second.getJSONObject("inputOrigins").getInt("knownInputCount"));assertEquals(0,second.getJSONObject("inputOrigins").getInt("missingInputCount"));
+            assertEquals(first.getString("taskId"),f.binding.getString("taskId"));assertEquals(first.getString("runId"),f.binding.getString("runId"));assertFalse(second.getBoolean("executionAuthorized"));assertFalse(second.getBoolean("schedulesChanged"));assertFalse(f.control.isCancelled());assertEquals(0,f.tasks.get(first.getString("taskId"),false).getJSONArray("operations").length());
+            JSONObject saved=f.tasks.journal(first.getString("taskId"),first.getString("runId"),first.getInt("epoch"),f.control).restore();assertFalse(saved.getJSONArray("messages").toString().contains("native_request_clock"));assertFalse(saved.getJSONArray("messages").toString().contains("inputOriginClock"));assertEquals("consumed",f.assistant.handle("getSubmission",new JSONObject().put("clientMessageId",next.getString("clientMessageId"))).getString("status"));
+        }finally{TimeZone.setDefault(previous);}
     }
 }
