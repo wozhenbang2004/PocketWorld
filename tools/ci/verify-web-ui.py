@@ -310,16 +310,42 @@ def section_editor_controls(root, label):
 
 
 def navigation_identity(root, visible):
-    controls = {label: accessible_controls(root, label) for label in PRIMARY_TABS}
     if not visible:
+        controls = {label: accessible_controls(root, label) for label in PRIMARY_TABS}
         assert not any(controls.values()), "The primary navigation remained accessible while the real IME was visible"
         return {"visible": False, "labels": list(PRIMARY_TABS)}
-    assert all(len(items) == 1 for items in controls.values()), "Expected exactly three distinct clickable primary tabs: 工作 / 任务 / 项目"
-    bounds = [next(iter(items)) for items in controls.values()]
-    assert all(bounds[i][2] <= bounds[i + 1][0] for i in range(2)), "Primary tabs are not arranged in their actual horizontal navigation row"
-    assert max(item[1] for item in bounds) < min(item[3] for item in bounds), "Primary tabs do not share one visible row"
+    controls = {label: [node for node in root.iter("node")
+                        if node.get("package") == APP_ID and label in accessible_values(node)
+                        and node.get("class") != "android.webkit.WebView"
+                        and all(node.get(attribute) == "true" for attribute in ("enabled", "clickable", "focusable"))]
+                for label in PRIMARY_TABS}
+    assert all(len(items) == 1 for items in controls.values()), "Expected one enabled, clickable, focusable control per primary tab: 工作 / 任务 / 项目"
+    tabs = [items[0] for items in controls.values()]
+    assert len({id(node) for node in tabs}) == len(PRIMARY_TABS), "Primary tabs must be three different controls"
     parents = {child: parent for parent in root.iter() for child in parent}
-    viewport = next(iter(controls[PRIMARY_TABS[0]].values()))
+    tab_widget = parents.get(tabs[0])
+    assert tab_widget is not None and all(parents.get(node) is tab_widget for node in tabs), "Primary tabs must be direct children of one navigation widget"
+    assert tab_widget.get("package") == APP_ID and tab_widget.get("class") == "android.widget.TabWidget" and "主导航" in accessible_values(tab_widget), "Expected the actual app TabWidget named 主导航"
+    bounds = [parse_bounds(node.get("bounds")) for node in tabs]
+    points = [[(item[0] + item[2]) // 2, (item[1] + item[3]) // 2] for item in bounds]
+    assert all(bounds[i][0] < bounds[i + 1][0] and bounds[i][2] < bounds[i + 1][2]
+               and points[i][0] < points[i + 1][0] for i in range(2)), "Primary tab edges and centers must be ordered left to right"
+    common_top, common_bottom = max(item[1] for item in bounds), min(item[3] for item in bounds)
+    assert common_top < common_bottom and all(common_top <= point[1] < common_bottom for point in points), "Primary tab centers do not share one visible row"
+    # Android may report intersecting accessibility edges. Check the same actual
+    # center used by target(), rather than treating zero edge overlap as a row.
+    clickable = []
+    for node in root.iter("node"):
+        if node.get("package") != APP_ID or node.get("class") == "android.webkit.WebView" or node.get("enabled") != "true" or node.get("clickable") != "true":
+            continue
+        try:
+            clickable.append((node, parse_bounds(node.get("bounds"))))
+        except ValueError:
+            continue
+    for tab, (x, y) in zip(tabs, points):
+        hits = [node for node, (left, top, right, bottom) in clickable if left <= x < right and top <= y < bottom]
+        assert len(hits) == 1 and hits[0] is tab, "A primary tab center is not a unique actual app hit target"
+    viewport = tab_widget
     while viewport is not None and viewport.get("class") != "android.webkit.WebView":
         viewport = parents.get(viewport)
     assert viewport is not None and viewport.get("package") == APP_ID, "Primary navigation is not in the actual app WebView"
@@ -328,7 +354,9 @@ def navigation_identity(root, visible):
         assert left <= item[0] < item[2] <= right and top <= item[1] < item[3] <= bottom, "Primary navigation is clipped outside the observed WebView"
         assert item[1] >= (top + bottom) // 2, "Expected the primary tabs in the lower navigation area"
     return {"visible": True, "labels": list(PRIMARY_TABS), "bounds": [list(item) for item in bounds],
-            "viewport_bounds": [left, top, right, bottom], "method": "actual clickable app controls and observed WebView bounds"}
+            "points": points, "adjacent_edge_overlap_px": [max(0, bounds[i][2] - bounds[i + 1][0]) for i in range(2)],
+            "viewport_bounds": [left, top, right, bottom],
+            "method": "actual direct primary tabs, unique center hit targets and observed WebView bounds"}
 
 
 def ime_identity(xml, dump, visible):
