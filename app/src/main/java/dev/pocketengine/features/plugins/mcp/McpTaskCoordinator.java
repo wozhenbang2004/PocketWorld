@@ -29,6 +29,10 @@ public final class McpTaskCoordinator {
     public interface Transport {
         JSONObject start(JSONObject declaration,JSONObject arguments,RunControl control)throws Exception;
         JSONObject query(JSONObject declaration,String remoteTaskId,RunControl control)throws Exception;
+        /** The original durable receipt must fence any output capture before bytes are retained. */
+        default JSONObject query(JSONObject declaration,String remoteTaskId,RunControl control,JSONObject originalReceipt)throws Exception {
+            return query(declaration,remoteTaskId,control);
+        }
         void cancel(JSONObject declaration,String remoteTaskId,RunControl control)throws Exception;
     }
     /** Only a transport which proves the business request boundary may clear the provisional uncertainty. */
@@ -85,14 +89,21 @@ public final class McpTaskCoordinator {
             old.put("receiptExpired",true).put("message","执行端收据已过期；不能据此重新提交操作");host.save(binding,old);return checked(binding,host.load(binding));
         }
         if(clock.getAsLong()<old.optLong("nextPollAt"))return old;
-        JSONObject result=transport.query(binding.declaration(),old.getString("remoteTaskId"),control);
+        JSONObject result=transport.query(binding.declaration(),old.getString("remoteTaskId"),control,new JSONObject(old.toString()));
+        requireContinuation(old,result);
         JSONObject receipt=record(binding,result,false).put("argumentsDigest",old.getString("argumentsDigest"));
-        if(!old.getString("remoteTaskId").equals(receipt.optString("remoteTaskId")))throw new SecurityException("Remote task identity changed");
-        if(!old.getString("createdAt").equals(receipt.optString("createdAt"))||
-                Instant.parse(receipt.getString("lastUpdatedAt")).isBefore(Instant.parse(old.getString("lastUpdatedAt"))))
-            throw new SecurityException("Remote task chronology changed");
         if(old.optBoolean("cancelRequested"))receipt.put("cancelRequested",true).put("cancelAcknowledged",old.optBoolean("cancelAcknowledged"));
         host.save(binding,receipt);check(binding,control,Access.QUERY);return checked(binding,host.load(binding));
+    }
+    /** Used by capturing transports before writing any original-result bytes, and again before CAS. */
+    public static void requireContinuation(JSONObject originalReceipt,JSONObject result)throws Exception {
+        if(originalReceipt==null||originalReceipt.optBoolean("resolved"))throw new SecurityException("Original unresolved task receipt required");
+        if(!originalReceipt.getString("remoteTaskId").equals(result.getString("taskId")))throw new SecurityException("Remote task identity changed");
+        if(!originalReceipt.getString("createdAt").equals(result.getString("createdAt"))||
+                Instant.parse(result.getString("lastUpdatedAt")).isBefore(Instant.parse(originalReceipt.getString("lastUpdatedAt"))))
+            throw new SecurityException("Remote task chronology changed");
+        if(originalReceipt.optBoolean("terminal")&&!originalReceipt.getString("status").equals(result.getString("status")))
+            throw new SecurityException("Remote terminal task state changed");
     }
     public JSONObject cancel(Binding binding,RunControl signalControl)throws Exception {
         check(binding,signalControl,Access.CANCEL);JSONObject receipt=checked(binding,host.load(binding));

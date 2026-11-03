@@ -12,6 +12,7 @@ import dev.pocketengine.features.HostToolSupervisor;
 import dev.pocketengine.features.MemorySourceBridge;
 import dev.pocketengine.features.NativeOwnerWorkflows;
 import dev.pocketengine.features.memory.ToolOutputStore;
+import dev.pocketengine.features.plugins.mcp.McpJson;
 import dev.pocketengine.features.plugins.mcp.McpTaskCoordinator;
 import dev.pocketengine.store.SecretVault;
 import dev.pocketengine.store.SettingsStore;
@@ -69,7 +70,7 @@ public final class McpTaskNativeJourneyTest {
     private static String id() { return UUID.randomUUID().toString(); }
 
     @Before public void before() {
-        Provider provider = new Provider(PROVIDER, "1", "Synthetic test key, not hardware-backed Android") {};
+        Provider provider = new Provider(PROVIDER, 1.0, "Synthetic test key, not hardware-backed Android") {};
         provider.put("KeyStore.AndroidKeyStore", FixtureKeyStore.class.getName());
         Security.addProvider(provider);
         RuntimeEnvironment.getApplication().getSharedPreferences("feature_secrets", Context.MODE_PRIVATE).edit().clear().commit();
@@ -80,6 +81,7 @@ public final class McpTaskNativeJourneyTest {
     private static final class Peer implements AutoCloseable {
         final McpFixture wire = new McpFixture();
         volatile boolean complete, dropCancelAck, dropCreationAck, wrongHandle;
+        volatile String creationUpdatedAt = CREATED, queryCreatedAt = CREATED, queryUpdatedAt = UPDATED;
         volatile CountDownLatch queryEntered, queryRelease, callEntered, callRelease;
 
         Peer() throws Exception {
@@ -124,7 +126,8 @@ public final class McpTaskNativeJourneyTest {
             JSONObject result = new JSONObject().put("resultType", creation ? "task" : "complete")
                     .put("taskId", !creation && wrongHandle ? "different-remote-task" : REMOTE)
                     .put("status", !creation && complete ? "completed" : "working")
-                    .put("createdAt", CREATED).put("lastUpdatedAt", !creation && complete ? UPDATED : CREATED)
+                    .put("createdAt", creation ? CREATED : queryCreatedAt)
+                    .put("lastUpdatedAt", creation ? creationUpdatedAt : complete ? queryUpdatedAt : CREATED)
                     .put("ttlMs", JSONObject.NULL).put("pollIntervalMs", 0);
             if (!creation && complete) result.put("result", new JSONObject().put("resultType", "complete").put("isError", true)
                     .put("content", new JSONArray().put(new JSONObject().put("type", "text")
@@ -206,7 +209,7 @@ public final class McpTaskNativeJourneyTest {
             return body.toString();
         }
         void revokeCredential() throws Exception {
-            JSONObject raw = new JSONObject(Files.readString(new File(android.getFilesDir(), "plugins/manifests.json").toPath()));
+            JSONObject raw = new JSONObject(new String(Files.readAllBytes(new File(android.getFilesDir(), "plugins/manifests.json").toPath()), StandardCharsets.UTF_8));
             context.secrets.remove(raw.getJSONArray("plugins").getJSONObject(0).getString("credentialRef"));
         }
         @Override public void close() { try { features.close(); } finally { db.close(); } }
@@ -345,6 +348,64 @@ public final class McpTaskNativeJourneyTest {
                 assertFalse(cancelled.getBoolean("cancelAcknowledged")); assertEquals(requests, peer.wire.received.size());
                 assertEquals("unknown", domain.state(attempt)); assertEquals(1, domain.tasks.get(attempt.task, false).getJSONArray("operations").length());
             } finally { peer.callRelease.countDown(); executor.shutdownNow(); }
+        }
+    }
+
+    @Test public void staleCompletedTaskCannotCaptureAnotherGenerationBeforeReceiptValidation() throws Exception {
+        for (String changed : new String[]{"createdAt", "lastUpdatedAt"}) {
+            try (Peer peer = new Peer(); Domain domain = new Domain(peer); Attempt attempt = new Attempt(domain)) {
+                peer.creationUpdatedAt = UPDATED;
+                assertEquals("unknown", attempt.dispatch().getString("status"));
+                assertEquals(0, domain.outputs());
+                String originalReceipt = McpJson.digest(domain.receipt(attempt));
+                int originalLists = peer.wire.count("tools/list");
+                attempt.control.cancel(); domain.reopen(); domain.awaitPoll(attempt); peer.complete = true;
+                // Both responses are internally chronological. Only the durable original row
+                // can reject a reused task ID or a callback older than its last observation.
+                if (changed.equals("createdAt")) peer.queryCreatedAt = "2026-11-01T00:00:00.500Z";
+                else peer.queryUpdatedAt = CREATED;
+                assertThrows(Exception.class, () -> domain.query(attempt));
+                assertEquals(changed + " must be fenced before any native output write", 0, domain.outputs());
+                assertEquals(originalReceipt, McpJson.digest(domain.receipt(attempt)));
+                assertEquals("unknown", domain.state(attempt));
+                assertEquals(1, peer.wire.count("tasks/get")); assertEquals(1, peer.wire.count("tools/call"));
+                assertEquals(originalLists, peer.wire.count("tools/list"));
+                // A later exact observation may still retain the real result of this operation.
+                peer.queryCreatedAt = CREATED; peer.queryUpdatedAt = UPDATED;
+                assertEquals("response_received", domain.query(attempt).getString("status"));
+                assertEquals(1, domain.outputs()); assertEquals(1, peer.wire.count("tools/call"));
+                assertTrue(peer.wire.failures.toString(), peer.wire.failures.isEmpty());
+            }
+        }
+    }
+
+    @Test public void cancelledDeliveryKeepsTheCommittedOriginalCaptureThroughColdRecovery() throws Exception {
+        try (Peer peer = new Peer(); Domain domain = new Domain(peer); Attempt attempt = new Attempt(domain)) {
+            assertEquals("unknown", attempt.dispatch().getString("status"));
+            domain.awaitPoll(attempt); peer.complete = true;
+            RunControl observation = new RunControl();
+            observation.setAuthorityCheck(() -> {
+                if (domain.outputs() > 0) throw new SecurityException("Synthetic source withdrawal after the original bytes commit");
+            });
+            assertThrows(InterruptedException.class, () -> domain.observe(attempt, false, observation, id()));
+            assertTrue(observation.isCancelled()); assertEquals(1, domain.outputs());
+            assertTrue(domain.inner(attempt).getBoolean("resolved")); assertEquals("receipt", domain.state(attempt));
+            JSONObject original = domain.receipt(attempt);
+            assertEquals("response_received", original.getString("status")); assertFalse(original.getBoolean("verified"));
+            JSONObject capture = original.getJSONObject("outputCapture"); assertEquals("stored", capture.getString("status"));
+            assertEquals(1, capture.getJSONArray("outputRefs").length());
+            JSONObject ref = capture.getJSONArray("outputRefs").getJSONObject(0);
+            assertEquals(attempt.task, ref.getString("taskId")); assertEquals(attempt.run, ref.getString("runId"));
+            assertEquals(attempt.operation, ref.getString("operationId"));
+            String originalCapture = McpJson.digest(capture);
+            domain.reopen(); int requests = peer.wire.received.size();
+            JSONObject recovered = domain.query(attempt);
+            assertFalse(recovered.getBoolean("networkRequested")); assertEquals(requests, peer.wire.received.size());
+            assertEquals(originalCapture, McpJson.digest(recovered.getJSONObject("outputCapture")));
+            String retained = domain.retained(ref);
+            assertTrue(retained.length() > 100000); assertTrue(retained.contains(NEEDLE)); assertFalse(retained.contains(TOKEN));
+            assertEquals(1, domain.outputs()); assertEquals(1, peer.wire.count("tasks/get")); assertEquals(1, peer.wire.count("tools/call"));
+            assertTrue(peer.wire.failures.toString(), peer.wire.failures.isEmpty());
         }
     }
 

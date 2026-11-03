@@ -108,7 +108,7 @@ public final class McpLocalPackage {
         String digest()throws Exception{return ProjectSources.digest(plan());}
         JSONObject command()throws Exception{return new JSONObject(command);}
         void addPayload(JSONObject payload)throws Exception{payload.put("nativeMcpPackageProgramDigest",McpLocalPackageProgram.identity()).put("nativeMcpPackageJobDigest",jobDigest);}
-        void write(RuntimeWorkspace copy)throws Exception{java.io.File target=copy.resolve(".native-mcp-package.json",false);Files.writeString(target.toPath(),job,StandardCharsets.UTF_8,StandardOpenOption.CREATE_NEW,StandardOpenOption.WRITE);}
+        void write(RuntimeWorkspace copy)throws Exception{java.io.File target=copy.resolve(".native-mcp-package.json",false);Files.write(target.toPath(),job.getBytes(StandardCharsets.UTF_8),StandardOpenOption.CREATE_NEW,StandardOpenOption.WRITE);}
     }
     /** Called only at original native pipe admission, after the typed TaskStore authority check. */
     public static boolean prepared(JSONObject exact){JSONObject payload=exact.optJSONObject("payload");return payload!=null&&payload.has("nativeMcpPackageProgramDigest");}

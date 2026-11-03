@@ -391,7 +391,8 @@ public final class PluginsModule implements EngineModule {
     private static McpTaskCoordinator.Transport taskTransport(McpClient client,McpResultCapture capture){
         return new McpTaskCoordinator.Transport(){
             public JSONObject start(JSONObject declaration,JSONObject arguments,RunControl control)throws Exception{return capture==null?client.start(declaration,arguments,control):client.start(declaration,arguments,control,capture::result);}
-            public JSONObject query(JSONObject declaration,String task,RunControl control)throws Exception{return capture==null?client.query(declaration,task,control):client.query(declaration,task,control,capture::result);}
+            public JSONObject query(JSONObject declaration,String task,RunControl control)throws Exception{return client.query(declaration,task,control);}
+            public JSONObject query(JSONObject declaration,String task,RunControl control,JSONObject originalReceipt)throws Exception{return capture==null?client.query(declaration,task,control):client.query(declaration,task,control,originalReceipt,capture::result);}
             public void cancel(JSONObject declaration,String task,RunControl control)throws Exception{client.cancel(declaration,task,control);}
         };
     }

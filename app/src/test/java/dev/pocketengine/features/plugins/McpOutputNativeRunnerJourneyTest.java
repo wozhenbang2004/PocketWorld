@@ -38,7 +38,7 @@ public final class McpOutputNativeRunnerJourneyTest {
     private static String id(){return UUID.randomUUID().toString();}
     private static String fingerprint(String actual)throws Exception{StringBuilder value=new StringBuilder("sha256:");for(byte b:MessageDigest.getInstance("SHA-256").digest(actual.getBytes(StandardCharsets.UTF_8)))value.append(String.format(Locale.ROOT,"%02x",b&255));return value.toString();}
     @Before public void before(){
-        Provider provider=new Provider(PROVIDER,"1","Known test key, not hardware-backed Android"){};
+        Provider provider=new Provider(PROVIDER,1.0,"Known test key, not hardware-backed Android"){};
         provider.put("KeyStore.AndroidKeyStore",FixtureKeyStore.class.getName());Security.addProvider(provider);
         RuntimeEnvironment.getApplication().getSharedPreferences("feature_secrets",Context.MODE_PRIVATE).edit().clear().commit();
     }

@@ -288,9 +288,12 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
         validateTaskId(remoteTaskId);
         return taskResult(requiredResult(rpc("tasks/get",new JSONObject().put("taskId",remoteTaskId),control,null,true)),remoteTaskId,false,null);
     }
-    JSONObject query(JSONObject declaration,String remoteTaskId,RunControl control,ResultCapture capture)throws Exception {
+    JSONObject query(JSONObject declaration,String remoteTaskId,RunControl control,JSONObject originalReceipt,ResultCapture capture)throws Exception {
         validateTaskConnection(declaration,control);validateTaskId(remoteTaskId);
-        return taskResult(requiredResult(rpc("tasks/get",new JSONObject().put("taskId",remoteTaskId),control,null,true)),remoteTaskId,false,capture);
+        JSONObject result=requiredResult(rpc("tasks/get",new JSONObject().put("taskId",remoteTaskId),control,null,true));
+        // A matching JSON-RPC/task ID alone cannot authorize old-generation result provenance.
+        dev.pocketengine.features.plugins.mcp.McpTaskCoordinator.requireContinuation(originalReceipt,result);
+        return taskResult(result,remoteTaskId,false,capture);
     }
     @Override public void cancel(JSONObject declaration,String remoteTaskId,RunControl control)throws Exception {
         validateTaskConnection(declaration,control);

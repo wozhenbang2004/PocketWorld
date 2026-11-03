@@ -231,11 +231,28 @@ public final class AgentRunner {
         }catch(Exception failure){
             if(recordedOperation!=null){
                 try{if(confirmedReceipt!=null)evidence=new JSONObject(confirmedReceipt.toString());evidence.put("operationId",recordedOperation).put("ownerSelectedSkill",true).put("receiptRecorded",true).put("postProcessingIncomplete",true).put("businessVerified",false).put("automaticReplayAllowed",false);}catch(Exception retained){/* The journal already owns the original receipt. */}
-                return finish(taskId,control!=null&&control.isCancelled()?"cancelled":"awaiting_user","原脚本已取得并保存回执，但历史或后续处理未完成。请在原任务核对这一次操作和成果；不会重新执行。",evidence,steps,config,sink);
+                return finishOwnerSkillFailure(taskId,control!=null&&control.isCancelled()?"cancelled":"awaiting_user","原脚本已取得并保存回执，但历史或后续处理未完成。请在原任务核对这一次操作和成果；不会重新执行。",evidence,steps,config,sink);
             }
             if(operation!=null){try{evidence.put("operationId",operation).put("status",dispatchEntered?"unknown":"rejected").put("accepted",dispatchEntered?JSONObject.NULL:false).put("nativeDispatchEntered",dispatchEntered).put("requiresReconciliation",dispatchEntered).put("automaticReplayAllowed",false);completeOperation(journal,operation,evidence,config);}catch(Exception retained){/* The original prepared/native receipt stays query-only. */}}
             String message=operation!=null?dispatchEntered?"所选脚本的原操作需要核对；保留既有回执，不会自动重试。":"所选脚本没有进入派发；请在原任务核对已登记的操作，不会自动重试。":"主人所选技能或原任务条件已变化，尚未派发；请核对后重新选择。";
-            return finish(taskId,control!=null&&control.isCancelled()?"cancelled":"awaiting_user",message,evidence,steps,config,sink);
+            return finishOwnerSkillFailure(taskId,control!=null&&control.isCancelled()?"cancelled":"awaiting_user",message,evidence,steps,config,sink);
+        }
+    }
+
+    /** Finalization failure must not erase which original native operation needs checking. */
+    private static RunOutcome finishOwnerSkillFailure(String taskId,String status,String summary,JSONObject evidence,int steps,
+                                                      ModelConfig config,EventSink sink) {
+        try{return finish(taskId,status,summary,evidence,steps,config,sink);}
+        catch(Exception failedToRecord){
+            JSONObject retained=new JSONObject();
+            try{retained=safeJson(evidence,config,true);}catch(Exception unavailable){
+                // Keep only native receipt facts if sanitizing the full receipt is unavailable.
+                for(String key:new String[]{"operationId","status","accepted","nativeDispatchEntered","requiresReconciliation","receiptRecorded","postProcessingIncomplete","ownerSelectedSkill"})
+                    try{if(evidence.has(key))retained.put(key,evidence.get(key));}catch(Exception ignored){}
+            }
+            try{retained.put("steps",steps).put("verification","user_required").put("automaticallyVerified",false)
+                    .put("automaticReplayAllowed",false).put("ownerResultFinalizationIncomplete",true);}catch(Exception ignored){}
+            return new RunOutcome(status,summary,retained);
         }
     }
 

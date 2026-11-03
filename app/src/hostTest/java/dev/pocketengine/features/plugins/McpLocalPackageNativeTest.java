@@ -33,11 +33,11 @@ public final class McpLocalPackageNativeTest {
         final Path manager=Files.createTempFile("mcp-package-provider-",".py");final McpLocalDiscoveryReviewTest.Fixture base;final Path source;
         Fixture(int installExit,boolean tamper)throws Exception {this(installExit,tamper,SERVER);}
         Fixture(int installExit,boolean tamper,String server)throws Exception {
-            Files.writeString(manager,"import sys,pathlib\nif sys.argv[1:]==['--version']:\n print('11.9.0')\nelse:\n print('PACKAGE_NON_PROTOCOL_STDOUT')\n print('ARGS:'+repr(sys.argv[1:]),file=sys.stderr,flush=True)\n pathlib.Path('PREPARATION_ATTEMPT').write_text('one')\n"+(tamper?" pathlib.Path('server.cjs').write_text('throw 1;')\n":"")+" sys.exit("+installExit+")\n");
+            writeUtf8(manager,"import sys,pathlib\nif sys.argv[1:]==['--version']:\n print('11.9.0')\nelse:\n print('PACKAGE_NON_PROTOCOL_STDOUT')\n print('ARGS:'+repr(sys.argv[1:]),file=sys.stderr,flush=True)\n pathlib.Path('PREPARATION_ATTEMPT').write_text('one')\n"+(tamper?" pathlib.Path('server.cjs').write_text('throw 1;')\n":"")+" sys.exit("+installExit+")\n");
             File python=new File(java.util.Objects.requireNonNull(System.getProperty("a25.python"))).getCanonicalFile();RuntimeTool provider=new RuntimeTool("npm",python,ProjectSources.sha256(Files.readAllBytes(python.toPath())),"11.9.0","Synthetic test provider; no third-party manager redistributed",List.of(manager.toString()),List.of("--version"));
             base=new McpLocalDiscoveryReviewTest.Fixture("node","server.cjs",server,Map.of("npm",provider));source=base.android.getFilesDir().toPath().resolve("local-development/checkouts").resolve(base.checkout).resolve("files");
-            Files.writeString(source.resolve("package.json"),new JSONObject().put("name","owned-mcp-fixture").put("version","1.0.0").put("packageManager","npm@11.9.0").toString());
-            Files.writeString(source.resolve("package-lock.json"),new JSONObject().put("name","owned-mcp-fixture").put("version","1.0.0").put("lockfileVersion",3).put("packages",new JSONObject().put("",new JSONObject().put("name","owned-mcp-fixture").put("version","1.0.0"))).toString());
+            writeUtf8(source.resolve("package.json"),new JSONObject().put("name","owned-mcp-fixture").put("version","1.0.0").put("packageManager","npm@11.9.0").toString());
+            writeUtf8(source.resolve("package-lock.json"),new JSONObject().put("name","owned-mcp-fixture").put("version","1.0.0").put("lockfileVersion",3).put("packages",new JSONObject().put("",new JSONObject().put("name","owned-mcp-fixture").put("version","1.0.0"))).toString());
             base.config.put("expectedSourceDigest",base.digest()).put(McpLocalPackage.FIELD,new JSONObject().put("manager","npm").put("version","11.9.0"));
         }
         JSONObject run()throws Exception{McpLocalDiscovery.Review review=base.review();JSONObject metadata=review.metadata();review.approvePreparation(metadata.getString("preparationDigest"));McpLocalDiscovery.Confirmed confirmed=review.confirm(metadata.getString("planDigest"));RunControl original=new RunControl();base.tasks.beginOwnerMcpDiscoveryForOwner(confirmed,original);return McpLocalDiscoveryPipe.run(confirmed,base.tasks,original);}
@@ -66,10 +66,10 @@ public final class McpLocalPackageNativeTest {
     }
     @Test public void failedPreparationDiagnosticsReadOnlyTheOriginalPagedLogAfterSourceChanges()throws Exception {
         try(Fixture f=new Fixture(19,false);dev.pocketengine.features.FeatureHost host=new dev.pocketengine.features.FeatureHost(e->{},f.base.tasks,()->false)){
-            Files.writeString(f.manager,Files.readString(f.manager).replace(" sys.exit(19)"," print('DIAGNOSTIC_START:'+('x'*20000)+':DIAGNOSTIC_END',file=sys.stderr,flush=True)\n sys.exit(19)"));
+            writeUtf8(f.manager,readUtf8(f.manager).replace(" sys.exit(19)"," print('DIAGNOSTIC_START:'+('x'*20000)+':DIAGNOSTIC_END',file=sys.stderr,flush=True)\n sys.exit(19)"));
             host.register(f.base.workspace);host.register(f.base.local);host.register(f.base.plugins);var owner=new dev.pocketengine.features.NativeOwnerWorkflows(host,f.base.context,f.base.tasks,new dev.pocketengine.features.memory.MemorySourceBridge(host,f.base.tasks));
             JSONObject result=f.run();String task=result.getString("taskId");assertEquals("failed",result.getString("status"));assertFalse(result.toString().contains("DIAGNOSTIC_START"));String original=ProjectSources.digest(f.base.tasks.ownerMcpDiscoveryForOwner(task));
-            Files.writeString(f.source.resolve("server.cjs"),"throw Error('a different source revision');");
+            writeUtf8(f.source.resolve("server.cjs"),"throw Error('a different source revision');");
             JSONObject request=new JSONObject().put("taskId",task).put("cursor",0).put("maxBytes",16384),page=owner.mcp("readLocalMcpDiagnostic",request);assertTrue(page.getBoolean("queryOnly"));assertFalse(page.getBoolean("replayAllowed"));assertFalse(page.getBoolean("modelDelivery"));assertTrue(page.getBoolean("hasMore"));assertEquals(original,ProjectSources.digest(f.base.tasks.ownerMcpDiscoveryForOwner(task)));
             JSONObject repeated=owner.mcp("readLocalMcpDiagnostic",request);assertEquals(ProjectSources.digest(page),ProjectSources.digest(repeated));StringBuilder text=new StringBuilder();int pages=0;
             while(true){text.append(dev.pocketengine.ui.McpLocalDiscoveryRules.INSTANCE.diagnosticText(page));pages++;if(!page.getBoolean("hasMore"))break;assertTrue(pages<8);page=owner.mcp("readLocalMcpDiagnostic",new JSONObject().put("taskId",task).put("cursor",page.getLong("nextCursor")).put("maxBytes",16384));}
@@ -80,7 +80,7 @@ public final class McpLocalPackageNativeTest {
     }
     @Test public void changedLockCannotReuseTheIndependentlyApprovedPreparation()throws Exception {
         try(Fixture f=new Fixture(0,false);McpLocalDiscovery.Review review=f.base.review()){
-            JSONObject view=review.metadata();review.approvePreparation(view.getString("preparationDigest"));Files.writeString(f.source.resolve("package-lock.json"),"{}");assertThrows(Exception.class,()->review.confirm(view.getString("planDigest")));assertEquals(0,f.base.tasks.list().length());
+            JSONObject view=review.metadata();review.approvePreparation(view.getString("preparationDigest"));writeUtf8(f.source.resolve("package-lock.json"),"{}");assertThrows(Exception.class,()->review.confirm(view.getString("planDigest")));assertEquals(0,f.base.tasks.list().length());
         }
     }
     @Test public void installedPackageToolUsesOriginalAgentApprovalDebitAndOneManagedInvocation()throws Exception {
@@ -95,12 +95,12 @@ public final class McpLocalPackageNativeTest {
     }
     @Test public void cancelDuringPackagePreparationStopsOnlyThatOriginalJobAndCannotReplayItsConfirmation()throws Exception {
         try(Fixture f=new Fixture(0,false)){
-            Files.writeString(f.manager,"import sys,pathlib,time\nif sys.argv[1:]==['--version']:\n print('11.9.0')\nelse:\n pathlib.Path('PREPARATION_ATTEMPT').write_text('one')\n print('PREPARATION_WAITING',file=sys.stderr,flush=True)\n time.sleep(60)\n");
+            writeUtf8(f.manager,"import sys,pathlib,time\nif sys.argv[1:]==['--version']:\n print('11.9.0')\nelse:\n pathlib.Path('PREPARATION_ATTEMPT').write_text('one')\n print('PREPARATION_WAITING',file=sys.stderr,flush=True)\n time.sleep(60)\n");
             McpLocalDiscovery.Review review=f.base.review();JSONObject metadata=review.metadata();review.approvePreparation(metadata.getString("preparationDigest"));McpLocalDiscovery.Confirmed confirmed=review.confirm(metadata.getString("planDigest"));RunControl original=new RunControl();f.base.tasks.beginOwnerMcpDiscoveryForOwner(confirmed,original);
             ExecutorService worker=Executors.newSingleThreadExecutor();try{
                 Future<JSONObject> pending=worker.submit(()->McpLocalDiscoveryPipe.run(confirmed,f.base.tasks,original));Path copy=f.base.android.getFilesDir().toPath().resolve("local-development/mcp-discovery-copies").resolve(confirmed.actionId());long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(8);while(!Files.exists(copy.resolve("PREPARATION_ATTEMPT"))&&System.nanoTime()<until)Thread.sleep(20);assertTrue(Files.exists(copy.resolve("PREPARATION_ATTEMPT")));
                 f.base.tasks.cancelOwnerMcpDiscoveryForOwner(confirmed.actionId());original.cancel();JSONObject result=pending.get(12,TimeUnit.SECONDS);assertNotEquals("completed",result.getString("status"));assertFalse(result.getJSONObject("receipt").getBoolean("metadataAvailable"));assertEquals(1,f.base.tasks.list().length());assertEquals(0,f.base.plugins.snapshot().getJSONArray("plugins").length());assertEquals(0,f.base.runtime.environmentManager().describe(f.base.pack).getInt("activeLeases"));
-                assertThrows(Exception.class,()->review.confirm(metadata.getString("planDigest")));assertThrows(Exception.class,()->confirmed.invocationForHost(f.base.tasks,original,()->{}));assertEquals("one",Files.readString(copy.resolve("PREPARATION_ATTEMPT")));
+                assertThrows(Exception.class,()->review.confirm(metadata.getString("planDigest")));assertThrows(Exception.class,()->confirmed.invocationForHost(f.base.tasks,original,()->{}));assertEquals("one",readUtf8(copy.resolve("PREPARATION_ATTEMPT")));
             }finally{original.cancel();worker.shutdownNow();}
         }
     }
@@ -118,17 +118,19 @@ public final class McpLocalPackageNativeTest {
     }
     @Test public void pnpmLockRequiresIntegrityForEveryVersionAndRejectsAlternativeSourcesBeforeApproval()throws Exception {
         try(Fixture f=new Fixture(0,false)){
-            Files.delete(f.source.resolve("package-lock.json"));Files.writeString(f.source.resolve("package.json"),new JSONObject().put("name","owned-fixture").put("version","1.0.0").put("packageManager","pnpm@10.27.0").put("dependencies",new JSONObject().put("example","1.0.0")).toString());
+            Files.delete(f.source.resolve("package-lock.json"));writeUtf8(f.source.resolve("package.json"),new JSONObject().put("name","owned-fixture").put("version","1.0.0").put("packageManager","pnpm@10.27.0").put("dependencies",new JSONObject().put("example","1.0.0")).toString());
             String prefix="lockfileVersion: '9.0'\nsettings:\n  autoInstallPeers: true\nimporters:\n  .:\n    dependencies:\n      example:\n        specifier: 1.0.0\n        version: 1.0.0\npackages:\n  example@1.0.0:\n",integrity="    resolution: {integrity: sha512-"+"A".repeat(86)+"==}\n",suffix="snapshots:\n  example@1.0.0: {}\n";
             JSONObject tools=f.base.runtime.mcpPackageToolsForHost("npm").put("managerVersion","10.27.0");f.base.config.put(McpLocalPackage.FIELD,new JSONObject().put("manager","pnpm").put("version","10.27.0"));
             for(String lock:new String[]{prefix+integrity+"  missing@2.0.0:\n    engines: {node: '>=18'}\n"+suffix,prefix+"    resolution: {tarball: https://unapproved.example/package.tgz}\n"+suffix}){
-                Files.writeString(f.source.resolve("pnpm-lock.yaml"),lock);JSONObject source=frozen(f);assertThrows(IllegalArgumentException.class,()->McpLocalPackage.inspect(f.base.config,source,tools));
+                writeUtf8(f.source.resolve("pnpm-lock.yaml"),lock);JSONObject source=frozen(f);assertThrows(IllegalArgumentException.class,()->McpLocalPackage.inspect(f.base.config,source,tools));
             }
-            Files.writeString(f.source.resolve("pnpm-lock.yaml"),prefix+integrity+suffix);assertEquals(1,McpLocalPackage.inspect(f.base.config,frozen(f),tools).plan().getInt("lockedPackageCount"));assertEquals(0,f.base.tasks.list().length());
+            writeUtf8(f.source.resolve("pnpm-lock.yaml"),prefix+integrity+suffix);assertEquals(1,McpLocalPackage.inspect(f.base.config,frozen(f),tools).plan().getInt("lockedPackageCount"));assertEquals(0,f.base.tasks.list().length());
         }
     }
+    private static void writeUtf8(Path path,String text)throws java.io.IOException {Files.write(path,text.getBytes(java.nio.charset.StandardCharsets.UTF_8));}
+    private static String readUtf8(Path path)throws java.io.IOException {return java.nio.charset.StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(Files.readAllBytes(path))).toString();}
     private static JSONObject frozen(Fixture f)throws Exception {
-        JSONArray files=new JSONArray();try(var paths=Files.list(f.source)){for(Path file:paths.sorted().toList())if(Files.isRegularFile(file)&&!file.getFileName().toString().startsWith("."))files.put(new JSONObject().put("path",file.getFileName().toString()).put("content",Files.readString(file)));}
+        JSONArray files=new JSONArray();try(var paths=Files.list(f.source)){for(Path file:paths.sorted().toList())if(Files.isRegularFile(file)&&!file.getFileName().toString().startsWith("."))files.put(new JSONObject().put("path",file.getFileName().toString()).put("content",readUtf8(file)));}
         return new JSONObject().put("checkout",new JSONObject().put("id",f.base.checkout).put("projectId",f.base.project)).put("files",files);
     }
 }

@@ -6278,7 +6278,16 @@ public final class TaskStore {
                     public synchronized dev.pocketengine.features.memory.ToolOutputCapture.Result record(JSONObject safeData,Boolean upstream)throws Exception {
                         if(finished)throw new SecurityException("原MCP结果已存证");finished=true;
                         var encoded=dev.pocketengine.features.memory.ToolOutputStore.encode(safeData,upstream,text->text,new JSONArray());
-                        synchronized(TaskStore.this){mcpTaskBindingForOwner(taskId,operationId);requireOutputTask(required(taskId));db.beginTransaction();try{var saved=dev.pocketengine.features.memory.ToolOutputStore.save(db,TaskStore.this,call,encoded);db.setTransactionSuccessful();return saved;}finally{db.endTransaction();}}
+                        synchronized(TaskStore.this){
+                            if(!fingerprint.equals(mcpTaskBindingForOwner(taskId,operationId).fingerprint()))throw new SecurityException("原MCP结果身份已变化");
+                            requireOutputTask(required(taskId));db.beginTransaction();try{
+                                var saved=dev.pocketengine.features.memory.ToolOutputStore.save(db,TaskStore.this,call,encoded);
+                                // Retain the source reference with its bytes even if a later control check
+                                // stops delivery after the remote completion was durably reconciled.
+                                recordMcpTaskObservationForOwner(taskId,operationId,remoteMcpJournal().record(taskId,operationId).put("outputCapture",saved.metadata()));
+                                db.setTransactionSuccessful();return saved;
+                            }finally{db.endTransaction();}
+                        }
                     }
                 };
             }
