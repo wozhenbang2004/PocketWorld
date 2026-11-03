@@ -903,11 +903,15 @@ class JobManager:
                     file.pop("diff")
                     file["diffAvailableInOriginalSnapshot"] = True
         native = job.get("worker") == "codex_app_server"
+        pi = job.get("worker") == "pi"
         live = job.get("id") in self.drivers and job.get("status") not in TERMINAL
         result["capabilities"] = worker_capabilities(job.get("worker"))
         result["capabilities"]["protocolVerified"] = bool(job.get("protocolVerified"))
-        result["capabilities"]["inputSteering"] = native and bool(job.get("inputSteeringVerified"))
+        steering_unknown = bool(job.get("steeringUnknown")) or any(json.loads(row[0]).get("status") == "unknown"
+            for row in self.ledger.execute("SELECT receipt FROM steer_messages WHERE job_id=?", (job["id"],)).fetchall())
         driver = self.drivers.get(job.get("id"))
+        result["capabilities"]["inputSteering"] = (native or pi) and bool(job.get("inputSteeringVerified")) and not steering_unknown and (
+            not pi or live and driver is not None and driver.can_steer(job.get("promptRequestId")))
         result.pop("coldRecoveryRead", None)
         result["coldRecovery"] = {"protocol": cold_session.PROTOCOL, "supportedForOriginalJob": cold_session.eligible(job), "requiresNativeOwnerReview": True, "readOnlyInspection": True, "lastInspection": json.loads(json.dumps(job.get("coldRecoveryRead", {"status": "not_checked"}))), "reason": "Original process identity and exact latest stored terminal Codex turn are both required; old jobs/Claude/SSH/private input staging have no cold continuation proof"}
         retained = self.processes.get(job.get("id"))
@@ -916,7 +920,7 @@ class JobManager:
                               "approve": live and bool(job.get("pendingApprovals")),
                               "answerQuestion": live and not job.get("assignmentWorkspace") and any(value.get("canAnswer") for value in job.get("pendingQuestions", [])),
                               "threadResume": self._can_resume(job), "threadFork": native and self._can_resume(job) and job.get("status") in {"completed", "failed", "cancelled"},
-                              "inputSteering": not job.get("assignmentWorkspace") and live and driver is not None and driver.can_steer(job.get("turnId")), "sessionReattach": False}
+                              "inputSteering": not job.get("assignmentWorkspace") and live and not steering_unknown and driver is not None and driver.can_steer(job.get("promptRequestId") if pi else job.get("turnId")), "sessionReattach": False}
         return result
 
     def _can_resume(self, job):
@@ -937,7 +941,7 @@ class JobManager:
             return False
         if worker == "pi" and (not job.get("protocolVerified") or not self._pi_session_current(job)):
             return False
-        if worker == "codex_app_server":
+        if worker in {"codex_app_server", "pi"}:
             if job.get("steeringUnknown"):
                 return False
             for (raw,) in self.ledger.execute("SELECT receipt FROM steer_messages WHERE job_id=?", (job["id"],)).fetchall():
@@ -1683,9 +1687,23 @@ class JobManager:
 
     def steer(self, jobid, request):
         jobid, message_id = identifier(jobid, "jobId"), identifier(request.get("messageId"), "messageId")
-        expected = text(request.get("expectedTurnId"), "expectedTurnId", 200)
         content = text(request.get("text"), "text", 12_000)
-        fingerprint = hashlib.sha256(json.dumps([jobid, expected, content, request.get("threadId"), request.get("jobOperationId")], ensure_ascii=False).encode()).hexdigest()
+        pi = request.get("protocol") == pi_driver.PROTOCOL
+        if pi:
+            if "expectedTurnId" in request or "turnId" in request:
+                raise RequestError("Pi has no native turn target; use its exact original prompt request", 409)
+            expected = text(request.get("expectedPromptRequestId"), "expectedPromptRequestId", 200)
+            native_session = text(request.get("sessionId"), "sessionId", 80)
+            text(request.get("threadId"), "threadId", 80)
+            identifier(request.get("jobOperationId"), "jobOperationId")
+            binding = [pi_driver.PROTOCOL, jobid, expected, content, request["threadId"], native_session, request["jobOperationId"]]
+        else:
+            if request.get("protocol") not in (None, "codex_app_server") or "expectedPromptRequestId" in request:
+                raise RequestError("Unsupported steering protocol/target; no input was sent", 409)
+            expected = text(request.get("expectedTurnId"), "expectedTurnId", 200)
+            # Preserve the original Codex fingerprint, including receipts saved before Pi support.
+            binding = [jobid, expected, content, request.get("threadId"), request.get("jobOperationId")]
+        fingerprint = hashlib.sha256(json.dumps(binding, ensure_ascii=False).encode()).hexdigest()
         with self.lock:
             row = self.ledger.execute("SELECT job_id, fingerprint FROM steer_messages WHERE message_id=?", (message_id,)).fetchone()
             if row is not None:
@@ -1697,12 +1715,20 @@ class JobManager:
                 raise RequestError("Job not found", 404)
             if request.get("threadId", job.get("threadId")) != job.get("threadId") or request.get("jobOperationId", job.get("operationId")) != job.get("operationId"):
                 raise RequestError("Steering identity does not match the original job/thread; no input was sent", 409)
-            if job.get("worker") != "codex_app_server" or job["status"] not in {"running", "awaiting_approval"} or driver is None or jobid in self.stopping or self.closed or job.get("turnId") != expected or not driver.can_steer(expected):
-                raise RequestError("Steering is unavailable or expectedTurnId is stale; no input was sent", 409)
+            target_matches = (job.get("worker") == "pi" and job.get("protocol") == pi_driver.PROTOCOL
+                and job.get("sessionId") == native_session == job.get("threadId")
+                and job.get("promptRequestId") == expected) if pi else job.get("worker") == "codex_app_server" and job.get("turnId") == expected
+            if (not target_matches or job["status"] not in {"running", "awaiting_approval"}
+                    or driver is None or jobid in self.stopping or self.closed or not driver.can_steer(expected)):
+                raise RequestError("Steering is unavailable or its original native target is stale; no input was sent", 409)
+            if job.get("steeringUnknown") or any(json.loads(row[0]).get("status") == "unknown"
+                    for row in self.ledger.execute("SELECT receipt FROM steer_messages WHERE job_id=?", (jobid,)).fetchall()):
+                raise RequestError("An original input remains unknown; query that receipt instead of sending another", 409)
             if self.ledger.execute("SELECT count(*) FROM steer_messages WHERE job_id=?", (jobid,)).fetchone()[0] >= 64:
                 raise RequestError("This job has reached its 64-message steering limit", 429)
-            value = {"jobId": jobid, "operationId": message_id, "jobOperationId": job.get("operationId"), "threadId": job["threadId"], "expectedTurnId": expected,
-                     "messageId": message_id, "status": "queued", "dispatched": False, "updatedAt": self.now(), "message": "Input is durably queued; not yet accepted by Codex"}
+            target = {"protocol": pi_driver.PROTOCOL, "sessionId": native_session, "expectedPromptRequestId": expected} if pi else {"expectedTurnId": expected}
+            value = {"jobId": jobid, "operationId": message_id, "jobOperationId": job.get("operationId"), "threadId": job["threadId"], **target,
+                     "messageId": message_id, "status": "queued", "dispatched": False, "updatedAt": self.now(), "message": "Input is durably queued; not yet accepted by the native worker"}
             self.ledger.execute("INSERT INTO steer_messages VALUES (?, ?, ?, ?, ?)", (message_id, jobid, fingerprint, json.dumps(value), self.now()))
             self.ledger.commit()
 
@@ -1714,7 +1740,7 @@ class JobManager:
                     job["lastSteerMessage"] = dict(value)
                     self._save(job)
             try:
-                driver.steer({"messageId": message_id, "expectedTurnId": expected, "text": content}, receipt)
+                driver.steer({"messageId": message_id, **target, "text": content}, receipt)
             except (DriverError, queue.Full):
                 receipt("rejected", {"dispatched": False, "message": "Turn/queue became unavailable before input dispatch"})
             return self.steer_message(jobid, message_id)

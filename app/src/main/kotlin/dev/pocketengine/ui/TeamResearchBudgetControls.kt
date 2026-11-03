@@ -52,6 +52,7 @@ import org.json.JSONObject
     var wakeReview by remember(page) { mutableStateOf<TaskStore.TeamWakePolicyReview?>(null) }
     var wakeShown by remember(page) { mutableStateOf<JSONObject?>(null) }
     var wakeAccepted by remember(wakeReview) { mutableStateOf(false) }
+    var showAllWakeAttention by remember(page) { mutableStateOf(false) }
     fun showWakeStatus(value: JSONObject) {
         wakeStatus = value; wakeReview = null; wakeShown = null; wakeAccepted = false
         val policy = value.optJSONObject("policy")
@@ -120,6 +121,25 @@ import org.json.JSONObject
                 Row { Checkbox(wakeAccepted, { wakeAccepted = it }, enabled = !busy); Text("我明确确认上述来源、次数与期限，仅保存策略") }
                 Button(onClick = { work({ page.approveWakePolicy(exact, shownPolicy.getString("digest")); page.wakePolicyStatus() }) { showWakeStatus(it); notice = "研究策略已保存，未启动或增加次数。仅后续新消息在原安全点复核后可续接；旧意图保留。" } }, enabled = !busy && wakeAccepted) { Text("仅保存研究续接策略（不启动）") }
             } }
+            val attention = observed.optJSONArray("wakeAttention")
+            if (attention != null && attention.length() > 0) {
+                Text("原研究续接提醒 · ${attention.length()} 项", style = MaterialTheme.typography.titleSmall)
+                TeamCaption("按原执行保留已登记的提醒，同一次续接合并展示。后续执行不会覆盖这些记录，当前成员状态请查看原任务。重读不会重试、补次数或改变消息是否已被使用，也不代表资源已经释放。")
+                val attentionStart = if (showAllWakeAttention) 0 else maxOf(0, attention.length() - 4)
+                for (index in attentionStart until attention.length()) {
+                    val item = attention.getJSONObject(index)
+                    val status = item.getString("status")
+                    val label = when (status) {
+                        "unknown" -> "结果未确定"
+                        "cancelled" -> "本次续接已取消"
+                        else -> "本次续接未完成"
+                    }
+                    Text("${item.getString("memberId")} · $label", style = MaterialTheme.typography.bodyMedium)
+                    TeamCaption(if (status == "unknown") "请核对原执行与原回执。未确定的结果不会通过新任务、新消息或再次发送来重做。" else "请查看原成员的未完成原因与保留结果。本页重读不会继续执行。")
+                    TeamCaption("原研究任务 ${item.getString("childTaskId")} · 执行代次 ${item.getInt("childEpoch")}")
+                }
+                if (attention.length() > 4) TextButton(onClick = { showAllWakeAttention = !showAllWakeAttention }) { Text(if (showAllWakeAttention) "收起较早提醒" else "查看全部 ${attention.length()} 项提醒（含较早未确定结果）") }
+            }
             val intents = observed.optJSONArray("intents")
             if (intents != null && intents.length() > 0) {
                 TeamCaption("保留 ${intents.length()} 条原意图，显示最近 ${minOf(8, intents.length())} 条；截至 ${java.util.Date(observedAt)}，实际派发仍会复核。")

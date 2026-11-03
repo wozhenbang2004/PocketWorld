@@ -118,6 +118,13 @@ if os.environ.get('PI_CODING_AGENT_DIR'):
     pi_models=[pi_configured_model]
 '''
 
+def inject_pi_catalogue(source):
+    # Preserve the actual fixture signature; fail closed if the protocol fixture changes.
+    needle = "def done("
+    if source.count(needle) != 1:
+        raise ValueError("expected exactly one Pi fixture completion function")
+    return source.replace(needle, PI_CATALOGUE + "\n" + needle, 1)
+
 def main():
     root=Path(sys.argv[1]).resolve(); workspace=root/'workspace';workspace.mkdir(parents=True)
     options=set(sys.argv[2:])
@@ -150,7 +157,7 @@ def main():
     peers=[('codex',codex,'approval','codex-cli 0.164.0-alpha.11'),('claude',claude,'approval','2.1.259 (Claude Code)')]
     if '--pi' in options:
         pi=PI.replace('import json, sys, time, threading','import json, sys, time, threading, os\n'+WIRE)
-        pi=pi.replace("def done(aborted=False):",PI_CATALOGUE+"\ndef done(aborted=False):")
+        pi=inject_pi_catalogue(pi)
         pi=pi.replace("reply({'models':[model,{'provider':'fixture','id':'model-b','name':'Fixture B'}]})","reply({'models':pi_models})")
         pi=pi.replace("assert value['provider']=='fixture' and value['modelId']=='model-b';model={**model,'id':'model-b'}",
                       "assert pi_configured_model and value['provider']=='pocketworld' and value['modelId']==pi_configured_model['id'];model=dict(pi_configured_model)")

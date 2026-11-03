@@ -89,4 +89,45 @@ public final class AutomationScheduleProposalTest {
         assertThrows(SecurityException.class,()->book.approveScheduleProposal(row.getString("id"),row.getString("digest"),100002));
     }
 
+    @Test public void cronDraftRequiresExactOriginalReviewAndKeepsSourceThroughOccurrence()throws Exception {
+        long before=java.time.Instant.parse("2027-01-04T08:00:00Z").toEpochMilli();File file=new File(temp.getRoot(),"cron-proposal.json");AutomationBook book=new AutomationBook(file);JSONObject nativeOrigin=origin();String operation=UUID.randomUUID().toString();
+        JSONObject requested=draft().put("schedule",new JSONObject().put("type","cron").put("scheduleVersion",1).put("expression","0 9 * * 1-5").put("zone","UTC"));
+        JSONObject row=book.proposeSchedule(nativeOrigin,operation,requested,before),displayed=AutomationBook.reviewedProposalForDisplay(row);
+        assertEquals(0,book.rules().length());assertEquals(-1,book.nextAt());assertFalse(row.getBoolean("executionAuthorized"));assertEquals(1,displayed.getJSONObject("draft").getJSONObject("schedule").getInt("scheduleVersion"));
+        JSONObject altered=new JSONObject(row.toString());altered.getJSONObject("draft").getJSONObject("schedule").put("expression","0 10 * * 1,2,3,4,5");assertThrows(SecurityException.class,()->AutomationBook.reviewedProposalForDisplay(altered));
+        JSONObject rule=book.approveScheduleProposal(row.getString("id"),row.getString("digest"),before+1).getJSONObject("rule");long planned=rule.getLong("scheduledAt");
+        assertEquals(java.time.Instant.parse("2027-01-04T09:00:00Z").toEpochMilli(),planned);AutomationBook cold=new AutomationBook(file);assertTrue(cold.approveScheduleProposal(row.getString("id"),row.getString("digest"),before+2).getBoolean("duplicate"));
+        JSONObject occurrence=cold.claimDue(planned,10).getJSONObject(0);cold.delivered(occurrence.getString("id"),"awaiting_user","主人仍需核对手机目标",planned);JSONObject admission=cold.taskRequest(occurrence.getString("id"),planned);
+        assertEquals(nativeOrigin.toString(),occurrence.getJSONObject("nativeOrigin").toString());assertEquals(nativeOrigin.getString("runId"),admission.getJSONObject("origin").getJSONObject("nativeOrigin").getString("runId"));assertFalse(admission.getBoolean("executionAuthorized"));assertEquals(1,cold.rules().length());
+        cold.revokeNativeScheduleOrigin(nativeOrigin,planned+1);assertThrows(IllegalStateException.class,()->cold.taskRequest(occurrence.getString("id"),planned+2));assertEquals(0,cold.claimDue(planned+86400000L,10).length());
+    }
+    @Test public void addingVersionSupportDoesNotRewriteAPreviouslyReviewedLegacyDigest()throws Exception {
+        File file=new File(temp.getRoot(),"legacy-shape-version.json");AutomationBook book=new AutomationBook(file);JSONObject nativeOrigin=origin();String operation=UUID.randomUUID().toString();JSONObject requested=draft().put("schedule",new JSONObject().put("type","daily").put("time","09:00").put("zone","UTC"));
+        JSONObject legacy=book.proposeSchedule(nativeOrigin,operation,requested,1000);assertEquals(3,legacy.getJSONObject("draft").getJSONObject("schedule").length());byte[] before=java.nio.file.Files.readAllBytes(file.toPath());
+        AutomationBook cold=new AutomationBook(file);JSONObject read=AutomationBook.reviewedProposalForDisplay(cold.scheduleProposals(null).getJSONObject(0));assertEquals(legacy.getString("digest"),read.getString("digest"));assertArrayEquals(before,java.nio.file.Files.readAllBytes(file.toPath()));
+        JSONObject versioned=new JSONObject(requested.toString());versioned.getJSONObject("schedule").put("scheduleVersion",1);assertThrows(SecurityException.class,()->cold.proposeSchedule(nativeOrigin,operation,versioned,1001));
+        assertEquals(legacy.getString("digest"),cold.approveScheduleProposal(legacy.getString("id"),legacy.getString("digest"),1002).getJSONObject("proposal").getString("digest"));assertFalse(cold.rules().getJSONObject(0).getJSONObject("schedule").has("scheduleVersion"));
+    }
+    @Test public void sourcePendingRejectsStaleSaveAndPreservesOriginalUntilVerified()throws Exception {
+        File file=new File(temp.getRoot(),"pending-save.json"); AutomationBook book=new AutomationBook(file); JSONObject nativeOrigin=origin();
+        JSONObject proposal=book.proposeSchedule(nativeOrigin,UUID.randomUUID().toString(),draft(),90000);
+        JSONObject rule=book.approveScheduleProposal(proposal.getString("id"),proposal.getString("digest"),90001).getJSONObject("rule");
+        JSONObject stale=new JSONObject(rule.toString()).put("title","过期页面修改");
+        // Hold the actual shared Book monitor: the stale page queues a save while
+        // the same monitor records quarantine, then must observe the quarantine.
+        java.lang.reflect.Field lockField=AutomationBook.class.getDeclaredField("lock");lockField.setAccessible(true);Object lock=lockField.get(book);
+        AutomationBook staleBook=new AutomationBook(file);java.util.concurrent.ExecutorService executor=java.util.concurrent.Executors.newSingleThreadExecutor();byte[] original;
+        try {
+            java.util.concurrent.CountDownLatch queued=new java.util.concurrent.CountDownLatch(1);java.util.concurrent.Future<Boolean> rejected;
+            synchronized(lock){
+                rejected=executor.submit(()->{queued.countDown();try{staleBook.save(stale,90003);return false;}catch(SecurityException expected){return true;}});
+                assertTrue(queued.await(2,java.util.concurrent.TimeUnit.SECONDS));book.nativeScheduleSourcePending(nativeOrigin,true,90002);original=java.nio.file.Files.readAllBytes(file.toPath());
+            }
+            assertTrue(rejected.get(2,java.util.concurrent.TimeUnit.SECONDS));
+        } finally {executor.shutdownNow();}
+        assertArrayEquals(original,java.nio.file.Files.readAllBytes(file.toPath()));
+        assertTrue(book.rules().getJSONObject(0).getBoolean("sourceCheckPending"));assertEquals(0,book.claimDue(100000,10).length());
+        book.nativeScheduleSourcePending(nativeOrigin,false,90004);
+        JSONObject updated=book.save(stale,90005);assertEquals("过期页面修改",updated.getString("title"));assertEquals(rule.getInt("revision")+1,updated.getInt("revision"));
+    }
 }

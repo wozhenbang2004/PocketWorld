@@ -10,6 +10,7 @@ import org.json.JSONObject;
 public final class RemoteJobEvents {
     public static final String PROTOCOL="original_job_events_v1", FILTER="normalized_driver_observations_v1";
     public static final String CHILD_SOURCE_PROTOCOL="claude_complete_child_v1";
+    public static final String CLAUDE_CHILD_PROGRESS_VERSION="2.1.317";
     public static final String CODEX_CHILD_SOURCE_PROTOCOL="codex_public_child_v1", CODEX_CHILD_VERSION="0.166.0-alpha.1";
     private RemoteJobEvents(){}
     public static final class Page {
@@ -25,6 +26,11 @@ public final class RemoteJobEvents {
         for(String key:new String[]{"taskId","runId","coordinatorEpoch","profileId","serviceBase","jobId","jobOperationId","environmentId","worker"})result.put(key,source.get(key));
         for(String key:new String[]{"threadId","sessionId","promptRequestId","turnId"})if(!source.optString(key).isEmpty())result.put(key,source.getString(key));
         String version=codexRuntimeVersion(source);if(version!=null)result.put("nativeRuntimeVersion",version);
+        if(claudeProgressRuntimeVersion(source)!=null){
+            JSONObject runtime=source.getJSONObject("modelRuntime"),bound=new JSONObject();
+            for(String key:new String[]{"protocol","worker","runtimeVersion","sessionId","promptRequestId"})bound.put(key,runtime.getString(key));
+            result.put("modelRuntime",bound);
+        }
         if(!source.optString("protocol").isEmpty())result.put("nativeProtocol",source.getString("protocol"));
         return result;
     }
@@ -43,10 +49,28 @@ public final class RemoteJobEvents {
         String session=originalSource.optString("sessionId",originalSource.optString("threadId")),prompt=originalSource.optString("promptRequestId");
         if(!session.matches("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")||!prompt.matches("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")||!session.equals(event.optString("parentSessionId"))||!prompt.equals(event.optString("parentPromptRequestId")))throw new SecurityException("child观察不是此原session/prompt，不混入父记录");
         String kind=event.optString("kind"),nativeType=event.optString("nativeType");
-        if(!(kind.equals("child_text")&&nativeType.matches("assistant/text|user/text")&&event.opt("text") instanceof String||kind.equals("tool")&&nativeType.equals("assistant/tool_use")||kind.equals("tool_result")&&nativeType.equals("user/tool_result")))throw new SecurityException("child观察只接完整公开text/tool block，不接thinking或审批");
+        boolean progress=kind.equals("tool")&&nativeType.equals("tool_progress");
+        if(progress)requireClaudeChildProgress(event,originalSource);
+        else if(!(kind.equals("child_text")&&nativeType.matches("assistant/text|user/text")&&event.opt("text") instanceof String||kind.equals("tool")&&nativeType.equals("assistant/tool_use")||kind.equals("tool_result")&&nativeType.equals("user/tool_result")))throw new SecurityException("child观察只接完整公开text/tool block与固定版本工具进度，不接thinking或审批");
         if(!event.has("parentToolUseId"))throw new SecurityException("child观察没有原parent tool-use身份");for(String key:new String[]{"parentToolUseId","nativeAgentId","nativeMessageId","nativeEventId"})if(event.has(key)&&(!(event.opt(key) instanceof String)||!event.getString(key).matches("[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}")))throw new SecurityException("child原生来源ID无效，未成为可操作会话");
         String parent=event.getString("parentToolUseId");view.put("kind","child").put("key","child:"+parent).put("sourceProtocol",CHILD_SOURCE_PROTOCOL).put("parentToolUseId",parent).put("parentSessionId",session).put("parentPromptRequestId",prompt);
+        if(progress)view.put("nativeLineageVersion",CLAUDE_CHILD_PROGRESS_VERSION).put("publicObservationOnly",true);
         for(String key:new String[]{"nativeAgentId","nativeMessageId","nativeEventId"})if(event.has(key))view.put(key,event.getString(key));return view;
+    }
+    /** This is a projection of the original authenticated job readback, never a requested version. */
+    private static String claudeProgressRuntimeVersion(JSONObject source){
+        if(!"claude".equals(source.optString("worker")))return null;
+        JSONObject runtime=source.optJSONObject("modelRuntime");
+        if(runtime==null||!"native_model_runtime_v1".equals(runtime.optString("protocol"))||!"claude".equals(runtime.optString("worker"))
+                ||!source.optString("sessionId").equals(runtime.optString("sessionId"))||!source.optString("promptRequestId").equals(runtime.optString("promptRequestId")))return null;
+        return CLAUDE_CHILD_PROGRESS_VERSION.equals(runtime.optString("runtimeVersion"))?CLAUDE_CHILD_PROGRESS_VERSION:null;
+    }
+    private static void requireClaudeChildProgress(JSONObject event,JSONObject source)throws Exception {
+        if(!CLAUDE_CHILD_PROGRESS_VERSION.equals(claudeProgressRuntimeVersion(source))||!CLAUDE_CHILD_PROGRESS_VERSION.equals(event.optString("nativeLineageVersion")))throw new SecurityException("Claude子工具进度缺少此原session/prompt的固定版本读回");
+        if(!childId(event,"itemId")||!(event.opt("nativeEventId") instanceof String)||!event.getString("nativeEventId").matches("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
+                ||!(event.opt("tool") instanceof String)||event.getString("tool").isBlank()||event.getString("tool").length()>200||event.getString("tool").codePoints().anyMatch(c->c<32||c==127||c>=0xd800&&c<=0xdfff)||!"running".equals(event.optString("status")))throw new SecurityException("Claude子工具进度的原生身份或公开状态无效");
+        Set<String> fields=Set.of("kind","nativeType","itemId","sequence","observedAt","tool","status","childSourceProtocol","parentToolUseId","parentSessionId","parentPromptRequestId","nativeEventId","nativeLineageVersion");
+        var keys=event.keys();while(keys.hasNext())if(!fields.contains(keys.next()))throw new SecurityException("Claude子工具进度含未声明字段，不显示隐藏正文或创建操作权");
     }
     private static String codexRuntimeVersion(JSONObject source){
         if(!"codex_app_server".equals(source.optString("worker")))return null;
