@@ -278,7 +278,8 @@
       "dev.pocketengine.phone.observation.PhoneExtensionJournalTest",
       "dev.pocketengine.phone.observation.PhoneAdvancedExtensionJourneyTest",
       "dev.pocketengine.phone.setup.ClipboardOwnerConsentTest",
-      "dev.pocketengine.displayhelper.DisplayMultiGesturePathsTest"
+      "dev.pocketengine.displayhelper.DisplayMultiGesturePathsTest",
+      "dev.pocketengine.phone.setup.AndroidClipboardUnreadableNativeTest"
     ],
     "helpers": [
       "dev.pocketengine.phone.observation.PhoneCollectionFixtures",

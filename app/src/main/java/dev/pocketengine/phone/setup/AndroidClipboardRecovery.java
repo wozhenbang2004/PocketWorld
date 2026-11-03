@@ -1,6 +1,5 @@
 package dev.pocketengine.phone.setup;
 
-import android.app.ActivityManager;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -31,7 +30,7 @@ public final class AndroidClipboardRecovery {
         ClipboardRestoration.Storage store=new ClipboardRestoration.Storage(){public String read()throws Exception{String value=vault.get(key);return value.isEmpty()?null:value;}public void write(String value)throws Exception{vault.put(key,value);if(!value.equals(vault.get(key)))throw new IllegalStateException("clipboard_original_save_failed");}public void clear()throws Exception{vault.remove(key);}};
         ClipboardManager manager=app.getSystemService(ClipboardManager.class);
         ClipboardRestoration.Clipboard clipboard=new ClipboardRestoration.Clipboard(){
-            public String snapshot(){if(manager==null)return null;ClipData clip=manager.getPrimaryClip();if(clip==null){ActivityManager.RunningAppProcessInfo info=new ActivityManager.RunningAppProcessInfo();ActivityManager.getMyMemoryState(info);return info.importance<=ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND?"empty":null;}return encode(clip);}
+            public String snapshot(){if(manager==null)return null;ClipData clip=manager.getPrimaryClip();if(clip==null)return null;return encode(clip);}
             public String replacement(String text){return encode(ClipData.newPlainText("PocketWorld temporary input",text));}
             public void installTemporary(String value)throws Exception {if(control==null)throw new SecurityException("clipboard_original_run_required");dev.pocketengine.phone.observation.NativePhoneEntry.call(control,revision,()->{requireOwnerAllowed(app,clipboardRevision);java.util.Objects.requireNonNull(admission).check();},()->{requireOwnerAllowed(app,clipboardRevision);install(value);return null;});}
             public String fingerprint(String value)throws Exception {if(value==null)throw new SecurityException("clipboard_unreadable");if(value.equals("empty"))return "empty";Parcel parcel=Parcel.obtain();try{byte[] bytes=Base64.decode(value,Base64.NO_WRAP);parcel.unmarshall(bytes,0,bytes.length);parcel.setDataPosition(0);ClipData clip=ClipData.CREATOR.createFromParcel(parcel);StringBuilder stable=new StringBuilder();stable.append(clip.getDescription().getLabel()).append('\0');for(int i=0;i<clip.getDescription().getMimeTypeCount();i++)stable.append(clip.getDescription().getMimeType(i)).append('\0');for(int i=0;i<clip.getItemCount();i++){ClipData.Item item=clip.getItemAt(i);stable.append(item.getText()).append('\0').append(item.getHtmlText()).append('\0').append(item.getUri()).append('\0').append(item.getIntent()==null?"":item.getIntent().toUri(0)).append('\0');}byte[] digest=java.security.MessageDigest.getInstance("SHA-256").digest(stable.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));return Base64.encodeToString(digest,Base64.NO_WRAP);}finally{parcel.recycle();}}
