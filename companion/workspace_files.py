@@ -56,8 +56,14 @@ class WorkspaceFiles:
         parts = self.parts(path)
         directory = self.directory(env, parts[:-1])
         try:
+            return self._raw(directory, parts[-1])
+        finally:
+            os.close(directory)
+
+    def _raw(self, directory, name):
+        try:
             try:
-                descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+                descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
             except FileNotFoundError:
                 return None
             with os.fdopen(descriptor, "rb") as stream:
@@ -72,8 +78,15 @@ class WorkspaceFiles:
                 return value
         except OSError:
             raise FileError("File cannot be opened without following a symbolic link", 403)
+
+    def _check_directory(self, env, parts, directory):
+        named = self.directory(env, parts)
+        try:
+            original, current = os.fstat(directory), os.fstat(named)
+            if (original.st_dev, original.st_ino) != (current.st_dev, current.st_ino):
+                raise FileError("Workspace directory changed; inspect the original file operation", 409)
         finally:
-            os.close(directory)
+            os.close(named)
 
     def revision(self, env, path, value):
         version = self.version(value)
@@ -180,53 +193,59 @@ class WorkspaceFiles:
                 raise FileError("operationId was already used for another file write", 409)
             return json.loads(previous[1])
         current()
-        before = self.raw(env, path)
-        version = "absent" if before is None else self.version(before)
-        if request.get("expectedVersion") != version:
-            raise FileError("File version changed; read and inspect the actual file before writing", 409)
-        desired = self.version(value)
-        receipt = {"operationId": operation, "environmentId": environment_id, "path": path, "status": "unknown", "desiredVersion": desired, "previousVersion": version, "message": "Write intent recorded; no confirmed result yet"}
-        if request.get("projectHistoryProtocol"):
-            receipt.update({key: request[key] for key in ("projectHistoryProtocol", "jobId", "jobOperationId", "snapshotId", "snapshotVersion", "expectedFileVersion", "desiredSha256")})
-            receipt.update(restoresConversation=False, atomicWorkspaceTransaction=False)
-        self.database.execute("INSERT INTO file_operations VALUES (?,?,?,?,?,?)", (operation, fingerprint, environment_id, path, desired, json.dumps(receipt)))
-        self.database.commit()
         directory = self.directory(env, parts[:-1])
-        temporary = ".pocketworld-write-" + uuid.uuid4().hex
-        dispatched = False
         try:
-            current()
-            if before is not None:
-                self.revision(env, path, before)
-            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write(value)
-                stream.flush()
-                if request.get("projectHistoryProtocol"):
-                    os.fchmod(stream.fileno(), 0o700 if request["desiredExecutable"] else 0o600)
-                os.fsync(stream.fileno())
-            latest = self.raw(env, path)
-            if ("absent" if latest is None else self.version(latest)) != version:
-                raise FileError("File changed before commit; no replacement was dispatched", 409)
-            current()
-            dispatched = True
-            os.replace(temporary, parts[-1], src_dir_fd=directory, dst_dir_fd=directory)
-            os.fsync(directory)
-            actual = self.raw(env, path)
-            if actual is None or self.version(actual) != desired:
-                raise FileError("File changed after replacement; inspect current content and do not retry blindly", 409)
-            receipt.update(status="completed", version=self.revision(env, path, actual), bytes=len(actual), verified=True, message="Actual file content matches the committed version")
+            before = self._raw(directory, parts[-1])
+            version = "absent" if before is None else self.version(before)
+            if request.get("expectedVersion") != version:
+                raise FileError("File version changed; read and inspect the actual file before writing", 409)
+            desired = self.version(value)
+            receipt = {"operationId": operation, "environmentId": environment_id, "path": path, "status": "unknown", "desiredVersion": desired, "previousVersion": version, "message": "Write intent recorded; no confirmed result yet"}
             if request.get("projectHistoryProtocol"):
-                from project_history import _file_version
-                receipt.update(fileVersion=_file_version(os.stat(parts[-1], dir_fd=directory, follow_symlinks=False), actual), modePolicy="private_owner_read_write_preserve_snapshot_executable")
-        except (OSError, FileError):
-            receipt.update(status="unknown" if dispatched else "failed", message="File write result requires inspection; the operation will not be replayed" if dispatched else "No replacement was dispatched; inspect the file before a new operation")
-        finally:
-            try:
-                os.unlink(temporary, dir_fd=directory)
-            except FileNotFoundError:
-                pass
-            os.close(directory)
-            self.database.execute("UPDATE file_operations SET receipt=? WHERE operation_id=?", (json.dumps(receipt), operation))
+                receipt.update({key: request[key] for key in ("projectHistoryProtocol", "jobId", "jobOperationId", "snapshotId", "snapshotVersion", "expectedFileVersion", "desiredSha256")})
+                receipt.update(restoresConversation=False, atomicWorkspaceTransaction=False)
+            self.database.execute("INSERT INTO file_operations VALUES (?,?,?,?,?,?)", (operation, fingerprint, environment_id, path, desired, json.dumps(receipt)))
             self.database.commit()
-        return receipt
+            temporary = ".pocketworld-write-" + uuid.uuid4().hex
+            dispatched = False
+            try:
+                current()
+                self._check_directory(env, parts[:-1], directory)
+                if before is not None:
+                    self.revision(env, path, before)
+                descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(value)
+                    stream.flush()
+                    if request.get("projectHistoryProtocol"):
+                        os.fchmod(stream.fileno(), 0o700 if request["desiredExecutable"] else 0o600)
+                    os.fsync(stream.fileno())
+                latest = self._raw(directory, parts[-1])
+                if ("absent" if latest is None else self.version(latest)) != version:
+                    raise FileError("File changed before commit; no replacement was dispatched", 409)
+                current()
+                # Optimistic guard, not an atomic filesystem compare-and-swap.
+                self._check_directory(env, parts[:-1], directory)
+                dispatched = True
+                os.replace(temporary, parts[-1], src_dir_fd=directory, dst_dir_fd=directory)
+                os.fsync(directory)
+                actual = self._raw(directory, parts[-1])
+                self._check_directory(env, parts[:-1], directory)
+                if actual is None or self.version(actual) != desired:
+                    raise FileError("File changed after replacement; inspect current content and do not retry blindly", 409)
+                receipt.update(status="completed", version=self.revision(env, path, actual), bytes=len(actual), verified=True, message="Actual file content matches the committed version")
+                if request.get("projectHistoryProtocol"):
+                    from project_history import _file_version
+                    receipt.update(fileVersion=_file_version(os.stat(parts[-1], dir_fd=directory, follow_symlinks=False), actual), modePolicy="private_owner_read_write_preserve_snapshot_executable")
+            except (OSError, FileError):
+                receipt.update(status="unknown" if dispatched else "failed", message="File write result requires inspection; the operation will not be replayed" if dispatched else "No replacement was dispatched; inspect the file before a new operation")
+            finally:
+                try:
+                    os.unlink(temporary, dir_fd=directory)
+                except FileNotFoundError:
+                    pass
+                self.database.execute("UPDATE file_operations SET receipt=? WHERE operation_id=?", (json.dumps(receipt), operation))
+                self.database.commit()
+            return receipt
+        finally:
+            os.close(directory)

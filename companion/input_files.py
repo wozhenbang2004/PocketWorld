@@ -120,7 +120,7 @@ def _directory(manager, job, env, create, error):
         root = manager.files.directory(env, [])
     except FileError as failure:
         raise error(str(failure), failure.status)
-    parent = None
+    parent = target = None
     try:
         root_info = os.fstat(root)
         physical_root = hashlib.sha256(json.dumps([env["root"], root_info.st_dev, root_info.st_ino], separators=(",", ":")).encode()).hexdigest()
@@ -140,15 +140,17 @@ def _directory(manager, job, env, create, error):
         identity = hashlib.sha256(json.dumps([info.st_dev, info.st_ino], separators=(",", ":")).encode()).hexdigest()
         old = job["inputState"].get("directoryIdentity")
         if old is not None and old != identity:
-            os.close(target)
             raise error("Original private input directory was replaced", 409)
         if create and old is None:
             job["inputState"]["directoryIdentity"] = identity
             manager._save(job)
-        return target
+        result, target = target, None  # Transfer ownership only after identity persistence.
+        return result
     except OSError:
         raise error("Private input directory is missing, pre-existing, or contains a symbolic link", 409)
     finally:
+        if target is not None:
+            os.close(target)
         if parent is not None:
             os.close(parent)
         os.close(root)
