@@ -8,7 +8,7 @@ internal object TaskExecutionPresentation {
     enum class Tone { RUNNING, WAITING, UNCERTAIN, ERROR, RETURNED, STOPPED, NEUTRAL }
     enum class Target { NONE, PROCESS, APPROVAL, RECONCILIATION, RESULT, FEEDBACK }
     data class Current(val title: String, val detail: String, val tone: Tone, val target: Target = Target.NONE, val action: String = "")
-    data class Record(val key: String, val title: String, val label: String, val tone: Tone, val at: Long, val runId: String, val arguments: String, val receipt: String, val limited: Boolean, val bodyBytes: Long, val projectExecutionId: String? = null)
+    data class Record(val key: String, val title: String, val label: String, val tone: Tone, val at: Long, val runId: String, val arguments: String, val receipt: String, val limited: Boolean, val bodyBytes: Long, val projectExecutionId: String? = null, val outputNotes: List<String> = emptyList())
 
     /** A read locator only. The native factory rechecks the original SQL plan, receipt and owner. */
     fun projectExecutionObservationId(row: JSONObject): String? = row.optString("operationId").takeIf {
@@ -70,7 +70,10 @@ internal object TaskExecutionPresentation {
 
     fun records(page: JSONObject, section: String): List<Record> = objects(page.optJSONArray("entries")).mapNotNull { row ->
         if (section == "events") row.optJSONObject("event")?.let { event ->
-            Record("event:" + row.optLong("position"), eventTitle(event.optString("type")), event.optString("status").let(::eventLabel), eventTone(event.optString("status")), event.optLong("at", event.optLong("timestamp")), event.optString("runId"), "", event.toString(), false, row.optLong("bodyBytes"))
+            val tool = event.optString("tool")
+            val projectLog = tool in setOf("project_execute", "project_status", "project_stop")
+            val notes = if (event.optString("type") == "tool" && (projectLog || tool == "ssh_exec")) outputNotes(event.optJSONObject("receipt"), projectLog) else emptyList()
+            Record("event:" + row.optLong("position"), eventTitle(event.optString("type")), event.optString("status").let(::eventLabel), eventTone(event.optString("status")), event.optLong("at", event.optLong("timestamp")), event.optString("runId"), "", event.toString(), false, row.optLong("bodyBytes"), outputNotes = notes)
         } ?: if (row.optString("status") == "read_limited") Record("event:" + row.optLong("position"), eventTitle(row.optString("type")), "原正文未在本页展开", Tone.NEUTRAL, 0, "", "", "", true, row.optLong("bodyBytes")) else null
         else operation(row)
     }
@@ -93,7 +96,50 @@ internal object TaskExecutionPresentation {
             receipt != null -> { tone = Tone.RETURNED; label = "已返回 · 目标仍需核对，结果可展开查看" }
             else -> { tone = Tone.NEUTRAL; label = "原状态：" + excerpt(state.ifBlank { "未报告" }, 80) }
         }
-        return Record("operation:" + row.optString("operationId", row.optString("position")), excerpt(row.optString("tool").ifBlank { "原工具调用" }, 120), label, tone, row.optLong("createdAt"), row.optString("runId"), row.optJSONObject("arguments")?.toString().orEmpty(), receipt?.toString().orEmpty(), row.optString("status") == "read_limited", row.optLong("bodyBytes"), projectExecutionObservationId(row))
+        return Record("operation:" + row.optString("operationId", row.optString("position")), excerpt(row.optString("tool").ifBlank { "原工具调用" }, 120), label, tone, row.optLong("createdAt"), row.optString("runId"), row.optJSONObject("arguments")?.toString().orEmpty(), receipt?.toString().orEmpty(), row.optString("status") == "read_limited", row.optLong("bodyBytes"), projectExecutionObservationId(row), outputNotes(receipt, row.optString("tool") in setOf("project_execute", "project_status", "project_stop")))
+    }
+
+    /** Read-only output facts, independent of process success or permission to read a source. */
+    fun outputNotes(receipt: JSONObject?, projectLog: Boolean = false): List<String> {
+        if (receipt == null) return emptyList()
+        val notes = mutableListOf<String>()
+        val supplied = receipt.optJSONObject("outputCapture") ?: receipt.optJSONObject("receipt")?.optJSONObject("outputCapture")
+        val capture = supplied?.let { runCatching { dev.pocketengine.features.memory.ToolOutputCapture.checkedMetadata(it) }.getOrNull() }
+        if (capture != null) {
+            val refs = objects(capture.optJSONArray("outputRefs"))
+            val bytes = refs.sumOf { it.getJSONObject("retainedRange").getLong("utf8Bytes") }
+            notes += when {
+                refs.isEmpty() -> "本回执没有可核对的输出留存引用，不能据此保证原件完整。"
+                refs.all { it.opt("retainedNativeDataComplete") == true } -> "本次允许留存的返回数据已完整保存，共 $bytes 字节；读取仍需核对原任务与来源。"
+                else -> "本次允许留存的返回数据仅部分保存，共 $bytes 字节；摘要不能代替未留存内容。"
+            }
+            if (refs.any { it.opt("upstreamTruncated") == true }) notes += "上游返回内容已截断，缺失部分不在留存件中。"
+            else if (refs.any { it.isNull("upstreamTruncated") }) notes += "上游内容是否完整尚未确认。"
+        } else if (supplied != null) notes += "输出留存信息无法核对，未据此宣称原件完整。"
+        val omissions = receipt.optJSONObject("displayOmissions")
+        var counted = false
+        var byteBudgetConfirmed = true
+        for ((field, label) in listOf("stdout" to "标准输出", "stderr" to "错误输出", "content" to "文本", "observation.stdout" to "观察中的标准输出", "observation.stderr" to "观察中的错误输出")) {
+            val fact = omissions?.optJSONObject(field) ?: continue
+            fun count(key: String): Long? = (fact.opt(key) as? Number)?.takeIf { it is Int || it is Long }?.toLong()?.takeIf { it in 0..Int.MAX_VALUE.toLong() }
+            val source = count("sourceUtf8Bytes") ?: continue
+            val head = count("headUtf8Bytes") ?: continue
+            val tail = count("tailUtf8Bytes") ?: continue
+            val omitted = count("omittedUtf8Bytes") ?: continue
+            if (fact.optString("sourceByteScope") != "returned_text_utf8" || fact.opt("nativeOutputChanged") != false || source != head + tail + omitted || omitted == 0L) continue
+            notes += "$label：返回文本的展示中省略 $omitted 字节，保留开头 $head 字节和末尾 $tail 字节。"
+            counted = true
+            byteBudgetConfirmed = byteBudgetConfirmed && fact.optString("budgetBasis") == "utf8_json_bytes" && fact.opt("tokenEstimateUsed") == false
+        }
+        if (receipt.opt("displayTruncated") == true && !counted) notes += "当前展示有省略，准确遗漏量未记录。"
+        if (counted && byteBudgetConfirmed) notes += "摘录使用保守的字节预算；没有按模型 token 数估算。"
+        if (projectLog) {
+            val log = receipt.optJSONObject("executionReceipt") ?: receipt.optJSONObject("observation") ?: receipt
+            if (log.opt("logIncompleteTail") == true) notes += "日志末条未写完整，仅可读取此前完整记录；这不能证明已达到存储上限。"
+            if (log.opt("outputTruncated") == true) notes += "原日志内容不完整，未留存部分不能由摘要恢复。"
+            if (log.opt("summaryOutputTruncated") == true) notes += "原回执仅含日志摘要，可展开这次执行的日志，分段读取已留存记录。"
+        }
+        return notes
     }
 
     private fun uncertain(operation: JSONObject): Boolean {

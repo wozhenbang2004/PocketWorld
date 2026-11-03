@@ -13,7 +13,7 @@ public final class ToolTextDisplay {
         public final int sourceBytes,headBytes,tailBytes,omittedBytes;
         private Excerpt(String text,int sourceBytes,int headBytes,int tailBytes){this.text=text;this.sourceBytes=sourceBytes;this.headBytes=headBytes;this.tailBytes=tailBytes;omittedBytes=sourceBytes-headBytes-tailBytes;}
         public boolean truncated(){return omittedBytes>0;}
-        public JSONObject metadata()throws Exception{return new JSONObject().put("sourceByteScope","returned_text_utf8").put("sourceUtf8Bytes",sourceBytes).put("headUtf8Bytes",headBytes).put("tailUtf8Bytes",tailBytes).put("omittedUtf8Bytes",omittedBytes).put("gapIsSourceContent",false).put("nativeOutputChanged",false);}
+        public JSONObject metadata()throws Exception{return new JSONObject().put("sourceByteScope","returned_text_utf8").put("sourceUtf8Bytes",sourceBytes).put("headUtf8Bytes",headBytes).put("tailUtf8Bytes",tailBytes).put("omittedUtf8Bytes",omittedBytes).put("gapIsSourceContent",false).put("nativeOutputChanged",false).put("budgetBasis","utf8_json_bytes").put("tokenEstimateUsed",false);}
     }
     public static Excerpt clip(String source,int jsonByteBudget){
         int bytes=source.getBytes(StandardCharsets.UTF_8).length;

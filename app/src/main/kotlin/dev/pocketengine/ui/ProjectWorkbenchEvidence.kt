@@ -151,9 +151,7 @@ internal fun NativeProjectExecutionLog(task: UiTask, onRefresh: () -> Unit, onFu
                             WorkbenchOutput(actual.optString(field))
                         }
                     }
-                    if (actual.optBoolean("logIncompleteTail")) Text("日志末条未写完整，仅显示此前完整记录；原字节保留，结束状态仍以原回执为准。", color = SecondaryInk, fontSize = 13.sp)
-                    else if (actual.optBoolean("outputTruncated")) Text("日志已达到存储上限，内容不完整。", color = SecondaryInk, fontSize = 13.sp)
-                    else if (actual.optBoolean("summaryOutputTruncated")) Text("这里显示日志摘要。可让 Agent 按这次执行分段读取。", color = SecondaryInk, fontSize = 13.sp)
+                    TaskExecutionPresentation.outputNotes(actual, projectLog = true).forEach { Text(it, color = SecondaryInk, fontSize = 13.sp, lineHeight = 20.sp) }
                     ProjectWorkbenchGuard.failureDraft(task, operation.optString("operationId"))?.let { draft ->
                         TextButton(onClick = { onRepair(draft) }, modifier = Modifier.testTag("project_use_build_error")) { Text("将这次错误带入修改草稿") }
                     }

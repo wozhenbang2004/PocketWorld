@@ -35,16 +35,20 @@ public final class AndroidRuntimeThermalObservationTest {
     private static AndroidRuntimeThermalObservation create(PowerManager power,AtomicLong now){memory(false);return new AndroidRuntimeThermalObservation(RuntimeEnvironment.getApplication(),power,RuntimeEnvironment.getApplication().getSystemService(ActivityManager.class),new Handler(Looper.getMainLooper()),now::get);}
     private static JSONObject memoryReturned(AndroidRuntimeThermalObservation original,long after)throws Exception{
         long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);JSONObject result;
-        do{idle();result=original.cachedSnapshotForHost();if(result.getLong("memoryObservationSequence")>after)return result;Thread.sleep(5);}while(System.nanoTime()<until);
+        do{idle();result=original.cachedSnapshotForHost();if(result.getLong("memoryObservationSequence")>after&&memoryLaneIdle(original))return result;Thread.sleep(5);}while(System.nanoTime()<until);
         throw new AssertionError("Original bounded memory read did not return: "+result);
     }
+    // Publication is inside the worker. Do not jump the paused clock while its
+    // zero-queue executor still owns that worker, even if the sample is visible.
+    private static boolean memoryLaneIdle(AndroidRuntimeThermalObservation original)throws Exception{var field=AndroidRuntimeThermalObservation.class.getDeclaredField("memoryReads");field.setAccessible(true);return ((java.util.concurrent.ThreadPoolExecutor)field.get(original)).getPoolSize()==0;}
+    private static void awaitMemoryLaneIdle(AndroidRuntimeThermalObservation original)throws Exception{long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);do{idle();if(memoryLaneIdle(original))return;Thread.sleep(5);}while(System.nanoTime()<until);throw new AssertionError("Original memory reader did not exit before advancing the paused clock");}
     private static PowerManager.OnThermalStatusChangedListener listener(ShadowPowerManager shadow){assertEquals(1,shadow.getThermalStatusListeners().size());return (PowerManager.OnThermalStatusChangedListener)shadow.getThermalStatusListeners().iterator().next();}
     @Test public void originalPlatformListenerAndFreshCooldownReadDriveOnlyAutomaticLogPages()throws Exception {
         PowerManager power=power();ShadowPowerManager shadow=Shadows.shadowOf(power);shadow.setCurrentThermalStatus(PowerManager.THERMAL_STATUS_SEVERE);AtomicLong now=new AtomicLong(100);
         var original=create(power,now);
         try{
             idle();memoryReturned(original,0);assertEquals(1,shadow.getThermalStatusListeners().size());JSONObject hot=original.snapshotForHost();assertTrue(hot.getBoolean("nativeListenerRegistrationConfirmed"));assertEquals(8192,hot.getInt("automaticLogPageBytes"));assertEquals(3,hot.getInt("thermalStatus"));
-            shadow.setCurrentThermalStatus(PowerManager.THERMAL_STATUS_NONE);idle();assertEquals("thermal_cooling",original.snapshotForHost().getString("reason"));
+            shadow.setCurrentThermalStatus(PowerManager.THERMAL_STATUS_NONE);idle();awaitMemoryLaneIdle(original);assertEquals("thermal_cooling",original.snapshotForHost().getString("reason"));
             for(int i=0;i<5;i++){long prior=original.cachedSnapshotForHost().getLong("memoryObservationSequence");now.addAndGet(5000);Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(5));memoryReturned(original,prior);}
             now.addAndGet(4999);Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(4999));assertEquals(8192,original.snapshotForHost().getInt("automaticLogPageBytes"));
             long previous=original.cachedSnapshotForHost().getLong("memoryObservationSequence");now.incrementAndGet();Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(1));JSONObject cold=memoryReturned(original,previous);
@@ -93,8 +97,8 @@ public final class AndroidRuntimeThermalObservationTest {
     @Test public void invalidationDuringOriginalReadTriggersOneFreshReadAfterItsReturn()throws Exception {
         AtomicLong now=new AtomicLong();AtomicInteger reads=new AtomicInteger();CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1),returned=new CountDownLatch(1);
         var original=new AndroidRuntimeThermalObservation(RuntimeEnvironment.getApplication(),power(),new Handler(Looper.getMainLooper()),now::get,info->{if(reads.incrementAndGet()==1){entered.countDown();try{while(release.getCount()>0)try{release.await();}catch(InterruptedException ignored){}}finally{returned.countDown();}}info.lowMemory=false;info.availMem=600;info.totalMem=1000;info.threshold=100;});
-        try{idle();assertTrue(entered.await(2,TimeUnit.SECONDS));RuntimeEnvironment.getApplication().onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN);idle();assertEquals(1,reads.get());assertFalse(original.cachedSnapshotForHost().getBoolean("memoryFresh"));release.countDown();assertTrue(returned.await(2,TimeUnit.SECONDS));long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);JSONObject current;
-            do{now.addAndGet(5000);Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(5));current=original.cachedSnapshotForHost();if(current.getBoolean("memoryFresh"))break;Thread.sleep(5);}while(System.nanoTime()<until);
+        try{idle();assertTrue(entered.await(2,TimeUnit.SECONDS));RuntimeEnvironment.getApplication().onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN);idle();assertEquals(1,reads.get());assertFalse(original.cachedSnapshotForHost().getBoolean("memoryFresh"));release.countDown();assertTrue(returned.await(2,TimeUnit.SECONDS));awaitMemoryLaneIdle(original);
+            long previous=original.cachedSnapshotForHost().getLong("memoryObservationSequence");now.addAndGet(5000);Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(5));JSONObject current=memoryReturned(original,previous);
             assertTrue(current.toString(),current.getBoolean("memoryFresh"));assertTrue(reads.get()>=2);assertFalse(current.getBoolean("memoryLow"));assertFalse(current.getBoolean("executionPolicyChanged"));
         }finally{release.countDown();original.close();assertTrue(returned.await(2,TimeUnit.SECONDS));idle();}
     }

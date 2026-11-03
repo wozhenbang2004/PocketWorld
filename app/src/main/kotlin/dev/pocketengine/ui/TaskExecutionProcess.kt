@@ -114,6 +114,7 @@ private fun TaskExecutionRecord(record: TaskExecutionPresentation.Record, taskId
                 arguments = if (record.limited) "" else record.arguments,
                 needsReview = record.tone == TaskExecutionPresentation.Tone.UNCERTAIN || record.tone == TaskExecutionPresentation.Tone.ERROR,
                 modifier = Modifier.testTag("task_execution_record_" + record.key))
+            ProcessOutputNotes(record)
             if (record.limited) Text("这条原记录有 ${record.bodyBytes} 字节，本页未展开；原件仍保留。",
                 fontSize = 12.sp, lineHeight = 18.sp, color = SecondaryInk, modifier = Modifier.padding(top = 4.dp))
             record.projectExecutionId?.let { NativeProjectExecutionObservation(taskId, it) }
@@ -140,6 +141,7 @@ private fun TaskExecutionRecord(record: TaskExecutionPresentation.Record, taskId
             TextButton(onClick = { expanded = !expanded }, modifier = Modifier.heightIn(min = 48.dp).testTag("task_execution_record_" + record.key), contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp)) { Text(if (expanded) "收起详情" else if (record.key.startsWith("event:")) "查看步骤详情" else "查看参数与返回", fontSize = 13.sp) }
             if (expanded) {
                 if (record.arguments.isNotBlank()) ProcessText("本次参数", record.arguments)
+                ProcessOutputNotes(record)
                 if (record.receipt.isNotBlank()) ProcessText("返回内容", record.receipt)
                 else Text("尚未收到确定结果，请先核对。", fontSize = 13.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("操作编号：" + record.key.removePrefix("operation:"), fontSize = 12.sp, lineHeight = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -152,6 +154,11 @@ private fun TaskExecutionRecord(record: TaskExecutionPresentation.Record, taskId
 private fun ProcessText(title: String, value: String) {
     Text(title, fontSize = 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 6.dp))
     SelectionContainer { Text(value, fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) }
+}
+
+@Composable
+private fun ProcessOutputNotes(record: TaskExecutionPresentation.Record) {
+    record.outputNotes.forEach { note -> Text(note, fontSize = 12.sp, lineHeight = 18.sp, color = SecondaryInk, modifier = Modifier.padding(top = 4.dp)) }
 }
 
 @Composable
@@ -206,6 +213,7 @@ private fun ExecutionActivityStep(record: TaskExecutionPresentation.Record, last
         androidx.compose.animation.AnimatedVisibility(visible = details) {
             Column(Modifier.fillMaxWidth().padding(start = 34.dp, top = 6.dp)) {
                 Text(record.label, fontSize = 12.sp, color = SecondaryInk, modifier = Modifier.padding(bottom = 6.dp))
+                ProcessOutputNotes(record)
                 if (record.arguments.isNotBlank()) ProcessText("本次参数", record.arguments)
                 if (record.receipt.isNotBlank()) ProcessText("返回内容", record.receipt)
                 else Text("尚未收到确定结果，请先核对。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
