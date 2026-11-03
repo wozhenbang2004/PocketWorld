@@ -80,7 +80,8 @@ public final class LearnedMethodDecisionNativeTest {
         void approve(JSONObject args)throws Exception{JSONObject approval=tasks.requireCapabilityApproval(task,run,"workspace_write",args,new JSONObject().put("feature","workspace").put("command","write"));tasks.decideCapabilityApproval(task,approval.getString("approvalId"),true);}
         JSONObject page()throws Exception{return new TaskMemoryNativeHost(host,tasks,bridge).handle("readLearnedMethodApplications",new JSONObject().put("recordId",record.getString("id")).put("revision",record.getLong("revision")).put("cursor","").put("limit",20));}
         int decisionRows()throws Exception{try(var rows=db.rawQuery("SELECT arguments FROM operations WHERE task_id=? AND tool='memory_method_decision'",new String[]{task})){int count=0;while(rows.moveToNext()){assertFalse("a rejected operation cannot acquire a native method fact",new JSONObject(rows.getString(0)).has("nativeMethodDecision"));count++;}return count;}}
-        JSONObject execute(String choice,JSONArray steps)throws Exception{JSONObject args=decision(choice,steps);String op=journal().beginOperation("memory_method_decision",args);JSONObject result=port.execute("memory_method_decision",new JSONObject(args.toString()).put("_hostOperationId",op),control);journal().finishOperation(op,result);return result;}
+        JSONObject execute(String choice,JSONArray steps)throws Exception{return execute(decision(choice,steps));}
+        JSONObject execute(JSONObject args)throws Exception{String op=journal().beginOperation("memory_method_decision",args);JSONObject result=port.execute("memory_method_decision",new JSONObject(args.toString()).put("_hostOperationId",op),control);journal().finishOperation(op,result);return result;}
         CapabilityPort raw()throws Exception{
             MemoryHostFence fence=new MemoryHostFence(){public void check()throws Exception{tasks.checkCapabilityCurrent(task,run,epoch,TaskStoreMemoryReader.RAW_QUERY);control.check();}public JSONObject admit(Admission action)throws Exception{synchronized(tasks){check();return action.run();}}};
             var binding=new TaskStoreMemoryReader.RawBinding(task,run,epoch,control,fence,host::memoryContextRevision);binding.bindOutputSources(tasks.toolOutputSources());tasks.bindRawModelExposure(binding);
@@ -132,27 +133,34 @@ public final class LearnedMethodDecisionNativeTest {
 
     @Test public void nativeMethodEffectReviewPinsOriginalResultAndDeduplicatesARepeatedDecision()throws Exception{
         try(Fixture f=new Fixture()){
-            f.port.beginRun(GOAL,f.control);JSONObject args=f.writeArgs();f.approve(args);
-            String step=f.journal().beginOperation("workspace_write",args);
-            JSONObject written=f.port.execute("workspace_write",new JSONObject(args.toString()).put("_hostOperationId",step),f.control);
-            f.journal().finishOperation(step,written);assertEquals(1,written.getInt("version"));
-            JSONObject first=f.execute("apply",new JSONArray().put(step)).getJSONObject("methodDecision");
+            f.port.beginRun(GOAL,f.control);JSONArray steps=new JSONArray(),receipts=new JSONArray();
+            for(int i=0;i<8;i++){
+                JSONObject args=f.writeArgs().put("path","界".repeat(235)+i+".txt");assertEquals(240,args.getString("path").length());f.approve(args);
+                String originalStep=f.journal().beginOperation("workspace_write",args);
+                JSONObject written=f.port.execute("workspace_write",new JSONObject(args.toString()).put("_hostOperationId",originalStep),f.control);
+                f.journal().finishOperation(originalStep,written);assertEquals(1,written.getInt("version"));steps.put(originalStep);receipts.put(written);
+            }
+            String reason="据".repeat(1000);JSONObject first=f.execute(f.decision("apply",steps).put("reason",reason)).getJSONObject("methodDecision");
+            try(var bytes=f.db.rawQuery("SELECT length(CAST(arguments AS BLOB)) FROM operations WHERE task_id=? AND operation_id=?",new String[]{f.task,first.getString("operationId")})){
+                assertTrue(bytes.moveToFirst());assertTrue("valid eight-step UTF-8 evidence must exercise the former 16KiB read limit",bytes.getLong(0)>16384);assertTrue(bytes.getLong(0)<=32768);
+            }
             JSONObject page=f.page(),projection=page.getJSONArray("applications").getJSONObject(0),evidence=projection.getJSONObject("effectEvidence");
+            assertEquals(reason,projection.getString("reason"));assertEquals(8,projection.getJSONArray("stepRefs").length());
             assertTrue(evidence.getBoolean("inputComparable"));assertTrue(evidence.getBoolean("environmentComparable"));
             assertFalse(evidence.getBoolean("causalEffectVerified"));assertFalse(evidence.getBoolean("executionAuthorized"));
-            assertFalse(evidence.toString().contains(args.getString("content")));assertFalse(evidence.toString().contains(GOAL));
+            assertFalse(evidence.toString().contains(f.writeArgs().getString("content")));assertFalse(evidence.toString().contains(GOAL));
             assertEquals(1,page.getJSONObject("effectComparison").getInt("eligibleApplications"));
             String operation=first.getString("operationId"),note="Owner inspected the exact saved workspace version and content";
             JSONObject quality=f.tasks.reviewAppQuality(f.task,operation,f.record.getString("id"),f.record.getLong("revision"),"verified",note).snapshot();
             assertEquals(evidence.getString("evidenceFingerprint"),quality.getJSONObject("methodEffectEvidence").getString("evidenceFingerprint"));
             assertEquals(quality.toString(),f.tasks.reviewAppQuality(f.task,operation,f.record.getString("id"),f.record.getLong("revision"),"verified",note).snapshot().toString());
             assertThrows(SecurityException.class,()->f.tasks.reviewAppQuality(f.task,operation,f.record.getString("id"),f.record.getLong("revision"),"skill_failed","different judgement"));
-            f.execute("apply",new JSONArray().put(step));JSONObject comparison=f.page().getJSONObject("effectComparison");
+            f.execute("apply",steps);JSONObject comparison=f.page().getJSONObject("effectComparison");
             assertEquals(1,comparison.getInt("eligibleApplications"));assertEquals(1,comparison.getInt("duplicateRuns"));
             assertEquals(1,comparison.getJSONArray("groups").getJSONObject(0).getJSONArray("methods").getJSONObject(0).getInt("ownerVerifiedResults"));
             assertFalse(comparison.getBoolean("automaticPromotionAllowed"));assertEquals(0,comparison.getInt("confidenceDelta"));
             // The old evidence cannot survive an actual change to the original operation result.
-            android.content.ContentValues changed=new android.content.ContentValues();changed.put("receipt",new JSONObject(written.toString()).put("version",2).toString());
+            String step=steps.getString(0);android.content.ContentValues changed=new android.content.ContentValues();changed.put("receipt",new JSONObject(receipts.getJSONObject(0).toString()).put("version",2).toString());
             assertEquals(1,f.db.update("operations",changed,"task_id=? AND operation_id=?",new String[]{f.task,step}));
             JSONObject stale=f.page();assertEquals(0,stale.getJSONArray("applications").length());assertTrue(stale.getInt("unavailableNativeProofs")>=2);
             assertThrows(SecurityException.class,()->f.tasks.reviewAppQuality(f.task,operation,f.record.getString("id"),f.record.getLong("revision"),"verified",note));

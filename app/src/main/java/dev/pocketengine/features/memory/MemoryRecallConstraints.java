@@ -60,8 +60,9 @@ public final class MemoryRecallConstraints {
         JSONObject properties=new JSONObject().put("maxHops",new JSONObject().put("type","integer").put("minimum",0).put("maximum",2));
         properties.put("layers",arraySchema(4,20,new JSONArray(List.of("fact","preference","episodic","procedural"))));
         properties.put("sourceKinds",arraySchema(4,30,new JSONArray(List.of("message","task_evidence","workspace_file","owner_saved"))));
-        properties.put("entityIds",arraySchema(8,160,null));
-        for(String field:List.of("updatedAfter","updatedBefore","eventAfter","eventBefore"))properties.put(field,new JSONObject().put("type","integer").put("minimum",0).put("maximum",Long.MAX_VALUE));
+        properties.put("entityIds",arraySchema(8,160,null).put("description","Exact existing stable subject/object IDs, not display names or permission grants."));
+        for(String field:List.of("updatedAfter","updatedBefore","eventAfter","eventBefore"))properties.put(field,new JSONObject().put("type","integer").put("minimum",0).put("maximum",Long.MAX_VALUE)
+                .put("description",field.startsWith("event")?"Inclusive event-time bound in Unix milliseconds. Unknown event time is excluded; update time is never substituted.":"Inclusive saved-record update-time bound in Unix milliseconds; this is not the historical event time."));
         return new JSONObject().put("type","object").put("properties",properties).put("additionalProperties",false);
     }
     private static JSONObject arraySchema(int max,int chars,JSONArray values)throws Exception {

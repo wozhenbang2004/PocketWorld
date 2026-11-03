@@ -77,7 +77,7 @@ internal fun LearnedMethodApplicationsSheet(record: JSONObject, state: PocketUiS
                                 val method = methods.getJSONObject(methodIndex)
                                 Text("执行实现 ${methodIndex + 1}：${method.getInt("attempts")} 次尝试；主人确认结果 ${method.getInt("ownerVerifiedResults")} 次，判为方法问题 ${method.getInt("ownerAttributedMethodFailures")} 次、环境问题 ${method.getInt("ownerAttributedEnvironmentFailures")} 次。",
                                     style = MaterialTheme.typography.bodySmall)
-                                Text("未核对 ${method.getInt("unreviewed")} 次，取消 ${method.getInt("cancelled")} 次，模型错误 ${method.getInt("modelErrors")} 次，反馈不可核对 ${method.getInt("invalidFeedback")} 次。",
+                                Text("未核对 ${method.getInt("unreviewed")} 次，取消 ${method.getInt("cancelled")} 次，模型错误 ${method.getInt("modelErrors")} 次，旧反馈缺原结果指纹 ${method.optInt("unboundFeedback")} 次，反馈不可核对 ${method.getInt("invalidFeedback")} 次。",
                                     style = MaterialTheme.typography.bodySmall)
                             }
                         }

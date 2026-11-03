@@ -65,7 +65,7 @@ public final class MethodEffectComparison {
                         .put("implementationFingerprint", evidence.optString("implementationFingerprint"))
                         .put("applications", new JSONArray()).put("attempts", 0).put("ownerVerifiedResults", 0)
                         .put("ownerAttributedMethodFailures", 0).put("ownerAttributedEnvironmentFailures", 0)
-                        .put("cancelled", 0).put("modelErrors", 0).put("unreviewed", 0).put("invalidFeedback", 0);
+                        .put("cancelled", 0).put("modelErrors", 0).put("unreviewed", 0).put("unboundFeedback", 0).put("invalidFeedback", 0);
                 methods.put(comparison);
             }
             eligible++; increment(comparison, "attempts");
@@ -78,6 +78,7 @@ public final class MethodEffectComparison {
             else if (outcome.equals("environment")) increment(comparison, "ownerAttributedEnvironmentFailures");
             else if (outcome.equals("cancelled")) increment(comparison, "cancelled");
             else if (outcome.equals("model_error")) increment(comparison, "modelErrors");
+            else if (outcome.equals("unbound")) increment(comparison, "unboundFeedback");
             else if (outcome.equals("invalid")) increment(comparison, "invalidFeedback");
             else increment(comparison, "unreviewed");
         }
@@ -120,6 +121,8 @@ public final class MethodEffectComparison {
                     || implementation.getLong("revision") != feedback.optLong("revision")
                     || !implementation.getString("digest").equals(feedback.optString("digest"))
                     || implementation.optLong("executionGeneration") != feedback.optLong("executionGeneration")) return "invalid";
+            if (!feedback.has("originalReceiptFingerprint")) return "unbound";
+            if (!evidence.getString("originalReceiptFingerprint").equals(feedback.optString("originalReceiptFingerprint"))) return "invalid";
         } else if (!"owner_reviewed_original_method_steps".equals(feedback.optString("evidenceKind"))) return "invalid";
         JSONObject link = feedback.optJSONObject("methodEffectEvidence");
         if (link != null && !evidence.getString("evidenceFingerprint").equals(link.optString("evidenceFingerprint"))) return "invalid";

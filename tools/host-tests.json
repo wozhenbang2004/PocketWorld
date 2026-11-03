@@ -799,7 +799,9 @@
       "dev.pocketengine.features.memory.MemoryHybridCandidateRetrievalNativeTest",
       "dev.pocketengine.features.memory.MemoryEntityAliasRetrievalNativeTest",
       "dev.pocketengine.features.memory.SQLiteMemoryRetrievalBackendTest",
-      "dev.pocketengine.features.memory.MemoryReadAudienceTest"
+      "dev.pocketengine.features.memory.MemoryReadAudienceTest",
+      "dev.pocketengine.features.memory.MemoryQueryPlanTest",
+      "dev.pocketengine.features.memory.MemoryRecallAgentCorpusNativeTest"
     ],
     "helpers": [
       "dev.pocketengine.testutil.HttpServer"
@@ -821,7 +823,9 @@
     "additionalClasses": [
       "dev.pocketengine.features.memory.MethodEffectComparisonTest",
       "dev.pocketengine.features.memory.LearnedMethodDecisionNativeTest",
-      "dev.pocketengine.features.skills.LearnedMethodApplicationsNativeTest"
+      "dev.pocketengine.features.skills.LearnedMethodApplicationsNativeTest",
+      "dev.pocketengine.features.memory.LearnedMethodReceiptTest",
+      "dev.pocketengine.features.skills.SkillQualityLifecycleTest"
     ],
     "helpers": [
       "dev.pocketengine.testutil.HttpServer"

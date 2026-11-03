@@ -81,6 +81,7 @@ public final class MethodEffectEvidence {
                 .put("environmentComparable", exactPlan).put("environmentCoverage", exactPlan ? "probed_backend_and_workspace_revision" : "unavailable_legacy")
                 .put("environmentFingerprint", digest(new JSONObject().put("environmentBinding", hashValue(reference, "environmentBinding"))
                         .put("workspaceRevision", reference.getString("workspaceRevision"))))
+                .put("originalReceiptFingerprint", receipt == null ? "" : digest(receipt))
                 .put("stepCount", receipt == null ? 0 : 1)
                 .put("stepRefsFingerprint", digest(new JSONObject().put("planDigest", hashValue(reference, "planDigest"))
                         .put("receiptFingerprint", receipt == null ? JSONObject.NULL : digest(receipt))))

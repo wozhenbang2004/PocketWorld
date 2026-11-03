@@ -239,7 +239,7 @@ public final class MemoryRecallAgentJourneyNativeTest {
         }
     }
 
-    private static final class Original {
+    static final class Original {
         final String conversation, text;
         final SourceRef ref;
         final JSONObject record;
@@ -248,7 +248,7 @@ public final class MemoryRecallAgentJourneyNativeTest {
         }
     }
 
-    private static final class Fixture implements AutoCloseable {
+    static final class Fixture implements AutoCloseable {
         final Context context = RuntimeEnvironment.getApplication();
         final TaskStore tasks;
         final SQLiteDatabase database;
@@ -289,6 +289,23 @@ public final class MemoryRecallAgentJourneyNativeTest {
         }
 
         Original remember(String text, String entity, String label, String predicate, long at) throws Exception {
+            JSONObject assertion = new JSONObject().put("version", 1).put("kind", "told")
+                    .put("subjectId", entity).put("subjectType", "entity").put("subjectLabel", label)
+                    .put("predicate", predicate).put("object", text).put("eventTime", at).put("assertedAt", at);
+            return importOriginal(text, new JSONObject().put("text", text).put("layer", "fact").put("assertion", assertion), at);
+        }
+
+        Original rememberSpec(JSONObject spec) throws Exception {
+            JSONObject source = spec.getJSONObject("source");
+            if (!"message".equals(source.getString("kind")) || !"owner".equals(source.getString("ownerId"))
+                    || !"private".equals(source.getString("spaceId"))) throw new IllegalArgumentException("native message fixture scope");
+            assertEquals(source.getString("sha256"), sha256(source.getString("originalText")));
+            JSONObject value = new JSONObject().put("text", spec.getString("text")).put("layer", spec.getString("layer"));
+            if (spec.has("assertion")) value.put("assertion", new JSONObject(spec.getJSONObject("assertion").toString()));
+            return importOriginal(source.getString("originalText"), value, spec.getLong("updatedAt"));
+        }
+
+        private Original importOriginal(String text, JSONObject value, long at) throws Exception {
             String conversation = UUID.randomUUID().toString();
             SourceRef ref = new SourceRef("message", UUID.randomUUID().toString(), 1, "owner", "private");
             originals.transaction(() -> {
@@ -299,26 +316,27 @@ public final class MemoryRecallAgentJourneyNativeTest {
                         .put("role", "user").put("content", text).put("at", at));
                 return null;
             });
-            JSONObject assertion = new JSONObject().put("version", 1).put("kind", "told")
-                    .put("subjectId", entity).put("subjectType", "entity").put("subjectLabel", label)
-                    .put("predicate", predicate).put("object", text).put("eventTime", at).put("assertedAt", at)
-                    .put("evidenceSpans", new JSONArray().put(new JSONObject().put("sourceRef", ref.toJson())
-                            .put("offset", 0).put("chars", text.length()).put("sha256", sha256(text))));
+            value.put("sourceRefs", new JSONArray().put(ref.toJson()));
+            if (value.has("assertion")) value.getJSONObject("assertion").put("evidenceSpans", new JSONArray()
+                    .put(new JSONObject().put("sourceRef", ref.toJson()).put("offset", 0)
+                            .put("chars", text.length()).put("sha256", sha256(text))));
             JSONObject record = memory.handle("importFromSources", new JSONObject().put("scope", scope())
-                    .put("record", new JSONObject().put("text", text).put("layer", "fact")
-                            .put("sourceRefs", new JSONArray().put(ref.toJson())).put("assertion", assertion))).getJSONObject("record");
+                    .put("record", value)).getJSONObject("record");
             return new Original(conversation, text, ref, record);
         }
 
         void assertOriginal(Original original) throws Exception {
             JSONObject stored = originals.read(() -> originals.message(original.conversation, original.ref.sourceId));
             assertEquals(original.ref.revision, stored.getLong("revision"));
-            JSONObject span = original.record.getJSONObject("assertion").getJSONArray("evidenceSpans").getJSONObject(0);
-            assertEquals(original.ref, SourceRef.fromJson(span.getJSONObject("sourceRef")));
             String text = stored.getString("content");
             assertEquals(original.text, text);
-            assertEquals(span.getString("sha256"), sha256(text.substring(span.getInt("offset"),
-                    span.getInt("offset") + span.getInt("chars"))));
+            assertEquals(original.ref, SourceRef.fromJson(original.record.getJSONArray("sourceRefs").getJSONObject(0)));
+            if (original.record.has("assertion")) {
+                JSONObject span = original.record.getJSONObject("assertion").getJSONArray("evidenceSpans").getJSONObject(0);
+                assertEquals(original.ref, SourceRef.fromJson(span.getJSONObject("sourceRef")));
+                assertEquals(span.getString("sha256"), sha256(text.substring(span.getInt("offset"),
+                        span.getInt("offset") + span.getInt("chars"))));
+            }
         }
 
         void reviseOriginal(Original original, String revised) throws Exception {
@@ -340,17 +358,23 @@ public final class MemoryRecallAgentJourneyNativeTest {
                     new ContextWindow.Budget(131072, 2048, 1024, 262144, 64, 0),
                     ContextBudgetPolicy.SourceKind.OWNER_OVERRIDE, 1, 1);
             return new AgentRunner(null, nativePort, budgets).run(id, goal, gateway.config(), control, event -> {
-                events.add(new JSONObject(event.toString()));
-                tasks.event(id, run, epoch, event);
+                try {
+                    events.add(new JSONObject(event.toString()));
+                    tasks.event(id, run, epoch, event);
+                } catch (Exception failedAudit) {
+                    // EventSink has no checked-exception channel. A native audit failure
+                    // fails the fixture immediately; it must never be treated as success.
+                    throw new AssertionError("Original TaskStore event could not be recorded", failedAudit);
+                }
             }, tasks.journal(id, run, epoch, control));
         }
 
         @Override public void close() { host.close(); database.close(); }
     }
 
-    private interface Script { JSONObject respond(int request, JSONObject body) throws Exception; }
+    interface Script { JSONObject respond(int request, JSONObject body) throws Exception; }
 
-    private static final class Gateway implements AutoCloseable {
+    static final class Gateway implements AutoCloseable {
         final HttpServer server;
         final List<JSONObject> requests = new CopyOnWriteArrayList<>();
         final AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -385,22 +409,22 @@ public final class MemoryRecallAgentJourneyNativeTest {
         @Override public void close() { server.stop(0); }
     }
 
-    private static JSONObject call(String id, JSONObject arguments) throws Exception {
+    static JSONObject call(String id, JSONObject arguments) throws Exception {
         return new JSONObject().put("id", id).put("type", "function").put("function", new JSONObject()
                 .put("name", "memory_search").put("arguments", arguments.toString()));
     }
-    private static JSONObject calls(JSONObject... calls) throws Exception {
+    static JSONObject calls(JSONObject... calls) throws Exception {
         JSONArray values = new JSONArray(); for (JSONObject call : calls) values.put(call);
         return response(new JSONObject().put("role", "assistant").put("content", "").put("tool_calls", values), "tool_calls");
     }
-    private static JSONObject answer(String text) throws Exception {
+    static JSONObject answer(String text) throws Exception {
         return response(new JSONObject().put("role", "assistant").put("content", text), "stop");
     }
     private static JSONObject response(JSONObject message, String finish) throws Exception {
         return new JSONObject().put("choices", new JSONArray().put(new JSONObject()
                 .put("finish_reason", finish).put("message", message)));
     }
-    private static List<JSONObject> toolResults(JSONObject request) throws Exception {
+    static List<JSONObject> toolResults(JSONObject request) throws Exception {
         List<JSONObject> result = new ArrayList<>();
         JSONArray messages = request.getJSONArray("messages");
         for (int i = 0; i < messages.length(); i++) {
@@ -409,17 +433,17 @@ public final class MemoryRecallAgentJourneyNativeTest {
         }
         return result;
     }
-    private static List<JSONObject> operations(JSONObject task, String tool) throws Exception {
+    static List<JSONObject> operations(JSONObject task, String tool) throws Exception {
         List<JSONObject> result = new ArrayList<>(); JSONArray values = task.getJSONArray("operations");
         for (int i = 0; i < values.length(); i++) if (tool.equals(values.getJSONObject(i).optString("tool"))) result.add(values.getJSONObject(i));
         return result;
     }
-    private static List<JSONObject> events(JSONObject task, String type) throws Exception {
+    static List<JSONObject> events(JSONObject task, String type) throws Exception {
         List<JSONObject> result = new ArrayList<>(); JSONArray values = task.getJSONArray("events");
         for (int i = 0; i < values.length(); i++) if (type.equals(values.getJSONObject(i).optString("type"))) result.add(values.getJSONObject(i));
         return result;
     }
-    private static JSONObject scope() throws Exception { return new JSONObject().put("ownerId", "owner").put("spaceId", "private"); }
+    static JSONObject scope() throws Exception { return new JSONObject().put("ownerId", "owner").put("spaceId", "private"); }
     private static String sha256(String text) throws Exception {
         byte[] digest = MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8));
         StringBuilder value = new StringBuilder(); for (byte b : digest) value.append(String.format("%02x", b & 255));

@@ -7849,7 +7849,8 @@ public final class TaskStore {
         if(!skill.equals(pack.getString("id"))||revision!=pack.getInt("revision")||!digest.equals(pack.getString("digest")))throw new SecurityException("原使用记录与审阅技能版本不同");
         JSONObject previous=original.optJSONObject("qualityFeedback");
         if(previous!=null&&(!outcome.equals(previous.getString("outcome"))||!note.trim().equals(previous.getString("note"))))throw new SecurityException("此原操作已有不同的主人归责记录");
-        var evidence=dev.pocketengine.features.skills.SkillQualityReceipt.fromOriginal(original,outcome,note,previous==null?System.currentTimeMillis():previous.getLong("at"));
+        var evidence=previous==null?dev.pocketengine.features.skills.SkillQualityReceipt.fromOriginal(original,outcome,note,System.currentTimeMillis())
+                :dev.pocketengine.features.skills.SkillQualityReceipt.fromRecordedOriginal(original,previous);
         if(previous==null){JSONObject row=skillOperation(task,operation),args=row.getJSONObject("arguments");skillMetadata(args).put("qualityFeedback",evidence.snapshot());writeSkillArguments(task,operation,args);}
         return evidence;
     }
@@ -7871,6 +7872,7 @@ public final class TaskStore {
         }
         return new JSONObject().put("applications",result).put("scanLimited",scanned>200).put("executionAuthorized",false);
     }
+    private static final int LEARNED_METHOD_ARGUMENT_BYTES=32768;
     /** An audit on the original Runner-prepared operation. The opaque Book selection only pins
      * a current learned method; it never grants execution or lets JSON mint source authority. */
     public JSONObject recordLearnedMethodDecision(String id,String run,int epoch,String operation,dev.pocketengine.features.memory.MemoryBook.ProcedureSelection selected,RunControl original)throws Exception{
@@ -7895,7 +7897,9 @@ public final class TaskStore {
                     .put("applicationState",decision.equals("apply")?"model_apply_with_native_steps":decision).put("backendOutcome",decision.equals("apply")?"native_step_receipts_confirmed":"not_attempted")
                     .put("applicationScope","explicit_model_decision_and_original_step_receipts").put("methodSemanticUseIndependentlyVerified",false).put("methodBusinessSuccessVerified",false).put("executionAuthorized",false).put("replayAllowed",false);
             fact.put("effectEvidence",dev.pocketengine.features.memory.MethodEffectEvidence.captureTaskDecision(fact,required(id)));
-            selected.checkCurrent();args.put("nativeMethodDecision",fact);ContentValues value=new ContentValues();value.put("arguments",args.toString());
+            selected.checkCurrent();args.put("nativeMethodDecision",fact);String persistedArguments=args.toString();
+            if(persistedArguments.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>LEARNED_METHOD_ARGUMENT_BYTES)throw new SecurityException("原方法决定及证据超过32KiB保存范围，未保存部分原生证明");
+            ContentValues value=new ContentValues();value.put("arguments",persistedArguments);
             if(db.update("operations",value,"task_id=? AND run_id=? AND operation_id=? AND tool='memory_method_decision' AND state='prepared'",new String[]{id,run,operation})!=1)throw new SecurityException("原方法决定操作已变化");
             dev.pocketengine.features.memory.OwnerSourceRunContext.formalPrepared(db,id,run,new JSONArray().put(new JSONObject().put("id",selected.recordId).put("revision",selected.revision)));
             original.check();selected.checkCurrent();db.setTransactionSuccessful();return new JSONObject().put("ok",true).put("code","method_decision_recorded").put("methodDecision",new JSONObject(fact.toString())).put("executionAuthorized",false);
@@ -7905,7 +7909,7 @@ public final class TaskStore {
         Object raw=value.opt(key);if(!(raw instanceof Integer||raw instanceof Long)||((Number)raw).longValue()<minimum)throw new SecurityException("原方法步骤的"+key+"不是准确整数");return((Number)raw).longValue();
     }
     private JSONObject learnedMethodDecisionOperation(String id,String operation)throws Exception{
-        try(Cursor row=db.rawQuery("SELECT run_id,state,created_at,CASE WHEN length(CAST(arguments AS BLOB))<=16384 THEN arguments END,CASE WHEN length(CAST(receipt AS BLOB))<=65536 THEN receipt END FROM operations WHERE task_id=? AND operation_id=? AND tool='memory_method_decision'",new String[]{id,operation})){
+        try(Cursor row=db.rawQuery("SELECT run_id,state,created_at,CASE WHEN length(CAST(arguments AS BLOB))<="+LEARNED_METHOD_ARGUMENT_BYTES+" THEN arguments END,CASE WHEN length(CAST(receipt AS BLOB))<=65536 THEN receipt END FROM operations WHERE task_id=? AND operation_id=? AND tool='memory_method_decision'",new String[]{id,operation})){
             if(!row.moveToFirst()||row.isNull(3))throw new SecurityException("缺少有界原方法决定操作");JSONObject value=new JSONObject().put("runId",row.getString(0)).put("state",row.getString(1)).put("createdAt",row.getLong(2)).put("arguments",new JSONObject(row.getString(3)));if(!row.isNull(4))value.put("receipt",new JSONObject(row.getString(4)));return value;
         }
     }
@@ -7964,7 +7968,11 @@ public final class TaskStore {
         JSONObject args=learnedMethodDecisionOperation(task,operation).getJSONObject("arguments"),prior=args.optJSONObject("appQualityFeedback");
         if(prior!=null&&(!outcome.equals(prior.getString("outcome"))||!note.trim().equals(prior.getString("note"))))throw new SecurityException("原方法采用已有不同App归责");
         var receipt=dev.pocketengine.features.memory.AppQualityReceipt.fromOriginalMethod(method,outcome,note,prior==null?System.currentTimeMillis():prior.getLong("at"));
-        if(prior==null){args.put("appQualityFeedback",receipt.snapshot());writeSkillArguments(task,operation,args);}return receipt;
+        if(prior==null){
+            args.put("appQualityFeedback",receipt.snapshot());
+            if(args.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>LEARNED_METHOD_ARGUMENT_BYTES)throw new SecurityException("原方法决定及主人反馈超过32KiB保存范围，原记录未改变");
+            writeSkillArguments(task,operation,args);
+        }return receipt;
     }
     /** Owner-only bounded projection; original operations remain the sole application ledger. */
     public synchronized JSONObject learnedMethodApplications(String record,long revision,String cursor,int requested)throws Exception{
