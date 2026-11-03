@@ -11,8 +11,13 @@ internal fun modelGroupEditDefinition(
 ): JSONObject {
     val priorRows = original?.getJSONArray("candidates")
     val prior = (0 until (priorRows?.length() ?: 0)).map { priorRows!!.getJSONObject(it) }.associateBy { it.getString("candidateId") }
+    val sourceAccounts = original?.optJSONObject("allowedAccounts")
+    val sourceRefs = sourceAccounts?.optJSONArray("refs")
+    require(original == null || sourceAccounts?.optString("mode") == "EXPLICIT" && sourceRefs != null) {
+        "原模型组账户许可格式不可编辑，请保留原记录并重新核对。"
+    }
     val accounts = linkedSetOf<String>()
-    original?.getJSONObject("allowedAccounts")?.getJSONArray("refs")?.let { refs ->
+    sourceRefs?.let { refs ->
         for (index in 0 until refs.length()) accounts.add(refs.getString(index))
     }
     val originalAccounts = accounts.toSet()

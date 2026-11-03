@@ -95,6 +95,18 @@ class ModelGroupEditPolicyTest {
         edited.first().put("allowedPurposes", JSONArray(listOf("RELAY")))
         assertPermissionsSame(chosen(original).first(), row(definition(original, edited), "a"))
     }
+    @Test fun unsupportedOrMissingAccountPolicyIsRejectedWithoutChangingItsMeaning() {
+        for (change in listOf<(JSONObject) -> Unit>(
+            { it.getJSONObject("allowedAccounts").put("mode", "ANY") },
+            { it.getJSONObject("allowedAccounts").remove("refs") },
+            { it.remove("allowedAccounts") }
+        )) {
+            val original = original().also(change); val before = original.toString()
+            assertThrows(Exception::class.java) { ModelGroup.fromJson(original) }
+            assertThrows(IllegalArgumentException::class.java) { definition(original, chosen(original)) }
+            assertEquals(before, original.toString())
+        }
+    }
     @Test fun newGroupUsesExistingOwnerOnlyDefaultsWithoutExternalOptIn() {
         val added = JSONObject().put("candidateId", "new").put("target", ModelTargetRef.exact("connection-new", "model-new").toJson()).put("enabled", true)
         val saved = definition(null, listOf(added), external = false)
