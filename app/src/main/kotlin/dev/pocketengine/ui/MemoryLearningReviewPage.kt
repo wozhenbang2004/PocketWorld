@@ -486,6 +486,12 @@ internal fun MemoryLearningReviewPage(
                 (localError ?: error)?.let { Text(it, color = Danger, fontSize = 13.sp, lineHeight = 22.sp) }
                 message?.let { MemoryLearningCaption(it) }
                 if (!projectNamespace && selectedId == null && !choosing) MemoryCognitionPanel(responses, pendingCommands, snapshot.optString("cognitionRevision"), onRequest)
+                if (projectNamespace && selectedId == null && !choosing) {
+                    MemoryLearningCaption("旧事查阅只限当前显选项目，不检索主人全局；原生范围失效时不回退。")
+                    MemoryOwnerHistorySearch(responses, snapshot.optString("cognitionRevision"), !busy, onRequest,
+                        onClearEvidence = onDismissSource, onEvidence = null, onSubject = null,
+                        displayedScope = snapshot.optJSONObject("scope"), onOriginalSource = onOpenSource)
+                }
                 if (choosing && selectedId == null) {
                     Text(if (consolidationBusy) "归纳中，仍由你把关" else "先选择值得一起归纳的记忆", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                     MemoryLearningCaption("选择依据 → 模型归纳 → 由你审阅。只使用你明确选择的当前版本；不会覆盖原记忆、自动接受、选择核心记忆或生成可执行技能。")

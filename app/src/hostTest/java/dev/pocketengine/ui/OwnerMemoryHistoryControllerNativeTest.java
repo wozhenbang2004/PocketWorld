@@ -30,7 +30,7 @@ public final class OwnerMemoryHistoryControllerNativeTest {
             JSONObject project=f.create("历史作用域测试");f.memory.handle("save",new JSONObject().put("scope",owner()).put("record",new JSONObject().put("text","私人旧事不能跟进项目")));f.enter();CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);
             f.io.execute(()->{entered.countDown();try{release.await(5,TimeUnit.SECONDS);}catch(InterruptedException interrupted){Thread.currentThread().interrupt();}});assertTrue(entered.await(5,TimeUnit.SECONDS));
             try{f.controller.requestOwnerDomain("memoryReview","searchHistory",new JSONObject().put("query","私人旧事"));f.controller.selectMemoryNamespace(project);}finally{release.countDown();}
-            f.settle();assertEquals("project",f.snapshot().getString("namespaceStatus"));assertFalse(f.controller.getState().ownerResponses("memoryReview").containsKey("searchHistory"));JSONObject reply=f.request("searchHistory",new JSONObject().put("query","私人旧事"));assertNotNull(reply);assertFalse(reply.toString(),reply.getBoolean("ok"));assertFalse(reply.has("result"));
+            f.settle();assertEquals("project",f.snapshot().getString("namespaceStatus"));assertFalse(f.controller.getState().ownerResponses("memoryReview").containsKey("searchHistory"));JSONObject reply=f.request("searchHistory",new JSONObject().put("query","私人旧事"));assertNotNull(reply);assertTrue(reply.toString(),reply.getBoolean("ok"));JSONObject result=reply.getJSONObject("result");assertEquals(0,result.getJSONArray("matches").length());assertEquals(project.getString("spaceId"),result.getJSONObject("scope").getString("spaceId"));assertFalse(result.getBoolean("activeRecall"));assertFalse(result.getBoolean("originalEvidenceRead"));
         }
     }
 }

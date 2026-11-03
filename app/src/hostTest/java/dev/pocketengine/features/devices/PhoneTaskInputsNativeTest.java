@@ -85,7 +85,7 @@ public final class PhoneTaskInputsNativeTest {
                 JSONObject message=call==1?new JSONObject().put("role","assistant").put("content",JSONObject.NULL).put("tool_calls",new JSONArray().put(new JSONObject().put("id","native-ask-call").put("type","function").put("function",new JSONObject().put("name","run_ask_user").put("arguments",new JSONObject().put("question","Which exact fixture section?").toString()))))
                     :new JSONObject().put("role","assistant").put("content","ORIGINAL-PAIRED-ANSWER-CONSUMED");
                 byte[] bytes=new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("message",message).put("finish_reason",call==1?"tool_calls":"stop"))).toString().getBytes(StandardCharsets.UTF_8);
-                exchange.getResponseHeaders().set("Content-Type","application/json");exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
+                exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
             }finally{exchange.close();}});http.start();
             model=new ModelConfig("http://127.0.0.1:"+http.getAddress().getPort(),"","controlled-paired-input",false,8,30);
             String operation="original-input-goal";allocation=DeviceProtocol.allocationId("original-source-task",target,resource,"goal",operation);

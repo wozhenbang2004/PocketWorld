@@ -73,7 +73,9 @@ class NativeFixture:
         required = {"format", "host", "port", "targetDeviceId", "targetInstanceId", "sourceDeviceId", "sourceInstanceId",
                     "sourceCertificatePem", "sourcePrivateKeyPem", "targetCertificatePem", "grantReceipt", "resourceBinding", "reportPath"}
         require(isinstance(self.spec, dict) and required <= self.spec.keys()
-                and not self.spec.keys() - required - {"capabilityVersion", "goal", "answer"}, "fixture_manifest_fields")
+                and not self.spec.keys() - required - {"capabilityVersion", "goal", "answer", "scenario"}, "fixture_manifest_fields")
+        self.scenario = self.spec.get("scenario", "happy")
+        require(self.scenario in {"happy", "owner_denied", "reconnect_cancelled"}, "fixture_scenario")
         require(self.spec["format"] == FORMAT and self.spec["host"] == "127.0.0.1", "fixture_loopback_only")
         protocol.integer(self.spec["port"], "port", 1, 65535)
         protocol.device_id(self.spec["sourceDeviceId"])
@@ -83,7 +85,7 @@ class NativeFixture:
                 and self.report_path.parent.resolve() == self.directory, "fixture_report_must_be_new_sibling")
         self.temporary = None
         self.manager = self.server = self.server_thread = self.connection = None
-        self.report = {"format": FORMAT, "operationId": OPERATION,
+        self.report = {"format": FORMAT, "operationId": OPERATION, "scenario": self.scenario,
                        "selectedPeerDeviceId": self.spec["targetDeviceId"],
                        "modelInferenceClaim": "synthetic_native_host_fixture", "phoneApprovalPerformedByPython": False}
 
@@ -155,6 +157,7 @@ class NativeFixture:
                 await connection.close()
                 raise
 
+        self._connect_original = connect
         asyncio.run_coroutine_threadsafe(connect(), service.loop).result(timeout=15)
         self.report["actualPeerDeviceId"] = self.connection.tls.peer.device_id
         self.server = CompanionServer(("127.0.0.1", 0), self.manager)
@@ -187,6 +190,82 @@ class NativeFixture:
             time.sleep(0.05)
         raise FixtureError("original_native_phase_timeout")
 
+    def owner_barrier(self, command):
+        """Coordinate test phases only. The Java side must perform the real native action."""
+        self.stage = "wait_" + command
+        raw = sys.stdin.readline(512)
+        require(bool(raw) and strict_json(raw) == {"command": command}, "fixture_owner_phase_changed")
+
+    def verify_wrong_phone_is_rejected(self):
+        try:
+            self.action("status", {"operationId": OPERATION, "peerDeviceId": self.spec["sourceDeviceId"]})
+        except ClientError as refused:
+            require(refused.status == 403, "wrong_phone_must_be_scope_refusal")
+            self.report["wrongPhoneRejected"] = True
+        else:
+            raise FixtureError("wrong_phone_must_not_adopt_original_task")
+
+    def finish(self, final):
+        self.report["finalStatus"] = final
+        self.report["events"] = self.action("events", {"operationId": OPERATION, "peerDeviceId": self.spec["targetDeviceId"],
+                                                       "cursor": "0", "limit": 100})
+        self.report.update(phase="complete", actualWireState=final["task"]["state"], taskRunUnchanged=True,
+                           duplicateSubmitReceiptUnchanged=True)
+        return self.report
+
+    def deny_before_start(self, run):
+        self.owner_barrier("owner-denied")
+        self.verify_wrong_phone_is_rejected()
+        denied = self.poll(lambda value: value.get("task", {}).get("state") == "cancelled", "wait_owner_denial")
+        require(not denied["task"].get("runId"), "owner_denial_cannot_start_a_run")
+        repeated = self.action("run", run)
+        require(repeated.get("taskId") == self.report["taskId"] and repeated.get("operationId") == OPERATION,
+                "repeated_denied_request_changed_original_task")
+        self.report.update(repeatedAfterDenial=repeated, runStarted=False)
+        return self.finish(denied)
+
+    def reconnect_then_cancel(self, answer_params):
+        service = self.manager.device_companion
+        old = self.connection
+        asyncio.run_coroutine_threadsafe(old.close(), service.loop).result(timeout=5)
+        offline = self.status()
+        require(offline.get("currentRead") == "unavailable" and offline.get("phoneStateUnconfirmed") is True
+                and "task" not in offline, "offline_read_must_keep_original_outcome_unconfirmed")
+        self.report["offlineStatus"] = offline
+        # Explicit fixture reconnect to the SAME certificate/device; never a task replay.
+        asyncio.run_coroutine_threadsafe(self._connect_original(), service.loop).result(timeout=15)
+        require(self.connection is not old and self.connection.tls.peer.device_id == self.spec["targetDeviceId"],
+                "reconnect_changed_selected_phone")
+        recovered = self.status()
+        require(recovered.get("task", {}).get("runId") == self.report["runId"]
+                and recovered["task"]["executorEpoch"] == self.report["executorEpoch"], "reconnect_changed_original_run")
+        self.report["reconnectedStatus"] = recovered
+        self.verify_wrong_phone_is_rejected()
+        print(json.dumps({"phase": "reconnected", "taskId": self.report["taskId"], "operationId": OPERATION,
+                          "runId": self.report["runId"]}), flush=True)
+        self.owner_barrier("cancel-original")
+        cancelled = self.action("cancel", {"operationId": OPERATION, "peerDeviceId": self.spec["targetDeviceId"],
+                                           "cancelOperationId": "phone-api-native-cancel"})
+        require(cancelled.get("accepted") is True and cancelled.get("cancellation", {}).get("requested") is True,
+                "native_cancel_not_requested")
+        self.report["cancelReceipt"] = cancelled
+        final = self.poll(lambda value: value.get("task", {}).get("state") == "cancelled", "wait_original_cancel")
+        try:
+            self.action("answer", answer_params)
+        except ClientError as refused:
+            require(refused.status in {403, 409}, "cancelled_answer_must_be_native_scope_refusal")
+            self.report["answerAfterCancelRejected"] = True
+        else:
+            raise FixtureError("cancelled_original_question_must_not_accept_answer")
+        self.finish(final)
+        print(json.dumps({"phase": "cancel_verified", "taskId": self.report["taskId"], "operationId": OPERATION}), flush=True)
+        self.owner_barrier("owner-revoked")
+        revoked = self.status()
+        require(revoked.get("currentRead") == "unavailable" and revoked.get("phoneStateUnconfirmed") is True
+                and "task" not in revoked, "revoked_read_must_not_claim_current_phone_state")
+        self.report["revokedReadStatus"] = revoked
+        return self.report
+
     def run(self):
         self.start()
         grant = self.spec["grantReceipt"]["body"]["grant"]
@@ -203,6 +282,8 @@ class NativeFixture:
         require(submitted == duplicate, "duplicate_submit_changed_original_receipt")
         self.report["duplicateReceipt"] = duplicate
         print(json.dumps({"phase": "submitted", "taskId": submitted["taskId"], "operationId": OPERATION}), flush=True)
+        if self.scenario == "owner_denied":
+            return self.deny_before_start(run)
 
         def ordinary(value):
             task = value.get("task", {})
@@ -225,6 +306,8 @@ class NativeFixture:
         answer_params = {**common, "controlOperationId": "phone-api-native-answer", "controlLeaseId": control["controlLeaseId"],
                          "originalRequestId": question["requestId"], "waitRevision": question["waitRevision"],
                          "text": self.spec.get("answer", "NATIVE-PHONE-EXACT-ANSWER")}
+        if self.scenario == "reconnect_cancelled":
+            return self.reconnect_then_cancel(answer_params)
         answered = self.action("answer", answer_params)
         self.report["answerReceipt"] = answered
         require(answered.get("accepted") is True and answered.get("inputSaved") is True, "original_answer_not_saved")
@@ -242,12 +325,8 @@ class NativeFixture:
                     and "NATIVE-PHONE-RESULT" in final.get("result", {}).get("summary", ""))
 
         final = self.poll(finished, "wait_original_result")
-        self.report["finalStatus"] = final
-        self.report["events"] = self.action("events", {"operationId": OPERATION, "peerDeviceId": self.spec["targetDeviceId"],
-                                                       "cursor": "0", "limit": 100})
-        self.report.update(phase="complete", actualWireState=final["task"]["state"], taskRunUnchanged=True,
-                           duplicateSubmitReceiptUnchanged=True, duplicateAnswerReceiptUnchanged=True)
-        return self.report
+        self.report["duplicateAnswerReceiptUnchanged"] = True
+        return self.finish(final)
 
     def write_report(self, value):
         private_write(self.report_path, (json.dumps(value, ensure_ascii=True, indent=2) + "\n").encode("ascii"))
@@ -277,9 +356,12 @@ def main(argv=None):
         fixture = NativeFixture(args.manifest)
         report = fixture.run()
         fixture.write_report(report)
-        print(json.dumps({"phase": "complete", "operationId": OPERATION, "taskId": report["taskId"],
-                          "runId": report["runId"], "executorEpoch": report["executorEpoch"],
-                          "state": report["actualWireState"]}), flush=True)
+        complete = {"phase": "complete", "operationId": OPERATION, "taskId": report["taskId"],
+                    "state": report["actualWireState"]}
+        for key in ("runId", "executorEpoch"):
+            if key in report:
+                complete[key] = report[key]
+        print(json.dumps(complete), flush=True)
         return 0
     except Exception as error:
         failure = {"phase": "failed", "stage": fixture.stage if fixture else "manifest", "errorType": type(error).__name__}

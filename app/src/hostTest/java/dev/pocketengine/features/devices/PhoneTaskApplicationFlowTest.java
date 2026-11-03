@@ -131,7 +131,10 @@ public final class PhoneTaskApplicationFlowTest {
         Security.removeProvider("PhoneTaskSyntheticKeyStore");syntheticDeviceKeys=null;
         if(temporary!=null)try(var paths=Files.walk(temporary)){for(Path path:paths.sorted(java.util.Comparator.reverseOrder()).toList())Files.deleteIfExists(path);}
     }
-    @Test public void externalHttpClientReachesOriginalPhoneApprovalRunnerAndSameTaskResult()throws Exception{
+    private Path reportPath;
+    private record Scenario(String taskId,String sourceDeviceId,String targetDeviceId){}
+    private record Started(String runId,int epoch,String allocationId,RunControl original){}
+    private Scenario startScenario(String scenario)throws Exception{
         app=(EngineApplication)RuntimeEnvironment.getApplication();app.deleteDatabase("pocket-world.db");app.tasks=new TaskStore(app);
         sql=(SQLiteDatabase)get(app.tasks,"db");app.features=new FeatureHost(event->{});app.settings=new SettingsStore(app);
         set(app,"deviceOwnerInputs",new DeviceOwnerInputs(app.tasks,id->{DeviceGoalSession session=app.originalDeviceGoalSession(id);return session!=null&&session.originalControl()==app.control(id)&&id.equals(app.activeId())?session:null;}));
@@ -179,33 +182,78 @@ public final class PhoneTaskApplicationFlowTest {
         },new DeviceReceiverServiceResource.OwnerPolicy(){public void requireEnabledCurrent(){if(!enabled.get())throw new SecurityException("Fixture owner disabled receiver");}public void disableByOwner(){enabled.set(false);}});
         ingress[0]=owner.ingress(receiver);receiver.start();
         JSONObject receipt=owner.pairing().issueGrantReceipt(owner.existingIdentity(),nativeGrant.getString("grantId"),System.currentTimeMillis());
-        Path report=temporary.resolve("report.json");
+        Path report=temporary.resolve("report.json");reportPath=report;
         JSONObject manifest=new JSONObject().put("format","pocketworld.phone-native-fixture.v1").put("host","127.0.0.1").put("port",listeners[0].port())
                 .put("sourceDeviceId",DeviceIdentity.id(source.cert)).put("sourceInstanceId",sourceInstance).put("targetDeviceId",DeviceIdentity.id(target.cert)).put("targetInstanceId",targetInstance)
                 .put("sourceCertificatePem",pem("source-cert.pem","CERTIFICATE",source.cert.getEncoded()).toString()).put("sourcePrivateKeyPem",pem("source-key.pem","PRIVATE KEY",source.keys.getPrivate().getEncoded()).toString())
                 .put("targetCertificatePem",pem("target-cert.pem","CERTIFICATE",target.cert.getEncoded()).toString()).put("grantReceipt",receipt).put("resourceBinding",binding)
-                .put("capabilityVersion","1.0").put("goal","Ask which exact fixture section to use, then finish with its answer.").put("answer","NATIVE-PHONE-EXACT-ANSWER").put("reportPath",report.toString());
-        Path manifestPath=temporary.resolve("manifest.json");Files.writeString(manifestPath,manifest.toString());Files.setPosixFilePermissions(manifestPath,PosixFilePermissions.fromString("rw-------"));
+                .put("scenario",scenario).put("capabilityVersion","1.0").put("goal","Ask which exact fixture section to use, then finish with its answer.").put("answer","NATIVE-PHONE-EXACT-ANSWER").put("reportPath",report.toString());
+        Path manifestPath=temporary.resolve("manifest.json");Files.write(manifestPath,manifest.toString().getBytes(StandardCharsets.UTF_8));Files.setPosixFilePermissions(manifestPath,PosixFilePermissions.fromString("rw-------"));
         Path checkout=checkout();python=new ProcessBuilder("python3","-B",checkout.resolve("companion/phone_task_native_fixture.py").toString(),"--manifest",manifestPath.toString()).directory(checkout.toFile()).redirectErrorStream(true).start();
         processOutput=Executors.newSingleThreadExecutor();processOutput.submit(()->{try(BufferedReader reader=new BufferedReader(new InputStreamReader(python.getInputStream(),StandardCharsets.UTF_8))){String line;while((line=reader.readLine())!=null)lines.add(line);}catch(Exception failure){lines.add("fixture output unavailable: "+failure.getClass().getSimpleName());}});
         JSONObject submitted=phase("submitted",45);String id=submitted.getString("taskId");
         JSONObject waiting=app.tasks.get(id,false);assertEquals("awaiting_user",waiting.getString("status"));assertTrue(waiting.optString("runId").isEmpty());assertTrue(app.hasPendingDeviceGoal(id));assertEquals(0,modelRequests.get());assertEquals(0,count("runs"));
-        // The same native owner action used by the existing phone task UI, not a network grant.
+        return new Scenario(id,DeviceIdentity.id(source.cert),DeviceIdentity.id(target.cert));
+    }
+    private Started approve(Scenario scenario)throws Exception{
+        // This is the native owner action used by the phone task UI, not a network grant.
         try(NativeDeviceWorkspaceHost.Window window=owner.host().openOwnerWindow()){
-            NativeDeviceWorkspaceHost.GoalReview reviewed=window.reviewGoal(id);window.confirmGoal(reviewed,false);
+            NativeDeviceWorkspaceHost.GoalReview reviewed=window.reviewGoal(scenario.taskId);window.confirmGoal(reviewed,false);
         }
-        JSONObject started=app.tasks.get(id,false);String run=started.getString("runId"),allocation=started.getJSONObject("deviceExecutionScope").getString("allocationId");int epoch=started.getInt("coordinatorEpoch");
-        assertNotNull(app.originalDeviceGoalSession(id));assertEquals(1,count("runs"));
+        JSONObject started=app.tasks.get(scenario.taskId,false);
+        assertNotNull(app.originalDeviceGoalSession(scenario.taskId));assertEquals(1,count("runs"));
+        return new Started(started.getString("runId"),started.getInt("coordinatorEpoch"),started.getJSONObject("deviceExecutionScope").getString("allocationId"),app.control(scenario.taskId));
+    }
+    private JSONObject completeReport()throws Exception{
         JSONObject finalLine=phase("complete",60);
         assertTrue("Python client did not finish",python.waitFor(5,TimeUnit.SECONDS));assertEquals("Native bridge client failed: "+finalLine,0,python.exitValue());
-        JSONObject actual=new JSONObject(Files.readString(report));assertEquals(id,actual.getString("taskId"));assertEquals(run,actual.getString("runId"));assertEquals(epoch,actual.getInt("executorEpoch"));assertEquals(allocation,actual.getString("allocationId"));
-        assertEquals(DeviceIdentity.id(target.cert),actual.getString("actualPeerDeviceId"));assertEquals(2,modelRequests.get());assertTrue(modelBodies.get(1).contains("NATIVE-PHONE-EXACT-ANSWER"));
-        JSONObject done=app.tasks.get(id,false),result=done.getJSONObject("deviceGoalResult");assertEquals("needs_confirmation",done.getString("status"));assertTrue(result.getBoolean("nativeRunnerExited"));assertTrue(result.getBoolean("nativeDispatchClosed"));assertEquals(run,result.getString("runId"));assertEquals(epoch,result.getInt("executorEpoch"));
-        assertEquals(2,done.getJSONObject("deviceExecutionScope").getInt("modelCallsUsed"));assertEquals(allocation,done.getJSONObject("deviceExecutionScope").getString("allocationId"));assertEquals(1,count("runs"));assertEquals(1,done.getJSONArray("ownerInputs").length());
+        return new JSONObject(new String(Files.readAllBytes(reportPath),StandardCharsets.UTF_8));
+    }
+    private void signal(String command)throws Exception{
+        byte[] bytes=(new JSONObject().put("command",command).toString()+"\n").getBytes(StandardCharsets.UTF_8);
+        python.getOutputStream().write(bytes);python.getOutputStream().flush();
+    }
+    private static void sameOriginal(Scenario scenario,Started started,JSONObject actual)throws Exception{
+        assertEquals(scenario.taskId,actual.getString("taskId"));assertEquals(started.runId,actual.getString("runId"));assertEquals(started.epoch,actual.getInt("executorEpoch"));assertEquals(started.allocationId,actual.getString("allocationId"));
+        assertEquals(scenario.targetDeviceId,actual.getString("actualPeerDeviceId"));
+    }
+    @Test public void externalHttpClientReachesOriginalPhoneApprovalRunnerAndSameTaskResult()throws Exception{
+        Scenario scenario=startScenario("happy");Started started=approve(scenario);JSONObject actual=completeReport();sameOriginal(scenario,started,actual);
+        assertEquals(2,modelRequests.get());assertTrue(modelBodies.get(1).contains("NATIVE-PHONE-EXACT-ANSWER"));
+        JSONObject done=app.tasks.get(scenario.taskId,false),result=done.getJSONObject("deviceGoalResult");assertEquals("needs_confirmation",done.getString("status"));assertTrue(result.getBoolean("nativeRunnerExited"));assertTrue(result.getBoolean("nativeDispatchClosed"));assertEquals(started.runId,result.getString("runId"));assertEquals(started.epoch,result.getInt("executorEpoch"));
+        assertEquals(2,done.getJSONObject("deviceExecutionScope").getInt("modelCallsUsed"));assertEquals(started.allocationId,done.getJSONObject("deviceExecutionScope").getString("allocationId"));assertEquals(1,count("runs"));assertEquals(1,done.getJSONArray("ownerInputs").length());
         assertEquals(DeviceProtocol.canonical(actual.getJSONObject("initialReceipt")),DeviceProtocol.canonical(actual.getJSONObject("duplicateReceipt")));
         assertEquals(DeviceProtocol.canonical(actual.getJSONObject("answerReceipt")),DeviceProtocol.canonical(actual.getJSONObject("duplicateAnswerReceipt")));
         assertEquals("phone-api-native-submit",actual.getJSONObject("duplicateReceipt").getString("operationId"));
-        assertEquals(id,actual.getJSONObject("duplicateReceipt").getString("taskId"));
+        assertEquals(scenario.taskId,actual.getJSONObject("duplicateReceipt").getString("taskId"));
+    }
+    @Test public void phoneOwnerDenialAndWrongDeviceCannotLaunchTheAcceptedGoal()throws Exception{
+        Scenario scenario=startScenario("owner_denied");
+        try(NativeDeviceWorkspaceHost.Window window=owner.host().openOwnerWindow()){window.cancelPendingGoal(scenario.taskId);}
+        signal("owner-denied");JSONObject actual=completeReport();
+        assertTrue(actual.getBoolean("wrongPhoneRejected"));assertFalse(actual.getBoolean("runStarted"));assertEquals("cancelled",actual.getString("actualWireState"));
+        JSONObject task=app.tasks.get(scenario.taskId,false);assertEquals("cancelled",task.getString("status"));assertTrue(task.optString("runId").isEmpty());assertFalse(app.hasPendingDeviceGoal(scenario.taskId));
+        assertEquals(0,count("runs"));assertEquals(0,modelRequests.get());assertEquals(0,task.optJSONArray("ownerInputs")==null?0:task.getJSONArray("ownerInputs").length());
+        assertEquals(scenario.taskId,actual.getJSONObject("repeatedAfterDenial").getString("taskId"));assertEquals("phone-api-native-submit",actual.getJSONObject("repeatedAfterDenial").getString("operationId"));
+    }
+    @Test public void actualReconnectExternalCancelAndNativeRevocationNeverDispatchAnOldAnswer()throws Exception{
+        Scenario scenario=startScenario("reconnect_cancelled");Started started=approve(scenario);
+        JSONObject reconnected=phase("reconnected",45);assertEquals(scenario.taskId,reconnected.getString("taskId"));assertEquals(started.runId,reconnected.getString("runId"));
+        assertEquals("awaiting_user",app.tasks.get(scenario.taskId,false).getString("status"));assertEquals(1,modelRequests.get());assertEquals(1,count("runs"));
+        // The Python client, not a local stop shortcut, now sends the original operation.cancel.
+        signal("cancel-original");phase("cancel_verified",45);
+        long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+        while(app.originalDeviceGoalSession(scenario.taskId)!=null&&System.nanoTime()<until){pumpServices();Thread.sleep(10);}
+        assertTrue(started.original.isCancelled());assertNull(app.originalDeviceGoalSession(scenario.taskId));
+        JSONObject stopped=app.tasks.get(scenario.taskId,false);assertEquals("cancelled",stopped.getString("status"));assertEquals(started.runId,stopped.getString("runId"));assertEquals(0,stopped.getJSONArray("ownerInputs").length());
+        try(NativeDeviceWorkspaceHost.Window window=owner.host().openOwnerWindow()){window.revoke(scenario.sourceDeviceId);}
+        assertTrue(owner.trust.peer(scenario.sourceDeviceId).getBoolean("revoked"));signal("owner-revoked");
+        JSONObject actual=completeReport();sameOriginal(scenario,started,actual);
+        assertTrue(actual.getBoolean("wrongPhoneRejected"));assertTrue(actual.getBoolean("answerAfterCancelRejected"));
+        assertEquals("unavailable",actual.getJSONObject("offlineStatus").getString("currentRead"));assertEquals("unavailable",actual.getJSONObject("revokedReadStatus").getString("currentRead"));
+        assertEquals("phone-api-native-submit",actual.getJSONObject("reconnectedStatus").getString("operationId"));
+        assertEquals("cancelled",actual.getString("actualWireState"));assertEquals(1,modelRequests.get());assertEquals(1,count("runs"));
+        assertEquals(1,app.tasks.get(scenario.taskId,false).getJSONObject("deviceExecutionScope").getInt("modelCallsUsed"));
     }
 
     private JSONObject phase(String expected,int timeoutSeconds)throws Exception{
@@ -230,17 +278,17 @@ public final class PhoneTaskApplicationFlowTest {
             JSONObject message=call==1?new JSONObject().put("role","assistant").put("content",JSONObject.NULL).put("tool_calls",new JSONArray().put(new JSONObject().put("id","native-phone-question").put("type","function").put("function",new JSONObject().put("name","run_ask_user").put("arguments",new JSONObject().put("question","Which exact native fixture section?").toString()))))
                     :new JSONObject().put("role","assistant").put("content","NATIVE-PHONE-RESULT");
             byte[] bytes=new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("message",message).put("finish_reason",call==1?"tool_calls":"stop"))).toString().getBytes(StandardCharsets.UTF_8);
-            exchange.getResponseHeaders().set("Content-Type","application/json");exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
+            exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
         }finally{exchange.close();}});model.start();
     }
     private void installLocalIdentity(Material target,String instance)throws Exception{
         syntheticDeviceKeys=KeyStore.getInstance("PKCS12");syntheticDeviceKeys.load(null);Field alias=DeviceIdentity.class.getDeclaredField("ALIAS");alias.setAccessible(true);
         syntheticDeviceKeys.setKeyEntry((String)alias.get(null),target.keys.getPrivate(),null,new Certificate[]{target.cert});
-        Security.addProvider(new java.security.Provider("PhoneTaskSyntheticKeyStore","1","Synthetic native phone fixture"){{put("KeyStore.AndroidKeyStore",FixtureKeyStore.class.getName());}});
-        Files.writeString(app.getNoBackupFilesDir().toPath().resolve("device-instance-v1"),instance);
+        Security.addProvider(new java.security.Provider("PhoneTaskSyntheticKeyStore",1.0,"Synthetic native phone fixture"){{put("KeyStore.AndroidKeyStore",FixtureKeyStore.class.getName());}});
+        Files.write(app.getNoBackupFilesDir().toPath().resolve("device-instance-v1"),instance.getBytes(StandardCharsets.UTF_8));
     }
     private Path pem(String filename,String kind,byte[] bytes)throws Exception{
-        Path path=temporary.resolve(filename);Files.writeString(path,"-----BEGIN "+kind+"-----\n"+Base64.getMimeEncoder(64,new byte[]{'\n'}).encodeToString(bytes)+"\n-----END "+kind+"-----\n");Files.setPosixFilePermissions(path,PosixFilePermissions.fromString("rw-------"));return path;
+        Path path=temporary.resolve(filename);Files.write(path,("-----BEGIN "+kind+"-----\n"+Base64.getMimeEncoder(64,new byte[]{'\n'}).encodeToString(bytes)+"\n-----END "+kind+"-----\n").getBytes(StandardCharsets.UTF_8));Files.setPosixFilePermissions(path,PosixFilePermissions.fromString("rw-------"));return path;
     }
     private static Path checkout(){
         Path current=Path.of(System.getProperty("user.dir")).toAbsolutePath();while(current!=null){if(Files.isRegularFile(current.resolve("companion/phone_task_native_fixture.py")))return current;current=current.getParent();}throw new AssertionError("Original companion fixture entrypoint missing from checkout");

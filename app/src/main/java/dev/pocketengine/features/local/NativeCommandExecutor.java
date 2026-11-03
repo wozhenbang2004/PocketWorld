@@ -58,7 +58,7 @@ public final class NativeCommandExecutor implements AutoCloseable {
                 if(checkout instanceof String&&((String)checkout).matches("[A-Za-z0-9_-]{1,80}"))busy.add((String)checkout);
                 else originalInventoryUnconfirmed=true;
             }
-            jobs.put(id,job);
+            compactOriginal(job);
         }catch(Exception unconfirmed){unreadableOriginalRecords++;originalInventoryUnconfirmed=true;/* Never rewrite, remove, rename or invent a Job from damaged bytes. */}
     }
     private static JSONObject readOriginal(File file)throws Exception {
@@ -69,7 +69,41 @@ public final class NativeCommandExecutor implements AutoCloseable {
         }
         BasicFileAttributes after=Files.readAttributes(path,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
         if(!after.isRegularFile()||!before.fileKey().equals(after.fileKey())||before.size()!=bytes.length||before.size()!=after.size()||!before.lastModifiedTime().equals(after.lastModifiedTime()))throw new java.io.IOException("legacy_original_receipt_changed_during_observation");
-        String text=StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes)).toString();return new JSONObject(text);
+        String text=StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes)).toString();JSONObject observed=new JSONObject(text);
+        // A disk/JSON marker cannot mint an internal compact-cache observation.
+        for(String key:List.of("_bodyOnDisk","_cachedOriginalSha256","_cachedFingerprintSha256","_bodyReadFailureCounted","_originalReceiptSha256"))observed.remove(key);
+        return observed.put("_originalReceiptSha256",dev.pocketengine.features.local.project.ProjectSources.sha256(bytes));
+    }
+    /** Only the original cache Map is compacted. Complete bytes remain in their
+     * original file; a later explicit read must match that exact frozen source. */
+    private void compactOriginal(JSONObject original)throws Exception {
+        if(original.optBoolean("_bodyOnDisk"))return;
+        String source=original.optString("_originalReceiptSha256");if(source.isEmpty())source=dev.pocketengine.features.local.project.ProjectSources.sha256(original.toString().getBytes(StandardCharsets.UTF_8));
+        JSONObject row=new JSONObject();
+        for(String key:List.of("id","operationId","checkoutId","status","createdAt","updatedAt","exitCode","signal","launchErrno","cancelRequested","verified","outputTruncated","stdoutTruncated","stderrTruncated","outputComplete","stdoutReadError","stderrReadError","message","nativeDispatchAttempted","nativeResultReceived","nativeResultContract","nativeStartObserved","nativeReceiptObservationFailed","processGroupAbsent","resourcesReleased","nativeCancelled","nativeTimedOut","noChildCreated","effectStatus","originalPersistedStatus","coldProcessUnconfirmed","processExitObserved","replayAllowed")){
+            Object value=original.opt(key);if(value==null)continue;
+            if(value instanceof String){String text=(String)value;row.put(key,text.substring(0,Math.min(key.equals("message")?400:256,text.length())));}
+            else if(value==JSONObject.NULL||value instanceof Boolean||value instanceof Number)row.put(key,value);
+        }
+        String output=original.optString("output"),tail=output.substring(Math.max(0,output.length()-2000));row.put("outputPreview",new String(tail.toCharArray()));
+        JSONArray argv=original.optJSONArray("argv");if(argv!=null&&argv.length()>0){String name=argv.optString(0);row.put("argv",new JSONArray().put(COMMANDS.contains(name)?name:"legacy_readonly_tool"));}
+        row.put("_bodyOnDisk",true).put("_cachedOriginalSha256",source).put("_cachedFingerprintSha256",dev.pocketengine.features.local.project.ProjectSources.sha256(original.optString("fingerprint").getBytes(StandardCharsets.UTF_8)));
+        jobs.put(original.getString("id"),row);
+    }
+    private JSONObject readPublicJob(JSONObject cached)throws Exception {
+        JSONObject captured;
+        synchronized(this){if(jobs.get(cached.getString("id"))!=cached)throw new java.io.IOException("原回执缓存观察已变化，请重新只读核对");if(!cached.optBoolean("_bodyOnDisk"))return publicJob(cached);captured=JsonFiles.copy(cached);}
+        try{
+            // Do not hold the supervisor/cancel monitor during filesystem IO.
+            JSONObject original=readOriginal(new File(receipts,captured.getString("id")+".json"));
+            if(!captured.getString("_cachedOriginalSha256").equals(original.getString("_originalReceiptSha256"))||!captured.getString("id").equals(original.optString("id"))||!captured.optString("checkoutId").equals(original.optString("checkoutId")))throw new java.io.IOException("legacy_original_body_source_changed");
+            synchronized(this){if(jobs.get(captured.getString("id"))!=cached)throw new java.io.IOException("legacy_original_cache_changed_during_body_read");}
+            if(captured.optBoolean("coldProcessUnconfirmed"))for(String key:List.of("status","originalPersistedStatus","coldProcessUnconfirmed","processExitObserved","resourcesReleased","replayAllowed","message"))if(captured.has(key))original.put(key,captured.get(key));
+            return publicJob(original);
+        }catch(Exception unavailable){
+            synchronized(this){originalInventoryUnconfirmed=true;if(!cached.optBoolean("_bodyReadFailureCounted")){unreadableOriginalRecords++;cached.put("_bodyReadFailureCounted",true);}}
+            throw new java.io.IOException("原回执正文未能按原来源完整核对；原文件和缓存预览保留，没有返回空成功、重放或回收操作编号");
+        }
     }
     /** Fixed facts only. This is not another execution ledger, a process-exit
      * proof, a repair grant or permission to recycle old operation identities. */
@@ -88,12 +122,14 @@ public final class NativeCommandExecutor implements AutoCloseable {
         return result;
     }
     private File executable(String name){for(File path:systemPaths){File executable=new File(path,name);if(executable.isFile()&&executable.canExecute())return executable;}return null;}
-    public synchronized JSONObject submit(String checkoutId,File cwd,JSONArray argv,String operationId,int timeout)throws Exception {
+    public JSONObject submit(String checkoutId,File cwd,JSONArray argv,String operationId,int timeout)throws Exception {
+        synchronized(this){
         if(closed)throw new IllegalStateException("本地执行器已关闭");
         if(operationId==null||!operationId.matches("[A-Za-z0-9_-]{1,80}"))throw new IllegalArgumentException("本地操作编号无效");
         if(timeout<1||timeout>120)throw new IllegalArgumentException("本地命令超时需为1至120秒");
         List<String> launch=validate(cwd,argv);String fingerprint=checkoutId+"\n"+argv.toString()+"\n"+timeout;
-        JSONObject previous=jobs.get(operationId);if(previous!=null){if(!fingerprint.equals(previous.optString("fingerprint")))throw new IllegalArgumentException("同一操作编号不能改变命令");return publicJob(previous);}
+        JSONObject previous=jobs.get(operationId);if(previous!=null){boolean same=previous.optBoolean("_bodyOnDisk")?dev.pocketengine.features.local.project.ProjectSources.sha256(fingerprint.getBytes(StandardCharsets.UTF_8)).equals(previous.optString("_cachedFingerprintSha256")):fingerprint.equals(previous.optString("fingerprint"));if(!same)throw new IllegalArgumentException("同一操作编号不能改变命令");}
+        else{
         if(originalInventoryUnconfirmed)throw new IllegalStateException("原只读命令回执归属尚未核对，未派发新命令或回收原操作编号");
         if(!supervisor.available())throw new IllegalStateException("本机进程组监督器不可用，未派发只读命令，也没有使用较弱的进程回退");
         if(jobs.size()>=500)throw new IllegalStateException("本地回执已达500条，请先导出归档；未释放旧操作编号");
@@ -101,6 +137,8 @@ public final class NativeCommandExecutor implements AutoCloseable {
         JSONObject job=new JSONObject().put("id",operationId).put("operationId",operationId).put("checkoutId",checkoutId).put("fingerprint",fingerprint).put("status","queued").put("argv",new JSONArray(argv.toString())).put("createdAt",System.currentTimeMillis()).put("updatedAt",System.currentTimeMillis()).put("output","").put("stdout","").put("stderr","").put("verified",false);
         save(job);jobs.put(operationId,job);busy.add(checkoutId);
         workers.execute(()->run(operationId,cwd,launch,timeout));return publicJob(job);
+        }}
+        return get(operationId);
     }
     private List<String> validate(File cwd,JSONArray argv)throws Exception {
         if(argv==null||argv.length()<1||argv.length()>40)throw new IllegalArgumentException("命令需为1至40项argv数组");
@@ -121,17 +159,17 @@ public final class NativeCommandExecutor implements AutoCloseable {
         File value=root;for(String part:relative.split("/",-1)){if(part.isEmpty()||part.equals(".")||part.equals(".."))throw new SecurityException("路径不可越过工作目录");value=new File(value,part);if(Files.isSymbolicLink(value.toPath()))throw new SecurityException("不跟随工作目录的符号链接");}
         if(!value.getCanonicalPath().startsWith(root.getCanonicalPath()+File.separator))throw new SecurityException("路径不可越过工作目录");return value;
     }
-    public synchronized JSONObject get(String id)throws Exception{JSONObject job=jobs.get(id);if(job==null)throw new IllegalArgumentException("本地执行回执不存在");return publicJob(job);}
-    public synchronized JSONArray list()throws Exception{JSONArray out=new JSONArray();for(JSONObject job:jobs.values()){JSONObject item=publicJob(job);String output=item.optString("output");item.remove("output");item.remove("stdout");item.remove("stderr");item.put("outputPreview",output.length()>2000?output.substring(output.length()-2000):output);out.put(item);}return out;}
+    public JSONObject get(String id)throws Exception{JSONObject job;synchronized(this){job=jobs.get(id);if(job==null)throw new IllegalArgumentException("本地执行回执不存在");if(!job.optBoolean("_bodyOnDisk"))return publicJob(job);}return readPublicJob(job);}
+    public synchronized JSONArray list()throws Exception{JSONArray out=new JSONArray();for(JSONObject job:jobs.values()){JSONObject item=publicJob(job);if(item.has("output")){String output=item.optString("output");item.put("outputPreview",output.length()>2000?output.substring(output.length()-2000):output);}item.remove("output");item.remove("stdout");item.remove("stderr");out.put(item);}return out;}
     public synchronized boolean busy(String id){return originalInventoryUnconfirmed||busy.contains(id);}
-    public synchronized JSONObject cancel(String id)throws Exception{JSONObject job=jobs.get(id);if(job==null)throw new IllegalArgumentException("本地执行回执不存在");if(!Set.of("queued","running","stopping").contains(job.optString("status")))return publicJob(job);job.put("cancelRequested",true).put("status","stopping");save(job);return publicJob(job);}
+    public JSONObject cancel(String id)throws Exception{synchronized(this){JSONObject job=jobs.get(id);if(job==null)throw new IllegalArgumentException("本地执行回执不存在");if(Set.of("queued","running","stopping").contains(job.optString("status"))){job.put("cancelRequested",true).put("status","stopping");save(job);return publicJob(job);}}return get(id);}
     private void run(String id,File cwd,List<String> argv,int timeout){
-        boolean nativeEntered=false,nativeResultReceived=false,resourcesProved=false;
+        boolean nativeEntered=false,nativeResultReceived=false,resourcesProved=false,terminalRecordSaved=false;
         OutputDecoder stdout=new OutputDecoder(text->appendOutput(id,"stdout",text)),stderr=new OutputDecoder(text->appendOutput(id,"stderr",text));
         try{
             synchronized(this){
                 JSONObject job=jobs.get(id);
-                if(closed||job.optBoolean("cancelRequested")){resourcesProved=true;job.put("status","cancelled").put("nativeDispatchAttempted",false).put("nativeResultReceived",false).put("effectStatus","not_dispatched").put("resourcesReleased",true).put("outputComplete",true).put("message","原命令在监督器派发前已取消");save(job);events.accept(publicJob(job));return;}
+                if(closed||job.optBoolean("cancelRequested")){resourcesProved=true;job.put("status","cancelled").put("nativeDispatchAttempted",false).put("nativeResultReceived",false).put("effectStatus","not_dispatched").put("resourcesReleased",true).put("outputComplete",true).put("message","原命令在监督器派发前已取消");save(job);terminalRecordSaved=true;events.accept(publicJob(job));return;}
             }
             Map<String,String> environment=Map.of("PATH",String.join(":",systemPaths.stream().map(File::getAbsolutePath).toArray(String[]::new)),"HOME",cwd.getAbsolutePath());
             nativeEntered=true;
@@ -153,10 +191,10 @@ public final class NativeCommandExecutor implements AutoCloseable {
                     .put("nativeDispatchAttempted",true).put("nativeResultReceived",true).put("nativeResultContract",exit.resultContract).put("processGroupAbsent",exit.groupAbsent).put("outputComplete",exit.outputComplete)
                     .put("resourcesReleased",resourcesProved).put("nativeCancelled",exit.cancelled).put("nativeTimedOut",exit.timedOut).put("noChildCreated",exit.noChildCreated)
                     .put("message",uncertain?"原进程组、输出或回执尚未完整核对，未放行未确认资源或重发原命令":"原监督器已返回进程组与输出事实，请核对输出；这不等于项目目标已完成");
-                save(job);events.accept(publicJob(job));
+                save(job);terminalRecordSaved=true;events.accept(publicJob(job));
             }
-        }catch(Exception|LinkageError error){synchronized(this){try{JSONObject job=jobs.get(id);job.put("status",nativeEntered?"unknown":"failed").put("nativeDispatchAttempted",nativeEntered).put("nativeResultReceived",nativeResultReceived).put("resourcesReleased",resourcesProved).put("message",nativeEntered?"原本机监督结果未完整确认，请核对原回执；没有弱回退或重新派发":"当前系统无法启动该本地工具，未进入监督器");save(job);events.accept(publicJob(job));}catch(Exception ignored){}}}
-        finally{synchronized(this){JSONObject job=jobs.get(id);if(job!=null&&resourcesProved)busy.remove(job.optString("checkoutId"));}}
+        }catch(Exception|LinkageError error){synchronized(this){try{JSONObject job=jobs.get(id);job.put("status",nativeEntered?"unknown":"failed").put("nativeDispatchAttempted",nativeEntered).put("nativeResultReceived",nativeResultReceived).put("resourcesReleased",resourcesProved).put("message",nativeEntered?"原本机监督结果未完整确认，请核对原回执；没有弱回退或重新派发":"当前系统无法启动该本地工具，未进入监督器");terminalRecordSaved=false;save(job);terminalRecordSaved=true;events.accept(publicJob(job));}catch(Exception ignored){}}}
+        finally{synchronized(this){JSONObject job=jobs.get(id);if(job!=null){if(resourcesProved)busy.remove(job.optString("checkoutId"));if(terminalRecordSaved)try{compactOriginal(job);}catch(Exception keepOriginalBuffer){/* Never drop unpersisted output or fabricate a saved body. */}}}}
     }
     private synchronized void appendOutput(String id,String channel,String text)throws Exception {
         JSONObject job=jobs.get(id);String old=job.optString(channel);int room=Math.max(0,65536-old.length());
@@ -182,6 +220,6 @@ public final class NativeCommandExecutor implements AutoCloseable {
         private void emit(java.nio.CharBuffer chars)throws Exception{chars.flip();if(chars.hasRemaining())sink.accept(chars.toString());chars.clear();}
     }
     private void save(JSONObject job)throws Exception{job.put("updatedAt",System.currentTimeMillis());JsonFiles.write(new File(receipts,job.getString("id")+".json"),job);}
-    private static JSONObject publicJob(JSONObject job)throws Exception{JSONObject value=JsonFiles.copy(job);value.remove("fingerprint");return value;}
+    private static JSONObject publicJob(JSONObject job)throws Exception{JSONObject value=JsonFiles.copy(job);for(String key:List.of("fingerprint","_originalReceiptSha256","_cachedOriginalSha256","_cachedFingerprintSha256","_bodyOnDisk","_bodyReadFailureCounted"))value.remove(key);return value;}
     @Override public synchronized void close(){closed=true;workers.shutdownNow();}
 }

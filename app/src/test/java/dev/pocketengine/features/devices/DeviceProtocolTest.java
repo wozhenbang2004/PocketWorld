@@ -10,8 +10,8 @@ import static org.junit.Assert.*;
 
 public final class DeviceProtocolTest {
     private JSONObject fixtures()throws Exception{
-        String explicit=System.getProperty("pocketworld.protocol.fixtures");if(explicit!=null)return new JSONObject(Files.readString(Path.of(explicit)));
-        Path at=Path.of("").toAbsolutePath();for(int depth=0;at!=null&&depth<5;depth++,at=at.getParent()){Path file=at.resolve("protocol/device-v1/fixtures.json");if(Files.isRegularFile(file))return new JSONObject(Files.readString(file));}throw new IllegalStateException("Shared protocol fixture asset not found");
+        String explicit=System.getProperty("pocketworld.protocol.fixtures");if(explicit!=null)return new JSONObject(new String(Files.readAllBytes(Path.of(explicit)),StandardCharsets.UTF_8));
+        Path at=Path.of("").toAbsolutePath();for(int depth=0;at!=null&&depth<5;depth++,at=at.getParent()){Path file=at.resolve("protocol/device-v1/fixtures.json");if(Files.isRegularFile(file))return new JSONObject(new String(Files.readAllBytes(file),StandardCharsets.UTF_8));}throw new IllegalStateException("Shared protocol fixture asset not found");
     }
     @Test public void javaAndPythonUseTheSameSharedFixtures()throws Exception{
         JSONArray rows=fixtures().getJSONArray("fixtures");assertEquals(63,rows.length());for(int i=0;i<rows.length();i++){

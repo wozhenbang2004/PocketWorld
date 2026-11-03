@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
@@ -205,8 +206,9 @@ private fun ConversationOperation(operation: TaskPresentation.Operation) {
 
 /** Uses the existing persisted list; search never changes a conversation or starts a task. */
 @Composable
-internal fun ConversationHistoryBrowser(loaded: List<ConversationHistory.Item>, activeId: String?, switchingBlocked: Boolean, onOpen: (String) -> Unit, onNew: () -> Unit, modifier: Modifier = Modifier, allowReadWhenBlocked: Boolean = false) {
+internal fun ConversationHistoryBrowser(loaded: List<ConversationHistory.Item>, activeId: String?, switchingBlocked: Boolean, onOpen: (String) -> Unit, onNew: () -> Unit, modifier: Modifier = Modifier, allowReadWhenBlocked: Boolean = false, onRename: ((ConversationHistory.Item) -> Unit)? = null, onPin: ((ConversationHistory.Item) -> Unit)? = null, managementBusy: Boolean = false) {
     var query by rememberSaveable { mutableStateOf("") }
+    var menuId by remember { mutableStateOf<String?>(null) }
     val groups = remember(loaded, query) { ConversationHistory.organize(loaded, query, System.currentTimeMillis(), ZoneId.systemDefault()) }
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -222,7 +224,16 @@ internal fun ConversationHistoryBrowser(loaded: List<ConversationHistory.Item>, 
                 items(group.items, key = { it.id }) { item ->
                     Column(Modifier.fillMaxWidth().background(if (item.id == activeId) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent, RoundedCornerShape(10.dp))
                         .clickable(enabled = !switchingBlocked || allowReadWhenBlocked) { onOpen(item.id) }.semantics { selected = item.id == activeId }.padding(horizontal = 10.dp, vertical = 14.dp)) {
-                        Text(item.title.ifBlank { "未命名对话" }, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 14.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(item.title.ifBlank { "未命名对话" }, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                            if (onRename != null && onPin != null && item.organizationRevision >= 0) Box {
+                                TextButton(onClick = { menuId = item.id }, enabled = !managementBusy, modifier = Modifier.semantics { contentDescription = "管理对话：" + item.title }) { Text("管理…") }
+                                DropdownMenu(expanded = menuId == item.id, onDismissRequest = { menuId = null }) {
+                                    DropdownMenuItem(text = { Text("改名…") }, onClick = { menuId = null; onRename(item) }, enabled = !managementBusy)
+                                    DropdownMenuItem(text = { Text(if (item.pinOrder > 0) "取消置顶" else "置顶") }, onClick = { menuId = null; onPin(item) }, enabled = !managementBusy)
+                                }
+                            }
+                        }
                         if (item.updatedAt > 0) Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.updatedAt)), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
                     }
                 }

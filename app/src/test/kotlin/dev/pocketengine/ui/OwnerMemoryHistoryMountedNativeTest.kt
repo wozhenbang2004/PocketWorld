@@ -78,7 +78,10 @@ class OwnerMemoryHistoryMountedNativeTest {
                 val state = native.controller.state
                 val snapshot = state.ownerSnapshot("memoryReview")
                 if (snapshot.optString("namespaceStatus") == "private") MemoryCognitionPanel(state.ownerResponses("memoryReview"), state.ownerPending("memoryReview"), snapshot.optString("cognitionRevision")) { command, payload -> calls += command; native.controller.requestOwnerDomain("memoryReview", command, payload) }
-                else Text("非私人记忆范围：未挂历史读取")
+                else if (snapshot.optString("namespaceStatus") == "project") MemoryLearningReviewPage(snapshot, state.ownerResponses("memoryReview"), state.ownerPending("memoryReview"), false, state.ownerErrors["memoryReview"],
+                    { command, payload -> calls += command; native.controller.requestOwnerDomain("memoryReview", command, payload) },
+                    { reference -> calls += "openSource"; native.controller.openOwnerSource(reference) }, {}, native.controller::dismissOwnerSource)
+                else Text("范围尚未核对：不读取旧事")
             } } }
             activity.get().setContentView(view)
             frame(); assertEquals("snapshot=${native.snapshot()}; replies=${native.controller.state.ownerResponses("memoryReview")}; errors=${native.controller.state.ownerErrors}; pending=${native.controller.state.ownerPending}", "private", native.snapshot().optString("namespaceStatus")); click("查看主体认知、历史与冲突…")
@@ -148,4 +151,25 @@ class OwnerMemoryHistoryMountedNativeTest {
             f.edit("A城"); f.click("查旧事（只读）"); f.clickContaining("A城旧事的存储概述"); assertNotNull(f.button("回读这条旧事的确切原句与hash"))
         }
     }
+    @Test fun actualProjectReviewCanQueryItsOwnHistoryAndOpenOriginalScopeWithoutPrivateFallback() {
+        Fixture().use { f ->
+            f.save(JSONObject().put("text", "项目原文：主人全局私密记录不能混进项目")); val project = f.native.create("历史入口项目"); val other = f.native.create("其他项目")
+            f.mount(); f.native.choose(project); val candidate = f.native.propose(f.native.file()).getJSONObject("candidate")
+            val accepted = f.native.result("acceptCandidate", JSONObject().put("id", candidate.getString("id")).put("revision", candidate.getLong("revision"))).getJSONObject("record")
+            f.frame(); f.edit("项目原文"); f.click("查旧事（只读）"); assertFalse(nodes().any { text(it).contains("主人全局私密记录") }); f.clickContaining("保留约束与选择理由")
+            assertEquals(project.getString("spaceId"), f.native.response("readHistoryRecord").getJSONObject("result").getJSONObject("record").getString("spaceId"))
+            val oldSource = f.button("回读原选来源范围（非原话认证）").config[SemanticsActions.OnClick].action!!
+            f.click("回读原选来源范围（非原话认证）"); val original = f.native.controller.state.ownerSource!!
+            assertEquals(accepted.getString("text"), original.getString("text")); assertEquals(accepted.getJSONArray("sourceRefs").getJSONObject(0).toString(), original.getJSONObject("sourceRef").toString()); assertFalse(original.getBoolean("executionAuthorized"))
+            f.native.choose(other); f.frame(); val sourceCalls = f.calls.count { it == "openSource" }; oldSource.invoke(); f.frame(); assertEquals(sourceCalls, f.calls.count { it == "openSource" }); assertNull(f.native.controller.state.ownerSource)
+            f.edit("项目原文"); val oldSearch = f.button("查旧事（只读）").config[SemanticsActions.OnClick].action!!
+            val settledAt = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while ("snapshot" in f.native.controller.state.ownerPending("memoryReview")) { check(System.nanoTime() < settledAt) { "Original project page snapshot did not settle" }; f.frame() }
+            f.native.workspace.close(); val requestId = f.native.controller.requestOwnerDomain("memoryReview", "snapshot", JSONObject())
+            val replyAt = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (f.native.response("snapshot")?.optString("requestId") != requestId) { check(System.nanoTime() < replyAt) { "Missing actual closed-scope snapshot receipt" }; f.frame() }
+            assertFalse(f.native.response("snapshot").getBoolean("ok")); f.frame(); val searchCalls = f.calls.count { it == "searchHistory" }; oldSearch.invoke(); f.frame(); assertEquals(searchCalls, f.calls.count { it == "searchHistory" }); assertTrue(nodes().any { text(it).contains("范围尚未核对") }); assertFalse(nodes().any { text(it).contains("主人全局私密记录") })
+        }
+    }
+
 }
