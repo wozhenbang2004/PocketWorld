@@ -48,6 +48,8 @@ public final class RemoteJobEventsTest {
     }
     static JSONObject child(String parent)throws Exception{return new JSONObject().put("kind","child_text").put("nativeType","assistant/text").put("text","same public text").put("childSourceProtocol",RemoteJobEvents.CHILD_SOURCE_PROTOCOL).put("parentToolUseId",parent).put("parentSessionId",GEN).put("parentPromptRequestId",GEN2);}
     static JSONObject claudeScope()throws Exception{return new JSONObject(scope().toString()).put("worker","claude").put("nativeProtocol","claude_stream_json").put("sessionId",GEN).put("promptRequestId",GEN2);}
+    static JSONObject claudeRuntimeSource()throws Exception{return claudeScope().put("protocol","claude_stream_json").put("modelRuntime",new JSONObject().put("protocol","native_model_runtime_v1").put("worker","claude").put("runtimeVersion",RemoteJobEvents.CLAUDE_CHILD_PROGRESS_VERSION).put("sessionId",GEN).put("promptRequestId",GEN2).put("model","unneeded-model-body"));}
+    static JSONObject childProgress(String parent,String eventId)throws Exception{return new JSONObject().put("kind","tool").put("nativeType","tool_progress").put("itemId","shared-tool-id").put("tool","Read").put("status","running").put("childSourceProtocol",RemoteJobEvents.CHILD_SOURCE_PROTOCOL).put("parentToolUseId",parent).put("parentSessionId",GEN).put("parentPromptRequestId",GEN2).put("nativeEventId",eventId).put("nativeLineageVersion",RemoteJobEvents.CLAUDE_CHILD_PROGRESS_VERSION);}
     @Test public void completeChildSourcesRemainDistinctReadOnlyAndNeverBecomeSessionOrApprovalAuthority()throws Exception{
         JSONObject source=claudeScope(),a=RemoteJobEvents.sourceView(child("toolu_child_a").put("nativeAgentId","agent-a"),source),b=RemoteJobEvents.sourceView(child("toolu_child_b"),source);
         assertNotEquals(a.getString("key"),b.getString("key"));assertEquals("agent-a",a.getString("nativeAgentId"));assertFalse(b.has("nativeAgentId"));assertFalse(a.getBoolean("executionAuthorized"));assertFalse(a.getBoolean("childSessionControl"));assertFalse(a.getBoolean("completeTranscript"));assertFalse(a.has("sessionId"));
@@ -58,5 +60,28 @@ public final class RemoteJobEventsTest {
         assertThrows(SecurityException.class,()->RemoteJobEvents.sourceView(child("toolu_a"),scope()));
         JSONObject request=RemoteJobEvents.request(null,source),actual=page(request,GEN,1,1,1).put("worker","claude").put("nativeProtocol","claude_stream_json").put("sessionId",GEN).put("promptRequestId",GEN2);JSONObject row=child("toolu_a").put("sequence",1).put("observedAt",1001);actual.put("events",new JSONArray().put(row));JSONObject saved=RemoteJobEvents.merge(null,RemoteJobEvents.received(source,request,actual));assertEquals("toolu_a",saved.getJSONArray("events").getJSONObject(0).getString("parentToolUseId"));
         actual.getJSONArray("events").getJSONObject(0).put("parentPromptRequestId",GEN);assertThrows(SecurityException.class,()->RemoteJobEvents.received(source,request,actual));assertEquals(1,saved.getLong("nextSequence"));
+    }
+    @Test public void pinnedChildProgressBindsOnlyOriginalRuntimeAndKeepsSharedToolIdsInTheirOwnChildren()throws Exception{
+        JSONObject source=claudeRuntimeSource(),scope=RemoteJobEvents.scope(source,"a".repeat(64));
+        assertEquals(5,scope.getJSONObject("modelRuntime").length());assertFalse(scope.toString().contains("unneeded-model-body"));assertFalse(scope.has("nativeRuntimeVersion"));
+        JSONObject a=RemoteJobEvents.sourceView(childProgress("toolu_a",GEN),scope),b=RemoteJobEvents.sourceView(childProgress("toolu_b",GEN2),scope);
+        assertNotEquals(a.getString("key"),b.getString("key"));assertEquals(GEN,a.getString("nativeEventId"));assertEquals(RemoteJobEvents.CLAUDE_CHILD_PROGRESS_VERSION,a.getString("nativeLineageVersion"));assertFalse(a.getBoolean("executionAuthorized"));assertFalse(a.getBoolean("childSessionControl"));assertFalse(a.has("sessionId"));
+        for(String key:new String[]{"runtimeVersion","worker","protocol","sessionId","promptRequestId"}){
+            JSONObject changed=claudeRuntimeSource();changed.getJSONObject("modelRuntime").put(key,"unconfirmed");JSONObject unbound=RemoteJobEvents.scope(changed,"a".repeat(64));
+            assertFalse(unbound.has("modelRuntime"));assertThrows(SecurityException.class,()->RemoteJobEvents.sourceView(childProgress("toolu_a",GEN),unbound));
+        }
+        assertThrows(SecurityException.class,()->RemoteJobEvents.sourceView(childProgress("toolu_a",GEN),claudeScope().put("nativeRuntimeVersion",RemoteJobEvents.CLAUDE_CHILD_PROGRESS_VERSION)));
+    }
+    @Test public void unsupportedChildProgressCannotAdvanceOriginalCursorOrDisplayExtraBodies()throws Exception{
+        JSONObject source=RemoteJobEvents.scope(claudeRuntimeSource(),"a".repeat(64)),request=RemoteJobEvents.request(null,source);
+        JSONObject actual=page(request,GEN,1,1,1).put("worker","claude").put("nativeProtocol","claude_stream_json").put("sessionId",GEN).put("promptRequestId",GEN2);
+        JSONObject row=childProgress("toolu_a",GEN).put("sequence",1).put("observedAt",1001);actual.put("events",new JSONArray().put(row));
+        JSONObject saved=RemoteJobEvents.merge(null,RemoteJobEvents.received(source,request,actual));assertEquals(1,saved.getLong("nextSequence"));
+        for(Object[] mutation:new Object[][]{{"nativeLineageVersion","2.1.316"},{"nativeEventId","not-native-uuid"},{"parentSessionId",GEN2},{"parentPromptRequestId",GEN},{"parentToolUseId",new JSONObject()},{"itemId","bad\nidentity"},{"tool","Read\u007f"},{"tool","\ud800"},{"status","completed"},{"text","hidden body"},{"command","run anything"},{"thinking","hidden reasoning"},{"nativeAgentId","new-agent"}}){
+            JSONObject invalid=new JSONObject(actual.toString());invalid.getJSONArray("events").getJSONObject(0).put((String)mutation[0],mutation[1]);
+            assertThrows(SecurityException.class,()->RemoteJobEvents.received(source,request,invalid));assertEquals(1,saved.getLong("nextSequence"));assertFalse(saved.getBoolean("executionAuthorized"));
+        }
+        JSONObject duplicate=RemoteJobEvents.merge(saved,RemoteJobEvents.received(source,request,actual));
+        assertEquals(1,duplicate.getLong("nextSequence"));assertEquals(1,duplicate.getJSONArray("events").length());assertTrue(RemoteJobEvents.same(saved.getJSONArray("events").getJSONObject(0),duplicate.getJSONArray("events").getJSONObject(0)));
     }
 }

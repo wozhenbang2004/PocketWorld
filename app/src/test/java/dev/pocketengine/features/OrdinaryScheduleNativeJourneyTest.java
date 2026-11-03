@@ -82,6 +82,18 @@ public final class OrdinaryScheduleNativeJourneyTest {
         assertTrue(approve(row).getBoolean("duplicate"));assertEquals(1,rules().length());assertEquals(1,tasks.list().length());
         assertEquals(1,tasks.get(id,false).getJSONArray("operations").length());assertFalse(plans.ownerSnapshot(module).getJSONArray("scheduleProposals").getJSONObject(0).getBoolean("executionAuthorized"));
     }
+    @Test public void cronSchemaAndOriginalPreparedProposalRequireTheSameExplicitOwnerApproval()throws Exception {
+        JSONObject tool=null;JSONArray declared=port.tools();for(int i=0;i<declared.length();i++){JSONObject candidate=declared.getJSONObject(i).getJSONObject("function");if("schedule_propose".equals(candidate.optString("name")))tool=candidate;}
+        assertNotNull(tool);JSONObject properties=tool.getJSONObject("parameters").getJSONObject("properties").getJSONObject("schedule").getJSONObject("properties");
+        boolean cron=false;JSONArray types=properties.getJSONObject("type").getJSONArray("enum");for(int i=0;i<types.length();i++)cron|="cron".equals(types.getString(i));assertTrue(cron);assertEquals(512,properties.getJSONObject("expression").getInt("maxLength"));assertEquals(1,properties.getJSONObject("scheduleVersion").getInt("maximum"));
+        JSONObject requested=draft().put("schedule",new JSONObject().put("type","cron").put("scheduleVersion",1).put("expression","*/15 * * * *").put("zone","UTC"));port.validate("schedule_propose",requested);
+        JSONObject unknown=new JSONObject(requested.toString());unknown.getJSONObject("schedule").put("scheduleVersion",2);assertThrows(Exception.class,()->port.validate("schedule_propose",unknown));
+        JSONObject proposal=propose(requested);assertEquals("pending",proposal.getString("status"));assertEquals("cron",proposal.getJSONObject("draft").getJSONObject("schedule").getString("type"));assertEquals(0,rules().length());assertFalse(proposal.getBoolean("executionAuthorized"));
+        JSONArray approvals=tasks.get(id,false).optJSONArray("approvals");assertTrue(approvals==null||approvals.length()==0);
+        assertThrows(SecurityException.class,()->plans.ownerCommand(module,"approveSchedule",new JSONObject().put("id",proposal.getString("id")).put("digest","0".repeat(64))));assertEquals(0,rules().length());
+        long before=System.currentTimeMillis();JSONObject approved=approve(proposal),rule=approved.getJSONObject("rule");assertEquals("cron",rule.getJSONObject("schedule").getString("type"));assertEquals(1,rule.getJSONObject("schedule").getInt("scheduleVersion"));assertEquals("UTC",rule.getJSONObject("schedule").getString("zone"));assertTrue(rule.getLong("nextAt")>before);assertEquals("notify_then_user_start",rule.getString("executionPolicy"));assertEquals(run,rule.getJSONObject("nativeOrigin").getString("runId"));assertFalse(approved.getBoolean("executionAuthorized"));
+        assertFalse(Shadows.shadowOf(app.getSystemService(AlarmManager.class)).getScheduledAlarms().isEmpty());assertTrue(approve(proposal).getBoolean("duplicate"));assertEquals(1,rules().length());assertEquals(1,tasks.list().length());assertEquals(1,tasks.get(id,false).getJSONArray("operations").length());
+    }
     @Test public void forgedPreparedChangedArgumentsReadonlyAndUnsupportedConditionCannotCreateRules()throws Exception {
         JSONObject draft=draft();assertThrows(SecurityException.class,()->port.execute("schedule_propose",new JSONObject(draft.toString()).put("_hostOperationId",UUID.randomUUID().toString()),original));
         String operation=tasks.journal(id,run,epoch,original).beginOperation("schedule_propose",draft);
