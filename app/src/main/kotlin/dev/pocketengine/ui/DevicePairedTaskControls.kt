@@ -54,23 +54,33 @@ internal fun DevicePairedTaskControls(task: UiTask, host: NativeDeviceWorkspaceH
             work { val next = window.taskActions(task.id); main.post { if (alive.get()) actions = next } }
         }
     }
-    fun control(action: String) {
+    fun control(action: String, reviewedResume: JSONObject? = null) {
         // Stop is independent of slow reads, pairing/model review and a queued pause/resume.
         if (!alive.get() || action in controlBusy || action !in setOf("cancel", "cancelPending") && controlBusy.isNotEmpty()) return
         controlBusy = controlBusy + action; error = null
         try { runOnControl(Runnable {
             var failure: String? = null
-            try { when (action) { "cancel" -> window.requestStop(task.id); "cancelPending" -> window.cancelPendingGoal(task.id); "pause" -> window.pauseTask(task.id); "resume" -> window.resumeTask(task.id) } }
+            try { when (action) {
+                "cancel" -> window.requestStop(task.id)
+                "cancelPending" -> window.cancelPendingGoal(task.id)
+                "pause" -> window.pauseTask(task.id)
+                "resume" -> window.resumeTask(task.id)
+                "approveResume", "denyResume" -> {
+                    val request = requireNotNull(reviewedResume)
+                    window.decideResumeRequest(task.id, request.getString("resumeRequestId"), request.getLong("reviewRevision"), action == "approveResume")
+                }
+            } }
             catch (problem: Exception) { failure = deviceControlFailure(problem) }
             val message = failure
             main.post { if (alive.get()) {
                 controlBusy = controlBusy - action; error = message
-                if (message == null) notice = when (action) { "cancel" -> "已提交停止处理，请核对任务状态。"; "cancelPending" -> "已取消本机尚未开始的目标。"; "pause" -> "已请求暂停，请核对任务状态。"; else -> "已请求继续同一次执行。" }
+                if (message == null) notice = when (action) { "cancel" -> "已提交停止处理，请核对任务状态。"; "cancelPending" -> "已取消本机尚未开始的目标。"; "pause" -> "已请求暂停，请核对任务状态。"; "denyResume" -> "已拒绝这次恢复请求，原执行保持当前状态。"; else -> "已请求继续同一次执行。" }
                 changed(); refresh++
             } }
         }) } catch (_: Exception) { controlBusy = controlBusy - action; error = "控制入口暂不可用，请使用任务通知中的停止按钮。" }
     }
     val pending = task.raw.optJSONArray("approvals").objects().filter { it.optString("state") == "pending" }
+    val resumeRequest = actions?.optJSONObject("resumeRequest")?.takeIf { it.optBoolean("ownerActionRequired") }
     Column(Modifier.fillMaxWidth().padding(vertical = 10.dp).testTag("paired_task_controls"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = SecondaryInk) }
         error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = SecondaryInk, modifier = Modifier.testTag("paired_task_control_error")) }
@@ -80,9 +90,20 @@ internal fun DevicePairedTaskControls(task: UiTask, host: NativeDeviceWorkspaceH
         if (actionAvailable(actions?.optJSONObject("resultReview"))) Button(onClick = { work {
             val native = window.reviewResult(task.id); main.post { if (alive.get()) result = native }
         } }, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp).testTag("paired_task_review_result")) { Text("核对成果并结束") }
+        resumeRequest?.let { request ->
+            DeviceContentSurface { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("已配对设备请求继续", style = MaterialTheme.typography.titleSmall)
+                Text("来源 ${request.optString("callerDeviceId").take(8)} · 仍使用这次执行的原权限和剩余预算。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                if (request.optBoolean("stale")) Text("任务状态已经变化。请拒绝这次旧请求，再由外部客户端读取同任务后重新请求。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(onClick = { control("approveResume", JSONObject(request.toString())) }, enabled = controlBusy.isEmpty() && !request.optBoolean("stale") && actionAvailable(actions?.optJSONObject("resume")), modifier = Modifier.heightIn(min = 48.dp).testTag("paired_task_confirm_resume_request")) { Text("确认继续这次执行") }
+                    TextButton(onClick = { control("denyResume", JSONObject(request.toString())) }, enabled = controlBusy.isEmpty(), modifier = Modifier.heightIn(min = 48.dp).testTag("paired_task_deny_resume_request")) { Text("拒绝") }
+                }
+            } }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             if (actionAvailable(actions?.optJSONObject("pause"))) OutlinedButton(onClick = { control("pause") }, enabled = controlBusy.isEmpty(), modifier = Modifier.heightIn(min = 48.dp).testTag("paired_task_pause")) { Text("暂停") }
-            if (actionAvailable(actions?.optJSONObject("resume"))) OutlinedButton(onClick = { control("resume") }, enabled = controlBusy.isEmpty(), modifier = Modifier.heightIn(min = 48.dp).testTag("paired_task_resume")) { Text("继续这次执行") }
+            if (resumeRequest == null && actionAvailable(actions?.optJSONObject("resume"))) OutlinedButton(onClick = { control("resume") }, enabled = controlBusy.isEmpty(), modifier = Modifier.heightIn(min = 48.dp).testTag("paired_task_resume")) { Text("继续这次执行") }
             if (actionAvailable(actions?.optJSONObject("pendingCancel"))) TextButton(onClick = { control("cancelPending") }, enabled = "cancelPending" !in controlBusy, modifier = Modifier.heightIn(min = 48.dp).testTag("paired_task_cancel_pending")) { Text("取消本机未启动目标") }
             else if (actionAvailable(actions?.optJSONObject("stop"))) TextButton(onClick = { control("cancel") }, enabled = "cancel" !in controlBusy, modifier = Modifier.heightIn(min = 48.dp).testTag("paired_task_stop")) { Text(if ("cancel" in controlBusy) "正在请求停止…" else "请求停止") }
         }

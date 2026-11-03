@@ -838,6 +838,68 @@ public final class TaskStore {
             ContentValues values=new ContentValues();values.put("run_id",run);values.put("task_id",id);values.put("epoch",1);values.put("status","running");values.put("checkpoint",new JSONObject().put("messages",new JSONArray()).put("steps",0).toString());values.put("grant_json",noTools.toString());values.put("created_at",now);values.put("updated_at",now);db.insertOrThrow("runs",null,values);write(task);original.bindHostRun(id,run,1);db.setTransactionSuccessful();return new NativeInferenceSession(id,run,1,kind,original,maximum);
         }finally{db.endTransaction();}
     }
+    /** Native original GoalSession only. Private/chat/phone mailboxes cannot be adopted. */
+    public synchronized void openDeviceOwnerInputMailbox(dev.pocketengine.features.devices.DeviceOwnerInputs.Scope original)throws Exception {
+        db.beginTransaction();try{JSONObject task=deviceOwnerInputTask(original);JSONObject mailbox=task.optJSONObject("ownerInputMailbox");
+            if(mailbox==null){task.put("ownerInputMailbox",new JSONObject().put("format","pocketworld.device-owner-mailbox.v1").put("runId",original.runId()).put("epoch",original.epoch()).put("conversationId","").put("sourceKind","native_paired_task_input").put("open",true));if(task.optJSONArray("ownerInputs")==null)task.put("ownerInputs",new JSONArray());write(task);}
+            else requireDeviceOwnerMailbox(task,original);db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
+    private JSONObject deviceOwnerInputTask(dev.pocketengine.features.devices.DeviceOwnerInputs.Scope original)throws Exception {
+        original.requireNativeIdentity();JSONObject task=required(original.taskId());
+        if(!TaskStoreDeviceTasks.deviceTask(task)||!"GOAL".equals(task.optString("deviceExecutionKind"))||!original.runId().equals(task.optString("runId"))||original.epoch()!=task.optInt("coordinatorEpoch")||task.optBoolean("cancelRequested")||!original.allocationId().equals(task.getJSONObject("deviceExecutionScope").optString("allocationId")))throw new SecurityException("原设备输入task/run/allocation已失效");
+        deviceTasks.fence(original.taskId(),original.runId(),original.epoch(),original.originalControl(),false);
+        try(Cursor run=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=? AND status='running'",new String[]{original.taskId(),original.runId(),Integer.toString(original.epoch())})){if(!run.moveToFirst())throw new SecurityException("原设备输入执行已结束");}return task;
+    }
+    private static JSONObject requireDeviceOwnerMailbox(JSONObject task,dev.pocketengine.features.devices.DeviceOwnerInputs.Scope original)throws Exception {
+        JSONObject mailbox=ownerMailbox(task,original.runId(),original.epoch());if(!"pocketworld.device-owner-mailbox.v1".equals(mailbox.optString("format"))||!"native_paired_task_input".equals(mailbox.optString("sourceKind"))||!mailbox.optString("conversationId").isEmpty())throw new SecurityException("不能把设备输入导入私人或手机邮箱");return mailbox;
+    }
+    /** Invoked only inside the pre-existing devices.controlOperation SQL transaction. */
+    public synchronized JSONObject appendDeviceOwnerInput(dev.pocketengine.features.devices.PairingCoordinator.Permission permission,dev.pocketengine.features.devices.DeviceOwnerInputs.Scope original)throws Exception {
+        if(!db.inTransaction())throw new SecurityException("设备输入必须与原controlOperation原子接收");JSONObject task=deviceOwnerInputTask(original),args=permission.envelope().arguments(),origin=task.getJSONObject("origin");
+        if(!permission.callerDeviceId().equals(origin.optString("callerDeviceId"))||!permission.originDeviceId().equals(origin.optString("originDeviceId"))||!permission.grantId().equals(origin.optString("grantId"))||permission.authorizationEpoch()!=origin.optLong("authorizationEpoch")||!dev.pocketengine.features.devices.DeviceProtocol.resourceEquals(permission.envelope().resourceBinding(),task.getJSONObject("deviceExecutionScope").getJSONObject("resourceBinding")))throw new SecurityException("输入peer/grant/epoch/resource不属于原任务");
+        deviceTasks.requireControlLease(permission.callerDeviceId(),original.taskId(),original.runId(),original.epoch(),args.getString("controlLeaseId"));if(hasUnresolved(original.taskId()))throw new SecurityException("原设备效果未决，输入不重放外效");
+        JSONArray approvals=task.optJSONArray("approvals");for(int i=0;approvals!=null&&i<approvals.length();i++)if("pending".equals(approvals.getJSONObject(i).optString("state")))throw new SecurityException("普通输入不代替具体审批");
+        JSONObject decision=dev.pocketengine.features.devices.DeviceOwnerInputs.prepare(original,task,permission),row=decision.getJSONObject("row");boolean duplicate=decision.getBoolean("duplicateInput"),answer="task.answerQuestion".equals(permission.envelope().method());JSONObject mailbox=requireDeviceOwnerMailbox(task,original);
+        if(!duplicate){
+            if(answer){if(mailbox.optBoolean("open")||checkpoint(original.runId()).getJSONArray("messages").length()!=args.getLong("waitRevision"))throw new SecurityException("原普通问题邮箱或检查点已变化");}
+            else if(!mailbox.optBoolean("open"))throw new SecurityException("原设备输入窗口已关闭");
+            JSONArray rows=task.getJSONArray("ownerInputs");rows.put(row);if(answer)task.getJSONObject("evidence").getJSONObject("ownerQuestion").put("replyConsumed",true).put("replyMessageId",row.getString("messageId")).put("answerSourceKind","native_paired_task_input").put("formalSourceRefAvailable",false);
+            appendEvent(task,new JSONObject().put("type","device_owner_input_accepted").put("runId",original.runId()).put("coordinatorEpoch",original.epoch()).put("messageId",row.getString("messageId")).put("inputKind",answer?"answer":"steer").put("sourceKind","native_paired_task_input").put("formalSourceRefAvailable",false).put("effectsDispatched",false));
+        }
+        return new JSONObject().put("accepted",true).put("inputSaved",true).put("duplicateInput",duplicate).put("messageId",row.getString("messageId")).put("inputKind",answer?"answer":"steer").put("taskId",original.taskId()).put("runId",original.runId()).put("executorEpoch",original.epoch()).put("allocationId",original.allocationId()).put("sourceKind","native_paired_task_input").put("formalSourceRefAvailable",false).put("executionAuthorized",false).put("newGrant",false);
+    }
+    public synchronized JSONArray pollDeviceOwnerInputs(dev.pocketengine.features.devices.DeviceOwnerInputs.Scope original,JSONArray included,boolean boundary,boolean close)throws Exception {
+        db.beginTransaction();try{
+            JSONObject task=deviceOwnerInputTask(original),mailbox=requireDeviceOwnerMailbox(task,original);if(!mailbox.optBoolean("open")){db.setTransactionSuccessful();return new JSONArray();}
+            if(included==null||included.length()>500)throw new SecurityException("原设备检查点身份无效");java.util.Set<String> ids=new java.util.HashSet<>();for(int i=0;i<included.length();i++)ids.add(included.getString(i));
+            JSONArray rows=task.getJSONArray("ownerInputs"),next=new JSONArray();boolean pending=false,changed=false;
+            for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i),proof=row.optJSONObject("nativeDeviceInput");if(proof==null)continue;
+                if(!dev.pocketengine.features.devices.DeviceOwnerInputs.FORMAT.equals(proof.optString("format"))||!"native_paired_task_input".equals(row.optString("sourceKind"))||!original.taskId().equals(row.optString("acceptedTaskId"))||!original.runId().equals(row.optString("acceptedRunId"))||original.epoch()!=row.optInt("acceptedEpoch")||!original.allocationId().equals(proof.optString("allocationId"))||!task.getJSONObject("origin").getString("callerDeviceId").equals(proof.optString("callerDeviceId")))throw new SecurityException("设备输入不属于原native来源/run/allocation");
+                if(ids.contains(row.getString("messageId")))continue;pending=true;if(boundary||"steer".equals(row.optString("mode"))){next.put(new JSONObject(row.toString()));if(!"claimed".equals(proof.optString("phase"))){proof.put("phase","claimed").put("claimedAt",System.currentTimeMillis());changed=true;}}
+            }
+            if(close&&!pending){mailbox.put("open",false);changed=true;}if(changed)write(task);db.setTransactionSuccessful();return next;
+        }finally{db.endTransaction();}
+    }
+    /** Same-run mailbox data gate; F03 resumeGoal still validates the original model/source
+     * allocation, remaining source share and canonical grant before the retained host wakes. */
+    public synchronized void reopenDeviceOwnerQuestionMailbox(dev.pocketengine.features.devices.DeviceOwnerInputs.Scope original,String messageId)throws Exception {
+        db.beginTransaction();try{JSONObject task=deviceOwnerInputTask(original),mailbox=requireDeviceOwnerMailbox(task,original);JSONObject question=task.getJSONObject("evidence").getJSONObject("ownerQuestion");
+            if(!"awaiting_user".equals(task.optString("status"))||!original.questionRequestId().equals(question.optString("requestId"))||original.waitRevision()!=question.optLong("waitRevision")||!Boolean.TRUE.equals(question.opt("replyConsumed"))||!messageId.equals(question.optString("replyMessageId"))||!original.originalControl().isPaused()||original.originalControl().pauseRevision()!=original.pauseRevision())throw new SecurityException("原设备问题或暂停版本已变化");
+            mailbox.put("open",true);write(task);db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
+    /** Only a genuine runnerFinished receipt may add ordinary-question evidence. The merge
+     * preserves original artifacts, mover evidence and every existing unknown operation. */
+    public void recordDeviceOrdinaryQuestionWait(dev.pocketengine.features.devices.DeviceGoalSession.Finished finished)throws Exception {
+        if(Thread.holdsLock(this))throw new SecurityException("原Session完成证明必须在Tasks锁外取得");finished.requireCurrent();var session=finished.originalSession();var identity=session.originalControl().hostRunIdentity();JSONObject result=finished.result(),question=dev.pocketengine.features.devices.DeviceOwnerInputs.question(result.optJSONObject("evidence"),session.taskId(),identity.runId(),identity.epoch());
+        if(!"awaiting_user".equals(result.optString("status"))||question==null)return;
+        synchronized(this){db.beginTransaction();try{JSONObject task=required(session.taskId());if(!TaskStoreDeviceTasks.deviceTask(task)||!"GOAL".equals(task.optString("deviceExecutionKind"))||!identity.runId().equals(task.optString("runId"))||identity.epoch()!=task.optInt("coordinatorEpoch")||session.originalControl().isCancelled()||!session.originalControl().isPaused()||hasUnresolved(session.taskId()))throw new SecurityException("原设备普通问题完成状态已改变");
+            JSONObject evidence=task.optJSONObject("evidence");if(evidence==null)evidence=new JSONObject();evidence.put("ownerQuestion",new JSONObject(result.getJSONObject("evidence").getJSONObject("ownerQuestion").toString()));task.put("evidence",evidence);
+            appendEvent(task,new JSONObject().put("type","device_ordinary_question_wait").put("runId",identity.runId()).put("coordinatorEpoch",identity.epoch()).put("requestId",question.getString("requestId")).put("waitRevision",question.getLong("waitRevision")).put("sourceKind","original_native_runner_finished").put("executionAuthorized",false));db.setTransactionSuccessful();
+        }finally{db.endTransaction();}}
+    }
+
     /** Short native notification claim. It opens only an original record, never executes an action. */
     public static final class OwnerTaskNotice {
         private final TaskStore issuer;private final String snapshot;

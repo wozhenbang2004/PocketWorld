@@ -14,7 +14,7 @@ public final class DeviceProtocolTest {
         Path at=Path.of("").toAbsolutePath();for(int depth=0;at!=null&&depth<5;depth++,at=at.getParent()){Path file=at.resolve("protocol/device-v1/fixtures.json");if(Files.isRegularFile(file))return new JSONObject(Files.readString(file));}throw new IllegalStateException("Shared protocol fixture asset not found");
     }
     @Test public void javaAndPythonUseTheSameSharedFixtures()throws Exception{
-        JSONArray rows=fixtures().getJSONArray("fixtures");assertEquals(47,rows.length());for(int i=0;i<rows.length();i++){
+        JSONArray rows=fixtures().getJSONArray("fixtures");assertEquals(63,rows.length());for(int i=0;i<rows.length();i++){
             JSONObject row=rows.getJSONObject(i);try{
                 if("message".equals(row.getString("kind")))DeviceProtocol.validateMessage(row.getJSONObject("message"));
                 else{byte[] raw=("raw".equals(row.getString("kind"))?row.getString("raw"):row.getJSONObject("message").toString()).getBytes(StandardCharsets.UTF_8);DeviceTaskEnvelope value=DeviceProtocol.parseRequest(raw);if(row.getBoolean("valid")){assertEquals(row.getString("name"),row.getString("canonical"),DeviceProtocol.canonical(value.json()));assertEquals(row.getString("name"),row.getString("argumentsDigest"),DeviceProtocol.argumentsDigest(value.json()));if(row.has("receiverTaskId"))assertEquals(row.getString("receiverTaskId"),DeviceProtocol.receiverTaskId(value));}}

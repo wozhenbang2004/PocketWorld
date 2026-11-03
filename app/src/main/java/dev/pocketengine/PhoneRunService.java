@@ -205,13 +205,13 @@ public final class PhoneRunService extends Service {
             PowerManager power=getSystemService(PowerManager.class);wakeLock=power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"PocketEngine:DeviceGoal");wakeLock.setReferenceCounted(false);wakeLock.acquire(30_000L);
             app.setStatus(id,"running","原设备目标在本机已授权模型与准确能力范围执行",original);
             var port=app.deviceGoalCapabilities(session);var journal=app.tasks.journal(id,run,runningEpoch,original);
-            session.runnerStarted();RunOutcome result=new AgentRunner(null,port,dev.pocketengine.runtime.context.ContextBudgetPolicy.currentHostSource()).run(id,runningGoal,runningConfig,original,event->app.record(id,event,original),journal);
+            session.runnerStarted();RunOutcome result=new AgentRunner(null,port,dev.pocketengine.runtime.context.ContextBudgetPolicy.currentHostSource(),null,app.deviceOwnerInputs().runnerInputs(session)).run(id,runningGoal,runningConfig,original,event->app.record(id,event,original),journal);
             var finished=session.runnerFinished(result);if(deadlineReached||original.isCancelled()){finishAttempt(id,run,original,new RunOutcome("cancelled","原设备目标已停止后续派发；已有动作与下游未知效果不冒作已撤销",result.evidence),startId);return;}
             if(result.status.equals("needs_confirmation")){app.tasks.deviceTasks().recordGoalIdle(finished);original.pause();waitingForUser=true;ownerWaitGeneration++;pendingDeviceApproval=null;app.pushTask(id);return;}
             if(result.status.matches("awaiting_user|paused")&&!app.tasks.hasUnresolved(id)){
                 // The AgentRunner has exited/closed its scoped surface, but its original SQL run,
                 // control, captured model and allocation stay alive. Exact approval does not mint a run.
-                original.pause();waitingForUser=true;ownerWaitGeneration++;app.tasks.status(id,"awaiting_user",result.summary);app.pushTask(id);
+                original.pause();waitingForUser=true;ownerWaitGeneration++;app.tasks.status(id,"awaiting_user",result.summary);app.recordDeviceOrdinaryQuestionWait(finished);app.pushTask(id);
                 String decided=pendingDeviceApproval;if(decided!=null)main.post(()->{try{if(waitingForUser&&session==deviceGoal)app.resumeDeviceExecution(id,decided);}catch(Exception stale){pendingDeviceApproval=null;app.error("原审批后续接条件已变化，请核对原任务；未新建run");}});return;
             }
             finishAttempt(id,run,original,result,startId);

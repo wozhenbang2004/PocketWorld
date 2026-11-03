@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PocketWorld · Phone tasks</title><link rel="stylesheet" href="/desk.css"></head>
+<body>
+<main>
+  <header><div><p class="eyebrow">PocketWorld / Task Desk</p><h1>On your phone.</h1></div><button id="new-task" class="primary">New task</button></header>
+  <div class="connection-bar"><span id="connection-indicator" class="dot" aria-hidden="true"></span><div><p id="connection-status">Opening local session…</p><p id="selection" class="muted">One selected phone. Your phone runs the task.</p></div><button id="doctor">Check connection</button></div>
+  <details id="connection-help"><summary>First connection &amp; recovery</summary><ol><li>Open <strong>Pair devices</strong> in the existing Windows Companion, or run <code>phone_tasks.py pair --config &lt;existing config&gt;</code>.</li><li>Import its invitation in PocketWorld’s device connections page. Review the same fingerprints on both devices and choose the exact phone task scope on the phone.</li><li>Start the original bridge, then use <strong>Check connection</strong>. An expired or revoked scope needs a new explicit review on the phone.</li></ol><p class="muted">This Desk stays bound to the phone below. A connection failure never switches devices or resubmits work. USB uses the CLI’s explicit serial and boot selection.</p><p id="phone-identity" class="mono"></p></details>
+  <output id="notice" role="status" aria-live="polite"></output>
+  <section id="composer" hidden aria-labelledby="new-title"><div class="row"><h2 id="new-title">A new phone task</h2><button id="dismiss-draft">Close</button></div><form id="submit">
+    <label for="goal">What should the phone do?</label><textarea id="goal" rows="3" maxlength="12000" required placeholder="Describe the outcome you want…"></textarea>
+    <label for="scope-choice">Phone-approved scope</label><select id="scope-choice" required><option value="">Check the connection to load current scopes</option></select>
+    <details><summary>Budget and scope details</summary><div class="fields"><label>Grant<input id="grant" readonly autocomplete="off"></label><label>Capability version<input id="version" readonly></label><label>Tool calls<input id="tools" type="number" min="0" max="400" value="10" required></label><label>Model calls<input id="models" type="number" min="1" max="1000" value="10" required></label></div><label>Original resource binding<textarea id="binding" rows="3" readonly spellcheck="false"></textarea></label></details>
+    <div class="row"><button id="start-task" type="submit" class="primary">Start on selected phone</button><span class="muted">Approval stays on the phone.</span></div><p id="submission-state" class="muted"></p>
+  </form></section>
+  <div class="workspace">
+    <aside aria-labelledby="recent-title"><div class="row"><h2 id="recent-title">Tasks</h2><button id="list" class="quiet">Refresh</button></div><div id="recent-list"><p class="muted">Your recent phone tasks will appear here.</p></div><details><summary>Find an operation</summary><label>Original operation ID<input id="operation" autocomplete="off" spellcheck="false"></label><button id="status">Read status</button></details></aside>
+    <section id="task-detail" aria-labelledby="current-title"><div class="task-heading"><div><p class="eyebrow" id="task-state">No task selected</p><h2 id="current-title">Choose a task to follow.</h2></div><span id="progress" class="ring" hidden aria-label="Following phone task"></span></div>
+      <p id="result-summary" class="summary">Start a task or select an original operation. Closing this window leaves phone tasks running.</p>
+      <div class="row task-actions"><button id="watch">Follow progress</button><button id="stop-watch" hidden>Pause view</button><button id="reconnect" hidden>Reconnect this task</button><button id="cancel" class="quiet">Cancel task</button></div>
+      <p id="approval-hint" class="muted" hidden>Open the original task in PocketWorld to review its pending approval. This browser cannot approve it.</p>
+      <ol id="events-list" class="timeline" aria-label="Task progress"></ol>
+      <details id="task-input"><summary>Continue this task</summary><p id="input-scope" class="muted">Read the task’s current phone scope first.</p><button id="acquire-control" disabled>Acquire task control</button>
+        <div id="ordinary-question" hidden><p id="question-text"></p><label>Your answer<textarea id="answer-text" rows="3" maxlength="4000"></textarea></label><button id="answer" class="primary" disabled>Answer question</button></div>
+        <div id="running-steer" hidden><label>Guidance<textarea id="steer-text" rows="3" maxlength="4000"></textarea></label><button id="steer" disabled>Send guidance</button></div>
+        <div id="resume-panel" hidden><button id="resume" disabled>Request resume on phone</button><p class="muted">The phone must approve and resume its original task. This request does not restart execution.</p></div>
+        <details><summary>Original control request</summary><label>Operation ID<input id="control-operation" readonly spellcheck="false"></label><button id="control-status" disabled>Read this request</button></details>
+      </details>
+      <details id="diagnostics"><summary>Receipts &amp; details</summary><div class="row"><button id="wait">Wait up to 30 seconds</button><button id="events">Read next events</button></div><pre id="result" tabindex="0" aria-label="Original phone receipt">No operation read yet.</pre></details>
+    </section>
+  </div>
+  <footer>One phone · original tasks · explicit control. Connection checks do not verify model inference.</footer>
+</main><script src="/desk.js"></script>
+</body></html>

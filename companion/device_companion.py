@@ -917,6 +917,10 @@ class DeviceCompanionService:
         self.bulk_connections = {}
         self.bound_addresses = []
         self._validate_settings()
+        # Inbound phone-task surfaces share this transport and original SQL. They
+        # never create a second phone runner, pairing database or authorization.
+        from phone_task_bridge import PhoneTaskRouter
+        self.phone_tasks = PhoneTaskRouter(self)
         self.native_lan_reservations = {}
         if native_lan_reservations is not None:
             from device_transport import LanPortReservation
@@ -1020,6 +1024,7 @@ class DeviceCompanionService:
             outgoing = self.receiver.pairing.accept_outgoing_grant(peer, receipt, self.manager.now())
             outgoing.require_target_peer(peer, self.manager.now())
         self.connections.add(connection)
+        self.phone_tasks.connection_opened(connection, peer)
         if connection.lane == "bulk":
             self.bulk_connections[(peer.device_id, peer.certificate_fingerprint)] = connection
         async def incoming(actual_peer, frame):
@@ -1041,11 +1046,14 @@ class DeviceCompanionService:
                         await connection.close("incompatible")
                     return
                 await connection.close("incompatible"); return
+            if self.phone_tasks.receive(connection, peer, frame.control):
+                return
             response = await self.receiver.receive(peer, frame.control)
             if not connection.send_control(response):
                 await connection.close()
         async def disconnected(delivery_may_be_unknown, error):
             self.connections.discard(connection)
+            self.phone_tasks.connection_closed(connection)
             key = (peer.device_id, peer.certificate_fingerprint)
             if self.bulk_connections.get(key) is connection:
                 self.bulk_connections.pop(key, None)
@@ -1162,6 +1170,7 @@ class DeviceCompanionService:
         return self.public_status()
 
     async def _stop_network(self):
+        await self.phone_tasks.close()
         await asyncio.gather(*(client.close() for client in self.clients), return_exceptions=True)
         await asyncio.gather(*(listener.close() for listener in self.listeners), return_exceptions=True)
         await asyncio.gather(*(connection.close() for connection in tuple(self.connections)), return_exceptions=True)
