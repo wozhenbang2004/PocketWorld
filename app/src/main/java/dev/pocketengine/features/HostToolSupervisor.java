@@ -347,7 +347,9 @@ public final class HostToolSupervisor implements CapabilityPort {
         Tool tool=routes.get(name);if(tool==null)throw new SecurityException("本任务没有该工具路由");
         if(tool.preset!=null&&!pluginCurrent(name,tool))throw new CapabilityPort.Unavailable();
         JSONObject args=arguments==null?new JSONObject():arguments;if(args.toString().length()>131072)throw new IllegalArgumentException("工具参数过大");
-        java.util.Iterator<String> keys=args.keys();while(keys.hasNext()){String key=keys.next();if(key.startsWith("_")||key.matches("taskId|runId|principalId|spaceId|ownerId|scope|epoch|coordinatorEpoch|feature|command"))throw new SecurityException("工具参数不能覆盖宿主身份或执行路由");}
+        // Admitted plugin business arguments stay nested below the native invocation envelope.
+        // Keep host transport keys private and the full identity/routing gate on native tools.
+        java.util.Iterator<String> keys=args.keys();while(keys.hasNext()){String key=keys.next();if(key.startsWith("_")||tool.preset==null&&key.matches("taskId|runId|principalId|spaceId|ownerId|scope|epoch|coordinatorEpoch|feature|command"))throw new SecurityException("工具参数不能覆盖宿主身份或执行路由");}
         PluginRules.validateArguments(args,tool.schema);
         if(tool.feature.equals("memory")&&Set.of("search","recall").contains(tool.command)&&(args.has("queries")||args.has("constraints")))
             dev.pocketengine.features.memory.MemoryQueryPlan.agentSuggested(args.getString("query"),args.has("queries")?args.getJSONArray("queries"):new JSONArray(),args.has("constraints")?args.getJSONObject("constraints"):new JSONObject());
