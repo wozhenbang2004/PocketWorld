@@ -529,7 +529,7 @@ function MemoryRecords({ domain, data, supported, run }: { domain: string; data:
   const records = list(rowsAt(data, keys)).filter(row => [titleOf(row), bodyOf(row), layerOf(row), sourceOf(row), recordId(row)].join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const layers = [...new Set(records.map(layerOf))];
   return <section className="pw-memory-collection" aria-label={domain === 'memory' ? '记住的内容' : '待核对内容'}>
-    <SearchField aria-label="筛选当前读取的记录" placeholder={domain === 'memory' ? '查找记住的内容' : '查找待核对内容'} value={query} onChange={setQuery} shape="rounded" />
+    <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="筛选当前读取的记录" placeholder={domain === 'memory' ? '查找记住的内容' : '查找待核对内容'} value={query} onChange={setQuery} shape="rounded" />
     <p className="pw-reading-lead">{domain === 'memory' ? '按内容类型阅读。展开一条，核对内容和来源。' : '先阅读内容与来源，再决定是否采用。'}</p>
     {!loaded ? <Empty>尚未读取当前记录。</Empty> : !records.length ? <Empty>{query.trim() ? '当前读取窗口没有匹配的内容。' : '当前读取窗口没有记录。'}</Empty> : layers.map(layer => <section className="pw-memory-category" key={layer} aria-label={layer}>
       <h2>{layer}</h2>
@@ -583,7 +583,7 @@ function TeamWorkspace({ domain, data, supported, run, registerTransientBack }: 
     </article> : <Empty>这项记录已不在当前读取窗口，请返回后刷新。</Empty> : <Tabs selectedKey={tab} onSelectionChange={value => { if (value === 'runs' || value === 'definitions') { remember(); setTab(value); } }} className="pw-team-tabs">
       <TabList aria-label={domain === 'teams' ? '团队视图' : '群协作视图'}><Tab id="runs">共同工作</Tab><Tab id="definitions">{domain === 'teams' ? '团队' : '群'}</Tab></TabList>
       <TabPanel id={tab}>
-        <SearchField aria-label={tab === 'runs' ? '搜索共同工作' : '搜索团队与群'} placeholder={tab === 'runs' ? '查找目标或共同工作' : '查找名称或成员'} value={queries[tab]} onChange={value => setQueries(current => ({ ...current, [tab]: value }))} shape="rounded" />
+        <SearchField className="pw-secondary-search" data-input-size="medium" aria-label={tab === 'runs' ? '搜索共同工作' : '搜索团队与群'} placeholder={tab === 'runs' ? '查找目标或共同工作' : '查找名称或成员'} value={queries[tab]} onChange={value => setQueries(current => ({ ...current, [tab]: value }))} shape="rounded" />
         <div className="pw-object-list">{!hasRows(data, tab === 'runs' ? runKeys : definitionKeys) ? <Empty>尚未读取{tab === 'runs' ? '共同工作' : '团队记录'}。</Empty> : !filtered.length ? <Empty>{queries[tab].trim() ? '当前读取窗口没有匹配项。' : tab === 'runs' ? '当前读取窗口没有共同工作。' : '当前读取窗口没有团队记录。'}</Empty> : filtered.map(row => {
           const position = objects.indexOf(row), id = recordId(row, String(position));
           const context = tab === 'runs' ? sourceOf(row) : membersOf(row) || sourceOf(row);
@@ -847,7 +847,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
       {(error || domainError) && <p className="pw-field-error" role="alert">{error || domainError}</p>}
       <div className="pw-secondary-page" data-secondary-view={viewKey}>
         {(page === 'settings' || page === 'connections') ? <>
-          <SearchField aria-label="搜索设置" placeholder="搜索设置" value={query} onChange={setQuery} shape="rounded" />
+          <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="搜索设置" placeholder="搜索设置" value={query} onChange={setQuery} shape="rounded" />
           {query.trim() ? <section className="pw-settings-results" aria-label="匹配的设置">{settingRows(filtered)}{filtered.length === 0 && <Empty>没有匹配的设置。</Empty>}</section>
             : <><section className="pw-settings-frequent" aria-label="常用设置">{settingRows(frequentSettings)}</section><Accordion variant="divided" className="pw-settings-groups" aria-label="按目的浏览设置" expandedKeys={expandedSettings} onExpandedChange={values => setExpandedSettings(new Set([...values].map(String)))} allowsMultipleExpanded>{SETTINGS_GROUPS.map(group => <AccordionItem id={group.id} key={group.id} title={group.title} description={group.detail} icon={group.icon} headingLevel={2} className="pw-settings-group">{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</AccordionItem>)}</Accordion></>}
         </> : settingsGroup ? <section className="pw-settings-group-page">{settingRows(settingsGroup.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</section>

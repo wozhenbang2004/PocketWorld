@@ -278,6 +278,37 @@ def accessible_controls(root, label, match="exact"):
     return unique
 
 
+def section_editor_controls(root, label):
+    """Resolve an unnamed WebView editor within one actually named section."""
+    sections = []
+    for node in root.iter("node"):
+        if node.get("package") != APP_ID or node.get("class") != "android.view.View" or label not in accessible_values(node):
+            continue
+        try:
+            parse_bounds(node.get("bounds"))
+        except ValueError:
+            continue
+        sections.append(node)
+    assert len(sections) == 1, "Expected one visible app section named " + label
+    section = sections[0]
+    editors = [node for node in section.iter("node") if node.get("package") == APP_ID
+               and node.get("class") == "android.widget.EditText"
+               and all(node.get(attribute) == "true" for attribute in ("enabled", "focusable", "clickable"))]
+    assert len(editors) == 1, "Expected one enabled, focusable editor within section " + label
+    editor = editors[0]
+    assert editor.get("password") != "true", "The work input target must not be a password field"
+    bounds = parse_bounds(editor.get("bounds"))
+    parents = {child: parent for parent in root.iter() for child in parent}
+    viewport = parents.get(section)
+    while viewport is not None and viewport.get("class") != "android.webkit.WebView":
+        viewport = parents.get(viewport)
+    assert viewport is not None and viewport.get("package") == APP_ID, "The named input section is not within the actual app WebView"
+    for container in (section, viewport):
+        left, top, right, bottom = parse_bounds(container.get("bounds"))
+        assert left <= bounds[0] < bounds[2] <= right and top <= bounds[1] < bounds[3] <= bottom, "The observed editor is clipped outside its section or WebView"
+    return {bounds: editor}
+
+
 def navigation_identity(root, visible):
     controls = {label: accessible_controls(root, label) for label in PRIMARY_TABS}
     if not visible:
@@ -407,18 +438,23 @@ def target(args):
     root = ET.parse(args.xml).getroot()
     unique = {}
     selected_label = args.label
-    for label in (args.label, args.fallback_label):
-        if not label:
-            continue
-        unique = accessible_controls(root, label, args.match)
-        if unique:
-            selected_label = label
-            break
+    selection = "section-editor" if args.section_editor else "named-control"
+    if args.section_editor:
+        assert args.match == "exact" and not args.fallback_label, "A section editor requires one exact section identity"
+        unique = section_editor_controls(root, args.label)
+    else:
+        for label in (args.label, args.fallback_label):
+            if not label:
+                continue
+            unique = accessible_controls(root, label, args.match)
+            if unique:
+                selected_label = label
+                break
     assert len(unique) == 1, "Expected one accessible app control named " + selected_label
     bounds, node = next(iter(unique.items()))
     point = [(bounds[0] + bounds[2]) // 2, (bounds[1] + bounds[3]) // 2]
     write_json(args.out, {"label": selected_label, "match": args.match, "bounds": bounds, "point": point,
-                          "source_xml": pathlib.Path(args.xml).name,
+                          "source_xml": pathlib.Path(args.xml).name, "selection": selection,
                           "method": "Android accessibility bounds", "class": node.attrib.get("class")})
     print(*point)
 
@@ -620,7 +656,14 @@ def verify_capture(args):
         assert target_data["label"] in labels, "Unexpected business action in the navigation journey"
         assert target_data["source_xml"] == xml, "Action target is not tied to its actual preceding scene"
         assert target_data["match"] in ("exact", "prefix"), "Unexpected accessibility target matching mode"
-        controls = accessible_controls(ET.parse(root / xml).getroot(), target_data["label"], target_data["match"])
+        selection = "section-editor" if name == "work-input-target.json" else "named-control"
+        assert target_data["selection"] == selection, "The target selection method differs from this action's required identity"
+        observed_root = ET.parse(root / xml).getroot()
+        if selection == "section-editor":
+            assert target_data["match"] == "exact", "The work-input section must match exactly"
+            controls = section_editor_controls(observed_root, target_data["label"])
+        else:
+            controls = accessible_controls(observed_root, target_data["label"], target_data["match"])
         assert len(controls) == 1, "Action target is no longer unique in its captured scene"
         bounds, node = next(iter(controls.items()))
         assert target_data["bounds"] == list(bounds) and target_data["class"] == node.get("class"), "Action coordinates differ from the observed accessibility node"
@@ -662,6 +705,7 @@ def main():
     control.add_argument("--label", required=True)
     control.add_argument("--fallback-label")
     control.add_argument("--match", choices=("exact", "prefix"), default="exact")
+    control.add_argument("--section-editor", action="store_true", help="Target the unique usable EditText inside the exactly named app section")
     control.add_argument("--out", required=True)
     control.set_defaults(function=target)
     scene = commands.add_parser("scene")

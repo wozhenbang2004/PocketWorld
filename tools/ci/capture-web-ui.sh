@@ -216,6 +216,8 @@ pw_scene() {
         mv "$attempt_error" "$last_error"
         printf 'scene=%s attempt=%s elapsed=%ss result=not-ready\n' \
             "$scene" "$attempt" "$((SECONDS - started))" >> "$wait_log"
+        # Retain each original assertion failure even if the deadline's final XML dump fails.
+        cat "$last_error" >> "$wait_log"
         (( SECONDS < PW_ADB_DEADLINE )) || break
         sleep 1
     done
@@ -292,9 +294,11 @@ pw_tap projects-root '工作' primary-work-target
 pw_scene primary-work-return workroom
 
 PW_STAGE=work-input-real-ime
-# Focus the actual editable work input without entering or sending a draft.
+# UIAutomator may omit a WebView textarea's accessible name. Resolve the unique
+# usable EditText inside the observed named section, never the section center.
+# Focus that actual editor without entering or sending a draft.
 # Native current IME service state and app XML jointly verify the hidden tabs.
-pw_tap primary-work-return '工作输入' work-input-target
+pw_tap primary-work-return '工作输入' work-input-target --section-editor
 pw_scene workroom-ime workroom-ime true
 pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/13-workroom-ime.png"
 

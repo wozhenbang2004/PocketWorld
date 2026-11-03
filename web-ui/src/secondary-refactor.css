@@ -40,6 +40,33 @@
   padding-block: 0;
 }
 .pw-secondary.pw-secondary-refactor [data-input-size] input { min-height: 48px; }
+/* BoardUI SearchField composes InputBase directly, without TextField's size
+ * marker. Its consumer now supplies that marker, so the same field surface and
+ * focus states apply. Keep CloseButton's original 16px circular face inside a
+ * square 48px target; a height-only override stretched it into a vertical bar. */
+.pw-secondary.pw-secondary-refactor .pw-secondary-search > [role="group"] {
+  height: auto;
+  padding-inline: 12px 4px;
+}
+.pw-secondary.pw-secondary-refactor .pw-secondary-search [role="group"] button {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+}
+.pw-secondary-refactor .pw-secondary-search [role="group"] button::before {
+  content: "";
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--color-background-tertiary-hover, #ededed);
+  pointer-events: none;
+}
+.pw-secondary-refactor .pw-secondary-search [role="group"] button > svg { position: relative; }
 .pw-secondary-refactor .pw-radio-option,
 .pw-secondary-refactor label:has(input[type="checkbox"]) { min-height: 48px; }
 .pw-secondary-refactor .pw-stretch-hit { width: 48px; height: 48px; min-width: 48px; }
@@ -119,9 +146,101 @@
 }
 .pw-secondary-refactor .pw-model-current > button { flex: none; padding-inline: 8px; }
 .pw-secondary-refactor .pw-model-catalog { padding: 0; margin: 0; }
-.pw-secondary-refactor .pw-model-catalog .cb-model2-options { max-height: none; overflow: visible; }
-.pw-secondary-refactor .pw-model-catalog .cb-model2-name { overflow-wrap: anywhere; }
-.pw-secondary-refactor .pw-model-catalog .cb-search input { min-height: 48px; font-size: 16px; }
+/* The retained Affect tools.tsx uses .cb-model2-name; its saved tools.css still
+ * names the list .cb-model-list. Apply that source list's left-aligned rows,
+ * stacked name/note, brand tile and selected/hover surfaces to the actual DOM.
+ * This is a scoped consumer repair; ModelPicker's filtering and key handling
+ * remain in library/composer.tsx. */
+.pw-secondary-refactor .pw-model-catalog .cb-model2-labels {
+  padding: 12px 14px 0;
+  color: var(--pw-copy, #555);
+  font-size: 12px;
+  line-height: 20px;
+}
+.pw-secondary-refactor .pw-model-catalog .cb-search {
+  min-height: 56px;
+  padding: 4px 14px;
+}
+.pw-secondary-refactor .pw-model-catalog .cb-search input {
+  min-height: 48px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 16px;
+  line-height: 24px;
+}
+.pw-secondary-refactor .pw-model-catalog .cb-search input:focus-visible { outline: none; }
+.pw-secondary-refactor .pw-model-catalog .cb-search:focus-within {
+  border-bottom-color: var(--pw-focus, #626262);
+  box-shadow: inset 0 -1px 0 var(--pw-focus, #626262);
+}
+.pw-secondary-refactor .pw-model-catalog .cb-model2-options {
+  max-height: none;
+  overflow: visible;
+  padding: 6px;
+}
+.pw-secondary-refactor .pw-model-catalog .cb-model2-options > button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 72px;
+  padding: 12px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  text-align: start;
+  white-space: normal;
+}
+.pw-secondary-refactor .pw-model-catalog .cb-model2-options > button:hover,
+.pw-secondary-refactor .pw-model-catalog .cb-model2-options > button:focus-visible,
+.pw-secondary-refactor .pw-model-catalog .cb-model2-options > button[aria-selected="true"] {
+  background: var(--cb-tray);
+}
+.pw-secondary-refactor .pw-model-catalog .cb-model2-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pw-secondary-refactor .pw-model-catalog .cb-model-initial {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--cb-line);
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 20px;
+}
+.pw-secondary-refactor .pw-model-catalog .cb-model2-name > span:last-child {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.pw-secondary-refactor .pw-model-catalog .cb-model2-name strong {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 15px;
+  line-height: 22px;
+}
+.pw-secondary-refactor .pw-model-catalog .cb-model2-name strong > svg { flex: none; }
+.pw-secondary-refactor .pw-model-catalog .cb-model2-name small {
+  display: block;
+  margin: 0;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: normal;
+}
 .pw-secondary-refactor .pw-model-directory-empty { padding: 28px 0 36px; }
 .pw-secondary-refactor .pw-model-directory-empty h2 {
   font-size: 21px;

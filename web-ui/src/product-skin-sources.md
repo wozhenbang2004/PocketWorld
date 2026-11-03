@@ -35,3 +35,14 @@ Validation for this file is limited to balanced CSS delimiter/quote checks, neut
 - The Android host sends actual IME visibility through its existing configuration channel. It changes root-navigation visibility, without introducing a new bridge command, viewport heuristic or second inset application.
 
 These are project adaptations of the identities above. Their current visual and interaction status is tracked in `DESIGN.md` and the matching CI artifacts, separately from upstream identity and the user's approval of the selected components.
+
+The CI69 model-catalogue correction maps the retained Affect reconstruction's
+`library/upstream/affect-library/src/demos/components-b/tools.css.source.txt`
+`.cb-model-list` rows/name/note rules to the actual `.cb-model2-options` and
+`.cb-model2-name` DOM retained from `tools.tsx.source.txt`. Its search and letter
+tile follow that family's `styles.css.source.txt` `.cb-search` / `.cb-brand`
+relationships. The source filtering, selection and key handlers stay unchanged.
+Secondary SearchField consumers add the existing TextField size marker so the
+retained BoardUI InputBase shell receives the same sizing; CloseButton's original
+16px face and SVG sit inside a square 48px target. These scoped repairs are in
+`secondary-refactor.css`, not edits to the archived source or new controls.

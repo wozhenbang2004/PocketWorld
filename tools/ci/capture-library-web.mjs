@@ -531,6 +531,23 @@ async function reachable(locator, { minSize = 24 } = {}) {
 async function capture(page, viewport, name, selectors, options = {}) {
   stage = `${viewport.width}:${name}`;
   await page.evaluate(name => window.__POCKET_VISUAL_FIXTURE__.label(name), name);
+  // A newly mounted source surface can request another font face after the
+  // previous FontFaceSet.ready resolved. Load the declared bundled faces for
+  // this capture, then measure the resulting layout; never accept fallback text.
+  await page.evaluate(async () => {
+    const requirements = [['Inter', 'PocketWorld'], ['Noto Sans SC', '工作任务项目'], ['JetBrains Mono', '0123456789']];
+    let timer;
+    try {
+      await Promise.race([
+        Promise.all(requirements.map(async ([family, sample]) => {
+          const faces = await document.fonts.load(`400 16px "${family}"`, sample);
+          if (!faces.length || faces.some(face => face.status !== 'loaded')) throw new Error(`Bundled font unavailable: ${family}`);
+        })),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Bundled font loading exceeded 10 seconds')), 10000); }),
+      ]);
+      await document.fonts.ready;
+    } finally { clearTimeout(timer); }
+  });
   await settle(page, 0, { motion: Boolean(options.motion) });
   const mounted = [];
   for (const selector of selectors) {
@@ -547,7 +564,7 @@ async function capture(page, viewport, name, selectors, options = {}) {
     scale: visualViewport?.scale ?? 1,
   }));
   assert(layout.documentWidth <= viewport.width + 1 && layout.bodyWidth <= viewport.width + 1, `Horizontal overflow at ${stage}: ${JSON.stringify(layout)}`);
-  assert(layout.fonts.every(font => font.loaded), 'Bundled font not ready');
+  assert(layout.fonts.every(font => font.loaded), `Bundled font not ready: ${JSON.stringify(layout.fonts)}`);
   assert.equal(layout.scale, 1, 'Unexpected whole-page zoom');
   const fixture = await page.evaluate(() => window.__POCKET_VISUAL_FIXTURE__.summary());
   assert.equal(fixture.violations.length, 0, `Fixture protocol/business violation: ${fixture.violations.join('; ')}`);
