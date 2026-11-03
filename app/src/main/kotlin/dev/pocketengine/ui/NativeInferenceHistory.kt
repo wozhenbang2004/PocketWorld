@@ -18,6 +18,7 @@ internal fun NativeInferenceHistory(controller: PocketWorldController) {
     var cursor by remember { mutableStateOf("") }; var more by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }; var error by remember { mutableStateOf<String?>(null) }
     var exhausted by remember { mutableStateOf(false) }; var version by remember { mutableIntStateOf(0) }
+    var diagnostics by remember { mutableStateOf(false) }
     fun read(reset: Boolean) {
         if (loading) return
         loading = true; error = null; val attempt = ++version
@@ -40,6 +41,13 @@ internal fun NativeInferenceHistory(controller: PocketWorldController) {
             Row(Modifier.fillMaxWidth()) { TextButton(onClick = controller::closeNativeInferenceHistory) { Text("返回") }; Spacer(Modifier.weight(1f)); TextButton(onClick = { read(true) }, enabled = !loading) { Text("刷新") } }
             Text("独立模型调用记录", style = MaterialTheme.typography.titleLarge)
             Text("连接测试、语音、本机服务与经验草稿的实际记录。有任务的调用仍归原任务；本页不产生执行权限。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = !diagnostics, onClick = { diagnostics = false }, label = { Text("独立调用") })
+                FilterChip(selected = diagnostics, onClick = { diagnostics = true }, label = { Text("趋势与诊断") })
+            }
+            if (diagnostics) {
+                ModelDiagnosticsPanel(controller, Modifier.weight(1f))
+            } else {
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             if (rows.isEmpty() && !loading) Text(if (more) "当前窗口没有独立调用，可查看较早记录。" else "当前没有保留的独立调用记录；不代表服务用量为0。", style = MaterialTheme.typography.bodySmall)
@@ -56,6 +64,7 @@ internal fun NativeInferenceHistory(controller: PocketWorldController) {
                 if (more && !exhausted) item { TextButton(onClick = { read(false) }, enabled = !loading) { Text("查看较早窗口") } }
             }
             Text("每页只读原任务摘要，可能包含不在本页展示的任务；不是全部账单或余额。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }

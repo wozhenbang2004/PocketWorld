@@ -322,10 +322,12 @@ class HostTestEntrypointTest(unittest.TestCase):
                              {'__builtins__': {}}, {'github': github, 'inputs': SimpleNamespace(target=target)}))
 
         cases = [({'event': 'pull_request'}, (False, True)),
-                 # Latest main runs its phone-platform/memory groups on other affected private PRs.
-                 # The separate batch-selection assertion keeps this advanced-phone batch exclusive.
-                 ({'event': 'pull_request', 'same_repo': False}, (False, True)),
-                 ({'event': 'pull_request', 'branch': 'uiux/workroom-20261102'}, (False, True)),
+                 # Latest main scopes automatic checks to named same-repository workpacks.
+                 ({'event': 'pull_request', 'branch': 'pro/workpack-06-model-quality'}, (False, True)),
+                 ({'event': 'pull_request', 'branch': 'pro/workpack-05-memory-quality'}, (False, True)),
+                 ({'event': 'pull_request', 'branch': 'pro/workpack-03-phone-api-cli'}, (False, True)),
+                 ({'event': 'pull_request', 'same_repo': False}, (False, False)),
+                 ({'event': 'pull_request', 'branch': 'uiux/workroom-20261102'}, (False, False)),
                  ({'event': 'pull_request', 'private': False}, (False, False)),
                  ({'event': 'push'}, (True, False)),
                  ({'event': 'workflow_dispatch', 'target': 'apk'}, (True, False)),
@@ -339,22 +341,29 @@ class HostTestEntrypointTest(unittest.TestCase):
         host = workflow.split('  host-tests:\n', 1)[1]
         selection = re.search(r"HOST_TEST_GROUPS: \$\{\{ (.*) \}\}", host)
         self.assertIsNotNone(selection)
+        guard = re.search(r'(?m)^    if: \$\{\{ (.*) \}\}$', host).group(1)
         def batch(event='pull_request', branch='pro/workpack-02-phone-control', same_repo=True, manual=''):
             repository = 'owner/private-pocketworld'
             github = SimpleNamespace(event_name=event, repository=repository, head_ref=branch,
-                event=SimpleNamespace(pull_request=SimpleNamespace(head=SimpleNamespace(
+                event=SimpleNamespace(repository=SimpleNamespace(private=True),pull_request=SimpleNamespace(head=SimpleNamespace(
                     repo=SimpleNamespace(full_name=repository if same_repo else 'fork/other')))))
-            return eval(selection.group(1).replace('&&', ' and ').replace('||', ' or '),
-                        {'__builtins__': {}}, {'github': github, 'inputs': SimpleNamespace(host_groups=manual)})
+            context = {'github': github, 'inputs': SimpleNamespace(host_groups=manual, target='host-tests')}
+            if not eval(guard.replace('&&', ' and ').replace('||', ' or '), {'__builtins__': {}}, context):
+                return None
+            return eval(selection.group(1).replace('&&', ' and ').replace('||', ' or '), {'__builtins__': {}}, context)
         groups = batch().split(',')
         self.assertEqual(['phone-setup-recovery', 'phone-input-extensions', 'phone-semantic-profile', 'phone-access-history',
                           'phone-observation-boundaries', 'phone-sensitive-owner', 'local-phone-leases', 'phone-audio-owner',
-                          'phone-task-platform', 'aion-conversations'], groups)
+                          'phone-task-platform', 'aion-conversations', 'model-quality-routing', 'model-quality-observability',
+                          'model-quality-sources', 'model-evaluation', 'gateway-continuation', 'runner-budget-stream'], groups)
         self.assertEqual(groups, HOST.select(REGISTRY, groups, []))
         main_groups = ['phone-task-platform', 'memory-recall-quality', 'memory-evidence-plan', 'memory-method-quality']
         self.assertEqual(main_groups, HOST.select(REGISTRY, main_groups, []))
-        self.assertEqual(main_groups, batch(branch='uiux/workroom-20261102').split(','))
-        self.assertEqual(main_groups, batch(same_repo=False).split(','))
+        self.assertEqual(main_groups, batch(branch='pro/workpack-03-phone-api-cli').split(','))
+        self.assertEqual(main_groups[1:], batch(branch='pro/workpack-05-memory-quality').split(','))
+        self.assertEqual(groups[10:], batch(branch='pro/workpack-06-model-quality').split(','))
+        self.assertIsNone(batch(branch='uiux/workroom-20261102'))
+        self.assertIsNone(batch(same_repo=False))
         self.assertEqual('request-clock', batch(event='workflow_dispatch', manual='request-clock'))
         self.assertNotIn('matrix:', host)
         for field in ('testedCommit', 'prBaseCommit', 'prHeadCommit', 'deviceTestsPerformed', 'apkBuiltOrSigned'):
