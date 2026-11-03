@@ -37,6 +37,8 @@ from pocket_companion import CompanionServer, JobManager
 
 FORMAT = "pocketworld.phone-native-fixture.v1"
 OPERATION = "phone-api-native-submit"
+OBSERVATION_PHASES = frozenset({"awaiting_question", "question_observed", "control_acquired",
+                                "link_closing", "link_closed", "offline_verified", "link_bound"})
 
 
 class FixtureError(RuntimeError):
@@ -361,6 +363,15 @@ class NativeFixture:
         raw = sys.stdin.readline(512)
         require(bool(raw) and strict_json(raw) == {"command": command}, "fixture_owner_phase_changed")
 
+    def observation_phase(self, phase):
+        """Bounded test progress only: no answers, grants, leases or credentials."""
+        require(phase in OBSERVATION_PHASES, "fixture_observation_phase_unknown")
+        event = {"phase": phase, "operationId": OPERATION}
+        for key in ("taskId", "runId", "executorEpoch"):
+            if key in self.report:
+                event[key] = self.report[key]
+        print(json.dumps(event), flush=True)
+
     def verify_wrong_phone_is_rejected(self):
         try:
             self.action("status", {"operationId": OPERATION, "peerDeviceId": self.spec["sourceDeviceId"]})
@@ -392,15 +403,19 @@ class NativeFixture:
     def reconnect_then_cancel(self, answer_params):
         service = self.manager.device_companion
         old = self.connection
+        self.observation_phase("link_closing")
         asyncio.run_coroutine_threadsafe(old.close(), service.loop).result(timeout=5)
+        self.observation_phase("link_closed")
         offline = self.status()
         require(offline.get("currentRead") == "unavailable" and offline.get("phoneStateUnconfirmed") is True
                 and "task" not in offline, "offline_read_must_keep_original_outcome_unconfirmed")
         self.report["offlineStatus"] = offline
+        self.observation_phase("offline_verified")
         # Explicit fixture reconnect to the SAME certificate/device; never a task replay.
         asyncio.run_coroutine_threadsafe(self._connect_original(), service.loop).result(timeout=15)
         require(self.connection is not old and self.connection.tls.peer.device_id == self.spec["targetDeviceId"],
                 "reconnect_changed_selected_phone")
+        self.observation_phase("link_bound")
         recovered = self.status()
         require(recovered.get("task", {}).get("runId") == self.report["runId"]
                 and recovered["task"]["executorEpoch"] == self.report["executorEpoch"], "reconnect_changed_original_run")
@@ -469,12 +484,14 @@ class NativeFixture:
             return (owner.get("originalSessionPresent") is True and question.get("approval") is False
                     and question.get("takeover") is False and bool(question.get("requestId")))
 
+        self.observation_phase("awaiting_question")
         waiting = self.poll(ordinary, "wait_original_question")
         task = waiting["task"]
         native = task["result"]["ownerInput"]
         question = native["ordinaryQuestion"]
         self.report.update(runId=task["runId"], executorEpoch=task["executorEpoch"], allocationId=native["allocationId"],
                            questionSnapshot=task)
+        self.observation_phase("question_observed")
         common = {"operationId": OPERATION, "peerDeviceId": self.spec["targetDeviceId"], "taskId": task["taskId"],
                   "runId": task["runId"], "executorEpoch": task["executorEpoch"], "allocationId": native["allocationId"]}
         control = self.action("acquire_control", {**common, "controlOperationId": "phone-api-native-control", "ttlMs": 30000})
@@ -493,6 +510,7 @@ class NativeFixture:
                 and lease.get("expiresAt") == control["controlLeaseExpiresAt"]
                 and lease.get("expiresAt", 0) > self.manager.now(), "original_control_missing_from_real_snapshot")
         self.report["controlSnapshot"] = controlled
+        self.observation_phase("control_acquired")
         # The same published snapshot is what Task Desk reads after acquisition;
         # do not conceal a missing projection by taking the lease from its receipt.
         answer_params = {**common, "controlOperationId": "phone-api-native-answer", "controlLeaseId": lease["controlLeaseId"],

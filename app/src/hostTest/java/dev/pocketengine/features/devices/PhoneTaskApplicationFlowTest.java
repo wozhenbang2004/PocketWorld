@@ -141,7 +141,16 @@ public final class PhoneTaskApplicationFlowTest {
     private Scenario startScenario(String scenario)throws Exception{
         app=(EngineApplication)RuntimeEnvironment.getApplication();app.deleteDatabase("pocket-world.db");app.tasks=new TaskStore(app);
         sql=(SQLiteDatabase)get(app.tasks,"db");app.features=new FeatureHost(event->{});app.settings=new SettingsStore(app);
-        set(app,"deviceOwnerInputs",new DeviceOwnerInputs(app.tasks,id->{DeviceGoalSession session=app.originalDeviceGoalSession(id);return session!=null&&session.originalControl()==app.control(id)&&id.equals(app.activeId())?session:null;}));
+        // Mirror the original onCreate selector's volatile reads. The public
+        // convenience getters take App's monitor, which is forbidden while the
+        // original TaskStore invokes this identity lookup under its own monitor.
+        EngineApplication originalApp=app;Field activeTask=EngineApplication.class.getDeclaredField("activeTaskId"),activeControl=EngineApplication.class.getDeclaredField("activeControl");
+        activeTask.setAccessible(true);activeControl.setAccessible(true);
+        set(app,"deviceOwnerInputs",new DeviceOwnerInputs(app.tasks,id->{
+            DeviceGoalSession session=originalApp.originalDeviceGoalSession(id);
+            try{return session!=null&&session.originalControl()==activeControl.get(originalApp)&&id.equals(activeTask.get(originalApp))?session:null;}
+            catch(IllegalAccessException unavailable){throw new AssertionError("Original native selector fields unavailable",unavailable);}
+        }));
         temporary=Files.createTempDirectory("phone-task-native-fixture-");Files.setPosixFilePermissions(temporary,PosixFilePermissions.fromString("rwx------"));
         Material source=certificate(),target=certificate();String sourceInstance=UUID.randomUUID().toString(),targetInstance=UUID.randomUUID().toString();
         installLocalIdentity(target,targetInstance);
@@ -223,7 +232,20 @@ public final class PhoneTaskApplicationFlowTest {
         }
         JSONObject started=app.tasks.get(scenario.taskId,false);
         assertNotNull(app.originalDeviceGoalSession(scenario.taskId));assertEquals(1,count("runs"));
+        requireLockFreeOriginalInputView(started);
         return new Started(started.getString("runId"),started.getInt("coordinatorEpoch"),started.getJSONObject("deviceExecutionScope").getString("allocationId"),app.control(scenario.taskId));
+    }
+    private void requireLockFreeOriginalInputView(JSONObject capturedTask)throws Exception{
+        // Capture actual SQL before taking App's monitor. The worker only reads
+        // the real input view; no TaskStore/Session monitor or task write is needed.
+        ExecutorService probe=Executors.newSingleThreadExecutor();
+        try{
+            synchronized(app){
+                JSONObject view=probe.submit(()->app.deviceOwnerInputs().view(capturedTask)).get(2,TimeUnit.SECONDS);
+                assertTrue(view.getBoolean("originalSessionPresent"));assertEquals(capturedTask.getString("id"),view.getString("taskId"));
+                assertEquals(capturedTask.getString("runId"),view.getString("runId"));assertEquals(capturedTask.getInt("coordinatorEpoch"),view.getInt("executorEpoch"));
+            }
+        }finally{probe.shutdownNow();}
     }
     private JSONObject completeReport()throws Exception{
         JSONObject finalLine=phase("complete",60);
@@ -353,7 +375,18 @@ public final class PhoneTaskApplicationFlowTest {
             if(line!=null){if(diagnostic.length()<12000)diagnostic.append(line).append('\n');try{JSONObject event=new JSONObject(line);if(expected.equals(event.optString("phase"))||expected.equals("complete")&&event.optString("phase").matches("complete|completed|final"))return event;}catch(org.json.JSONException ignored){}}
             if(!python.isAlive()&&lines.isEmpty())break;
         }
-        fail("Native Python phase "+expected+" missing. Output: "+diagnostic+"; model requests="+modelRequests.get());return null;
+        fail("Native Python phase "+expected+" missing. Output: "+diagnostic+"; model requests="+modelRequests.get()+"; native state="+nativeWaitMetadata());return null;
+    }
+    private String nativeWaitMetadata(){
+        // Timeout diagnostics must not try to acquire the very App/SQL monitors
+        // being diagnosed, and never include answer text, model config or grants.
+        try{
+            String task=(String)get(app,"activeTaskId");RunControl control=(RunControl)get(app,"activeControl");
+            DeviceGoalSession session=task==null?null:app.originalDeviceGoalSession(task);
+            return new JSONObject().put("activeTaskPresent",task!=null).put("controlPresent",control!=null)
+                    .put("cancelled",control!=null&&control.isCancelled()).put("paused",control!=null&&control.isPaused())
+                    .put("originalSessionPresent",session!=null).put("sameOriginalControl",session!=null&&session.originalControl()==control).toString();
+        }catch(Exception unavailable){return "metadata_unavailable";}
     }
     private void pumpServices()throws Exception{
         Shadows.shadowOf(Looper.getMainLooper()).idle();Intent intent;
