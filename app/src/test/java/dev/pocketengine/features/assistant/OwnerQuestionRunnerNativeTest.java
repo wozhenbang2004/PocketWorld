@@ -46,6 +46,7 @@ public final class OwnerQuestionRunnerNativeTest {
             return assistant.handle("send",new JSONObject().put("message","Ask the fixture's ordinary question, then use my answer").put("clientMessageId",UUID.randomUUID().toString())
                 .put("executionScope",new JSONObject().put("deadlineAt",0L).put("toolLimit",8).put("modelCallLimit",modelBudget)));
         }
+        void allowNotifications(){org.robolectric.Shadows.shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS);}
         JSONObject waiting(String id)throws Exception{
             long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(12);JSONObject task;
             var field=EngineApplication.class.getDeclaredField("ownerQuestionInputs");field.setAccessible(true);OwnerQuestionInputs nativeInputs=(OwnerQuestionInputs)field.get(app);
@@ -82,13 +83,28 @@ public final class OwnerQuestionRunnerNativeTest {
         JSONObject source=f.app.tasks.conversationRepository().source(accepted.getString("messageId"));assertEquals("user",source.getString("role"));assertEquals("accepted",source.getJSONObject("submission").getString("status"));assertFalse(retained.getJSONObject("ownerInputMailbox").getBoolean("open"));
     }}
     private static android.app.Notification notice(Fixture f,JSONObject task)throws Exception {
-        org.robolectric.Shadows.shadowOf(f.app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS);
+        // The original worker can own the one posting claim before reaching Android.
+        // Trigger at most once, then only observe that exact notice; never repost it.
         new dev.pocketengine.features.assistant.notifications.AssistantTaskNotifications(f.app,f.app.tasks).update(task.getString("id"));
         JSONObject view=f.app.tasks.get(task.getString("id"),false).getJSONObject("ownerNotification");
-        android.app.Notification result=org.robolectric.Shadows.shadowOf(f.app.getSystemService(android.app.NotificationManager.class)).getNotification("assistant-task:"+task.getString("id")+":"+view.getString("token"),1906);assertNotNull(result);return result;
+        JSONObject expected=OwnerQuestionReply.reference(task);assertNotNull(expected);
+        assertEquals(task.getString("id"),view.getString("taskId"));assertEquals(task.getString("runId"),view.getString("runId"));assertEquals(task.getInt("coordinatorEpoch"),view.getInt("epoch"));
+        String token=view.getString("token"),tag="assistant-task:"+task.getString("id")+":"+token;
+        long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(12);String phase="";
+        do{
+            JSONObject current=f.app.tasks.get(task.getString("id"),false),question=OwnerQuestionReply.reference(current);assertNotNull("original ordinary question changed before native notice delivery",question);
+            for(String key:new String[]{"taskId","runId","coordinatorEpoch","requestId","waitRevision"})assertEquals("original question identity changed: "+key,expected.get(key),question.get(key));
+            JSONObject nativeView=current.getJSONObject("ownerNotification");assertEquals("original notice token changed before delivery",token,nativeView.getString("token"));
+            JSONObject noticeQuestion=nativeView.getJSONObject("ownerQuestion");for(String key:new String[]{"taskId","runId","coordinatorEpoch","requestId","waitRevision"})assertEquals("native notice question changed: "+key,expected.get(key),noticeQuestion.get(key));
+            phase=nativeView.getString("phase");assertTrue("original native notice cannot be retried: "+phase,List.of("planned","posting","posted").contains(phase));
+            android.app.Notification result=org.robolectric.Shadows.shadowOf(f.app.getSystemService(android.app.NotificationManager.class)).getNotification(tag,1906);
+            if(result!=null&&"posted".equals(phase))return result;
+            Thread.sleep(10);
+        }while(System.nanoTime()<until);
+        fail("original native notice did not finish delivery; phase="+phase);return null;
     }
     @Test public void actualPostedRemoteInputAnswersOneOrdinaryWaitAndNeverReplaysIt()throws Exception{try(Fixture f=new Fixture()){
-        JSONObject ack=f.start(4),waiting=f.waiting(ack.getString("taskId"));String grant=f.grant(waiting.getString("runId"));android.app.Notification posted=notice(f,waiting);
+        f.allowNotifications();JSONObject ack=f.start(4),waiting=f.waiting(ack.getString("taskId"));String grant=f.grant(waiting.getString("runId"));android.app.Notification posted=notice(f,waiting);
         android.app.Notification.Action reply=java.util.Arrays.stream(posted.actions).filter(a->a.getRemoteInputs()!=null).findFirst().orElseThrow();
         android.content.Intent intent=new android.content.Intent(org.robolectric.Shadows.shadowOf(reply.actionIntent).getSavedIntent());android.os.Bundle answer=new android.os.Bundle();answer.putCharSequence(OwnerQuestionReply.KEY,"ORIGINAL-NATIVE-REMOTE-INPUT");android.app.RemoteInput.addResultsToIntent(reply.getRemoteInputs(),intent,answer);
         JSONObject accepted=OwnerQuestionReply.dispatch(f.app,intent);assertTrue(accepted.getBoolean("accepted"));JSONObject settled=f.settled(ack.getString("taskId"));assertEquals(waiting.getString("runId"),settled.getString("runId"));assertEquals(grant,f.grant(waiting.getString("runId")));assertEquals(2,f.calls.get());
@@ -103,7 +119,7 @@ public final class OwnerQuestionRunnerNativeTest {
         int before=f.app.tasks.get(id,false).getJSONArray("ownerInputs").length();JSONObject result=f.answer(waiting,"THIS-WITHDRAWN-ANSWER-MUST-NOT-BE-ADOPTED");assertFalse(result.getBoolean("accepted"));assertEquals(before,f.app.tasks.get(id,false).getJSONArray("ownerInputs").length());assertEquals(1,f.calls.get());assertEquals(1,f.runs(id));
     }}
     @Test public void staleStopCannotStopAnotherWaitAndCurrentStopOnlyClosesOriginalRun()throws Exception{try(Fixture f=new Fixture()){
-        JSONObject ack=f.start(4),waiting=f.waiting(ack.getString("taskId"));android.app.Notification posted=notice(f,waiting);android.app.Notification.Action stop=java.util.Arrays.stream(posted.actions).filter(a->a.getRemoteInputs()==null).findFirst().orElseThrow();android.content.Intent intent=new android.content.Intent(org.robolectric.Shadows.shadowOf(stop.actionIntent).getSavedIntent());
+        f.allowNotifications();JSONObject ack=f.start(4),waiting=f.waiting(ack.getString("taskId"));android.app.Notification posted=notice(f,waiting);android.app.Notification.Action stop=java.util.Arrays.stream(posted.actions).filter(a->a.getRemoteInputs()==null).findFirst().orElseThrow();android.content.Intent intent=new android.content.Intent(org.robolectric.Shadows.shadowOf(stop.actionIntent).getSavedIntent());
         android.content.Intent stale=new android.content.Intent(intent);JSONObject changed=new JSONObject(stale.getStringExtra("noticeView"));changed.put("runId",UUID.randomUUID().toString());stale.putExtra("noticeView",changed.toString());assertThrows(SecurityException.class,()->OwnerQuestionReply.dispatch(f.app,stale));assertEquals("awaiting_user",f.app.tasks.get(waiting.getString("id"),false).getString("status"));
         assertTrue(OwnerQuestionReply.dispatch(f.app,intent).getBoolean("accepted"));assertEquals("cancelled",f.app.tasks.get(waiting.getString("id"),false).getString("status"));assertEquals(1,f.calls.get());assertEquals(1,f.runs(waiting.getString("id")));assertEquals(1,f.app.tasks.get(waiting.getString("id"),false).getJSONArray("ownerInputs").length());
     }}
