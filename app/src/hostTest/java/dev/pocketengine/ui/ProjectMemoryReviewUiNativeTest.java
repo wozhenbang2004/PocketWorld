@@ -87,8 +87,9 @@ public final class ProjectMemoryReviewUiNativeTest {
             int beforeEpoch=diagnosticEpoch(),beforeSubmitted=observed.submitted.get();
             String expectedId=controller.requestOwnerDomain("memoryReview",command,payload);int afterSubmitted=observed.submitted.get();
             settle();JSONObject reply=response(command);
+            for(int poll=0;poll<50 && (reply==null || !expectedId.equals(reply.optString("requestId")));poll++){Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(20));reply=response(command);}
             String worker=afterSubmitted==beforeSubmitted+1?observed.states.getOrDefault(afterSubmitted,"unobserved"):"submission_not_unique";
-            assertTrue(reply==null?missingReplyDiagnostic(command,expectedId,beforeEpoch)+"; workerLifecycle="+worker:reply.toString(),reply!=null&&reply.getBoolean("ok"));return reply.getJSONObject("result");
+            assertTrue(reply==null||!expectedId.equals(reply.optString("requestId"))?missingReplyDiagnostic(command,expectedId,beforeEpoch)+"; workerLifecycle="+worker:reply.toString(),reply!=null&&expectedId.equals(reply.optString("requestId"))&&reply.getBoolean("ok"));return reply.getJSONObject("result");
         }
         ProjectMemoryNamespaces.Selection token()throws Exception{var field=PocketWorldController.class.getDeclaredField("memoryReviewScope");field.setAccessible(true);Object scope=field.get(controller);var getter=scope.getClass().getDeclaredMethod("getSelected");getter.setAccessible(true);return (ProjectMemoryNamespaces.Selection)getter.invoke(scope);}
         JSONObject file()throws Exception{return result("projectFileChoices",new JSONObject()).getJSONArray("files").getJSONObject(0);}
