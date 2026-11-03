@@ -10,6 +10,9 @@ final class RuntimeActivity {
     private RuntimeActivity(){}
 
     static JSONObject describe(String operation,JSONObject original,Long silenceMillis,boolean outputObserved)throws Exception {
+        return describe(operation,original,silenceMillis,outputObserved,null);
+    }
+    static JSONObject describe(String operation,JSONObject original,Long silenceMillis,boolean outputObserved,Long uptimeMillis)throws Exception {
         String contract=original.optString("nativeResultContract");
         boolean nativeContract=NativeProcessSupervisor.knownOrdinaryExitContract(contract)
                 ||NativeProcessSupervisor.PTY_EXIT_RESULT_CONTRACT.equals(contract)||NativeProcessSupervisor.PIPE_EXIT_RESULT_CONTRACT.equals(contract);
@@ -40,13 +43,22 @@ final class RuntimeActivity {
             input.put("state",yes(ack,"nativeAcknowledged")&&Set.of("delivered","not_dispatched").contains(status)?status:"unknown");
             if(id.matches("[A-Za-z0-9_-]{1,80}"))input.put("operationId",id);
         }
-        return new JSONObject().put("format","pocketworld.runtime-activity.v1").put("operationId",operation)
+        JSONObject result=new JSONObject().put("format","pocketworld.runtime-activity.v1").put("operationId",operation)
                 .put("state",state).put("inferred",state.equals("inferred_idle"))
                 .put("silenceMillis",liveSilence?silenceMillis:JSONObject.NULL).put("idleAfterMillis",IDLE_AFTER_MILLIS)
                 .put("silenceScope","monotonic_original_live_owner_callbacks_only")
                 .put("outputObservedThisOwner",yes(original,"ownedWorkerLive")&&outputObserved)
                 .put("waitingForInput","unknown").put("input",input)
                 .put("processTerminal",settled||noChild).put("businessVerified",false).put("replayAllowed",false);
+        if(original.has("foregroundWaitMillis")&&yes(original,"backgroundObservationExplicitlyIncluded")){
+            long wait=original.getLong("foregroundWaitMillis");
+            boolean live=yes(original,"ownedWorkerLive")&&yes(original,"nativeStartObserved")&&!exit&&!yes(original,"cancelRequested")&&!"unknown".equals(original.optString("status"));
+            String phase=settled||noChild?"exited":live&&uptimeMillis!=null&&uptimeMillis>=0?(uptimeMillis<wait?"foreground_wait":"background_observation"):"observation_unknown";
+            result.put("observationWindow",new JSONObject().put("phase",phase).put("foregroundWaitMillis",wait)
+                    .put("source","original_reviewed_command_and_live_monotonic_start").put("sameExecution",true)
+                    .put("totalTimeoutMillis",original.optLong("timeoutMillis")).put("deadlineExtended",false).put("executionAuthorized",false));
+        }
+        return result;
     }
     private static boolean yes(JSONObject value,String key){return Boolean.TRUE.equals(value.opt(key));}
 }

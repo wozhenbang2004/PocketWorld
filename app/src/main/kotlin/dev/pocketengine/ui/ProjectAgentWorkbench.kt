@@ -311,6 +311,7 @@ internal fun NativeProjectAgentWorkbench(checkout: JSONObject, inspection: JSONO
                     })
                 }
                 if (step?.optString("localCommand") == "patchFiles" && payload.optJSONArray("files").objects().none { it.optString("action") == "mkdir" }) WorkbenchCaption("文件逐个保存；中途失败时，已保存的文件不会自动回滚。后续修改与撤销冲突时会保留新内容。")
+                if (payload.has("foregroundWaitMillis")) WorkbenchCaption("先在前台观察最多 ${payload.optLong("foregroundWaitMillis")} 毫秒；未结束只观察同一执行，原批准总期限 ${payload.optLong("timeoutMillis")} 毫秒不变。取消或任务结束仍停止，不重新启动。")
                 if (payload.has("executable")) SelectionContainer { Text(payload.optString("executable") + " " + payload.optJSONArray("argv"), fontFamily = FontFamily.Monospace, fontSize = 12.sp) }
                 TextButton(onClick = { reviewed = !reviewed }) { Text(if (reviewed) "收起具体内容" else "核对具体文件与参数") }
                 if (reviewed) {

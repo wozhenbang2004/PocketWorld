@@ -103,6 +103,18 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertIn('logPolicy = page.optJSONObject("logObservationPolicy")', ui)
         self.assertNotIn('metadata = page', ui)
 
+    def test_development_continuity_selects_only_its_original_native_journeys(self):
+        entry = REGISTRY['runtime-development-continuity']
+        self.assertTrue(entry['native'])
+        self.assertTrue(entry['robolectric'])
+        self.assertEqual(['dev.pocketengine.ui.RuntimeActivityCaptionTest',
+                          'dev.pocketengine.features.local.project.ProjectCommandSpecTest'], entry.get('additionalClasses', []))
+        self.assertEqual(['dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest'], entry['helpers'])
+        self.assertEqual(['runtime-development-continuity'], HOST.select(REGISTRY, [], [entry['class']]))
+        source = (HOST.ROOT / 'app/src/hostTest/java' / (entry['class'].replace('.', '/') + '.java')).read_text()
+        self.assertEqual(3, len(re.findall(r'@Test\s+public\s+void\s+\w+\s*\(', source)))
+        self.assertNotIn('@Ignore', source)
+
     def test_owner_diagnostic_metadata_is_explicit_and_consumes_the_shared_phone_whitelist(self):
         entry = REGISTRY['runtime-diagnostic-metadata']
         self.assertTrue(entry['robolectric'])
