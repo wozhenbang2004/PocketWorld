@@ -1420,8 +1420,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 if (exportFile.canonicalFile.parentFile != app.cacheDir.canonicalFile || !exportFile.name.startsWith("owner-export-") || !exportFile.isFile) throw IllegalStateException("导出内容不可用，请重新导出")
                 if (uri == null) { main.post { if (!closed) state = state.copy(exportPending = false, notice = "已取消保存文件") }; return@execute }
                 if (uri.scheme != "content") throw SecurityException("只可保存到系统文档选择器授权的位置")
-                val stream = app.contentResolver.openOutputStream(uri, "wt") ?: throw IllegalStateException("无法写入选择的位置")
-                stream.use { output -> exportFile.inputStream().use { input -> input.copyTo(output) }; output.flush() }
+                WorkspaceExportOutput.write(exportFile) { app.contentResolver.openOutputStream(uri, "wt") }
                 main.post { if (!closed) state = state.copy(exportPending = false, notice = "文件已保存到你选择的位置") }
             } catch (error: Exception) { main.post { if (!closed) state = state.copy(exportPending = false, error = message(error)) } }
             finally { temporary?.delete() }
