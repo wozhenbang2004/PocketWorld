@@ -1,6 +1,7 @@
 package dev.pocketengine.phone.setup;
 
 import android.content.ComponentName;
+import android.app.KeyguardManager;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -38,7 +39,11 @@ public final class AccessibilityRecovery {
         own = new ComponentName(app, PhoneAccessibilityService.class).flattenToString();
         ownerUid = android.os.Process.myUid();
         platform = new Platform() {
-            public boolean unlocked() { UserManager users = app.getSystemService(UserManager.class); return users != null && users.isUserUnlocked(); }
+            public boolean unlocked() {
+                UserManager users = app.getSystemService(UserManager.class);
+                KeyguardManager keyguard = app.getSystemService(KeyguardManager.class);
+                return users != null && users.isUserUnlocked() && keyguard != null && !keyguard.isDeviceLocked();
+            }
             public boolean permitted() { return app.checkSelfPermission(PERMISSION) == PackageManager.PERMISSION_GRANTED; }
             public boolean connected() { return PhoneAccessibilityService.get() != null; }
             public String services() { return Settings.Secure.getString(app.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES); }
@@ -112,14 +117,18 @@ public final class AccessibilityRecovery {
             if (platform.enabled() != 1) return outcome("owner_accessibility_disabled", false);
 
             List<String> entries = read();
+            // An absent entry may be a later owner revocation. Earlier consent cannot distinguish
+            // that from an OEM clearing it, so only rebind a registration that is still present.
+            if (!contains(entries, own)) return outcome("owner_accessibility_disabled", false);
             if (contains(entries, own)) {
                 synchronized (CONSENT_LOCK) {
                     requireCurrent(consentRevision, current);
+                    List<String> fresh = read();
+                    if (!contains(fresh, own)) return outcome("owner_accessibility_disabled", false);
                     if (!preferences.edit().putBoolean("compensationPending", true).putString("compensationComponent", own)
                             .putInt("compensationUid", ownerUid).commit()) throw new IllegalStateException("recovery_journal_save_failed");
                     // Persist first: a partial settings write must not silently strand the original registration.
                     removedOriginal = true;
-                    List<String> fresh = read();
                     fresh.removeIf(value -> same(value, own));
                     if (!platform.writeServices(String.join(":", fresh)) || contains(read(), own))
                         throw new IllegalStateException("remove_unconfirmed");

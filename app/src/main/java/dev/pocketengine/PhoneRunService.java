@@ -239,6 +239,10 @@ public final class PhoneRunService extends Service {
         JSONObject health=AndroidPhoneReadiness.snapshot(this,display);
         if(!health.getJSONObject(mode.equals("background")?"backgroundExecution":"mainExecution").optBoolean("ready"))throw new SecurityException("本机屏幕、无障碍、会话或可见停止入口不可用；不会回落其他显示");
     }
+    private AndroidPhonePort mainPhonePort(){
+        return new AndroidPhonePort(this,live->dev.pocketengine.phone.access.PhoneAccessBindings.primaryOwners(
+                app.features.module("display") instanceof DisplayModule display?display:null,live));
+    }
     private void runDeviceTools(dev.pocketengine.features.devices.DeviceToolsSession session,int startId){
         String id=session.taskId(),run=runningRunId;RunControl original=session.originalControl();BackgroundPhonePort background=null;
         JSONObject evidence=new JSONObject();
@@ -248,11 +252,11 @@ public final class PhoneRunService extends Service {
             if(admission.executionMode().equals("background")){
                 if(!(app.features.module("display") instanceof DisplayModule))throw new SecurityException("本机后台屏helper未安装");
                 DisplayModule display=(DisplayModule)app.features.module("display");display.prepare(original);background=new BackgroundPhonePort(display);port=background;
-            }else port=new AndroidPhonePort(this);
+            }else port=mainPhonePort();
             if(background!=null)background.bindLifecycle(this,id,run,runningEpoch,original);
             taskBackgroundPort=background;if(!app.attachPort(id,port,original))throw new SecurityException("原PhonePort未获本机准入");
             requireDeviceToolsReady(admission.executionMode(),original);
-            deviceTools=new dev.pocketengine.features.devices.DeviceToolsRuntime(admission.request().targetDeviceId(),admission,original,port,app.tasks.deviceTasks(),this::requireDeviceToolsReady,app.deviceObservedImageSink());
+            deviceTools=new dev.pocketengine.features.devices.DeviceToolsRuntime(admission.request().targetDeviceId(),admission,original,app.phoneAgentSource(id,original,port),app.tasks.deviceTasks(),this::requireDeviceToolsReady,app.deviceObservedImageSink());
             app.setStatus(id,"running","已连接本机手机工具 · 不调用模型 · 可随时停止",original);
             while(!destroyed&&!original.isCancelled()&&System.currentTimeMillis()<session.deadline()){
                 if(original.isPaused()){deviceTools.invalidate();port.clearReferences();JSONObject paused=app.tasks.get(id,false);if("pausing".equals(paused.optString("status"))){app.tasks.status(id,"paused","原设备工具已暂停新派发；已有真实回执保留");app.pushTask(id);}Thread.sleep(100);continue;}
@@ -305,7 +309,7 @@ public final class PhoneRunService extends Service {
                 app.setStatus(id,"preparing","正在检查独立后台屏，不会改为主屏操作",control);
                 if(!(app.features.module("display") instanceof DisplayModule))throw new IllegalStateException("后台助手不可用");
                 DisplayModule display=(DisplayModule)app.features.module("display");display.prepare(control);backgroundPort=new BackgroundPhonePort(display);port=backgroundPort;
-            }else if(port==null)port=new AndroidPhonePort(this);
+            }else if(port==null)port=mainPhonePort();
             if(backgroundPort!=null)backgroundPort.bindLifecycle(this,id,runId,epoch,control);
             taskBackgroundPort=backgroundPort;
             if(!app.attachPort(id,port,control)){if(backgroundPort!=null)backgroundPort.closeSession();throw new InterruptedException("Task stopped before phone admission");}

@@ -1,6 +1,5 @@
 package dev.pocketengine.phone.setup;
 
-import android.app.ActivityOptions;
 import android.app.Application;
 import android.content.ComponentName;
 import android.content.Context;
@@ -126,7 +125,7 @@ public final class AndroidAppCopiesNativeTest {
     @Test public void selectedWorkUserIsTheOnlyNativeEntryAndReceiptStillRequiresOwnerAccountVerification()throws Exception {
         AndroidAppCopies copies=new AndroidAppCopies(app(),0);RunControl control=control();try {
             JSONObject receipt=copies.launch(choose(copies.list(control),10),0,control,control::check);assertEquals(1,LauncherFixture.calls.size());Launch launch=LauncherFixture.calls.get(0);
-            assertEquals(work(),launch.user());assertEquals(PACKAGE+"/"+PACKAGE+".Main",launch.component().flattenToString());assertEquals(0,ActivityOptions.fromBundle(launch.options()).getLaunchDisplayId());
+            assertEquals(work(),launch.user());assertEquals(PACKAGE+"/"+PACKAGE+".Main",launch.component().flattenToString());assertEquals(0,launch.options().getInt("android.activity.launchDisplayId",-1));
             assertTrue(receipt.getBoolean("accepted"));assertFalse(receipt.getBoolean("actualUserVerified"));assertTrue(receipt.getBoolean("requiresPause"));assertFalse(receipt.getBoolean("automaticProfileFallback"));
         }finally{copies.clear();}
     }

@@ -35,6 +35,8 @@ internal fun PhoneSetupControls(snapshot: JSONObject, onCommand: (String, JSONOb
         }
         Text(recoveryOutcome(recovery.optString("lastOutcome")), style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (available && !recovery.optBoolean("unlockSignalsAvailable"))
+            Text("系统未提供当前解锁监听；请在本页手动核对原连接。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         val connection = recovery.optString("connectionOutcome")
         if (connection.isNotBlank() && connection != "not_requested")
             Text(connectionOutcome(connection), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -67,8 +69,8 @@ internal fun PhoneOwnerExecutionControls(state: PocketUiState, connection: Backg
         Text("按这台手机系统实际可见的应用副本选择。关闭后，新的读取、截图、动作和分享会重新核对当前规则；这些选项不会授予系统权限。",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(onClick = { choosing = !choosing }, enabled = !controller.phoneOwnerAppsLoading && controller.phoneOwnerApps.isNotEmpty()) {
-                Text(if (selected == null) "选择应用副本" else selected!!.label(), maxLines = 1)
+            OutlinedButton(onClick = { choosing = !choosing }, modifier = Modifier.weight(1f), enabled = !controller.phoneOwnerAppsLoading && controller.phoneOwnerApps.isNotEmpty()) {
+                Text(if (selected == null) "选择应用副本" else selected!!.label(), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             }
             TextButton(onClick = { selected = null; choosing = false; controller.loadPhoneOwnerApps() }, enabled = !controller.phoneOwnerAppsLoading && !controller.phoneOwnerPolicyBusy) { Text("重新读取", fontSize = 12.sp) }
             if (controller.phoneOwnerAppsLoading || controller.phoneOwnerPolicyBusy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 1.5.dp, color = MaterialTheme.colorScheme.onSurface)

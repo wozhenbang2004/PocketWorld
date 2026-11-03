@@ -201,7 +201,7 @@ class HostTestEntrypointTest(unittest.TestCase):
             self.assertEqual(sorted(item['methods']), sorted(methods), item['class'])
             self.assertNotIn('@Ignore', source)
         self.assertEqual([12, 30, 8], [len(item['methods']) for item in manifest['classes'][:3]])
-        self.assertEqual([6, 7, 13, 1, 7, 5, 4, 4], [len(item['methods']) for item in manifest['classes'][3:]])
+        self.assertEqual([6, 7, 13, 1, 7, 5, 9, 4], [len(item['methods']) for item in manifest['classes'][3:]])
 
     def test_phone_sensitive_owner_explicit_group_does_not_expand_the_shared_native_class(self):
         group = 'phone-sensitive-owner'
@@ -250,7 +250,87 @@ class HostTestEntrypointTest(unittest.TestCase):
             self.assertEqual([manifest['group']], invocation['groups'])
             self.assertEqual(classes, invocation['classes'])
             self.assertEqual(counts, json.loads((runs[0] / 'result.json').read_text())['executed'])
-            self.assertEqual(97, sum(counts.values()))
+            self.assertEqual(102, sum(counts.values()))
+
+    def test_advanced_phone_groups_register_exact_bodies_and_compile_only_helpers(self):
+        # Registry/source closure only; SDK35 production/test compilation remains the host Gradle gate.
+        manifest = json.loads((HOST.ROOT / 'tools/tests/fixtures/phone-advanced-execution-tests.json').read_text())
+        self.assertEqual(1, manifest['schemaVersion'])
+        expected_counts = {'phone-setup-recovery': 28, 'phone-input-extensions': 27,
+                           'phone-semantic-profile': 44, 'phone-access-history': 33}
+        self.assertEqual(set(expected_counts), set(manifest['groups']))
+        for group, inventory in manifest['groups'].items():
+            entry = REGISTRY[group]
+            with self.subTest(group=group):
+                self.assertTrue(entry['robolectric'])
+                self.assertFalse(entry.get('native', False))
+                self.assertEqual([item['class'] for item in inventory['classes']], [entry['class']] + entry['additionalClasses'])
+                self.assertEqual([item['class'] for item in inventory['helpers']], entry['helpers'])
+                self.assertEqual([group], HOST.select(REGISTRY, [group], []))
+                self.assertEqual(expected_counts[group], sum(len(item['methods']) for item in inventory['classes']))
+                for item in inventory['classes'] + inventory['helpers']:
+                    source = HOST.ROOT / item['source']
+                    self.assertTrue(source.is_file(), item['class'])
+                    self.assertEqual(item['class'].replace('.', '/') + '.java', '/'.join(source.parts[-len(item['class'].split('.')):]))
+                    if 'methods' in item:
+                        text = source.read_text()
+                        methods = re.findall(r'@Test(?:\([^)]*\))?\s+public\s+void\s+(\w+)\s*\(', text)
+                        self.assertEqual(sorted(item['methods']), sorted(methods), item['class'])
+                        self.assertEqual(len(methods), len(set(methods)))
+                        self.assertNotIn('@Ignore', text)
+        self.assertIn('dev.pocketengine.phone.setup.AndroidAppCopiesNativeTest', REGISTRY['phone-setup-recovery']['helpers'])
+        self.assertNotIn('dev.pocketengine.phone.setup.AndroidAppCopiesNativeTest', REGISTRY['phone-setup-recovery']['additionalClasses'])
+        self.assertIn('dev.pocketengine.features.semantic.SemanticBackgroundDisplayFixture', REGISTRY['phone-sensitive-owner']['helpers'])
+        self.assertIn('dev.pocketengine.displayhelper.DisplayTypedIntentNativeTest', REGISTRY['phone-sensitive-owner']['helpers'])
+
+    def test_phone_pull_request_gate_excludes_signing_and_unrelated_or_fork_branches(self):
+        workflow = (HOST.ROOT / '.github/workflows/build-apk.yml').read_text()
+        self.assertNotIn('pull_request_target:', workflow)
+        self.assertIn('permissions:\n  contents: read', workflow)
+        self.assertIn('  pull_request:\n    branches: [main]', workflow)
+        self.assertIn('cancel-in-progress: false', workflow)
+        apk, host = workflow.split('  apk:\n', 1)[1].split('  host-tests:\n', 1)
+        self.assertNotIn('secrets.', host)
+        self.assertNotIn('apksigner', host)
+        self.assertNotIn(':app:assembleDebug', host)
+        self.assertIn('Apply stable project signing key', apk)
+        host_condition = re.search(r'(?m)^    if: \$\{\{ (.*) \}\}$', host).group(1)
+        apk_condition = re.search(r'(?m)^    if: \$\{\{ (.*) \}\}$', apk).group(1)
+
+        def selected(expression, event, private=True, branch='pro/workpack-02-phone-control', same_repo=True, target=''):
+            repository = 'owner/private-pocketworld'
+            github = SimpleNamespace(event_name=event, repository=repository, head_ref=branch,
+                event=SimpleNamespace(repository=SimpleNamespace(private=private),
+                    pull_request=SimpleNamespace(head=SimpleNamespace(repo=SimpleNamespace(full_name=repository if same_repo else 'fork/other')))))
+            return bool(eval(expression.replace('&&', ' and ').replace('||', ' or '),
+                             {'__builtins__': {}}, {'github': github, 'inputs': SimpleNamespace(target=target)}))
+
+        cases = [({'event': 'pull_request'}, (False, True)),
+                 ({'event': 'pull_request', 'same_repo': False}, (False, False)),
+                 ({'event': 'pull_request', 'branch': 'uiux/workroom-20261102'}, (False, False)),
+                 ({'event': 'pull_request', 'private': False}, (False, False)),
+                 ({'event': 'push'}, (True, False)),
+                 ({'event': 'workflow_dispatch', 'target': 'apk'}, (True, False)),
+                 ({'event': 'workflow_dispatch', 'target': 'host-tests'}, (False, True))]
+        for arguments, expected in cases:
+            with self.subTest(**arguments):
+                self.assertEqual(expected, (selected(apk_condition, **arguments), selected(host_condition, **arguments)))
+
+    def test_phone_pr_uses_one_exact_bounded_batch_and_records_base_head_and_tested_commit(self):
+        workflow = (HOST.ROOT / '.github/workflows/build-apk.yml').read_text()
+        host = workflow.split('  host-tests:\n', 1)[1]
+        selection = re.search(r"HOST_TEST_GROUPS: \$\{\{ github.event_name == 'pull_request' && '([^']+)' \|\| inputs.host_groups \}\}", host)
+        self.assertIsNotNone(selection)
+        groups = selection.group(1).split(',')
+        self.assertEqual(['phone-setup-recovery', 'phone-input-extensions', 'phone-semantic-profile', 'phone-access-history',
+                          'phone-observation-boundaries', 'phone-sensitive-owner', 'local-phone-leases', 'phone-audio-owner'], groups)
+        self.assertEqual(groups, HOST.select(REGISTRY, groups, []))
+        self.assertNotIn('matrix:', host)
+        for field in ('testedCommit', 'prBaseCommit', 'prHeadCommit', 'deviceTestsPerformed', 'apkBuiltOrSigned'):
+            self.assertIn("'" + field + "':", host)
+        self.assertIn("['git', 'rev-parse', 'HEAD']", host)
+        self.assertIn('persist-credentials: false', host)
+        self.assertIn('phone-control-pr', host)
 
     def test_gateway_uses_exact_android_compatible_http_helper_and_byte_io(self):
         entry = REGISTRY['gateway-continuation']

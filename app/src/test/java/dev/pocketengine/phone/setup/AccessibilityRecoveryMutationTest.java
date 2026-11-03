@@ -100,6 +100,15 @@ public final class AccessibilityRecoveryMutationTest {
         assertEquals(OTHER, platform.services);
     }
 
+    @Test public void laterPerServiceDisableCannotBorrowEarlierRecoveryConsent() throws Exception {
+        recovery.setConsent(true, 0);
+        platform.services = OTHER; // Other services keep the system-wide switch on.
+        assertEquals("owner_accessibility_disabled", recovery.restore().getString("lastOutcome"));
+        assertEquals(0, platform.writes);
+        assertEquals(OTHER, platform.services);
+        assertFalse(recovery.snapshot().getBoolean("compensationPending"));
+    }
+
     @Test public void cancellationRestoresOnlyTheRecordedRegistration() throws Exception {
         recovery.setConsent(true, 0);
         AtomicBoolean current = new AtomicBoolean(true);

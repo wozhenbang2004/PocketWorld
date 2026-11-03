@@ -7,6 +7,7 @@ import android.app.PendingIntent;
 import android.app.RemoteInput;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -43,6 +44,8 @@ public final class PhoneSetupModule implements EngineModule {
     private final Object pairingLock = new Object();
     private final AtomicBoolean recoveryQueued = new AtomicBoolean();
     private final AtomicBoolean recoveryRunning = new AtomicBoolean();
+    private final PhoneRecoveryReceiver unlockReceiver = new PhoneRecoveryReceiver();
+    private boolean lifecycleSignalsRegistered;
     private PendingIntent replyIntent, cancelIntent;
     private volatile boolean closed;
     private volatile String lastPairingOutcome = "not_requested";
@@ -64,6 +67,14 @@ public final class PhoneSetupModule implements EngineModule {
         this.main = Objects.requireNonNull(main);
         this.worker = Objects.requireNonNull(worker);
         instance = this;
+        IntentFilter unlock = new IntentFilter(Intent.ACTION_USER_UNLOCKED);
+        unlock.addAction(Intent.ACTION_USER_PRESENT);
+        try {
+            // USER_UNLOCKED is registered-receiver-only on Android; a manifest filter never receives it.
+            if (Build.VERSION.SDK_INT >= 33) context.android.registerReceiver(unlockReceiver, unlock, Context.RECEIVER_NOT_EXPORTED);
+            else context.android.registerReceiver(unlockReceiver, unlock);
+            lifecycleSignalsRegistered = true;
+        } catch (RuntimeException unavailable) { lifecycleSignalsRegistered = false; }
     }
 
     static PhoneSetupModule current() { return instance; }
@@ -78,7 +89,7 @@ public final class PhoneSetupModule implements EngineModule {
             }
             return new JSONObject().put("pairing", entry.put("lastOutcome", lastPairingOutcome))
                     .put("recovery", recovery.snapshot().put("connectionOutcome", lastConnectionOutcome)
-                            .put("busy", recoveryRunning.get()))
+                            .put("busy", recoveryRunning.get()).put("unlockSignalsAvailable", lifecycleSignalsRegistered))
                     .put("modelCommandsAvailable", false);
         }
     }
@@ -302,6 +313,11 @@ public final class PhoneSetupModule implements EngineModule {
             pairing.cancel();
             cancelNotice();
             main.removeCallbacksAndMessages(this);
+            if (lifecycleSignalsRegistered) {
+                try { context.android.unregisterReceiver(unlockReceiver); }
+                catch (RuntimeException alreadyRemoved) { }
+                lifecycleSignalsRegistered = false;
+            }
             if (instance == this) instance = null;
         }
         if (worker instanceof ExecutorService) ((ExecutorService) worker).shutdown();

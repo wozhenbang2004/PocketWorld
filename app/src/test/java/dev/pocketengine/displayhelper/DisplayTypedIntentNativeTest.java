@@ -1,6 +1,5 @@
 package dev.pocketengine.displayhelper;
 
-import android.app.ActivityOptions;
 import android.app.Application;
 import android.content.Context;
 import android.content.ContextWrapper;
@@ -68,7 +67,7 @@ public final class DisplayTypedIntentNativeTest {
     @Test public void showAlarmsEntersTheExactBackgroundComponentOnceWithoutClaimingAnAlarmExists()throws Exception {
         JSONObject request=installRequest(new JSONObject().put("kind","show_alarms"));Gate gate=new Gate();JSONObject receipt=DisplayTypedIntent.dispatch(app(),DISPLAY,request,gate);
         var launched=Shadows.shadowOf(app()).getNextStartedActivityForResult();assertNotNull(launched);assertEquals(AlarmClock.ACTION_SHOW_ALARMS,launched.intent.getAction());
-        assertEquals(PACKAGE+"/"+PACKAGE+".Main",launched.intent.getComponent().flattenToString());assertEquals(DISPLAY,ActivityOptions.fromBundle(launched.options).getLaunchDisplayId());
+        assertEquals(PACKAGE+"/"+PACKAGE+".Main",launched.intent.getComponent().flattenToString());assertEquals(DISPLAY,launched.options.getInt("android.activity.launchDisplayId",-1));
         assertNull(launched.intent.getExtras());assertEquals(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_MULTIPLE_TASK,launched.intent.getFlags());assertEquals(1,gate.claims);assertEquals(3,gate.checks);
         assertTrue(receipt.getBoolean("accepted"));assertFalse(receipt.getBoolean("verifiedBusinessSuccess"));assertFalse(receipt.getBoolean("messageSent"));assertTrue(receipt.getBoolean("requiresPostconditionCheck"));assertNull(Shadows.shadowOf(app()).getNextStartedActivity());
     }

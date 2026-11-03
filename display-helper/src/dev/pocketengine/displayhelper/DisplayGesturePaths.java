@@ -16,23 +16,33 @@ final class DisplayGesturePaths {
     interface Gate {void check()throws Exception;}
     interface Input {boolean send(MotionEvent event)throws Exception;}
     private final Handler main;private volatile Sequence current;
-    private static final class Sequence {final LeasePolicy lease;final float[][][] paths;final long down;volatile boolean attempted;int pointers;float progress;Sequence(LeasePolicy lease,float[][][] paths){this.lease=lease;this.paths=paths;down=SystemClock.uptimeMillis();}}
+    private static final class Sequence {final LeasePolicy lease;final float[][][] paths;final long down;volatile boolean attempted;boolean downAccepted,cancelAttempted,cancelAccepted;int pointers;float progress;Sequence(LeasePolicy lease,float[][][] paths){this.lease=lease;this.paths=paths;down=SystemClock.uptimeMillis();}}
     DisplayGesturePaths(Handler main){this.main=main;}
     boolean active(){return current!=null;}
     JSONObject run(LeasePolicy lease,JSONObject request,int width,int height,Gate gate,Input input)throws Exception {
         float[][][] paths=parse(request.getJSONArray("paths"),width,height);int duration=integer(request,"durationMs",100,2000);Sequence sequence=new Sequence(lease,paths);
         try{
             onMain(()->{gate.check();if(current!=null)throw new IllegalStateException("touch_sequence_busy");current=sequence;return true;});
-            if(!onMain(()->{gate.check();sequence.pointers=1;return send(sequence,MotionEvent.ACTION_DOWN,input);}))throw new IllegalStateException("gesture_down_unconfirmed");
+            if(!onMain(()->{gate.check();require(sequence);sequence.pointers=1;boolean accepted=send(sequence,MotionEvent.ACTION_DOWN,input);sequence.downAccepted=accepted;return accepted;}))throw new IllegalStateException("gesture_down_unconfirmed");
             if(paths.length==2&&!onMain(()->{gate.check();require(sequence);sequence.pointers=2;return send(sequence,MotionEvent.ACTION_POINTER_DOWN|(1<<MotionEvent.ACTION_POINTER_INDEX_SHIFT),input);}))throw new IllegalStateException("second_pointer_rejected");
             int steps=Math.max(2,duration/20);for(int i=1;i<=steps;i++){Thread.sleep(Math.max(1,duration/steps));final float fraction=(float)i/steps;if(!onMain(()->{gate.check();require(sequence);sequence.progress=fraction;return send(sequence,MotionEvent.ACTION_MOVE,input);}))throw new IllegalStateException("gesture_move_rejected");}
             if(paths.length==2&&!onMain(()->{gate.check();require(sequence);boolean accepted=send(sequence,MotionEvent.ACTION_POINTER_UP|(1<<MotionEvent.ACTION_POINTER_INDEX_SHIFT),input);sequence.pointers=1;return accepted;}))throw new IllegalStateException("pointer_up_rejected");
-            boolean finished=onMain(()->{gate.check();require(sequence);boolean accepted=send(sequence,MotionEvent.ACTION_UP,input);if(accepted)current=null;return accepted;});if(!finished)throw new IllegalStateException("gesture_up_rejected");return receipt(true);
-        }catch(Exception failure){cancel(sequence,input);if(!sequence.attempted)return receipt(false).put("error","gesture_not_started");return new JSONObject().put("ok",false).put("accepted",JSONObject.NULL).put("error","gesture_outcome_unknown").put("automaticReplayAllowed",false);}
+            boolean finished=onMain(()->{gate.check();require(sequence);boolean accepted=send(sequence,MotionEvent.ACTION_UP,input);if(accepted&&current==sequence)current=null;return accepted;});if(!finished)throw new IllegalStateException("gesture_up_rejected");return receipt(true);
+        }catch(Exception failure){String cleanup=cancel(sequence,input);if(!sequence.attempted)return receipt(false).put("error","gesture_not_started");return new JSONObject().put("ok",false).put("accepted",JSONObject.NULL).put("error","gesture_outcome_unknown").put("pointerCleanup",cleanup).put("requiresReconciliation",true).put("automaticReplayAllowed",false);}
         finally{cancel(sequence,input);}
     }
     void cancelLease(LeasePolicy lease,Input input){Sequence value=current;if(value!=null&&value.lease==lease)cancel(value,input);}
-    private void cancel(Sequence sequence,Input input){try{onMain(()->{if(current==sequence){try{if(sequence.pointers>0)send(sequence,MotionEvent.ACTION_CANCEL,input);}finally{current=null;}}return true;});}catch(Exception ignored){/* Original display teardown is the final fence. */}}
+    /** Called by the owner only after the original display token has actually been released. */
+    void releaseLease(LeasePolicy lease){Sequence value=current;if(value!=null&&value.lease==lease)current=null;}
+    private String cancel(Sequence sequence,Input input){try{return onMain(()->{
+        if(current!=sequence)return sequence.cancelAccepted?"cancel_accepted_not_business_proof":"not_attempted_original_sequence_gone";
+        if(!sequence.attempted){current=null;return "not_started";}
+        if(!sequence.downAccepted)return "not_attempted_down_unconfirmed";
+        if(sequence.cancelAttempted)return sequence.cancelAccepted?"cancel_accepted_not_business_proof":"cancel_unconfirmed";
+        sequence.cancelAttempted=true;
+        if(send(sequence,MotionEvent.ACTION_CANCEL,input)){sequence.cancelAccepted=true;if(current==sequence)current=null;return "cancel_accepted_not_business_proof";}
+        return "cancel_unconfirmed";
+    });}catch(Exception ignored){return "cancel_unconfirmed";/* Original display teardown is the final fence. */}}
     private void require(Sequence sequence){if(current!=sequence)throw new SecurityException("touch_sequence_replaced");}
     private static boolean send(Sequence sequence,int action,Input input)throws Exception {
         int count=sequence.pointers;MotionEvent.PointerProperties[] properties=new MotionEvent.PointerProperties[count];MotionEvent.PointerCoords[] coordinates=new MotionEvent.PointerCoords[count];
@@ -47,4 +57,3 @@ final class DisplayGesturePaths {
         try{return future.get(3,TimeUnit.SECONDS);}catch(Exception failed){entry.compareAndSet(0,2);throw failed;}finally{future.cancel(false);}
     }
 }
-

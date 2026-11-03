@@ -199,7 +199,7 @@ public final class AgentRunner {
         RecentScreenHistory screens=phone==null||control==null?null:new RecentScreenHistory(control,()->{
             if(phone instanceof AdaptivePhonePort)((AdaptivePhonePort)phone).requireHistoryCurrent(control);
             if(capabilities!=null&&!capabilities.responseCurrent(control))throw new SecurityException("历史画面来源已撤回");
-        });
+        },()->System.nanoTime()/1_000_000,phone instanceof AdaptivePhonePort&&((AdaptivePhonePort)phone).appPolicyBound()?()->((AdaptivePhonePort)phone).appPolicyRevision():null);
         java.util.List<String> recalledScreens=new java.util.ArrayList<>();
         ContextCompactor compactor=new ContextCompactor(journal,journal==null?null:journal.compaction(),runBudgets);
         long[] pauseSeen = new long[]{control == null ? 0 : control.pauseRevision()};
@@ -303,6 +303,7 @@ public final class AgentRunner {
                     if(!context.isEmpty())nativeReference=context+(nativeReference.isEmpty()?"":"\n\n"+nativeReference);
                 }
                 tools=intent.filter(tools,this::intentEffecting);
+                if(screens!=null)for(JSONObject withdrawn:screens.withdrawnUploads(history,control))removeNativeImage(withdrawn,"此原手机图片已过期、遗忘或来源已撤回；未发送图片。");
                 // This is the existing request-only host-reference lane. Never checkpoint a second
                 // copy of SQL arguments/scope/receipts, or label recovery data as owner input.
                 if(!nativeReference.isEmpty()){
@@ -364,6 +365,9 @@ public final class AgentRunner {
                     final PhoneRouteSession currentRoutes=routes;
                     dev.pocketengine.runtime.usage.InferenceCapture.Target originalMain=journal==null?dev.pocketengine.runtime.usage.InferenceCapture.unattributed():journal.inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN,"");
                     if(currentRoutes!=null)originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,()->currentRoutes.requireCurrentSources(control));
+                    if(screens!=null)originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,()->{
+                        try{screens.requireUploads(nativeProvenance,control);}catch(SecurityException withdrawn){throw new ModelGateway.RequestRefreshRequired();}
+                    });
                     final JSONArray originalHistory=history,retryProjection=requestHistory;final JSONArray[] retryOwnerInputs={null};final boolean retryAfterContextRepair=!contextRecoveryUsed;
                     // Each physical call gets a fresh target/receipt and rechecks the original native
                     // task/epoch/scope. No tool has been admitted from this incomplete response.
@@ -713,7 +717,7 @@ public final class AgentRunner {
                 }
                 // All tool_call_ids are resolved before any native user image/new step is added.
                 if (observed) appendCapturedObservation(history, latest, config, contextBudget,screens,control);observed=false;
-                if(sequenceMayContinue)for(String screenId:recalledScreens){JSONObject recalled=screens.recall(screenId,control);if(recalled!=null)appendHistoricalObservation(history,recalled,config,contextBudget);}
+                if(sequenceMayContinue)for(String screenId:recalledScreens){JSONObject recalled=screens.recall(screenId,control);if(recalled!=null){appendHistoricalObservation(history,recalled,config,contextBudget);screens.nativeUpload(history.getJSONObject(history.length()-1),recalled,control);}}
                 recalledScreens.clear();
                 for(var image:nativeImages)try{if(sequenceMayContinue){JSONObject actual=image.metadata().put("imageBase64",image.base64(control)).put("imageMimeType",image.mimeType());appendObservation(history,actual,config,contextBudget);emit(taskId,"tool_observation","completed","已将本次真实图片加入下一轮模型上下文。",null,new JSONObject().put("actualImageAttached",true).put("coordinateAuthority",false),config,sink);}}
                     finally{image.close();}nativeImages.clear();
@@ -1232,7 +1236,14 @@ public final class AgentRunner {
     private static boolean imageInputAvailable(ModelConfig config){return config.usesAccount()?ModelGateway.accountSupportsImageInput(config.accountModel):config.supportsImageInput;}
     private static void appendCapturedObservation(JSONArray history,JSONObject observation,ModelConfig config,RunContextBudget budget,RecentScreenHistory screens,RunControl original)throws Exception {
         if(screens!=null&&config.sendScreenshots&&imageInputAvailable(config))screens.retain(observation,original);
+        int before=history.length();
         appendObservation(history,observation,config,budget);
+        if(screens!=null&&history.length()>before)screens.nativeUpload(history.getJSONObject(history.length()-1),observation,original);
+    }
+    private static void removeNativeImage(JSONObject message,String notice)throws Exception {
+        markObservationWithoutImage(message);JSONArray parts=message.optJSONArray("content"),replacement=new JSONArray();
+        for(int i=0;parts!=null&&i<parts.length();i++){JSONObject part=parts.optJSONObject(i);if(part!=null&&!"image_url".equals(part.optString("type")))replacement.put(part);}
+        replacement.put(new JSONObject().put("type","text").put("text",notice));message.put("content",replacement);
     }
     private static void appendHistoricalObservation(JSONArray history,JSONObject observation,ModelConfig config,RunContextBudget budget)throws Exception {
         // The payload has no observationId, nodeId or coordinates; it cannot replace the current action surface.

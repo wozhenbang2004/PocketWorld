@@ -39,15 +39,15 @@ public final class PhonePracticeEvidence {
         landing(receipt);
     }
     public synchronized void observation(JSONObject actual)throws Exception {
-        if(actual==null||!actual.optBoolean("ok")||actual.optInt("displayId",-1)!=display)return;
-        JSONArray nodes=actual.optJSONArray("nodes");if(nodes==null)return;
+        if(actual==null||!actual.optBoolean("ok")||actual.optInt("displayId",-1)!=display){clearPending();targetVisible=false;return;}
+        JSONArray nodes=actual.optJSONArray("nodes");if(nodes==null){clearPending();targetVisible=false;return;}
         boolean target=targetCurrent(actual);
         if(seenTarget&&!target&&backRequested){checks.put("back","passed");backRequested=false;}
-        targetVisible=target;clickNodes.clear();inputNodes.clear();scrollNodes.clear();if(!target)return;
+        targetVisible=target;clickNodes.clear();inputNodes.clear();scrollNodes.clear();if(!target){clearPending();return;}
         seenTarget=true;checks.put("tree","passed");if(display>0&&!actual.optString("sessionId").isEmpty())checks.put("display","passed");
         Set<String> rows=new LinkedHashSet<>();Integer count=null,tick=null;String input=null;
         for(int i=0;i<nodes.length();i++){JSONObject n=nodes.optJSONObject(i);if(n==null||n.optBoolean("password")||!n.optBoolean("visible",true))continue;
-            String text=n.optString("text"),description=n.optString("description"),id=n.optString("nodeId");
+            String text=n.optString("text"),description=n.optString("description"),id=n.optString("id",n.optString("nodeId"));
             if(text.startsWith("PW_DIAG_CLICK_COUNT:"))count=integer(text,"PW_DIAG_CLICK_COUNT:");
             if(text.startsWith("PW_DIAG_TICK:"))tick=integer(text,"PW_DIAG_TICK:");
             if(text.startsWith("PW_DIAG_ROW_"))rows.add(text);
@@ -59,6 +59,7 @@ public final class PhonePracticeEvidence {
         if(fresh&&pendingClick!=null&&count!=null&&count>pendingClick){checks.put("click","passed");pendingClick=null;}
         if(fresh&&pendingText!=null&&pendingText.equals(input)){checks.put(pendingText.equals(PhonePracticeActivity.ASCII)?"ascii_input":"chinese_input","passed");pendingText=null;}
         if(fresh&&pendingRows!=null&&!rows.isEmpty()&&!pendingRows.equals(rows)){checks.put("scroll","passed");pendingRows=null;}
+        if(fresh)clearPending();
         lastClicks=count;visibleRows=rows;observationId=after;
         if(tick!=null){long at=actual.optLong("observedAtUptimeMs",-1);if(initialTick==null&&at>=0){initialTick=tick;initialTickAt=at;}else if(initialTick!=null&&at>=initialTickAt+3000&&tick>=initialTick+3)checks.put("live_updates","passed");}
         landing(actual);
@@ -81,5 +82,6 @@ public final class PhonePracticeEvidence {
                 .put("evidenceOrigin","original_run_native_observations").put("deviceVerified",false).put("containsPrivateContent",false);
     }
     static boolean knownReason(String reason){return REASONS.contains(reason);}
+    private void clearPending(){pendingClick=null;pendingText=null;pendingRows=null;actionObservation="";backRequested=false;}
     private static Integer integer(String text,String prefix){try{return Integer.valueOf(text.substring(prefix.length()).trim());}catch(Exception invalid){return null;}}
 }

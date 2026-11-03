@@ -32,7 +32,7 @@ public final class ClipboardRestoration {
                     .put("clipboardRecoveryPending",!restored).put("mechanism","owner_allowed_same_field_paste");
         }catch(InterruptedException stopped){throw stopped;}
         catch(Exception failure){
-            Throwable cause=failure;while(cause!=null){if(cause instanceof dev.pocketengine.phone.observation.NativeSensitiveStep.OwnerRequired)throw(dev.pocketengine.phone.observation.NativeSensitiveStep.OwnerRequired)cause;cause=cause.getCause();}
+            Throwable cause=failure;while(cause!=null){if(cause instanceof dev.pocketengine.phone.observation.NativeSensitiveStep.OwnerRequired)throw(dev.pocketengine.phone.observation.NativeSensitiveStep.OwnerRequired)cause;if(cause instanceof ClipboardProfileScope.Unavailable)throw(ClipboardProfileScope.Unavailable)cause;cause=cause.getCause();}
             return new JSONObject().put("ok",false).put("accepted",entered?JSONObject.NULL:false).put("error",entered?"clipboard_input_unknown":"clipboard_unavailable").put("clipboardRestored",restored).put("clipboardRecoveryPending",storage.read()!=null).put("requiresReconciliation",entered).put("automaticReplayAllowed",false);
         }
         finally{CLIPBOARD.unlock();}
@@ -53,4 +53,3 @@ public final class ClipboardRestoration {
     private static JSONObject refusal(String code)throws Exception{return new JSONObject().put("ok",false).put("accepted",false).put("error",code).put("automaticFallback",false);}
     private static String hash(String value)throws Exception {if(value==null)throw new IllegalStateException("clipboard_unreadable");byte[] digest=MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));StringBuilder out=new StringBuilder();for(byte b:digest)out.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return out.toString();}
 }
-

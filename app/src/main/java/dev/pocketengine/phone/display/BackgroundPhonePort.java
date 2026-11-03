@@ -123,7 +123,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
         if("phone_launch_app_copy".equals(tool)){
             JSONObject exact=appCopies.require(args,control);String pkg=exact.getString("packageName");int user=exact.getInt("userId");
             reserveApp(pkg,user,control);beforeOpenAudio(pkg,user,control,revision);clearReferences();
-            result=module.requestAdmitted("launch_copy",exact,control,revision,sessionId,displayId,admission);
+            result=module.requestAdmitted("launch_copy",exact,control,revision,sessionId,displayId,()->{admission.check();appCopies.require(args,control);});
             return verifyExactLanding(result,before,pkg,user,exact.optString("component"),control,revision);
         }
         if("phone_practice_target".equals(tool)){
@@ -135,7 +135,12 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
             Observation expected=current;if(expected==null||expected.control!=control||!expected.id.equals(args.optString("observationId"))||expected.revision!=revision||SystemClock.uptimeMillis()-expected.at>120000)return failure("stale_observation","扩展动作需要当前副屏观察。");
             if("phone_paste_text".equals(tool)){
                 AccessibilityForest.Ref ref=expected.tree.forest.refs.get(args.getString("nodeId"));if(ref==null)return failure("stale_node","原输入目标已变化。");
-                result=dev.pocketengine.phone.observation.AccessibilityPasteInput.paste(service,service,displayId,ref,args.getString("text"),control,revision,admission,()->{Tree fresh=validateTarget(expected,ref,control);NativeSensitiveStep.requireNode(fresh.forest,ref,"phone_type",control,revision);},this::clearReferences);
+                result=dev.pocketengine.phone.observation.AccessibilityPasteInput.paste(service,service,displayId,ref,args.getString("text"),control,revision,admission,()->{
+                    Tree fresh=validateTarget(expected,ref,control);NativeSensitiveStep.requireNode(fresh.forest,ref,"phone_type",control,revision);
+                    AccessibilityNodeInfo node=AccessibilityForest.resolve(service,displayId,ref);
+                    try{dev.pocketengine.phone.setup.ClipboardProfileScope.require(ownerPackages(control),node==null?"":String.valueOf(node.getPackageName()),module.hostContext().getApplicationInfo().uid/100000);}
+                    finally{if(node!=null)node.recycle();}
+                },this::clearReferences);
             }else if("phone_gesture".equals(tool)){
                 if(!expected.imageIncluded)return failure("coordinate_unverifiable","多指需要当前真实图片。");
                 JSONArray paths=args.getJSONArray("paths");for(int i=0;i<paths.length();i++){JSONArray path=paths.getJSONArray(i);for(int j=1;j<path.length();j++){JSONArray from=path.getJSONArray(j-1),to=path.getJSONArray(j);checkSensitiveCoordinate(expected,new JSONObject().put("x1",from.getInt(0)).put("y1",from.getInt(1)).put("x2",to.getInt(0)).put("y2",to.getInt(1)),true,control);}}

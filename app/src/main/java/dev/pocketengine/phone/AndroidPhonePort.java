@@ -62,9 +62,14 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
     private volatile long lastScreenshotRequest;
     private volatile boolean lastIncludeImage;
     private final dev.pocketengine.phone.setup.AndroidAppCopies appCopies;
+    private final dev.pocketengine.phone.access.PhoneOwnerPackages.Probe clipboardOwners;
     private dev.pocketengine.phone.diagnostics.PhonePracticeTarget practiceTarget;
 
-    public AndroidPhonePort(Context context) { this.context = context.getApplicationContext();appCopies=new dev.pocketengine.phone.setup.AndroidAppCopies(this.context,Display.DEFAULT_DISPLAY); }
+    public AndroidPhonePort(Context context) { this(context,null); }
+    public AndroidPhonePort(Context context,dev.pocketengine.phone.access.PhoneOwnerPackages.Probe clipboardOwners) {
+        this.context=context.getApplicationContext();this.clipboardOwners=clipboardOwners;
+        appCopies=new dev.pocketengine.phone.setup.AndroidAppCopies(this.context,Display.DEFAULT_DISPLAY);
+    }
     @Override public PhoneUiSignals uiSignals(RunControl control)throws Exception {control.check();if(control.isPaused())return null;PhoneAccessibilityService service=requireService();requireUnlocked(service);return service.uiSignals();}
     @Override public boolean isConnected() { return PhoneAccessibilityService.get() != null; }
     @Override public void clearReferences() { reference.set(null); }
@@ -82,16 +87,16 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
                 if(practiceTarget==null)practiceTarget=new dev.pocketengine.phone.diagnostics.PhonePracticeTarget(context,Display.DEFAULT_DISPLAY,service.observationSessionId());
                 JSONObject result=practiceTarget.launch(control,()->{guard(service,control,revision);admission.check();});clearReferences();return result;
             }
-            if(tool.equals("phone_app_after_task"))return failure("background_app_lifecycle_required","主屏不支持按后台独立任务关闭App，不会关闭用户正在使用的页面。");
             Snapshot expected=requireReference(args,control);
             if(tool.equals("phone_paste_text")){
+                if(clipboardOwners==null)return failure("clipboard_profile_identity_unavailable","无法证明目标与原剪贴板属于同一Android资料，未执行粘贴。").put("supported",false);
                 AccessibilityForest.Ref ref=expected.tree.forest.refs.get(args.getString("nodeId"));
                 if(ref==null)return failure("stale_node","输入目标已变化。");
                 return dev.pocketengine.phone.observation.AccessibilityPasteInput.paste(context,service,Display.DEFAULT_DISPLAY,ref,args.getString("text"),control,expected.revision,admission,()->{
                     Tree fresh=validateTarget(service,expected,control,ref);
                     NativeSensitiveStep.requireNode(fresh.forest,ref,"phone_type",control,expected.revision);
                     Rect bounds=new Rect();AccessibilityNodeInfo node=AccessibilityForest.resolve(service,Display.DEFAULT_DISPLAY,ref);
-                    try{if(node==null)throw new PhoneFailure("stale_node","输入目标已变化。");node.getBoundsInScreen(bounds);}finally{if(node!=null)node.recycle();}
+                    try{if(node==null)throw new PhoneFailure("stale_node","输入目标已变化。");node.getBoundsInScreen(bounds);requireClipboardProfile(String.valueOf(node.getPackageName()),control);}finally{if(node!=null)node.recycle();}
                     Rect controls=onMain(control,expected.revision,service::controlsBounds);
                     if(Rect.intersects(bounds,controls))throw new PhoneFailure("controls_overlap","输入目标被任务控制条遮挡。");
                 },this::clearReferences);
@@ -102,6 +107,14 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
         catch(NativePhoneEntry.Refused refused){clearReferences();return failure("paused_or_changed",refused.getMessage());}
         catch(PhoneFailure refused){clearReferences();JSONObject result=failure(refused.code,refused.getMessage());if(ObservationSafety.unknownEffect(refused.code))result.put("accepted",JSONObject.NULL);return result;}
         catch(InterruptedException stopped){clearReferences();throw stopped;}
+    }
+
+    private void requireClipboardProfile(String packageName,RunControl control)throws Exception {
+        dev.pocketengine.phone.access.PhoneOwnerPackages owners;
+        try{owners=clipboardOwners.read(control);}
+        catch(InterruptedException stopped){throw stopped;}
+        catch(Exception unavailable){throw new dev.pocketengine.phone.setup.ClipboardProfileScope.Unavailable("clipboard_profile_identity_unavailable",unavailable);}
+        dev.pocketengine.phone.setup.ClipboardProfileScope.require(owners,packageName,context.getApplicationInfo().uid/100000);
     }
 
     /** Accessibility owns an accepted main-screen gesture; it exposes no cancellation-by-ID API. */

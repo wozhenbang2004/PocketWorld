@@ -454,8 +454,11 @@ final class DisplayEngine {
         LeasePolicy cancelling=lease;if(cancelling!=null)gesturePaths.cancelLease(cancelling,event->{inject(cancelling,event,-1);return true;});
         ownerTransfer=null;taskTopology.clear();
         main.removeCallbacks(trailingFrame);scheduledFrameReader=null;framePending=false;lastFrameConsumed=0;
-        LeasePolicy old=lease;lease=null;activeTouch=null;if(old!=null)old.release();latestPixels=null;frameAt=0;packageName="";requiredDisplayFlags=0;
+        LeasePolicy old=lease;activeTouch=null;if(old!=null)old.release();latestPixels=null;frameAt=0;packageName="";requiredDisplayFlags=0;
         if(display!=null){display.release();display=null;}if(reader!=null){reader.close();reader=null;}
+        // An unconfirmed CANCEL stays occupied until physical display teardown succeeds.
+        // Keep the stopped original lease on a teardown failure so cleanup can be reconciled.
+        if(old!=null)gesturePaths.releaseLease(old);lease=null;
     }
     private int flag(String name)throws Exception {return DisplayManager.class.getDeclaredField(name).getInt(null);}
     private <T>T onMain(java.util.concurrent.Callable<T> call)throws Exception {

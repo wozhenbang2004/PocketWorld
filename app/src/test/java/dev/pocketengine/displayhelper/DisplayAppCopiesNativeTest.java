@@ -1,6 +1,5 @@
 package dev.pocketengine.displayhelper;
 
-import android.app.ActivityOptions;
 import android.app.Application;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.phone.setup.AndroidAppCopies;
@@ -27,7 +26,7 @@ public final class DisplayAppCopiesNativeTest {
         AndroidAppCopies copies=new AndroidAppCopies(AndroidAppCopiesNativeTest.app(),7);RunControl control=AndroidAppCopiesNativeTest.control();try {
             JSONObject exact=copies.require(AndroidAppCopiesNativeTest.choose(copies.list(control),10),control);Gate gate=new Gate();JSONObject receipt=DisplayAppCopies.launch(AndroidAppCopiesNativeTest.app(),7,exact,gate);
             assertEquals(1,gate.claims);assertEquals(1,AndroidAppCopiesNativeTest.LauncherFixture.calls.size());var launch=AndroidAppCopiesNativeTest.LauncherFixture.calls.get(0);
-            assertEquals(AndroidAppCopiesNativeTest.work(),launch.user());assertEquals(7,ActivityOptions.fromBundle(launch.options()).getLaunchDisplayId());assertTrue(receipt.getBoolean("accepted"));assertFalse(receipt.getBoolean("actualUserVerified"));assertFalse(receipt.getBoolean("verifiedBusinessSuccess"));
+            assertEquals(AndroidAppCopiesNativeTest.work(),launch.user());assertEquals(7,launch.options().getInt("android.activity.launchDisplayId",-1));assertTrue(receipt.getBoolean("accepted"));assertFalse(receipt.getBoolean("actualUserVerified"));assertFalse(receipt.getBoolean("verifiedBusinessSuccess"));
         }finally{copies.clear();}
     }
     @Test public void wrongDisplayOrExpiredReferenceNeverBecomesAnUnqualifiedLaunch()throws Exception {
@@ -40,6 +39,13 @@ public final class DisplayAppCopiesNativeTest {
         AndroidAppCopies copies=new AndroidAppCopies(AndroidAppCopiesNativeTest.app(),7);RunControl control=AndroidAppCopiesNativeTest.control();try {
             JSONObject exact=copies.require(AndroidAppCopiesNativeTest.choose(copies.list(control),10),control);Gate gate=new Gate();gate.duringClaim=()->{try{AndroidAppCopiesNativeTest.installArchive(2);}catch(Exception e){throw new AssertionError(e);}};
             assertThrows(SecurityException.class,()->DisplayAppCopies.launch(AndroidAppCopiesNativeTest.app(),7,exact,gate));assertEquals(1,gate.claims);assertTrue(AndroidAppCopiesNativeTest.LauncherFixture.calls.isEmpty());
+        }finally{copies.clear();}
+    }
+    @Test public void referenceThatExpiresDuringFinalNativeAdmissionCannotEnterLauncherApps()throws Exception {
+        AndroidAppCopies copies=new AndroidAppCopies(AndroidAppCopiesNativeTest.app(),7);RunControl control=AndroidAppCopiesNativeTest.control();try {
+            JSONObject exact=copies.require(AndroidAppCopiesNativeTest.choose(copies.list(control),10),control);int[] checks={0};
+            DisplayTypedIntent.Gate gate=new DisplayTypedIntent.Gate(){public void check(){if(++checks[0]==3)org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofSeconds(60));}public void requireAppFree(String p,int user){}};
+            assertThrows(SecurityException.class,()->DisplayAppCopies.launch(AndroidAppCopiesNativeTest.app(),7,exact,gate));assertEquals(3,checks[0]);assertTrue(AndroidAppCopiesNativeTest.LauncherFixture.calls.isEmpty());
         }finally{copies.clear();}
     }
 }

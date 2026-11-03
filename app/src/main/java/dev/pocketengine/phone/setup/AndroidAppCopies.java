@@ -28,6 +28,9 @@ public final class AndroidAppCopies implements AutoCloseable {
     private record Copy(JSONObject identity,long listedAt) { }
     private final Context context;
     private final int displayId;
+    // This fence contains only cached reference mutations and the short native entry.
+    // Metadata/authority work uses this object's monitor and never holds this fence.
+    private final Object referenceFence=new Object();
     private final Map<String,Copy> listed=new LinkedHashMap<>();
     private RunControl listedControl;
     private long listedPauseRevision;
@@ -47,7 +50,7 @@ public final class AndroidAppCopies implements AutoCloseable {
         this.context=context.getApplicationContext();this.displayId=displayId;
     }
     public synchronized JSONObject list(RunControl control)throws Exception {
-        requireControl(control);listed.clear();listedControl=control;listedPauseRevision=control.pauseRevision();
+        requireControl(control);synchronized(referenceFence){listed.clear();listedControl=control;listedPauseRevision=control.pauseRevision();}
         LauncherApps launcher=context.getSystemService(LauncherApps.class);UserManager users=context.getSystemService(UserManager.class);
         if(launcher==null||users==null)return result(new JSONArray(),false,"profile_service_unavailable");
         if(watched!=launcher){stopWatching();launcher.registerCallback(changes,new android.os.Handler(android.os.Looper.getMainLooper()));watched=launcher;}
@@ -64,7 +67,7 @@ public final class AndroidAppCopies implements AutoCloseable {
                     if(activity.getApplicationInfo()==null||!activity.getApplicationInfo().enabled||activity.getApplicationInfo().uid/100000!=nativeUser){complete=false;continue;}
                     JSONObject identity;
                     try {identity=identity(activity,nativeUser,serial);}catch(SecurityException unavailable){complete=false;continue;}
-                    String ref=UUID.randomUUID().toString();listed.put(ref,new Copy(identity,SystemClock.uptimeMillis()));
+                    String ref=UUID.randomUUID().toString();synchronized(referenceFence){listed.put(ref,new Copy(identity,SystemClock.uptimeMillis()));}
                     String label=String.valueOf(activity.getLabel()).replaceAll("[\\p{Cntrl}]"," ");if(label.length()>200)label=label.substring(0,200);
                     out.put(new JSONObject(identity.toString()).put("copyRef",ref).put("label",label).put("labelIsUntrusted",true)
                             .put("profileKind",user.equals(android.os.Process.myUserHandle())?"current":"related")
@@ -73,7 +76,7 @@ public final class AndroidAppCopies implements AutoCloseable {
             }catch(SecurityException unavailable){complete=false;}
         }
         requireControl(control);
-        if(control.pauseRevision()!=listedPauseRevision){listed.clear();throw new SecurityException("app_copy_run_changed");}
+        if(control.pauseRevision()!=listedPauseRevision){synchronized(referenceFence){listed.clear();}throw new SecurityException("app_copy_run_changed");}
         return result(out,complete,complete?"accessible_related_profiles":"some_profiles_unavailable");
     }
     /** Requires the original native run which produced this reference, including its pause revision. */
@@ -82,7 +85,7 @@ public final class AndroidAppCopies implements AutoCloseable {
     }
     public synchronized JSONObject require(JSONObject args)throws Exception {
         requireControl(listedControl);
-        Copy copy=reference(args,listedControl);JSONObject exact=copy.identity;
+        Copy copy;synchronized(referenceFence){copy=reference(args,listedControl);}JSONObject exact=copy.identity;
         LauncherApps launcher=context.getSystemService(LauncherApps.class);UserManager users=context.getSystemService(UserManager.class);
         if(launcher==null||users==null)throw new SecurityException("profile_service_unavailable");
         for(UserHandle user:launcher.getProfiles()) {
@@ -102,7 +105,7 @@ public final class AndroidAppCopies implements AutoCloseable {
         LauncherApps launcher=context.getSystemService(LauncherApps.class);
         try {
             return NativePhoneEntry.call(control,revision,()->{admission.check();require(args,control);},()->{
-                synchronized(this) {
+                synchronized(referenceFence) {
                     // No RunControl/TaskStore callback while its native-entry monitor is held.
                     // The metadata was re-read by admission; invalidate/expiry can still win here.
                     reference(args,control);
@@ -129,10 +132,10 @@ public final class AndroidAppCopies implements AutoCloseable {
                 ||new java.math.BigDecimal(args.get("userId").toString()).intValueExact()!=copy.identity.getInt("userId"))throw new SecurityException("app_copy_reference_mismatch");
         return copy;
     }
-    public synchronized void clear(){listed.clear();listedControl=null;stopWatching();}
+    public synchronized void clear(){synchronized(referenceFence){listed.clear();listedControl=null;}stopWatching();}
     @Override public void close(){clear();}
     private void stopWatching(){if(watched!=null){watched.unregisterCallback(changes);watched=null;}}
-    private synchronized void invalidate(String pkg,UserHandle user){listed.entrySet().removeIf(entry->entry.getValue().identity.optString("packageName").equals(pkg)&&entry.getValue().identity.optInt("userId",-1)==id(user));}
+    private synchronized void invalidate(String pkg,UserHandle user){synchronized(referenceFence){listed.entrySet().removeIf(entry->entry.getValue().identity.optString("packageName").equals(pkg)&&entry.getValue().identity.optInt("userId",-1)==id(user));}}
     private static boolean unlocked(UserManager users,UserHandle user){return user.equals(android.os.Process.myUserHandle())?users.isUserUnlocked():users.isUserUnlocked(user);}
     private static void requireControl(RunControl control)throws Exception {
         if(control==null||!control.hasHostRun())throw new SecurityException("app_copy_original_run_required");

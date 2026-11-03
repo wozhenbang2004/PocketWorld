@@ -72,6 +72,7 @@ public final class AdaptivePhonePort implements PhonePort {
     public boolean textTargetingAvailable(){return localCaptureAllowed&&localOcrAllowed&&source instanceof NativeOcrTapPort&&ocrAvailable();}
     public boolean matchesHostScope(String task,String run,int epoch){return scope.taskId.equals(task)&&scope.runId.equals(run)&&scope.epoch==epoch;}
     public PhonePort physicalPort(){return source instanceof dev.pocketengine.phone.access.GuardedPhonePort?((dev.pocketengine.phone.access.GuardedPhonePort)source).physicalPort():source;}
+    public boolean appPolicyBound(){return source instanceof dev.pocketengine.phone.access.GuardedPhonePort;}
     public long appPolicyRevision(){return source instanceof dev.pocketengine.phone.access.GuardedPhonePort?((dev.pocketengine.phone.access.GuardedPhonePort)source).policyRevision():0;}
     /** Owner diagnostics may read only these booleans from the exact original run; no execution or content capture. */
     public synchronized JSONObject ownerPracticeResult(String task,String run,int epoch)throws Exception {
@@ -92,7 +93,7 @@ public final class AdaptivePhonePort implements PhonePort {
     public JSONObject nativeExtension(String tool,JSONObject args,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
         PhoneExtensionTools.validate(tool,args);
         boolean write=PhoneExtensionTools.writes(tool);
-        boolean opening=tool.equals("phone_launch_app_copy")||tool.equals("phone_practice_target")||tool.equals("phone_app_after_task");
+        boolean opening=tool.equals("phone_launch_app_copy")||tool.equals("phone_practice_target");
         boolean listing=tool.equals("phone_list_app_copies");
         synchronized(this){
             String blocked=authority(control);if(blocked!=null)return failure(blocked,"原手机任务控制已变化。");
@@ -165,11 +166,11 @@ public final class AdaptivePhonePort implements PhonePort {
         dev.pocketengine.phone.PhoneUiSignals.Stamp before=signals.snapshot(windows),after=before;
         if(before.closed)return failure("event_source_closed","原界面事件源已经关闭。");
         while(before.same(after)&&System.nanoTime()<until){
-            requireEventCurrent(control,revision,policyRevision,session);
+            requireEventCurrent(control,revision,policyRevision,session,signals);
             signals.awaitChange(before,windows,Math.min(250,Math.max(1,(until-System.nanoTime())/1_000_000L)),control,revision);
             after=signals.snapshot(windows);if(after.closed)break;
         }
-        requireEventCurrent(control,revision,policyRevision,session);
+        requireEventCurrent(control,revision,policyRevision,session,signals);
         JSONObject result=new JSONObject().put("ok",true).put("eventObserved",!before.same(after)&&!after.closed).put("status",after.closed?"source_closed":before.same(after)?"timeout":"event_hint").put("containsNotificationText",false).put("eventProvesBusinessOutcome",false).put("eventScope","current_windows_or_global_invalidation").put("displayId",scope.displayId).put("sessionId",scope.sessionId);
         if(after.closed){synchronized(this){clearReferences();}return result;}
         if(!before.same(after)){
@@ -178,9 +179,10 @@ public final class AdaptivePhonePort implements PhonePort {
         }
         return result;
     }
-    private synchronized void requireEventCurrent(RunControl control,long revision,long policyRevision,String session)throws Exception {
+    private synchronized void requireEventCurrent(RunControl control,long revision,long policyRevision,String session,dev.pocketengine.phone.PhoneUiSignals originalSignals)throws Exception {
         String blocked=authority(control);
-        if(blocked!=null||control.pauseRevision()!=revision||policyRevision!=appPolicyRevision()||!scope.sessionId.equals(session)||!source.isConnected()){
+        if(blocked!=null||control.pauseRevision()!=revision||policyRevision!=appPolicyRevision()||!scope.sessionId.equals(session)||!source.isConnected()
+                ||!(source instanceof NativePhoneSignals)||((NativePhoneSignals)source).uiSignals(control)!=originalSignals){
             clearReferences();throw new SecurityException("event_original_run_or_source_changed");
         }
     }
@@ -291,7 +293,9 @@ public final class AdaptivePhonePort implements PhonePort {
         catch(NativeSensitiveStep.OwnerRequired owner){synchronized(this){clearReferences();}throw owner;}
         catch(InterruptedException stopped){synchronized(this){clearReferences();}throw stopped;}
         catch(Exception unknown){result=new JSONObject().put("ok",false).put("accepted",JSONObject.NULL).put("error","action_unknown");}
-        synchronized(this){clearReferences();if(result==null)result=new JSONObject().put("ok",false).put("accepted",JSONObject.NULL).put("error","action_unknown");
+        synchronized(this){if(result==null)result=new JSONObject().put("ok",false).put("accepted",JSONObject.NULL).put("error","action_unknown");
+            if(practice!=null)practice.action("phone_scroll_node",args,result);
+            clearReferences();
             if(result.has("accepted")&&result.isNull("accepted")){reconciliationRequired=true;return ObservationReport.annotateFailure(result).put("targetRef",target).put("automaticReplayAllowed",false);}}
         result.put("targetRef",target).put("beforeTreeFingerprint",before).put("verified",false).put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false).put("mechanism","accessibility_action_scroll_"+args.getString("direction"));
         if(!Boolean.TRUE.equals(result.opt("accepted")))return result;

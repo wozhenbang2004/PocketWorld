@@ -206,7 +206,7 @@ public final class RunContextBudget {
             java.util.Iterator<String> iterator=object.keys();while(iterator.hasNext())keys.add(iterator.next());
             Collections.sort(keys);update(digest,"{");
             for(String key:keys) {
-                if((root&&key.equals("observationId"))||(node&&key.equals("id")))continue;
+                if((root&&(key.equals("observationId")||key.equals("historicalScreenId")||key.equals("historicalScreenHash")))||(node&&key.equals("id")))continue;
                 update(digest,JSONObject.quote(key));update(digest,":");
                 Object item=object.get(key);
                 if(root&&key.equals("nodes")&&item instanceof JSONArray) {

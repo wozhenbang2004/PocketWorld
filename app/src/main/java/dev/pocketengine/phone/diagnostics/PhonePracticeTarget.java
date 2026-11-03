@@ -30,7 +30,8 @@ public final class PhonePracticeTarget implements AutoCloseable {
             return NativePhoneEntry.call(control,revision,()->{if(admission==null)throw new SecurityException("original_practice_admission_required");admission.check();if(app.control(run.taskId())!=control)throw new SecurityException("practice_run_changed");},()->{
                 requested=true;original=control;
                 // The original app UID can launch its own non-exported Activity on the exact allowed display.
-                context.startActivity(intent,options.toBundle());
+                try{context.startActivity(intent,options.toBundle());}
+                catch(android.content.ActivityNotFoundException|SecurityException unsupported){return new JSONObject().put("ok",false).put("accepted",false).put("error","practice_display_unsupported").put("displayId",display).put("automaticReplayAllowed",false);}
                 control.onCancel(()->PhonePracticeActivity.requestCloseOriginal(control));
                 return new JSONObject().put("ok",true).put("accepted",true).put("verified",false)
                         .put("practiceSessionId",nonce).put("displayId",display).put("sessionId",session)

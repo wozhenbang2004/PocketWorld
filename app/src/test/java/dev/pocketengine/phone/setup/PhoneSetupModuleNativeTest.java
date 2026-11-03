@@ -151,6 +151,21 @@ public final class PhoneSetupModuleNativeTest {
         assertEquals(1, display.pairCalls); assertEquals(43211, display.dispatched.getInt("pairingPort"));
     }
 
+    @Test public void registeredUnlockSignalsUseSameConsentBoundWorkerAndStopAfterClose() throws Exception {
+        recovery.setConsent(true, 0);
+        assertTrue(module.snapshot().getJSONObject("recovery").getBoolean("unlockSignalsAvailable"));
+        app.sendBroadcast(new Intent(Intent.ACTION_USER_UNLOCKED));
+        app.sendBroadcast(new Intent(Intent.ACTION_USER_PRESENT));
+        Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertEquals(1, work.size()); // The two actual registered deliveries coalesce before transport.
+        drain(); assertEquals(1, display.connectCalls); assertEquals(0, display.pairCalls);
+        module.close();
+        app.sendBroadcast(new Intent(Intent.ACTION_USER_PRESENT));
+        Shadows.shadowOf(Looper.getMainLooper()).idle(); drain();
+        assertEquals(1, display.connectCalls);
+        assertFalse(module.snapshot().getJSONObject("recovery").getBoolean("unlockSignalsAvailable"));
+    }
+
     @Test public void unknownNativeReplyCannotBeReplayedAndCodeIsDiscarded() throws Exception {
         String session = begin(); display.throwAfterPair = true;
         module.receiveNotification(PhoneSetupModule.SUBMIT, session, "123456", () -> { }); drain();

@@ -21,7 +21,7 @@ public final class PhoneAccessBindings {
             return physical;
         }
         PhoneOwnerPackages.Probe probe=physical instanceof BackgroundPhonePort?((BackgroundPhonePort)physical)::ownerPackages:
-                live->primary(display,live);
+                live->primaryOwners(display,live);
         int user=android.os.Process.myUid()/100000;
         return new GuardedPhonePort(physical,policy,probe,user);
     }
@@ -29,10 +29,10 @@ public final class PhoneAccessBindings {
         PhoneAccessPolicy.State policy=new AndroidPhoneAccessStore(context).current();
         if(!policy.available())throw new SecurityException("app_policy_unavailable");
         if(policy.rules().isEmpty())return;
-        PhoneOwnerPackages actual=primary(display,original);
+        PhoneOwnerPackages actual=primaryOwners(display,original);
         policy.require(actual.owners(),actual.known(),PhoneAccessPolicy.Use.OWNER_SHARE);
     }
-    private static PhoneOwnerPackages primary(DisplayModule display,RunControl original)throws Exception {
+    public static PhoneOwnerPackages primaryOwners(DisplayModule display,RunControl original)throws Exception {
         if(display==null)throw new SecurityException("phone_owner_identity_unavailable");
         PhoneOwnerPackages identities=PhoneOwnerPackages.fromOwnership(display.primaryOwnership(original,original.isPaused()),"primary");
         return PhoneWindowPackages.read(PhoneAccessibilityService.get(),Display.DEFAULT_DISPLAY,identities,original::check);

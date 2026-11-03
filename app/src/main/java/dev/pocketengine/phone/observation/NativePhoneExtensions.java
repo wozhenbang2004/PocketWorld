@@ -7,4 +7,3 @@ import org.json.JSONObject;
 public interface NativePhoneExtensions {
     JSONObject extension(String tool,JSONObject arguments,RunControl original,NativePhoneEntry.Admission admission)throws Exception;
 }
-

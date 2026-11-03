@@ -45,4 +45,3 @@ public final class PhoneExtensionJournalTest {
         }finally{if(capabilities!=null)capabilities.close();original.cancel();Field db=TaskStore.class.getDeclaredField("db");db.setAccessible(true);((SQLiteDatabase)db.get(tasks)).close();}
     }
 }
-
