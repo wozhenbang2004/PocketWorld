@@ -1160,6 +1160,25 @@ class HarnessConfigs:
         # Original provider references may be restored, but never a prior managed token.
         if value == ABSENT:
             return False
+        if key in {"settings.defaultProvider", "settings.defaultModel", "settings.enabledModels"}:
+            # These Pi selectors share the atomic authentication restore group,
+            # but their model/protocol names are not credentials.
+            return False
+        if key == "models.providers.pocketworld":
+            provider = value.get("value")
+            token = provider.get("apiKey") if isinstance(provider, dict) else None
+            if not isinstance(token, str) or not token:
+                return False
+            for (raw,) in self.db.execute("SELECT private_plan FROM harness_plans").fetchall():
+                historical = json.loads(raw)
+                if historical["restoreOf"] is not None:
+                    continue
+                previous = historical["after"].get(key, {}).get("value")
+                # Compare the actual secret, not serialized provider metadata.
+                # A renamed provider or changed endpoint cannot revive that key.
+                if isinstance(previous, dict) and token == previous.get("apiKey"):
+                    return True
+            return False
         for (raw,) in self.db.execute("SELECT private_plan FROM harness_plans").fetchall():
             historical = json.loads(raw)
             if historical["restoreOf"] is not None:

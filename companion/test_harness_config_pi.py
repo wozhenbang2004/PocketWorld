@@ -173,6 +173,30 @@ class PiHarnessConfigurationTests(unittest.TestCase):
         self.assertEqual("COMMITTED", restored["state"])
         self.assertEqual(baseline, self.images())
 
+    def test_openai_provider_and_common_model_selectors_restore_exactly(self):
+        raw = self.settings.read_text()
+        for field, value in {"defaultProvider": "openai", "defaultModel": "gpt-5", "enabledModels": ["openai/gpt-5"]}.items():
+            raw = JsonFields(raw).set(field, {"value": value})
+        self.settings.write_text(raw)
+        initial = self.images()
+        self.applied()
+        plan, receipt = self.restore()
+        self.assertEqual([], plan["conflicts"])
+        self.assertEqual("COMMITTED", receipt["state"])
+        self.assertEqual(initial, self.images())
+
+    def test_managed_pi_api_key_is_revoked_even_when_provider_metadata_changes(self):
+        self.applied()
+        # Derive a genuine managed key from the actual applied target file. An
+        # old protected before-image carrying it must be rejected regardless of
+        # unrelated provider metadata; do not forge a new permission or operation.
+        provider = json.loads(self.models.read_text())["providers"]["pocketworld"]
+        provider["name"] = "Renamed provider"
+        provider["baseUrl"] = "https://changed.invalid/v1"
+        self.assertTrue(self.service._revoked_before("models.providers.pocketworld", {"value": provider}))
+        provider["apiKey"] = OTHER_SECRET
+        self.assertFalse(self.service._revoked_before("models.providers.pocketworld", {"value": provider}))
+
     def test_unrelated_edits_are_preserved_in_both_files_during_restore(self):
         self.applied()
         self.settings.write_text(JsonFields(self.settings.read_text()).set("theme", {"value": "external-theme"}))
