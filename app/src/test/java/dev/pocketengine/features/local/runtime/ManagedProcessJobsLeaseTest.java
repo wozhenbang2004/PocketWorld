@@ -3,6 +3,7 @@ package dev.pocketengine.features.local.runtime;
 import static org.junit.Assert.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -14,12 +15,13 @@ import org.junit.Test;
 
 /** Every pre-worker failure must release its caller lease once, outside the jobs monitor. */
 public final class ManagedProcessJobsLeaseTest {
-    private Path directory;private ManagedProcessJobs jobs;
+    private Path directory;private ManagedProcessJobs jobs;private boolean releaseUnconfirmed;
     @Before public void create() throws Exception {
         directory=Files.createTempDirectory("a25f1-lease-exits-");jobs=new ManagedProcessJobs(directory.toFile(),new NativeProcessSupervisor());
     }
     @After public void clean() throws Exception {
-        jobs.close();try(var paths=Files.walk(directory)){for(Path path:paths.sorted(java.util.Comparator.reverseOrder()).toList())Files.deleteIfExists(path);}
+        if(releaseUnconfirmed)assertEquals("runtime_process_drain_unconfirmed",assertThrows(IllegalStateException.class,jobs::close).getMessage());else jobs.close();
+        try(var paths=Files.walk(directory)){for(Path path:paths.sorted(java.util.Comparator.reverseOrder()).toList())Files.deleteIfExists(path);}
     }
     private RuntimeInvocation invocation(String operation,ProjectRuntime.LiveGate gate) throws Exception {
         JSONObject source=RuntimeContractsTest.source();
@@ -38,23 +40,23 @@ public final class ManagedProcessJobsLeaseTest {
     }
     @Test public void invalidCachedReceiptAndClosedRuntimeAlsoCloseExactlyOnce() throws Exception {
         RuntimeInvocation cached=invocation("corrupt",()->{});Path record=directory.resolve("jobs/corrupt/receipt.json");
-        Files.createDirectories(record.getParent());Files.writeString(record,"{\"invalid\":true}");AtomicInteger corruptClosed=new AtomicInteger();
+        Files.createDirectories(record.getParent());Files.write(record,"{\"invalid\":true}".getBytes(StandardCharsets.UTF_8));AtomicInteger corruptClosed=new AtomicInteger();
         assertThrows(Exception.class,()->jobs.start(cached,List.of("/bin/sh"),Map.of(),directory.toFile(),5000,lease(corruptClosed)));
-        assertEquals(1,corruptClosed.get());assertEquals("{\"invalid\":true}",Files.readString(record));
+        assertEquals(1,corruptClosed.get());assertEquals("{\"invalid\":true}",new String(Files.readAllBytes(record),StandardCharsets.UTF_8));
         jobs.close();AtomicInteger shutdownClosed=new AtomicInteger();RuntimeInvocation stopped=invocation("closed",()->{});
         assertThrows(IllegalStateException.class,()->jobs.start(stopped,List.of("/bin/sh"),Map.of(),directory.toFile(),5000,lease(shutdownClosed)));
         assertEquals(1,shutdownClosed.get());
     }
     @Test public void observedWorkSuccessCannotSettleWhenItsLeaseReleaseFailed() throws Exception {
-        Path active=Files.createDirectory(directory.resolve("active"));Files.writeString(active.resolve("Main.java"),"class Main {}\n");
+        Path active=Files.createDirectory(directory.resolve("active"));Files.write(active.resolve("Main.java"),"class Main {}\n".getBytes(StandardCharsets.UTF_8));
         JSONObject source=RuntimeContractsTest.source();RuntimeInvocation call=new RuntimeInvocation(RuntimeContractsTest.exact(source,"termux.prepare",null),RuntimeContractsTest.binding("release-failed"),source,RuntimeContractsTest.original(),()->{},new RuntimeWorkspace(active.toFile(),"project",RuntimeContractsTest.CHECKOUT));
-        jobs.startPreparation(call,"environment",context->new JSONObject(),()->{throw new java.io.IOException("controlled release failure");});
+        releaseUnconfirmed=true; jobs.startPreparation(call,"environment",context->new JSONObject(),()->{throw new java.io.IOException("controlled release failure");});
         long end=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(3);RuntimeReceipt actual=null;
         while(System.nanoTime()<end){actual=jobs.query(call.executionRef());if(actual.json().has("finishedAt"))break;Thread.sleep(5);}
         assertNotNull(actual);assertEquals("unknown",actual.status());assertFalse(actual.terminal());assertFalse(actual.json().getBoolean("resourcesReleased"));assertTrue(actual.json().getBoolean("leaseError"));assertEquals("runtime_resource_release_unconfirmed",actual.json().getString("error"));
     }
     @Test public void commandAndPreparationStayNonterminalThroughoutBlockedLeaseClose() throws Exception {
-        Path active=Files.createDirectory(directory.resolve("active"));Files.writeString(active.resolve("Main.java"),"class Main {}\n");assertTrue("current host JNI is required for the command half",jobs.available());
+        Path active=Files.createDirectory(directory.resolve("active"));Files.write(active.resolve("Main.java"),"class Main {}\n".getBytes(StandardCharsets.UTF_8));assertTrue("current host JNI is required for the command half",jobs.available());
         AtomicInteger callbacks=new AtomicInteger();jobs.setReceiptSink(receipt->callbacks.incrementAndGet());
         for(boolean command:new boolean[]{false,true})for(boolean fail:new boolean[]{false,true}){
             String id=(command?"command":"preparation")+(fail?"-failure":"-success");JSONObject source=RuntimeContractsTest.source();
@@ -70,7 +72,7 @@ public final class ManagedProcessJobsLeaseTest {
                 release.countDown();long until=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(3);RuntimeReceipt actual=null;
                 while(System.nanoTime()<until){actual=jobs.query(call.executionRef());if(actual.json().has("finishedAt")&&callbacks.get()==previousCallbacks+1)break;Thread.sleep(5);}
                 assertNotNull(actual);assertEquals(1,closed.get());assertEquals(previousCallbacks+1,callbacks.get());assertEquals(id,fail?"unknown":"completed",actual.status());assertEquals(!fail,actual.terminal());assertEquals(!fail,actual.json().getBoolean("resourcesReleased"));
-                if(fail)assertEquals("runtime_resource_release_unconfirmed",actual.json().getString("error"));
+                if(fail){releaseUnconfirmed=true;assertEquals("runtime_resource_release_unconfirmed",actual.json().getString("error"));}
             }finally{release.countDown();}
         }
     }

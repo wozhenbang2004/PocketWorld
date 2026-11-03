@@ -230,10 +230,12 @@ public final class ModelCapabilityAdaptersTest {
         assertEquals(attack,result.getJSONObject("data").getString("stdout"));assertFalse(result.toString().contains("SECRET-LEASE"));assertFalse(result.toString().contains("SECRET-PASSWORD"));assertFalse(result.getBoolean("verified"));
     }
     @Test public void outputBudgetPreservesReceiptAndDoesNotSplitEmoji()throws Exception {
-        Fixture f=new Fixture();SshFake module=new SshFake();module.result.put("stdout","🙂".repeat(20000)).put("stderr","界".repeat(20000));
+        Fixture f=new Fixture();SshFake module=new SshFake();module.result.put("stdout","OUT-HEAD"+"🙂".repeat(20000)+"OUT-TAIL").put("stderr","ERR-HEAD"+"界".repeat(20000)+"ERR-TAIL");
         JSONObject out=f.ssh(module).execute("ssh_exec",f.authority.prepare("ssh_exec",new JSONObject().put("command","pwd")),f.control);
         assertTrue(CapabilityResults.bytes(out)<=32768);assertTrue(out.getBoolean("outputTruncated"));assertEquals(0,out.getJSONObject("receipt").getInt("exitCode"));
         String text=out.getJSONObject("data").optString("stdout");if(!text.isEmpty())assertFalse(Character.isHighSurrogate(text.charAt(text.length()-1)));
+        assertTrue(text.startsWith("OUT-HEAD"));assertTrue(text.endsWith("OUT-TAIL"));assertTrue(out.getJSONObject("data").getString("stderr").startsWith("ERR-HEAD"));assertTrue(out.getJSONObject("data").getString("stderr").endsWith("ERR-TAIL"));assertTrue(out.getBoolean("displayTruncated"));
+        for(String key:new String[]{"stdout","stderr"}){JSONObject actual=out.getJSONObject("displayOmissions").getJSONObject(key);assertEquals(module.result.getString(key).getBytes(java.nio.charset.StandardCharsets.UTF_8).length,actual.getInt("sourceUtf8Bytes"));assertEquals(actual.getInt("sourceUtf8Bytes")-actual.getInt("headUtf8Bytes")-actual.getInt("tailUtf8Bytes"),actual.getInt("omittedUtf8Bytes"));assertFalse(actual.getBoolean("nativeOutputChanged"));}
     }
     @Test public void longBrowserObservationKeepsIdentityAndWholeActionableElementRefs()throws Exception {
         JSONArray elements=new JSONArray();for(int i=0;i<250;i++)elements.put(new JSONObject().put("ref","n"+i).put("tag","BUTTON").put("type","button").put("text","界".repeat(160)).put("id","x".repeat(1200)).put("name","界".repeat(1200)).put("href","https://example.com/"+"x".repeat(2000)));

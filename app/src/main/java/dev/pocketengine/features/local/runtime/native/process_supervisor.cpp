@@ -52,7 +52,7 @@ void child_error(int fd,int error) {
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_ordinaryProtocol(JNIEnv*,jclass) { return 2; }
+Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_ordinaryProtocol(JNIEnv*,jclass) { return 3; }
 
 extern "C" JNIEXPORT jlongArray JNICALL
 Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(
@@ -99,32 +99,44 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(
     bool stopped=entry_cancelled,timed_out=false,io_complete=true,leader_done=false,kill_sent=false,start_notified=false;
     long long start=now_ms(),stop_at=0,leader_at=0;
     int status=0;
-    bool leader_reaped=false;
+    bool leader_reaped=false,owns_leader=pid>0;
     if(pid>0) {
         for(auto& pair:pipes) nonblocking(pair[0]);
+        auto observe_leader=[&]() {
+            if(!owns_leader) return false;
+            siginfo_t info{};int checked;const auto observation_deadline=now_ms()+50;
+            // Keep the exact child waitable until cleanup. Another same-process
+            // reaper can remove it: a failed wait is not a reusable signal handle.
+            do {checked=waitid(P_PID,static_cast<id_t>(pid),&info,WEXITED|WNOHANG|WNOWAIT);}
+            while(checked<0&&errno==EINTR&&now_ms()<observation_deadline);
+            if(checked<0) {owns_leader=false;io_complete=false;return false;}
+            if(info.si_pid==pid&&!leader_done) {leader_done=true;leader_at=now_ms();}
+            return true;
+        };
+        auto signal_owned=[&](int signal,bool include_leader) {
+            if(!observe_leader()) return false;
+            kill(-pid,signal);if(include_leader) kill(pid,signal);
+            return true;
+        };
         while(true) {
             const auto time=now_ms();
             bool wants_stop=env->CallBooleanMethod(observer,cancelled)==JNI_TRUE;
             if(env->ExceptionCheck()) { env->ExceptionClear(); wants_stop=true; io_complete=false; }
             if(time-start>=timeout_ms) { timed_out=true; wants_stop=true; }
+            const bool previously_done=leader_done;
+            if(!observe_leader()) break;
             if(wants_stop && !stopped) {
                 stopped=true; stop_at=time;
                 // The child may not have reached setsid yet. Signal the owned leader as well.
-                kill(-pid,SIGTERM); kill(pid,SIGTERM);
+                if(!signal_owned(SIGTERM,true)) break;
             }
             if(stopped && !kill_sent && time-stop_at>=grace_ms) {
-                kill(-pid,SIGKILL); kill(pid,SIGKILL); kill_sent=true;
+                if(!signal_owned(SIGKILL,true)) { break; }
+                kill_sent=true;
             }
-            if(!leader_done) {
-                siginfo_t info{};
-                // Leave the leader unreaped until group cleanup, preventing its PID/PGID reuse here.
-                if(waitid(P_PID,static_cast<id_t>(pid),&info,WEXITED|WNOHANG|WNOWAIT)==0 && info.si_pid==pid) {
-                    leader_done=true; leader_at=time;
-                    // A successful shell may have left background children holding pipes or resources.
-                    kill(-pid,SIGTERM);
-                }
-            }
-            if(leader_done && time-leader_at>=grace_ms) kill(-pid,SIGKILL);
+            // A successful shell may have left background children holding pipes or resources.
+            if(leader_done&&!previously_done&&!signal_owned(SIGTERM,false)) break;
+            if(leader_done && time-leader_at>=grace_ms&&!signal_owned(SIGKILL,false)) break;
             pollfd descriptors[3];
             for(int i=0;i<3;i++) descriptors[i]={pipes[i][0],POLLIN,0};
             int polled=poll(descriptors,3,50);
@@ -144,7 +156,7 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(
                             start_notified=true;
                             bool accepted=env->CallBooleanMethod(observer,started)==JNI_TRUE;
                             if(env->ExceptionCheck()) {env->ExceptionClear();accepted=false;}
-                            if(!accepted) {io_complete=false;stopped=true;stop_at=now_ms();kill(-pid,SIGTERM);kill(pid,SIGTERM);}
+                            if(!accepted) {io_complete=false;stopped=true;stop_at=now_ms();signal_owned(SIGTERM,true);}
                         }
                         break;
                     }
@@ -168,16 +180,16 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(
                             if(env->ExceptionCheck()) { env->ExceptionClear(); io_complete=false; }
                             if(!accepted) io_complete=false;
                         }
-                        if(!io_complete && !stopped) { stopped=true;stop_at=now_ms();kill(-pid,SIGTERM);kill(pid,SIGTERM); }
+                        if(!io_complete && !stopped) { stopped=true;stop_at=now_ms();signal_owned(SIGTERM,true); }
                     }
                 }
             }
+            if(!owns_leader) break;
             if(leader_done && pipes[0][0]<0 && pipes[1][0]<0 && pipes[2][0]<0) break;
             if(leader_done && time-leader_at>grace_ms+2000) {io_complete=false;break;}
         }
         // Even detached stdout does not make a background member an owned persistent job.
-        kill(-pid,SIGKILL);
-        while(true) {
+        if(owns_leader&&signal_owned(SIGKILL,false)) while(true) {
             const pid_t waited=waitpid(pid,&status,0);
             if(waited==pid) {leader_reaped=true;break;}
             if(waited<0&&errno==EINTR) continue;
