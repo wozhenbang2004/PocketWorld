@@ -5,6 +5,7 @@ import {
   RiSettings3Line, RiShieldCheckLine, RiSmartphoneLine, RiTeamLine,
 } from '@remixicon/react';
 import { bridge } from './bridge';
+import ReminderWorkspace from './ReminderWorkspace';
 import { ModelPicker, PressButton } from './library';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import {
@@ -655,16 +656,16 @@ function DomainPage({ domain, state, data, supported, run, registerTransientBack
     </SettingsDialog>
   </>;
   if (domain === 'memory' || domain === 'memoryReview' || domain === 'learning') return <MemoryRecords domain={domain} data={data} supported={supported} run={run} />;
-  if (domain === 'automation' || domain === 'commitments') return <>
+  if (domain === 'automation') return <ReminderWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
+  if (domain === 'commitments') return <>
     <Card title={title} description="时间、时区、原目标与发生回执绑定；打开目标不自动执行。">
-      <Collection data={data} keys={domain === 'automation' ? ['rules', 'reminders'] : ['commitments']} label={domain === 'automation' ? '提醒规则' : '承诺'}>{row => <>
+      <Collection data={data} keys={['commitments']} label={'承诺'}>{row => <>
         <Facts items={[[ '计划', first(object(row.schedule), ['type', 'frequency'], text(row.scheduleType)) ], ['时区', first(object(row.schedule), ['timezone'], text(row.timezone)) ], ['期限', timeText(row.dueAt) ], ['版本', row.revision]]} />
         <div className="pw-form-actions">{act(domain + '.review', { id: recordId(row), expectedRevision: row.revision }, '查看原目标与操作')}{row.taskId && act('tasks.open', { id: row.taskId }, '打开关联任务')}</div>
       </>}</Collection>
-      {domain === 'automation' && <Button variant="secondary" onClick={() => { setEntry({}); setDraft({ goal: '', frequency: 'once', date: '', time: '', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }); }}>新建提醒</Button>}
     </Card>
     <Collection data={data} keys={['receipts', 'followUpReceipts']} label="发生回执">{row => <div className="pw-form-actions">{act(domain + '.openReceipt', { receiptId: recordId(row), claimId: row.claimId }, '打开原发生记录')}</div>}</Collection>
-    <SettingsDialog isOpen={entry !== null} title="新建提醒" onClose={() => setEntry(null)}><div className="pw-form-grid"><TextAreaField label="提醒目标" value={text(draft.goal)} onChange={value => update('goal', value)} /><RadioOptions label="重复方式" value={text(draft.frequency, 'once')} options={[{ id: 'once', label: '仅一次' }, { id: 'daily', label: '每天' }]} onChange={value => update('frequency', value)} /><TextField label={draft.frequency === 'daily' ? '每日时刻（HH:mm）' : '时间（YYYY-MM-DD HH:mm）'} value={text(draft.time)} onChange={value => update('time', value)} /><TextField label="时区" value={text(draft.timezone)} onChange={value => update('timezone', value)} /></div><div className="pw-form-actions">{act('automation.reviewSchedule', { goal: draft.goal, frequency: draft.frequency, time: draft.time, timezone: draft.timezone }, '核对提醒计划', true)}</div></SettingsDialog>
+
   </>;
   if (domain === 'channels') return <Card title="消息渠道与主人绑定" description="保留真实私聊证据、绑定版本、接收状态、原任务和投递回执。">
     <Collection data={data} keys={['profiles', 'channels']} label="渠道">{row => <>

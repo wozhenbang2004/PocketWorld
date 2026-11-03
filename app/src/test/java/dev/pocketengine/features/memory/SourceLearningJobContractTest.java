@@ -24,4 +24,14 @@ public final class SourceLearningJobContractTest {
     @Test public void nativeOwnerDispatcherRequiresTrueConsentAndCannotAcceptModelOrGrantOverrides()throws Exception{int[] called={0};var host=commands(called);JSONObject run=new JSONObject().put("taskId","native-original").put("revision",1L).put("confirmModelUse",true);SourceLearningJob.dispatch("runLearningJob",run,new RunControl(),host);assertEquals(1,called[0]);for(Object bad:new Object[]{"true",false,1,JSONObject.NULL})assertThrows(Exception.class,()->SourceLearningJob.dispatch("runLearningJob",new JSONObject(run.toString()).put("confirmModelUse",bad),new RunControl(),host));assertThrows(Exception.class,()->SourceLearningJob.dispatch("runLearningJob",new JSONObject(run.toString()).put("model","free-provider"),new RunControl(),host));assertThrows(Exception.class,()->SourceLearningJob.dispatch("runLearningJob",new JSONObject(run.toString()).put("revision",1.0),new RunControl(),host));assertThrows(Exception.class,()->SourceLearningJob.dispatch("tool_native_memory_learning_batch",run,new RunControl(),host));assertEquals(1,called[0]);}
     @Test public void cancelledNativeOwnerCommandCannotCreateOrSkipAPlan()throws Exception{int[] called={0};RunControl cancelled=new RunControl();cancelled.cancel();assertThrows(Exception.class,()->SourceLearningJob.dispatch("createLearningJob",new JSONObject().put("sourceRefs",new JSONArray().put(input().getJSONObject("sourceRef"))),cancelled,commands(called)));assertThrows(Exception.class,()->SourceLearningJob.dispatch("skipLearningJobBatch",new JSONObject().put("taskId","native-original").put("revision",1).put("confirmUnknownUse","true"),new RunControl(),commands(called)));assertEquals(0,called[0]);}
 
+    @Test public void executionContractCannotCarryAuthorityOrWrapFutureLongVersionsIntoCurrentSchema()throws Exception{
+        JSONObject current=LearningExtractionContract.capture(LearningExtractionContract.SOURCE,null);assertTrue(LearningExtractionContract.supported(current));
+        assertThrows(SecurityException.class,()->LearningExtractionContract.checked(new JSONObject(current.toString()).put("executionAuthorized",true)));
+        assertThrows(SecurityException.class,()->LearningExtractionContract.checked(new JSONObject(current.toString()).put("sourceCharsLimit",24000.0)));
+        assertFalse(LearningExtractionContract.supported(new JSONObject(current.toString()).put("assertionVersion",4_294_967_296L+MemoryAssertion.VERSION)));
+        assertFalse(LearningExtractionContract.supported(new JSONObject(current.toString()).put("sourceCharsLimit",4_294_967_296L+LearningExtractionContract.SOURCE_CHARS)));
+        assertThrows(SecurityException.class,()->LearningExtractionContract.capture(LearningExtractionContract.OWNER_QUOTE,null));
+        assertEquals("contract_unverifiable_requires_review",LearningExtractionContract.publicationStatus(new JSONObject().put("format","pocketworld.source-learning-draft.future")));
+    }
+
 }

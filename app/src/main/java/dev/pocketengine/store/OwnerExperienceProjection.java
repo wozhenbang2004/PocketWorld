@@ -61,9 +61,19 @@ public final class OwnerExperienceProjection {
             return operation; // A passive archive never revives a previously retired body.
         }
         JSONObject recorded=receipt.getJSONObject("recordedDraft");
-        if(recorded.length()!=4||!recorded.has("draft")||!"pocketworld.source-learning-draft.v1".equals(recorded.optString("format"))
+        boolean contractRecorded=LearningExtractionContract.DRAFT_FORMAT.equals(recorded.optString("format"));
+        Set<String> recordedFields=contractRecorded?Set.of("format","sourceRef","sourceFingerprint","draft","extractionContract"):Set.of("format","sourceRef","sourceFingerprint","draft");
+        if(recorded.length()!=recordedFields.size()||!recorded.has("draft")||(!contractRecorded&&!"pocketworld.source-learning-draft.v1".equals(recorded.optString("format")))
                 ||!source.equals(SourceRef.fromJson(recorded.getJSONObject("sourceRef")))||!input.getString("sourceFingerprint").equals(recorded.optString("sourceFingerprint"))
                 ||!TaskStore.capabilityFingerprint(recorded).equals(receipt.getString("draftFingerprint")))throw new SecurityException("原学习draft与原操作输入/hash不一致");
+        for(var keys=recorded.keys();keys.hasNext();)if(!recordedFields.contains(keys.next()))throw new SecurityException("原学习draft包含非原生字段");
+        if(contractRecorded){
+            JSONObject contract=LearningExtractionContract.checked(recorded.getJSONObject("extractionContract"));
+            LearningExtractionContract.requireSame(contract,arguments.getJSONObject("extractionContract"));
+            if(!TaskStore.capabilityFingerprint(contract).equals(receipt.optString("extractionContractFingerprint")))throw new SecurityException("原学习draft契约指纹不一致");
+            // A passive archive preserves the actual older contract too. Publication eligibility
+            // remains the original learning job's decision; export never reruns the extractor.
+        }else if(arguments.has("extractionContract")||receipt.has("extractionContractFingerprint"))throw new SecurityException("原学习draft不能降级为无契约旧格式");
         if(!barrier.blocked(source))return operation;
         JSONObject projected=new JSONObject(operation.toString()),redacted=projected.getJSONObject("receipt");redacted.remove("recordedDraft");
         redacted.put("recordedDraftRetired",true).put("sourceRef",source.toJson()).put("sourceFingerprint",input.getString("sourceFingerprint"))

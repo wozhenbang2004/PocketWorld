@@ -9,7 +9,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -51,7 +50,7 @@ internal fun NativeSshWorkbench(profileId: String, state: PocketUiState, control
             }
         }
     }
-    if (openConfirmation) AlertDialog(onDismissRequest = { openConfirmation = false }, containerColor = Color.White, title = { Text("打开远端交互式 Shell？") }, text = { Text("连接：" + profile.optString("name") + "\n初始目录：" + profile.optString("workspace") + "\n\n该 Shell 使用此账号的实际远端权限。关闭手机连接不保证远端进程终止。") }, confirmButton = { Button(onClick = { controller.requestFeature("ssh", "openPty", JSONObject().put("profileId", profileId).put("cols", 80).put("rows", 24).put("timeoutSeconds", 600).put("allowInteractiveShell", true)); openConfirmation = false }) { Text("打开这次终端") } }, dismissButton = { TextButton(onClick = { openConfirmation = false }) { Text("取消") } })
+    if (openConfirmation) AlertDialog(onDismissRequest = { openConfirmation = false }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("打开远端交互式 Shell？") }, text = { Text("连接：" + profile.optString("name") + "\n初始目录：" + profile.optString("workspace") + "\n\n该 Shell 使用此账号的实际远端权限。关闭手机连接不保证远端进程终止。") }, confirmButton = { Button(onClick = { controller.requestFeature("ssh", "openPty", JSONObject().put("profileId", profileId).put("cols", 80).put("rows", 24).put("timeoutSeconds", 600).put("allowInteractiveShell", true)); openConfirmation = false }) { Text("打开这次终端") } }, dismissButton = { TextButton(onClick = { openConfirmation = false }) { Text("取消") } })
     terminal?.let { binding -> SshTerminalView(binding, state, controller) { terminal = null } }
     doctorProfile?.let { captured -> PrivateSshDoctorPage(captured, controller) { doctorProfile = null } }
 }
@@ -160,7 +159,7 @@ private fun SftpTextEditor(profileId: String, path: String, state: PocketUiState
             failedWrite = true; localError = state.moduleErrors["ssh.writeFile"] ?: "未收到本次保存的确定回执，请核对原任务。"; submitted = null
         }
     }
-    AlertDialog(onDismissRequest = { if (!saving) { if (content != baseline) discard = true else close() } }, containerColor = Color.White, title = { Text(path, fontSize = 16.sp) }, text = {
+    AlertDialog(onDismissRequest = { if (!saving) { if (content != baseline) discard = true else close() } }, containerColor = MaterialTheme.colorScheme.surface, title = { Text(path, fontSize = 16.sp) }, text = {
         Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
             if (loading || saving) LinearProgressIndicator(Modifier.fillMaxWidth())
             if (readInput?.optString("_requestId") == readRequest) state.moduleErrors["ssh.readFile"]?.let { Text(it, color = Danger, fontSize = 12.sp) }
@@ -174,12 +173,12 @@ private fun SftpTextEditor(profileId: String, path: String, state: PocketUiState
             if (uncertain) SshCaption("写入结果不明，已停止重复保存。保留本地内容，可复制后到原任务和远端核对；不会自动重试。")
         }
     }, confirmButton = { Button(onClick = { cooperativeAccepted = false; confirmWrite = true }, enabled = initialized && content != baseline && submitted == null && !saving && !loading && !uncertain) { Text(if (saving || submitted != null) "等待写入回执" else "保存到远端") } }, dismissButton = { TextButton(onClick = { if (content != baseline) discard = true else close() }, enabled = !saving) { Text("关闭") } })
-    if (confirmWrite) AlertDialog(onDismissRequest = { confirmWrite = false }, containerColor = Color.White, title = { Text("保存这份远端文件？") }, text = { Column {
+    if (confirmWrite) AlertDialog(onDismissRequest = { confirmWrite = false }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("保存这份远端文件？") }, text = { Column {
         Text(path, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
         SshCaption("会检查已读取的文件版本，在协作锁内替换内容。其他不遵守这个锁的程序仍可能同时修改文件，这不是全局原子比较并交换。")
         Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(cooperativeAccepted, { cooperativeAccepted = it }); Text("已核对修改，接受本次协作校验写入", fontSize = 12.sp) }
     } }, confirmButton = { Button(onClick = { val frozen = content; val reviewedVersion = version; val request = controller.requestFeature("ssh", "writeFile", JSONObject().put("profileId", profileId).put("path", path).put("content", frozen).put("expectedVersion", reviewedVersion).put("acceptCooperativeWrite", true)); submitted = SftpWriteRequest(request, frozen, reviewedVersion); localError = null; confirmWrite = false }, enabled = cooperativeAccepted && submitted == null && !saving && !uncertain) { Text("确认写入") } }, dismissButton = { TextButton(onClick = { confirmWrite = false }) { Text("取消") } })
-    if (discard) AlertDialog(onDismissRequest = { discard = false }, containerColor = Color.White, title = { Text("关闭远端文件编辑？") }, text = { Text("当前未确认保存的编辑内容会从本地编辑区移除。远端结果以实际回执和核对为准。") }, confirmButton = { TextButton(onClick = { discard = false; close() }) { Text("关闭编辑区") } }, dismissButton = { TextButton(onClick = { discard = false }) { Text("保留编辑") } })
+    if (discard) AlertDialog(onDismissRequest = { discard = false }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("关闭远端文件编辑？") }, text = { Text("当前未确认保存的编辑内容会从本地编辑区移除。远端结果以实际回执和核对为准。") }, confirmButton = { TextButton(onClick = { discard = false; close() }) { Text("关闭编辑区") } }, dismissButton = { TextButton(onClick = { discard = false }) { Text("保留编辑") } })
 }
 
 private data class SftpWriteRequest(val id: String, val content: String, val version: String)

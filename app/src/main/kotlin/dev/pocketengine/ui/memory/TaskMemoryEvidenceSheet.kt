@@ -9,7 +9,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -176,7 +175,7 @@ fun TaskMemoryEvidenceSheet(
     LaunchedEffect(reviewing?.optString("id"), sourceDocument?.toString(), error) { scroll.scrollTo(0) }
     BackHandler { if (busy) onDismiss() else if (historyCitation != null) historyCitation = null else if (rawCitation != null) rawCitation = null else if (traceTask != null) traceTask = null else if (reviewing != null) reviewing = null else if (sourceDocument != null) sourceDocument = null else if (taskSearchOpen) taskSearchOpen = false else onDismiss() }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, containerColor = Color.White) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, containerColor = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(.94f).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("本次任务记忆", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))

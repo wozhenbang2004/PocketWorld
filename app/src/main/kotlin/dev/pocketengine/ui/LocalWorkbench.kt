@@ -15,7 +15,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.window.Dialog
@@ -190,8 +189,8 @@ private fun LocalCommands(checkoutId: String, state: PocketUiState, controller: 
         } catch (failure: Exception) { error = failure.message }
     }, enabled = runAllowed, modifier = Modifier.padding(top = 10.dp)) { Text("核对并执行") }
     error?.let { Text(it, color = Danger, fontSize = 12.sp) }
-    if (enableConfirmation) AlertDialog(onDismissRequest = { enableConfirmation = false }, containerColor = Color.White, title = { Text("连接 Termux？") }, text = { Text("这只启用本应用的连接选择，不代替系统权限。Termux 命令具有该账号的真实文件和网络权限；后续每次执行仍需你核对。") }, confirmButton = { Button(onClick = { controller.requestFeature("local", "termux.setEnabled", JSONObject().put("enabled", true)); enableConfirmation = false }) { Text("启用连接") } }, dismissButton = { TextButton(onClick = { enableConfirmation = false }) { Text("取消") } })
-    confirmation?.let { frozen -> AlertDialog(onDismissRequest = { confirmation = null }, containerColor = Color.White, title = { Text("执行这次操作？") }, text = { SelectionContainer { Text(frozen.description, fontSize = 13.sp, modifier = Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) } }, confirmButton = { Button(onClick = { submitted = frozen.command to controller.requestFeature("local", frozen.command, JSONObject(frozen.input.toString())); confirmation = null }, enabled = !submitting && !pending && !nativePending) { Text("确认这次执行") } }, dismissButton = { TextButton(onClick = { confirmation = null }) { Text("取消") } }) }
+    if (enableConfirmation) AlertDialog(onDismissRequest = { enableConfirmation = false }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("连接 Termux？") }, text = { Text("这只启用本应用的连接选择，不代替系统权限。Termux 命令具有该账号的真实文件和网络权限；后续每次执行仍需你核对。") }, confirmButton = { Button(onClick = { controller.requestFeature("local", "termux.setEnabled", JSONObject().put("enabled", true)); enableConfirmation = false }) { Text("启用连接") } }, dismissButton = { TextButton(onClick = { enableConfirmation = false }) { Text("取消") } })
+    confirmation?.let { frozen -> AlertDialog(onDismissRequest = { confirmation = null }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("执行这次操作？") }, text = { SelectionContainer { Text(frozen.description, fontSize = 13.sp, modifier = Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) } }, confirmButton = { Button(onClick = { submitted = frozen.command to controller.requestFeature("local", frozen.command, JSONObject(frozen.input.toString())); confirmation = null }, enabled = !submitting && !pending && !nativePending) { Text("确认这次执行") } }, dismissButton = { TextButton(onClick = { confirmation = null }) { Text("取消") } }) }
 }
 
 @Composable

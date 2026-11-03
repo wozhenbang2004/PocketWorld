@@ -13,7 +13,7 @@ import org.json.JSONObject
 
 /** References the original connections. Saving a group does not send a request or copy a key. */
 @Composable
-internal fun ModelGroupsPanel(snapshot: JSONObject, connections: JSONObject, busy: Boolean,
+internal fun ModelGroupsPanel(snapshot: JSONObject, connections: JSONObject, references: JSONObject, busy: Boolean,
     save: (String, Long, String, JSONObject, () -> Unit) -> Unit,
     select: (String, ModelTargetRef?) -> Unit) {
     val groups = jsonRows(snapshot.optJSONArray("groups"))
@@ -50,24 +50,30 @@ internal fun ModelGroupsPanel(snapshot: JSONObject, connections: JSONObject, bus
     }
     if (creating || editing != null) {
         val original = editing
-        ModelGroupEditor(original, connections, busy, { creating = false; editing = null }) { name, definition ->
+        ModelGroupEditor(original, connections, references, busy, { creating = false; editing = null }) { name, definition ->
             save(original?.optString("groupId").orEmpty(), original?.optLong("revision") ?: 0L, name, definition) { creating = false; editing = null }
         }
     }
 }
 
 @Composable
-private fun ModelGroupEditor(original: JSONObject?, connections: JSONObject, busy: Boolean, close: () -> Unit, save: (String, JSONObject) -> Unit) {
+private fun ModelGroupEditor(original: JSONObject?, connections: JSONObject, references: JSONObject, busy: Boolean, close: () -> Unit, save: (String, JSONObject) -> Unit) {
     var name by remember(original) { mutableStateOf(original?.optString("name").orEmpty()) }
     var chosen by remember(original) { mutableStateOf(jsonRows(original?.optJSONArray("candidates"))) }
     var attempts by remember(original) { mutableIntStateOf(original?.optJSONObject("attemptPolicy")?.optInt("maxAttempts", 1) ?: 1) }
     var switches by remember(original) { mutableStateOf(original?.optJSONObject("attemptPolicy")?.optInt("maxRouteSwitches", 0) == 1) }
     var external by remember(original) { mutableStateOf(chosen.any { it.optJSONArray("allowedAudiences")?.toString()?.contains("EXTERNAL_RELAY") == true }) }
-    val profiles = jsonRows(connections.optJSONArray("connections"))
+    val defaults = jsonRows(connections.optJSONArray("connections"))
+    val favorites = jsonRows(references.optJSONArray("models")).filter { it.optBoolean("favorite") && it.optBoolean("available") }.map {
+        JSONObject().put("id", it.getString("connectionId")).put("name", it.optString("connectionName")).put("model", it.getString("modelId"))
+            .put("binding", it.getJSONObject("binding")).put("enabled", true)
+    }
+    val profiles = (favorites + defaults).distinctBy { it.optString("id") + "\u0000" + it.optString("model") }
     AlertDialog(onDismissRequest = { if (!busy) close() }, title = { Text(if (original == null) "新模型组" else "编辑模型组") },
         text = { Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(name, { name = it }, label = { Text("用途名称，例如：编码") }, singleLine = true, enabled = !busy)
             Text("候选 ${chosen.size}/8 · 上方优先。供主任务、摘要和成员明确选择，只引用原连接，不复制凭据。", style = MaterialTheme.typography.bodySmall)
+            Text("下方包含当前可用的收藏模型与连接默认模型；批量收藏后，可在此继续加入原模型组。", style = MaterialTheme.typography.bodySmall)
             chosen.forEachIndexed { index, candidate ->
                 val target = candidate.getJSONObject("target")
                 Text("${index + 1}. ${target.optString("modelId")}", style = MaterialTheme.typography.bodyMedium)

@@ -157,9 +157,13 @@ public final class RemoteModule implements EngineModule {
     private JSONObject steerJob(JSONObject input)throws Exception {
         if(input.has("_profileBinding"))requireProfileBinding(input.getString("profileId"),input.getString("_profileBinding"));
         String profileId=identifier(input,"profileId"),jobId=identifier(input,"jobId"),messageId=identifier(input,"messageId");
-        String expected=required(input,"expectedTurnId",200),content=required(input,"text",12000);
-        JSONObject body=new JSONObject().put("messageId",messageId).put("expectedTurnId",expected).put("text",content);
-        JSONObject details=new JSONObject().put("messageId",messageId).put("jobId",jobId).put("expectedTurnId",expected);
+        String content=required(input,"text",12000);
+        JSONObject body=RemoteMessageTarget.copy(input,new JSONObject().put("messageId",messageId).put("text",content));
+        JSONObject details=RemoteMessageTarget.copy(input,new JSONObject().put("messageId",messageId).put("jobId",jobId));
+        if(RemoteMessageTarget.pi(input)){
+            if(!required(input,"sessionId",200).equals(required(input,"threadId",200)))throw new SecurityException("Pi补充不是原session/thread");
+            required(input,"jobOperationId",200);
+        }
         if(input.has("_profileBinding"))details.put("profileBinding",required(input,"_profileBinding",64)).put("sourceServiceBase",required(input,"serviceBase",2048));
         for(String key:new String[]{"threadId","jobOperationId"})if(input.has(key)){String value=required(input,key,200);body.put(key,value);details.put(key,value);}
         Reservation reserved=reserve(profileId,messageId,"steer_message",body,details);
@@ -187,20 +191,22 @@ public final class RemoteModule implements EngineModule {
         String status=result.optString("status");
         if(!status.matches("queued|sending|accepted|unknown|rejected|not_found"))return unknownSteer(intent);
         if(!intent.getString("operationId").equals(result.optString("operationId",result.optString("messageId")))
-                ||!intent.getString("messageId").equals(result.optString("messageId"))||!intent.getString("jobId").equals(result.optString("jobId"))
-                ||!status.equals("not_found")&&!intent.getString("expectedTurnId").equals(result.optString("expectedTurnId"))
-                ||status.equals("accepted")&&!intent.getString("expectedTurnId").equals(result.optString("turnId")))return unknownSteer(intent);
+                ||!intent.getString("messageId").equals(result.optString("messageId"))||!intent.getString("jobId").equals(result.optString("jobId")))return unknownSteer(intent);
+        if(!status.equals("not_found")){
+            try{if(!RemoteMessageTarget.receiptMatches(intent,result))return unknownSteer(intent);}
+            catch(SecurityException|org.json.JSONException malformed){return unknownSteer(intent);}
+        }
         for(String key:new String[]{"threadId","jobOperationId"}){
-            if(intent.has(key)&&(status.equals("accepted")||result.has(key))&&!intent.getString(key).equals(result.optString(key)))return unknownSteer(intent);
+            if(intent.has(key)&&(RemoteMessageTarget.pi(intent)&&!status.equals("not_found")||status.equals("accepted")||result.has(key))&&!intent.getString(key).equals(result.optString(key)))return unknownSteer(intent);
             if(intent.has(key)&&!result.has(key))result.put(key,intent.get(key));
         }
-        if(!result.has("expectedTurnId"))result.put("expectedTurnId",intent.getString("expectedTurnId"));
+        if(status.equals("not_found"))RemoteMessageTarget.copy(intent,result);
         intent.put("status",status.equals("accepted")?"settled":status.equals("rejected")?"rejected":status.equals("queued")||status.equals("sending")?"pending":"unknown").put("executorStatus",status);
         recordOperation(intent);result.put("profileId",intent.getString("profileId"));result.remove("fingerprint");
         context.emit(id(),new JSONObject().put("kind","steer_message").put("receipt",metadata(result)));return result;
     }
     private JSONObject unknownSteer(JSONObject intent)throws Exception {
-        intent.put("status","unknown").put("message","补充要求是否被原turn接收尚未确认；仅查询消息编号，不会重发或开启新turn。原任务未被此回执停止。");recordOperation(intent);
+        intent.put("status","unknown").put("message",RemoteMessageTarget.pi(intent)?"补充是否进入原Pi队列尚未确认；仅查询原消息，不重发、不另开prompt。此回执不证明模型已处理或任务已停止。":"补充要求是否被原turn接收尚未确认；仅查询消息编号，不会重发或开启新turn。原任务未被此回执停止。");recordOperation(intent);
         JSONObject result=new JSONObject(intent.toString());result.remove("fingerprint");
         context.emit(id(),new JSONObject().put("kind","steer_message").put("receipt",metadata(result)));return result;
     }
@@ -877,27 +883,34 @@ public final class RemoteModule implements EngineModule {
         if(recent.size()>=30&&!recent.containsKey(job.optString("profileId")+":"+job.optString("id"))){String oldest=null;long time=Long.MAX_VALUE;for(Map.Entry<String,JSONObject> item:recent.entrySet()){long at=item.getValue().optLong("updatedAt");if(at<time){time=at;oldest=item.getKey();}}if(oldest!=null)recent.remove(oldest);}
         recent.put(job.optString("profileId")+":"+job.getString("id"),metadata(job).put("serviceBase",job.optString("serviceBase")));
     }
-    private static JSONObject metadata(JSONObject job)throws Exception {JSONObject value=new JSONObject();for(String key:new String[]{"id","profileId","serviceBase","operationId","environmentId","worker","status","message","createdAt","updatedAt","exitCode","outputTruncated","timedOut","archived","lastKnownStatus","path","version","previousVersion","desiredVersion","verified","protocol","protocolVerified","controlProtocolVerified","sessionIdentityConfirmed","sessionId","promptRequestId","threadId","turnId","pendingApprovals","approvalReceipts","pendingQuestions","questionReceipts","progress","promptResultIdentity","diffTruncated","model","reportedModel","readOnly","readOnlyConfirmed","externalToolsDisabled","teamReadOnlyTools","capabilities","controls","inputSteeringVerified","steeringUnknown","lastSteerMessage","interruptAcknowledged","turnStartAcknowledged","resumeJobId","sourceServiceBase","remoteEffectsVerified","eventCount","resultSubtype","permissionDenialCount","messageId","jobId","jobOperationId","expectedTurnId","dispatched","errorCode","resultSnapshotId","resultSnapshotVersion","snapshotPrelaunchVerified","snapshotBaseVerifiedAt","workspaceIdentity","assignmentWorkspace","externalJobLimits","inferenceUsage","modelCallHardCapSupported","tokenHardCapSupported","costHardCapSupported","wallTimeHardCapSupported","wallTimeEnforcement","detachedDescendantIsolationVerified","assignmentWriteSandboxVerified","osReadIsolationVerified","modelOptions","modelRuntime","effort","noTools","nativeSettled","resourcesHeld","commandAllowlistEnforced","processStarted","dispatchFenceFinal","notStartedConfirmed","processCleanupProof","outputLimitExceeded","inputState","recoveryProof","coldRecovery","projectHistory","sessionBranchSource","sessionBranch","inferenceAudience","groupInputSource","externalGroupApiMode","externalGroupApiRead"})if(job.has(key))value.put(key,job.get(key));return new JSONObject(value.toString());}
+    private static JSONObject metadata(JSONObject job)throws Exception {JSONObject value=new JSONObject();for(String key:new String[]{"id","profileId","serviceBase","operationId","environmentId","worker","status","message","createdAt","updatedAt","exitCode","outputTruncated","timedOut","archived","lastKnownStatus","path","version","previousVersion","desiredVersion","verified","protocol","protocolVerified","controlProtocolVerified","sessionIdentityConfirmed","sessionId","promptRequestId","threadId","turnId","pendingApprovals","approvalReceipts","pendingQuestions","questionReceipts","progress","promptResultIdentity","diffTruncated","model","reportedModel","readOnly","readOnlyConfirmed","externalToolsDisabled","teamReadOnlyTools","capabilities","controls","inputSteeringVerified","steeringUnknown","lastSteerMessage","interruptAcknowledged","turnStartAcknowledged","resumeJobId","sourceServiceBase","remoteEffectsVerified","eventCount","resultSubtype","permissionDenialCount","messageId","jobId","jobOperationId","expectedTurnId","expectedPromptRequestId","disposition","delivery","consumed","dispatched","errorCode","resultSnapshotId","resultSnapshotVersion","snapshotPrelaunchVerified","snapshotBaseVerifiedAt","workspaceIdentity","assignmentWorkspace","externalJobLimits","inferenceUsage","modelCallHardCapSupported","tokenHardCapSupported","costHardCapSupported","wallTimeHardCapSupported","wallTimeEnforcement","detachedDescendantIsolationVerified","assignmentWriteSandboxVerified","osReadIsolationVerified","modelOptions","modelRuntime","effort","noTools","nativeSettled","nativeQueueEmptyConfirmed","resourcesHeld","commandAllowlistEnforced","processStarted","dispatchFenceFinal","notStartedConfirmed","processCleanupProof","outputLimitExceeded","inputState","recoveryProof","coldRecovery","projectHistory","sessionBranchSource","sessionBranch","inferenceAudience","groupInputSource","externalGroupApiMode","externalGroupApiRead"})if(job.has(key))value.put(key,job.get(key));return new JSONObject(value.toString());}
     /** Native WorkProfile source inspection only. Not reachable through handle or model commands. */
     public JSONObject workProfileTargetFacts(JSONObject reference,dev.pocketengine.core.RunControl observation)throws Exception {
         workProfileReference(reference);java.util.Objects.requireNonNull(observation).check();
         String worker=reference.getString("worker");
-        if(!worker.matches("codex_app_server|claude"))return new JSONObject().put("supported",false).put("sourceEvidence",new JSONObject().put("sourceState","unsupported").put("reasonCode","worker_adapter_unimplemented"));
+        if(!worker.matches("codex_app_server|claude|pi"))return new JSONObject().put("supported",false).put("sourceEvidence",new JSONObject().put("sourceState","unsupported").put("reasonCode","worker_adapter_unimplemented"));
         JSONObject binding=workProfileCurrentBinding(reference,observation),entrypoint=(JSONObject)binding.remove("_entrypointObservation");
         JSONObject query=new JSONObject().put("profileId",binding.getString("profileId")).put("_profileBinding",binding.getString("profileBinding"));
         JSONObject body=new JSONObject().put("environmentId",binding.getString("environmentId")).put("environmentBinding",binding.getString("environmentBinding")).put("worker",worker);
         JSONObject probe=request(query,"/v1/workers/probe",body,15,observation);workProfileProfileCurrent(reference,observation);
         if(!binding.getString("environmentId").equals(probe.optString("environmentId"))||!worker.equals(probe.optString("worker")))throw new SecurityException("原Harness探测返回了另一环境或执行器");
         JSONObject after=workProfileExecutableObservation(probe);boolean identityCurrent=Boolean.TRUE.equals(entrypoint.opt("executableIdentityVerified"))&&Boolean.TRUE.equals(after.opt("executableIdentityVerified"))&&entrypoint.getString("executableIdentity").equals(after.getString("executableIdentity"));
-        boolean codex=worker.equals("codex_app_server"),available=Boolean.TRUE.equals(probe.opt("available"));
-        boolean protocol=codex&&Boolean.TRUE.equals(probe.opt("protocolVerified")),config=codex&&protocol&&Boolean.TRUE.equals(probe.opt("configReadVerified"));
-        boolean supported=identityCurrent&&available&&(codex?protocol&&config&&Boolean.TRUE.equals(probe.opt("accountConfigured")):Boolean.TRUE.equals(probe.opt("cliFlagsVerified")));
-        String mode=probe.optString("authMode");if(!java.util.Set.of("apiKey","chatgpt","amazonBedrock","gcp").contains(mode)||!protocol)mode="unknown";
+        boolean codex=worker.equals("codex_app_server"),pi=worker.equals("pi"),available=Boolean.TRUE.equals(probe.opt("available"));
+        boolean protocol=(codex||pi)&&Boolean.TRUE.equals(probe.opt("protocolVerified")),config=codex&&protocol&&Boolean.TRUE.equals(probe.opt("configReadVerified"));
+        boolean cliFlags=Boolean.TRUE.equals(probe.opt("cliFlagsVerified")),noTools=Boolean.TRUE.equals(probe.opt("noTools"));
         String version=probe.optString("cliVersion");if(!version.matches("[0-9]+(?:\\.[0-9]+){1,3}(?:[-+][A-Za-z0-9._-]+)?")||version.length()>80)version="unknown";
-        JSONObject evidence=new JSONObject().put("sourceState",supported?"source_ready":"unavailable").put("reasonCode",supported?"original_binding_and_probe_observed":!identityCurrent?"worker_entrypoint_identity_unverified_or_changed":!available?"worker_unavailable":codex?"worker_protocol_account_or_config_unverified":"worker_cli_flags_unverified")
-                .put("workerAvailable",available).put("protocolSupported",true).put("protocolVerified",codex?workProfileBoolean(probe,"protocolVerified"):JSONObject.NULL)
-                .put("accountConfigured",protocol?workProfileBoolean(probe,"accountConfigured"):JSONObject.NULL).put("accountMode",mode).put("configReadVerified",protocol?workProfileBoolean(probe,"configReadVerified"):JSONObject.NULL)
+        boolean pinnedPi="1.4.0".equals(version);
+        boolean supported=identityCurrent&&available&&(codex?protocol&&config&&Boolean.TRUE.equals(probe.opt("accountConfigured")):pi?pinnedPi&&cliFlags&&protocol&&noTools:cliFlags);
+        String mode=probe.optString("authMode");if(!java.util.Set.of("apiKey","chatgpt","amazonBedrock","gcp").contains(mode)||!codex||!protocol)mode="unknown";
+        String unverified=codex?"worker_protocol_account_or_config_unverified":"worker_cli_flags_unverified";
+        if(pi)unverified=!pinnedPi?"worker_version_unsupported":!cliFlags?"worker_cli_flags_unverified":!protocol?"worker_protocol_unverified":"worker_no_tools_unverified";
+        JSONObject evidence=new JSONObject().put("sourceState",supported?"source_ready":"unavailable").put("reasonCode",supported?"original_binding_and_probe_observed":!identityCurrent?"worker_entrypoint_identity_unverified_or_changed":!available?"worker_unavailable":unverified)
+                .put("workerAvailable",available).put("protocolSupported",true).put("protocolVerified",codex||pi?workProfileBoolean(probe,"protocolVerified"):JSONObject.NULL)
+                .put("accountConfigured",codex&&protocol?workProfileBoolean(probe,"accountConfigured"):JSONObject.NULL).put("accountMode",mode).put("configReadVerified",codex&&protocol?workProfileBoolean(probe,"configReadVerified"):JSONObject.NULL)
                 .put("workerVersion",version).put("connectionVerified",false).put("configurationApplied",false).put("runtimeVerified",false);
+        // The original Pi probe only observes its pinned no-tools RPC. It proves
+        // neither configured account/billing nor an applied Harness configuration.
+        if(pi)evidence.put("cliFlagsVerified",workProfileBoolean(probe,"cliFlagsVerified")).put("noTools",workProfileBoolean(probe,"noTools"));
         JSONObject identity=identityCurrent?after:workProfileExecutableObservation(new JSONObject());for(var keys=identity.keys();keys.hasNext();){String key=keys.next();evidence.put(key,identity.get(key));}
         observation.check();return binding.put("supported",supported).put("sourceEvidence",evidence);
     }
@@ -929,7 +942,7 @@ public final class RemoteModule implements EngineModule {
         java.util.Objects.requireNonNull(observation).check();if(closed)throw new SecurityException("原电脑模块已关闭");return requireProfileBinding(reference.getString("profileId"),reference.getString("profileBinding"));
     }
     private JSONObject workProfileCurrentBinding(JSONObject reference,dev.pocketengine.core.RunControl observation)throws Exception {
-        JSONObject profile=workProfileProfileCurrent(reference,observation);String worker=reference.getString("worker");if(!worker.matches("codex_app_server|claude"))throw new SecurityException("此Harness适配器尚未实现");
+        JSONObject profile=workProfileProfileCurrent(reference,observation);String worker=reference.getString("worker");if(!worker.matches("codex_app_server|claude|pi"))throw new SecurityException("此Harness适配器尚未实现");
         JSONObject query=new JSONObject().put("profileId",profile.getString("id")).put("_profileBinding",profile.getString("bindingHash"));
         JSONObject environment=RemoteTaskRequest.environment(handleForTask("environments",query,observation),reference.getString("environmentId"),worker);profile=workProfileProfileCurrent(reference,observation);
         String environmentBinding=environment.optString("bindingHash");if(!environmentBinding.matches("[a-f0-9]{64}")||!reference.getString("environmentBinding").equals(environmentBinding))throw new SecurityException("原环境绑定已变化，未应用旧工作Profile");

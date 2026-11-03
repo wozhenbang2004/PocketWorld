@@ -6,7 +6,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.json.JSONObject
@@ -57,7 +56,7 @@ private fun SourceMemoryEditor(kind: String, id: String, initialText: String, st
             saved = result?.optJSONObject("record") ?: result?.takeIf { it.optString("id").isNotBlank() && it.has("revision") }
         }
     }
-    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = Color.White, title = { Text(if (saved == null) "明确保存到记忆" else "记忆已保存") }, text = {
+    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = MaterialTheme.colorScheme.surface, title = { Text(if (saved == null) "明确保存到记忆" else "记忆已保存") }, text = {
         Column(Modifier.heightIn(max = 500.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (saved == null) {
                 Text("只有你在此明确保存，才会形成记忆。来源身份和当前版本由宿主读取核验。", fontSize = 12.sp, lineHeight = 21.sp)
@@ -71,7 +70,7 @@ private fun SourceMemoryEditor(kind: String, id: String, initialText: String, st
             }
         }
     }, confirmButton = { if (saved != null) Button(onClick = close) { Text("完成") } else Button(onClick = { save(ordinary) }, enabled = !busy && text.isNotBlank() && text.length <= 8000) { Text(if (busy) "正在核验保存" else "明确保存") } }, dismissButton = { if (saved == null) TextButton(onClick = close, enabled = !busy) { Text("取消") } })
-    if (confirmResave) AlertDialog(onDismissRequest = { confirmResave = false }, containerColor = Color.White, title = { Text("重新保存已遗忘来源？") }, text = { Text("你将明确允许这条已遗忘来源重新形成记忆。宿主仍会核验来源存在及当前版本，不会恢复其他已遗忘内容。") }, confirmButton = { Button(onClick = { confirmResave = false; save(resave) }, enabled = !busy) { Text("重新保存已遗忘来源") } }, dismissButton = { TextButton(onClick = { confirmResave = false }) { Text("保留遗忘状态") } })
+    if (confirmResave) AlertDialog(onDismissRequest = { confirmResave = false }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("重新保存已遗忘来源？") }, text = { Text("你将明确允许这条已遗忘来源重新形成记忆。宿主仍会核验来源存在及当前版本，不会恢复其他已遗忘内容。") }, confirmButton = { Button(onClick = { confirmResave = false; save(resave) }, enabled = !busy) { Text("重新保存已遗忘来源") } }, dismissButton = { TextButton(onClick = { confirmResave = false }) { Text("保留遗忘状态") } })
 }
 
 
@@ -132,7 +131,7 @@ internal fun SourceLearningDialog(kind: String, id: String, state: PocketUiState
             else -> localMessage = envelope?.optString("error") ?: "停止回执未确认，请核对原任务和候选。"
         }
     }
-    AlertDialog(onDismissRequest = { stop(true) }, containerColor = Color.White, title = { Text(if (result?.optBoolean("proposed") == true) "候选待审，尚未采用" else if (stoppedAcknowledged) "本次提炼已停止" else "从真实来源提炼候选") }, text = {
+    AlertDialog(onDismissRequest = { stop(true) }, containerColor = MaterialTheme.colorScheme.surface, title = { Text(if (result?.optBoolean("proposed") == true) "候选待审，尚未采用" else if (stoppedAcknowledged) "本次提炼已停止" else "从真实来源提炼候选") }, text = {
         Column(Modifier.heightIn(max = 500.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("默认不自动学习。提炼会把下面这个版本的来源正文发给当前模型，只生成待审候选，不写入正式记忆，也不启用技能。", fontSize = 12.sp, lineHeight = 21.sp)
             listOfNotNull(prepared, proposed).filter { !it.optBoolean("ok") && !(stoppedAcknowledged && it.optString("requestId") == proposedId) }.forEach { Text(it.optString("error", "操作未完成，请核对原来源"), color = Danger, fontSize = 12.sp, lineHeight = 20.sp) }

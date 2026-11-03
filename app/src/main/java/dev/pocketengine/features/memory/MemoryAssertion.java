@@ -50,6 +50,23 @@ public final class MemoryAssertion {
         if(row.has("assertionCorrectionAt"))return row.getLong("assertionCorrectionAt");
         JSONObject a=row.getJSONObject("assertion");for(String key:List.of("validFrom","eventTime","assertedAt"))if(!a.isNull(key))return a.getLong(key);return Long.MIN_VALUE;
     }
+    static long effectiveAt(JSONObject row)throws Exception {
+        JSONObject a=row.getJSONObject("assertion");for(String field:List.of("validFrom","eventTime"))if(!a.isNull(field))return a.getLong(field);return 0;
+    }
+    static boolean protectedValue(JSONObject row)throws Exception {
+        return row.has("assertionCorrectionAt")||"user_said".equals(row.getJSONObject("assertion").getString("kind"));
+    }
+    private static String reviewDigest(JSONObject row)throws Exception {
+        return TaskMemoryUse.digest(MemoryArchive.canonical(new JSONObject().put("id",row.getString("id")).put("text",row.getString("text")).put("assertion",row.getJSONObject("assertion"))));
+    }
+    static boolean sameReviewedMeaning(JSONObject before,JSONObject after)throws Exception {
+        return before.has("assertion")&&after.has("assertion")&&reviewDigest(before).equals(reviewDigest(after));
+    }
+    /** Only an actual native correction/selection can supersede an opaque legacy floor.
+     * Metadata-only revisions keep the original review identity; ordinary JSON cannot issue it. */
+    static void recordNativeReview(JSONObject row,long now)throws Exception {
+        row.put("assertionCorrectionAt",now).put("assertionReview",new JSONObject().put("revision",row.getLong("revision")).put("at",now).put("contentDigest",reviewDigest(row)));
+    }
     /** Do not use insertion/updatedAt as event time: a late historical import cannot win today. */
     static Map<String,String> statuses(Collection<JSONObject> rows,Set<String> eligible,long now)throws Exception {return statuses(rows,eligible,now,Map.of());}
     static Map<String,String> statuses(Collection<JSONObject> rows,Set<String> eligible,long now,Map<String,JSONObject> fences)throws Exception {
@@ -58,32 +75,77 @@ public final class MemoryAssertion {
             if(!eligible.contains(id))status="source_or_record_inactive";
             else if(row.has("assertionResolution")&&"replace".equals(row.getJSONObject("assertionResolution").optString("decision"))&&!id.equals(row.getJSONObject("assertionResolution").optString("selectedId")))status="historical";
             else if("imagined".equals(a.getString("kind")))status="imagined_not_real_world_fact";
-            else if(!a.isNull("validFrom")&&a.getLong("validFrom")>now)status="not_yet_valid";
+            else if(effectiveAt(row)>now)status="not_yet_valid";
             else if(!a.isNull("validTo")&&a.getLong("validTo")<=now)status="historical";
-            else if(fences.containsKey(keyDigest(row))&&eventOrder(row)<fenceOrder(fences.get(keyDigest(row)),now))status="historical";
+            else if(belowFloor(row,fences.get(keyDigest(row)),now))status="historical";
             else {groups.computeIfAbsent(key(row),unused->new ArrayList<>()).add(row);continue;}result.put(id,status);
         }
         for(List<JSONObject> group:groups.values()){
+            List<JSONObject> strong=new ArrayList<>();for(JSONObject row:group)if(protectedValue(row))strong.add(row);
+            long protectedFloor=protectedFloor(fences.get(keyDigest(group.get(0))),now);
+            // A later model inference is a reviewable contradiction, not authority to replace
+            // the owner's correction or a source-proved literal. No confidence vote is used.
+            if(!strong.isEmpty()||hasProtectedFence(fences.get(keyDigest(group.get(0))),now)){
+                long newest=protectedFloor;for(JSONObject row:strong)newest=Math.max(newest,eventOrder(row));
+                List<JSONObject> latest=new ArrayList<>();for(JSONObject row:strong)if(eventOrder(row)==newest)latest.add(row);else result.put(row.getString("id"),"historical");
+                classifyLatest(latest,result);
+                Set<String> objects=new HashSet<>();for(JSONObject row:latest)objects.add(row.getJSONObject("assertion").getString("object"));
+                for(JSONObject row:group)if(!protectedValue(row))result.put(row.getString("id"),eventOrder(row)<newest||objects.contains(row.getJSONObject("assertion").getString("object"))?"historical":"pending_conflict");
+                continue;
+            }
             long newest=Long.MIN_VALUE;for(JSONObject row:group)newest=Math.max(newest,eventOrder(row));
             List<JSONObject> latest=new ArrayList<>();for(JSONObject row:group)if(eventOrder(row)==newest)latest.add(row);else result.put(row.getString("id"),"historical");
-            Set<String> objects=new HashSet<>();for(JSONObject row:latest)objects.add(row.getJSONObject("assertion").getString("object"));
-            JSONObject review=exactResolution(latest);
-            for(JSONObject row:latest){String id=row.getString("id");result.put(id,objects.size()<2?"current":review==null?"pending_conflict":"coexist".equals(review.getString("decision"))||id.equals(review.optString("selectedId"))?"current":"historical");}
+            classifyLatest(latest,result);
         }
         return result;
     }
+    private static void classifyLatest(List<JSONObject> latest,Map<String,String> result)throws Exception {
+        Set<String> objects=new HashSet<>();for(JSONObject row:latest)objects.add(row.getJSONObject("assertion").getString("object"));JSONObject review=exactResolution(latest);
+        for(JSONObject row:latest){String id=row.getString("id");result.put(id,objects.size()<2?"current":review==null?"pending_conflict":"coexist".equals(review.getString("decision"))||id.equals(review.optString("selectedId"))?"current":"historical");}
+    }
     static String keyDigest(JSONObject row)throws Exception{return TaskMemoryUse.digest(key(row));}
     static JSONObject mergeFence(JSONObject old,JSONObject row)throws Exception {
-        JSONObject a=row.getJSONObject("assertion");long effective=a.isNull("validFrom")?0:a.getLong("validFrom"),order=eventOrder(row);TreeMap<Long,Long> timeline=new TreeMap<>();
-        if(old!=null){JSONArray versions=old.getJSONArray("versions");for(int i=0;i<versions.length();i++){JSONObject v=versions.getJSONObject(i);timeline.put(v.getLong("effectiveAt"),v.getLong("eventOrder"));}}
+        JSONObject out=new JSONObject().put("keyDigest",keyDigest(row)).put("ownerId",row.getString("ownerId")).put("spaceId",row.getString("spaceId")).put("fenceVersion",2);
+        boolean legacy=old!=null&&!old.has("fenceVersion");
+        // The old aggregate has no contributor/authority identity. Preserve it verbatim;
+        // rebuilding it from surviving records would erase forgotten-source protection.
+        out.put("legacyVersions",old==null?new JSONArray():new JSONArray(old.getJSONArray(legacy?"versions":"legacyVersions").toString()));
+        String field=row.has("assertionCorrectionAt")?"reviewedVersions":"user_said".equals(row.getJSONObject("assertion").getString("kind"))?"literalVersions":"versions";
+        for(String name:List.of("versions","reviewedVersions","literalVersions")){
+            JSONArray prior=old==null||legacy?new JSONArray():old.getJSONArray(name);
+            out.put(name,name.equals(field)?mergeTimeline(prior,effectiveAt(row),eventOrder(row)):new JSONArray(prior.toString()));
+        }
+        return out;
+    }
+    private static JSONArray mergeTimeline(JSONArray versions,long effective,long order)throws Exception {
+        TreeMap<Long,Long> timeline=new TreeMap<>();for(int i=0;i<versions.length();i++){JSONObject v=versions.getJSONObject(i);timeline.put(v.getLong("effectiveAt"),v.getLong("eventOrder"));}
         timeline.merge(effective,order,Math::max);JSONArray kept=new JSONArray();long floor=Long.MIN_VALUE;boolean first=true;
         for(var entry:timeline.entrySet())if(first||entry.getValue()>floor){kept.put(new JSONObject().put("effectiveAt",entry.getKey()).put("eventOrder",entry.getValue()));floor=entry.getValue();first=false;}
         if(kept.length()>32)throw new IllegalStateException("同一事实未来有效时点超过32个，未丢弃旧当前性屏障");
-        return new JSONObject().put("keyDigest",keyDigest(row)).put("ownerId",row.getString("ownerId")).put("spaceId",row.getString("spaceId")).put("versions",kept);
+        return kept;
     }
-    private static long fenceOrder(JSONObject fence,long now)throws Exception{long order=Long.MIN_VALUE;JSONArray rows=fence.getJSONArray("versions");for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(row.getLong("effectiveAt")<=now)order=Math.max(order,row.getLong("eventOrder"));}return order;}
+    private static long fenceOrder(JSONArray rows,long now)throws Exception{long order=Long.MIN_VALUE;for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(row.getLong("effectiveAt")<=now)order=Math.max(order,row.getLong("eventOrder"));}return order;}
+    static long protectedFloor(JSONObject fence,long now)throws Exception {
+        return fence==null||!fence.has("fenceVersion")?Long.MIN_VALUE:Math.max(fenceOrder(fence.getJSONArray("reviewedVersions"),now),fenceOrder(fence.getJSONArray("literalVersions"),now));
+    }
+    static boolean hasProtectedFence(JSONObject fence,long now)throws Exception {
+        if(fence==null||!fence.has("fenceVersion"))return false;
+        for(String field:List.of("reviewedVersions","literalVersions")){JSONArray versions=fence.getJSONArray(field);for(int i=0;i<versions.length();i++)if(versions.getJSONObject(i).getLong("effectiveAt")<=now)return true;}return false;
+    }
+    private static boolean belowFloor(JSONObject row,JSONObject fence,long now)throws Exception {
+        if(fence==null)return false;long order=eventOrder(row);
+        long legacy=fenceOrder(fence.getJSONArray(fence.has("fenceVersion")?"legacyVersions":"versions"),now);
+        if(!row.has("assertionReview")&&order<legacy)return true;
+        if(!fence.has("fenceVersion"))return false;
+        return order<protectedFloor(fence,now)||!protectedValue(row)&&order<fenceOrder(fence.getJSONArray("versions"),now);
+    }
     public static void checkedFence(JSONObject value)throws Exception {
-        if(value.length()!=4||!value.optString("keyDigest").matches("[a-f0-9]{64}"))throw new IllegalStateException("事实当前性屏障无效");MemoryBook.Scope.stored(value);JSONArray versions=value.getJSONArray("versions");if(versions.length()<1||versions.length()>32)throw new IllegalStateException("事实时序屏障数量无效");long previous=-1;for(int i=0;i<versions.length();i++){JSONObject row=versions.getJSONObject(i);Object order=row.opt("eventOrder");long effective=SourceRef.integer(row,"effectiveAt",0);if(row.length()!=2||effective<=previous||!(order instanceof Integer||order instanceof Long))throw new IllegalStateException("事实屏障不能猜测事件时间");previous=effective;}
+        boolean versioned=value.has("fenceVersion");
+        if(value.length()!=(versioned?8:4)||!value.optString("keyDigest").matches("[a-f0-9]{64}")||versioned&&SourceRef.integer(value,"fenceVersion",1)!=2)throw new IllegalStateException("事实当前性屏障无效");MemoryBook.Scope.stored(value);
+        for(String field:versioned?List.of("legacyVersions","versions","reviewedVersions","literalVersions"):List.of("versions")){
+            JSONArray versions=value.getJSONArray(field);if(versions.length()>(32)||!versioned&&versions.length()<1)throw new IllegalStateException("事实时序屏障数量无效");long previous=-1;
+            for(int i=0;i<versions.length();i++){JSONObject row=versions.getJSONObject(i);Object order=row.opt("eventOrder");long effective=SourceRef.integer(row,"effectiveAt",0);if(row.length()!=2||effective<=previous||!(order instanceof Integer||order instanceof Long))throw new IllegalStateException("事实屏障不能猜测事件时间");previous=effective;}
+        }
     }
     private static JSONObject exactResolution(List<JSONObject> group)throws Exception {
         if(group.isEmpty())return null;JSONObject resolution=group.get(0).optJSONObject("assertionResolution");if(resolution==null)return null;
@@ -91,12 +153,17 @@ public final class MemoryAssertion {
         for(int i=0;i<refs.length();i++){JSONObject ref=refs.getJSONObject(i);if(!Objects.equals(expected.remove(ref.getString("id")),ref.getLong("revision")))return null;}return expected.isEmpty()?resolution:null;
     }
     static void checkStored(JSONObject row,long version)throws Exception {
-        if(!row.has("assertion")){if(row.has("assertionCorrectionAt")||row.has("assertionResolution"))throw new IllegalStateException("人本修订缺少原陈述");return;}
+        if(!row.has("assertion")){if(row.has("assertionCorrectionAt")||row.has("assertionResolution")||row.has("assertionReview"))throw new IllegalStateException("人本修订缺少原陈述");return;}
         if(version<9)throw new IllegalStateException("人本记忆缺少安全schema版本，未忽略其时间/冲突限制");row.put("assertion",checked(row.getJSONObject("assertion")));
         requireEvidence(row.getJSONObject("assertion"),row.getJSONArray("sourceRefs"));
         if(row.has("assertionCorrectionAt"))SourceRef.integer(row,"assertionCorrectionAt",0);
+        if(row.has("assertionReview")){
+            JSONObject review=row.getJSONObject("assertionReview");MemoryArchive.keys(review,Set.of("revision","at","contentDigest"));
+            if(review.length()!=3||SourceRef.integer(review,"revision",1)>row.getLong("revision")||!row.has("assertionCorrectionAt")
+                    ||SourceRef.integer(review,"at",0)!=row.getLong("assertionCorrectionAt")||!reviewDigest(row).equals(review.optString("contentDigest")))throw new IllegalStateException("原生审阅身份与当前陈述不符");
+        }
         if(row.has("assertionResolution")){
-            JSONObject r=row.getJSONObject("assertionResolution");if(r.length()!=5||!Set.of("replace","coexist").contains(r.optString("decision")))throw new IllegalStateException("冲突审阅结果无效");text(r,"reason",1,1000);SourceRef.integer(r,"at",0);String selected=r.getString("selectedId");if(!selected.isEmpty()&&!selected.matches("[0-9a-f-]{36}"))throw new IllegalStateException("冲突保留身份无效");JSONArray refs=r.getJSONArray("records");if(refs.length()<2||refs.length()>20)throw new IllegalStateException("冲突审阅范围无效");Set<String> ids=new HashSet<>();for(int i=0;i<refs.length();i++){JSONObject ref=refs.getJSONObject(i);if(ref.length()!=2||!ref.getString("id").matches("[0-9a-f-]{36}")||!ids.add(ref.getString("id")))throw new IllegalStateException("冲突审阅版本重复或无效");SourceRef.integer(ref,"revision",1);}
+            JSONObject r=row.getJSONObject("assertionResolution");if(r.length()!=5||!Set.of("replace","coexist").contains(r.optString("decision")))throw new IllegalStateException("冲突审阅结果无效");text(r,"reason",1,1000);SourceRef.integer(r,"at",0);String selected=r.getString("selectedId");if(!selected.isEmpty()&&!selected.matches("[0-9a-f-]{36}"))throw new IllegalStateException("冲突保留身份无效");JSONArray refs=r.getJSONArray("records");if(refs.length()<1||refs.length()>20||refs.length()==1&&(!row.has("assertionReview")||!"replace".equals(r.getString("decision"))))throw new IllegalStateException("冲突审阅范围无效");Set<String> ids=new HashSet<>();for(int i=0;i<refs.length();i++){JSONObject ref=refs.getJSONObject(i);if(ref.length()!=2||!ref.getString("id").matches("[0-9a-f-]{36}")||!ids.add(ref.getString("id")))throw new IllegalStateException("冲突审阅版本重复或无效");SourceRef.integer(ref,"revision",1);}
             if(!ids.contains(row.getString("id"))||"replace".equals(r.getString("decision"))&&!ids.contains(selected)||"coexist".equals(r.getString("decision"))&&!selected.isEmpty())throw new IllegalStateException("原生冲突决策缺少所示记录或保留身份");
         }
     }

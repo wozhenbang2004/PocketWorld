@@ -50,6 +50,7 @@ internal fun PocketExecutionStatus(
  * No demo phases, elapsed times, or automatic completion are synthesized. */
 @Composable
 private fun ExecutionRays(modifier: Modifier) {
+    val ink = Ink
     val transition = rememberInfiniteTransition(label = "executionRays")
     val phase by transition.animateFloat(0f, 1f,
         animationSpec = infiniteRepeatable(tween(800, easing = LinearEasing)), label = "executionRayPhase")
@@ -58,7 +59,7 @@ private fun ExecutionRays(modifier: Modifier) {
         for (index in 0 until 8) {
             val progress = (phase + 1f - index / 8f) % 1f
             rotate(index * 45f, center) {
-                drawLine(Ink.copy(alpha = 1f - .8f * progress),
+                drawLine(ink.copy(alpha = 1f - .8f * progress),
                     Offset(center.x, center.y - 6.25f * scale),
                     Offset(center.x, center.y - 3.25f * scale),
                     strokeWidth = 1.1f * scale, cap = StrokeCap.Round)

@@ -35,6 +35,7 @@ public final class HostToolSupervisor implements CapabilityPort {
     private dev.pocketengine.features.memory.TaskMemoryUse taskMemory;
     private dev.pocketengine.features.memory.TaskMemoryUse.Selection memorySelection;
     private final Map<String,dev.pocketengine.features.memory.TaskMemoryUse.Selection> toolMemorySelections=new LinkedHashMap<>();
+    private final Map<String,dev.pocketengine.features.memory.TaskMemoryUse.HistoricalSelection> historicalMemorySelections=new LinkedHashMap<>();
     private long toolMemoryGeneration;
     private boolean toolMemoryEnded;
     private dev.pocketengine.features.memory.TaskMemoryUse.TaskRef memoryTask;
@@ -69,7 +70,7 @@ public final class HostToolSupervisor implements CapabilityPort {
     public void installProjectMemoryRead(dev.pocketengine.features.memory.ProjectMemoryAccess selected,RunControl original)throws Exception{
         if(memoryControl!=null||projectMemory!=null)throw new SecurityException("项目记忆范围只能在原run开始前显选一次");selected.requireOriginal(original,taskId,runId,epoch);tasks.checkExtensionRun(taskId,runId,epoch,original);projectMemory=selected;
         routes.remove("memory_method_decision");nativeRoutes.remove("memory_method_decision");
-        for(String name:new String[]{"memory_search","memory_recall"}){Tool tool=routes.get(name);if(tool!=null)tool.definition.getJSONObject("function").put("description","只检索主人为本次run显选的项目记忆及原来源；不混入主人全局脑，不扩大原冻结版本或字符预算。");}
+        for(String name:new String[]{"memory_search","memory_recall"}){Tool tool=routes.get(name);if(tool!=null)tool.definition.getJSONObject("function").put("description","只检索主人为本次run显选的项目记忆及原来源；不混入主人全局脑，不扩大原冻结版本或字符预算。memory_recall可显式mode=historical读取原授权内保留的历史版本；历史不是当前事实或原始证据，不扩展身份关系。");}
     }
     /** Read-only preparation even before a Run exists. The unbound port never leaves this factory. */
     public static Set<String> configuredSkillCapabilities(FeatureHost host,TaskStore tasks)throws Exception{return new HostToolSupervisor(host,tasks,null,null,0,true,true,null,null).skillCapabilityNames();}
@@ -78,7 +79,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         this.host=java.util.Objects.requireNonNull(host);this.tasks=java.util.Objects.requireNonNull(tasks);this.taskId=catalogueOnly?null:identifier(taskId);this.runId=catalogueOnly?null:identifier(runId);this.epoch=epoch;this.allowWrites=allowWrites;
         this.outputCapture=outputCapture;this.workProfile=workProfile;if(!catalogueOnly&&workProfile==null&&tasks.get(this.taskId,false).optJSONObject("workProfileRef")!=null)throw new SecurityException("此任务已冻结工作配置，必须接入原生准确选用；没有继承全局工具");
         add("memory","search","memory_search","检索主人私人记忆，只返回真实已保存记录。可用queries补充至多3条同义/语义短查询，constraints按时间、实体、来源缩小范围并限制0至2跳稳定身份关系。时间界限是含端点的Unix毫秒，event时间未知会排除，updated不是事发时间；entityIds仅接受已有稳定身份。原query保留，不增加模型请求或读取权限；摘要不是原件，相关不代表事实或因果。",false,props("query",text(8000),"queries",querySuggestions(),"constraints",dev.pocketengine.features.memory.MemoryRecallConstraints.schema(),"limit",integer(1,100)),"query");
-        add("memory","recall","memory_recall","按当前问题召回主人私人记忆及来源。可用queries补充至多3条同义/语义短查询，constraints按时间、实体、来源缩小范围并限制0至2跳稳定身份关系。时间界限是含端点的Unix毫秒，event时间未知会排除，updated不是事发时间；entityIds仅接受已有稳定身份。原query保留，不增加模型请求或读取权限；历史不自动代表当前事实，原件可经memory_history_search回读。",false,props("query",text(8000),"queries",querySuggestions(),"constraints",dev.pocketengine.features.memory.MemoryRecallConstraints.schema(),"limit",integer(1,20)),"query");
+        add("memory","recall","memory_recall","按当前问题召回主人私人记忆及来源。mode默认current；显式historical只读仍可访问的保留版本，标明历史/冲突/未知时序，不把历史当当前事实、原件或授权。可用queries补充至多3条同义/语义短查询，constraints按时间、实体、来源缩小范围；current可限制0至2跳稳定身份关系，historical不扩展关系。时间界限是含端点的Unix毫秒，event时间未知会排除，updated不是事发时间；entityIds仅接受已有稳定身份。原query保留，不增加模型请求或读取权限；原件仍按memory_history_search/read的原范围回读。",false,props("query",text(8000),"mode",new JSONObject().put("type","string").put("enum",new JSONArray().put("current").put("historical")),"queries",querySuggestions(),"constraints",dev.pocketengine.features.memory.MemoryRecallConstraints.schema(),"limit",integer(1,20)),"query");
         add("memory","$method_decision","memory_method_decision","记录本任务对准确经验版本的明确采用/不适用/未选决定与理由。apply须关联本task/run已经返回确定回执的1至8个stepOperationIds，可从memory_raw_query(section=operations)取得原operationId。只记录决定和原步骤关系，不证明方法语义有效或导致业务成功，不执行或重试任何步骤。",true,
                 props("recordId",text(240),"revision",new JSONObject().put("type","integer").put("minimum",1).put("maximum",Long.MAX_VALUE),"decision",new JSONObject().put("type","string").put("enum",new JSONArray().put("apply").put("not_applicable").put("not_selected")),"reason",text(1000),"stepOperationIds",new JSONObject().put("type","array").put("maxItems",8).put("items",text(80))),"recordId","revision","decision","reason","stepOperationIds");
         add("workspace","$projects","workspace_projects","列出实际本地工作区项目。",false,new JSONObject());
@@ -103,7 +104,7 @@ public final class HostToolSupervisor implements CapabilityPort {
                 props("id",text(80),"revision",integer(1,Integer.MAX_VALUE),"digest",text(64),"reason",text(1000),"stepOperationIds",new JSONObject().put("type","array").put("minItems",1).put("maxItems",8).put("items",text(80))),"id","revision","digest","reason","stepOperationIds");
         if(host.hasSkillExecutionHost())add("skills","$skill_execute","skills_execute","当前任务需要Skill脚本时，按主人已选手机托管或电脑隔离地点准备具体版本、原始参数、依赖与输入输出审阅；主人本机批准本次计划后才沿原任务执行。手机同UID并非OS沙箱；安装或读取不授权执行，模型不能切换地点或降低权限合同。",true,
                 props("id",text(80),"revision",integer(1,Integer.MAX_VALUE),"digest",text(64),"scriptPath",text(240),"arguments",new JSONObject().put("type","array").put("maxItems",40).put("items",text(2048)),"timeoutSeconds",integer(1,120),"maxOutputBytes",integer(1,65536)),"id","revision","digest","scriptPath");
-        add("automation","$schedule_propose","schedule_propose","将原私人对话的普通时间意图保存为待主人审阅草案；不会排程或取得执行权。语义条件监控不支持，不能暗降级。",true,scheduleProposalProperties(),"title","kind","schedule");
+        add("automation","$schedule_propose","schedule_propose","将原私人对话的普通时间意图保存为待主人审阅草案；不会排程或取得执行权。语义条件监控不支持，不能暗降级。cron 须 scheduleVersion=1、显式 zone，expression 为分、时、日、月、星期共五个字段（周日=0）；支持数字、*、逗号、升序范围、*/n 或 a-b/n，日与星期最多限制一项。不支持秒、年、命令、名称或特殊日期语法。",true,scheduleProposalProperties(),"title","kind","schedule");
         add("automation","$schedule_list","schedule_list","读取本原私人对话当前执行提出的计划草案状态，不创建或执行任务。",false,new JSONObject());
         add("attachments","list","attachments_list","列出主人实际导入的附件元数据。",false,new JSONObject());
         add("attachments","readText","attachments_read_text","读取真实附件的可解析文字，不能把元数据当全文。",false,props("id",text(80)),"id");
@@ -127,7 +128,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         workingControl=java.util.Objects.requireNonNull(original);
         if(projectMemory!=null)projectMemory.requireOriginal(original,taskId,runId,epoch);
         memoryControl=original;
-        synchronized(toolMemorySelections){toolMemorySelections.clear();toolMemoryEnded=false;toolMemoryGeneration++;}
+        synchronized(toolMemorySelections){toolMemorySelections.clear();historicalMemorySelections.clear();toolMemoryEnded=false;toolMemoryGeneration++;}
         workingFence=new dev.pocketengine.features.memory.MemoryHostFence(){
             public void check()throws Exception{synchronized(tasks){if(memoryControl!=original)throw new SecurityException("工作记忆的原控制已结束");tasks.checkExtensionRun(taskId,runId,epoch,original);}}
             public JSONObject admit(Admission action)throws Exception{synchronized(tasks){check();return action.run();}}
@@ -167,7 +168,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         try{return working.snapshot();}catch(IllegalStateException ended){workingFence.check();closeWorking();return null;}
     }
     private void closeWorking(){var previous=working;RunControl owner=workingControl;Runnable cancelled=workingCancellation;working=null;workingControl=null;workingFence=null;workingCancellation=null;if(owner!=null&&cancelled!=null)owner.removeCancelAction(cancelled);if(previous!=null)host.releaseWorkingMemory(previous);}
-    private void endToolMemorySelections(){synchronized(toolMemorySelections){toolMemoryEnded=true;toolMemoryGeneration++;toolMemorySelections.clear();}}
+    private void endToolMemorySelections(){synchronized(toolMemorySelections){toolMemoryEnded=true;toolMemoryGeneration++;toolMemorySelections.clear();historicalMemorySelections.clear();}}
     @Override public void endRun(RunControl original){endToolMemorySelections();closeWorking();}
     @Override public void close(){try{modelRequestAbandoned("");}catch(Exception ignored){}if(nativeDevicePort!=null)nativeDevicePort.close();nativeDevicePort=null;nativeDeviceRoutes=null;if(finalCapabilities!=null)finalCapabilities.invalidate();finalCapabilities=null;endToolMemorySelections();closeWorking();taskMemory=null;memorySelection=null;memoryTask=null;memoryControl=null;memoryFence=null;projectMemory=null;}
     private void retainToolMemorySelection(dev.pocketengine.features.memory.TaskMemoryUse.Selection selected)throws Exception{
@@ -175,17 +176,34 @@ public final class HostToolSupervisor implements CapabilityPort {
         for(String field:new String[]{"retrievalDependencies","memoryNamespace"})if(metadata.has(field))identity.put(field,metadata.get(field));
         String digest=TaskStore.capabilityFingerprint(identity);synchronized(toolMemorySelections){
             if(toolMemoryEnded)throw new SecurityException("原run已经结束，未保留迟到选择");
-            if(!toolMemorySelections.containsKey(digest)&&toolMemorySelections.size()>=16)throw new IllegalStateException("本run已达到16份不同记忆检索选择上限；未交付新正文");
+            if(!toolMemorySelections.containsKey(digest)&&toolMemorySelections.size()+historicalMemorySelections.size()>=16)throw new IllegalStateException("本run已达到16份不同记忆检索选择上限；未交付新正文");
             toolMemorySelections.putIfAbsent(digest,selected);
         }
     }
+    private dev.pocketengine.features.memory.TaskMemoryUse.HistoricalSelection retainHistoricalMemorySelection(dev.pocketengine.features.memory.TaskMemoryUse.HistoricalSelection selected)throws Exception{
+        String digest=selected.metadata().getString("historyDigest");synchronized(toolMemorySelections){
+            if(toolMemoryEnded)throw new SecurityException("原run已经结束，未保留迟到历史选择");
+            var previous=historicalMemorySelections.get(digest);if(previous!=null)return previous;
+            if(toolMemorySelections.size()+historicalMemorySelections.size()>=16)throw new IllegalStateException("本run已达到16份不同记忆检索选择上限；未交付新正文");
+            historicalMemorySelections.put(digest,selected);return selected;
+        }
+    }
     private void validateToolMemorySelections(RunControl original)throws Exception{
-        List<dev.pocketengine.features.memory.TaskMemoryUse.Selection> selected;long generation;synchronized(toolMemorySelections){if(toolMemoryEnded)throw new SecurityException("原run已经结束，未接受旧回调");generation=toolMemoryGeneration;selected=new java.util.ArrayList<>(toolMemorySelections.values());}
-        if(selected.isEmpty())return;if(original!=memoryControl||taskMemory==null||memoryFence==null)throw new SecurityException("检索选择不属于原run");
+        List<dev.pocketengine.features.memory.TaskMemoryUse.Selection> selected;List<dev.pocketengine.features.memory.TaskMemoryUse.HistoricalSelection> historical;long generation;
+        synchronized(toolMemorySelections){if(toolMemoryEnded)throw new SecurityException("原run已经结束，未接受旧回调");generation=toolMemoryGeneration;selected=new java.util.ArrayList<>(toolMemorySelections.values());historical=new java.util.ArrayList<>(historicalMemorySelections.values());}
+        if(selected.isEmpty()&&historical.isEmpty())return;if(original!=memoryControl||taskMemory==null||memoryFence==null)throw new SecurityException("检索选择不属于原run");
         for(var selection:selected)try{taskMemory.validateTaskMemorySelection(privateScope(),selection,memoryFence);}
         catch(InterruptedException cancelled){throw cancelled;}
         catch(Exception unavailable){original.check();throw new dev.pocketengine.features.memory.ToolOutputCapture.OutputSourceUnavailable(unavailable);}
+        for(var selection:historical)try{taskMemory.validateHistoricalTaskRecall(privateScope(),selection,memoryFence);}
+        catch(InterruptedException cancelled){throw cancelled;}
+        catch(Exception unavailable){original.check();throw new dev.pocketengine.features.memory.ToolOutputCapture.OutputSourceUnavailable(unavailable);}
         synchronized(toolMemorySelections){if(toolMemoryEnded||generation!=toolMemoryGeneration)throw new SecurityException("检索校验期间原run已经结束");}
+    }
+    private JSONArray historicalReferenceValidation()throws Exception{
+        validateToolMemorySelections(memoryControl);JSONArray references=new JSONArray();
+        synchronized(toolMemorySelections){if(toolMemoryEnded)throw new SecurityException("原run已经结束");for(var selected:historicalMemorySelections.values())references.put(selected.validation());}
+        return references;
     }
     @Override public boolean responseCurrent(RunControl original)throws Exception{
         validateToolMemorySelections(original);
@@ -242,14 +260,13 @@ public final class HostToolSupervisor implements CapabilityPort {
     /** Refresh only at request assembly. Calls from the admitted step retain old pinned presets. */
     private void refreshPluginRoutes()throws Exception {
         Map<String,Tool> next=new LinkedHashMap<>(nativeRoutes);if(workProfile!=null&&!workProfile.hasSkills())next.entrySet().removeIf(entry->entry.getValue().feature.equals("skills"));
-        if(available("plugins")){
-            JSONArray registry=host.module("plugins").handle("registry",new JSONObject()).getJSONArray("tools");
-            for(int i=0;i<registry.length();i++){
-                JSONObject entry=registry.getJSONObject(i);if(workProfile!=null&&!workProfile.includesPluginTool(entry))continue;boolean writes=!entry.optString("effect","write").equals("read");if(writes&&!allowWrites)continue;
-                String name=entry.getString("name");if(!name.matches("[A-Za-z][A-Za-z0-9_-]{0,63}")||next.containsKey(name))throw new IllegalArgumentException("插件工具名称无效或冲突");
-                JSONObject preset=new JSONObject().put("id",entry.getString("pluginId")).put("tool",entry.getString("tool")).put("expectedVersion",entry.getString("version")).put("expectedInstallationId",entry.getString("installationId")).put("expectedExecutionIdentity",TaskStore.capabilityFingerprint(entry.getJSONObject("executionBinding")));
-                JSONObject schema=new JSONObject(entry.getJSONObject("schema").toString());next.put(name,new Tool("plugins","invoke",writes,schema,definition(name,entry.getString("description"),schema),preset));
-            }
+        JSONArray registry=available("plugins")?host.module("plugins").handle("registry",new JSONObject()).getJSONArray("tools"):new JSONArray();
+        if(workProfile!=null)workProfile.requirePluginTools(registry);
+        for(int i=0;i<registry.length();i++){
+            JSONObject entry=registry.getJSONObject(i);if(workProfile!=null&&!workProfile.includesPluginTool(entry))continue;boolean writes=!entry.optString("effect","write").equals("read");if(writes&&!allowWrites)continue;
+            String name=entry.getString("name");if(!name.matches("[A-Za-z][A-Za-z0-9_-]{0,63}")||next.containsKey(name))throw new IllegalArgumentException("插件工具名称无效或冲突");
+            JSONObject preset=new JSONObject().put("id",entry.getString("pluginId")).put("tool",entry.getString("tool")).put("expectedVersion",entry.getString("version")).put("expectedInstallationId",entry.getString("installationId")).put("expectedExecutionIdentity",TaskStore.capabilityFingerprint(entry.getJSONObject("executionBinding")));
+            JSONObject schema=new JSONObject(entry.getJSONObject("schema").toString());next.put(name,new Tool("plugins","invoke",writes,schema,definition(name,entry.getString("description"),schema),preset));
         }
         routes.clear();routes.putAll(next);
     }
@@ -290,7 +307,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         }
         // Full live version identities only: validation is not limited to the query's top matches,
         // contains no memory/Skill body, and is consumed by the runner, not injected as instructions.
-        JSONObject validation=new JSONObject().put("memory",memoryVersions).put("skills",skillVersions);snapshot.put("referenceValidation",validation);
+        JSONObject validation=new JSONObject().put("memory",memoryVersions).put("historicalMemory",historicalReferenceValidation()).put("skills",skillVersions);snapshot.put("referenceValidation",validation);
         if(admittedSkillAssetScope!=null)validation.put("skillScopeFingerprint",dev.pocketengine.features.skills.SkillSourcePolicy.scopeFingerprint(admittedSkillAssetScope));
         JSONObject temporary=workingSnapshot();admittedWorkingMemory=temporary!=null;if(temporary!=null&&!temporary.optString("context").isEmpty()){reference.append("\n").append(temporary.getString("context"));snapshot.put("workingMemory",new JSONObject().put("taskId",taskId).put("runId",runId).put("epoch",epoch).put("revision",temporary.getLong("revision")).put("persisted",false));}
         if(workProfile!=null&&workProfile.hasInstructions()){
@@ -404,6 +421,13 @@ public final class HostToolSupervisor implements CapabilityPort {
                 result=tasks.recordLearnedMethodDecision(taskId,runId,epoch,decisionOperation,selected,control);
             }
         }
+        else if(name.equals("memory_recall")&&"historical".equals(args.optString("mode","current"))){
+            if(memoryControl!=control||taskMemory==null||memoryTask==null||memoryFence==null)throw new SecurityException("原任务历史记忆选择尚未绑定，未放宽读取范围");host.synchronizeMemory(privateScope());
+            var plan=dev.pocketengine.features.memory.MemoryQueryPlan.agentSuggested(args.getString("query"),args.optJSONArray("queries")==null?new JSONArray():args.getJSONArray("queries"),args.optJSONObject("constraints")==null?new JSONObject():args.getJSONObject("constraints"));
+            var selected=taskMemory.prepareHistoricalTaskRecall(privateScope(),memoryTask,plan,Math.min(16,args.optInt("limit",6)),12000,memoryFence);
+            result=memoryFence.admit(()->{taskMemory.validateHistoricalTaskRecall(privateScope(),selected,memoryFence);var retained=retainHistoricalMemorySelection(selected);
+                JSONObject snapshot=taskMemory.validateHistoricalTaskRecall(privateScope(),retained,memoryFence);tasks.prepareHistoricalMemoryToolReference(name,retained,control);return snapshot;});
+        }
         else if(projectMemory!=null&&tool.feature.equals("memory")){
             if(!java.util.Set.of("search","recall").contains(tool.command)||memoryControl!=control||taskMemory==null||memoryFence==null)throw new SecurityException("本run项目记忆没有全局记忆或方法执行后门");host.synchronizeMemory(privateScope());
             var selected=args.has("queries")||args.has("constraints")?taskMemory.prepareSemanticTaskRecall(privateScope(),memoryTask,dev.pocketengine.features.memory.MemoryQueryPlan.agentSuggested(args.getString("query"),args.optJSONArray("queries")==null?new JSONArray():args.getJSONArray("queries"),args.optJSONObject("constraints")==null?new JSONObject():args.getJSONObject("constraints")),Math.min(16,args.optInt("limit",6)),12000,memoryFence):taskMemory.prepareTaskRecall(privateScope(),memoryTask,args.getString("query"),Math.min(16,args.optInt("limit",6)),12000,memoryFence);
@@ -502,7 +526,7 @@ public final class HostToolSupervisor implements CapabilityPort {
     private static JSONObject text(int max)throws Exception{return new JSONObject().put("type","string").put("maxLength",max);}
     private static JSONObject querySuggestions()throws Exception{return new JSONObject().put("type","array").put("maxItems",3).put("items",text(500));}
     private static JSONObject scheduleProposalProperties()throws Exception {
-        JSONObject schedule=new JSONObject().put("type","object").put("properties",props("type",new JSONObject().put("type","string").put("enum",new JSONArray().put("once").put("interval").put("daily").put("weekly").put("monthly")),"at",new JSONObject().put("type","integer").put("minimum",1),"anchorAt",new JSONObject().put("type","integer").put("minimum",1),"intervalMillis",new JSONObject().put("type","integer").put("minimum",60000).put("maximum",31622400000L),"time",text(5),"zone",text(80),"daysOfWeek",new JSONObject().put("type","array").put("maxItems",7).put("items",integer(1,7)),"dayOfMonth",integer(1,31),"shortMonthPolicy",text(12),"dstGap",text(16),"dstOverlap",text(8))).put("required",new JSONArray().put("type")).put("additionalProperties",false);
+        JSONObject schedule=new JSONObject().put("type","object").put("properties",props("type",new JSONObject().put("type","string").put("enum",new JSONArray().put("once").put("interval").put("daily").put("weekly").put("monthly").put("cron")),"scheduleVersion",integer(1,1),"expression",text(512),"at",new JSONObject().put("type","integer").put("minimum",1),"anchorAt",new JSONObject().put("type","integer").put("minimum",1),"intervalMillis",new JSONObject().put("type","integer").put("minimum",60000).put("maximum",31622400000L),"time",text(5),"zone",text(80),"daysOfWeek",new JSONObject().put("type","array").put("maxItems",7).put("items",integer(1,7)),"dayOfMonth",integer(1,31),"shortMonthPolicy",text(12),"dstGap",text(16),"dstOverlap",text(8))).put("required",new JSONArray().put("type")).put("additionalProperties",false);
         return props("title",text(120),"kind",new JSONObject().put("type","string").put("enum",new JSONArray().put("reminder").put("phone_goal")),"goal",text(4000),"schedule",schedule);
     }
     private static JSONObject integer(int min,int max)throws Exception{return new JSONObject().put("type","integer").put("minimum",min).put("maximum",max);}

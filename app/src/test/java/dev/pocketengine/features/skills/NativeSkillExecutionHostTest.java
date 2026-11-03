@@ -104,7 +104,9 @@ public final class NativeSkillExecutionHostTest {
             assertTrue(result.toString().length()<=2048);assertEquals(1,result.getInt("artifactCount"));
             JSONObject artifact=f.tasks.readSkillExecution(f.task.getString("id"),f.input.getString("_hostOperationId")).getJSONObject("receipt").getJSONArray("artifacts").getJSONObject(0);byte[] raw=f.tasks.readSkillArtifact(f.task.getString("id"),f.input.getString("_hostOperationId"),artifact.getString("artifactId"),artifact.getString("sha256"));assertArrayEquals(new byte[]{(byte)0x89,'P','N','G',0,(byte)0xff},raw);
             assertThrows(SecurityException.class,()->f.tasks.readSkillArtifact(f.task.getString("id"),f.input.getString("_hostOperationId"),artifact.getString("artifactId"),"0".repeat(64)));
-            f.skills.handle("delete",new JSONObject().put("id",f.installed.getString("id")));f.control.cancel();assertNull(f.host.pendingReview(f.task.getString("id")));
+            assertThrows(SecurityException.class,()->f.skills.handle("delete",new JSONObject().put("id",f.installed.getString("id"))));
+            // Simulate missing local bytes through the actual registry; this is not native uninstall authorization.
+            new SkillBook(new java.io.File(f.android.getFilesDir(),"skills")).delete(scope(),f.installed.getString("id"));f.control.cancel();assertNull(f.host.pendingReview(f.task.getString("id")));
             TaskStore reopened=new TaskStore(f.android);try(NativeSkillExecutionHost restart=new NativeSkillExecutionHost(f.android,f.skills,f.wire,reopened,(id,run,epoch,c)->{throw new SecurityException("no restored live executor");},id->{})){
                 JSONObject actual=restart.reconcile(f.task.getString("id"),f.input.getString("_hostOperationId"),false);assertEquals("completed",actual.getJSONObject("receipt").getString("status"));assertEquals(1,f.posts.get());assertEquals(1,f.markers());
             }
@@ -125,7 +127,8 @@ public final class NativeSkillExecutionHostTest {
             String task=f.task.getString("id"),operation=f.input.getString("_hostOperationId");
             assertEquals("not_retrieved",f.host.taskSnapshot(task,Set.of("skills_execute"),new JSONObject()).getJSONArray("executions").getJSONObject(0).getJSONObject("artifactAvailability").getString("state"));
             f.tasks.journal(task,f.task.getString("runId"),f.task.getInt("coordinatorEpoch"),f.control).finishOperation(operation,result);
-            f.host.removeConfiguration(f.window,f.host.configuration().getLong("revision"),f.host.configuration().getString("stateFingerprint"));f.skills.handle("delete",new JSONObject().put("id",f.installed.getString("id")));f.control.cancel();f.failArtifactReads=false;
+            f.host.removeConfiguration(f.window,f.host.configuration().getLong("revision"),f.host.configuration().getString("stateFingerprint"));assertThrows(SecurityException.class,()->f.skills.handle("delete",new JSONObject().put("id",f.installed.getString("id"))));
+            new SkillBook(new java.io.File(f.android.getFilesDir(),"skills")).delete(scope(),f.installed.getString("id"));f.control.cancel();f.failArtifactReads=false;
             try(NativeSkillExecutionHost reopened=new NativeSkillExecutionHost(f.android,f.skills,f.wire,f.tasks,(id,run,epoch,c)->{throw new SecurityException("no restarted live executor");},id->{})){
                 assertFalse(reopened.configuration().getBoolean("configured"));assertNull(reopened.pendingReview(task));
                 JSONObject actual=reopened.retrieveArtifacts(task,operation);assertEquals("available",actual.getJSONObject("artifactAvailability").getString("state"));assertFalse(actual.getBoolean("replayAllowed"));

@@ -19,6 +19,10 @@ from remote_interactions import QuestionMailbox, Progress, question
 MAX_EVENT = 1_048_576
 MAX_OUTPUT = 196_608
 CHILD_SOURCE_PROTOCOL = "claude_complete_child_v1"
+# Public tool_progress fields in the official SDK reference read 2026-11-03;
+# SDK 0.2.177 records its bundled CLI as 2.1.317. This is observation only,
+# enabled by matching both existing initialize and system/init readbacks.
+CHILD_PROGRESS_VERSION = "2.1.317"
 REQUIRED_FLAGS = ("--safe-mode", "--restricted", "--settings", "--input-format", "--output-format", "--verbose",
                   "--include-partial-messages", "--permission-prompts", "--permission-prompt-tool",
                   "--permission-mode", "--tools", "--allowedTools", "--disallowedTools",
@@ -99,6 +103,7 @@ class ClaudeStreamDriver:
         self.event_count = 0
         self.reported_model = None
         self.runtime_version = None
+        self.system_init_version = None
         self.requested_model = self.requested_effort = None
         self.model_options = None
         self.context_window = self.context_source = None
@@ -148,10 +153,11 @@ class ClaudeStreamDriver:
         self.output = (self.output + value)[:MAX_OUTPUT]
 
     def _child_source(self, event):
-        """Only complete, session-confirmed public blocks carry native child lineage.
+        """Session-confirmed public observations carry native child lineage.
 
         Agent SDK docs expose parent_tool_use_id on complete assistant/user messages,
-        not child token streams. No Agent tool, child session, resume or grant is added.
+        not child token streams; tool progress separately requires the exact version.
+        No Agent tool, child session, resume or grant is added.
         """
         parent = event.get("parent_tool_use_id")
         if parent is None:
@@ -170,6 +176,38 @@ class ClaudeStreamDriver:
             if value is not None:
                 source[key] = identifier(value)
         return source
+
+    def _tool_progress(self, event):
+        if event.get("parent_tool_use_id") is None:
+            # Preserve the existing main/unmarked observation contract. Child
+            # fields must never be erased into this branch.
+            self.progress.add("tool", "tool_progress", event.get("tool_use_id", ""),
+                              tool=str(event.get("tool_name", "unknown")), status="running")
+            return
+        if not self.initialized or not self.turn_dispatched:
+            raise DriverError("Child progress precedes its original approved invocation")
+        source = self._child_source({key: event.get(key) for key in ("parent_tool_use_id", "session_id", "uuid")})
+        try:
+            session_uuid(event.get("uuid"))
+        except DriverError:
+            raise DriverError("Child progress lacks its exact native event UUID") from None
+        item, tool = event.get("tool_use_id"), event.get("tool_name")
+        if not isinstance(item, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}", item):
+            raise DriverError("Child progress tool-use identity is unsupported")
+        if not self._option_text(tool) or any(ord(char) == 127 for char in tool):
+            raise DriverError("Child progress tool name is unsupported")
+        try:
+            tool.encode("utf-8")
+        except UnicodeError:
+            raise DriverError("Child progress tool name is not valid text") from None
+        if self.runtime_version != CHILD_PROGRESS_VERSION or self.system_init_version != CHILD_PROGRESS_VERSION:
+            self.progress.add("notice", "claude/child_progress/unavailable",
+                              summary="Public child tool progress omitted: this original initialize and session do not confirm the supported CLI version. No child progress was attached to the parent.")
+            return
+        source["nativeLineageVersion"] = self.runtime_version
+        # No retry payload, system text, task handle, hidden reasoning or usage.
+        # Progress already keys these observations by the original parent source.
+        self.progress.add("tool", "tool_progress", item, tool=tool, status="running", **source)
 
     def _send(self, value):
         data = (json.dumps(value, ensure_ascii=False) + "\n").encode("utf-8")
@@ -442,6 +480,7 @@ class ClaudeStreamDriver:
                 version = event.get("claude_code_version")
                 if self.runtime_version and version is not None and version != self.runtime_version:
                     raise DriverError("Claude runtime version changed after initialization; prior prompt outcome is unverified")
+                self.system_init_version = version
             elif kind == "control_request":
                 self._permission(event)
             elif kind == "control_cancel_request":
@@ -489,7 +528,7 @@ class ClaudeStreamDriver:
                             self.questions.resolve(self.question_tools[tool_id], "tool_result")
                         self.progress.add("tool_result", "user/tool_result", tool_id or "", status="failed" if block.get("is_error") else "completed", text=block.get("content") if isinstance(block.get("content"), str) else "Structured tool result; no full payload displayed", **child)
             elif kind == "tool_progress":
-                self.progress.add("tool", kind, event.get("tool_use_id", ""), tool=str(event.get("tool_name", "unknown")), status="running")
+                self._tool_progress(event)
             elif kind == "result":
                 if not self.protocol_verified or session != self.session_id or not isinstance(event.get("is_error"), bool):
                     raise DriverError("Claude result lacks confirmed session or error status")

@@ -23,7 +23,7 @@ public final class ModelCapabilityProbe {
     private static final String TOKEN="[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";
     public interface Caller { JSONObject complete(ModelConfig config,JSONArray messages,JSONArray tools,RunControl control,InferenceCapture.Target target)throws Exception; }
     public static JSONObject run(ModelConfig config,boolean image,RunControl control,InferenceCapture.Target target)throws Exception {
-        return run(config,image,control,target,ModelGateway::complete);
+        return run(config,image,control,target,null);
     }
     static JSONObject run(ModelConfig selected,boolean image,RunControl control,InferenceCapture.Target target,Caller caller)throws Exception {
         if(selected.usesAccount()||selected.capabilityBinding==null)throw new IllegalArgumentException("请选择原API连接后探测；账号能力仍由账号页核对");
@@ -35,24 +35,41 @@ public final class ModelCapabilityProbe {
         JSONObject result=new JSONObject().put("format","pocketworld.model-probe.v1").put("binding",selected.capabilityBinding.toJson())
                 .put("model",selected.model).put("configurationDigest",ModelRoutePlan.configurationDigest(selected)).put("probeRequestDigest",ModelRoutePlan.configurationDigest(config)).put("at",System.currentTimeMillis())
                 .put("evidenceKind","observed_synthetic_probe").put("toolVerificationScope","single_synthetic_echo_schema_not_all_tools_or_schemas").put("deviceToolsExecuted",false).put("capabilityMetadataChanged",false).put("text", "not_run").put("tools","not_run").put("image",image?"not_run":"not_requested");
-        control.check();
+        try(ModelProbeDeadline deadline=new ModelProbeDeadline(control,config.requestTimeoutSeconds*1000L)){
+        Caller bounded=caller==null?(candidate,messages,tools,original,nativeTarget)->ModelGateway.completeBefore(candidate,messages,tools,original,nativeTarget,deadline.deadlineAtMillis()):caller;
+        result.put("totalBudgetMillis",config.requestTimeoutSeconds*1000L).put("diagnostics",new JSONArray());
+        deadline.check();
         String token=UUID.randomUUID().toString();
-        try{JSONObject text=caller.complete(config,new JSONArray().put(new JSONObject().put("role","user").put("content",TEXT+token)),null,control,target);
-            result.put("text",token.equals(text.optString("content").trim())?"passed":"unconfirmed");}catch(InterruptedException stopped){throw stopped;}catch(SecurityException revoked){throw revoked;}catch(Exception failed){control.check();result.put("text","unconfirmed");}
-        control.check();
+        try{JSONObject text=bounded.complete(config,new JSONArray().put(new JSONObject().put("role","user").put("content",TEXT+token)),null,control,target);
+            deadline.check();result.put("text",token.equals(text.optString("content").trim())?"passed":"unconfirmed");if(!"passed".equals(result.getString("text")))unconfirmed(result,"text");
+        }catch(InterruptedException stopped){deadline.check();throw stopped;}catch(SecurityException revoked){throw revoked;}catch(Exception failed){deadline.check();failed(result,"text",failed);if(configurationRejected(failed))return finish(result).put("stoppedBecause","connection_configuration_rejected");}
+        deadline.stage("tools");
         JSONArray tools=echoTools();
-        JSONObject reply;try{reply=caller.complete(config,new JSONArray().put(new JSONObject().put("role","user").put("content",FUNCTION+token+FUNCTION_END)),tools,control,target);}catch(InterruptedException stopped){throw stopped;}catch(SecurityException revoked){throw revoked;}catch(Exception failed){control.check();reply=new JSONObject();}
+        JSONObject reply;boolean toolFailure=false;try{reply=bounded.complete(config,new JSONArray().put(new JSONObject().put("role","user").put("content",FUNCTION+token+FUNCTION_END)),tools,control,target);deadline.check();}catch(InterruptedException stopped){deadline.check();throw stopped;}catch(SecurityException revoked){throw revoked;}catch(Exception failed){deadline.check();failed(result,"tools",failed);toolFailure=true;reply=new JSONObject();if(configurationRejected(failed))return finish(result).put("stoppedBecause","connection_configuration_rejected");}
         boolean called=false;JSONArray calls=reply.optJSONArray("tool_calls");
         if(calls!=null&&calls.length()==1)try{JSONObject fn=calls.getJSONObject(0).getJSONObject("function");JSONObject args=new JSONObject(fn.getString("arguments"));called="pocket_capability_echo".equals(fn.getString("name"))&&args.length()==1&&token.equals(args.getString("token"));}catch(Exception invalid){called=false;}
         result.put("tools",called?"passed":"unconfirmed");
+        if(!called&&!toolFailure)unconfirmed(result,"tools");
         if(image){
-            control.check();String digits=String.format(java.util.Locale.ROOT,"%06d",new java.security.SecureRandom().nextInt(1000000));
+            deadline.stage("image");String digits=String.format(java.util.Locale.ROOT,"%06d",new java.security.SecureRandom().nextInt(1000000));
             JSONArray content=new JSONArray().put(new JSONObject().put("type","text").put("text",IMAGE))
                     .put(new JSONObject().put("type","image_url").put("image_url",new JSONObject().put("url",image(digits))));
-            try{JSONObject visual=caller.complete(config,new JSONArray().put(new JSONObject().put("role","user").put("content",content)),null,control,target);
-                result.put("image",digits.equals(visual.optString("content").trim())?"passed":"unconfirmed");}catch(InterruptedException stopped){throw stopped;}catch(SecurityException revoked){throw revoked;}catch(Exception failed){control.check();result.put("image","unconfirmed");}
+            try{JSONObject visual=bounded.complete(config,new JSONArray().put(new JSONObject().put("role","user").put("content",content)),null,control,target);
+                deadline.check();result.put("image",digits.equals(visual.optString("content").trim())?"passed":"unconfirmed");if(!"passed".equals(result.getString("image")))unconfirmed(result,"image");}catch(InterruptedException stopped){deadline.check();throw stopped;}catch(SecurityException revoked){throw revoked;}catch(Exception failed){deadline.check();failed(result,"image",failed);}
         }
-        return result.put("meaning","one_synthetic_probe_not_general_quality_or_device_permission");
+        deadline.check();return finish(result);
+        }
+    }
+    private static JSONObject finish(JSONObject result)throws Exception{return result.put("meaning","one_synthetic_probe_not_general_quality_or_device_permission");}
+    private static void unconfirmed(JSONObject result,String stage)throws Exception{result.getJSONArray("diagnostics").put(new JSONObject().put("stage",stage).put("reason","SYNTHETIC_REPLY_UNCONFIRMED").put("message",stage.equals("tools")?"本次没有返回所声明的单个测试函数；请核对该模型和当前接口的工具能力。没有执行真实工具。":"本次回复未匹配合成校验内容，尚不能证实此能力；这不代表永久不支持。"));}
+    private static boolean configurationRejected(Exception failure){return failure instanceof ModelGateway.GatewayException gateway&&java.util.Set.of("AUTHENTICATION","UNSUPPORTED_MODEL","ENDPOINT_MISMATCH","NOT_FOUND").contains(gateway.diagnosticReason());}
+    private static void failed(JSONObject result,String stage,Exception failure)throws Exception{
+        String reason="UNKNOWN",message="本阶段未完成；请核对原连接与网络。未修改配置或能力声明。";int status=0;
+        if(failure instanceof ModelGateway.GatewayException gateway){
+            reason=gateway.diagnosticReason();var observed=gateway.observation();if(observed!=null){status=observed.httpStatus;if("UNKNOWN".equals(reason)){reason=observed.kind.name();message=switch(observed.kind){case TIMEOUT->"本阶段请求超时；请核对服务响应与网络。总期限没有重置。";case NETWORK->"本阶段网络连接失败；请核对原服务地址与网络。";case PROTOCOL,INCOMPLETE_STREAM->"服务回复结构不完整或不符合当前协议；请核对模型与接口。";default->message;};}}
+            try{message=ModelConnectionFailure.message(ModelConnectionFailure.Reason.valueOf(reason));}catch(IllegalArgumentException nonHttp){/* Keep local non-HTTP advice. */}
+        }else if(failure instanceof ModelRequestPolicy.Rejected){reason="CAPABILITY_OR_PARAMETERS";message="本机能力或参数校验拒绝了此阶段；请核对精确模型的工具、图片和输出设置。";}
+        result.put(stage,"unconfirmed").getJSONArray("diagnostics").put(new JSONObject().put("stage",stage).put("reason",reason).put("httpStatus",status).put("message",message));
     }
     private static JSONArray echoTools()throws Exception {
         return new JSONArray().put(new JSONObject().put("type","function").put("function",new JSONObject().put("name","pocket_capability_echo")

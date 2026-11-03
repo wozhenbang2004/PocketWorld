@@ -33,7 +33,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
     private JSONObject landingBaseline;
     private android.content.Context lifecycleContext;
     private dev.pocketengine.phone.setup.PhoneAudioRecovery audioRecovery;
-    private RunControl lifecycleControl;private String audioTask,audioOwner;
+    private RunControl lifecycleControl;private String audioTask,audioOwner,lifecycleRun;private int lifecycleEpoch=-1;
     private volatile JSONObject ownerHandoff;
     private dev.pocketengine.phone.setup.AndroidAppCopies appCopies;
     private dev.pocketengine.phone.diagnostics.PhonePracticeTarget practiceTarget;
@@ -53,7 +53,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
         if(original==null||!original.matchesHostRun(task,run,epoch)||!module.ownedBy(task)||!sameSession(module.session()))throw new SecurityException("original_audio_run_required");
         String owner=task+"/"+run+"/"+epoch;if(audioOwner!=null&&(!audioOwner.equals(owner)||lifecycleControl!=original))throw new SecurityException("original_audio_run_changed");
         if(context.getApplicationContext() instanceof dev.pocketengine.EngineApplication app){appResources=app.resources.phoneApps();resourceOwner=owner;}
-        lifecycleContext=context.getApplicationContext();audioRecovery=dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.get(lifecycleContext);audioTask=task;audioOwner=owner;lifecycleControl=original;
+        lifecycleContext=context.getApplicationContext();audioRecovery=dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.get(lifecycleContext);audioTask=task;audioOwner=owner;lifecycleControl=original;lifecycleRun=run;lifecycleEpoch=epoch;
     }
     /** Cleanup may undo only this original run's durable changes, including after cancellation. */
     public synchronized JSONObject restoreTaskAudio()throws Exception {
@@ -169,18 +169,30 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
     }
     public void renewTaskLease(String taskId,String runId,int epoch,RunControl control,long taskDeadline)throws Exception {module.renewTaskLease(taskId,runId,epoch,control,sessionId,displayId,taskDeadline);}
     public void noteReleasePending(){module.noteReleasePending(sessionId,displayId);}
+    /** An inline preview can only read the lifecycle-bound original port; this creates no new observation. */
+    public synchronized void requireOwnerObservationRun(String task,String run,int epoch,RunControl original)throws Exception {
+        if(original==null||original!=lifecycleControl||!task.equals(audioTask)||!run.equals(lifecycleRun)||epoch!=lifecycleEpoch
+                ||!original.matchesHostRun(task,run,epoch)||original.isCancelled()||!module.ownedBy(task)||!isConnected())
+            throw new SecurityException("original_phone_preview_run_changed");
+    }
+    private JSONObject ownerObservationIdentity(String task,JSONObject observation)throws Exception {
+        observation.put("taskId",task);
+        if(lifecycleControl!=null&&task.equals(audioTask)&&lifecycleControl.matchesHostRun(task,lifecycleRun,lifecycleEpoch))
+            observation.put("runId",lifecycleRun).put("coordinatorEpoch",lifecycleEpoch);
+        return observation;
+    }
     /** Read-only view while the agent runs: no new frame, reference or model observation is made. */
     public synchronized JSONObject cachedObservationForOwner(String taskId)throws Exception {
         if(!module.ownedBy(taskId))throw new SecurityException("副屏不属于当前任务");
         if(ownerHandoffActive())return handoffObservation(taskId);
-        if(cached==null)return new JSONObject().put("ok",false).put("error","no_observation")
-                .put("message","任务尚未取得真实副屏画面").put("manualAllowed",false).put("referencesExpired",true);
-        return new JSONObject(cached.toString()).put("manualAllowed",false).put("referencesExpired",true).put("taskId",taskId);
+        if(cached==null)return ownerObservationIdentity(taskId,new JSONObject().put("ok",false).put("error","no_observation")
+                .put("message","任务尚未取得真实副屏画面").put("manualAllowed",false).put("referencesExpired",true));
+        return ownerObservationIdentity(taskId,new JSONObject(cached.toString()).put("manualAllowed",false).put("referencesExpired",true));
     }
     /** The native supervisor validates and journals the current run before using these owner entry points. */
     public synchronized JSONObject observeForOwner(String taskId,RunControl control)throws Exception {
         beginOwner(taskId,control);
-        try{if(ownerHandoffActive())return handoffObservation(taskId);JSONObject observed=observe(true,control);if(ownerHandoff!=null)observed.put("ownerHandoff",ownerHandoffState());return observed.put("manualAllowed",observed.optBoolean("ok")).put("referencesExpired",!observed.optBoolean("ok")).put("taskId",taskId);}
+        try{if(ownerHandoffActive())return handoffObservation(taskId);JSONObject observed=observe(true,control);if(ownerHandoff!=null)observed.put("ownerHandoff",ownerHandoffState());return ownerObservationIdentity(taskId,observed.put("manualAllowed",observed.optBoolean("ok")).put("referencesExpired",!observed.optBoolean("ok")));}
         finally{ownerPermit=null;}
     }
     /** Called only by the native owner inspector after original-run admission/journaling. */
@@ -223,7 +235,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
         catch(Exception unknown){clearReferences();return failure("action_unknown","私密输入结果尚未确认，请由机主核对后继续。").put("accepted",JSONObject.NULL);}
         finally{ownerPermit=null;}
     }
-    private JSONObject handoffObservation(String taskId)throws Exception{return new JSONObject().put("ok",false).put("taskId",taskId).put("sessionId",sessionId).put("displayId",displayId).put("manualAllowed",false).put("referencesExpired",true).put("ownerHandoff",ownerHandoffState()).put("message","原应用已交由主人或位置待核对；没有读取主屏画面。请返回本页核对并交还原副屏。");}
+    private JSONObject handoffObservation(String taskId)throws Exception{return ownerObservationIdentity(taskId,new JSONObject().put("ok",false).put("sessionId",sessionId).put("displayId",displayId).put("manualAllowed",false).put("referencesExpired",true).put("ownerHandoff",ownerHandoffState()).put("message","原应用已交由主人或位置待核对；没有读取主屏画面。请返回本页核对并交还原副屏。"));}
     private void beginOwner(String taskId,RunControl control)throws Exception {
         if(control==null||!module.ownedBy(taskId))throw new SecurityException("副屏不属于当前任务");
         control.check();if(!control.isPaused())throw new SecurityException("先暂停并接管任务后才能操作副屏");

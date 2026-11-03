@@ -3,6 +3,7 @@ package dev.pocketengine;
 import androidx.activity.ComponentActivity;
 import androidx.activity.OnBackPressedCallback;
 import android.graphics.Color;
+import dev.pocketengine.ui.UiAppearance;
 import android.graphics.Insets;
 import android.net.http.SslError;
 import android.os.Bundle;
@@ -142,10 +143,11 @@ public final class BrowserActivity extends ComponentActivity {
     private final Handler leaseTimers=new Handler(Looper.getMainLooper());
     private final Runnable leaseExpiryCheck=()->scheduleLeaseExpiry(lease.snapshot());
     @Override public void onCreate(Bundle saved){
+        setTheme(UiAppearance.theme(this));
         super.onCreate(saved);
         getOnBackPressedDispatcher().addCallback(this,new OnBackPressedCallback(true){@Override public void handleOnBackPressed(){handleBrowserBack();}});
-        getWindow().setDecorFitsSystemWindows(false);getWindow().setStatusBarColor(Color.WHITE);getWindow().setNavigationBarColor(Color.WHITE);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
-        LinearLayout page=new LinearLayout(this);page.setOrientation(LinearLayout.VERTICAL);page.setBackgroundColor(Color.WHITE);
+        getWindow().setDecorFitsSystemWindows(false);UiAppearance.window(this);
+        LinearLayout page=new LinearLayout(this);page.setOrientation(LinearLayout.VERTICAL);page.setBackgroundColor(UiAppearance.surface(this));
         page.setOnApplyWindowInsetsListener((view,insets)->{Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout()),keyboard=insets.getInsets(WindowInsets.Type.ime());browserImeVisible=insets.isVisible(WindowInsets.Type.ime());if(navigationControls!=null)navigationControls.setVisibility(browserImeVisible?View.GONE:View.VISIBLE);view.setPadding(bars.left,bars.top,bars.right,Math.max(bars.bottom,keyboard.bottom));return insets;});
         page.setTag("browser_root");
         LinearLayout toolbar=new LinearLayout(this);toolbar.setTag("browser_toolbar");toolbar.setGravity(android.view.Gravity.CENTER_VERTICAL);toolbar.setPadding(dp(8),dp(5),dp(8),dp(5));
@@ -153,7 +155,7 @@ public final class BrowserActivity extends ComponentActivity {
         address=new EditText(this);address.setTag("browser_address");address.setMinimumHeight(dp(48));address.setSingleLine(true);address.setTextSize(14);address.setHint("网址或搜索内容");address.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_URI);address.setImeOptions(EditorInfo.IME_ACTION_GO);toolbar.addView(address,new LinearLayout.LayoutParams(0,-2,1));
         Button go=button("打开");go.setOnClickListener(v->{takeover("主人已接管浏览器");navigate(address.getText().toString());hideBrowserIme();});toolbar.addView(go);page.addView(toolbar);
         progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);page.addView(progress,new LinearLayout.LayoutParams(-1,dp(2)));progress.setVisibility(View.GONE);
-        message=new TextView(this);message.setTextSize(12);message.setTextColor(0xff777777);message.setPadding(dp(14),dp(6),dp(14),dp(6));message.setText("网页操作使用独立浏览器窗口；可返回助手继续。");page.addView(message);
+        message=new TextView(this);message.setTextSize(12);message.setTextColor(UiAppearance.secondary(this));message.setPadding(dp(14),dp(6),dp(14),dp(6));message.setText("网页操作使用独立浏览器窗口；可返回助手继续。");page.addView(message);
         browserContainer=new android.widget.FrameLayout(this);try{profiles=BrowserProfiles.get(this);}catch(Exception unavailable){profileError="浏览器资料无法读取，请先核对设置";}createWebView();
         page.addView(browserContainer,new LinearLayout.LayoutParams(-1,0,1));LinearLayout controls=new LinearLayout(this);navigationControls=controls;previous=button("上一页");previous.setOnClickListener(v->{takeover("主人已接管浏览器");if(web!=null&&web.canGoBack())web.goBack();});next=button("下一页");next.setOnClickListener(v->{takeover("主人已接管浏览器");if(web!=null&&web.canGoForward())web.goForward();});Button reload=button("刷新");reload.setOnClickListener(v->{takeover("主人已接管浏览器");if(web==null){createWebView();navigate(recoveryUrl);}else web.reload();});controls.setTag("browser_navigation");controls.addView(previous,new LinearLayout.LayoutParams(0,-2,1));controls.addView(next,new LinearLayout.LayoutParams(0,-2,1));controls.addView(reload,new LinearLayout.LayoutParams(0,-2,1));Button more=button("更多");more.setTag("browser_more");more.setOnClickListener(v->{android.widget.PopupMenu menu=new android.widget.PopupMenu(this,more);menu.getMenu().add(0,2,0,"浏览历史");menu.getMenu().add(0,3,1,"书签");menu.getMenu().add(0,4,2,"收藏当前页");menu.getMenu().add(0,5,3,"站点权限说明");menu.getMenu().add(0,6,4,"地址保存设置…");menu.getMenu().add(0,7,5,"本次原生网络观察…");menu.getMenu().add(0,1,6,"关闭浏览器并结束网页执行…");menu.setOnMenuItemClickListener(item->{switch(item.getItemId()){case 1:confirmCloseForOwner();return true;case 2:showBrowserHistory(false);return true;case 3:showBrowserHistory(true);return true;case 4:bookmarkCurrentPage();return true;case 5:showSitePermissionDetails();return true;case 6:showExactUrlSettings();return true;case 7:showNativeNetworkSettings();return true;default:return false;}});menu.show();});controls.addView(more,new LinearLayout.LayoutParams(0,-2,1));page.addView(controls);
         OwnerPanelInstaller installer=ownerPanelInstaller;if(installer!=null)try{ownerPanel=installer.install(this,page);}catch(Exception unavailable){message.setText("研究工作区暂不可用，请核对原任务；浏览页面仍可手动操作。");}
@@ -1083,10 +1085,22 @@ public final class BrowserActivity extends ComponentActivity {
     }
     @Override public void onWindowFocusChanged(boolean focused){super.onWindowFocusChanged(focused);if(!focused&&stopNativeInput!=null)stopNativeInput.run();}
     @Override public void onPause(){ownerForeground=false;if(artifactUpload!=null)artifactUpload.close();if(stopNativeInput!=null)stopNativeInput.run();deniedSiteRequests.clear();if(siteRequest!=null&&!siteRequest.awaitingPlatform)cancelSiteRequest(siteRequest.page,false);if(externalLinkConfirmation!=null){externalLinkConfirmation.dismiss();externalLinkConfirmation=null;}if(pageDialog!=null){cancelPageDialog(null,BrowserPageDialog.Reason.OWNER_LEFT);takeover("你已离开网页，网页提示已取消；已发生的动作请回原任务核对。");}for(Page page:pages.values())page.view.onPause();super.onPause();}
-    @Override public void onResume(){super.onResume();ownerForeground=true;if(web!=null)web.onResume();if(siteRequest!=null&&siteRequest.platformAllowed!=null)finishSitePlatformResult(siteRequest);}
+    @Override public void onResume(){super.onResume();refreshChromeAppearance();ownerForeground=true;if(web!=null)web.onResume();if(siteRequest!=null&&siteRequest.platformAllowed!=null)finishSitePlatformResult(siteRequest);}
     @Override protected void onSaveInstanceState(Bundle state){Page owner=activePage!=null&&activePage.taskOwner==null?activePage:null;if(owner==null)for(Page page:pages.values())if(page.taskOwner==null){owner=page;break;}if(owner!=null&&profileSession!=null&&profileSession.current()){Bundle page=new Bundle();owner.view.saveState(page);state.putBundle("browserState",page);state.putString("browserProfileId",profileSession.profileId);state.putLong("browserProfileRevision",profileSession.profileRevision);state.putString("browserProfileIsolation",profileSession.isolation);if(owner.view.getUrl()!=null)state.putString("browserUrl",owner.view.getUrl());}super.onSaveInstanceState(state);}
     @Override public void onDestroy(){if(closeConfirmation!=null){closeConfirmation.dismiss();closeConfirmation=null;}if(current.get()==this)current.clear();closeProfileSession("浏览器已关闭");if(ownerPanel!=null)try{ownerPanel.close();}catch(Exception ignored){}ownerPanel=null;browserIo.shutdown();leaseTimers.removeCallbacksAndMessages(null);lease.setExpirationListener(null);super.onDestroy();}
-    private Button button(String label){Button button=new Button(this);button.setText(label);button.setTextSize(13);button.setTextColor(0xff222222);button.setAllCaps(false);button.setMinWidth(0);button.setMinimumWidth(0);button.setMinHeight(dp(48));button.setPadding(dp(9),dp(4),dp(9),dp(4));return button;}
+    private void refreshChromeAppearance(){
+        UiAppearance.window(this);View root=getWindow().getDecorView().findViewWithTag("browser_root");
+        if(root!=null){root.setBackgroundColor(UiAppearance.surface(this));colorNativeChrome(root);}
+        if(message!=null)message.setTextColor(UiAppearance.secondary(this));
+    }
+    private void colorNativeChrome(View view){
+        if(view instanceof WebView)return;
+        if(view instanceof TextView text){text.setTextColor(UiAppearance.foreground(this));text.setHintTextColor(UiAppearance.secondary(this));}
+        if(view instanceof Button button)button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(UiAppearance.surfaceVariant(this)));
+        if(view instanceof ProgressBar progress){android.content.res.ColorStateList tint=android.content.res.ColorStateList.valueOf(UiAppearance.primary(this));progress.setProgressTintList(tint);progress.setIndeterminateTintList(tint);}
+        if(view instanceof android.view.ViewGroup group)for(int i=0;i<group.getChildCount();i++)colorNativeChrome(group.getChildAt(i));
+    }
+    private Button button(String label){Button button=new Button(this);button.setText(label);button.setTextSize(13);button.setTextColor(UiAppearance.foreground(this));button.setAllCaps(false);button.setMinWidth(0);button.setMinimumWidth(0);button.setMinHeight(dp(48));button.setPadding(dp(9),dp(4),dp(9),dp(4));return button;}
     private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
     private static JSONObject json(Object...pairs){JSONObject result=new JSONObject();for(int i=0;i+1<pairs.length;i+=2)try{result.put(String.valueOf(pairs[i]),pairs[i+1]);}catch(Exception ignored){}return result;}
 }

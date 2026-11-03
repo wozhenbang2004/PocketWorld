@@ -154,7 +154,7 @@ internal fun TeamCollaborationPage(
             val request = onCommand(command, input); pending = listOf(request, command, draftKey, text); localError = null
         } catch (failure: Exception) { localError = failure.message }
     }
-    Surface(color = Color.White) {
+    Surface(color = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onClose) { Text("返回") }
@@ -191,7 +191,7 @@ internal fun TeamCollaborationPage(
                         TextButton(onClick = { val question = questions.first(); tab = 0; selected = question.optString("memberId"); replyId = question.getString("messageId"); if (members.any { it.optString("id") == selected }) recipient = selected!! }, enabled = run.optString("status") != "cancelled") { Text("查看并回答") }
                     }
                 }
-                TabRow(tab, containerColor = Color.White) { listOf("对话", "分工", "成果").forEachIndexed { i, label -> Tab(tab == i, { tab = i }, text = { Text(label) }) } }
+                TabRow(tab, containerColor = MaterialTheme.colorScheme.surface) { listOf("对话", "分工", "成果").forEachIndexed { i, label -> Tab(tab == i, { tab = i }, text = { Text(label) }) } }
                 Box(Modifier.weight(1f).fillMaxWidth()) { listStates.SaveableStateProvider("$runId|$tab|$selected") { val listState = rememberLazyListState()
                 LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (tab == 0) {
@@ -343,7 +343,7 @@ internal fun TeamAssignmentEditor(definition: JSONObject, busy: Set<String>, las
             pending = null
         }
     }
-    AlertDialog(onDismissRequest = { if (pending == null) close() }, containerColor = Color.White, title = { Text("分工与依赖") }, text = {
+    AlertDialog(onDismissRequest = { if (pending == null) close() }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("分工与依赖") }, text = {
         Column(Modifier.heightIn(max = 540.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("仅修改下次任务的分工；当前任务保留原配置。前置成员真实完成后，依赖它的成员才开始。", style = MaterialTheme.typography.bodySmall)
             if (definition.toString() != reviewed) Text("团队配置已更新，请关闭后重新载入分工。", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)

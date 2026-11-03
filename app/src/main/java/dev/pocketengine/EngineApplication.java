@@ -1722,6 +1722,16 @@ public final class EngineApplication extends Application implements dev.pocketen
         }
         return answerOwnerQuestionFromNotification(exact,text);
     }
+    private JSONObject answerOwnerQuestionChoiceFromTaskPage(JSONObject exact,String optionId)throws Exception {
+        String text;
+        synchronized(tasks){
+            JSONObject task=tasks.get(exact.getString("taskId"),false);
+            JSONObject evidence=task.optJSONObject("evidence");
+            text=dev.pocketengine.runtime.policy.OwnerQuestionChoices.answer(evidence==null?null:evidence.optJSONObject("ownerQuestion"),exact,optionId);
+        }
+        // The existing native reply path rechecks identity, budgets and duplicate receipts at commit.
+        return answerOwnerQuestionFromTaskPage(exact,text);
+    }
     private void retainOwnerQuestionAfterSettlement(String id,RunControl original,ModelConfig captured){
         ownerQuestionInputs.forget(id);try{tasks.retainOwnerQuestionOriginal(ownerQuestionInputs,id,original,captured);}catch(Exception unavailable){/* No restored JSON becomes live authority. */}
     }
@@ -1934,7 +1944,11 @@ public final class EngineApplication extends Application implements dev.pocketen
         };
         try{
             memorySources.synchronize(json("ownerId","owner","spaceId","private"));
-            var workflow=new dev.pocketengine.features.memory.MemoryConsolidationWorkflow(memory,(messages,control)->dev.pocketengine.runtime.ModelGateway.complete(request.model,messages,null,control,dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(tasks.journal(request.taskId,request.runId,request.epoch,request.control).inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.SUMMARY,""),dev.pocketengine.features.memory.LearningInputAdmission.consolidation(memory,json("ownerId","owner","spaceId","private"),selected,new JSONObject(messages.getJSONObject(1).getString("content")),memorySources::requireLearningReference))));
+            var workflow=new dev.pocketengine.features.memory.MemoryConsolidationWorkflow(memory,(messages,control)->{
+                var admission=dev.pocketengine.features.memory.LearningInputAdmission.consolidation(memory,json("ownerId","owner","spaceId","private"),selected,new JSONObject(messages.getJSONObject(1).getString("content")),memorySources::requireLearningReference);
+                var response=dev.pocketengine.runtime.ModelGateway.complete(request.model,messages,null,control,dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(tasks.journal(request.taskId,request.runId,request.epoch,request.control).inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.SUMMARY,""),admission));
+                control.check();admission.check();return response;
+            });
             JSONObject result=workflow.propose(json("ownerId","owner","spaceId","private"),selected,original,fence);
             synchronized(this){
                 request.settled=true;JSONObject candidate=result.optJSONObject("candidate");String status=candidate==null?"none":candidate.optString("status");
@@ -1974,7 +1988,11 @@ public final class EngineApplication extends Application implements dev.pocketen
         };
         try{
             memorySources.synchronize(json("ownerId","owner","spaceId","private"));
-            var workflow=new dev.pocketengine.features.KnowledgeLearningWorkflow(memory,skills,memorySources::read,(messages,control)->dev.pocketengine.runtime.ModelGateway.complete(request.model,messages,null,control,dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(tasks.journal(request.taskId,request.runId,request.epoch,request.control).inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.SUMMARY,""),dev.pocketengine.features.memory.LearningInputAdmission.source(memory,memorySources::read,json("ownerId","owner","spaceId","private"),expected,new JSONObject(messages.getJSONObject(1).getString("content"))))),fence);
+            var workflow=new dev.pocketengine.features.KnowledgeLearningWorkflow(memory,skills,memorySources::read,(messages,control)->{
+                var admission=dev.pocketengine.features.memory.LearningInputAdmission.source(memory,memorySources::read,json("ownerId","owner","spaceId","private"),expected,new JSONObject(messages.getJSONObject(1).getString("content")));
+                var response=dev.pocketengine.runtime.ModelGateway.complete(request.model,messages,null,control,dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(tasks.journal(request.taskId,request.runId,request.epoch,request.control).inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.SUMMARY,""),admission));
+                control.check();admission.check();return response;
+            },fence);
             JSONObject result=workflow.proposeLearning(json("ownerId","owner","spaceId","private"),expected,original);
             synchronized(this){
                 request.settled=true;JSONObject candidate=result.optJSONObject("candidate");String status=candidate==null?"none":candidate.optString("status");
@@ -2126,6 +2144,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             case "getState":{JSONObject state=state();publish(state);return state;}
             case "getFeatures":features.sendState();return null;
             case "answerOwnerQuestion":return answerOwnerQuestionFromTaskPage(input.getJSONObject("questionIdentity"),input.getString("text"));
+            case "answerOwnerQuestionChoice":return answerOwnerQuestionChoiceFromTaskPage(input.getJSONObject("questionIdentity"),input.getString("optionId"));
             case "saveTaskMemory":case "resaveTaskMemory":return saveSourceMemory("task_evidence","task:"+input.getString("taskId")+":verified_result",input,action.equals("resaveTaskMemory"));
             case "saveMessageMemory":case "resaveMessageMemory":return saveSourceMemory("message",input.getString("messageId"),input,action.equals("resaveMessageMemory"));
             case "setFollowUpPolicy":{
@@ -2184,7 +2203,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             }if(automationPlanTask(task))return controlAutomationPlanTask(automationModule(),json("taskId",id,"runId",task.optString("runId"),"coordinatorEpoch",task.optInt("coordinatorEpoch"),"occurrenceId",source.getString("occurrenceId"),"commitmentId",source.getString("commitmentId")),"cancel");RunControl capability=capabilityControls.get(id);if(capability==null)capability=pendingCapabilityStops.get(id);if(capability!=null)cancelCapabilityAttempt(capability);else {features.cancelRelatedTasks(id);stop(id);}return null;}
             case "takeoverTask":return takeoverTask(input.getString("taskId"));
             case "ownerPhoneHandoff":return ownerPhoneHandoff(input.getString("taskId"),input.getString("handoffAction"),input.optString("handoffId"));
-            case "observeTask":return observeTask(input.getString("taskId"));
+            case "observeTask":return observeTask(input.getString("taskId"),input);
             case "manualTaskAction":return manualTaskAction(input.getString("taskId"),input.getString("tool"),input.optJSONObject("args"),input.optString("observationId"));
             case "ownerSecretInput":return manualTaskAction(input.getString("taskId"),"phone_type",json("nodeId",input.getString("nodeId")),input.getString("observationId"),input.getString("text"));
             case "resolveOperation":{String id=input.getString("taskId");JSONObject reviewed=tasks.get(id,false);if(teamWriteOrigin(reviewed))tasks.requireTeamOwnerAttempt(input);if(groupOrigin(reviewed)){groupOwnerWorkflows.check();reviewedGroupAttempt(reviewed,input);}RunControl control=control(id);if(ownerActionActive||control!=null&&!control.isPaused()||capabilityControls.containsKey(id)||features.mediaControl(id)!=null||features.teamControl(id)!=null)throw new IllegalStateException("请等待动作回执并暂停执行，再核对动作结果");JSONObject result=tasks.resolveOperation(id,input.getString("operationId"),input.getString("outcome"));if(!tasks.hasUnresolved(id)){EngineModule semantic=features.module("semantic");if(semantic instanceof dev.pocketengine.features.semantic.SemanticModule)((dev.pocketengine.features.semantic.SemanticModule)semantic).releaseRun(control);}pushTask(id);if(channelTaskHost!=null)channelTaskHost.publishTaskState(id);return result;}
@@ -2259,11 +2278,13 @@ public final class EngineApplication extends Application implements dev.pocketen
             }finally{ownerActionActive=false;}
         }
     }
-    private JSONObject observeTask(String id)throws Exception {
+    private JSONObject observeTask(String id,JSONObject input)throws Exception {
+        dev.pocketengine.phone.observation.PhoneObservationPreview.Identity expected=dev.pocketengine.phone.observation.PhoneObservationPreview.expected(input);
         synchronized(ownerInteractions){
             PhonePort port;RunControl owner;synchronized(this){if(!id.equals(activeTaskId))throw new IllegalStateException("请先接管或恢复原任务");port=activePort;owner=activeControl;}
             if(!(port instanceof dev.pocketengine.phone.display.BackgroundPhonePort))throw new IllegalStateException("独立屏仍在准备或该任务使用主屏");
             dev.pocketengine.phone.display.BackgroundPhonePort background=(dev.pocketengine.phone.display.BackgroundPhonePort)port;
+            if(expected!=null)background.requireOwnerObservationRun(id,expected.runId,expected.epoch,owner);
             if(owner!=null&&!owner.phoneSurfaceActive())throw new SecurityException("当前在专用网页；原手机屏幕仅保留，未开放手动输入");
             boolean manual=owner!=null&&owner.isPaused()&&!owner.isCancelled()&&!tasks.hasUnresolved(id)&&!background.ownerHandoffActive();
             JSONObject observation=owner!=null&&owner.isPaused()&&!owner.isCancelled()?background.observeForOwner(id,owner):background.cachedObservationForOwner(id);

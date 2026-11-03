@@ -136,7 +136,7 @@ private fun RemoteOwnerDialog(taskId: String, controller: PocketWorldController,
     }
     Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         val clipboardView = androidx.compose.ui.platform.LocalView.current
-        Surface(Modifier.fillMaxSize(), color = androidx.compose.ui.graphics.Color.White) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("原电脑会话", fontSize = 21.sp, fontWeight = FontWeight.SemiBold); TextButton(onClick = close) { Text("返回") } }
                 Text(if (snapshot.optBoolean("teamRemoteWriter")) "团队所选文件副本 · 这里只审原job单次请求。不是全项目/Git或OS隔离；完整命令build/test仍未支持。回原团队继续制作与独审，离开/切后台使本次审阅失效。" else if(snapshot.has("teamMemberApprovalAcceptIds")) "团队成员原执行 · 只回答此成员的原问题、审阅其原请求；不新开轮次，不扩大只读范围。继续或制作请返回原团队，重新审阅制作范围。离开/切后台使本次审阅失效。" else "只查询原执行；明确续接会在同一个本机任务建立新的执行代次。离开页面使本次审阅失效，不会撤回已派发的操作。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp)

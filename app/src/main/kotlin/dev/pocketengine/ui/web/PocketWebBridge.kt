@@ -78,6 +78,7 @@ internal class PocketWebBridge(
     private var taskReviewGeneration = 0L
     private val commandFence = PocketWebCommandFence()
     private val reviews = PocketWebTaskReviews()
+    private val reminderReviews = PocketWebReminders()
     private val commandReceipts = linkedMapOf<String, Pair<String, JSONObject>>()
     private val pendingCommands = mutableMapOf<String, String>()
     private data class PhoneReview(val goal: String, val mode: String, val tools: Int, val models: Int, val minutes: Int, val viewEpoch: Int, val expires: Long)
@@ -117,7 +118,7 @@ internal class PocketWebBridge(
             "accounts.beginLogin", "accounts.cancelLogin", "accounts.openAuthorization", "accounts.select", "accounts.refresh", "accounts.models", "accounts.retryPlanUsage",
             "memory.list", "memory.search", "memoryReview.list", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource",
             "memoryReview.candidates", "mcp.snapshot", "mcp.pickConfig", "mcp.cancel", "learning.snapshot", "groups.snapshot",
-            "remote.probe", "remote.environments", "local.termuxProbe", "automation.receipts", "channels.inspect", "skills.read", "plugins.history", "proxy.status", "proxy.stop"
+            "remote.probe", "remote.environments", "local.termuxProbe", "automation.receipts", "automation.list", "automation.reviewSchedule", "automation.reviewRule", "automation.confirmReview", "automation.prepareOccurrence", "channels.inspect", "skills.read", "plugins.history", "proxy.status", "proxy.stop"
         )
     }
 
@@ -166,7 +167,7 @@ internal class PocketWebBridge(
         reviews.clear()
         phoneReviews.clear()
         voiceReviews.clear()
-        modelReviews.clear()
+        modelReviews.clear(); reminderReviews.clear()
         section?.takeIf { it in ownerDomains }?.let(controller::leaveOwnerDomain)
         deviceWindow?.close(); deviceWindow = null
         section = null
@@ -194,7 +195,7 @@ internal class PocketWebBridge(
         commandFence.invalidate()
         taskReviewGeneration++
         domainGeneration++
-        reviews.clear(); phoneReviews.clear(); voiceReviews.clear(); modelReviews.clear()
+        reviews.clear(); phoneReviews.clear(); voiceReviews.clear(); modelReviews.clear(); reminderReviews.clear()
         if (documentReplaced) documentId = null
     }
 
@@ -329,7 +330,7 @@ internal class PocketWebBridge(
                 val nextDocument = requiredString(args, "documentId")
                 require(nextDocument.length <= 120)
                 if (nextDocument != documentId) {
-                    documentId = nextDocument; presentationEpoch++; reviews.clear(); phoneReviews.clear(); voiceReviews.clear(); modelReviews.clear()
+                    documentId = nextDocument; presentationEpoch++; reviews.clear(); phoneReviews.clear(); voiceReviews.clear(); modelReviews.clear(); reminderReviews.clear()
                     controller.voiceInputTypeChanged(phoneIntent)
                 }
                 return JSONObject().put("ready", true).put("source", "library-web")
@@ -509,7 +510,8 @@ internal class PocketWebBridge(
                 if (next == "models") readModelSnapshot()
                 when (next) {
                     "memory" -> controller.requestFeature("memory", "list")
-                    "automation", "commitments" -> controller.requestFeature("automation", "receipts")
+                    "automation" -> { controller.requestFeature("automation", "list"); controller.requestFeature("automation", "receipts") }
+                    "commitments" -> controller.requestFeature("automation", "receipts")
                     "channels" -> controller.requestFeature("channels", "inspect")
                 }
                 if (next == "devices") {
@@ -592,6 +594,32 @@ internal class PocketWebBridge(
             }
             "local.termuxProbe" -> { requireSection("local"); checkedPayload(args, emptySet()); return accepted(controller.requestFeature("local", "termux.probe")) }
             "automation.receipts" -> { require(section in setOf("automation", "commitments")) { "原提醒窗口已关闭" }; checkedPayload(args, emptySet()); return accepted(controller.requestFeature("automation", "receipts")) }
+            "automation.list" -> { requireSection("automation"); checkedPayload(args, emptySet()); return accepted(controller.requestFeature("automation", "list")) }
+            "automation.reviewSchedule", "automation.reviewRule" -> {
+                requireSection("automation")
+                require(controller.state.moduleBusy.none { it in setOf("automation.save", "automation.setEnabled", "automation.delete", "automation.list") }) { "请先等待原提醒操作回执" }
+                require(controller.state.moduleErrors["automation.list"] == null) { "原提醒清单未读成功，请刷新后核对" }
+                val rules = controller.state.feature("automation").optJSONArray("rules") ?: error("请先读取提醒清单")
+                return if (action == "automation.reviewSchedule") reminderReviews.reviewSchedule(args, rules) else reminderReviews.reviewRule(args, rules)
+            }
+            "automation.confirmReview" -> {
+                requireSection("automation"); checkedPayload(args, setOf("reviewHandle"))
+                require(controller.state.moduleBusy.none { it in setOf("automation.save", "automation.setEnabled", "automation.delete", "automation.list") }) { "请先等待原提醒操作回执" }
+                require(controller.state.moduleErrors["automation.list"] == null) { "原提醒清单未读成功，请刷新后核对" }
+                val reviewed = reminderReviews.consume(requiredString(args, "reviewHandle"), controller.state.feature("automation").optJSONArray("rules") ?: error("原提醒清单不可用"))
+                val command = reviewed.getString("command")
+                return accepted(controller.requestFeature("automation", command, reviewed.getJSONObject("input"))).put("command", command)
+            }
+            "automation.prepareOccurrence" -> {
+                requireSection("automation"); checkedPayload(args, setOf("occurrenceId"))
+                require("automation.receipts" !in controller.state.moduleBusy) { "请先等待原发生记录读取" }
+                val id = requiredString(args, "occurrenceId")
+                val receipts = controller.state.moduleResults["automation.receipts"]?.optJSONArray("receipts") ?: error("请先读取原发生记录")
+                val receipt = (0 until receipts.length()).mapNotNull { receipts.optJSONObject(it) }.firstOrNull { it.optString("id") == id }
+                require(receipt != null && receipt.optString("kind") == "phone_goal" && receipt.optString("status") in setOf("awaiting_user", "blocked_notifications")) { "原发生状态已变化，请刷新核对" }
+                controller.prepareReminderOccurrence(id)
+            }
+
             "channels.inspect" -> { requireSection("channels"); checkedPayload(args, emptySet()); return accepted(controller.requestFeature("channels", "inspect")) }
             "skills.read" -> {
                 requireSection("skills"); checkedPayload(args, setOf("id", "path", "offset", "length"))
@@ -773,7 +801,7 @@ internal class PocketWebBridge(
     private fun canUseTaskControls(task: UiTask) = task.raw.optJSONObject("origin")?.optString("kind") != "paired_device" && (!isGroup(task) || taskPage != null && controller.groupTaskReady)
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")
     private fun leaveTask() { commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
-    private fun leaveConnection() { commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); deviceWindow?.close(); deviceWindow = null; section?.takeIf { it in ownerDomains }?.let(controller::leaveOwnerDomain); section = null }
+    private fun leaveConnection() { commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); reminderReviews.clear(); deviceWindow?.close(); deviceWindow = null; section?.takeIf { it in ownerDomains }?.let(controller::leaveOwnerDomain); section = null }
     private fun requireSection(expected: String) { require(section == expected) { "原能力窗口已关闭，请重新进入" } }
     private fun requireComposer(args: JSONObject, optional: Boolean = false) {
         val draft = controller.composerDraft ?: error("原输入尚未恢复")

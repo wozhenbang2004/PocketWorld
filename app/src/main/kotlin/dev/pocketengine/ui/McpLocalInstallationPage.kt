@@ -9,7 +9,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -61,7 +60,7 @@ import org.json.JSONObject
     }
     DisposableEffect(Unit) { onDispose { heldReviews.toList().forEach { id -> runCatching { request("discardLocalMcpInstallReview", JSONObject().put("reviewId", id)) } }; heldReviews.clear() } }
     BackHandler { back() }
-    Surface(Modifier.fillMaxSize(), color = Color.White) {
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = ::back) { Text("返回") }
@@ -125,5 +124,5 @@ import org.json.JSONObject
             }
         }
     }
-    if (exitConfirm) AlertDialog(onDismissRequest = { exitConfirm = false }, containerColor = Color.White, title = { Text("安装回执尚未返回") }, text = { Text("现在离开只结束页面观察，不能认定未安装或自动重试。请回原 MCP 管理核对真实安装身份与权限。") }, confirmButton = { TextButton(onClick = { exitConfirm = false; onManageInstalled() }) { Text("离开并核对原安装") } }, dismissButton = { TextButton(onClick = { exitConfirm = false }) { Text("继续等待") } })
+    if (exitConfirm) AlertDialog(onDismissRequest = { exitConfirm = false }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("安装回执尚未返回") }, text = { Text("现在离开只结束页面观察，不能认定未安装或自动重试。请回原 MCP 管理核对真实安装身份与权限。") }, confirmButton = { TextButton(onClick = { exitConfirm = false; onManageInstalled() }) { Text("离开并核对原安装") } }, dismissButton = { TextButton(onClick = { exitConfirm = false }) { Text("继续等待") } })
 }

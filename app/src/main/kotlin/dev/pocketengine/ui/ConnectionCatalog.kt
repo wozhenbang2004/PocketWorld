@@ -16,7 +16,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -42,7 +41,7 @@ internal fun ConnectionCatalog(titles: Map<String, String>, description: (String
             placeholder = { Text("搜索模型、记忆、工具…", fontSize = 14.sp) },
             modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
             colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Ink, unfocusedBorderColor = Line,
-                focusedContainerColor = Color.White, unfocusedContainerColor = Color.White),
+                focusedContainerColor = MaterialTheme.colorScheme.surface, unfocusedContainerColor = MaterialTheme.colorScheme.surface),
             trailingIcon = { if(query.isNotEmpty()) AffectToolButton("close", "清除能力搜索", { query = "" }) })
         ConnectionCategoryTabs(listOf("全部", "模型", "工作", "记忆", "扩展"), selected) { selected = it }
         var total = 0
@@ -55,7 +54,7 @@ internal fun ConnectionCatalog(titles: Map<String, String>, description: (String
             if(visible.isNotEmpty()) {
                 Text(group, fontSize = 13.sp, color = SecondaryInk, fontWeight = FontWeight.Medium)
                 Surface(Modifier.fillMaxWidth().pocketDepth(PocketDepth.CONTENT, 14.dp),
-                    color = Color.White, shape = RoundedCornerShape(14.dp), border = BorderStroke(.5.dp, Line)) {
+                    color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(14.dp), border = BorderStroke(.5.dp, Line)) {
                     Column {
                         visible.forEachIndexed { rowIndex, id ->
                             Row(Modifier.fillMaxWidth().clickable { open(id) }.padding(14.dp),

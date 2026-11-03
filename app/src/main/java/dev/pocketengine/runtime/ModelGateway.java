@@ -152,10 +152,18 @@ public final class ModelGateway {
     }
     /** Additional original-consumer budget, checked for every candidate and again before dispatch. */
     public static JSONObject completeWithAdmission(ModelConfig config,JSONArray messages,JSONArray tools,RunControl control,InferenceCapture.Target target,CandidateAdmission originalBudget)throws Exception {
+        return completeBounded(config,messages,tools,control,target,originalBudget,Long.MAX_VALUE);
+    }
+    /** A native multi-phase caller can only shorten this original request's existing deadline. */
+    public static JSONObject completeBefore(ModelConfig config,JSONArray messages,JSONArray tools,RunControl control,InferenceCapture.Target target,long originalDeadlineAt)throws Exception {
+        if(originalDeadlineAt<=0)throw new IllegalArgumentException("original_model_deadline_required");
+        return completeBounded(config,messages,tools,control,target,candidate->{},originalDeadlineAt);
+    }
+    private static JSONObject completeBounded(ModelConfig config,JSONArray messages,JSONArray tools,RunControl control,InferenceCapture.Target target,CandidateAdmission originalBudget,long originalDeadlineAt)throws Exception {
         return executeLogical(config,messages,tools,control,target,"INTERNAL",null,(candidate,capture,commit)->{
             JSONObject result=candidate.usesAccount()?completeAccount(candidate,messages,tools,control,null,capture):completeApi(candidate,messages,tools,control,null,capture,target);
             commit.beforeFlush(capture.callId,1);return result;
-        },candidate->{validate(candidate);if(!candidate.usesAccount())applyRequestPolicy(candidate,messages,tools,ProviderAdapters.selected(candidate.provider).request(candidate,messages,tools),target,control);originalBudget.check(candidate);});
+        },candidate->{validate(candidate);if(!candidate.usesAccount())applyRequestPolicy(candidate,messages,tools,ProviderAdapters.selected(candidate.provider).request(candidate,messages,tools),target,control);originalBudget.check(candidate);},originalDeadlineAt);
     }
     /** Resolve only the actual physical receipt against this native frozen plan, not a later default. */
     public static ModelConfig actualConfigForReceipt(ModelConfig captured,InferenceReceipt receipt)throws Exception {
@@ -260,12 +268,15 @@ public final class ModelGateway {
         });
     }
     private static JSONObject executeLogical(ModelConfig config,JSONArray messages,JSONArray tools,RunControl control,InferenceCapture.Target target,String ingress,String nativeDigest,PhysicalAttempt physical,CandidateAdmission preflight)throws Exception {
+        return executeLogical(config,messages,tools,control,target,ingress,nativeDigest,physical,preflight,Long.MAX_VALUE);
+    }
+    private static JSONObject executeLogical(ModelConfig config,JSONArray messages,JSONArray tools,RunControl control,InferenceCapture.Target target,String ingress,String nativeDigest,PhysicalAttempt physical,CandidateAdmission preflight,long originalDeadlineAt)throws Exception {
         InferenceCapture.requireOriginalContext(control,target);
         config=config.forPurpose(target.context.purpose.name());
         control.check();LogicalInferenceAuthority authority=target.logical;
         if(config.routePlan!=null&&authority==null)throw new SecurityException("模型组需要原TaskStore逻辑请求准入；没有调用未归因通路");
         ModelRoutePlan plan=config.routePlan==null?new ModelRoutePlan(config.model,0,target.context.purpose.name(),target.context.purpose==InferenceReceipt.Purpose.RELAY?"EXTERNAL_RELAY":"APP_OWNER",java.util.List.of(new ModelRoutePlan.Candidate("exact",config,"")),authority==null?1:3,0):config.routePlan;
-        long deadline=System.currentTimeMillis()+config.requestTimeoutSeconds*1000L;JSONObject snapshot=plan.toJson();JSONArray rows=snapshot.getJSONArray("orderedCandidates");java.util.List<ModelRoutePlan.Candidate> eligible=new java.util.ArrayList<>();Exception rejection=null;
+        long deadline=Math.min(originalDeadlineAt,System.currentTimeMillis()+config.requestTimeoutSeconds*1000L);JSONObject snapshot=plan.toJson();JSONArray rows=snapshot.getJSONArray("orderedCandidates");java.util.List<ModelRoutePlan.Candidate> eligible=new java.util.ArrayList<>();Exception rejection=null;
         boolean opaque=false;for(int i=0;messages!=null&&i<messages.length();i++)if(messages.getJSONObject(i).optJSONObject("provider_data")!=null)opaque=true;
         for(int i=0;i<plan.candidates.size();i++){
             ModelRoutePlan.Candidate candidate=plan.candidates.get(i);if(candidate.config()==null||!candidate.exclusion().isEmpty()||!plan.dispatches(candidate))continue;
@@ -278,7 +289,7 @@ public final class ModelGateway {
         }
         String logical=java.util.UUID.randomUUID().toString();int maximum=plan.dispatchMaxAttempts();
         String resourceOwner=null;int inheritedResourceLimit=Integer.MAX_VALUE;
-        if(authority!=null){String digest=nativeDigest==null?requestDigest(messages,tools):nativeDigest;JSONObject admitted=authority.begin(logical,digest,snapshot,deadline,plan.dispatchMaxAttempts());deadline=admitted.getLong("deadlineAt");maximum=Math.min(plan.dispatchMaxAttempts(),admitted.getJSONObject("control").getInt("maxAttempts"));
+        if(authority!=null){String digest=nativeDigest==null?requestDigest(messages,tools):nativeDigest;JSONObject admitted=authority.begin(logical,digest,snapshot,deadline,plan.dispatchMaxAttempts());deadline=Math.min(deadline,admitted.getLong("deadlineAt"));maximum=Math.min(plan.dispatchMaxAttempts(),admitted.getJSONObject("control").getInt("maxAttempts"));
             if(admitted.has("modelResourceScope")){
                 if(!(admitted.opt("modelResourceScope") instanceof JSONObject))throw new SecurityException("original_native_model_resource_scope_required");
                 JSONObject resources=admitted.getJSONObject("modelResourceScope");
@@ -686,16 +697,6 @@ public final class ModelGateway {
         return key == null || key.isEmpty() ? value : value.replace(key, "[密钥已隐藏]");
     }
 
-    private static String httpMessage(int status) {
-        if (status == 401 || status == 403) return "模型认证失败，请检查 API 密钥或账号权限。（HTTP " + status + "）";
-        if (status == 404) return "找不到模型或接口地址，请检查模型名称与 /v1 路径。（HTTP 404）";
-        if (status == 429) return "模型额度不足或请求过于频繁，请检查额度并稍后重试。（HTTP 429）";
-        if (status == 400 || status == 422) return "模型未接受请求，请检查模型名称、输出与推理参数、工具调用和图片支持。（HTTP " + status + "）";
-        if (status >= 300 && status < 400) return "模型地址发生重定向，请填写服务提供方的最终接口地址。";
-        if (status >= 500) return "模型服务暂时不可用，请稍后重试。（HTTP " + status + "）";
-        return "模型请求失败，请检查接口设置。（HTTP " + status + "）";
-    }
-
     private static void putFailure(JSONObject object, String message, String code) {
         try { object.put("ok", false).put("message", message).put("code", code); } catch (Exception ignored) { }
     }
@@ -703,7 +704,8 @@ public final class ModelGateway {
     private static GatewayException httpFailure(ModelConfig captured,int status,java.util.List<String> retryAfter,java.util.List<String> date,InputStream errorBody)throws Exception {
         String bounded=boundedError(errorBody);
         if((status==400||status==413)&&contextLimitCode(bounded))return localFailure("模型明确报告上下文超限；尚未派发工具。",InferenceFailure.Kind.CONTEXT_LIMIT,status);
-        return new GatewayException(httpMessage(status),InferenceFailure.classifiedHttp(status,withoutCapturedSecret(retryAfter,captured.apiKey),withoutCapturedSecret(date,captured.apiKey),System.currentTimeMillis(),bounded));
+        var reason=dev.pocketengine.runtime.models.ModelConnectionFailure.reason(status,bounded);
+        return new GatewayException(dev.pocketengine.runtime.models.ModelConnectionFailure.message(reason)+"（HTTP "+status+"）",InferenceFailure.classifiedHttp(status,withoutCapturedSecret(retryAfter,captured.apiKey),withoutCapturedSecret(date,captured.apiKey),System.currentTimeMillis(),bounded),reason.name());
     }
     /** Only exact protocol error codes authorize one compaction; never match arbitrary provider prose. */
     private static boolean contextLimitCode(InputStream input){return contextLimitCode(boundedError(input));}
@@ -746,9 +748,12 @@ public final class ModelGateway {
         public InferenceFailure observation(){return failure;}
         public static GatewayException incompleteStream()throws Exception{return new GatewayException("模型流在终态前中断；本次没有派发工具。",InferenceFailure.local(InferenceFailure.Kind.INCOMPLETE_STREAM,System.currentTimeMillis()));}
         private final InferenceFailure failure;
+        private final String diagnosticReason;
+        public String diagnosticReason(){return diagnosticReason;}
         private boolean logicalControlled;
         public boolean logicalControlled(){return logicalControlled;}
         public GatewayException(String message) { this(message,null); }
-        private GatewayException(String message,InferenceFailure failure){super(message);this.failure=failure;}
+        private GatewayException(String message,InferenceFailure failure){this(message,failure,"UNKNOWN");}
+        private GatewayException(String message,InferenceFailure failure,String diagnosticReason){super(message);this.failure=failure;this.diagnosticReason=diagnosticReason;}
     }
 }

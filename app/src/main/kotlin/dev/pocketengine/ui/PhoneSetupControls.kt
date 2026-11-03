@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -142,6 +143,7 @@ internal fun PhonePracticeEvidence(controller: PocketWorldController) {
     }
     controller.phonePracticeReadError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
     val result = controller.phonePracticeEvidence ?: return
+    var expandedCheck by remember(result.optString("taskId"), result.optString("runId")) { mutableStateOf<String?>(null) }
     if (!result.optBoolean("ok")) {
         Text("尚未取得原演练的实际证据；能力检查与请求已接受都不计作操作通过。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         return
@@ -150,7 +152,7 @@ internal fun PhonePracticeEvidence(controller: PocketWorldController) {
     val rows = result.optJSONArray("checks") ?: return
     val labels = mapOf("helper" to "助手认证", "display" to "独立显示会话", "tree" to "界面树", "frame" to "实际画面", "click" to "点击后的计数",
         "ascii_input" to "英文输入读回", "chinese_input" to "中文输入读回", "scroll" to "滚动后内容", "back" to "返回离开测试页",
-        "live_updates" to "延时内容更新", "main_screen_isolation" to "主屏隔离", "ime_isolation" to "输入法隔离")
+        "live_updates" to "延时内容更新", "main_screen_isolation" to "主屏隔离", "ime_isolation" to "输入法隔离", "rotation" to "旋转后的画面与点击")
     for (index in 0 until rows.length()) {
         val check = rows.optJSONObject(index) ?: continue
         val label = labels[check.optString("id")] ?: continue
@@ -159,9 +161,14 @@ internal fun PhonePracticeEvidence(controller: PocketWorldController) {
             "failed" -> "未通过"
             else -> "未取得证据"
         }
-        Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { expandedCheck = check.optString("id").takeUnless { it == expandedCheck } }, verticalAlignment = Alignment.CenterVertically) {
             Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
             Text(status, style = MaterialTheme.typography.bodySmall, color = if (check.optString("state") == "failed") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (expandedCheck == check.optString("id")) {
+            Text(check.optJSONObject("expected")?.optString("description")?.takeIf { it.isNotBlank() } ?: "旧版结果未记录逐项预期；请保留原结果范围。", style = MaterialTheme.typography.bodySmall)
+            Text("原因：${check.optString("reasonCode", "not_observed")} · 验收契约 ${check.optInt("contractVersion", 1)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            SelectionContainer { Text(check.optJSONObject("observed")?.toString(2) ?: "旧版结果没有结构化实际回读。", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 6.dp)) }
         }
     }
     Text("只统计这条原任务留下的操作前后证据。未运行或未知项保留未核验；退出测试页、停止和资源回收以原任务回执为准。",

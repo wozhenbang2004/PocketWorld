@@ -35,7 +35,8 @@ public final class QuickPanelSurfaceTest {
         final Class<?> type;
         final Object surface;
         final ViewGroup view;
-        int captures,cancels,sends,queries,opens;
+        int captures,cancels,sends,queries,opens,draftWrites;
+        String persistedDraft;
         boolean includeImage;
         String sentNote;
         Fixture()throws Exception {
@@ -48,6 +49,8 @@ public final class QuickPanelSurfaceTest {
                     case "cancelPreview":cancels++;call("ready");break;
                     case "send":sends++;sentNote=(String)args[0];break;
                     case "queryReceipt":queries++;break;
+                    case "noteChanged":draftWrites++;persistedDraft=(String)args[0];break;
+                    case "clearDraft":persistedDraft="";call("draftCleared");break;
                     case "openOriginalTask":opens++;break;
                     case "close":close();break;
                     default:break;
@@ -132,10 +135,10 @@ public final class QuickPanelSurfaceTest {
             f.click("查询原回执");assertEquals(1,f.queries);assertEquals(0,f.sends);assertEquals(0,f.captures);
         }
     }
-    @Test public void cancellingOnePreviewDoesNotCarryItsNoteIntoAnotherSource()throws Exception {
+    @Test public void cancellingOnePreviewRetainsDraftButRequiresReviewForAnotherSource()throws Exception {
         try(Fixture f=new Fixture()) {
             f.click("补充原任务");f.preview("原来源A",false);f.editNote().setText("只属于来源A的说明");f.saveNote();f.click("取消这份内容");
-            assertEquals(1,f.cancels);f.preview("原来源B",false);assertEquals("",f.editNote().getText().toString());assertEquals(0,f.sends);
+            assertEquals(1,f.cancels);f.preview("原来源B",false);assertFalse(((Button)f.view.findViewWithTag("quick_panel_send")).isEnabled());assertEquals("只属于来源A的说明",f.editNote().getText().toString());assertEquals(0,f.sends);f.saveNote();assertTrue(((Button)f.view.findViewWithTag("quick_panel_send")).isEnabled());
         }
     }
 
@@ -147,25 +150,25 @@ public final class QuickPanelSurfaceTest {
             assertEquals(captured,((TextView)f.view.findViewWithTag("quick_panel_source")).getText().toString());EditText input=f.editNote();input.setText("仍属于原捕获");f.saveNote();assertEquals(captured,((TextView)f.view.findViewWithTag("quick_panel_source")).getText().toString());assertEquals(0,f.captures);assertEquals(0,f.sends);f.save("04-partial-and-note-entry-visible.png");f.click("发送到原任务");assertEquals("仍属于原捕获",f.sentNote);assertEquals(1,f.sends);
         }
     }
-    @Test public void cancellingOrClosingNoteEditorNeverSendsAndClearsItsTemporaryText()throws Exception {
+    @Test public void closingNoteEditorRetainsDraftWhileClearingItsTemporaryViewsWithoutSending()throws Exception {
         try(Fixture f=new Fixture()) {
-            f.click("补充原任务");f.preview("固定来源A",false);EditText saved=f.editNote();saved.setText("明确保存的说明");f.saveNote();EditText canceled=f.editNote();canceled.setText("取消的编辑");android.app.AlertDialog dialog=f.noteDialog();assertTrue(dialog.getButton(android.app.AlertDialog.BUTTON_NEGATIVE).performClick());org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();assertEquals("",canceled.getText().toString());assertEquals("明确保存的说明",f.editNote().getText().toString());EditText open=f.noteDialog().getWindow().getDecorView().findViewWithTag("quick_panel_note");open.setText("关闭时清理");f.close();assertEquals("",open.getText().toString());assertEquals(0,f.captures);assertEquals(0,f.sends);assertEquals(0,f.view.getChildCount());
+            f.click("补充原任务");f.preview("固定来源A",false);EditText saved=f.editNote();saved.setText("明确保存的说明");f.saveNote();EditText canceled=f.editNote();canceled.setText("取消的编辑");android.app.AlertDialog dialog=f.noteDialog();assertTrue(dialog.getButton(android.app.AlertDialog.BUTTON_NEGATIVE).performClick());org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();assertEquals("",canceled.getText().toString());assertEquals("取消的编辑",f.persistedDraft);assertFalse(((Button)f.view.findViewWithTag("quick_panel_send")).isEnabled());assertEquals("取消的编辑",f.editNote().getText().toString());EditText open=f.noteDialog().getWindow().getDecorView().findViewWithTag("quick_panel_note");open.setText("关闭时清理");f.close();assertEquals("",open.getText().toString());assertEquals("关闭时清理",f.persistedDraft);assertTrue(f.draftWrites>=3);assertEquals(0,f.captures);assertEquals(0,f.sends);assertEquals(0,f.view.getChildCount());
         }
     }
-    @Test public void savedNoteStaysWithSamePreviewButNeverCrossesCaptureOrNewSourceIdentity()throws Exception {
+    @Test public void savedNoteRetainsTextButApprovalNeverCrossesCaptureOrNewSourceIdentity()throws Exception {
         try(Fixture f=new Fixture()) {
             f.click("补充原任务");f.preview("固定来源A",false);f.editNote().setText("已经保存、只属于A");f.saveNote();
             java.lang.reflect.Field field=f.type.getDeclaredField("preview");field.setAccessible(true);Object samePreview=field.get(f.surface);
             f.call("error","同一份内容的可恢复提示");assertEquals("已经保存、只属于A",f.editNote().getText().toString());f.saveNote();
             f.call("preview",samePreview);assertEquals("已经保存、只属于A",f.editNote().getText().toString());f.saveNote();
-            f.call("capturing");f.preview("固定来源B",false);assertEquals("",f.editNote().getText().toString());f.editNote().setText("已经保存、只属于B");f.saveNote();
-            f.preview("直接交来的固定来源C",false);assertEquals("",f.editNote().getText().toString());assertEquals(0,f.sends);assertEquals(0,f.captures);
+            f.call("capturing");f.preview("固定来源B",false);assertFalse(((Button)f.view.findViewWithTag("quick_panel_send")).isEnabled());assertEquals("已经保存、只属于A",f.editNote().getText().toString());f.editNote().setText("已经保存、只属于B");f.saveNote();
+            f.preview("直接交来的固定来源C",false);assertFalse(((Button)f.view.findViewWithTag("quick_panel_send")).isEnabled());assertEquals("已经保存、只属于B",f.editNote().getText().toString());assertEquals(0,f.sends);assertEquals(0,f.captures);
         }
     }
 
-    @Test public void changedCaptureDiscardsAnOpenNoteEditorWithoutApplyingItToTheNextSource()throws Exception {
+    @Test public void changedCaptureRetainsOpenDraftWithoutApplyingItToTheNextSource()throws Exception {
         try(Fixture f=new Fixture()) {
-            f.click("补充原任务");f.preview("固定来源A",false);EditText input=f.editNote();input.setText("只属于A的未保存编辑");android.app.AlertDialog original=f.noteDialog();f.call("ready");assertFalse(original.isShowing());assertEquals("",input.getText().toString());f.preview("固定来源B",false);assertEquals("",f.editNote().getText().toString());assertEquals(0,f.sends);assertEquals(0,f.captures);
+            f.click("补充原任务");f.preview("固定来源A",false);EditText input=f.editNote();input.setText("只属于A的未保存编辑");android.app.AlertDialog original=f.noteDialog();f.call("ready");assertFalse(original.isShowing());assertEquals("",input.getText().toString());f.preview("固定来源B",false);assertFalse(((Button)f.view.findViewWithTag("quick_panel_send")).isEnabled());assertEquals("只属于A的未保存编辑",f.persistedDraft);assertEquals("只属于A的未保存编辑",f.editNote().getText().toString());assertEquals(0,f.sends);assertEquals(0,f.captures);
         }
     }
 }

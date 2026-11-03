@@ -73,9 +73,9 @@ internal fun AffectComposerFrame(
     toolbar: @Composable RowScope.() -> Unit,
     footer: @Composable RowScope.() -> Unit
 ) {
-    Column(modifier.fillMaxWidth().pocketDepth(PocketDepth.INPUT, 16.dp).clip(RoundedCornerShape(16.dp)).background(Color(0xfff0f0f0))) {
-        Surface(shape = RoundedCornerShape(14.dp), color = Color.White,
-            border = BorderStroke(.5.dp, Color(0xffe7e7e7)), shadowElevation = 0.dp) {
+    Column(modifier.fillMaxWidth().pocketDepth(PocketDepth.INPUT, 16.dp).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainer)) {
+        Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(.5.dp, Line), shadowElevation = 0.dp) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp)) {
                 editor()
                 Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, content = toolbar)
@@ -92,10 +92,10 @@ internal fun AffectSendButton(label: String, onClick: () -> Unit, enabled: Boole
     Box(Modifier.size(48.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
         IconButton(onClick = onClick, enabled = enabled,
             modifier = modifier.size(40.dp).clip(RoundedCornerShape(10.dp))
-                .background(if(enabled) Ink else Color(0xffdedede))
+                .background(if(enabled) Ink else MaterialTheme.colorScheme.surfaceContainerHighest)
                 .semantics { contentDescription = label }) {
             if(submitting) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 1.5.dp, color = SecondaryInk)
-            else AffectGlyph("arrow", color = if(enabled) Color.White else Color(0xff999999))
+            else AffectGlyph("arrow", color = if(enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = .38f))
         }
     }
 }

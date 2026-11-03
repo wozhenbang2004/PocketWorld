@@ -99,7 +99,7 @@ public final class QuickPanelCoordinatorRaceTest {
             finally{QuickPanelRaceProbe.release.countDown();}
         },"quick-panel-test-schedule-release");
         try {
-            panel.show();panel.capture(false);assertTrue("Worker reached the actual native capture handoff",QuickPanelRaceProbe.entered.await(5,TimeUnit.SECONDS));
+            panel.show();worker.submit(()->{}).get(5,TimeUnit.SECONDS);Shadows.shadowOf(Looper.getMainLooper()).idle();panel.capture(false);assertTrue("Worker reached the actual native capture handoff",QuickPanelRaceProbe.entered.await(5,TimeUnit.SECONDS));
             release.start();QuickPanelRaceProbe.cancelStarted.countDown();panel.cancelPreview();
             worker.submit(()->{}).get(5,TimeUnit.SECONDS);Shadows.shadowOf(Looper.getMainLooper()).idle();
             panel.capture(false);worker.submit(()->{}).get(5,TimeUnit.SECONDS);Shadows.shadowOf(Looper.getMainLooper()).idle();

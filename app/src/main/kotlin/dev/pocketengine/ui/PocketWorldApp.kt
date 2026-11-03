@@ -43,6 +43,8 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -60,11 +62,6 @@ import dev.pocketengine.features.conversation.ConversationHistory
 import dev.pocketengine.features.conversation.TaskPresentation
 
 
-internal val Ink = Color(0xff181818)
-internal val SecondaryInk = Color(0xff666666)
-internal val Line = Color(0xffe4e4e4)
-internal val Soft = Color(0xfff2f2f2)
-internal val Danger = Color(0xff242424)
 internal val Rounded = RoundedCornerShape(16.dp)
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -209,7 +206,7 @@ internal fun PocketWorldApp(controller: PocketWorldController, requestWebWorkspa
         Scaffold(
             containerColor = PageSurface,
             topBar = {
-                Row(Modifier.fillMaxWidth().background(Color.White).statusBarsPadding()
+                Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).statusBarsPadding()
                     .padding(horizontal = 12.dp, vertical = 4.dp).heightIn(min = 48.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     Text("PocketWorld", fontSize = 17.sp, fontWeight = FontWeight.Medium, color = Ink)
@@ -228,7 +225,7 @@ internal fun PocketWorldApp(controller: PocketWorldController, requestWebWorkspa
                 }
             },
             bottomBar = {
-                Column(Modifier.background(Color.White).navigationBarsPadding()) {
+                Column(Modifier.background(MaterialTheme.colorScheme.surface).navigationBarsPadding()) {
                     HorizontalDivider(color = Line.copy(alpha = .65f), thickness = .5.dp)
                     Row(Modifier.fillMaxWidth().selectableGroup().padding(horizontal = 12.dp, vertical = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -267,9 +264,9 @@ internal fun PocketWorldApp(controller: PocketWorldController, requestWebWorkspa
         if (selectedTask != null) TaskSheet(selectedTask, state.activeTaskId == selectedTask.id, controller, if (taskReturnConnection != null) "返回原入口" else "返回" + listOf("对话", "任务", "项目")[taskReturnTab], ::closeTask)
         if (teamLaunch) TeamLaunchSheet(state, controller, draft) { teamLaunch = false }
         if (state.teamRunId != null) TeamRunDetail(state, controller)
-        if (state.inspectionTaskId != null) DeviceInspector(state, controller)
+        if (state.inspectionTaskId != null && controller.phoneInlinePreview == null) DeviceInspector(state, controller)
         if (state.backgroundSetupOpen) BackgroundPhoneSetup(state, controller)
-        if (conversationPicker) ModalBottomSheet(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), onDismissRequest = { conversationPicker = false }, containerColor = Color.White) {
+        if (conversationPicker) ModalBottomSheet(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), onDismissRequest = { conversationPicker = false }, containerColor = MaterialTheme.colorScheme.surface) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp).navigationBarsPadding()) {
                 ConversationHistoryBrowser(state.conversations.map(controller::conversationOrganizationItem), state.conversationId, state.chatBusy || state.chatSubmitting,
                     { controller.openConversation(it); conversationPicker = false }, { controller.newConversation(); conversationPicker = false }, allowReadWhenBlocked = true,
@@ -289,8 +286,8 @@ internal fun PocketWorldApp(controller: PocketWorldController, requestWebWorkspa
         if (fileDialog) NameDialog("新建文件", "项目内路径", "例如：src/main.py", { fileDialog = false }) { name -> controller.newFile(name); fileDialog = false }
         if (state.filePath != null) FileEditor(state, controller)
         state.workspaceArtifactView?.let { WorkspaceArtifactSheet(it, state, controller) }
-        suggestedGoal?.let { goal -> AlertDialog(onDismissRequest = { controller.cancelChannelPhone(); suggestedGoal = null }, containerColor = Color.White, title = { Text("收到新的手机任务") }, text = { Text("当前还有未发送的草稿。是否用收到的任务替换？\n\n$goal") }, confirmButton = { Button(onClick = { phoneDraft = goal; changePhoneIntent(true); tab = 0; suggestedGoal = null }) { Text("填入新任务") } }, dismissButton = { TextButton(onClick = { controller.cancelChannelPhone(); suggestedGoal = null }) { Text("保留草稿") } }) }
-        consentGoal?.let { goal -> AlertDialog(onDismissRequest = { controller.cancelChannelPhone(); consentGoal = null }, containerColor = Color.White, title = { Text(if (executionMode == "background") "在后台独立屏执行" else "交给助手操作主屏") }, text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        suggestedGoal?.let { goal -> AlertDialog(onDismissRequest = { controller.cancelChannelPhone(); suggestedGoal = null }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("收到新的手机任务") }, text = { Text("当前还有未发送的草稿。是否用收到的任务替换？\n\n$goal") }, confirmButton = { Button(onClick = { phoneDraft = goal; changePhoneIntent(true); tab = 0; suggestedGoal = null }) { Text("填入新任务") } }, dismissButton = { TextButton(onClick = { controller.cancelChannelPhone(); suggestedGoal = null }) { Text("保留草稿") } }) }
+        consentGoal?.let { goal -> AlertDialog(onDismissRequest = { controller.cancelChannelPhone(); consentGoal = null }, containerColor = MaterialTheme.colorScheme.surface, title = { Text(if (executionMode == "background") "在后台独立屏执行" else "交给助手操作主屏") }, text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(goal, fontWeight = FontWeight.Medium)
             if (controller.hasChannelPhoneOrigin) Text("此目标来自已认证主人私聊；接收时与当前都须已开启原渠道主人任务授权。本次仍需单独确认屏幕使用，任务状态与结果摘要将返回原私聊。", color = SecondaryInk)
             Text(if (executionMode == "background") "需要已连接的后台助手。无法建立独立屏幕时会停止等待。" else "会切换手机应用并占用当前屏幕。暂停后再自行操作，停止不会撤回已发生的动作。", color = SecondaryInk)
@@ -312,6 +309,16 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
     taskMemoryState: MutableState<JSONObject?>, answerSourcesState: MutableState<JSONObject?>, answerSourceMemoryState: MutableState<JSONObject?>) {
     var chatTools by remember { mutableStateOf(false) }
     var composerDetails by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
+    var quoteMessage by remember(state.conversationId) { mutableStateOf<UiMessage?>(null) }
+    quoteMessage?.let { MessageQuoteSheet(it, controller) { quoteMessage = null } }
+    var modelPickerOpen by remember { mutableStateOf(false) }
+    val modelConnections = controller.nativeModelConnections()
+    if (modelPickerOpen && modelConnections != null) ComposerModelPicker(modelConnections,
+        controller::runModelConnectionWork, controller::modelConnectionChanged,
+        { modelPickerOpen = false; controller.openConnection("models") },
+        { modelPickerOpen = false; controller.openConnection("accounts") },
+        { modelPickerOpen = false })
     ChatAttachmentChooser(state,controller)
     var taskMemoryReference by taskMemoryState
     taskMemoryReference?.let { TaskMemoryWorkflowSheet(controller, it) { taskMemoryReference = null } }
@@ -337,7 +344,7 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
         }
     }
     LaunchedEffect(showLatest) { if (showLatest > 0 && state.messages.isNotEmpty()) { scroll.animateScrollToItem(state.messages.lastIndex); setNewReplies(false) } }
-    Column(Modifier.fillMaxSize().background(Color.White)) {
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
         if (state.messages.isEmpty()) Column(Modifier.weight(1f).fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.Center) {
             Text("想聊聊，\n还是交给我办？", fontSize = 24.sp, lineHeight = 32.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-.8).sp)
             Text("你的对话、任务和项目，都留在同一个口袋世界。", fontSize = 14.sp, lineHeight = 23.sp, color = SecondaryInk, modifier = Modifier.padding(top = 15.dp, bottom = 30.dp))
@@ -346,10 +353,10 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
         } else LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("conversation_messages"), state = scroll, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             items(state.messages, key = { it.id ?: (it.role + it.at + it.content.hashCode()) }) { message -> Column(Modifier.fillMaxWidth(), horizontalAlignment = if (message.role == "user") Alignment.End else Alignment.Start) {
                 var messageDetails by remember(message.id, message.at) { mutableStateOf(false) }
-                val hasMessageActions = message.id != null || message == lastAssistant || message.memoryReference != null
+                val hasMessageActions = message.content.isNotEmpty() || message.id != null || message == lastAssistant || message.memoryReference != null
                 if (message.role != "user") Row(verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 10.dp)) {
-                    Box(Modifier.size(26.dp).clip(RoundedCornerShape(8.dp)).background(Color.White)
+                    Box(Modifier.size(26.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surface)
                         .border(.5.dp, Line, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
                         AffectGlyph("spark", Modifier.size(14.dp))
                     }
@@ -374,6 +381,10 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                 }
                 message.submission?.let{ChatInputReceipt(it,controller)}
                 if(messageDetails) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = { clipboard.setText(AnnotatedString(message.content)) }, enabled = message.content.isNotEmpty(), modifier = Modifier.testTag("message_copy")) { Text("复制", fontSize = 12.sp) }
+                        if (!phone && message.ownerOriginalLocator != null) TextButton(onClick = { quoteMessage = message }, enabled = !state.chatSubmitting && ownerDraft != null && message.content.isNotEmpty(), modifier = Modifier.testTag("message_quote")) { Text("引用到草稿", fontSize = 12.sp) }
+                    }
                     message.id?.let { id -> SourceMemoryControl("message", id, message.content, state, controller, compact = true) }
                     finalAnswerSourceSelection(message)?.let { selection -> TextButton(onClick = { answerSources = selection; answerSourceMemory = message.memoryReference }, modifier = Modifier.testTag("final_answer_sources_open")) { Text("这次回答的来源", fontSize = 11.sp) } }
                     message.memoryReference?.let { reference -> TextButton(onClick = { taskMemoryReference = JSONObject(reference.toString()) }) { Text("本次提供的记忆来源", fontSize = 11.sp) } }
@@ -383,7 +394,7 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                         ConversationTaskJournal(TaskPresentation.fromTaskStore(linked.raw), { if (teamRunReferences(linked).isNotEmpty()) controller.openTeam(teamRunReferences(linked).first()) else controller.focusTask(it) }, controller::getTask,
                             interruptedSourceRevision = controller.conversationSourceRevision,
                             readInterrupted = if (linked.raw.optString("kind") == "assistant" && linked.raw.optJSONObject("origin") == null) { cursor, done -> controller.readConversationInterrupted(id, state.conversationId, cursor, done) } else null,
-                            answerQuestion = controller::answerOwnerQuestion)
+                            answerQuestion = controller::answerOwnerQuestion, chooseQuestion = controller::answerOwnerQuestionChoice)
                     }
                 }
             } }
@@ -441,7 +452,7 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                         onClick = { if(phone) controller.pickAttachments() else controller.openChatAttachmentPicker() },
                         enabled = !state.attachmentImporting && !state.chatSubmitting)
                     Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                        TextButton(onClick = settings, modifier = Modifier.widthIn(max = 156.dp),
+                        TextButton(onClick = { if (modelConnections != null) modelPickerOpen = true else settings() }, modifier = Modifier.widthIn(max = 156.dp),
                             contentPadding = PaddingValues(horizontal = 6.dp)) {
                             AffectGlyph("spark", Modifier.size(16.dp), SecondaryInk)
                             Spacer(Modifier.width(5.dp))
@@ -458,10 +469,10 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                     Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
                         IconButton(onClick = send, enabled = canSend,
                             modifier = Modifier.size(40.dp).clip(RoundedCornerShape(10.dp))
-                                .background(if(canSend) Ink else Color(0xffdedede))
+                                .background(if(canSend) Ink else MaterialTheme.colorScheme.surfaceContainerHighest)
                                 .semantics { contentDescription = if(phone) "开始办事" else if(state.chatSubmitting) "正在登记" else if(state.chatBusy) "加入原任务" else "发送" }) {
                             if(state.chatSubmitting) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 1.5.dp, color = SecondaryInk)
-                            else AffectGlyph("arrow", color = if(canSend) Color.White else Color(0xff999999))
+                            else AffectGlyph("arrow", color = if(canSend) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = .38f))
                         }
                     }
                 },
@@ -595,7 +606,7 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
             }
             host.taskActionErrors[task.id]?.let { Text(it, color = Danger, fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 8.dp)) }
             if (phoneTask) runCatching { dev.pocketengine.features.assistant.OwnerPhoneQuestions.pageQuestion(task.raw) }.getOrNull()?.let { question ->
-                key(task.id, question.toString()) { OwnerQuestionPanel(question, controller::answerOwnerQuestion) }
+                key(task.id, question.toString()) { OwnerQuestionPanel(question, controller::answerOwnerQuestion, controller::answerOwnerQuestionChoice) }
             }
             Box(Modifier.fillMaxWidth().height(1.dp).bringIntoViewRequester(approvalAnchor))
             if (!pairedTask && !mediaTask && (!groupTask || controller.groupTaskReady) && pendingCapabilityApprovals(task).isNotEmpty()) CapabilityApprovals(task, controller)
@@ -659,7 +670,8 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
                 if (childLocator != null) OutlinedButton(onClick = { controller.openTeamChild(task); close() }, modifier = Modifier.padding(top = 12.dp).testTag("task_return_team_child")) { Text("回原团队处理此分工") }
                 else Text("原团队来源不完整或不一致，请从原团队记录核对。", color = Danger, fontSize = 12.sp)
             } else if (!pairedTask) teamRunReferences(task).forEach { runId -> OutlinedButton(onClick = { controller.openTeam(runId) }, modifier = Modifier.padding(top = 12.dp)) { Text("查看团队成员、会话与任务") } }
-            if (!pairedTask && phoneTask && task.executionMode == "background" && task.status != "completed") OutlinedButton(onClick = { controller.openInspection(task.id) }, modifier = Modifier.padding(top = 14.dp)) { Text("查看独立屏与接管") }
+            if (!pairedTask && phoneTask) PhoneResourceStatus(task, host, controller)
+            if (!pairedTask && phoneTask && task.executionMode == "background" && task.status != "completed") InlinePhoneObservation(task, host, controller)
             if (phoneTask && task.status == "reconciling" && unknown.isEmpty()) Text("正在读取待核对的动作，请稍候或重新打开此任务。", color = SecondaryInk, fontSize = 12.sp, modifier = Modifier.padding(top = 16.dp))
             if (!pairedTask && !phoneTask && task.raw.optString("kind") != "assistant" && task.status == "reconciling" && unknown.isEmpty()) Column(Modifier.fillMaxWidth().padding(top = 18.dp).clip(Rounded).background(Soft).padding(16.dp)) {
                 Text("核对外部执行结果", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
@@ -686,14 +698,14 @@ internal fun TaskSheet(task: UiTask, active: Boolean, controller: PocketWorldCon
             }
             if (auditDetails) {
                 if (task.raw.optJSONObject("historyEventPage")?.optBoolean("hasMore") == true || task.raw.optJSONObject("historyEventPage")?.optBoolean("readLimited") == true)
-                    Text("用量来自当前记录窗口；完整记录可继续按页查看。", color = SecondaryInk, fontSize = 13.sp)
-                TaskInferencePanel(task.raw, controller::reestimateInference, controller::openChatGptUsage)
+                    Text("展开用量可查询本任务仍保留的调用回执；读取有上限，新增调用请刷新。", color = SecondaryInk, fontSize = 13.sp)
+                TaskInferencePanel(task.raw, controller::reestimateInference, controller::openChatGptUsage, readUsage = controller::readTaskInferenceUsage)
                 TaskAuditPanel(task.id, controller)
             }
             Spacer(Modifier.height(24.dp))
         }
     }
-    if (!pairedTask && !teamChild && resumeConsent) AlertDialog(onDismissRequest = { resumeConsent = false }, containerColor = Color.White, title = { Text("继续原任务") }, text = { Text(if (groupTask) "保留原群目标、来源、受众和累计额度，只从原任务续接；群或成员授权已变化、媒体已生成或效果未知时会拒绝，不会创建替代任务。" else if (assistantTask) "保留原任务目标、上下文与补充要求，继续调用已授权的工具。新的写操作仍需宿主授权。" else if (task.executionMode == "background") "将使用后台独立屏，读取保留的上下文并重新观察当前现场；独立屏不可用时会等待。" else "将操作手机主屏并占用当前屏幕；任务会先重新观察，再根据保留的上下文继续。") }, confirmButton = { Button(onClick = { controller.resumeTask(task, if (groupTask) "" else feedback); resumeConsent = false }) { Text("继续执行") } }, dismissButton = { TextButton(onClick = { resumeConsent = false }) { Text("取消") } })
+    if (!pairedTask && !teamChild && resumeConsent) AlertDialog(onDismissRequest = { resumeConsent = false }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("继续原任务") }, text = { Text(if (groupTask) "保留原群目标、来源、受众和累计额度，只从原任务续接；群或成员授权已变化、媒体已生成或效果未知时会拒绝，不会创建替代任务。" else if (assistantTask) "保留原任务目标、上下文与补充要求，继续调用已授权的工具。新的写操作仍需宿主授权。" else if (task.executionMode == "background") "将使用后台独立屏，读取保留的上下文并重新观察当前现场；独立屏不可用时会等待。" else "将操作手机主屏并占用当前屏幕；任务会先重新观察，再根据保留的上下文继续。") }, confirmButton = { Button(onClick = { controller.resumeTask(task, if (groupTask) "" else feedback); resumeConsent = false }) { Text("继续执行") } }, dismissButton = { TextButton(onClick = { resumeConsent = false }) { Text("取消") } })
     if (!pairedTask && !teamChild && capabilityPreparation) TaskCapabilityPage(task.id, controller.skillExecutionHost(), controller::runPluginCatalogWork,
         { controller.taskCapabilitySnapshot(task.id) }, { operation, artifact, sha -> controller.readTaskSkillArtifact(task.id, operation, artifact, sha) },
         { plugin, tool -> capabilityPreparation = false; close(); controller.openTaskMcpPreparation(task.id, plugin, tool) }, { capabilityPreparation = false }, controller::runEcosystemControlWork, jsHost = controller.pluginExecutionHost())
@@ -741,7 +753,7 @@ private fun ProjectsScreen(state: PocketUiState, controller: PocketWorldControll
             }
         }
         if (state.projects.isEmpty()) item { EmptyState("从一个真实项目开始", "选择Web或Python模板，或从系统文件选择器导入已有源码。文件保存在这台手机，工具准备状态会单独显示。") }
-        if (choosing || state.projectId == null) items(state.projects, key = { it.id }) { project -> Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(13.dp)).background(if (state.projectId == project.id) Soft else Color.White).clickable { controller.selectProject(project.id); choosing = false }.padding(14.dp)) { Text(project.name, fontSize = 15.sp, fontWeight = if (state.projectId == project.id) FontWeight.SemiBold else FontWeight.Normal) } }
+        if (choosing || state.projectId == null) items(state.projects, key = { it.id }) { project -> Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(13.dp)).background(if (state.projectId == project.id) Soft else MaterialTheme.colorScheme.surface).clickable { controller.selectProject(project.id); choosing = false }.padding(14.dp)) { Text(project.name, fontSize = 15.sp, fontWeight = if (state.projectId == project.id) FontWeight.SemiBold else FontWeight.Normal) } }
         if (state.projectId != null) {
             item {
                 if (active == null) { if (pinnedCheckout == null) LinearProgressIndicator(Modifier.fillMaxWidth()); Text(if (pinnedCheckout == null) "正在打开原项目工作区" else "原工作副本暂不可用。草稿仍绑定原副本，不会移到更新的副本。", color = SecondaryInk, fontSize = 13.sp); state.moduleErrors["owner.openDevelopmentProject"]?.let { Text(it, color = Danger, fontSize = 13.sp) }; TextButton(onClick = { controller.openDevelopmentProject(state.projectId!!) }) { Text("重新核对项目") } }
@@ -880,7 +892,7 @@ private fun FileEditor(state: PocketUiState, controller: PocketWorldController) 
                         }
                     }
                     Column(Modifier.fillMaxWidth().height(editorHeight).pocketDepth(PocketDepth.INPUT, 16.dp)
-                        .clip(RoundedCornerShape(16.dp)).background(Color.White).border(.5.dp, Line, RoundedCornerShape(16.dp))) {
+                        .clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface).border(.5.dp, Line, RoundedCornerShape(16.dp))) {
                         Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                             AffectGlyph("file", color = SecondaryInk)
                             Text("编辑内容", fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f).padding(start = 8.dp))
@@ -893,7 +905,7 @@ private fun FileEditor(state: PocketUiState, controller: PocketWorldController) 
                             textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 22.sp),
                             shape = RoundedCornerShape(0.dp), colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = Ink, unfocusedBorderColor = Color.Transparent, disabledBorderColor = Color.Transparent,
-                                focusedContainerColor = Color.White, unfocusedContainerColor = Color.White, disabledContainerColor = Soft))
+                                focusedContainerColor = MaterialTheme.colorScheme.surface, unfocusedContainerColor = MaterialTheme.colorScheme.surface, disabledContainerColor = Soft))
                         Row(Modifier.fillMaxWidth().background(Soft).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(state.lastSavedVersion?.let { "已保存为 v$it" } ?: "保存时核对文件版本", fontSize = 12.sp, color = SecondaryInk, modifier = Modifier.weight(1f).padding(vertical = 12.dp))
                             if (state.fileReady && state.fileVersion > 0) TextButton(onClick = { history = !history; if (history) controller.fileHistory() }) { Text(if (history) "收起版本记录" else "查看版本记录", fontSize = 12.sp) }
@@ -915,7 +927,7 @@ private fun FileEditor(state: PocketUiState, controller: PocketWorldController) 
                         if (state.revisionLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
                         state.revisionContent?.let { content ->
                             Text("v${state.revisionNumber} 的内容", fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 12.dp))
-                            SelectionContainer { Text(content, fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(12.dp)).background(Color.White).padding(14.dp)) }
+                            SelectionContainer { Text(content, fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surface).padding(14.dp)) }
                             OutlinedButton(onClick = { if (state.fileContent != state.fileBaseline) replaceDraft = true else controller.useRevision() }, enabled = !state.fileSaving, modifier = Modifier.padding(top = 8.dp)) { Text("放入编辑区", fontSize = 12.sp) }
                         }
                     }
@@ -924,8 +936,8 @@ private fun FileEditor(state: PocketUiState, controller: PocketWorldController) 
             }
         }
     }
-    if (replaceDraft) AlertDialog(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), tonalElevation = 0.dp, onDismissRequest = { replaceDraft = false }, containerColor = Color.White, title = { Text("用历史内容替换编辑区？") }, text = { Text("当前未保存的修改将被替换。文件已保存的版本会保留，下一次保存会创建新版本。") }, confirmButton = { Button(onClick = { controller.useRevision(); replaceDraft = false }) { Text("替换编辑内容") } }, dismissButton = { TextButton(onClick = { replaceDraft = false }) { Text("保留当前修改") } })
-    if (discard) AlertDialog(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), tonalElevation = 0.dp, onDismissRequest = { discard = false }, containerColor = Color.White, title = { Text("关闭文件编辑？") }, text = { Text("尚未保存的修改会离开当前编辑区。") }, confirmButton = { TextButton(onClick = { discard = false; controller.closeFile() }) { Text("放弃修改并关闭") } }, dismissButton = { Button(onClick = { discard = false }) { Text("继续编辑") } })
+    if (replaceDraft) AlertDialog(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), tonalElevation = 0.dp, onDismissRequest = { replaceDraft = false }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("用历史内容替换编辑区？") }, text = { Text("当前未保存的修改将被替换。文件已保存的版本会保留，下一次保存会创建新版本。") }, confirmButton = { Button(onClick = { controller.useRevision(); replaceDraft = false }) { Text("替换编辑内容") } }, dismissButton = { TextButton(onClick = { replaceDraft = false }) { Text("保留当前修改") } })
+    if (discard) AlertDialog(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), tonalElevation = 0.dp, onDismissRequest = { discard = false }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("关闭文件编辑？") }, text = { Text("尚未保存的修改会离开当前编辑区。") }, confirmButton = { TextButton(onClick = { discard = false; controller.closeFile() }) { Text("放弃修改并关闭") } }, dismissButton = { Button(onClick = { discard = false }) { Text("继续编辑") } })
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -1042,6 +1054,7 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
                     val latestReply = state.messages.lastOrNull { it.role == "assistant" }?.content
                     OutlinedButton(onClick = { if (state.speaking) controller.stopSpeaking() else latestReply?.let(controller::speak) }, enabled = state.speaking || latestReply != null, modifier = Modifier.padding(top = 10.dp)) { Text(if (state.speaking) "停止朗读" else "朗读最近回复") }
                 }
+                if (settingsSection == 2) PocketAppearanceControls()
                 if (settingsSection == 2) SettingsSurface("更多能力", "沿用同一引擎与已有配置") {
                     NativeOwnerDataArchives(controller.ownerArchives)
                     NativeOwnerProjectStorage(controller.projectStorage)
@@ -1051,7 +1064,7 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
             }
         }
     }
-    if (cleartextDialog && !requiredCleartextConsent.isNullOrEmpty()) AlertDialog(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), tonalElevation = 0.dp, onDismissRequest = { cleartextDialog = false }, containerColor = Color.White, title = { Text("允许这个明文模型连接？") }, text = { Text("协议：" + providers[provider].orEmpty() + "\n地址：" + requiredCleartextConsent.substringAfter('|') + "\n\nAPI 凭据、屏幕截图和文本将通过 HTTP 明文传输。更换协议或地址后需要重新确认。") }, confirmButton = { Button(onClick = { acceptedCleartextConsent = requiredCleartextConsent; cleartextDialog = false }) { Text("允许此协议与地址") } }, dismissButton = { TextButton(onClick = { cleartextDialog = false }) { Text("取消") } })
+    if (cleartextDialog && !requiredCleartextConsent.isNullOrEmpty()) AlertDialog(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), tonalElevation = 0.dp, onDismissRequest = { cleartextDialog = false }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("允许这个明文模型连接？") }, text = { Text("协议：" + providers[provider].orEmpty() + "\n地址：" + requiredCleartextConsent.substringAfter('|') + "\n\nAPI 凭据、屏幕截图和文本将通过 HTTP 明文传输。更换协议或地址后需要重新确认。") }, confirmButton = { Button(onClick = { acceptedCleartextConsent = requiredCleartextConsent; cleartextDialog = false }) { Text("允许此协议与地址") } }, dismissButton = { TextButton(onClick = { cleartextDialog = false }) { Text("取消") } })
 }
 
 // Layout adaptation of the retained Affect Integration Settings sections and action footer
@@ -1060,7 +1073,7 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
 @Composable
 internal fun SettingsSurface(title: String, detail: String, content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxWidth().padding(top = 4.dp).pocketDepth(PocketDepth.CONTENT, 18.dp)
-        .clip(RoundedCornerShape(18.dp)).background(Color.White).border(.5.dp, Line, RoundedCornerShape(18.dp)).padding(16.dp)) {
+        .clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surface).border(.5.dp, Line, RoundedCornerShape(18.dp)).padding(16.dp)) {
         Text(title, fontSize = 16.sp, fontWeight = FontWeight.Medium)
         Text(detail, fontSize = 12.sp, lineHeight = 19.sp, color = SecondaryInk, modifier = Modifier.padding(top = 3.dp, bottom = 16.dp))
         content()
@@ -1070,7 +1083,7 @@ internal fun SettingsSurface(title: String, detail: String, content: @Composable
 @Composable
 private fun settingsFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedBorderColor = Ink, unfocusedBorderColor = Line,
-    focusedContainerColor = Color.White, unfocusedContainerColor = Color.White,
+    focusedContainerColor = MaterialTheme.colorScheme.surface, unfocusedContainerColor = MaterialTheme.colorScheme.surface,
     disabledContainerColor = Soft, disabledBorderColor = Line)
 
 @Composable
@@ -1085,9 +1098,9 @@ private fun SettingEntry(title: String, detail: String, open: () -> Unit) {
     }
 }
 @Composable
-private fun Notice(text: String, error: Boolean, dismiss: () -> Unit) { Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 5.dp).clip(RoundedCornerShape(12.dp)).background(if (error) Color(0xffe8e8e8) else Soft).padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) { Text(text, fontSize = 12.sp, lineHeight = 20.sp, color = if (error) Danger else SecondaryInk, modifier = Modifier.weight(1f).padding(vertical = 10.dp)); TextButton(onClick = dismiss, contentPadding = PaddingValues(5.dp)) { Text("关闭", fontSize = 11.sp) } } }
+private fun Notice(text: String, error: Boolean, dismiss: () -> Unit) { Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 5.dp).clip(RoundedCornerShape(12.dp)).background(if (error) MaterialTheme.colorScheme.errorContainer else Soft).padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) { Text(text, fontSize = 12.sp, lineHeight = 20.sp, color = if (error) Danger else SecondaryInk, modifier = Modifier.weight(1f).padding(vertical = 10.dp)); TextButton(onClick = dismiss, contentPadding = PaddingValues(5.dp)) { Text("关闭", fontSize = 11.sp) } } }
 @Composable
-private fun ModeChip(text: String, selected: Boolean, click: () -> Unit) { Text(text, fontSize = 11.sp, color = if (selected) Ink else SecondaryInk, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, modifier = Modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(11.dp)).background(if (selected) Soft else Color.White).clickable(onClick = click).padding(horizontal = 14.dp, vertical = 8.dp)) }
+private fun ModeChip(text: String, selected: Boolean, click: () -> Unit) { Text(text, fontSize = 11.sp, color = if (selected) Ink else SecondaryInk, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, modifier = Modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(11.dp)).background(if (selected) Soft else MaterialTheme.colorScheme.surface).clickable(onClick = click).padding(horizontal = 14.dp, vertical = 8.dp)) }
 @Composable
 private fun Suggestion(title: String, caption: String, click: () -> Unit) { Row(Modifier.fillMaxWidth().clickable(onClick = click).padding(vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) { Text(title, fontSize = 14.sp, modifier = Modifier.weight(1f)); Text(caption, fontSize = 11.sp, color = SecondaryInk); Text(" ›", fontSize = 18.sp, color = SecondaryInk) }; HorizontalDivider(color = Line) }
 @Composable
@@ -1100,12 +1113,12 @@ private fun NameDialog(title: String, label: String, example: String, close: () 
 @Composable
 internal fun EditableNameDialog(title: String, label: String, example: String, close: () -> Unit, save: (String) -> Unit, initial: String = "", confirmLabel: String = "创建", busy: Boolean = false, error: String? = null, maxChars: Int = Int.MAX_VALUE) {
     var value by rememberSaveable(initial) { mutableStateOf(initial) }
-    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = Color.White, title = { Text(title) }, text = { Column { OutlinedTextField(value, { if (it.length <= maxChars) value = it }, label = { Text(label) }, placeholder = { Text(example) }, singleLine = true, enabled = !busy, shape = RoundedCornerShape(13.dp)); error?.let { Text(it, fontSize = 12.sp, color = Danger) } } }, confirmButton = { Button(onClick = { save(value) }, enabled = !busy && value.isNotBlank() && value.length <= maxChars) { Text(if (busy) "保存中" else confirmLabel) } }, dismissButton = { TextButton(onClick = close, enabled = !busy) { Text("取消") } })
+    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = MaterialTheme.colorScheme.surface, title = { Text(title) }, text = { Column { OutlinedTextField(value, { if (it.length <= maxChars) value = it }, label = { Text(label) }, placeholder = { Text(example) }, singleLine = true, enabled = !busy, shape = RoundedCornerShape(13.dp)); error?.let { Text(it, fontSize = 12.sp, color = Danger) } } }, confirmButton = { Button(onClick = { save(value) }, enabled = !busy && value.isNotBlank() && value.length <= maxChars) { Text(if (busy) "保存中" else confirmLabel) } }, dismissButton = { TextButton(onClick = close, enabled = !busy) { Text("取消") } })
 }
 @Composable
 private fun TaskImage(task: UiTask) { val url = task.raw.optJSONObject("evidence")?.optString("imageDataUrl").orEmpty(); val bitmap = remember(url) { try { if (!url.startsWith("data:image/jpeg;base64,") && !url.startsWith("data:image/png;base64,")) null else { val data = Base64.decode(url.substringAfter(','), Base64.DEFAULT); if (data.size > 4_000_000) null else BitmapFactory.decodeByteArray(data, 0, data.size) } } catch (_: Exception) { null } }; if (bitmap != null) { Text("结果截图", fontSize = 12.sp, color = SecondaryInk, modifier = Modifier.padding(top = 22.dp, bottom = 10.dp)); androidx.compose.foundation.Image(bitmap.asImageBitmap(), contentDescription = "本任务保存的结果截图", modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp).clip(Rounded)) } }
 @Composable
-private fun LineIcon(kind: Int) { Canvas(Modifier.size(22.dp)) { val w = size.width; val h = size.height; val stroke = Stroke(width = 1.7.dp.toPx(), cap = StrokeCap.Round); when (kind) { 0 -> { val p = Path().apply { moveTo(w * .14f, h * .15f); lineTo(w * .86f, h * .15f); lineTo(w * .86f, h * .72f); lineTo(w * .43f, h * .72f); lineTo(w * .22f, h * .9f); lineTo(w * .22f, h * .72f); lineTo(w * .14f, h * .72f); close() }; drawPath(p, Ink, style = stroke) }; 1 -> { drawRoundRect(Ink, topLeft = androidx.compose.ui.geometry.Offset(w * .2f, h * .13f), size = androidx.compose.ui.geometry.Size(w * .6f, h * .75f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx()), style = stroke); val p = Path().apply { moveTo(w * .34f, h * .5f); lineTo(w * .46f, h * .62f); lineTo(w * .68f, h * .37f) }; drawPath(p, Ink, style = stroke) }; 2 -> { val p = Path().apply { moveTo(w * .12f, h * .3f); lineTo(w * .4f, h * .3f); lineTo(w * .48f, h * .2f); lineTo(w * .86f, h * .2f); lineTo(w * .86f, h * .82f); lineTo(w * .12f, h * .82f); close() }; drawPath(p, Ink, style = stroke) }; else -> { for (y in listOf(.25f, .5f, .75f)) drawLine(Ink, androidx.compose.ui.geometry.Offset(w * .15f, h * y), androidx.compose.ui.geometry.Offset(w * .85f, h * y), strokeWidth = 1.7.dp.toPx(), cap = StrokeCap.Round) } } } }
+private fun LineIcon(kind: Int) { val ink = Ink; Canvas(Modifier.size(22.dp)) { val w = size.width; val h = size.height; val stroke = Stroke(width = 1.7.dp.toPx(), cap = StrokeCap.Round); when (kind) { 0 -> { val p = Path().apply { moveTo(w * .14f, h * .15f); lineTo(w * .86f, h * .15f); lineTo(w * .86f, h * .72f); lineTo(w * .43f, h * .72f); lineTo(w * .22f, h * .9f); lineTo(w * .22f, h * .72f); lineTo(w * .14f, h * .72f); close() }; drawPath(p, ink, style = stroke) }; 1 -> { drawRoundRect(ink, topLeft = androidx.compose.ui.geometry.Offset(w * .2f, h * .13f), size = androidx.compose.ui.geometry.Size(w * .6f, h * .75f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx()), style = stroke); val p = Path().apply { moveTo(w * .34f, h * .5f); lineTo(w * .46f, h * .62f); lineTo(w * .68f, h * .37f) }; drawPath(p, ink, style = stroke) }; 2 -> { val p = Path().apply { moveTo(w * .12f, h * .3f); lineTo(w * .4f, h * .3f); lineTo(w * .48f, h * .2f); lineTo(w * .86f, h * .2f); lineTo(w * .86f, h * .82f); lineTo(w * .12f, h * .82f); close() }; drawPath(p, ink, style = stroke) }; else -> { for (y in listOf(.25f, .5f, .75f)) drawLine(ink, androidx.compose.ui.geometry.Offset(w * .15f, h * y), androidx.compose.ui.geometry.Offset(w * .85f, h * y), strokeWidth = 1.7.dp.toPx(), cap = StrokeCap.Round) } } } }
 private fun date(value: Long): String = if (value <= 0) "" else DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(value))
 private fun sameOrigin(first: String, second: String): Boolean = try {
     val a = java.net.URI(first)

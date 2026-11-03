@@ -12,7 +12,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -24,7 +23,7 @@ import org.json.JSONObject
  * the caller's original reviewed-task controls, never an optimistic completion or a retry. */
 @Composable
 internal fun TaskReconciliationCard(taskId: String, operations: List<JSONObject>, onResolve: (String, String) -> Unit) {
-    Surface(color = Color.White, shape = RoundedCornerShape(14.dp), border = BorderStroke(.5.dp, Line),
+    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(14.dp), border = BorderStroke(.5.dp, Line),
         modifier = Modifier.fillMaxWidth().padding(top = 16.dp).pocketDepth(PocketDepth.CONTENT, 14.dp)
             .testTag("task_reconciliation_card")) {
         Column {

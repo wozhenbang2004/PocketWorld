@@ -13,7 +13,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -28,14 +27,14 @@ internal fun AttachmentOutcomeOverlay(flow:AttachmentOutcomeCoordinator) {
     val state=flow.state;if(!state.open)return
     state.thumbnail?.let{image->DisposableEffect(image){onDispose{image.recycle()}}}
     Dialog(onDismissRequest=flow::close,properties=DialogProperties(usePlatformDefaultWidth=false,dismissOnBackPress=false)) {
-        Surface(Modifier.fillMaxSize(),color=Color.White) {
+        Surface(Modifier.fillMaxSize(),color=MaterialTheme.colorScheme.surface) {
             val file=state.file
             if(state.comparison!=null){
                 NativeImageVersionComparison(state.comparison,flow::closeComparison)
             }else if(state.processingSource!=null&&state.processingInfo!=null){
                 NativeFileProcessComposer(state,flow)
             }else if(state.documentDraft!=null){
-                NativeDocumentComposer(state.documentDraft,state.busy,state.error,state.pendingDocumentTask,flow::createDocument,flow::queryDocument,flow::closeDocumentDraft)
+                NativeDocumentComposer(state.documentDraft,state.busy,state.error,state.pendingDocumentTask,flow::createDocument,flow::queryDocument,flow::closeDocumentDraft,flow::updateDocumentDraft)
             }else if(state.originalFile!=null){
                 NativeOriginalFilePage(state.originalFile,flow::backFromOriginalFile)
             }else if(state.team!=null){

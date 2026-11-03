@@ -102,4 +102,62 @@ public final class OwnerMemoryHistoryNativeTest {
             f.save(new JSONObject(row.toString()).put("text","修正后的另一件事"));assertThrows(IllegalStateException.class,()->f.read(hit));
         }
     }
+    private static JSONArray exactRefs(JSONArray rows)throws Exception {JSONArray refs=new JSONArray();for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);refs.put(new JSONObject().put("id",row.getString("id")).put("revision",row.getLong("revision")));}return refs;}
+    private static JSONObject resolve(JSONArray rows,String selected,String decision)throws Exception {return new JSONObject().put("records",exactRefs(rows)).put("decision",decision).put("selectedId",selected).put("reason","主人核对所示原版本后明确选择，未授予执行权限");}
+    private static long after(long stamp)throws Exception {while(System.currentTimeMillis()<=stamp)Thread.sleep(1);return System.currentTimeMillis();}
+    private static JSONObject view(Fixture f)throws Exception{return f.owner.memory("cognitionProjection",new JSONObject().put("subjectId","owner"));}
+
+    @Test public void nativeCorrectionAndConflictChoiceSurviveLaterInferenceForgetAndColdReview()throws Exception {
+        String laterId;
+        try(Fixture f=new Fixture()){
+            long old=System.currentTimeMillis()-10000;JSONObject original=f.save(fact("最初记录A城","A城",old,old));
+            JSONObject corrected=f.owner.memory("correctReviewed",new JSONObject().put("id",original.getString("id")).put("expectedRevision",1).put("text","主人更正为C城")).getJSONObject("record");
+            assertTrue(corrected.has("assertionReview"));long next=after(corrected.getLong("assertionCorrectionAt"));JSONObject guess=fact("模型后来推断D城","D城",next,next);guess.getJSONObject("assertion").put("kind","inferred");JSONObject d=f.save(guess);
+            JSONObject projection=view(f);assertEquals(corrected.getString("id"),projection.getJSONArray("current").getJSONObject(0).getString("id"));assertEquals(2,projection.getJSONArray("pendingConflicts").length());
+            assertEquals(0,f.memory.handle("search",new JSONObject().put("scope",scope()).put("query","D城")).getJSONArray("records").length());
+            assertThrows(IllegalStateException.class,()->f.owner.memory("resolveAssertionConflictReviewed",resolve(new JSONArray().put(d),d.getString("id"),"replace")));
+            JSONObject selected=resolve(projection.getJSONArray("pendingConflicts"),d.getString("id"),"replace");f.owner.memory("resolveAssertionConflictReviewed",selected);
+            assertThrows(IllegalStateException.class,()->f.owner.memory("resolveAssertionConflictReviewed",selected));JSONObject current=view(f).getJSONArray("current").getJSONObject(0);assertEquals(d.getString("id"),current.getString("id"));assertTrue(current.has("assertionReview"));
+            long newest=after(current.getLong("assertionCorrectionAt"));JSONObject e=fact("又一次模型推断E城","E城",newest,newest);e.getJSONObject("assertion").put("kind","inferred");laterId=f.save(e).getString("id");
+            f.owner.memory("forgetReviewed",new JSONObject().put("id",d.getString("id")).put("expectedRevision",current.getLong("revision")));assertEquals(0,view(f).getJSONArray("current").length());
+        }
+        try(Fixture cold=new Fixture(false)){
+            JSONObject projection=view(cold);assertEquals(0,projection.getJSONArray("current").length());assertEquals(1,projection.getJSONArray("pendingConflicts").length());
+            JSONArray pending=projection.getJSONArray("pendingConflicts");assertEquals(laterId,pending.getJSONObject(0).getString("id"));
+            assertThrows(IllegalStateException.class,()->cold.owner.memory("resolveAssertionConflictReviewed",resolve(pending,"","coexist")));
+            cold.owner.memory("resolveAssertionConflictReviewed",resolve(pending,laterId,"replace"));assertEquals(laterId,view(cold).getJSONArray("current").getJSONObject(0).getString("id"));
+            assertThrows(SecurityException.class,()->cold.owner.memory("correctReviewed",new JSONObject().put("id",laterId).put("expectedRevision",2).put("text","跨域伪造").put("scope",scope())));
+        }
+    }
+
+    @Test public void firstNativeResolutionProtectsTheSelectedFactBeforeAnyPreviousCorrectionExists()throws Exception {
+        try(Fixture f=new Fixture()){
+            long before=System.currentTimeMillis()-10000;JSONObject a=f.save(fact("原记载A","A",before,before)),b=f.save(fact("原记载B","B",before,before));
+            f.owner.memory("resolveAssertionConflictReviewed",resolve(view(f).getJSONArray("pendingConflicts"),b.getString("id"),"replace"));JSONObject chosen=view(f).getJSONArray("current").getJSONObject(0);assertEquals(b.getString("id"),chosen.getString("id"));assertTrue(chosen.has("assertionReview"));
+            long next=after(chosen.getLong("assertionCorrectionAt"));JSONObject guess=fact("未经核对的后来推断C","C",next,next);guess.getJSONObject("assertion").put("kind","inferred");f.save(guess);
+            assertEquals(b.getString("id"),view(f).getJSONArray("current").getJSONObject(0).getString("id"));assertEquals(2,view(f).getJSONArray("pendingConflicts").length());assertFalse(f.book().get(scope(),a.getString("id")).getBoolean("active"));
+        }
+    }
+
+    @Test public void acceptedExplanationRemainsAfterCandidateCleanupButNeverOutlivesCorrectionOrForget()throws Exception {
+        String acceptedId;String explanation="根据两条来源保留这个方案；这是提炼说明，不是主人动机或效果证明。";
+        try(Fixture f=new Fixture()){
+            JSONObject a=f.save(new JSONObject().put("text","方案原资料甲")),b=f.save(new JSONObject().put("text","方案原资料乙"));
+            JSONObject draft=new JSONObject().put("layer","fact").put("text","保存的方案概述").put("reason",explanation).put("applicability","").put("confidence",0.5);
+            JSONObject candidate=f.book().proposeConsolidation(scope(),draft,exactRefs(new JSONArray().put(a).put(b)),System.currentTimeMillis());
+            JSONObject input=new JSONObject().put("id",candidate.getString("id")).put("revision",candidate.getLong("revision")),accepted=f.owner.memory("acceptCandidate",input);JSONObject row=accepted.getJSONObject("record");acceptedId=row.getString("id");
+            assertEquals(acceptedId,f.owner.memory("acceptCandidate",input).getJSONObject("record").getString("id"));assertEquals("unverified",row.getJSONObject("learningRationale").getString("validationStatus"));
+            f.owner.memory("archiveCandidates",new JSONObject().put("selections",exactRefs(new JSONArray().put(accepted.getJSONObject("candidate")))));
+            assertEquals(explanation,f.read(row).getJSONObject("record").getJSONObject("learningRationale").getString("reason"));assertFalse(f.owner.memory("listCandidateHistory",new JSONObject()).toString().contains(explanation));
+            MemoryArchive.checked(f.memory.ownerArchive(scope()),scope());
+            assertThrows(SecurityException.class,()->f.save(new JSONObject().put("text","伪造说明").put("learningRationale",row.getJSONObject("learningRationale"))));
+        }
+        try(Fixture cold=new Fixture(false)){
+            JSONObject row=cold.book().get(scope(),acceptedId);assertEquals(explanation,row.getJSONObject("learningRationale").getString("reason"));
+            JSONObject pinned=cold.owner.memory("setCore",new JSONObject().put("id",acceptedId).put("revision",row.getLong("revision")).put("core",true)).getJSONObject("record");assertTrue(pinned.has("learningRationale"));
+            JSONObject corrected=cold.owner.memory("correctReviewed",new JSONObject().put("id",acceptedId).put("expectedRevision",pinned.getLong("revision")).put("text","纠正后的方案概述")).getJSONObject("record");
+            assertFalse(corrected.has("learningRationale"));assertFalse(cold.memory.ownerArchive(scope()).toString().contains(explanation));
+            cold.owner.memory("forgetReviewed",new JSONObject().put("id",acceptedId).put("expectedRevision",corrected.getLong("revision")));assertThrows(Exception.class,()->cold.read(corrected));
+        }
+    }
 }

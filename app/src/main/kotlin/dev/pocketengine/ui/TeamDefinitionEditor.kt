@@ -7,7 +7,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.json.JSONArray
@@ -53,7 +52,7 @@ internal fun TeamDefinitionEditor(team: JSONObject, state: PocketUiState, contro
     val remoteProductionConfigured = state.feature("teams").optBoolean("selectedFileRemoteProductionConfigured")
     fun update(index: Int, next: AgentSlotDraft) { slots = slots.mapIndexed { n, old -> if (n == index) next else old } }
     LaunchedEffect(state.moduleResults["teams.save"]) { if (submitted != null && state.moduleResultInputs["teams.save"]?.optString("_requestId") == submitted) close() }
-    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = Color.White, title = { Text(if (team.has("id")) "编辑团队" else "创建团队") }, text = {
+    AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = MaterialTheme.colorScheme.surface, title = { Text(if (team.has("id")) "编辑团队" else "创建团队") }, text = {
         Column(Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedTextField(name, { name = it }, label = { Text("团队名称") }, singleLine = true)
             Row(horizontalArrangement=Arrangement.spacedBy(6.dp)) { FilterChip(mode == "collaborate", { mode = "collaborate" }, label = { Text("共同分析") }); FilterChip(mode == "debate", { mode = "debate" }, label = { Text("取证与讨论") }); FilterChip(mode=="produce",{mode="produce"},enabled=state.feature("teams").optBoolean("writeAssignmentsConfigured"),label={Text("文件协作")}) }

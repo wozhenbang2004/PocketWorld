@@ -23,6 +23,35 @@ final class TaskUsageQuery {
         return LOCAL_ORIGINS.contains(origin.optString("kind"))&&!"EXTERNAL_GROUP".equals(origin.optString("inferenceAudience"))
                 &&!origin.has("groupInputSource")&&!origin.has("externalGroupApiMode");
     }
+    /** All retained runs of one original owner task, within the existing diagnostic read budgets. */
+    static JSONObject taskUsage(SQLiteDatabase db,String task,RunControl control)throws Exception {
+        if(task==null||!task.matches("[a-fA-F0-9-]{36}")||control==null||control.hasHostRun())throw new SecurityException("累计用量只供原生主人页面读取原任务");
+        control.check();
+        try(Cursor row=db.rawQuery("SELECT ui_header FROM tasks WHERE task_id=?",new String[]{task})){
+            if(!row.moveToFirst()||row.isNull(0)||row.getString(0).length()>32768||!privateHeader(new JSONObject(row.getString(0))))throw new SecurityException("原私人任务来源不可核对");
+        }
+        JSONArray receipts=new JSONArray();int rows=0,bytes=0,oversized=0;boolean limited=false;
+        try(Cursor cursor=db.rawQuery("SELECT event_order,body_bytes FROM task_events WHERE task_id=? AND event_type='inference_receipt' ORDER BY event_order DESC LIMIT "+(MAX_ROWS+1),new String[]{task})){
+            while(cursor.moveToNext()){
+                control.check();if(rows==MAX_ROWS){limited=true;break;}rows++;
+                long size=cursor.getLong(1);if(size<0||size>MAX_RECEIPT_BYTES){oversized++;continue;}
+                if(bytes+size>MAX_BYTES){limited=true;break;}
+                try(Cursor body=db.rawQuery("SELECT event_json FROM task_events WHERE task_id=? AND event_order=?",new String[]{task,Long.toString(cursor.getLong(0))})){
+                    if(!body.moveToFirst())throw new IllegalStateException("原调用在读取时已变化");String text=body.getString(0);
+                    if(text.getBytes(StandardCharsets.UTF_8).length!=size)throw new IllegalStateException("原调用大小无法核对");
+                    JSONObject event=new JSONObject(text),identity=event.optJSONObject("context");
+                    if(identity==null||!task.equals(identity.optString("taskId")))throw new SecurityException("调用不属于原SQL任务");
+                    receipts.put(event);bytes+=size;
+                }
+            }
+        }
+        JSONArray chronological=new JSONArray();for(int i=receipts.length()-1;i>=0;i--)chronological.put(receipts.getJSONObject(i));
+        control.check();return new JSONObject().put("format","pocketworld.task-inference-usage.v1").put("taskId",task)
+                .put("projection",dev.pocketengine.runtime.usage.InferenceProjection.fromEvents(chronological))
+                .put("rowsExamined",rows).put("sourceBytes",bytes).put("oversizedRows",oversized).put("queryLimited",limited||oversized>0)
+                .put("maxRows",MAX_ROWS).put("maxSourceBytes",MAX_BYTES).put("sourceReadAt",System.currentTimeMillis())
+                .put("allRetainedRuns",true).put("readOnly",true).put("executionAuthorized",false);
+    }
     static JSONObject trends(SQLiteDatabase db,UsageTrendProjection.Query query,RunControl control)throws Exception {
         control.check();JSONArray receipts=new JSONArray();int rows=0,bytes=0,scopeExcluded=0,oversized=0;boolean limited=false;
         String sql="SELECT e.task_id,e.event_order,e.body_bytes,t.ui_header FROM task_events e JOIN tasks t ON t.task_id=e.task_id WHERE e.event_type='inference_receipt' AND t.updated_at>=? ORDER BY t.updated_at DESC,e.task_id,e.event_order DESC LIMIT "+(MAX_ROWS+1);

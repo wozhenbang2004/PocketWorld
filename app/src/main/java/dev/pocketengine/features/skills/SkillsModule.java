@@ -25,13 +25,13 @@ public final class SkillsModule implements EngineModule {
             .put("progressiveReading",true).put("textResourcesOnly",true).put("grantsFromInstructions",false).put("scriptExecution",false).put("validationOnLoad",true)
             .put("nativeGitSourceReview",true).put("gitSourceProvider","github_public_https").put("nativeRetainedRevisionReview",true)
             .put("nativeMcpSourceReview",mcpSources!=null).put("mcpSourceAutomaticSync",false)
-            .put("nativePackageStreams",true).put("maxPackageArchiveBytes",SkillArchive.MAX_ARCHIVE_BYTES)
+            .put("nativeReviewedRemoval",true).put("nativeSingleSkillDocument",true).put("nativePackageStreams",true).put("maxPackageArchiveBytes",SkillArchive.MAX_ARCHIVE_BYTES)
             .put("nativeDiscovery",true).put("discoveryMatching","lexical-v1")
             .put("nativeSourcePolicyReview",true).put("sourcePriority","project_then_user_then_bundled_then_stable_id").put("modelInvocationPolicyEnforced",true)
             .put("nativeProjectSourceBinding",projectNamespaces!=null).put("automaticProjectWatch",false)
             .put("nativeExecutionReview",true).put("executionRequiresNativeBackend",true)
             .put("nativeExperienceImport",true).put("experienceResolverAvailable",book.experienceResolverAvailable()).put("experienceExecutionVerified",false)
-            .put("commands",new JSONArray(new String[]{"list","get","import","read","setEnabled","delete"}));}
+            .put("commands",new JSONArray(new String[]{"list","get","import","read","setEnabled"}));}
     @Override public JSONObject handle(String command,JSONObject input)throws Exception {
         JSONObject scope=input.optJSONObject("scope");if(scope==null)scope=privateScope();long now=System.currentTimeMillis();JSONObject result;
         for(String key:new String[]{"projectId","checkoutId","projectRevision","projectSelection","namespace"})if(input.has(key)||scope.has(key))throw new SecurityException("项目技能范围只能来自原生项目选择与原任务，不接受命令JSON指定");
@@ -41,7 +41,7 @@ public final class SkillsModule implements EngineModule {
             case "read":return book.read(scope,input.getString("id"),input.optString("path","SKILL.md"),input.optInt("offset",0),input.optInt("length",8000),now);
             case "import":result=new JSONObject().put("skill",book.install(scope,input,now));break;
             case "setEnabled":result=new JSONObject().put("skill",book.setEnabled(scope,input.getString("id"),input.getBoolean("enabled"),input.optString("acceptedDigest"),input.optBoolean("confirmed",false),now));break;
-            case "delete":book.delete(scope,input.getString("id"));result=new JSONObject().put("deleted",true);break;
+            case "delete":throw new SecurityException("请在原生技能页面停用并审阅卸载；泛型命令不能绕过原使用和资源门禁");
             default:throw new IllegalArgumentException("未知技能操作");
         }
         context.emit(id(),new JSONObject().put("event","skills_changed"));return result;
@@ -161,6 +161,11 @@ public final class SkillsModule implements EngineModule {
     }
     /** Owner UI opens a user-selected SAF document off the main thread. Not a model/feature command. */
     public JSONObject inspectPackage(JSONObject scope,InputStream archive,String id)throws Exception{return book.inspectPackage(scope,archive,id,System.currentTimeMillis());}
+    public JSONObject inspectDocument(JSONObject scope,InputStream document,String id)throws Exception{return book.inspectDocument(scope,document,id,System.currentTimeMillis());}
+    public JSONObject importDocument(JSONObject scope,InputStream document,JSONObject options)throws Exception{
+        JSONObject result=new JSONObject().put("skill",book.importDocument(scope,document,options,System.currentTimeMillis()));context.emit(id(),new JSONObject().put("event","skills_changed"));return result;
+    }
+
     public JSONObject importPackage(JSONObject scope,InputStream archive,JSONObject options)throws Exception{
         JSONObject skill=book.importPackage(scope,archive,options,System.currentTimeMillis());
         context.emit(id(),new JSONObject().put("event","skills_changed"));return new JSONObject().put("skill",skill);
@@ -268,8 +273,37 @@ public final class SkillsModule implements EngineModule {
         return "source_check_unavailable";
     }
     /** Exact native functional-package ownership cleanup; never accepts an unpinned model delete. */
-    public JSONObject deletePackageReviewed(JSONObject scope,String id,int revision,String digest,long executionGeneration)throws Exception {
-        JSONObject result=book.deletePackageReviewed(scope,id,revision,digest,executionGeneration);context.emit(id(),new JSONObject().put("event","skills_changed"));return result;
+    public JSONObject deletePackageReviewed(JSONObject scope,String id,int revision,String digest,long executionGeneration,dev.pocketengine.store.TaskStore.SkillRemovalGuard guard)throws Exception {
+        if(guard==null)throw new SecurityException("缺少原卸载使用门禁");guard.requireOutsideTaskMonitor();
+        JSONObject expected=new JSONObject().put("id",id).put("revision",revision).put("digest",digest).put("executionGeneration",executionGeneration);
+        JSONObject current=book.get(scope,id,System.currentTimeMillis());SkillRemovalPolicy.requireRemovable(current,expected);
+        // Book read, then SQL, then Book CAS: no nested registry/TaskStore monitor.
+        guard.checkCurrentOutsideBook(current);
+        JSONObject result=book.deletePackageReviewed(scope,id,revision,digest,executionGeneration,guard);context.emit(id(),new JSONObject().put("event","skills_changed"));return result;
+    }
+    public final class RemovalReview {
+        private final dev.pocketengine.store.TaskStore tasks;private final String expected,view,action=java.util.UUID.randomUUID().toString();private boolean submitted;
+        private RemovalReview(dev.pocketengine.store.TaskStore tasks,JSONObject current)throws Exception{this.tasks=tasks;expected=SkillRemovalPolicy.pin(current).toString();view=new JSONObject(expected).put("name",current.getString("name")).put("resources",new JSONArray(current.getJSONArray("resources").toString())).put("originalReceiptsRetained",true).put("executionAuthorized",false).toString();}
+        public JSONObject view()throws Exception{return new JSONObject(view);}
+        public String actionId(){return action;}
+        public synchronized JSONObject remove(dev.pocketengine.core.RunControl original)throws Exception{
+            if(submitted)throw new SecurityException("本次卸载已提交，只核对原回执，不重复派发");original.check();submitted=true;
+            JSONObject pin=new JSONObject(expected);String task=action,operation=null;dev.pocketengine.store.TaskStore.SkillRemovalGuard guard=null;boolean created=false,journalAttempted=false;
+            try{
+                tasks.checkSkillRemovalIdleForOwner(pin.getString("id"));
+                tasks.beginExternal("skills","removeReviewed",task,new JSONObject().put("goal","卸载主人已确认的停用技能"));created=true;tasks.status(task,"running","核对原版本与资源后卸载");
+                operation=tasks.beginCapabilityOperation(task,task,"skills","removeReviewed",new JSONObject().put("expected",pin));guard=tasks.skillRemovalGuardForPreparedOperation(task,operation,original);original.check();
+                JSONObject receipt=deletePackageReviewed(privateScope(),pin.getString("id"),pin.getInt("revision"),pin.getString("digest"),pin.getLong("executionGeneration"),guard).put("status","completed").put("accepted",true).put("taskId",task).put("operationId",operation).put("replayAllowed",false);
+                journalAttempted=true;tasks.finishCapabilityOperation(task,operation,receipt);tasks.updateExternal(task,receipt);return receipt;
+            }catch(Exception failed){
+                if(operation==null){if(created)tasks.updateExternal(task,new JSONObject().put("status","failed").put("accepted",false).put("notDispatched",true).put("replayAllowed",false));throw failed;}
+                boolean unknown=guard!=null&&guard.entered();JSONObject receipt=new JSONObject().put("status",unknown?"unknown":"rejected").put("accepted",unknown?JSONObject.NULL:false).put("taskId",task).put("operationId",operation).put("replayAllowed",false).put("code",unknown?"skill_removal_result_unknown":"skill_removal_not_dispatched").put("message",unknown?"卸载结果未完整确认；保留原任务编号，只读核对，不重试":"原版本、任务或资源变化，未进入删除；请重新核对");
+                if(!journalAttempted)tasks.finishCapabilityOperation(task,operation,receipt);tasks.updateExternal(task,receipt);return receipt;
+            }
+        }
+    }
+    public RemovalReview reviewRemovalForOwner(dev.pocketengine.store.TaskStore tasks,JSONObject expected)throws Exception{
+        JSONObject current=book.get(privateScope(),expected.getString("id"),System.currentTimeMillis());SkillRemovalPolicy.requireRemovable(current,expected);tasks.checkSkillRemovalIdleForOwner(expected.getString("id"));return new RemovalReview(tasks,current);
     }
     /** Native only. No registered backend/TaskStore adapter means unavailable, never an app-UID shell. */
     public SkillExecution executionForHost(SkillExecution.Backend backend,SkillExecution.HostPort host){

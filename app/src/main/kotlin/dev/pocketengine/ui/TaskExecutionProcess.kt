@@ -64,7 +64,7 @@ internal fun TaskExecutionProcess(task: UiTask, controller: PocketWorldControlle
     val recentActivity = TaskExecutionPresentation.records(JSONObject().put("entries", recentEntries), "operations")
     Column(Modifier.fillMaxWidth().padding(vertical = 12.dp).testTag("task_execution_process")) {
         Surface(modifier = Modifier.fillMaxWidth().pocketDepth(PocketDepth.CONTENT, 14.dp),
-            shape = RoundedCornerShape(14.dp), color = Color.White) {
+            shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surface) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
         Text("执行动态", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         PocketExecutionStatus(current.title, current.tone, prominent = true, animateRunning = true, modifier = Modifier.fillMaxWidth().padding(top = 6.dp).semantics { heading() }.testTag("task_execution_current"))

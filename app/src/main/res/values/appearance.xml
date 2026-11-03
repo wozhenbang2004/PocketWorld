@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="appearance_title">外观</string>
+    <string name="appearance_description">选择界面明暗，或随系统变化。图片、视频与原始文件内容保持原样。</string>
+    <string name="appearance_system">跟随系统</string>
+    <string name="appearance_light">始终浅色</string>
+    <string name="appearance_dark">始终深色</string>
+    <string name="appearance_save_unconfirmed">当前显示已变化，但偏好是否保存尚未确认。请核对存储，重新打开应用后检查。</string>
+</resources>

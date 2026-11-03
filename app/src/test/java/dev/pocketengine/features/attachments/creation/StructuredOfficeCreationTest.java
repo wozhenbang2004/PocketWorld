@@ -90,6 +90,16 @@ public final class StructuredOfficeCreationTest {
             assertNotNull(new DocumentDraft(complete));
         }
     }
+    @Test public void presentationEditorSourceRetainsEmptyParagraphsEmbeddedNewlinesAndSupportedTextLimits()throws Exception {
+        JSONObject input=deck();JSONObject slide=input.getJSONObject("presentation").getJSONArray("slides").getJSONObject(1);slide.put("paragraphs",new JSONArray().put("").put("一段内换行\n仍是同一段").put("尾段")).put("notes","讲稿\n\n尾行\n");
+        var draft=new DocumentDraft(input);assertEquals(3,draft.office.slides.get(1).paragraphs().size());assertEquals("",draft.office.slides.get(1).paragraphs().get(0));assertEquals("一段内换行\n仍是同一段",draft.office.slides.get(1).paragraphs().get(1));
+        byte[] actual=PresentationDocumentWriter.write(draft,new RunControl());assertEquals(List.of("结束","","一段内换行\n仍是同一段","尾段"),OfficePackage.drawingParagraphs(actual,"ppt/slides/slide2.xml",new RunControl()));assertEquals(List.of("讲稿","","尾行",""),OfficePackage.drawingParagraphs(actual,"ppt/notesSlides/notesSlide2.xml",new RunControl()));
+        for(String key:List.of("body","fontPoints")){JSONObject textDocumentField=new JSONObject(input.toString()).put(key,key.equals("body")?"不是演示源":12);assertThrows(Exception.class,()->new DocumentDraft(textDocumentField));}
+        JSONObject wrongVersion=new JSONObject(input.toString());wrongVersion.getJSONObject("presentation").put("version",2);assertThrows(Exception.class,()->new DocumentDraft(wrongVersion));
+        JSONObject notesTooLong=new JSONObject(input.toString());notesTooLong.getJSONObject("presentation").getJSONArray("slides").getJSONObject(1).put("notes","字".repeat(8001));assertThrows(Exception.class,()->new DocumentDraft(notesTooLong));
+        JSONObject textTooLong=new JSONObject(input.toString());textTooLong.getJSONObject("presentation").getJSONArray("slides").getJSONObject(0).getJSONArray("shapes").getJSONObject(0).put("text","字".repeat(4001));assertThrows(Exception.class,()->new DocumentDraft(textTooLong));
+        JSONObject paragraphTooLong=new JSONObject(input.toString());paragraphTooLong.getJSONObject("presentation").getJSONArray("slides").getJSONObject(1).getJSONArray("paragraphs").put(1,"字".repeat(2001));assertThrows(Exception.class,()->new DocumentDraft(paragraphTooLong));
+    }
     @Test public void wordHeadingsAreNamedEditableStyles()throws Exception {
         var draft=new DocumentDraft(new JSONObject().put("format","docx").put("title","报告").put("body","## 小节\n段落\n名称\t金额\n项目\t120"));var bytes=WordDocumentWriter.write(draft,new RunControl());var parts=xml(bytes);
         assertTrue(parts.get("word/document.xml").contains("w:pStyle w:val=\"Heading2\""));assertTrue(parts.get("word/styles.xml").contains("w:styleId=\"Heading2\""));assertTrue(parts.get("word/_rels/document.xml.rels").contains("/styles"));

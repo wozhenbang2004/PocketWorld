@@ -132,7 +132,7 @@ private fun ConversationTable(block: RichMessageDocument.Block, link: (String) -
 internal fun ConversationTaskJournal(task: TaskPresentation.Snapshot, onOpenTask: (String) -> Unit,
     onLoadDetails: (String) -> Unit, modifier: Modifier = Modifier,
     interruptedSourceRevision: Long = 0, readInterrupted: ((String, (JSONObject?, String?) -> Unit) -> Unit)? = null,
-    answerQuestion: ((JSONObject, String) -> Unit)? = null) {
+    answerQuestion: OwnerQuestionSubmit? = null, chooseQuestion: OwnerQuestionSubmit? = null) {
     var expanded by rememberSaveable(task.id, task.runId) {
         mutableStateOf(task.status in setOf("preparing", "running", "awaiting_user", "waiting_approval", "reconciling", "unknown", "failed"))
     }
@@ -141,7 +141,7 @@ internal fun ConversationTaskJournal(task: TaskPresentation.Snapshot, onOpenTask
     }
     var showAll by rememberSaveable(task.id, task.runId) { mutableStateOf(false) }
     Surface(modifier = modifier.fillMaxWidth().testTag("conversation_task_" + task.id).pocketDepth(PocketDepth.CONTENT, 14.dp),
-        shape = RoundedCornerShape(14.dp), color = Color.White) {
+        shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surface) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f).clickable(enabled = task.id.isNotBlank()) {
@@ -180,7 +180,7 @@ internal fun ConversationTaskJournal(task: TaskPresentation.Snapshot, onOpenTask
                     Text("原任务记录尚未载入。", fontSize = 13.sp, color = SecondaryInk)
                     TextButton(onClick = { onLoadDetails(task.id) }) { Text("读取记录") }
                 } else if (task.operations.isEmpty()) Text("原任务还没有工具调用记录。", fontSize = 13.sp, color = SecondaryInk)
-                if (answerQuestion != null) task.ownerQuestion?.let { question -> key(task.id, interruptedSourceRevision, question.toString()) { OwnerQuestionPanel(question, answerQuestion) } }
+                if (answerQuestion != null && chooseQuestion != null) task.ownerQuestion?.let { question -> key(task.id, interruptedSourceRevision, question.toString()) { OwnerQuestionPanel(question, answerQuestion, chooseQuestion) } }
                 if (readInterrupted != null) InterruptedAttemptJournal(task.id, interruptedSourceRevision, readInterrupted)
                 val visible = if(showAll) task.operations else task.operations.takeLast(3)
                 if(task.operations.size > 3) TextButton(onClick = { showAll = !showAll }) {
