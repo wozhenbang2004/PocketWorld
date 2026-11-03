@@ -261,8 +261,32 @@ public final class AutomationModule implements EngineModule {
             JSONArray claimed=book.claimDue(System.currentTimeMillis(),10);
             for(int i=0;i<claimed.length();i++){
                 String id=claimed.getJSONObject(i).getString("id");
-                JSONObject origin=book.receiptNativeOrigin(id);if(origin!=null){try{if(mounted==null)throw new ScheduleSourceState.Unavailable();mounted.withNativeScheduleSource(origin,()->new JSONObject());}catch(Exception unavailable){if(unavailable instanceof ScheduleSourceState.Invalidated)book.revokeNativeScheduleOrigin(origin,System.currentTimeMillis());else{book.nativeScheduleSourcePending(origin,true,System.currentTimeMillis());book.deferSourceUnavailableReceipt(id,System.currentTimeMillis());}clearSourceNotifications(app,book);continue;}}
-                book.dispatchReceipt(id,receipt->postNotification(app,receipt),System.currentTimeMillis());
+                JSONObject origin=book.receiptNativeOrigin(id);
+                if(origin==null)book.dispatchReceipt(id,receipt->postNotification(app,receipt),System.currentTimeMillis());
+                else{
+                    // Enter the existing source domain BEFORE the Book lock. The original
+                    // source/Tasks transaction covers the actual local notification, not
+                    // just an empty preflight which could outlive a completed deletion.
+                    final boolean[] callbackEntered={false},notificationEntered={false};
+                    try{
+                        if(mounted==null)throw new ScheduleSourceState.Unavailable();
+                        mounted.withNativeScheduleSource(origin,()->{
+                            callbackEntered[0]=true;
+                            return book.dispatchReceipt(id,receipt->{notificationEntered[0]=true;return postNotification(app,receipt);},System.currentTimeMillis());
+                        });
+                    }catch(Exception unavailable){
+                        if(callbackEntered[0]){
+                            // A postcheck or final Book write can fail AFTER notify. Never
+                            // defer that occurrence. Keep a saved native result, or retain
+                            // unknown; an unwriteable dispatching row cold-recovers unknown.
+                            if(notificationEntered[0])try{book.delivered(id,"delivery_unknown","原通知可能已提交；只核对本次原发生，未重新派发",System.currentTimeMillis());}catch(Exception unrecorded){unavailable.addSuppressed(unrecorded);}
+                            throw unavailable;
+                        }
+                        if(unavailable instanceof ScheduleSourceState.Invalidated)book.revokeNativeScheduleOrigin(origin,System.currentTimeMillis());
+                        else{book.nativeScheduleSourcePending(origin,true,System.currentTimeMillis());book.deferSourceUnavailableReceipt(id,System.currentTimeMillis());}
+                        clearSourceNotifications(app,book);continue;
+                    }
+                }
                 if(mounted!=null)mounted.reconcileNativeScheduleSources();
                 JSONArray retained=book.receipts();for(int j=0;j<retained.length();j++)if(id.equals(retained.getJSONObject(j).getString("id"))){results.put(retained.getJSONObject(j));break;}
             }

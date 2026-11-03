@@ -82,6 +82,50 @@ public final class TaskMemoryUse {
         public JSONObject metadata()throws Exception{return new JSONObject(metadata);}
     }
 
+    /** Opaque, run-local read of retained versions. It cannot be supplied to Provided/Intent
+     * APIs and never promotes a historical assertion into the active reference snapshot. */
+    public static final class HistoricalSelection {
+        private final MemoryBook issuer;private final TaskRef task;private final ProjectMemoryAccess projectAccess;
+        private final MemoryAudienceSelection audience;private final String snapshot,metadata,validation;
+        private HistoricalSelection(TaskMemoryUse use,TaskRef task,JSONObject value,MemoryAudienceSelection audience)throws Exception{
+            issuer=use.book;this.task=task;projectAccess=use.projectAccess;this.audience=audience;
+            String id=UUID.randomUUID().toString(),digest=historicalReceiptDigest(value);JSONArray records=new JSONArray();
+            for(int i=0;i<value.getJSONArray("records").length();i++){JSONObject row=value.getJSONArray("records").getJSONObject(i),ref=new JSONObject();for(String key:java.util.List.of("id","revision","ownerId","spaceId","sourceRefs","temporalStatus","textSha256"))ref.put(key,row.get(key));records.put(ref);}
+            JSONObject nativeMetadata=task.toJson().put("historySelectionId",id).put("historyDigest",digest).put("records",records).put("readMode","retained_history");
+            if(projectAccess!=null)nativeMetadata.put("memoryNamespace",jsonScope(projectAccess.ownerId(),projectAccess.spaceId()));
+            metadata=nativeMetadata.toString();validation=new JSONObject().put("historySelectionId",id).put("historyDigest",digest).toString();
+            snapshot=value.put("historySelectionId",id).put("historyDigest",digest).put("phase","historical_read").toString();
+        }
+        public JSONObject snapshot()throws Exception{return new JSONObject(snapshot);}
+        public JSONObject metadata()throws Exception{return new JSONObject(metadata);}
+        public JSONObject validation()throws Exception{return new JSONObject(validation);}
+    }
+    public HistoricalSelection prepareHistoricalTaskRecall(JSONObject authenticatedScope,TaskRef task,MemoryQueryPlan plan,int limit,int maxChars,MemoryHostFence fence)throws Exception{
+        MemoryBook.Scope scope=scope(authenticatedScope);requireScope(scope,task);requireFence(fence);MemoryAudienceSelection audience=captureAudience(null,bookScope(scope));final HistoricalSelection[] selected={null};
+        fence.admit(()->{checkAudience(audience);synchronized(book){TaskState state=task(scope,task);if(!"current".equals(taskStatus(state,task))||!Set.of("preparing","running").contains(state.status))throw new SecurityException("历史读取不属于当前原任务");
+            JSONObject snapshot=book.historicalSnapshotScoped(bookScopeValue(authenticatedScope),java.util.Objects.requireNonNull(plan),limit,maxChars,audience);
+            if(!"current".equals(taskStatus(task(scope,task),task)))throw new SecurityException("历史读取期间原任务已变化");selected[0]=new HistoricalSelection(this,task,snapshot,audience);
+        }checkAudience(audience);return new JSONObject();});return selected[0];
+    }
+    public JSONObject validateHistoricalTaskRecall(JSONObject authenticatedScope,HistoricalSelection selected,MemoryHostFence fence)throws Exception{
+        MemoryBook.Scope scope=scope(authenticatedScope);requireFence(fence);if(selected==null||selected.issuer!=book||selected.projectAccess!=projectAccess)throw new SecurityException("不是此原run的历史选择");requireScope(scope,selected.task);
+        return fence.admit(()->{checkAudience(selected.audience);synchronized(book){TaskState state=task(scope,selected.task);if(!"current".equals(taskStatus(state,selected.task))||!Set.of("preparing","running").contains(state.status))throw new SecurityException("历史选择的原执行代次已变化");
+            JSONObject snapshot=selected.snapshot();book.requireHistoricalSnapshotCurrent(bookScopeValue(authenticatedScope),snapshot,selected.audience);checkAudience(selected.audience);return snapshot;
+        }});
+    }
+    /** The Runner accepts only a currently native-held token AND the same exact projected body.
+     * Reopened runs have no such token; their old tool receipt must be re-queried, never replayed. */
+    public static boolean historicalReceiptCurrent(JSONObject receipt,JSONArray nativeValidations)throws Exception{
+        if(receipt==null||nativeValidations==null||!"historical_read".equals(receipt.optString("phase")))return false;
+        String digest=historicalReceiptDigest(receipt);if(!digest.equals(receipt.optString("historyDigest")))return false;
+        for(int i=0;i<nativeValidations.length();i++){JSONObject current=nativeValidations.getJSONObject(i);if(current.getString("historySelectionId").equals(receipt.optString("historySelectionId"))&&digest.equals(current.getString("historyDigest")))return true;}return false;
+    }
+    private static String historicalReceiptDigest(JSONObject snapshot)throws Exception{
+        if(!"pocketworld.task-memory-history.v1".equals(snapshot.optString("format"))||!"retained_history".equals(snapshot.optString("readMode"))||!Boolean.TRUE.equals(snapshot.opt("readOnlyHistory"))||!Boolean.FALSE.equals(snapshot.opt("activeRecall"))||!Boolean.FALSE.equals(snapshot.opt("currentFactVerified"))||!Boolean.FALSE.equals(snapshot.opt("memoryTextIsOriginalEvidence"))||!Boolean.FALSE.equals(snapshot.opt("executionAuthorized"))||!Boolean.FALSE.equals(snapshot.opt("modelUseVerified")))throw new SecurityException("历史选择不能伪装成当前事实、原件或权限");
+        JSONObject exact=new JSONObject(snapshot.toString());exact.remove("historySelectionId");exact.remove("historyDigest");exact.remove("phase");
+        return TaskMemoryTrace.rawFingerprint(exact);
+    }
+
     /** Select using the real task's current scope/run. A preparation is never a provided receipt. */
     public Selection prepareTaskRecall(JSONObject authenticatedScope,TaskRef task,String query,int limit,int maxChars,MemoryHostFence fence)throws Exception{
         return prepareTaskRecall(authenticatedScope,task,query,limit,maxChars,fence,null);

@@ -1,6 +1,7 @@
 package dev.pocketengine.features.workspace;
 
 import dev.pocketengine.features.memory.MemoryBook;
+import dev.pocketengine.features.memory.LearningExtractionContract;
 import dev.pocketengine.features.memory.SourceLearningJob;
 import dev.pocketengine.features.memory.SourceRef;
 import dev.pocketengine.store.OwnerExperienceProjection;
@@ -55,6 +56,39 @@ public final class OwnerExperienceLearningDraftProjectionTest {
         JSONObject retired=OwnerExperienceProjection.projectNativeLearningDraft(operation(),ref->true);assertSame(retired,OwnerExperienceProjection.projectNativeLearningDraft(retired,ref->{throw new AssertionError("no missing local history can revive a retired body");}));assertFalse(retired.toString().contains(BODY));
         retired.getJSONObject("receipt").put("recordedDraft",operation().getJSONObject("receipt").getJSONObject("recordedDraft"));assertThrows(SecurityException.class,()->OwnerExperienceProjection.projectNativeLearningDraft(retired,ref->false));
         JSONObject substituted=OwnerExperienceProjection.projectNativeLearningDraft(operation(),ref->true);substituted.getJSONObject("receipt").put("sourceRef",new SourceRef("message","changed",1,"owner","private").toJson());assertThrows(SecurityException.class,()->OwnerExperienceProjection.projectNativeLearningDraft(substituted,ref->false));
+    }
+    private static JSONObject contractedOperation(boolean olderPrompt)throws Exception {
+        JSONObject original=operation(),contract=LearningExtractionContract.capture(LearningExtractionContract.SOURCE,null);
+        if(olderPrompt)contract.put("promptSha256","0".repeat(64));
+        JSONObject receipt=original.getJSONObject("receipt"),recorded=receipt.getJSONObject("recordedDraft");
+        recorded.put("format",LearningExtractionContract.DRAFT_FORMAT).put("extractionContract",new JSONObject(contract.toString()));
+        original.getJSONObject("arguments").put("extractionContract",new JSONObject(contract.toString()));
+        receipt.put("draftFingerprint",TaskStore.capabilityFingerprint(recorded)).put("extractionContractFingerprint",TaskStore.capabilityFingerprint(contract));
+        return original;
+    }
+    @Test public void actualV2AndOlderPromptRemainPassiveOriginalEvidenceAndStillRetireAfterForget()throws Exception {
+        for(boolean older:new boolean[]{false,true}){
+            JSONObject original=contractedOperation(older);String exact=original.toString();
+            assertEquals(!older,LearningExtractionContract.supported(original.getJSONObject("arguments").getJSONObject("extractionContract")));
+            assertSame(original,OwnerExperienceProjection.projectNativeLearningDraft(original,ref->false));
+            JSONObject retired=OwnerExperienceProjection.projectNativeLearningDraft(original,ref->true);
+            assertFalse(retired.toString().contains(BODY));assertEquals(exact,original.toString());
+            assertEquals(original.getJSONObject("arguments").toString(),retired.getJSONObject("arguments").toString());
+            assertEquals(original.getJSONObject("receipt").getString("extractionContractFingerprint"),retired.getJSONObject("receipt").getString("extractionContractFingerprint"));
+            assertSame(retired,OwnerExperienceProjection.projectNativeLearningDraft(retired,ref->{throw new AssertionError("retired draft cannot consult a new source to regain its body");}));
+        }
+    }
+    @Test public void v2ProjectionRejectsSubstitutedContractsAndDowngradesBeforeTheSourceBarrier()throws Exception {
+        for(int change=0;change<5;change++){
+            JSONObject bad=contractedOperation(false),receipt=bad.getJSONObject("receipt"),recorded=receipt.getJSONObject("recordedDraft");
+            if(change==0)recorded.getJSONObject("extractionContract").put("promptSha256","d".repeat(64));
+            else if(change==1)receipt.put("extractionContractFingerprint","d".repeat(64));
+            else if(change==2)bad.getJSONObject("arguments").getJSONObject("extractionContract").put("sourceCharsLimit",1);
+            else if(change==3){recorded.put("format","pocketworld.source-learning-draft.v1");recorded.remove("extractionContract");}
+            else recorded.put("extraAuthority",true);
+            receipt.put("draftFingerprint",TaskStore.capabilityFingerprint(recorded));
+            assertThrows(SecurityException.class,()->OwnerExperienceProjection.projectNativeLearningDraft(bad,ref->{throw new AssertionError("mismatched native contract reached the source barrier");}));
+        }
     }
     @Test public void originalBookKnownDeleteAndForgetAreStickyWhileAbsentSourcesStayUnknown()throws Exception {
         Map<String,SourceRef.State> actual=new HashMap<>();SourceRef deleted=source(),forgotten=new SourceRef("message","formally-forgotten",1,"owner","private");actual.put(deleted.sourceId,new SourceRef.State(deleted,false));actual.put(forgotten.sourceId,new SourceRef.State(forgotten,false));File file=new File(temp.getRoot(),"records.json");MemoryBook book=new MemoryBook(file,(identity,kind,id)->actual.get(id));

@@ -126,7 +126,10 @@ public final class MemorySourceBridge {
     /** A pinned learning parent also requires source read eligibility, not only matching revision. */
     public void requireLearningReference(SourceRef expected)throws Exception {
         requireCurrentReference(expected);
-        if("message".equals(expected.kind)&&read(expected)==null)throw new SecurityException("原消息来源不可读"); // Also rejects retired/context-retired original messages.
+        // Read eligibility can retire without changing the original identity/revision.
+        // Keep large workspace/attachment reads out of this parent admission check.
+        boolean originalTaskSnapshot="task_evidence".equals(expected.kind)&&expected.sourceId.startsWith("task:")&&expected.sourceId.endsWith(":verified_result");
+        if(("message".equals(expected.kind)||originalTaskSnapshot)&&read(expected)==null)throw new SecurityException("原学习来源不可读");
     }
     public KnowledgeLearningWorkflow.SourceDocument read(SourceRef ref)throws Exception{
         if("workspace_file".equals(ref.kind))return readWorkspace(ref);
@@ -191,6 +194,12 @@ public final class MemorySourceBridge {
             else if(actual.ref.revision>ref.revision)mutate(scope,memory,false,receipt->memory.sourceUpdated(scope,actual.ref,receipt));
         }
         SkillsModule skills=skills();if(skills!=null)skills.reconcileExperiences(scope);
+        // A reviewed reminder may reference an original USER message without any formal
+        // memory row. Its original source/receipt still needs revocation before source
+        // synchronization can report completion; no unindexed message is added to Book.
+        if("owner".equals(identity.ownerId)&&"private".equals(identity.spaceId)){
+            EngineModule automation=host.module("automation");if(automation instanceof dev.pocketengine.features.automation.AutomationModule schedules)schedules.reconcileNativeScheduleSources();
+        }
     }
     public synchronized JSONObject forgetReviewed(JSONObject scope,String id,long revision)throws Exception{
         EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");MemoryModule memory=(MemoryModule)module;
@@ -205,6 +214,15 @@ public final class MemorySourceBridge {
     public synchronized JSONObject correctReviewed(JSONObject scope,String id,long revision,String text)throws Exception{
         EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");MemoryModule memory=(MemoryModule)module;
         reconcilePending(scope,memory);return mutate(scope,memory,false,"owner_correction",receipt->memory.correctReviewed(scope,id,revision,text,receipt));
+    }
+    /** Reuses the original source reconciliation domain before exact pending-candidate review. */
+    public synchronized JSONObject prepareAssertionReview(JSONObject scope,JSONObject request)throws Exception{
+        synchronize(scope);EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");
+        return ((MemoryModule)module).prepareAssertionReview(scope,request);
+    }
+    public synchronized JSONObject reviewCandidateAssertion(JSONObject scope,JSONObject request)throws Exception{
+        synchronize(scope);EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");
+        return ((MemoryModule)module).reviewCandidateAssertion(scope,request);
     }
     public synchronized JSONObject supersedeReviewed(JSONObject scope,String keptId,long keptRevision,String replacedId,long replacedRevision)throws Exception{
         EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");MemoryModule memory=(MemoryModule)module;

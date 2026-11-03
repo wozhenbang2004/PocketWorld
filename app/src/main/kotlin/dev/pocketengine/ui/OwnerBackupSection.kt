@@ -2,7 +2,6 @@ package dev.pocketengine.ui
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -82,13 +81,9 @@ import org.json.JSONObject
             state.experiencePage?.let { page ->
                 HorizontalDivider()
                 Text("原经历快照 · 第 ${page.optInt("pageIndex") + 1}/${page.optInt("pageCount")} 页", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                Caption("快照时间：${page.optLong("snapshotAt")} · ${page.optString("kind")}。只核对归档字节，不证明内容真实或授权仍有效。附件字节须有同包原件分区，按hash核对。")
+                Caption("快照时间：${ownerExperienceTime(page.opt("snapshotAt"))} · ${ownerExperienceKindLabel(page.optString("kind"))}。只核对归档字节，不证明内容真实或授权仍有效。附件字节须有同包原件分区，按hash核对。")
                 val data = page.optJSONObject("data") ?: JSONObject()
-                data.optJSONArray("entries")?.rows()?.forEach { row ->
-                    if (row.optString("status") == "blocked_by_known_source_barrier") Caption("此原经历已被本机已知的遗忘/删除/来源门阻止；不显示旧正文。")
-                    else SelectionContainer { Text(row.toString(2), fontSize = 12.sp, lineHeight = 20.sp) }
-                }
-                data.optJSONArray("gaps")?.takeIf { it.length() > 0 }?.let { Caption("原件缺口：" + it.toString()) }
+                OwnerExperiencePageContent(data, page.optString("kind"))
                 Row {
                     TextButton(onClick = { flow.readExperiencePage(page.optInt("pageIndex") - 1) }, enabled = !state.busy && page.optInt("pageIndex") > 0) { Text("上一页") }
                     TextButton(onClick = { flow.readExperiencePage(page.optInt("pageIndex") + 1) }, enabled = !state.busy && page.optBoolean("hasMore")) { Text("下一页") }
