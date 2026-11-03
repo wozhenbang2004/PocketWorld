@@ -92,11 +92,17 @@ public final class MemorySourceCleanupHostTest {
     @Test public void unrelatedSourceDeletionAfterFailedForgetIntentIsNotForgetCommitProof()throws Exception{
         try(Fixture f=new Fixture()){
             SourceRef a=f.source("changed A"),b=f.source("valid B");JSONObject record=f.save(new JSONArray().put(a.toJson()).put(b.toJson()),"A plus B root");
+            String retained=f.tasks.readMemorySource(b).text;
             String intent=f.intent(f.ref(record,a).put("sourceRefs",new JSONArray().put(a.toJson()).put(b.toJson())),"owner_forget");
             String id=a.sourceId.substring(5,a.sourceId.length()-16);f.tasks.event(id,new JSONObject().put("type","user_verification").put("completed",false));
             SourceRef revoked=f.tasks.resolveMemorySource(MemoryBook.Scope.from(scope()),a.kind,a.sourceId).ref;
             f.memory.sourceDeleted(scope(),revoked,ignored->{});assertFalse(f.memory.isSourceForgotten(scope(),b));
-            f.bridge.synchronize(scope());assertEquals("completed",f.tasks.get(intent,false).getString("status"));assertNotNull(f.tasks.readMemorySource(b));assertFalse(f.memory.isSourceForgotten(scope(),a));
+            // A's real deletion establishes its durable retirement floor. The unrelated
+            // pre-intent must not turn that evidence into a forget proof for still-live B.
+            assertTrue(f.memory.isSourceForgotten(scope(),a));
+            f.bridge.synchronize(scope());assertEquals("completed",f.tasks.get(intent,false).getString("status"));
+            assertFalse(f.memory.isSourceForgotten(scope(),b));assertEquals(retained,f.tasks.readMemorySource(b).text);
+            assertTrue(f.memory.isSourceForgotten(scope(),a));assertThrows(IllegalStateException.class,()->f.tasks.readMemorySource(a));
         }
     }
     @Test public void nestedTransitiveSourcesAlsoStayBelowJournalArrayLimit()throws Exception{

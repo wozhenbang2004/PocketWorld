@@ -50,16 +50,18 @@ tasks.withType(Test).configureEach {
     maxHeapSize = '1024m'
     // Robolectric's real document FD close needs the JDK17 java.io bridge; host JVM only.
     if (selected.contains('project-file-operations')) jvmArgs '--add-opens=java.base/java.io=ALL-UNNAMED'
-    // The SDK35 host Conscrypt socket bridge inspects InetAddress on JDK17.
-    // Keep real mutually authenticated TLS; open only this host-test module/package.
-    if (selected.contains('phone-task-platform')) jvmArgs '--add-opens=java.base/java.net=ALL-UNNAMED'
+    // SDK35 host Conscrypt inspects InetAddress on JDK17 for the real phone/OAuth TLS peers.
+    // Open only this host-test JVM package; production TLS and certificate checks are unchanged.
+    if (selected.contains('phone-task-platform') || classes.contains('dev.pocketengine.features.plugins.McpOAuthNativeRunnerJourneyTest')) {
+        jvmArgs '--add-opens=java.base/java.net=ALL-UNNAMED'
+    }
     enableAssertions = true
     outputs.upToDateWhen { false }
     // AGP's test_config.properties paths are app-module relative. A repository-root
     // cwd makes Robolectric look for app resources/APK under the wrong build/ tree.
     workingDir project.projectDir
     systemProperty 'pocket.gateway.source', rootProject.projectDir.absolutePath
-    ['a25.python', 'a25.node', 'pocket.gateway.python', 'robolectric.dependency.dir'].each { key ->
+    ['a25.python', 'a25.node', 'pocket.gateway.python', 'robolectric.dependency.dir', 'pocketworldHostLostWaitDir', 'pocketworldHostOldLostWaitDir'].each { key ->
         def value = providers.gradleProperty(key).orNull
         if (value != null) systemProperty key, value
     }
@@ -80,6 +82,7 @@ tasks.withType(Test).configureEach {
             workingDirectory: workingDir.absolutePath, gatewaySource: systemProperties['pocket.gateway.source'],
             junitXmlDirectory: reports.junitXml.outputLocation.get().asFile.absolutePath,
             junitXmlRequired: reports.junitXml.required.get(),
+            jvmArguments: jvmArgs,
             assertions: true, deviceTest: false
         ])) + '\n'
     }

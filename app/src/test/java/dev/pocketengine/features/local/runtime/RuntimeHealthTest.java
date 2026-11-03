@@ -20,6 +20,13 @@ public final class RuntimeHealthTest {
                 .put("dnsServers",new JSONArray().put("1.1.1.1")).put("tools",tools));
     }
     private static JSONObject active(AndroidRuntimeCatalog catalog)throws Exception {return new JSONObject().put("generationIdentity","d".repeat(64)).put("catalogIdentity",catalog.identity).put("catalog",catalog.descriptor()).put("installedPackages","python3\t3.12.3\ngit\t2.43.0\n");}
+    /** Actual production DTO with synthetic catalog/seal inputs for the original mounted owner UI. */
+    public static JSONObject ownerPreviewForUi(boolean ready,String phase,boolean stale)throws Exception {
+        AndroidRuntimeCatalog catalog=catalog();JSONObject progress=new JSONObject().put("phase",phase).put("catalogIdentity",stale?"f".repeat(64):catalog.identity);
+        if("failed".equals(phase))progress.put("error","runtime_download_http_503").put("failure",RuntimeHealth.failure(new SocketTimeoutException("private fixture URL must not enter owner preview")));
+        return new JSONObject().put("runtimeId","managed_process_v1").put("canExecute",ready).put("preparationAvailable",true).put("preparation",progress)
+                .put("health",RuntimeHealth.android(catalog,active(catalog),new JSONArray(),progress,true,true,ready));
+    }
     @Test public void networkFailureIsNotAPluginStrikeOrAutomaticRestartPermission()throws Exception {
         JSONObject fault=RuntimeHealth.failure(new SocketTimeoutException("credential fixture-secret should not leave failure"));
         assertEquals("network",fault.getString("category"));assertFalse(fault.getBoolean("pluginFaultAttributed"));assertFalse(fault.getBoolean("automaticRestartAllowed"));assertFalse(fault.toString().contains("fixture-secret"));

@@ -50,9 +50,20 @@ final class CapabilityResults {
         out.put("receipt",receipt);
         Set<String> fields=descriptor.feature.equals("browser")?BROWSER_DATA:descriptor.feature.equals("ssh")?SSH_DATA:ATTACHMENT_DATA;
         JSONObject selected=new JSONObject();for(String key:fields)if(nativeResult.has(key))selected.put(key,nativeResult.get(key));
+        if(descriptor.feature.equals("ssh"))return sshText(out,selected);
         Budget budget=new Budget(Math.max(0,Math.min(24000,MAX_BYTES-bytes(out)-256)));out.put("data",copy(selected,budget,0)).put("outputTruncated",budget.truncated);
         if(bytes(out)>MAX_BYTES)out.put("data",new JSONObject()).put("outputTruncated",true);
         return out;
+    }
+    private static JSONObject sshText(JSONObject out,JSONObject selected)throws Exception {
+        java.util.Map<String,String> text=new java.util.LinkedHashMap<>();for(String key:new String[]{"stdout","stderr","content"})if(selected.opt(key) instanceof String){text.put(key,selected.getString(key));selected.remove(key);}
+        Budget metadata=new Budget(Math.min(text.isEmpty()?24000:8000,Math.max(0,MAX_BYTES-bytes(out)-256)));JSONObject data=(JSONObject)copy(selected,metadata,0),omissions=new JSONObject();
+        out.put("data",data).put("displayOmissions",omissions).put("displayTruncated",metadata.truncated).put("outputTruncated",metadata.truncated);int remaining=text.size();
+        for(var field:text.entrySet()){
+            int available=Math.max(0,MAX_BYTES-bytes(out)-remaining*512);ToolTextDisplay.Excerpt part=ToolTextDisplay.clip(field.getValue(),Math.min(12000,available/remaining--));data.put(field.getKey(),part.text);
+            if(part.truncated()){omissions.put(field.getKey(),part.metadata());out.put("displayTruncated",true).put("outputTruncated",true);}
+        }
+        if(bytes(out)>MAX_BYTES)throw new IllegalStateException("原SSH结果元数据超过展示预算");return out;
     }
     private static JSONObject browserObservation(CapabilityDescriptor descriptor,JSONObject raw,JSONObject capture)throws Exception {
         CapabilityDescriptor.uuid(raw.optString("observationId"));

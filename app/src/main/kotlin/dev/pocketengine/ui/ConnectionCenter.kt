@@ -115,7 +115,7 @@ internal fun ConnectionCenter(state: PocketUiState, controller: PocketWorldContr
                             }
                             "mcp" -> McpInstallPreviewPage(snapshot, responses, pending, "snapshot" in pending, error,
                                 { command, payload -> controller.requestOwnerDomain(domain, command, payload) }, controller::pickMcpConfig,
-                                { val task = controller.taskMcpPreparation?.optString("taskId"); if (!task.isNullOrBlank()) { controller.focusTask(task); close() } else section = null }, controller.taskMcpPreparation?.optString("pluginId"), controller.taskMcpPreparation?.optString("tool"), nativeHost = controller.pluginExecutionHost(), runOAuthWork = controller::runPluginCatalogWork, runOAuthControl = controller::runEcosystemControlWork)
+                                { val task = controller.taskMcpPreparation?.optString("taskId"); if (!task.isNullOrBlank()) { controller.focusTask(task); close() } else section = null }, controller.taskMcpPreparation?.optString("pluginId"), controller.taskMcpPreparation?.optString("tool"), nativeHost = controller.pluginExecutionHost(), runOAuthWork = controller::runPluginCatalogWork, runOAuthControl = controller::runEcosystemControlWork, onOpenEvidenceTask = { controller.focusTask(it); close() })
                             "learning" -> ExperienceSkillReviewPage(snapshot, responses, pending, "snapshot" in pending, error,
                                 { command, payload -> controller.requestOwnerDomain(domain, command, payload) }, { section = null },
                                 onOpenInferenceRecord = { reference -> controller.focusTask(reference.getString("taskId")) })
@@ -376,22 +376,31 @@ private fun MemoryEditor(record: JSONObject, state: PocketUiState, controller: P
 @Composable
 private fun NativeReminders(state: PocketUiState, controller: PocketWorldController) {
     var create by remember { mutableStateOf(false) }
+    var rescheduleFrom by remember { mutableStateOf<JSONObject?>(null) }
     var deleting by remember { mutableStateOf<JSONObject?>(null) }
     val rules = state.feature("automation").optJSONArray("rules").objects()
     CenterCaption("提醒按手机系统调度，可能延后。手机目标会通知你查看并开始，不会擅自操作屏幕。")
-    OutlinedButton(onClick = { create = true }) { Text("新建提醒") }
+    OutlinedButton(onClick = { rescheduleFrom = null; create = true }) { Text("新建提醒") }
     TextButton(onClick = { controller.openConnection("commitments") }) { Text("查看承诺与持续跟进", fontSize = 12.sp) }
     rules.forEach { rule ->
+        val schedule = rule.optJSONObject("schedule")
+        val exhaustedOnce = schedule?.optString("type") == "once" && !rule.optBoolean("enabled") &&
+            (schedule.optLong("at") <= System.currentTimeMillis() || rule.optLong("onceClaimedAt", -1) >= schedule.optLong("at") || !rule.has("onceClaimedAt") && rule.optLong("claimedCount") > 0)
         Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) { Text(rule.optString("title"), fontSize = 14.sp); CenterCaption(if (rule.optLong("nextAt", -1) > 0) "下次：" + centerDate(rule.optLong("nextAt")) else "已暂停或等待下次启用"); TextButton(onClick = { deleting = rule }) { Text("删除", fontSize = 12.sp, color = Danger) } }
-            Switch(checked = rule.optBoolean("enabled"), onCheckedChange = { controller.requestFeature("automation", "setEnabled", JSONObject().put("id", rule.optString("id")).put("enabled", it)) }, enabled = "automation.setEnabled" !in state.moduleBusy)
+            Column(Modifier.weight(1f)) {
+                Text(rule.optString("title"), fontSize = 14.sp)
+                CenterCaption(if (exhaustedOnce) "这次安排已到期或已有发生记录；原结果仍以回执为准。" else if (rule.optLong("nextAt", -1) > 0) "下次：" + centerDate(rule.optLong("nextAt")) else "已暂停或等待下次启用")
+                if (exhaustedOnce && !rule.optBoolean("sourceInvalidated")) TextButton(onClick = { rescheduleFrom = JSONObject(rule.toString()); create = true }) { Text("重新安排", fontSize = 12.sp) }
+                TextButton(onClick = { deleting = rule }) { Text("删除", fontSize = 12.sp, color = Danger) }
+            }
+            Switch(checked = rule.optBoolean("enabled"), onCheckedChange = { controller.requestFeature("automation", "setEnabled", JSONObject().put("id", rule.optString("id")).put("enabled", it)) }, enabled = !exhaustedOnce && "automation.setEnabled" !in state.moduleBusy)
         }
         HorizontalDivider(color = Line)
     }
     val receipts = state.moduleResults["automation.receipts"]?.optJSONArray("receipts").objects().takeLast(10).reversed()
     if (receipts.isNotEmpty()) CenterHeading("最近投递")
     receipts.forEach { receipt -> Text(receipt.optString("title"), fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp)); CenterCaption(receipt.optString("message")); if (receipt.optString("kind") == "phone_goal") TextButton(onClick = { controller.prepareReminderOccurrence(receipt.optString("id")) }) { Text("查看原任务目标", fontSize = 12.sp) } }
-    if (create) ReminderEditor(state, controller) { create = false }
+    if (create) ReminderEditor(state, controller, rescheduleFrom) { create = false; rescheduleFrom = null }
     deleting?.let { rule -> ConfirmAction("删除这个提醒？", rule.optString("title"), "删除提醒", { deleting = null }) { controller.requestFeature("automation", "delete", JSONObject().put("id", rule.optString("id"))); deleting = null } }
 }
 
@@ -415,8 +424,8 @@ internal fun reminderScheduleDraft(type: String, minutes: String, time: String, 
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ReminderEditor(state: PocketUiState, controller: PocketWorldController, close: () -> Unit) {
-    var title by rememberSaveable { mutableStateOf("") }
+private fun ReminderEditor(state: PocketUiState, controller: PocketWorldController, original: JSONObject? = null, close: () -> Unit) {
+    var title by rememberSaveable { mutableStateOf(original?.optString("title").orEmpty()) }
     var type by rememberSaveable { mutableStateOf("once") }
     var typeMenu by remember { mutableStateOf(false) }
     var time by rememberSaveable { mutableStateOf("09:00") }
@@ -428,8 +437,8 @@ private fun ReminderEditor(state: PocketUiState, controller: PocketWorldControll
     var skipGap by rememberSaveable { mutableStateOf(false) }
     var laterOverlap by rememberSaveable { mutableStateOf(false) }
     var advanced by rememberSaveable { mutableStateOf(false) }
-    var phone by rememberSaveable { mutableStateOf(false) }
-    var goal by rememberSaveable { mutableStateOf("") }
+    var phone by rememberSaveable { mutableStateOf(original?.optString("kind") == "phone_goal") }
+    var goal by rememberSaveable { mutableStateOf(original?.optString("goal").orEmpty()) }
     var misfire by rememberSaveable { mutableStateOf("skip") }
     var overlap by rememberSaveable { mutableStateOf("buffer_one") }
     var maxCatchUp by rememberSaveable { mutableStateOf("3") }
@@ -445,6 +454,7 @@ private fun ReminderEditor(state: PocketUiState, controller: PocketWorldControll
     val preview = draft.getOrNull()?.let { runCatching { dev.pocketengine.features.automation.AutomationSchedule.preview(it, now, 3) }.getOrNull() }
     LaunchedEffect(busy) { if (submitted && !busy && state.moduleErrors["automation.save"] == null) close() }
     AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = Color.White, title = { Text("新建提醒") }, text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (original != null) CenterCaption("这是一个新的未来提醒。原发生、任务和未知结果会保留，不会重放或替换。请核对目标和新时间。")
         OutlinedTextField(title, { title = it.take(200) }, label = { Text("提醒内容") }, maxLines = 3)
         Box {
             OutlinedButton(onClick = { typeMenu = true }, enabled = !busy) { Text("时间安排：" + (types.firstOrNull { it.first == type }?.second ?: "请选择安排") + " ▾") }
@@ -609,7 +619,7 @@ private fun NativePlugins(state: PocketUiState, controller: PocketWorldControlle
     CenterCaption("启用不等于授权。插件只能使用你已授予的工具权限；停止不会撤回远端已发生的效果。")
     plugins.optJSONArray("plugins").objects().forEach { plugin ->
         val manifest = plugin.optJSONObject("manifest") ?: JSONObject()
-        Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(manifest.optString("name", plugin.optString("id")), fontSize = 14.sp); CenterCaption("版本 " + manifest.optString("version") + " · " + (plugin.optJSONArray("grants")?.length() ?: 0) + " 项已授权限") }; if (manifest.optJSONArray("tools").objects().any { it.optString("kind") == "mcp" }) TextButton(onClick = { controller.openConnection("mcp") }) { Text(if (plugin.optBoolean("enabled")) "已启用 · 管理" else "已停用 · 管理", fontSize = 12.sp) } else Switch(plugin.optBoolean("enabled"), { controller.requestFeature("plugins", "enable", JSONObject().put("id", plugin.optString("id")).put("enabled", it)) }, enabled = "plugins.enable" !in state.moduleBusy) }
+        Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(manifest.optString("name", plugin.optString("id")), fontSize = 14.sp); CenterCaption("版本 " + manifest.optString("version") + " · " + (plugin.optJSONArray("grants")?.length() ?: 0) + " 项已授权限") }; if (manifest.optJSONObject("mcpSource") != null || manifest.optJSONArray("tools").objects().any { it.optString("kind") == "mcp" }) TextButton(onClick = { controller.openConnection("mcp") }) { Text(if (plugin.optBoolean("enabled")) "已启用 · 管理" else "已停用 · 管理", fontSize = 12.sp) } else Switch(plugin.optBoolean("enabled"), { controller.requestFeature("plugins", "enable", JSONObject().put("id", plugin.optString("id")).put("enabled", it)) }, enabled = "plugins.enable" !in state.moduleBusy) }
         HorizontalDivider(color = Line)
     }
     PluginVersions(state, controller)

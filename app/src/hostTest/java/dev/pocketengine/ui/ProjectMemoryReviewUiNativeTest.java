@@ -39,12 +39,29 @@ import static org.junit.Assert.*;
 public final class ProjectMemoryReviewUiNativeTest {
     private static final String WORDS="项目原文：保留约束与选择理由，不能只记最终结论。";
     private static JSONObject owner()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
+    /** Test-only executor wrapper records lifecycle enums, never request payloads or identities. */
+    private static final class ObservedExecutor extends java.util.concurrent.AbstractExecutorService {
+        final ExecutorService delegate;
+        final java.util.concurrent.atomic.AtomicInteger submitted=new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.ConcurrentHashMap<Integer,String> states=new java.util.concurrent.ConcurrentHashMap<>();
+        ObservedExecutor(ExecutorService delegate){this.delegate=delegate;}
+        @Override public void execute(Runnable task){
+            int ticket=submitted.incrementAndGet();states.put(ticket,"queued");
+            delegate.execute(()->{states.put(ticket,"running");try{task.run();states.put(ticket,"wrapper_runnable_returned");}
+                catch(Throwable failure){states.put(ticket,"wrapper_runnable_threw");throw failure;}});
+        }
+        @Override public void shutdown(){delegate.shutdown();}
+        @Override public java.util.List<Runnable> shutdownNow(){return delegate.shutdownNow();}
+        @Override public boolean isShutdown(){return delegate.isShutdown();}
+        @Override public boolean isTerminated(){return delegate.isTerminated();}
+        @Override public boolean awaitTermination(long timeout,TimeUnit unit)throws InterruptedException{return delegate.awaitTermination(timeout,unit);}
+    }
     static final class Fixture implements AutoCloseable {
-        final EngineApplication app=new EngineApplication();final PocketWorldController controller;final ExecutorService io;final android.database.sqlite.SQLiteDatabase db;
+        final EngineApplication app=new EngineApplication();final PocketWorldController controller;final ExecutorService io;private final ObservedExecutor observed;final android.database.sqlite.SQLiteDatabase db;
         final WorkspaceModule workspace;final LocalModule local;final MemoryModule memory;final ProjectMemoryNamespaces nativeScopes;
         Fixture()throws Exception{
             Method attach=Application.class.getDeclaredMethod("attach",android.content.Context.class);attach.setAccessible(true);attach.invoke(app,RuntimeEnvironment.getApplication());app.deleteDatabase("pocket-world.db");app.settings=new SettingsStore(app);app.tasks=new TaskStore(app);var database=TaskStore.class.getDeclaredField("db");database.setAccessible(true);db=(android.database.sqlite.SQLiteDatabase)database.get(app.tasks);app.features=new FeatureHost(event->{},app.tasks,()->false);
-            FeatureContext context=new FeatureContext(app,app.settings,new SecretVault(app),event->{});workspace=new WorkspaceModule(context);local=new LocalModule(context,workspace);app.features.register(workspace);app.features.register(local);app.features.register(new dev.pocketengine.features.attachments.AttachmentsModule(context));MemorySourceBridge sources=new MemorySourceBridge(app.features,app.tasks);sources.bindWorkspace(workspace);memory=new MemoryModule(context,sources.assertionResolver());app.features.register(memory);app.features.register(new SkillsModule(context,memory::resolveExperience));app.features.setMemorySynchronizer(sources::synchronize);app.nativeOwnerWorkflows=new NativeOwnerWorkflows(app.features,context,app.tasks,sources);nativeScopes=app.nativeOwnerWorkflows.projectMemoryForOwner();controller=new PocketWorldController(new ComposeActivity(),app);var field=PocketWorldController.class.getDeclaredField("io");field.setAccessible(true);io=(ExecutorService)field.get(controller);
+            FeatureContext context=new FeatureContext(app,app.settings,new SecretVault(app),event->{});workspace=new WorkspaceModule(context);local=new LocalModule(context,workspace);app.features.register(workspace);app.features.register(local);app.features.register(new dev.pocketengine.features.attachments.AttachmentsModule(context));MemorySourceBridge sources=new MemorySourceBridge(app.features,app.tasks);sources.bindWorkspace(workspace);memory=new MemoryModule(context,sources.assertionResolver());app.features.register(memory);app.features.register(new SkillsModule(context,memory::resolveExperience));app.features.setMemorySynchronizer(sources::synchronize);app.nativeOwnerWorkflows=new NativeOwnerWorkflows(app.features,context,app.tasks,sources);nativeScopes=app.nativeOwnerWorkflows.projectMemoryForOwner();controller=new PocketWorldController(new ComposeActivity(),app);var field=PocketWorldController.class.getDeclaredField("io");field.setAccessible(true);observed=new ObservedExecutor((ExecutorService)field.get(controller));io=observed;field.set(controller,io);
         }
         JSONObject create(String name)throws Exception{
             String id=workspace.handle("create",new JSONObject().put("name",name)).getString("id");workspace.handle("write",new JSONObject().put("projectId",id).put("path","notes.txt").put("content",WORDS).put("expectedVersion",0));JSONObject checkout=local.handle("prepare",new JSONObject().put("projectId",id));JSONArray choices=nativeScopes.choicesForOwner();for(int i=0;i<choices.length();i++){JSONObject row=choices.getJSONObject(i);if(checkout.getString("id").equals(row.getString("checkoutId")))return row;}throw new AssertionError("missing actual project choice");
@@ -55,7 +72,25 @@ public final class ProjectMemoryReviewUiNativeTest {
         JSONObject snapshot(){return controller.getState().ownerSnapshot("memoryReview");}
         JSONObject response(String command){return controller.getState().ownerResponses("memoryReview").get(command);}
         JSONObject request(String command,JSONObject payload)throws Exception{controller.requestOwnerDomain("memoryReview",command,payload);settle();return response(command);}
-        JSONObject result(String command,JSONObject payload)throws Exception{JSONObject reply=request(command,payload);assertTrue(reply==null?"no native reply":reply.toString(),reply!=null&&reply.getBoolean("ok"));return reply.getJSONObject("result");}
+        private Object diagnosticField(Object target,String name)throws Exception{var field=target.getClass().getDeclaredField(name);field.setAccessible(true);return field.get(target);}
+        private int diagnosticEpoch()throws Exception{return ((java.util.Map<String,Integer>)diagnosticField(controller,"ownerEpochs")).getOrDefault("memoryReview",0);}
+        private String missingReplyDiagnostic(String command,String expectedId,int beforeEpoch)throws Exception{
+            var requests=(java.util.Map<?,?>)diagnosticField(controller,"ownerRequests");Object pending=requests.get("memoryReview."+command);
+            boolean matches=pending!=null&&expectedId.equals(diagnosticField(pending,"id"));
+            boolean epochMatches=pending!=null&&((Integer)diagnosticField(pending,"epoch"))==diagnosticEpoch();
+            return "no native reply; closed="+diagnosticField(controller,"closed")
+                    +"; epochUnchanged="+(beforeEpoch==diagnosticEpoch())
+                    +"; pending="+(pending!=null)+"; requestMatches="+matches+"; pendingEpochMatches="+epochMatches
+                    +"; callbackPostOrHandled=unobserved";
+        }
+        JSONObject result(String command,JSONObject payload)throws Exception{
+            int beforeEpoch=diagnosticEpoch(),beforeSubmitted=observed.submitted.get();
+            String expectedId=controller.requestOwnerDomain("memoryReview",command,payload);int afterSubmitted=observed.submitted.get();
+            settle();JSONObject reply=response(command);
+            for(int poll=0;poll<50 && (reply==null || !expectedId.equals(reply.optString("requestId")));poll++){Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(20));reply=response(command);}
+            String worker=afterSubmitted==beforeSubmitted+1?observed.states.getOrDefault(afterSubmitted,"unobserved"):"submission_not_unique";
+            assertTrue(reply==null||!expectedId.equals(reply.optString("requestId"))?missingReplyDiagnostic(command,expectedId,beforeEpoch)+"; workerLifecycle="+worker:reply.toString(),reply!=null&&expectedId.equals(reply.optString("requestId"))&&reply.getBoolean("ok"));return reply.getJSONObject("result");
+        }
         ProjectMemoryNamespaces.Selection token()throws Exception{var field=PocketWorldController.class.getDeclaredField("memoryReviewScope");field.setAccessible(true);Object scope=field.get(controller);var getter=scope.getClass().getDeclaredMethod("getSelected");getter.setAccessible(true);return (ProjectMemoryNamespaces.Selection)getter.invoke(scope);}
         JSONObject file()throws Exception{return result("projectFileChoices",new JSONObject()).getJSONArray("files").getJSONObject(0);}
         JSONObject propose(JSONObject file)throws Exception{return result("proposeProjectFile",new JSONObject().put("path",file.getString("path")).put("version",file.getInt("version")).put("revisionId",file.getString("revisionId")).put("sha256",file.getString("sha256")).put("offset",0).put("chars",4000));}

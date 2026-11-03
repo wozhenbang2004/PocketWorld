@@ -17,12 +17,12 @@ import org.junit.Test;
 
 /** Real host JNI process ownership. This is not Android ABI or durable process reattachment. */
 public final class ManagedProcessJobsLifecycleTest {
-    private Path directory,active;private ManagedProcessJobs jobs;
+    private Path directory,active;private ManagedProcessJobs jobs;private boolean releaseUnconfirmed;
     @Before public void create()throws Exception {
-        directory=Files.createTempDirectory("c2-owned-process-");active=Files.createDirectory(directory.resolve("active"));Files.writeString(active.resolve("Main.java"),"class Main {}\n");
+        directory=Files.createTempDirectory("c2-owned-process-");active=Files.createDirectory(directory.resolve("active"));Files.write(active.resolve("Main.java"),"class Main {}\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         jobs=new ManagedProcessJobs(directory.toFile(),new NativeProcessSupervisor());assertTrue("load the current host JNI library",jobs.available());
     }
-    @After public void close()throws Exception {try{jobs.close();}finally{try(var paths=Files.walk(directory)){for(Path path:paths.sorted(java.util.Comparator.reverseOrder()).toList())Files.deleteIfExists(path);}}}
+    @After public void close()throws Exception {try{if(releaseUnconfirmed)assertEquals("runtime_process_drain_unconfirmed",assertThrows(IllegalStateException.class,jobs::close).getMessage());else jobs.close();}finally{try(var paths=Files.walk(directory)){for(Path path:paths.sorted(java.util.Comparator.reverseOrder()).toList())Files.deleteIfExists(path);}}}
     private RuntimeInvocation call(String operation,String executable,JSONArray argv)throws Exception {return call(operation,executable,argv,false);}
     private RuntimeInvocation call(String operation,String executable,JSONArray argv,boolean service)throws Exception {
         JSONObject source=RuntimeContractsTest.source(),exact=RuntimeContractsTest.exact(source,"termux.run",argv);exact.getJSONObject("payload").put("executable",executable);if(service)exact.getJSONObject("payload").put("runMode","owned_service");exact.put("requestDigest",ProjectSources.digest(exact.getJSONObject("payload")));
@@ -33,6 +33,8 @@ public final class ManagedProcessJobsLifecycleTest {
     }
     @Test public void ownerReconstructionNeverAttachesCancelsOrReplaysThePreviousProcess()throws Exception {
         RuntimeInvocation invocation=call("owned", "sh",new JSONArray().put("-c").put("printf 'ORIGINAL_LOG\\n'; exec sleep 60"));
+        String operation=invocation.executionRef().operationId();var finalReceipt=new java.util.concurrent.CountDownLatch(1);
+        jobs.setReceiptSink(receipt->{if(operation.equals(receipt.optString("operationId"))&&receipt.has("finishedAt"))finalReceipt.countDown();});
         jobs.start(invocation,List.of("/bin/sh","-c","printf 'ORIGINAL_LOG\\n'; exec sleep 60"),Map.of("PATH","/usr/bin:/bin"),active.toFile(),5000,()->{});
         long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);JSONObject live=null;while(System.nanoTime()<until){live=jobs.query(invocation.executionRef()).json();if(live.optString("stdout").contains("ORIGINAL_LOG"))break;Thread.sleep(5);}
         assertNotNull(live);assertTrue(live.getBoolean("ownedWorkerLive"));assertFalse(live.getBoolean("receiptReceived"));
@@ -41,6 +43,7 @@ public final class ManagedProcessJobsLifecycleTest {
             JSONObject cancel=reconstructed.requestCancel(invocation.executionRef()).json();assertEquals("no_owned_live_process",cancel.getString("cancelDelivery"));assertFalse(cancel.getBoolean("resourcesReleased"));assertTrue("the original owner still supervises its same process",jobs.query(invocation.executionRef()).json().getBoolean("ownedWorkerLive"));
         }
         jobs.requestCancel(invocation.executionRef());JSONObject stopped=finished(invocation);assertTrue(stopped.getBoolean("cancelRequested"));assertTrue(stopped.getBoolean("processExited"));assertTrue(stopped.getBoolean("processGroupAbsent"));assertTrue(stopped.getBoolean("resourcesReleased"));assertEquals("failed",stopped.getString("status"));
+        assertTrue("the original final receipt must finish its log summary before fixture deletion",finalReceipt.await(3,TimeUnit.SECONDS));
     }
     @Test public void nativeDeadlineStopsAndDrainsWithoutReportingBusinessSuccess()throws Exception {
         RuntimeInvocation invocation=call("deadline","sh",new JSONArray().put("-c").put("exec sleep 60"));
@@ -65,6 +68,7 @@ public final class ManagedProcessJobsLifecycleTest {
     }
 
     @Test public void ownedServiceNativeExitWithFailedLeaseCloseIsUnknownAndStillHoldsCheckout()throws Exception {
+        releaseUnconfirmed=true;
         var ack=new java.util.concurrent.CountDownLatch(1);jobs.setReceiptSink(value->{if(value.optBoolean("nativeStartObserved")&&!value.optBoolean("receiptReceived"))ack.countDown();});
         RuntimeInvocation invocation=call("service-close-unknown","sh",new JSONArray().put("-c").put("exec sleep 60"),true);jobs.start(invocation,List.of("/bin/sh","-c","exec sleep 60"),Map.of("PATH","/usr/bin:/bin"),active.toFile(),5000,()->{throw new java.io.IOException("controlled owned-service lease close failure");});assertTrue(ack.await(3,TimeUnit.SECONDS));jobs.requestCancel(invocation.executionRef());JSONObject actual=finished(invocation);assertEquals("unknown",actual.getString("status"));assertTrue(actual.getBoolean("processExited"));assertTrue(actual.getBoolean("processGroupAbsent"));assertFalse(actual.getBoolean("resourcesReleased"));assertThrows(SecurityException.class,()->jobs.requireOwnedOrReleased(invocation.executionRef()));assertThrows(IllegalStateException.class,()->jobs.requireCheckoutWritable(invocation.executionRef().checkoutId()));
     }

@@ -160,6 +160,16 @@ internal fun TaskCapabilityPage(taskId: String, host: NativeSkillExecutionHost, 
                     TextButton(onClick = { pickConfig.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }, enabled = !busy) { Text("读取电脑隔离端配置") }
                     if (configuration.optBoolean("configured")) TextButton(onClick = { removeConfig = JSONObject(configuration.toString()) }, enabled = !busy) { Text("停用并移除执行配置", color = Danger, fontSize = 12.sp) }
                     }
+                    if (snapshot.has("capabilityPreparationMessage")) Caption(snapshot.getString("capabilityPreparationMessage"))
+                    OwnerSkillInvocationControls(snapshot, busy || review != null) { input, generation ->
+                        val taskPin = snapshot.getJSONObject("ownerInvocation").getString("taskPin")
+                        work({
+                            val app = context.applicationContext as? dev.pocketengine.EngineApplication ?: throw IllegalStateException("原任务宿主暂不可用")
+                            val selected = host.selectForOwner(window, taskId, taskPin, input, generation, app.taskSkillCapabilitiesForOwner(taskId))
+                            try { app.startOwnerSkillOnTask(selected) } catch (failed: Exception) { selected.close(); throw failed }
+                            readSnapshot()
+                        }) { snapshot = it; notice = "本次主人选择已进入原任务，请在出现的执行计划中核对并批准；没有自动运行。" }
+                    }
                     if (jsHost != null) TaskJsSelectionControls(taskId, jsHost, runWork)
                     val executions = snapshot.optJSONArray("executions").objects()
                     executions.takeLast(visibleExecutions).reversed().forEach { operation ->

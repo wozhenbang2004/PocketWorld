@@ -66,9 +66,14 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
         dev.pocketengine.features.local.runtime.android.AndroidRuntimeThermalObservation original;boolean closed;
         synchronized(this){original=logObservation;closed=logObservationClosed;}
         if(original!=null)return original.snapshotForHost();
+        return unavailableLogObservationPolicy(closed);
+    }
+    private JSONObject unavailableLogObservationPolicy(boolean closed)throws Exception {
         boolean android=androidRuntime!=null||!configurationProblem.isEmpty(),conservative=closed||android;
         return new JSONObject().put("format","pocketworld.runtime-log-observation-policy.v1").put("source",android?"android_thermal_observer_unavailable":"non_android_host_runtime")
                 .put("thermalStatus",JSONObject.NULL).put("automaticLogPageBytes",conservative?8192:32768).put("automaticLogPageReduced",conservative)
+                .put("observationAgeMillis",JSONObject.NULL).put("memoryLow",JSONObject.NULL).put("memoryFresh",false)
+                .put("memoryAvailableBytes",JSONObject.NULL).put("memoryTotalBytes",JSONObject.NULL).put("memoryThresholdBytes",JSONObject.NULL).put("memoryObservationAgeMillis",JSONObject.NULL)
                 .put("reason",closed?"thermal_observer_closed":conservative?"thermal_status_unknown":"non_android_host_default_unchanged")
                 .put("ownerMessage",conservative?RuntimeLogObservationPolicy.UNKNOWN_MESSAGE:"")
                 .put("explicitLogLimitsChanged",false).put("executionPolicyChanged",false).put("resourceReleaseProved",false).put("energySavingsMeasured",false);
@@ -82,6 +87,10 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
                 .put("supervisorLoaded",jobs.available()).put("ptyAvailable",jobs.ptyAvailable()).put("duplexAvailable",jobs.pipesAvailable()).put("integrityRechecked",false)
                 .put("runtimeIdentityFingerprintSha256",ProjectSources.sha256(identity().getBytes(java.nio.charset.StandardCharsets.UTF_8)))
                 .put("catalogFingerprintSha256",profile==null?JSONObject.NULL:ProjectSources.sha256(profile.catalogIdentity().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        dev.pocketengine.features.local.runtime.android.AndroidRuntimeThermalObservation original;boolean closed;
+        synchronized(this){original=logObservation;closed=logObservationClosed;}
+        JSONObject cached=original==null?unavailableLogObservationPolicy(closed):original.cachedSnapshotForHost();
+        for(String key:java.util.List.of("thermalStatus","observationAgeMillis","memoryLow","memoryFresh","memoryAvailableBytes","memoryTotalBytes","memoryThresholdBytes","memoryObservationAgeMillis","automaticLogPageBytes","automaticLogPageReduced"))facts.put(key,cached.opt(key)==null?JSONObject.NULL:cached.get(key));
         observation.check();return facts;
     }
 
@@ -101,6 +110,16 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
     public synchronized JSONObject gitImportToolsForHost()throws Exception {
         JSONObject python=skillToolsForHost("python3"),facts=describe(),git=null;JSONArray observed=facts.getJSONArray("tools");for(int i=0;i<observed.length();i++){JSONObject candidate=observed.getJSONObject(i);if("git".equals(candidate.optString("name"))&&(candidate.optBoolean("hashVerified")||candidate.optBoolean("probeVerified")))git=candidate;}
         if(git==null||!git.optString("sha256").matches("[a-f0-9]{64}"))throw new IllegalStateException("原托管环境Git尚未实际准备，请先核对开发工具；未切到电脑或任意shell");JSONArray argv=new JSONArray();if(androidRuntime!=null)argv.put(androidRuntime.guestTool("git"));else for(String value:tools.get("git").command(List.of()))argv.put(value);if(argv.length()!=1)throw new SecurityException("Git导入只接受原单个准确Git二进制");String gitProbe=git.optString("observedVersion",git.optString("version","")),version=gitProbe.split("\\R",2)[0];if(version.isEmpty()||version.length()>120||version.chars().anyMatch(Character::isISOControl))throw new SecurityException("原Git版本探测首行无法准确展示");return new JSONObject().put("runtimeIdentity",identity()).put("gitArgv",argv).put("gitExecutableSha256",git.getString("sha256")).put("gitVersion",version).put("gitVersionProbeSha256",ProjectSources.sha256(gitProbe.getBytes(java.nio.charset.StandardCharsets.UTF_8))).put("bootstrapSha256",python.getString("bootstrapSha256")).put("path",python.getString("path")).put("guestProjectRoot",python.getString("guestProjectRoot"));
+    }
+    /** Exact tools from this installed generation; preparing dependencies never installs a manager. */
+    public synchronized JSONObject mcpPackageToolsForHost(String manager)throws Exception {
+        if(!java.util.Set.of("npm","pnpm").contains(manager))throw new SecurityException("mcp_package_manager_not_supported");
+        JSONObject python=skillToolsForHost("python3"),facts=describe(),node=null,selectedManager=null;JSONArray observed=facts.getJSONArray("tools");
+        for(int i=0;i<observed.length();i++){JSONObject candidate=observed.getJSONObject(i);if(candidate.optBoolean("hashVerified")||candidate.optBoolean("probeVerified")){if("node".equals(candidate.optString("name")))node=candidate;if(manager.equals(candidate.optString("name")))selectedManager=candidate;}}
+        if(node==null||selectedManager==null||!node.optString("sha256").matches("[a-f0-9]{64}")||!selectedManager.optString("sha256").matches("[a-f0-9]{64}"))throw new IllegalStateException("原托管环境缺少已核对的Node或包管理器，请从原开发工具入口准备；不会自动下载管理器");
+        JSONArray nodeArgv=new JSONArray(),managerArgv=new JSONArray();if(androidRuntime!=null){nodeArgv.put(androidRuntime.guestTool("node"));managerArgv.put(androidRuntime.guestTool(manager));}else{for(String value:tools.get("node").command(List.of()))nodeArgv.put(value);for(String value:tools.get(manager).command(List.of()))managerArgv.put(value);}
+        String version=selectedManager.optString("observedVersion",selectedManager.optString("version","")).split("\\R",2)[0];if(!version.matches("[0-9]+\\.[0-9]+\\.[0-9]+(?:-[A-Za-z0-9.-]+)?"))throw new SecurityException("包管理器版本探测必须能准确显示和核对");
+        return new JSONObject().put("runtimeIdentity",identity()).put("path",python.getString("path")).put("pythonArgv",python.getJSONArray("interpreterArgv")).put("nodeArgv",nodeArgv).put("managerArgv",managerArgv).put("bootstrapSha256",python.getString("bootstrapSha256")).put("nodeSha256",node.getString("sha256")).put("managerSha256",selectedManager.getString("sha256")).put("managerVersion",version);
     }
     public String identity() {return androidRuntime==null?identity:androidRuntime.identity();}
     /** Native host hook for its original TaskStore receipt row; no new task or execution authority. */
@@ -154,11 +173,15 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
         if(original.executionRef().phase()!=RuntimeExecutionRef.Phase.COMMAND||!NativePipeAdmission.exact(original.exact())||!identity().equals(original.exact().getString("runtimeIdentity"))||!jobs.pipesAvailable())throw new SecurityException("runtime_pipe_original_native_invocation_required");
         JSONObject payload=original.exact().getJSONObject("payload"),spec=dev.pocketengine.features.local.project.ProjectCommandSpec.fromPayload(payload);
         if(!".".equals(spec.getString("workingDirectory"))||!"pipes".equals(spec.getString("terminalMode"))||!"owned_service".equals(spec.getString("runMode"))||!java.util.Set.of("python3","node").contains(spec.getString("executable")))throw new SecurityException("runtime_pipe_fixed_registered_interpreter_required");
-        // First version runs a real frozen script, not eval, a shell, an arbitrary binary or an implicit package install.
+        // The only bootstrap exception is the exact native package program, still behind original typed admission.
+        boolean packagePreparation=dev.pocketengine.features.plugins.McpLocalPackage.prepared(original.exact());
+        if(packagePreparation)dev.pocketengine.features.plugins.McpLocalPackage.requireProgram(original.exact());
+        else {
         JSONArray argv=spec.getJSONArray("argv");int index=0;boolean python="python3".equals(spec.getString("executable"));
         while(index<argv.length()&&java.util.Set.of("-I","-u","-B","-E","-s","-S").contains(argv.getString(index))){if(!python)throw new SecurityException("runtime_pipe_node_startup_flag_unsupported");index++;}
         if(index>=argv.length())throw new SecurityException("runtime_pipe_frozen_entry_required");String entry=dev.pocketengine.features.workspace.VersionedWorkspace.path(argv.getString(index));
-        if(!entry.endsWith(python?".py":".js")||!ProjectSources.byteFiles(original.sourceSnapshot()).containsKey(entry))throw new SecurityException("runtime_pipe_entry_not_in_original_source");
+        if(!(python?entry.endsWith(".py"):entry.endsWith(".js")||entry.endsWith(".mjs")||entry.endsWith(".cjs"))||!ProjectSources.byteFiles(original.sourceSnapshot()).containsKey(entry))throw new SecurityException("runtime_pipe_entry_not_in_original_source");
+        }
         JSONObject observed=describe();if(!observed.optBoolean("canExecute"))throw new IllegalStateException("runtime_environment_not_prepared");
         boolean toolReady=false;JSONArray actual=observed.getJSONArray("tools");for(int i=0;i<actual.length();i++){JSONObject row=actual.getJSONObject(i);if(spec.getString("executable").equals(row.optString("name"))&&(row.optBoolean("hashVerified")||row.optBoolean("probeVerified")))toolReady=true;}
         if(!toolReady)throw new IllegalStateException("runtime_pipe_registered_tool_not_ready");

@@ -19,12 +19,16 @@ public final class OwnerQuestionReplyReceiver extends BroadcastReceiver {
             catch(Exception unavailable){/* No answer body or task content in diagnostics; no retry after an uncertain commit. */}
             try{
                 JSONObject view=new JSONObject(intent.getStringExtra("noticeView"));NotificationManager manager=context.getSystemService(NotificationManager.class);
-                if(manager!=null){PendingIntent open=PendingIntent.getActivity(context,0,AssistantTaskNotifications.open(context,view),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-                    Notification notice=new Notification.Builder(context,AssistantTaskNotifications.CHANNEL).setSmallIcon(android.R.drawable.ic_dialog_info)
+                if(manager!=null){
+                    // This hint chooses a read-only original-task route, never answer authority.
+                    boolean phone=intent.getBooleanExtra("phoneOwnerQuestion",false);
+                    Intent target=phone?dev.pocketengine.phone.PhoneNotificationControls.open(context,new JSONObject().put("id",view.getString("taskId")).put("runId",view.getString("runId")).put("coordinatorEpoch",view.getInt("epoch"))):AssistantTaskNotifications.open(context,view);
+                    PendingIntent open=PendingIntent.getActivity(context,0,target,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+                    Notification notice=new Notification.Builder(context,phone?dev.pocketengine.phone.PhoneReadiness.TASK_CHANNEL:AssistantTaskNotifications.CHANNEL).setSmallIcon(android.R.drawable.ic_dialog_info)
                         .setContentTitle(accepted?"原任务已收到这次操作":"这条通知已到期或暂不可核对")
                         .setContentText(accepted?"点此查看原任务的实际状态与已有结果":"请核对原记录；不会自动重发、继续或授权动作")
                         .setVisibility(Notification.VISIBILITY_PRIVATE).setOnlyAlertOnce(true).setAutoCancel(true).setContentIntent(open).build();
-                    manager.notify("assistant-task:"+view.getString("taskId")+":"+view.getString("token"),1906,notice);}
+                    manager.notify((phone?"phone-question:":"assistant-task:")+view.getString("taskId")+":"+view.getString("token"),1906,notice);}
             }catch(Exception noticeUnavailable){/* OS notice acceptance is not visual delivery proof. */}
             finally{pending.finish();}
         });

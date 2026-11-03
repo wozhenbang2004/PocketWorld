@@ -87,4 +87,17 @@ public final class ManagedScriptCallbackNativeGateTest {
             f.execute();f.approve(f.review());ready(f);long start=System.nanoTime();f.control.cancel();assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-start)<500);JSONObject stopped=f.work.get(10,TimeUnit.SECONDS);assertFalse(stopped.getBoolean("ok"));drained(transport);assertEquals(0,f.tasks.scriptArtifactPublicationsForOwner(f.id(),f.operation()).length());assertEquals(0,AttachmentRepository.get(f.android).book.list().length());assertTrue(Files.isRegularFile(f.copy().resolve("workspace/output/result.bin")));assertEquals("40.00",f.originalInput());
         }
     }
+    @Test public void sourceWithdrawalAfterDispatchCancelsOnlyTheOriginalJobAndRetiresItsCallback()throws Exception {
+        for(boolean replace:List.of(false,true)){
+            var transport=new ManagedScriptCallbackTestTransport();
+            try(var f=new ManagedSkillNativeJourneyTest.Fixture("python3",WAIT,Map.of(),false,true,transport)){
+                f.execute();f.approve(f.review());ready(f);
+                if(replace)f.skills.handle("import",new JSONObject().put("id",f.installed.getString("id")).put("revision",f.installed.getInt("revision")).put("source","own:replacement").put("manifest","---\nname: own-phone-skill\ndescription: 已更新的独立版本\n---\nChanged original source\n").put("resources",new JSONObject().put("scripts/main.py","raise RuntimeError('must never be replayed')\n")));
+                else f.skills.handle("setEnabled",new JSONObject().put("id",f.installed.getString("id")).put("enabled",false));
+                JSONObject stopped=f.work.get(10,TimeUnit.SECONDS);assertFalse(stopped.toString(),stopped.getBoolean("ok"));assertFalse(stopped.getBoolean("replayAllowed"));drained(transport);
+                assertEquals(0,f.tasks.scriptArtifactPublicationsForOwner(f.id(),f.operation()).length());assertEquals(0,AttachmentRepository.get(f.android).book.list().length());assertEquals(1,f.tasks.get(f.id(),false).getJSONArray("operations").length());assertEquals("40.00",f.originalInput());
+                f.reopenForReceiptOnly();JSONObject observed=f.host.reconcile(f.id(),f.operation(),false);assertFalse(observed.getJSONObject("receipt").getBoolean("replayAllowed"));assertEquals(1,f.tasks.get(f.id(),false).getJSONArray("operations").length());assertEquals(0,f.tasks.scriptArtifactPublicationsForOwner(f.id(),f.operation()).length());
+            }
+        }
+    }
 }

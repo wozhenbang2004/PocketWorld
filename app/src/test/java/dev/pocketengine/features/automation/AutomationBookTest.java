@@ -32,6 +32,32 @@ public final class AutomationBookTest {
         ExecutorService threads=Executors.newFixedThreadPool(2);try{Future<Integer>a=threads.submit(()->one.claimDue(3000,10).length());Future<Integer>b=threads.submit(()->two.claimDue(3000,10).length());assertEquals(1,a.get(1,TimeUnit.SECONDS)+b.get(1,TimeUnit.SECONDS));}finally{threads.shutdownNow();}
         assertEquals(1,one.receipts().length());
     }
+    @Test public void pausedFutureOnceCanResumeButExpiredUnclaimedOnceNeedsANewTime()throws Exception{
+        AutomationBook book=new AutomationBook(new File(temp.getRoot(),"rules.json"));JSONObject rule=book.save(once(3000),1000);String id=rule.getString("id");
+        book.setEnabled(id,false,1500);book.setEnabled(id,true,2000);assertEquals(3000,book.nextAt());assertEquals(0,book.claimDue(2999,10).length());assertEquals(1,book.claimDue(3000,10).length());
+        JSONObject expired=book.save(once(4000).put("enabled",false),3500);String before=book.rules().toString();
+        assertThrows(IllegalStateException.class,()->book.setEnabled(expired.getString("id"),true,4500));assertEquals(before,book.rules().toString());
+    }
+    @Test public void unknownOnceCannotReplayThroughEnableSaveOrClockRollback()throws Exception{
+        File file=new File(temp.getRoot(),"rules.json");AutomationBook book=new AutomationBook(file);String id=book.save(once(2000),1000).getString("id");String original=book.claimDue(2000,10).getJSONObject(0).getString("id");book.recoverInterrupted(2100);
+        String before=book.rules().toString();AutomationBook reopened=new AutomationBook(file);
+        assertThrows(IllegalStateException.class,()->reopened.setEnabled(id,true,2200));assertThrows(IllegalStateException.class,()->reopened.setEnabled(id,true,1500));
+        JSONObject rearm=new JSONObject(reopened.rules().getJSONObject(0).toString()).put("enabled",true);
+        assertThrows(IllegalStateException.class,()->reopened.save(rearm,1500));assertEquals(before,reopened.rules().toString());
+        assertEquals(0,reopened.claimDue(2500,10).length());assertEquals(1,reopened.receipts().length());assertEquals(original,reopened.receipts().getJSONObject(0).getString("id"));assertEquals("delivery_unknown",reopened.receipts().getJSONObject(0).getString("status"));
+    }
+    @Test public void explicitNewFutureTimeKeepsOldUnknownReceiptAndDoesNotReplayIt()throws Exception{
+        AutomationBook book=new AutomationBook(new File(temp.getRoot(),"rules.json"));JSONObject rule=book.save(once(2000),1000);String original=book.claimDue(2000,10).getJSONObject(0).getString("id");book.recoverInterrupted(2100);
+        JSONObject revised=new JSONObject(book.rules().getJSONObject(0).toString()).put("enabled",true).put("schedule",new JSONObject().put("type","once").put("at",5000));
+        JSONObject saved=book.save(revised,3000);assertEquals(rule.getString("id"),saved.getString("id"));assertEquals(0,book.claimDue(4999,10).length());
+        JSONObject future=book.claimDue(5000,10).getJSONObject(0);assertNotEquals(original,future.getString("id"));assertEquals(5000,future.getLong("occurrenceAt"));assertEquals(2,book.receipts().length());assertEquals("delivery_unknown",book.receipts().getJSONObject(0).getString("status"));
+    }
+    @Test public void correctingAClaimedGoalRevokesOldDeliveryWithoutRearmingThePastTime()throws Exception{
+        AutomationBook book=new AutomationBook(new File(temp.getRoot(),"rules.json"));JSONObject original=book.save(once(2000),1000);book.claimDue(2000,10);
+        JSONObject edited=book.save(new JSONObject(original.toString()).put("goal","主人纠正后的目标"),2100);
+        assertFalse(edited.getBoolean("enabled"));assertTrue(edited.getBoolean("taskRequestsRevoked"));assertEquals("once_requires_new_future_time",edited.getString("resumeBlockedReason"));
+        assertEquals(0,book.claimDue(2200,10).length());assertEquals("cancelled",book.receipts().getJSONObject(0).getString("status"));
+    }
     @Test public void springGapAdvancesToValidTimeAndFallOverlapOccursOncePerDay()throws Exception {
         JSONObject spring=AutomationBook.validateSchedule(daily("02:30","America/New_York").getJSONObject("schedule"));
         long start=Instant.parse("2027-03-14T05:00:00Z").toEpochMilli();assertEquals(Instant.parse("2027-03-14T07:30:00Z").toEpochMilli(),AutomationBook.nextDaily(spring,start));

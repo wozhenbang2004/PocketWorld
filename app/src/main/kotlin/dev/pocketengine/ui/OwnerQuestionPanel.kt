@@ -18,7 +18,7 @@ internal fun OwnerQuestionPanel(question: JSONObject, answer: (JSONObject, Strin
     var submitted by remember { mutableStateOf(false) }
     val identity = question.optJSONObject("identity") ?: return
     if (question.optBoolean("answered")) {
-        Text("回答已保留在原对话；是否继续以原任务状态为准。", fontSize = 12.sp, color = SecondaryInk)
+        Text(if (question.optString("sourceKind") == "native_phone_owner_input") "回答已保留在原手机任务；是否继续以原任务状态为准。" else "回答已保留在原对话；是否继续以原任务状态为准。", fontSize = 12.sp, color = SecondaryInk)
     } else TextButton(onClick = { open = true }, enabled = !submitted, modifier = Modifier.testTag("owner_question_open")) { Text("回答这个普通问题") }
     if (open) ModalBottomSheet(onDismissRequest = { open = false }) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(horizontal = 22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
