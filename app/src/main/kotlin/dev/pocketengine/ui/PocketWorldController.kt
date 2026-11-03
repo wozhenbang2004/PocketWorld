@@ -2363,26 +2363,6 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         io.execute { try { app.settings.saveLocalObservation(capture, ocr); app.sendState() }
             catch (error: Exception) { main.post { if (!closed) state = state.copy(error = message(error)) } } }
     }
-    fun saveModel(url: String, model: String, apiKey: String, screenshots: Boolean, provider: String = state.modelProvider, maxOutputTokens: Int = state.maxOutputTokens, cleartextConsent: String = state.cleartextConsent, supportsImageInput: Boolean = false) {
-        state = state.copy(modelSaving = true, error = null)
-        io.execute {
-            try {
-                app.settings.save(JSONObject().put("baseUrl", url.trim()).put("model", model.trim()).put("apiKey", apiKey).put("sendScreenshots", screenshots).put("supportsImageInput", supportsImageInput).put("provider", provider).put("maxOutputTokens", maxOutputTokens).put("cleartextConsent", cleartextConsent))
-                main.post { if (!closed) state = state.copy(modelSaving = false, modelSavedRevision = state.modelSavedRevision + 1, notice = "模型设置已保存") }
-                app.sendState()
-            } catch (error: Exception) { main.post { if (!closed) state = state.copy(modelSaving = false, error = message(error)) } }
-        }
-    }
-    fun testModel(url: String, model: String, apiKey: String, screenshots: Boolean, provider: String = state.modelProvider, maxOutputTokens: Int = state.maxOutputTokens, cleartextConsent: String = state.cleartextConsent) {
-        state = state.copy(modelTesting = true, modelTest = "正在测试文字连接…", modelTestTaskId = null)
-        io.execute {
-            try {
-                val config = app.settings.merged(JSONObject().put("baseUrl", url.trim()).put("model", model.trim()).put("apiKey", apiKey).put("sendScreenshots", screenshots).put("provider", provider).put("maxOutputTokens", maxOutputTokens).put("cleartextConsent", cleartextConsent))
-                val result = app.testModelConnection(config)
-                main.post { if (!closed) state = state.copy(modelTesting = false, modelTest = "本次测试：${config.model} · ${config.provider}\n" + result.optString("message"), modelTestTaskId = result.optJSONObject("inferenceReference")?.optString("taskId")?.takeIf { it.matches(Regex("[a-fA-F0-9-]{36}")) }) }
-            } catch (error: Exception) { main.post { if (!closed) state = state.copy(modelTesting = false, modelTest = message(error)) } }
-        }
-    }
     private fun feature(feature: String, command: String, payload: JSONObject = JSONObject()): String {
         val id = UUID.randomUUID().toString()
         val key = "$feature.$command"
