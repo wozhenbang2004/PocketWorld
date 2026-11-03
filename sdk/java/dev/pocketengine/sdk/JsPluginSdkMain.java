@@ -2,6 +2,7 @@ package dev.pocketengine.sdk;
 
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.plugins.sdk.js.JsPluginPackage;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
@@ -27,12 +28,8 @@ public final class JsPluginSdkMain {
             } else throw new IllegalArgumentException("JS SDK只做静态validate/pack/inspect，不执行脚本");
             JSONObject receipt = artifact.receipt();
             if ("pack".equals(action)) {
-                Path target = Path.of(args[5]); boolean created = false;
-                try {
-                    try (OutputStream out = Files.newOutputStream(target, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
-                        created = true; artifact.write(out, control); out.flush();
-                    }
-                } catch (Exception failure) { if (created) Files.deleteIfExists(target); throw failure; }
+                Path target = Path.of(args[5]);
+                pack(artifact, target, control);
                 receipt.put("saved", true).put("outputPath", target.toAbsolutePath().toString());
             }
             System.out.println(receipt);
@@ -40,5 +37,20 @@ public final class JsPluginSdkMain {
             System.err.println(new JSONObject().put("status", "error").put("staticOnly", true).put("message", failure.getMessage()));
             System.exit(2);
         } finally { try { Runtime.getRuntime().removeShutdownHook(stop); } catch (IllegalStateException shuttingDown) { } }
+    }
+
+    static void pack(JsPluginPackage artifact, Path target, RunControl control) throws Exception {
+        boolean created = false;
+        try {
+            try (OutputStream out = Files.newOutputStream(target, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
+                created = true; artifact.write(out, control); out.flush();
+            }
+        } catch (Exception failure) {
+            if (!created) throw failure;
+            // The path may now name another process's file. There is no atomic
+            // compare-and-delete here, so retain any output rather than unlink it.
+            throw new IOException("Package creation failed; no output was removed. Output path may contain partial or replaced data: "
+                    + target.toAbsolutePath() + ". Inspect it before cleanup or retry. Cause: " + failure.getMessage(), failure);
+        }
     }
 }
