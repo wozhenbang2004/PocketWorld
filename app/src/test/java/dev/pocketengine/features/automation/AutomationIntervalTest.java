@@ -1,6 +1,7 @@
 package dev.pocketengine.features.automation;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.Instant;
 import java.util.TimeZone;
@@ -91,7 +92,7 @@ public final class AutomationIntervalTest {
         AutomationBook catchup=new AutomationBook(new File(temp.getRoot(),"cron-catchup.json"));catchup.save(rule(schedule).put("policy",new JSONObject().put("misfire","catch_up").put("overlap","allow").put("maxCatchUp",2)),before);JSONArray first=catchup.claimDue(late,20);assertEquals(2,first.length());assertEquals(at("2027-01-04T09:00:00Z"),first.getJSONObject(0).getLong("occurrenceAt"));assertEquals(at("2027-01-04T09:30:00Z"),catchup.nextAt());JSONArray rest=catchup.claimDue(late,20);assertEquals(2,rest.length());assertEquals(at("2027-01-04T09:30:00Z"),rest.getJSONObject(0).getLong("occurrenceAt"));assertEquals(0,catchup.claimDue(late,20).length());
     }
     @Test public void unknownStoredScheduleVersionCannotDispatchButStillCanBePaused()throws Exception {
-        File file=new File(temp.getRoot(),"future-version.json");AutomationBook book=new AutomationBook(file);long due=at("2027-01-04T09:00:00Z");JSONObject saved=book.save(rule(cron("*/15 9 * * *","UTC")),due-1000),receipt=book.claimDue(due,10).getJSONObject(0);JSONObject stored=new JSONObject(Files.readString(file.toPath()));stored.getJSONArray("rules").getJSONObject(0).getJSONObject("schedule").put("scheduleVersion",2);Files.writeString(file.toPath(),stored.toString());byte[] before=Files.readAllBytes(file.toPath());
+        File file=new File(temp.getRoot(),"future-version.json");AutomationBook book=new AutomationBook(file);long due=at("2027-01-04T09:00:00Z");JSONObject saved=book.save(rule(cron("*/15 9 * * *","UTC")),due-1000),receipt=book.claimDue(due,10).getJSONObject(0);JSONObject stored=new JSONObject(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8));stored.getJSONArray("rules").getJSONObject(0).getJSONObject("schedule").put("scheduleVersion",2);Files.write(file.toPath(),stored.toString().getBytes(StandardCharsets.UTF_8));byte[] before=Files.readAllBytes(file.toPath());
         assertThrows(IllegalArgumentException.class,()->book.dispatchReceipt(receipt.getString("id"),r->{fail("unknown schema cannot execute");return null;},due+1));assertThrows(IllegalArgumentException.class,()->book.save(saved,due+1));assertArrayEquals(before,Files.readAllBytes(file.toPath()));book.recoverInterrupted(due+2);assertEquals("delivery_unknown",book.receipts().getJSONObject(0).getString("status"));book.setEnabled(saved.getString("id"),false,due+3,1);assertEquals(-1,book.nextAt());assertEquals("delivery_unknown",book.receipts().getJSONObject(0).getString("status"));assertThrows(IllegalArgumentException.class,()->book.setEnabled(saved.getString("id"),true,due+4,2));
     }
 }
