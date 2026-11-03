@@ -336,19 +336,22 @@ class PinnedConfiguredColdRecoveryTests(unittest.TestCase):
         self.addCleanup(fixture.tearDown)
         self.default_home = fixture.root / "default-codex-home"
         self.default_home.mkdir()
-        self.environment = patch.dict(os.environ, {"CODEX_HOME": str(self.default_home)})
+        self.cli_bin = fixture.root / "bin"
+        self.cli_bin.mkdir()
+        self.environment = patch.dict(os.environ, {"CODEX_HOME": str(self.default_home), "PATH": str(self.cli_bin) + os.pathsep + os.environ["PATH"]})
         self.environment.start()
         self.addCleanup(self.environment.stop)
         fixture.executable.write_text("#!/usr/bin/env python3\nimport sys\nif sys.argv[1:] == ['--version']:\n print('codex-cli 0.164.0-alpha.11')\n raise SystemExit\n" + PIPE.replace("home=Path(sys.argv[1])", "home=Path(os.environ['CODEX_HOME'])"))
+        (self.cli_bin / "codex").symlink_to(fixture.executable)
         self.manager = fixture.manager
         self.other_home = fixture.root / "another-codex-home"
         self.other_home.mkdir()
         self.other_target = {**fixture.target, "bindingId": "another-codex", "configRoot": str(self.other_home)}
         self.manager.environments["computer"]["harnesses"].append(self.other_target)
-        self.manager._launch = self.launch
         spawn = self.manager._spawn
         def original_spawn(*args, **kwargs):
             self.active_lease = self.manager.ledger.execute("SELECT * FROM harness_root_leases").fetchone()
+            self.spawn_argv = list(args[1])
             return spawn(*args, **kwargs)
         self.manager._spawn = original_spawn
         self.plan, _receipt = fixture.applied()
@@ -357,6 +360,10 @@ class PinnedConfiguredColdRecoveryTests(unittest.TestCase):
         self.assertEqual("completed", self.wait(self.job["id"])["status"])
         self.assertIn("_coldConfigHome", self.manager.jobs[self.job["id"]])
         self.assertIn("_coldProcess", self.manager.jobs[self.job["id"]])
+        self.assertEqual([str(fixture.executable), "app-server"], self.spawn_argv)
+        pin_json = json.dumps(self.manager.jobs[self.job["id"]]["_coldConfigHome"])
+        for private in (controlled.ACCESS, controlled.ORIGINAL, fixture.file.read_text()):
+            self.assertNotIn(private, pin_json)
         self.manager.close()
         path = fixture.root / "state" / ("job-" + self.job["id"] + ".json")
         actual = json.loads(path.read_text())
@@ -366,7 +373,6 @@ class PinnedConfiguredColdRecoveryTests(unittest.TestCase):
         (self.default_home / "stored.json").write_text((fixture.config_root / "stored.json").read_text())
         self.manager = fixture.manager = JobManager(fixture.config, controlled.TOKEN)
         fixture.service = self.manager.harness_configs
-        self.manager._launch = self.launch
         self.assertEqual("interrupted", self.manager.get(self.job["id"])["status"])
 
     def launch(self, env, argv):
@@ -512,4 +518,21 @@ class PinnedConfiguredColdRecoveryTests(unittest.TestCase):
         with self.assertRaises(RequestError):
             cold_session.inspect(self.manager, self.job["id"], RequestError)
         self.assertEqual(boundary, len(self.methods()))
+        self.assertFalse((self.default_home / "methods.jsonl").exists())
+
+    def test_changed_path_cannot_redirect_pinned_read_and_unmatched_launch_gets_no_pin(self):
+        from unittest.mock import patch
+        other_bin = self.fixture.root / "other-bin"
+        other_bin.mkdir()
+        marker = self.fixture.root / "wrong-cli-used"
+        alternate = other_bin / "codex"
+        alternate.write_text("#!/usr/bin/env python3\nfrom pathlib import Path\nPath(" + repr(str(marker)) + ").touch()\n")
+        alternate.chmod(0o700)
+        child_env = {**os.environ, "CODEX_HOME": str(self.fixture.config_root), "PATH": str(other_bin) + os.pathsep + os.environ["PATH"]}
+        original = self.manager.jobs[self.job["id"]]
+        env = self.manager._environment("computer")
+        self.assertIsNone(cold_session.pin_configuration(self.manager, original, env, ["codex", "app-server"], env["root"], child_env))
+        with patch.dict(os.environ, {"PATH": child_env["PATH"]}):
+            self.assertTrue(cold_session.inspect(self.manager, original["id"], RequestError)["controls"]["threadResume"])
+        self.assertFalse(marker.exists())
         self.assertFalse((self.default_home / "methods.jsonl").exists())
