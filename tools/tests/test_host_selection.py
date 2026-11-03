@@ -52,7 +52,7 @@ class HostSelectionTest(unittest.TestCase):
         runtime = 'native-normal-cleanup,runtime-development-continuity,runtime-preparation-cancel,runtime-recovery-admission,native-duplex-pipes,runtime-activity,runtime-thermal-log-policy,runtime-diagnostic-metadata,request-clock,runtime-output-display,runtime-health,script-artifact-publication,managed-skill-private-artifacts,runner-repeat-notice,runtime-log-tail-recovery,legacy-command-receipt-recovery'
         memory = 'memory-recall-quality,memory-evidence-plan,memory-method-quality'
         phone = 'phone-task-platform,' + memory
-        advanced = 'phone-setup-recovery,phone-input-extensions,phone-semantic-profile,phone-access-history,phone-observation-boundaries,phone-sensitive-owner,local-phone-leases,phone-audio-owner,phone-task-platform,aion-conversations,' + model
+        advanced = 'phone-setup-recovery,phone-input-extensions,phone-semantic-profile,phone-access-history,phone-observation-boundaries,phone-sensitive-owner,local-phone-leases,phone-audio-owner,phone-task-platform,aion-conversations,model-quality-routing,model-quality-sources,gateway-continuation,runner-budget-stream,request-clock,runtime-output-display'
         self.assertIn("HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && (github.head_ref == 'pro/dsh-runtime-continuity' && '" + runtime + "' || github.head_ref == 'pro/workpack-02-phone-control' && '" + advanced + "' || github.head_ref == 'pro/workpack-06-model-quality' && '" + model + "' || github.head_ref == 'pro/workpack-03-phone-api-cli' && '" + phone + "' || '" + memory + "') || inputs.host_groups }}", host)
         registry = json.loads((M.ROOT / 'tools/host-tests.json').read_text())
         self.assertEqual(model.split(','), M.selected(registry, '', model))

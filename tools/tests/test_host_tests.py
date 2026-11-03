@@ -330,6 +330,7 @@ class HostTestEntrypointTest(unittest.TestCase):
 
         cases = [({'event': 'pull_request'}, (False, True)),
                  # Latest main scopes automatic checks to named same-repository workpacks.
+                 ({'event': 'pull_request', 'branch': 'pro/dsh-runtime-continuity'}, (False, True)),
                  ({'event': 'pull_request', 'branch': 'pro/workpack-06-model-quality'}, (False, True)),
                  ({'event': 'pull_request', 'branch': 'pro/workpack-05-memory-quality'}, (False, True)),
                  ({'event': 'pull_request', 'branch': 'pro/workpack-03-phone-api-cli'}, (False, True)),
@@ -361,14 +362,23 @@ class HostTestEntrypointTest(unittest.TestCase):
         groups = batch().split(',')
         self.assertEqual(['phone-setup-recovery', 'phone-input-extensions', 'phone-semantic-profile', 'phone-access-history',
                           'phone-observation-boundaries', 'phone-sensitive-owner', 'local-phone-leases', 'phone-audio-owner',
-                          'phone-task-platform', 'aion-conversations', 'model-quality-routing', 'model-quality-observability',
-                          'model-quality-sources', 'model-evaluation', 'gateway-continuation', 'runner-budget-stream'], groups)
+                          'phone-task-platform', 'aion-conversations', 'model-quality-routing', 'model-quality-sources',
+                          'gateway-continuation', 'runner-budget-stream', 'request-clock', 'runtime-output-display'], groups)
         self.assertEqual(groups, HOST.select(REGISTRY, groups, []))
         main_groups = ['phone-task-platform', 'memory-recall-quality', 'memory-evidence-plan', 'memory-method-quality']
         self.assertEqual(main_groups, HOST.select(REGISTRY, main_groups, []))
         self.assertEqual(main_groups, batch(branch='pro/workpack-03-phone-api-cli').split(','))
         self.assertEqual(main_groups[1:], batch(branch='pro/workpack-05-memory-quality').split(','))
-        self.assertEqual(groups[10:], batch(branch='pro/workpack-06-model-quality').split(','))
+        model_groups = ['model-quality-routing', 'model-quality-observability', 'model-quality-sources',
+                        'model-evaluation', 'gateway-continuation', 'runner-budget-stream']
+        self.assertEqual(model_groups, batch(branch='pro/workpack-06-model-quality').split(','))
+        runtime_groups = ['native-normal-cleanup', 'runtime-development-continuity', 'runtime-preparation-cancel',
+                          'runtime-recovery-admission', 'native-duplex-pipes', 'runtime-activity', 'runtime-thermal-log-policy',
+                          'runtime-diagnostic-metadata', 'request-clock', 'runtime-output-display', 'runtime-health',
+                          'script-artifact-publication', 'managed-skill-private-artifacts', 'runner-repeat-notice',
+                          'runtime-log-tail-recovery', 'legacy-command-receipt-recovery']
+        self.assertEqual(runtime_groups, batch(branch='pro/dsh-runtime-continuity').split(','))
+        self.assertEqual(runtime_groups, HOST.select(REGISTRY, runtime_groups, []))
         self.assertIsNone(batch(branch='uiux/workroom-20261102'))
         self.assertIsNone(batch(same_repo=False))
         self.assertEqual('request-clock', batch(event='workflow_dispatch', manual='request-clock'))
