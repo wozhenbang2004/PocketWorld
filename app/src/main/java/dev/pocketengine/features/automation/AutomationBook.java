@@ -83,13 +83,24 @@ public final class AutomationBook {
             if(!kind.equals("reminder")&&!kind.equals("phone_goal"))throw new IllegalArgumentException("未知规则类型");
             String goal=kind.equals("phone_goal")?text(input.optString("goal",old==null?"":old.optString("goal")),1,4000,"手机目标"):"";
             JSONObject schedule=validateSchedule(input.getJSONObject("schedule"));boolean enabled=input.optBoolean("enabled",old==null||old.optBoolean("enabled"));
+            boolean onceRearmBlocked=old!=null&&enabled&&"once".equals(schedule.getString("type"))&&(schedule.getLong("at")<=now||old.has("onceClaimedAt")&&schedule.getLong("at")<=old.getLong("onceClaimedAt")
+                    ||"once".equals(old.getJSONObject("schedule").getString("type"))&&schedule.getLong("at")==old.getJSONObject("schedule").getLong("at")&&onceAlreadyClaimed(state,old));
+            if(onceRearmBlocked){
+                boolean edited=!title.equals(old.optString("title"))||!kind.equals(old.optString("kind"))||!goal.equals(old.optString("goal"));
+                if(!edited)throw new IllegalStateException("这次一次性提醒已到期或已有原发生记录；请选择新的未来时间，不会重新投递旧实例");
+                // An owner correction must still revoke the old pending goal. Saving that
+                // correction does not grant a second dispatch of an exhausted occurrence.
+                enabled=false;
+            }
             JSONObject policy=AutomationPolicy.rule(input.has("policy")?input.getJSONObject("policy"):old==null?null:old.optJSONObject("policy"),schedule.optString("zone","UTC"));
             JSONObject rule=new JSONObject().put("id",old==null?(forcedId==null?UUID.randomUUID().toString():forcedId):id).put("title",title).put("kind",kind).put("goal",goal)
                     .put("schedule",schedule).put("enabled",enabled).put("revision",old==null?1:old.getInt("revision")+1)
                     .put("createdAt",old==null?now:old.getLong("createdAt")).put("updatedAt",now)
                     .put("policy",policy).put("claimedCount",old==null?0:claimedCount(state,old))
                     .put("taskRequestsRevoked",!enabled).put("executionPolicy","notify_then_user_start");
+            if(onceRearmBlocked)rule.put("resumeBlockedReason","once_requires_new_future_time");
             if(nativeOrigin!=null)rule.put("nativeOrigin",copy(nativeOrigin));else if(old!=null&&old.optJSONObject("nativeOrigin")!=null)rule.put("nativeOrigin",copy(old.getJSONObject("nativeOrigin")));
+            if(old!=null){if(old.has("onceClaimedAt"))rule.put("onceClaimedAt",old.get("onceClaimedAt"));else if("once".equals(old.getJSONObject("schedule").getString("type"))&&onceAlreadyClaimed(state,old))rule.put("onceClaimedAt",old.getJSONObject("schedule").getLong("at"));}
             arm(rule,initialAt(schedule,now));
             if(index<0)rules.put(rule);else{rules.put(index,rule);cancelPending(state,id,"规则已修改，旧版本未投递的提醒已取消",now);}write(state);return copy(rule);
         }
@@ -160,6 +171,9 @@ public final class AutomationBook {
             // Once rules are disabled at claim time. An explicit pause must still cancel their
             // outstanding claim instead of returning early and delivering an obsolete goal.
             if(rule.getBoolean("enabled")==enabled){if(!enabled){boolean changed=cancelPending(state,id,"规则已暂停，尚未投递的提醒已取消",now);if(!rule.optBoolean("taskRequestsRevoked")){rule.put("taskRequestsRevoked",true).put("revision",rule.getInt("revision")+1).put("updatedAt",now);changed=true;}if(changed)write(state);}return copy(rule);}
+            if(enabled&&"once".equals(rule.getJSONObject("schedule").getString("type"))
+                    &&(rule.getJSONObject("schedule").getLong("at")<=now||onceAlreadyClaimed(state,rule)))
+                throw new IllegalStateException("一次性提醒不能通过开关重放原发生；请重新安排一个未来时间，旧回执和未知结果会保留");
             rule.put("enabled",enabled).put("taskRequestsRevoked",!enabled).put("revision",rule.getInt("revision")+1).put("updatedAt",now)
                     .put("claimedCount",claimedCount(state,rule));
             arm(rule,initialAt(rule.getJSONObject("schedule"),now));
@@ -329,7 +343,7 @@ public final class AutomationBook {
                             if(omitted){if(pending==null)pending=new JSONObject().put("firstAt",occurrence).put("count",0);pending.put("lastAt",occurrence).put("count",pending.getLong("count")+1);rule.put("coalescedPending",pending);}
                             else if(pending!=null){receipt.put("coalescedOccurrences",copy(pending)).put("message",terminal==null?"已合并错过的日历实例，尚未确认本次投递":"合并实例未投递："+terminal);rule.remove("coalescedPending");}
                         }
-                        receipts.put(receipt);if(terminal==null){rule.put("claimedCount",count+1);claimed.put(copy(receipt));catchUp++;}historyBudget--;changed=true;
+                        receipts.put(receipt);if("once".equals(schedule.getString("type")))rule.put("onceClaimedAt",Math.max(occurrence,rule.optLong("onceClaimedAt",0)));if(terminal==null){rule.put("claimedCount",count+1);claimed.put(copy(receipt));catchUp++;}historyBudget--;changed=true;
                     }
                     if("expired".equals(terminal)){rule.put("enabled",false).put("ruleState","expired").put("scheduledAt",JSONObject.NULL).put("nextAt",JSONObject.NULL);next=-1;stopped=true;break;}
                     if(strategy.equals("catch_up")&&catchUp>=policy.getInt("maxCatchUp")&&j+1<due.size()){next=due.get(j+1);stopped=true;break;}
@@ -415,6 +429,16 @@ public final class AutomationBook {
         if(rule.has("claimedCount"))return rule.getLong("claimedCount");
         long count=0;JSONArray receipts=state.getJSONArray("receipts");for(int i=0;i<receipts.length();i++)if(rule.getString("id").equals(receipts.getJSONObject(i).optString("ruleId")))count++;
         return count;
+    }
+    private static boolean onceAlreadyClaimed(JSONObject state,JSONObject rule)throws Exception {
+        long occurrence=rule.getJSONObject("schedule").getLong("at");
+        if(rule.has("onceClaimedAt"))return rule.getLong("onceClaimedAt")>=occurrence;
+        JSONArray receipts=state.getJSONArray("receipts");for(int i=0;i<receipts.length();i++){
+            JSONObject receipt=receipts.getJSONObject(i);if(rule.getString("id").equals(receipt.optString("ruleId"))&&sameInteger(receipt.opt("occurrenceAt"),occurrence))return true;
+        }
+        // Older books may have pruned a terminal receipt. Ambiguous old once history
+        // cannot authorize replay merely because the wall clock moved backwards.
+        return claimedCount(state,rule)>0;
     }
     private static void arm(JSONObject rule,long scheduled)throws Exception {
         if(scheduled<0){rule.put("scheduledAt",JSONObject.NULL).put("nextAt",JSONObject.NULL).put("ruleState","schedule_exhausted").put("enabled",false);return;}
