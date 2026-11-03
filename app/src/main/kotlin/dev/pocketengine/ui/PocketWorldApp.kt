@@ -353,7 +353,10 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                 }
                 (message.taskId ?: message.submission?.optString("taskId"))?.takeIf { it.isNotBlank() }?.let { id ->
                     if (state.messages.lastOrNull { (it.taskId ?: it.submission?.optString("taskId")) == id }?.id == message.id) state.tasks.find { it.id == id }?.let { linked ->
-                        ConversationTaskJournal(TaskPresentation.fromTaskStore(linked.raw), { if (teamRunReferences(linked).isNotEmpty()) controller.openTeam(teamRunReferences(linked).first()) else controller.focusTask(it) }, controller::getTask)
+                        ConversationTaskJournal(TaskPresentation.fromTaskStore(linked.raw), { if (teamRunReferences(linked).isNotEmpty()) controller.openTeam(teamRunReferences(linked).first()) else controller.focusTask(it) }, controller::getTask,
+                            interruptedSourceRevision = controller.conversationSourceRevision,
+                            readInterrupted = if (linked.raw.optString("kind") == "assistant" && linked.raw.optJSONObject("origin") == null) { cursor, done -> controller.readConversationInterrupted(id, state.conversationId, cursor, done) } else null,
+                            answerQuestion = controller::answerOwnerQuestion)
                     }
                 }
             } }

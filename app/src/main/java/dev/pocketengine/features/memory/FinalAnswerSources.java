@@ -121,7 +121,7 @@ public final class FinalAnswerSources {
         }
         JSONArray messages=checkpoint.optJSONArray("messages");JSONObject evidence=checkpoint.optJSONObject("observation"),proof=evidence==null?null:evidence.optJSONObject("nativeFinalAnswer");
         if(messages==null||messages.length()>MAX_ROWS||proof==null||!"pocketworld.runner-final-answer.v1".equals(proof.optString("format"))||!task.equals(proof.optString("taskId"))||!run.equals(proof.optString("runId"))||epoch!=proof.optInt("coordinatorEpoch")||!Boolean.TRUE.equals(proof.opt("inputBoundaryEmpty")))return null;
-        int index=number(proof,"messageIndex",-1,0,MAX_ROWS);if(index>=messages.length()||proof.optInt("historyLength")!=index+1)return null;
+        int index=number(proof,"messageIndex",-1,0,MAX_ROWS);if(!nativeFinalBoundaryCurrent(messages,index,number(proof,"historyLength",-1,0,MAX_ROWS)))return null;
         JSONObject message=messages.getJSONObject(index);String body=message.optString("content");
         if(!"assistant".equals(message.optString("role"))||message.has("tool_calls")||message.optBoolean("memoryContextRetired")||!(message.opt("content") instanceof String)||!expected.getString("answerFingerprint").equals(CompactionPlan.fingerprint(body))||!expected.getString("answerFingerprint").equals(proof.optString("answerFingerprint")))return null;
         JSONObject reference=message.optJSONObject("memoryReference");
@@ -133,6 +133,21 @@ public final class FinalAnswerSources {
         if(reference!=null)pin.put("requestId",reference.getString("requestId")).put("answerId",reference.getString("answerId"));
         if(expected.has("messageIndex")&&(!same(expected,pin)))return null;
         requireContexts(db,conversations,outputs,authority,pin,window);return new Answer(authority,pin,messages,index);
+    }
+    /** Shape only, never source authority: the original Runner appends a final native phone
+     * observation after its assistant answer. New owner input, tool output or unknown tails
+     * cannot be treated as that observation or revive an old final-answer boundary. */
+    static boolean nativeFinalBoundaryCurrent(JSONArray messages,int index,int declaredLength)throws Exception{
+        if(messages==null||index<0||index>=messages.length()||declaredLength!=messages.length())return false;
+        for(int i=index+1;i<messages.length();i++){
+            JSONObject tail=messages.optJSONObject(i);if(tail==null||tail.length()!=3||!"user".equals(tail.optString("role"))||!Boolean.TRUE.equals(tail.opt("hostObservation")))return false;
+            JSONArray parts=tail.optJSONArray("content");if(parts==null||parts.length()!=1)return false;JSONObject part=parts.optJSONObject(0);
+            if(part==null||part.length()!=2||!"text".equals(part.optString("type"))||!(part.opt("text") instanceof String))return false;
+            String text=part.getString("text");if(!text.startsWith(TaskMemoryHistory.OBSERVATION_PREFIX))return false;
+            try{org.json.JSONTokener token=new org.json.JSONTokener(text.substring(TaskMemoryHistory.OBSERVATION_PREFIX.length()));if(!(token.nextValue() instanceof JSONObject)||token.nextClean()!=0)return false;}
+            catch(org.json.JSONException invalid){return false;}
+        }
+        return true;
     }
     private static void requireContexts(SQLiteDatabase db,ConversationRepository conversations,ToolOutputStore.Sources outputs,JSONObject task,JSONObject answer,Window window)throws Exception{
         window.check();String id=answer.getString("taskId"),run=answer.getString("runId");

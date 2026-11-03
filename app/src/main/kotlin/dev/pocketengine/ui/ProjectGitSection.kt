@@ -27,11 +27,16 @@ import org.json.JSONObject
 
 /** Git's index/history remain distinct from the formal project version store and unsaved editor drafts. */
 @Composable
-internal fun ProjectGitSection(projectId: String, checkoutId: String, host: PocketUiState, controller: PocketWorldController) {
+internal fun ProjectGitSection(projectId: String, checkoutId: String, host: PocketUiState, controller: PocketWorldController, onCheckoutSelected: (String) -> Unit = {}) {
     val flow = controller.projectGit
     val state = flow.state.takeIf { it.projectId == projectId && it.checkoutId == checkoutId } ?: ProjectGitState(projectId = projectId, checkoutId = checkoutId, busy = true)
     var open by rememberSaveable(checkoutId) { mutableStateOf(false) }
     var details by rememberSaveable(checkoutId) { mutableStateOf(false) }
+    var isolationForm by rememberSaveable(checkoutId) { mutableStateOf(false) }
+    var baseCommit by rememberSaveable(checkoutId) { mutableStateOf("") }
+    var isolationBranch by rememberSaveable(checkoutId) { mutableStateOf("") }
+    val checkout = host.feature("local").optJSONArray("checkouts").objects().firstOrNull { it.optString("id") == checkoutId }
+    val isolation = checkout?.optJSONObject("isolatedGit")
     var message by rememberSaveable(checkoutId) { mutableStateOf("") }
     var author by rememberSaveable(checkoutId) { mutableStateOf("") }
     var email by rememberSaveable(checkoutId) { mutableStateOf("") }
@@ -76,6 +81,17 @@ internal fun ProjectGitSection(projectId: String, checkoutId: String, host: Pock
                         }
                         TextButton(onClick = { state.originalId?.let(controller::focusTask) }) { Text("查看同一任务与日志") }
                     }
+                    if (isolation != null) {
+                        Text("基于已审提交的私有隔离副本", fontWeight = FontWeight.SemiBold)
+                        GitCaption("分支 ${isolation.optString("branch")} · 基线 ${isolation.optString("baseCommit").take(12)}。原仓未链接或自动合并；已有任务仍固定在各自原副本。")
+                        OutlinedButton(onClick = { action { flow.selectRelated(isolation.getString("sourceCheckoutId"), onCheckoutSelected); open = false } }, enabled = !state.busy, modifier = Modifier.fillMaxWidth().testTag("project_git_return_source")) { Text("明确返回原副本 · 保留此隔离成果") }
+                        GitCaption("成果通过原文件「审阅并导回」按正式版本逐项核对，不自动merge或删除失败现场。")
+                    }
+                    state.observation?.optJSONObject("git")?.takeIf { it.optString("action") == "isolate" && !it.optBoolean("ok") }?.let { failed -> GitCaption("创建目标 ${failed.optString("targetCheckoutId").take(8)} · 原操作 ${state.originalId.orEmpty().take(8)}。未登记为可选副本不表示现场已清理；原副本保持不变，核对原任务，不自动删除或重放。") }
+                    val readyIsolation = state.observation?.optJSONObject("git")?.optJSONObject("isolatedCheckout")
+                    if (readyIsolation != null) Button(onClick = { action { flow.selectRelated(readyIsolation.getString("id"), onCheckoutSelected); open = false } }, enabled = !state.busy, modifier = Modifier.fillMaxWidth().testTag("project_git_select_isolation")) { Text("选择隔离副本继续开发") }
+                    val existingIsolations = host.feature("local").optJSONArray("checkouts").objects().filter { it.optJSONObject("isolatedGit")?.optString("sourceCheckoutId") == checkoutId }
+                    existingIsolations.forEach { item -> TextButton(onClick = { action { flow.selectRelated(item.getString("id"), onCheckoutSelected); open = false } }, enabled = !state.busy) { Text("选择私有隔离 · ${item.optJSONObject("isolatedGit")?.optString("branch")} · ${item.optString("id").take(8)}") } }
                     val snapshot = state.snapshot
                     if (snapshot != null && !snapshot.optBoolean("repositoryPresent")) {
                         Text("这个副本尚未初始化 Git", fontWeight = FontWeight.SemiBold)
@@ -112,6 +128,15 @@ internal fun ProjectGitSection(projectId: String, checkoutId: String, host: Pock
                             HorizontalDivider()
                         }
                         if (snapshot.optBoolean("truncated")) TextButton(onClick = { action { flow.readStatus(nextPage = true) } }, enabled = !state.busy && !state.processPending && state.review == null) { Text("读取下一页 Git 状态") }
+                        if (isolation == null && pin.optString("head") != "unborn") {
+                            TextButton(onClick = { isolationForm = !isolationForm; if (baseCommit.isEmpty()) baseCommit = pin.getString("head") }, enabled = !state.busy && !state.uncertain && !state.processPending && state.review == null, modifier = Modifier.testTag("project_git_isolation_form")) { Text(if (isolationForm) "收起隔离创建" else "从已审提交建立私有隔离") }
+                            if (isolationForm) {
+                                GitCaption("独立common库和真实Git worktree，仅复制所选提交的可达对象，不带原配置/hooks/remote凭据，不复制未提交修改。最多2000源文件/16MiB、Git对象64MiB；不联网、不直接链接用户原仓。")
+                                OutlinedTextField(baseCommit, { baseCommit = it }, label = { Text("本地已审提交完整ID") }, modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !state.busy && state.review == null)
+                                OutlinedTextField(isolationBranch, { isolationBranch = it }, label = { Text("本次私有新分支名") }, modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !state.busy && state.review == null)
+                                OutlinedButton(onClick = { action { flow.reviewIsolation(baseCommit, isolationBranch) } }, enabled = baseCommit.isNotBlank() && isolationBranch.isNotBlank() && !state.busy && !state.uncertain && state.review == null, modifier = Modifier.fillMaxWidth().testTag("project_git_isolation_review")) { Text("审阅创建隔离副本") }
+                            }
+                        }
                         TextButton(onClick = { action { flow.history() } }, enabled = !state.busy && !state.processPending && state.review == null, modifier = Modifier.testTag("project_git_history")) { Text("读取这个 HEAD 的提交历史") }
                         Text("已选 ${state.selected.size} 项", fontWeight = FontWeight.SemiBold)
                         OutlinedButton(onClick = { action { flow.review("stage") } }, enabled = flow.can("stage"), modifier = Modifier.fillMaxWidth().testTag("project_git_stage")) { Text("审阅只暂存所选文件") }
@@ -150,6 +175,8 @@ internal fun ProjectGitSection(projectId: String, checkoutId: String, host: Pock
                         if (review.optString("action") == "commit") {
                             SelectionContainer { Text("${review.optString("authorName")} <${review.optString("authorEmail")}>\n${review.optString("message")}", style = MaterialTheme.typography.bodyMedium) }
                             GitCaption("只形成此审阅树的本地提交，不运行 hooks，不推送，不修改工作树；原 index 字节保持不变。")
+                        } else if (review.optString("action") == "isolate") {
+                            GitCaption("基于 ${review.optString("baseCommit")} · 新分支 ${review.optString("branch")} · 新副本 ${review.optString("targetCheckoutId").take(8)}。此确认运行原托管Git创建私有副本，源仓WIP/refs不变；失败现场保留，不自动merge/清理。同UID不是安全沙箱。")
                         } else GitCaption(if (review.optString("action") == "init") "仅在当前副本初始化普通本地仓库，不暂存。" else "只改所选 Git 索引项，保留工作树与未选文件。")
                         Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(consent, { consent = it }, enabled = !state.busy); Text("我已核对所选文件、比较层和这次影响", modifier = Modifier.weight(1f)) }
                         Button(onClick = { action { flow.confirm() } }, enabled = consent && !state.busy && review.optBoolean("available"), modifier = Modifier.fillMaxWidth().testTag("project_git_confirm")) { Text("确认本次动作") }
@@ -163,7 +190,7 @@ internal fun ProjectGitSection(projectId: String, checkoutId: String, host: Pock
                     }
                     TextButton(onClick = { details = !details }) { Text(if (details) "收起技术详情" else "范围与原操作详情") }
                     if (details) SelectionContainer { Column {
-                        GitCaption("仅支持当前副本内普通非裸 .git 仓；外跳gitdir、linked worktree、object alternates、partial clone、include/filter、链接元数据明确不支持。禁hooks/fsmonitor/外部diff/pager/网络Git。不是同UID OS沙箱，任意进程绕过Git锁不受此入口隔离。")
+                        GitCaption("支持普通非裸 .git 仓及本入口完整创建的私有common隔离；任意外部gitdir/linked worktree、object alternates、partial clone、include/filter、链接元数据仍拒绝。禁hooks/fsmonitor/外部diff/pager/网络Git。不是同UID OS沙箱，任意进程绕过Git锁不受此入口隔离。")
                         GitCaption("每次变更绑定HEAD/index/工作树/源版本和实际Git程序摘要；Git自己持有原index.lock和ref CAS。未知锁不删，未知效果只核对原编号，不自动重试。当前读取有界，文件路径/容量超限会明确拒绝。")
                         Text(state.snapshot?.optString("gitVersion").orEmpty(), style = MaterialTheme.typography.labelSmall)
                         Text("原操作 ${state.originalId.orEmpty()}", style = MaterialTheme.typography.labelSmall)

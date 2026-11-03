@@ -28,6 +28,7 @@ public final class BrowserStepReadSourceCurrentTest {
             browser.ui.call(()->{browser.driver.original.pages.get(browser.tab).put("documentId",receipt.getString("documentId"));return null;});
             CapabilityPort extended=extensions.bind(browser.port,new ExtensionRuntime.Binding(browser.f.binding.taskId,browser.f.binding.runId,browser.f.binding.epoch),browser.f.control);
             CapabilityPort outer=new ToolOutputSourcePort(extended,browser.f.tasks.toolOutputFactory(browser.f.binding.taskId,browser.f.binding.runId,browser.f.binding.epoch,browser.f.control,text->text),browser.f.control);
+            outer.beginRun("检查原来源",browser.f.control);
             outer.prepareTurn("检查原来源",1,0,browser.f.control);
             int reads=browser.driver.reads,operations=browser.f.tasks.get(browser.f.binding.taskId,false).getJSONArray("operations").length();
             assertTrue(outer.stepReadSourceCurrent("browser_task_observe",receipt,browser.f.control));

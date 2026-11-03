@@ -364,7 +364,7 @@ public final class AgentRunner {
                     }catch(RunContextBudget.Blocked unavailable){chosenConfig=stepRouting.useMain("light_context_unavailable");}
                     final ModelConfig requestConfig=chosenConfig;
                     if(stepRouting.enabled())emit(taskId,"model_route","running",stepRouting.selectedLight()?"本次已在原任务预算内选择轻量候选，仅接受明确只读步骤。":"本次使用原主候选。",null,stepRouting.diagnostics(),config,sink);
-                    final JSONArray actualModelMessages=finalRequestMessages;final StringBuilder visibleAttempt=new StringBuilder();
+                    final JSONArray actualModelMessages=finalRequestMessages;final StringBuilder visibleAttempt=new StringBuilder();final String[] visibleCall={""};final boolean[] prefixRetained={false};
                     final PhoneRouteSession currentRoutes=routes;
                     dev.pocketengine.runtime.usage.InferenceCapture.Target originalMain=journal==null?dev.pocketengine.runtime.usage.InferenceCapture.unattributed():journal.inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN,"");
                     if(currentRoutes!=null)originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,()->currentRoutes.requireCurrentSources(control));
@@ -373,9 +373,13 @@ public final class AgentRunner {
                     // Each physical call gets a fresh target/receipt and rechecks the original native
                     // task/epoch/scope. No tool has been admitted from this incomplete response.
                     try{response=ModelGateway.completeStreaming(requestConfig,actualModelMessages,tools,control,event->{
-                        if(event.kind==ModelGateway.StreamKind.STARTED){nativeRequest[0]=event.requestId;if(capabilities!=null)capabilities.beforeModelRequest(event.requestId,actualModelMessages,control);}
-                        if(event.kind==ModelGateway.StreamKind.TEXT_DELTA&&visibleAttempt.length()<32768){int count=Math.min(event.text.length(),32768-visibleAttempt.length());if(count>0&&count<event.text.length()&&Character.isHighSurrogate(event.text.charAt(count-1)))count--;visibleAttempt.append(event.text,0,count);}
+                        if(event.kind==ModelGateway.StreamKind.STARTED){
+                            if(!visibleCall[0].equals(event.requestId)){if(!prefixRetained[0])retainInterruptedPrefix(taskId,visibleCall[0],visibleAttempt,requestConfig,sink);visibleAttempt.setLength(0);prefixRetained[0]=false;visibleCall[0]=event.requestId;}
+                            nativeRequest[0]=event.requestId;if(capabilities!=null)capabilities.beforeModelRequest(event.requestId,actualModelMessages,control);
+                        }
                         emitStream(taskId,event,requestConfig,control,sink);
+                        if(event.requestId.equals(visibleCall[0])&&event.kind==ModelGateway.StreamKind.TEXT_DELTA&&visibleAttempt.length()<32768){int count=Math.min(event.text.length(),32768-visibleAttempt.length());if(count>0&&count<event.text.length()&&Character.isHighSurrogate(event.text.charAt(count-1)))count--;visibleAttempt.append(event.text,0,count);}
+                        if(event.requestId.equals(visibleCall[0])&&(event.kind==ModelGateway.StreamKind.FAILED||event.kind==ModelGateway.StreamKind.CANCELLED)&&!prefixRetained[0]){retainInterruptedPrefix(taskId,visibleCall[0],visibleAttempt,requestConfig,sink);prefixRetained[0]=true;}
                     },contextBudget.inferenceTarget(originalMain,actualModelMessages,tools,requestConfig),new ModelGateway.RetryObserver(){
                         public void beforeWait(String logical,String failedCall,int retryNumber,long delay)throws Exception {
                             if(!retryAfterContextRepair)throw new ModelGateway.GatewayException("原上下文整理后的唯一请求已结束；本轮没有再次重试。");
@@ -395,8 +399,7 @@ public final class AgentRunner {
                         if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);
                         // The UI's bounded visible prefix survives an interrupted attempt in the
                         // original audit, never in assistant history or as an accepted answer.
-                        for(int offset=0;offset<visibleAttempt.length();){int end=Math.min(visibleAttempt.length(),offset+8000);if(end<visibleAttempt.length()&&Character.isHighSurrogate(visibleAttempt.charAt(end-1)))end--;
-                            emit(taskId,"model_attempt_interrupted","running","已保留中断推理的已显示片段；不是正式答复或操作结果。",null,new JSONObject().put("callId",nativeRequest[0]).put("offset",offset).put("text",visibleAttempt.substring(offset,end)).put("provisional",true).put("attemptCompleted",false).put("displayPrefixLimit",32768),config,sink);offset=end;}
+                        if(!prefixRetained[0])retainInterruptedPrefix(taskId,visibleCall[0],visibleAttempt,requestConfig,sink);
                         control.check();
                         if(failed instanceof ModelGateway.RequestRefreshRequired){
                             if(retryOwnerInputs[0]!=null){stepRouting.ownerBoundary();appendOwnerInputs(history,retryOwnerInputs[0],config);recallIntent=latestOwnerRecallQuery(history,recallIntent);checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget);}
@@ -1433,6 +1436,11 @@ public final class AgentRunner {
         ToolArgumentException(String code) { this.code = code; }
     }
 
+    private static void retainInterruptedPrefix(String taskId,String call,StringBuilder prefix,ModelConfig config,EventSink sink)throws Exception {
+        if(call.isEmpty())return;
+        for(int offset=0;offset<prefix.length();){int end=Math.min(prefix.length(),offset+8000);if(end<prefix.length()&&Character.isHighSurrogate(prefix.charAt(end-1)))end--;
+            emit(taskId,"model_attempt_interrupted","running","已保留中断推理的已显示片段；不是正式答复或操作结果。",null,new JSONObject().put("callId",call).put("offset",offset).put("text",prefix.substring(offset,end)).put("provisional",true).put("attemptCompleted",false).put("displayPrefixLimit",32768),config,sink);offset=end;}
+    }
     private static void emit(String taskId, String type, String status, String message, String tool,
                              JSONObject receipt, ModelConfig config, EventSink sink) throws Exception {
         emit(taskId,type,status,message,tool,receipt,config,sink,null);

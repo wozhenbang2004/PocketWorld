@@ -720,6 +720,7 @@ public final class TaskStore {
         private HarnessGatewayConfiguration(HarnessGatewayConfigurationOwner owner,String lease,String model,JSONObject value){this.owner=owner;this.lease=lease;this.model=model;this.value=value.toString();}
         public JSONObject view()throws Exception{return new JSONObject(value);}
         public void checkCurrent()throws Exception {synchronized(owner.store){owner.checkCurrent();JSONObject descriptor=owner.store.gatewayConfigurationDescriptor(owner.child,lease);if(!capabilityFingerprint(view()).equals(capabilityFingerprint(owner.store.gatewayConfigurationSelection(descriptor,model))))throw new SecurityException("原lease配置绑定已改变");}}
+        public String originalOperation()throws Exception{synchronized(owner.store){checkCurrent();return owner.configurationOperation;}}
     }
     /** Not authority or a retry permit: only the entered original CLI's native approval POST
      * is still settling. Callers other than its continuous bridge must keep refusing dispatch. */
@@ -964,6 +965,103 @@ public final class TaskStore {
         }finally{db.endTransaction();}}
     }
 
+    /** The original question notice is consumed once in the same SQL transaction as its
+     * original ownerInputs row and USER message/source. Saving an answer grants nothing. */
+    public synchronized JSONObject consumeOwnerQuestionReply(String id,String run,int epoch,String requestId,long waitRevision,String noticeToken,String text)throws Exception {
+        db.beginTransaction();try{
+            JSONObject task=required(id);requirePrivateOwner(task);JSONObject permission=grant(run);executionScopeCurrent(task,run,permission);if(permission.getLong("expiresAt")<=System.currentTimeMillis())throw new SecurityException("原问题已到期；只可打开原任务");JSONArray sourceRefs=scheduleProposalUserRefs(id,run,epoch,task.getString("conversationId"));requireScheduleProposalSources(id,run,epoch,task.getString("conversationId"),sourceRefs);var accepted=dev.pocketengine.features.assistant.OwnerQuestionInputs.reply(task,id,run,epoch,requestId,waitRevision,noticeToken,text,System.currentTimeMillis());
+            if(accepted.duplicate()){db.setTransactionSuccessful();return accepted.result();}
+            try(Cursor attempt=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{id,run,Integer.toString(epoch)})){
+                if(!attempt.moveToFirst()||!"awaiting_user".equals(attempt.getString(0)))throw new SecurityException("原问题执行尚未结算或已变化，未接收旧通知");
+            }
+            JSONObject mailbox=ownerMailbox(task,run,epoch);if(mailbox.optBoolean("open")||!task.getString("conversationId").equals(mailbox.optString("conversationId")))throw new SecurityException("原问题邮箱未关闭或不属于原对话");
+            JSONObject row=accepted.row();OwnerInputQueue.accepted(row,false);JSONArray rows=task.optJSONArray("ownerInputs");if(rows==null)rows=new JSONArray();rows.put(row);task.put("ownerInputs",rows);
+            task.getJSONObject("evidence").getJSONObject("ownerQuestion").put("replyConsumed",true).put("replyMessageId",row.getString("messageId")).put("replyConsumedAt",row.getLong("acceptedAt"));
+            task.getJSONObject("ownerNotification").put("phase","answered").put("answeredAt",row.getLong("acceptedAt"));write(task);
+            conversationRepository.recordOwnerQuestionInput(this,accepted);
+            appendEvent(task,new JSONObject().put("type","owner_question_answer_saved").put("runId",run).put("coordinatorEpoch",epoch).put("requestId",requestId).put("waitRevision",waitRevision).put("messageId",row.getString("messageId")).put("executionAuthorized",false));
+            db.setTransactionSuccessful();return accepted.result();
+        }finally{db.endTransaction();}
+    }
+    /** Read-only exact ACK lookup, including a lost commit return. Never consumes or resumes. */
+    public synchronized JSONObject ownerQuestionReplyReceipt(String id,String run,int epoch,String request,long revision,String token,String text)throws Exception{
+        JSONObject task=required(id);dev.pocketengine.features.assistant.OwnerQuestionInputs.requirePrivateTask(task);if(text==null||text.isBlank()||text.length()>4000)return null;
+        String digest=capabilityFingerprint(new JSONObject().put("text",text.strip()));JSONArray rows=task.optJSONArray("ownerInputs");
+        for(int i=0;rows!=null&&i<rows.length();i++){JSONObject row=rows.getJSONObject(i),proof=row.optJSONObject("ownerQuestionReply");if(proof==null||!dev.pocketengine.features.assistant.OwnerQuestionInputs.FORMAT.equals(proof.optString("format"))||!run.equals(row.optString("acceptedRunId"))||epoch!=row.optInt("acceptedEpoch")||!request.equals(proof.optString("requestId")))continue;
+            if(revision!=proof.optLong("waitRevision")||!digest.equals(proof.optString("textDigest"))||!token.equals(proof.optString("noticeToken")))throw new SecurityException("同一原问题不能改写已保存回答");
+            return new JSONObject().put("accepted",true).put("duplicate",true).put("answerSaved",true).put("taskId",id).put("runId",run).put("coordinatorEpoch",epoch).put("requestId",request).put("waitRevision",revision).put("messageId",row.getString("messageId")).put("continuationRequested",false).put("executionAuthorized",false);
+        }return null;
+    }
+    /** Only this process's original settled controller may be retained. No JSON grant or
+     * restored process state can construct the private Waiting handle. */
+    public synchronized dev.pocketengine.features.assistant.OwnerQuestionInputs.Waiting retainOwnerQuestionOriginal(dev.pocketengine.features.assistant.OwnerQuestionInputs inputs,String id,RunControl original,dev.pocketengine.core.ModelConfig captured)throws Exception {
+        JSONObject task=required(id);dev.pocketengine.features.assistant.OwnerQuestionInputs.requirePrivateTask(task);
+        if(!"awaiting_user".equals(task.optString("status"))||original==null||!original.matchesHostRun(id,task.optString("runId"),task.optInt("coordinatorEpoch")))return null;
+        try(Cursor attempt=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{id,task.getString("runId"),Integer.toString(task.getInt("coordinatorEpoch"))})){
+            if(!attempt.moveToFirst()||!"awaiting_user".equals(attempt.getString(0)))return null;
+        }
+        return inputs.retain(task,grant(task.getString("runId")),original,captured);
+    }
+    /** Native same-run CAS. This method never creates an attempt, lease, grant, budget or
+     * epoch, and never renews an expired execution scope. All source barriers remain live. */
+    public synchronized JSONObject resumeOwnerQuestionRun(dev.pocketengine.features.assistant.OwnerQuestionInputs.Waiting original)throws Exception {
+        db.beginTransaction();try{
+            original.requireOriginal();String id=original.taskId(),run=original.runId();int epoch=original.epoch();JSONObject task=required(id),permission=grant(run);
+            JSONObject reply=dev.pocketengine.features.assistant.OwnerQuestionInputs.requireSavedContinuation(original,task,permission,checkpoint(run),System.currentTimeMillis());executionScopeCurrent(task,run,permission);
+            JSONObject scope=task.getJSONObject("executionScope");if(scope.getInt("modelCallLimit")-scope.getInt("modelCallsUsed")-deviceTasks.heldBudget(id,run,true)<1||scope.getInt("toolLimit")-scope.getInt("toolsUsed")-deviceTasks.heldBudget(id,run,false)<1)throw new SecurityException("原剩余预算已由子任务占用，回答不补额度");
+            try(Cursor active=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND status='running' LIMIT 1",new String[]{id})){if(active.moveToFirst())throw new SecurityException("原任务已有执行，未叠加第二执行器");}
+            if(hasUnresolved(id))throw new SecurityException("原操作尚未核对，回答不重放外效");
+            JSONArray approvals=task.optJSONArray("approvals");for(int i=0;approvals!=null&&i<approvals.length();i++)if("pending".equals(approvals.getJSONObject(i).optString("state")))throw new SecurityException("普通问题回答不代替具体操作授权");
+            JSONObject mailbox=ownerMailbox(task,run,epoch);if(mailbox.optBoolean("open")||!original.conversationId().equals(mailbox.optString("conversationId")))throw new SecurityException("原问题邮箱已被接手或改变");
+            conversationRepository.requireQueuedOwnerMessageCurrent(original.conversationId(),reply);
+            dev.pocketengine.features.memory.TaskStoreMemoryQuery.requireOutputContext(db,outputSources,id,run);
+            dev.pocketengine.features.memory.TaskStoreMemoryQuery.requireOwnerSourceContinuation(db,conversationRepository,id,run,original.conversationId());
+            ContentValues active=new ContentValues();active.put("status","running");active.put("updated_at",System.currentTimeMillis());
+            if(db.update("runs",active,"task_id=? AND run_id=? AND epoch=? AND status='awaiting_user'",new String[]{id,run,Integer.toString(epoch)})!=1)throw new SecurityException("原问题执行已被消费，未重复恢复");
+            reply.getJSONObject("ownerQuestionReply").put("phase","continuing").put("continuationClaimedAt",System.currentTimeMillis());mailbox.put("open",true);
+            task.put("ownerQuestionContinuation",new JSONObject().put("format","pocketworld.owner-question-continuation.v1").put("runId",run).put("epoch",epoch).put("requestId",original.requestId()).put("waitRevision",original.waitRevision()).put("messageId",reply.getString("messageId")).put("phase","claimed"))
+                .put("status","preparing").put("summary","回答已保存，正在沿原执行与剩余预算继续");
+            appendEvent(task,new JSONObject().put("type","owner_question_continuation_claimed").put("runId",run).put("coordinatorEpoch",epoch).put("requestId",original.requestId()).put("messageId",reply.getString("messageId")).put("newGrant",false));
+            db.setTransactionSuccessful();return copy(task,false);
+        }finally{db.endTransaction();}
+    }
+    /** Capability construction must not broaden/rewrite the old grant for this typed CAS. */
+    public synchronized boolean ownerQuestionContinuationActive(String id,String run,int epoch,RunControl original)throws Exception {
+        JSONObject task=required(id),marker=task.optJSONObject("ownerQuestionContinuation");
+        if(marker==null||!run.equals(marker.optString("runId"))||epoch!=marker.optInt("epoch"))return false;
+        if(!"pocketworld.owner-question-continuation.v1".equals(marker.optString("format"))||!"claimed".equals(marker.optString("phase"))||original==null||!original.matchesHostRun(id,run,epoch)||!task.optString("status").matches("preparing|running"))throw new SecurityException("原问题续接身份已改变");
+        return true;
+    }
+    /** Worker rejection/early failure is an observation, never an automatic retry. */
+    public synchronized void ownerQuestionContinuationUnavailable(dev.pocketengine.features.assistant.OwnerQuestionInputs.Waiting original)throws Exception {
+        JSONObject task=required(original.taskId()),marker=task.optJSONObject("ownerQuestionContinuation");
+        if(marker==null||!original.originalControl().matchesHostRun(original.taskId(),original.runId(),original.epoch())||!original.runId().equals(task.optString("runId"))||original.epoch()!=task.optInt("coordinatorEpoch")
+                ||!original.runId().equals(marker.optString("runId"))||original.epoch()!=marker.optInt("epoch")||!original.requestId().equals(marker.optString("requestId"))||!task.optString("status").matches("preparing|running"))return;
+        marker.put("phase","unavailable");write(task);endAttempt(original.taskId(),original.runId(),original.originalControl().isCancelled()?"cancelled":"awaiting_user","回答已保存，原执行未能继续，请回原任务处理；没有续权或重试",task.getJSONObject("evidence"));
+    }
+
+    /** Native observation/navigation after a saved answer. This changes no execution authority. */
+    public synchronized JSONObject noteOwnerQuestionAnswerState(JSONObject accepted,String requested)throws Exception {
+        if(!Set.of("saved_owner_action_required","saved_original_host_busy","saved_original_conversation_busy","saved_worker_unavailable","saved_source_sync_required","saved_execution_unavailable","original_worker_requested").contains(requested))throw new IllegalArgumentException("问题续接状态无效");
+        db.beginTransaction();try{
+            JSONObject task=required(accepted.getString("taskId"));dev.pocketengine.features.assistant.OwnerQuestionInputs.requirePrivateTask(task);JSONObject evidence=task.optJSONObject("evidence"),question=evidence==null?null:evidence.optJSONObject("ownerQuestion");
+            if(question==null||!task.getString("runId").equals(accepted.getString("runId"))||task.getInt("coordinatorEpoch")!=accepted.getInt("coordinatorEpoch")||!question.optString("requestId").equals(accepted.getString("requestId"))||!question.optString("replyMessageId").equals(accepted.getString("messageId"))||!Boolean.TRUE.equals(question.opt("replyConsumed"))){db.setTransactionSuccessful();return accepted;}
+            String state=requested,run=task.getString("runId");JSONObject permission=grant(run),scope=task.optJSONObject("executionScope");
+            try{if(TaskExecutionScope.effectiveDeadline(scope)<=System.currentTimeMillis()||permission.getLong("expiresAt")<=System.currentTimeMillis())state="saved_scope_expired";
+                else if(scope.getInt("modelCallLimit")-scope.getInt("modelCallsUsed")-deviceTasks.heldBudget(task.getString("id"),run,true)<1||scope.getInt("toolLimit")-scope.getInt("toolsUsed")-deviceTasks.heldBudget(task.getString("id"),run,false)<1||permission.getInt("remainingOperations")<1)state="saved_budget_exhausted";
+                else if(!scope.getString("taskId").equals(task.getString("id"))||permission.optLong("executionScopeRevision")!=scope.getLong("revision"))state="saved_original_authority_changed";
+            }catch(Exception scopeUnknown){state="saved_scope_unavailable";}
+            if(!state.matches("saved_scope_.*|saved_budget_exhausted|saved_original_authority_changed"))try{
+                JSONObject row=null;JSONArray rows=task.getJSONArray("ownerInputs");for(int i=0;i<rows.length();i++)if(accepted.getString("messageId").equals(rows.getJSONObject(i).optString("messageId")))row=rows.getJSONObject(i);
+                if(row==null)throw new SecurityException("原回答不可核对");conversationRepository.requireQueuedOwnerMessageCurrent(task.getString("conversationId"),row);
+                dev.pocketengine.features.memory.TaskStoreMemoryQuery.requireOutputContext(db,outputSources,task.getString("id"),run);dev.pocketengine.features.memory.TaskStoreMemoryQuery.requireOwnerSourceContinuation(db,conversationRepository,task.getString("id"),run,task.getString("conversationId"));
+            }catch(Exception sourceUnknown){state="saved_source_unavailable";}
+            String action=state.matches("saved_scope_.*|saved_budget_exhausted|saved_original_authority_changed")?"review_execution_scope":state.matches("saved_source_.*")?"review_original_sources":"open_original_conversation";
+            task.put("ownerQuestionReplyState",new JSONObject().put("format","pocketworld.owner-question-reply-state.v1").put("runId",run).put("epoch",task.getInt("coordinatorEpoch")).put("requestId",question.getString("requestId")).put("messageId",accepted.getString("messageId")).put("state",state).put("ownerAction",action).put("observedAt",System.currentTimeMillis()).put("executionAuthorized",false));write(task);
+            db.setTransactionSuccessful();return new JSONObject(accepted.toString()).put("continuationState",state).put("ownerAction",action);
+        }finally{db.endTransaction();}
+    }
+
     /** Short native notification claim. It opens only an original record, never executes an action. */
     public static final class OwnerTaskNotice {
         private final TaskStore issuer;private final String snapshot;
@@ -997,6 +1095,13 @@ public final class TaskStore {
         if(!Set.of("posting","posted","permission_required","unconfirmed","obsolete").contains(phase)||claim==null||claim.issuer!=this)throw new SecurityException("通知状态没有原生来源");
         JSONObject view=claim.view(),task=required(view.getString("taskId")),prior=task.optJSONObject("ownerNotification");if(prior==null||!view.getString("token").equals(prior.optString("token")))return;
         if("opened".equals(prior.optString("phase"))&&!phase.equals("obsolete"))return;if(!ownerTaskNoticeCurrent(claim))return;prior.put("phase",phase).put("lastObservedAt",System.currentTimeMillis()).put("deliveryConfirmed",false);task.put("ownerNotification",prior);write(task);
+    }
+    /** Cancel only this exact original notice run. No old button can stop its replacement. */
+    public synchronized JSONObject requestOwnerTaskNoticeStop(String id,String run,int epoch,String token)throws Exception {
+        db.beginTransaction();try{JSONObject task=required(id);requirePrivateOwner(task);JSONObject notice=task.optJSONObject("ownerNotification"),current=settledOwnerNotice(task);
+            if(notice==null||current==null||token==null||!token.equals(notice.optString("token"))||!token.equals(current.optString("token"))||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")||!run.equals(notice.optString("runId"))||epoch!=notice.optInt("epoch")||!task.optString("status").matches("awaiting_user|waiting_approval|awaiting_approval|reconciling|interrupted"))throw new SecurityException("原通知已变化；只可查看原任务");
+            requestCancel(id,null);endAttempt(id,run,"cancelled","主人已停止原等待任务；已发生的动作与未知回执保留",task.optJSONObject("evidence")==null?new JSONObject():task.getJSONObject("evidence"));db.setTransactionSuccessful();return new JSONObject().put("accepted",true).put("taskId",id).put("runId",run).put("epoch",epoch).put("newGrant",false).put("effectsReversed",false);
+        }finally{db.endTransaction();}
     }
     /** Native Activity navigation only. Old notices cannot clear a replacement notice or grant continuation. */
     public synchronized JSONObject openOwnerTaskNotice(String id,String run,int epoch,String token)throws Exception{
@@ -2676,6 +2781,14 @@ public final class TaskStore {
         return prepareHarnessConfigOperation(id,source,request,target,restoreOf,null);
     }
     public synchronized JSONObject prepareHarnessConfigOperation(String id,JSONObject source,JSONObject request,JSONObject target,String restoreOf,HarnessGatewayConfiguration configuration)throws Exception {
+        return prepareHarnessConfigOperation(id,source,request,target,restoreOf,configuration,null);
+    }
+    public synchronized JSONObject prepareHarnessConfigOperation(String id,JSONObject source,JSONObject request,JSONObject target,String restoreOf,HarnessGatewayConfiguration configuration,dev.pocketengine.features.controlplane.NativeWorkProfileHost.HarnessReferences references)throws Exception {
+        if(restoreOf!=null&&harnessConfigOperation(id,restoreOf).getJSONObject("request").has("referenceAssets")!=request.has("referenceAssets"))throw new SecurityException("恢复必须保留原文本投射身份，不能省略组件");
+        if(request.has("referenceAssets")){
+            if(restoreOf==null){if(configuration==null||references==null||configuration.owner.store!=this)throw new SecurityException("文本投射只接受原主人的冻结版本原生对象，不接受任意JSON");references.requireSqlBinding(this,configuration.owner.view());if(!capabilityFingerprint(references.view()).equals(capabilityFingerprint(request.getJSONObject("referenceAssets"))))throw new SecurityException("文本投射不是原生捕获的完整版本");}
+            else if(!capabilityFingerprint(harnessConfigOperation(id,restoreOf).getJSONObject("request").getJSONObject("referenceAssets")).equals(capabilityFingerprint(request.getJSONObject("referenceAssets"))))throw new SecurityException("恢复不能换入另一文本内容或版本");
+        }else if(references!=null)throw new SecurityException("未携带完整文本参考，未静默丢弃");
         if(request.has("gatewayOwnerBinding")&&restoreOf==null){if(configuration==null||configuration.owner.store!=this)throw new SecurityException("双身份配置只接受原SQL同lease发行的原生对象");configuration.checkCurrent();if(!gatewaySelectionDigest(request).equals(capabilityFingerprint(configuration.view())))throw new SecurityException("不是原生配置选择");if(configuration.owner.configurationOperation!=null)throw new SecurityException("同lease已固定另一原配置操作，只查询原编号");}
         JSONObject current=remoteOwnerTarget(id);boolean preparedGateway=configuration!=null&&gatewayContinuationRow(id)!=null&&gatewayContinuationRow(id).getString("state").equals("remote_job_prepared")&&current.optString("executorStatus").equals("native_gateway_prepared");if(!remoteSourceFingerprint(current).equals(remoteSourceFingerprint(source))||!current.optString("executorStatus").matches("completed|failed|cancelled")&&!preparedGateway)throw new SecurityException("原电脑任务尚未结算、不是本轮真实未派发prepared或身份改变，不能审阅配置");
         if(!id.equals(request.optString("taskId"))||!current.getString("runId").equals(request.optString("runId"))||current.getInt("coordinatorEpoch")!=request.optInt("epoch")||!current.getString("environmentId").equals(request.optString("environmentId")))throw new SecurityException("配置请求必须归原task/run/epoch/environment");
@@ -2686,13 +2799,13 @@ public final class TaskStore {
         db.beginTransaction();try{
             try(Cursor pending=db.rawQuery("SELECT operation_id,tool,state,arguments FROM operations WHERE task_id=? AND state IN ('prepared','unknown','remote_job_prepared','remote_job_sending','remote_job_unknown','remote_approval_sending','remote_approval_unknown','remote_question_prepared','remote_question_sending','remote_question_unknown')",new String[]{id})){while(pending.moveToNext())if(!(preparedGateway&&current.getString("runId").equals(pending.getString(0))&&pending.getString(1).equals("remote_job")&&pending.getString(2).equals("remote_job_prepared"))&&(restoreOf==null||!restoreOf.equals(pending.getString(0))||!pending.getString(1).equals("harness_config")))throw new SecurityException("原任务尚有未决动作，只能核对原operationId");}
             if(request.has("gatewayOwnerBinding")&&restoreOf==null)requireGatewayConfigurationRequest(id,request);
-            String operation=UUID.randomUUID().toString();JSONObject exact=new JSONObject(request.toString()).put("operationId",operation),args=new JSONObject().put("source",source).put("request",exact).put("target",target).put("configurationOnly",true).put("executionAuthorized",false).put("nativeDispatchState","PREVIEW_ONLY");if(restoreOf!=null)args.put("restoreOf",restoreOf);
+            String operation=UUID.randomUUID().toString();JSONObject exact=dev.pocketengine.features.remote.NativeHarnessConfigs.storageRequest(request).put("operationId",operation),args=new JSONObject().put("source",source).put("request",exact).put("target",target).put("configurationOnly",true).put("executionAuthorized",false).put("nativeDispatchState","PREVIEW_ONLY");if(restoreOf!=null)args.put("restoreOf",restoreOf);
             insertRemoteOperation(operation,id,current.getString("runId"),"harness_config",args,"prepared");if(configuration!=null){configuration.owner.configurationOperation=operation;configuration.owner.configurationSelectionDigest=gatewaySelectionDigest(request);if(preparedGateway){JSONObject execution=gatewayContinuationRow(id),executionArgs=execution.getJSONObject("arguments");executionArgs.getJSONObject("gatewayStage").put("configurationOperationId",operation);ContentValues link=new ContentValues();link.put("arguments",sanitize(executionArgs).toString());if(db.update("operations",link,"task_id=? AND operation_id=? AND state='remote_job_prepared'",new String[]{id,current.getString("runId")})!=1)throw new SecurityException("本轮prepared已变化");}}db.setTransactionSuccessful();return new JSONObject(args.toString()).put("operationId",operation).put("taskId",id).put("state","prepared");
         }finally{db.endTransaction();}
     }
     /** Freeze the observed plan to its one original prepared operation before showing approval. */
     public synchronized void bindHarnessGatewayConfigurationPlan(HarnessGatewayConfiguration configuration,String operation,JSONObject plan)throws Exception {
-        if(configuration==null||configuration.owner.store!=this)throw new SecurityException("没有同一原生配置owner");configuration.checkCurrent();HarnessGatewayConfigurationOwner owner=configuration.owner;if(!operation.equals(owner.configurationOperation))throw new SecurityException("不能绑定另一配置operation");db.beginTransaction();try{JSONObject row=harnessConfigOperation(owner.child,operation);if(!row.optString("nativeDispatchState").equals("PREVIEW_ONLY")||!row.getString("state").matches("prepared|unknown"))throw new SecurityException("原配置已领取，只查询");dev.pocketengine.features.remote.NativeHarnessConfigs.validatePlan(plan,row);String digest=plan.getString("planDigest");if(owner.configurationPlanDigest!=null&&!owner.configurationPlanDigest.equals(digest))throw new SecurityException("原配置planDigest已冻结");row.put("plan",new JSONObject(plan.toString()));ContentValues values=new ContentValues();values.put("arguments",sanitize(row).toString());if(db.update("operations",values,"task_id=? AND operation_id=? AND tool='harness_config' AND state=?",new String[]{owner.child,operation,row.getString("state")})!=1)throw new SecurityException("原配置状态改变");owner.configurationPlanDigest=digest;db.setTransactionSuccessful();}finally{db.endTransaction();}
+        if(configuration==null||configuration.owner.store!=this)throw new SecurityException("没有同一原生配置owner");configuration.checkCurrent();HarnessGatewayConfigurationOwner owner=configuration.owner;if(!operation.equals(owner.configurationOperation))throw new SecurityException("不能绑定另一配置operation");db.beginTransaction();try{JSONObject row=harnessConfigOperation(owner.child,operation);if(!row.optString("nativeDispatchState").equals("PREVIEW_ONLY")||!row.getString("state").matches("prepared|unknown"))throw new SecurityException("原配置已领取，只查询");dev.pocketengine.features.remote.NativeHarnessConfigs.validatePlan(plan,row);String digest=plan.getString("planDigest");if(owner.configurationPlanDigest!=null&&!owner.configurationPlanDigest.equals(digest))throw new SecurityException("原配置planDigest已冻结");row.put("plan",dev.pocketengine.features.remote.NativeHarnessConfigs.storagePlan(plan));ContentValues values=new ContentValues();values.put("arguments",sanitize(row).toString());if(db.update("operations",values,"task_id=? AND operation_id=? AND tool='harness_config' AND state=?",new String[]{owner.child,operation,row.getString("state")})!=1)throw new SecurityException("原配置状态改变");owner.configurationPlanDigest=digest;db.setTransactionSuccessful();}finally{db.endTransaction();}
     }
     /** Read the immutable original operation, including after page/process loss. Never creates a claim. */
     public synchronized JSONObject harnessConfigOperation(String id,String operation)throws Exception {
@@ -2715,7 +2828,7 @@ public final class TaskStore {
         if(row.getJSONObject("request").has("gatewayOwnerBinding")&&!row.has("restoreOf"))requireGatewayConfigurationRequest(accepted.getString("taskId"),row.getJSONObject("request"));
         dev.pocketengine.features.remote.NativeHarnessConfigs.validatePlan(accepted.getJSONObject("plan"),row);
         if(!row.optString("nativeDispatchState").equals("PREVIEW_ONLY")||!row.getString("state").matches("prepared|unknown")){if(row.optJSONObject("plan")==null||!row.getJSONObject("plan").getString("planDigest").equals(accepted.getJSONObject("plan").getString("planDigest")))throw new SecurityException("原配置操作已绑定另一计划");db.setTransactionSuccessful();return new HarnessConfigClaim(this,approval,row,false);}
-        row.put("plan",accepted.getJSONObject("plan")).put("nativeDispatchState","APPLY_CLAIMED");ContentValues values=new ContentValues();values.put("arguments",sanitize(row).toString());values.put("state","unknown");if(db.update("operations",values,"task_id=? AND operation_id=? AND tool='harness_config' AND state=?",new String[]{accepted.getString("taskId"),accepted.getString("operationId"),row.getString("state")})!=1)throw new SecurityException("原配置操作已被领取");row.put("state","unknown");HarnessConfigClaim claim=new HarnessConfigClaim(this,approval,row,true);HarnessGatewayConfiguration gateway=approval.gatewayConfiguration();if(gateway!=null){if(gateway.owner.store!=this||!row.getString("operationId").equals(gateway.owner.configurationOperation)||!accepted.getJSONObject("plan").getString("planDigest").equals(gateway.owner.configurationPlanDigest))throw new SecurityException("不是本次固定T04原生claim");claim.gatewayOwner=gateway.owner;gateway.owner.configurationClaim=claim;}claimed=claim;db.setTransactionSuccessful();}finally{db.endTransaction();}if(claimed.gatewayOwner!=null)claimed.activeGatewayClaim=true;return claimed;
+        row.put("plan",dev.pocketengine.features.remote.NativeHarnessConfigs.storagePlan(accepted.getJSONObject("plan"))).put("nativeDispatchState","APPLY_CLAIMED");ContentValues values=new ContentValues();values.put("arguments",sanitize(row).toString());values.put("state","unknown");if(db.update("operations",values,"task_id=? AND operation_id=? AND tool='harness_config' AND state=?",new String[]{accepted.getString("taskId"),accepted.getString("operationId"),row.getString("state")})!=1)throw new SecurityException("原配置操作已被领取");row.put("state","unknown");HarnessConfigClaim claim=new HarnessConfigClaim(this,approval,row,true);HarnessGatewayConfiguration gateway=approval.gatewayConfiguration();if(gateway!=null){if(gateway.owner.store!=this||!row.getString("operationId").equals(gateway.owner.configurationOperation)||!accepted.getJSONObject("plan").getString("planDigest").equals(gateway.owner.configurationPlanDigest))throw new SecurityException("不是本次固定T04原生claim");claim.gatewayOwner=gateway.owner;gateway.owner.configurationClaim=claim;}claimed=claim;db.setTransactionSuccessful();}finally{db.endTransaction();}if(claimed.gatewayOwner!=null)claimed.activeGatewayClaim=true;return claimed;
     }
     /** Only exact target receipts settle the original SQL operation; unknown remains query-only. */
     public synchronized void recordHarnessConfigReceipt(dev.pocketengine.features.remote.NativeHarnessConfigs.Observation observation)throws Exception {
@@ -2728,11 +2841,13 @@ public final class TaskStore {
         recordHarnessConfigReceipt(new HarnessConfigClaim(this,null,row,false),observed.getJSONObject("actual"));
     }
     public synchronized void recordHarnessConfigReceipt(HarnessConfigClaim claim,JSONObject actual)throws Exception {
+        actual=dev.pocketengine.features.remote.NativeHarnessConfigs.storageReceipt(actual);
         if(claim==null||claim.issuer!=this)throw new SecurityException("不是原TaskStore配置claim");JSONObject exact=claim.view(),row=harnessConfigOperation(exact.getString("taskId"),exact.getString("operationId")),request=row.getJSONObject("request"),plan=row.getJSONObject("plan");
         if(!exact.getString("operationId").equals(actual.optString("operationId")))throw new SecurityException("配置回执属于另一操作");String state=actual.optString("state");
         if(!state.matches("PREPARED|APPLYING|READBACK_VERIFIED|COMMITTED|CONFLICT|PARTIAL|RECOVERY_REQUIRED|unknown|not_found"))throw new SecurityException("未知配置事务状态");
         if(!state.matches("PREPARED|not_found")){if(!plan.getString("planDigest").equals(actual.optString("planDigest")))throw new SecurityException("配置回执计划digest不同");for(String key:new String[]{"environmentId","environmentBinding","bindingId"})if(!request.get(key).equals(actual.opt(key)))throw new SecurityException("配置回执目标不同");}
         if(actual.optBoolean("runtimeVerified")||state.equals("COMMITTED")&&(!actual.optBoolean("configApplied")||!actual.optBoolean("effectiveReadback")))throw new SecurityException("文件事务不能伪造运行成功或缺真实读回");
+        if(state.equals("COMMITTED")&&request.has("referenceAssets")){JSONObject projection=actual.optJSONObject("referenceProjection");if(projection==null||!projection.optBoolean("effectiveReadback")||projection.optBoolean("scriptsExecutable",true)||projection.optBoolean("permissionsChanged",true)||!dev.pocketengine.features.controlplane.NativeWorkProfileHost.harnessReferenceDigest(request.getJSONObject("referenceAssets")).equals(projection.optString("manifestDigest")))throw new SecurityException("所选完整文本参考没有准确版本读回；不把模型配置成功冒作全部应用");}
         if(row.getString("state").equals("receipt")){JSONObject previous=row.getJSONObject("receipt");if(!canonical(previous).equals(canonical(actual)))throw new SecurityException("原配置回执已固定，不能换成另一结果");return;}
         ContentValues values=new ContentValues();values.put("receipt",sanitize(actual).toString());values.put("state",state.matches("COMMITTED|CONFLICT")?"receipt":"unknown");db.update("operations",values,"task_id=? AND operation_id=? AND tool='harness_config'",new String[]{exact.getString("taskId"),exact.getString("operationId")});
         if(state.equals("COMMITTED")&&row.has("restoreOf")){ContentValues recovered=new ContentValues();recovered.put("state","receipt");db.update("operations",recovered,"task_id=? AND operation_id=? AND tool='harness_config'",new String[]{exact.getString("taskId"),row.getString("restoreOf")});}
@@ -8920,6 +9035,58 @@ public final class TaskStore {
     private boolean hasUnconfirmedForUi(String id){
         // Presentation only: owned-running/stopping are real nonterminal facts, not unknown effects.
         try(Cursor row=db.rawQuery("SELECT 1 FROM operations WHERE task_id=? AND state IN ('prepared','unknown','remote_job_prepared','remote_job_sending','remote_job_unknown','remote_approval_sending','remote_approval_unknown','remote_question_prepared','remote_question_sending','remote_question_unknown') LIMIT 1",new String[]{id})){return row.moveToFirst();}
+    }
+    /** Native owner read selection over the original audit. Its body remains private until
+     * the canonical forget domain and this same SQL source/version fence both accept it. */
+    public static final class ConversationInterruptedRead {
+        private final TaskStore issuer;private final String id,conversation,page;private final JSONArray sources,runs;
+        private ConversationInterruptedRead(TaskStore issuer,String id,String conversation,JSONObject page,JSONArray sources,JSONArray runs){this.issuer=issuer;this.id=id;this.conversation=conversation;this.page=page.toString();this.sources=sources;this.runs=runs;}
+        public JSONArray sources()throws Exception{return new JSONArray(sources.toString());}
+    }
+    public synchronized ConversationInterruptedRead prepareConversationInterruptedRead(String id,String conversation,String cursor)throws Exception {
+        JSONObject task=required(id);requirePrivateOwner(task);
+        if(!"assistant".equals(task.optString("kind"))||task.optJSONObject("origin")!=null||conversation==null||conversation.isBlank()||!conversation.equals(task.optString("conversationId"))||conversationRepository==null||!conversationRepository.exists(conversation))throw new SecurityException("中断片段只能在原私人对话查看");
+        JSONObject page=TaskAuditStore.eventPage(db,id,cursor,24,65536);JSONArray entries=page.getJSONArray("entries"),selected=new JSONArray(),sources=new JSONArray(),runs=new JSONArray();java.util.Set<String> seenRefs=new java.util.HashSet<>(),seenRuns=new java.util.HashSet<>();
+        for(int i=0;i<entries.length();i++){
+            JSONObject entry=entries.getJSONObject(i);if(!"model_attempt_interrupted".equals(entry.optString("type")))continue;
+            JSONObject view=new JSONObject().put("position",entry.get("position")).put("rowRevision",entry.get("rowRevision")).put("type","model_attempt_interrupted");
+            JSONObject event=entry.optJSONObject("event"),receipt=event==null?null:event.optJSONObject("receipt");
+            try{
+                if(!"available".equals(entry.optString("status"))||receipt==null||!Boolean.TRUE.equals(receipt.opt("provisional"))||!Boolean.FALSE.equals(receipt.opt("attemptCompleted")))throw new SecurityException("片段原件不可核对");
+                String call=receipt.getString("callId");
+                try(Cursor original=db.rawQuery("SELECT body_bytes FROM task_events WHERE task_id=? AND event_type='inference_receipt' AND call_id=?",new String[]{id,call})){if(!original.moveToFirst()||original.getLong(0)<0||original.getLong(0)>32768||original.moveToNext())throw new SecurityException("片段缺少唯一有界原模型调用");}
+                JSONObject nativeCall=TaskAuditStore.call(db,id,call),context=nativeCall==null?null:nativeCall.optJSONObject("context");
+                if(context==null||!id.equals(context.optString("taskId")))throw new SecurityException("片段缺原模型身份");String run=context.getString("runId");int epoch=context.getInt("epoch");
+                if(!run.matches("[a-fA-F0-9-]{36}")||epoch<1||event.has("runId")&&!run.equals(event.optString("runId"))||event.has("coordinatorEpoch")&&epoch!=event.optInt("coordinatorEpoch"))throw new SecurityException("片段的原执行身份不一致");
+                JSONArray refs=interruptedRunUserSources(task,run,epoch);if(refs.length()==0)throw new SecurityException("旧片段没有原用户输入纳入证明");
+                for(int j=0;j<refs.length();j++){JSONObject ref=refs.getJSONObject(j);if(seenRefs.add(capabilityFingerprint(ref)))sources.put(ref);}
+                if(sources.length()>64)throw new SecurityException("片段来源超出有界窗口");if(seenRuns.add(run+":"+epoch))runs.put(new JSONObject().put("runId",run).put("epoch",epoch).put("sources",refs));
+                JSONObject safe=new JSONObject();for(String key:new String[]{"callId","offset","text","displayPrefixLimit","provisional","attemptCompleted"})if(receipt.has(key))safe.put(key,receipt.get(key));
+                view.put("status","available").put("event",new JSONObject().put("type","model_attempt_interrupted").put("runId",run).put("coordinatorEpoch",epoch).put("receipt",safe));
+            }catch(SecurityException|IllegalArgumentException|org.json.JSONException unproven){view.put("status","source_unavailable").put("reason","original_call_or_user_source_unproven");}
+            selected.put(view);
+        }
+        page.put("entries",selected).put("conversationId",conversation).put("sourceCurrentReadRequired",true).put("assistantAnswer",false);
+        return new ConversationInterruptedRead(this,id,conversation,page,sources,runs);
+    }
+    private JSONArray interruptedRunUserSources(JSONObject task,String run,int epoch)throws Exception {
+        JSONArray rows=task.optJSONArray("ownerInputs"),refs=new JSONArray();java.util.Set<String> ids=new java.util.HashSet<>();
+        if(rows==null||rows.length()>64)return refs;
+        for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!run.equals(row.optString("materializedRunId")))continue;
+            if(!task.getString("id").equals(row.optString("acceptedTaskId"))||epoch!=row.optInt("materializedEpoch",-1)||!"materialized".equals(row.optString("queueState")))throw new SecurityException("原输入已撤回或换代");
+            String message=row.getString("messageId");long revision=TaskExecutionScope.exactLong(row,"ownerMessageRevision",1,Long.MAX_VALUE);if(!ids.add(message))throw new SecurityException("原输入不唯一");
+            refs.put(new dev.pocketengine.features.memory.SourceRef("message",message,revision,"owner","private").toJson());
+        }return refs;
+    }
+    /** Called only inside MemorySourceBridge.withCurrentUserSources; this grants no effects,
+     * uses no model/helper IO, and does not reopen a run or rewrite an original audit row. */
+    public synchronized JSONObject readConversationInterrupted(ConversationInterruptedRead selected)throws Exception {
+        if(selected==null||selected.issuer!=this)throw new SecurityException("片段读取没有原生选择");db.beginTransaction();try{
+            JSONObject task=required(selected.id);requirePrivateOwner(task);if(task.optJSONObject("origin")!=null||!selected.conversation.equals(task.optString("conversationId"))||!conversationRepository.exists(selected.conversation))throw new SecurityException("原对话已变化");
+            for(int i=0;i<selected.runs.length();i++){JSONObject run=selected.runs.getJSONObject(i);JSONArray actual=interruptedRunUserSources(task,run.getString("runId"),run.getInt("epoch"));if(!capabilityFingerprint(new JSONObject().put("refs",actual)).equals(capabilityFingerprint(new JSONObject().put("refs",run.getJSONArray("sources")))))throw new SecurityException("片段原输入已变化");requireScheduleProposalSources(selected.id,run.getString("runId"),run.getInt("epoch"),selected.conversation,actual);}
+            JSONObject page=new JSONObject(selected.page);JSONArray entries=page.getJSONArray("entries");for(int i=0;i<entries.length();i++){JSONObject row=entries.getJSONObject(i);try(Cursor current=db.rawQuery("SELECT row_revision FROM task_events WHERE task_id=? AND event_order=? AND event_type='model_attempt_interrupted'",new String[]{selected.id,Long.toString(row.getLong("position"))})){if(!current.moveToFirst()||row.getLong("rowRevision")!=current.getLong(0))throw new SecurityException("片段原审计已变化");}}
+            db.setTransactionSuccessful();return page;
+        }finally{db.endTransaction();}
     }
     public synchronized JSONObject taskHistoryPage(String id,String section,String cursor,int limit,int maxBytes)throws Exception{
         try(Cursor row=db.rawQuery("SELECT 1 FROM tasks WHERE task_id=?",new String[]{id})){if(!row.moveToFirst())throw new IllegalArgumentException("原任务不存在");}if("events".equals(section))return TaskAuditStore.eventPage(db,id,cursor,limit,maxBytes);if("operations".equals(section))return TaskAuditStore.operationPage(db,id,cursor,limit,maxBytes);throw new IllegalArgumentException("未知原历史范围");

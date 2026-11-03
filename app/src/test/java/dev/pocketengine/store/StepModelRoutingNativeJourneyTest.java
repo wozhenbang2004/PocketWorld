@@ -69,7 +69,7 @@ public final class StepModelRoutingNativeJourneyTest {
         JSONObject profile=settings.saveApiConnection("",0,"Synthetic route",new JSONObject().put("baseUrl","http://127.0.0.1:"+server.getAddress().getPort()+"/v1")
                 .put("provider","openai_chat").put("model","main").put("apiKey","fixture-private-key").put("sendScreenshots",false).put("maxSteps",8));
         settings.selectApiConnection(profile.getString("id"),profile.getLong("revision"));
-        ModelBinding binding=ModelBinding.fromJson(models.configure(null,ModelBinding.Format.OPENAI,null).getJSONObject("binding"));
+        ModelBinding binding=ModelBinding.fromJson(models.configure(null,ModelBinding.Format.OPENAI,java.net.URI.create(settings.apiConfigForCatalog().baseUrl+"/models")).getJSONObject("binding"));
         for(String model:List.of("main","light")){
             models.editField(binding,model,0,ModelFacts.Field.TOOL_CALLS,ModelFacts.OwnerValue.known(true),false);
             models.editField(binding,model,1,ModelFacts.Field.CHAT_OUTPUT_PARAMETER,ModelFacts.OwnerValue.known(ModelFacts.ChatOutputParameter.MAX_TOKENS),false);

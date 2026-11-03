@@ -14,6 +14,7 @@ public final class NativeHarnessGatewayOwner {
     public interface Access {
         JSONObject view()throws Exception;
         void checkCurrent()throws Exception;
+        default dev.pocketengine.features.controlplane.NativeWorkProfileHost.HarnessReferences referenceAssets()throws Exception{return null;}
         JSONObject start(Approval approval)throws Exception;
     }
     public interface ParentAccess {
@@ -134,11 +135,12 @@ public final class NativeHarnessGatewayOwner {
     /** Source recheck stays outside TaskStore's SQL/approval callbacks. This object cannot
      * issue a config claim; it only tightens the existing plan's original live source. */
     public final class ConfigurationSource {
-        private final Page page;private final Access access;private final String lease;private final TaskStore.HarnessGatewayConfiguration configuration;private final String profile;
-        private ConfigurationSource(Page page,String lease,TaskStore.HarnessGatewayConfiguration configuration)throws Exception {this.page=page;this.access=page.access;this.lease=lease;this.configuration=configuration;JSONObject model=access.view();JSONObject source=model.optJSONObject("workProfileRelaySource");profile=source==null?null:source.toString();}
+        private final Page page;private final Access access;private final String lease;private final TaskStore.HarnessGatewayConfiguration configuration;private final String profile;private final dev.pocketengine.features.controlplane.NativeWorkProfileHost.HarnessReferences references;
+        private ConfigurationSource(Page page,String lease,TaskStore.HarnessGatewayConfiguration configuration)throws Exception {this.page=page;this.access=page.access;this.lease=lease;this.configuration=configuration;JSONObject model=access.view();JSONObject source=model.optJSONObject("workProfileRelaySource");references=access.referenceAssets();if(source==null&&references!=null){JSONObject manifest=references.view();source=new JSONObject().put("profileId",manifest.getString("profileId")).put("profileRevision",manifest.getLong("profileRevision")).put("resolutionDigest",manifest.getString("resolutionDigest")).put("sourceKind","frozen_original_work_profile_references").put("configurationApplied",false);}profile=source==null?null:source.toString();}
         public TaskStore.HarnessGatewayConfiguration configuration(){return configuration;}
         public JSONObject profileView()throws Exception{return profile==null?null:new JSONObject(profile);}
-        public void checkCurrent()throws Exception {current(page);if(page.access!=access)throw new SecurityException("原配置来源审阅已被替换");access.checkCurrent();original(page,lease,false);configuration.checkCurrent();}
+        public dev.pocketengine.features.controlplane.NativeWorkProfileHost.HarnessReferences referenceAssets(){return references;}
+        public void checkCurrent()throws Exception {current(page);if(page.access!=access)throw new SecurityException("原配置来源审阅已被替换");access.checkCurrent();if(references!=null)references.checkCurrent();original(page,lease,false);configuration.checkCurrent();}
     }
     public ConfigurationSource configurationSource(Page page,JSONObject input)throws Exception {var configuration=configuration(page,input);if(page.access==null){page.access=host.capture(page.parent.getString("parentTaskId"),page.parent.getString("parentRunId"),page.task);page.access.checkCurrent();}ConfigurationSource source=new ConfigurationSource(page,input.getString("leaseId"),configuration);source.checkCurrent();return source;}
     private static boolean forChild(JSONObject value,String child){return value!=null&&value.optJSONObject("configurationOwner")!=null&&child.equals(value.optJSONObject("configurationOwner").optString("taskId"));}

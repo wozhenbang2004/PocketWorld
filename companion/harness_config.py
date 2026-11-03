@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 
 from workspace_files import FileError
 from platform_backend import PlatformError
+import harness_reference_assets as reference_assets
 
 ADAPTER = "pocketworld-config-1"
 SUPPORTED = {"codex": ("0.164.0-alpha.11", "codex-config-v1", "config.toml", "CODEX_HOME", "codex_app_server"),
@@ -470,7 +471,8 @@ class HarnessConfigs:
                     "capabilities": {"detected": True, "configReadable": readable, "configWritable": readable and known and bool(env.get("writeAllowed")),
                                      "protocolVerified": False, "modelInferenceVerified": False, "toolRoundTripVerified": False,
                                      "runtimeDriverSupported": target["family"] in {"codex", "claude"}, "approvalBridgeVerified": False,
-                                     "resumeVerified": False, "cancelVerified": False, "assetProjection": False},
+                                     "resumeVerified": False, "cancelVerified": False, "assetProjection": readable and known and bool(env.get("writeAllowed")) and self.windows_storage is None,
+                                     "assetProjectionMode": "reference_text_only_no_hooks_or_execution", "assetRuntimeVerified": False},
                     "writeConsistency": "OPTIMISTIC", "effectiveReadback": False, "runtimeVerified": False}
 
     @staticmethod
@@ -523,6 +525,8 @@ class HarnessConfigs:
         allowed = {"operationId", "bindingId", "environmentId", "environmentBinding", "identityDigest", "profileDigest", "endpointLeaseRef", "taskId", "runId", "epoch", "model"}
         if "gatewayOwnerBinding" in request:
             allowed.add("gatewayOwnerBinding")
+        if "referenceAssets" in request:
+            allowed.add("referenceAssets")
         if set(request) != allowed:
             raise ConfigError("Plan accepts exact native references, not paths, credentials, arbitrary fields or execution grants", 400)
         with self.manager.lock:
@@ -574,6 +578,12 @@ class HarnessConfigs:
             plan["replacesOperation"] = ownership[0] if ownership else None
             plan["restoreBefore"] = previous.get("restoreBefore", previous["before"]) if previous else copy.deepcopy(before)
             plan["restoreBeforeRaw"] = previous.get("restoreBeforeRaw", previous["beforeRaw"]) if previous else raw
+            if "referenceAssets" in request:
+                files, metadata, conflicts = reference_assets.preview(self, target, request["referenceAssets"], previous)
+                plan.update(referenceFiles=files, referenceMetadata=metadata, referenceAssetsDigest=reference_assets.manifest_digest(request["referenceAssets"]))
+                plan["conflicts"].extend(conflicts)
+            elif previous and previous.get("referenceFiles"):
+                raise ConfigError("A previous managed reference selection is still installed; explicitly restore it before a model-only configuration")
             return self._save_plan(plan)
 
     def _save_plan(self, plan):
@@ -587,6 +597,8 @@ class HarnessConfigs:
             if self.db.execute("SELECT 1 FROM " + table + " WHERE operation_id=?", (plan["operationId"],)).fetchone():
                 raise ConfigError("Original operationId belongs to another operation kind")
         plan["planDigest"] = digest(plan)
+        if len(encoded(self._public_plan(plan)).encode("utf-8")) > 262144:
+            raise ConfigError("Complete configuration/content diff exceeds 256 KiB; explicitly reduce selection, no truncated preview", 413)
         self.db.execute("INSERT INTO harness_plans VALUES (?,?,?,?)", (plan["planId"], plan["operationId"], plan["planDigest"], encoded(plan)))
         self.db.commit()
         return self._public_plan(plan)
@@ -602,10 +614,11 @@ class HarnessConfigs:
                 "environmentId": plan["target"]["environmentId"], "bindingId": plan["target"]["bindingId"], "expectedFileDigest": self._file_digest(plan["beforeRaw"]),
                 "profileDigest": plan["request"]["profileDigest"], "endpointLeaseRef": plan["request"]["endpointLeaseRef"], "credentialRefType": "GATEWAY_ACCESS",
                 "filePlans": [{"pathRef": SUPPORTED[plan["identity"]["family"]][2], "operations": [{"kind": "remove_field" if value == ABSENT else "set_field", "field": key,
-                               "before": masked(key, plan["before"][key]), "after": masked(key, plan["after"][key])} for key in sorted(plan["after"]) for value in [plan["after"][key]]]}],
+                               "before": masked(key, plan["before"][key]), "after": masked(key, plan["after"][key])} for key in sorted(plan["after"]) for value in [plan["after"][key]]]}] + reference_assets.public_files(plan.get("referenceFiles", [])),
                 "scopeDelta": {"scope": plan["identity"]["scope"], "configRoot": plan["target"]["root"], "executionAuthorized": False},
                 "gatewayScope": plan["gatewayScope"],
                 **({"gatewayOwnerBinding": plan["request"]["gatewayOwnerBinding"]} if "gatewayOwnerBinding" in plan["request"] else {}),
+                **({"referenceAssetsDigest": plan["referenceAssetsDigest"], "referenceSources": plan["referenceMetadata"], "referenceProjectionMode": "literal_text_no_hooks_no_execution", "assetRuntimeVerified": False} if "referenceAssetsDigest" in plan else {}),
                 "authRestoreGroups": [{"name": "effective_authentication", "fields": group} for group in plan["authGroups"]],
                 "expiresAt": plan["expiresAt"], "restoreOf": plan["restoreOf"], "conflicts": plan["conflicts"], "writeConsistency": "OPTIMISTIC",
                 "runtimeVerified": False, "nextSessionRequired": True}
@@ -636,6 +649,24 @@ class HarnessConfigs:
                    "environmentId": plan["target"]["environmentId"], "environmentBinding": plan["identity"]["environmentBinding"], "bindingId": plan["target"]["bindingId"],
                    "configApplied": False, "effectiveReadback": False, "runtimeVerified": False, "nextSessionRequired": True, "writeConsistency": "OPTIMISTIC",
                    "files": [{"pathRef": SUPPORTED[plan["identity"]["family"]][2], "state": state}], **values}
+        if "referenceAssetsDigest" in plan:
+            observed, complete = [], True
+            for item in plan["referenceFiles"]:
+                try:
+                    actual = reference_assets.read(self, plan["target"], item["pathRef"])
+                    matched = actual == item["afterRaw"]
+                    observed.append({"pathRef": item["pathRef"], "matchesPlan": matched, "actualDigest": self._file_digest(actual), "state": "READBACK_VERIFIED" if matched else "UNCONFIRMED"})
+                    complete = complete and matched
+                except (OSError, FileError, UnicodeError):
+                    observed.append({"pathRef": item["pathRef"], "matchesPlan": False, "state": "UNCONFIRMED"})
+                    complete = False
+            receipt["files"].extend(observed)
+            receipt["referenceProjection"] = {"manifestDigest": plan["referenceAssetsDigest"], "effectiveReadback": complete,
+                "sources": plan["referenceMetadata"], "scriptsExecutable": False, "permissionsChanged": False,
+                "runtimeVerified": False, "referenceOnly": True, "applied": state == "COMMITTED" and complete and plan["restoreOf"] is None,
+                "restored": state == "COMMITTED" and complete and plan["restoreOf"] is not None}
+            if state == "COMMITTED" and not complete:
+                receipt.update(state="RECOVERY_REQUIRED", configApplied=False, effectiveReadback=False, unknown=True)
         self.db.execute("INSERT OR REPLACE INTO harness_receipts VALUES (?,?,?)", (plan["operationId"], plan["planDigest"], encoded(receipt)))
         self.db.commit()
         return receipt
@@ -679,6 +710,8 @@ class HarnessConfigs:
                     raise ConfigError("CONFIG_ROOT_IN_USE: an environment alias owns this physical root")
             if self._read(target) != plan["beforeRaw"]:
                 return self._receipt(plan, "CONFLICT", drifted=True)
+            if any(reference_assets.read(self, target, item["pathRef"]) != item["beforeRaw"] for item in plan.get("referenceFiles", [])):
+                return self._receipt(plan, "CONFLICT", drifted=True)
             if not held and plan["restoreOf"] and plan.get("restoreResourceKey") != target["resourceKey"]:
                 changed = self.db.execute("UPDATE harness_root_leases SET resource_key=?,state='HELD' WHERE resource_key=? AND operation_id=? AND job_id IS NULL AND state='CONFIGURED'", (target["resourceKey"], plan["restoreResourceKey"], plan["restoreOf"])).rowcount
                 if changed != 1:
@@ -694,8 +727,21 @@ class HarnessConfigs:
             self._receipt(plan, "PREPARED")
             self._receipt(plan, "APPLYING")
             try:
-                native_storage = (self._replace(target, plan["beforeRaw"], plan["afterRaw"], plan=plan) if self.windows_storage is not None
-                                  else self._replace(target, plan["beforeRaw"], plan["afterRaw"]))
+                for item in sorted(plan.get("referenceFiles", []), key=lambda value: value["index"]):
+                    if self.manager.closed or self.manager.now() >= plan["expiresAt"] or not self._same_identity_now(target, plan["identity"]):
+                        raise ConfigError("Original reference transaction identity/deadline changed")
+                    if plan["restoreOf"] is None:
+                        self._lease(plan["request"], target)
+                    reference_assets.replace(self, target, item)
+                if plan.get("referenceFiles"):
+                    if self.manager.closed or self.manager.now() >= plan["expiresAt"] or not self._same_identity_now(target, plan["identity"]):
+                        raise ConfigError("Original reference transaction changed before configuration replacement")
+                    if plan["restoreOf"] is None:
+                        self._lease(plan["request"], target)
+                native_storage = None
+                if plan["beforeRaw"] != plan["afterRaw"]:
+                    native_storage = (self._replace(target, plan["beforeRaw"], plan["afterRaw"], plan=plan) if self.windows_storage is not None
+                                      else self._replace(target, plan["beforeRaw"], plan["afterRaw"]))
                 native_facts = {"nativeStorage": native_storage} if native_storage is not None else {}
                 if native_storage is not None and native_storage.get("verified") is not True:
                     return self._receipt(plan, "RECOVERY_REQUIRED", unknown=True, **native_facts)
@@ -707,8 +753,12 @@ class HarnessConfigs:
                 editor = self._editor(target["family"], actual)
                 if any(editor.get(key) != value for key, value in plan["after"].items()):
                     return self._receipt(plan, "RECOVERY_REQUIRED", unknown=True, **native_facts)
+                if not reference_assets.readback(self, target, plan.get("referenceFiles", [])):
+                    return self._receipt(plan, "RECOVERY_REQUIRED", drifted=True, unknown=True, **native_facts)
                 self._receipt(plan, "READBACK_VERIFIED", configApplied=True, effectiveReadback=True, actualFileDigest=self._file_digest(actual), **native_facts)
                 receipt = self._receipt(plan, "COMMITTED", configApplied=True, effectiveReadback=True, actualFileDigest=self._file_digest(actual), restored=plan["restoreOf"] is not None, **native_facts)
+                if receipt["state"] != "COMMITTED":
+                    return receipt
                 if plan["restoreOf"]:
                     self.db.execute("DELETE FROM harness_root_leases WHERE resource_key=? AND operation_id=?", (target["resourceKey"], plan["restoreOf"]))
                 else:
@@ -785,7 +835,11 @@ class HarnessConfigs:
             raw = self._read(target)
             editor = self._editor(target["family"], raw)
             conflicts, changes, grouped = [], {}, set()
-            for group in original["authGroups"]:
+            # A partial reference write can fail before the config replacement. An
+            # exact original before-image already on disk is a no-op, not revival
+            # of an old authentication value or permission to replay the apply.
+            already_original = bool(original.get("referenceFiles")) and raw == original.get("restoreBeforeRaw", original["beforeRaw"])
+            for group in ([] if already_original else original["authGroups"]):
                 grouped.update(group)
                 block_drift = target["family"] == "codex" and editor.provider_block() != self._editor("codex", original["afterRaw"]).provider_block()
                 if block_drift or any(editor.get(key) != original["after"][key] for key in group):
@@ -794,7 +848,7 @@ class HarnessConfigs:
                     conflicts.append({"group": "effective_authentication", "fields": group, "reason": "restoration would revive a managed/expired credential"})
                 else:
                     changes.update({key: original.get("restoreBefore", original["before"])[key] for key in group})
-            for key in original["after"]:
+            for key in ([] if already_original else original["after"]):
                 if key not in grouped:
                     if editor.get(key) == original["after"][key]:
                         changes[key] = original.get("restoreBefore", original["before"])[key]
@@ -815,6 +869,9 @@ class HarnessConfigs:
             plan = {**original, "planId": uuid.uuid4().hex, "operationId": identifier(request["operationId"]), "requestFingerprint": digest(request), "identity": identity,
                     "target": target, "beforeRaw": raw, "afterRaw": after, "before": {key: editor.get(key) for key in changes}, "after": changes,
                     "expiresAt": self.manager.now() + 300000, "restoreOf": operation, "restoreResourceKey": original["target"]["resourceKey"], "conflicts": conflicts}
+            if original.get("referenceFiles"):
+                plan["referenceFiles"], reference_conflicts = reference_assets.restoration(self, target, original)
+                plan["conflicts"].extend(reference_conflicts)
             plan.pop("planDigest", None)
             return self._save_plan(plan)
 
@@ -890,7 +947,7 @@ class HarnessConfigs:
         held = self.db.execute("SELECT operation_id,job_id FROM harness_root_leases WHERE resource_key=?", (target["resourceKey"],)).fetchone()
         if held is None or held[0] != operation or held[1] not in {None, job["id"]}:
             raise ConfigError("CONFIG_ROOT_IN_USE: original root is already bound to another job")
-        if not self._same_identity_now(target, plan["identity"]) or self._read(target) != plan["afterRaw"]:
+        if not self._same_identity_now(target, plan["identity"]) or self._read(target) != plan["afterRaw"] or not self._references_current(target, plan):
             self._receipt(plan, "RECOVERY_REQUIRED", drifted=True)
             raise ConfigError("Harness identity/config drifted; managed dispatch blocked")
         for resource, operation_id, state in self.db.execute("SELECT resource_key,operation_id,state FROM harness_root_leases WHERE resource_key!=?", (target["resourceKey"],)).fetchall():
@@ -939,11 +996,21 @@ class HarnessConfigs:
         try:
             _, target = self._target(plan["request"])
             self._lease(plan["request"], target)
-            if self._read(target) != plan["afterRaw"]:
+            if self._read(target) != plan["afterRaw"] or not self._references_current(target, plan):
                 self._receipt(plan, "RECOVERY_REQUIRED", drifted=True)
                 return False
             return True
         except (ConfigError, FileError, OSError):
+            return False
+
+    def _references_current(self, target, plan):
+        if not plan.get("referenceFiles"):
+            return True
+        try:
+            if target["family"] == "codex" and reference_assets.read(self, target, "AGENTS.override.md") is not None:
+                return False
+            return reference_assets.readback(self, target, plan["referenceFiles"])
+        except (OSError, FileError, UnicodeError):
             return False
 
     def redact(self, text):
@@ -965,7 +1032,7 @@ class HarnessConfigs:
             if not rows:
                 return {"bindingId": target["bindingId"], "managed": False, "runtimeVerified": False, "effectiveReadback": False}
             plan = json.loads(self.db.execute("SELECT private_plan FROM harness_plans WHERE operation_id=?", (rows[0],)).fetchone()[0])
-            drift = self._read(target) != plan["afterRaw"] or not self._same_identity_now(target, plan["identity"])
+            drift = self._read(target) != plan["afterRaw"] or not self._same_identity_now(target, plan["identity"]) or not self._references_current(target, plan)
             return {"bindingId": target["bindingId"], "operationId": rows[0], "jobId": rows[1], "managed": True, "drifted": drift,
                     "configApplied": self.operation(rows[0])["configApplied"], "effectiveReadback": not drift,
                     "nextSessionRequired": True, "runtimeVerified": False, "writeConsistency": "OPTIMISTIC"}
