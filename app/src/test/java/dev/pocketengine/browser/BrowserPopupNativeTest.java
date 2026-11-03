@@ -35,7 +35,8 @@ public final class BrowserPopupNativeTest {
     @After public void shutdownOriginalApplication()throws Exception {new BrowserTaskActivityTest().shutdownOriginalApplication();}
     private static WebView web(BrowserActivity activity)throws Exception {Field field=BrowserActivity.class.getDeclaredField("web");field.setAccessible(true);return (WebView)field.get(activity);}
     private static WebResourceRequest request(String url,String method,boolean gesture){return new WebResourceRequest(){public Uri getUrl(){return Uri.parse(url);}public boolean isForMainFrame(){return true;}public boolean isRedirect(){return false;}public boolean hasGesture(){return gesture;}public String getMethod(){return method;}public Map<String,String> getRequestHeaders(){return Map.of();}};}
-    private static void choose(int button){android.app.AlertDialog dialog=ShadowAlertDialog.getLatestAlertDialog();assertNotNull(dialog);assertTrue(dialog.isShowing());dialog.getButton(button).performClick();}
+    // AlertController queues the real button listener; drain it before checking its effect.
+    private static void choose(int button){android.app.AlertDialog dialog=ShadowAlertDialog.getLatestAlertDialog();assertNotNull(dialog);assertTrue(dialog.isShowing());dialog.getButton(button).performClick();Shadows.shadowOf(Looper.getMainLooper()).idle();}
     private static WebView popup(WebView opener)throws Exception {
         AtomicReference<WebView> delivered=new AtomicReference<>();Handler handler=new Handler(Looper.getMainLooper(),message->{delivered.set(((WebView.WebViewTransport)message.obj).getWebView());return true;});Message reply=Message.obtain(handler);reply.obj=opener.new WebViewTransport();
         assertTrue(opener.getWebChromeClient().onCreateWindow(opener,false,true,reply));Shadows.shadowOf(Looper.getMainLooper()).idle();assertNotNull(delivered.get());return delivered.get();
