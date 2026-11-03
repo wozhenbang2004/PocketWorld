@@ -1027,7 +1027,12 @@ public final class TaskStore {
             JSONObject task=required(original.taskId()),marker=task.optJSONObject("ownerQuestionContinuation"),evidence=task.optJSONObject("evidence"),question=evidence==null?null:evidence.optJSONObject("ownerQuestion");
             if(!original.runId().equals(task.optString("runId"))||original.epoch()!=task.optInt("coordinatorEpoch")||marker==null||!"claimed".equals(marker.optString("phase"))||!original.runId().equals(marker.optString("runId"))||original.epoch()!=marker.optInt("epoch")||!original.requestId().equals(marker.optString("requestId"))
                     ||question==null||!original.requestId().equals(question.optString("requestId"))||original.waitRevision()!=question.optLong("waitRevision")){db.setTransactionSuccessful();return;}
-            marker.put("phase","unavailable");JSONObject mailbox=ownerMailbox(task,original.runId(),original.epoch());mailbox.put("open",false);if(task.optString("status").matches("preparing|running"))task.put("status",original.originalControl().isCancelled()?"stopping":"awaiting_user");write(task);db.setTransactionSuccessful();
+            marker.put("phase","unavailable");JSONObject mailbox=ownerMailbox(task,original.runId(),original.epoch());mailbox.put("open",false);
+            // This exact claimed continuation stopped before physical dispatch. A later
+            // owner pause is now settled; keep its controller revision and original hold.
+            String status=task.optString("status");RunControl control=original.originalControl();
+            if(status.matches("preparing|running")||"pausing".equals(status)&&(control.isPaused()||control.isCancelled()))task.put("status",control.isCancelled()?"stopping":"awaiting_user");
+            write(task);db.setTransactionSuccessful();
         }finally{db.endTransaction();}
     }
     private JSONObject noteOwnerPhoneQuestionAnswerState(JSONObject accepted,String requested)throws Exception {

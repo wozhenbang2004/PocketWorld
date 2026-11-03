@@ -83,9 +83,25 @@ public final class OwnerQuestionRunnerNativeTest {
     }}
     private static android.app.Notification notice(Fixture f,JSONObject task)throws Exception {
         org.robolectric.Shadows.shadowOf(f.app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS);
-        new dev.pocketengine.features.assistant.notifications.AssistantTaskNotifications(f.app,f.app.tasks).update(task.getString("id"));
-        JSONObject view=f.app.tasks.get(task.getString("id"),false).getJSONObject("ownerNotification");
-        android.app.Notification result=org.robolectric.Shadows.shadowOf(f.app.getSystemService(android.app.NotificationManager.class)).getNotification("assistant-task:"+task.getString("id")+":"+view.getString("token"),1906);assertNotNull(result);return result;
+        JSONObject expected=dev.pocketengine.features.assistant.notifications.TaskNotificationState.candidate(task);assertNotNull(expected);
+        String id=expected.getString("taskId"),run=expected.getString("runId"),token=expected.getString("token");int epoch=expected.getInt("epoch");
+        new dev.pocketengine.features.assistant.notifications.AssistantTaskNotifications(f.app,f.app.tasks).update(id);
+        // The original App worker may already own this token's "posting" claim. This
+        // update then correctly returns without reposting, before that worker notifies.
+        // Observe its actual publication; never retry update or construct a notification.
+        long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(12);android.app.Notification result=null;String phase="absent";
+        do{
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+            JSONObject current=f.app.tasks.get(id,false);assertEquals(run,current.getString("runId"));assertEquals(epoch,current.getInt("coordinatorEpoch"));
+            JSONObject view=current.optJSONObject("ownerNotification");
+            if(view!=null){assertEquals(id,view.getString("taskId"));assertEquals(run,view.getString("runId"));assertEquals(epoch,view.getInt("epoch"));assertEquals(token,view.getString("token"));phase=view.optString("phase");
+                result=org.robolectric.Shadows.shadowOf(f.app.getSystemService(android.app.NotificationManager.class)).getNotification("assistant-task:"+id+":"+token,1906);if(result!=null)break;
+            }
+            Thread.sleep(10);
+        }while(System.nanoTime()<until);
+        assertNotNull("original task notice was not published; phase="+phase,result);assertNotNull(result.contentIntent);
+        android.content.Intent target=org.robolectric.Shadows.shadowOf(result.contentIntent).getSavedIntent();
+        assertEquals(id,target.getStringExtra("taskId"));assertEquals(run,target.getStringExtra("noticeRun"));assertEquals(epoch,target.getIntExtra("noticeEpoch",-1));assertEquals(token,target.getStringExtra("noticeToken"));return result;
     }
     @Test public void actualPostedRemoteInputAnswersOneOrdinaryWaitAndNeverReplaysIt()throws Exception{try(Fixture f=new Fixture()){
         JSONObject ack=f.start(4),waiting=f.waiting(ack.getString("taskId"));String grant=f.grant(waiting.getString("runId"));android.app.Notification posted=notice(f,waiting);
