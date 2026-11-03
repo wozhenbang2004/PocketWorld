@@ -188,20 +188,43 @@ internal fun mergeTaskSummary(incoming: UiTask, previous: UiTask?): UiTask {
     val newerRemoteEpoch = remoteEpoch && incoming.raw.optInt("coordinatorEpoch") > previous.raw.optInt("coordinatorEpoch")
     if (!newerRemoteEpoch && incoming.updatedAt < previous.updatedAt) return previous
     val sameRun = incoming.raw.optString("runId") == previous.raw.optString("runId") && incoming.raw.optInt("coordinatorEpoch") == previous.raw.optInt("coordinatorEpoch")
+    val merged = JSONObject(incoming.raw.toString())
+    val evidence = merged.optJSONObject("evidence")
+    val oldEvidence = previous.raw.optJSONObject("evidence")
+    val resultDigest = merged.optString("resultImageDigest")
+    val imageSha = evidence?.optString("imageSha256") ?: ""
+    val sameResultImage = oldEvidence != null && evidence != null && incoming.id == previous.id && sameRun && merged.optString("taskProjection") == "summary" &&
+        merged.optLong("resultRevision") > 0 && merged.optLong("resultRevision") == previous.raw.optLong("resultRevision") &&
+        resultDigest.matches(Regex("[a-f0-9]{64}")) && resultDigest == previous.raw.optString("resultImageDigest") &&
+        imageSha.matches(Regex("[a-f0-9]{64}")) && imageSha == oldEvidence.optString("imageSha256") &&
+        evidence.optString("imageFile").isNotBlank() && evidence.optString("imageFile") == oldEvidence.optString("imageFile")
+    // A reused filename and wall clock do not identify screenshot bytes or the result they show.
+    // Only a summary of this exact native result may borrow a previously loaded image. A detail
+    // read without bytes may have found a missing/replaced file, so it must not restore the cache.
+    if (evidence != null && evidence.optString("imageDataUrl").isBlank()) {
+        evidence.remove("imageDataUrl")
+        if (sameResultImage && oldEvidence.optString("imageDataUrl").isNotBlank()) {
+            evidence.put("imageDataUrl", oldEvidence.getString("imageDataUrl"))
+        }
+    }
     if (sameRun && incoming.raw.optString("taskProjection") == "summary" && incoming.updatedAt == previous.updatedAt && previous.raw.optString("taskProjection") == "detail_window") {
         val retained = JSONObject(previous.raw.toString())
-        incoming.raw.keys().forEach { key -> if (key !in setOf("events", "taskProjection", "auditBodyIncluded")) retained.put(key, incoming.raw.get(key)) }
+        merged.keys().forEach { key -> if (key !in setOf("events", "taskProjection", "auditBodyIncluded")) retained.put(key, merged.get(key)) }
+        if (sameResultImage) {
+            val retainedEvidence = JSONObject(oldEvidence.toString())
+            evidence.keys().forEach { key -> retainedEvidence.put(key, evidence.get(key)) }
+            retained.put("evidence", retainedEvidence)
+        }
+        if (!merged.has("evidence")) retained.optJSONObject("evidence")?.let {
+            it.remove("imageDataUrl"); it.remove("imageFile"); it.remove("imageSha256")
+        }
+        if (!merged.has("resultImageDigest")) retained.remove("resultImageDigest")
         // The original native version has not advanced. Keep only this already bounded detail
         // window; any newer task state must be re-read, and no retained body authorizes an action.
         return incoming.copy(raw = retained)
     }
-    if (sameRun && !incoming.raw.has("operations") && previous.raw.has("operations")) incoming.raw.put("operations", previous.raw.getJSONArray("operations"))
-    val evidence = incoming.raw.optJSONObject("evidence")
-    val oldEvidence = previous.raw.optJSONObject("evidence")
-    if (evidence != null && oldEvidence != null && oldEvidence.has("imageDataUrl") && evidence.optString("imageFile").isNotBlank() && evidence.optString("imageFile") == oldEvidence.optString("imageFile")) {
-        evidence.put("imageDataUrl", oldEvidence.getString("imageDataUrl"))
-    }
-    return incoming
+    if (sameRun && !merged.has("operations") && previous.raw.has("operations")) merged.put("operations", JSONArray(previous.raw.getJSONArray("operations").toString()))
+    return incoming.copy(raw = merged)
 }
 
 internal fun executionLocation(mode: String): String = when (mode) {
