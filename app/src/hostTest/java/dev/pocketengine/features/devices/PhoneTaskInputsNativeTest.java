@@ -65,6 +65,7 @@ public final class PhoneTaskInputsNativeTest {
     };
     private static final class Fixture implements AutoCloseable {
         final TaskStore tasks;final SQLiteDatabase sql;final DeviceIdentity.AuthenticatedPeer peer;final String target;
+        final TaskStoreDeviceTrust trust;
         final long deadline=System.currentTimeMillis()+300_000;final JSONObject resource=new JSONObject().put("screenMode","capabilities");
         final PairingCoordinator pairing;final DeviceExecutionAdmission admission;final RunControl original=new RunControl();
         final DeviceGoalSession session;volatile DeviceGoalSession current;final DeviceOwnerInputs inputs;final DeviceTaskCoordinator coordinator;
@@ -82,7 +83,7 @@ public final class PhoneTaskInputsNativeTest {
                 .put("capabilities",new JSONArray().put("task.submitGoal").put("task.get").put("task.acquireControl").put("task.answerQuestion").put("task.steer").put("task.respond").put("task.requestResume").put("operation.get"))
                 .put("toolNames",new JSONArray()).put("resources",new JSONArray().put(resource)).put("allowedOrigins",new JSONArray().put(peer.deviceId())).put("allowDelegation",false).put("maxDelegationDepth",0).put("toolBudget",20).put("modelBudget",20);
             ContentValues saved=new ContentValues();saved.put("grant_id","input-grant");saved.put("peer_device_id",peer.deviceId());saved.put("local_device_id",target);saved.put("authorization_epoch",1);saved.put("expires_at",deadline);saved.put("body_json",grant.toString());saved.put("revoked",0);sql.insertOrThrow("device_grants",null,saved);
-            pairing=new PairingCoordinator(new TaskStoreDeviceTrust(sql),target,"input-receiver");
+            trust=tasks.deviceTrust();pairing=new PairingCoordinator(trust,target,"input-receiver");
             http.createContext("/",exchange->{try{
                 bodies.add(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));int call=requests.incrementAndGet();
                 JSONObject message=call==1?new JSONObject().put("role","assistant").put("content",JSONObject.NULL).put("tool_calls",new JSONArray().put(new JSONObject().put("id","native-ask-call").put("type","function").put("function",new JSONObject().put("name","run_ask_user").put("arguments",new JSONObject().put("question","Which exact fixture section?").toString()))))
@@ -174,6 +175,44 @@ public final class PhoneTaskInputsNativeTest {
         String grant()throws Exception{try(Cursor row=sql.rawQuery("SELECT grant_json FROM runs WHERE run_id=?",new String[]{run})){assertTrue(row.moveToFirst());return row.getString(0);}}
         public void close(){original.cancel();inputs.released(task,original);tasks.deviceTasks().release(run,original);http.stop(0);sql.close();}
     }
+    @Test public void originalTrustReadsDoNotInvertNativeSqlTransactionAndFacadeLocks()throws Exception{try(Fixture f=new Fixture(4)){
+        // A single native connection exposes the production lock order. WAL must
+        // not make a waiting reader disappear and accidentally hide the cycle.
+        f.sql.disableWriteAheadLogging();assertFalse(f.sql.isWriteAheadLoggingEnabled());
+        var readers=Executors.newSingleThreadExecutor();var probes=Executors.newSingleThreadExecutor();
+        try{
+            for(String lookup:List.of("peer","grant","outgoing")){
+                var readerThread=new java.util.concurrent.atomic.AtomicReference<Thread>();
+                java.util.concurrent.Future<JSONObject> read=null;java.util.concurrent.Future<Boolean> probe=null;
+                f.sql.beginTransaction();
+                try{
+                    read=readers.submit(()->{readerThread.set(Thread.currentThread());return switch(lookup){case "peer"->f.trust.peer(f.peer.deviceId());case "grant"->f.trust.grant("input-grant");default->f.trust.outgoingGrant(f.peer.deviceId(),"missing-native-grant");};});
+                    long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);boolean waiting=false;
+                    while(System.nanoTime()<end&&!read.isDone()){
+                        Thread reader=readerThread.get();if(reader!=null)for(StackTraceElement frame:reader.getStackTrace())if(frame.getClassName().equals("android.database.sqlite.SQLiteConnectionPool")&&frame.getMethodName().contains("waitForConnection")){waiting=true;break;}
+                        if(waiting)break;Thread.sleep(5);
+                    }
+                    assertTrue("The real trust read must wait for the original native SQL connection",waiting);
+                    // Probe before reentering trust on the transaction thread.
+                    // With the old inverse order this times out, but finally can
+                    // still release SQL and drain both workers without deadlock.
+                    probe=probes.submit(()->{synchronized(f.trust){return true;}});
+                    assertTrue("A SQL-waiting trust read cannot retain its facade monitor",probe.get(2,TimeUnit.SECONDS));
+                    f.admission.checkCurrent();assertEquals(1,f.trust.peer(f.peer.deviceId()).getLong("authorizationEpoch"));assertEquals(1,f.trust.grant("input-grant").getLong("authorizationEpoch"));assertNull(f.trust.outgoingGrant(f.peer.deviceId(),"missing-native-grant"));
+                    f.sql.setTransactionSuccessful();
+                }finally{
+                    f.sql.endTransaction();
+                    if(read!=null){JSONObject result=read.get(5,TimeUnit.SECONDS);if(lookup.equals("outgoing"))assertNull(result);else{assertNotNull(result);assertEquals(1,result.getLong("authorizationEpoch"));assertFalse(result.getBoolean("revoked"));assertEquals(lookup.equals("peer")?f.peer.deviceId():"input-grant",result.getString(lookup.equals("peer")?"deviceId":"grantId"));}}
+                    if(probe!=null)assertTrue(probe.get(5,TimeUnit.SECONDS));
+                }
+            }
+        }finally{
+            readers.shutdown();probes.shutdown();try{assertTrue(readers.awaitTermination(5,TimeUnit.SECONDS));assertTrue(probes.awaitTermination(5,TimeUnit.SECONDS));}finally{readers.shutdownNow();probes.shutdownNow();}
+        }
+        // Keep the original commit-before-network boundary: no test-owned SQL
+        // transaction may surround the actual Runner/model request.
+        RunOutcome waitingForOwner=f.runOriginal();assertEquals(f.diagnostics(waitingForOwner),"awaiting_user",waitingForOwner.status);assertEquals(1,f.requests.get());assertEquals(1,f.count("runs"));assertEquals(1,f.tasks.get(f.task,false).getJSONObject("deviceExecutionScope").getInt("modelCallsUsed"));
+    }}
     @Test public void realQuestionAndSteeringReachOriginalRunnerWithSameRunGrantAndCumulativeBudget()throws Exception{try(Fixture f=new Fixture(4)){
         f.observeResultClosingWindow=true;
         String lease=f.acquire("first-control",null).getString("leaseId"),grant=f.grant();

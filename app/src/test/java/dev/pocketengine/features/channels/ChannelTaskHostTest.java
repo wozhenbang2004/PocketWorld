@@ -29,7 +29,7 @@ public final class ChannelTaskHostTest {
     private static final String SECRET="fixture-relay-authority-at-least-32-bytes";
     // Robolectric has no AndroidKeyStore. This explicit test-only key provider lets the real
     // SecretVault encrypt/decrypt persisted fixture credentials; it proves no device keystore behavior.
-    @Before public void keyFixture(){java.security.Security.addProvider(new java.security.Provider("ChannelTestKeyStore","1","Explicit channel test fixture"){{put("KeyStore.AndroidKeyStore",FixtureKeyStore.class.getName());}});}
+    @Before public void keyFixture(){java.security.Security.addProvider(new java.security.Provider("ChannelTestKeyStore",1.0,"Explicit channel test fixture"){{put("KeyStore.AndroidKeyStore",FixtureKeyStore.class.getName());}});}
     @After public void removeKeyFixture(){java.security.Security.removeProvider("ChannelTestKeyStore");}
     private FeatureContext context(){Context app=RuntimeEnvironment.getApplication();return new FeatureContext(app,new SettingsStore(app),new SecretVault(app),event->{});}
     @Test public void authenticatedOwnerTaskUsesOneHostIdentityAndRealReceiptWithoutDmApproval()throws Exception{

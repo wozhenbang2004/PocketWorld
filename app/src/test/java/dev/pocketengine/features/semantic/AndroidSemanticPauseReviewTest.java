@@ -44,7 +44,8 @@ public final class AndroidSemanticPauseReviewTest {
         RunControl original=new RunControl();original.bindHostRun("original-task","original-run",1);Safety.original=original;Safety.mode=mode;Safety.calls=0;
         PhoneAccessibilityService service=Robolectric.buildService(PhoneAccessibilityService.class).create().get();serviceField().set(null,service);
         SemanticRequest request=SemanticRequest.parse(calendar?SemanticCalendarRequestTest.draft():new JSONObject().put("kind","web").put("url","https://example.org/"));
-        SemanticPlatform.Target target=new SemanticPlatform.Target(new JSONObject().put("component","example.editor/example.editor.Main").put("packageName","example.editor"),"fixture","official_intent");
+        SemanticPlatform.Target target=new SemanticPlatform.Target(new JSONObject().put("component","example.editor/example.editor.Main").put("packageName","example.editor")
+                .put("userId",0).put("profileSerial",RuntimeEnvironment.getApplication().getSystemService(android.os.UserManager.class).getSerialNumberForUser(android.os.Process.myUserHandle())),"fixture","official_intent");
         AndroidSemanticPlatform platform=new AndroidSemanticPlatform(RuntimeEnvironment.getApplication(),service,()->{});
         FutureTask<JSONObject> result=new FutureTask<>(()->platform.dispatch(request,target,original,original::check));Thread worker=new Thread(result,"semantic-pause-review");worker.start();
         long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(4);
