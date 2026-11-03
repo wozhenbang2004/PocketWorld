@@ -1,0 +1,41 @@
+import { createElement, forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import './agent-stepper.js';
+import type { AgentStepper as AgentStepperElement, Step, RunState } from './agent-stepper.js';
+
+export type AgentStepperHandle = Pick<AgentStepperElement, 'play' | 'pause' | 'reset' | 'seek'>;
+export interface AgentStepperProps {
+  steps?: Step[];
+  language?: 'en' | 'zh';
+  autoplay?: boolean;
+  playbackRate?: number;
+  className?: string;
+  onStateChange?: (state: RunState) => void;
+}
+
+/** React adapter for the same Web Component used in the standalone preview. */
+export const AgentStepper = forwardRef<AgentStepperHandle, AgentStepperProps>(
+  function AgentStepper({ steps, language='en', autoplay=false, playbackRate=1, className, onStateChange }, ref) {
+    const element = useRef<AgentStepperElement>(null);
+    useImperativeHandle(ref, () => ({
+      play: () => element.current?.play(),
+      pause: () => element.current?.pause(),
+      reset: options => element.current?.reset(options),
+      seek: seconds => element.current?.seek(seconds),
+    }), []);
+    useEffect(() => { if (element.current && steps) element.current.steps = steps; }, [steps]);
+    useEffect(() => { if (element.current) element.current.playbackRate = playbackRate; }, [playbackRate]);
+    useEffect(() => {
+      const node=element.current;
+      if (!node) return;
+      const handler=(event: Event) => onStateChange?.((event as CustomEvent<RunState>).detail);
+      node.addEventListener('runstatechange',handler);
+      return () => node.removeEventListener('runstatechange',handler);
+    }, [onStateChange]);
+    useEffect(() => {
+      const node=element.current;
+      if (autoplay) node?.play(); else node?.pause();
+      return () => node?.pause();
+    }, [autoplay, steps]);
+    return createElement('agent-stepper', { ref:element, language, className });
+  }
+);

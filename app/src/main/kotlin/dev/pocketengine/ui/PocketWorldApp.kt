@@ -69,7 +69,7 @@ internal val Rounded = RoundedCornerShape(16.dp)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun PocketWorldApp(controller: PocketWorldController) {
+internal fun PocketWorldApp(controller: PocketWorldController, requestWebWorkspace: (((() -> Boolean)) -> Unit)? = null) {
     val state = controller.state
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var settings by rememberSaveable { mutableStateOf(false) }
@@ -85,6 +85,9 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
     LaunchedEffect(controller.conversationOrganizationOwnerVisible) { if (!controller.conversationOrganizationOwnerVisible) { conversationRename = null; conversationRenameBusy = false; conversationManageMessage = null } }
     var projectDialog by rememberSaveable { mutableStateOf(false) }
     var fileDialog by rememberSaveable { mutableStateOf(false) }
+    val chatTaskMemoryReference = remember { mutableStateOf<JSONObject?>(null) }
+    val chatAnswerSources = remember { mutableStateOf<JSONObject?>(null) }
+    val chatAnswerSourceMemory = remember { mutableStateOf<JSONObject?>(null) }
     var phoneDraft by rememberSaveable { mutableStateOf("") }
     var phoneIntent by rememberSaveable { mutableStateOf(false) }
     val privateDraft=controller.composerDraft
@@ -193,6 +196,26 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
                     Text(" / ", fontSize = 14.sp, color = SecondaryInk)
                     Text(listOf("对话", "任务", "项目")[tab], fontSize = 14.sp, color = SecondaryInk)
                     Spacer(Modifier.weight(1f))
+                    fun canLeaveNative(): Boolean {
+                        val latest = controller.state
+                        val openLayer = tab != 0 || settings || connections || teamLaunch || selectedTaskId != null ||
+                            taskMemorySearch || conversationPicker || conversationRename != null ||
+                            chatTaskMemoryReference.value != null || chatAnswerSources.value != null ||
+                            projectDialog || fileDialog || consentGoal != null || suggestedGoal != null ||
+                            latest.teamRunId != null || latest.inspectionTaskId != null || latest.backgroundSetupOpen ||
+                            latest.filePath != null || latest.workspaceArtifactView != null || latest.chatAttachmentPickerOpen ||
+                            controller.notificationPreviewsOpen || controller.attachmentOutcomes.state.open ||
+                            controller.nativeEvaluationOpen || controller.nativeInferenceHistoryOpen ||
+                            controller.conversationReader != null || controller.queuedInputsPage != null
+                        val pendingWork = latest.ownerPending.isNotEmpty() || latest.moduleBusy.isNotEmpty() ||
+                            latest.chatSubmitting || latest.phoneSubmitting || latest.fileSaving || latest.modelSaving ||
+                            latest.modelTesting || latest.agentPreferencesSaving || latest.inspectionBusy ||
+                            latest.exportPending || controller.composerSaving || controller.voicePresentationBusy()
+                        return nativeWorkspaceExitAllowed(openLayer, pendingWork)
+                    }
+                    if (requestWebWorkspace != null && canLeaveNative()) {
+                        TextButton(onClick = { requestWebWorkspace(::canLeaveNative) }) { Text("网页工作台") }
+                    }
                     if(tab == 0) IconButton(onClick = { conversationPicker = true },
                         enabled = controller.composerDraft != null,
                         modifier = Modifier.semantics { contentDescription = "历史对话" }) {
@@ -229,7 +252,7 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
                 when (tab) {
                     0 -> ChatScreen(state, draft, changeDraft, phoneIntent, changePhoneIntent, executionMode, { executionMode = it }, {
                         if(phoneIntent==phoneComposerVisible){if (phoneComposerVisible) consentGoal = draft else if (draft.isNotBlank()) { controller.sendChat(draft,composerKey,composerEpoch) }}
-                    }, controller, { settings = true }, { task -> openTask(task.id) }, { teamLaunch = true }, chatScroll, observedMessage, { observedMessage = it }, newReplies, { newReplies = it }, readingReady, missingReadingAnchor)
+                    }, controller, { settings = true }, { task -> openTask(task.id) }, { teamLaunch = true }, chatScroll, observedMessage, { observedMessage = it }, newReplies, { newReplies = it }, readingReady, missingReadingAnchor, chatTaskMemoryReference, chatAnswerSources, chatAnswerSourceMemory)
                     1 -> TaskAuditList(state, controller, { openTask(it.id) }, { taskMemorySearch = true })
                     2 -> ProjectsScreen(state, controller, { projectDialog = true }, { fileDialog = true })
                 }
@@ -282,14 +305,15 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
 
 @Composable
 private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) -> Unit, phone: Boolean, onPhone: (Boolean) -> Unit, mode: String, onMode: (String) -> Unit, send: () -> Unit, controller: PocketWorldController, settings: () -> Unit, task: (UiTask) -> Unit, collaborate: () -> Unit,
-    scroll: LazyListState, observedMessage: String, observeMessage: (String) -> Unit, newReplies: Boolean, setNewReplies: (Boolean) -> Unit, readingReady:Boolean, missingReadingAnchor:Boolean) {
+    scroll: LazyListState, observedMessage: String, observeMessage: (String) -> Unit, newReplies: Boolean, setNewReplies: (Boolean) -> Unit, readingReady:Boolean, missingReadingAnchor:Boolean,
+    taskMemoryState: MutableState<JSONObject?>, answerSourcesState: MutableState<JSONObject?>, answerSourceMemoryState: MutableState<JSONObject?>) {
     var chatTools by remember { mutableStateOf(false) }
     var composerDetails by remember { mutableStateOf(false) }
     ChatAttachmentChooser(state,controller)
-    var taskMemoryReference by remember { mutableStateOf<JSONObject?>(null) }
+    var taskMemoryReference by taskMemoryState
     taskMemoryReference?.let { TaskMemoryWorkflowSheet(controller, it) { taskMemoryReference = null } }
-    var answerSources by remember { mutableStateOf<JSONObject?>(null) }
-    var answerSourceMemory by remember { mutableStateOf<JSONObject?>(null) }
+    var answerSources by answerSourcesState
+    var answerSourceMemory by answerSourceMemoryState
     answerSources?.let { FinalAnswerSourcesSheet(controller, it, answerSourceMemory) { answerSources = null } }
     val ownerDraft=controller.composerDraft
     val ownerKey=ownerDraft?.key.orEmpty();val ownerEpoch=controller.composerViewEpoch

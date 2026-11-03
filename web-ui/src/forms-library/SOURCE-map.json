@@ -1,0 +1,287 @@
+{
+  "version": 1,
+  "policy": "Actual source reuse; original files retained as non-runtime .source references. No fixture rows or fake persistence are imported into runtime.",
+  "boarduiSource": "ec5c5eb3e29c2441be63b9422cd54f411ef23466 plus 20261101 official free registry additions preserved by independent-overlay SOURCES.md",
+  "files": [
+    {
+      "componentSource": "utils/cx.ts",
+      "archive": "boardui-upstream.zip",
+      "sha256": "4ca0de6224d878d97323fef81ed08a5f80721e208336fc7b79b431d17eb367b4",
+      "adapted": "boardui/utils/cx.ts",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ]
+    },
+    {
+      "componentSource": "components/base/input/label.tsx",
+      "archive": "boardui-upstream.zip",
+      "sha256": "9c8b6c0594352f6ed614a21bbb1c934aeb8c63a7c9faa4e575a24934849d3ef8",
+      "adapted": "boardui/components/base/input/label.tsx",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ]
+    },
+    {
+      "componentSource": "components/base/input/hint-text.tsx",
+      "archive": "independent-overlay.zip",
+      "sha256": "b37d026d5f2bd78536b7e08259a086afdaf171defea7484ecd8ace9b1c254b06",
+      "adapted": "boardui/components/base/input/hint-text.tsx",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ]
+    },
+    {
+      "componentSource": "components/base/input/input.tsx",
+      "archive": "independent-overlay.zip",
+      "sha256": "c24efbd120081cb1e5fd928ce6f220f8134f26f2f93d32f267eb33017198dda3",
+      "adapted": "boardui/components/base/input/input.tsx",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ]
+    },
+    {
+      "componentSource": "components/base/textarea/textarea.tsx",
+      "archive": "boardui-upstream.zip",
+      "sha256": "7916841c3474f0242bd9adb2300eb9fa3f62aefe2aaa7cb4120f7247acf05f14",
+      "adapted": "boardui/components/base/textarea/textarea.tsx",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ]
+    },
+    {
+      "componentSource": "components/base/dropdown/menu-styles.ts",
+      "archive": "independent-overlay.zip",
+      "sha256": "2d911a7d99caf800f1095f9db3c285ce11aa27c362e5dd2fd5919115a9d74b1b",
+      "adapted": "boardui/components/base/dropdown/menu-styles.ts",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ],
+      "officialRegistry": {
+        "snapshot": "vendor/boardui-registry-20261101/combobox.json",
+        "sha256": "2d911a7d99caf800f1095f9db3c285ce11aa27c362e5dd2fd5919115a9d74b1b",
+        "sameAsOverlay": true
+      }
+    },
+    {
+      "componentSource": "components/foundations/icons/chevrons.tsx",
+      "archive": "boardui-upstream.zip",
+      "sha256": "a8f9668905fb2179290133ac187286c4917a4d77de621ee67c7556ef2e2db902",
+      "adapted": "boardui/components/foundations/icons/chevrons.tsx",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ]
+    },
+    {
+      "componentSource": "utils/use-dismiss-on-outside-press.ts",
+      "archive": "boardui-upstream.zip",
+      "sha256": "4c2cf34afe5c618bb7cefc4cef2400a92264db4e8db3781580d867922315a28a",
+      "adapted": "boardui/utils/use-dismiss-on-outside-press.ts",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ]
+    },
+    {
+      "componentSource": "components/base/select/select.tsx",
+      "archive": "boardui-upstream.zip",
+      "sha256": "3e601115ff7f4caf637cf1f6fc07a6997b486ef0eee8fda0911ae4121c08da8e",
+      "adapted": "boardui/components/base/select/select.tsx",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ]
+    },
+    {
+      "componentSource": "components/foundations/direction/direction.tsx",
+      "archive": "boardui-upstream.zip",
+      "sha256": "cb7e973ed50f1ea4b4dbf3039ac86de321f4bb4fb7df2ce64ce36b323dfdb2a0",
+      "adapted": "boardui/components/foundations/direction/direction.tsx",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ]
+    },
+    {
+      "componentSource": "components/foundations/scroll-fade/scroll-fade.tsx",
+      "archive": "independent-overlay.zip",
+      "sha256": "94a1d1032e59b40091ed546835b796d0776838aa82fa554be176f926d0b3b54d",
+      "adapted": "boardui/components/foundations/scroll-fade/scroll-fade.tsx",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ]
+    },
+    {
+      "componentSource": "components/base/combobox/combobox.tsx",
+      "archive": "independent-overlay.zip",
+      "sha256": "97f015b55f1d9bf933e160452494e2508a88bc7bd2e501eece95c68828069653",
+      "adapted": "boardui/components/base/combobox/combobox.tsx",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ],
+      "officialRegistry": {
+        "snapshot": "vendor/boardui-registry-20261101/combobox.json",
+        "sha256": "97f015b55f1d9bf933e160452494e2508a88bc7bd2e501eece95c68828069653",
+        "sameAsOverlay": true
+      }
+    },
+    {
+      "componentSource": "components/base/buttons/close-button.tsx",
+      "archive": "boardui-upstream.zip",
+      "sha256": "47ab8c6639043dd22e4a92d0f74952c9e2270c92e3f0718b522f6125dd7d5c49",
+      "adapted": "boardui/components/base/buttons/close-button.tsx",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ]
+    },
+    {
+      "componentSource": "components/base/spinner/spinner.tsx",
+      "archive": "independent-overlay.zip",
+      "sha256": "f40fdb7ff5142afa60dcd917ee06d01967a0a169d666fc64ee244f26830fdcdd",
+      "adapted": "boardui/components/base/spinner/spinner.tsx",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ]
+    },
+    {
+      "componentSource": "components/foundations/template-copy/template-copy.tsx",
+      "archive": "independent-overlay.zip",
+      "sha256": "5c9de7f3a6cc31587ca3e0338314b66e27654b4744403b97e589f41de15f25b3",
+      "adapted": "boardui/components/foundations/template-copy/template-copy.tsx",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ]
+    },
+    {
+      "componentSource": "components/base/search-field/search-field.tsx",
+      "archive": "independent-overlay.zip",
+      "sha256": "0eab68a5bf81ee93bfdcb1f1a0e8561aa696989749b72c63ba45f62b96b6c670",
+      "adapted": "boardui/components/base/search-field/search-field.tsx",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ],
+      "officialRegistry": {
+        "snapshot": "vendor/boardui-registry-20261101/search-field.json",
+        "sha256": "0eab68a5bf81ee93bfdcb1f1a0e8561aa696989749b72c63ba45f62b96b6c670",
+        "sameAsOverlay": true
+      }
+    },
+    {
+      "componentSource": "components/base/radio/radio.tsx",
+      "archive": "boardui-upstream.zip",
+      "sha256": "13e0787ddd31198bf7035d754140c27bcddb59fe07807873bb572c346ed18287",
+      "adapted": "boardui/components/base/radio/radio.tsx",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ]
+    },
+    {
+      "componentSource": "components/base/checkbox/checkbox-glyph.tsx",
+      "archive": "boardui-upstream.zip",
+      "sha256": "b123159e3940f094112dbec3231a19e572c02424bd676ecd321d014798e75748",
+      "adapted": "boardui/components/base/checkbox/checkbox-glyph.tsx",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ]
+    },
+    {
+      "componentSource": "components/base/checkbox/checkbox.tsx",
+      "archive": "boardui-upstream.zip",
+      "sha256": "59faad3d5885077822d00ba983fc88acf2848cb21faad7ed2aebc0eaa2282834",
+      "adapted": "boardui/components/base/checkbox/checkbox.tsx",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ]
+    },
+    {
+      "componentSource": "components/base/accordion/accordion.tsx",
+      "archive": "independent-overlay.zip",
+      "sha256": "762786dd6ba88e1df5311d2b80d9ea6ede93f2878dcda44357ef1b9905186312",
+      "adapted": "boardui/components/base/accordion/accordion.tsx",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ],
+      "officialRegistry": {
+        "snapshot": "vendor/boardui-registry-20261101/accordion.json",
+        "sha256": "762786dd6ba88e1df5311d2b80d9ea6ede93f2878dcda44357ef1b9905186312",
+        "sameAsOverlay": true
+      }
+    },
+    {
+      "componentSource": "components/base/table/table.tsx",
+      "archive": "boardui-upstream.zip",
+      "sha256": "fd08929f4eb0615d4bd6578e1334a382c0123f29a7ed039e08caaa4d52aa00b0",
+      "adapted": "boardui/components/base/table/table.tsx",
+      "changes": [
+        "@/ aliases rewritten to relative module paths; runtime component behavior retained"
+      ]
+    },
+    {
+      "componentSource": "components/application/settings/settings-modal.tsx",
+      "archive": "boardui-upstream.zip",
+      "sha256": "ac55bff6655cbf45fd98fb27505cb56b9805f56a4dcef9372207d3d0d97b26d4",
+      "adapted": "SettingsDialog.tsx",
+      "changes": [
+        "Controlled product adaptation; demo data and simulated mutation completion removed"
+      ]
+    },
+    {
+      "componentSource": "components/application/data-table/data-table.tsx",
+      "archive": "boardui-upstream.zip",
+      "sha256": "620275fafbb48f743477cfc5d18421a3088c7c803b204fc70575ddc5c099a0db",
+      "adapted": "ObjectTable.tsx",
+      "changes": [
+        "Controlled product adaptation; demo data and simulated mutation completion removed"
+      ]
+    },
+    {
+      "componentSource": "components/base/file-upload/file-upload.tsx",
+      "archive": "boardui-upstream.zip",
+      "sha256": "27b1c26a2383c83a068a31c2415f5eaab35a8ee91c6bd391f481b67ee7ea17b3",
+      "adapted": "HostFileUpload.tsx",
+      "changes": [
+        "Controlled product adaptation; demo data and simulated mutation completion removed"
+      ]
+    },
+    {
+      "componentSource": "independent switch mechanism reproduction",
+      "sha256": "1b75a3e0aa4f755c0eff19acd9f0aa5ad0cedc3f854bf86fb105951677fc395a",
+      "adapted": "StretchSwitch.tsx",
+      "identity": "Library-approved independent mechanism reproduction, not Animate UI upstream source"
+    },
+    {
+      "componentSource": "components/base/buttons/button.tsx",
+      "archive": "boardui-upstream.zip",
+      "sha256": "882cbaeca1c185d162faa6aba68958cb767f0458d10f0f1306c40520adefd086",
+      "adapted": "boardui/components/base/buttons/button.tsx",
+      "changes": [
+        "@/ imports changed to relative only"
+      ]
+    },
+    {
+      "componentSource": "components/base/buttons/icon-button.tsx",
+      "archive": "boardui-upstream.zip",
+      "sha256": "67042faf2968bb5b45c29155b0d5df14487671dbfeab03235ba89a070ac04704",
+      "adapted": "boardui/components/base/buttons/icon-button.tsx",
+      "changes": [
+        "@/ imports changed to relative only"
+      ]
+    },
+    {
+      "componentSource": "utils/directional-icon.ts",
+      "archive": "boardui-upstream.zip",
+      "sha256": "2c850149648723a00356b52ccc3069cffd1577f4339b9e96b125fccc1040eb8b",
+      "adapted": "boardui/utils/directional-icon.ts",
+      "changes": [
+        "@/ imports changed to relative only"
+      ]
+    }
+  ],
+  "externalDependencies": [
+    "@remixicon/react",
+    "react",
+    "react-aria-components",
+    "tailwind-merge"
+  ],
+  "styleAdaptation": [
+    "BoardUI theme/typography retained; all hue ramps remapped to neutral values.",
+    "Typography semibold/bold tokens constrained to 500 for this project.",
+    "Selection gradients removed in product scope; original layered glyph transitions retained."
+  ]
+}

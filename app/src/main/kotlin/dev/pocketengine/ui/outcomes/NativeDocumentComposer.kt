@@ -20,7 +20,7 @@ internal fun NativeDocumentComposer(original:JSONObject,busy:Boolean,error:Strin
     var format by remember(original){mutableStateOf(original.optString("format","docx"))}
     var size by remember(original){mutableIntStateOf(original.optInt("fontPoints",12))}
     var confirm by remember(original){mutableStateOf(false)}
-    BackHandler(enabled=!busy,onBack=back)
+    BackHandler { nativeBusyBack(busy, back) }
     Column(Modifier.fillMaxSize().systemBarsPadding().imePadding().padding(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
         Row(Modifier.fillMaxWidth()){Text("可编辑文档",style=MaterialTheme.typography.titleLarge,modifier=Modifier.weight(1f));TextButton(onClick=back,enabled=!busy){Text("返回")}}
         Text(if(original.has("parentArtifactId"))"从已选原成果的固定源继续；生成新的独立版本，原文件保留。"else "在本机生成真实Word或PDF，并保留可继续修改的原始内容。",style=MaterialTheme.typography.bodySmall)
