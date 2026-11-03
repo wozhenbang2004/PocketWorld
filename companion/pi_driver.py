@@ -18,6 +18,7 @@ import time
 import uuid
 
 from codex_driver import DriverError
+from driver_dispatch import PipeWriter, DispatchError
 from remote_interactions import Progress
 
 VERSION = "1.4.0"
@@ -87,6 +88,7 @@ class PiRpcDriver:
         self.process, self.on_state, self.stopped = process, on_state, stopped
         self.deadline = time.monotonic() + timeout
         self.dispatch_guard = dispatch_guard or nullcontext
+        self.writer = PipeWriter(process)
         self.native_session = session_id(native_session) if native_session else None
         self.session_dir = Path(session_dir) if session_dir else None
         self.expected_file = Path(expected_file) if expected_file else None
@@ -141,18 +143,21 @@ class PiRpcDriver:
         except (OSError, ValueError, DriverError, queue.Full):
             self.read_error = DriverError("Pi RPC stream could not be validated; do not replay")
 
-    def _send(self, kind, request_id, **values):
-        data = (json.dumps({"id": request_id, "type": kind, **values}, ensure_ascii=False) + "\n").encode("utf-8")
+    def _prepare_send(self, kind, request_id, **values):
+        stopping = kind in {"clear_queue", "abort", "get_state"} and (self.stop_requested or self.settled)
+        deadline = (self.abort_deadline or self.deadline) if stopping else self.deadline
+        return self.writer.reserve({"id": request_id, "type": kind, **values}, deadline,
+                                   (lambda: False) if stopping else self.stopped)
+
+    def _send(self, kind, request_id, _ticket=None, **values):
+        ticket = _ticket if _ticket is not None else self._prepare_send(kind, request_id, **values)
         try:
-            view = memoryview(data)
-            while view:
-                written = self.process.stdin.write(view)
-                if not written:
-                    raise OSError("Pipe did not accept data")
-                view = view[written:]
-            self.process.stdin.flush()
-        except (OSError, ValueError):
-            raise DriverError("Pi pipe write is unconfirmed; do not replay")
+            self.writer.send(ticket)
+        except DispatchError:
+            raise DriverError("Pi pipe write is unconfirmed; do not replay") from None
+
+    def _command_ticket(self, kind, request_id, **values):
+        return kind, request_id, values, self._prepare_send(kind, request_id, **values)
 
     def _next(self):
         while True:
@@ -219,67 +224,75 @@ class PiRpcDriver:
 
     def _clear_queue(self, phase):
         self.clear_id, self.clear_phase = str(uuid.uuid4()), phase
-        self._send("clear_queue", self.clear_id)
+        return self._command_ticket("clear_queue", self.clear_id)
 
     def _pump_controls(self, now):
         if not self.turn_dispatched:
             return
         with self.dispatch_guard():
-            if self.stop_requested or self.settled:
-                self._reject_unsent()
-            if self.stop_requested:
-                # RPC command handlers are asynchronous. Clear before abort, then clear again
-                # AFTER all submitted steer replies and settlement to fence a late enqueue.
-                if not self.stop_clear_done:
-                    if self.clear_id is None:
-                        self._clear_queue("stop")
-                    return
-                if self.abort_id is None:
-                    self.abort_id = str(uuid.uuid4())
-                    self._send("abort", self.abort_id)
-                    return
-            if self.settled:
-                if self.steer_replies:
-                    if any(value.get("timedOut") for value in self.steer_replies.values()):
-                        raise DriverError("Pi settled with an unacknowledged input; queue outcome remains unknown")
-                    return
-                if self.stop_requested and not self.abort_ack:
-                    return
-                if not self.final_clear_done:
-                    if self.clear_id is None:
-                        self._clear_queue("final")
-                    return
-                if self.final_state_id is None and not self.native_queue_empty_confirmed:
-                    self.final_state_id = str(uuid.uuid4())
-                    self._send("get_state", self.final_state_id)
-                return
-            if not self.can_steer() or self.steer_replies or not self.events.empty():
-                return
-            try:
-                request, receipt = self.steers.get_nowait()
-            except queue.Empty:
-                return
-            if not self.can_steer(request["expectedPromptRequestId"]):
-                receipt("rejected", {"dispatched": False, "message": "Original Pi prompt identity changed before input dispatch"})
-                return
-            queue_frame = {"type": "queue_update", "steering": [*self.native_steering, request["text"]], "followUp": []}
-            if len((json.dumps(queue_frame, ensure_ascii=False) + "\n").encode("utf-8")) > MAX_EVENT:
-                receipt("rejected", {"dispatched": False, "message": "Pi native queue would exceed its bounded protocol frame; input was not sent or truncated"})
-                return
-            request_id = str(uuid.uuid4())
-            receipt("sending", {"nativeRequestId": request_id, "dispatched": None})
-            if not self.can_steer(request["expectedPromptRequestId"]):
-                receipt("rejected", {"dispatched": False, "message": "Stopped before Pi input dispatch"})
-                return
-            self.steer_replies[request_id] = {"receipt": receipt, "deadline": min(now + 5, self.deadline)}
-            self.dispatched_texts.append(request["text"])
-            try:
-                self._send("steer", request_id, message=request["text"])
-            except DriverError:
-                self.steer_replies.pop(request_id, None)
+            command = self._prepare_controls(now)
+        if command is None:
+            return
+        kind, request_id, values, ticket = command
+        try:
+            self._send(kind, request_id, _ticket=ticket, **values)
+        except DriverError:
+            if kind == "steer":
+                pending = self.steer_replies.pop(request_id, None)
                 self.steering_unknown = self.steering_unresolved = True
-                receipt("unknown", {"dispatched": None, "message": "Pi input pipe write is unconfirmed; do not resend"})
-                raise
+                if pending:
+                    pending["receipt"]("unknown", {"dispatched": None, "message": "Pi input pipe write is unconfirmed; do not resend"})
+            raise
+
+    def _prepare_controls(self, now):
+        if self.stop_requested or self.settled:
+            self._reject_unsent()
+        if self.stop_requested:
+            # RPC command handlers are asynchronous. Clear before abort, then clear again
+            # AFTER all submitted steer replies and settlement to fence a late enqueue.
+            if not self.stop_clear_done:
+                if self.clear_id is None:
+                    return self._clear_queue("stop")
+                return
+            if self.abort_id is None:
+                self.abort_id = str(uuid.uuid4())
+                return self._command_ticket("abort", self.abort_id)
+        if self.settled:
+            if self.steer_replies:
+                if any(value.get("timedOut") for value in self.steer_replies.values()):
+                    raise DriverError("Pi settled with an unacknowledged input; queue outcome remains unknown")
+                return
+            if self.stop_requested and not self.abort_ack:
+                return
+            if not self.final_clear_done:
+                if self.clear_id is None:
+                    return self._clear_queue("final")
+                return
+            if self.final_state_id is None and not self.native_queue_empty_confirmed:
+                self.final_state_id = str(uuid.uuid4())
+                return self._command_ticket("get_state", self.final_state_id)
+            return
+        if not self.can_steer() or self.steer_replies or not self.events.empty():
+            return
+        try:
+            request, receipt = self.steers.get_nowait()
+        except queue.Empty:
+            return
+        if not self.can_steer(request["expectedPromptRequestId"]):
+            receipt("rejected", {"dispatched": False, "message": "Original Pi prompt identity changed before input dispatch"})
+            return
+        queue_frame = {"type": "queue_update", "steering": [*self.native_steering, request["text"]], "followUp": []}
+        if len((json.dumps(queue_frame, ensure_ascii=False) + "\n").encode("utf-8")) > MAX_EVENT:
+            receipt("rejected", {"dispatched": False, "message": "Pi native queue would exceed its bounded protocol frame; input was not sent or truncated"})
+            return
+        request_id = str(uuid.uuid4())
+        receipt("sending", {"nativeRequestId": request_id, "dispatched": None})
+        if not self.can_steer(request["expectedPromptRequestId"]):
+            receipt("rejected", {"dispatched": False, "message": "Stopped before Pi input dispatch"})
+            return
+        self.steer_replies[request_id] = {"receipt": receipt, "deadline": min(now + 5, self.deadline)}
+        self.dispatched_texts.append(request["text"])
+        return self._command_ticket("steer", request_id, message=request["text"])
 
     def _input_response(self, event):
         request_id = event.get("id")
@@ -414,7 +427,8 @@ class PiRpcDriver:
             if self.stopped() or time.monotonic() >= self.deadline:
                 raise DriverError("Pi cancelled before prompt dispatch")
             self.turn_dispatched = True  # A partial write is UNKNOWN, never a retry license.
-            self._send("prompt", self.prompt_id, message=prompt)
+            ticket = self._prepare_send("prompt", self.prompt_id, message=prompt)
+        self._send("prompt", self.prompt_id, _ticket=ticket, message=prompt)
         aborted = False
         final_reason = None
         while True:

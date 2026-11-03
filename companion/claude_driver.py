@@ -14,6 +14,7 @@ import time
 import uuid
 
 from codex_driver import DriverError
+from driver_dispatch import PipeWriter, WriteTicket, DispatchError
 from remote_interactions import QuestionMailbox, Progress, question
 
 MAX_EVENT = 1_048_576
@@ -73,6 +74,7 @@ class ClaudeStreamDriver:
         self.session_id = session_uuid(session_id)
         self.on_state, self.stopped = on_state, stopped
         self.dispatch_guard = dispatch_guard or nullcontext
+        self.writer = PipeWriter(process)
         self.cwd = Path(cwd or ".").resolve()
         self.write_allowed = write_allowed
         self.deadline = time.monotonic() + timeout
@@ -209,25 +211,34 @@ class ClaudeStreamDriver:
         # Progress already keys these observations by the original parent source.
         self.progress.add("tool", "tool_progress", item, tool=tool, status="running", **source)
 
+    def _prepare_send(self, value, stopping=False):
+        deadline = (self.interrupt_deadline or time.monotonic() + 3) if stopping else self.deadline
+        return self.writer.reserve(value, deadline, (lambda: False) if stopping else self.stopped)
+
     def _send(self, value):
-        data = (json.dumps(value, ensure_ascii=False) + "\n").encode("utf-8")
+        ticket = value if isinstance(value, WriteTicket) else self._prepare_send(value)
         try:
-            view = memoryview(data)
-            while view:
-                written = self.process.stdin.write(view)
-                if not written:
-                    raise OSError("Pipe did not accept data")
-                view = view[written:]
-            self.process.stdin.flush()
-        except (OSError, ValueError):
-            raise DriverError("Claude pipe write is unconfirmed; do not replay")
+            self.writer.send(ticket)
+        except DispatchError:
+            raise DriverError("Claude pipe write is unconfirmed; do not replay") from None
 
     def _control(self, request_id, request):
         self._send({"type": "control_request", "request_id": request_id, "request": request})
 
+    @staticmethod
+    def _answer_frame(wire_id, response):
+        return {"type": "control_response", "response": {"subtype": "success",
+                "request_id": wire_id, "response": response}}
+
     def _answer(self, wire_id, response):
-        self._send({"type": "control_response", "response": {"subtype": "success",
-                    "request_id": wire_id, "response": response}})
+        self._send(self._answer_frame(wire_id, response))
+
+    def _question_answer(self, wire_id, response):
+        with self.dispatch_guard():
+            if not self._question_live():
+                raise DriverError("Original question stopped before answer dispatch")
+            ticket = self._prepare_send(self._answer_frame(wire_id, response))
+        self._send(ticket)
 
     def _next(self):
         while True:
@@ -239,7 +250,9 @@ class ClaudeStreamDriver:
                     with self.dispatch_guard():
                         self.interrupt_id = str(uuid.uuid4())
                         self.interrupt_deadline = now + 3
-                        self._control(self.interrupt_id, {"subtype": "interrupt"})
+                        ticket = self._prepare_send({"type": "control_request", "request_id": self.interrupt_id,
+                                                     "request": {"subtype": "interrupt"}}, stopping=True)
+                    self._send(ticket)
                 if now >= self.interrupt_deadline:
                     raise DriverError("Claude interruption lacks a final result; effects are unknown")
             try:
@@ -247,8 +260,7 @@ class ClaudeStreamDriver:
                 return self.events.get_nowait()
             except queue.Empty:
                 self._decisions()
-                with self.dispatch_guard():
-                    self.questions.pump(self._question_live, self._answer, self._state)
+                self.questions.pump(self._question_live, self._question_answer, self._state)
             try:
                 return self.events.get(timeout=.05)
             except queue.Empty:
@@ -343,14 +355,15 @@ class ClaudeStreamDriver:
                 receipt["decision"] = "accept" if allow else "decline"
                 response = {"behavior": "allow", "updatedInput": entry["input"]} if allow else {
                     "behavior": "deny", "message": "Owner declined or invocation is stopping"}
-                try:
-                    self._answer(entry["wireId"], response)
-                except DriverError:
-                    receipt["status"] = "unknown"
-                    self._state()
-                    raise
-                receipt["status"] = "sent"
+                ticket = self._prepare_send(self._answer_frame(entry["wireId"], response), stopping=not allow)
+            try:
+                self._send(ticket)
+            except DriverError:
+                receipt["status"] = "unknown"
                 self._state()
+                raise
+            receipt["status"] = "sent"
+            self._state()
 
     def _question_live(self):
         return self.initialized and self.protocol_verified and self.turn_dispatched and not self.finished and not self.closed.is_set() and self.interrupt_id is None and not self.stopped()
@@ -439,11 +452,12 @@ class ClaudeStreamDriver:
             if selected is None or effort is not None and not any(row["id"] == effort for row in selected["efforts"]):
                 raise DriverError("Claude model/effort is not advertised by this actual native initialize; no prompt was sent")
         with self.dispatch_guard():
-            if self.stopped():
+            if self.stopped() or time.monotonic() >= self.deadline:
                 raise DriverError("Claude stopped before prompt dispatch")
             self.turn_dispatched = True  # Even a partial pipe write must never be replayed.
-            self._send({"type": "user", "uuid": self.prompt_id, "session_id": self.session_id,
-                        "parent_tool_use_id": None, "message": {"role": "user", "content": prompt}})
+            ticket = self._prepare_send({"type": "user", "uuid": self.prompt_id, "session_id": self.session_id,
+                                         "parent_tool_use_id": None, "message": {"role": "user", "content": prompt}})
+        self._send(ticket)
         while True:
             event = self._next()
             if event is None:

@@ -12,6 +12,7 @@ import uuid
 from remote_interactions import QuestionMailbox, Progress, question
 import group_input_audience
 from codex_child_sources import CodexChildSources
+from driver_dispatch import PipeWriter, WriteTicket, DispatchError
 
 
 class DriverError(Exception):
@@ -32,6 +33,7 @@ class CodexAppServerDriver:
         self.output_limit = output_limit
         self.output_limit_exceeded = False
         self.dispatch_guard = dispatch_guard or nullcontext
+        self.writer = PipeWriter(process)
         self.deadline = time.monotonic() + timeout
         self.messages = queue.Queue(maxsize=128)
         self.decisions = queue.Queue(maxsize=32)
@@ -104,18 +106,16 @@ class CodexAppServerDriver:
             except queue.Full:
                 pass
 
+    def _prepare_send(self, value, stopping=False):
+        deadline = (self.interrupt_deadline or time.monotonic() + 3) if stopping else self.deadline
+        return self.writer.reserve(value, deadline, (lambda: False) if stopping else self.stopped)
+
     def _send(self, value):
+        ticket = value if isinstance(value, WriteTicket) else self._prepare_send(value)
         try:
-            with self.lock:
-                remaining = memoryview((json.dumps(value, ensure_ascii=False) + "\n").encode())
-                while remaining:
-                    written = self.process.stdin.write(remaining)
-                    if not written:
-                        raise OSError("Pipe did not accept data")
-                    remaining = remaining[written:]
-                self.process.stdin.flush()
-        except (OSError, ValueError):
-            raise DriverError("Codex request dispatch is unconfirmed")
+            self.writer.send(ticket)
+        except DispatchError:
+            raise DriverError("Codex request dispatch is unconfirmed; do not replay") from None
 
     def _id(self):
         self.serial += 1
@@ -136,8 +136,9 @@ class CodexAppServerDriver:
                 self.interrupt_deadline = now + 3
             if self.turn_id and not self.interrupt_sent:
                 with self.dispatch_guard():
-                    self._send({"id": self._id(), "method": "turn/interrupt", "params": {"threadId": self.thread_id, "turnId": self.turn_id}})
+                    ticket = self._prepare_send({"id": self._id(), "method": "turn/interrupt", "params": {"threadId": self.thread_id, "turnId": self.turn_id}}, stopping=True)
                     self.interrupt_sent = True
+                self._send(ticket)
             if now >= self.interrupt_deadline:
                 raise DriverError("Codex cancellation has no matching final turn receipt; effects are unknown")
         for request_id, pending in list(self.steer_replies.items()):
@@ -152,7 +153,7 @@ class CodexAppServerDriver:
                 request, receipt = self.steers.get_nowait()
             except queue.Empty:
                 break
-            # Serializes the final eligibility check and write with Companion cancellation.
+            # Reserve this exact one-use input under the original cancellation guard.
             with self.dispatch_guard():
                 if not self.can_steer(request["expectedTurnId"]):
                     receipt("rejected", {"dispatched": False, "message": "Original turn is no longer available for steering"})
@@ -164,15 +165,16 @@ class CodexAppServerDriver:
                     receipt("rejected", {"dispatched": False, "message": "Stopped before input dispatch"})
                     continue
                 self.steer_replies[request_id] = {"receipt": receipt, "turnId": request["expectedTurnId"], "deadline": now + 5}
-                try:
-                    self._send({"id": request_id, "method": "turn/steer", "params": {"threadId": self.thread_id,
-                                "expectedTurnId": request["expectedTurnId"], "clientUserMessageId": request["messageId"],
-                                "input": [{"type": "text", "text": request["text"]}]}})
-                except DriverError:
-                    self.steer_replies.pop(request_id, None)
-                    self.steering_unknown = True
-                    receipt("unknown", {"dispatched": None, "message": "Steer write is unconfirmed; do not resend"})
-                    raise
+                ticket = self._prepare_send({"id": request_id, "method": "turn/steer", "params": {"threadId": self.thread_id,
+                            "expectedTurnId": request["expectedTurnId"], "clientUserMessageId": request["messageId"],
+                            "input": [{"type": "text", "text": request["text"]}]}})
+            try:
+                self._send(ticket)
+            except DriverError:
+                self.steer_replies.pop(request_id, None)
+                self.steering_unknown = True
+                receipt("unknown", {"dispatched": None, "message": "Steer write is unconfirmed; do not resend"})
+                raise
         while True:
             try:
                 request_id, decision = self.decisions.get_nowait()
@@ -181,26 +183,27 @@ class CodexAppServerDriver:
             with self.dispatch_guard():
                 with self.lock:
                     request = self.pending.pop(str(request_id), None)
-                if request and self.completed is None:
-                    if self.interrupt_sent or self.stopped():
-                        decision = "decline"
-                    receipt = {"requestId": str(request_id), "decision": decision, "status": "sending"}
-                    self.approval_receipts.append(receipt)
-                    self._state()  # Durable intent precedes this exact one-time answer.
-                    if self.interrupt_sent or self.stopped():
-                        decision = receipt["decision"] = "decline"
-                    try:
-                        self._send({"id": request["wireId"], "result": {"decision": decision}})
-                    except DriverError:
-                        receipt["status"] = "unknown"
-                        self._state()
-                        raise
-                    receipt["status"] = "sent"
-                    self._state()
+                if not request or self.completed is not None:
+                    continue
+                if self.interrupt_sent or self.stopped():
+                    decision = "decline"
+                receipt = {"requestId": str(request_id), "decision": decision, "status": "sending"}
+                self.approval_receipts.append(receipt)
+                self._state()  # Durable intent precedes this exact one-time answer.
+                if self.interrupt_sent or self.stopped():
+                    decision = receipt["decision"] = "decline"
+                ticket = self._prepare_send({"id": request["wireId"], "result": {"decision": decision}}, stopping=decision == "decline")
+            try:
+                self._send(ticket)
+            except DriverError:
+                receipt["status"] = "unknown"
+                self._state()
+                raise
+            receipt["status"] = "sent"
+            self._state()
         # Previously received request retractions/terminal events win over new answers.
         if self.messages.empty():
-            with self.dispatch_guard():
-                self.questions.pump(self._question_live, self._question_send, self._state)
+            self.questions.pump(self._question_live, self._question_send, self._state)
         try:
             value = self.messages.get(timeout=.1)
         except queue.Empty:
@@ -254,7 +257,8 @@ class CodexAppServerDriver:
             if self.group_generation is not None and (self.group_api_revoked or self.group_generation() != self.group_expected_generation):
                 raise DriverError("API-key source changed at the original turn dispatch boundary; no group prompt sent")
             self.turn_dispatched = True
-            self._send({"id": request_id, "method": "turn/start", "params": params})
+            ticket = self._prepare_send({"id": request_id, "method": "turn/start", "params": params})
+        self._send(ticket)
         while True:
             response = self._pump()
             if response and response.get("id") == request_id:
@@ -524,7 +528,11 @@ class CodexAppServerDriver:
         return self.protocol_verified and self.turn_dispatched and self.thread_id is not None and self.turn_id is not None and self.completed is None and not self.closed and not self.interrupt_sent and not self.stopped() and not self.assignment_write
 
     def _question_send(self, wire_id, response):
-        self._send({"id": wire_id, "result": response})
+        with self.dispatch_guard():
+            if not self._question_live():
+                raise DriverError("Original question stopped before answer dispatch")
+            ticket = self._prepare_send({"id": wire_id, "result": response})
+        self._send(ticket)
 
     def answer_question(self, request_id, request_hash, answer_id, answers):
         try:
@@ -687,7 +695,8 @@ class CodexAppServerDriver:
             self.on_state({"sessionBranch": {"phase": "sending", "sourceThreadId": thread_id, "sourceTurnId": turn_id, "filesRestored": False}})
             self.fork_dispatched = True
             request_id = self._id()
-            self._send({"id": request_id, "method": "thread/fork", "params": {"threadId": thread_id, "lastTurnId": turn_id, "excludeTurns": True}})
+            ticket = self._prepare_send({"id": request_id, "method": "thread/fork", "params": {"threadId": thread_id, "lastTurnId": turn_id, "excludeTurns": True}})
+        self._send(ticket)
         # Do not hold the Companion cancellation monitor while waiting for peer IO.
         while True:
             response = self._pump()
