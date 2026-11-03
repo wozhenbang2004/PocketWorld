@@ -46,18 +46,20 @@ class HostSelectionTest(unittest.TestCase):
         host = s.split('  host-tests:\n', 1)[1]
         guard = re.search(r'(?m)^    if: (.+)$', host).group(1)
         self.assertEqual(
-            "${{ github.event.repository.private && (github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.head_ref == 'pro/workpack-06-model-quality' || github.head_ref == 'pro/workpack-05-memory-quality' || github.head_ref == 'pro/workpack-03-phone-api-cli')) }}",
+            "${{ github.event.repository.private && (github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.head_ref == 'pro/workpack-06-model-quality' || github.head_ref == 'pro/workpack-05-memory-quality' || github.head_ref == 'pro/workpack-03-phone-api-cli' || github.head_ref == 'pro/aion-alma-full-report-takeover')) }}",
             guard)
         model = 'model-quality-routing,model-quality-observability,model-quality-sources,model-evaluation,gateway-continuation,runner-budget-stream'
         memory = 'memory-recall-quality,memory-evidence-plan,memory-method-quality'
         phone = 'phone-task-platform,' + memory
-        self.assertIn("HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && (github.head_ref == 'pro/workpack-06-model-quality' && '" + model + "' || github.head_ref == 'pro/workpack-03-phone-api-cli' && '" + phone + "' || '" + memory + "') || inputs.host_groups }}", host)
+        aion = 'aion-team-wake,alma-pi-no-tools,schedule-proposals,alma-child-sources'
+        self.assertIn("HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && (github.head_ref == 'pro/workpack-06-model-quality' && '" + model + "' || github.head_ref == 'pro/workpack-03-phone-api-cli' && '" + phone + "' || github.head_ref == 'pro/aion-alma-full-report-takeover' && '" + aion + "' || '" + memory + "') || inputs.host_groups }}", host)
         registry = json.loads((M.ROOT / 'tools/host-tests.json').read_text())
         self.assertEqual(model.split(','), M.selected(registry, '', model))
         self.assertEqual(memory.split(','), M.selected(registry, '', memory))
         self.assertEqual(phone.split(','), M.selected(registry, '', phone))
+        self.assertEqual(aion.split(','), M.selected(registry, '', aion))
         self.assertFalse(set(model.split(',')) & set(phone.split(',')))
         self.assertFalse(set(model.split(',')) & set(memory.split(',')))
-        self.assertIn("HOST_TEST_GROUP: ${{ github.event_name == 'pull_request' && (github.head_ref == 'pro/workpack-06-model-quality' && 'model-quality-routing' || github.head_ref == 'pro/workpack-03-phone-api-cli' && 'phone-task-platform' || 'memory-recall-quality') || inputs.host_group }}", host)
+        self.assertIn("HOST_TEST_GROUP: ${{ github.event_name == 'pull_request' && (github.head_ref == 'pro/workpack-06-model-quality' && 'model-quality-routing' || github.head_ref == 'pro/workpack-03-phone-api-cli' && 'phone-task-platform' || github.head_ref == 'pro/aion-alma-full-report-takeover' && 'aion-team-wake' || 'memory-recall-quality') || inputs.host_group }}", host)
         apk = s.split('  apk:\n', 1)[1].split('  host-tests:\n', 1)[0]
         self.assertIn("if: ${{ github.event.repository.private && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.target != 'host-tests') }}", apk)

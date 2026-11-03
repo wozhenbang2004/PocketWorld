@@ -1,5 +1,5 @@
 name: Build private debug APK
-run-name: ${{ github.event_name == 'pull_request' && (github.head_ref == 'pro/workpack-06-model-quality' && 'Model quality host tests' || 'Bounded phone/memory host tests') || github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && format('Host tests · {0}', inputs.host_groups != '' && 'selected batch' || inputs.host_group) || 'Debug APK' }} · ${{ github.ref_name }} · ${{ github.run_number }}
+run-name: ${{ github.event_name == 'pull_request' && (github.head_ref == 'pro/workpack-06-model-quality' && 'Model quality host tests' || github.head_ref == 'pro/aion-alma-full-report-takeover' && 'Aion/ALMA host tests' || 'Bounded phone/memory host tests') || github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && format('Host tests · {0}', inputs.host_groups != '' && 'selected batch' || inputs.host_group) || 'Debug APK' }} · ${{ github.ref_name }} · ${{ github.run_number }}
 
 on:
   pull_request:
@@ -213,17 +213,17 @@ jobs:
           retention-days: 7
 
   host-tests:
-    # Manual selections retain their original contract. Three same-repository workpack branches use separate bounded batches.
+    # Manual selections retain their original contract. Same-repository authorized branches use separate bounded batches.
     # PR builds are bounded host checks, never APK packaging or signing.
-    if: ${{ github.event.repository.private && (github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.head_ref == 'pro/workpack-06-model-quality' || github.head_ref == 'pro/workpack-05-memory-quality' || github.head_ref == 'pro/workpack-03-phone-api-cli')) }}
+    if: ${{ github.event.repository.private && (github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.head_ref == 'pro/workpack-06-model-quality' || github.head_ref == 'pro/workpack-05-memory-quality' || github.head_ref == 'pro/workpack-03-phone-api-cli' || github.head_ref == 'pro/aion-alma-full-report-takeover')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
       run:
         shell: bash
     env:
-      HOST_TEST_GROUP: ${{ github.event_name == 'pull_request' && (github.head_ref == 'pro/workpack-06-model-quality' && 'model-quality-routing' || github.head_ref == 'pro/workpack-03-phone-api-cli' && 'phone-task-platform' || 'memory-recall-quality') || inputs.host_group }}
-      HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && (github.head_ref == 'pro/workpack-06-model-quality' && 'model-quality-routing,model-quality-observability,model-quality-sources,model-evaluation,gateway-continuation,runner-budget-stream' || github.head_ref == 'pro/workpack-03-phone-api-cli' && 'phone-task-platform,memory-recall-quality,memory-evidence-plan,memory-method-quality' || 'memory-recall-quality,memory-evidence-plan,memory-method-quality') || inputs.host_groups }}
+      HOST_TEST_GROUP: ${{ github.event_name == 'pull_request' && (github.head_ref == 'pro/workpack-06-model-quality' && 'model-quality-routing' || github.head_ref == 'pro/workpack-03-phone-api-cli' && 'phone-task-platform' || github.head_ref == 'pro/aion-alma-full-report-takeover' && 'aion-team-wake' || 'memory-recall-quality') || inputs.host_group }}
+      HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && (github.head_ref == 'pro/workpack-06-model-quality' && 'model-quality-routing,model-quality-observability,model-quality-sources,model-evaluation,gateway-continuation,runner-budget-stream' || github.head_ref == 'pro/workpack-03-phone-api-cli' && 'phone-task-platform,memory-recall-quality,memory-evidence-plan,memory-method-quality' || github.head_ref == 'pro/aion-alma-full-report-takeover' && 'aion-team-wake,alma-pi-no-tools,schedule-proposals,alma-child-sources' || 'memory-recall-quality,memory-evidence-plan,memory-method-quality') || inputs.host_groups }}
       POCKETWORLD_HOST_GRADLE_JVMARGS: '-Xmx3072m -Dfile.encoding=UTF-8'
     steps:
       - name: Check out selected revision
@@ -247,6 +247,7 @@ jobs:
           set -euo pipefail
           python3 -B -m unittest discover -s tools/tests -p test_apk_workflow_paths.py -v
           python3 -B -m unittest discover -s tools/tests -p test_host_tests.py -v
+          python3 -B -m unittest discover -s tools/tests -p test_host_selection.py -v
           if [[ "$HOST_TEST_GROUP" == browser-long-page ]]; then
             python3 -B -m unittest discover -s tools/tests -p test_browser_long_page_entrypoint.py -v
           fi
