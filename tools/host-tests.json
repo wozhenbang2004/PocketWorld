@@ -400,6 +400,7 @@
       "dev.pocketengine.features.assistant.notifications.OwnerQuestionReferenceTest",
       "dev.pocketengine.features.assistant.OwnerQuestionInputsNativeTest",
       "dev.pocketengine.features.assistant.OwnerPhoneQuestionsNativeTest",
+      "dev.pocketengine.features.assistant.OwnerPhoneQuestionContinuationJourneyTest",
       "dev.pocketengine.features.assistant.OwnerQuestionRunnerNativeTest",
       "dev.pocketengine.features.assistant.ConversationInterruptedNativeJourneyTest"
     ],
@@ -409,7 +410,7 @@
       "dev.pocketengine.features.channels.ChannelSecurityTest"
     ],
     "robolectric": true,
-    "description": "Original owner conversation storage/migrations/transfer and native title/pin organization. Includes mounted Compose owner rename/cancel/pin/unpin and pinned-history refresh; no physical device or visual-design acceptance. Includes interrupted output history and original private-owner question/notification replies with SQL, controlled HTTP model, one-time answer, old notices, cancellation and canonical forgetting. Includes ordinary phone questions retained by the original physical port/service worker, exact same-run continuation, source/lease/expiry/queue race guards, and existing notification routing; physical Android/device/visual acceptance remains unverified."
+    "description": "Original owner conversation storage/migrations/transfer and native title/pin organization. Includes mounted Compose owner rename/cancel/pin/unpin and pinned-history refresh; no physical device or visual-design acceptance. Includes interrupted output history and original private-owner question/notification replies with SQL, controlled HTTP model, one-time answer, old notices, cancellation and canonical forgetting. Includes ordinary phone questions retained by the original physical port/service worker, exact same-run continuation, source/lease/expiry/queue race guards, and existing notification routing. The successful phone journey uses actual App admission, Service START, Runner HTTP, posted RemoteInput/PendingIntent and production receiver, with explicit model/tree fixtures; original call audit, lease and once-only input stay checked. Physical Android/device/visual acceptance remains unverified."
   },
   "remote-transport": {
     "class": "dev.pocketengine.features.remote.RemoteTransportTest",
