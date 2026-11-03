@@ -205,13 +205,13 @@ public final class PhoneRunService extends Service {
             PowerManager power=getSystemService(PowerManager.class);wakeLock=power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"PocketEngine:DeviceGoal");wakeLock.setReferenceCounted(false);wakeLock.acquire(30_000L);
             app.setStatus(id,"running","原设备目标在本机已授权模型与准确能力范围执行",original);
             var port=app.deviceGoalCapabilities(session);var journal=app.tasks.journal(id,run,runningEpoch,original);
-            session.runnerStarted();RunOutcome result=new AgentRunner(null,port,dev.pocketengine.runtime.context.ContextBudgetPolicy.currentHostSource()).run(id,runningGoal,runningConfig,original,event->app.record(id,event,original),journal);
+            session.runnerStarted();RunOutcome result=new AgentRunner(null,port,dev.pocketengine.runtime.context.ContextBudgetPolicy.currentHostSource(),null,app.deviceOwnerInputs().runnerInputs(session)).run(id,runningGoal,runningConfig,original,event->app.record(id,event,original),journal);
             var finished=session.runnerFinished(result);if(deadlineReached||original.isCancelled()){finishAttempt(id,run,original,new RunOutcome("cancelled","原设备目标已停止后续派发；已有动作与下游未知效果不冒作已撤销",result.evidence),startId);return;}
             if(result.status.equals("needs_confirmation")){app.tasks.deviceTasks().recordGoalIdle(finished);original.pause();waitingForUser=true;ownerWaitGeneration++;pendingDeviceApproval=null;app.pushTask(id);return;}
             if(result.status.matches("awaiting_user|paused")&&!app.tasks.hasUnresolved(id)){
                 // The AgentRunner has exited/closed its scoped surface, but its original SQL run,
                 // control, captured model and allocation stay alive. Exact approval does not mint a run.
-                original.pause();waitingForUser=true;ownerWaitGeneration++;app.tasks.status(id,"awaiting_user",result.summary);app.pushTask(id);
+                original.pause();waitingForUser=true;ownerWaitGeneration++;app.tasks.status(id,"awaiting_user",result.summary);app.recordDeviceOrdinaryQuestionWait(finished);app.pushTask(id);
                 String decided=pendingDeviceApproval;if(decided!=null)main.post(()->{try{if(waitingForUser&&session==deviceGoal)app.resumeDeviceExecution(id,decided);}catch(Exception stale){pendingDeviceApproval=null;app.error("原审批后续接条件已变化，请核对原任务；未新建run");}});return;
             }
             finishAttempt(id,run,original,result,startId);
@@ -353,7 +353,14 @@ public final class PhoneRunService extends Service {
         if(leaseWatch!=null)leaseWatch.cancel(false);deadlineReached=false;
         leaseWatch=leaseSupervisor.scheduleWithFixedDelay(()->{
             if(destroyed||!id.equals(runningId)||!run.equals(runningRunId)||original!=ownerControl)return;
-            try{if(original.isCancelled()||app.control(id)!=original)throw new SecurityException("原任务控制已变化");long end=app.tasks.taskExecutionDeadline(id,run,epoch);
+            try{if(original.isCancelled()||app.control(id)!=original)throw new SecurityException("原任务控制已变化");
+                var goal=deviceGoal;long end;
+                if(goal!=null&&goal.originalControl()==original&&id.equals(goal.taskId())){
+                    // A real exited Runner with its original closed dispatch and
+                    // paused control is waiting for owner result review, not execution.
+                    if(original.isPaused())try{app.tasks.deviceTasks().reviewGoalResult(id,run,epoch);return;}catch(SecurityException notClosedYet){/* Ordinary question/pause still retains the original deadline. */}
+                    end=app.tasks.deviceTasks().goalSupervisionDeadline(goal);
+                }else end=app.tasks.taskExecutionDeadline(id,run,epoch);
                 if(end!=Long.MAX_VALUE&&System.currentTimeMillis()>=end){deadlineReached=true;throw new SecurityException("任务期限已到");}
                 BackgroundPhonePort background=taskBackgroundPort;if(background!=null&&background.isConnected())background.renewTaskLease(id,run,epoch,original,end);
                 synchronized(this){if(wakeLock!=null&&!waitingForUser)wakeLock.acquire(30_000L);}
