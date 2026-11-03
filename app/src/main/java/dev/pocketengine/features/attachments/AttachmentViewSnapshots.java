@@ -45,6 +45,11 @@ public final class AttachmentViewSnapshots {
         JSONObject meta=metadata(token);File blob=new File(root,token+".blob");byte[] bytes=Files.readAllBytes(blob.toPath());
         try{if(!digest(bytes).equals(meta.getString("sha256")))throw new SecurityException("临时查看文件字节已变化");return blob;}finally{Arrays.fill(bytes,(byte)0);}
     }}
+    /** Native failed file-chooser preparation; validates the exact expiring-copy URI before removal. */
+    public void discardUnsent(Uri uri)throws Exception {
+        if(uri==null||!"content".equals(uri.getScheme())||!context.getPackageName().concat(".attachments").equals(uri.getAuthority())||uri.getPathSegments().size()!=2||!"view".equals(uri.getPathSegments().get(0))||uri.getQuery()!=null||uri.getFragment()!=null)throw new SecurityException("只能清理本次未交付的准确原生快照");
+        discard(uri.getLastPathSegment());
+    }
     /** Native failed preparation only; no URI grant has been handed to an external reader. */
     void discard(String token)throws Exception {synchronized(disk){checkToken(token);Files.deleteIfExists(new File(root,token+".blob").toPath());Files.deleteIfExists(new File(root,token+".json").toPath());}}
     private void prune(){File[] files=root.listFiles((d,n)->n.endsWith(".json"));for(File file:files==null?new File[0]:files){boolean expired=true;try{expired=new JSONObject(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8)).optLong("expiresAt")<System.currentTimeMillis();}catch(Exception ignored){}if(expired){new File(root,file.getName().replace(".json",".blob")).delete();file.delete();}}}

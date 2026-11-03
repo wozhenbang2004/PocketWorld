@@ -758,5 +758,48 @@
     ],
     "robolectric": true,
     "description": "Native popup/permission callbacks in the original Activity, TaskStore and RunControl; exact parent/document lifecycle and once-only owner decisions. Android SDK35 host fixtures; physical WebView and device unverified."
+  },
+  "browser-native-input": {
+    "class": "dev.pocketengine.browser.BrowserNativeInputTest",
+    "additionalClasses": [
+      "dev.pocketengine.browser.BrowserSiteModeTest",
+      "dev.pocketengine.browser.BrowserNativeInputTaskPortTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.browser.BrowserTaskSpaceTest"
+    ],
+    "robolectric": true,
+    "description": "Bounded Android WebView input, actual layout and history plus original TaskSpace/CapabilityPort approval, currentness, cancellation and unknown receipts. SDK35 host fixtures; physical renderer unverified."
+  },
+  "browser-artifact-upload": {
+    "class": "dev.pocketengine.browser.BrowserArtifactApprovalTest",
+    "additionalClasses": [
+      "dev.pocketengine.browser.BrowserArtifactInputTest",
+      "dev.pocketengine.browser.BrowserArtifactSourceTest",
+      "dev.pocketengine.browser.BrowserArtifactStagingTest",
+      "dev.pocketengine.browser.BrowserArtifactUploadSqlTest",
+      "dev.pocketengine.browser.BrowserArtifactUploadTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.browser.BrowserTaskSpaceTest",
+      "dev.pocketengine.browser.BrowserTaskPersistenceTest"
+    ],
+    "robolectric": true,
+    "description": "Original task artifact versions, prepared approvals, verified staging and durable upload receipts with cancellation, changed input, duplicate callbacks and unknown recovery. SDK35 host tests; actual WebView chooser needs device validation."
+  },
+  "browser-network-barriers": {
+    "class": "dev.pocketengine.browser.BrowserNativeNetworkRecordsTest",
+    "additionalClasses": [
+      "dev.pocketengine.browser.BrowserNativeTransportTest",
+      "dev.pocketengine.browser.BrowserNetworkDebuggingTest",
+      "dev.pocketengine.browser.BrowserWaitBarrierTest",
+      "dev.pocketengine.browser.BrowserWaitBarrierJavascriptTest",
+      "dev.pocketengine.browser.BrowserNativeNetworkPortTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.browser.BrowserTaskSpaceTest"
+    ],
+    "robolectric": true,
+    "description": "Task-scoped CDP transport, response metadata/body pins and bounded DOM/network quiet barriers, through the original approval and cancellation paths. SDK35 host fixtures; physical WebView devtools transport requires device validation."
   }
 }
