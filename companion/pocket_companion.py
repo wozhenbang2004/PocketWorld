@@ -903,7 +903,7 @@ class JobManager:
 
     def _public(self, job):
         result = {k: v for k, v in job.items() if k not in {"fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding", "projectEnvironmentBinding", "projectEnvironmentConfigHash", "_coldProcess", "_coldOrigin", "_coldConfigHome", "_originalProcessGroup", "_harnessConfigRequest", "_ccSwitchImportRequest", "_nativeProjectManifest", "_nativeInputChunks", "_nativeInputPeer", "_piSession"}}
-        if job.get("status") == "interrupted" and any(key in job for key in ("harnessConfigOperationId", "_harnessConfigRequest")):
+        if job.get("worker") == "codex_app_server" and job.get("status") == "interrupted" and any(key in job for key in ("harnessConfigOperationId", "_harnessConfigRequest")):
             result.pop("harnessColdRootRetirement", None)
             try:
                 retired_root = self.harness_configs.cold_root_retirement(job)
@@ -938,7 +938,7 @@ class JobManager:
         result["coldRecovery"] = {"protocol": cold_session.PROTOCOL, "supportedForOriginalJob": cold_session.eligible(job), "requiresNativeOwnerReview": True, "readOnlyInspection": True, "lastInspection": json.loads(json.dumps(job.get("coldRecoveryRead", {"status": "not_checked"}))), "reason": "Original process identity and exact latest stored terminal Codex turn are both required; old jobs/Claude/SSH/private input staging have no cold continuation proof"}
         retained = self.processes.get(job.get("id"))
         original_stop = retained is not None and getattr(retained, "_pocket_worker_finished", False) and job.get("resourcesHeld") is True
-        cold_root_cancel = job.get("status") == "interrupted" and self._can_resume(job) and self.harness_configs.active_cold_root(job) is not None
+        cold_root_cancel = native and job.get("status") == "interrupted" and self._can_resume(job) and self.harness_configs.active_cold_root(job) is not None
         result["controls"] = {"readSessionRecovery": cold_session.eligible(job), "cancel": job.get("status") not in TERMINAL or original_stop or cold_root_cancel,
                               "approve": live and bool(job.get("pendingApprovals")),
                               "answerQuestion": live and not job.get("assignmentWorkspace") and any(value.get("canAnswer") for value in job.get("pendingQuestions", [])),
@@ -1187,7 +1187,9 @@ class JobManager:
         expected = identifier(request["jobOperationId"], "jobOperationId")
         with self.lock:
             job = self._original_cancel_job_locked(jobid, expected)
-            configured_cold = job.get("status") == "interrupted" and any(key in job for key in ("harnessConfigOperationId", "_harnessConfigRequest"))
+            configured_cold = job.get("worker") == "codex_app_server" and job.get("status") == "interrupted" and any(key in job for key in ("harnessConfigOperationId", "_harnessConfigRequest"))
+            if configured_cold and self.ledger.in_transaction:
+                raise RequestError("Original ledger has an unresolved transaction; no root retirement was attempted", 409)
         if configured_cold:
             self._reconcile_original_process(jobid)  # Existing read-only original-group fence, never a cold PID signal.
         try:

@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import select
+import sqlite3
 import subprocess
 import time
 try:
@@ -1137,6 +1138,8 @@ class HarnessConfigs:
         return {"resourceKey": resource, "restoreAfterRaw": mutation["afterRaw"] if mutation["restoreOf"] is not None else None}
 
     def _cold_restore_proof(self, original, target):
+        if self.db.in_transaction:
+            raise ConfigError("Original ledger has an unresolved transaction; cold root restoration is unconfirmed")
         if target["family"] == "pi":
             partial = self._pi_partial_recovery(original, target, self._read(target))
             if partial:
@@ -1310,6 +1313,8 @@ class HarnessConfigs:
             raise ConfigError("Configured Codex continuation cannot switch the original home/root/executable")
 
     def _cold_root_record(self, job):
+        if self.db.in_transaction:
+            raise ConfigError("Original ledger has an unresolved transaction; cold root retirement is unconfirmed")
         row = self.db.execute("SELECT private_plan FROM harness_plans WHERE operation_id=?", (identifier(job.get("harnessConfigOperationId")),)).fetchone()
         if row is None:
             raise ConfigError("Original configuration root operation is missing")
@@ -1384,19 +1389,39 @@ class HarnessConfigs:
                  "rootResourceKey": plan["target"]["resourceKey"], "physicalRootKey": plan["target"]["physicalRootKey"], "jobNeverBound": False}
         if not self._valid_cold_root_retirement(plan, proof):
             raise ConfigError("Original explicit cold root retirement evidence is incomplete")
-        changed = self.db.execute("UPDATE harness_root_leases SET job_id=NULL,state='CONFIGURED',proof=? WHERE resource_key=? AND operation_id=? AND binding_id=? AND job_id=? AND state='ACTIVE' AND proof=?",
-                                  (encoded(proof), expected[0], expected[1], expected[2], expected[3], expected[5])).rowcount
-        if changed != 1:
-            self.db.rollback()
-            raise ConfigError("Original root changed before retirement; no replacement lease was touched")
+        # Never leave an uncertain retirement transaction on the shared ledger:
+        # unrelated job saves must not commit it, and GET/restore must never read
+        # its uncommitted CONFIGURED row as a durable outcome. This connection is
+        # private to this one exact CAS and is always discarded after the attempt.
+        database = next((row[2] for row in self.db.execute("PRAGMA database_list") if row[1] == "main"), None)
+        if database != str(self.manager.state / "operations.sqlite3") or self.db.in_transaction:
+            raise ConfigError("Original ledger identity or committed state is unconfirmed; no root was retired")
+        writer = None
         try:
-            self.db.commit()
-        except Exception:
-            try:
-                self.db.rollback()
-            except Exception:
-                pass  # Persistence remains unconfirmed; never report or replay success.
-            raise ConfigError("Original root retirement persistence is unconfirmed; query the original job before retrying")
+            # mode=rw opens only the existing original database, never creates a
+            # second ledger. Filesystem replacement remains OPTIMISTIC.
+            writer = sqlite3.connect(Path(database).as_uri() + "?mode=rw", uri=True)
+            writer.execute("PRAGMA synchronous=FULL")
+            changed = writer.execute("UPDATE harness_root_leases SET job_id=NULL,state='CONFIGURED',proof=? WHERE resource_key=? AND operation_id=? AND binding_id=? AND job_id=? AND state='ACTIVE' AND proof=?",
+                                     (encoded(proof), expected[0], expected[1], expected[2], expected[3], expected[5])).rowcount
+            if changed != 1:
+                raise ConfigError("Original root changed before retirement; no replacement lease was touched")
+            writer.commit()
+        except Exception as failure:
+            if writer is not None:
+                try:
+                    writer.rollback()
+                except Exception:
+                    pass  # This writer is never used to read/reconcile an outcome.
+            if isinstance(failure, ConfigError):
+                raise
+            raise ConfigError("Original root retirement persistence is unconfirmed; query the original job before retrying") from failure
+        finally:
+            if writer is not None:
+                try:
+                    writer.close()
+                except Exception:
+                    pass  # Do not mask the commit error or reuse this private writer.
         return self._cold_retirement_summary(proof)
 
     @staticmethod

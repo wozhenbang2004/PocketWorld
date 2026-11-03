@@ -1,5 +1,6 @@
 """Explicit owner retirement of a real original ACTIVE-root snapshot; controlled CLI only."""
 import copy
+from contextlib import contextmanager
 import errno
 import json
 import os
@@ -280,19 +281,52 @@ class ColdRootRetirementTests(unittest.TestCase):
         self.assertEqual(saved, self.lease())
         self.assertEqual(boundary, len(self.peer.methods()))
 
-    def commit_failure(self, after_commit):
-        original_db = self.manager.harness_configs.db
-        class FailedCommit:
-            def __getattr__(self, key): return getattr(original_db, key)
-            def commit(self):
-                if after_commit: original_db.commit()
-                raise sqlite3.OperationalError("controlled uncertain commit")
-        self.manager.harness_configs.db = FailedCommit()
+    @contextmanager
+    def failed_retirement_writes(self, after_commit=False, rollback_fails=False, close_fails=False):
+        connect, opened = sqlite3.connect, []
+        def failed_connection(*args, **kwargs):
+            db = connect(*args, **kwargs)
+            state = {"database": args[0], "uri": kwargs.get("uri"), "closed": False}
+            opened.append(state)
+            class FailedCommit:
+                def __getattr__(self, key): return getattr(db, key)
+                def commit(self):
+                    if after_commit: db.commit()
+                    state["pendingAtCommitError"] = db.in_transaction
+                    raise sqlite3.OperationalError("controlled uncertain commit")
+                def rollback(self):
+                    if rollback_fails:
+                        state["pendingAtRollbackError"] = db.in_transaction
+                        raise sqlite3.OperationalError("controlled failed rollback")
+                    db.rollback()
+                def close(self):
+                    state["pendingAtClose"] = db.in_transaction
+                    db.close()
+                    state["closed"] = True
+                    if close_fails:
+                        raise sqlite3.OperationalError("controlled failed close after actual close")
+            return FailedCommit()
+        # The injected errors belong to a real second SQLite connection, never
+        # to the original shared ledger or a synthetic transaction flag.
+        with patch("sqlite3.connect", side_effect=failed_connection):
+            yield opened
+
+    def committed_lease(self):
+        db = sqlite3.connect(str(self.manager.state / "operations.sqlite3"))
         try:
+            return db.execute("SELECT * FROM harness_root_leases WHERE resource_key=?", (self.active[0],)).fetchone()
+        finally:
+            db.close()
+
+    def commit_failure(self, after_commit):
+        with self.failed_retirement_writes(after_commit=after_commit) as opened:
             with self.assertRaisesRegex(RequestError, "persistence is unconfirmed"):
                 self.cancel()
-        finally:
-            self.manager.harness_configs.db = original_db
+        self.assertEqual(1, len(opened))
+        self.assertTrue(opened[0]["closed"])
+        self.assertTrue(opened[0]["uri"])
+        self.assertEqual((self.manager.state / "operations.sqlite3").as_uri() + "?mode=rw", opened[0]["database"])
+        self.assertFalse(self.manager.ledger.in_transaction)
         boundary = len(self.peer.methods())
         if after_commit:
             self.assertEqual("CONFIGURED", self.lease()[4])
@@ -312,6 +346,120 @@ class ColdRootRetirementTests(unittest.TestCase):
 
     def test_commit_error_after_commit_is_reconciled_without_a_second_retirement(self):
         self.commit_failure(True)
+
+    def test_commit_and_rollback_failure_never_publish_or_piggyback_uncommitted_retirement(self):
+        config = self.peer.fixture.file.read_bytes()
+        with self.failed_retirement_writes(rollback_fails=True) as opened:
+            with self.assertRaisesRegex(RequestError, "persistence is unconfirmed"):
+                self.cancel()
+        self.assertEqual(1, len(opened))
+        self.assertTrue(opened[0]["pendingAtCommitError"])
+        self.assertTrue(opened[0]["pendingAtRollbackError"])
+        self.assertTrue(opened[0]["pendingAtClose"])
+        self.assertTrue(opened[0]["closed"])
+        self.assertFalse(self.manager.ledger.in_transaction)
+        self.assertNotIn("harnessColdRootRetirement", self.manager.get(self.jobid))
+        self.assertEqual(self.active, self.committed_lease())
+        self.manager._save(self.job)  # An ordinary shared-ledger save cannot commit the failed write.
+        self.assertEqual(self.active, self.committed_lease())
+        self.assertEqual(config, self.peer.fixture.file.read_bytes())
+        self.assert_not_retired()
+
+    def test_commit_and_rollback_failure_retry_never_replays_uncommitted_success(self):
+        with self.failed_retirement_writes(rollback_fails=True) as opened:
+            with self.assertRaisesRegex(RequestError, "persistence is unconfirmed"):
+                self.cancel()
+            boundary = len(self.peer.methods())
+            with self.assertRaisesRegex(RequestError, "persistence is unconfirmed"):
+                self.cancel()
+        self.assertEqual(2, len(opened))
+        self.assertTrue(all(state["pendingAtRollbackError"] and state["closed"] for state in opened))
+        self.assertGreater(len(self.peer.methods()), boundary)
+        self.assertEqual(self.active, self.committed_lease())
+        self.assert_not_retired()
+        boundary = len(self.peer.methods())
+        self.assertEqual("retired", self.cancel()["harnessColdRootRetirement"]["status"])
+        self.assertGreater(len(self.peer.methods()), boundary)
+
+    def test_commit_and_rollback_failure_cannot_authorize_reviewed_restore(self):
+        with self.failed_retirement_writes(rollback_fails=True):
+            with self.assertRaisesRegex(RequestError, "persistence is unconfirmed"):
+                self.cancel()
+        config = self.peer.fixture.file.read_bytes()
+        with self.assertRaisesRegex(ConfigError, "COMMITTED/CONFIGURED"):
+            self.peer.fixture.restore()
+        self.assertEqual(config, self.peer.fixture.file.read_bytes())
+        self.assertEqual(self.active, self.committed_lease())
+        self.assert_not_retired()
+
+    def test_commit_after_error_with_rollback_and_close_errors_uses_only_committed_outcome(self):
+        with self.failed_retirement_writes(after_commit=True, rollback_fails=True, close_fails=True) as opened:
+            with self.assertRaisesRegex(RequestError, "persistence is unconfirmed") as failure:
+                self.cancel()
+        self.assertEqual("controlled uncertain commit", str(failure.exception.__cause__.__cause__))
+        self.assertEqual(1, len(opened))
+        self.assertFalse(opened[0]["pendingAtCommitError"])
+        self.assertFalse(opened[0]["pendingAtRollbackError"])
+        self.assertTrue(opened[0]["closed"])
+        self.assertFalse(self.manager.ledger.in_transaction)
+        committed, boundary = self.committed_lease(), len(self.peer.methods())
+        self.assertEqual("CONFIGURED", committed[4])
+        self.assertEqual("retired", self.manager.get(self.jobid)["harnessColdRootRetirement"]["status"])
+        self.assertEqual("retired", self.cancel()["harnessColdRootRetirement"]["status"])
+        self.assertEqual(committed, self.committed_lease())
+        self.assertEqual(boundary, len(self.peer.methods()))
+
+    def test_missing_original_ledger_is_not_created_as_a_new_retirement_database(self):
+        database = self.manager.state / "operations.sqlite3"
+        parked = database.with_suffix(".parked")
+        connect, created = sqlite3.connect, []
+        def missing(*args, **kwargs):
+            database.rename(parked)
+            try:
+                return connect(*args, **kwargs)
+            finally:
+                created.append(database.exists())
+                parked.rename(database)
+        with patch("sqlite3.connect", side_effect=missing), self.assertRaisesRegex(RequestError, "persistence is unconfirmed"):
+            self.cancel()
+        self.assertEqual([False], created)
+        self.assertFalse(self.manager.ledger.in_transaction)
+        self.assertEqual(self.active, self.committed_lease())
+        self.assert_not_retired()
+
+    def test_existing_unresolved_shared_transaction_cannot_publish_retirement_or_be_saved_by_retry(self):
+        self.cancel()
+        retired = self.lease()
+        self.manager.ledger.execute("DELETE FROM harness_root_leases")
+        self.manager.ledger.execute("INSERT INTO harness_root_leases VALUES (?,?,?,?,?,?)", self.active)
+        self.manager.ledger.commit()
+        self.manager.ledger.execute("UPDATE harness_root_leases SET job_id=?,state=?,proof=? WHERE resource_key=?", (retired[3], retired[4], retired[5], self.active[0]))
+        try:
+            self.assertTrue(self.manager.ledger.in_transaction)
+            self.assertNotIn("harnessColdRootRetirement", self.manager.get(self.jobid))
+            with self.assertRaisesRegex(RequestError, "unresolved transaction"):
+                self.cancel()
+            with self.assertRaisesRegex(ConfigError, "unresolved transaction"):
+                self.peer.fixture.restore()
+            self.assertTrue(self.manager.ledger.in_transaction)
+            self.assertEqual(self.active, self.committed_lease())
+        finally:
+            self.manager.ledger.rollback()
+        self.assert_not_retired()
+
+    def test_unsupported_interrupted_configured_workers_keep_original_cancel_behavior(self):
+        for worker in ("claude", "pi"):
+            with self.subTest(worker=worker):
+                self.job["worker"] = worker
+                try:
+                    with patch.object(self.manager.harness_configs, "cold_root_retirement", side_effect=AssertionError("Not a Codex cold job")), patch.object(self.manager, "_reconcile_original_process", side_effect=AssertionError("Not a Codex cold job")):
+                        result = self.cancel()
+                    self.assertEqual("interrupted", result["status"])
+                    self.assertTrue(result["originalCancellation"]["identityMatched"])
+                    self.assertNotIn("harnessColdRootRetirement", result)
+                    self.assert_not_retired()
+                finally:
+                    self.job["worker"] = "codex_app_server"
 
     def test_restoration_rejects_tampered_retirement_evidence(self):
         self.cancel()
