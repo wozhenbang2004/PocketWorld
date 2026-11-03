@@ -893,6 +893,7 @@
     "additionalClasses": [
       "dev.pocketengine.features.memory.MemoryRecallAgentJourneyNativeTest",
       "dev.pocketengine.features.memory.HistoricalMemoryRecallAgentNativeTest",
+      "dev.pocketengine.features.memory.TaskMemoryHistoryTest",
       "dev.pocketengine.features.memory.MemorySemanticRecallNativeTest",
       "dev.pocketengine.features.memory.MemoryHybridCandidateRetrievalNativeTest",
       "dev.pocketengine.features.memory.MemoryEntityAliasRetrievalNativeTest",

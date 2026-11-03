@@ -127,22 +127,38 @@ public final class HistoricalMemoryRecallAgentNativeTest {
             JSONObject args=arguments("historical");args.getJSONObject("constraints").put("eventBefore",PAST);
             try(Gateway gateway=new Gateway(f,(request,body)->{
                 if(request==1)return calls(recall("before-cold",args));
-                if(request==2)return answer("Historical retained prose: "+OLD);
-                if(request==3){assertFalse(body.toString().contains(OLD));assertTrue(body.toString().contains("reference_expired"));assertTrue(body.toString().contains(TaskMemoryHistory.RETIRED));return calls(recall("explicit-fresh-history",args));}
-                assertEquals(4,request);historical(toolResults(body).get(toolResults(body).size()-1));assertTrue(body.toString().contains(OLD));return answer("Fresh historical selection read; it remains historical, not authority.");
+                if(request==2)return calls(recall("derived-query-with-old-text",new JSONObject(args.toString()).put("query",OLD)));
+                if(request==3)return answer("Historical retained prose: "+OLD);
+                if(request==4){assertFalse(body.toString().contains(OLD));assertTrue(body.toString().contains("reference_expired"));assertTrue(body.toString().contains(TaskMemoryHistory.RETIRED));
+                    assertEquals("{}",callArguments(body.getJSONArray("messages"),"derived-query-with-old-text"));return calls(recall("explicit-fresh-history",args));}
+                assertEquals(5,request);historical(toolResults(body).get(toolResults(body).size()-1));assertTrue(body.toString().contains(OLD));return answer("Fresh historical selection read; it remains historical, not authority.");
             })){
                 assertEquals("needs_confirmation",f.run(gateway).status);gateway.assertHealthy();
                 String originalSelection=toolResults(gateway.requests.get(1)).get(0).getString("historySelectionId");
+                String originalArguments=callArguments(checkpoint(f.database,f.run),"derived-query-with-old-text");assertTrue(originalArguments.contains(OLD));
                 f.tasks.endAttempt(f.id,f.run,"needs_confirmation","Native fixture pause after read",new JSONObject());
                 // Separate native store, Book, Host, control and run; persisted original data is
                 // kept. No process-local historical token is copied into the restored task.
                 try(ColdRun cold=new ColdRun(f)){
-                    RunOutcome outcome=cold.run(f.goal,gateway);gateway.assertHealthy();assertEquals("needs_confirmation",outcome.status);assertEquals(4,gateway.requests.size());
-                    List<JSONObject> finalResults=toolResults(gateway.requests.get(3));JSONObject fresh=finalResults.get(finalResults.size()-1);
+                    RunOutcome outcome=cold.run(f.goal,gateway);gateway.assertHealthy();assertEquals("needs_confirmation",outcome.status);assertEquals(5,gateway.requests.size());
+                    List<JSONObject> finalResults=toolResults(gateway.requests.get(4));JSONObject fresh=finalResults.get(finalResults.size()-1);
                     assertNotEquals(originalSelection,fresh.getString("historySelectionId"));assertEquals(past.getString("id"),fresh.getJSONArray("records").getJSONObject(0).getString("id"));
-                    assertEquals(2,events(cold.tasks.get(f.id,false),"memory_history_reference_prepared").size());
+                    assertEquals(3,events(cold.tasks.get(f.id,false),"memory_history_reference_prepared").size());
+                    assertEquals(originalArguments,callArguments(checkpoint(f.database,f.run),"derived-query-with-old-text"));
+                    assertEquals(originalArguments,callArguments(checkpoint(f.database,cold.run),"derived-query-with-old-text"));
                 }
             }
+        }
+    }
+
+    private static String callArguments(JSONArray messages,String callId)throws Exception{
+        for(int i=0;i<messages.length();i++){JSONArray calls=messages.getJSONObject(i).optJSONArray("tool_calls");for(int j=0;calls!=null&&j<calls.length();j++){
+            JSONObject call=calls.getJSONObject(j);if(callId.equals(call.optString("id")))return call.getJSONObject("function").getString("arguments");
+        }}throw new AssertionError("original call pairing missing: "+callId);
+    }
+    private static JSONArray checkpoint(SQLiteDatabase database,String run)throws Exception{
+        try(var row=database.rawQuery("SELECT checkpoint FROM runs WHERE run_id=?",new String[]{run})){
+            assertTrue(row.moveToFirst());return new JSONObject(row.getString(0)).getJSONArray("messages");
         }
     }
 
