@@ -617,6 +617,14 @@ private fun NativeChannels(state: PocketUiState, controller: PocketWorldControll
 private fun NativePlugins(state: PocketUiState, controller: PocketWorldController) {
     val plugins = state.feature("plugins")
     CenterCaption("启用不等于授权。插件只能使用你已授予的工具权限；停止不会撤回远端已发生的效果。")
+    plugins.optJSONArray("registryUnavailable").objects().forEach { unavailable ->
+        val reason = when (unavailable.optString("code")) {
+            "authorization_required" -> "需要重新授权"
+            "discovery_required", "source_invalidated" -> "需要重新发现并审阅来源"
+            else -> "声明或原执行绑定暂不可核对"
+        }
+        CenterCaption("上次装配未提供 ${unavailable.optString("pluginId")}：$reason。其他可用工具保留；依赖此插件的工作配置仍会停止并要求核对。")
+    }
     plugins.optJSONArray("plugins").objects().forEach { plugin ->
         val manifest = plugin.optJSONObject("manifest") ?: JSONObject()
         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(manifest.optString("name", plugin.optString("id")), fontSize = 14.sp); CenterCaption("版本 " + manifest.optString("version") + " · " + (plugin.optJSONArray("grants")?.length() ?: 0) + " 项已授权限") }; if (manifest.optJSONObject("mcpSource") != null || manifest.optJSONArray("tools").objects().any { it.optString("kind") == "mcp" }) TextButton(onClick = { controller.openConnection("mcp") }) { Text(if (plugin.optBoolean("enabled")) "已启用 · 管理" else "已停用 · 管理", fontSize = 12.sp) } else Switch(plugin.optBoolean("enabled"), { controller.requestFeature("plugins", "enable", JSONObject().put("id", plugin.optString("id")).put("enabled", it)) }, enabled = "plugins.enable" !in state.moduleBusy) }

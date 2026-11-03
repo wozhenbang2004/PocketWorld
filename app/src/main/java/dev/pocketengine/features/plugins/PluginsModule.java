@@ -22,6 +22,7 @@ public final class PluginsModule implements EngineModule {
     private final Map<String,Invocation> active=new LinkedHashMap<>();
     private final Map<String,McpPreview> mcpPreviews=new LinkedHashMap<>();
     private final Map<String,McpClient> mcpClients=new LinkedHashMap<>();
+    private String registryUnavailable="[]";
     private final McpConfigImportAdapter configurationImports=new McpConfigImportAdapter();
     private static final long MCP_PREVIEW_TTL=10*60*1000L;
     private boolean closed;
@@ -48,7 +49,7 @@ public final class PluginsModule implements EngineModule {
     @Override public synchronized JSONObject snapshot()throws Exception {
         recoverMcpSecrets();pruneMcpPreviews();JSONArray all=list();for(int i=0;i<all.length();i++)all.put(i,publicPlugin(all.getJSONObject(i)));
         JSONArray pending=new JSONArray();for(Map.Entry<String,Invocation> entry:active.entrySet())pending.put(new JSONObject().put("operationId",entry.getKey()).put("pluginId",entry.getValue().pluginId).put("status",entry.getValue().control.isCancelled()?"stopping":"running"));
-        return new JSONObject().put("plugins",all).put("active",pending).put("execution","declarative_echo_https_or_mcp").put("mcpSupport",nativeMcpSupport()).put("nativeMcpConfigurationImport",new JSONObject().put("source","selected_saf_document").put("readOnly",true).put("maxBytes",McpConfigImportAdapter.MAX_BYTES).put("credentialsImported",false)).put("arbitraryCode",false).put("commands",new JSONArray().put("discoverMcp").put("installMcp").put("discardMcpPreview").put("install").put("previewInstall").put("history").put("previewRollback").put("rollback").put("enable").put("grant").put("remove").put("invoke").put("validateArguments").put("cancel").put("registry"));
+        return new JSONObject().put("plugins",all).put("active",pending).put("registryUnavailable",new JSONArray(registryUnavailable)).put("execution","declarative_echo_https_or_mcp").put("mcpSupport",nativeMcpSupport()).put("nativeMcpConfigurationImport",new JSONObject().put("source","selected_saf_document").put("readOnly",true).put("maxBytes",McpConfigImportAdapter.MAX_BYTES).put("credentialsImported",false)).put("arbitraryCode",false).put("commands",new JSONArray().put("discoverMcp").put("installMcp").put("discardMcpPreview").put("install").put("previewInstall").put("history").put("previewRollback").put("rollback").put("enable").put("grant").put("remove").put("invoke").put("validateArguments").put("cancel").put("registry"));
     }
     /** Opaque native result, not reconstructible from feature/model JSON or an arbitrary URI string. */
     public static final class SelectedMcpConfigurationDocument {
@@ -96,7 +97,7 @@ public final class PluginsModule implements EngineModule {
         if(command.equals("discoverMcp"))return discoverMcp(input);
         synchronized(this){
             if(closed)throw new IllegalStateException("插件执行器已关闭");
-            if(command.equals("registry"))return new JSONObject().put("tools",toolRegistry());
+            if(command.equals("registry"))return new JSONObject().put("tools",toolRegistry()).put("unavailable",new JSONArray(registryUnavailable));
             if(command.equals("cancel")){
                 String operationId=input.getString("operationId");Invocation invocation=active.get(operationId);
                 if(invocation==null)return new JSONObject().put("operationId",operationId).put("active",false).put("status","not_active");
@@ -763,10 +764,17 @@ public final class PluginsModule implements EngineModule {
     private void removeCredential(JSONObject plugin)throws Exception{String ref=plugin.optString("credentialRef");if(!ref.isEmpty())context.secrets.remove(ref);context.secrets.remove("plugin:"+plugin.optString("id"));}
     /** Only currently enabled, explicitly granted declarations are visible to the host's tool registry. */
     public synchronized JSONArray toolRegistry()throws Exception{
-        JSONArray result=new JSONArray(),plugins=list();
-        for(int i=0;i<plugins.length();i++){
-            JSONObject plugin=plugins.getJSONObject(i);if(!plugin.optBoolean("enabled")||plugin.optBoolean("mcpCatalogueInvalidated"))continue;if(plugin.optJSONObject("mcpAuthorization")!=null)try{oauth().credential(plugin.getJSONObject("mcpAuthorization"));}catch(Exception inactive){continue;}
-            JSONArray granted=plugin.optJSONArray("grants"),tools=plugin.getJSONObject("manifest").getJSONArray("tools");
+        // Shared storage failures remain fatal. Optional per-installation failures do not
+        // hide healthy native tools or publish a partial set from the failed plugin.
+        JSONArray plugins=list();
+        PluginRegistryAssembly.Result assembled=PluginRegistryAssembly.assemble(plugins,plugin->{
+            if(plugin.optBoolean("mcpCatalogueInvalidated"))throw new PluginRegistryAssembly.Unavailable("source_invalidated");
+            if(plugin.optJSONObject("mcpAuthorization")!=null)try{oauth().credential(plugin.getJSONObject("mcpAuthorization"));}
+                catch(java.util.concurrent.CancellationException cancelled){throw cancelled;}
+                catch(InterruptedException cancelled){throw cancelled;}
+                catch(Exception inactive){throw new PluginRegistryAssembly.Unavailable("authorization_required");}
+            PluginRules.manifest(plugin.getJSONObject("manifest")); // Never replace an invalid schema with an empty/permissive schema.
+            JSONArray result=new JSONArray(),granted=plugin.optJSONArray("grants"),tools=plugin.getJSONObject("manifest").getJSONArray("tools");
             for(int j=0;j<tools.length();j++){
                 JSONObject tool=tools.getJSONObject(j);String name=tool.getString("name");boolean allowed=false;
                 if(granted!=null)for(int g=0;g<granted.length();g++)if(("tool:"+name).equals(granted.optString(g)))allowed=true;
@@ -774,8 +782,8 @@ public final class PluginsModule implements EngineModule {
                 if("mcp".equals(tool.optString("kind"))&&"stdio".equals(tool.optString("transport")))localProgramSummary(plugin,tool);
                 if("mcp".equals(tool.optString("kind"))&&!"stdio".equals(tool.optString("transport"))){
                     McpClient client=mcpClients.get(installationId(plugin));
-                    if(client!=null&&!client.usable()&&!client.needsDiscovery())continue;
-                    if(client==null&&McpData.LEGACY.equals(tool.optString("protocolVersion")))continue;
+                    if(client!=null&&!client.usable()&&!client.needsDiscovery())throw new PluginRegistryAssembly.Unavailable("discovery_required");
+                    if(client==null&&McpData.LEGACY.equals(tool.optString("protocolVersion")))throw new PluginRegistryAssembly.Unavailable("discovery_required");
                 }
                 String id="plugin:"+plugin.getString("id")+":"+name;
                 // Native-only dependency identity. No credential value is copied; provider
@@ -783,8 +791,10 @@ public final class PluginsModule implements EngineModule {
                 JSONObject binding=executionBinding(plugin,tool);
                 result.put(new JSONObject().put("id",id).put("pluginId",plugin.getString("id")).put("tool",name).put("name",functionName(id)).put("description",tool.optString("description",name)).put("schema",JsonFiles.copy(tool.getJSONObject("schema"))).put("version",plugin.getJSONObject("manifest").getString("version")).put("installationId",installationId(plugin)).put("effect",tool.optString("effect",tool.getString("kind").equals("echo")?"read":"write")).put("effectSource","plugin_declaration_with_owner_grant").put("executionBinding",binding));
             }
-        }
-        return result;
+            return result;
+        });
+        registryUnavailable=assembled.unavailable().toString();
+        return assembled.tools();
     }
     private static JSONObject executionBinding(JSONObject plugin,JSONObject tool)throws Exception {
         JSONObject binding=new JSONObject().put("pluginId",plugin.getString("id")).put("installationId",installationId(plugin))

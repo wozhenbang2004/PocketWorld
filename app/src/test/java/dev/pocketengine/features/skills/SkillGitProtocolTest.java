@@ -57,6 +57,15 @@ public final class SkillGitProtocolTest {
         @Override public void close(){server.stop(0);}
     }
     static SkillGitSource source(){return new SkillGitSource("https://github.com/demo/skills.git","main","selected");}
+    @Test public void pastedSkillLinkUsesTheExistingPinnedSubtreeClient()throws Exception {
+        try(Server server=new Server(files("1"))) {
+            SkillGitSource pasted=SkillGitSource.fromInput("https://github.com/demo/skills/blob/main/selected/SKILL.md","main","");
+            SkillGitSource.Fetched fetched=server.client().fetch(pasted,new RunControl());
+            assertEquals(source(),fetched.source);assertEquals(COMMIT,fetched.commit);
+            assertEquals(SkillBook.digest(files("1")),fetched.digest);
+            assertEquals(5,server.requests.get());assertFalse(fetched.view().getBoolean("executionAuthorized"));
+        }
+    }
     @Test public void actualSubtreeReadPinsCommitAndExactContentWithoutFetchingUnselectedTree()throws Exception {
         try(Server server=new Server(files("1"))) {
             SkillGitSource.Fetched result=server.client().fetch(source(),new RunControl());

@@ -22,7 +22,11 @@ def parser():
     sub = command.add_subparsers(dest="action", required=True)
     sub.add_parser("doctor"); sub.add_parser("connect", help="Verify the selected phone and read its current capabilities; no automatic fallback")
     sub.add_parser("capabilities", help="Read the selected phone's current native capabilities and signed scope receipts")
-    sub.add_parser("list"); sub.add_parser("mcp", help="MCP stdio server (2025-11-25)")
+    sub.add_parser("list"); sub.add_parser("mcp", help="MCP stdio server (2026-07-28 per-request metadata; 2025-11-25 initialize)")
+    sub.add_parser("mcp-protocols", help="Show inbound server and outbound Android plugin-client support separately; no phone connection")
+    diagnostic = sub.add_parser("diagnostic-export", help="Preview a bounded redacted report from one original task; no uploads")
+    diagnostic.add_argument("operation_id")
+    diagnostic.add_argument("--output", type=Path, help="New local file; requires terminal confirmation of the exact displayed preview SHA-256")
     pair = sub.add_parser("pair", help="Open the existing native Windows pairing window; both devices still require owner review")
     pair.add_argument("--config", required=True, type=Path, help="Existing native Companion configuration; no identity or token will be provisioned")
     pair.add_argument("--development-state", action="store_true", help="Explicitly use the original source-tree development pairing entry")
@@ -77,6 +81,8 @@ class SelectedPhoneClient:
         if params.get("peerDeviceId") != self.peer:
             raise ClientError("The CLI remains bound to the explicitly selected phone")
         return self.client.execute(action, params)
+    def redact_diagnostic_text(self, text):
+        return self.client.redact_diagnostic_text(text)
 
 
 SETTLED = {"succeeded", "failed", "cancelled", "interrupted", "expired", "rejected"}
@@ -183,11 +189,35 @@ def main(argv=None):
     command = parser()
     args = command.parse_args(argv)
     try:
+        if args.action == "mcp-protocols":
+            from phone_task_mcp import protocol_support
+            print(json.dumps(protocol_support(), ensure_ascii=False, separators=(",", ":")))
+            return 0
         if args.action == "pair":
             return pair_native(args)
         if not args.endpoint or not args.token_file or not args.phone:
             command.error("This action requires --endpoint, --token-file and --phone. Use pair --help for first connection.")
         client = SelectedPhoneClient(Client(args.endpoint, args.token_file, args.ca_file), args.phone)
+        if args.action == "diagnostic-export":
+            import hashlib
+            from phone_task_diagnostics import collect, preview_bytes, save_reviewed
+            report = collect(client, args.phone, args.operation_id)
+            raw = preview_bytes(report)
+            print(raw.decode("utf-8"), end="", flush=True)
+            digest = hashlib.sha256(raw).hexdigest()
+            print("Diagnostic preview SHA-256: " + digest, file=sys.stderr, flush=True)
+            if args.output is not None:
+                print("Local destination: " + str(args.output.expanduser().absolute()), file=sys.stderr, flush=True)
+                if not sys.stdin.isatty():
+                    raise ClientError("Review the preview in a terminal before exporting; no file was written")
+                print("To export exactly this preview, type its full SHA-256 (anything else cancels): ", file=sys.stderr, end="", flush=True)
+                confirmed = sys.stdin.readline().strip()
+                if confirmed != digest:
+                    print("Export cancelled; no file was written.", file=sys.stderr)
+                    return 2
+                save_reviewed(raw, args.output, confirmed)
+                print("Diagnostic exported to the reviewed local destination. Nothing was uploaded.", file=sys.stderr)
+            return 0 if report["outcome"] == "captured" and not report["partial"] else 3
         if args.action == "mcp":
             from phone_task_mcp import stdio
             stdio(client, sys.stdin.buffer, sys.stdout.buffer)
