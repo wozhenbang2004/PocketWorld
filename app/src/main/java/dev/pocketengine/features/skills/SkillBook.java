@@ -712,7 +712,8 @@ public final class SkillBook {
         synchronized(lock){return executionSnapshotLocked(scope,id,revision,digest,capabilities,now);}
     }
     interface ExecutionAction<T>{T run(ExecutionSnapshot snapshot)throws Exception;}
-    /** Keep current-package validation and the bounded submit in the same registry critical section. */
+    /** Capture and validate exact current bytes under the registry lock. Callers must
+     * leave this section before waiting for a worker that rechecks source authority. */
     <T>T withExecutionSnapshot(JSONObject scope,String id,int revision,String digest,Set<String> capabilities,long now,ExecutionAction<T> action)throws Exception {
         synchronized(lock){return action.run(executionSnapshotLocked(scope,id,revision,digest,capabilities,now));}
     }

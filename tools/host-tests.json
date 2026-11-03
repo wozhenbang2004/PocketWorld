@@ -838,6 +838,19 @@
     "robolectric": true,
     "description": "Original native owner/Supervisor/TaskStore remote Tasks, resources/subscriptions and synthetic OAuth over real loopback HTTP/TLS; exact identity, unknown no replay, cold result retention, cancellation and stale UI callbacks. Production and selected tests compile against SDK35. No actual account authorization or Android device claim."
   },
+  "phone-task-platform": {
+    "class": "dev.pocketengine.features.devices.PhoneTaskInputsNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.devices.PhoneTaskApplicationFlowTest",
+      "dev.pocketengine.features.devices.DeviceProtocolTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "python": true,
+    "description": "Inbound phone task HTTP/MCP/CLI/Desk on the original native pairing, TaskStore, owner confirmation, PhoneRunService and Runner. Real loopback Python Client/CompanionHTTP/mTLS/native ingress and synthetic model fixture; exact ordinary question and phone-reviewed resume gates, no new task/runner/grant or automatic replay. Shared Java/Python protocol vectors retained. No physical Android/USB, real model/account or public relay deployment claim."
+  },
   "browser-owner-interactions": {
     "class": "dev.pocketengine.browser.BrowserPopupNativeTest",
     "additionalClasses": [

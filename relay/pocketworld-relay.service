@@ -1,0 +1,24 @@
+[Unit]
+Description=PocketWorld opaque TLS byte relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pocketworld-relay
+Group=pocketworld-relay
+WorkingDirectory=/opt/pocketworld/relay
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStartPre=/opt/pocketworld/relay/.venv/bin/python /opt/pocketworld/relay/pocket_relay_host.py check --config /etc/pocketworld-relay/routes.json --cert /etc/pocketworld-relay/tls.pem --key /etc/pocketworld-relay/tls.key
+ExecStart=/opt/pocketworld/relay/.venv/bin/python /opt/pocketworld/relay/pocket_relay_host.py run --config /etc/pocketworld-relay/routes.json --cert /etc/pocketworld-relay/tls.pem --key /etc/pocketworld-relay/tls.key
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

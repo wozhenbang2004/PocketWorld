@@ -204,6 +204,8 @@ public final class McpResourceEvidence {
     }
     private static void requirePublicationMetadata(JSONObject actual,JSONObject event)throws Exception{
         JSONObject origin=actual.getJSONObject("source"),nativePublication=origin.getJSONObject("nativePublication");
+        // AttachmentBook's public metadata intentionally omits source.uri/url. The original
+        // URI is checked against the SHA-bound private JSON in readRetainedText, not this view.
         if(!event.getString("attachmentId").equals(actual.optString("id"))||!event.getString("sha256").equals(actual.optString("sha256"))||event.getLong("size")!=actual.optLong("size",-1)
                 ||!"application/json".equals(actual.optString("mimeType"))||!"owner".equals(actual.optString("principalId"))||!"private".equals(actual.optString("spaceId"))
                 ||actual.optBoolean("outputSourceRetired")||!ROLE.equals(origin.optString("kind"))||origin.has("groupSpaceId")||!ROLE.equals(nativePublication.optString("role")))throw new SecurityException("原MCP附件不是原私人历史快照");
@@ -215,7 +217,7 @@ public final class McpResourceEvidence {
                 ||event.getInt("epoch")!=origin.optInt("epoch")||!event.getString("publicationId").equals(origin.optString("publicationId"))
                 ||!event.getString("publicationId").equals(nativePublication.optString("operationId"))||!event.getString("sha256").equals(origin.optString("snapshotSha256"))
                 ||!event.getString("readOperationId").equals(origin.optString("readOperationId"))||!event.getString("contentDigest").equals(origin.optString("contentDigest"))
-                ||!event.getString("descriptorDigest").equals(origin.optString("descriptorDigest"))||!event.getString("uri").equals(origin.optString("uri"))
+                ||!event.getString("descriptorDigest").equals(origin.optString("descriptorDigest"))
                 ||!McpData.digest(event.getJSONObject("source")).equals(McpData.digest(origin.getJSONObject("mcpSource"))))throw new SecurityException("原MCP快照保存来源不匹配");
     }
     private static JSONObject checkedResult(JSONObject supplied)throws Exception{

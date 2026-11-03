@@ -319,15 +319,31 @@ public class McpClientTest {
             JSONObject failure=client.query(tool,"fixture-remote-task",new RunControl());assertTrue(failure.getJSONObject("error").getBoolean("dataOmitted"));assertFalse(failure.toString().contains("test-secret"));assertEquals(0,f.count("tasks/update"));assertEquals(0,f.count("sampling/createMessage"));
         }
     }
-    @Test public void taskRestartCanQueryKnownHandleWithoutReplayingToolAndDescriptorReplacementBlocksQuery()throws Exception {
+    @Test public void taskRestartQueriesKnownHandleWithoutRediscoveryOrReplayAndRejectsReplacedAuthority()throws Exception {
         try(McpFixture f=new McpFixture()){
             f.tasksSupport=true;JSONObject saved;
             try(McpClient first=new McpClient(f.endpoint(),"")){saved=declaration(first,first.discover(new RunControl()));f.result=task("working",true);first.start(saved,new JSONObject(),new RunControl());}
+            int toolLists=f.count("tools/list");
             f.handler=e->{if(e.method().equals("tasks/get"))e.json(task("working",false));else f.standard(e);};
             try(McpClient restored=new McpClient(f.endpoint(),"")){
-                restored.discover(new RunControl());assertEquals("working",restored.query(saved,"fixture-remote-task",new RunControl()).getString("status"));assertEquals(1,f.count("tools/call"));
-                f.definitions.getJSONObject(0).put("description","replacement");try{restored.query(saved,"fixture-remote-task",new RunControl());fail();}catch(Exception expected){}
-                assertEquals(1,f.count("tasks/get"));assertEquals(1,f.count("tools/call"));
+                restored.connectForTask(saved,new RunControl());assertEquals("working",restored.query(saved,"fixture-remote-task",new RunControl()).getString("status"));
+                f.definitions.getJSONObject(0).put("description","replacement")
+                        .put("inputSchema",new JSONObject().put("type","object").put("additionalProperties",false));
+                assertNotEquals(saved.getString("descriptorDigest"),McpData.digest(f.definitions.getJSONObject(0)));
+                assertEquals("working",restored.query(saved,"fixture-remote-task",new RunControl()).getString("status"));
+                assertEquals(2,f.count("tasks/get"));assertEquals(toolLists,f.count("tools/list"));assertEquals(1,f.count("tools/call"));
+                restored.close();int requests=f.received.size();
+                assertThrows(Exception.class,()->restored.query(saved,"fixture-remote-task",new RunControl()));assertEquals(requests,f.received.size());
+            }
+            // A known task survives tool-schema changes, but never a different server or lost
+            // Tasks negotiation. Once invalidated, restoring the peer cannot revive this client.
+            for(boolean replaceServer:new boolean[]{true,false})try(McpClient restored=new McpClient(f.endpoint(),"")){
+                restored.connectForTask(saved,new RunControl());
+                if(replaceServer)f.serverVersion="replacement";else f.tasksSupport=false;
+                assertThrows(Exception.class,()->restored.query(saved,"fixture-remote-task",new RunControl()));assertFalse(restored.usable());
+                f.serverVersion="1";f.tasksSupport=true;int requests=f.received.size();
+                assertThrows(Exception.class,()->restored.query(saved,"fixture-remote-task",new RunControl()));assertEquals(requests,f.received.size());
+                assertEquals(2,f.count("tasks/get"));assertEquals(toolLists,f.count("tools/list"));assertEquals(1,f.count("tools/call"));
             }
         }
     }

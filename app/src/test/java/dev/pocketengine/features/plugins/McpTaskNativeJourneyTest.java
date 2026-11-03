@@ -249,6 +249,29 @@ public final class McpTaskNativeJourneyTest {
         @Override public void close() { control.cancel(); host.close(); }
     }
 
+    private static void assertCompleteRetainedResult(String retained, JSONObject ref) throws Exception {
+        assertTrue(ref.getBoolean("retainedNativeDataComplete"));
+        assertTrue(ref.has("upstreamTruncated")); assertTrue(ref.isNull("upstreamTruncated"));
+        assertTrue(retained.length() > 100000); assertFalse(retained.contains(TOKEN));
+        JSONObject saved = new JSONObject(retained), result = saved.getJSONObject("result");
+        assertEquals("pocketworld.mcp-returned-data.v1", saved.getString("format"));
+        assertEquals("supported_text_and_structured_content_fields", saved.getString("sourceCoverage"));
+        assertFalse(saved.getBoolean("upstreamTruncationKnown")); assertFalse(saved.getBoolean("unsupportedContentOmitted"));
+        assertTrue(result.getBoolean("isError")); assertEquals(0, result.getJSONArray("omittedContent").length());
+        JSONArray content = result.getJSONArray("content"); assertEquals(1, content.length());
+        assertEquals("text", content.getJSONObject(0).getString("type"));
+        assertEquals("A".repeat(25000) + NEEDLE + "Z".repeat(35000) + "[凭据已隐藏]", content.getJSONObject(0).getString("text"));
+        JSONObject structured = result.getJSONObject("structuredContent");
+        assertEquals("S".repeat(40000), structured.getString("detail")); assertFalse(structured.has("authorization"));
+        byte[] bytes = retained.getBytes(StandardCharsets.UTF_8);
+        JSONObject range = ref.getJSONObject("retainedRange");
+        assertEquals(0, range.getInt("offset")); assertEquals("UTF-16", range.getString("unit"));
+        assertEquals(retained.length(), range.getInt("chars")); assertEquals(bytes.length, range.getInt("utf8Bytes"));
+        StringBuilder digest = new StringBuilder("sha256:");
+        for (byte value : MessageDigest.getInstance("SHA-256").digest(bytes)) digest.append(String.format(Locale.ROOT, "%02x", value & 255));
+        assertEquals(digest.toString(), ref.getString("revision"));
+    }
+
     @Test public void originalHostTaskColdRecoveryCapturesLongResultWithoutSchemaRediscoveryOrReplay() throws Exception {
         try (Peer peer = new Peer(); Domain domain = new Domain(peer); Attempt attempt = new Attempt(domain)) {
             assertEquals("unknown", attempt.dispatch().getString("status"));
@@ -267,17 +290,20 @@ public final class McpTaskNativeJourneyTest {
             assertEquals("receipt", domain.state(attempt)); assertFalse(domain.tasks.hasUnresolved(attempt.task));
             assertEquals(1, peer.wire.count("tools/call")); assertEquals(originalLists, peer.wire.count("tools/list"));
             assertEquals(1, peer.wire.count("tasks/get")); assertEquals(1, domain.outputs());
-            JSONObject capture = completed.getJSONObject("outputCapture"); assertEquals("stored", capture.getString("status"));
+            JSONObject capture = completed.getJSONObject("outputCapture");
+            // All native returned bytes are retained; an RPC completion cannot prove that the
+            // remote server did not truncate before returning them. Keep that distinct unknown.
+            assertEquals("partial", capture.getString("status"));
+            assertEquals("native_output_upstream_completeness_unknown", capture.getString("reason"));
+            assertEquals(1, capture.getJSONArray("outputRefs").length());
             JSONObject ref = capture.getJSONArray("outputRefs").getJSONObject(0);
             assertEquals(attempt.task, ref.getString("taskId")); assertEquals(attempt.run, ref.getString("runId"));
             assertEquals(attempt.operation, ref.getString("operationId")); assertEquals("MCP_RESULT_JSON", ref.getString("captureKind"));
-            String retained = domain.retained(ref); assertTrue(retained.contains(NEEDLE)); assertTrue(retained.length() > 100000); assertFalse(retained.contains(TOKEN));
-            StringBuilder digest = new StringBuilder("sha256:");
-            for (byte value : MessageDigest.getInstance("SHA-256").digest(retained.getBytes(StandardCharsets.UTF_8))) digest.append(String.format(Locale.ROOT, "%02x", value & 255));
-            assertEquals(digest.toString(), ref.getString("revision"));
+            assertCompleteRetainedResult(domain.retained(ref), ref);
             assertFalse(domain.tasks.get(attempt.task, false).toString().contains(TOKEN));
             int requests = peer.wire.received.size(); JSONObject duplicate = domain.query(attempt);
             assertFalse(duplicate.getBoolean("networkRequested")); assertEquals(requests, peer.wire.received.size());
+            assertEquals(McpJson.digest(capture), McpJson.digest(duplicate.getJSONObject("outputCapture")));
             assertEquals(1, domain.tasks.get(attempt.task, false).getJSONArray("operations").length()); assertEquals(1, domain.tasks.list().length());
             assertTrue(peer.wire.failures.toString(), peer.wire.failures.isEmpty());
         }
@@ -392,7 +418,8 @@ public final class McpTaskNativeJourneyTest {
             assertTrue(domain.inner(attempt).getBoolean("resolved")); assertEquals("receipt", domain.state(attempt));
             JSONObject original = domain.receipt(attempt);
             assertEquals("response_received", original.getString("status")); assertFalse(original.getBoolean("verified"));
-            JSONObject capture = original.getJSONObject("outputCapture"); assertEquals("stored", capture.getString("status"));
+            JSONObject capture = original.getJSONObject("outputCapture"); assertEquals("partial", capture.getString("status"));
+            assertEquals("native_output_upstream_completeness_unknown", capture.getString("reason"));
             assertEquals(1, capture.getJSONArray("outputRefs").length());
             JSONObject ref = capture.getJSONArray("outputRefs").getJSONObject(0);
             assertEquals(attempt.task, ref.getString("taskId")); assertEquals(attempt.run, ref.getString("runId"));
@@ -402,8 +429,7 @@ public final class McpTaskNativeJourneyTest {
             JSONObject recovered = domain.query(attempt);
             assertFalse(recovered.getBoolean("networkRequested")); assertEquals(requests, peer.wire.received.size());
             assertEquals(originalCapture, McpJson.digest(recovered.getJSONObject("outputCapture")));
-            String retained = domain.retained(ref);
-            assertTrue(retained.length() > 100000); assertTrue(retained.contains(NEEDLE)); assertFalse(retained.contains(TOKEN));
+            assertCompleteRetainedResult(domain.retained(ref), ref);
             assertEquals(1, domain.outputs()); assertEquals(1, peer.wire.count("tasks/get")); assertEquals(1, peer.wire.count("tools/call"));
             assertTrue(peer.wire.failures.toString(), peer.wire.failures.isEmpty());
         }

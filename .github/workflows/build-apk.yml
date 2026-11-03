@@ -1,10 +1,25 @@
 name: Build private debug APK
-run-name: ${{ github.event_name == 'pull_request' && 'MCP, Skills, profiles and memory host tests' || github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && format('Host tests · {0}', inputs.host_groups != '' && 'selected batch' || inputs.host_group) || 'Debug APK' }} · ${{ github.ref_name }} · ${{ github.run_number }}
+run-name: ${{ github.event_name == 'pull_request' && 'MCP, Skills, profiles, phone and memory host tests' || github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && format('Host tests · {0}', inputs.host_groups != '' && 'selected batch' || inputs.host_group) || 'Debug APK' }} · ${{ github.ref_name }} · ${{ github.run_number }}
 
 on:
   pull_request:
     branches: [main]
     paths:
+      - '.github/workflows/build-apk.yml'
+      - 'companion/phone_task*'
+      - 'companion/test_phone_task*'
+      - 'companion/device_*'
+      - 'companion/pocket_companion.py'
+      - 'protocol/device-v1/**'
+      - 'relay/**'
+      - 'app/src/main/java/dev/pocketengine/features/devices/**'
+      - 'app/src/main/java/dev/pocketengine/store/TaskStore*'
+      - 'app/src/main/java/dev/pocketengine/EngineApplication.java'
+      - 'app/src/main/java/dev/pocketengine/PhoneRunService.java'
+      - 'app/src/main/kotlin/dev/pocketengine/ui/DevicePairedTaskControls.kt'
+      - 'app/src/hostTest/java/dev/pocketengine/features/devices/PhoneTask*'
+      - 'app/src/test/java/dev/pocketengine/features/devices/DeviceProtocolTest.java'
+      - 'tools/host-tests*'
       - 'app/src/main/java/dev/pocketengine/features/memory/**'
       - 'app/src/main/java/dev/pocketengine/features/HostToolSupervisor.java'
       - 'app/src/main/java/dev/pocketengine/runtime/AgentRunner.java'
@@ -16,7 +31,6 @@ on:
       - 'app/src/hostTest/java/dev/pocketengine/features/skills/LearnedMethodApplicationsNativeTest.java'
       - 'app/src/test/resources/memory/**'
       - 'tools/host-tests.json'
-      - '.github/workflows/build-apk.yml'
       - 'tools/host-tests*'
       - 'app/src/main/java/dev/pocketengine/features/plugins/**'
       - 'app/src/main/java/dev/pocketengine/features/skills/**'
@@ -52,7 +66,7 @@ on:
         description: 'Used only for target=host-tests; deliberately no full-suite option'
         type: choice
         default: device-receiver
-        options: [mcp-ecosystem, mcp-local-discovery, mcp-stdio-framing, mcp-prompts, mcp-health, project-file-operations, project-file-search, browser-expression, device-receiver, managed-runtime, gateway-continuation, memory-automatic, memory-assertion-recall, memory-consolidation, memory-learning-assertions, memory-experience, browser-long-page, phone-observation-boundaries, phone-sensitive-owner, agent-preferences, aion-core, aion-mcp-skills, aion-office, aion-conversations, remote-transport, aion-team-catalog, magpie-work-profile, native-operation-event, browser-document-download, browser-native-sequence, retained-development-admission, runtime-health, managed-skills, aion-work-profile-targets, aion-worker-entrypoint, runtime-activity, runtime-thermal-log-policy, aion-mcp-config, aion-capability-observations, aion-team-templates, local-phone-leases, script-artifact-publication, phone-audio-owner, schedule-proposals, native-duplex-pipes, aion-tool-discovery, aion-team-wake, memory-project-namespaces, request-clock, runner-repeat-notice, runner-budget-stream, alma-child-sources, alma-pi-no-tools, native-normal-cleanup, memory-archive-currentness, runtime-preparation-cancel, runtime-log-tail-recovery, managed-skill-private-artifacts, model-capability-probe, runtime-recovery-admission, aion-team-research-read, runtime-diagnostic-metadata, legacy-command-receipt-recovery, memory-recall-quality, memory-evidence-plan, memory-method-quality, browser-owner-interactions, browser-native-input, browser-artifact-upload, browser-network-barriers, runtime-development-continuity]
+        options: [mcp-ecosystem, mcp-local-discovery, mcp-stdio-framing, mcp-prompts, mcp-health, project-file-operations, project-file-search, browser-expression, device-receiver, managed-runtime, gateway-continuation, memory-automatic, memory-assertion-recall, memory-consolidation, memory-learning-assertions, memory-experience, browser-long-page, phone-observation-boundaries, phone-sensitive-owner, agent-preferences, aion-core, aion-mcp-skills, aion-office, aion-conversations, remote-transport, aion-team-catalog, magpie-work-profile, native-operation-event, browser-document-download, browser-native-sequence, retained-development-admission, runtime-health, managed-skills, aion-work-profile-targets, aion-worker-entrypoint, runtime-activity, runtime-thermal-log-policy, aion-mcp-config, aion-capability-observations, aion-team-templates, local-phone-leases, script-artifact-publication, phone-audio-owner, schedule-proposals, native-duplex-pipes, aion-tool-discovery, aion-team-wake, memory-project-namespaces, request-clock, runner-repeat-notice, runner-budget-stream, alma-child-sources, alma-pi-no-tools, native-normal-cleanup, memory-archive-currentness, runtime-preparation-cancel, runtime-log-tail-recovery, managed-skill-private-artifacts, model-capability-probe, runtime-recovery-admission, aion-team-research-read, runtime-diagnostic-metadata, legacy-command-receipt-recovery, memory-recall-quality, memory-evidence-plan, memory-method-quality, browser-owner-interactions, browser-native-input, browser-artifact-upload, browser-network-barriers, runtime-development-continuity, phone-task-platform]
       host_groups:
         description: 'Optional explicit comma-separated batch (max 16); overrides host_group, no full-suite wildcard. Chromium groups use individual mode.'
         type: string
@@ -250,7 +264,7 @@ jobs:
           retention-days: 7
 
   host-tests:
-    # Bounded MCP/Skills, Profile composition and memory groups on affected private PRs.
+    # Bounded MCP/Skills, Profile composition, phone and memory groups on affected private PRs.
     # Separate from APK pushes; no PR packaging or signing.
     if: ${{ github.event.repository.private && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests') }}
     runs-on: ubuntu-24.04
@@ -260,7 +274,7 @@ jobs:
         shell: bash
     env:
       HOST_TEST_GROUP: ${{ github.event_name == 'pull_request' && 'mcp-ecosystem' || inputs.host_group }}
-      HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && 'mcp-ecosystem,mcp-local-discovery,mcp-stdio-framing,mcp-prompts,mcp-health,aion-mcp-skills,managed-skills,managed-skill-private-artifacts,magpie-work-profile,aion-work-profile-targets,memory-recall-quality,memory-evidence-plan,memory-method-quality' || inputs.host_groups }}
+      HOST_TEST_GROUPS: ${{ github.event_name == 'pull_request' && 'mcp-ecosystem,mcp-local-discovery,mcp-stdio-framing,mcp-prompts,mcp-health,aion-mcp-skills,managed-skills,managed-skill-private-artifacts,magpie-work-profile,aion-work-profile-targets,memory-recall-quality,memory-evidence-plan,memory-method-quality,phone-task-platform' || inputs.host_groups }}
       POCKETWORLD_HOST_GRADLE_JVMARGS: '-Xmx3072m -Dfile.encoding=UTF-8'
     steps:
       - name: Check out selected revision
@@ -321,6 +335,10 @@ jobs:
           echo "CHROME_BIN=$CHROME_BIN" >> "$GITHUB_ENV"
           "$CHROME_BIN" --version >> build-artifacts/host-tests/tool-versions.txt
 
+      - name: Install pinned phone platform fixture dependencies
+        if: ${{ env.HOST_TEST_GROUP == 'phone-task-platform' || contains(env.HOST_TEST_GROUPS, 'phone-task-platform') }}
+        run: python3 -m pip install --disable-pip-version-check -r companion/requirements-device-identity.txt -r relay/requirements.txt
+
       - name: Run the selected original host test bodies
         id: selected_host_tests
         run: |
@@ -332,6 +350,19 @@ jobs:
           for group in "${HOST_GROUPS[@]}"; do HOST_ARGS+=(--group "$group"); done
           python3 -B tools/host-tests.py "${HOST_ARGS[@]}" --online \
             --output build-artifacts/host-tests 2>&1 | tee build-artifacts/host-tests/host-tests.log
+
+      - name: Verify phone HTTP MCP CLI Desk USB and self-host relay boundaries
+        if: ${{ contains(fromJSON(steps.selected_host_tests.outputs.groups || '[]'), 'phone-task-platform') }}
+        run: |
+          set -euo pipefail
+          (
+            python3 -B protocol/device-v1/verify_profile.py
+            cd companion
+            python3 -B -m unittest test_phone_tasks test_phone_task_client test_phone_task_api test_phone_task_receipts test_phone_task_usb test_phone_task_upgrade \
+              test_device_protocol test_device_transport test_device_pairing test_device_companion test_device_relay_leases -v
+            cd ../relay
+            python3 -B -m unittest test_selfhost -v
+          ) 2>&1 | tee build-artifacts/host-tests/phone-platform-boundaries.log
 
       - name: Prepare official isolated Chromium fixture runtime
         if: ${{ inputs.host_groups == '' && inputs.host_group == 'browser-long-page' }}

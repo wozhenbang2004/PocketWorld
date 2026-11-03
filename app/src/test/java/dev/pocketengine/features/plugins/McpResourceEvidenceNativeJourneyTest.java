@@ -242,6 +242,7 @@ public final class McpResourceEvidenceNativeJourneyTest {
             assertFalse(saved.getBoolean("executionAuthorized")); assertFalse(saved.getBoolean("automaticConversationInjection"));
             assertEquals(1, fixture.repo.book.list().length()); assertEquals(1, fixture.events(McpResourceEvidence.EVENT_TYPE));
             assertEquals(1, fixture.tasks.ownerAttachmentReferences(fixture.task).length());
+            assertFalse(fixture.repo.book.get(attachment.getString("id")).getJSONObject("source").has("uri"));
             String original = fixture.retained(attachment); JSONObject retained = new JSONObject(original);
             assertTrue(original.getBytes(StandardCharsets.UTF_8).length > 131072); assertTrue(original.contains(NEEDLE));
             assertFalse(original.contains(TOKEN)); assertFalse(original.contains("Bearer ")); assertFalse(original.contains(fixture.server.endpoint()));

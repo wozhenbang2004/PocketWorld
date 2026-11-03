@@ -166,6 +166,8 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         HistoryAction openHistory(String originalTaskId, String originalOperationId) throws Exception;
         void pause(String originalTaskId) throws Exception;
         void resume(String originalTaskId) throws Exception;
+        default JSONObject resumeRequest(String originalTaskId)throws Exception{return null;}
+        default void decideResumeRequest(String originalTaskId,String requestId,long reviewRevision,boolean approved)throws Exception{throw new SecurityException("原设备恢复确认入口未配置");}
         ApprovalAction reviewApproval(String originalTaskId, String originalApprovalId) throws Exception;
         /** Original task/controller only. A sent request must not be labelled as stopped. */
         void requestStop(String originalTaskId) throws Exception;
@@ -353,7 +355,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
             current(); if (review == null || review.window != this || review.generation != reviewGeneration.get()) throw new SecurityException("模型审阅已离开原生页面，请重新读取原任务");
             consume(review.generation); review.source.confirm(useForFutureGoals);
         }
-        public JSONObject taskActions(String id) throws Exception { current(); return new JSONObject().put("capturedAt", System.currentTimeMillis()).put("stop", availability(control.stopAvailability(id))).put("pause", availability(control.pauseAvailability(id))).put("resume", availability(control.resumeAvailability(id))).put("goalReview", availability(goals.reviewAvailability(id))).put("pendingCancel", availability(control.pendingCancelAvailability(id))).put("resultReview", availability(control.resultReviewAvailability(id))); }
+        public JSONObject taskActions(String id) throws Exception { current(); return new JSONObject().put("capturedAt", System.currentTimeMillis()).put("stop", availability(control.stopAvailability(id))).put("pause", availability(control.pauseAvailability(id))).put("resume", availability(control.resumeAvailability(id))).put("resumeRequest",control.resumeRequest(id)).put("goalReview", availability(goals.reviewAvailability(id))).put("pendingCancel", availability(control.pendingCancelAvailability(id))).put("resultReview", availability(control.resultReviewAvailability(id))); }
         public void cancelPendingGoal(String id) throws Exception { current(); control.pendingCancelAvailability(id).require(); control.cancelPendingGoal(id); }
         public ResultReview reviewResult(String id) throws Exception {
             current(); control.resultReviewAvailability(id).require(); ResultAction source = Objects.requireNonNull(control.reviewResult(id)); JSONObject safe = source.view();
@@ -366,6 +368,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         }
         public void pauseTask(String id) throws Exception { current(); control.pauseAvailability(id).require(); control.pause(id); }
         public void resumeTask(String id) throws Exception { current(); control.resumeAvailability(id).require(); control.resume(id); }
+        public void decideResumeRequest(String id,String requestId,long reviewRevision,boolean approved)throws Exception{current();control.decideResumeRequest(id,requestId,reviewRevision,approved);}
         public ApprovalReview reviewApproval(String id, String approvalId) throws Exception {
             current(); ApprovalAction source = Objects.requireNonNull(control.reviewApproval(id, approvalId)); JSONObject safe = source.view();
             if (!id.equals(safe.optString("taskId")) || !approvalId.equals(safe.optString("approvalId")) || !safe.optString("argumentsHash").matches("[a-f0-9]{64}") || blank(safe.optString("runId")) || safe.optInt("executorEpoch") < 1) throw new SecurityException("审批不属于这个原任务和准确参数");

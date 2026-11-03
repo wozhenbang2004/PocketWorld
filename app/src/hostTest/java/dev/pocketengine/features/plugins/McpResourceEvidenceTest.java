@@ -75,7 +75,12 @@ public final class McpResourceEvidenceTest {
             File root=temp.newFolder();AttachmentBook book=new AttachmentBook(root);McpResourceEvidence.Snapshot selected=McpResourceEvidence.captured(actual("retained original"),()->{});
             McpResourceEvidence.Publication saved=selected.saveForOwner(book,target(),new RunControl());JSONObject event=saved.indexEvent();String artifact=event.getString("attachmentId");
             assertFalse(event.has("contents"));assertFalse(event.has("text"));AttachmentBook cold=new AttachmentBook(root);
-            assertNull(cold.outputSourceEligibility(artifact,event.getString("sha256")));assertTrue(McpResourceEvidence.readRetainedText(cold,event,new RunControl()).contains("retained original"));
+            assertNull(cold.outputSourceEligibility(artifact,event.getString("sha256")));
+            assertFalse(cold.get(artifact).getJSONObject("source").has("uri"));
+            String retained=McpResourceEvidence.readRetainedText(cold,event,new RunControl());
+            assertTrue(retained.contains("retained original"));assertEquals(event.getString("uri"),new JSONObject(retained).getString("uri"));
+            JSONObject changedUri=new JSONObject(event.toString()).put("uri","resource://owner/replacement");
+            assertThrows(SecurityException.class,()->McpResourceEvidence.readRetainedText(cold,changedUri,new RunControl()));
             if(changeBytes)Files.write(new File(root,artifact+".blob").toPath(),"replacement bytes".getBytes(StandardCharsets.UTF_8));
             else {
                 File metadata=new File(root,artifact+".json");JSONObject changed=new JSONObject(new String(Files.readAllBytes(metadata.toPath()),StandardCharsets.UTF_8));

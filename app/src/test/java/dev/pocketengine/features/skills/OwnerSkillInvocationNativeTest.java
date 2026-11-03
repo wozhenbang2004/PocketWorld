@@ -36,6 +36,7 @@ public final class OwnerSkillInvocationNativeTest {
         final NativeSkillExecutionHost.OwnerWindow window;
         final FeatureHost features;
         final JSONObject input;
+        final java.util.concurrent.atomic.AtomicInteger injectedFailures=new java.util.concurrent.atomic.AtomicInteger();
         JSONObject started;
         Rig()throws Exception{this(true);}
         Rig(boolean settled)throws Exception {
@@ -66,7 +67,7 @@ public final class OwnerSkillInvocationNativeTest {
                 public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{return nativePort.prepareTurn(query,round,steps,control);}
                 public JSONObject beforeTool(String name,JSONObject input,RunControl control)throws Exception{return nativePort.beforeTool(name,input,control);}
                 public JSONObject execute(String name,JSONObject input,RunControl control)throws Exception{return nativePort.execute(name,input,control);}
-                public void afterTool(String name,JSONObject input,JSONObject receipt,RunControl control)throws Exception{nativePort.afterTool(name,input,receipt,control);if("afterTool".equals(failAt))throw new java.io.IOException("fixture: afterTool failed after real receipt");}
+                public void afterTool(String name,JSONObject input,JSONObject receipt,RunControl control)throws Exception{nativePort.afterTool(name,input,receipt,control);if("afterTool".equals(failAt)){injectedFailures.incrementAndGet();throw new java.io.IOException("fixture: afterTool failed after real receipt");}}
                 public void endRun(RunControl control)throws Exception{nativePort.endRun(control);}
                 public void close(){nativePort.close();}
             };
@@ -74,7 +75,7 @@ public final class OwnerSkillInvocationNativeTest {
             RunJournal journal=new RunJournal(){
                 boolean receiptSaved;
                 public JSONObject restore()throws Exception{return nativeJournal.restore();}
-                public void checkpoint(JSONArray history,int steps,JSONObject evidence)throws Exception{nativeJournal.checkpoint(history,steps,evidence);if(receiptSaved&&"checkpoint".equals(failAt))throw new java.io.IOException("fixture: checkpoint ack lost after real receipt");}
+                public void checkpoint(JSONArray history,int steps,JSONObject evidence)throws Exception{nativeJournal.checkpoint(history,steps,evidence);if(receiptSaved&&"checkpoint".equals(failAt)){injectedFailures.incrementAndGet();throw new java.io.IOException("fixture: checkpoint ack lost after real receipt");}}
                 public String beginOperation(String tool,JSONObject args)throws Exception{return nativeJournal.beginOperation(tool,args);}
                 public void finishOperation(String operation,JSONObject receipt)throws Exception{nativeJournal.finishOperation(operation,receipt);receiptSaved=true;}
                 public int executionStepCeiling(int captured)throws Exception{return nativeJournal.executionStepCeiling(captured);}
@@ -95,7 +96,8 @@ public final class OwnerSkillInvocationNativeTest {
             assertEquals("$(owner literal)",review.plan.review().getJSONObject("request").getJSONArray("arguments").getString(0));
             assertTrue(r.host.readScript(review).getString("content").contains("NEVER EXECUTE"));
             r.host.decide(r.window,review,review.plan.digest,true);RunOutcome outcome=running.get(15,TimeUnit.SECONDS);
-            assertEquals(outcome.summary,"needs_confirmation",outcome.status);assertTrue(outcome.evidence.getBoolean("ownerSelectedSkill"));assertFalse(outcome.evidence.getBoolean("businessVerified"));
+            assertEquals(outcome.summary+" "+outcome.evidence,"needs_confirmation",outcome.status);assertTrue(outcome.evidence.getBoolean("ownerSelectedSkill"));assertFalse(outcome.evidence.getBoolean("businessVerified"));assertEquals(0,r.injectedFailures.get());
+            assertEquals("completed",r.fixture.tasks.readSkillExecution(r.id,outcome.evidence.getString("operationId")).getJSONObject("receipt").getString("status"));
             assertEquals(1,r.fixture.posts.get());assertEquals(1,r.fixture.markers());assertEquals(1,r.fixture.tasks.list().length());assertEquals(2,r.fixture.tasks.get(r.id,false).getJSONArray("operations").length());
             assertThrows(SecurityException.class,()->selected.checkBeforeStart(r.host));assertThrows(SecurityException.class,()->r.host.decide(r.window,review,review.plan.digest,true));
         }
@@ -137,8 +139,8 @@ public final class OwnerSkillInvocationNativeTest {
         for(String failure:new String[]{"checkpoint","afterTool"})try(Rig r=new Rig()){
             var selected=r.select();r.start(selected);var running=r.run(selected,failure);var review=r.review(running);
             r.host.decide(r.window,review,review.plan.digest,true);RunOutcome outcome=running.get(15,TimeUnit.SECONDS);
-            assertEquals("awaiting_user",outcome.status);assertTrue(outcome.evidence.getBoolean("receiptRecorded"));assertTrue(outcome.evidence.getBoolean("postProcessingIncomplete"));assertFalse(outcome.summary.contains("尚未派发"));
-            String operation=outcome.evidence.getString("operationId");assertEquals("completed",r.fixture.tasks.readSkillExecution(r.id,operation).getJSONObject("receipt").getString("status"));
+            assertEquals(outcome.summary+" "+outcome.evidence,"awaiting_user",outcome.status);assertEquals(failure+" must fail only after the real receipt",1,r.injectedFailures.get());assertTrue(outcome.evidence.getBoolean("receiptRecorded"));assertTrue(outcome.evidence.getBoolean("postProcessingIncomplete"));assertFalse(outcome.summary.contains("尚未派发"));
+            String operation=outcome.evidence.getString("operationId");assertEquals(outcome.evidence.toString(),"completed",r.fixture.tasks.readSkillExecution(r.id,operation).getJSONObject("receipt").getString("status"));
             assertEquals(1,r.fixture.posts.get());assertEquals(1,r.fixture.markers());assertFalse(outcome.evidence.getBoolean("automaticReplayAllowed"));
             assertThrows(SecurityException.class,()->selected.checkBeforeStart(r.host));
             r.fixture.tasks.finishCapabilityAttempt(r.id,r.started.getString("runId"),r.started.getInt("coordinatorEpoch"),r.original,outcome);

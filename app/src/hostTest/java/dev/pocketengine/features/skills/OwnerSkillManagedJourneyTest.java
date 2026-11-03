@@ -29,7 +29,7 @@ import static org.junit.Assert.*;
 @ConscryptMode(ConscryptMode.Mode.OFF)
 public final class OwnerSkillManagedJourneyTest {
     @Test public void ownerOnlySelectionRunsRealManagedScriptAndColdRecoveryOnlyReadsItsOriginalArtifact()throws Exception {
-        String script="from pathlib import Path\nimport sys\nvalue=float(Path('input/data.txt').read_text())+5\nPath('output/result.bin').write_bytes((format(value,'.2f')+'|'+sys.argv[1]).encode('utf-8'))\nprint('OWNER_NATIVE_SCRIPT_EXECUTED')\n";
+        String script="from pathlib import Path\nimport sys\nvalue=float(Path('input/data.txt').read_text())+5\nPath('output').mkdir(exist_ok=True)\nPath('output/result.bin').write_bytes((format(value,'.2f')+'|'+sys.argv[1]).encode('utf-8'))\nprint('OWNER_NATIVE_SCRIPT_EXECUTED')\n";
         RunControl original=new RunControl();
         try(ManagedSkillNativeJourneyTest.Fixture f=new ManagedSkillNativeJourneyTest.Fixture("python3",script,true,"$(owner literal) 中文")){
             // Preserve an earlier definite unstarted operation in this same fixture task.

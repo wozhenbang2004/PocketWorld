@@ -219,15 +219,19 @@ public final class SkillExecution {
         validateCurrent(plan,grant,control);AtomicBoolean called=new AtomicBoolean(),attempted=new AtomicBoolean();Receipt receipt;
         try{receipt=host.dispatchOnce(plan,grant,control,()->{
             if(!called.compareAndSet(false,true))throw new SecurityException("同一操作不能重复派发");
-            return withSnapshot(plan.run,plan.skillId,plan.revision,plan.packageDigest,clock.now(),snapshot->{
+            SkillBook.ExecutionSnapshot current=withSnapshot(plan.run,plan.skillId,plan.revision,plan.packageDigest,clock.now(),snapshot->{
                 validateGrant(plan,grant,control);host.checkCurrent(plan,grant,control);requirePackage(plan,snapshot);requireEnvironment(plan);
                 // A read-only origin resolver is another authority; a probe may outlive its revision.
-                SkillBook.ExecutionSnapshot current=withSnapshot(plan.run,plan.skillId,plan.revision,plan.packageDigest,clock.now(),value->value);
-                requirePackage(plan,current);
-                validateGrant(plan,grant,control);host.checkCurrent(plan,grant,control);
-                attempted.set(true);try{return safeReceipt(grant,backend.submit(new Dispatch(plan,grant,current),control));}
-                catch(Exception uncertain){return Receipt.unknown(grant.operationId);}
+                SkillBook.ExecutionSnapshot refreshed=withSnapshot(plan.run,plan.skillId,plan.revision,plan.packageDigest,clock.now(),value->value);
+                requirePackage(plan,refreshed);return refreshed;
             });
+            // Never wait for an external worker while holding SkillBook's monitor: its
+            // native dispatch checkpoints must revalidate this same source/approval.
+            // The retained bytes are exact; the original HostPort/backend still fence
+            // grant, run, source and environment changes before their actual handoff.
+            validateGrant(plan,grant,control);host.checkCurrent(plan,grant,control);
+            attempted.set(true);try{return safeReceipt(grant,backend.submit(new Dispatch(plan,grant,current),control));}
+            catch(Exception uncertain){return Receipt.unknown(grant.operationId);}
         });}catch(Exception failure){if(!attempted.get())throw failure;receipt=Receipt.unknown(grant.operationId);}
         return result(plan,grant,receipt,control.isCancelled());
     }

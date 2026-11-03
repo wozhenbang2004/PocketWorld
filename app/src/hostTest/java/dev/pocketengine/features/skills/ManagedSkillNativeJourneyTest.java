@@ -224,9 +224,12 @@ public final class ManagedSkillNativeJourneyTest {
             Files.write(source,lock.replace("a".repeat(64),"b".repeat(64)).getBytes(StandardCharsets.UTF_8));
             assertThrows(Exception.class,()->f.approve(review));
             assertFalse(Files.exists(f.copy()));assertEquals(0,f.callbacks.get());
-            f.host.decide(f.window,review,review.plan.digest,false);
             assertEquals("rejected",work.get(5,TimeUnit.SECONDS).getString("status"));
-            assertFalse(f.record().has("nativeManagedJob"));assertNull(f.callbackFailure.get());
+            // The active source guard retires this review after the bytes change. A second
+            // owner decision cannot revive that already rejected original operation.
+            assertThrows(SecurityException.class,()->f.host.decide(f.window,review,review.plan.digest,false));
+            assertEquals("rejected",f.record().getJSONObject("receipt").getString("status"));
+            assertFalse(f.record().has("nativeManagedJob"));assertFalse(Files.exists(f.copy()));assertEquals(0,f.callbacks.get());assertNull(f.callbackFailure.get());
         }
     }
     @Test public void stopUsesOriginalManagedJobAndColdUnknownCannotDispatchOrDeleteItsCopy()throws Exception {
