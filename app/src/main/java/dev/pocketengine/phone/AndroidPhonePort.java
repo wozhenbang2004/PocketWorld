@@ -74,6 +74,12 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
     @Override public boolean isConnected() { return PhoneAccessibilityService.get() != null; }
     @Override public void clearReferences() { reference.set(null); }
 
+    /** Ends this physical port's run lifetime; per-observation invalidation must not close it. */
+    public synchronized void closeExtensions() {
+        clearReferences();appCopies.close();
+        if(practiceTarget!=null){practiceTarget.close();practiceTarget=null;}
+    }
+
     @Override public synchronized JSONObject extension(String tool,JSONObject args,RunControl control,NativePhoneEntry.Admission admission)throws Exception {
         workerOnly();dev.pocketengine.phone.observation.PhoneExtensionTools.validate(tool,args);
         control.check();if(control.isPaused())return failure("task_paused","原执行已暂停。");

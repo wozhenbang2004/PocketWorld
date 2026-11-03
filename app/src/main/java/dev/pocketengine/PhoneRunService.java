@@ -245,10 +245,11 @@ public final class PhoneRunService extends Service {
     }
     private void runDeviceTools(dev.pocketengine.features.devices.DeviceToolsSession session,int startId){
         String id=session.taskId(),run=runningRunId;RunControl original=session.originalControl();BackgroundPhonePort background=null;
+        PhonePort port=null;
         JSONObject evidence=new JSONObject();
         try{
             PowerManager power=getSystemService(PowerManager.class);wakeLock=power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"PocketEngine:DeviceTools");wakeLock.setReferenceCounted(false);wakeLock.acquire(30_000L);
-            var admission=session.firstAdmission();PhonePort port;
+            var admission=session.firstAdmission();
             if(admission.executionMode().equals("background")){
                 if(!(app.features.module("display") instanceof DisplayModule))throw new SecurityException("本机后台屏helper未安装");
                 DisplayModule display=(DisplayModule)app.features.module("display");display.prepare(original);background=new BackgroundPhonePort(display);port=background;
@@ -272,7 +273,7 @@ public final class PhoneRunService extends Service {
             if(deviceTools!=null){deviceTools.close();deviceTools=null;}
             if(background!=null){try{evidence.put("displayRelease",background.closeSession());}catch(Exception ignored){}background=null;}
             finishAttempt(id,run,original,new RunOutcome(original.isCancelled()?"cancelled":"awaiting_user","原设备工具已停止派发；请核对实际操作与本机权限，未运行模型或回落显示",evidence),startId);
-        }finally{if(background!=null)background.closeSession();releaseWakeLock();app.features.sendState();}
+        }finally{if(port instanceof AndroidPhonePort mainPort)mainPort.closeExtensions();if(background!=null)background.closeSession();releaseWakeLock();app.features.sendState();}
     }
     /** Service resource ownership is separate from task execution. This branch never creates a
      * PhonePort, AgentRunner, phone.local lease, or a replacement RunControl/grant. */
@@ -300,10 +301,10 @@ public final class PhoneRunService extends Service {
     }
     private void run(String id,String runId,int epoch,String goal,ModelConfig config,RunControl control,int startId,boolean manualOnly){
 
-        BackgroundPhonePort backgroundPort=null;
+        BackgroundPhonePort backgroundPort=null;PhonePort port=null;
         try{
             PowerManager power=getSystemService(PowerManager.class);wakeLock=power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"PocketEngine:PhoneRun");wakeLock.setReferenceCounted(false);wakeLock.acquire(30_000L);
-            PhonePort port=heldPort;heldPort=null;
+            port=heldPort;heldPort=null;
             if(port instanceof BackgroundPhonePort)backgroundPort=(BackgroundPhonePort)port;
             if(port==null&&"background".equals(app.mode(id))){
                 app.setStatus(id,"preparing","正在检查独立后台屏，不会改为主屏操作",control);
@@ -345,7 +346,7 @@ public final class PhoneRunService extends Service {
             JSONObject evidence=new JSONObject();boolean cleanupConfirmed=true;if(backgroundPort!=null){try{JSONObject release=backgroundPort.closeSession();evidence.put("displayRelease",release);cleanupConfirmed=release.optBoolean("releaseConfirmed");}catch(Exception unknown){cleanupConfirmed=false;}backgroundPort=null;}
             finishAttempt(id,runId,control,new RunOutcome(control.isCancelled()?"cancelled":cleanupConfirmed?"paused":"awaiting_user",control.isCancelled()?"已停止后续操作":cleanupConfirmed?"运行条件暂不满足，已保留原任务与预算":"后台屏释放尚未核实，请先核对原会话",evidence),startId);
         }catch(Exception ex){JSONObject evidence=new JSONObject();if(backgroundPort!=null){try{evidence.put("displayRelease",backgroundPort.closeSession());}catch(Exception ignored){}backgroundPort=null;}finishAttempt(id,runId,control,new RunOutcome(control.isCancelled()?"cancelled":"failed",control.isCancelled()?"已停止后续操作":safeMessage(ex),evidence),startId);}
-        finally{dev.pocketengine.phone.diagnostics.PhonePracticeActivity.requestCloseOriginal(control);app.releasePhonePractice(control);if(backgroundPort!=null)backgroundPort.closeSession();releaseWakeLock();app.features.sendState();}
+        finally{dev.pocketengine.phone.diagnostics.PhonePracticeActivity.requestCloseOriginal(control);app.releasePhonePractice(control);if(port instanceof AndroidPhonePort mainPort&&port!=heldPort)mainPort.closeExtensions();if(backgroundPort!=null)backgroundPort.closeSession();releaseWakeLock();app.features.sendState();}
     }
     private void holdForOwner(String id,PhonePort port,RunControl control,RunOutcome outcome)throws Exception{
         control.pause();port.clearReferences();
@@ -367,8 +368,8 @@ public final class PhoneRunService extends Service {
             }catch(Exception stopped){var completed=deviceGoal;if(completed!=null&&completed.originalControl()==original&&completed.ownerResultClosed())return;original.cancel();main.post(()->{var current=deviceGoal;if(id.equals(runningId)&&original==ownerControl&&waitingForUser&&(current==null||current.originalControl()!=original||!current.ownerResultClosed()))app.stop(id);});}
         },0,1,java.util.concurrent.TimeUnit.SECONDS);
     }
-    private void closeHeld(){PhonePort port=heldPort;heldPort=null;if(port instanceof BackgroundPhonePort)((BackgroundPhonePort)port).closeSession();}
-    private void closeHeldAsync(){PhonePort port=heldPort;heldPort=null;if(port instanceof BackgroundPhonePort){BackgroundPhonePort background=(BackgroundPhonePort)port;background.noteReleasePending();CLEANUP.execute(background::closeSession);}}
+    private void closeHeld(){PhonePort port=heldPort;heldPort=null;if(port instanceof AndroidPhonePort mainPort)mainPort.closeExtensions();if(port instanceof BackgroundPhonePort)((BackgroundPhonePort)port).closeSession();}
+    private void closeHeldAsync(){PhonePort port=heldPort;heldPort=null;if(port instanceof AndroidPhonePort mainPort)CLEANUP.execute(mainPort::closeExtensions);if(port instanceof BackgroundPhonePort){BackgroundPhonePort background=(BackgroundPhonePort)port;background.noteReleasePending();CLEANUP.execute(background::closeSession);}}
     private void finish(String id,RunOutcome outcome,int startId){
         finishAttempt(id,runningRunId,app.control(id),outcome,startId);
     }

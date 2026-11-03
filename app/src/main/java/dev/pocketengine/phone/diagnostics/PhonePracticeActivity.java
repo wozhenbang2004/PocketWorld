@@ -34,7 +34,7 @@ public final class PhonePracticeActivity extends Activity {
             original=app.control(id);
             if(original==null||!original.matchesHostRun(id,run,epoch)||original.isCancelled()||nonce==null||!nonce.matches("[a-f0-9-]{36}")||getDisplay()==null||getDisplay().getDisplayId()!=display)throw new SecurityException("practice_identity_changed");
             app.tasks.requireOwnerPhonePractice(id,run,epoch,original);
-            PhonePracticeActivity previous=current;if(previous!=null&&previous!=this&&!previous.isDestroyed())throw new SecurityException("practice_target_busy");current=this;
+            PhonePracticeTarget.claim(getIntent(),original,getDisplay().getDisplayId(),()->{PhonePracticeActivity previous=current;if(previous!=null&&previous!=this&&!previous.isDestroyed())throw new SecurityException("practice_target_busy");current=this;});
             LinearLayout page=new LinearLayout(this);page.setOrientation(LinearLayout.VERTICAL);page.setPadding(dp(24),dp(24),dp(24),dp(20));page.setBackgroundColor(Color.WHITE);
             TextView title=text("手机能力演练");title.setTextSize(22);title.setTypeface(null,android.graphics.Typeface.BOLD);page.addView(title);
             page.addView(text("只修改此测试页。可随时停止原任务；测试结果以实际回读为准。"));
@@ -52,9 +52,10 @@ public final class PhonePracticeActivity extends Activity {
     private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
     private GradientDrawable shape(int fill,int stroke){GradientDrawable d=new GradientDrawable();d.setColor(fill);d.setCornerRadius(dp(8));d.setStroke(dp(1),stroke);return d;}
     private TextView text(String value){TextView text=new TextView(this);text.setText(value);text.setTextColor(0xff202020);text.setTextSize(15);text.setPadding(0,dp(8),0,dp(8));return text;}
-    public static void requestCloseOriginal(RunControl original){PhonePracticeActivity target=current;if(target!=null&&target.original==original)target.main.post(()->{if(current==target&&target.original==original&&!target.isDestroyed())target.finishAndRemoveTask();});}
+    public static void requestCloseOriginal(RunControl original){PhonePracticeTarget.revokePending(original);PhonePracticeActivity target=current;if(target!=null&&target.original==original)target.main.post(()->{if(current==target&&target.original==original&&!target.isDestroyed())target.finishAndRemoveTask();});}
     /** Does not navigate or kill any other application. A timeout remains unknown cleanup. */
     public static JSONObject closeOriginal(RunControl original)throws Exception {
+        PhonePracticeTarget.revokePending(original);
         PhonePracticeActivity target=current;if(target==null||target.original!=original)return new JSONObject().put("requested",false).put("confirmed",true).put("reason","no_original_practice_activity");
         requestCloseOriginal(original);boolean done=Looper.myLooper()!=Looper.getMainLooper()&&target.destroyed.await(2,TimeUnit.SECONDS);
         return new JSONObject().put("requested",true).put("confirmed",done).put("reason",done?"original_activity_destroyed":"practice_cleanup_pending").put("otherAppsTouched",false);

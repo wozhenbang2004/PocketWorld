@@ -45,6 +45,9 @@ public final class AndroidAppCopiesNativeTest {
     @Implements(LauncherApps.class)
     public static class LauncherFixture extends ShadowLauncherApps {
         public static final List<Launch> calls=new ArrayList<>();public static boolean loseReply;
+        public static int registrations,unregistrations;
+        @Implementation protected void registerCallback(LauncherApps.Callback callback,android.os.Handler handler){super.registerCallback(callback,handler);registrations++;}
+        @Implementation protected void unregisterCallback(LauncherApps.Callback callback){super.unregisterCallback(callback);unregistrations++;}
         @Implementation protected void startMainActivity(ComponentName component,UserHandle user,Rect bounds,Bundle options){calls.add(new Launch(component,user,options));if(loseReply)throw new IllegalStateException("fixture lost native launch reply");}
     }
     public static Application app(){return RuntimeEnvironment.getApplication();}
@@ -52,7 +55,7 @@ public final class AndroidAppCopiesNativeTest {
     public static RunControl control(){RunControl control=new RunControl();control.bindHostRun("copy-task","copy-run",1);return control;}
     @Before public void setup()throws Exception {installFixture();}
     public static void installFixture()throws Exception {
-        LauncherFixture.calls.clear();LauncherFixture.loseReply=false;
+        LauncherFixture.calls.clear();LauncherFixture.loseReply=false;LauncherFixture.registrations=0;LauncherFixture.unregistrations=0;
         UserManager users=app().getSystemService(UserManager.class);Shadows.shadowOf(users).addProfile(0,10,"work fixture",0x20);
         Shadows.shadowOf(users).setUserState(work(),ShadowUserManager.UserState.STATE_RUNNING_UNLOCKED);Shadows.shadowOf(users).setSerialNumberForUser(work(),910);
         installArchive(1);LauncherApps launcher=app().getSystemService(LauncherApps.class);
@@ -134,5 +137,17 @@ public final class AndroidAppCopiesNativeTest {
             JSONObject args=choose(copies.list(control),10);LauncherFixture.loseReply=true;JSONObject receipt=copies.launch(args,0,control,control::check);
             assertEquals(1,LauncherFixture.calls.size());assertTrue(receipt.isNull("accepted"));assertTrue(receipt.getBoolean("requiresReconciliation"));assertFalse(receipt.getBoolean("automaticReplayAllowed"));
         }finally{copies.clear();}
+    }
+    @Test public void originalRunCancellationUnregistersItsCallbackAndCannotCloseAnotherRunPort()throws Exception {
+        AndroidAppCopies first=new AndroidAppCopies(app(),0),second=new AndroidAppCopies(app(),0);RunControl original=control(),next=control();
+        try {
+            first.list(original);assertEquals(1,LauncherFixture.registrations);
+            assertThrows(SecurityException.class,()->first.list(next));assertEquals(1,LauncherFixture.registrations);
+            original.cancel();assertEquals(1,LauncherFixture.unregistrations);
+            JSONObject fresh=choose(second.list(next),10);assertEquals(2,LauncherFixture.registrations);
+            original.cancel();assertEquals(1,LauncherFixture.unregistrations);assertEquals(10,second.require(fresh,next).getInt("userId"));
+            second.close();assertEquals(2,LauncherFixture.unregistrations);
+            assertThrows(SecurityException.class,()->second.list(next));assertTrue(LauncherFixture.calls.isEmpty());
+        }finally{first.close();second.close();}
     }
 }

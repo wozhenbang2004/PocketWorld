@@ -34,6 +34,9 @@ public final class AndroidAppCopies implements AutoCloseable {
     private final Map<String,Copy> listed=new LinkedHashMap<>();
     private RunControl listedControl;
     private long listedPauseRevision;
+    private RunControl lifetimeControl;
+    private Runnable cancelCleanup;
+    private boolean closed;
     private LauncherApps watched;
     private final LauncherApps.Callback changes=new LauncherApps.Callback() {
         @Override public void onPackageAdded(String pkg,UserHandle user){invalidate(pkg,user);}
@@ -50,7 +53,8 @@ public final class AndroidAppCopies implements AutoCloseable {
         this.context=context.getApplicationContext();this.displayId=displayId;
     }
     public synchronized JSONObject list(RunControl control)throws Exception {
-        requireControl(control);synchronized(referenceFence){listed.clear();listedControl=control;listedPauseRevision=control.pauseRevision();}
+        requireControl(control);bindLifetime(control);requireControl(control);
+        synchronized(referenceFence){listed.clear();listedControl=control;listedPauseRevision=control.pauseRevision();}
         LauncherApps launcher=context.getSystemService(LauncherApps.class);UserManager users=context.getSystemService(UserManager.class);
         if(launcher==null||users==null)return result(new JSONArray(),false,"profile_service_unavailable");
         if(watched!=launcher){stopWatching();launcher.registerCallback(changes,new android.os.Handler(android.os.Looper.getMainLooper()));watched=launcher;}
@@ -132,9 +136,19 @@ public final class AndroidAppCopies implements AutoCloseable {
                 ||new java.math.BigDecimal(args.get("userId").toString()).intValueExact()!=copy.identity.getInt("userId"))throw new SecurityException("app_copy_reference_mismatch");
         return copy;
     }
-    public synchronized void clear(){synchronized(referenceFence){listed.clear();listedControl=null;}stopWatching();}
-    @Override public void close(){clear();}
-    private void stopWatching(){if(watched!=null){watched.unregisterCallback(changes);watched=null;}}
+    private void bindLifetime(RunControl control){
+        if(closed||lifetimeControl!=null&&lifetimeControl!=control)throw new SecurityException("app_copy_original_port_required");
+        lifetimeControl=control;
+        if(cancelCleanup==null){cancelCleanup=()->closeOriginal(control);control.onCancel(cancelCleanup);}
+    }
+    private synchronized void closeOriginal(RunControl control){if(lifetimeControl==control)close();}
+    public synchronized void clear(){
+        synchronized(referenceFence){listed.clear();listedControl=null;}
+        if(lifetimeControl!=null&&cancelCleanup!=null)lifetimeControl.removeCancelAction(cancelCleanup);
+        cancelCleanup=null;stopWatching();
+    }
+    @Override public synchronized void close(){closed=true;clear();}
+    private void stopWatching(){LauncherApps old=watched;watched=null;if(old!=null)old.unregisterCallback(changes);}
     private synchronized void invalidate(String pkg,UserHandle user){synchronized(referenceFence){listed.entrySet().removeIf(entry->entry.getValue().identity.optString("packageName").equals(pkg)&&entry.getValue().identity.optInt("userId",-1)==id(user));}}
     private static boolean unlocked(UserManager users,UserHandle user){return user.equals(android.os.Process.myUserHandle())?users.isUserUnlocked():users.isUserUnlocked(user);}
     private static void requireControl(RunControl control)throws Exception {

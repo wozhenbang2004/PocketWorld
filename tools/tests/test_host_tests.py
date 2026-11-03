@@ -261,7 +261,7 @@ class HostTestEntrypointTest(unittest.TestCase):
         manifest = json.loads((HOST.ROOT / 'tools/tests/fixtures/phone-advanced-execution-tests.json').read_text())
         self.assertEqual(1, manifest['schemaVersion'])
         expected_counts = {'phone-setup-recovery': 28, 'phone-input-extensions': 27,
-                           'phone-semantic-profile': 44, 'phone-access-history': 33}
+                           'phone-semantic-profile': 45, 'phone-access-history': 37}
         self.assertEqual(set(expected_counts), set(manifest['groups']))
         for group, inventory in manifest['groups'].items():
             entry = REGISTRY[group]

@@ -86,7 +86,7 @@ public final class OwnerPhoneApps {
             throw new SecurityException("owner_app_uid_changed");
         String pkg = activity.getComponentName().getPackageName();
         PackageInfo archive = context.getPackageManager().getPackageArchiveInfo(app.sourceDir, PackageManager.GET_SIGNING_CERTIFICATES);
-        if (archive == null || archive.signingInfo == null || !pkg.equals(archive.packageName()))
+        if (archive == null || archive.signingInfo == null || !pkg.equals(archive.packageName))
             throw new SecurityException("owner_app_installation_unavailable");
         Signature[] raw = archive.signingInfo.getApkContentsSigners();
         if (raw == null || raw.length == 0) throw new SecurityException("owner_app_signer_unavailable");

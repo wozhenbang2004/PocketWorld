@@ -188,7 +188,8 @@
             "installChangedDuringAdmissionStopsTheOriginalNativeLaunch",
             "platformPackageEventRevokesAnOtherwiseMatchingReference",
             "selectedWorkUserIsTheOnlyNativeEntryAndReceiptStillRequiresOwnerAccountVerification",
-            "lostReplyAfterLaunchIsUnknownAndNeverRetriedInsideTheCopyConsumer"
+            "lostReplyAfterLaunchIsUnknownAndNeverRetriedInsideTheCopyConsumer",
+            "originalRunCancellationUnregistersItsCallbackAndCannotCloseAnotherRunPort"
           ]
         },
         {
@@ -327,6 +328,16 @@
             "anotherPracticeNonceBreaksPendingEvidenceEvenWhenTheOriginalPageLaterReturns",
             "laterUnrelatedChangeCannotRepairTheFirstFailedReadback",
             "liveUpdatesNeedElapsedNativeTimeAndBackNeedsAnAcceptedOriginalAction"
+          ]
+        },
+        {
+          "class": "dev.pocketengine.phone.diagnostics.PhoneOwnedPracticeNativeTest",
+          "source": "app/src/test/java/dev/pocketengine/phone/diagnostics/PhoneOwnedPracticeNativeTest.java",
+          "methods": [
+            "ordinaryPhoneGoalCannotAcquireTheOwnerPracticeFlagOrLaunchThePrivateTarget",
+            "originalOwnerTargetEntersItsPrivateActivityAndCancellationClearsOnlyThatActivity",
+            "duplicateLaunchAndAnEndedOriginalRunCannotCreateAnotherTarget",
+            "privateActivityRequiresTheExactNativeNonceSessionDisplayAndOneClaim"
           ]
         },
         {

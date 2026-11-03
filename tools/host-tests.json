@@ -317,6 +317,7 @@
       "dev.pocketengine.phone.access.PhoneAppResourcesTest",
       "dev.pocketengine.phone.access.AndroidPhoneAccessStoreNativeTest",
       "dev.pocketengine.phone.diagnostics.PhonePracticeEvidenceTest",
+      "dev.pocketengine.phone.diagnostics.PhoneOwnedPracticeNativeTest",
       "dev.pocketengine.displayhelper.DisplayAppOwnershipTest",
       "dev.pocketengine.phone.display.PhoneParallelCapabilitiesTest"
     ],
@@ -324,7 +325,7 @@
       "dev.pocketengine.testutil.HttpServer"
     ],
     "robolectric": true,
-    "description": "Original TaskStore/Runner historical-frame IDs versus current observation/attachments, live per-app owner policy, original resource exclusivity and exact policy CAS. Explicit phone/model/transport fixtures; no current-screen claim from history or unproved device parallel isolation. Self-owned practice before/action/after evidence and truthful display capability negotiation preserve unsupported when isolation proof is absent."
+    "description": "Original TaskStore/Runner historical-frame IDs versus current observation/attachments, live per-app owner policy, original resource exclusivity and exact policy CAS. Explicit phone/model/transport fixtures; no current-screen claim from history or unproved device parallel isolation. Self-owned practice before/action/after evidence and truthful display capability negotiation preserve unsupported when isolation proof is absent. Private owner practice also exercises the actual TaskStore flag, non-exported Activity, one native session/nonce/display claim and original-run cancellation cleanup; no physical-device input or rehearsal pass is claimed."
   },
   "agent-preferences": {
     "class": "dev.pocketengine.store.AgentPreferenceStoreTest",

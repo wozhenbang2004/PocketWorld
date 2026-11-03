@@ -488,7 +488,10 @@ public final class TaskStore {
         JSONObject task=create(goal,mode);task.put("ownerPhonePractice",true);write(task);return copy(task,false);
     }
     public synchronized void requireOwnerPhonePractice(String id,String run,int epoch,RunControl original)throws Exception {
-        checkExtensionRun(id,run,epoch,original);JSONObject task=required(id);
+        // Native target identity only: dispatch separately requires its exact prepared operation.
+        // A queued Activity may arrive after that same operation has already become a receipt.
+        if(original==null||!original.matchesHostRun(id,run,epoch)||original.isPaused())throw new SecurityException("owner_practice_original_run_required");
+        original.check();checkCapabilityCurrent(id,run,epoch,"phone_practice_target");JSONObject task=required(id);
         if(!task.optBoolean("ownerPhonePractice")||!"phone".equals(task.optString("kind")))throw new SecurityException("owner_practice_required");
     }
     public synchronized JSONObject createCapabilityTask(String goal,String conversationId)throws Exception{
