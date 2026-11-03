@@ -18,7 +18,7 @@ public final class BrowserWaitBarrier {
     }
     public static void validate(JSONObject value)throws Exception {
         if(value==null)throw new IllegalArgumentException("等待屏障需要明确kind");
-        for(String key:value.keySet())if(!Set.of("kind","quietMs","captureId").contains(key))throw new IllegalArgumentException("等待屏障含额外字段");
+        for(java.util.Iterator<String> keys=value.keys();keys.hasNext();)if(!Set.of("kind","quietMs","captureId").contains(keys.next()))throw new IllegalArgumentException("等待屏障含额外字段");
         if(!(value.opt("kind") instanceof String)||!Set.of("dom","network","dom_network").contains(value.getString("kind")))throw new IllegalArgumentException("等待屏障类型无效");
         if(value.has("quietMs")){Object ms=value.get("quietMs");if(!(ms instanceof Number)||((Number)ms).doubleValue()!=value.optInt("quietMs")||value.getInt("quietMs")<100||value.getInt("quietMs")>2000)throw new IllegalArgumentException("安静窗口为100至2000毫秒");}
         if(value.getString("kind").equals("dom")){if(value.has("captureId"))throw new IllegalArgumentException("DOM屏障不读取网络采集");}

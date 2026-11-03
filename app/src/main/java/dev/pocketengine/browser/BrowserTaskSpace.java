@@ -237,7 +237,7 @@ public final class BrowserTaskSpace {
     public void deliveredNetwork(JSONObject args,JSONObject actual)throws Exception {
         main();checkOriginal(originalControl);Tab tab=required(args.getString("tabId"));
         if(!"native".equals(args.optString("backend"))||!args.optString("action").matches("start|read")||!actual.optBoolean("ok")||!actual.optBoolean("accepted"))return;
-        JSONObject expected=tab.identity();for(String key:expected.keySet())if(!String.valueOf(expected.get(key)).equals(String.valueOf(actual.opt(key))))throw new StalePage("网络交付不是原任务页");
+        JSONObject expected=tab.identity();for(java.util.Iterator<String> keys=expected.keys();keys.hasNext();){String key=keys.next();if(!String.valueOf(expected.get(key)).equals(String.valueOf(actual.opt(key))))throw new StalePage("网络交付不是原任务页");}
         driver.deliveredNetwork(tab,copy(actual));
     }
     public void requireSequencePage(JSONObject initial)throws Exception {
