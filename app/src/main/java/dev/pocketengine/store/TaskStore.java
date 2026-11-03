@@ -9005,7 +9005,9 @@ public final class TaskStore {
     public synchronized void status(String id,String status,String summary)throws Exception{JSONObject t=read(id);if(t==null)return;if(status.matches("paused|pausing|stopping|cancelled"))t.remove("automationConditionWaitId");t.put("status",status).put("summary",summary);write(t);}
     public synchronized void finish(String id,String status,String summary,JSONObject evidence)throws Exception{
         JSONObject t=read(id);if(t==null)return;JSONObject clean=new JSONObject(evidence.toString());String image=clean.optString("imageBase64");
-        if(!image.isEmpty()){if(image.length()>6_000_000)throw new IllegalArgumentException("结果截图过大");AtomicFile target=new AtomicFile(new File(artifacts,id+".jpg"));FileOutputStream out=null;try{out=target.startWrite();out.write(Base64.decode(image,Base64.DEFAULT));target.finishWrite(out);}catch(Exception e){if(out!=null)target.failWrite(out);throw e;}clean.remove("imageBase64");clean.put("imageFile",id+".jpg");}
+        // The host mints this identity from its actual bytes; callers cannot claim an older file.
+        clean.remove("imageFile");clean.remove("imageSha256");
+        if(!image.isEmpty()){if(image.length()>6_000_000)throw new IllegalArgumentException("结果截图过大");byte[] bytes=Base64.decode(image,Base64.DEFAULT);String sha=resultImageSha256(bytes);AtomicFile target=new AtomicFile(new File(artifacts,id+".jpg"));FileOutputStream out=null;try{out=target.startWrite();out.write(bytes);target.finishWrite(out);}catch(Exception e){if(out!=null)target.failWrite(out);throw e;}clean.remove("imageBase64");clean.put("imageFile",id+".jpg").put("imageSha256",sha);}
         t.put("status",status).put("summary",summary).put("evidence",sanitize(clean));write(t);
     }
     /** Native owner continuation only; the actual TeamsModule still performs its atomic snapshot CAS. */
@@ -9711,14 +9713,31 @@ public final class TaskStore {
             if(TaskStoreDeviceTasks.deviceTask(value)){JSONObject previous=read(value.getString("id"));long revision=previous==null?0:previous.optLong("deviceStateRevision");value.put("deviceStateRevision",Math.addExact(revision,1));}
             if(channel||group){String key=group?"groupStateRevision":"channelStateRevision";JSONObject previous=read(value.getString("id"));long revision=previous==null?0:previous.optLong(key,0);if(revision==Long.MAX_VALUE)throw new IllegalStateException("渠道任务回执版本已耗尽");value.put(key,revision+1);}
             if(value.optJSONObject("origin")!=null&&"owner_reviewed_realtime".equals(value.getJSONObject("origin").optString("kind"))){JSONObject previous=read(value.getString("id"));long revision=previous==null?0:Math.max(1,previous.optLong("voiceStateRevision",previous.optLong("updatedAt",1)));if(revision==Long.MAX_VALUE)throw new IllegalStateException("语音任务记录版本已耗尽");value.put("voiceStateRevision",revision+1);}
-            value.put("updatedAt",System.currentTimeMillis());ContentValues v=new ContentValues();v.put("task_id",value.getString("id"));v.put("document",TaskAuditStore.coreAndImport(db,value));v.put("audit_format",1);JSONObject header=TaskAuditStore.header(db,value);if("needs_confirmation".equals(value.optString("status")))header.put("resultReviewDigest",resultReviewDigest(value));v.put("ui_header",header.toString());v.put("updated_at",value.getLong("updatedAt"));if(db.update("tasks",v,"task_id=?",new String[]{value.getString("id")})==0&&db.insertOrThrow("tasks",null,v)<0)throw new IllegalStateException("任务事务写入失败");
+            value.put("updatedAt",System.currentTimeMillis());ContentValues v=new ContentValues();v.put("task_id",value.getString("id"));v.put("document",TaskAuditStore.coreAndImport(db,value));v.put("audit_format",1);JSONObject header=TaskAuditStore.header(db,value);if("needs_confirmation".equals(value.optString("status")))header.put("resultReviewDigest",resultReviewDigest(value));projectResultImageIdentity(value,header);v.put("ui_header",header.toString());v.put("updated_at",value.getLong("updatedAt"));if(db.update("tasks",v,"task_id=?",new String[]{value.getString("id")})==0&&db.insertOrThrow("tasks",null,v)<0)throw new IllegalStateException("任务事务写入失败");
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
     }
     private JSONObject checkpoint(String runId)throws Exception{try(Cursor c=db.rawQuery("SELECT checkpoint FROM runs WHERE run_id=?",new String[]{runId})){return c.moveToFirst()?new JSONObject(c.getString(0)):new JSONObject();}}
     private JSONObject checkpointForTask(String id)throws Exception{try(Cursor c=db.rawQuery("SELECT checkpoint FROM runs WHERE task_id=? ORDER BY epoch DESC LIMIT 1",new String[]{id})){return c.moveToFirst()?new JSONObject(c.getString(0)):new JSONObject();}}
     private JSONObject grant(String runId)throws Exception{try(Cursor c=db.rawQuery("SELECT grant_json FROM runs WHERE run_id=?",new String[]{runId})){if(!c.moveToFirst())throw new SecurityException("没有执行授权");return new JSONObject(c.getString(0));}}
-    private JSONObject copy(JSONObject t,boolean image)throws Exception{JSONObject result=new JSONObject(t.toString());if("needs_confirmation".equals(t.optString("status")))result.put("resultReviewDigest",resultReviewDigest(t));JSONObject evidence=result.optJSONObject("evidence");if(image&&evidence!=null&&evidence.optString("imageFile").equals(t.optString("id")+".jpg")){File f=new File(artifacts,evidence.getString("imageFile"));if(f.isFile()&&f.length()<4_000_000)evidence.put("imageDataUrl","data:image/jpeg;base64,"+Base64.encodeToString(Files.readAllBytes(f.toPath()),Base64.NO_WRAP));}return result;}
+    private static String resultImageSha256(byte[] bytes)throws Exception{StringBuilder hash=new StringBuilder();for(byte value:java.security.MessageDigest.getInstance("SHA-256").digest(bytes))hash.append(String.format(java.util.Locale.ROOT,"%02x",value&255));return hash.toString();}
+    /** Read-only cache identity for these exact native result facts, never execution/confirmation authority. */
+    private static void projectResultImageIdentity(JSONObject task,JSONObject projection)throws Exception{
+        projection.put("resultRevision",task.optLong("resultRevision"));projection.remove("resultImageDigest");JSONObject image=task.optJSONObject("evidence");
+        if(image==null||!image.optString("imageFile").equals(task.optString("id")+".jpg")||!image.optString("imageSha256").matches("[a-f0-9]{64}"))return;
+        projection.put("resultImageDigest",resultReviewDigest(task));JSONObject evidence=projection.optJSONObject("evidence");if(evidence==null){evidence=new JSONObject();projection.put("evidence",evidence);}evidence.put("imageFile",image.getString("imageFile")).put("imageSha256",image.getString("imageSha256"));
+    }
+    private JSONObject copy(JSONObject t,boolean image)throws Exception{
+        JSONObject result=new JSONObject(t.toString());if("needs_confirmation".equals(t.optString("status")))result.put("resultReviewDigest",resultReviewDigest(t));projectResultImageIdentity(t,result);JSONObject evidence=result.optJSONObject("evidence");
+        if(evidence!=null)evidence.remove("imageDataUrl");
+        if(image&&evidence!=null&&evidence.optString("imageFile").equals(t.optString("id")+".jpg")){
+            File f=new File(artifacts,evidence.getString("imageFile"));if(f.isFile()&&f.length()<4_000_000){byte[] bytes=Files.readAllBytes(f.toPath());String expected=evidence.optString("imageSha256");
+                // Legacy reads have no immutable cache proof. New results must match the saved bytes.
+                if(bytes.length<4_000_000&&(expected.isEmpty()||expected.equals(resultImageSha256(bytes))))evidence.put("imageDataUrl","data:image/jpeg;base64,"+Base64.encodeToString(bytes,Base64.NO_WRAP));
+            }
+        }
+        return result;
+    }
     private void importLegacy(AtomicFile legacy)throws Exception{try(Cursor c=db.rawQuery("SELECT value FROM meta WHERE key='legacyImported'",null)){if(c.moveToFirst())return;}db.beginTransaction();try{JSONArray old;try{old=new JSONArray(new String(legacy.readFully(),StandardCharsets.UTF_8));}catch(java.io.FileNotFoundException absent){old=new JSONArray();}for(int i=0;i<old.length();i++){JSONObject t=old.optJSONObject(i);if(t==null||!t.optString("id").matches("[a-f0-9-]{36}"))continue;if(t.optJSONArray("events")==null)t.put("events",new JSONArray());if(t.optJSONObject("evidence")==null)t.put("evidence",new JSONObject());if(!t.has("kind"))t.put("kind","phone");write(t);}db.execSQL("INSERT INTO meta(key,value) VALUES('legacyImported','1')");db.setTransactionSuccessful();}finally{db.endTransaction();}}
     private void recover()throws Exception{
         db.beginTransaction();try{
