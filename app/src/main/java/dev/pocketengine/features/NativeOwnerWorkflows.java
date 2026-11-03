@@ -29,6 +29,7 @@ public final class NativeOwnerWorkflows {
     private final TaskStore tasks;
     private final MemorySourceBridge sources;
     private final dev.pocketengine.features.memory.TaskMemoryNativeHost taskMemory;
+    private volatile dev.pocketengine.features.memory.FinalAnswerSources.RetainedFrameReader answerSourceFrames;
     private volatile AccountGateway accounts;
     private final Map<String,String> authorizationUrls=new HashMap<>();
     private final Map<String,JSONObject> catalogs=new HashMap<>();
@@ -87,6 +88,17 @@ public final class NativeOwnerWorkflows {
     }
     public JSONObject taskMemory(String command,JSONObject payload)throws Exception{return taskMemory.handle(command,payload);}
     public JSONObject taskMemory(String command,JSONObject payload,dev.pocketengine.core.RunControl originalOwnerRead)throws Exception{return taskMemory.handle(command,payload,originalOwnerRead);}
+    /** Native retained-evidence producers may install one exact frame reader. No JSON registration
+     * or task-result screenshot fallback is exposed to a feature command or model. */
+    public synchronized void installAnswerSourceFrameReader(dev.pocketengine.features.memory.FinalAnswerSources.RetainedFrameReader reader){
+        if(answerSourceFrames!=null)throw new IllegalStateException("原来源屏帧读取器已经安装");answerSourceFrames=java.util.Objects.requireNonNull(reader);
+    }
+    public JSONObject answerSources(JSONObject payload,dev.pocketengine.core.RunControl ownerRead)throws Exception{
+        synchronized(sources){
+            JSONObject scope=ownerScope();MemoryModule original=memory();
+            return tasks.readFinalAnswerSources(payload,ownerRead,(task,run,sequence,revision)->original.isSavedEventForgotten(scope,task,run,sequence,revision),answerSourceFrames);
+        }
+    }
     private static JSONObject ownerScope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
     private MemoryModule memory(){EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");return (MemoryModule)module;}
     private PluginsModule plugins(){EngineModule module=host.module("plugins");if(!(module instanceof PluginsModule))throw new IllegalStateException("插件模块暂不可用");return (PluginsModule)module;}

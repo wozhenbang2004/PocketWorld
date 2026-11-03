@@ -131,8 +131,9 @@ public final class ToolOutputStoreNativeTest {
     }
     @Test public void v4UpgradePreservesOriginalRowsAndExplicitDeleteCascadesOnlyMatchingOutputs()throws Exception{
         try(Fixture f=new Fixture()){
-            String oldTask=f.id,oldRun=f.run;f.tasks.journal(f.id,f.run,f.epoch,f.control).checkpoint(new JSONArray().put(new JSONObject().put("role","user").put("content","原v4保留正文")),0,new JSONObject());f.tasks.event(f.id,new JSONObject().put("type","v4-fixture-original-audit").put("message","原审计"));
-            f.db.execSQL("DROP TRIGGER task_output_task_delete");f.db.execSQL("DROP TRIGGER task_output_run_delete");f.db.execSQL("DROP TRIGGER task_output_header_delete");f.db.execSQL("DROP TABLE task_output_chunks");f.db.execSQL("DROP TABLE task_output_sources");f.db.setVersion(4);f.db.close();f.open();assertEquals(5,f.db.getVersion());assertTrue(f.tasks.get(oldTask,false).getJSONArray("events").toString().contains("v4-fixture-original-audit"));
+            int currentSchemaVersion=f.db.getVersion();String oldTask=f.id,oldRun=f.run;f.tasks.journal(f.id,f.run,f.epoch,f.control).checkpoint(new JSONArray().put(new JSONObject().put("role","user").put("content","原v4保留正文")),0,new JSONObject());f.tasks.event(f.id,new JSONObject().put("type","v4-fixture-original-audit").put("message","原审计"));
+            // Simulates the missing v4 output tables, not a complete historical schema image.
+            f.db.execSQL("DROP TRIGGER task_output_task_delete");f.db.execSQL("DROP TRIGGER task_output_run_delete");f.db.execSQL("DROP TRIGGER task_output_header_delete");f.db.execSQL("DROP TABLE task_output_chunks");f.db.execSQL("DROP TABLE task_output_sources");f.db.setVersion(4);f.db.close();f.open();assertEquals(currentSchemaVersion,f.db.getVersion());assertTrue(f.tasks.get(oldTask,false).getJSONArray("events").toString().contains("v4-fixture-original-audit"));
             f.newTask();JSONObject other=f.capture("ssh_read_file",new JSONObject().put("content","别的任务必须保留"));String otherTask=f.id;
             for(String mode:new String[]{"OFF","ON"}){
                 f.db.execSQL("PRAGMA recursive_triggers="+mode);f.newTask();JSONObject first=f.capture("ssh_read_file",new JSONObject().put("content","本任务首run输出"));String firstRun=f.run;

@@ -22,9 +22,10 @@ import org.json.JSONObject
 internal fun NativeProjectToolPreparation(runtime: JSONObject?, task: UiTask?, enabled: Boolean, start: () -> Unit, refresh: () -> Unit) {
     val executable = runtime?.opt("canExecute") == true
     val receipt = ProjectWorkbenchGuard.preparationReceipt(task)
-    val progress = ProjectPreparationProgress.from(runtime?.optJSONObject("preparation")) ?: ProjectPreparationProgress.fromReceipt(receipt)
-    if (executable) return
-    var details by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    val health = ProjectRuntimeHealth.original(runtime)
+    val progress = if (health?.optJSONObject("preparation")?.opt("current") == false) null else ProjectPreparationProgress.from(runtime?.optJSONObject("preparation")) ?: ProjectPreparationProgress.fromReceipt(receipt)
+    if (executable && health == null) return
+    var details by androidx.compose.runtime.remember(runtime?.optString("identity"), health?.optString("activeGenerationIdentity")) { androidx.compose.runtime.mutableStateOf(false) }
     val available = runtime?.opt("preparationAvailable") == true
     androidx.compose.material3.Surface(
         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
@@ -34,14 +35,14 @@ internal fun NativeProjectToolPreparation(runtime: JSONObject?, task: UiTask?, e
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(if (progress?.error != null) "开发工具需要处理" else "开发工具尚未就绪",
+                    Text(if (executable) "手机开发工具可用" else if (progress?.error != null) "开发工具需要处理" else "开发工具尚未就绪",
                         fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    Text(if (available) "准备完成后即可构建和运行" else "仍可查看和编辑项目文件",
+                    Text(if (executable) "查看当前版本与保留范围" else if (available) "准备完成后即可构建和运行" else "仍可查看和编辑项目文件",
                         color = SecondaryInk, fontSize = 13.sp, lineHeight = 18.sp)
                 }
-                TextButton(onClick = { details = !details }) { Text(if (details) "收起" else "详情") }
+                TextButton(onClick = { details = !details }, modifier = Modifier.testTag("project_runtime_health_details")) { Text(if (details) "收起" else "详情") }
             }
-            progress?.let { current ->
+            if (!executable) progress?.let { current ->
                 if (current.error == null) {
                     val fraction = current.fraction
                     if (fraction == null) LinearProgressIndicator(Modifier.fillMaxWidth().testTag("project_preparation_progress"))
@@ -49,7 +50,7 @@ internal fun NativeProjectToolPreparation(runtime: JSONObject?, task: UiTask?, e
                 }
                 current.error?.let { Text(it, color = Danger, fontSize = 13.sp, lineHeight = 20.sp) }
             }
-            if (available) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (!executable && available) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = start, enabled = enabled && runtime?.opt("preparationAvailable") == true,
                     modifier = Modifier.weight(1f).testTag("project_prepare_phone_tools")) {
                     Text(if (progress?.resumableDownload == true) "继续准备" else "准备工具")
@@ -57,16 +58,18 @@ internal fun NativeProjectToolPreparation(runtime: JSONObject?, task: UiTask?, e
                 TextButton(onClick = refresh) { Text("刷新") }
             }
             if (details) {
-                Text("工具准备会进入当前项目任务，执行前仍需确认方案。下载完成不代表安装和核验完成。",
+                Text(if (executable) "这里只读取现有环境与恢复范围；任务仍使用自己的当前审批。" else "工具准备会进入当前项目任务，执行前仍需确认方案。下载完成不代表安装和核验完成。",
                     color = SecondaryInk, fontSize = 14.sp, lineHeight = 20.sp)
-                progress?.let { current ->
+                ProjectRuntimeHealth.details(health).forEach { fact -> Text(fact, color = SecondaryInk, fontSize = 13.sp, lineHeight = 20.sp, modifier = Modifier.testTag("project_runtime_health_fact")) }
+                if (!executable) progress?.let { current ->
                     Text("当前阶段：${current.phase}", fontSize = 13.sp,
                         modifier = Modifier.testTag("project_preparation_phase"))
                     preparationCount(current)?.let { Text(it, color = SecondaryInk, fontSize = 13.sp) }
                     if (current.resumableDownload) Text("已下载的内容可以续传；继续前仍会核对原任务。",
                         color = SecondaryInk, fontSize = 13.sp, lineHeight = 20.sp)
                 }
-                if (!available) {
+                if (executable) TextButton(onClick = refresh) { Text("刷新环境观察") }
+                else if (!available) {
                     Text("当前运行环境没有可用的工具准备入口。", color = SecondaryInk, fontSize = 14.sp)
                     TextButton(onClick = refresh) { Text("重新检查") }
                 } else if (!enabled) Text("请先处理原项目任务中的操作或审批。", color = SecondaryInk, fontSize = 14.sp)

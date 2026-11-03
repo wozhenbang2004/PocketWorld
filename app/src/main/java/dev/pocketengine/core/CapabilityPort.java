@@ -21,6 +21,9 @@ public interface CapabilityPort extends AutoCloseable {
     }
     /** False discards an answer made against a revoked capability/context snapshot. */
     default boolean responseCurrent(RunControl control)throws Exception{return true;}
+    /** Read-only evidence for optional step routing, never authorization or a tool replay.
+     * Unknown producers and receipts without a currently checkable native source pin stay false. */
+    default boolean stepReadSourceCurrent(String tool,JSONObject receipt,RunControl original)throws Exception{return false;}
     /** Native gateway request identity + final projected messages; never exposed as a model tool. */
     default void beforeModelRequest(String requestId,JSONArray projectedMessages,RunControl control)throws Exception { }
     /** After a real completed response survives the existing pause/source/steering gates. */
