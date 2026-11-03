@@ -194,7 +194,7 @@ public final class WorkProfileTeamApplicationJourneyTest {
             definition.put("teamTemplateRef", new JSONObject().put("id", teamId)
                     .put("digest", WorkProfile.fingerprint(app.features.teamDefinition(teamId))).put("optional", false));
             JSONObject saved = page.save("", 0, "Native Profile member routes", definition);
-            var review = page.review(saved.getString("profileId"), 1, new RunControl());
+            var review = page.review(saved.getString("profileId"), 1, new RunControl(), app.reviewOwnerWorkProfileProject(project, checkout.getString("id"), "managed_process_v1"));
             assertTrue(review.view().toString(), review.view().getBoolean("ready"));
             return page.select(review, review.digest, original);
         } finally { page.close(); }

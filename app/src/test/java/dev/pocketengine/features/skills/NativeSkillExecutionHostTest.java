@@ -50,7 +50,7 @@ public final class NativeSkillExecutionHostTest {
         public final NativeSkillExecutionHost host;
         final NativeSkillExecutionHost.OwnerWindow window;
         public Fixture(String... arguments)throws Exception {
-            Path root=Path.of("").toAbsolutePath();companion=new ProcessBuilder("python3","-B","app/src/test/java/dev/pocketengine/features/skills/companion/companion_fixture.py",root.toString()).redirectError(ProcessBuilder.Redirect.INHERIT).start();
+            Path root=Path.of(System.getProperty("pocket.gateway.source",".")).toAbsolutePath();companion=new ProcessBuilder("python3","-B",root.resolve("app/src/test/java/dev/pocketengine/features/skills/companion/companion_fixture.py").toString(),root.toString()).redirectError(ProcessBuilder.Redirect.INHERIT).start();
             info=new JSONObject(new BufferedReader(new InputStreamReader(companion.getInputStream(),StandardCharsets.UTF_8)).readLine());String base=info.getString("base"),token=info.getString("token");
             wire=new EngineModule(){
                 public String id(){return "remote";}
