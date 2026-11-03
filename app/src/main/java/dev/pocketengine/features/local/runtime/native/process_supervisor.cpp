@@ -131,7 +131,8 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(
                 if(!signal_owned(SIGTERM,true)) break;
             }
             if(stopped && !kill_sent && time-stop_at>=grace_ms) {
-                if(!signal_owned(SIGKILL,true)) break;kill_sent=true;
+                if(!signal_owned(SIGKILL,true)) { break; }
+                kill_sent=true;
             }
             // A successful shell may have left background children holding pipes or resources.
             if(leader_done&&!previously_done&&!signal_owned(SIGTERM,false)) break;
