@@ -173,6 +173,17 @@ def run(args):
         print('Building actual desktop JNI from project sources.', flush=True)
         subprocess.run(command, cwd=ROOT, env=env, check=True)
         props['pocketworldHostNativeDir'] = str(native)
+        if 'native-normal-cleanup' in groups:
+            fixture = ROOT / 'app/src/test/java/dev/pocketengine/features/local/runtime/native_wait_reap_fixture.cpp'
+            for name, original in [('LostWait', source / 'process_supervisor.cpp'),
+                                   ('OldLostWait', ROOT / 'app/src/test/resources/runtime/ordinary-process-protocol2.cpp')]:
+                isolated = report / ('native-' + name)
+                isolated.mkdir()
+                fault_command = command[:command.index(str(source / 'process_supervisor.cpp'))] + [
+                    str(original), str(fixture), '-pthread', '-Wl,--wrap=waitid', '-Wl,--wrap=kill',
+                    '-o', str(isolated / 'libpocketprocess.so')]
+                subprocess.run(fault_command, cwd=ROOT, env=env, check=True)
+                props['pocketworldHost' + name + 'Dir'] = str(isolated)
     command = [gradle, '--no-daemon', '--no-parallel', '--max-workers=1', '--console=plain', '-p', str(ROOT)]
     if not args.online:
         command.append('--offline')
