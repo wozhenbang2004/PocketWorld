@@ -54,7 +54,7 @@ public final class OwnerSkillManagedJourneyTest {
             f.workspace.handle("write",new JSONObject().put("projectId",otherProject).put("path","input/data.txt").put("expectedVersion",0).put("content","900.00"));
             String otherCheckout=f.local.handle("prepare",new JSONObject().put("projectId",otherProject)).getString("id");
             JSONObject different=f.configuration("python3").put("checkoutId",otherCheckout);
-            var originalConfiguration=new SkillExecutionConfiguration(new java.io.File(f.android.getFilesDir(),"skill-execution.json"));
+            var originalConfiguration=new SkillExecutionConfiguration(new java.io.File(((android.content.Context)f.android).getFilesDir(),"skill-execution.json"));
             var prior=originalConfiguration.inspectPhone(different);originalConfiguration.install(prior,prior.digest);
             JSONObject blocked=f.host.taskSnapshot(f.id(),Set.of("skills_execute"),new JSONObject());assertFalse(blocked.getJSONObject("ownerInvocation").getBoolean("available"));assertFalse(blocked.getJSONObject("ownerInvocation").getBoolean("projectConfigurationCompatible"));
             JSONArray displayed=blocked.getJSONObject("phoneExecution").getJSONArray("checkouts");assertEquals(1,displayed.length());assertEquals(f.checkout,displayed.getJSONObject(0).getString("checkoutId"));
