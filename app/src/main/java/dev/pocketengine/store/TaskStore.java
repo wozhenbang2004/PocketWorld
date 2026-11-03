@@ -2355,7 +2355,7 @@ public final class TaskStore {
     public synchronized JSONObject beginOwnerDocumentForOwner(String id,dev.pocketengine.features.attachments.creation.DocumentDraft draft)throws Exception{
         if(id==null||!id.matches("[a-f0-9-]{36}")||draft==null)throw new SecurityException("缺少原主人文档动作");JSONObject previous=read(id);
         if(previous!=null){requirePrivateOwner(previous);JSONObject exact=previous.optJSONObject("externalRefs");exact=exact==null?null:exact.optJSONObject("documentCreation");if(!"attachments".equals(previous.optString("feature"))||!"createDocument".equals(previous.optString("command"))||exact==null||!draft.identity.equals(exact.optString("planDigest")))throw new SecurityException("原动作已经属于另一份实际文档计划，未重新保存");return get(id,false).put("knownOperation",true);}
-        return beginExternal("attachments","createDocument",id,dev.pocketengine.features.attachments.creation.DocumentDraft.sourceInput(draft.source()).put("_nativeDocumentPlanDigest",draft.identity)).put("knownOperation",false);
+        db.beginTransaction();try{JSONObject task=beginExternal("attachments","createDocument",id,dev.pocketengine.features.attachments.creation.DocumentDraft.sourceInput(draft.source()).put("_nativeDocumentPlanDigest",draft.identity));task.put("coordinatorEpoch",1);write(task);db.setTransactionSuccessful();return task.put("knownOperation",false);}finally{db.endTransaction();}
     }
     public synchronized JSONObject beginExternal(String feature,String command,String operationId,JSONObject input)throws Exception{
         return beginExternal(feature,command,operationId,input,null);
