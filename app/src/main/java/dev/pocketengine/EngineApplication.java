@@ -408,6 +408,8 @@ public final class EngineApplication extends Application implements dev.pocketen
         remoteOwnerWorkflows=new dev.pocketengine.features.RemoteOwnerWorkflows(features,tasks,this::publish);
         remoteOwnerWorkflows.bindGatewayOwner(new dev.pocketengine.features.remote.NativeHarnessGatewayOwner.Host(){
             public dev.pocketengine.features.remote.NativeHarnessGatewayOwner.ParentAccess parentResume(String child)throws Exception{return reviewGatewayParentAccess(child);}
+            public org.json.JSONArray parentProfileChoices(String child)throws Exception {TaskStore.GatewayParentRunReview review=tasks.reviewGatewayParentRun(child);if(retainedTaskControl(review.view().getString("parentTaskId"))!=null)throw new SecurityException("原任务仍有控制器，不替换配置");return nativeWorkProfiles().gatewayProfileChoices(tasks,review);}
+            public dev.pocketengine.features.remote.NativeHarnessGatewayOwner.ParentAccess parentResumeProfile(String child,String profile,long revision)throws Exception{return reviewGatewayParentAccess(child,profile,revision);}
             public void stopParent(String task,String run)throws Exception{GatewayParentRun nativeRun=activeGatewayParentRun(task,run);if(nativeRun!=null)nativeRun.close();else {var module=features.module("proxy");if(module instanceof dev.pocketengine.features.proxy.ProxyModule){var bridge=((dev.pocketengine.features.proxy.ProxyModule)module).existingHarnessGateway(task,run);if(bridge!=null)bridge.close();}}}
             public dev.pocketengine.features.remote.NativeHarnessGatewayOwner.Access capture(String task,String run,String child)throws Exception{return captureExistingTaskHarnessGateway(task,run,child);}
             public JSONObject existing(String task,String run)throws Exception{return existingTaskHarnessGateway(task,run);}
@@ -686,11 +688,12 @@ public final class EngineApplication extends Application implements dev.pocketen
     /** Read native resource identity only. An Intent/JSON cannot construct this object. */
     public GatewayParentRun originalGatewayParentRun(String nativeId){return nativeId==null?null:gatewayParentRuns.get(nativeId);}
     public GatewayParentRun activeGatewayParentRun(String task,String run){for(GatewayParentRun value:gatewayParentRuns.values())if(value.task.equals(task)&&value.run.equals(run))return value;return null;}
-    private dev.pocketengine.features.remote.NativeHarnessGatewayOwner.ParentAccess reviewGatewayParentAccess(String child)throws Exception {
+    private dev.pocketengine.features.remote.NativeHarnessGatewayOwner.ParentAccess reviewGatewayParentAccess(String child)throws Exception {return reviewGatewayParentAccess(child,null,0);}
+    private dev.pocketengine.features.remote.NativeHarnessGatewayOwner.ParentAccess reviewGatewayParentAccess(String child,String profileId,long profileRevision)throws Exception {
         if(activeId()!=null||!gatewayParentRuns.isEmpty())throw new SecurityException("原手机/网关执行服务仍有任务，请先处理原服务；此入口不接管");
         TaskStore.GatewayParentRunReview review=tasks.reviewGatewayParentRun(child);JSONObject facts=review.view();String task=facts.getString("parentTaskId");
         if(retainedTaskControl(task)!=null)throw new SecurityException("原父任务仍有活动控制，请先核对原执行");
-        var profileReview=nativeWorkProfiles().reviewGatewayParent(tasks,review);ModelConfig requested=profileReview==null?null:profileReview.relayModel();
+        var profileReview=profileId==null?nativeWorkProfiles().reviewGatewayParent(tasks,review):nativeWorkProfiles().reviewGatewayParentProfile(tasks,review,profileId,profileRevision);ModelConfig requested=profileReview==null?null:profileReview.relayModel();
         long revision=requested==null?settings.relaySelectionRevision():profileReview.view().getLong("profileRevision");ModelConfig model=requested==null?settings.captureRelaySelection():requested;
         if(requested==null&&revision!=settings.relaySelectionRevision()||model.usesAccount())throw new SecurityException("仅已配置API RELAY可用于外部Harness，不使用ChatGPT账号");
         SettingsStore.validate(model);dev.pocketengine.runtime.ModelGateway.validate(model);String digest=dev.pocketengine.runtime.models.ModelRoutePlan.configurationDigest(model);

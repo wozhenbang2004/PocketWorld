@@ -44,6 +44,7 @@ public final class LocalModule implements EngineModule {
     private dev.pocketengine.features.local.project.ProjectGitImport nativeGitImport;
     private dev.pocketengine.features.local.project.NativeExecutionCaches nativeExecutionCaches;
     private dev.pocketengine.store.TaskStore nativeCacheTasks;
+    private dev.pocketengine.features.local.runtime.NativeDiagnosticCollector nativeDiagnostics;
     public LocalModule(FeatureContext context,EngineModule projects)throws Exception {
         this(context,projects,dev.pocketengine.features.local.runtime.android.AndroidManagedRuntimeFactory.create(context.android));
     }
@@ -59,7 +60,7 @@ public final class LocalModule implements EngineModule {
     @Override public synchronized JSONObject snapshot()throws Exception {
         JSONArray checkouts=new JSONArray();File[] entries=new File(root,"checkouts").listFiles();
         if(entries!=null)for(File entry:entries)if(entry.isDirectory()&&new File(entry,"checkout.json").isFile())checkouts.put(JsonFiles.read(new File(entry,"checkout.json")));
-        return new JSONObject().put("tools",commands.tools()).put("jobs",commands.list()).put("termuxJobs",termux.list()).put("checkouts",checkouts).put("termux",termux.status()).put("projectRuntime",projectRuntime.describe()).put("projectRuntimes",projectRuntimesForOwner()).put("arbitraryAppUidShell",false).put("reviewedImportRequired",true).put("termuxReturnMaxBytes",TermuxWorkspaceTransfer.MAX_BYTES).put("projectDevelopment",development.snapshot());
+        return new JSONObject().put("tools",commands.tools()).put("jobs",commands.list()).put("legacyReceiptRecovery",commands.receiptRecovery()).put("termuxJobs",termux.list()).put("checkouts",checkouts).put("termux",termux.status()).put("projectRuntime",projectRuntime.describe()).put("projectRuntimes",projectRuntimesForOwner()).put("arbitraryAppUidShell",false).put("reviewedImportRequired",true).put("termuxReturnMaxBytes",TermuxWorkspaceTransfer.MAX_BYTES).put("projectDevelopment",development.snapshot());
     }
     /** Native-only wiring; no JSON operation can install an authorization provider. */
     public void setProjectHost(ProjectDevelopment.HostPort host){development.setHost(host);for(ProjectRuntime runtime:runtimes.values())if(runtime instanceof ManagedProjectRuntime)((ManagedProjectRuntime)runtime).setProcessInputSink(receipt->{try{host.recordProcessInputReceipt(receipt);}catch(Exception failed){throw new IllegalStateException("runtime_original_pty_input_receipt_unconfirmed",failed);}});}
@@ -76,6 +77,12 @@ public final class LocalModule implements EngineModule {
     public synchronized JSONObject projectRuntimeForHost(String id)throws Exception {ProjectRuntime runtime=runtime(id);JSONObject facts=runtime.describe();return facts.put("runtimeId",id).put("name",id.equals("termux")?"Termux（可选外部环境）":"这台手机");}
     /** Native automatic viewer only; explicit log calls and execution plans do not consult this policy. */
     public synchronized JSONObject automaticProjectLogPolicyForHost(String id)throws Exception {if(closed)throw new IllegalStateException("原项目模块已关闭");ProjectRuntime original=runtime(id);return original instanceof ManagedProjectRuntime?((ManagedProjectRuntime)original).automaticLogObservationPolicyForHost():new JSONObject().put("automaticLogPageBytes",32768).put("automaticLogPageReduced",false).put("source","external_runtime_default_unchanged").put("executionPolicyChanged",false).put("explicitLogLimitsChanged",false);}
+    /** Typed native owner preview only, not a handle()/model command or Skill grant. */
+    public dev.pocketengine.features.local.runtime.NativeDiagnosticCollector.Preview diagnosticMetadataForOwner(RunControl observation)throws Exception {
+        observation.check();if(observation.hasHostRun())throw new SecurityException("诊断预览不借用任务、模型或Skill执行授权");dev.pocketengine.features.local.runtime.NativeDiagnosticCollector original;
+        synchronized(this){if(closed)throw new IllegalStateException("原项目模块已关闭");if(nativeDiagnostics==null)nativeDiagnostics=new dev.pocketengine.features.local.runtime.NativeDiagnosticCollector(dev.pocketengine.features.local.runtime.NativeDiagnosticSources.create(context.android,projectRuntime instanceof ManagedProjectRuntime?(ManagedProjectRuntime)projectRuntime:null),1500);original=nativeDiagnostics;}
+        return original.collect(observation);
+    }
     public synchronized JSONArray projectRuntimesForOwner()throws Exception {JSONArray facts=new JSONArray();for(String id:runtimes.keySet())facts.put(projectRuntimeForHost(id));return facts;}
     private ProjectRuntime runtime(String id){ProjectRuntime runtime=runtimes.get(id);if(runtime==null)throw new SecurityException("所选真实运行位置尚未配置");return runtime;}
     private static String runtimeId(JSONObject exact){return exact.optString("runtimeId","termux");}
@@ -159,6 +166,7 @@ public final class LocalModule implements EngineModule {
         ProjectRuntime selected=runtime(id);if(!(selected instanceof ManagedProjectRuntime))throw new SecurityException("受控服务需要原本机managed运行时");return (ManagedProjectRuntime)selected;
     }
     private void requireCheckoutWritable(String checkout)throws Exception {
+        if(commands.busy(checkout))throw new IllegalStateException("原只读命令进程或回执归属尚未确认，未向该副本派发新执行或写入");
         for(ProjectRuntime selected:runtimes.values())if(selected instanceof ManagedProjectRuntime)((ManagedProjectRuntime)selected).requireCheckoutWritable(checkout);
     }
     public synchronized dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified projectPreviewForOwner(String previewId,String checkoutId){var preview=previews.get(previewId);if(closed||preview==null||!checkoutId.equals(preview.checkoutId))throw new IllegalStateException("此预览资源已释放，请重新核对当前项目");return preview;}
@@ -175,10 +183,11 @@ public final class LocalModule implements EngineModule {
         if(input.has("expectedSourceDigest")&&!source.getString("sourceDigest").equals(input.getString("expectedSourceDigest")))throw new SecurityException("原项目源码已变化，请重新核对项目包清单");
         if(input.has("includeGeneratedRoots")&&!(input.opt("includeGeneratedRoots") instanceof Boolean))throw new IllegalArgumentException("输出根目录选择需为布尔值");
         JSONObject original=new JSONObject().put("projectId",source.getString("projectId")).put("checkoutId",checkoutId).put("sourceDigest",source.getString("sourceDigest")).put("name",checkout.getString("name"));
-        var frozen=dev.pocketengine.features.local.project.ProjectPackageArchive.capture(content(checkoutId),original,input.optString("mode","source_project"),input.optString("entryPath"),input.optBoolean("includeGeneratedRoots"));
+        JSONArray selected=input.has("includePaths")?dev.pocketengine.features.local.project.ProjectPackageArchive.normalizedSelection(input.getJSONArray("includePaths")):null;
+        var frozen=dev.pocketengine.features.local.project.ProjectPackageArchive.capture(content(checkoutId),original,input.optString("mode","source_project"),input.optString("entryPath"),input.optBoolean("includeGeneratedRoots"),selected);
         if(!source.getString("sourceDigest").equals(ProjectSources.describe(export(checkoutId)).getString("sourceDigest")))throw new SecurityException("采集期间源码变化，未保存不完整项目包");
         // Verify the complete selected listing again, including generated resources outside the source fence.
-        var checked=dev.pocketengine.features.local.project.ProjectPackageArchive.capture(content(checkoutId),original,input.optString("mode","source_project"),input.optString("entryPath"),input.optBoolean("includeGeneratedRoots"));
+        var checked=dev.pocketengine.features.local.project.ProjectPackageArchive.capture(content(checkoutId),original,input.optString("mode","source_project"),input.optString("entryPath"),input.optBoolean("includeGeneratedRoots"),selected);
         if(!frozen.identity.equals(checked.identity))throw new SecurityException("采集期间所选文件/资源清单变化，未保存项目包");return frozen;
     }
     private JSONObject projectPackagePlan(JSONObject input)throws Exception {
@@ -745,9 +754,9 @@ public final class LocalModule implements EngineModule {
         if(command.equals("project.runtime.describe"))return projectRuntimeForHost(input.getString("runtimeId"));
         if(command.startsWith("project."))return development.handle(command,input);
         switch(command){
-            case "probe":return new JSONObject().put("tools",commands.tools()).put("termux",termux.status());
+            case "probe":return new JSONObject().put("tools",commands.tools()).put("termux",termux.status()).put("legacyReceiptRecovery",commands.receiptRecovery());
             case "prepare":return prepare(JsonFiles.text(input,"projectId",80));
-            case "listJobs":return new JSONObject().put("jobs",commands.list()).put("termuxJobs",termux.list());
+            case "listJobs":return new JSONObject().put("jobs",commands.list()).put("termuxJobs",termux.list()).put("legacyReceiptRecovery",commands.receiptRecovery());
             case "getJob":return input.optBoolean("termux")?termux.get(JsonFiles.text(input,"jobId",80)):commands.get(JsonFiles.text(input,"jobId",80));
             case "cancelJob":return input.optBoolean("termux")?termux.cancel(JsonFiles.text(input,"jobId",80)):commands.cancel(JsonFiles.text(input,"jobId",80));
             case "run":{
@@ -902,5 +911,5 @@ public final class LocalModule implements EngineModule {
     private static String hash(byte[] bytes)throws Exception {StringBuilder out=new StringBuilder();for(byte value:MessageDigest.getInstance("SHA-256").digest(bytes))out.append(String.format(java.util.Locale.ROOT,"%02x",value&255));return out.toString();}
     private static void atomic(File target,byte[] value)throws Exception {File pending=File.createTempFile("pending-",".tmp",target.getParentFile());try{try(FileOutputStream output=new FileOutputStream(pending)){output.write(value);output.getFD().sync();}Files.move(pending.toPath(),target.toPath(),StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);}finally{Files.deleteIfExists(pending.toPath());}}
     private static JSONObject json(Object... pairs){JSONObject out=new JSONObject();try{for(int i=0;i+1<pairs.length;i+=2)out.put(String.valueOf(pairs[i]),pairs[i+1]);}catch(Exception ignored){}return out;}
-    @Override public void close(){closed=true;commands.close();termux.close();for(ProjectRuntime runtime:runtimes.values())if(runtime instanceof ManagedProjectRuntime)try{((ManagedProjectRuntime)runtime).close();}catch(Exception unconfirmed){context.emit(id(),json("kind","runtime_cleanup_unknown","message","本机进程清理尚未确认，请核对原任务"));}synchronized(this){previews.clear();}}
+    @Override public void close(){closed=true;dev.pocketengine.features.local.runtime.NativeDiagnosticCollector diagnostic;synchronized(this){diagnostic=nativeDiagnostics;}if(diagnostic!=null)diagnostic.close();commands.close();termux.close();for(ProjectRuntime runtime:runtimes.values())if(runtime instanceof ManagedProjectRuntime)try{((ManagedProjectRuntime)runtime).close();}catch(Exception unconfirmed){context.emit(id(),json("kind","runtime_cleanup_unknown","message","本机进程清理尚未确认，请核对原任务"));}synchronized(this){previews.clear();}}
 }

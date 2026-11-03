@@ -103,6 +103,66 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertIn('logPolicy = page.optJSONObject("logObservationPolicy")', ui)
         self.assertNotIn('metadata = page', ui)
 
+    def test_owner_diagnostic_metadata_is_explicit_and_consumes_the_shared_phone_whitelist(self):
+        entry = REGISTRY['runtime-diagnostic-metadata']
+        self.assertTrue(entry['robolectric'])
+        self.assertFalse(entry.get('native', False))
+        names = [entry['class']] + entry['additionalClasses']
+        self.assertEqual(3, len(names))
+        self.assertEqual(['runtime-diagnostic-metadata'], HOST.select(REGISTRY, [], names))
+        methods = 0
+        for name in names:
+            source = (HOST.ROOT / 'app/src/test/java' / (name.replace('.', '/') + '.java')).read_text()
+            methods += len(re.findall(r'@Test(?:\([^)]*\))?\s+public\s+void\s+\w+\s*\(', source))
+            self.assertNotIn('@Ignore', source)
+        self.assertEqual(15, methods)
+        source = (HOST.ROOT / 'app/src/main/java/dev/pocketengine/features/local/runtime/NativeDiagnosticSources.java').read_text()
+        self.assertIn('AndroidPhoneDiagnostics.preview(context,null)', source)
+        self.assertIn('report.readiness()', source)
+        self.assertNotIn('AndroidPhoneReadiness', source)
+        ui = (HOST.ROOT / 'app/src/main/kotlin/dev/pocketengine/ui/ProjectStorageSection.kt').read_text()
+        self.assertIn('ActivityResultContracts.CreateDocument("application/json")', ui)
+        self.assertIn('flow.diagnosticExportResult(original, uri)', ui)
+        self.assertIn('state.diagnosticReviewed && !state.busy', ui)
+        coordinator = (HOST.ROOT / 'app/src/main/kotlin/dev/pocketengine/ui/ProjectStorageCoordinator.kt').read_text()
+        self.assertIn('ticket !== diagnosticTicket', coordinator)
+        self.assertIn('diagnosticWindow.write(ticket', coordinator)
+        self.assertIn('openOutputStream(uri, "wt")', coordinator)
+        self.assertIn('diagnosticWindow.foreground(visible)', coordinator)
+        self.assertIn('state.diagnosticPickerPending || state.diagnosticExportEntered) return null', coordinator)
+        self.assertIn('flow.diagnosticPickerUnavailable(ticket)', ui)
+
+    def test_legacy_receipt_recovery_keeps_original_bytes_and_does_not_add_a_runtime(self):
+        entry = REGISTRY['legacy-command-receipt-recovery']
+        self.assertTrue(entry['robolectric'])
+        self.assertTrue(entry['native'])
+        names = [entry['class']] + entry['additionalClasses']
+        self.assertEqual(7, len(names))
+        # The original LocalWorkbench guard also belongs to file operations.
+        self.assertEqual(['legacy-command-receipt-recovery', 'project-file-operations'], HOST.select(REGISTRY, [], names))
+        methods = 0
+        for name in names:
+            source = (HOST.ROOT / 'app/src/test/java' / (name.replace('.', '/') + '.java')).read_text()
+            methods += len(re.findall(r'@Test(?:\([^)]*\))?\s+public\s+void\s+\w+\s*\(', source))
+            self.assertNotIn('@Ignore', source)
+        self.assertEqual(24, methods)
+        source = (HOST.ROOT / 'app/src/main/java/dev/pocketengine/features/local/NativeCommandExecutor.java').read_text()
+        loader = source[source.index('File[] saved='):source.index('private static JSONObject readOriginal')]
+        self.assertNotIn('JsonFiles.write', loader)
+        self.assertNotIn('Files.delete', loader)
+        self.assertIn('file.getName().equals(id+".json")', loader)
+        self.assertIn('coldProcessUnconfirmed', loader)
+        self.assertIn('public synchronized boolean busy(String id){return originalInventoryUnconfirmed||busy.contains(id);}', source)
+        self.assertIn('NativeProcessSupervisor.Exit exit=supervisor.execute(', source)
+        self.assertIn('exit.groupAbsent&&exit.outputComplete', source)
+        self.assertNotIn('ProcessBuilder', source)
+        self.assertNotIn('Process process=', source)
+        self.assertIn('&&supervised&&!originalInventoryUnconfirmed', source)
+        self.assertIn('dev.pocketengine.features.local.NativeCommandUnavailableProbe', entry['helpers'])
+        ui = (HOST.ROOT / 'app/src/main/kotlin/dev/pocketengine/ui/LocalWorkbench.kt').read_text()
+        self.assertIn('local.optJSONObject("legacyReceiptRecovery")', ui)
+        self.assertIn('!LocalWorkbenchGuard.pollable(', ui)
+
     def test_registered_real_sources_and_helpers_exist(self):
         for entry in REGISTRY.values():
             for name in list(dict.fromkeys([entry['class']] + entry.get('additionalClasses', []) + entry['helpers'])):

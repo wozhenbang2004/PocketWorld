@@ -2,11 +2,14 @@ package dev.pocketengine.ui
 
 import android.os.Bundle
 import android.os.Handler
+import android.net.Uri
 import androidx.compose.runtime.*
 import dev.pocketengine.EngineApplication
 import dev.pocketengine.core.RunControl
 import dev.pocketengine.features.local.LocalModule
 import dev.pocketengine.features.local.project.ProjectStorage
+import dev.pocketengine.features.local.runtime.NativeDiagnosticCollector
+import dev.pocketengine.features.local.runtime.NativeDiagnosticWindow
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Future
 import org.json.JSONArray
@@ -16,7 +19,9 @@ internal data class ProjectStorageState(
     val open: Boolean = false, val busy: Boolean = false, val inventory: JSONObject? = null,
     val selected: Set<String> = emptySet(), val review: JSONObject? = null, val originalAction: String? = null,
     val original: JSONObject? = null, val result: JSONObject? = null, val caches: List<JSONObject> = emptyList(),
-    val notice: String? = null, val error: String? = null
+    val notice: String? = null, val error: String? = null,
+    val diagnosticText: String? = null, val diagnosticSha: String? = null, val diagnosticBytes: Int = 0,
+    val diagnosticReviewed: Boolean = false, val diagnosticPickerPending: Boolean = false, val diagnosticExportEntered: Boolean = false
 )
 /** UI observer over the original runtime lease, Local directory and external task. */
 internal class ProjectStorageCoordinator(
@@ -31,11 +36,53 @@ internal class ProjectStorageCoordinator(
     private var future: Future<*>? = null
     private var review: ProjectStorage.Review? = null
     private var reviewControl: RunControl? = null
+    private val diagnosticWindow = NativeDiagnosticWindow { !closed && privateOwner() }
+    private var diagnosticPreview: NativeDiagnosticCollector.Preview? = null
+    private var diagnosticTicket: NativeDiagnosticWindow.Ticket? = null
+    private var diagnosticDestination: Uri? = null
     private fun local() = app.features.module("local") as? LocalModule ?: error("原项目存储宿主不可用")
     private fun owner() { check(!closed && foreground && privateOwner()) { "请从本机私人页面审阅存储范围" } }
     private fun pending() = state.originalAction != null && state.original?.optString("status") != "completed"
-    fun open() { owner(); state = state.copy(open = true); refresh() }
-    fun closePage() { cancelRead(); clearReview(); state = state.copy(open = false, busy = false, review = null) }
+    fun open() { owner(); diagnosticWindow.open(); state = state.copy(open = true); refresh() }
+    fun closePage() { cancelRead(); clearReview(); clearDiagnostic(); state = state.copy(open = false, busy = false, review = null) }
+    private fun clearDiagnostic() { diagnosticWindow.close(); diagnosticPreview = null; diagnosticTicket = null; diagnosticDestination = null; state = state.copy(diagnosticText = null, diagnosticSha = null, diagnosticBytes = 0, diagnosticReviewed = false, diagnosticPickerPending = false, diagnosticExportEntered = false) }
+    fun readDiagnostics() {
+        owner(); if (state.busy || state.review != null || state.diagnosticPickerPending) return
+        diagnosticWindow.open()
+        work { c -> val preview = local().diagnosticMetadataForOwner(c); { diagnosticWindow.replace(preview); diagnosticPreview = preview; state = state.copy(diagnosticText = preview.textForOwner(), diagnosticSha = preview.sha256(), diagnosticBytes = preview.size(), diagnosticReviewed = false, diagnosticExportEntered = false, notice = "已固定这次只读元数据。超时/失败域在快照中标明，不代表任务已停止、修复或通过设备验收。") } }
+    }
+    fun reviewDiagnostics(accepted: Boolean) {
+        owner(); if (state.busy || state.diagnosticPickerPending) return
+        val preview = diagnosticPreview ?: return
+        diagnosticWindow.review(preview.sha256(), accepted); state = state.copy(diagnosticReviewed = accepted)
+    }
+    fun prepareDiagnosticExport(): NativeDiagnosticWindow.Ticket? {
+        if (closed || !foreground || !privateOwner() || state.busy || !state.open || !state.diagnosticReviewed || state.diagnosticPickerPending || state.diagnosticExportEntered) return null
+        return diagnosticWindow.prepare().also { diagnosticTicket = it; state = state.copy(diagnosticPickerPending = true) }
+    }
+    fun diagnosticPickerUnavailable(ticket: NativeDiagnosticWindow.Ticket) {
+        if (closed || ticket !== diagnosticTicket) return
+        diagnosticWindow.cancel(ticket); diagnosticTicket = null; diagnosticDestination = null
+        state = state.copy(diagnosticPickerPending = false, error = "无法打开系统文件选择器，没有写入诊断正文。")
+    }
+    fun diagnosticExportResult(ticket: NativeDiagnosticWindow.Ticket?, uri: Uri?) {
+        if (closed || ticket == null || ticket !== diagnosticTicket) return
+        if (uri == null) { diagnosticWindow.cancel(ticket); diagnosticTicket = null; state = state.copy(diagnosticPickerPending = false, notice = "已取消选择，未写入诊断正文。") ; return }
+        if (uri.scheme != "content" || uri.authority.isNullOrBlank()) { diagnosticWindow.cancel(ticket); diagnosticTicket = null; state = state.copy(diagnosticPickerPending = false, error = "系统未授予可用的文档引用，没有写入其他路径。") ; return }
+        diagnosticDestination = uri; finishDiagnosticExport()
+    }
+    private fun finishDiagnosticExport() {
+        if (closed || !foreground || !state.open || state.busy) return
+        val ticket = diagnosticTicket ?: return; val uri = diagnosticDestination ?: return
+        diagnosticTicket = null; diagnosticDestination = null
+        if (!privateOwner()) { diagnosticWindow.cancel(ticket); state = state.copy(diagnosticPickerPending = false, error = "原私人页面已变化，没有写入诊断正文。所选提供方可能已创建空文件。") ; return }
+        state = state.copy(diagnosticPickerPending = false)
+        work { c ->
+            val result = try { diagnosticWindow.write(ticket, { app.contentResolver.openOutputStream(uri, "wt") ?: error("diagnostic_destination_unavailable") }, c) }
+            catch (failed: Exception) { throw IllegalStateException("诊断文件写入未完整确认，目标可能已有部分数据。请在所选提供方核对；没有自动重试。") }
+            return@work { state = state.copy(diagnosticReviewed = false, diagnosticExportEntered = diagnosticPreview?.exportEntered() == true, notice = "已向所选文档提供方写入 ${result.getInt("bytes")} 字节的固定元数据。没有自动上传；提供方可能自行同步，持久保存尚未独立验证。") }
+        }
+    }
     fun refresh() = work { c ->
         val data = local().ownerStorageInventoryForHost(c)
         val caches = app.features.ownerDataArchives(app).localCachesForOwner(c).rows()
@@ -88,8 +135,8 @@ internal class ProjectStorageCoordinator(
     fun stop() { val id = state.originalAction ?: return; work { _ -> val actual = app.features.cancelOwnerStorageCleanupForOwner(id); { state = state.copy(original = actual, notice = "已请求停止后续删除；已清理的缓存不会回滚，原项目和固定成果保留。") } } }
     fun readOriginal(id: String) { if (state.busy) return; work { _ -> val original = app.features.ownerStorageCleanupForOwner(id); { state = state.copy(originalAction = id, original = original); query() } } }
     fun backupCache(id: String) { owner(); if (!state.busy) { closePage(); openBackup(id) } }
-    fun foreground(visible: Boolean) { foreground = visible; if (!visible) { cancelRead(); clearReview(); state = state.copy(busy = false, review = null) } }
-    fun detach() { closed = true; cancelRead(); clearReview() }
+    fun foreground(visible: Boolean) { foreground = visible; diagnosticWindow.foreground(visible); if (!visible) { cancelRead(); clearReview(); state = state.copy(busy = false, review = null) } else finishDiagnosticExport() }
+    fun detach() { closed = true; cancelRead(); clearReview(); clearDiagnostic() }
     fun save(bundle: Bundle) { state.originalAction?.let { bundle.putString("projectOwnerStorageAction", it) } }
     fun restore(bundle: Bundle?) { state = state.copy(originalAction = bundle?.getString("projectOwnerStorageAction"), notice = bundle?.getString("projectOwnerStorageAction")?.let { "只恢复了原清理编号；没有恢复删除确认。请只读核对原结果。" }) }
     private fun clearReview() { review = null; reviewControl?.cancel(); reviewControl = null }
@@ -97,7 +144,7 @@ internal class ProjectStorageCoordinator(
     private fun work(onFailure: (() -> Unit)? = null, block: (RunControl) -> (() -> Unit)) {
         owner(); if (state.busy) return
         val epoch = ++generation; val c = RunControl(); control = c; state = state.copy(busy = true, error = null)
-        future = io.submit { try { val accepted = block(c); c.check(); main.post { if (!closed && epoch == generation && foreground && privateOwner()) { control = null; future = null; state = state.copy(busy = false); accepted() } } } catch (failure: Exception) { main.post { if (!closed && epoch == generation) { onFailure?.invoke(); state = state.copy(busy = false, error = failure.message?.take(400) ?: "原清理状态待核对"); control = null; future = null } } } }
+        future = io.submit { try { val accepted = block(c); c.check(); main.post { if (!closed && epoch == generation && foreground && privateOwner()) { control = null; future = null; state = state.copy(busy = false); accepted(); finishDiagnosticExport() } } } catch (failure: Exception) { main.post { if (!closed && epoch == generation) { onFailure?.invoke(); state = state.copy(busy = false, error = failure.message?.take(400) ?: "原清理状态待核对", diagnosticReviewed = false, diagnosticExportEntered = diagnosticPreview?.exportEntered() == true); control = null; future = null; finishDiagnosticExport() } } } }
     }
 }
 private fun JSONArray.rows(): List<JSONObject> = (0 until length()).mapNotNull { optJSONObject(it) }

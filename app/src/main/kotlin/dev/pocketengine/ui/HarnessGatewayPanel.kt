@@ -118,6 +118,16 @@ private fun HarnessGatewayContinuationPanel(snapshot: JSONObject, gateway: JSONO
         Text("若原助手已等待且控制结束，可明确恢复同一任务为仅网关执行；不新建任务、不启动手机操作或第二个 Agent。原范围缺失或耗尽时，先回原任务确认执行范围。", style = MaterialTheme.typography.bodyMedium)
         OutlinedButton(onClick = { send("gateway.reviewParentRun", JSONObject()) }, enabled = enabled) { Text("审阅原任务的仅网关恢复") }
     }
+    if (stage == null && !uncertain && (session?.optBoolean("available") != true || session?.optString("state") in setOf("STOPPED", "EXPIRED"))) {
+        OutlinedButton(onClick = { send("gateway.profileChoices", JSONObject()) }, enabled = enabled) { Text("列出保存的工作配置（仅本次网关）") }
+        snapshot.optJSONArray("gatewayProfileChoices")?.let { profiles ->
+            if (profiles.length() == 0) Text("原任务已有冻结配置，或尚无含 RELAY 的保存引用；不替换原配置，也不新建授权。", color = SecondaryInk, style = MaterialTheme.typography.bodySmall)
+            profiles.objects().forEach { profile ->
+                OutlinedButton(onClick = { send("gateway.reviewParentProfile", JSONObject().put("profileId", profile.optString("profileId")).put("profileRevision", profile.optLong("revision"))) }, enabled = enabled) { Text("预检并审阅 ${profile.optString("name")} · 修订 ${profile.optLong("revision")}") }
+            }
+            Text("只在原累计范围内绑定明确 API RELAY 和本任务准确目标；其他资产投射尚未接入。预检读取原目标事实，不运行任务；实际配置仍须下一步逐字段确认与读回。", color = SecondaryInk, style = MaterialTheme.typography.bodySmall)
+        }
+    }
     if (parentScope != null && !uncertain) {
         parentScope.optJSONObject("workProfile")?.let { profile ->
             Text("任务工作配置 · 版本 ${profile.optLong("profileRevision")} · ${if (parentScope.optString("relaySourceKind") == "frozen_original_work_profile_RELAY") "冻结网关模型" else "网关沿用原宿主选择"}", color = SecondaryInk, style = MaterialTheme.typography.bodySmall)

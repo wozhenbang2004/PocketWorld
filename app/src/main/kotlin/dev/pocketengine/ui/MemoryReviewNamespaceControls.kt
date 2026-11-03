@@ -34,7 +34,7 @@ internal fun MemoryReviewNamespacePage(
     var filesRead by remember(scopeKey) { mutableStateOf<String?>(null) }
     var proposalRead by remember(scopeKey) { mutableStateOf<String?>(null) }
     var localError by remember(scopeKey) { mutableStateOf<String?>(null) }
-    val readOnly = setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "cognitionProjection", "getParentRecord", "readAssertionEvidence", "openSource", "namespaceChoices", "projectFileChoices")
+    val readOnly = setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "cognitionProjection", "searchHistory", "readHistoryRecord", "getParentRecord", "readAssertionEvidence", "openSource", "namespaceChoices", "projectFileChoices")
     val changing = status == "changing" || "selectNamespace" in pending
     val busy = changing || pending.any { it !in readOnly }
     fun request(command: String, payload: JSONObject = JSONObject()): String? = try { localError = null; onRequest(command, payload) } catch (failure: Exception) { localError = failure.message ?: "原生请求未开始"; null }
