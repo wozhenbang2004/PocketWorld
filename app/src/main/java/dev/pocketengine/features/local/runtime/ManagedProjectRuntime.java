@@ -125,7 +125,11 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
     /** Native host hook for its original TaskStore receipt row; no new task or execution authority. */
     public void setReceiptSink(java.util.function.Consumer<JSONObject> nativeSink) {jobs.setReceiptSink(nativeSink);}
     public void setProcessInputSink(java.util.function.Consumer<ManagedProcessJobs.ProcessInputReceipt> sink){jobs.setProcessInputSink(sink);}
-    public JSONObject processInput(RuntimeExecutionRef reference,dev.pocketengine.core.RunControl original,String operation,JSONObject request,ProjectRuntime.LiveGate gate)throws Exception{requireProvider(reference);reference.checkControl(original);return jobs.processInput(reference,original,operation,request,gate);}
+    public JSONObject processInput(RuntimeExecutionRef reference,dev.pocketengine.core.RunControl original,String operation,JSONObject request,ProjectRuntime.LiveGate gate)throws Exception {
+        requireProvider(reference);
+        // The original executor checks the control inside its never-queued proof boundary.
+        return jobs.processInput(reference,original,operation,request,gate);
+    }
     public AutoCloseable retainOwnedServiceAuthority(RuntimeExecutionRef reference,dev.pocketengine.core.RunControl original)throws Exception {
         requireProvider(reference);reference.checkControl(original);jobs.requireOwnedOrReleased(reference);
         return original.retainAuthorityCheck(()->jobs.requireOwnedOrReleased(reference));
