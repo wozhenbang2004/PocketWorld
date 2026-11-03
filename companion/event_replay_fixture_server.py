@@ -4,6 +4,10 @@ import sys
 from pathlib import Path
 import read_reconnect_fixture_server as original
 
+# Existing approved initialize/session readbacks, never a new capability probe.
+original.CLAUDE = original.CLAUDE.replace("2.1.316 (controlled question protocol fixture)", "2.1.317 (controlled question protocol fixture)", 1)
+original.CLAUDE = original.CLAUDE.replace("'response':{}}})", "'response':{'claude_code_version':'2.1.317'}}})", 1)
+original.CLAUDE = original.CLAUDE.replace("'mcp_servers':[]})", "'mcp_servers':[],'claude_code_version':'2.1.317'})", 1)
 codex_line = next(line for line in original.CODEX.splitlines() if "emit({'method':'turn/started'" in line)
 original.CODEX = original.CODEX.replace(codex_line, codex_line + "\n        for n in range(96): emit({'method':'item/commandExecution/outputDelta','params':{'threadId':'question-thread','turnId':turn,'itemId':'burst-item','delta':'controlled observed chunk '+str(n)}})", 1)
 claude_line = next(line for line in original.CLAUDE.splitlines() if "emit({'type':'system','subtype':'init'" in line)
@@ -16,6 +20,13 @@ child_blocks = """
                       {'type':'text','text':'same public child observation'},
                       {'type':'thinking','thinking':'NEVER_EXPOSE_CHILD_THINKING'},
                       {'type':'tool_use','id':'same-child-tool','name':'Read','input':{}}]}})
+            progress={'type':'tool_progress','session_id':session,'user_message_uuid':prompt,
+                      'parent_tool_use_id':'toolu_child_'+suffix,'tool_use_id':'same-child-tool',
+                      'tool_name':'Read','elapsed_time_seconds':1,
+                      'uuid':'11223344-5566-7788-9900-11223344556'+('1' if suffix=='a' else '2'),
+                      'subagent_retry':{'agent_id':'NEVER_EXPOSE_RETRY_AGENT'},
+                      'text':'NEVER_EXPOSE_PROGRESS_TEXT'}
+            emit(progress);emit(progress)
             emit({'type':'user','session_id':session,'uuid':'public-result-'+suffix,
                   'parent_tool_use_id':'toolu_child_'+suffix,
                   'message':{'content':[{'type':'tool_result','tool_use_id':'same-child-tool','content':'same public result'}]}})

@@ -433,7 +433,7 @@ class HostTestEntrypointTest(unittest.TestCase):
             'dev.pocketengine.features.remote.RemoteInputDeliveryTest': 11,
             'dev.pocketengine.features.remote.RemoteTaskDraftsTest': 4,
             'dev.pocketengine.ui.RemoteDraftDeliveryMountedTest': 10,
-            'dev.pocketengine.features.automation.AutomationIntervalTest': 4,
+            'dev.pocketengine.features.automation.AutomationIntervalTest': 13,
         }
         for name, count in expected.items():
             self.assertEqual(1, len(HOST.select(REGISTRY, [], [name])), name)

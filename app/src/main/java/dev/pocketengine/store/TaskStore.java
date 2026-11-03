@@ -2581,6 +2581,7 @@ public final class TaskStore {
             for(String key:new String[]{"nativeProtocol","threadId","sessionId","promptRequestId"})if(scope.has(key)&&!scope.get(key).equals(current.opt(key.equals("nativeProtocol")?"protocol":key)))throw new SecurityException("事件native会话已改变，不能确认旧游标");
             JSONObject currentEventScope=dev.pocketengine.features.remote.RemoteJobEvents.scope(current,scope.getString("profileBindingHash"));
             for(String key:new String[]{"turnId","nativeRuntimeVersion"})if(scope.has(key)&&!scope.get(key).equals(currentEventScope.opt(key)))throw new SecurityException("事件原turn或native runtime已变化，不能确认旧来源游标");
+            if(scope.has("modelRuntime")&&!dev.pocketengine.features.remote.RemoteJobEvents.same(scope.optJSONObject("modelRuntime"),currentEventScope.optJSONObject("modelRuntime")))throw new SecurityException("事件原session/prompt的native runtime已变化，不能确认旧子来源游标");
             JSONObject next=dev.pocketengine.features.remote.RemoteJobEvents.merge(task.optJSONObject("remoteEventRead"),page);
             task.put("remoteEventRead",next);write(task);db.setTransactionSuccessful();return new JSONObject(next.toString());
         }finally{db.endTransaction();}
