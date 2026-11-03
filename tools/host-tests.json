@@ -312,7 +312,13 @@
       "dev.pocketengine.features.capabilities.OfficeDocumentCapabilityTest"
     ],
     "helpers": [],
-    "description": "Original immutable document creation, bounded OOXML and known formula source/readback: four exact classes, 15 tests; pure JVM files, not Office renderer or device acceptance."
+    "description": "Original immutable document creation, bounded OOXML and known formula source/readback: four exact classes, 18 tests; pure JVM files, not Office renderer or device acceptance."
+  },
+  "aion-office-mounted": {
+    "class": "dev.pocketengine.ui.AttachmentOutcomeNativeControllerTest",
+    "helpers": [],
+    "robolectric": true,
+    "description": "Four original mounted native owner journeys including PPTX source-pinned edit, restore, export and unknown-result fences. Robolectric semantics and structural readback, not visual layout or device acceptance."
   },
   "aion-conversations": {
     "class": "dev.pocketengine.features.assistant.ConversationWorkbenchNativeJourneyTest",

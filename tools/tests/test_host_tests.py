@@ -453,6 +453,19 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertTrue(REGISTRY['alma-pi-no-tools']['python'])
         self.assertTrue(REGISTRY['alma-pi-no-tools']['robolectric'])
 
+    def test_aion_office_mounted_keeps_original_full_class(self):
+        entry = REGISTRY['aion-office-mounted']
+        name = 'dev.pocketengine.ui.AttachmentOutcomeNativeControllerTest'
+        self.assertEqual(name, entry['class'])
+        self.assertTrue(entry['robolectric'])
+        self.assertEqual([], entry['helpers'])
+        self.assertEqual(['aion-office-mounted'], HOST.select(REGISTRY, [], [name]))
+        source = (HOST.ROOT / 'app/src/test/java/dev/pocketengine/ui/AttachmentOutcomeNativeControllerTest.java').read_text()
+        self.assertEqual(4, len(re.findall(r'@Test\b', source)))
+        self.assertNotIn('@Ignore', source)
+        self.assertIn('originalPresentationOwnerEditsSecondPageRestoresDraftAndExportsNewActualPptx', source)
+        self.assertIn('stoppedPresentationSaveRestoresOnlyOriginalUnknownQueryAndRechecksWithdrawnSource', source)
+
     def test_android_resource_paths_use_module_cwd_and_gateway_keeps_repository_root(self):
         registration = (HOST.ROOT / 'tools/host-tests.gradle').read_text()
         selected = re.findall(r'^\s*workingDir (project|rootProject)\.projectDir\s*$', registration, re.M)
