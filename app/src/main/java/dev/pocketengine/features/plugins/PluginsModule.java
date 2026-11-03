@@ -349,7 +349,10 @@ public final class PluginsModule implements EngineModule {
                 if("required".equals(taskSupport))throw new McpClient.CallFailure(false,false,"此工具必须协商Tasks并使用原TaskStore任务入口，尚未发送调用");
                 result=output==null?mcp.call(tool,args,invocation.control):mcp.call(tool,args,invocation.control,output::result);
             }else result=HttpToolClient.invoke(tool.getString("endpoint"),token,name,args,operationId,invocation.control);
-            synchronized(this){invocation.control.check();return withOutputCapture(new JSONObject().put("operationId",operationId).put("status","response_received").put("verified",false).put("toolResult",result),output);}
+            synchronized(this){invocation.control.check();
+                JSONObject receipt=new JSONObject().put("operationId",operationId).put("status","response_received").put("verified",false).put("toolResult",result);
+                if(mcp==null)receipt.put("outputProjection",McpData.outputProjection());
+                return withOutputCapture(receipt,output);}
         }catch(McpResultCapture.AdmissionRefused refused){
             // Only Factory admission can issue this type; no transport/save catch is relabelled.
             return new JSONObject().put("operationId",operationId).put("status","failed").put("dispatchStatus","not_dispatched")
