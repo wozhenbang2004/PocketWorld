@@ -51,11 +51,18 @@ public final class PhoneOwnedPracticeNativeTest {
         @Implementation protected void onCreate(){}
     }
     private EngineApplication app;
+    private String previousActivityContexts;
     private final List<RunControl> controls=new ArrayList<>();
     private final List<PhonePracticeTarget> targets=new ArrayList<>();
     private final List<ActivityController<PhonePracticeActivity>> activities=new ArrayList<>();
-    @Before public void setup(){app=(EngineApplication)RuntimeEnvironment.getApplication();app.tasks=new TaskStore(app);}
+    @Before public void setup(){
+        // Robolectric 4.16.1 otherwise reuses the Application Context on display 0. The actual
+        // Activity needs its own UI/display Context, exactly as Android supplies before onCreate.
+        previousActivityContexts=System.getProperty("robolectric.createActivityContexts");System.setProperty("robolectric.createActivityContexts","true");
+        app=(EngineApplication)RuntimeEnvironment.getApplication();app.tasks=new TaskStore(app);
+    }
     @After public void close()throws Exception {
+        try{
         for(RunControl control:controls)control.cancel();
         for(PhonePracticeTarget target:targets)target.close();
         Shadows.shadowOf(Looper.getMainLooper()).idle();
@@ -63,6 +70,7 @@ public final class PhoneOwnedPracticeNativeTest {
         Shadows.shadowOf(Looper.getMainLooper()).idle();
         field("activeTaskId",null);field("activeControl",null);
         Field database=TaskStore.class.getDeclaredField("db");database.setAccessible(true);((SQLiteDatabase)database.get(app.tasks)).close();
+        }finally{if(previousActivityContexts==null)System.clearProperty("robolectric.createActivityContexts");else System.setProperty("robolectric.createActivityContexts",previousActivityContexts);}
     }
     private void field(String name,Object value)throws Exception {Field field=EngineApplication.class.getDeclaredField(name);field.setAccessible(true);field.set(app,value);}
     private JSONObject task(boolean owner)throws Exception {
@@ -119,13 +127,14 @@ public final class PhoneOwnedPracticeNativeTest {
         journal.finishOperation(operation,receipt);assertFalse(app.tasks.hasUnresolved(task.getString("id")));
         assertEquals("receipt",app.tasks.get(task.getString("id"),false).getJSONArray("operations").getJSONObject(0).getString("state"));
         var started=Shadows.shadowOf(app).getNextStartedActivityForResult();assertNotNull(started);Intent launch=started.intent;
+        assertSame("independent Robolectric intent/options queues record the same single launch",launch,Shadows.shadowOf(app).getNextStartedActivity());assertNull(Shadows.shadowOf(app).getNextStartedActivityForResult());
         assertEquals(new ComponentName(app,PhonePracticeActivity.class),launch.getComponent());
         assertFalse("actual merged manifest keeps the target private",app.getPackageManager().getActivityInfo(launch.getComponent(),0).exported);
         assertEquals(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_MULTIPLE_TASK,launch.getFlags());assertEquals(0,started.options.getInt("android.activity.launchDisplayId",-1));
         assertEquals(task.getString("id"),launch.getStringExtra("taskId"));assertEquals(task.getString("runId"),launch.getStringExtra("runId"));assertEquals(task.getInt("coordinatorEpoch"),launch.getIntExtra("epoch",-1));
         assertEquals(SESSION,launch.getStringExtra("executionSessionId"));assertEquals(receipt.getString("practiceSessionId"),launch.getStringExtra("practiceSessionId"));assertEquals(0,receipt.getInt("displayId"));
         ActivityController<PhonePracticeActivity> mounted=mount(launch);PhonePracticeActivity activity=mounted.get();
-        assertFalse(activity.isFinishing());assertEquals(0,activity.getDisplay().getDisplayId());assertTrue(text(content(activity),"PW_DIAG_SESSION:"+receipt.getString("practiceSessionId")));
+        assertFalse(activity.refusalReason(),activity.isFinishing());assertEquals(0,activity.getDisplay().getDisplayId());assertTrue(text(content(activity),"PW_DIAG_SESSION:"+receipt.getString("practiceSessionId")));
         Button click=(Button)description(content(activity),"PW_DIAG_CLICK");assertNotNull(click);assertTrue(click.performClick());assertTrue(text(content(activity),"PW_DIAG_CLICK_COUNT:1"));
         EditText input=(EditText)description(content(activity),"PW_DIAG_INPUT");assertNotNull(input);input.setText(PhonePracticeActivity.CHINESE);assertEquals(PhonePracticeActivity.CHINESE,input.getText().toString());
         PhonePracticeActivity.requestCloseOriginal(new RunControl());Shadows.shadowOf(Looper.getMainLooper()).idle();assertFalse(activity.isFinishing());
@@ -150,7 +159,7 @@ public final class PhoneOwnedPracticeNativeTest {
         rejectedActivity(new Intent(originalIntent).putExtra("practiceSessionId",UUID.randomUUID().toString()));
         rejectedActivity(new Intent(originalIntent).putExtra("executionSessionId","foreign-execution-session"));
         rejectedActivity(new Intent(originalIntent).putExtra("displayId",7));
-        ActivityController<PhonePracticeActivity> exact=mount(originalIntent);assertFalse("invalid claims must not consume the exact native launch",exact.get().isFinishing());assertTrue(text(content(exact.get()),PhonePracticeActivity.MARKER));destroy(exact);
+        ActivityController<PhonePracticeActivity> exact=mount(originalIntent);assertFalse("invalid claims must not consume the exact native launch: "+exact.get().refusalReason(),exact.get().isFinishing());assertTrue(text(content(exact.get()),PhonePracticeActivity.MARKER));destroy(exact);
         rejectedActivity(new Intent(originalIntent));assertNull(Shadows.shadowOf(app).getNextStartedActivity());
         // The owner flag and native callback claim never waive the original prepared/unknown gate.
         RunJournal journal=journal(task,original);JSONObject args=targetArgs();String other=journal.beginOperation(TOOL,args),missing=UUID.randomUUID().toString();TaskStoreCapabilityAuthority authority=authority(task,original);PhonePracticeTarget blocked=target();

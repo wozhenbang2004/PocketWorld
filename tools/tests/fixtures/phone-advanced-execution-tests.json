@@ -295,7 +295,8 @@
             "historyRegistrationDoesNotDestroyExistingDuplicateObservationBudgetProof",
             "recalledImageCapPreservesOwnerAttachmentAndNeverRestoresActionCoordinates",
             "forgettingRecalledFrameRemovesItsHistoricalPixelsFromTheNextRealModelRequest",
-            "revokedOriginalSourceCannotResendAlreadyAppendedHistoricalPixelsOnANewTurn"
+            "revokedOriginalSourceCannotResendAlreadyAppendedHistoricalPixelsOnANewTurn",
+            "pauseAfterLastActionRefreshesTheOriginalTurnBeforeAnotherImageUpload"
           ]
         },
         {

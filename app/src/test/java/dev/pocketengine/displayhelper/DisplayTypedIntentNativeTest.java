@@ -64,12 +64,24 @@ public final class DisplayTypedIntentNativeTest {
             public void requireAppFree(String pkg,int user)throws Exception{assertEquals(request.getJSONObject("target").getString("packageName"),pkg);assertEquals(android.os.Process.myUid()/100000,user);}
         });
     }
+    /** Android migrates ACTION_SEND's EXTRA_TEXT into ClipData during native launch. */
+    public static void assertOnlyAuthorizedTextPayload(Intent intent,String original){
+        assertEquals(Intent.ACTION_SEND,intent.getAction());assertEquals("text/plain",intent.getType());
+        assertEquals(Set.of(Intent.EXTRA_TEXT),intent.getExtras().keySet());assertEquals(original,intent.getStringExtra(Intent.EXTRA_TEXT));
+        android.content.ClipData clip=intent.getClipData();assertNotNull(clip);assertEquals(1,clip.getItemCount());
+        assertEquals(1,clip.getDescription().getMimeTypeCount());assertEquals("text/plain",clip.getDescription().getMimeType(0));
+        android.content.ClipData.Item item=clip.getItemAt(0);assertEquals(original,item.getText().toString());assertNull(item.getHtmlText());assertNull(item.getUri());assertNull(item.getIntent());
+        assertNull(intent.getData());assertNull(intent.getSelector());
+        assertEquals(0,intent.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION|Intent.FLAG_GRANT_PREFIX_URI_PERMISSION));
+    }
     @Test public void showAlarmsEntersTheExactBackgroundComponentOnceWithoutClaimingAnAlarmExists()throws Exception {
         JSONObject request=installRequest(new JSONObject().put("kind","show_alarms"));Gate gate=new Gate();JSONObject receipt=DisplayTypedIntent.dispatch(app(),DISPLAY,request,gate);
         var launched=Shadows.shadowOf(app()).getNextStartedActivityForResult();assertNotNull(launched);assertEquals(AlarmClock.ACTION_SHOW_ALARMS,launched.intent.getAction());
         assertEquals(PACKAGE+"/"+PACKAGE+".Main",launched.intent.getComponent().flattenToString());assertEquals(DISPLAY,launched.options.getInt("android.activity.launchDisplayId",-1));
         assertNull(launched.intent.getExtras());assertEquals(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_MULTIPLE_TASK,launched.intent.getFlags());assertEquals(1,gate.claims);assertEquals(3,gate.checks);
-        assertTrue(receipt.getBoolean("accepted"));assertFalse(receipt.getBoolean("verifiedBusinessSuccess"));assertFalse(receipt.getBoolean("messageSent"));assertTrue(receipt.getBoolean("requiresPostconditionCheck"));assertNull(Shadows.shadowOf(app()).getNextStartedActivity());
+        assertTrue(receipt.getBoolean("accepted"));assertFalse(receipt.getBoolean("verifiedBusinessSuccess"));assertFalse(receipt.getBoolean("messageSent"));assertTrue(receipt.getBoolean("requiresPostconditionCheck"));
+        assertSame("Robolectric maintains a separate intent/options queue for the same single entry",launched.intent,Shadows.shadowOf(app()).getNextStartedActivity());
+        assertNull(Shadows.shadowOf(app()).getNextStartedActivityForResult());assertNull(Shadows.shadowOf(app()).getNextStartedActivity());
     }
     @Test public void installChangeInsideFinalOwnershipGatePreventsNativeEntry()throws Exception {
         JSONObject request=installRequest(new JSONObject().put("kind","show_alarms"));Gate gate=new Gate();gate.atClaim=()->{try{install(SemanticRequest.parse(request.getJSONObject("parameters")),2,true);}catch(Exception e){throw new AssertionError(e);}};
@@ -105,7 +117,8 @@ public final class DisplayTypedIntentNativeTest {
     }
     @Test public void exactPackageShareHasOnlyTheApprovedTextAndNeverAChooserOrRecipient()throws Exception {
         JSONObject request=installRequest(new JSONObject().put("kind","share_text").put("packageName",PACKAGE).put("text","仅交付这段原文"));
-        assertTrue(DisplayTypedIntent.dispatch(app(),DISPLAY,request,new Gate()).getBoolean("accepted"));Intent actual=Shadows.shadowOf(app()).getNextStartedActivity();assertEquals(Intent.ACTION_SEND,actual.getAction());assertEquals(PACKAGE,actual.getPackage());assertEquals(Set.of(Intent.EXTRA_TEXT),actual.getExtras().keySet());assertEquals("仅交付这段原文",actual.getStringExtra(Intent.EXTRA_TEXT));assertNull(actual.getClipData());assertNull(actual.getData());
+        assertTrue(DisplayTypedIntent.dispatch(app(),DISPLAY,request,new Gate()).getBoolean("accepted"));Intent actual=Shadows.shadowOf(app()).getNextStartedActivity();assertEquals(PACKAGE,actual.getPackage());assertOnlyAuthorizedTextPayload(actual,"仅交付这段原文");
+        assertNull(Shadows.shadowOf(app()).getNextStartedActivity());
         assertThrows(SecurityException.class,()->DisplayTypedIntent.build("show_alarms",new JSONObject().put("kind","show_alarms").put("rawIntent","intent://blocked")));
     }
 }

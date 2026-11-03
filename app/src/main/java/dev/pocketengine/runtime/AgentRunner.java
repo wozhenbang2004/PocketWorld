@@ -196,9 +196,12 @@ public final class AgentRunner {
         RunContextBudget contextBudget = new RunContextBudget(runBudgets);
         OwnerIntent intent=new OwnerIntent(goal);
         PhoneRouteSession routes=null;
+        java.util.concurrent.atomic.AtomicBoolean historyTurnPrepared=new java.util.concurrent.atomic.AtomicBoolean();
         RecentScreenHistory screens=phone==null||control==null?null:new RecentScreenHistory(control,()->{
             if(phone instanceof AdaptivePhonePort)((AdaptivePhonePort)phone).requireHistoryCurrent(control);
-            if(capabilities!=null&&!capabilities.responseCurrent(control))throw new SecurityException("历史画面来源已撤回");
+            // Initial/resumed observation precedes admission of this turn's capability snapshot.
+            // Physical phone authority stays live; only an already prepared reference can expire.
+            if(historyTurnPrepared.get()&&capabilities!=null&&!capabilities.responseCurrent(control))throw new SecurityException("历史画面来源已撤回");
         },()->System.nanoTime()/1_000_000,phone instanceof AdaptivePhonePort&&((AdaptivePhonePort)phone).appPolicyBound()?()->((AdaptivePhonePort)phone).appPolicyRevision():null);
         java.util.List<String> recalledScreens=new java.util.ArrayList<>();
         ContextCompactor compactor=new ContextCompactor(journal,journal==null?null:journal.compaction(),runBudgets);
@@ -258,6 +261,9 @@ public final class AgentRunner {
             int firstRound=originalModelRounds;
             modelTurns: for (int round = firstRound; round <= executionStepCeiling(config,journal); round++) {
                 originalModelRounds=round+1;
+                // Retire old uploads against the old admission before prepareTurn replaces it.
+                withdrawHistoricalImages(screens,history,control);
+                historyTurnPrepared.set(false);
                 JSONObject resumed = afterPause(taskId, config, control, sink, pauseSeen, intent, history, journal, goal);
                 if (resumed != null) { latest = resumed; evidence = resumed; appendCapturedObservation(history, resumed, config, contextBudget,screens,control); }
                 control.check();
@@ -302,8 +308,9 @@ public final class AgentRunner {
                     String context=clean(reference.optString("context"),config);
                     if(!context.isEmpty())nativeReference=context+(nativeReference.isEmpty()?"":"\n\n"+nativeReference);
                 }
+                historyTurnPrepared.set(true);
                 tools=intent.filter(tools,this::intentEffecting);
-                if(screens!=null)for(JSONObject withdrawn:screens.withdrawnUploads(history,control))removeNativeImage(withdrawn,"此原手机图片已过期、遗忘或来源已撤回；未发送图片。");
+                withdrawHistoricalImages(screens,history,control);
                 // This is the existing request-only host-reference lane. Never checkpoint a second
                 // copy of SQL arguments/scope/receipts, or label recovery data as owner input.
                 if(!nativeReference.isEmpty()){
@@ -366,6 +373,7 @@ public final class AgentRunner {
                     dev.pocketengine.runtime.usage.InferenceCapture.Target originalMain=journal==null?dev.pocketengine.runtime.usage.InferenceCapture.unattributed():journal.inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN,"");
                     if(currentRoutes!=null)originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,()->currentRoutes.requireCurrentSources(control));
                     if(screens!=null)originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,()->{
+                        if(!historyTurnPrepared.get())throw new ModelGateway.RequestRefreshRequired();
                         try{screens.requireUploads(nativeProvenance,control);}catch(SecurityException withdrawn){throw new ModelGateway.RequestRefreshRequired();}
                     });
                     final JSONArray originalHistory=history,retryProjection=requestHistory;final JSONArray[] retryOwnerInputs={null};final boolean retryAfterContextRepair=!contextRecoveryUsed;
@@ -428,6 +436,7 @@ public final class AgentRunner {
                 resumed = afterPause(taskId, config, control, sink, pauseSeen, intent, history, journal, goal);
                 if (resumed != null) {
                     if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);
+                    withdrawHistoricalImages(screens,history,control);historyTurnPrepared.set(false);
                     latest = resumed; evidence = resumed; appendCapturedObservation(history, resumed, config, contextBudget,screens,control);
                     continue; // Discard a decision made against the pre-pause screen.
                 }
@@ -507,6 +516,7 @@ public final class AgentRunner {
                     }
                     resumed = afterPause(taskId, config, control, sink, pauseSeen, intent, history, journal, goal);
                     if (resumed != null) {
+                        withdrawHistoricalImages(screens,history,control);historyTurnPrepared.set(false);
                         latest=resumed;evidence=resumed;observed=true;sequenceMayContinue=false;
                         for(int stale=index;stale<calls.length();stale++)history.put(toolResult(calls.getJSONObject(stale),failure("stale_observation","机主已暂停或接管，这批尚未派发的旧决定已全部丢弃；请依据新现场重新规划。"),config));
                         break;
@@ -562,6 +572,7 @@ public final class AgentRunner {
                     emit(taskId, "tool", "running", capabilities!=null&&capabilities.supports(name)?"正在调用已授权的能力工具。":toolLabel(name), name, null, config, sink);
                     resumed = afterPause(taskId, config, control, sink, pauseSeen, intent, history, journal, goal);
                     if (resumed != null) {
+                        withdrawHistoricalImages(screens,history,control);historyTurnPrepared.set(false);
                         latest = resumed; evidence = resumed; observed = true;sequenceMayContinue=false;
                         receipt = failure("stale_observation", "暂停后页面已重新观察，这批尚未派发的旧决定已全部丢弃。");
                         for(int stale=index;stale<calls.length();stale++)history.put(toolResult(calls.getJSONObject(stale),receipt,config));
@@ -705,6 +716,15 @@ public final class AgentRunner {
                     }
                     if (phone!=null&&control.phoneSurfaceActive()&&(changesScreen(name) || "phone_wait".equals(name))) {
                         control.checkpoint();
+                        if(control.pauseRevision()!=pauseSeen[0]){
+                            withdrawHistoricalImages(screens,history,control);historyTurnPrepared.set(false);
+                            resumed=afterPause(taskId,config,control,sink,pauseSeen,intent,history,journal,goal);
+                            if(resumed==null)throw new SecurityException("原手机恢复观察缺失");
+                            latest=resumed;evidence=resumed;observed=true;sequenceMayContinue=false;
+                            for(int stale=index+1;stale<calls.length();stale++)history.put(toolResult(calls.getJSONObject(stale),failure("stale_observation","原动作回执已保留；暂停后的旧批次余项未派发，请依据新现场重新规划。"),config));
+                            if(routes!=null)routes.disableLearning();
+                            break;
+                        }
                         latest = observe(taskId, config, control, sink);
                         evidence = latest;
                         observed = true;
@@ -974,6 +994,20 @@ public final class AgentRunner {
 
     private static boolean referenceTool(String name){return name.equals("memory_search")||name.equals("memory_recall")||name.equals("skills_list")||name.equals("skills_read");}
     private static JSONObject referenceRetired()throws Exception{return new JSONObject().put("ok",false).put("code","reference_expired").put("untrustedReference",true).put("message","历史参考正文不再保留；如仍需要，请重新读取当前有效版本，不得重放历史动作。");}
+    /** Preserve only the code of a body-free, native pre-dispatch refusal. Rebuild its message
+     * from constants: neither error prose nor extra fields may retain withdrawn source text. */
+    private static JSONObject retiredReferenceReceipt(String body)throws Exception{
+        try{
+            JSONObject result=new JSONObject(body);
+            if(result.length()==3&&Boolean.FALSE.equals(result.opt("ok"))&&result.opt("message") instanceof String){
+                String code=result.optString("code");
+                if(code.equals("invalid_arguments"))return failure(code,"此能力工具的参数不符合当前合同，尚未执行。请核对该工具的字段与范围。");
+                if(code.equals("owner_intent_read_only"))return failure(code,"本次主人意图只允许读取；此调用尚未派发。");
+                if(code.equals("tool_withdrawn"))return failure(code,"本轮工具已撤销或安装改变，旧决定尚未执行，请重新取得当前工具清单。");
+            }
+        }catch(Exception invalid){/* Unknown or malformed receipts still lose every body. */}
+        return referenceRetired();
+    }
     /** Revalidate only host reference-read receipts; never rewrite user input or effect receipts. */
     static void refreshReferenceHistory(JSONArray history,JSONObject validation)throws Exception{
         dev.pocketengine.features.memory.TaskMemoryHistory.retire(history,validation,false);
@@ -983,7 +1017,7 @@ public final class AgentRunner {
             if("assistant".equals(row.optString("role"))&&tools!=null)for(int j=0;j<tools.length();j++){
                 JSONObject call=tools.getJSONObject(j);String name=call.getJSONObject("function").optString("name");if(referenceTool(name))calls.put(call.getString("id"),name);else calls.remove(call.getString("id"));
             }
-            if("tool".equals(row.optString("role"))){String name=calls.get(row.optString("tool_call_id"));if(name!=null&&!currentReferenceReceipt(name,row.optString("content"),validation))row.put("content",referenceRetired().toString());}
+            if("tool".equals(row.optString("role"))){String name=calls.get(row.optString("tool_call_id"));if(name!=null&&!currentReferenceReceipt(name,row.optString("content"),validation))row.put("content",retiredReferenceReceipt(row.optString("content")).toString());}
         }
     }
     private static boolean currentReferenceReceipt(String name,String body,JSONObject validation){
@@ -1058,7 +1092,7 @@ public final class AgentRunner {
                 preserveOutputCarrier(original,message,config);
                 if ("tool".equals(role)) {
                     if (!pending.remove(message.optString("tool_call_id")) || !(message.opt("content") instanceof String)) throw new JournalFailure();
-                    if(referenceCalls.containsKey(message.optString("tool_call_id"))){message.put("content",referenceRetired().toString());message.remove("toolOutputCapture");}
+                    if(referenceCalls.containsKey(message.optString("tool_call_id"))){message.put("content",retiredReferenceReceipt(message.optString("content")).toString());message.remove("toolOutputCapture");}
                     else if(historyCalls.containsKey(original.optString("tool_call_id"))){JSONObject body=new JSONObject(original.getString("content"));message.put("content",safeToolReceipt(historyCalls.get(original.getString("tool_call_id")),body,config).toString());}
                     result.put(message);
                     continue;
@@ -1234,6 +1268,9 @@ public final class AgentRunner {
     }
 
     private static boolean imageInputAvailable(ModelConfig config){return config.usesAccount()?ModelGateway.accountSupportsImageInput(config.accountModel):config.supportsImageInput;}
+    private static void withdrawHistoricalImages(RecentScreenHistory screens,JSONArray history,RunControl original)throws Exception {
+        if(screens!=null)for(JSONObject withdrawn:screens.withdrawnUploads(history,original))removeNativeImage(withdrawn,"此原手机图片已过期、遗忘或来源已撤回；未发送图片。");
+    }
     private static void appendCapturedObservation(JSONArray history,JSONObject observation,ModelConfig config,RunContextBudget budget,RecentScreenHistory screens,RunControl original)throws Exception {
         if(screens!=null&&config.sendScreenshots&&imageInputAvailable(config))screens.retain(observation,original);
         int before=history.length();

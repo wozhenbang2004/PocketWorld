@@ -60,20 +60,56 @@ public final class RecentScreenRunnerTest {
     }
     @Test public void forgettingRecalledFrameRemovesItsHistoricalPixelsFromTheNextRealModelRequest()throws Exception {journey(false);}
     @Test public void revokedOriginalSourceCannotResendAlreadyAppendedHistoricalPixelsOnANewTurn()throws Exception {journey(true);}
+    @Test public void pauseAfterLastActionRefreshesTheOriginalTurnBeforeAnotherImageUpload()throws Exception {
+        RunControl control=control();AtomicReference<Throwable> failure=new AtomicReference<>();List<JSONObject> requests=new ArrayList<>();
+        int[] effects={0},observations={0},prepares={0};long[] preparedPause={-1};boolean[] pausedAfterReceipt={false};String[] firstScreen={null};
+        HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        server.createContext("/",exchange->{try{
+            JSONObject request=new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));requests.add(request);JSONArray messages=request.getJSONArray("messages");JSONObject response;
+            if(requests.size()==1){
+                firstScreen[0]=screenId(messages);
+                response=call("completed-before-pause","phone_click_node",new JSONObject().put("observationId","read-1").put("nodeId","node-read-1"));
+            }else{
+                assertEquals(2,requests.size());assertEquals(1,effects[0]);assertTrue(pausedAfterReceipt[0]);assertEquals(control.pauseRevision(),preparedPause[0]);
+                assertNotEquals(firstScreen[0],screenId(messages));assertEquals("only the fresh resumed phone image can be uploaded",1,nativeImages(messages,false));
+                JSONObject receipt=null;for(int i=0;i<messages.length();i++){JSONObject row=messages.getJSONObject(i);if("completed-before-pause".equals(row.optString("tool_call_id")))receipt=new JSONObject(row.getString("content"));}
+                assertNotNull("the completed original action receipt survives owner resume",receipt);assertTrue(receipt.getBoolean("ok"));assertTrue(receipt.getBoolean("accepted"));
+                response=new JSONObject().put("role","assistant").put("content","原点击回执已保留，已重新核对恢复后的页面。");
+            }
+            byte[] bytes=new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("message",response).put("finish_reason",response.has("tool_calls")?"tool_calls":"stop"))).toString().getBytes(StandardCharsets.UTF_8);exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
+        }catch(Throwable error){failure.compareAndSet(null,error);try{exchange.sendResponseHeaders(500,0);}catch(Exception ignored){}}finally{exchange.close();}});server.start();
+        PhonePort phone=new PhonePort(){
+            public boolean isConnected(){return true;}public void clearReferences(){}
+            public JSONObject observe(boolean image,RunControl original)throws Exception{assertSame(control,original);assertTrue(image);return frame("read-"+(++observations[0])).put("pauseRevision",control.pauseRevision());}
+            public JSONObject execute(String name,JSONObject args,RunControl original)throws Exception{assertSame(control,original);assertEquals("phone_click_node",name);assertEquals(1,++effects[0]);return new JSONObject().put("ok",true).put("accepted",true);}
+        };
+        CapabilityPort capabilities=new CapabilityPort(){
+            public JSONArray tools(){return new JSONArray();}public boolean supports(String name){return false;}public boolean sideEffecting(String name){return false;}public JSONObject execute(String name,JSONObject args,RunControl original){throw new AssertionError("no capability effect requested");}
+            public JSONObject prepareTurn(String query,int round,int steps,RunControl original)throws Exception{assertSame(control,original);prepares[0]++;preparedPause[0]=control.pauseRevision();return new JSONObject().put("tools",new JSONArray()).put("reference",new JSONObject());}
+            public boolean responseCurrent(RunControl original){return preparedPause[0]==control.pauseRevision();}
+        };
+        try{
+            RunOutcome result=new AgentRunner(phone,capabilities).run("history-task","在手机界面完成点击并核对现场",config("http://127.0.0.1:"+server.getAddress().getPort()),control,event->{
+                if(!pausedAfterReceipt[0]&&"tool".equals(event.optString("type"))&&"completed".equals(event.optString("status"))&&"phone_click_node".equals(event.optString("tool"))){pausedAfterReceipt[0]=true;control.pause();control.resume();}
+            });
+            assertNull("actual request violation: "+failure.get(),failure.get());assertEquals(result.summary,"completed",result.status);assertEquals(2,requests.size());assertEquals(2,prepares[0]);assertEquals(1,effects[0]);assertEquals(3,observations[0]);
+        }finally{control.cancel();server.stop(0);}
+    }
     private static void journey(boolean revoke)throws Exception {
         RunControl control=control();AtomicReference<Throwable> failure=new AtomicReference<>();List<JSONObject> requests=new ArrayList<>();boolean[] source={true};String[] selected={null};int[] prepares={0};
         HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
-        server.createContext("/",exchange->{try{
+        server.createContext("/",exchange->{boolean stopAfterResponse=false;try{
             JSONObject request=new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));requests.add(request);int number=requests.size();JSONObject message;
             if(number==1){selected[0]=screenId(request.getJSONArray("messages"));message=call("view-history",RecentScreenHistory.VIEW,new JSONObject().put("screenId",selected[0]));}
             else if(number==2){assertEquals(1,nativeImages(request.getJSONArray("messages"),true));message=call(revoke?"index-before-withdraw":"forget-history",revoke?RecentScreenHistory.LIST:RecentScreenHistory.FORGET,revoke?new JSONObject():new JSONObject().put("screenId",selected[0]));}
-            else {assertEquals(3,number);assertEquals("revoked or forgotten native pixels must not remain in provider JSON",0,nativeImages(request.getJSONArray("messages"),revoke?false:true));if(revoke)control.cancel();message=new JSONObject().put("role","assistant").put("content","已按原任务核对历史画面。");}
+            else {assertEquals(3,number);assertEquals("revoked or forgotten native pixels must not remain in provider JSON",0,nativeImages(request.getJSONArray("messages"),revoke?false:true));stopAfterResponse=revoke;message=new JSONObject().put("role","assistant").put("content","已按原任务核对历史画面。");}
             byte[] bytes=new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("message",message).put("finish_reason",message.has("tool_calls")?"tool_calls":"stop"))).toString().getBytes(StandardCharsets.UTF_8);exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
-        }catch(Throwable error){failure.compareAndSet(null,error);try{exchange.sendResponseHeaders(500,0);}catch(Exception ignored){}}finally{exchange.close();}});server.start();
+        }catch(Throwable error){failure.compareAndSet(null,error);try{exchange.sendResponseHeaders(500,0);}catch(Exception ignored){}}finally{exchange.close();if(stopAfterResponse)control.cancel();}});server.start();
         PhonePort phone=new PhonePort(){public boolean isConnected(){return true;}public void clearReferences(){}public JSONObject observe(boolean image,RunControl original)throws Exception{assertSame(control,original);assertTrue(image);return frame("original");}public JSONObject execute(String name,JSONObject args,RunControl original){throw new AssertionError("history tools must never dispatch a phone action");}};
         CapabilityPort capabilities=new CapabilityPort(){public JSONArray tools(){return new JSONArray();}public boolean supports(String name){return false;}public boolean sideEffecting(String name){return false;}public JSONObject execute(String name,JSONObject args,RunControl original){throw new AssertionError("no capability effect requested");}
             public JSONObject prepareTurn(String query,int round,int steps,RunControl original)throws Exception {if(++prepares[0]==3&&revoke)source[0]=false;return new JSONObject().put("tools",new JSONArray()).put("reference",new JSONObject());}
-            public boolean responseCurrent(RunControl original){return source[0];}
+            // Match the actual Extension/Host reference lifecycle: no admitted snapshot initially.
+            public boolean responseCurrent(RunControl original){assertSame(control,original);return prepares[0]>0&&source[0];}
         };
         try {
             RunOutcome result=new AgentRunner(phone,capabilities).run("history-task","查看手机当前画面并按编号回看，不做任何点击或发送",config("http://127.0.0.1:"+server.getAddress().getPort()),control,event->{});

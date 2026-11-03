@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "memory-recall-agent-corpus-v1",
+  "sourceDatasetId": "memory-recall-quality-v1",
+  "sourceDatasetSha256": "cf64afb57c785d463c427bd34249d99c92042a7f98a761464503721a09c52656",
+  "scenarioCount": 12,
+  "baselineComparisons": 4,
+  "holdoutUsed": false,
+  "provenance": "Synthetic development scenarios only; no user records or upstream benchmark rows.",
+  "executionBoundary": "Real AgentRunner, ModelGateway loopback HTTP, HostToolSupervisor, MemoryModule and original TaskStore SQLite conversation sources. Only model responses are scripted. This does not measure live-model query or answer quality.",
+  "baselineContract": "The first four cases independently run original query-only memory_search and enriched queries-plus-constraints memory_search through the same native Agent path with the same limit. Counts are four paired tasks, not test methods.",
+  "scopeBoundary": "The scope-refusal case sends a forbidden model-selected scope to the original host schema; it does not pretend to create or authorize a second owner database.",
+  "costBoundary": "The cost case exceeds the native maximum of three additional queries. The host rejects it without semantic dispatch; physical MAIN requests remain counted by the original meter.",
+  "cases": [
+    {"id": "agent-01", "developmentScenario": "dev-01", "category": "zero_overlap_zh", "mode": "retrieve", "compareBaseline": true},
+    {"id": "agent-02", "developmentScenario": "dev-02", "category": "zero_overlap_en", "mode": "retrieve", "compareBaseline": true},
+    {"id": "agent-03", "developmentScenario": "dev-03", "category": "stable_id_rename", "mode": "retrieve", "compareBaseline": true},
+    {"id": "agent-04", "developmentScenario": "dev-04", "category": "two_hop_relation", "mode": "retrieve", "compareBaseline": true},
+    {"id": "agent-05", "developmentScenario": "dev-05", "category": "current_vs_late_history", "mode": "retrieve", "compareBaseline": false},
+    {"id": "agent-06", "developmentScenario": "dev-06", "category": "unresolved_contradiction", "mode": "no_answer", "compareBaseline": false},
+    {"id": "agent-07", "developmentScenario": "dev-07", "category": "owner_correction", "mode": "retrieve", "compareBaseline": false},
+    {"id": "agent-08", "developmentScenario": "dev-09", "category": "native_source_withdrawal", "mode": "no_answer", "compareBaseline": false},
+    {"id": "agent-09", "developmentScenario": "dev-01", "category": "host_scope_argument_refusal", "mode": "reject_scope", "compareBaseline": false},
+    {"id": "agent-10", "developmentScenario": "dev-15", "category": "unrelated_low_quality_empty", "mode": "no_answer", "compareBaseline": false},
+    {"id": "agent-11", "developmentScenario": "dev-16", "category": "native_query_plan_cost_cap", "mode": "reject_cost", "compareBaseline": false},
+    {"id": "agent-12", "developmentScenario": "dev-01", "category": "duplicate_read_then_owner_cancel", "mode": "duplicate_cancel", "compareBaseline": false}
+  ]
+}

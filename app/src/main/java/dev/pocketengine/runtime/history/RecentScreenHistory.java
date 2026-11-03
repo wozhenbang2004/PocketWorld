@@ -54,6 +54,7 @@ public final class RecentScreenHistory implements AutoCloseable {
     public synchronized boolean forget(String id,RunControl live)throws Exception {require(live);boolean found=frames.containsKey(id);remove(id);return found;}
     /** Register only after the original Runner appends its native capture/recall envelope. */
     public synchronized void nativeUpload(JSONObject message,JSONObject observation,RunControl live)throws Exception {
+        if(!hasImage(message))return;
         require(live);String id=observation.optString("historicalScreenId",observation.optString("screenId"));
         uploads.put(message,new Upload(id,generation,live.pauseRevision(),observation.optLong("appPolicyRevision",-1)));
     }

@@ -869,5 +869,107 @@
     "robolectric": true,
     "description": "Twenty-nine focused original readonly command checks: damaged original records retain bytes and block unsafe redispatch/writes without disabling readable projects. The same original operation/worker/argv now consumes the existing NativeProcessSupervisor, not ProcessBuilder; only typed native groupAbsent/outputComplete releases busy, cold/unknown scopes remain held. Actual own4s inherited-child late-writer containment, Unicode split/caps/separate streams, original six process/cancel cases and forked real missing-library capability/no-dispatch boundary; no weak fallback, new Runner/TaskStore, shell permission or physical device proof. Same original jobs Map retains only fixed metadata and independent2K previews, never historical full output/argv/fingerprints; explicit full reads verify original frozen file SHA and scope. Native final buffers compact only after successful original persistence; changed bodies/cache markers do not restore authority or empty-success.",
     "native": true
+  },
+  "browser-owner-interactions": {
+    "class": "dev.pocketengine.browser.BrowserPopupNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.browser.BrowserPopupRouteTest",
+      "dev.pocketengine.browser.BrowserSiteDecisionTest",
+      "dev.pocketengine.browser.BrowserSiteRequirementTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.browser.BrowserTaskActivityTest",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Native popup/permission callbacks in the original Activity, TaskStore and RunControl; exact parent/document lifecycle and once-only owner decisions. Android SDK35 host fixtures; physical WebView and device unverified."
+  },
+  "browser-native-input": {
+    "class": "dev.pocketengine.browser.BrowserNativeInputTest",
+    "additionalClasses": [
+      "dev.pocketengine.browser.BrowserSiteModeTest",
+      "dev.pocketengine.browser.BrowserNativeInputTaskPortTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.browser.BrowserTaskSpaceTest"
+    ],
+    "robolectric": true,
+    "description": "Bounded Android WebView input, actual layout and history plus original TaskSpace/CapabilityPort approval, currentness, cancellation and unknown receipts. SDK35 host fixtures; physical renderer unverified."
+  },
+  "browser-artifact-upload": {
+    "class": "dev.pocketengine.browser.BrowserArtifactApprovalTest",
+    "additionalClasses": [
+      "dev.pocketengine.browser.BrowserArtifactInputTest",
+      "dev.pocketengine.browser.BrowserArtifactSourceTest",
+      "dev.pocketengine.browser.BrowserArtifactStagingTest",
+      "dev.pocketengine.browser.BrowserArtifactUploadSqlTest",
+      "dev.pocketengine.browser.BrowserArtifactUploadTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.browser.BrowserTaskSpaceTest",
+      "dev.pocketengine.browser.BrowserTaskPersistenceTest",
+      "dev.pocketengine.browser.BrowserProfileCapabilityBindingTest"
+    ],
+    "robolectric": true,
+    "description": "Original task artifact versions, prepared approvals, verified staging and durable upload receipts with cancellation, changed input, duplicate callbacks and unknown recovery. SDK35 host tests; actual WebView chooser needs device validation."
+  },
+  "browser-network-barriers": {
+    "class": "dev.pocketengine.browser.BrowserNativeNetworkRecordsTest",
+    "additionalClasses": [
+      "dev.pocketengine.browser.BrowserNativeTransportTest",
+      "dev.pocketengine.browser.BrowserNetworkDebuggingTest",
+      "dev.pocketengine.browser.BrowserWaitBarrierTest",
+      "dev.pocketengine.browser.BrowserWaitBarrierJavascriptTest",
+      "dev.pocketengine.browser.BrowserNativeNetworkPortTest",
+      "dev.pocketengine.browser.BrowserNativeNetworkContextTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.browser.BrowserTaskSpaceTest"
+    ],
+    "robolectric": true,
+    "description": "Task-scoped CDP transport, response metadata/body pins and bounded DOM/network quiet barriers, through the original approval and cancellation paths. SDK35 host fixtures; physical WebView devtools transport requires device validation."
+  },
+  "memory-recall-quality": {
+    "class": "dev.pocketengine.features.memory.MemoryRecallQualityTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.memory.MemoryRecallAgentJourneyNativeTest",
+      "dev.pocketengine.features.memory.MemorySemanticRecallNativeTest",
+      "dev.pocketengine.features.memory.MemoryHybridCandidateRetrievalNativeTest",
+      "dev.pocketengine.features.memory.MemoryEntityAliasRetrievalNativeTest",
+      "dev.pocketengine.features.memory.SQLiteMemoryRetrievalBackendTest",
+      "dev.pocketengine.features.memory.MemoryReadAudienceTest",
+      "dev.pocketengine.features.memory.MemoryQueryPlanTest",
+      "dev.pocketengine.features.memory.MemoryRecallAgentCorpusNativeTest",
+      "dev.pocketengine.runtime.ReferenceHistoryTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Frozen synthetic 16-development/8-holdout corpus: default lexical, pre-existing query suggestions, and bounded constrained entity paths. Real Book/SQLite/TaskStore/Runner/HTTP fixture, original history rereads, reference refusal/retirement, revision/forget/audience and SDK35 test-source boundaries; no live model rewrite accuracy, causal effect, phone UI or device acceptance."
+  },
+  "memory-evidence-plan": {
+    "class": "dev.pocketengine.features.memory.MemoryEvidencePlanNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.memory.ConversationHistoryNativeTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original history capability with real SQLite multi-session originals and bounded conversation/message and task/run/operation plans, exact version/span/hash rereads, cancellation/withdrawal/cost/partial guards. Producer-window reservation is not a physical SQLite I/O measurement."
+  },
+  "memory-method-quality": {
+    "class": "dev.pocketengine.features.memory.MethodEffectEvidenceTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.memory.MethodEffectComparisonTest",
+      "dev.pocketengine.features.memory.LearnedMethodDecisionNativeTest",
+      "dev.pocketengine.features.skills.LearnedMethodApplicationsNativeTest",
+      "dev.pocketengine.features.memory.LearnedMethodReceiptTest",
+      "dev.pocketengine.features.skills.SkillQualityLifecycleTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Original operation and native input/environment/version evidence, owner quality feedback, repeat/cancel/stale callback/legacy compatibility, bounded observational comparison; real original Runner and workspace write with scripted loopback model. No inferred business success, causality, promotion or new authorization."
   }
 }

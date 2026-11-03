@@ -261,7 +261,7 @@ class HostTestEntrypointTest(unittest.TestCase):
         manifest = json.loads((HOST.ROOT / 'tools/tests/fixtures/phone-advanced-execution-tests.json').read_text())
         self.assertEqual(1, manifest['schemaVersion'])
         expected_counts = {'phone-setup-recovery': 28, 'phone-input-extensions': 30,
-                           'phone-semantic-profile': 45, 'phone-access-history': 37}
+                           'phone-semantic-profile': 45, 'phone-access-history': 38}
         self.assertEqual(set(expected_counts), set(manifest['groups']))
         for group, inventory in manifest['groups'].items():
             entry = REGISTRY[group]
@@ -287,7 +287,7 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertIn('dev.pocketengine.features.semantic.SemanticBackgroundDisplayFixture', REGISTRY['phone-sensitive-owner']['helpers'])
         self.assertIn('dev.pocketengine.displayhelper.DisplayTypedIntentNativeTest', REGISTRY['phone-sensitive-owner']['helpers'])
 
-    def test_phone_pull_request_gate_excludes_signing_and_unrelated_or_fork_branches(self):
+    def test_private_pull_request_host_gate_preserves_memory_jobs_without_signing(self):
         workflow = (HOST.ROOT / '.github/workflows/build-apk.yml').read_text()
         self.assertNotIn('pull_request_target:', workflow)
         self.assertIn('permissions:\n  contents: read', workflow)
@@ -310,8 +310,10 @@ class HostTestEntrypointTest(unittest.TestCase):
                              {'__builtins__': {}}, {'github': github, 'inputs': SimpleNamespace(target=target)}))
 
         cases = [({'event': 'pull_request'}, (False, True)),
-                 ({'event': 'pull_request', 'same_repo': False}, (False, False)),
-                 ({'event': 'pull_request', 'branch': 'uiux/workroom-20261102'}, (False, False)),
+                 # Latest main runs its bounded memory groups on other affected private PRs.
+                 # The separate batch-selection assertion below keeps phone groups exclusive.
+                 ({'event': 'pull_request', 'same_repo': False}, (False, True)),
+                 ({'event': 'pull_request', 'branch': 'uiux/workroom-20261102'}, (False, True)),
                  ({'event': 'pull_request', 'private': False}, (False, False)),
                  ({'event': 'push'}, (True, False)),
                  ({'event': 'workflow_dispatch', 'target': 'apk'}, (True, False)),
@@ -323,12 +325,24 @@ class HostTestEntrypointTest(unittest.TestCase):
     def test_phone_pr_uses_one_exact_bounded_batch_and_records_base_head_and_tested_commit(self):
         workflow = (HOST.ROOT / '.github/workflows/build-apk.yml').read_text()
         host = workflow.split('  host-tests:\n', 1)[1]
-        selection = re.search(r"HOST_TEST_GROUPS: \$\{\{ github.event_name == 'pull_request' && '([^']+)' \|\| inputs.host_groups \}\}", host)
+        selection = re.search(r"HOST_TEST_GROUPS: \$\{\{ (.*) \}\}", host)
         self.assertIsNotNone(selection)
-        groups = selection.group(1).split(',')
+        def batch(event='pull_request', branch='pro/workpack-02-phone-control', same_repo=True, manual=''):
+            repository = 'owner/private-pocketworld'
+            github = SimpleNamespace(event_name=event, repository=repository, head_ref=branch,
+                event=SimpleNamespace(pull_request=SimpleNamespace(head=SimpleNamespace(
+                    repo=SimpleNamespace(full_name=repository if same_repo else 'fork/other')))))
+            return eval(selection.group(1).replace('&&', ' and ').replace('||', ' or '),
+                        {'__builtins__': {}}, {'github': github, 'inputs': SimpleNamespace(host_groups=manual)})
+        groups = batch().split(',')
         self.assertEqual(['phone-setup-recovery', 'phone-input-extensions', 'phone-semantic-profile', 'phone-access-history',
                           'phone-observation-boundaries', 'phone-sensitive-owner', 'local-phone-leases', 'phone-audio-owner'], groups)
         self.assertEqual(groups, HOST.select(REGISTRY, groups, []))
+        memory = ['memory-recall-quality', 'memory-evidence-plan', 'memory-method-quality']
+        self.assertEqual(memory, HOST.select(REGISTRY, memory, []))
+        self.assertEqual(memory, batch(branch='uiux/workroom-20261102').split(','))
+        self.assertEqual(memory, batch(same_repo=False).split(','))
+        self.assertEqual('request-clock', batch(event='workflow_dispatch', manual='request-clock'))
         self.assertNotIn('matrix:', host)
         for field in ('testedCommit', 'prBaseCommit', 'prHeadCommit', 'deviceTestsPerformed', 'apkBuiltOrSigned'):
             self.assertIn("'" + field + "':", host)

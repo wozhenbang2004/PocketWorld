@@ -13,6 +13,7 @@ import dev.pocketengine.store.SecretVault;
 import java.io.*;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.After;
 import org.junit.Before;
@@ -31,9 +32,9 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=35,manifest=Config.NONE,application=Application.class,shadows={PhoneAudioNativeBridgeTest.Socket.class,PhoneAudioNativeBridgeTest.Vault.class,PhoneAudioNativeBridgeTest.Safety.class})
 public final class PhoneAudioNativeBridgeTest {
-    static int peerUid,payloads,sets,launches;static String mode,session;static JSONObject lastSet;static boolean dropSetReceipt;
+    static int peerUid,payloads,sets,launches,ownershipReads,releases;static String mode,session;static JSONObject lastSet,lastRelease;static boolean dropSetReceipt;
     static Runnable afterGet;static RunControl cancelAfterSet;
-    @Before public void reset(){peerUid=2000;payloads=sets=launches=0;mode="allow";session="original-audio-session";lastSet=null;afterGet=null;cancelAfterSet=null;dropSetReceipt=false;}
+    @Before public void reset(){peerUid=2000;payloads=sets=launches=ownershipReads=releases=0;mode="allow";session="original-audio-session";lastSet=lastRelease=null;afterGet=null;cancelAfterSet=null;dropSetReceipt=false;}
     @After public void clear()throws Exception{afterGet=null;cancelAfterSet=null;Field f=PhoneAccessibilityService.class.getDeclaredField("instance");f.setAccessible(true);f.set(null,null);}
     @Implements(SecretVault.class) public static class Vault {@Implementation public String get(String slot){return "fixture-token";}}
     @Implements(PhoneAccessibilityService.class) public static class Safety {@Implementation public String observationSafetyFailure(){return null;}}
@@ -46,9 +47,11 @@ public final class PhoneAudioNativeBridgeTest {
             @Override public void write(int b)throws IOException{if(closed)throw new IOException("closed");sent.write(b);}
             @Override public void flush()throws IOException{try{
                 JSONObject request=new JSONObject(DisplayWire.read(new DataInputStream(new ByteArrayInputStream(sent.toByteArray())),32768));payloads++;String command=request.getString("command");JSONObject reply=status();
+                if(command.equals("ownership")){ownershipReads++;reply.put("ownership",ownership());}
                 if(command.equals("audio.get")){reply.put("mode",mode);Runnable callback=afterGet;afterGet=null;if(callback!=null)callback.run();}
                 if(command.equals("audio.set")){sets++;lastSet=new JSONObject(request.toString());mode=request.getString("mode");reply.put("accepted",true).put("verified",false);}
                 if(command.equals("launch"))launches++;
+                if(command.equals("release")){releases++;lastRelease=new JSONObject(request.toString());reply.put("released",true).put("sessionActive",false);}
                 reply.put("requestId",request.getString("requestId"));ByteArrayOutputStream encoded=new ByteArrayOutputStream();DisplayWire.write(new DataOutputStream(encoded),reply.toString(),8*1024*1024);response=encoded.toByteArray();
                 if(command.equals("audio.set")&&cancelAfterSet!=null){RunControl c=cancelAfterSet;cancelAfterSet=null;c.cancel();}
                 if(command.equals("audio.set")&&dropSetReceipt)closed=true;
@@ -58,6 +61,13 @@ public final class PhoneAudioNativeBridgeTest {
         @Implementation public void close(){closed=true;}
     }
     private static JSONObject status()throws Exception{return new JSONObject().put("ok",true).put("protocol",1).put("uid",2000).put("sdk",35).put("sessionActive",true).put("sessionId",session).put("displayId",5).put("width",101).put("height",101).put("imeIsolation","available").put("backgroundOnly",true).put("focusIsolationRequested",true).put("displayFlagsConfirmed",true);}
+    /** Explicit read-only peer fixture: the original owned display is empty before launch. */
+    private static JSONObject ownership()throws Exception {
+        JSONObject primary=new JSONObject().put("taskId",1).put("rootTaskId",1).put("displayId",0).put("androidUserId",0).put("userId",0)
+                .put("packageName","example.launcher").put("component","example.launcher/.Home").put("rootIdentity","fixture-primary-root");
+        return new JSONObject().put("status","observed").put("primary",new JSONArray().put(primary)).put("owned",new JSONArray())
+                .put("taskTopology",new JSONObject().put("schemaVersion",1).put("status","observed").put("complete",true).put("readOnly",true).put("tasks",new JSONArray().put(primary)));
+    }
     private static void field(Object object,String name,Object value)throws Exception{Field f=object.getClass().getDeclaredField(name);f.setAccessible(true);f.set(object,value);}
     private final class Fixture implements AutoCloseable {
         final Context app=RuntimeEnvironment.getApplication();final DisplayModule module;final BackgroundPhonePort port;final RunControl original=new RunControl();
@@ -115,6 +125,12 @@ public final class PhoneAudioNativeBridgeTest {
         f.enable();dropSetReceipt=true;var entry=BackgroundPhonePort.class.getDeclaredMethod("executeNative",String.class,JSONObject.class,RunControl.class);entry.setAccessible(true);
         java.util.concurrent.FutureTask<JSONObject> work=new java.util.concurrent.FutureTask<>(()->(JSONObject)entry.invoke(f.port,"phone_launch_app",new JSONObject().put("packageName","example.music"),f.original));new Thread(work,"original-native-audio-launch-fixture").start();JSONObject receipt=work.get(5,java.util.concurrent.TimeUnit.SECONDS);
         assertEquals("audio_policy_unconfirmed",receipt.getString("error"));assertTrue(receipt.isNull("accepted"));assertFalse(receipt.getBoolean("replayAllowed"));assertFalse(receipt.getBoolean("launchDispatched"));assertEquals(1,sets);assertEquals(0,launches);assertEquals(1,f.pending());assertFalse(f.original.isCancelled());
+        assertEquals(1,ownershipReads);assertFalse(f.module.isConnected());assertEquals("ignore",mode);
+        assertEquals(1,f.port.restoreTaskAudio().getInt("pending"));assertEquals(1,sets);assertEquals(0,releases);
+        dropSetReceipt=false;f.module.acceptStatus(status());JSONObject cleaned=f.port.closeSession();
+        assertTrue(cleaned.getBoolean("releaseConfirmed"));assertEquals(0,cleaned.getJSONObject("audioRestore").getInt("pending"));assertEquals(1,cleaned.getJSONObject("audioRestore").getInt("restored"));
+        assertEquals("allow",mode);assertEquals(2,sets);assertEquals(0,launches);assertEquals(0,f.pending());assertEquals(1,releases);
+        assertEquals("original-audio-session",lastRelease.getString("sessionId"));assertEquals(5,lastRelease.getInt("displayId"));assertFalse(f.module.hasSession());
     }}
     @Test public void nativeOwnerPolicyDefaultsOffCannotEnableOverALiveTaskAndCanRevokeImmediately()throws Exception{try(Fixture f=new Fixture()){
         assertFalse(f.module.snapshot().getBoolean("audioSilenceEnabled"));assertThrows(SecurityException.class,()->f.module.setAudioPolicyForOwner(true));assertFalse(f.module.setAudioPolicyForOwner(false).getBoolean("enabled"));

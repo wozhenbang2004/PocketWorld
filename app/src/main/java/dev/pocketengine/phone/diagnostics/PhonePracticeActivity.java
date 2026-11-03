@@ -25,16 +25,20 @@ public final class PhonePracticeActivity extends Activity {
     private final Handler main=new Handler(Looper.getMainLooper());
     private final CountDownLatch destroyed=new CountDownLatch(1);
     private TextView tick;private int ticks,clicks;private RunControl original;
+    private String refusalReason="";
     private final Runnable advance=new Runnable(){public void run(){if(tick!=null){tick.setText("PW_DIAG_TICK:"+(++ticks));main.postDelayed(this,350);}}};
     @Override public void onCreate(Bundle state){
         super.onCreate(state);
+        String stage="practice_identity";
         try{
             EngineApplication app=(EngineApplication)getApplication();String id=getIntent().getStringExtra("taskId"),run=getIntent().getStringExtra("runId");
             int epoch=getIntent().getIntExtra("epoch",-1),display=getIntent().getIntExtra("displayId",-1);String nonce=getIntent().getStringExtra("practiceSessionId");
             original=app.control(id);
             if(original==null||!original.matchesHostRun(id,run,epoch)||original.isCancelled()||nonce==null||!nonce.matches("[a-f0-9-]{36}")||getDisplay()==null||getDisplay().getDisplayId()!=display)throw new SecurityException("practice_identity_changed");
-            app.tasks.requireOwnerPhonePractice(id,run,epoch,original);
+            stage="practice_task_authority";app.tasks.requireOwnerPhonePractice(id,run,epoch,original);
+            stage="practice_native_claim";
             PhonePracticeTarget.claim(getIntent(),original,getDisplay().getDisplayId(),()->{PhonePracticeActivity previous=current;if(previous!=null&&previous!=this&&!previous.isDestroyed())throw new SecurityException("practice_target_busy");current=this;});
+            stage="practice_ui";
             LinearLayout page=new LinearLayout(this);page.setOrientation(LinearLayout.VERTICAL);page.setPadding(dp(24),dp(24),dp(24),dp(20));page.setBackgroundColor(Color.WHITE);
             TextView title=text("手机能力演练");title.setTextSize(22);title.setTypeface(null,android.graphics.Typeface.BOLD);page.addView(title);
             page.addView(text("只修改此测试页。可随时停止原任务；测试结果以实际回读为准。"));
@@ -47,8 +51,10 @@ public final class PhonePracticeActivity extends Activity {
             ScrollView scroll=new ScrollView(this);scroll.setContentDescription("PW_DIAG_LIST");LinearLayout rows=new LinearLayout(this);rows.setOrientation(LinearLayout.VERTICAL);
             for(int i=0;i<40;i++){TextView row=text(String.format(java.util.Locale.ROOT,"PW_DIAG_ROW_%02d · 可滚动测试行",i));row.setPadding(0,dp(16),0,dp(16));rows.addView(row);}scroll.addView(rows);page.addView(scroll,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,0,1));
             setContentView(page);main.postDelayed(advance,350);
-        }catch(Exception expired){finishAndRemoveTask();}
+        }catch(Exception expired){refusalReason=stage+":"+expired.getClass().getSimpleName();finishAndRemoveTask();}
     }
+    /** Native diagnostic code only; never contains intent values, source text or exception messages. */
+    String refusalReason(){return refusalReason;}
     private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
     private GradientDrawable shape(int fill,int stroke){GradientDrawable d=new GradientDrawable();d.setColor(fill);d.setCornerRadius(dp(8));d.setStroke(dp(1),stroke);return d;}
     private TextView text(String value){TextView text=new TextView(this);text.setText(value);text.setTextColor(0xff202020);text.setTextSize(15);text.setPadding(0,dp(8),0,dp(8));return text;}

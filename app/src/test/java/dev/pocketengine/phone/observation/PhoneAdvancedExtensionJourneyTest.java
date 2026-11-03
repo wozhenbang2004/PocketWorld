@@ -195,14 +195,35 @@ public final class PhoneAdvancedExtensionJourneyTest {
             host.policy.set(new PhoneAccessPolicy.State(1,true,Map.of()));assertThrows(SecurityException.class,()->host.phone.requireHistoryCurrent(host.control));
             assertFalse(host.capabilities.responseCurrent(host.control));assertEquals(1,host.physical.observations.get());assertEquals(0,host.physical.effects.get());
             host.phone.requireHistoryCurrent(host.control);assertNotNull(host.observe());
+
+            // The existing display-5 fixture has a separate accessibility event source. A main
+            // display history guard pins the actual service session without another observation.
+            int reads=host.physical.observations.get();PhoneUiSignals originalFeed=host.physical.signals;
+            GuardedPhonePort mainSource=new GuardedPhonePort(host.physical,host.policy::get,c->{throw new AssertionError("history identity must not read owner trees");},0);
+            AdaptivePhonePort mainHistory=new AdaptivePhonePort(mainSource,new AdaptivePhonePort.Scope(host.task,host.run,host.epoch,"accessibility-session",0),false,false,()->1000L);
+            mainHistory.requireHistoryCurrent(host.control);
+            long generation=originalFeed.snapshot(Set.of()).generation;originalFeed.record(9);
+            assertTrue(originalFeed.snapshot(Set.of()).generation>generation);mainHistory.requireHistoryCurrent(host.control);
+            originalFeed.close();assertThrows(SecurityException.class,()->mainHistory.requireHistoryCurrent(host.control));
+            host.physical.signals=new PhoneUiSignals("replacement-accessibility-session",()->1000L);
+            assertTrue(mainSource.isConnected());assertFalse(host.control.isCancelled());
+            assertThrows(SecurityException.class,()->mainHistory.requireHistoryCurrent(host.control));
+            assertEquals(reads,host.physical.observations.get());assertEquals(0,host.physical.effects.get());
         }
     }
     @Test public void practiceScrollPassRequiresTheOriginalActionAndDifferentFreshRows()throws Exception {
         try(Host host=new Host()){
-            JSONObject launch=j("packageName","app.example","userId",0);JSONObject started=host.execute("phone_practice_target",host.prepared("phone_practice_target",launch));assertTrue(started.getBoolean("accepted"));
+            JSONObject launch=j("packageName","app.example","userId",0),originalLaunch=host.prepared("phone_practice_target",launch);
+            JSONObject started=host.execute("phone_practice_target",originalLaunch);assertTrue(started.getBoolean("accepted"));
             JSONObject before=host.observe();assertEquals("unknown",check(host.phone.ownerPracticeResult(host.task,host.run,host.epoch),"scroll"));
             JSONObject wheel=j("observationId",before.getString("observationId"),"nodeId","n0","value","2","direction","forward");
-            JSONObject receipt=host.execute("phone_set_wheel",host.prepared("phone_set_wheel",wheel));assertTrue(receipt.getBoolean("accepted"));assertEquals("2",receipt.getString("actualValue"));
+            assertThrows("an unfinished original launch must fence the next prepared action",IllegalStateException.class,()->host.prepared("phone_set_wheel",wheel));
+            host.journal.finishOperation(originalLaunch.getString("_hostOperationId"),started);assertFalse(host.tasks.hasUnresolved(host.task));
+            JSONObject originalWheel=host.prepared("phone_set_wheel",wheel),receipt=host.execute("phone_set_wheel",originalWheel);assertTrue(receipt.getBoolean("accepted"));assertEquals("2",receipt.getString("actualValue"));
+            host.journal.finishOperation(originalWheel.getString("_hostOperationId"),receipt);
+            JSONArray operations=host.tasks.get(host.task,false).getJSONArray("operations");assertEquals(2,operations.length());
+            java.util.Set<String> recorded=new java.util.HashSet<>();for(int i=0;i<operations.length();i++){JSONObject operation=operations.getJSONObject(i);assertEquals("receipt",operation.getString("state"));recorded.add(operation.getString("operationId"));}
+            assertEquals(Set.of(originalLaunch.getString("_hostOperationId"),originalWheel.getString("_hostOperationId")),recorded);assertFalse(host.tasks.hasUnresolved(host.task));
             assertEquals("passed",check(host.phone.ownerPracticeResult(host.task,host.run,host.epoch),"scroll"));assertEquals(2,host.physical.effects.get());
         }
     }

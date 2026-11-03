@@ -104,6 +104,7 @@ public final class TaskMemoryUse {
             String id=UUID.randomUUID().toString(),digest=digest(snapshot.getString("context"));
             JSONObject metadata=task.toJson().put("selectionId",id).put("contextDigest",digest).put("records",refs)
                     .put("selectionDiagnostics",MemoryRecallBudget.checked(snapshot.getJSONObject("selectionDiagnostics"),refs));
+            if(snapshot.has("retrievalDependencies"))metadata.put("retrievalDependencies",new JSONArray(snapshot.getJSONArray("retrievalDependencies").toString()));
             if(projectAccess!=null)metadata.put("memoryNamespace",jsonScope(projectAccess.ownerId(),projectAccess.spaceId()));
             JSONObject binding=task.toJson();for(java.util.Iterator<String> it=binding.keys();it.hasNext();){String key=it.next();snapshot.put(key,binding.get(key));}
             snapshot.put("task",binding).put("records",projected).put("receiptId",id).put("selectionId",id).put("contextDigest",digest).put("phase","prepared")
@@ -122,7 +123,7 @@ public final class TaskMemoryUse {
             JSONArray refs=selection.metadata().getJSONArray("records");for(int i=0;i<refs.length();i++)
                 if(!"current".equals(book.taskReferenceState(bookScope(scope),refs.getJSONObject(i)).getString("status")))throw new IllegalStateException("选中记忆已变化，不能提供旧片段");
             if(!"current".equals(taskStatus(task(scope,selection.task),selection.task)))throw new IllegalStateException("任务已变化");
-            JSONObject result=selection.snapshot();book.requireAudienceSnapshotCurrent(bookScope(scope),result,selection.audience);checkAudience(selection.audience);return result;
+            JSONObject result=selection.snapshot();book.requireRetrievalDependencies(bookScope(scope),result,selection.audience);book.requireAudienceSnapshotCurrent(bookScope(scope),result,selection.audience);checkAudience(selection.audience);return result;
         }});
     }
     /** Confirm only the native journal's exact original projection; do not infer use from a search. */

@@ -19,6 +19,10 @@ import dev.pocketengine.core.RunControl;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Before;
@@ -30,6 +34,7 @@ import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
+import org.robolectric.annotation.LooperMode;
 import org.robolectric.shadows.ShadowLauncherApps;
 import org.robolectric.shadows.ShadowSystemClock;
 import org.robolectric.shadows.ShadowUserManager;
@@ -38,6 +43,7 @@ import static org.junit.Assert.*;
 /** Original LauncherApps consumer with actual SDK35 PM/UM objects; native launch is a recorded service fixture. */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=35,manifest=Config.NONE,application=Application.class,shadows=AndroidAppCopiesNativeTest.LauncherFixture.class)
+@LooperMode(LooperMode.Mode.PAUSED)
 public final class AndroidAppCopiesNativeTest {
     public static final String PACKAGE="copy.native.fixture";
     private static final String ARCHIVE="/fixture/native-copy/base.apk";
@@ -139,15 +145,38 @@ public final class AndroidAppCopiesNativeTest {
         }finally{copies.clear();}
     }
     @Test public void originalRunCancellationUnregistersItsCallbackAndCannotCloseAnotherRunPort()throws Exception {
-        AndroidAppCopies first=new AndroidAppCopies(app(),0),second=new AndroidAppCopies(app(),0);RunControl original=control(),next=control();
+        AndroidAppCopies first=new AndroidAppCopies(app(),0),second=new AndroidAppCopies(app(),0),preCancelled=new AndroidAppCopies(app(),0);RunControl original=control(),next=control();
         try {
-            first.list(original);assertEquals(1,LauncherFixture.registrations);
+            JSONObject old=choose(first.list(original),10);assertEquals(1,LauncherFixture.registrations);
             assertThrows(SecurityException.class,()->first.list(next));assertEquals(1,LauncherFixture.registrations);
-            original.cancel();assertEquals(1,LauncherFixture.unregistrations);
+            // Bounded stand-in for the retained SQL authority lock: the native reader owns the
+            // copies monitor while cancellation owns authority. A synchronous cleanup would wait
+            // for five seconds here; the finite lock deadline lets a regression fail without hanging.
+            ReentrantLock authorityLock=new ReentrantLock();CountDownLatch authorityHeld=new CountDownLatch(1),authorityRequested=new CountDownLatch(1),cancelReturned=new CountDownLatch(1);
+            AtomicReference<Throwable> readerFailure=new AtomicReference<>(),cancelFailure=new AtomicReference<>();
+            try(AutoCloseable retained=original.retainAuthorityCheck(()->{
+                authorityRequested.countDown();if(!authorityLock.tryLock(5,TimeUnit.SECONDS))throw new SecurityException("bounded_authority_fixture_timeout");
+                authorityLock.unlock();
+            })){
+                Thread reader=new Thread(()->{try{first.require(old,original);}catch(Throwable failed){readerFailure.set(failed);}},"copy-original-authority-reader");
+                Thread canceller=new Thread(()->{
+                    authorityLock.lock();try{authorityHeld.countDown();if(!authorityRequested.await(2,TimeUnit.SECONDS))throw new AssertionError("original authority was not reached");original.cancel();cancelReturned.countDown();}
+                    catch(Throwable failed){cancelFailure.set(failed);}finally{authorityLock.unlock();}
+                },"copy-original-authority-cancel");
+                reader.setDaemon(true);canceller.setDaemon(true);canceller.start();
+                try{assertTrue(authorityHeld.await(2,TimeUnit.SECONDS));reader.start();assertTrue("cancel must return before the blocked authority deadline",cancelReturned.await(2,TimeUnit.SECONDS));}
+                finally{reader.join(6000);canceller.join(6000);}
+                assertFalse(reader.isAlive());assertFalse(canceller.isAlive());assertNull(cancelFailure.get());assertTrue(readerFailure.get() instanceof InterruptedException);
+            }
+            assertTrue(original.isCancelled());assertEquals("main cleanup is queued, while native actions are already refused",0,LauncherFixture.unregistrations);
+            assertThrows(InterruptedException.class,()->first.launch(old,0,original,original::check));
             JSONObject fresh=choose(second.list(next),10);assertEquals(2,LauncherFixture.registrations);
-            original.cancel();assertEquals(1,LauncherFixture.unregistrations);assertEquals(10,second.require(fresh,next).getInt("userId"));
+            Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals(1,LauncherFixture.unregistrations);assertEquals(10,second.require(fresh,next).getInt("userId"));
+            original.cancel();Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals(1,LauncherFixture.unregistrations);assertEquals(10,second.require(fresh,next).getInt("userId"));
             second.close();assertEquals(2,LauncherFixture.unregistrations);
             assertThrows(SecurityException.class,()->second.list(next));assertTrue(LauncherFixture.calls.isEmpty());
-        }finally{first.close();second.close();}
+            RunControl alreadyCancelled=control();alreadyCancelled.cancel();assertThrows(InterruptedException.class,()->preCancelled.list(alreadyCancelled));
+            Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals(2,LauncherFixture.registrations);assertEquals(2,LauncherFixture.unregistrations);
+        }finally{first.close();second.close();preCancelled.close();Shadows.shadowOf(Looper.getMainLooper()).idle();}
     }
 }

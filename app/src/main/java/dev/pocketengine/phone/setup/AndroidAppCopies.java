@@ -28,6 +28,7 @@ public final class AndroidAppCopies implements AutoCloseable {
     private record Copy(JSONObject identity,long listedAt) { }
     private final Context context;
     private final int displayId;
+    private final android.os.Handler main=new android.os.Handler(android.os.Looper.getMainLooper());
     // This fence contains only cached reference mutations and the short native entry.
     // Metadata/authority work uses this object's monitor and never holds this fence.
     private final Object referenceFence=new Object();
@@ -57,7 +58,7 @@ public final class AndroidAppCopies implements AutoCloseable {
         synchronized(referenceFence){listed.clear();listedControl=control;listedPauseRevision=control.pauseRevision();}
         LauncherApps launcher=context.getSystemService(LauncherApps.class);UserManager users=context.getSystemService(UserManager.class);
         if(launcher==null||users==null)return result(new JSONArray(),false,"profile_service_unavailable");
-        if(watched!=launcher){stopWatching();launcher.registerCallback(changes,new android.os.Handler(android.os.Looper.getMainLooper()));watched=launcher;}
+        if(watched!=launcher){stopWatching();launcher.registerCallback(changes,main);watched=launcher;}
         JSONArray out=new JSONArray();boolean complete=true;
         for(UserHandle user:launcher.getProfiles()) {
             control.check();
@@ -139,7 +140,9 @@ public final class AndroidAppCopies implements AutoCloseable {
     private void bindLifetime(RunControl control){
         if(closed||lifetimeControl!=null&&lifetimeControl!=control)throw new SecurityException("app_copy_original_port_required");
         lifetimeControl=control;
-        if(cancelCleanup==null){cancelCleanup=()->closeOriginal(control);control.onCancel(cancelCleanup);}
+        // Cancellation may hold the original TaskStore lock while list/require awaits its authority.
+        // The cancelled flag fences actions immediately; never acquire this monitor on that caller.
+        if(cancelCleanup==null){cancelCleanup=()->main.post(()->closeOriginal(control));control.onCancel(cancelCleanup);}
     }
     private synchronized void closeOriginal(RunControl control){if(lifetimeControl==control)close();}
     public synchronized void clear(){

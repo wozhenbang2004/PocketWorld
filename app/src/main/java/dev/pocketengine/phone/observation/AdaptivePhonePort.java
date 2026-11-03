@@ -87,6 +87,28 @@ public final class AdaptivePhonePort implements PhonePort {
             clearReferences();historyPolicyRevision=revision;
             throw new SecurityException(blocked==null?"historical_phone_source_or_policy_changed":blocked);
         }
+        try{
+            // Check native identity without recapturing a tree, pixels, or owner packages.
+            PhonePort physical=physicalPort();
+            if(physical instanceof dev.pocketengine.phone.display.BackgroundPhonePort){
+                JSONObject identity=((dev.pocketengine.phone.display.BackgroundPhonePort)physical).executionIdentity();
+                if(scope.displayId!=identity.optInt("displayId",-1)||!scope.sessionId.equals(identity.optString("sessionId")))
+                    throw new SecurityException("historical_phone_session_changed");
+            }else if(physical instanceof NativePhoneSignals&&(scope.displayId==0||physical instanceof dev.pocketengine.phone.AndroidPhonePort)){
+                if(scope.displayId!=0)throw new SecurityException("historical_phone_display_changed");
+                NativePhoneSignals nativeSignals=(NativePhoneSignals)physical;
+                dev.pocketengine.phone.PhoneUiSignals feed=nativeSignals.uiSignals(original);
+                dev.pocketengine.phone.PhoneUiSignals.Stamp identity=feed==null?null:feed.snapshot(java.util.Collections.emptySet());
+                // UI events may change generation; only the original live service owns these frames.
+                if(identity==null||identity.closed||!scope.sessionId.equals(identity.serviceSession)
+                        ||nativeSignals.uiSignals(original)!=feed||feed.snapshot(java.util.Collections.emptySet()).closed)
+                    throw new SecurityException("historical_phone_session_changed");
+            }
+            // Generic ports do not establish native display/session identity through event hints.
+            blocked=authority(original);
+            if(blocked!=null||!source.isConnected()||revision!=appPolicyRevision())
+                throw new SecurityException(blocked==null?"historical_phone_source_or_policy_changed":blocked);
+        }catch(Exception revoked){clearReferences();historyPolicyRevision=revision;throw revoked;}
         historyPolicyRevision=revision;
     }
     /** All side effects enter from the existing CapabilityPort's original prepared operation. */

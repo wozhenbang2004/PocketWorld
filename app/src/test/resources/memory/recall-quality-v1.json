@@ -1,0 +1,1961 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "memory-recall-quality-v1",
+  "provenance": "Independently authored synthetic scenarios. No user messages, personal records or upstream benchmark rows.",
+  "evaluationBoundary": "Book retrieval and bounded context packing; query rewrites are synthetic human paraphrases, not measured live-model outputs. Native Agent integration is tested separately.",
+  "splitPolicy": {
+    "development": 16,
+    "holdout": 8,
+    "holdoutRule": "Expected labels are withheld from the implementation author until the first frozen evaluation. After disclosure this is a regression set, not a fresh holdout."
+  },
+  "budget": {
+    "defaultLimit": 4,
+    "defaultMaxChars": 9000,
+    "maxAdditionalModelRequests": 0,
+    "maxQueries": 4,
+    "maxTotalQueryChars": 1500
+  },
+  "metrics": [
+    "answer_recall_at_limit",
+    "answer_mrr",
+    "answerable_tasks_hit",
+    "no_answer_tasks_with_only_allowed_support",
+    "forbidden_record_leaks",
+    "scope_leaks",
+    "context_budget_violations",
+    "invalid_query_plans_rejected"
+  ],
+  "scenarios": [
+    {
+      "id": "dev-01",
+      "split": "development",
+      "category": "zero_overlap_zh",
+      "query": "手机耗电严重",
+      "suggestions": [
+        "省电 能耗 节约"
+      ],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {},
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "energy",
+          "text": "出差可选择节约电量模式，关闭持续定位。",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:energy",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "出差可选择节约电量模式，关闭持续定位。",
+            "sha256": "d2f95bf30c49888653b51d73870d3fa8274b5431851e6db76551a69584a2896c"
+          },
+          "updatedAt": 1700000001000
+        },
+        {
+          "key": "soup",
+          "text": "午餐准备番茄汤。",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:soup",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "午餐准备番茄汤。",
+            "sha256": "660458ce64f61343411570c514bb63d88f04dff0c979b93941d6a5897c31ab7c"
+          },
+          "updatedAt": 1700000001000
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [
+        "energy"
+      ],
+      "allowedSupport": [],
+      "forbiddenRecords": [],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": true,
+      "expectation": "retrieve"
+    },
+    {
+      "id": "dev-02",
+      "split": "development",
+      "category": "zero_overlap_en",
+      "query": "cheap lodging near terminal",
+      "suggestions": [
+        "affordable accommodation airport"
+      ],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {},
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "stay",
+          "text": "An airport guesthouse quotes 65 credits per night.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:stay",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "An airport guesthouse quotes 65 credits per night.",
+            "sha256": "37bb0930efcfc29dd54159cd83785f234d5bc0f13255713702abd52ea70534c5"
+          },
+          "updatedAt": 1700000001000
+        },
+        {
+          "key": "baggage",
+          "text": "A suitcase has a cracked wheel.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:baggage",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "A suitcase has a cracked wheel.",
+            "sha256": "cea3919961922b5178a09443c21e8c109436122bda0680c3c1b271bf113913c1"
+          },
+          "updatedAt": 1700000001000
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [
+        "stay"
+      ],
+      "allowedSupport": [],
+      "forbiddenRecords": [],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": true,
+      "expectation": "retrieve"
+    },
+    {
+      "id": "dev-03",
+      "split": "development",
+      "category": "stable_id_rename",
+      "query": "Marin",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {},
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "name",
+          "text": "Marin now uses the stage name Aster.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:name",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "Marin now uses the stage name Aster.",
+            "sha256": "6ba52589b2b3ca0510b34e0b03c344ee27547b12e72e8a13b40575e44b21c685"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "person:performer-7",
+            "subjectType": "person",
+            "subjectLabel": "Marin",
+            "predicate": "stage_name",
+            "object": "Aster",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null
+          }
+        },
+        {
+          "key": "drink",
+          "text": "Aster prefers mint infusion before rehearsal.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:drink",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "Aster prefers mint infusion before rehearsal.",
+            "sha256": "63cf7a9172b0f2f82d602cda2d0c72eff2bd04d12cd43da534901a03f0901fe3"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "person:performer-7",
+            "subjectType": "person",
+            "subjectLabel": "Aster",
+            "predicate": "beverage",
+            "object": "mint infusion",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null
+          }
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [
+        "drink"
+      ],
+      "allowedSupport": [
+        "name"
+      ],
+      "forbiddenRecords": [],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "retrieve"
+    },
+    {
+      "id": "dev-04",
+      "split": "development",
+      "category": "two_hop_relation",
+      "query": "Where should Sable enter?",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {
+        "maxHops": 2
+      },
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "assignment",
+          "text": "Sable is assigned to the Meridian expedition.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:assignment",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "Sable is assigned to the Meridian expedition.",
+            "sha256": "92423e4a01d9d714ac148e4d610cda270dc0f5081f89967f3b8c1fe3c54c4c63"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "person:sable",
+            "subjectType": "person",
+            "subjectLabel": "Sable",
+            "predicate": "assigned_to",
+            "object": "Meridian expedition",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null,
+            "objectId": "entity:meridian",
+            "objectType": "entity"
+          }
+        },
+        {
+          "key": "depot",
+          "text": "The expedition starts from Quay Depot.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:depot",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "The expedition starts from Quay Depot.",
+            "sha256": "6b5deb08fb3c9b4cbd22d9f1fd867bd92cc40a7cd8a491b8f2c59f1bb3da41ea"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "entity:meridian",
+            "subjectType": "entity",
+            "subjectLabel": "Meridian expedition",
+            "predicate": "starts_at",
+            "object": "Quay Depot",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null,
+            "objectId": "entity:quay",
+            "objectType": "entity"
+          }
+        },
+        {
+          "key": "entry",
+          "text": "The depot uses an amber latch beside the service entrance.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-c:entry",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-c",
+            "originalText": "The depot uses an amber latch beside the service entrance.",
+            "sha256": "5c1ab634473317e195f741a63af29ef45a3ad8b328ecb8aecc3494af31ce2e35"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "entity:quay",
+            "subjectType": "entity",
+            "subjectLabel": "Quay Depot",
+            "predicate": "access",
+            "object": "amber latch beside service entrance",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null
+          }
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [
+        "entry"
+      ],
+      "allowedSupport": [
+        "assignment",
+        "depot"
+      ],
+      "forbiddenRecords": [],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "retrieve"
+    },
+    {
+      "id": "dev-05",
+      "split": "development",
+      "category": "late_old_fact",
+      "query": "residence",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {},
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "early",
+          "text": "Residence was Alder Town.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:early",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "Residence was Alder Town.",
+            "sha256": "63a2142c7aa19fbc1c21eb161a79dde771634642696bfc533254cae0d2b7f978"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "owner",
+            "subjectType": "owner",
+            "subjectLabel": "Owner",
+            "predicate": "residence",
+            "object": "Alder Town",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null
+          }
+        },
+        {
+          "key": "current",
+          "text": "Residence is Brook Town.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:current",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "Residence is Brook Town.",
+            "sha256": "853857e36c5b51cab60d5a1f7889632dc5676fcc92a1445238b3ce30896e870d"
+          },
+          "updatedAt": 1700000002000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "owner",
+            "subjectType": "owner",
+            "subjectLabel": "Owner",
+            "predicate": "residence",
+            "object": "Brook Town",
+            "eventTime": 1700000002000,
+            "assertedAt": 1700000002000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null
+          }
+        },
+        {
+          "key": "late",
+          "text": "Old residence note still says Alder Town.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-c:late",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-c",
+            "originalText": "Old residence note still says Alder Town.",
+            "sha256": "f9a96e595864b30ee8b3cae98f1ab07b07f72da3a5610246c0535bb6213160b3"
+          },
+          "updatedAt": 1700000005000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "owner",
+            "subjectType": "owner",
+            "subjectLabel": "Owner",
+            "predicate": "residence",
+            "object": "Alder Town",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null
+          }
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [
+        "current"
+      ],
+      "allowedSupport": [],
+      "forbiddenRecords": [
+        "early",
+        "late"
+      ],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "retrieve"
+    },
+    {
+      "id": "dev-06",
+      "split": "development",
+      "category": "unresolved_contradiction",
+      "query": "harbor route",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {},
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "red",
+          "text": "The harbor route uses the red ferry.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:red",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "The harbor route uses the red ferry.",
+            "sha256": "c6602684ff7dc3d9b5ef8d49a32ab2f5dc4b2452c9407a462e36d6a49e51bc14"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "entity:harbor",
+            "subjectType": "entity",
+            "subjectLabel": "Harbor",
+            "predicate": "route",
+            "object": "red ferry",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null
+          }
+        },
+        {
+          "key": "blue",
+          "text": "The harbor route uses the blue ferry.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:blue",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "The harbor route uses the blue ferry.",
+            "sha256": "594feb81ed2cfce40457378abf0350c30b58c597a094ca4e145d2b6253deef28"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "entity:harbor",
+            "subjectType": "entity",
+            "subjectLabel": "Harbor",
+            "predicate": "route",
+            "object": "blue ferry",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null
+          }
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [],
+      "allowedSupport": [],
+      "forbiddenRecords": [
+        "red",
+        "blue"
+      ],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "no_answer"
+    },
+    {
+      "id": "dev-07",
+      "split": "development",
+      "category": "native_correction",
+      "query": "Dock pickup",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {},
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "pickup",
+          "text": "Dock pickup happens on Tuesday.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:pickup",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "Dock pickup happens on Tuesday.",
+            "sha256": "621772d687bd3403065660e9d9c96d59754f7035e39a5e92ac9f77dd3f788c6f"
+          },
+          "updatedAt": 1700000001000
+        },
+        {
+          "key": "other",
+          "text": "The garden opens after sunrise.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:other",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "The garden opens after sunrise.",
+            "sha256": "4965092b63d21365c428c57f72685477e7b3b0c7705008cdcf56c441517cce17"
+          },
+          "updatedAt": 1700000001000
+        }
+      ],
+      "mutations": [
+        {
+          "type": "correct",
+          "key": "pickup",
+          "text": "Dock pickup happens on Thursday.",
+          "at": 1700000003000
+        }
+      ],
+      "expectedRelevant": [
+        "pickup"
+      ],
+      "allowedSupport": [],
+      "forbiddenRecords": [],
+      "forbiddenText": [
+        "Tuesday"
+      ],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "retrieve"
+    },
+    {
+      "id": "dev-08",
+      "split": "development",
+      "category": "source_revision_changed",
+      "query": "Orchid assembly",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {},
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "assembly",
+          "text": "Orchid assembly uses a copper key.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:assembly",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "Orchid assembly uses a copper key.",
+            "sha256": "b99208d5736fef7480450bccf51ec5f65151e8c3449cb745e92ef49ab3737f7a"
+          },
+          "updatedAt": 1700000001000
+        },
+        {
+          "key": "other",
+          "text": "Fern shelves were numbered yesterday.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:other",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "Fern shelves were numbered yesterday.",
+            "sha256": "48092ba93ee7a73d48f368bf0f1e5407f0fa8c8ad7de2f2afc5c6094f5fea762"
+          },
+          "updatedAt": 1700000001000
+        }
+      ],
+      "mutations": [
+        {
+          "type": "source_revision",
+          "key": "assembly",
+          "revision": 2
+        }
+      ],
+      "expectedRelevant": [],
+      "allowedSupport": [],
+      "forbiddenRecords": [
+        "assembly"
+      ],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "no_answer"
+    },
+    {
+      "id": "dev-09",
+      "split": "development",
+      "category": "source_withdrawn",
+      "query": "Birch wiring",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {},
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "wiring",
+          "text": "Birch wiring is checked with a violet probe.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:wiring",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "Birch wiring is checked with a violet probe.",
+            "sha256": "f5d063ed22055953a8e27826b50cc08cf6a30a70922ff27d9ad19ee60945be38"
+          },
+          "updatedAt": 1700000001000
+        },
+        {
+          "key": "other",
+          "text": "Granite tiles arrived intact.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:other",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "Granite tiles arrived intact.",
+            "sha256": "989b77e24ec487c139bda1ef21f3dbc18e3f0f2d7aa717b900b4c3921ff2bc8f"
+          },
+          "updatedAt": 1700000001000
+        }
+      ],
+      "mutations": [
+        {
+          "type": "source_delete",
+          "key": "wiring"
+        }
+      ],
+      "expectedRelevant": [],
+      "allowedSupport": [],
+      "forbiddenRecords": [
+        "wiring"
+      ],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "no_answer"
+    },
+    {
+      "id": "dev-10",
+      "split": "development",
+      "category": "forget_persistence",
+      "query": "Willow parcel",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {},
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "parcel",
+          "text": "Willow parcel collection uses counter nine.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:parcel",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "Willow parcel collection uses counter nine.",
+            "sha256": "2b8bb58e5f18f7fc052bdf86e850008c1595b79c91dfd52ed47a7b3a5df3502f"
+          },
+          "updatedAt": 1700000001000
+        },
+        {
+          "key": "other",
+          "text": "The orchestra starts at noon.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:other",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "The orchestra starts at noon.",
+            "sha256": "40d46fe6b4c490159f8a62e487b2c5e882c3d4de8c61513eb6493223055e9e1c"
+          },
+          "updatedAt": 1700000001000
+        }
+      ],
+      "mutations": [
+        {
+          "type": "forget",
+          "key": "parcel"
+        }
+      ],
+      "expectedRelevant": [],
+      "allowedSupport": [],
+      "forbiddenRecords": [
+        "parcel"
+      ],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "no_answer"
+    },
+    {
+      "id": "dev-11",
+      "split": "development",
+      "category": "foreign_owner",
+      "query": "Birch instrument",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {},
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "private",
+          "text": "Birch instrument cabinet code is entirely synthetic.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:private",
+            "revision": 1,
+            "ownerId": "other-owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "Birch instrument cabinet code is entirely synthetic.",
+            "sha256": "d224ef8ca19756e0542ba3956ac2f545339079b574db98219a5cd480b539fe52"
+          },
+          "updatedAt": 1700000001000
+        },
+        {
+          "key": "own",
+          "text": "Cedar panels need repainting.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:own",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "Cedar panels need repainting.",
+            "sha256": "f5fb2187283d7328fbc1ef9b62cbaf4829b104c89beb764ca16aeb6b77c36748"
+          },
+          "updatedAt": 1700000001000
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [],
+      "allowedSupport": [],
+      "forbiddenRecords": [
+        "private"
+      ],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "no_answer"
+    },
+    {
+      "id": "dev-12",
+      "split": "development",
+      "category": "foreign_namespace",
+      "query": "Cobalt workshop",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {},
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "group",
+          "text": "Cobalt workshop entry requires an orange tag.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:group",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "group:synthetic",
+            "sessionId": "session-a",
+            "originalText": "Cobalt workshop entry requires an orange tag.",
+            "sha256": "922f28ea98d066a01dfec0aea96fea6f1f606283b47e7968c8fd57f4d2e5e0df"
+          },
+          "updatedAt": 1700000001000
+        },
+        {
+          "key": "own",
+          "text": "Juniper windows face west.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:own",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "Juniper windows face west.",
+            "sha256": "3241e586ecdfc8b7783dec42d1e3967915660063e3e7e6125397290e2270dc42"
+          },
+          "updatedAt": 1700000001000
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [],
+      "allowedSupport": [],
+      "forbiddenRecords": [
+        "group"
+      ],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "no_answer"
+    },
+    {
+      "id": "dev-13",
+      "split": "development",
+      "category": "source_kind_filter",
+      "query": "Echo calibration",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {
+        "sourceKinds": [
+          "task_evidence"
+        ]
+      },
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "plan",
+          "text": "Echo calibration remains a tentative discussion.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:plan",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "Echo calibration remains a tentative discussion.",
+            "sha256": "1cb74bea83d3cd6ebcb2e2845481bf5988e09520508154041adfff39024d73ab"
+          },
+          "updatedAt": 1700000001000
+        },
+        {
+          "key": "measured",
+          "text": "Echo calibration measured eight units.",
+          "layer": "fact",
+          "source": {
+            "kind": "task_evidence",
+            "sourceId": "session-b:measured",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "Echo calibration measured eight units.",
+            "sha256": "2cb156d69e09bdb548e7663284084522c5dbd07b790b6271189a9be72f9bb4ab"
+          },
+          "updatedAt": 1700000001000
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [
+        "measured"
+      ],
+      "allowedSupport": [],
+      "forbiddenRecords": [
+        "plan"
+      ],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "retrieve"
+    },
+    {
+      "id": "dev-14",
+      "split": "development",
+      "category": "layer_filter",
+      "query": "Silver database",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {
+        "layers": [
+          "procedural"
+        ]
+      },
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "host",
+          "text": "Silver database hosts the ledger.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:host",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "Silver database hosts the ledger.",
+            "sha256": "ea3b97136203bb1eb25319fe89b49ec63e8bc5468c93c73d0dfcc106a8f2e601"
+          },
+          "updatedAt": 1700000001000
+        },
+        {
+          "key": "procedure",
+          "text": "Silver database export requires snapshot isolation.",
+          "layer": "procedural",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:procedure",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "Silver database export requires snapshot isolation.",
+            "sha256": "d41ca84efc8b5d5cae315e0e10783689c0ab3c2fb9f356445472c8a8caa5bccb"
+          },
+          "updatedAt": 1700000001000
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [
+        "procedure"
+      ],
+      "allowedSupport": [],
+      "forbiddenRecords": [
+        "host"
+      ],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "retrieve"
+    },
+    {
+      "id": "dev-15",
+      "split": "development",
+      "category": "unrelated_query",
+      "query": "volcanic ash cleanup",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {},
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "cups",
+          "text": "Ceramic cups are stored on the upper shelf.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:cups",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "Ceramic cups are stored on the upper shelf.",
+            "sha256": "22aacbf86281af702d23b10c327cec388a992d95c35bfa66589670c69a6882be"
+          },
+          "updatedAt": 1700000001000
+        },
+        {
+          "key": "music",
+          "text": "The quartet rehearses slow movements.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:music",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "The quartet rehearses slow movements.",
+            "sha256": "d13d5e46c1882a85213d83a7640fd508cca3388975141fb655a5ca6a8c1751ce"
+          },
+          "updatedAt": 1700000001000
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [],
+      "allowedSupport": [],
+      "forbiddenRecords": [
+        "cups",
+        "music"
+      ],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "no_answer"
+    },
+    {
+      "id": "dev-16",
+      "split": "development",
+      "category": "context_cost_cap",
+      "query": "Tamarind archive",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {},
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 450,
+      "records": [
+        {
+          "key": "long",
+          "text": "Tamarind archive contains a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. ",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:long",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "Tamarind archive contains a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. a bounded synthetic historical note. ",
+            "sha256": "3dbf68f450c4e01bd24779ee4e36d39909a2bb68e207217736ec566d5a68b3c1"
+          },
+          "updatedAt": 1700000001000
+        },
+        {
+          "key": "other",
+          "text": "Peach jam is refrigerated.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:other",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "Peach jam is refrigerated.",
+            "sha256": "90412a4ed1dc0a827ed8ea6d55ea34335ba1f3535674fc8e9d775f97a51c1e59"
+          },
+          "updatedAt": 1700000001000
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [],
+      "allowedSupport": [],
+      "forbiddenRecords": [
+        "long"
+      ],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "no_answer"
+    },
+    {
+      "id": "hol-17",
+      "split": "holdout",
+      "category": "zero_overlap_recovery",
+      "query": "restart without duplicating work",
+      "suggestions": [
+        "recovery idempotency resumable"
+      ],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {},
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "recovery",
+          "text": "Idempotency keys let the dispatcher resume unfinished batches.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:recovery",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "Idempotency keys let the dispatcher resume unfinished batches.",
+            "sha256": "58caf53baa3d9fb788dd133f7f286b23eabe4687e7a3e112fadaa18cbd546075"
+          },
+          "updatedAt": 1700000001000
+        },
+        {
+          "key": "other",
+          "text": "The journal binds outcomes to input digests.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:other",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "The journal binds outcomes to input digests.",
+            "sha256": "2d6674e3e3557cee80da15b843fa9525765bf3dd9e080932fbe4ab0f9a093e0f"
+          },
+          "updatedAt": 1700000001000
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [
+        "recovery"
+      ],
+      "allowedSupport": [],
+      "forbiddenRecords": [],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": true,
+      "expectation": "retrieve"
+    },
+    {
+      "id": "hol-18",
+      "split": "holdout",
+      "category": "zero_overlap_food",
+      "query": "不能喝乳制品时怎么替换",
+      "suggestions": [
+        "奶类 饮食 替代 植物"
+      ],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {},
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "substitute",
+          "text": "烘焙时可用植物饮品代替牛乳。",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:substitute",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "烘焙时可用植物饮品代替牛乳。",
+            "sha256": "90ea7a0be2661cbf9b7081ee4a10750a2a0da6400e18abb8598c073e81c295a8"
+          },
+          "updatedAt": 1700000001000
+        },
+        {
+          "key": "other",
+          "text": "烤箱周围预留通风空间。",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:other",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "烤箱周围预留通风空间。",
+            "sha256": "ae7fd2ef6940d3549b5ded139cc0f69e9d887cb6eebdcb90dbee3290edfa9e21"
+          },
+          "updatedAt": 1700000001000
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [
+        "substitute"
+      ],
+      "allowedSupport": [],
+      "forbiddenRecords": [],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": true,
+      "expectation": "retrieve"
+    },
+    {
+      "id": "hol-19",
+      "split": "holdout",
+      "category": "two_hop_navigation",
+      "query": "Lio",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {
+        "maxHops": 2
+      },
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "owner",
+          "text": "Lio pilots the Owl skiff.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:owner",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "Lio pilots the Owl skiff.",
+            "sha256": "453b743a1de3d42b7bbe8881e843cec53854c3c793ba31f46ef5e3866eaeec62"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "person:lio",
+            "subjectType": "person",
+            "subjectLabel": "Lio",
+            "predicate": "pilots",
+            "object": "Owl",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null,
+            "objectId": "entity:owl",
+            "objectType": "entity"
+          }
+        },
+        {
+          "key": "landing",
+          "text": "The skiff docks at Pine Landing.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:landing",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "The skiff docks at Pine Landing.",
+            "sha256": "d35993f42816e13d40e5c2febb732c95482d441c3d7ff856afcf3750744e3730"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "entity:owl",
+            "subjectType": "entity",
+            "subjectLabel": "Owl skiff",
+            "predicate": "docks_at",
+            "object": "Pine Landing",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null,
+            "objectId": "entity:pine",
+            "objectType": "entity"
+          }
+        },
+        {
+          "key": "contact",
+          "text": "The landing attendant uses radio channel seven.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-c:contact",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-c",
+            "originalText": "The landing attendant uses radio channel seven.",
+            "sha256": "cbbeed999392a458cdc8f3ccb191f67b3daa75fd6a199736fe2997cd7e75f4f3"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "entity:pine",
+            "subjectType": "entity",
+            "subjectLabel": "Pine Landing",
+            "predicate": "contact",
+            "object": "radio channel seven",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null
+          }
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [
+        "contact"
+      ],
+      "allowedSupport": [
+        "owner",
+        "landing"
+      ],
+      "forbiddenRecords": [],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "retrieve"
+    },
+    {
+      "id": "hol-20",
+      "split": "holdout",
+      "category": "event_time_not_recorded_time",
+      "query": "Violet inspection",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {
+        "eventAfter": 1700000001200,
+        "eventBefore": 1700000001800
+      },
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "old",
+          "text": "Violet inspection found loose bolts.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:old",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "Violet inspection found loose bolts.",
+            "sha256": "fcbfc6435758a8dab39778c1aaabf6ba1a46950e57efa08a17fbd5dd5661710b"
+          },
+          "updatedAt": 1700000009000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "entity:violet-old",
+            "subjectType": "entity",
+            "subjectLabel": "Old site",
+            "predicate": "inspection",
+            "object": "loose bolts",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null
+          }
+        },
+        {
+          "key": "inrange",
+          "text": "Violet inspection found intact seals.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:inrange",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "Violet inspection found intact seals.",
+            "sha256": "1acaedd616c232af46c368f9b571d598e98e8e0f090087eecfc8f28c1994f3ee"
+          },
+          "updatedAt": 1700000002000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "entity:violet-inrange",
+            "subjectType": "entity",
+            "subjectLabel": "Middle site",
+            "predicate": "inspection",
+            "object": "intact seals",
+            "eventTime": 1700000001500,
+            "assertedAt": 1700000001500,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null
+          }
+        },
+        {
+          "key": "unknown",
+          "text": "Violet inspection note has no event timestamp.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-c:unknown",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-c",
+            "originalText": "Violet inspection note has no event timestamp.",
+            "sha256": "cc625606777cd727efad04e54e3971cad028236c1546e56281d54408253cdf2d"
+          },
+          "updatedAt": 1700000001500,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "entity:violet-unknown",
+            "subjectType": "entity",
+            "subjectLabel": "Unknown site",
+            "predicate": "inspection",
+            "object": "date unknown",
+            "eventTime": null,
+            "assertedAt": null,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null
+          }
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [
+        "inrange"
+      ],
+      "allowedSupport": [],
+      "forbiddenRecords": [
+        "old",
+        "unknown"
+      ],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "retrieve"
+    },
+    {
+      "id": "hol-21",
+      "split": "holdout",
+      "category": "same_label_distinct_identity",
+      "query": "Vega Observatory",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {
+        "maxHops": 2
+      },
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "observer",
+          "text": "Ari maintains Vega Observatory.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:observer",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "Ari maintains Vega Observatory.",
+            "sha256": "ef5bca5683935a90f52a44e18c248a66877742bf0097c60e62144ff8edb30e2f"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "person:observer",
+            "subjectType": "person",
+            "subjectLabel": "Ari",
+            "predicate": "maintains",
+            "object": "Vega Observatory",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null,
+            "objectId": "entity:vega",
+            "objectType": "entity"
+          }
+        },
+        {
+          "key": "optics",
+          "text": "The observer carries an indigo calibration lens.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:optics",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "The observer carries an indigo calibration lens.",
+            "sha256": "4063a7bd4be17a7e77789f733c69961069bdad65467d4e525bd75af3f1450fc2"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "person:observer",
+            "subjectType": "person",
+            "subjectLabel": "Ari",
+            "predicate": "equipment",
+            "object": "indigo calibration lens",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null
+          }
+        },
+        {
+          "key": "sailor",
+          "text": "A different Ari carries a coral anchor.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-c:sailor",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-c",
+            "originalText": "A different Ari carries a coral anchor.",
+            "sha256": "dca357e3ccbcd93b8d101b5f64379e84d79d8679754ddbefee23430b54c05d03"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "person:sailor",
+            "subjectType": "person",
+            "subjectLabel": "Ari",
+            "predicate": "equipment",
+            "object": "coral anchor",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null
+          }
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [
+        "optics"
+      ],
+      "allowedSupport": [
+        "observer"
+      ],
+      "forbiddenRecords": [
+        "sailor"
+      ],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "retrieve"
+    },
+    {
+      "id": "hol-22",
+      "split": "holdout",
+      "category": "withdrawn_graph_bridge",
+      "query": "Saffron boarding",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {
+        "maxHops": 2
+      },
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "craft",
+          "text": "Saffron craft carries crate Lumen.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:craft",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "Saffron craft carries crate Lumen.",
+            "sha256": "8768ad531d37daac5f754382bf140d630afbbfe6c27b68efbdcb6e8528c88c5a"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "entity:saffron",
+            "subjectType": "entity",
+            "subjectLabel": "Saffron craft",
+            "predicate": "carries",
+            "object": "Lumen",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null,
+            "objectId": "entity:lumen",
+            "objectType": "entity"
+          }
+        },
+        {
+          "key": "bridge",
+          "text": "Crate Lumen is stored in the Bramble shed.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:bridge",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "Crate Lumen is stored in the Bramble shed.",
+            "sha256": "73cd57e91f6d4268fa6fc472bff655a3ecddd008bd4d6af5cc19925619c9d0bc"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "entity:lumen",
+            "subjectType": "entity",
+            "subjectLabel": "Lumen crate",
+            "predicate": "stored_in",
+            "object": "Bramble shed",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null,
+            "objectId": "entity:bramble",
+            "objectType": "entity"
+          }
+        },
+        {
+          "key": "gate",
+          "text": "The shed gate opens with a triangular token.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-c:gate",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-c",
+            "originalText": "The shed gate opens with a triangular token.",
+            "sha256": "3890014f035c2024b3690cb7dc72fbee5934926dddd73af305812bc654259e36"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "entity:bramble",
+            "subjectType": "entity",
+            "subjectLabel": "Bramble shed",
+            "predicate": "access",
+            "object": "triangular token",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null
+          }
+        }
+      ],
+      "mutations": [
+        {
+          "type": "source_delete",
+          "key": "bridge"
+        }
+      ],
+      "expectedRelevant": [],
+      "allowedSupport": [
+        "craft"
+      ],
+      "forbiddenRecords": [
+        "bridge",
+        "gate"
+      ],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "no_answer"
+    },
+    {
+      "id": "hol-23",
+      "split": "holdout",
+      "category": "entity_constraint",
+      "query": "inspection",
+      "suggestions": [],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {
+        "entityIds": [
+          "machine:q6"
+        ]
+      },
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "q6",
+          "text": "Machine Q6 inspection recorded twelve cycles.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:q6",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "Machine Q6 inspection recorded twelve cycles.",
+            "sha256": "347172d8625eee799a7c2dd9a6a00922fef38683b6397d4c1ea86201297f3b8a"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "machine:q6",
+            "subjectType": "entity",
+            "subjectLabel": "Q6",
+            "predicate": "inspection",
+            "object": "twelve cycles",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null
+          }
+        },
+        {
+          "key": "r8",
+          "text": "Machine R8 inspection recorded two cycles.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:r8",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "Machine R8 inspection recorded two cycles.",
+            "sha256": "7711d717db534b629ad40b01ab39402b9c90f5837bc61f57fc5747cbb2f77c4c"
+          },
+          "updatedAt": 1700000001000,
+          "assertion": {
+            "version": 1,
+            "kind": "told",
+            "subjectId": "machine:r8",
+            "subjectType": "entity",
+            "subjectLabel": "R8",
+            "predicate": "inspection",
+            "object": "two cycles",
+            "eventTime": 1700000001000,
+            "assertedAt": 1700000001000,
+            "validFrom": null,
+            "validTo": null,
+            "reviewAfter": null
+          }
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [
+        "q6"
+      ],
+      "allowedSupport": [],
+      "forbiddenRecords": [
+        "r8"
+      ],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "retrieve"
+    },
+    {
+      "id": "hol-24",
+      "split": "holdout",
+      "category": "rewrite_request_cap",
+      "query": "retry queue",
+      "suggestions": [
+        "recovery",
+        "retrying",
+        "work queue",
+        "repetition"
+      ],
+      "suggestionProvenance": "synthetic_query_paraphrase_not_model_output",
+      "constraints": {},
+      "scope": {
+        "ownerId": "owner",
+        "spaceId": "private"
+      },
+      "limit": 4,
+      "maxChars": 9000,
+      "records": [
+        {
+          "key": "queue",
+          "text": "The retry queue needs a finite delay.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-a:queue",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-a",
+            "originalText": "The retry queue needs a finite delay.",
+            "sha256": "6a6723353b29f9aa52781b3edb569ceab5a233fffaa9d6cb5c24f9466faef71c"
+          },
+          "updatedAt": 1700000001000
+        },
+        {
+          "key": "other",
+          "text": "The orchard is quiet.",
+          "layer": "fact",
+          "source": {
+            "kind": "message",
+            "sourceId": "session-b:other",
+            "revision": 1,
+            "ownerId": "owner",
+            "spaceId": "private",
+            "sessionId": "session-b",
+            "originalText": "The orchard is quiet.",
+            "sha256": "3d9ca71c267f80d1a28a655acee19fedeae660f54236d1d84e58197fef1f8eec"
+          },
+          "updatedAt": 1700000001000
+        }
+      ],
+      "mutations": [],
+      "expectedRelevant": [],
+      "allowedSupport": [],
+      "forbiddenRecords": [],
+      "forbiddenText": [],
+      "zeroOriginalLexicalOverlap": false,
+      "expectation": "reject"
+    }
+  ]
+}

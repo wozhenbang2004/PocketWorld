@@ -16,6 +16,18 @@ public final class SkillQualityReceipt {
             .put("executionGeneration",pack.getLong("executionGeneration")).put("outcome",outcome).put("note",note.trim()).put("at",now).put("evidenceKind","owner_reviewed_original_reference_steps").put("automaticallyVerified",false).put("executionAuthorized",false);
         if(pack.optJSONObject("origin")!=null)value.put("originRef",new JSONObject(pack.getJSONObject("origin").getJSONObject("ref").toString()));return new SkillQualityReceipt(value);
     }
+    /** A repeat owner click preserves the stored judgement. It never binds an old judgement to
+     * a changed receipt, and never manufactures a missing result fingerprint for legacy rows. */
+    public static SkillQualityReceipt fromRecordedOriginal(JSONObject original,JSONObject saved)throws Exception {
+        JSONObject current=fromOriginal(original,saved.getString("outcome"),saved.getString("note"),saved.getLong("at")).snapshot();
+        for(String key:new String[]{"taskId","runId","operationId","ownerId","spaceId","skillId","revision","digest","outcome","note","at","evidenceKind"})
+            if(!String.valueOf(current.get(key)).equals(String.valueOf(saved.get(key))))throw new SecurityException("原主人归责不属于同一执行与版本");
+        if(!Boolean.FALSE.equals(saved.opt("automaticallyVerified"))||!Boolean.FALSE.equals(saved.opt("executionAuthorized")))throw new SecurityException("原主人归责不能自动验证或授予权限");
+        if(saved.has("executionGeneration")&&saved.getLong("executionGeneration")!=current.getLong("executionGeneration"))throw new SecurityException("原主人归责的执行版本已变化");
+        if(saved.has("originRef")&&(!current.has("originRef")||!SkillExecution.digestJson(saved.getJSONObject("originRef")).equals(SkillExecution.digestJson(current.getJSONObject("originRef")))))throw new SecurityException("原主人归责的方法来源已变化");
+        if(saved.has("originalReceiptFingerprint")&&!current.getString("originalReceiptFingerprint").equals(saved.getString("originalReceiptFingerprint")))throw new SecurityException("主人曾核对的原回执已变化，不能重新绑定旧判断");
+        return new SkillQualityReceipt(new JSONObject(saved.toString()));
+    }
     /** Caller must read original from TaskStore, not a feature-command payload. */
     public static SkillQualityReceipt fromOriginal(JSONObject original,String outcome,String note,long now)throws Exception {
         if(!java.util.Set.of("verified","skill_failed","verifier_rejected","environment","cancelled","model_error").contains(outcome))throw new IllegalArgumentException("请选择可归责的使用结果");
@@ -29,7 +41,7 @@ public final class SkillQualityReceipt {
         JSONObject value=new JSONObject().put("taskId",ref.getString("taskId")).put("runId",ref.getString("runId")).put("operationId",ref.getString("operationId"))
             .put("ownerId",ref.getString("ownerId")).put("spaceId",ref.getString("spaceId")).put("skillId",pack.getString("id")).put("revision",pack.getInt("revision"))
             .put("digest",pack.getString("digest")).put("executionGeneration",pack.optLong("executionGeneration",0)).put("outcome",outcome).put("note",note.trim()).put("at",now)
-            .put("evidenceKind","owner_reviewed_original_execution").put("automaticallyVerified",false).put("executionAuthorized",false);
+            .put("evidenceKind","owner_reviewed_original_execution").put("originalReceiptFingerprint",SkillExecution.digestJson(receipt)).put("automaticallyVerified",false).put("executionAuthorized",false);
         if(pack.optJSONObject("origin")!=null)value.put("originRef",new JSONObject(pack.getJSONObject("origin").getJSONObject("ref").toString()));
         return new SkillQualityReceipt(value);
     }

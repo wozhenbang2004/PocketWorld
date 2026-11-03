@@ -6,7 +6,6 @@ import android.content.Intent;
 import android.os.Bundle;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.displayhelper.DisplayTypedIntentNativeTest;
-import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.phone.display.DisplayModule;
 import dev.pocketengine.phone.observation.NativePhoneEntry;
 import org.json.JSONArray;
@@ -23,7 +22,6 @@ public final class SemanticBackgroundDisplayFixture {
     static final String SESSION="original-semantic-display";
     static int dispatches;static boolean entered,loseReply,wrongUser;static String targetPackage,targetComponent;
     static void reset(boolean lose,boolean wrong){dispatches=0;entered=false;loseReply=lose;wrongUser=wrong;targetPackage="";targetComponent="";}
-    @Implementation protected void __constructor__(FeatureContext ignored){}
     @Implementation protected boolean hasSession(){return true;}
     @Implementation protected boolean isConnected(){return true;}
     @Implementation protected JSONObject session()throws Exception{return new JSONObject().put("sessionId",SESSION).put("displayId",DISPLAY).put("sessionActive",true)
