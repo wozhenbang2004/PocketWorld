@@ -21,9 +21,12 @@ internal fun LearnedMethodApplicationsSheet(record: JSONObject, state: PocketUiS
     var cursor by remember(id, revision) { mutableStateOf("") }
     var error by remember(id, revision) { mutableStateOf<String?>(null) }
     var pageLimited by remember(id, revision) { mutableStateOf(false) }
+    var effectComparison by remember(id, revision) { mutableStateOf<JSONObject?>(null) }
+    var showEffectComparison by remember(id, revision) { mutableStateOf(false) }
     fun load(next: String) {
         if (request != null) return
         error = null
+        effectComparison = null
         request = controller.requestOwnerDomain("taskMemory", "readLearnedMethodApplications",
             JSONObject().put("recordId", id).put("revision", revision).put("cursor", next).put("limit", 20))
     }
@@ -39,12 +42,16 @@ internal fun LearnedMethodApplicationsSheet(record: JSONObject, state: PocketUiS
             val result = response.getJSONObject("result")
             require(result.getString("recordId") == id && result.getLong("recordRevision") == revision
                 && result.opt("executionAuthorized") == false)
+            val comparison = result.optJSONObject("effectComparison")
+            if (comparison != null) require(comparison.optString("format") == "pocketworld.method-effect-comparison.v1"
+                && comparison.opt("executionAuthorized") == false && comparison.opt("causalEffectVerified") == false)
             val found = result.getJSONArray("applications")
             rows = rows + (0 until found.length()).map { found.getJSONObject(it) }.filter { next ->
                 rows.none { it.optString("operationId") == next.optString("operationId") }
             }
             cursor = result.getString("nextCursor")
             pageLimited = result.optInt("readLimitedOperations") > 0 || !result.optBoolean("completeHistory")
+            effectComparison = comparison
         } catch (_: Exception) { error = "原方法版本或回执格式不可核对，未显示替代记录" }
     }
     ModalBottomSheet(onDismissRequest = close, containerColor = MaterialTheme.colorScheme.surface) {
@@ -54,6 +61,33 @@ internal fun LearnedMethodApplicationsSheet(record: JSONObject, state: PocketUiS
                 Text("方法的实际应用回执", style = MaterialTheme.typography.titleLarge)
                 Text("展示这个准确方法版本的原任务明确采用/未采用决定、关联步骤回执及派生脚本记录。采用决定与真实步骤关联不证明方法语义有效或导致业务成功；已提供、已加载或后端接受不计采用。",
                     style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 8.dp))
+                effectComparison?.let { comparison ->
+                    TextButton(onClick = { showEffectComparison = !showEffectComparison }) {
+                        Text(if (showEffectComparison) "收起本次读取的效果核对" else "查看本次读取的效果核对")
+                    }
+                    if (showEffectComparison) {
+                        Text("本次 ${comparison.optInt("scannedApplications")} 份原回执中，${comparison.optInt("eligibleApplications")} 次独立尝试可核对输入与已观察环境。",
+                            style = MaterialTheme.typography.bodySmall)
+                        val groups = comparison.getJSONArray("groups")
+                        for (groupIndex in 0 until groups.length()) {
+                            val methods = groups.getJSONObject(groupIndex).getJSONArray("methods")
+                            Text("输入与已观察环境相同的第 ${groupIndex + 1} 组", style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier.padding(top = 8.dp))
+                            for (methodIndex in 0 until methods.length()) {
+                                val method = methods.getJSONObject(methodIndex)
+                                Text("执行实现 ${methodIndex + 1}：${method.getInt("attempts")} 次尝试；主人确认结果 ${method.getInt("ownerVerifiedResults")} 次，判为方法问题 ${method.getInt("ownerAttributedMethodFailures")} 次、环境问题 ${method.getInt("ownerAttributedEnvironmentFailures")} 次。",
+                                    style = MaterialTheme.typography.bodySmall)
+                                Text("未核对 ${method.getInt("unreviewed")} 次，取消 ${method.getInt("cancelled")} 次，模型错误 ${method.getInt("modelErrors")} 次，旧反馈缺原结果指纹 ${method.optInt("unboundFeedback")} 次，反馈不可核对 ${method.getInt("invalidFeedback")} 次。",
+                                    style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        Text("证据不完整 ${comparison.optInt("excludedIncompleteEvidence")} 份，未实际采用 ${comparison.optInt("excludedUnapplied")} 份；重复或冲突记录不增加独立尝试数。",
+                            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+                        Text(if (comparison.optBoolean("completeHistory")) "已覆盖当前可读取的原回执；这些关联不证明因果收益，不会自动提高可信度或授予权限。"
+                            else "统计仅限本次读取，不能作为全部历史的成功率；这些关联不证明因果收益，不会自动提高可信度或授予权限。",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
             }
             items(rows, key = { it.getString("operationId") }) { row ->
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
