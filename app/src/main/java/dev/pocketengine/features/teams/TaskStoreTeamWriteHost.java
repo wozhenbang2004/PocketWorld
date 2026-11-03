@@ -31,7 +31,8 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
     @Override public void finishRead(JSONObject original,JSONObject receipt,boolean unknown)throws Exception{tasks.finishTeamNativeRead(original,receipt,unknown);}
     private Consumer<Runnable> parentCleanup;
     public void setParentCleanup(Consumer<Runnable> originalQueue){if(parentCleanup!=null)throw new SecurityException("原父协作停止队列已经接入");parentCleanup=java.util.Objects.requireNonNull(originalQueue);}
-    TeamParentHost parentHost(TeamCoordinator coordinator,CurrentModel model,TeamParentHost.Definitions definitions){if(parentCleanup==null)return null;return new TeamParentHost(tasks,workspace,coordinator,this,model,definitions,changed,parentCleanup);}
+    TeamParentHost parentHost(TeamCoordinator coordinator,CurrentModel model,TeamParentHost.Definitions definitions){return parentHost(coordinator,model,definitions,null);}
+    TeamParentHost parentHost(TeamCoordinator coordinator,CurrentModel model,TeamParentHost.Definitions definitions,dev.pocketengine.features.FeatureContext context){if(parentCleanup==null)return null;return new TeamParentHost(tasks,workspace,coordinator,this,model,definitions,changed,parentCleanup,context);}
     public void setRemoteProduction(TeamAssignmentHost.RemoteProduction production){assignments.setRemoteProduction(production);}
     public boolean remoteProductionConfigured(){return assignments.remoteProductionConfigured();}
     public TeamWriteScope captureScope(String parent,String parentRun,String project,JSONObject reviewedDefinition)throws Exception{return TeamWriteScope.capture(workspace,parent,parentRun,project,reviewedDefinition,assignments.remoteSelections());}

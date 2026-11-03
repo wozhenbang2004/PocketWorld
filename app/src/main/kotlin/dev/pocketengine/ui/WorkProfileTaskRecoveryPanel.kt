@@ -22,11 +22,14 @@ internal fun WorkProfileTaskRecoveryPanel(task: JSONObject, host: NativeWorkProf
     runWork: (Runnable) -> Unit, runControl: (Runnable) -> Unit,
     originalSnapshot: (String, String, Int) -> JSONObject,
     inspect: (NativeWorkProfileHost.Page, String, String, Int, RunControl) -> NativeWorkProfileHost.Review,
-    continueTask: (String, NativeWorkProfileHost.Selection, RunControl, (Result<JSONObject>) -> Unit) -> Unit) {
+    continueTask: (String, NativeWorkProfileHost.Selection, RunControl, (Result<JSONObject>) -> Unit) -> Unit,
+    reviewProject: (() -> dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection)? = null,
+    continueProject: ((String, NativeWorkProfileHost.Selection, RunControl, dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection, (Result<JSONObject>) -> Unit) -> Unit)? = null) {
     val id = task.getString("id")
     val run = task.optString("runId")
     val epoch = task.optInt("coordinatorEpoch")
     val scope = task.optJSONObject("executionScope")
+    val originalProject = task.optJSONObject("developmentContext")
     val page = remember(host, id, run, epoch, scope?.optLong("revision")) { host.newOwnerPage() }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val main = remember { Handler(Looper.getMainLooper()) }
@@ -41,6 +44,9 @@ internal fun WorkProfileTaskRecoveryPanel(task: JSONObject, host: NativeWorkProf
     var control by remember(page) { mutableStateOf<RunControl?>(null) }
     var consent by remember(review) { mutableStateOf(false) }
     var notice by remember(page) { mutableStateOf<String?>(null) }
+    var selectedProject by remember(page) { mutableStateOf<dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection?>(null) }
+    var selectedProjectView by remember(page) { mutableStateOf(JSONObject()) }
+
     val recoverable = task.optString("status") in setOf("queued", "paused", "awaiting_user", "needs_confirmation", "interrupted", "failed", "cancelled")
 
     DisposableEffect(page, lifecycle) {
@@ -68,7 +74,7 @@ internal fun WorkProfileTaskRecoveryPanel(task: JSONObject, host: NativeWorkProf
     fun begin() {
         val inspected = review ?: return
         val originalControl = control ?: return
-        if (busy || !foreground || !consent || scope == null || !recoverable || !WorkProfileDrafts.runnable(reviewed)) return
+        if (busy || !foreground || !consent || scope == null || !recoverable || !WorkProfileDrafts.runnable(reviewed, originalProject != null || selectedProject != null)) return
         busy = true; continuing = true; notice = null
         val complete: (Result<JSONObject>) -> Unit = { result -> main.post { if (alive) {
             busy = false; continuing = false; review = null; consent = false
@@ -76,7 +82,10 @@ internal fun WorkProfileTaskRecoveryPanel(task: JSONObject, host: NativeWorkProf
         } } }
         try { runWork(Runnable {
             runCatching { page.select(inspected, inspected.digest, originalControl) }.fold({ selected ->
-                try { continueTask(id, selected, originalControl, complete) } catch (unavailable: Exception) { complete(Result.failure(unavailable)) }
+                try { val project = selectedProject
+                    if (project != null && continueProject != null) continueProject(id, selected, originalControl, project, complete)
+                    else continueTask(id, selected, originalControl, complete)
+                } catch (unavailable: Exception) { complete(Result.failure(unavailable)) }
             }, { complete(Result.failure(it)) })
         }) } catch (unavailable: Exception) { complete(Result.failure(unavailable)) }
     }
@@ -119,12 +128,17 @@ internal fun WorkProfileTaskRecoveryPanel(task: JSONObject, host: NativeWorkProf
                     val item = items!!.getJSONObject(index)
                     Text("${item.optString("kind")} · ${item.optString("id")} · ${item.optString("status")}${if (item.optBoolean("optional") && !item.optBoolean("included")) "（明确省略可选项）" else ""}", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
                 }
-                if (!WorkProfileDrafts.runnable(reviewed)) Text("原配置含本入口尚未应用的字段或模型不完整。只保留引用，不静默忽略、改写原任务或替换模型。", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                if (originalProject == null && (task.optJSONArray("operations")?.length() ?: 0) == 0 && reviewProject != null) {
+                    TextButton(onClick = { work({ reviewProject().let { it to it.view() } }) { selectedProject = it.first; selectedProjectView = it.second; consent = false } }, enabled = !busy && foreground) { Text("原任务尚未关联项目：选择当前原项目副本") }
+                    if (selectedProject != null) Text("将关联原项目 ${selectedProjectView.optString("projectId")}；仅在本次原run仍为0动作时绑定，不增加预算。", style = MaterialTheme.typography.bodySmall)
+                }
+                originalProject?.let { Text("继续原项目 ${it.optString("projectId")} · ${it.optString("runtime")}；不更换副本或追加原预算。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk) }
+                if (!WorkProfileDrafts.runnable(reviewed, originalProject != null || selectedProject != null)) Text("原配置含本入口尚未应用的字段或模型不完整。只保留引用，不静默忽略、改写原任务或替换模型。", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(consent, { consent = it }, enabled = !busy && foreground && scope != null && recoverable)
                     Text("只继续这项原任务，保留原范围、累计预算与旧回执；新的外部效果仍逐项走原授权。", style = MaterialTheme.typography.bodySmall)
                 }
-                Button(onClick = { begin() }, enabled = !busy && foreground && scope != null && recoverable && consent && WorkProfileDrafts.runnable(reviewed), modifier = Modifier.heightIn(min = 48.dp).testTag("continue_original_work_profile_task")) { Text("明确继续这项原任务") }
+                Button(onClick = { begin() }, enabled = !busy && foreground && scope != null && recoverable && consent && WorkProfileDrafts.runnable(reviewed, originalProject != null || selectedProject != null), modifier = Modifier.heightIn(min = 48.dp).testTag("continue_original_work_profile_task")) { Text("明确继续这项原任务") }
             }
         }
     }

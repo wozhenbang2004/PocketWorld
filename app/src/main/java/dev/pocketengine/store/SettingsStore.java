@@ -365,6 +365,12 @@ public final class SettingsStore {
     public synchronized ModelConfig captureWorkProfileModel(ModelTargetRef ref,String purpose,String audience)throws Exception {
         requireConfirmed();if(ref==null)throw new IllegalArgumentException("工作配置必须引用准确模型");return captureModelTarget(ref,purpose,audience,getSelected());
     }
+    /** Native Profile startup fallback only: freeze the original selected exact binding without
+     * resolving unrelated global MAIN/SUMMARY aliases or creating a new default setting. */
+    public synchronized ModelConfig captureWorkProfileGlobalDefault()throws Exception {
+        requireConfirmed();ModelConfig original=getSelected();
+        return original.withPurposePlans(java.util.Map.of()).withRoutePlan(ModelRoutePlan.exact(original,"DEFAULT","APP_OWNER"));
+    }
     public synchronized JSONObject modelGroupsSnapshot()throws Exception {
         requireConfirmed();JSONObject root=modelGroupsDocument();return new JSONObject(root.toString());
     }

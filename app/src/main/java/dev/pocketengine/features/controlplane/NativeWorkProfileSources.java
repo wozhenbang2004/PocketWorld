@@ -36,6 +36,10 @@ public final class NativeWorkProfileSources implements WorkProfileResolver.Sourc
     @Override public ModelConfig model(ModelTargetRef reference, String purpose, RunControl observation) throws Exception {
         observation.check(); ModelConfig value = settings.captureWorkProfileModel(reference, purpose, "RELAY".equals(purpose) ? "EXTERNAL_RELAY" : "APP_OWNER"); checkModel(value, purpose, observation); observation.check(); return value;
     }
+    @Override public ModelConfig globalDefault(RunControl observation) throws Exception {
+        observation.check(); ModelConfig captured = settings.captureWorkProfileGlobalDefault();
+        checkModel(captured, "DEFAULT", observation); return captured;
+    }
     @Override public void checkModel(ModelConfig captured, String purpose, RunControl observation) throws Exception {
         observation.check();
         if (captured.routePlan == null) { requireCandidate(captured, observation); return; }
@@ -119,6 +123,16 @@ public final class NativeWorkProfileSources implements WorkProfileResolver.Sourc
             JSONObject data = plugins.extensionCatalogMetadata(observation); JSONArray rows = data.getJSONArray("plugins"), items = new JSONArray();
             for (int i = 0; i < rows.length(); i++) items.put(publicFields(rows.getJSONObject(i), "id", "name", "version", "installationId", "approvalRevision", "sourceSha256", "enabled", "approved"));
             return new JSONObject().put("items", items).put("revision", data.getLong("revision")).put("originalStore", "ExecutablePluginCatalog");
+        }, observation));
+        sections.put("teams", choiceSection(() -> {
+            EngineModule module=features.module("teams");if(!(module instanceof dev.pocketengine.features.teams.TeamsModule))throw new IllegalStateException("original_team_store_not_mounted");
+            JSONArray rows=module.snapshot().getJSONArray("teams"),items=new JSONArray();
+            for(int i=0;i<rows.length();i++){
+                JSONObject row=rows.getJSONObject(i);JSONArray members=new JSONArray(),actual=row.getJSONArray("members");
+                for(int m=0;m<actual.length();m++)members.put(publicFields(actual.getJSONObject(m),"id","name","runner","device","model","modelTarget"));
+                items.put(publicFields(row,"id","name").put("digest",WorkProfile.fingerprint(row)).put("members",members));
+            }
+            return new JSONObject().put("items",items).put("originalStore","TeamsModule");
         }, observation));
         if (accounts == null) sections.put("accounts", new JSONObject().put("available", false).put("reasonCode", "original_account_source_not_mounted"));
         else sections.put("accounts", choiceSection(() -> {

@@ -135,6 +135,7 @@ private fun RemoteOwnerDialog(taskId: String, controller: PocketWorldController,
         }
     }
     Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        val clipboardView = androidx.compose.ui.platform.LocalView.current
         Surface(Modifier.fillMaxSize(), color = androidx.compose.ui.graphics.Color.White) {
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("原电脑会话", fontSize = 21.sp, fontWeight = FontWeight.SemiBold); TextButton(onClick = close) { Text("返回") } }
@@ -180,7 +181,7 @@ private fun RemoteOwnerDialog(taskId: String, controller: PocketWorldController,
                     save = { id, path -> send("saveSnapshot", JSONObject().put("snapshotId", id).put("path", path)) },
                     openAttachment = controller::openAttachmentOutcome)
                 RemoteConversationResultPanel(snapshot, fresh && !busy, controller, ::send)
-                RemoteDraftPanel(snapshot, fresh && !busy, ::send)
+                RemoteDraftPanel(snapshot, fresh && !busy, clipboard = { draft, revision, mode -> controller.readRemoteDraftClipboard(snapshot, draft, revision, mode, clipboardView) }, send = ::send)
                 RemotePreviewPanel(snapshot, controller)
 
                 if (fresh && snapshot.optBoolean("canContinue")) {

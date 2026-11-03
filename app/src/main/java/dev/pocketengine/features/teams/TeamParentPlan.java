@@ -67,6 +67,19 @@ public final class TeamParentPlan {
             .put("expiresAt",Math.min(parent.getLong("expiresAt"),System.currentTimeMillis()+10*60_000L)).put("executionAuthorized",false).put("originalProjectWriteAuthorized",false).put("commandExecutionAvailable",false).put("osSandboxVerified",false);
         original.checkCurrent();return new TeamParentPlan(original,plan);
     }
+    /** The native source is bound to this exact opaque proposal. Generic team JSON still loses
+     * pins in AgentSlot.normalize; only this original plan includes them in its owner planHash. */
+    public static TeamParentPlan withWorkProfileModels(TeamParentPlan original,
+            dev.pocketengine.features.controlplane.NativeWorkProfileHost.MemberPlanModels source)throws Exception {
+        source.requirePlan(original);JSONObject plan=original.view(),definition=plan.getJSONObject("definition");
+        JSONArray members=definition.getJSONArray("members");
+        for(int i=0;i<members.length();i++){
+            JSONObject member=members.getJSONObject(i);TeamMemberModels.Selection selected=source.captureMember(member);
+            member.put("memberModelSelection",selected.publicIdentity()).put("model",selected.config.model);
+        }
+        definition.put("nativeWorkProfileModels",source.view());source.requirePlan(original);
+        return new TeamParentPlan(original.origin,plan);
+    }
     /** Workspace reads are outside SQL. Recheck every selected base before the atomic original start. */
     public static void checkBases(TeamWorkFiles.Workspace workspace,JSONObject plan)throws Exception {
         JSONObject source=plan.getJSONObject("sourceParent");JSONArray items=plan.getJSONArray("items");for(int i=0;i<items.length();i++){

@@ -372,20 +372,31 @@ public final class TeamCoordinator implements AutoCloseable {
     public synchronized void requireParentStartable()throws Exception{if(closed)throw new IllegalStateException("团队执行器已关闭");for(Run run:runs.values())if(active(run))throw new IllegalStateException("请先处理原团队的真实活动/暂停工作，不重复启动");}
     /** Exact native SQL start claim, same coordinator, worker pool and assignment lifecycle. */
     public synchronized JSONObject startParentPlan(dev.pocketengine.store.TaskStore.TeamParentStart approved,ModelConfig model,EvidenceFactory evidence,ExternalMemberFactory external)throws Exception{
-        approved.checkCurrent();JSONObject original=approved.view();return startSelected(original.getJSONObject("definition"),original.getString("goal"),1,model,original.getString("teamRunId"),evidence,external,TeamWriteScope.fromParentStart(approved),original.getJSONObject("workPlan"));
+        approved.checkCurrent();JSONObject original=approved.view();return startSelected(original.getJSONObject("definition"),original.getString("goal"),1,model,original.getString("teamRunId"),evidence,external,TeamWriteScope.fromParentStart(approved),original.getJSONObject("workPlan"),approved);
     }
     private JSONObject startSelected(JSONObject team,String goal,int rounds,ModelConfig config,String operationId,EvidenceFactory evidence,ExternalMemberFactory external,TeamWriteScope nativeScope)throws Exception{
         return startSelected(team,goal,rounds,config,operationId,evidence,external,nativeScope,null);
     }
     private JSONObject startSelected(JSONObject team,String goal,int rounds,ModelConfig config,String operationId,EvidenceFactory evidence,ExternalMemberFactory external,TeamWriteScope nativeScope,JSONObject initialWorkPlan)throws Exception{
+        return startSelected(team,goal,rounds,config,operationId,evidence,external,nativeScope,initialWorkPlan,null);
+    }
+    private JSONObject startSelected(JSONObject team,String goal,int rounds,ModelConfig config,String operationId,EvidenceFactory evidence,ExternalMemberFactory external,TeamWriteScope nativeScope,JSONObject initialWorkPlan,dev.pocketengine.store.TaskStore.TeamParentStart nativeStart)throws Exception{
         if(operationId==null||!operationId.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("operationId无效");if(runs.containsKey(operationId)||archived.containsKey(operationId))throw new IllegalStateException("此任务已存在，请读取原结果");
         if(closed)throw new IllegalStateException("团队执行器已关闭");for(Run run:runs.values())if(active(run))throw new IllegalStateException("已有团队任务运行或暂停，请先处理原任务");
         if(goal==null||goal.trim().isEmpty()||goal.length()>8000)throw new IllegalArgumentException("团队目标需为1至8000字");if(rounds<1||rounds>2)throw new IllegalArgumentException("讨论轮数为1或2");if(config==null||config.baseUrl.isEmpty()&&!config.usesAccount()||config.model.isEmpty())throw new IllegalStateException("请先配置模型");
+        boolean profilePins=nativeStart!=null&&team.optJSONObject("nativeWorkProfileModels")!=null;
+        if(profilePins)nativeStart.checkCurrent();java.util.Map<String,TeamMemberModels.Selection> capturedProfileModels=new java.util.HashMap<>();
         JSONArray supplied=team.getJSONArray("members");if(supplied.length()<1||supplied.length()>4)throw new IllegalArgumentException("团队需1至4名真实成员");JSONArray roster=new JSONArray();Set<String> ids=new java.util.HashSet<>();
         for(int i=0;i<supplied.length();i++){
             JSONObject slot=AgentSlot.normalize(supplied.getJSONObject(i),i);if(!ids.add(slot.getString("id")))throw new IllegalArgumentException("成员ID重复");
             String fallbackModel=slot.optString("runner","model").equals("model")?config.model:"";
             slot.put("modelInherited",!slot.has("model")&&!slot.has("modelTarget")).put("model",slot.optString("model",fallbackModel)).put("status","queued").put("text","").put("generation",0).put("paused",false).put("localSessionId",UUID.randomUUID().toString()).put("evidence",new JSONArray()).put("roundStates",new JSONArray());
+            if(profilePins){
+                JSONObject pin=supplied.getJSONObject(i).getJSONObject("memberModelSelection");
+                slot.put("memberModelSelection",new JSONObject(pin.toString()));
+                TeamMemberModels.Selection captured=TeamMemberModels.capture(slot,config,memberModelCapture);TeamMemberModels.requireSame(captured,pin);
+                capturedProfileModels.put(slot.getString("id")+":"+slot.optInt("identityRevision",1),captured);
+            }
             slot.put("availability",AgentSlot.availability(slot,external!=null));for(int round=1;round<=rounds;round++)slot.getJSONArray("roundStates").put(new JSONObject().put("round",round).put("status","queued"));roster.put(slot);
         }
         TeamWorkPlan.validate(roster);
@@ -395,7 +406,7 @@ public final class TeamCoordinator implements AutoCloseable {
         if(!mode.equals("produce")&&researchFactory!=null)json.put("researchExecutionFormat",RESEARCH_FORMAT).put("researchBudgetAutoRefill",false);
         if(nativeScope!=null)json.put("productionScope",nativeScope.snapshot());
         if(initialWorkPlan!=null){if(nativeScope==null||!operationId.equals(initialWorkPlan.getString("teamRunId")))throw new SecurityException("原父计划与原制作scope不匹配");TeamWorkItems.validate(initialWorkPlan.getJSONArray("items"),roster);json.put("workPlan",JsonFiles.copy(initialWorkPlan)).put("phase","work_items").put("callLimit",nativeScope.snapshot().getJSONObject("initialBudget").getInt("callLimit")).put("toolCallLimit",nativeScope.snapshot().getJSONObject("initialBudget").getInt("toolCallLimit")).put("externalTurnLimit",0);}
-if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateException("团队保留记录已满，原任务与待核对结果未删除；请先处理现有团队");makeRoom();Run run=new Run(json,new RunControl(),config,evidence,external);runs.put(operationId,run);try{if(budgetHost!=null)budgetHost.initialize(new InitialBudgetPlan(run));message(run,"*",0,"user","goal",redact(goal,config),null);activity(run,"created","团队任务已建立",null);board(run);appendParentEvent(run);persist();}catch(Exception failure){runs.remove(operationId);throw failure;}JSONObject accepted=JsonFiles.copy(json);schedule(run);return accepted;
+if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateException("团队保留记录已满，原任务与待核对结果未删除；请先处理现有团队");makeRoom();Run run=new Run(json,new RunControl(),config,evidence,external);run.modelSelections.putAll(capturedProfileModels);if(profilePins){nativeStart.checkCurrent();json.put("nativeWorkProfileModels",JsonFiles.copy(team.getJSONObject("nativeWorkProfileModels")));}runs.put(operationId,run);try{if(budgetHost!=null)budgetHost.initialize(new InitialBudgetPlan(run));message(run,"*",0,"user","goal",redact(goal,config),null);activity(run,"created","团队任务已建立",null);board(run);appendParentEvent(run);persist();}catch(Exception failure){runs.remove(operationId);throw failure;}JSONObject accepted=JsonFiles.copy(json);schedule(run);return accepted;
     }
     /** Native foreground budget source only. No model JSON can construct this review pin. */
     public static final class ResearchBudgetPlan {

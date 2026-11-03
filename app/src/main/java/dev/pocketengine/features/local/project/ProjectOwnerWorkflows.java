@@ -18,6 +18,39 @@ public final class ProjectOwnerWorkflows {
     public JSONObject continueTeamRound(dev.pocketengine.features.teams.TeamProjectRoundHost.Continuation original)throws Exception{RoundContinuationExecutor nativeHost=roundContinuationExecutor;if(nativeHost==null)throw new IllegalStateException("原native继续入口尚未挂载；没有新建run或更换预算");return nativeHost.resume(java.util.Objects.requireNonNull(original));}
     public JSONObject createProject(JSONObject input)throws Exception{return local.createProjectForOwner(input.getString("name"),input.getString("template"));}
     public JSONObject openProject(JSONObject input)throws Exception{return local.openProjectForOwner(input.getString("projectId"));}
+    /** Exact native owner selection for the existing Profile admission. Reading/exporting an
+     * already selected checkout creates no task, command, grant or alternate project registry. */
+    public ProfileProjectSelection reviewWorkProfileProject(String projectId,String checkoutId,String runtime)throws Exception {
+        String project=ProjectBuildPlan.identity(projectId),checkout=ProjectBuildPlan.identity(checkoutId);
+        local.projectRuntimeForHost(runtime);
+        JSONObject actual=ProjectSources.describe(local.handle("export",new JSONObject().put("checkoutId",checkout)));
+        if(!project.equals(actual.getString("projectId")))throw new SecurityException("原项目副本不属于所选项目");
+        JSONObject context=new JSONObject().put("format","pocketworld.development-context.v1")
+            .put("projectId",project).put("checkoutId",checkout).put("runtime",runtime)
+            .put("initialSourceDigest",actual.getString("sourceDigest")).put("clientMessageId",java.util.UUID.randomUUID().toString())
+            .put("filesAreUntrusted",true).put("authorityAdded",false);
+        return new ProfileProjectSelection(this,context);
+    }
+    public static final class ProfileProjectSelection {
+        private final ProjectOwnerWorkflows issuer;private final String context;private String boundTask;
+        private ProfileProjectSelection(ProjectOwnerWorkflows issuer,JSONObject context){this.issuer=issuer;this.context=context.toString();}
+        public void checkCurrent()throws Exception {
+            JSONObject selected=new JSONObject(context);issuer.local.projectRuntimeForHost(selected.getString("runtime"));
+            JSONObject actual=ProjectSources.describe(issuer.local.handle("export",new JSONObject().put("checkoutId",selected.getString("checkoutId"))));
+            if(!selected.getString("projectId").equals(actual.getString("projectId"))||!selected.getString("initialSourceDigest").equals(actual.getString("sourceDigest")))throw new SecurityException("原项目或源码已变化，请重新核对项目选择；没有启动");
+        }
+        public JSONObject view()throws Exception {checkCurrent();return new JSONObject(context).put("executionAuthorized",false).put("commandsAuthorized",false);}
+    }
+    public void requireWorkProfileProject(ProfileProjectSelection selected)throws Exception {
+        if(selected==null||selected.issuer!=this)throw new SecurityException("original_work_profile_project_selection_required");selected.checkCurrent();
+    }
+    /** One use, original preparing/zero-operation binding. The original SQL method remains the
+     * only authority and rejects changing an existing task's project or renewing its budget. */
+    public void bindWorkProfileProject(ProfileProjectSelection selected,JSONObject task,RunControl original)throws Exception {
+        requireWorkProfileProject(selected);original.check();
+        synchronized(selected){if(selected.boundTask!=null)throw new SecurityException("原项目选择已用于一项任务，请重新核对");selected.boundTask=task.getString("id");}
+        tasks.bindDevelopmentContext(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),original,new JSONObject(selected.context));
+    }
     public JSONObject start(JSONObject ownerInput)throws Exception {
         String checkout=ProjectBuildPlan.identity(ownerInput.getString("checkoutId")),project=ProjectBuildPlan.identity(ownerInput.getString("projectId"));
         String digest=ownerInput.getString("expectedSourceDigest"),client=ownerInput.getString("clientMessageId"),goal=ownerInput.getString("goal").trim();

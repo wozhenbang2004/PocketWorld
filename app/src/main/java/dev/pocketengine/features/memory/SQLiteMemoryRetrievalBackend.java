@@ -6,6 +6,10 @@ import android.database.sqlite.SQLiteException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 import java.util.List;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -65,7 +69,7 @@ public final class SQLiteMemoryRetrievalBackend implements MemoryRetrievalBacken
             StringBuilder match=new StringBuilder();for(String term:new LinkedHashSet<>(terms)){if(match.length()>0)match.append(" OR ");match.append('"').append(term.replace("\"","\"\"")).append('"');}
             sql="SELECT r.record_id,r.revision,r.updated_at"+("fts4".equals(mode)?",matchinfo(memory_fts,'pcnalx')":"")+" FROM memory_fts JOIN memory_refs r ON r.rowid=memory_fts.rowid WHERE memory_fts MATCH ? AND r.owner_id=? AND r.space_id=? ORDER BY "+("fts5".equals(mode)?"bm25(memory_fts), ":"")+"r.updated_at DESC LIMIT ?";
             // FTS4 must rank the whole bounded match set before taking the requested limit.
-            args=new String[]{match.toString(),owner,space,String.valueOf("fts4".equals(mode)?1000:limit)};
+            args=new String[]{match.toString(),owner,space,"1000"};
         }
         List<Match> result=new ArrayList<>();List<Scored> scored=new ArrayList<>();
         try(Cursor cursor=db.rawQuery(sql,args)){while(cursor.moveToNext()){
@@ -74,9 +78,27 @@ public final class SQLiteMemoryRetrievalBackend implements MemoryRetrievalBacken
         }}
         if(!scored.isEmpty()){
             scored.sort(Comparator.comparingDouble((Scored hit)->hit.score).reversed().thenComparing(Comparator.comparingLong((Scored hit)->hit.updatedAt).reversed()));
-            for(int i=0;i<Math.min(limit,scored.size());i++)result.add(scored.get(i).match);
+            for(int i=0;i<scored.size();i++)result.add(scored.get(i).match);
         }
-        return result;
+        if(normalized.isEmpty())return result;
+        // FTS whole-token candidates and the existing substring/CJK channel complement
+        // one another. Both stay scope-local, bounded by the original 1000 documents,
+        // and return identities only; MemoryBook still re-reads every formal hit.
+        return fuse(result,lexical.find(owner,space,normalized,1000),limit);
+    }
+    private static List<Match> fuse(List<Match> nativeHits,List<Match> lexicalHits,int limit){
+        Map<String,Double> scores=new LinkedHashMap<>();Map<String,Match> matches=new LinkedHashMap<>();Map<String,Integer> nativeRanks=new LinkedHashMap<>();
+        List<List<Match>> channels=List.of(nativeHits,lexicalHits);
+        for(int channel=0;channel<channels.size();channel++){
+            Set<String> seen=new HashSet<>();List<Match> hits=channels.get(channel);
+            for(int rank=0;rank<Math.min(1000,hits.size());rank++){
+                Match hit=hits.get(rank);String key=hit.id+'\0'+hit.revision;if(!seen.add(key))continue;
+                scores.merge(key,1d/(60+rank+1),Double::sum);matches.putIfAbsent(key,hit);if(channel==0)nativeRanks.put(key,rank);
+            }
+        }
+        List<String> ordered=new ArrayList<>(scores.keySet());ordered.sort(Comparator.<String>comparingDouble(scores::get).reversed()
+                .thenComparingInt(key->nativeRanks.getOrDefault(key,Integer.MAX_VALUE)).thenComparing(key->key));
+        List<Match> result=new ArrayList<>();for(int i=0;i<Math.min(limit,ordered.size());i++)result.add(matches.get(ordered.get(i)));return result;
     }
     private static String indexTerms(String text){
         String normalized=LexicalMemoryRetrievalBackend.normalize(text);List<String> terms=new ArrayList<>(LexicalMemoryRetrievalBackend.terms(normalized));
@@ -108,7 +130,7 @@ public final class SQLiteMemoryRetrievalBackend implements MemoryRetrievalBacken
     private static final class Scored{final Match match;final double score;final long updatedAt;Scored(Match match,double score,long updatedAt){this.match=match;this.score=score;this.updatedAt=updatedAt;}}
     private int count(String table){try(Cursor c=db.rawQuery("SELECT count(*) FROM "+table,null)){c.moveToFirst();return c.getInt(0);}}
     @Override public synchronized void invalidate(){checkOpen();generation="";indexedCount=0;lexical.invalidate();db.execSQL("DELETE FROM memory_fts");db.execSQL("DELETE FROM memory_refs");}
-    @Override public synchronized JSONObject status()throws Exception{return new JSONObject().put("backend","sqlite_"+mode).put("fts5",mode.equals("fts5")).put("fts4",mode.equals("fts4")).put("fts5Probed",fts5Probed).put("fallbackReason",mode.equals("fts4")?(fts5Probed?"fts5_probe_failed":"native_fts4_policy"):"").put("rank",mode.equals("fts5")?"sqlite_bm25":"bm25_from_matchinfo").put("indexedCount",indexedCount).put("indexAuthority",false).put("persisted",false).put("closed",closed);}
+    @Override public synchronized JSONObject status()throws Exception{return new JSONObject().put("backend","sqlite_"+mode).put("fts5",mode.equals("fts5")).put("fts4",mode.equals("fts4")).put("fts5Probed",fts5Probed).put("fallbackReason",mode.equals("fts4")?(fts5Probed?"fts5_probe_failed":"native_fts4_policy"):"").put("rank",mode.equals("fts5")?"sqlite_bm25":"bm25_from_matchinfo").put("rankScope","native_channel_before_fusion").put("candidateFusion","rrf_native_fts_lexical_v1").put("semantic",false).put("indexedCount",indexedCount).put("indexAuthority",false).put("persisted",false).put("closed",closed);}
     private void checkOpen(){if(closed)throw new IllegalStateException("派生检索索引已关闭");}
     @Override public synchronized void close(){if(!closed){closed=true;generation="";indexedCount=0;lexical.close();db.close();}}
 }

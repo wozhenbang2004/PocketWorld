@@ -11,13 +11,13 @@ import org.json.JSONObject;
  * No Agent loop, task store, scheduler or independent budget is introduced here. */
 public final class TeamParentHost {
     public interface Definitions {JSONObject get(String teamId)throws Exception;}
-    private final TaskStore tasks;private final TeamWorkFiles.Workspace workspace;private final TeamCoordinator coordinator;private final TaskStoreTeamWriteHost writes;private final TaskStoreTeamWriteHost.CurrentModel models;private final Definitions definitions;private final Consumer<String> changed;private final Consumer<Runnable> cleanup;
-    TeamParentHost(TaskStore tasks,TeamWorkFiles.Workspace workspace,TeamCoordinator coordinator,TaskStoreTeamWriteHost writes,TaskStoreTeamWriteHost.CurrentModel models,Definitions definitions,Consumer<String> changed,Consumer<Runnable> cleanup){this.tasks=tasks;this.workspace=workspace;this.coordinator=coordinator;this.writes=writes;this.models=models;this.definitions=definitions;this.changed=changed;this.cleanup=cleanup;}
+    private final TaskStore tasks;private final TeamWorkFiles.Workspace workspace;private final TeamCoordinator coordinator;private final TaskStoreTeamWriteHost writes;private final TaskStoreTeamWriteHost.CurrentModel models;private final Definitions definitions;private final Consumer<String> changed;private final Consumer<Runnable> cleanup;private final dev.pocketengine.features.FeatureContext context;
+    TeamParentHost(TaskStore tasks,TeamWorkFiles.Workspace workspace,TeamCoordinator coordinator,TaskStoreTeamWriteHost writes,TaskStoreTeamWriteHost.CurrentModel models,Definitions definitions,Consumer<String> changed,Consumer<Runnable> cleanup,dev.pocketengine.features.FeatureContext context){this.tasks=tasks;this.workspace=workspace;this.coordinator=coordinator;this.writes=writes;this.models=models;this.definitions=definitions;this.changed=changed;this.cleanup=cleanup;this.context=context;}
     public JSONObject execute(String task,String run,int epoch,String tool,String operation,JSONObject arguments,RunControl original)throws Exception {
         TaskStore.TeamParentOrigin source=tasks.teamParentOrigin(task,run,epoch,tool,operation,arguments,original);
         JSONObject result;
         switch(tool){
-            case "teams_plan":{JSONObject selected=definitions.get(arguments.getString("teamId"));TeamParentPlan captured=TeamParentPlan.capture(source,workspace,selected,arguments);result=tasks.recordTeamParentPlan(source,captured);break;}
+            case "teams_plan":{JSONObject selected=definitions.get(arguments.getString("teamId"));TeamParentPlan captured=TeamParentPlan.capture(source,workspace,selected,arguments);if(context!=null&&context.teamProfileModels()!=null)captured=context.teamProfileModels().plan(captured,original);result=tasks.recordTeamParentPlan(source,captured);break;}
             case "teams_start":result=start(source,arguments,original);break;
             case "teams_get":result=read(source,arguments,original,false);break;
             case "teams_wait":result=read(source,arguments,original,true);break;
@@ -30,12 +30,16 @@ public final class TeamParentHost {
         // is not a failed phone operation, nor proof that the team's business goal is complete.
         if(!result.has("ok"))result.put("ok",true);return result;
     }
+    private ModelConfig parentStartModel(TaskStore.TeamParentStart approved,RunControl original)throws Exception {
+        ModelConfig captured=context==null||context.teamProfileModels()==null?null:context.teamProfileModels().start(approved,original);
+        return captured==null?models.get():captured;
+    }
     private JSONObject start(TaskStore.TeamParentOrigin source,JSONObject args,RunControl original)throws Exception {
         JSONObject row=tasks.teamParentPlan(source,args.getString("planRef"),args.getString("planHash")),plan=row.getJSONObject("plan");
         if(row.has("teamRunId"))return status(source,row.getString("teamRunId")).put("knownPlan",true).put("queryOnly",true);
         coordinator.requireParentStartable();if(!plan.getString("selectedDefinitionHash").equals(TaskStore.capabilityFingerprint(definitions.get(plan.getJSONObject("definition").getString("id")))))throw new SecurityException("原成员配置已经变化，旧提案不可启动");TeamParentPlan.checkBases(workspace,plan);
         TaskStore.TeamParentStart approved=tasks.claimTeamParentStart(source,args.getString("planRef"),args.getString("planHash"));if(!approved.dispatch()){JSONObject receipt=approved.view();return receipt.has("teamRunId")?status(source,receipt.getString("teamRunId")).put("knownPlan",true).put("queryOnly",true):receipt;}
-        JSONObject actual=coordinator.startParentPlan(approved,models.get(),null,null);tasks.completeTeamParentStart(approved,actual);String originalTeam=actual.getString("id");original.onCancel(()->{try{cleanup.accept(()->{try{writes.cancel(originalTeam);coordinator.cancel(originalTeam);changed.accept(originalTeam);}catch(Exception ignored){}});}catch(RuntimeException queueUnavailable){/* Original task cancellation still revokes all child SQL/currentness gates; native stop remains queryable. */}});changed.accept(originalTeam);return status(source,actual.getString("id")).put("planRef",args.getString("planRef")).put("planHash",args.getString("planHash")).put("started",true).put("businessVerified",false);
+        JSONObject actual=coordinator.startParentPlan(approved,parentStartModel(approved,original),null,null);tasks.completeTeamParentStart(approved,actual);String originalTeam=actual.getString("id");original.onCancel(()->{try{cleanup.accept(()->{try{writes.cancel(originalTeam);coordinator.cancel(originalTeam);changed.accept(originalTeam);}catch(Exception ignored){}});}catch(RuntimeException queueUnavailable){/* Original task cancellation still revokes all child SQL/currentness gates; native stop remains queryable. */}});changed.accept(originalTeam);return status(source,actual.getString("id")).put("planRef",args.getString("planRef")).put("planHash",args.getString("planHash")).put("started",true).put("businessVerified",false);
     }
     private JSONObject status(TaskStore.TeamParentOrigin source,String id)throws Exception {
         JSONObject task=tasks.teamParentAccess(source,id,false),run=coordinator.get(id),state=tasks.teamParentExecutionState(source,id),nativeState=coordinator.parentExecutorState(id);

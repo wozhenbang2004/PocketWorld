@@ -19,6 +19,11 @@ public final class LocalWorkbenchGuardTest {
             try{LocalWorkbenchGuard.importPayload(invalid);fail("Incomplete review accepted");}catch(IllegalArgumentException expected){}
         }
     }
+    @Test public void binaryReviewCannotFallBackToTheOldTextSubmissionShape()throws Exception {
+        JSONObject binary=review().put("format",dev.pocketengine.features.local.project.ProjectBinaryImport.REVIEW).put("textDiff",false);
+        assertThrows(IllegalArgumentException.class,()->LocalWorkbenchGuard.importPayload(binary));
+        assertEquals(4,LocalWorkbenchGuard.importPayload(review()).length());
+    }
     @Test public void argumentsAreLiteralLinesNotShellSyntax()throws Exception {
         JSONArray argv=LocalWorkbenchGuard.argv("python3","main file.py\n$(touch never)\n");assertEquals(3,argv.length());assertEquals("main file.py",argv.getString(1));assertEquals("$(touch never)",argv.getString(2));
     }

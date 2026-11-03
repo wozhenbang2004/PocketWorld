@@ -277,7 +277,16 @@ public final class ModelGateway {
             }catch(Exception refused){if(refused instanceof InterruptedException)throw refused;rejection=refused;rows.getJSONObject(i).put("exclusion",refused instanceof ModelRequestPolicy.Rejected?((ModelRequestPolicy.Rejected)refused).code:refused instanceof SecurityException?"origin_or_audience_denied":"candidate_capability_unavailable");}
         }
         String logical=java.util.UUID.randomUUID().toString();int maximum=plan.maxAttempts;
-        if(authority!=null){String digest=nativeDigest==null?requestDigest(messages,tools):nativeDigest;JSONObject admitted=authority.begin(logical,digest,snapshot,deadline);deadline=admitted.getLong("deadlineAt");maximum=admitted.getJSONObject("control").getInt("maxAttempts");}
+        String resourceOwner=null;int inheritedResourceLimit=Integer.MAX_VALUE;
+        if(authority!=null){String digest=nativeDigest==null?requestDigest(messages,tools):nativeDigest;JSONObject admitted=authority.begin(logical,digest,snapshot,deadline);deadline=admitted.getLong("deadlineAt");maximum=admitted.getJSONObject("control").getInt("maxAttempts");
+            if(admitted.has("modelResourceScope")){
+                if(!(admitted.opt("modelResourceScope") instanceof JSONObject))throw new SecurityException("original_native_model_resource_scope_required");
+                JSONObject resources=admitted.getJSONObject("modelResourceScope");
+                String owner=resources.getString("ownerTaskId");Object raw=resources.get("maxConcurrentModelCalls");
+                if(!owner.equals(admitted.getString("budgetOwnerRef"))||!owner.matches("[a-f0-9-]{36}")||!(raw instanceof Integer||raw instanceof Long)||((Number)raw).longValue()<1||((Number)raw).longValue()>2)throw new SecurityException("original_native_model_resource_scope_required");
+                resourceOwner=owner;inheritedResourceLimit=((Number)raw).intValue();
+            }
+        }
         if(eligible.isEmpty()){
             physical.rejected(logical,config);
             if(authority!=null)authority.finish(logical,"FAILED","failed","none");if(rejection!=null)throw controlled(rejection,authority!=null);throw new GatewayException("模型组没有可用候选；请在模型页核对原连接和用途。没有回退到其他账号。");
@@ -286,8 +295,8 @@ public final class ModelGateway {
         try { for(int attempt=1;attempt<=maximum;attempt++){
             control.check();if(System.currentTimeMillis()>=deadline){if(authority!=null)authority.finish(logical,"FAILED","unknown","none");throw controlled(localFailure("模型请求总期限已到，等待与重试没有重置期限。",InferenceFailure.Kind.TIMEOUT),authority!=null);}
             ModelRoutePlan.Candidate chosen=eligible.get(candidateIndex);ModelConfig selected=chosen.config();
-            RunControl.HostRunIdentity originalRun=control.hostRunIdentity();String originalTask=originalRun==null?target.context.taskId:originalRun.taskId();
-            ModelCallAdmission.Permit permit=MODEL_CALLS.enter(control,originalTask,deadline);InferenceCapture capture;
+            RunControl.HostRunIdentity originalRun=control.hostRunIdentity();String originalTask=resourceOwner!=null?resourceOwner:originalRun==null?target.context.taskId:originalRun.taskId();
+            ModelCallAdmission.Permit permit=MODEL_CALLS.enter(control,originalTask,deadline,inheritedResourceLimit);InferenceCapture capture;
             try{checkGroup(plan,chosen);preflight.check(selected);capture=new InferenceCapture(selected,control,InferenceCapture.withAdmission(target,()->checkGroup(plan,chosen)));capture.limitDeadlineAt(deadline);
                 if(authority!=null){capture.logical(logical,attempt,chosen.candidateId(),plan.requestedAlias,ingress,retryReason,deadline);authority.reserve(logical,capture.callId,attempt,chosen.candidateId(),retryReason);}
             }catch(Exception|Error refused){permit.close();throw refused;}

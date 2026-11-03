@@ -7,12 +7,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketengine.features.remote.RemoteInputDelivery
+import dev.pocketengine.features.remote.RemoteDraftClipboard
 import java.util.UUID
 import org.json.JSONObject
 
 /** Durable local intent, not an automatic future job or a claim of provider consumption. */
 @Composable
 internal fun RemoteDraftPanel(snapshot: JSONObject, enabled: Boolean, send: (String, JSONObject) -> Unit) {
+    RemoteDraftPanel(snapshot, enabled, clipboard = null, send = send)
+}
+
+/** Existing callers keep their no-clipboard ABI; only the explicit native owner
+ * caller supplies a one-use reader. No ambient clipboard access is introduced. */
+@Composable
+internal fun RemoteDraftPanel(snapshot: JSONObject, enabled: Boolean, clipboard: ((String, Long, String) -> String)?, send: (String, JSONObject) -> Unit) {
     if (snapshot.optBoolean("teamRemoteWriter")) return
     val taskId=snapshot.optString("taskId"); val source=snapshot.optJSONObject("source")?:return
     if (source.optString("protocol") !in setOf("codex_app_server","claude_stream_json","pi_rpc_v1")) return
@@ -27,6 +35,7 @@ internal fun RemoteDraftPanel(snapshot: JSONObject, enabled: Boolean, send: (Str
     var text by remember(taskId) { mutableStateOf("") }
     var mode by remember(taskId) { mutableStateOf("next_turn") }
     var notice by remember(taskId) { mutableStateOf<String?>(null) }
+    var clipboardReviewUsed by remember(taskId) { mutableStateOf<String?>(null) }
     val selected=drafts.find { it.optString("id")==id }
     LaunchedEffect(selected?.optLong("revision")) { if(selected!=null)revision=selected.optLong("revision") }
     val editable=selected==null||selected.optString("state") in setOf("draft","queued")
@@ -50,6 +59,23 @@ internal fun RemoteDraftPanel(snapshot: JSONObject, enabled: Boolean, send: (Str
         Row { RadioButton(mode=="next_turn",{if(editable&&selected==null)mode="next_turn"},enabled=editable&&selected==null); Text("下一轮：原会话核对终态后明确续接；Pi仅无工具对话",fontSize=14.sp,modifier=Modifier.padding(top=12.dp)) }
         if(source.optString("protocol")=="codex_app_server")Row { RadioButton(mode=="steer",{if(editable&&selected==null)mode="steer"},enabled=editable&&selected==null); Text("当前Codex turn补充：准确turn不变才可发送",fontSize=14.sp,modifier=Modifier.padding(top=12.dp)) }
         OutlinedTextField(text,{if(it.length<=12000){text=it;notice=null}},enabled=editable&&enabled,label={Text("给这个原会话的要求")},minLines=2,maxLines=6,modifier=Modifier.fillMaxWidth())
+        if(clipboard!=null&&editable) {
+            val readId=id;val readRevision=revision;val readMode=mode;val readReview=snapshot.optString("reviewId")
+            val cursorCurrent=if(selected==null)revision==0L else revision==selected.optLong("revision")&&mode==selected.optString("mode")
+            key(readReview,readId,readRevision,readMode) {
+                OutlinedButton(onClick={
+                    if(id!=readId||revision!=readRevision||mode!=readMode||clipboardReviewUsed==readReview){notice=RemoteDraftClipboard.Reason.TARGET.message;return@OutlinedButton}
+                    val before=text;clipboardReviewUsed=readReview
+                    try {
+                        val imported=clipboard(readId,readRevision,readMode)
+                        if(id!=readId||revision!=readRevision||mode!=readMode||text!=before){notice=RemoteDraftClipboard.Reason.TARGET.message;return@OutlinedButton}
+                        text=RemoteDraftClipboard.append(before,imported);notice="已追加到本机编辑器；尚未保存或发送，请先核对文字。"
+                    } catch(safe: RemoteDraftClipboard.Failure){notice=safe.reason.message}
+                    catch(_: Exception){notice=RemoteDraftClipboard.Reason.UNAVAILABLE.message}
+                },enabled=enabled&&cursorCurrent&&delivery.optBoolean("protocolEvidenceReported")&&readReview.isNotEmpty()&&clipboardReviewUsed!=readReview){Text("追加本机剪贴板一次（仅填草稿）")}
+            }
+            Text(if(clipboardReviewUsed==readReview)"本次原审阅已使用一次读取；再次读取需先查询原任务。" else "仅明确点击时读取本机纯文本；不继承剪贴板同步权限，不覆盖原编辑，也不自动保存或发送。",fontSize=13.sp)
+        }
         if(editable) Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick={send("saveDraft",JSONObject().put("draftId",id).put("draftRevision",revision).put("mode",mode).put("text",text).put("queued",false))},enabled=enabled&&targetReady&&text.isNotBlank()){Text("保存草稿")}
             Button(onClick={send("saveDraft",JSONObject().put("draftId",id).put("draftRevision",revision).put("mode",mode).put("text",text).put("queued",true))},enabled=enabled&&targetReady&&text.isNotBlank()){Text("保存并排队")}

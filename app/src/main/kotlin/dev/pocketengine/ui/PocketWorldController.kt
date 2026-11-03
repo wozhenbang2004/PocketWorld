@@ -676,12 +676,34 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             complete(if (failure != null) Result.failure(failure) else if (value != null) Result.success(value) else Result.failure(IllegalStateException("原工作配置任务回执缺失")))
         }
     }
+    fun reviewWorkProfileProject(): dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection {
+        check(!closed && privateWorkspaceView()) { "请先在原私人项目工作台选择项目副本" }
+        val project = state.projectId ?: throw IllegalStateException("请先打开原项目工作台，再回到工作配置选择这份副本")
+        val checkout = projectWorkbench.checkout(project) ?: throw IllegalStateException("请选择原项目的真实副本")
+        return app.reviewOwnerWorkProfileProject(project, checkout, projectWorkbench.agent(checkout).runtimeId.value)
+    }
+    fun startOwnerWorkProfileProject(goal: String, selected: dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection,
+        control: dev.pocketengine.core.RunControl, project: dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection,
+        complete: (Result<JSONObject>) -> Unit) {
+        check(!closed)
+        app.runOwnerWorkProfileAsync(goal, "", null, null, selected, control, project) { value, failure ->
+            complete(if (failure != null) Result.failure(failure) else if (value != null) Result.success(value) else Result.failure(IllegalStateException("原项目工作配置任务回执缺失")))
+        }
+    }
     fun reviewOriginalTaskWorkProfile(page: dev.pocketengine.features.controlplane.NativeWorkProfileHost.Page, id: String, run: String, epoch: Int, control: dev.pocketengine.core.RunControl): dev.pocketengine.features.controlplane.NativeWorkProfileHost.Review = page.reviewForTask(app.tasks, id, run, epoch, control)
     fun originalTaskWorkProfileSnapshot(id: String, run: String, epoch: Int): JSONObject = if (run.isEmpty()) app.tasks.pendingWorkProfileTaskSnapshot(id) else app.tasks.workProfileRunSnapshot(id, run, epoch)
     fun continueOwnerWorkProfile(id: String, selected: dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection, control: dev.pocketengine.core.RunControl, complete: (Result<JSONObject>) -> Unit) {
         check(!closed)
         app.continueOwnerWorkProfileAsync(id, selected, control) { value, failure ->
             complete(if (failure != null) Result.failure(failure) else if (value != null) Result.success(value) else Result.failure(IllegalStateException("原工作配置任务回执缺失")))
+        }
+    }
+    fun continueOwnerWorkProfileProject(id: String, selected: dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection,
+        control: dev.pocketengine.core.RunControl, project: dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection,
+        complete: (Result<JSONObject>) -> Unit) {
+        check(!closed)
+        app.continueOwnerWorkProfileAsync(id, selected, control, project) { value, failure ->
+            complete(if (failure != null) Result.failure(failure) else if (value != null) Result.success(value) else Result.failure(IllegalStateException("原项目工作配置继续回执缺失")))
         }
     }
     fun nativeModelConnections(): dev.pocketengine.runtime.models.ModelConnectionService? = app.modelConnections
@@ -973,6 +995,16 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val window = remoteOwnerWindow ?: throw IllegalStateException("请重新打开原电脑任务审阅页")
         val task = remoteOwnerTask ?: throw IllegalStateException("没有原任务身份")
         return requestOwnerDomain("remoteTask", command, JSONObject(payload.toString()).put("windowId", window).put("taskId", task))
+    }
+    /** Explicit native UI read only; text never enters owner event/log/response maps. */
+    fun readRemoteDraftClipboard(snapshot: JSONObject, draft: String, revision: Long, mode: String, focused: android.view.View): String {
+        val window = remoteOwnerWindow ?: throw dev.pocketengine.features.remote.RemoteDraftClipboard.targetFailure()
+        val task = remoteOwnerTask ?: throw dev.pocketengine.features.remote.RemoteDraftClipboard.targetFailure()
+        if (snapshot.optString("windowId") != window || snapshot.optString("taskId") != task) throw dev.pocketengine.features.remote.RemoteDraftClipboard.targetFailure()
+        val host = app.remoteOwnerWorkflows ?: throw dev.pocketengine.features.remote.RemoteDraftClipboard.targetFailure()
+        val target = JSONObject().put("windowId", window).put("taskId", task).put("reviewId", snapshot.getString("reviewId"))
+            .put("draftId", draft).put("draftRevision", revision).put("mode", mode)
+        return host.clipboardDraftText(activity, target) { approval -> dev.pocketengine.features.remote.RemoteDraftClipboard.read(activity, focused, approval) }
     }
     private fun cancelOwnerControl(request: OwnerRequest) {
         if (request.domain == "memoryReview" && request.command == "proposeConsolidation" || request.domain == "learning" && request.command in setOf("proposeLearning", "runLearningJob")) {

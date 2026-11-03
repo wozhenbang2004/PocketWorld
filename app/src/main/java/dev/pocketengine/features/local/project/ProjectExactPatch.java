@@ -14,6 +14,7 @@ public final class ProjectExactPatch {
     private ProjectExactPatch() {}
     public static JSONArray prepare(JSONObject snapshot,JSONArray edits)throws Exception {
         if(edits.length()<1||edits.length()>MAX_FILES)throw new IllegalArgumentException("一次精确补丁需1至8个文件");
+        for(int i=0;i<edits.length();i++)if("move".equals(edits.getJSONObject(i).optString("action"))){if(edits.length()!=1)throw new IllegalArgumentException("move须独占一次原补丁，不混合其他修改");return ProjectFileMove.prepare(snapshot,edits.getJSONObject(i));}
         Map<String,String> text=ProjectSources.files(snapshot);Map<String,byte[]> all=ProjectSources.byteFiles(snapshot);Map<String,JSONObject> prepared=new TreeMap<>();
         for(int i=0;i<edits.length();i++){
             JSONObject edit=edits.getJSONObject(i);String path=VersionedWorkspace.path(edit.getString("path")),action=edit.optString("action","replace");
@@ -70,7 +71,7 @@ public final class ProjectExactPatch {
         if(!receipt.optBoolean("receiptReceived")||!Set.of("completed","failed").contains(receipt.optString("status")))throw new SecurityException("撤销需原确定文件回执；unknown保留原操作核对，不自动反向");
     }
     public static JSONArray reverse(JSONObject snapshot,JSONArray original,JSONObject receipt,String originalOperation)throws Exception {
-        requireSettledReceipt(receipt);
+        requireSettledReceipt(receipt);if(ProjectFileMove.any(original))return ProjectFileMove.reverse(snapshot,original,receipt,originalOperation);
         JSONArray observed=receipt.getJSONArray("files");if(original.length()!=observed.length())throw new SecurityException("原文件回执不完整");Map<String,byte[]> current=ProjectSources.byteFiles(snapshot);JSONArray result=new JSONArray();Set<String> paths=new java.util.HashSet<>();
         for(int i=0;i<original.length();i++){
             JSONObject file=original.getJSONObject(i),actual=observed.getJSONObject(i);String path=file.getString("path"),after=file.getString("afterHash"),state=actual.getString("state");
@@ -93,7 +94,7 @@ public final class ProjectExactPatch {
     }
     static boolean encodedBytes(JSONObject file){return file.has("encoding")||file.has("bytePatchContract")||file.has("beforeContentBase64")||file.has("contentBase64");}
     /** Strict native payload decoding, not a write or scope grant. Legacy UTF8 rows are unchanged.
-     * Encoded rows must be a reviewed exact hex window or a native source-bound copy. */
-    public static byte[] payloadBytes(JSONObject file,boolean before)throws Exception{return encodedBytes(file)?(ProjectByteCopy.matches(file)?ProjectByteCopy.validated(file):ProjectHexOverwrite.validated(file))[before?0:1]:encode(file.getString(before?"beforeContent":"content"));}
+     * Encoded rows must be a reviewed exact hex window, native source-bound copy or paired rename. */
+    public static byte[] payloadBytes(JSONObject file,boolean before)throws Exception{return encodedBytes(file)?(ProjectFileMove.matches(file)?ProjectFileMove.bytes(file):ProjectByteCopy.matches(file)?ProjectByteCopy.validated(file):ProjectHexOverwrite.validated(file))[before?0:1]:encode(file.getString(before?"beforeContent":"content"));}
     public static byte[] encode(String value)throws Exception {if(value.indexOf('\0')>=0)throw new IllegalArgumentException("文字补丁不能包含空字节");var encoded=StandardCharsets.UTF_8.newEncoder().encode(java.nio.CharBuffer.wrap(value));byte[] bytes=new byte[encoded.remaining()];encoded.get(bytes);return bytes;}
 }

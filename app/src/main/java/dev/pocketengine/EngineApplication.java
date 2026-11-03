@@ -257,25 +257,39 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(task.optJSONObject("workProfileRef")==null){if(selected!=null)throw new SecurityException("工作配置尚未绑定原run");return null;}
         if(original==null)throw new SecurityException("请在原任务工作配置页查看或恢复；没有构造新的默认控制器");String id=task.getString("id"),run=task.getString("runId");int epoch=task.getInt("coordinatorEpoch");
         if(selected==null)return nativeWorkProfiles().toolSelectionForRun(tasks,id,run,epoch,original);
-        selected.requireBoundRun(id,run,epoch,original);String digest=selected.snapshot().getString("resolutionDigest");return new dev.pocketengine.features.controlplane.WorkProfileToolSelection(selected,id,run,epoch,original,()->tasks.checkWorkProfileRun(id,run,epoch,digest,original));
+        selected.requireBoundRun(id,run,epoch,original);String digest=selected.snapshot().getString("resolutionDigest");return new dev.pocketengine.features.controlplane.WorkProfileToolSelection(selected,id,run,epoch,original,()->tasks.checkWorkProfileRun(id,run,epoch,digest,original),()->tasks.checkWorkProfileCapabilityBinding(id,run,epoch,digest,original),(tool,operation,args,supplied)->tasks.checkWorkProfilePreparedTool(id,run,epoch,digest,tool,operation,args,supplied));
     }
     private ModelConfig nativeWorkProfileModel(dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection selected,RunControl original)throws Exception {
-        nativeWorkProfiles().requireOwnedSelection(selected,original);JSONObject definition=selected.profile().toJson(),policies=definition.getJSONObject("modelPolicies");java.util.Iterator<String> names=policies.keys();while(names.hasNext()){String purpose=names.next();if(!java.util.Set.of("MAIN","SUMMARY","RELAY").contains(purpose))throw new SecurityException("work_profile_role_not_applied_in_native_single_run:"+purpose);}
+        return nativeWorkProfileModel(selected,original,false);
+    }
+    private ModelConfig nativeWorkProfileModel(dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection selected,RunControl original,boolean projectSelected)throws Exception {
+        nativeWorkProfiles().requireOwnedSelection(selected,original);JSONObject definition=selected.profile().toJson(),policies=definition.getJSONObject("modelPolicies");java.util.Iterator<String> names=policies.keys();while(names.hasNext()){String purpose=names.next();if(!java.util.Set.of("MAIN","SUMMARY","RELAY").contains(purpose)&&!(projectSelected&&(purpose.equals("MEMBER")||purpose.startsWith("MEMBER."))))throw new SecurityException("work_profile_role_requires_original_project_selection:"+purpose);}
         JSONObject resources=definition.getJSONObject("resourcePreferences");if(resources.has("maxConcurrentModelCalls"))original.restrictModelConcurrency(resources.getInt("maxConcurrentModelCalls"));
-        JSONArray items=selected.snapshot().getJSONArray("items");for(int i=0;i<items.length();i++){JSONObject item=items.getJSONObject(i);String kind=item.getString("kind");if(item.getBoolean("included")&&(kind.equals("team")||kind.startsWith("target:")))throw new SecurityException("work_profile_configuration_not_applied_in_native_single_run:"+kind);}
+        JSONArray items=selected.snapshot().getJSONArray("items");for(int i=0;i<items.length();i++){JSONObject item=items.getJSONObject(i);String kind=item.getString("kind");if(item.getBoolean("included")&&((kind.equals("team")&&!projectSelected)||kind.startsWith("target:")))throw new SecurityException("work_profile_configuration_not_applied_in_native_single_run:"+kind);}
         var captured=selected.models();ModelConfig main=captured.get("MAIN"),summary=captured.get("SUMMARY");if(main==null||summary==null)throw new SecurityException("work_profile_precise_MAIN_SUMMARY_required");
-        java.util.Map<String,dev.pocketengine.runtime.models.ModelRoutePlan> purposes=new java.util.HashMap<>(main.purposePlans);purposes.put("SUMMARY",summary.routePlan==null?dev.pocketengine.runtime.models.ModelRoutePlan.exact(summary,"SUMMARY","APP_OWNER"):summary.routePlan);purposes.put("DEFAULT",dev.pocketengine.runtime.models.ModelRoutePlan.exact(main,"DEFAULT","APP_OWNER"));return main.withPurposePlans(purposes);
+        java.util.Map<String,dev.pocketengine.runtime.models.ModelRoutePlan> purposes=new java.util.HashMap<>(main.purposePlans);purposes.put("SUMMARY",summary.routePlan==null?dev.pocketengine.runtime.models.ModelRoutePlan.exact(summary,"SUMMARY","APP_OWNER"):summary.routePlan);ModelConfig startup=captured.get("_GLOBAL");purposes.put("DEFAULT",startup==null?dev.pocketengine.runtime.models.ModelRoutePlan.exact(main,"DEFAULT","APP_OWNER"):startup.routePlan);return main.withPurposePlans(purposes);
     }
     /** Synchronous native worker call. The owner selected exact sources; original task grants still admit every effect. */
     public JSONObject runOwnerWorkProfile(String goal,String conversation,JSONObject ownerScope,JSONArray initial,dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection selected,RunControl original)throws Exception {
+        return runOwnerWorkProfile(goal,conversation,ownerScope,initial,selected,original,null);
+    }
+    public dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection reviewOwnerWorkProfileProject(String project,String checkout,String runtime)throws Exception {
+        if(projectOwnerWorkflows==null)throw new IllegalStateException("原项目宿主尚未挂载");return projectOwnerWorkflows.reviewWorkProfileProject(project,checkout,runtime);
+    }
+    public JSONObject runOwnerWorkProfile(String goal,String conversation,JSONObject ownerScope,JSONArray initial,dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection selected,RunControl original,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection project)throws Exception {
         if(android.os.Looper.myLooper()==android.os.Looper.getMainLooper())throw new IllegalStateException("请在原生工作队列运行工作配置任务");original.check();if(original.hasHostRun())throw new SecurityException("不能复用旧控制器新建工作配置任务");String wanted=goal==null?"":goal.trim();if(wanted.isEmpty()||wanted.length()>4000)throw new IllegalArgumentException("请填写1至4000字任务目标");
-        nativeWorkProfiles().claimOwnerExecutionStart(selected,original);ModelConfig captured=nativeWorkProfileModel(selected,original);SettingsStore.validate(captured);dev.pocketengine.runtime.ModelGateway.validate(captured);String ownerConversation=conversation==null?"":conversation;
+        if(project!=null){if(projectOwnerWorkflows==null)throw new IllegalStateException("原项目宿主尚未挂载");projectOwnerWorkflows.requireWorkProfileProject(project);}
+        nativeWorkProfiles().claimOwnerExecutionStart(selected,original);ModelConfig captured=nativeWorkProfileModel(selected,original,project!=null);SettingsStore.validate(captured);dev.pocketengine.runtime.ModelGateway.validate(captured);String ownerConversation=conversation==null?"":conversation;
         if(!ownerConversation.isEmpty()){EngineModule module=features.module("assistant");if(!(module instanceof dev.pocketengine.features.assistant.AssistantModule)||!ownerConversation.equals(module.handle("get",json("conversationId",ownerConversation)).getString("conversationId")))throw new SecurityException("工作配置不属于原私人对话");}
-        JSONObject task=tasks.createCapabilityTaskWithWorkProfile(wanted,ownerConversation,selected,original);try{initializeOwnerExecutionScope(task.getString("id"),captured,ownerScope);return runCapabilityAttempt(task.getString("id"),initial,captured,original,selected);}catch(Exception failed){JSONObject current=tasks.get(task.getString("id"),false);if(current!=null&&current.optString("runId").isEmpty())tasks.status(task.getString("id"),"needs_confirmation","原工作配置尚未启动，请在原任务审阅来源与执行范围；没有改用默认模型或重发。");throw failed;}
+        JSONObject task=tasks.createCapabilityTaskWithWorkProfile(wanted,ownerConversation,selected,original);try{initializeOwnerExecutionScope(task.getString("id"),captured,ownerScope);return runCapabilityAttempt(task.getString("id"),initial,captured,original,selected,project);}catch(Exception failed){JSONObject current=tasks.get(task.getString("id"),false);if(current!=null&&current.optString("runId").isEmpty())tasks.status(task.getString("id"),"needs_confirmation","原工作配置尚未启动，请在原任务审阅来源与执行范围；没有改用默认模型或重发。");throw failed;}
     }
     /** UI detachment only drops the result observer, never interrupts the original authorized task worker. */
     public void runOwnerWorkProfileAsync(String goal,String conversation,JSONObject ownerScope,JSONArray initial,dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection selected,RunControl original,java.util.function.BiConsumer<JSONObject,Exception> completion)throws Exception {
         java.util.Objects.requireNonNull(completion);JSONObject frozenScope=ownerScope==null?null:new JSONObject(ownerScope.toString());JSONArray frozenInitial=initial==null?null:new JSONArray(initial.toString());capabilityWorkers.execute(()->{JSONObject result=null;Exception failure=null;try{result=runOwnerWorkProfile(goal,conversation,frozenScope,frozenInitial,selected,original);}catch(Exception unavailable){failure=unavailable;}finally{sendState();}completion.accept(result,failure);});
+    }
+    public void runOwnerWorkProfileAsync(String goal,String conversation,JSONObject ownerScope,JSONArray initial,dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection selected,RunControl original,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection project,java.util.function.BiConsumer<JSONObject,Exception> completion)throws Exception {
+        java.util.Objects.requireNonNull(completion);JSONObject frozenScope=ownerScope==null?null:new JSONObject(ownerScope.toString());JSONArray frozenInitial=initial==null?null:new JSONArray(initial.toString());
+        capabilityWorkers.execute(()->{JSONObject result=null;Exception failure=null;try{result=runOwnerWorkProfile(goal,conversation,frozenScope,frozenInitial,selected,original,project);}catch(Exception unavailable){failure=unavailable;}finally{sendState();}completion.accept(result,failure);});
     }
     /** Explicit owner recovery of the same task; scopes/budgets are retained, not renewed by selecting a Profile. */
     public JSONObject continueOwnerWorkProfile(String id,JSONArray initial,dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection selected,RunControl original)throws Exception {return continueOwnerWorkProfile(id,null,initial,selected,original);}
@@ -283,11 +297,21 @@ public final class EngineApplication extends Application implements dev.pocketen
     public void continueOwnerWorkProfileAsync(String id,dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection selected,RunControl original,java.util.function.BiConsumer<JSONObject,Exception> completion) {
         java.util.Objects.requireNonNull(completion);capabilityWorkers.execute(()->{JSONObject result=null;Exception failure=null;try{result=continueOwnerWorkProfile(id,null,selected,original);}catch(Exception unavailable){failure=unavailable;}finally{sendState();}completion.accept(result,failure);});
     }
+    public void continueOwnerWorkProfileAsync(String id,dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection selected,RunControl original,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection project,java.util.function.BiConsumer<JSONObject,Exception> completion) {
+        java.util.Objects.requireNonNull(completion);capabilityWorkers.execute(()->{JSONObject result=null;Exception failure=null;try{result=continueOwnerWorkProfile(id,null,null,selected,original,project);}catch(Exception unavailable){failure=unavailable;}finally{sendState();}completion.accept(result,failure);});
+    }
     /** Pending goals need a fresh explicit original scope; started runs cannot renew budgets through this API. */
     public JSONObject continueOwnerWorkProfile(String id,JSONObject ownerScope,JSONArray initial,dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection selected,RunControl original)throws Exception {
-        if(android.os.Looper.myLooper()==android.os.Looper.getMainLooper())throw new IllegalStateException("请在原生工作队列恢复工作配置任务");nativeWorkProfiles().claimOwnerExecutionStart(selected,original);ModelConfig captured=nativeWorkProfileModel(selected,original);SettingsStore.validate(captured);dev.pocketengine.runtime.ModelGateway.validate(captured);tasks.requireWorkProfileTaskSelection(id,selected);
+        return continueOwnerWorkProfile(id,ownerScope,initial,selected,original,null);
+    }
+    public JSONObject continueOwnerWorkProfile(String id,JSONObject ownerScope,JSONArray initial,dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection selected,RunControl original,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection project)throws Exception {
+        if(android.os.Looper.myLooper()==android.os.Looper.getMainLooper())throw new IllegalStateException("请在原生工作队列恢复工作配置任务");
+        JSONObject retained=tasks.get(id,false);boolean projectSelected=retained.optJSONObject("developmentContext")!=null;
+        if(project!=null){if(projectSelected)throw new SecurityException("原任务已有项目绑定，不借恢复更换项目");if(projectOwnerWorkflows==null)throw new IllegalStateException("原项目宿主尚未挂载");projectOwnerWorkflows.requireWorkProfileProject(project);}
+        if(projectSelected){if(projectOwnerWorkflows==null)throw new IllegalStateException("原项目宿主尚未挂载");projectOwnerWorkflows.requireTask(id);}
+        nativeWorkProfiles().claimOwnerExecutionStart(selected,original);ModelConfig captured=nativeWorkProfileModel(selected,original,projectSelected||project!=null);SettingsStore.validate(captured);dev.pocketengine.runtime.ModelGateway.validate(captured);tasks.requireWorkProfileTaskSelection(id,selected);
         JSONObject task=tasks.get(id,false);if(task.optJSONObject("executionScope")==null){if(task.optJSONObject("workProfileIntent")==null||ownerScope==null)throw new SecurityException("请明确重新审阅待启动任务范围；没有使用默认预算");initializeOwnerExecutionScope(id,captured,ownerScope);}else if(ownerScope!=null)throw new SecurityException("工作配置恢复不能续给预算，请使用原任务范围入口");
-        return runCapabilityAttempt(id,initial,captured,original,selected);
+        return runCapabilityAttempt(id,initial,captured,original,selected,project);
     }
 
     public dev.pocketengine.features.RemoteOwnerWorkflows remoteOwnerWorkflows;
@@ -361,6 +385,16 @@ public final class EngineApplication extends Application implements dev.pocketen
     private void initializeFeatures(){
         groupOwnerWorkflows=new dev.pocketengine.features.NativeGroupOwnerWorkflows(this,dev.pocketengine.ui.ComposeActivity.class);
         features=new FeatureHost(this::publish,tasks,()->activeId()!=null,resources);FeatureContext context=new FeatureContext(this,settings,new SecretVault(this),this::publish);
+        context.installTeamProfileModels(new FeatureContext.TeamProfileModels(){
+            public dev.pocketengine.features.teams.TeamParentPlan plan(dev.pocketengine.features.teams.TeamParentPlan actual,RunControl original)throws Exception {
+                JSONObject parent=actual.origin().view(),task=tasks.get(parent.getString("parentTaskId"),false);if(task.optJSONObject("workProfileRef")==null)return actual;
+                return dev.pocketengine.features.teams.TeamParentPlan.withWorkProfileModels(actual,nativeWorkProfiles().memberModelsForPlan(tasks,actual,original));
+            }
+            public ModelConfig start(TaskStore.TeamParentStart actual,RunControl original)throws Exception {
+                JSONObject parent=tasks.get(actual.view().getJSONObject("scope").getString("parentTaskId"),false);if(parent.optJSONObject("workProfileRef")==null)return null;
+                return nativeWorkProfiles().memberModelsForStart(tasks,actual,original).baseModel();
+            }
+        });
         memorySources=new dev.pocketengine.features.MemorySourceBridge(features,tasks);features.setMemorySynchronizer(memorySources::synchronize);
         installPhoneRouteSources();
         nativeOwnerWorkflows=new dev.pocketengine.features.NativeOwnerWorkflows(features,context,tasks,memorySources);
@@ -1450,6 +1484,9 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     private JSONObject runCapabilityAttempt(String id,JSONArray initial,ModelConfig config,RunControl control)throws Exception{return runCapabilityAttempt(id,initial,config,control,null);}
     private JSONObject runCapabilityAttempt(String id,JSONArray initial,ModelConfig config,RunControl control,dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection selectedProfile)throws Exception{
+        return runCapabilityAttempt(id,initial,config,control,selectedProfile,null);
+    }
+    private JSONObject runCapabilityAttempt(String id,JSONArray initial,ModelConfig config,RunControl control,dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection selectedProfile,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection project)throws Exception{
         if(selectedProfile!=null)nativeWorkProfiles().requireOwnedSelection(selectedProfile,control);RunControl existing=capabilityControls.putIfAbsent(id,control);if(existing!=null&&existing!=control)throw new IllegalStateException("该任务仍在执行");
         JSONObject attempt=null;
         dev.pocketengine.features.assistant.OwnerSourceRequestProjection ownerSources=null;
@@ -1468,6 +1505,7 @@ public final class EngineApplication extends Application implements dev.pocketen
                 control.check();attempt=control.hasHostRun()?tasks.requireCapabilityAttempt(id,control):tasks.startAttempt(id,"capabilities",config.maxSteps);
                 control.bindHostRun(id,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"));control.check();
             }
+            if(project!=null){if(selectedProfile==null||projectOwnerWorkflows==null)throw new SecurityException("原项目工作配置选择不存在");projectOwnerWorkflows.bindWorkProfileProject(project,attempt,control);attempt=tasks.get(id,false);}
             boolean ownerMailbox=dev.pocketengine.features.memory.OwnerSourceRunContext.acceptsPrivateOwnerProjection(attempt);
             if(ownerMailbox){tasks.openOwnerInputMailbox(id,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"),attempt.getString("conversationId"),control);if(hasTaskAttachments(attempt))attachmentRoutePins.require(id,config,false);}
             final String sourceRun=attempt.getString("runId");final int sourceEpoch=attempt.getInt("coordinatorEpoch");

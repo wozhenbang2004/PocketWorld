@@ -41,6 +41,21 @@ public final class ModelCallAdmissionTest {
     @Test public void queuedSourceRevocationIsCheckedOutsideTheOccupancyMonitor()throws Exception{
         ModelCallAdmission gate=new ModelCallAdmission();try(var held=gate.enter(limited(1),"task",deadline())){RunControl waiting=limited(1);java.util.concurrent.atomic.AtomicBoolean revoked=new java.util.concurrent.atomic.AtomicBoolean();waiting.setAuthorityCheck(()->{assertFalse(Thread.holdsLock(gate));if(revoked.get())throw new SecurityException("Revoked native source");});Future<?> result=workers.submit(()->gate.enter(waiting,"task",deadline()));await(()->gate.waitingCount()==1);revoked.set(true);assertTrue(failed(result) instanceof InterruptedException);assertTrue(waiting.isCancelled());assertEquals(0,gate.waitingCount());assertEquals(1,gate.activeCount());}
     }
+    @Test public void verifiedInheritedBudgetOwnerSharesTheSameGateAndIntersectsTheChildLimit()throws Exception {
+        ModelCallAdmission gate=new ModelCallAdmission();RunControl parent=limited(2),child=limited(1);child.bindHostRun("actual-child","child-run",1);
+        var held=gate.enter(parent,"original-budget-owner",deadline(),2);
+        Future<ModelCallAdmission.Permit> pending=workers.submit(()->gate.enter(child,"original-budget-owner",deadline(),2));
+        await(()->gate.waitingCount()==1);assertFalse(pending.isDone());
+        try(var unrelated=gate.enter(new RunControl(),"unrelated",deadline())){assertEquals(2,gate.activeCount());}
+        held.close();var accepted=pending.get(3,TimeUnit.SECONDS);assertEquals(1,gate.activeCount());accepted.close();assertEquals(0,gate.activeCount());
+    }
+    @Test public void inheritedScopeCannotInventALargerLimitAndQueuedChildCancellationKeepsParentOccupancy()throws Exception {
+        ModelCallAdmission gate=new ModelCallAdmission();assertThrows(SecurityException.class,()->gate.enter(new RunControl(),"owner",deadline(),3));
+        try(var held=gate.enter(new RunControl(),"owner",deadline(),1)){
+            RunControl child=new RunControl();Future<?> pending=workers.submit(()->gate.enter(child,"owner",deadline(),2));await(()->gate.waitingCount()==1);
+            child.cancel();assertTrue(failed(pending) instanceof InterruptedException);assertEquals(0,gate.waitingCount());assertEquals(1,gate.activeCount());
+        }
+    }
     @Test public void boundedWaitQueueDoesNotBlockIndependentTasksThatCanEnterImmediately()throws Exception{
         ModelCallAdmission gate=new ModelCallAdmission(2);try(var held=gate.enter(limited(1),"task",deadline())){RunControl first=limited(1),second=limited(1);Future<?> a=workers.submit(()->gate.enter(first,"task",deadline()));await(()->gate.waitingCount()==1);Future<?> b=workers.submit(()->gate.enter(second,"task",deadline()));await(()->gate.waitingCount()==2);assertThrows(ModelCallAdmission.Refused.class,()->gate.enter(limited(1),"task",deadline()));try(var independent=gate.enter(limited(1),"other",deadline())){assertEquals(2,gate.activeCount());}first.cancel();second.cancel();assertTrue(failed(a) instanceof InterruptedException);assertTrue(failed(b) instanceof InterruptedException);assertEquals(0,gate.waitingCount());}
     }

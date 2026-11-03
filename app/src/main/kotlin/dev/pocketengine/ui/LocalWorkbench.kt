@@ -42,6 +42,7 @@ internal object LocalWorkbenchGuard {
         return response
     }
     @JvmStatic fun importPayload(review: JSONObject): JSONObject {
+        require(!dev.pocketengine.features.local.project.ProjectBinaryImport.isReview(review)) { "原字节审阅须走原字节确认，不借文字参数导回" }
         val version = review.opt("expectedVersion")
         require((version is Int || version is Long) && (version as Number).toLong() in 0..Int.MAX_VALUE.toLong()) { "缺少已审项目版本" }
         val hash = review.optString("expectedHash")
@@ -272,14 +273,7 @@ internal fun LocalFiles(checkoutId: String, state: PocketUiState, controller: Po
             open = { selected -> session.open(checkoutId, selected, false) }, inspectBinary = { binaryInfo = it })
     }
     else if (state.moduleResultInputs["local.changes"]?.optString("_requestId") == requestId && state.moduleResultInputs["local.changes"]?.optBoolean("_failed") == true) state.moduleErrors["local.changes"]?.let { Text("未取得当前原文件清单：$it", color = MaterialTheme.colorScheme.error) }
-    binaryInfo?.let { file -> AlertDialog(onDismissRequest = { binaryInfo = null }, title = { Text(file.label) }, text = { Column {
-        Text(file.path, fontFamily = FontFamily.Monospace)
-        Text("二进制文件 · ${file.bytes} 字节", style = MaterialTheme.typography.bodyMedium)
-        Text("不支持文字编辑。文件可随项目包保存、导出；支持的页面资源可在预览中使用。", style = MaterialTheme.typography.bodyMedium)
-        var identity by remember(file.path) { mutableStateOf(false) }
-        TextButton(onClick = { identity = !identity }) { Text(if (identity) "收起文件校验信息" else "文件校验信息") }
-        if (identity) SelectionContainer { Text("SHA-256\n" + file.sha256, style = MaterialTheme.typography.labelMedium) }
-    } }, confirmButton = { TextButton(onClick = { binaryInfo = null }) { Text("返回文件树") } }) }
+    binaryInfo?.let { file -> LocalBinaryFileReview(projectId, checkoutId, file.path, state, controller, initialBytes = file.bytes, refreshed = { refresh() }) { binaryInfo = null } }
     TextButton(onClick = { adding = !adding }) { Text(if (adding) "收起新增" else "新增文本文件") }
     if (adding) {
         OutlinedTextField(newPath, { newPath = it }, label = { Text("相对路径，例如 src/main.py") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -288,12 +282,87 @@ internal fun LocalFiles(checkoutId: String, state: PocketUiState, controller: Po
     opened?.let { (path, fresh) -> LocalFileReview(projectId, checkoutId, path, fresh, state, controller) { session.closeFile(checkoutId); refresh() } }
 }
 
+/** Same original manual-owner feature requests. No task/model execution or new permission surface. */
+@Composable
+private fun LocalBinaryFileReview(projectId: String, checkoutId: String, path: String, state: PocketUiState, controller: PocketWorldController, initialBytes: Long? = null, initialReview: JSONObject? = null, draftRetained: Boolean = false, refreshed: () -> Unit, close: () -> Unit) {
+    var review by remember(projectId, checkoutId, path) { mutableStateOf(initialReview?.let { JSONObject(it.toString()) }) }
+    var readRequest by remember(projectId, checkoutId, path) { mutableStateOf<String?>(null) }
+    var importRequest by remember(projectId, checkoutId, path) { mutableStateOf<String?>(null) }
+    var inFlight by remember(projectId, checkoutId, path) { mutableStateOf(false) }
+    var needsFreshRead by remember(projectId, checkoutId, path) { mutableStateOf(false) }
+    var receipt by remember(projectId, checkoutId, path) { mutableStateOf<JSONObject?>(null) }
+    var error by remember(projectId, checkoutId, path) { mutableStateOf<String?>(null) }
+    var identities by remember(projectId, checkoutId, path) { mutableStateOf(false) }
+    fun refreshReview() {
+        if (inFlight) return
+        inFlight = true; review = null; error = null; needsFreshRead = true; importRequest = null
+        try { readRequest = controller.requestFeature("local", "reviewFile", JSONObject().put("checkoutId", checkoutId).put("path", path)) }
+        catch (failure: Exception) { inFlight = false; error = failure.message }
+    }
+    val readInput = state.moduleResultInputs["local.reviewFile"]
+    val readResult = LocalWorkbenchGuard.result(state.moduleResults["local.reviewFile"], readInput, readRequest, checkoutId, path)
+    LaunchedEffect(readResult?.toString(), readInput?.toString(), readRequest) {
+        val selected = readRequest ?: return@LaunchedEffect
+        if (readInput?.optString("_requestId") != selected) return@LaunchedEffect
+        if (readInput.optBoolean("_failed")) { error = "未取得当前原字节审阅：" + state.moduleErrors["local.reviewFile"].orEmpty(); inFlight = false; readRequest = null; return@LaunchedEffect }
+        val actual = readResult ?: return@LaunchedEffect
+        if (actual.optString("projectId") != projectId || !dev.pocketengine.features.local.project.ProjectBinaryImport.isReview(actual)) { error = "文件类型或所选项目已变化；请回文件树刷新，用原文字入口重新核对。"; review = null }
+        else { review = JSONObject(actual.toString()); needsFreshRead = false; receipt = null }
+        inFlight = false; readRequest = null
+    }
+    val importInput = state.moduleResultInputs["local.importToProject"]
+    val importResult = LocalWorkbenchGuard.result(state.moduleResults["local.importToProject"], importInput, importRequest, checkoutId, path)
+    LaunchedEffect(importResult?.toString(), importInput?.toString(), importRequest) {
+        val selected = importRequest ?: return@LaunchedEffect
+        if (importInput?.optString("_requestId") != selected) return@LaunchedEffect
+        if (importInput.optBoolean("_failed")) { error = "这次导回未取得确定回执。先读取当前源与正式版本核对，不会自动重发。\n" + state.moduleErrors["local.importToProject"].orEmpty(); needsFreshRead = true; inFlight = false; importRequest = null; return@LaunchedEffect }
+        val actual = importResult ?: return@LaunchedEffect
+        if (actual.optString("projectId") != projectId || actual.optString("format") != dev.pocketengine.features.local.project.ProjectBinaryImport.RECEIPT) error = "回执身份未匹配，先刷新核对，不自动重发。"
+        else { receipt = JSONObject(actual.toString()); refreshed() }
+        needsFreshRead = true; inFlight = false; importRequest = null
+    }
+    val selected = review
+    val busy = inFlight || state.moduleBusy.any { it in setOf("local.writeFile", "local.deleteFile", "local.importToProject") }
+    val canImport = selected != null && selected.optString("projectId") == projectId && selected.optBoolean("importable") && !needsFreshRead && receipt == null && !busy
+    AlertDialog(onDismissRequest = { if (!busy) close() }, title = { Text(path.substringAfterLast('/')) }, text = { Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState())) {
+        Text(path, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+        if (selected == null) {
+            LocalCaption(initialBytes?.let { "原字节文件 · $it 字节" } ?: "原字节版本核对")
+            LocalCaption("不是文字编辑器。可随项目包保留；也可先核对当前原字节，再明确导回正式版本库。")
+        } else {
+            LocalCaption("工作副本 ${selected.optLong("sourceBytes")} 字节 → 正式 v${selected.optInt("expectedVersion")}（${selected.optLong("targetBytes")} 字节）")
+            if (selected.optBoolean("deleted")) Text("所选工作文件已删除；确认后会在正式版本库记录删除。", color = Danger, fontSize = 13.sp)
+            LocalCaption(selected.optString("message"))
+            LocalCaption("源 SHA " + selected.optString("expectedHash").take(16) + " · 目标 SHA " + selected.optString("expectedTargetHash").take(16))
+            TextButton(onClick = { identities = !identities }) { Text(if (identities) "收起完整校验身份" else "完整SHA与目标修订") }
+            if (identities) LocalCode("源 SHA-256\n${selected.optString("expectedHash")}\n目标 SHA-256\n${selected.optString("expectedTargetHash")}\n目标 revision\n${selected.optString("expectedTargetRevisionId")}")
+            for ((key, label) in listOf("sourcePreview" to "当前工作原字节", "targetPreview" to "正式原字节")) selected.optJSONObject(key)?.let { preview ->
+                LocalCaption("$label · 只显示前 ${preview.optInt("shownBytes")} / ${preview.optLong("totalBytes")} 字节${if (preview.optBoolean("truncated")) "（非完整预览）" else ""}")
+                LocalCode(preview.optString("hex").ifEmpty { "（无字节）" }.chunked(32).joinToString("\n"))
+            }
+            LocalCaption("这不是text diff，也不是完整内容或格式安全验证。只保存已落盘、SHA匹配的这份工作文件；不运行、不导出或分享。")
+        }
+        if (draftRetained) LocalCaption("未保存的文字草稿仍保留，不包含在这次原字节导回中。")
+        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        receipt?.let { result -> Text("正式版本 v${result.optInt("version")} · " + if (result.optBoolean("projectVersionCommitted")) "已取得原版本提交回执" else "已核对同一原版本，未再写内容", fontSize = 13.sp); LocalCaption(result.optString("message")); if (!result.optBoolean("checkoutBaselineUpdated")) Text("副本基线登记仍不明；刷新后可明确只登记已一致的版本，不盲目再写。", color = Danger, fontSize = 12.sp) }
+        error?.let { Text(it, color = Danger, fontSize = 12.sp) }
+        TextButton(onClick = { refreshReview() }, enabled = !busy) { Text(if (selected == null && !needsFreshRead) "核对原字节与正式版本" else "重新读取当前源与正式版本") }
+    } }, confirmButton = {
+        if (canImport) Button(onClick = {
+            if (inFlight || importRequest != null) return@Button
+            try { val frozen = dev.pocketengine.features.local.project.ProjectBinaryImport.payload(JSONObject(selected!!.toString())); inFlight = true; error = null; importRequest = controller.requestFeature("local", "importToProject", frozen) }
+            catch (failure: Exception) { inFlight = false; importRequest = null; needsFreshRead = true; error = "这次派发未确定；先刷新原源与目标，不自动重发。" + failure.message.orEmpty() }
+        }) { Text(when { selected!!.optBoolean("same") -> "只登记已一致版本"; selected.optBoolean("deleted") -> "确认删除正式文件"; else -> "明确导回这份原字节" }) }
+    }, dismissButton = { TextButton(onClick = { close() }, enabled = !busy) { Text("返回文件树") } })
+}
+
 @Composable
 private fun LocalFileReview(projectId: String, checkoutId: String, path: String, fresh: Boolean, state: PocketUiState, controller: PocketWorldController, close: () -> Unit) {
     val store = controller.projectWorkbench.fileDrafts
     var editor by remember(projectId, checkoutId, path) { mutableStateOf<ProjectFileDraft?>(null) }
     var restoreError by remember(projectId, checkoutId, path) { mutableStateOf<String?>(null) }
     var reviewRequest by remember(checkoutId, path) { mutableStateOf<String?>(null) }
+    var byteReview by remember(projectId, checkoutId, path) { mutableStateOf<JSONObject?>(null) }
     var mode by remember(checkoutId, path) { mutableIntStateOf(0) }
     var acknowledged by remember(checkoutId, path) { mutableStateOf(false) }
     var acknowledgedLatest by remember(checkoutId, path) { mutableStateOf(false) }
@@ -327,7 +396,15 @@ private fun LocalFileReview(projectId: String, checkoutId: String, path: String,
     }
     val incoming = LocalWorkbenchGuard.result(state.moduleResults["local.reviewFile"], state.moduleResultInputs["local.reviewFile"], reviewRequest, checkoutId, path)
     LaunchedEffect(incoming?.toString(), reviewRequest) {
+        if (dev.pocketengine.features.local.project.ProjectBinaryImport.isReview(incoming)) byteReview = JSONObject(incoming.toString())
+    }
+    if (byteReview != null && submitted == null) {
+        LocalBinaryFileReview(projectId, checkoutId, path, state, controller, initialReview = byteReview, draftRetained = editor?.dirty() == true, refreshed = {}) { close() }
+        return
+    }
+    LaunchedEffect(incoming?.toString(), reviewRequest) {
         val actual = incoming ?: return@LaunchedEffect
+        if (dev.pocketengine.features.local.project.ProjectBinaryImport.isReview(actual)) return@LaunchedEffect
         val current = editor ?: return@LaunchedEffect
         try { if (update(current.observe(actual))) { needsFreshRead = false; importedVersion = null } }
         catch (failure: Exception) { localError = failure.message }

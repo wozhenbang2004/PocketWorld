@@ -11,15 +11,27 @@ import org.json.JSONObject;
 public final class WorkProfileToolSelection {
     private final Map<String, String> skills = new LinkedHashMap<>(), instructions = new LinkedHashMap<>(), plugins = new LinkedHashMap<>();
     private final String extensionRefs;
-    private final CapabilitySnapshot.CurrentCheck current, bindingCurrent;
+    private final CapabilitySnapshot.CurrentCheck current, bindingCurrent, sourcesCurrent;
+    @FunctionalInterface public interface PreparedCheck { void check(String tool,String operation,JSONObject args,RunControl original)throws Exception; }
+    private final PreparedCheck preparedCurrent;
     public WorkProfileToolSelection(NativeWorkProfileHost.Selection selection, String task, String run, int epoch, RunControl original, CapabilitySnapshot.CurrentCheck currentRun) throws Exception {
         this(selection.snapshot(), () -> { selection.requireBoundRun(task, run, epoch, original); currentRun.check(); selection.checkCurrent(original); }, () -> { selection.requireBoundRun(task, run, epoch, original); currentRun.check(); });
         selection.requireBoundRun(task, run, epoch, original);
     }
+    public WorkProfileToolSelection(NativeWorkProfileHost.Selection selection,String task,String run,int epoch,RunControl original,CapabilitySnapshot.CurrentCheck currentRun,CapabilitySnapshot.CurrentCheck binding,PreparedCheck prepared)throws Exception {
+        this(selection.snapshot(),()->{selection.requireBoundRun(task,run,epoch,original);currentRun.check();selection.checkCurrent(original);},
+            ()->{selection.requireBoundRun(task,run,epoch,original);binding.check();},
+            ()->{selection.requireBoundRun(task,run,epoch,original);selection.checkCurrent(original);},
+            (tool,operation,args,supplied)->{if(supplied!=original)throw new SecurityException("original_profile_control_required");prepared.check(tool,operation,args,supplied);});
+        selection.requireBoundRun(task,run,epoch,original);
+    }
     /** Package-private data tests; production callers need the typed, bound native selection above. */
     WorkProfileToolSelection(JSONObject snapshot, CapabilitySnapshot.CurrentCheck current) throws Exception { this(snapshot, current, current); }
     WorkProfileToolSelection(JSONObject snapshot, CapabilitySnapshot.CurrentCheck current, CapabilitySnapshot.CurrentCheck bindingCurrent) throws Exception {
-        if (!snapshot.getBoolean("ready")) throw new SecurityException("profile_selection_not_ready"); this.current = java.util.Objects.requireNonNull(current); this.bindingCurrent = java.util.Objects.requireNonNull(bindingCurrent);
+        this(snapshot,current,bindingCurrent,current,null);
+    }
+    WorkProfileToolSelection(JSONObject snapshot,CapabilitySnapshot.CurrentCheck current,CapabilitySnapshot.CurrentCheck bindingCurrent,CapabilitySnapshot.CurrentCheck sourcesCurrent,PreparedCheck prepared)throws Exception {
+        if (!snapshot.getBoolean("ready")) throw new SecurityException("profile_selection_not_ready"); this.current = java.util.Objects.requireNonNull(current); this.bindingCurrent = java.util.Objects.requireNonNull(bindingCurrent); this.sourcesCurrent=java.util.Objects.requireNonNull(sourcesCurrent);this.preparedCurrent=prepared;
         JSONArray selected = snapshot.getJSONArray("items"), extensions = new JSONArray();
         for (int i = 0; i < selected.length(); i++) {
             JSONObject item = selected.getJSONObject(i); if (!item.getBoolean("included")) continue;
@@ -37,6 +49,23 @@ public final class WorkProfileToolSelection {
         extensionRefs = extensions.toString();
     }
     public void checkCurrent() throws Exception { current.check(); }
+    /** The exact original journal op already exists; no read-side no-pending redispatch fence. */
+    public void checkPrepared(String tool,JSONObject dispatched,RunControl original)throws Exception {
+        String operation=dispatched==null?"":dispatched.optString("_hostOperationId");
+        if(operation.isEmpty()||preparedCurrent==null){checkCurrent();return;}
+        JSONObject args=new JSONObject(dispatched.toString());args.remove("_hostOperationId");
+        preparedCurrent.check(tool,operation,args,original);sourcesCurrent.check();preparedCurrent.check(tool,operation,args,original);
+    }
+    /** An opaque same-call recheck, not permission or a reusable operation/start token. */
+    public final class PreparedTool {
+        private final String tool,dispatched;private final RunControl original;
+        private PreparedTool(String tool,JSONObject dispatched,RunControl original)throws Exception {this.tool=tool;this.dispatched=dispatched==null?"{}":dispatched.toString();this.original=original;}
+        public void checkCurrent()throws Exception {checkPrepared(tool,new JSONObject(dispatched),original);}
+        private void require(WorkProfileToolSelection expected)throws Exception {if(expected!=WorkProfileToolSelection.this)throw new SecurityException("original_profile_tool_check_required");checkCurrent();}
+    }
+    public PreparedTool forTool(String tool,JSONObject dispatched,RunControl original)throws Exception {
+        PreparedTool checked=new PreparedTool(tool,dispatched,original);checked.checkCurrent();return checked;
+    }
     /** Short original SQL/control identity only; safe for existing retained capability checks. */
     public void checkBindingCurrent() throws Exception { bindingCurrent.check(); }
     public boolean hasSkills() { return !skills.isEmpty(); }
@@ -59,7 +88,13 @@ public final class WorkProfileToolSelection {
         return ref.getInt("revision")==actual.optInt("revision",-1)&&ref.getString("digest").equals(actual.optString("digest"));
     }
     public void requireSkillRequest(JSONObject args) throws Exception {
-        checkCurrent(); String selected = skills.get(args.getString("id"));
+        checkCurrent();requireSkillReference(args);
+    }
+    public void requireSkillRequest(JSONObject args,PreparedTool checked)throws Exception {
+        if(checked==null)throw new SecurityException("original_profile_tool_check_required");checked.require(this);requireSkillReference(args);
+    }
+    private void requireSkillReference(JSONObject args)throws Exception {
+        String selected = skills.get(args.getString("id"));
         if (selected == null) throw new SecurityException("skill_not_selected_in_original_work_profile"); JSONObject ref = new JSONObject(selected);
         if (!ref.getString("digest").equals(args.getString("digest")) || args.has("revision") && ref.getInt("revision") != args.getInt("revision")) throw new SecurityException("skill_revision_not_selected_in_original_work_profile");
     }
@@ -72,13 +107,22 @@ public final class WorkProfileToolSelection {
     }
     /** Preserve original discovery/error/budget provenance; only remove nonselected metadata. */
     public JSONObject filterSkillDiscovery(JSONObject original) throws Exception {
-        checkCurrent(); JSONObject result = new JSONObject(original.toString()); JSONArray rows = original.getJSONArray("skills"), retained = new JSONArray(); int excluded = 0;
+        checkCurrent();return filterDiscoveryData(original);
+    }
+    private JSONObject filterDiscoveryData(JSONObject original)throws Exception {
+        JSONObject result = new JSONObject(original.toString()); JSONArray rows = original.getJSONArray("skills"), retained = new JSONArray(); int excluded = 0;
         for (int i = 0; i < rows.length(); i++) if (includesSkill(rows.getJSONObject(i))) retained.put(new JSONObject(rows.getJSONObject(i).toString())); else excluded++;
         result.put("skills", retained).put("workProfileSelection", true).put("profileExcluded", excluded); return result;
     }
     /** Owner-selected exact references are eligible even when unrelated global matches filled the lexical limit. */
     public JSONObject filterSkillDiscovery(JSONObject original, JSONArray currentCatalogue, java.util.Set<String> hostCapabilities) throws Exception {
-        JSONObject result = filterSkillDiscovery(original); JSONArray retained = result.getJSONArray("skills"); java.util.Set<String> included = new java.util.HashSet<>();
+        checkCurrent();return filterDiscoveryData(original,currentCatalogue,hostCapabilities);
+    }
+    public JSONObject filterSkillDiscovery(JSONObject original,JSONArray currentCatalogue,java.util.Set<String> hostCapabilities,PreparedTool checked)throws Exception {
+        if(checked==null)throw new SecurityException("original_profile_tool_check_required");checked.require(this);return filterDiscoveryData(original,currentCatalogue,hostCapabilities);
+    }
+    private JSONObject filterDiscoveryData(JSONObject original,JSONArray currentCatalogue,java.util.Set<String> hostCapabilities)throws Exception {
+        JSONObject result = filterDiscoveryData(original); JSONArray retained = result.getJSONArray("skills"); java.util.Set<String> included = new java.util.HashSet<>();
         for (int i = 0; i < retained.length(); i++) included.add(retained.getJSONObject(i).getString("id")); int added = 0, omitted = 0;
         for (int i = 0; i < currentCatalogue.length(); i++) {
             JSONObject row = currentCatalogue.getJSONObject(i); if (!includesSkill(row) || included.contains(row.getString("id")) || !row.optBoolean("active") || !row.optBoolean("contentVerified")) continue;

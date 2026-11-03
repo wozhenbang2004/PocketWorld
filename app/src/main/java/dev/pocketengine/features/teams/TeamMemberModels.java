@@ -21,11 +21,29 @@ public final class TeamMemberModels {
     }
     /** No later default is read. Cold reopen recaptures the original public target, then compares every pin. */
     public static Selection capture(JSONObject member,ModelConfig global,Capture nativeCapture)throws Exception {
+        return captureWithDefault(member,global,nativeCapture,null);
+    }
+    /** Only the opaque native planning source may supply a lower-priority Profile default. */
+    public static Selection capture(JSONObject member,ModelConfig global,Capture nativeCapture,
+            dev.pocketengine.features.controlplane.NativeWorkProfileHost.MemberPlanModels defaults)throws Exception {
+        return captureWithDefault(member,global,nativeCapture,defaults==null?null:defaults.defaultForMember(member));
+    }
+    public static Selection capture(JSONObject member,ModelConfig global,Capture nativeCapture,
+            dev.pocketengine.features.controlplane.NativeWorkProfileHost.MemberStartModels defaults)throws Exception {
+        return captureWithDefault(member,global,nativeCapture,defaults.defaultForMember(member));
+    }
+    private static Selection captureWithDefault(JSONObject member,ModelConfig global,Capture nativeCapture,ModelConfig profileDefault)throws Exception {
         JSONObject previous=member.optJSONObject("memberModelSelection");
         ModelTargetRef explicit=member.optJSONObject("modelTarget")==null?null:ModelTargetRef.fromJson(member.getJSONObject("modelTarget"));
         ModelTargetRef chosen=explicit!=null?explicit:target(previous,"memberTarget");
+        String purpose="MEMBER";
+        if(previous!=null&&previous.optJSONObject("memberRoute")!=null)purpose=previous.getJSONObject("memberRoute").getString("purpose");
+        if(!purpose.equals("MEMBER")&&!purpose.equals("MEMBER."+member.getString("id")))throw new SecurityException("成员模型用途不是实际原slot身份");
+        if(profileDefault!=null){if(previous!=null)throw new SecurityException("原planning成员不能夹带已有模型pin");chosen=reference(profileDefault);purpose=profileDefault.routePlan==null?"MEMBER":profileDefault.routePlan.purpose;}
+        if(!purpose.equals("MEMBER")&&!purpose.equals("MEMBER."+member.getString("id")))throw new SecurityException("工作配置成员用途不是实际原slot身份");
         ModelConfig selected;
-        if(chosen!=null){if(nativeCapture==null)throw new SecurityException("原成员精确模型连接尚未接入，未使用默认连接替代");selected=nativeCapture.capture(chosen,"MEMBER",global);}
+        if(profileDefault!=null)selected=profileDefault;
+        else if(chosen!=null){if(nativeCapture==null)throw new SecurityException("原成员精确模型连接尚未接入，未使用默认连接替代");selected=nativeCapture.capture(chosen,purpose,global);}
         else if(member.optBoolean("modelInherited"))selected=global.forPurpose("MEMBER");
         else selected=global.withModel(member.optString("model",global.model)).withRoutePlan(null).withPurposePlans(Map.of());
         ModelTargetRef summaryTarget=target(previous,"summaryTarget");
@@ -34,7 +52,7 @@ public final class TeamMemberModels {
         ModelConfig memberConfig=selected.withRoutePlan(null).withPurposePlans(Map.of());
         JSONObject pin=new JSONObject().put("format","pocketworld.team-member-model.v1").put("identityRevision",member.optInt("identityRevision",1));
         if(nativeRoutes){
-            ModelRoutePlan memberPlan=singleAttempt(selected,"MEMBER"),summaryPlan=singleAttempt(summary,"SUMMARY");
+            ModelRoutePlan memberPlan=singleAttempt(selected,purpose),summaryPlan=singleAttempt(summary,"SUMMARY");
             memberConfig=memberPlan.primary().withRoutePlan(memberPlan).withPurposePlans(Map.of("MEMBER",memberPlan,"MAIN",memberPlan,"SUMMARY",summaryPlan));
             pin.put("memberRoute",stable(memberPlan)).put("summaryRoute",stable(summaryPlan));
             ModelTargetRef memberTarget=chosen==null?reference(selected):chosen,actualSummary=summaryTarget==null?reference(summary):summaryTarget;

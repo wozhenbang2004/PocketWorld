@@ -21,6 +21,8 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
     private final File home,tmp;
     private final String identity;
     private AndroidRuntimePreparation androidRuntime;
+    private dev.pocketengine.features.local.runtime.android.AndroidRuntimeThermalObservation logObservation;
+    private boolean logObservationClosed;
     private String configurationProblem="";
     private ManagedProjectRuntime(File privateDirectory,RuntimeEnvironment.Package approvedPackage,Map<String,RuntimeTool> approvedTools) throws Exception {
         File directory=RuntimeFiles.directory(privateDirectory,"managed-process");
@@ -55,6 +57,22 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
     public RuntimeEnvironment environmentManager() {return environments;}
     /** Body-free owner storage view with the same original package/generation leases. */
     public RuntimeStorage ownerStorageForHost(){return new RuntimeStorage(this,androidRuntime,environments,jobs,home,tmp);}
+    /** Native composition only. These read-only facts deliberately never enter
+     * describe(), runtime identity, command environment or an approved plan hash. */
+    public synchronized void bindLogObservationForHost(dev.pocketengine.features.local.runtime.android.AndroidRuntimeThermalObservation original){
+        if(logObservation!=null||logObservationClosed)throw new IllegalStateException("runtime_log_observer_already_bound_or_closed");logObservation=java.util.Objects.requireNonNull(original);
+    }
+    public JSONObject automaticLogObservationPolicyForHost()throws Exception {
+        dev.pocketengine.features.local.runtime.android.AndroidRuntimeThermalObservation original;boolean closed;
+        synchronized(this){original=logObservation;closed=logObservationClosed;}
+        if(original!=null)return original.snapshotForHost();
+        boolean android=androidRuntime!=null||!configurationProblem.isEmpty(),conservative=closed||android;
+        return new JSONObject().put("format","pocketworld.runtime-log-observation-policy.v1").put("source",android?"android_thermal_observer_unavailable":"non_android_host_runtime")
+                .put("thermalStatus",JSONObject.NULL).put("automaticLogPageBytes",conservative?8192:32768).put("automaticLogPageReduced",conservative)
+                .put("reason",closed?"thermal_observer_closed":conservative?"thermal_status_unknown":"non_android_host_default_unchanged")
+                .put("ownerMessage",conservative?RuntimeLogObservationPolicy.UNKNOWN_MESSAGE:"")
+                .put("explicitLogLimitsChanged",false).put("executionPolicyChanged",false).put("resourceReleaseProved",false).put("energySavingsMeasured",false);
+    }
 
     /** Native Skill description from this same installed generation/tools. No
      * argv/executable/env is accepted from model or downloaded Skill metadata. */
@@ -240,5 +258,9 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
     @Override public JSONObject readLog(RuntimeExecutionRef ref,long afterSequence,int maxBytes) throws Exception {
         requireProvider(ref);return jobs.readLog(ref,afterSequence,maxBytes);
     }
-    @Override public void close() throws Exception {jobs.close();}
+    @Override public void close() throws Exception {
+        dev.pocketengine.features.local.runtime.android.AndroidRuntimeThermalObservation original;
+        synchronized(this){logObservationClosed=true;original=logObservation;}
+        try{if(original!=null)original.close();}finally{jobs.close();}
+    }
 }

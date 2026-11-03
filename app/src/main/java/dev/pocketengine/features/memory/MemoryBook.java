@@ -1172,22 +1172,34 @@ public final class MemoryBook {
     private JSONArray search(Scope s,String query,int limit,Set<String> active)throws Exception {
         String normalized=normalize(query==null?"":query);
         if(normalized.length()>500)throw new IllegalArgumentException("检索词最多500字");
-        List<MemoryRetrievalBackend.Document> documents=new ArrayList<>();Map<String,Long> eligible=new LinkedHashMap<>();
+        List<MemoryRetrievalBackend.Document> documents=new ArrayList<>();Map<String,Long> eligible=new LinkedHashMap<>();List<JSONObject> admitted=new ArrayList<>();
         for(JSONObject value:records.values()){
             if(!s.matches(value)||!active.contains(value.getString("id")))continue;
-            MemoryRetrievalBackend.Document document=retrievalDocument(value);documents.add(document);eligible.put(document.id,document.revision);
+            admitted.add(value);eligible.put(value.getString("id"),value.getLong("revision"));
         }
+        MemoryEntityAliasProjection aliases=MemoryEntityAliasProjection.from(admitted);
+        for(JSONObject value:admitted)documents.add(retrievalDocument(value,aliases));
         List<MemoryRetrievalBackend.Match> hits;
         try{retrieval.synchronize(documents);hits=retrieval.find(s.ownerId,s.spaceId,normalized,MAX_RECORDS);if(hits==null)throw new IllegalStateException("索引缺少结果契约");}
         catch(InterruptedException cancelled){throw cancelled;}
         catch(Exception unavailable){fallbackRetrieval(unavailable.getClass().getSimpleName());retrieval.synchronize(documents);hits=retrieval.find(s.ownerId,s.spaceId,normalized,MAX_RECORDS);}
         JSONArray result=new JSONArray();int count=Math.max(1,Math.min(MAX_RECORDS,limit));Set<String> unique=new HashSet<>(),current=activeIds(System.currentTimeMillis());Map<SourceRef,Boolean> verified=new LinkedHashMap<>();
+        MemoryEntityAliasProjection directOnly=MemoryEntityAliasProjection.from(List.of()),currentAliases=null;
         for(int i=0;i<Math.min(MAX_RECORDS,hits.size())&&result.length()<count;i++){
             MemoryRetrievalBackend.Match hit=hits.get(i);if(hit==null||hit.id==null||!unique.add(hit.id))continue;
             JSONObject row=records.get(hit.id);Long expected=eligible.get(hit.id);
             // Index identity is a suggestion. Re-read the current formal map, never an indexed body.
             if(expected==null||hit.revision!=expected||row==null||!s.matches(row)||row.getLong("revision")!=hit.revision||!current.contains(hit.id)||!retrievalSourcesLive(row,verified))continue;
-            if(LexicalMemoryRetrievalBackend.score(retrievalDocument(row),normalized)<0)continue;
+            if(LexicalMemoryRetrievalBackend.score(retrievalDocument(row,directOnly),normalized)<0){
+                if(currentAliases==null){
+                    // Only alias-dependent hits need donor revalidation. Unrelated formal
+                    // sources are not read a second time for an ordinary direct match.
+                    List<JSONObject> currentDonors=new ArrayList<>();for(JSONObject donor:records.values())if(s.matches(donor)&&current.contains(donor.getString("id"))
+                            &&java.util.Objects.equals(eligible.get(donor.getString("id")),donor.getLong("revision"))&&aliases.mayDonateToQuery(donor,normalized)&&retrievalSourcesLive(donor,verified))currentDonors.add(donor);
+                    currentAliases=MemoryEntityAliasProjection.from(currentDonors);
+                }
+                if(LexicalMemoryRetrievalBackend.score(retrievalDocument(row,currentAliases),normalized)<0)continue;
+            }
             result.put(viewRecord(row));
         }
         return result;
@@ -1209,14 +1221,15 @@ public final class MemoryBook {
             if(current!=null&&scope.matches(current)&&active.contains(id)&&live.contains(id)&&prior.getLong("revision")==current.getLong("revision")&&retrievalSourcesLive(current,verified))result.put(viewRecord(current));
         }return result;
     }
-    private static MemoryRetrievalBackend.Document retrievalDocument(JSONObject row)throws Exception {
+    private static MemoryRetrievalBackend.Document retrievalDocument(JSONObject row,MemoryEntityAliasProjection aliases)throws Exception {
         StringBuilder searchable=new StringBuilder(row.getString("text"));JSONObject assertion=row.optJSONObject("assertion");
         // Reviewed semantics are a disposable lexical projection, never a second record body.
         // No model request, identity merge or raw source expansion; currentness/audience gates
         // still select every indexed row and re-read the exact formal revision after search.
-        if(assertion!=null)for(String field:List.of("subjectLabel","predicate","object","condition")){
+        if(assertion!=null)for(String field:List.of("subjectId","subjectLabel","predicate","objectId","object","condition")){
             String value=assertion.optString(field,"");if(!value.isEmpty())searchable.append('\n').append(value);
         }
+        if(assertion!=null)searchable.append('\n').append(aliases.terms(assertion));
         return new MemoryRetrievalBackend.Document(row.getString("ownerId"),row.getString("spaceId"),row.getString("id"),row.getLong("revision"),searchable.toString(),row.getLong("updatedAt"),row.optDouble("confidence",0));
     }
     private Set<String> retrievalActiveIds(Scope scope,long now)throws Exception {return retrievalActiveIds(scope,now,null);}
@@ -1296,7 +1309,7 @@ public final class MemoryBook {
         return result;
     }
     private void fallbackRetrieval(String reason){try{retrieval.close();}catch(Exception ignored){}retrieval=new LexicalMemoryRetrievalBackend("backend_failure_"+reason);}
-    public synchronized JSONObject retrievalStatus()throws Exception{return retrieval.status().put("admission","formal_map_scope_revision_live_sources").put("candidateRecordsIndexed",false);}
+    public synchronized JSONObject retrievalStatus()throws Exception{return retrieval.status().put("admission","formal_map_scope_revision_live_sources").put("candidateRecordsIndexed",false).put("entityAliasStrategy","current_exact_typed_identity_v1").put("entityAliasLabelsPerIdentity",MemoryEntityAliasProjection.MAX_LABELS_PER_ID).put("entityAliasesPersisted",false);}
     public synchronized void closeRetrieval()throws Exception{retrieval.close();}
 
     public synchronized JSONObject recall(JSONObject scope,String query,int limit)throws Exception {

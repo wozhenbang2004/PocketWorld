@@ -3648,6 +3648,7 @@ public final class TaskStore {
     public static final class TeamParentOrigin {
         private final TaskStore issuer;private final RunControl original;private final String task,run,tool,operation,argsHash,projectHash,view;private final int epoch;private final long pause;
         private TeamParentOrigin(TaskStore issuer,String task,String run,int epoch,String tool,String operation,JSONObject args,RunControl original,JSONObject view)throws Exception{this.issuer=issuer;this.task=task;this.run=run;this.epoch=epoch;this.tool=tool;this.operation=operation;this.original=original;argsHash=capabilityFingerprint(args);this.view=view.toString();projectHash=view.getString("projectContextHash");pause=original.pauseRevision();}
+        public boolean issuedBy(TaskStore actual){return actual==issuer;}
         public JSONObject view()throws Exception{return new JSONObject(view);}
         public void checkCurrent()throws Exception{original.check();synchronized(issuer){issuer.checkTeamParentOriginSql(this);}}
     }
@@ -3716,6 +3717,12 @@ public final class TaskStore {
         checkCapabilityCurrent(source.task,source.run,source.epoch,source.tool);JSONObject task=required(source.task),development=task.optJSONObject("developmentContext");if(!source.projectHash.equals(capabilityFingerprint(development==null?new JSONObject():development)))throw new SecurityException("原父项目范围已经变化");
         if(!source.operation.isEmpty())try(Cursor c=db.rawQuery("SELECT tool,arguments,state FROM operations WHERE task_id=? AND run_id=? AND operation_id=?",new String[]{source.task,source.run,source.operation})){if(!c.moveToFirst()||!c.getString(0).equals(source.tool)||!c.getString(2).equals("prepared")||!source.argsHash.equals(capabilityFingerprint(new JSONObject(c.getString(1)))))throw new SecurityException("团队动作不是原Runner精确prepared参数");}
     }
+    /** Only the original prepared planning invocation may exclude its own pending operation.
+     * Source/model lookup and control.check remain outside this SQL-only validation. */
+    public synchronized void checkTeamWorkProfilePlanBinding(TeamParentOrigin source,String digest,RunControl original)throws Exception {
+        if(source==null||source.issuer!=this||source.original!=original||!"teams_plan".equals(source.tool)||source.operation.isEmpty())throw new SecurityException("original_work_profile_team_plan_required");
+        checkTeamParentOriginSql(source);checkFrozenWorkProfileBinding(source.task,source.run,source.epoch,digest);
+    }
     private boolean parentOperationInPool(JSONObject pool,String op)throws Exception {
         if(pool==null)return false;JSONArray reservations=pool.getJSONArray("reservations");
         for(int i=0;i<reservations.length();i++){JSONArray ids=reservations.getJSONObject(i).getJSONArray("operationIds");for(int j=0;j<ids.length();j++)if(op.equals(ids.getString(j)))return true;}return false;
@@ -3756,11 +3763,17 @@ public final class TaskStore {
     public static final class TeamParentStart {
         private final TaskStore issuer;private final TeamParentOrigin origin;private final String data,ref,hash;private final boolean dispatch;
         private TeamParentStart(TaskStore issuer,TeamParentOrigin origin,String ref,String hash,JSONObject data,boolean dispatch){this.issuer=issuer;this.origin=origin;this.ref=ref;this.hash=hash;this.data=data.toString();this.dispatch=dispatch;}
+        public boolean issuedBy(TaskStore actual){return actual==issuer;}
         public boolean dispatch(){return dispatch;}public JSONObject view()throws Exception{return new JSONObject(data);}
         public void checkCurrent()throws Exception{origin.original.check();synchronized(issuer){issuer.checkTeamParentStartSql(this);}}
     }
     private void checkTeamParentStartSql(TeamParentStart start)throws Exception{
         if(start==null||start.issuer!=this||!start.dispatch)throw new SecurityException("不是原SQL签发的本次真实启动");checkTeamParentOriginSql(start.origin);JSONObject row=teamParentPlanRow(start.origin.task,start.ref,start.hash);if(!row.optString("state").equals("starting")||!row.optString("startOperationId").equals(start.origin.operation)||!row.optString("startRunId").equals(start.origin.run)||row.optInt("startEpoch")!=start.origin.epoch)throw new SecurityException("本提案已经启动、恢复或换代，不重派");
+    }
+    /** Symmetric prepared-start Profile check. No control/source callback under the SQL monitor. */
+    public synchronized void checkTeamWorkProfileStartBinding(TeamParentStart start,String digest,RunControl original)throws Exception {
+        if(start==null||start.issuer!=this||start.origin.original!=original)throw new SecurityException("original_work_profile_team_start_required");
+        checkTeamParentStartSql(start);checkFrozenWorkProfileBinding(start.origin.task,start.origin.run,start.origin.epoch,digest);
     }
     /** The original prepared op, exact native capability approval, pool and child are claimed together. */
     public synchronized TeamParentStart claimTeamParentStart(TeamParentOrigin source,String ref,String hash)throws Exception{
@@ -5662,6 +5675,11 @@ public final class TaskStore {
     /** Original run metadata only. It survives journal checkpoint replacement, but never grants a capability. */
     public synchronized JSONObject workProfileRunSnapshot(String id,String run,int epoch)throws Exception {
         JSONObject task=required(id);requirePrivateOwner(task);if(!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("工作配置不属于当前原任务代次");
+        return originalWorkProfileRunSnapshot(id,run,epoch);
+    }
+    /** Private original-ledger read only. Historical use is confined to an already verified native
+     * team budget anchor; the public Profile recovery/current-run guard above is unchanged. */
+    private JSONObject originalWorkProfileRunSnapshot(String id,String run,int epoch)throws Exception {
         try(Cursor row=db.rawQuery("SELECT grant_json FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{id,run,String.valueOf(epoch)})){
             if(!row.moveToFirst())throw new SecurityException("原工作配置run不存在");JSONObject value=new JSONObject(row.getString(0)).optJSONObject("nativeWorkProfile");if(value==null)throw new SecurityException("原run没有冻结工作配置");
             var definition=dev.pocketengine.features.controlplane.WorkProfile.fromJson(value.getJSONObject("definition"));if(!definition.id.equals(value.getString("profileId"))||definition.revision!=value.getLong("profileRevision")||!definition.digest().equals(value.getString("profileDigest"))||!id.equals(value.getString("taskId"))||!run.equals(value.getString("runId"))||epoch!=value.getInt("epoch"))throw new SecurityException("原工作配置快照身份无效");JSONObject proof=new JSONObject(value.toString());for(String field:new String[]{"resolutionDigest","definition","taskId","runId","epoch","extensionSelectionRevision","extensionSelectionDigest"})proof.remove(field);if(!dev.pocketengine.features.controlplane.WorkProfile.fingerprint(proof).equals(value.getString("resolutionDigest")))throw new SecurityException("原工作配置解析快照摘要不符");return new JSONObject(value.toString());
@@ -5669,6 +5687,31 @@ public final class TaskStore {
     }
     public synchronized void checkWorkProfileRun(String id,String run,int epoch,String resolutionDigest,RunControl original)throws Exception {
         checkExtensionRun(id,run,epoch,original);checkFrozenWorkProfileBinding(id,run,epoch,resolutionDigest);
+    }
+    /** Source identity for a retained native capability snapshot, not dispatch admission.
+     * No control callback/source lookup under SQL; the original executor still validates its grant/op. */
+    public synchronized void checkWorkProfileCapabilityBinding(String id,String run,int epoch,String digest,RunControl original)throws Exception {
+        if(original==null||original.isCancelled()||original.isPaused()||!original.matchesHostRun(id,run,epoch))throw new SecurityException("original_profile_capability_control_changed");
+        JSONObject task=required(id);requirePrivateOwner(task);
+        if(!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")||!task.optString("status").matches("preparing|running")||task.optBoolean("cancelRequested"))throw new SecurityException("original_profile_capability_run_changed");
+        try(Cursor row=db.rawQuery("SELECT status FROM runs WHERE run_id=? AND task_id=? AND epoch=?",new String[]{run,id,String.valueOf(epoch)})){if(!row.moveToFirst()||!"running".equals(row.getString(0)))throw new SecurityException("original_profile_capability_run_ended");}
+        JSONObject permission=grant(run);executionScopeCurrent(task,run,permission);
+        if(permission.optLong("expiresAt")<=System.currentTimeMillis()||!"owner".equals(permission.optString("principalId"))||!"private".equals(permission.optString("spaceId"))||!task.optString("executionMode").equals(permission.optString("mode")))throw new SecurityException("original_profile_capability_grant_changed");
+        if(!"capabilities".equals(task.optString("executionMode")))try(Cursor lease=db.rawQuery("SELECT run_id,epoch,expires_at FROM leases WHERE resource_id='phone.local'",null)){if(!lease.moveToFirst()||!run.equals(lease.getString(0))||epoch!=lease.getInt(1)||lease.getLong(2)<=System.currentTimeMillis())throw new SecurityException("original_profile_capability_lease_changed");}
+        checkFrozenWorkProfileBinding(id,run,epoch,digest);
+    }
+    /** Only rechecks this Runner's already prepared exact operation. It does not create an op,
+     * grant or allowance. Other effects still block, except the same already-verified native
+     * running project services permitted by the original dispatch fence. */
+    public void checkWorkProfilePreparedTool(String id,String run,int epoch,String digest,String tool,String operation,JSONObject args,RunControl original)throws Exception {
+        original.check();synchronized(this){
+            checkWorkProfileCapabilityBinding(id,run,epoch,digest,original);checkCapabilityCurrent(id,run,epoch,tool);
+            if(operation==null||operation.isEmpty())throw new SecurityException("original_profile_prepared_operation_required");
+            try(Cursor row=db.rawQuery("SELECT tool,arguments,state FROM operations WHERE task_id=? AND run_id=? AND operation_id=?",new String[]{id,run,operation})){
+                if(!row.moveToFirst()||!tool.equals(row.getString(0))||!"prepared".equals(row.getString(2))||!capabilityFingerprint(args).equals(capabilityFingerprint(new JSONObject(row.getString(1)))))throw new SecurityException("original_profile_prepared_operation_mismatch");
+            }
+            if(hasUnresolvedExcept(id,operation)&&!onlyOwnedProjectPending(id,run,epoch,"",operation))throw new SecurityException("other_effect_requires_reconciliation");
+        }original.check();
     }
     /** Only the original RELAY-only run's control callback. Deliberately no control.check/fence or
      * source/module lookup: the full model/asset admission still runs outside this SQL-only callback. */
@@ -7321,6 +7364,21 @@ public final class TaskStore {
         if(context.bindingKind!=InferenceReceipt.BindingKind.HOST_RUN||origin==null||identity==null||nativeRun==null||!"team_research".equals(origin.optString("kind"))||!context.taskId.equals(task.getString("id"))||!context.runId.equals(task.optString("runId"))||context.epoch!=task.optInt("coordinatorEpoch")||!context.taskId.equals(identity.optString("researchTaskId"))||!context.taskId.equals(origin.optString("researchTaskId"))||!context.memberId.equals(identity.optString("memberId"))||!context.memberId.equals(origin.optString("memberId"))||!identity.getString("teamRunId").equals(origin.optString("teamRunId"))||!owner.getString("id").equals(task.optString("parentTaskId"))||!owner.getString("id").equals(teamWriteTask(origin.getString("teamRunId")).getString("id"))||!context.runId.equals(nativeRun.optString("runId"))||context.epoch!=nativeRun.optInt("coordinatorEpoch")||!originalStandaloneTeamBudgetOwner(owner,pool))return false;
         try(Cursor run=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{context.taskId,context.runId,Integer.toString(context.epoch)})){return run.moveToFirst()&&run.getString(0).equals("running");}
     }
+    /** Resource-only metadata from the same original native budget owner. No grant, quota,
+     * model reservation or new limiter is created. Covers real member journals and Team sites. */
+    private JSONObject originalProfileModelResources(JSONObject task,JSONObject nativeOwner,InferenceReceipt.Context context)throws Exception {
+        JSONObject owner=nativeOwner==null?task:nativeOwner;String anchor;
+        if(nativeOwner==null){if(context.bindingKind!=InferenceReceipt.BindingKind.HOST_RUN)return null;anchor=context.runId;}
+        else {JSONObject pool=teamBudget(owner);if(originalStandaloneTeamBudgetOwner(owner,pool))return null;anchor=pool.getString("parentRunId");}
+        JSONObject permission=grant(anchor);if(permission==null)throw new SecurityException("原模型资源预算owner run不存在");
+        if(permission.optJSONObject("nativeWorkProfile")==null){if(owner.optJSONObject("workProfileRef")!=null)throw new SecurityException("原Profile预算缺少冻结模型资源配置");return null;}
+        JSONObject frozen=originalWorkProfileRunSnapshot(owner.getString("id"),anchor,originalRunEpoch(owner.getString("id"),anchor));
+        JSONObject resources=frozen.getJSONObject("resourcePreferences"),defined=frozen.getJSONObject("definition").getJSONObject("resourcePreferences");
+        if(!dev.pocketengine.features.controlplane.WorkProfile.fingerprint(resources).equals(dev.pocketengine.features.controlplane.WorkProfile.fingerprint(defined)))throw new SecurityException("原Profile资源偏好快照不符");
+        if(!resources.has("maxConcurrentModelCalls"))return null;
+        int limit=dev.pocketengine.store.TaskExecutionScope.exactInt(resources,"maxConcurrentModelCalls",1,2);
+        return new JSONObject().put("ownerTaskId",owner.getString("id")).put("maxConcurrentModelCalls",limit);
+    }
     private InferenceCapture.Target logicalTarget(InferenceCapture.Target target,InferenceAdmission admission,int nativeMaxAttempts){
         InferenceReceipt.Context context=target.context;
         return InferenceCapture.withLogicalAuthority(target,new dev.pocketengine.runtime.usage.LogicalInferenceAuthority(){
@@ -7338,7 +7396,9 @@ public final class TaskStore {
                     // Existing team sites own one physical reservation. Until their native allocator
                     // supplies another, a group policy cannot silently increase that grant.
                     JSONObject origin=task.optJSONObject("origin");int cap=owner!=null||origin!=null&&java.util.Set.of("group","channel").contains(origin.optString("kind"))?1:nativeMaxAttempts;
-                    return InferenceRequestStore.begin(db,id,context.taskId+":"+context.runId,digest,context,plan,owner==null?context.taskId:owner.getString("id"),Math.min(hard,requestedDeadline),Math.min(cap,plan.getInt("maxAttempts")));
+                    JSONObject resources=originalProfileModelResources(task,owner,context);
+                    JSONObject admitted=InferenceRequestStore.begin(db,id,context.taskId+":"+context.runId,digest,context,plan,owner==null?context.taskId:owner.getString("id"),Math.min(hard,requestedDeadline),Math.min(cap,plan.getInt("maxAttempts")));
+                    if(resources!=null)admitted.put("modelResourceScope",resources);return admitted;
                 }
             }
             public boolean matchesHistoryOrigin(String call,dev.pocketengine.core.ModelConfig config,JSONObject providerData)throws Exception {synchronized(TaskStore.this){

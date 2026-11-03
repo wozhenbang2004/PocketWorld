@@ -29,7 +29,24 @@ public final class TaskStoreTeamAssignments implements TeamAssignmentHost.Tasks 
         @Override public JSONObject integrationHistory(JSONObject args,RunControl control)throws Exception{check("team_read_integration",control);return tasks.teamIntegrationHistory(binding,args,control);}
         @Override public JSONObject question(String operation,String question,RunControl control)throws Exception {check("team_request_input",control);JSONObject receipt=tasks.askTeamAssignment(binding,operation,question,control);changed.accept(binding.getString("taskId"));return receipt;}
     };}
-    @Override public RunJournal journal(JSONObject binding,RunControl original)throws Exception {return tasks.journal(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"),original);}
+    @Override public RunJournal journal(JSONObject binding,RunControl original)throws Exception {
+        RunJournal journal=tasks.journal(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"),original);String member=binding.getString("memberId");
+        return new RunJournal(){
+            public dev.pocketengine.runtime.context.CompactionJournal compaction(){return journal.compaction();}
+            public JSONObject restore()throws Exception{return journal.restore();}
+            public void checkpoint(JSONArray messages,int steps,JSONObject observation)throws Exception{journal.checkpoint(messages,steps,observation);}
+            public String beginOperation(String tool,JSONObject args)throws Exception{return journal.beginOperation(tool,args);}
+            public void finishOperation(String operation,JSONObject receipt)throws Exception{journal.finishOperation(operation,receipt);}
+            public boolean hasNativeProjectRunningAck(String operation,JSONObject receipt)throws Exception{return journal.hasNativeProjectRunningAck(operation,receipt);}
+            public JSONObject projectServiceExitEvidence(JSONArray operations)throws Exception{return journal.projectServiceExitEvidence(operations);}
+            public boolean reserveModelRecovery(String call,long wait)throws Exception{return journal.reserveModelRecovery(call,wait);}
+            public int executionStepCeiling(int captured)throws Exception{return journal.executionStepCeiling(captured);}
+            public dev.pocketengine.runtime.usage.InferenceCapture.Target inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose purpose,String supplied)throws Exception {
+                var actual=purpose==dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN?dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MEMBER:purpose;
+                return journal.inferenceTarget(actual,actual==dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MEMBER||actual==dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.SUMMARY?member:supplied);
+            }
+        };
+    }
     @Override public AgentRunner.OwnerInputs inputs(JSONObject binding,RunControl original){return tasks.teamAssignmentInputs(binding,original);}
     @Override public void reserveInference(JSONObject binding,String dedupKey)throws Exception {tasks.reserveTeamInference(binding,"member",dedupKey);}
     @Override public dev.pocketengine.core.CapabilityPort meter(dev.pocketengine.core.CapabilityPort original,JSONObject binding)throws Exception{return tasks.teamUsesWorkItems(binding.getString("teamRunId"))?new TeamBudgetPort(original,tasks,binding):original;}

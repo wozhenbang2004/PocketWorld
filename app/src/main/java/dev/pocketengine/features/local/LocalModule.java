@@ -74,6 +74,8 @@ public final class LocalModule implements EngineModule {
     public void requireProjectDevServiceForHost(JSONObject binding,String executionId)throws Exception {if(closed)throw new IllegalStateException("原项目模块已关闭");development.checkDevService(binding,executionId);}
     public void setProjectReceiptSink(java.util.function.Consumer<JSONObject> sink){for(ProjectRuntime runtime:runtimes.values())if(runtime instanceof ManagedProjectRuntime)((ManagedProjectRuntime)runtime).setReceiptSink(sink);}
     public synchronized JSONObject projectRuntimeForHost(String id)throws Exception {ProjectRuntime runtime=runtime(id);JSONObject facts=runtime.describe();return facts.put("runtimeId",id).put("name",id.equals("termux")?"Termux（可选外部环境）":"这台手机");}
+    /** Native automatic viewer only; explicit log calls and execution plans do not consult this policy. */
+    public synchronized JSONObject automaticProjectLogPolicyForHost(String id)throws Exception {if(closed)throw new IllegalStateException("原项目模块已关闭");ProjectRuntime original=runtime(id);return original instanceof ManagedProjectRuntime?((ManagedProjectRuntime)original).automaticLogObservationPolicyForHost():new JSONObject().put("automaticLogPageBytes",32768).put("automaticLogPageReduced",false).put("source","external_runtime_default_unchanged").put("executionPolicyChanged",false).put("explicitLogLimitsChanged",false);}
     public synchronized JSONArray projectRuntimesForOwner()throws Exception {JSONArray facts=new JSONArray();for(String id:runtimes.keySet())facts.put(projectRuntimeForHost(id));return facts;}
     private ProjectRuntime runtime(String id){ProjectRuntime runtime=runtimes.get(id);if(runtime==null)throw new SecurityException("所选真实运行位置尚未配置");return runtime;}
     private static String runtimeId(JSONObject exact){return exact.optString("runtimeId","termux");}
@@ -609,6 +611,8 @@ public final class LocalModule implements EngineModule {
         original.check();if(!original.matchesHostRun(currentAdmission.taskId,currentAdmission.runId,currentAdmission.epoch)||!currentAdmission.taskId.equals(originalCollection.getJSONObject("binding").getString("taskId")))throw new SecurityException("生成文件读取不是原任务当前scope");JSONObject plan=dev.pocketengine.features.local.project.ProjectBuildPlan.verified(originalCollection.getJSONObject("plan")),step=dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,originalCollection.getString("stepId"));if(!"collectProjectOutput".equals(step.getString("localCommand")))throw new SecurityException("请选择原managed生成文件保存动作");
         development.handle("project.poll",ProjectSources.copy(originalCollection));JSONObject actual=queryManagedOutputReceipt(ProjectDevelopment.exact(plan,step),originalCollection.getJSONObject("binding"));if(!"completed".equals(actual.optString("status")))throw new IllegalStateException("原生成文件保存尚未确认，只核对原动作");original.check();return new JSONObject(actual.getJSONObject("attachment").toString()).put("ok",true).put("accepted",true).put("status","observed").put("code","project_generated_output_observed").put("generatedArtifact",true).put("buildReceiptIdentity",actual.getString("buildReceiptIdentity")).put("buildJobId",actual.getString("buildJobId")).put("collectionJobId",actual.getString("operationId")).put("originalPath",actual.getString("path")).put("buildOutputAttribution","selected_output_observed_after_build");
     }
+    /** Typed native planning read only; actual rename remains in the original prepared patch. */
+    public synchronized void verifyProjectMoveForHost(String checkoutId,JSONArray rows)throws Exception {dev.pocketengine.features.local.project.ProjectFileMove.preflight(content(checkoutId),checkoutId,rows,binaryImportCurrent());}
     /** One original journal operation; preflight all files, then report each real per-file effect. */
     private JSONObject applyProjectPatch(JSONObject request,JSONObject link,JSONObject payload,JSONObject snapshot,RunControl original,ProjectAdmission admission,JSONObject binding,long pauseRevision)throws Exception {
         String checkout=request.getString("checkoutId");JSONObject result=new JSONObject().put("id",binding.getString("operationId")).put("operationId",binding.getString("operationId")).put("checkoutId",checkout).put("kind","local_patch").put("provider","app_private_checkout").put("projectExecution",link).put("sourceDigest",request.getString("sourceDigest")).put("sourceCheckStatus","native_checkout_verified").put("crossFileAtomic",false).put("businessVerified",false).put("replayAllowed",false);
@@ -630,6 +634,9 @@ public final class LocalModule implements EngineModule {
                 receipts.put(new JSONObject().put("path",path).put("action",action).put("beforeHash",expected).put("afterHash",file.getString("afterHash")).put("state","skipped").put("commitAttempted",false));
             }
             if(total>ProjectSources.MAX_TOTAL_BYTES||count>ProjectSources.MAX_FILES)throw new IllegalArgumentException("原补丁结果超过源码范围");
+            if(dev.pocketengine.features.local.project.ProjectFileMove.any(files)){
+                JSONObject actual=dev.pocketengine.features.local.project.ProjectFileMove.execute(content(checkout),checkout,files,()->checkProjectControl(original,admission,binding,pauseRevision));for(var keys=actual.keys();keys.hasNext();){String key=keys.next();result.put(key,actual.get(key));}result.put("sourceCheckStatus","native_checkout_verified").put("cancelRequested",original.isCancelled());try{result.put("updatedSourceDigest",ProjectSources.describe(export(checkout)).getString("sourceDigest"));}catch(Exception unavailable){result.put("updatedSourceDigestUnavailable",true);}return result;
+            }
             for(int i=0;i<files.length();i++){
                 JSONObject file=files.getJSONObject(i),receipt=receipts.getJSONObject(i);String path=file.getString("path"),action=file.getString("action");File target=NativeCommandExecutor.within(content(checkout),path);File pending=null;
                 try {
@@ -756,7 +763,7 @@ public final class LocalModule implements EngineModule {
     }
     private JSONObject prepare(String projectId)throws Exception {
         var snapshot=packageWorkspace().projectSnapshotForHost(projectId);JSONArray entries=new JSONArray();java.util.Map<String,byte[]> files=new java.util.LinkedHashMap<>();
-        for(var file:snapshot.files()){entries.put(new JSONObject().put("path",file.path).put("sourceVersion",file.version).put("sha256",file.sha256));files.put(file.path,file.bytes());}
+        for(var file:snapshot.files()){entries.put(new JSONObject().put("path",file.path).put("sourceVersion",file.version).put("sha256",file.sha256).put("binary","binary".equals(file.kind)).put("bytes",file.sizeBytes));files.put(file.path,file.bytes());}
         JSONObject checkout=new JSONObject().put("id",UUID.randomUUID().toString()).put("projectId",projectId).put("name",snapshot.definition().optString("name")).put("files",entries).put("createdAt",System.currentTimeMillis());
         createCheckoutBytes(checkout,files);return checkout;
     }
@@ -810,7 +817,7 @@ public final class LocalModule implements EngineModule {
         for(String path:paths){JSONObject before=original.get(path),now=current.get(path);String hash=now==null?"absent":now.getString("sha256"),old=before==null?"absent":before.optString("sha256");
             String change=hash.equals(old)?"unchanged":now==null?"deleted":old.equals("absent")?"added":"modified";if(!change.equals("unchanged"))changed++;
             if(now==null&&change.equals("unchanged"))continue;
-            entries.put(new JSONObject().put("path",path).put("change",change).put("sha256",hash).put("bytes",now==null?0:now.getLong("bytes")).put("sourceVersion",before==null?0:before.optInt("sourceVersion")).put("binary",now!=null&&now.optBoolean("binary")));
+            entries.put(new JSONObject().put("path",path).put("change",change).put("sha256",hash).put("bytes",now==null?0:now.getLong("bytes")).put("sourceVersion",before==null?0:before.optInt("sourceVersion")).put("binary",now!=null?now.optBoolean("binary"):before!=null&&before.optBoolean("binary")));
         }
         JSONArray baseline=new JSONArray();for(String path:new TreeSet<>(original.keySet()))baseline.put(original.get(path));
         return new JSONObject().put("checkoutId",id).put("projectId",checkout.getString("projectId")).put("files",entries).put("changedCount",changed).put("fileCount",current.size())
@@ -824,7 +831,7 @@ public final class LocalModule implements EngineModule {
         return projects.handle("read",new JSONObject().put("projectId",project).put("path",path).put("version",latest.getInt("version")));
     }
     private JSONObject review(String id,String path)throws Exception {
-        requireIdle(id);JSONObject checkout=checkout(id),file=localFile(id,path),target=target(checkout.getString("projectId"),path);
+        requireIdle(id);JSONObject checkout=checkout(id);JSONObject byteReview=binaryReview(id,path,checkout);if(byteReview!=null)return byteReview;JSONObject file=localFile(id,path),target=target(checkout.getString("projectId"),path);
         if(file.optBoolean("deleted")&&!byPath(checkout.getJSONArray("files")).containsKey(path))throw new IllegalArgumentException("工作副本没有这个文件");
         boolean same=file.optBoolean("deleted")==target.optBoolean("deleted")&&file.getString("content").equals(target.getString("content"));
         JSONObject result=VersionedWorkspace.compare(path,target.getString("content"),file.getString("content"),"项目v"+target.getInt("version"),"工作副本");
@@ -833,13 +840,26 @@ public final class LocalModule implements EngineModule {
     private JSONObject importToProject(JSONObject input)throws Exception {
         String id=JsonFiles.text(input,"checkoutId",80),path=JsonFiles.text(input,"path",240);requireIdle(id);requireCheckoutWritable(id);
         Object rawVersion=input.opt("expectedVersion");if(!(rawVersion instanceof Integer||rawVersion instanceof Long)||((Number)rawVersion).longValue()<0||((Number)rawVersion).longValue()>Integer.MAX_VALUE)throw new IllegalArgumentException("请先审阅差异，并提交看到的整数项目版本");
-        JSONObject file=localFile(id,path),checkout=checkout(id);requireHash(input,file.getString("sha256"));
+        JSONObject checkout=checkout(id);JSONObject bytesImported=importBinaryToProject(input,id,path,checkout);if(bytesImported!=null)return bytesImported;JSONObject file=localFile(id,path);requireHash(input,file.getString("sha256"));
         JSONArray files=checkout.getJSONArray("files");if(file.optBoolean("deleted")&&!byPath(files).containsKey(path))throw new IllegalArgumentException("工作副本没有这个文件");
         JSONObject result=projects.handle(file.optBoolean("deleted")?"removeFile":"write",new JSONObject().put("projectId",checkout.getString("projectId")).put("path",path).put("content",file.getString("content")).put("expectedVersion",((Number)rawVersion).intValue()));
         boolean found=false;for(int i=0;i<files.length();i++)if(path.equals(files.getJSONObject(i).getString("path"))){files.getJSONObject(i).put("sourceVersion",result.getInt("version")).put("sha256",file.getString("sha256"));found=true;}
         if(!found)files.put(new JSONObject().put("path",path).put("sourceVersion",result.getInt("version")).put("sha256",file.getString("sha256")));
         JsonFiles.write(new File(content(id).getParentFile(),"checkout.json"),checkout);
         return result.put("projectId",checkout.getString("projectId")).put("checkoutId",id).put("importedHash",file.getString("sha256"));
+    }
+    private dev.pocketengine.features.local.project.ProjectBinaryImport.Current binaryImportCurrent(){return ()->{if(closed||Thread.currentThread().isInterrupted())throw new java.io.InterruptedIOException("原字节读取/导回已取消");};}
+    private boolean byteContext(dev.pocketengine.features.local.project.ProjectBinaryImport.Source source,dev.pocketengine.features.workspace.VersionedWorkspace.FileSnapshot target,JSONObject baseline){return source.binary||"binary".equals(target.kind)||source.deleted&&baseline!=null&&baseline.optBoolean("binary");}
+    private boolean byteBaselineCurrent(JSONObject row,dev.pocketengine.features.local.project.ProjectBinaryImport.Source source,dev.pocketengine.features.workspace.VersionedWorkspace.FileSnapshot target){return row!=null&&row.optInt("sourceVersion",-1)==target.version&&source.sha256.equals(row.optString("sha256"));}
+    private JSONObject binaryReview(String id,String path,JSONObject checkout)throws Exception {
+        if(!(projects instanceof dev.pocketengine.features.workspace.WorkspaceModule)||!ProjectSources.sourcePath(path))return null;var source=dev.pocketengine.features.local.project.ProjectBinaryImport.read(content(id),id,path,binaryImportCurrent());JSONObject baseline=byPath(checkout.getJSONArray("files")).get(path);if(source.deleted&&baseline==null)throw new IllegalArgumentException("工作副本没有这个文件");var target=packageWorkspace().fileSnapshotForHost(checkout.getString("projectId"),path,0);if(!byteContext(source,target,baseline))return null;return dev.pocketengine.features.local.project.ProjectBinaryImport.review(source,target,byteBaselineCurrent(baseline,source,target));
+    }
+    private JSONObject importBinaryToProject(JSONObject input,String id,String path,JSONObject checkout)throws Exception {
+        boolean explicit=input.has("byteReviewContract");if(!(projects instanceof dev.pocketengine.features.workspace.WorkspaceModule)||!ProjectSources.sourcePath(path)){if(explicit)throw new SecurityException("原字节导回不在所选source/原版本库范围");return null;}var source=dev.pocketengine.features.local.project.ProjectBinaryImport.read(content(id),id,path,binaryImportCurrent());JSONObject baseline=byPath(checkout.getJSONArray("files")).get(path);if(source.deleted&&baseline==null)throw new IllegalArgumentException("工作副本没有这个文件");var target=packageWorkspace().fileSnapshotForHost(checkout.getString("projectId"),path,0);if(!byteContext(source,target,baseline)){if(explicit)throw new SecurityException("文件现在是文字，请回原文字差异入口重新审阅；原字节标记不能放宽文字限制");return null;}
+        dev.pocketengine.features.local.project.ProjectBinaryImport.requireInput(input,source,target);boolean same=source.deleted==target.tombstone&&source.sha256.equals(target.sha256);if(same&&byteBaselineCurrent(baseline,source,target))throw new IllegalStateException("原字节与版本基线已一致，未重复写入版本");source.requireCurrent(binaryImportCurrent());binaryImportCurrent().check();dev.pocketengine.features.workspace.VersionedWorkspace.FileSnapshot committed;
+        if(same){committed=packageWorkspace().fileSnapshotForHost(target.projectId,path,0);dev.pocketengine.features.local.project.ProjectBinaryImport.requireTarget(input,committed);}else committed=source.deleted?packageWorkspace().deleteForHost(target):packageWorkspace().writeBytesForHost(target,source.bytes());
+        if(!source.sha256.equals(committed.sha256))throw new IllegalStateException("已返回的正式版本与所选原字节不同，请读取核对，不自动重发");JSONArray entries=checkout.getJSONArray("files");JSONObject row=baseline;if(row==null){row=new JSONObject().put("path",path);entries.put(row);}row.put("sourceVersion",committed.version).put("sha256",source.sha256).put("binary",source.binary||source.deleted&&"binary".equals(target.kind)).put("bytes",source.sizeBytes);boolean baselineUpdated=true;try{JsonFiles.write(new File(content(id).getParentFile(),"checkout.json"),checkout);}catch(Exception baselineUnknown){baselineUpdated=false;}
+        return committed.json().put("format",dev.pocketengine.features.local.project.ProjectBinaryImport.RECEIPT).put("checkoutId",id).put("path",path).put("importedHash",source.sha256).put("sourceBytes",source.sizeBytes).put("byteImport",true).put("projectVersionCommitted",!same).put("contentWritten",!same).put("alreadyMatchingVersionObserved",same).put("checkoutBaselineUpdated",baselineUpdated).put("baselineUpdateStatus",baselineUpdated?"observed":"unknown").put("status",baselineUpdated?same?"baseline_reconciled":"completed":same?"baseline_update_unknown":"project_committed_baseline_unknown").put("businessVerified",false).put("replayAllowed",false).put("atomicSourceFence",false).put("message",baselineUpdated?same?"正式原字节已一致，仅核对并更新副本基线，没有重复写版本":"所选原字节已按正式版本CAS保存；没有运行、导出或分享":same?"正式版本已核对一致，但副本基线登记未确认；先刷新核对，不自动重发":"正式版本已确证保存，但副本基线登记未确认；先刷新核对，可明确只登记已一致版本，不能盲目再写");
     }
     private JSONObject materialize(JSONObject input)throws Exception {
         String source=JsonFiles.text(input,"checkoutId",80),operation=JsonFiles.text(input,"jobId",80);JSONObject receipt=termux.collection(operation);

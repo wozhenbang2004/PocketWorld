@@ -56,7 +56,9 @@ class HostTestEntrypointTest(unittest.TestCase):
         fixture = HOST.ROOT / 'tools/host-fixtures/SkillCallbackUnixTransport.java'
         self.assertTrue(fixture.is_file())
         self.assertIn('StandardProtocolFamily.UNIX', fixture.read_text())
-        self.assertIn('ExtendedSocketOptions.SO_PEERCRED', fixture.read_text())
+        self.assertIn('getField("SO_PEERCRED")', fixture.read_text())
+        self.assertIn('ClassLoader.getPlatformClassLoader()', fixture.read_text())
+        self.assertIn('channel.getOption(peerCredentials())', fixture.read_text())
         self.assertIn('ProcessHandle.current().pid()', fixture.read_text())
         self.assertTrue((HOST.ROOT / 'tools/host-fixtures/skill_callback_client_fixture.py').is_file())
         self.assertEqual(['managed-skill-private-artifacts'], HOST.select(REGISTRY, [], [entry['class']]))
@@ -73,6 +75,33 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertIn('own_fixture_download_not_opened', source)
         self.assertNotIn('@Ignore', source)
         self.assertIn('dev.pocketengine.features.local.runtime.AndroidRuntimePreparationTest', entry['helpers'])
+
+    def test_thermal_log_policy_is_explicit_and_does_not_add_an_execution_or_npm_lane(self):
+        entry = REGISTRY['runtime-thermal-log-policy']
+        self.assertTrue(entry['native'])
+        self.assertTrue(entry['robolectric'])
+        names = [entry['class']] + entry['additionalClasses']
+        self.assertEqual(4, len(names))
+        self.assertEqual(['runtime-thermal-log-policy'], HOST.select(REGISTRY, [], names))
+        methods = 0
+        for name in names:
+            matches = [HOST.ROOT / root / (name.replace('.', '/') + '.java')
+                       for root in ['app/src/hostTest/java', 'app/src/test/java']]
+            sources = [path for path in matches if path.is_file()]
+            self.assertEqual(1, len(sources))
+            methods += len(re.findall(r'@Test\s+public\s+void\s+\w+\s*\(', sources[0].read_text()))
+        self.assertEqual(15, methods)
+        helper = (HOST.ROOT / 'app/src/hostTest/java/dev/pocketengine/features/local/project/ProjectManagedRunnerJourneyTest.java').read_text()
+        self.assertIn('createFixture(true)', helper)
+        self.assertIn('createTerminalFixture()throws Exception {createFixture(false);}', helper)
+        self.assertNotIn('Files.readString(', helper)
+        terminal = (HOST.ROOT / 'app/src/main/java/dev/pocketengine/features/local/project/ProjectOwnerTerminal.java').read_text()
+        self.assertIn('automaticProjectLogPolicyForHost', terminal)
+        self.assertIn('cursor,pageBytes', terminal)
+        ui = (HOST.ROOT / 'app/src/main/kotlin/dev/pocketengine/ui/ProjectTerminalSection.kt').read_text()
+        self.assertIn('key(task.id, execution, metadata)', ui)
+        self.assertIn('logPolicy = page.optJSONObject("logObservationPolicy")', ui)
+        self.assertNotIn('metadata = page', ui)
 
     def test_registered_real_sources_and_helpers_exist(self):
         for entry in REGISTRY.values():

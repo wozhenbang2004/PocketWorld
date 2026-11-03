@@ -24,6 +24,10 @@ import org.robolectric.annotation.SQLiteMode;
 @ConscryptMode(ConscryptMode.Mode.OFF)
 public final class ManagedScriptCallbackNativeJourneyTest {
     private static final String VALUE="private original result 中文🙂";
+    @Test public void credentialApiUsesItsRealJdkModuleWithoutOpeningTheFixtureEndpoint()throws Exception {
+        var transport=ManagedScriptCallbackTestSupport.transport();JSONObject actual=(JSONObject)transport.getClass().getMethod("credentialApiFacts").invoke(transport);
+        assertEquals("jdk.net",actual.getString("module"));assertTrue(actual.getBoolean("platformModule"));assertEquals("SO_PEERCRED",actual.getString("option"));assertEquals(0,ManagedScriptCallbackTestSupport.openServers(transport));assertEquals(0,ManagedScriptCallbackTestSupport.openClients(transport));
+    }
     private static String python() {
         return "import json,pathlib,subprocess,time\np=pathlib.Path('output');p.mkdir(exist_ok=True)\n(p/'result.bin').write_bytes("+JSONObject.quote(VALUE)+".encode('utf-8'))\n"+
                 "r=subprocess.run(['pocketworld','share','output/result.bin'],capture_output=True,text=True)\nprint('PRIVATE_CLIENT_EXIT',r.returncode,flush=True)\nif r.returncode: print(r.stdout,flush=True); raise RuntimeError('private callback failed')\n"+

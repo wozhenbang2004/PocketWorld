@@ -82,7 +82,8 @@ internal fun ConnectionCenter(state: PocketUiState, controller: PocketWorldContr
                             "workProfiles" -> {
                                 val profileHost = remember(controller) { runCatching { controller.nativeWorkProfiles() } }.getOrNull()
                                 if (profileHost != null) WorkProfilesPage(profileHost, controller::runWorkProfileWork, controller::runWorkProfileControl,
-                                    controller::startOwnerWorkProfile, { id -> controller.focusTask(id); close() }, { section = it }, { section = null })
+                                    controller::startOwnerWorkProfile, { id -> controller.focusTask(id); close() }, { section = it }, { section = null },
+                                    controller::reviewWorkProfileProject, controller::startOwnerWorkProfileProject)
                                 else Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                     Text("工作配置暂不可用", style = MaterialTheme.typography.titleMedium)
                                     Text("原生来源宿主未能读取，旧定义没有重置。请稍后重新打开。", style = MaterialTheme.typography.bodySmall)
@@ -389,48 +390,107 @@ private fun NativeReminders(state: PocketUiState, controller: PocketWorldControl
     deleting?.let { rule -> ConfirmAction("删除这个提醒？", rule.optString("title"), "删除提醒", { deleting = null }) { controller.requestFeature("automation", "delete", JSONObject().put("id", rule.optString("id"))); deleting = null } }
 }
 
+/** Native editor draft only. Same normalizer/preview/save shape; no Book write, grant or model call. */
+internal fun reminderScheduleDraft(type: String, minutes: String, time: String, zone: String, weekdays: String, monthDay: String, lastDay: Boolean, skipGap: Boolean, laterOverlap: Boolean, now: Long): JSONObject {
+    require(type in setOf("once", "interval", "daily", "weekly", "monthly")) { "请选择支持的时间安排" }
+    val calendar = type in setOf("daily", "weekly", "monthly")
+    val raw = if (calendar) JSONObject().put("type", type).put("time", time).put("zone", zone.trim()).put("dstGap", if (skipGap) "skip" else "shift_forward").put("dstOverlap", if (laterOverlap) "later" else "earlier") else {
+        val count = minutes.toLongOrNull() ?: 0L
+        require(count in 1L..525600L) { "分钟数应为1至525600" }
+        val delay = Math.multiplyExact(count, 60000L)
+        // First occurrence is explicit and future, even if save reaches Book in the same millisecond.
+        val first = Math.addExact(now, delay)
+        if (type == "interval") JSONObject().put("type", "interval").put("anchorAt", first).put("intervalMillis", delay)
+        else JSONObject().put("type", "once").put("at", first)
+    }
+    if (type == "weekly") raw.put("daysOfWeek", JSONArray(weekdays.split(',').filter { it.isNotBlank() }.map { it.toInt() }))
+    if (type == "monthly") raw.put("dayOfMonth", monthDay.toIntOrNull() ?: 0).put("shortMonthPolicy", if (lastDay) "last_day" else "skip")
+    return dev.pocketengine.features.automation.AutomationSchedule.normalize(raw)
+}
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ReminderEditor(state: PocketUiState, controller: PocketWorldController, close: () -> Unit) {
     var title by rememberSaveable { mutableStateOf("") }
-    var daily by rememberSaveable { mutableStateOf(false) }
+    var type by rememberSaveable { mutableStateOf("once") }
+    var typeMenu by remember { mutableStateOf(false) }
     var time by rememberSaveable { mutableStateOf("09:00") }
     var minutes by rememberSaveable { mutableStateOf("30") }
+    var zone by rememberSaveable { mutableStateOf(ZoneId.systemDefault().id) }
+    var weekdays by rememberSaveable { mutableStateOf("1,2,3,4,5") }
+    var monthDay by rememberSaveable { mutableStateOf("1") }
+    var lastDay by rememberSaveable { mutableStateOf(false) }
+    var skipGap by rememberSaveable { mutableStateOf(false) }
+    var laterOverlap by rememberSaveable { mutableStateOf(false) }
+    var advanced by rememberSaveable { mutableStateOf(false) }
     var phone by rememberSaveable { mutableStateOf(false) }
     var goal by rememberSaveable { mutableStateOf("") }
     var misfire by rememberSaveable { mutableStateOf("skip") }
     var overlap by rememberSaveable { mutableStateOf("buffer_one") }
     var maxCatchUp by rememberSaveable { mutableStateOf("3") }
     var submitted by remember { mutableStateOf(false) }
+    var submitError by remember { mutableStateOf<String?>(null) }
     val busy = "automation.save" in state.moduleBusy
+    val types = listOf("once" to "一次", "interval" to "固定间隔", "daily" to "每天", "weekly" to "每周", "monthly" to "每月")
+    val calendar = type in setOf("daily", "weekly", "monthly")
+    val repeating = type != "once"
+    fun schedule(now: Long) = reminderScheduleDraft(type, minutes, time, zone, weekdays, monthDay, lastDay, skipGap, laterOverlap, now)
+    val now = System.currentTimeMillis()
+    val draft = runCatching { schedule(now) }
+    val preview = draft.getOrNull()?.let { runCatching { dev.pocketengine.features.automation.AutomationSchedule.preview(it, now, 3) }.getOrNull() }
     LaunchedEffect(busy) { if (submitted && !busy && state.moduleErrors["automation.save"] == null) close() }
     AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = Color.White, title = { Text("新建提醒") }, text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        OutlinedTextField(title, { title = it }, label = { Text("提醒内容") }, maxLines = 3)
-        Row(verticalAlignment = Alignment.CenterVertically) { Text("每天重复", Modifier.weight(1f), fontSize = 13.sp); Switch(daily, { daily = it }) }
-        if (daily) { OutlinedTextField(time, { time = it }, label = { Text("每天时间 HH:mm") }, singleLine = true); CenterCaption("时区：" + ZoneId.systemDefault().id) } else OutlinedTextField(minutes, { minutes = it.filter(Char::isDigit).take(6) }, label = { Text("多少分钟后") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-        Row(verticalAlignment = Alignment.CenterVertically) { Text("提醒我开始手机任务", Modifier.weight(1f), fontSize = 13.sp); Switch(phone, { phone = it }) }
-        if (phone) OutlinedTextField(goal, { goal = it }, label = { Text("手机任务目标") }, minLines = 2, maxLines = 5)
-        if (daily) {
-            Text("错过日历时间时", fontSize = 14.sp)
-            listOf("skip" to "跳过旧实例，只处理最新一次", "coalesce" to "合并错过的实例为一次", "catch_up" to "按原日历逐次补处理").forEach { (value, label) ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(selected = misfire == value, onClick = { misfire = value }, enabled = !busy)
-                    Text(label, fontSize = 13.sp, modifier = Modifier.weight(1f))
-                }
-            }
-            if (misfire == "catch_up") OutlinedTextField(maxCatchUp, { maxCatchUp = it.filter(Char::isDigit).take(2) },
-                label = { Text("本轮最多补处理次数（1–20）") }, singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-            Text("原任务仍未结束时", fontSize = 14.sp)
-            listOf("buffer_one" to "保留一个待处理实例", "skip" to "跳过新实例", "allow" to "允许并行（仍各自需要原任务授权）").forEach { (value, label) ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(selected = overlap == value, onClick = { overlap = value }, enabled = !busy)
-                    Text(label, fontSize = 13.sp, modifier = Modifier.weight(1f))
-                }
-            }
-            CenterCaption("补处理不等于补执行：通知投递未知或旧任务结果未核对时，不会盲目重发或假定成功。")
+        OutlinedTextField(title, { title = it.take(200) }, label = { Text("提醒内容") }, maxLines = 3)
+        Box {
+            OutlinedButton(onClick = { typeMenu = true }, enabled = !busy) { Text("时间安排：" + (types.firstOrNull { it.first == type }?.second ?: "请选择安排") + " ▾") }
+            DropdownMenu(expanded = typeMenu, onDismissRequest = { typeMenu = false }) { types.forEach { (value, label) -> DropdownMenuItem(text = { Text(label) }, onClick = { type = value; typeMenu = false }) } }
         }
+        if (calendar) {
+            OutlinedTextField(time, { time = it.take(5) }, label = { Text("当地时间 HH:mm") }, singleLine = true)
+            OutlinedTextField(zone, { zone = it.take(80) }, label = { Text("时区，例如 Asia/Shanghai") }, singleLine = true)
+        } else OutlinedTextField(minutes, { minutes = it.filter(Char::isDigit).take(6) }, label = { Text(if (type == "interval") "每隔多少分钟" else "多少分钟后") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+        if (type == "interval") CenterCaption("首次约在所填分钟数后；随后按这个固定起点间隔。改时区不改间隔，后台调度可能延后。")
+        if (type == "weekly") FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日").forEachIndexed { index, label ->
+                val day = (index + 1).toString()
+                FilterChip(selected = day in weekdays.split(','), onClick = { val selected = weekdays.split(',').filter { it.isNotBlank() }.toMutableSet(); if (!selected.add(day)) selected.remove(day); weekdays = selected.sorted().joinToString(",") }, label = { Text(label) }, enabled = !busy)
+            }
+        }
+        if (type == "monthly") {
+            OutlinedTextField(monthDay, { monthDay = it.filter(Char::isDigit).take(2) }, label = { Text("每月几日（1–31）") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+            Row(verticalAlignment = Alignment.CenterVertically) { Text("短月使用最后一天", Modifier.weight(1f), fontSize = 13.sp); Switch(lastDay, { lastDay = it }, enabled = !busy) }
+            CenterCaption(if (lastDay) "例如31日遇到2月，会使用2月最后一天。" else "当月没有所选日期时，跳过当月。")
+        }
+        if (calendar) {
+            TextButton(onClick = { advanced = !advanced }) { Text(if (advanced) "收起夏令时选项" else "夏令时选项") }
+            if (advanced) {
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("不存在的当地时间跳过", Modifier.weight(1f), fontSize = 13.sp); Switch(skipGap, { skipGap = it }, enabled = !busy) }
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("重复时间选择较晚一次", Modifier.weight(1f), fontSize = 13.sp); Switch(laterOverlap, { laterOverlap = it }, enabled = !busy) }
+            }
+        }
+        draft.exceptionOrNull()?.message?.let { Text(it, color = Danger, fontSize = 12.sp) }
+        preview?.optJSONArray("occurrences").objects().forEach { occurrence -> CenterCaption("预计：" + occurrence.optString("local").replace('T', ' ') + " · " + occurrence.optString("zone")) }
+        CenterCaption("预览用同一日历算法，保存时重算首次起点；固定间隔预览为UTC。系统可能延后，不保证秒级准点。")
+        Row(verticalAlignment = Alignment.CenterVertically) { Text("提醒我开始手机任务", Modifier.weight(1f), fontSize = 13.sp); Switch(phone, { phone = it }, enabled = !busy) }
+        if (phone) OutlinedTextField(goal, { goal = it.take(4000) }, label = { Text("手机任务目标") }, minLines = 2, maxLines = 5)
+        if (repeating) {
+            Text("错过安排时间时", fontSize = 14.sp)
+            listOf("skip" to "跳过旧实例，只处理最新一次", "coalesce" to "合并错过的实例为一次", "catch_up" to "按原安排逐次补处理").forEach { (value, label) -> Row(verticalAlignment = Alignment.CenterVertically) { RadioButton(selected = misfire == value, onClick = { misfire = value }, enabled = !busy); Text(label, fontSize = 13.sp, modifier = Modifier.weight(1f)) } }
+            if (misfire == "catch_up") OutlinedTextField(maxCatchUp, { maxCatchUp = it.filter(Char::isDigit).take(2) }, label = { Text("本轮最多补处理次数（1–20）") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+            Text("原任务仍未结束时", fontSize = 14.sp)
+            listOf("buffer_one" to "保留一个待处理实例", "skip" to "跳过新实例", "allow" to "允许并行（仍各自需要原任务授权）").forEach { (value, label) -> Row(verticalAlignment = Alignment.CenterVertically) { RadioButton(selected = overlap == value, onClick = { overlap = value }, enabled = !busy); Text(label, fontSize = 13.sp, modifier = Modifier.weight(1f)) } }
+            CenterCaption("投递未知或旧任务结果未核对时，不会盲目重发。")
+        }
+        submitError?.let { Text(it, color = Danger, fontSize = 12.sp) }
         state.moduleErrors["automation.save"]?.let { Text(it, color = Danger, fontSize = 12.sp) }
-    } }, confirmButton = { Button(onClick = { submitted = true; val schedule = if (daily) JSONObject().put("type", "daily").put("time", time).put("zone", ZoneId.systemDefault().id) else JSONObject().put("type", "once").put("at", System.currentTimeMillis() + (minutes.toLongOrNull() ?: 0) * 60_000); controller.requestFeature("automation", "save", JSONObject().put("rule", JSONObject().put("title", title.trim()).put("kind", if (phone) "phone_goal" else "reminder").put("goal", goal.trim()).put("enabled", true).put("schedule", schedule).put("policy", JSONObject().put("misfire", if (daily) misfire else "skip").put("overlap", if (daily) overlap else "buffer_one").put("maxCatchUp", maxCatchUp.toIntOrNull() ?: 3)))) }, enabled = !busy && (misfire != "catch_up" || (maxCatchUp.toIntOrNull() ?: 0) in 1..20) && title.isNotBlank() && (!phone || goal.isNotBlank()) && (daily || (minutes.toLongOrNull() ?: 0) in 1..525600)) { Text(if (busy) "保存中" else "创建提醒") } }, dismissButton = { TextButton(onClick = close, enabled = !busy) { Text("取消") } })
+    } }, confirmButton = { Button(onClick = {
+        val currentDraft = runCatching { schedule(System.currentTimeMillis()) }
+        if (currentDraft.isSuccess) {
+        submitError = null
+        submitted = true
+        controller.requestFeature("automation", "save", JSONObject().put("rule", JSONObject().put("title", title.trim()).put("kind", if (phone) "phone_goal" else "reminder").put("goal", goal.trim()).put("enabled", true).put("schedule", currentDraft.getOrThrow()).put("policy", JSONObject().put("misfire", if (repeating) misfire else "skip").put("overlap", if (repeating) overlap else "buffer_one").put("maxCatchUp", maxCatchUp.toIntOrNull() ?: 3))))
+        } else submitError = currentDraft.exceptionOrNull()?.message ?: "时间安排当前不可用，请核对后重试"
+    }, enabled = !busy && draft.isSuccess && (misfire != "catch_up" || (maxCatchUp.toIntOrNull() ?: 0) in 1..20) && title.isNotBlank() && (!phone || goal.isNotBlank())) { Text(if (busy) "保存中" else "创建提醒") } }, dismissButton = { TextButton(onClick = close, enabled = !busy) { Text("取消") } })
 }
 
 internal fun qqGatewayConnection(channels: JSONObject, profileId: String): JSONObject? = channels.optJSONObject("qq")?.optJSONArray("connections").objects().find { it.optString("profileId") == profileId }

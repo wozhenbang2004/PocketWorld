@@ -18,7 +18,11 @@ public final class WorkProfileDrafts {
     public static boolean changed(JSONObject definition,JSONObject saved,String name)throws Exception{return saved==null||!WorkProfile.fingerprint(copy(definition).put("name",name)).equals(WorkProfile.fingerprint(saved));}
     public static boolean originalOwnerTask(JSONObject task){return "assistant".equals(task.optString("kind"))&&"owner".equals(task.optString("actorId"))&&"private".equals(task.optString("spaceId"))&&(!task.has("origin")||task.isNull("origin"))&&!task.has("sourceLearningJob")&&!task.has("teamAssignment")&&!task.has("teamWriteScope")&&(task.optJSONObject("workProfileRef")!=null||task.optJSONObject("workProfileIntent")!=null);}
     public static JSONObject withModel(JSONObject definition,String purpose,JSONObject reference)throws Exception{
-        if(!java.util.Set.of("MAIN","SUMMARY","RELAY").contains(purpose))throw new IllegalArgumentException("本入口仅支持主任务、摘要与明确的网关模型");JSONObject next=copy(definition);next.getJSONObject("modelPolicies").put(purpose,ModelTargetRef.fromJson(reference).toJson());return WorkProfile.fromJson(next).toJson();
+        if(!purpose.matches("MAIN|SUMMARY|RELAY|MEMBER(?:\\.[A-Za-z0-9_-]{1,60})?"))throw new IllegalArgumentException("请选择原主任务、摘要、网关或实际成员用途");JSONObject next=copy(definition);next.getJSONObject("modelPolicies").put(purpose,ModelTargetRef.fromJson(reference).toJson());return WorkProfile.fromJson(next).toJson();
+    }
+    public static JSONObject withoutMemberModel(JSONObject definition,String purpose)throws Exception {if(!purpose.matches("MEMBER(?:\\.[A-Za-z0-9_-]{1,60})?"))throw new IllegalArgumentException("请选择原成员用途");JSONObject next=copy(definition);next.getJSONObject("modelPolicies").remove(purpose);return WorkProfile.fromJson(next).toJson();}
+    public static JSONObject withTeamTemplate(JSONObject definition,JSONObject exactNativeChoice)throws Exception {
+        JSONObject next=copy(definition);next.put("teamTemplateRef",exactNativeChoice==null?JSONObject.NULL:fields(exactNativeChoice,"id","digest").put("optional",false));return WorkProfile.fromJson(next).toJson();
     }
     public static JSONObject withoutRelayModel(JSONObject definition)throws Exception {JSONObject next=copy(definition);next.getJSONObject("modelPolicies").remove("RELAY");return WorkProfile.fromJson(next).toJson();}
     /** Owner choices only. Account plans remain app-only; groups are rechecked for EXTERNAL_RELAY at preflight. */
@@ -50,8 +54,10 @@ public final class WorkProfileDrafts {
         }
         JSONObject accounts=sections.optJSONObject("accounts");if(accounts!=null&&accounts.optBoolean("available")){JSONObject data=accounts,ref=data.optJSONObject("selectedModelRef");if(ref!=null&&data.optBoolean("selectedModelUsable"))out.put(new JSONObject().put("label","原账号页所选模型").put("detail",ref.getString("modelId")).put("reference",ModelTargetRef.exact("account:"+ref.getString("accountId"),ref.getString("modelId")).toJson()));}return out;
     }
-    public static boolean runnable(JSONObject review)throws Exception{
-        if(!review.optBoolean("ready"))return false;JSONObject policies=review.getJSONObject("modelPolicies");if(!policies.has("MAIN")||!policies.has("SUMMARY"))return false;var names=policies.keys();while(names.hasNext())if(!java.util.Set.of("MAIN","SUMMARY","RELAY").contains(names.next()))return false;
-        JSONArray items=review.getJSONArray("items");for(int i=0;i<items.length();i++){JSONObject item=items.getJSONObject(i);String kind=item.getString("kind");if(item.getBoolean("included")&&(kind.equals("team")||kind.startsWith("target:")))return false;}return true;
+    public static boolean runnable(JSONObject review)throws Exception{return runnable(review,false);}
+    public static boolean runnable(JSONObject review,boolean originalProjectSelected)throws Exception{
+        if(!review.optBoolean("ready"))return false;JSONObject policies=review.getJSONObject("modelPolicies");if(!policies.has("MAIN")||!policies.has("SUMMARY"))return false;
+        var names=policies.keys();while(names.hasNext()){String purpose=names.next();if(!java.util.Set.of("MAIN","SUMMARY","RELAY","_GLOBAL").contains(purpose)&&!(originalProjectSelected&&purpose.matches("MEMBER(?:\\.[A-Za-z0-9_-]{1,60})?")))return false;}
+        JSONArray items=review.getJSONArray("items");for(int i=0;i<items.length();i++){JSONObject item=items.getJSONObject(i);String kind=item.getString("kind");if(item.getBoolean("included")&&((kind.equals("team")&&!originalProjectSelected)||kind.startsWith("target:")))return false;}return true;
     }
 }

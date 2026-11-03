@@ -12,7 +12,7 @@ import org.json.JSONObject;
 
 /** Native owner page only. Transport modules and model JSON cannot create these ephemeral reviews. */
 public final class RemoteOwnerWorkflows {
-    private static final class Window {dev.pocketengine.features.remote.NativeHarnessGatewayOwner.Page gateway;volatile long gatewayRevision;dev.pocketengine.features.remote.NativeHarnessGatewayOwner.ParentAccess gatewayParentAccess;JSONObject gatewayParentReview;volatile String gatewayParentDigest;String lastGatewayParentDigest;long gatewayParentReviewExpires;String gatewayPreparedReview,gatewayPreparedRequest,gatewayPreparedOperation,lastGatewayDispatchDigest,lastGatewayDispatchOperation;volatile String gatewayExecutionDigest;JSONObject gatewayExecutionReview;TaskStore.HarnessGatewayConfiguration gatewayExecutionConfiguration;long gatewayExecutionExpires;final String id,task;final Object nativeOwner;JSONObject source;volatile String review;String profileBinding;JSONObject result,artifact,snapshotFile;long reviewedAt,readGeneration,lastReadAttemptAt,lastSuccessfulReadAt;String queryStatus="not_queried",eventReadStatus="not_queried";volatile long lifecycleRevision;volatile boolean closed;boolean fresh,savingResult;JSONObject directory,conversationResult,projectFirst,projectEnvironment,projectReview,projectPage,projectDiff,projectOperation,projectReadSource;String projectReadOperation;volatile String projectDigest;long projectExpires;boolean projectBusy;String conversationDigest;long conversationExpiresAt;dev.pocketengine.features.channels.ChannelsModule.PrivateInputSource conversationSource;final Map<String,JSONObject> selectedFiles=new LinkedHashMap<>();TaskStore.TeamRemoteOwnerWindow teamWindow;final Map<String,TaskStore.TeamRemoteOwnerReview> teamReviews=new LinkedHashMap<>();Window(String id,String task,Object nativeOwner){this.id=id;this.task=task;this.nativeOwner=nativeOwner;}}
+    private static final class Window {dev.pocketengine.features.remote.NativeHarnessGatewayOwner.Page gateway;volatile long gatewayRevision;dev.pocketengine.features.remote.NativeHarnessGatewayOwner.ParentAccess gatewayParentAccess;JSONObject gatewayParentReview;volatile String gatewayParentDigest;String lastGatewayParentDigest;long gatewayParentReviewExpires;String gatewayPreparedReview,gatewayPreparedRequest,gatewayPreparedOperation,lastGatewayDispatchDigest,lastGatewayDispatchOperation;volatile String gatewayExecutionDigest;JSONObject gatewayExecutionReview;TaskStore.HarnessGatewayConfiguration gatewayExecutionConfiguration;long gatewayExecutionExpires;final String id,task;final Object nativeOwner;JSONObject source;volatile String review;String profileBinding,clipboardReadReview;JSONObject result,artifact,snapshotFile;long reviewedAt,readGeneration,lastReadAttemptAt,lastSuccessfulReadAt;String queryStatus="not_queried",eventReadStatus="not_queried";volatile long lifecycleRevision;volatile boolean closed;boolean fresh,savingResult;JSONObject directory,conversationResult,projectFirst,projectEnvironment,projectReview,projectPage,projectDiff,projectOperation,projectReadSource;String projectReadOperation;volatile String projectDigest;long projectExpires;boolean projectBusy;String conversationDigest;long conversationExpiresAt;dev.pocketengine.features.channels.ChannelsModule.PrivateInputSource conversationSource;final Map<String,JSONObject> selectedFiles=new LinkedHashMap<>();TaskStore.TeamRemoteOwnerWindow teamWindow;final Map<String,TaskStore.TeamRemoteOwnerReview> teamReviews=new LinkedHashMap<>();Window(String id,String task,Object nativeOwner){this.id=id;this.task=task;this.nativeOwner=nativeOwner;}}
     /** Native owner approval for a real original-task RELAY-only run; never JSON-restorable. */
     public static final class GatewayParentRunApproval {
         private final RemoteOwnerWorkflows host;private final Window window;private final dev.pocketengine.features.remote.NativeHarnessGatewayOwner.ParentAccess access;private final String digest;private final long lifecycle,expires;
@@ -238,6 +238,67 @@ public final class RemoteOwnerWorkflows {
         if(required(window.id)!=window||!window.fresh||window.source==null||!review.equals(window.review)||android.os.SystemClock.uptimeMillis()-window.reviewedAt>60_000L)throw new SecurityException("本次原生审阅已过期，请查询原任务后重新确认");
         if(window.teamWindow!=null&&foregroundOwner!=window.nativeOwner)throw new SecurityException("原审批Activity已不在前台");
         if(window.profileBinding==null||!window.profileBinding.equals(module().profileBindingHash(window.source.getString("profileId"))))throw new SecurityException("审阅后的电脑配置或凭据已变化，请查询原任务后重新确认；未派发旧决定");
+    }
+    @FunctionalInterface public interface ClipboardDraftReader {android.content.ClipData read(ClipboardDraftReadAccess approval)throws Exception;}
+    /** Private native owner read permit, process-local and one-use. Not a task/run grant. */
+    public static final class ClipboardDraftReadAccess {
+        private final RemoteOwnerWorkflows host;private final Window window;private final String review,binding,draft,mode,scope;
+        private final long lifecycle,generation,revision;private volatile boolean closed;private boolean claimed;
+        private ClipboardDraftReadAccess(RemoteOwnerWorkflows host,Window window,JSONObject input,JSONObject scope)throws Exception {
+            this.host=host;this.window=window;review=window.review;binding=window.profileBinding;lifecycle=window.lifecycleRevision;generation=window.readGeneration;
+            draft=input.getString("draftId");mode=input.getString("mode");revision=input.getLong("draftRevision");this.scope=scope.toString();
+        }
+        public void checkCurrent()throws Exception {if(closed)throw dev.pocketengine.features.remote.RemoteDraftClipboard.targetFailure();host.checkClipboardRead(this);if(closed)throw dev.pocketengine.features.remote.RemoteDraftClipboard.targetFailure();}
+        public void claimNativeRead(Object actualOwner)throws Exception {
+            checkCurrent();if(actualOwner!=window.nativeOwner)throw dev.pocketengine.features.remote.RemoteDraftClipboard.targetFailure();
+            synchronized(this){if(closed||claimed)throw dev.pocketengine.features.remote.RemoteDraftClipboard.targetFailure();claimed=true;}
+            checkCurrent();
+        }
+        private synchronized boolean claimed(){return claimed;}
+    }
+    /** Native Compose caller only, deliberately absent from the JSON command dispatcher.
+     * Clipboard/service work is always outside both host and TaskStore monitors. */
+    public String clipboardDraftText(Object nativeOwner,JSONObject input,ClipboardDraftReader reader)throws Exception {
+        if(Thread.holdsLock(this)||Thread.holdsLock(tasks))throw dev.pocketengine.features.remote.RemoteDraftClipboard.targetFailure();
+        ClipboardDraftReadAccess approval;
+        try{synchronized(this){
+            if(input.length()!=6)throw new SecurityException("原读取字段不符");
+            for(var key=input.keys();key.hasNext();)if(!java.util.Set.of("windowId","taskId","reviewId","draftId","draftRevision","mode").contains(key.next()))throw new SecurityException("不是原读取目标");
+            Window window=required(input.getString("windowId"));checkReview(window,input.getString("reviewId"));
+            if(nativeOwner==null||window.nativeOwner!=nativeOwner||foregroundOwner!=nativeOwner||window.teamWindow!=null||!window.task.equals(input.getString("taskId"))||reader==null||window.review.equals(window.clipboardReadReview))throw new SecurityException("原前台读取已失效或已使用");
+            JSONObject scope=clipboardDraftTarget(window,input.getString("draftId"),input.getLong("draftRevision"),input.getString("mode"),input.opt("draftRevision"));
+            approval=new ClipboardDraftReadAccess(this,window,input,scope);window.clipboardReadReview=window.review;
+        }}catch(Exception invalid){throw dev.pocketengine.features.remote.RemoteDraftClipboard.targetFailure();}
+        try{
+            android.content.ClipData sample;
+            try{sample=reader.read(approval);}catch(dev.pocketengine.features.remote.RemoteDraftClipboard.Failure safe){throw safe;}catch(Exception unavailable){throw dev.pocketengine.features.remote.RemoteDraftClipboard.unavailableFailure();}
+            if(!approval.claimed())throw dev.pocketengine.features.remote.RemoteDraftClipboard.targetFailure();
+            String text=dev.pocketengine.features.remote.RemoteDraftClipboard.text(sample);
+            try{approval.checkCurrent();}catch(Exception changed){throw dev.pocketengine.features.remote.RemoteDraftClipboard.targetFailure();}
+            return text;
+        }finally{approval.closed=true;}
+    }
+    private synchronized void checkClipboardRead(ClipboardDraftReadAccess approval)throws Exception {
+        Window window=approval.window;checkReadCurrent(window,approval.lifecycle,approval.generation);checkReview(window,approval.review);
+        if(window.nativeOwner==null||foregroundOwner!=window.nativeOwner||window.teamWindow!=null||!approval.binding.equals(window.profileBinding)||!approval.review.equals(window.clipboardReadReview))throw new SecurityException("原读取身份已变化");
+        JSONObject actual=clipboardDraftTarget(window,approval.draft,approval.revision,approval.mode,approval.revision);
+        if(!dev.pocketengine.features.remote.RemoteTaskDrafts.same(new JSONObject(approval.scope),actual))throw new SecurityException("原草稿目标已变化");
+    }
+    private JSONObject clipboardDraftTarget(Window window,String draft,long revision,String mode,Object revisionValue)throws Exception {
+        if(!draft.matches("[a-f0-9-]{36}")||revision<0||!(revisionValue instanceof Integer||revisionValue instanceof Long))throw new SecurityException("原草稿游标无效");
+        synchronized(tasks){
+            JSONObject current=tasks.remoteOwnerTarget(window.task),task=tasks.get(window.task,false),origin=task.optJSONObject("origin");
+            if(task.has("teamRunId")||task.has("memberId")||origin!=null&&origin.optString("kind").startsWith("team")||current.opt("cancelRequested")!=Boolean.FALSE||task.optString("status").matches("stopping|cancelled|completed"))throw new SecurityException("不是当前私人草稿目标");
+            if(task.has("parentTaskId")){tasks.requirePrivateRemoteChild(window.task);JSONObject parent=tasks.get(task.getString("parentTaskId"),false);if(parent==null||parent.optBoolean("cancelRequested")||parent.optString("status").matches("stopping|cancelled|completed"))throw new SecurityException("原私人父任务已停止");}
+            if(current.opt("protocolVerified")!=Boolean.TRUE)throw new SecurityException("原协议身份未确认");
+            for(String key:new String[]{"taskId","runId","profileId","serviceBase","jobId","jobOperationId","environmentId","worker","protocol","threadId"})if(!(current.opt(key) instanceof String)||current.getString(key).trim().isEmpty())throw new SecurityException("原会话字段未确认");
+            JSONObject scope=dev.pocketengine.features.remote.RemoteTaskDrafts.scope(current,window.profileBinding,mode);
+            if(!dev.pocketengine.features.remote.RemoteTaskDrafts.same(scope,dev.pocketengine.features.remote.RemoteTaskDrafts.scope(window.source,window.profileBinding,mode)))throw new SecurityException("原会话已换代");
+            JSONArray rows=tasks.originalRemoteDrafts(window.task);JSONObject found=null;for(int i=0;i<rows.length();i++)if(draft.equals(rows.getJSONObject(i).optString("id")))found=rows.getJSONObject(i);
+            if(found==null){if(revision!=0)throw new SecurityException("原草稿不存在");}
+            else if(found.getLong("revision")!=revision||!found.optString("state").matches("draft|queued")||!mode.equals(found.optString("mode"))||!dev.pocketengine.features.remote.RemoteTaskDrafts.same(scope,found.getJSONObject("scope")))throw new SecurityException("原草稿已变化或领取");
+            return scope;
+        }
     }
     private JSONObject draftAction(Window window,String command,JSONObject input)throws Exception {
         TaskStore.RemoteDraftDispatch dispatch=null;String binding;long lifecycle;JSONObject local;

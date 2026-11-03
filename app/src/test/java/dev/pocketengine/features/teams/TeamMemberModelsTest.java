@@ -12,6 +12,11 @@ import static org.junit.Assert.*;
 public final class TeamMemberModelsTest {
     private static ModelConfig config(String name){return new ModelConfig("http://127.0.0.1/v1","never-persist-this-key",name,false,24,60,"openai_chat",512);}
     private static ModelConfig captured(){ModelConfig main=config("global-main"),summary=config("independent-summary");return main.withRoutePlan(ModelRoutePlan.exact(main,"MAIN","APP_OWNER")).withPurposePlans(Map.of("DEFAULT",ModelRoutePlan.exact(main,"DEFAULT","APP_OWNER"),"SUMMARY",ModelRoutePlan.exact(summary,"SUMMARY","APP_OWNER")));}
+    @Test public void genericMemberJsonCannotRetainACopiedNativeModelPin() throws Exception {
+        JSONObject member=new JSONObject().put("id","a").put("name","A").put("role","Native slot").put("runner","model").put("device","phone")
+            .put("memberModelSelection",new JSONObject().put("format","pocketworld.team-member-model.v1"));
+        assertFalse(AgentSlot.normalize(member,0).has("memberModelSelection"));
+    }
     @Test public void legacyMemberNameCannotBeOverwrittenByMainDefaultAndSummaryIsIndependent()throws Exception {
         var selected=TeamMemberModels.capture(new JSONObject().put("id","a").put("model","member-A"),captured(),null);
         assertEquals("member-A",selected.config.forPurpose("MEMBER").model);assertEquals("member-A",selected.config.forPurpose("MAIN").model);assertEquals("independent-summary",selected.config.forPurpose("SUMMARY").model);

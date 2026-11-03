@@ -15,6 +15,8 @@ public final class WorkProfileResolver {
     public interface Sources {
         ModelConfig model(ModelTargetRef reference, String purpose, RunControl observation) throws Exception;
         void checkModel(ModelConfig captured, String purpose, RunControl observation) throws Exception;
+        /** Native startup default, never MAIN or a later global lookup. Missing adapters stay explicit. */
+        default ModelConfig globalDefault(RunControl observation) throws Exception { observation.check(); return null; }
         /** Existing source's public native facts, not content from a model or imported Profile. */
         JSONObject skill(String id, RunControl observation) throws Exception;
         JSONObject plugin(String id, RunControl observation) throws Exception;
@@ -44,6 +46,7 @@ public final class WorkProfileResolver {
             Sources frozenModels = new Sources() {
                 public ModelConfig model(ModelTargetRef reference, String purpose, RunControl control) throws Exception { ModelConfig captured = models.get(purpose); if(captured == null) throw new SecurityException("frozen_profile_model_missing"); sources.checkModel(captured, purpose, control); return captured; }
                 public void checkModel(ModelConfig captured, String purpose, RunControl control) throws Exception { sources.checkModel(captured, purpose, control); }
+                public ModelConfig globalDefault(RunControl control) throws Exception { ModelConfig captured=models.get("_GLOBAL"); if(captured!=null)sources.checkModel(captured,"DEFAULT",control);return captured; }
                 public JSONObject skill(String id, RunControl control) throws Exception { return sources.skill(id, control); }
                 public JSONObject plugin(String id, RunControl control) throws Exception { return sources.plugin(id, control); }
                 public JSONObject extension(String id, RunControl control) throws Exception { return sources.extension(id, control); }
@@ -87,7 +90,7 @@ public final class WorkProfileResolver {
             public JSONObject target(JSONObject ref, RunControl observation) throws Exception { return frozenTarget(sources, frozen, ref, observation); }
             public Set<String> hostCapabilities() throws Exception { return sources.hostCapabilities(); }
         };
-        Resolution observed = resolve(assets, originalAssets, control); observed.requireReady(); JSONArray expected = new JSONArray(), actual = observed.view().getJSONArray("items"), original = frozen.getJSONArray("items");
+        Resolution observed = resolve(assets, originalAssets, control, false); observed.requireReady(); JSONArray expected = new JSONArray(), actual = observed.view().getJSONArray("items"), original = frozen.getJSONArray("items");
         for (int i = 0; i < original.length(); i++) if (!"model".equals(original.getJSONObject(i).getString("kind"))) expected.put(original.getJSONObject(i));
         for (int i = 0; i < expected.length(); i++) { JSONObject item = expected.getJSONObject(i); if (item.getString("kind").startsWith("target:") && item.getBoolean("optional") && !item.getBoolean("included")) actual.put(i, new JSONObject(item.toString())); }
         if (!WorkProfile.fingerprint(expected).equals(WorkProfile.fingerprint(actual))) throw new SecurityException("original_work_profile_asset_sources_changed"); control.check();
@@ -95,7 +98,8 @@ public final class WorkProfileResolver {
     private interface Read { JSONObject get() throws Exception; }
     private interface Check { JSONObject verify(JSONObject actual) throws Exception; }
     private WorkProfileResolver() { }
-    public static Resolution resolve(WorkProfile profile, Sources sources, RunControl observation) throws Exception {
+    public static Resolution resolve(WorkProfile profile, Sources sources, RunControl observation) throws Exception {return resolve(profile,sources,observation,true);}
+    private static Resolution resolve(WorkProfile profile,Sources sources,RunControl observation,boolean captureDefault) throws Exception {
         java.util.Objects.requireNonNull(profile); java.util.Objects.requireNonNull(sources); observation.check();
         JSONObject definition = profile.toJson(), capturedModels = new JSONObject(); JSONArray rows = new JSONArray();
         Set<String> availableCapabilities=sources.hostCapabilities();
@@ -110,6 +114,20 @@ public final class WorkProfileResolver {
                 JSONObject identity = modelIdentity(captured); models.put(purpose, captured); capturedModels.put(purpose, identity);
                 rows.put(row("model", purpose, false, "ready", identity));
             } catch (Exception unavailable) { observation.check(); rows.put(row("model", purpose, false, "unavailable", null)); }
+        }
+        if(captureDefault){
+        // A fully explicit MAIN/SUMMARY Profile does not depend on an unrelated unconfigured
+        // global source. Member/required-team use still needs an exact native startup fallback.
+        ModelConfig startupDefault=null;
+        try {startupDefault=sources.globalDefault(observation);if(startupDefault!=null)sources.checkModel(startupDefault,"DEFAULT",observation);}
+        catch(Exception unavailable){observation.check();startupDefault=null;}
+        if (startupDefault != null) {
+            JSONObject identity = modelIdentity(startupDefault);
+            models.put("_GLOBAL", startupDefault); capturedModels.put("_GLOBAL", identity);
+            rows.put(row("model", "_GLOBAL", false, "ready", identity));
+        } else if (WorkProfile.keys(policies).stream().anyMatch(p -> p.equals("MEMBER") || p.startsWith("MEMBER.")) || definition.optJSONObject("teamTemplateRef")!=null&&!definition.getJSONObject("teamTemplateRef").optBoolean("optional")) {
+            rows.put(row("model", "_GLOBAL", false, "native_startup_default_unavailable", null));
+        }
         }
         for (String section : new String[]{"instructionRefs", "skillRefs"}) {
             JSONArray selected = definition.getJSONArray(section);
@@ -207,7 +225,7 @@ public final class WorkProfileResolver {
         }
         return result;
     }
-    private static JSONObject modelIdentity(ModelConfig captured) throws Exception {
+    static JSONObject modelIdentity(ModelConfig captured) throws Exception {
         JSONObject result = new JSONObject().put("model", captured.model).put("configurationDigest", ModelRoutePlan.configurationDigest(captured));
         if (captured.capabilityBinding != null) result.put("binding", captured.capabilityBinding.toJson());
         if (captured.usesAccount()) result.put("account", captured.accountModel.toJson());
@@ -227,6 +245,14 @@ public final class WorkProfileResolver {
         Sources pinned=new Sources(){
             public ModelConfig model(ModelTargetRef ref,String purpose,RunControl control)throws Exception{ModelConfig captured=original.model(ref,purpose,control);requireStoredModelIdentity(frozen,purpose,captured);return captured;}
             public void checkModel(ModelConfig captured,String purpose,RunControl control)throws Exception{original.checkModel(captured,purpose,control);}
+            public ModelConfig globalDefault(RunControl control)throws Exception {
+                JSONObject pin=frozen.getJSONObject("modelPolicies").optJSONObject("_GLOBAL");if(pin==null)return null;
+                JSONObject account=pin.optJSONObject("account"),binding=pin.optJSONObject("binding");
+                String connection=binding!=null?binding.getString("connectionId"):account!=null?"account:"+account.getString("accountId"):"";
+                if(connection.isEmpty())throw new SecurityException("original_profile_global_default_unavailable");
+                ModelConfig captured=original.model(ModelTargetRef.exact(connection,pin.getString("model")),"DEFAULT",control);
+                requireStoredModelIdentity(frozen,"_GLOBAL",captured);return captured;
+            }
             public JSONObject skill(String id,RunControl control)throws Exception{return original.skill(id,control);}
             public JSONObject plugin(String id,RunControl control)throws Exception{return original.plugin(id,control);}
             public JSONObject extension(String id,RunControl control)throws Exception{return original.extension(id,control);}

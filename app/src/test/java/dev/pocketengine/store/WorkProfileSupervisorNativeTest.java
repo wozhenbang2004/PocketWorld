@@ -58,7 +58,7 @@ public final class WorkProfileSupervisorNativeTest {
     }
     private JSONObject skill(String name,String description,String body)throws Exception {JSONObject row=skills.handle("import",new JSONObject().put("source","fixture:owner").put("manifest","---\nname: "+name+"\ndescription: "+description+"\n---\n"+body)).getJSONObject("skill");skills.handle("setEnabled",new JSONObject().put("id",row.getString("id")).put("enabled",true).put("confirmed",true).put("acceptedDigest",row.getString("digest")));return skills.handle("get",new JSONObject().put("id",row.getString("id"))).getJSONObject("skill");}
     private JSONObject plugin(String id,String[] tools)throws Exception {JSONArray definitions=new JSONArray();for(String tool:tools)definitions.put(new JSONObject().put("name",tool).put("kind","echo"));JSONObject row=plugins.handle("install",new JSONObject().put("manifest",new JSONObject().put("id",id).put("name",id).put("version","1").put("tools",definitions)));row=plugins.setEnabledReviewed(id,row.getString("installationId"),true);for(String tool:tools)row=plugins.setToolGrantReviewed(id,row.getString("installationId"),row.getString("grantsDigest"),tool,true);return row;}
-    private HostToolSupervisor supervisor()throws Exception {String id=run.getString("id"),r=run.getString("runId");int epoch=run.getInt("coordinatorEpoch");String digest=selection.snapshot().getString("resolutionDigest");var policy=new WorkProfileToolSelection(selection,id,r,epoch,original,()->tasks.checkWorkProfileRun(id,r,epoch,digest,original));return new HostToolSupervisor(features,tasks,id,r,epoch,true,null,policy);}
+    private HostToolSupervisor supervisor()throws Exception {String id=run.getString("id"),r=run.getString("runId");int epoch=run.getInt("coordinatorEpoch");String digest=selection.snapshot().getString("resolutionDigest");var policy=new WorkProfileToolSelection(selection,id,r,epoch,original,()->tasks.checkWorkProfileRun(id,r,epoch,digest,original),()->tasks.checkWorkProfileCapabilityBinding(id,r,epoch,digest,original),(tool,op,args,live)->tasks.checkWorkProfilePreparedTool(id,r,epoch,digest,tool,op,args,live));return new HostToolSupervisor(features,tasks,id,r,epoch,true,null,policy);}
     private void authorize(CapabilityPort port)throws Exception {JSONArray names=new JSONArray(),tools=port.tools();for(int i=0;i<tools.length();i++)names.put(tools.getJSONObject(i).getJSONObject("function").getString("name"));tasks.authorizeTools(run.getString("id"),run.getString("runId"),names);}
     private void recordEvent(JSONObject event){try{tasks.event(run.getString("id"),run.getString("runId"),run.getInt("coordinatorEpoch"),event);}catch(Exception failed){throw new IllegalStateException(failed);}}
     private void instructionProfile(JSONObject source)throws Exception {
@@ -75,6 +75,32 @@ public final class WorkProfileSupervisorNativeTest {
             JSONObject context=port.contextSnapshot("a query unrelated to zephyr");String discovery=context.getJSONObject("skillsDiscovery").toString();assertTrue(discovery.contains(chosenSkill.getString("id")));assertFalse(discovery.contains(otherSkill.getString("id")));assertEquals(1,context.getJSONObject("referenceValidation").getJSONArray("skills").length());
             assertThrows(SecurityException.class,()->port.validate("skills_read",new JSONObject().put("id",otherSkill.getString("id")).put("digest",otherSkill.getString("digest"))));
             port.validate("skills_read",new JSONObject().put("id",chosenSkill.getString("id")).put("digest",chosenSkill.getString("digest")));assertFalse(port.supports(hiddenTool));assertEquals(0,tasks.get(run.getString("id"),false).getJSONArray("operations").length());}
+    }
+    @Test public void originalPreparedSkillsListAndReadUseExactProfileSourceChecksNotNewDispatch() throws Exception {
+        try(var port=supervisor()){
+            authorize(port);String task=run.getString("id"),attempt=run.getString("runId");int epoch=run.getInt("coordinatorEpoch");
+            var journal=tasks.journal(task,attempt,epoch,original);
+            String list=journal.beginOperation("skills_list",new JSONObject());
+            JSONObject discovered=port.execute("skills_list",new JSONObject().put("_hostOperationId",list),original);
+            assertTrue(discovered.toString().contains(chosenSkill.getString("id")));assertFalse(discovered.toString().contains(otherSkill.getString("id")));
+            journal.finishOperation(list,discovered);
+            JSONObject args=new JSONObject().put("id",chosenSkill.getString("id")).put("digest",chosenSkill.getString("digest"));
+            String read=journal.beginOperation("skills_read",args);
+            JSONObject body=port.execute("skills_read",new JSONObject(args.toString()).put("_hostOperationId",read),original);
+            assertTrue(body.toString().contains("selected reference body"));journal.finishOperation(read,body);
+            assertEquals(2,tasks.get(task,false).getJSONArray("operations").length());
+        }
+    }
+    @Test public void preparedSkillReadStillRejectsSourceRevocationAndMismatchedArguments() throws Exception {
+        try(var port=supervisor()){
+            authorize(port);var journal=tasks.journal(run.getString("id"),run.getString("runId"),run.getInt("coordinatorEpoch"),original);
+            JSONObject args=new JSONObject().put("id",chosenSkill.getString("id")).put("digest",chosenSkill.getString("digest"));
+            String read=journal.beginOperation("skills_read",args);
+            assertThrows(SecurityException.class,()->port.execute("skills_read",new JSONObject(args.toString()).put("path","other.txt").put("_hostOperationId",read),original));
+            skills.handle("setEnabled",new JSONObject().put("id",chosenSkill.getString("id")).put("enabled",false));
+            assertThrows(Exception.class,()->port.execute("skills_read",new JSONObject(args.toString()).put("_hostOperationId",read),original));
+            assertEquals(0,tasks.inferenceUsage(run.getString("id")).getJSONArray("receipts").length());
+        }
     }
     @Test public void missingProfilePolicyCannotSilentlyUseTheLegacyGlobalSurface()throws Exception {
         assertThrows(SecurityException.class,()->new HostToolSupervisor(features,tasks,run.getString("id"),run.getString("runId"),run.getInt("coordinatorEpoch"),true));

@@ -45,6 +45,12 @@ public final class SkillsModule implements EngineModule {
     /** Supervisor-only loading with actual host capabilities, never a model-supplied grant list. */
     public JSONObject loadForHost(JSONObject scope,String id,String digest,Set<String> hostCapabilities)throws Exception{return book.loadForHost(scope,id,digest,hostCapabilities,System.currentTimeMillis());}
     public JSONObject catalogueForHost(JSONObject scope)throws Exception {return book.catalogueForHost(scope,System.currentTimeMillis());}
+    public JSONObject cataloguePageForHost(JSONObject scope,Set<String> capabilities,JSONObject cursor,int pageSize)throws Exception {
+        return cataloguePageForHost(scope,capabilities,cursor,pageSize,null);
+    }
+    public JSONObject cataloguePageForHost(JSONObject scope,Set<String> capabilities,JSONObject cursor,int pageSize,Set<String> selectedVersions)throws Exception {
+        return book.cataloguePageForHost(scope,capabilities,cursor,pageSize,selectedVersions,System.currentTimeMillis());
+    }
     public JSONObject discoverForHost(JSONObject authenticatedScope,String query,Set<String> hostCapabilities,int limit,int maxChars)throws Exception {
         return book.discoverForHost(authenticatedScope,query,hostCapabilities,limit,maxChars,System.currentTimeMillis());
     }

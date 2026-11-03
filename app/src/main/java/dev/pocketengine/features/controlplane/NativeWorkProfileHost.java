@@ -24,8 +24,11 @@ public final class NativeWorkProfileHost {
     /** Reuses the original run's frozen metadata. This only removes tools; it never starts/resumes a run. */
     public WorkProfileToolSelection toolSelectionForRun(dev.pocketengine.store.TaskStore tasks, String id, String run, int epoch, RunControl original) throws Exception {
         JSONObject frozen = tasks.workProfileRunSnapshot(id, run, epoch); String digest = frozen.getString("resolutionDigest");
-        dev.pocketengine.core.CapabilitySnapshot.CurrentCheck binding = () -> tasks.checkWorkProfileRun(id, run, epoch, digest, original);
-        WorkProfileToolSelection policy = new WorkProfileToolSelection(frozen, () -> { binding.check(); WorkProfileResolver.checkStoredAssetSourcesCurrent(frozen, sources, original); }, binding);
+        dev.pocketengine.core.CapabilitySnapshot.CurrentCheck full = () -> tasks.checkWorkProfileRun(id, run, epoch, digest, original);
+        dev.pocketengine.core.CapabilitySnapshot.CurrentCheck binding = () -> tasks.checkWorkProfileCapabilityBinding(id,run,epoch,digest,original);
+        dev.pocketengine.core.CapabilitySnapshot.CurrentCheck source = () -> WorkProfileResolver.checkStoredAssetSourcesCurrent(frozen,sources,original);
+        WorkProfileToolSelection policy = new WorkProfileToolSelection(frozen, () -> { full.check(); source.check(); }, binding,source,
+            (tool,operation,args,supplied)->{if(supplied!=original)throw new SecurityException("original_profile_control_required");tasks.checkWorkProfilePreparedTool(id,run,epoch,digest,tool,operation,args,original);});
         policy.checkCurrent(); return policy;
     }
     /** Active original run only. This chooses a route, never a gateway/target approval or new run. */
@@ -91,6 +94,205 @@ public final class NativeWorkProfileHost {
                 .put("purpose","RELAY").put("audience","EXTERNAL_RELAY").put("configurationApplied",false).put("runtimeVerified",false);
         }
     }
+    /** Planning-only defaults for an actual native team proposal. The opaque plan supplies the
+     * original parent and selected slots; this is not a start token, grant or second team plan.
+     * The existing TeamParentPlan/owner approval must still pin these facts before execution. */
+    public MemberPlanModels memberModelsForPlan(dev.pocketengine.store.TaskStore tasks,
+            dev.pocketengine.features.teams.TeamParentPlan plan, RunControl original) throws Exception {
+        if (plan == null || original == null || !plan.origin().issuedBy(tasks)) throw new SecurityException("original_work_profile_member_plan_required");
+        plan.checkCurrent();
+        JSONObject parent = plan.origin().view();
+        String task = parent.getString("parentTaskId"), run = parent.getString("parentRunId");
+        int epoch = parent.getInt("parentEpoch");
+        if (!original.matchesHostRun(task, run, epoch)) throw new SecurityException("original_work_profile_member_control_required");
+        original.check();
+        JSONObject frozen = tasks.workProfileRunSnapshot(task, run, epoch);
+        tasks.checkTeamWorkProfilePlanBinding(plan.origin(), frozen.getString("resolutionDigest"), original);
+        MemberPlanModels captured = new MemberPlanModels(this, tasks, plan, original, frozen);
+        captured.checkCurrent();
+        return captured;
+    }
+
+    /** Credential-bearing captures stay transient. It is intentionally valid only while the
+     * original planning invocation is current, not after its operation receipts or a new epoch.
+     * No model JSON can construct this object or turn its public view into approval. */
+    public static final class MemberPlanModels {
+        private final NativeWorkProfileHost issuer;
+        private final dev.pocketengine.store.TaskStore tasks;
+        private final dev.pocketengine.features.teams.TeamParentPlan plan;
+        private final RunControl original;
+        private final String task, run, frozen, digest, teamId, teamDigest, publicView;
+        private final int epoch;
+        private final long pause;
+        private final Map<String, ModelConfig> models;
+        private final Map<String, String> purposes;
+        private final ModelConfig baseModel;
+
+        private MemberPlanModels(NativeWorkProfileHost issuer, dev.pocketengine.store.TaskStore tasks,
+                dev.pocketengine.features.teams.TeamParentPlan plan, RunControl original,
+                JSONObject frozen) throws Exception {
+            this.issuer = issuer; this.tasks = tasks; this.plan = plan; this.original = original;
+            this.frozen = frozen.toString(); digest = frozen.getString("resolutionDigest");
+            JSONObject parent = plan.origin().view(), proposed = plan.view();
+            task = parent.getString("parentTaskId"); run = parent.getString("parentRunId");
+            epoch = parent.getInt("parentEpoch"); pause = original.pauseRevision();
+            JSONObject selected = proposed.getJSONObject("definition"); teamId = selected.getString("id");
+            JSONObject actual = issuer.sources.team(teamId, original);
+            if (actual == null || !teamId.equals(actual.optString("id"))) throw new SecurityException("original_work_profile_member_team_missing");
+            teamDigest = WorkProfile.fingerprint(actual);
+            if (!teamDigest.equals(proposed.getString("selectedDefinitionHash"))) throw new SecurityException("original_work_profile_member_team_changed");
+            Map<String,ModelConfig> frozenModels = WorkProfileResolver.resolveStored(frozen,issuer.sources,original).models();
+            ModelConfig global = frozenModels.get("_GLOBAL"), summary = frozenModels.get("SUMMARY");
+            if(global==null||summary==null)throw new SecurityException("原工作配置没有启动默认模型快照，请重新在原任务审阅；未借用MAIN或当前默认");
+            baseModel=global.withPurposePlans(Map.of("SUMMARY",summary.routePlan==null?dev.pocketengine.runtime.models.ModelRoutePlan.exact(summary,"SUMMARY","APP_OWNER"):summary.routePlan));
+            JSONObject definition = frozen.getJSONObject("definition"), template = definition.optJSONObject("teamTemplateRef");
+            if (template != null) {
+                boolean included = false;
+                JSONArray items = frozen.getJSONArray("items");
+                for (int i = 0; i < items.length(); i++) {
+                    JSONObject item = items.getJSONObject(i);
+                    if ("team".equals(item.optString("kind")) && template.getString("id").equals(item.optString("id"))) included = item.optBoolean("included");
+                }
+                if (!included || !teamId.equals(template.getString("id")) || !teamDigest.equals(template.getString("digest"))) throw new SecurityException("original_work_profile_member_template_not_selected");
+            }
+            JSONObject policies = definition.getJSONObject("modelPolicies");
+            Map<String, ModelConfig> captures = new java.util.LinkedHashMap<>();
+            Map<String, String> selectedPurposes = new java.util.LinkedHashMap<>();
+            java.util.Set<String> used = new java.util.HashSet<>(), members = new java.util.HashSet<>();
+            JSONArray rows = new JSONArray(), selectedMembers = selected.getJSONArray("members");
+            for (int i = 0; i < selectedMembers.length(); i++) {
+                JSONObject member = selectedMembers.getJSONObject(i);
+                String id = member.getString("id");
+                if (!members.add(id) || !id.matches("[A-Za-z][A-Za-z0-9_-]{0,63}")) throw new SecurityException("original_work_profile_member_slot_changed");
+                JSONObject nativeMember = dev.pocketengine.features.teams.AgentSlot.normalize(
+                        dev.pocketengine.features.teams.TeamWorkPlan.find(actual.getJSONArray("members"), id), i);
+                if (!"model".equals(nativeMember.optString("runner", "model")) || !"phone".equals(nativeMember.opt("device"))) throw new SecurityException("work_profile_member_requires_original_local_model_slot");
+                // Assignment/path fields are deliberately changed by the native plan. Model,
+                // runner and device identity must still be the actual saved slot, not new JSON.
+                for (String key : new String[]{"runner", "device", "model", "modelTarget"}) {
+                    if (!WorkProfile.fingerprint(nativeMember.opt(key)).equals(WorkProfile.fingerprint(member.opt(key)))) throw new SecurityException("original_work_profile_member_slot_changed:" + key);
+                }
+                String purpose = id.length() <= 60 && policies.has("MEMBER." + id) ? "MEMBER." + id
+                        : policies.has("MEMBER") ? "MEMBER" : null;
+                boolean explicit = nativeMember.optJSONObject("modelTarget") != null || !nativeMember.optString("model").isEmpty();
+                JSONObject row = new JSONObject().put("memberId", id).put("profileDefaultApplied", false);
+                if (explicit) row.put("sourceKind", "original_explicit_member");
+                else if (purpose == null) row.put("sourceKind", "original_task_or_captured_global");
+                else {
+                    ModelConfig model = frozenModels.get(purpose);
+                    WorkProfileResolver.requireStoredModelIdentity(frozen, purpose, model);
+                    captures.put(id, model); selectedPurposes.put(id, purpose); used.add(purpose);
+                    row.put("sourceKind", "frozen_work_profile_member_default").put("purpose", purpose)
+                            .put("modelIdentity", new JSONObject(frozen.getJSONObject("modelPolicies").getJSONObject(purpose).toString()));
+                }
+                rows.put(row);
+            }
+            JSONArray unused = new JSONArray();
+            for (String purpose : WorkProfile.keys(policies)) if ((purpose.equals("MEMBER") || purpose.startsWith("MEMBER.")) && !used.contains(purpose)) unused.put(purpose);
+            models = Map.copyOf(captures); purposes = Map.copyOf(selectedPurposes);
+            publicView = new JSONObject().put("sourceKind", "native_team_plan_work_profile_defaults")
+                    .put("profileId", frozen.getString("profileId")).put("profileRevision", frozen.getLong("profileRevision"))
+                    .put("resolutionDigest", digest).put("teamId", teamId).put("selectedDefinitionHash", teamDigest)
+                    .put("members", rows).put("unusedProfilePurposes", unused).put("globalModelDefault",frozen.getJSONObject("modelPolicies").getJSONObject("_GLOBAL")).put("summaryModel",frozen.getJSONObject("modelPolicies").getJSONObject("SUMMARY")).put("planningOnly", true)
+                    .put("configurationApplied", false).put("executionAuthorized", false).toString();
+        }
+
+        public void checkCurrent() throws Exception {
+            original.check(); plan.checkCurrent();
+            if (original.isPaused() || original.pauseRevision() != pause || !original.matchesHostRun(task, run, epoch)) throw new SecurityException("original_work_profile_member_plan_changed");
+            tasks.checkTeamWorkProfilePlanBinding(plan.origin(), digest, original);
+            JSONObject actual = issuer.sources.team(teamId, original);
+            if (actual == null || !teamDigest.equals(WorkProfile.fingerprint(actual))) throw new SecurityException("original_work_profile_member_team_changed");
+            for (String id : models.keySet()) issuer.sources.checkModel(models.get(id), purposes.get(id), original);
+            issuer.sources.checkModel(baseModel,"DEFAULT",original);issuer.sources.checkModel(baseModel.forPurpose("SUMMARY"),"SUMMARY",original);
+            WorkProfileResolver.checkStoredAssetSourcesCurrent(new JSONObject(frozen), issuer.sources, original);
+            original.check(); plan.checkCurrent();
+            tasks.checkTeamWorkProfilePlanBinding(plan.origin(), digest, original);
+        }
+        public void requirePlan(dev.pocketengine.features.teams.TeamParentPlan exactPlan)throws Exception {
+            if(exactPlan!=plan)throw new SecurityException("original_work_profile_member_plan_source_mismatch");checkCurrent();
+        }
+        public void requireOriginal(dev.pocketengine.store.TaskStore actual,
+                dev.pocketengine.features.teams.TeamParentPlan exactPlan, RunControl control) throws Exception {
+            if (actual != tasks || exactPlan != plan || control != original) throw new SecurityException("original_work_profile_member_plan_source_mismatch");
+            checkCurrent();
+        }
+        /** Native TeamParentPlan only; no arbitrary member JSON may retain or inject a pin. */
+        public ModelConfig defaultForMember(JSONObject member) throws Exception {
+            checkCurrent();String id=member.getString("id");
+            JSONObject actual=dev.pocketengine.features.teams.TeamWorkPlan.find(plan.view().getJSONObject("definition").getJSONArray("members"),id);
+            for(String key:new String[]{"id","runner","device","model","modelTarget"})if(!WorkProfile.fingerprint(actual.opt(key)).equals(WorkProfile.fingerprint(member.opt(key))))throw new SecurityException("original_work_profile_member_slot_changed:"+key);
+            if(member.has("memberModelSelection"))throw new SecurityException("原planning成员不能夹带模型pin");
+            return models.get(id);
+        }
+        public dev.pocketengine.features.teams.TeamMemberModels.Selection captureMember(JSONObject member)throws Exception {
+            checkCurrent();return dev.pocketengine.features.teams.TeamMemberModels.capture(member,baseModel,(ref,purpose,global)->issuer.sources.model(ref,purpose,original),this);
+        }
+        public ModelConfig baseModel()throws Exception{checkCurrent();return baseModel;}
+        public Map<String, ModelConfig> models() throws Exception { checkCurrent(); return models; }
+        public JSONObject view() throws Exception { checkCurrent(); return new JSONObject(publicView); }
+    }
+    /** Original owner-approved start only. Reconstruct every native model pin before the existing
+     * Coordinator dispatch; after that the original member/control/pool and Gateway remain authority. */
+    public MemberStartModels memberModelsForStart(dev.pocketengine.store.TaskStore tasks,
+            dev.pocketengine.store.TaskStore.TeamParentStart approved,RunControl original)throws Exception {
+        if(approved==null||original==null||!original.hasHostRun()||!approved.issuedBy(tasks))throw new SecurityException("original_work_profile_member_start_required");
+        approved.checkCurrent();return new MemberStartModels(this,tasks,approved,original);
+    }
+    public static final class MemberStartModels {
+        private final NativeWorkProfileHost issuer;private final dev.pocketengine.store.TaskStore tasks;
+        private final dev.pocketengine.store.TaskStore.TeamParentStart approved;private final RunControl original;
+        private final String frozen,digest,teamId,teamDigest,actualTeam;private final ModelConfig base;
+        private final Map<String,ModelConfig> defaults;private final Map<String,String> purposes;
+        private MemberStartModels(NativeWorkProfileHost issuer,dev.pocketengine.store.TaskStore tasks,
+                dev.pocketengine.store.TaskStore.TeamParentStart approved,RunControl original)throws Exception {
+            this.issuer=issuer;this.tasks=tasks;this.approved=approved;this.original=original;
+            JSONObject start=approved.view(),scope=start.getJSONObject("scope"),definition=start.getJSONObject("definition");
+            JSONObject marker=definition.getJSONObject("nativeWorkProfileModels");
+            JSONObject saved=tasks.workProfileRunSnapshot(scope.getString("parentTaskId"),scope.getString("parentRunId"),original.hostRunIdentity().epoch());
+            frozen=saved.toString();digest=saved.getString("resolutionDigest");
+            if(!digest.equals(marker.getString("resolutionDigest"))||!saved.getString("profileId").equals(marker.getString("profileId"))||saved.getLong("profileRevision")!=marker.getLong("profileRevision"))throw new SecurityException("原团队计划不属于本次冻结工作配置");
+            tasks.checkTeamWorkProfileStartBinding(approved,digest,original);
+            teamId=marker.getString("teamId");teamDigest=marker.getString("selectedDefinitionHash");
+            JSONObject team=issuer.sources.team(teamId,original);
+            if(team==null||!teamDigest.equals(WorkProfile.fingerprint(team)))throw new SecurityException("原团队模板已改变，请重新提出准确计划");
+            actualTeam=team.toString();Map<String,ModelConfig> captured=WorkProfileResolver.resolveStored(saved,issuer.sources,original).models();
+            ModelConfig global=captured.get("_GLOBAL"),summary=captured.get("SUMMARY");if(global==null||summary==null)throw new SecurityException("原计划没有启动时默认模型，不使用当前默认或MAIN替代");
+            base=global.withPurposePlans(Map.of("SUMMARY",summary.routePlan==null?dev.pocketengine.runtime.models.ModelRoutePlan.exact(summary,"SUMMARY","APP_OWNER"):summary.routePlan));
+            if(!WorkProfile.fingerprint(marker.getJSONObject("globalModelDefault")).equals(WorkProfile.fingerprint(saved.getJSONObject("modelPolicies").getJSONObject("_GLOBAL")))||!WorkProfile.fingerprint(marker.getJSONObject("summaryModel")).equals(WorkProfile.fingerprint(saved.getJSONObject("modelPolicies").getJSONObject("SUMMARY"))))throw new SecurityException("原团队默认或摘要模型pin已改变");
+            Map<String,ModelConfig> selectedDefaults=new java.util.LinkedHashMap<>();Map<String,String> selectedPurposes=new java.util.LinkedHashMap<>();
+            JSONObject policies=saved.getJSONObject("definition").getJSONObject("modelPolicies");JSONArray members=definition.getJSONArray("members");
+            for(int i=0;i<members.length();i++){
+                JSONObject member=members.getJSONObject(i),nativeMember=dev.pocketengine.features.teams.AgentSlot.normalize(dev.pocketengine.features.teams.TeamWorkPlan.find(team.getJSONArray("members"),member.getString("id")),i);
+                if(!"model".equals(nativeMember.getString("runner"))||!"phone".equals(nativeMember.opt("device")))throw new SecurityException("工作配置仅接原本机模型成员");
+                for(String key:new String[]{"runner","device","modelTarget"})if(!WorkProfile.fingerprint(nativeMember.opt(key)).equals(WorkProfile.fingerprint(member.opt(key))))throw new SecurityException("原已批slot身份已改变:"+key);
+                String id=member.getString("id"),purpose=id.length()<=60&&policies.has("MEMBER."+id)?"MEMBER."+id:policies.has("MEMBER")?"MEMBER":null;
+                if(nativeMember.optJSONObject("modelTarget")==null&&nativeMember.optString("model").isEmpty()&&purpose!=null){selectedDefaults.put(id,captured.get(purpose));selectedPurposes.put(id,purpose);}
+            }
+            defaults=Map.copyOf(selectedDefaults);purposes=Map.copyOf(selectedPurposes);
+            for(int i=0;i<members.length();i++){
+                JSONObject member=members.getJSONObject(i),nativeMember=dev.pocketengine.features.teams.AgentSlot.normalize(dev.pocketengine.features.teams.TeamWorkPlan.find(team.getJSONArray("members"),member.getString("id")),i);
+                var selected=dev.pocketengine.features.teams.TeamMemberModels.capture(nativeMember,base,(ref,purpose,fallback)->issuer.sources.model(ref,purpose,original),this);
+                dev.pocketengine.features.teams.TeamMemberModels.requireSame(selected,member.getJSONObject("memberModelSelection"));
+                if(!selected.config.model.equals(member.optString("model")))throw new SecurityException("原成员可见模型与冻结pin不符");
+            }
+            checkCurrent();
+        }
+        public ModelConfig defaultForMember(JSONObject member)throws Exception {
+            checkCurrent();JSONObject expected=dev.pocketengine.features.teams.AgentSlot.normalize(dev.pocketengine.features.teams.TeamWorkPlan.find(new JSONObject(actualTeam).getJSONArray("members"),member.getString("id")),0);
+            for(String key:new String[]{"id","runner","device","model","modelTarget"})if(!WorkProfile.fingerprint(expected.opt(key)).equals(WorkProfile.fingerprint(member.opt(key))))throw new SecurityException("original_work_profile_member_slot_changed:"+key);
+            if(member.has("memberModelSelection"))throw new SecurityException("原source成员不能夹带模型pin");return defaults.get(member.getString("id"));
+        }
+        public void checkCurrent()throws Exception {
+            original.check();tasks.checkTeamWorkProfileStartBinding(approved,digest,original);
+            JSONObject current=issuer.sources.team(teamId,original);if(current==null||!teamDigest.equals(WorkProfile.fingerprint(current)))throw new SecurityException("原团队模板已改变");
+            issuer.sources.checkModel(base,"DEFAULT",original);issuer.sources.checkModel(base.forPurpose("SUMMARY"),"SUMMARY",original);
+            for(String id:defaults.keySet())issuer.sources.checkModel(defaults.get(id),purposes.get(id),original);
+            WorkProfileResolver.checkStoredAssetSourcesCurrent(new JSONObject(frozen),issuer.sources,original);
+            approved.checkCurrent();tasks.checkTeamWorkProfileStartBinding(approved,digest,original);
+        }
+        public ModelConfig baseModel()throws Exception{checkCurrent();return base;}
+    }
     private WorkProfile stored(String id, long revision) throws Exception {
         JSONArray rows = settings.workProfilesSnapshot().getJSONArray("profiles");
         for (int i = 0; i < rows.length(); i++) {
@@ -128,8 +330,7 @@ public final class NativeWorkProfileHost {
         public Review reviewForTask(dev.pocketengine.store.TaskStore tasks, String taskId, String runId, int epoch, RunControl observation) throws Exception {
             final long request; synchronized (this) { current(true); pending = null; request = ++generation; }
             JSONObject original = runId.isEmpty()?tasks.pendingWorkProfileTaskSnapshot(taskId):tasks.workProfileRunSnapshot(taskId, runId, epoch);
-            WorkProfile row = WorkProfile.fromJson(original.getJSONObject("definition"));
-            WorkProfileResolver.Resolution resolution = WorkProfileResolver.resolve(row, sources, observation);
+            WorkProfileResolver.Resolution resolution = WorkProfileResolver.resolveStored(original, sources, observation);
             String retained = WorkProfile.fingerprint(original);
             synchronized (this) {
                 current(true); if (request != generation) throw new SecurityException("work_profile_review_superseded");

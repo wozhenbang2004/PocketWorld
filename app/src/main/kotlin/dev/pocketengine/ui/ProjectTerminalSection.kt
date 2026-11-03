@@ -36,6 +36,7 @@ internal fun NativeProjectTerminal(task: UiTask) {
     var opened by remember(task.id, execution) { mutableStateOf(false) }
     var session by remember(task.id, execution) { mutableStateOf<ProjectOwnerTerminal.Session?>(null) }
     var metadata by remember(task.id, execution) { mutableStateOf<JSONObject?>(null) }
+    var logPolicy by remember(task.id, execution) { mutableStateOf<JSONObject?>(null) }
     var web by remember(task.id, execution) { mutableStateOf<ProjectTerminalWebView?>(null) }
     var ready by remember(task.id, execution) { mutableStateOf(false) }
     var takingInput by remember(task.id, execution) { mutableStateOf(false) }
@@ -49,7 +50,7 @@ internal fun NativeProjectTerminal(task: UiTask) {
     var incomplete by remember(task.id, execution) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val actions = remember(task.id, execution, opened) { Channel<JSONObject>(16) }
-    fun closeView() { takingInput = false; opened = false; ready = false; web?.release(); web = null; session?.close(); session = null; metadata = null; cursor = 0; actions.close() }
+    fun closeView() { takingInput = false; opened = false; ready = false; web?.release(); web = null; session?.close(); session = null; metadata = null; logPolicy = null; cursor = 0; actions.close() }
     fun enqueue(action: JSONObject) {
         if (!takingInput || !active || nativeStatus != "running" || stopped || incomplete) return
         if (!actions.trySend(action).isSuccess) { takingInput = false; notice = "输入队列已满，这次未发送；请核对终端后再明确操作。" }
@@ -95,6 +96,7 @@ internal fun NativeProjectTerminal(task: UiTask) {
             try {
                 if (web?.waitingForParser() != true) {
                     val page = withContext(Dispatchers.IO) { original.read(cursor) }
+                    logPolicy = page.optJSONObject("logObservationPolicy")
                     nativeStatus = page.optString("nativeStatus", "unknown")
                     if (nativeStatus != "running" || page.optBoolean("inputUncertain")) takingInput = false
                     if (page.optBoolean("logIncompleteTail")) { incomplete = true; takingInput = false; notice = "原日志末条未写完整，仅显示此前完整记录；原字节保留，已关闭输入，请核对原任务回执。" }
@@ -112,6 +114,7 @@ internal fun NativeProjectTerminal(task: UiTask) {
     if (opened && metadata != null) {
         Text("${metadata!!.optString("executable")} · ${metadata!!.optString("workingDirectory")}", style = MaterialTheme.typography.titleSmall)
         WorkbenchCaption("显示这个原PTY的VT屏幕，标准输出与错误合流。关闭屏幕不会停止任务；输入限原启动批准，不支持密码或令牌。")
+        if (logPolicy?.optBoolean("automaticLogPageReduced") == true) WorkbenchCaption(logPolicy!!.optString("ownerMessage"))
         key(task.id, execution, metadata) {
             AndroidView(factory = { nativeContext ->
                 try { ProjectTerminalWebView.create(nativeContext, metadata!!, object : ProjectTerminalWebView.Events {

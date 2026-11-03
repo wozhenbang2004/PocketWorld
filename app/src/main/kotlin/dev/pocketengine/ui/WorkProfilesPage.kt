@@ -27,7 +27,9 @@ import org.json.JSONObject
 @Composable
 internal fun WorkProfilesPage(host: NativeWorkProfileHost, runWork: (Runnable) -> Unit, runControl: (Runnable) -> Unit,
     start: (String, NativeWorkProfileHost.Selection, RunControl, (Result<JSONObject>) -> Unit) -> Unit,
-    openTask: (String) -> Unit, openDomain: (String) -> Unit, back: () -> Unit) {
+    openTask: (String) -> Unit, openDomain: (String) -> Unit, back: () -> Unit,
+    reviewProject: (() -> dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection)? = null,
+    startProject: ((String, NativeWorkProfileHost.Selection, RunControl, dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection, (Result<JSONObject>) -> Unit) -> Unit)? = null) {
     val page = remember(host) { host.newOwnerPage() }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val main = remember { Handler(Looper.getMainLooper()) }
@@ -50,6 +52,8 @@ internal fun WorkProfilesPage(host: NativeWorkProfileHost, runWork: (Runnable) -
     var removing by remember(page) { mutableStateOf<JSONObject?>(null) }
     var leaving by remember(page) { mutableStateOf<(() -> Unit)?>(null) }
     var consent by remember(review) { mutableStateOf(false) }
+    var selectedProject by remember(page) { mutableStateOf<dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection?>(null) }
+    var selectedProjectView by remember(page) { mutableStateOf(JSONObject()) }
 
     DisposableEffect(page, lifecycle) {
         fun sync() {
@@ -92,7 +96,7 @@ internal fun WorkProfilesPage(host: NativeWorkProfileHost, runWork: (Runnable) -
         val inspected = review ?: return
         val originalControl = control ?: return
         val wanted = goal.trim()
-        if (busy || !foreground || !consent || wanted.isEmpty() || !WorkProfileDrafts.runnable(reviewed)) return
+        if (busy || !foreground || !consent || wanted.isEmpty() || !WorkProfileDrafts.runnable(reviewed, selectedProject != null)) return
         busy = true; running = true; notice = null
         val complete: (Result<JSONObject>) -> Unit = { outcome -> main.post { if (alive) {
             busy = false; running = false; review = null; consent = false
@@ -100,7 +104,10 @@ internal fun WorkProfilesPage(host: NativeWorkProfileHost, runWork: (Runnable) -
         } } }
         try { runWork(Runnable {
             runCatching { page.select(inspected, inspected.digest, originalControl) }.fold({ selected ->
-                try { start(wanted, selected, originalControl, complete) } catch (unavailable: Exception) { complete(Result.failure(unavailable)) }
+                try { val project = selectedProject
+                    if (project != null && startProject != null) startProject(wanted, selected, originalControl, project, complete)
+                    else start(wanted, selected, originalControl, complete)
+                } catch (unavailable: Exception) { complete(Result.failure(unavailable)) }
             }, { complete(Result.failure(it)) })
         }) } catch (unavailable: Exception) { complete(Result.failure(unavailable)) }
     }
@@ -142,6 +149,16 @@ internal fun WorkProfilesPage(host: NativeWorkProfileHost, runWork: (Runnable) -
                         val target = draft.getJSONObject("modelPolicies").optJSONObject(purpose)
                         TextButton(onClick = { picker = purpose }, enabled = !busy && foreground, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("$title · ${target?.optString("groupId", target.optString("modelId")) ?: "请选择原模型"}") }
                     }
+                    TextButton(onClick = { picker = "MEMBER" }, enabled = !busy && foreground, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("本机团队默认 · ${draft.getJSONObject("modelPolicies").optJSONObject("MEMBER")?.let { it.optString("groupId", it.optString("modelId")) } ?: "保留原任务 / 启动默认"}") }
+                    if (draft.getJSONObject("modelPolicies").has("MEMBER")) TextButton(onClick = { editor = WorkProfileDrafts.withoutMemberModel(draft, "MEMBER"); review = null }, enabled = !busy && foreground) { Text("不指定团队默认模型") }
+                    TextButton(onClick = { picker = "teams" }, enabled = !busy && foreground) { Text("原团队模板 · ${draft.optJSONObject("teamTemplateRef")?.optString("id") ?: "不限定模板"}") }
+                    val nativeTeam = profileRows(choices.optJSONObject("sections")?.optJSONObject("teams")?.optJSONArray("items")).firstOrNull { it.optString("id") == draft.optJSONObject("teamTemplateRef")?.optString("id") }
+                    profileRows(nativeTeam?.optJSONArray("members")).filter { it.optString("runner", "model") == "model" && it.opt("device") == "phone" && it.optString("id").length <= 60 }.forEach { member ->
+                        val purpose = "MEMBER.${member.getString("id")}"; val target = draft.getJSONObject("modelPolicies").optJSONObject(purpose)
+                        TextButton(onClick = { picker = purpose }, enabled = !busy && foreground, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("${member.optString("name", member.optString("id"))} · ${target?.optString("groupId", target.optString("modelId")) ?: "沿用团队默认"}") }
+                        if (target != null) TextButton(onClick = { editor = WorkProfileDrafts.withoutMemberModel(draft, purpose); review = null }, enabled = !busy && foreground) { Text("不指定此成员默认") }
+                    }
+                    Text("原成员已选的准确连接或旧模型名优先；仅实际入选的本机模型slot消费这些默认。远端与目标配置不会由此开放。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
                     if (draft.getJSONObject("modelPolicies").has("RELAY")) TextButton(onClick = { editor = WorkProfileDrafts.withoutRelayModel(draft); review = null }, enabled = !busy && foreground) { Text("不指定本任务网关模型，保留原宿主选择") }
                     Text("网关模型仅由原生主人批准的准确子任务范围消费，不代表远端配置已修改。控制结束后，可在原电脑任务页审阅同一任务的仅网关恢复，不重启主任务或续给预算。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
                     TextButton(onClick = { openOriginal("accounts") }) { Text("账号模型须先在原账号页选择") }
@@ -158,15 +175,20 @@ internal fun WorkProfilesPage(host: NativeWorkProfileHost, runWork: (Runnable) -
                     TextButton(onClick = { openOriginal("pluginCatalog") }) { Text("在原目录管理安装、MCP 与源码审批") }
                 }
                 SettingsSurface("预检后，再明确启动", "预检只核原来源，不运行工具，不代表配置已应用或目标已连通。此入口接入主任务、摘要、任务指导参考及已支持的技能与工具选用。") {
-                    Text("团队、MEMBER 与运行目标配置尚未接入本入口；已有这些字段可保留与预检，但不会静默忽略后运行。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
-                    Button(onClick = { val saved = original ?: return@Button; val observing = RunControl(); control = observing; work({ page.review(saved.getString("profileId"), saved.getLong("revision"), observing) }) { review = it; reviewed = it.view() } }, enabled = !busy && foreground && original != null && name == original!!.optString("name") && WorkProfile.fingerprint(draft) == WorkProfile.fingerprint(original!!)) { Text("预检这项已保存修订") }
+                    Text("本机成员模型沿原团队计划与主人审批生效；须选择真实原项目副本。远端、运行目标 apply/readback 仍未接入，不会静默忽略。", style = MaterialTheme.typography.bodySmall, color = SecondaryInk)
+                    if (reviewProject != null) TextButton(onClick = { work({ reviewProject().let { it to it.view() } }) { selectedProject = it.first; selectedProjectView = it.second; consent = false } }, enabled = !busy && foreground, modifier = Modifier.testTag("work_profile_choose_original_project")) { Text(if (selectedProject == null) "选择当前原项目工作台副本（团队必选）" else "重新核对原项目副本") }
+                    if (selectedProject != null) {
+                        Text("原项目 ${selectedProjectView.optString("projectId")} · ${selectedProjectView.optString("runtime")}；只关联这份准确源码，不追加权限或预算。", style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = { selectedProject = null; selectedProjectView = JSONObject(); consent = false }, enabled = !busy && foreground) { Text("不关联项目") }
+                    }
+                    Button(onClick = { val saved = original ?: return@Button; val observing = RunControl(); control = observing; work({ page.review(saved.getString("profileId"), saved.getLong("revision"), observing) }) { review = it; reviewed = it.view() } }, enabled = !busy && foreground && original != null && name == original!!.optString("name") && WorkProfile.fingerprint(draft) == WorkProfile.fingerprint(original!!), modifier = Modifier.testTag("work_profile_preflight")) { Text("预检这项已保存修订") }
                     if (review != null) {
                         Text(if (reviewed.optBoolean("ready")) "原来源预检通过 · 尚未运行" else "预检有阻塞 · 未启动", style = MaterialTheme.typography.titleSmall)
                         profileRows(reviewed.optJSONArray("items")).forEach { item -> Text("${item.optString("kind")} · ${item.optString("id")} · ${item.optString("status")}${if (item.optBoolean("optional") && !item.optBoolean("included")) "（明确省略可选项）" else ""}", style = MaterialTheme.typography.bodySmall, color = SecondaryInk) }
-                        if (!WorkProfileDrafts.runnable(reviewed)) Text("该配置尚不能由本入口运行。请补齐两项模型；若含尚未接入的字段，请保留原定义并新建只选用已支持来源的配置。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                        OutlinedTextField(goal, { goal = it.take(4000) }, enabled = !busy && foreground, label = { Text("本次原任务目标") }, minLines = 2, maxLines = 5, modifier = Modifier.fillMaxWidth())
-                        Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(consent, { consent = it }, enabled = !busy && foreground); Text("核对以上引用，按原任务范围开始；外部效果仍逐项走原授权。", style = MaterialTheme.typography.bodySmall) }
-                        Button(onClick = { begin() }, enabled = !busy && foreground && consent && goal.isNotBlank() && WorkProfileDrafts.runnable(reviewed), modifier = Modifier.heightIn(min = 48.dp).testTag("work_profile_start_exact")) { Text("按这项修订开始原任务") }
+                        if (!WorkProfileDrafts.runnable(reviewed, selectedProject != null)) Text("该配置尚不能由本入口运行。请补齐两项模型；含成员/团队时先选择原项目；运行目标配置仍未接入，请保留编辑，不会删字段后运行。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        OutlinedTextField(goal, { goal = it.take(4000) }, enabled = !busy && foreground, label = { Text("本次原任务目标") }, minLines = 2, maxLines = 5, modifier = Modifier.fillMaxWidth().testTag("work_profile_goal"))
+                        Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(consent, { consent = it }, enabled = !busy && foreground, modifier = Modifier.testTag("work_profile_owner_consent")); Text("核对以上引用，按原任务范围开始；外部效果仍逐项走原授权。", style = MaterialTheme.typography.bodySmall) }
+                        Button(onClick = { begin() }, enabled = !busy && foreground && consent && goal.isNotBlank() && WorkProfileDrafts.runnable(reviewed, selectedProject != null), modifier = Modifier.heightIn(min = 48.dp).testTag("work_profile_start_exact")) { Text("按这项修订开始原任务") }
                     }
                 }
             }
@@ -203,10 +225,10 @@ private fun ProfileSourcePicker(kind: String, choices: JSONObject, definition: J
         }, confirmButton = { TextButton(onClick = close) { Text("返回，不改变") } })
         return
     }
-    val models = kind in setOf("MAIN", "SUMMARY", "RELAY")
+    val models = kind in setOf("MAIN", "SUMMARY", "RELAY", "MEMBER") || kind.startsWith("MEMBER.")
     val skillSource = kind in setOf("instructions", "skills")
     val section = choices.optJSONObject("sections")?.optJSONObject(if (kind == "instructions") "skills" else kind)
-    AlertDialog(onDismissRequest = close, title = { Text(if (models) "选择原${when(kind) { "MAIN" -> "主任务"; "RELAY" -> "API 网关"; else -> "摘要" }}模型" else "选择原${when(kind) { "instructions" -> "任务指导（Skill 文档）"; "skills" -> "技能"; "plugins" -> "插件工具"; else -> "JS 扩展" }}") },
+    AlertDialog(onDismissRequest = close, title = { Text(if (models) "选择原${when(kind) { "MAIN" -> "主任务"; "RELAY" -> "API 网关"; "SUMMARY" -> "摘要"; else -> "本机成员" }}模型" else "选择原${when(kind) { "instructions" -> "任务指导（Skill 文档）"; "skills" -> "技能"; "plugins" -> "插件工具"; "teams" -> "团队模板"; else -> "JS 扩展" }}") },
         text = { Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             if (kind == "instructions") Text("主人选择的任务指导仅进入原请求参考层，不提升为系统指令或工具权限。全文超出原参考窗口时明确停止，请减选后重审；不会静默截断。", style = MaterialTheme.typography.bodySmall)
             if (kind == "RELAY") Text("仅选已有 API 连接或允许外部网关用途的模型组。账号计划不能用于外部 Harness；不重配目标，也不新增预算。", style = MaterialTheme.typography.bodySmall)
@@ -214,6 +236,10 @@ private fun ProfileSourcePicker(kind: String, choices: JSONObject, definition: J
                 val rows = profileRows(WorkProfileDrafts.modelChoices(choices, kind))
                 if (rows.isEmpty()) Text("暂无可用原连接，请先在模型或账号页配置；不会生成或自动替换模型。", style = MaterialTheme.typography.bodySmall)
                 rows.forEach { row -> TextButton(onClick = { changed(WorkProfileDrafts.withModel(definition, kind, row.getJSONObject("reference"))); close() }, enabled = !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(row.optString("label") + " · " + row.optString("detail")) } }
+            } else if (kind == "teams") {
+                TextButton(onClick = { changed(WorkProfileDrafts.withTeamTemplate(definition, null)); close() }, enabled = !busy) { Text("不限定团队模板；仍须原计划与主人批准") }
+                if (section?.optBoolean("available") != true) Text("原团队目录暂不可读取，未改用其他模板。", style = MaterialTheme.typography.bodySmall)
+                profileRows(section?.optJSONArray("items")).forEach { row -> TextButton(onClick = { changed(WorkProfileDrafts.withTeamTemplate(definition, row)); close() }, enabled = !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(row.optString("name", row.optString("id"))) } }
             } else if (section?.optBoolean("available") != true) Text("原来源暂不可读取，不能当作空目录或已就绪。请回原管理页核对。", style = MaterialTheme.typography.bodySmall)
             else {
                 val rows = profileRows(section.optJSONArray("items"))

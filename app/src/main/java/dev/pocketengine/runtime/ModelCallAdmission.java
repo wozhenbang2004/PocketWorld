@@ -29,9 +29,13 @@ final class ModelCallAdmission {
         @Override public void close(){if(closed.compareAndSet(false,true))synchronized(ModelCallAdmission.this){Active held=active.get(key);if(--held.count==0)active.remove(key);ModelCallAdmission.this.notifyAll();}}
     }
     Permit enter(RunControl original,String originalTask,long deadlineAt)throws Exception {
+        return enter(original,originalTask,deadlineAt,Integer.MAX_VALUE);
+    }
+    Permit enter(RunControl original,String originalTask,long deadlineAt,int inheritedLimit)throws Exception {
+        if(inheritedLimit!=Integer.MAX_VALUE&&(inheritedLimit<1||inheritedLimit>2))throw new SecurityException("Invalid original model resource scope");
         Object key=originalTask.isEmpty()?original:originalTask;
         long pause=original.pauseRevision();
-        Waiter request=new Waiter(key,original.modelConcurrencyLimit());
+        Waiter request=new Waiter(key,Math.min(original.modelConcurrencyLimit(),inheritedLimit));
         Runnable wake=()->{synchronized(this){notifyAll();}};
         original.onCancel(wake);
         try {
