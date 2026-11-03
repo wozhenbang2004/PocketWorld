@@ -106,7 +106,7 @@ public final class NativeOwnerWorkflows {
     }
     public JSONObject memorySnapshot()throws Exception{
         host.synchronizeMemory(ownerScope());
-        return memory().snapshot().put("nativeCapabilities",new JSONObject().put("acceptCandidate",true).put("candidateCapacity",true).put("listCandidateHistory",true).put("archiveCandidates",true).put("reconsiderRejected",true).put("forgetReviewed",true).put("openSource",true));
+        return memory().snapshot().put("nativeCapabilities",new JSONObject().put("acceptCandidate",true).put("candidateCapacity",true).put("listCandidateHistory",true).put("archiveCandidates",true).put("reconsiderRejected",true).put("forgetReviewed",true).put("openSource",true).put("prepareAssertionReview",true).put("reviewCandidateAssertion",true));
     }
     public JSONObject memory(String command,JSONObject payload)throws Exception{
         dev.pocketengine.features.memory.ProjectMemoryNamespaces.rejectNamespaceArguments(payload);
@@ -132,6 +132,8 @@ public final class NativeOwnerWorkflows {
             }
             case "readAssertionEvidence":return sources.readAssertionEvidence(scope,SourceRef.fromJson(payload.getJSONObject("sourceRef")),Math.toIntExact(nativeOffset(payload,"offset")),Math.toIntExact(positiveVersion(payload,"chars")),payload.getString("sha256"));
             case "acceptCandidate":return module.acceptCandidate(scope,payload.getString("id"),positiveVersion(payload,"revision"));
+            case "prepareAssertionReview":return sources.prepareAssertionReview(scope,payload);
+            case "reviewCandidateAssertion":return sources.reviewCandidateAssertion(scope,payload);
             case "candidateCapacity":return module.candidateCapacity(scope);
             case "listCandidateHistory":return module.listCandidateHistory(scope);
             case "archiveCandidates":return module.archiveCandidates(scope,payload.getJSONArray("selections"));

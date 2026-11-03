@@ -38,6 +38,7 @@ public final class LearningAssertionDraft {
         return "可选返回assertion对象以保留主体、来源类型与事件时间：kind为user_said/inferred/told/imagined，subjectId、subjectType、subjectLabel、predicate、object、condition，以及可空eventTime、validFrom、validTo、reviewAfter（原事件明确的毫秒时间，未知为null，不用今天或生成时间替代）。"
                 +"quote必须逐字摘自来源text，offset是其UTF-16起点；不要返回version、assertedAt、evidenceSpans、SourceRef或权限字段，这些只由宿主提供。"
                 +"user_said只能用于真实用户原句且text/object/quote完全相同；摘要、推断或转述必须另标kind，虚构标imagined。主体指事实描述的对象，不是说话人；只有明确描述主人本人的事实才用subjectId=owner、subjectType=owner。"
+                +"尚未发生或尚未完成的计划摘要也标imagined，保留原文中的计划含义；日期已经过去不证明行动发生，不得自动改为现实事实或实际结果。原话中的计划也只是说过这句话的证据。"
                 +"第三人、同名人或主体不明时不要猜主人或创建稳定身份，省略assertion并在普通候选中保留原来的描述和未知。所有输出只是待主人审阅的候选，不能宣称已保存、确认或验证。";
     }
 }

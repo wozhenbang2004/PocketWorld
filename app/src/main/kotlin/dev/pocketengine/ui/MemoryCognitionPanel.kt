@@ -33,7 +33,7 @@ import org.json.JSONObject
     }
     TextButton(onClick = { open = !open; view = null; source = null; reading = null; sourceReading = null }) { Text(if (open) "收起主体认知与冲突" else "查看主体认知、历史与冲突…") }
     if (!open) return
-    Text("认知是可重建视图，不是新的记忆权威。未知主体不归入主人画像；想象不参与现实事实。", fontSize = 12.sp)
+    Text("认知是可重建视图，不是新的记忆权威。未知主体不归入主人画像；未发生的计划与想象不参与现实事实。", fontSize = 12.sp)
     MemoryOwnerHistorySearch(responses, evidenceVersion, mutation == null, request,
         onClearEvidence = { source = null; sourceReading = null },
         onEvidence = { span -> source = null; sourceReading = send("readAssertionEvidence", span) },
@@ -44,7 +44,7 @@ import org.json.JSONObject
     error?.let { Text(it, fontSize = 12.sp) }
     view?.let { current ->
         Text("当前 ${current.optJSONArray("current")?.length() ?: 0} · 历史 ${current.optJSONArray("history")?.length() ?: 0} · 待审冲突 ${current.optJSONArray("pendingConflicts")?.length() ?: 0}", fontSize = 13.sp)
-        for ((field, title) in listOf("current" to "当前认知", "history" to "历史 / 想象 / 未生效")) {
+        for ((field, title) in listOf("current" to "当前认知", "history" to "历史 / 计划或想象 / 未生效")) {
             Text(title, fontSize = 14.sp)
             cognitionRows(current.optJSONArray(field)).forEach { row ->
                 SelectionContainer { Text(row.optString("text"), fontSize = 13.sp) }

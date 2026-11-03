@@ -201,6 +201,15 @@ public final class MemorySourceBridge {
         EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");MemoryModule memory=(MemoryModule)module;
         reconcilePending(scope,memory);return mutate(scope,memory,false,"owner_correction",receipt->memory.correctReviewed(scope,id,revision,text,receipt));
     }
+    /** Reuses the original source reconciliation domain before exact pending-candidate review. */
+    public synchronized JSONObject prepareAssertionReview(JSONObject scope,JSONObject request)throws Exception{
+        synchronize(scope);EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");
+        return ((MemoryModule)module).prepareAssertionReview(scope,request);
+    }
+    public synchronized JSONObject reviewCandidateAssertion(JSONObject scope,JSONObject request)throws Exception{
+        synchronize(scope);EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");
+        return ((MemoryModule)module).reviewCandidateAssertion(scope,request);
+    }
     public synchronized JSONObject supersedeReviewed(JSONObject scope,String keptId,long keptRevision,String replacedId,long replacedRevision)throws Exception{
         EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");MemoryModule memory=(MemoryModule)module;
         reconcilePending(scope,memory);return mutate(scope,memory,true,receipt->memory.supersedeReviewed(scope,keptId,keptRevision,replacedId,replacedRevision,receipt));

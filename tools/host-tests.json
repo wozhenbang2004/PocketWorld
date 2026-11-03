@@ -153,23 +153,32 @@
       "dev.pocketengine.ui.MemoryHistoryReviewGuardTest",
       "dev.pocketengine.ui.OwnerMemoryHistoryControllerNativeTest",
       "dev.pocketengine.ui.OwnerMemoryHistoryMountedNativeTest",
-      "dev.pocketengine.features.memory.ProjectMemoryHistoryNativeTest"
+      "dev.pocketengine.ui.MemoryAssertionReviewNativeTest",
+      "dev.pocketengine.ui.MemoryAssertionReviewMountedNativeTest",
+      "dev.pocketengine.features.memory.ProjectMemoryHistoryNativeTest",
+      "dev.pocketengine.features.memory.MemoryCandidateRetentionTest",
+      "dev.pocketengine.features.memory.MemorySourceLifecycleTest"
     ],
     "helpers": [
       "dev.pocketengine.ui.ProjectMemoryReviewUiNativeTest"
     ],
     "robolectric": true,
-    "description": "Typed-field/native SQLite/lexical fusion, private/project retained history and original owner Controller/Compose paths. Currentness, native correction and reviewed conflict priority, candidate explanation retention, exact source/revision/cursor/forget and stale callback gates. Default model recall remains current-only. No new member/group grant, live provider, screenshots, visual or device acceptance."
+    "description": "Typed-field/native SQLite/lexical fusion, private/project retained history and original owner Controller/Compose paths. Explicit stable person/entity/relation review keeps exact identity donor dependencies distinct from ordinary consolidation parents, with plan/time, source/revision/cursor/forget, bounded retention and stale callback gates. Native correction/conflict priority and unverified candidate explanations remain traceable. Default model recall remains current-only. No new member/group grant, live provider, screenshots, visual or device acceptance."
   },
   "memory-consolidation": {
     "class": "dev.pocketengine.features.memory.MemoryConsolidationConfidenceTest",
     "additionalClasses": [
       "dev.pocketengine.features.memory.MemoryConsolidationTest",
-      "dev.pocketengine.features.memory.MemoryConsolidationWorkflowTest"
+      "dev.pocketengine.features.memory.MemoryConsolidationWorkflowTest",
+      "dev.pocketengine.ui.MemoryNativeConsolidationControllerTest"
     ],
-    "helpers": [],
+    "helpers": [
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
     "robolectric": true,
-    "description": "Thirty-seven exact native consolidation, provenance-family confidence, owner-review/cancel/source/expiry/forget and no-candidate workflow methods. No extra model call, semantic-quality, Compose visual or device acceptance."
+    "description": "Exact native consolidation, provenance-family confidence, original owner Controller/Application/Runner, cancel/source/expiry/forget and no-candidate workflow paths. Controlled loopback HTTP; no live provider, general semantic-quality, Compose visual or device acceptance."
   },
   "memory-learning-assertions": {
     "class": "dev.pocketengine.features.KnowledgeLearningAssertionWorkflowTest",
@@ -181,7 +190,7 @@
     ],
     "helpers": [],
     "robolectric": true,
-    "description": "Forty-two exact typed source-draft, original workflow/Book/native review, body-edit/correction and candidate lifecycle methods. Pending prose edits withdraw stale typed hypotheses; ordinary formal saves cannot retain unchanged typed meaning under new prose. Original native correction receipts, explicit new typed drafts, metadata saves, source lineage, CAS, retry/cold and source withdrawal remain fenced. No extra model call, general semantic quality, screenshots or device acceptance."
+    "description": "Typed source-draft, original workflow/Book/native review, body-edit/correction and candidate lifecycle paths. Pending prose edits withdraw stale typed hypotheses; ordinary formal saves cannot retain unchanged typed meaning under new prose. Original native correction receipts, explicit new typed drafts, metadata saves, source lineage, CAS, retry/cold and source withdrawal remain fenced. No extra model call, general semantic quality, screenshots or device acceptance."
   },
   "memory-experience": {
     "class": "dev.pocketengine.features.workspace.OwnerExperienceArchiveNativeTest",
@@ -955,7 +964,8 @@
       "dev.pocketengine.features.channels.ChannelInferenceAudienceJourneyTest",
       "dev.pocketengine.features.channels.QqC2CStreamJourneyTest",
       "dev.pocketengine.features.channels.ChannelAnswerPagesTest",
-      "dev.pocketengine.features.channels.ChannelHttpTest"
+      "dev.pocketengine.features.channels.ChannelHttpTest",
+      "dev.pocketengine.features.MemorySourceCleanupHostTest"
     ],
     "helpers": [
       "dev.pocketengine.features.channels.QqOwnerImageJourneyTest",
