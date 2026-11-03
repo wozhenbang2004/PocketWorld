@@ -4,8 +4,11 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 import zipfile
 
 SPEC = importlib.util.spec_from_file_location("pocketworld_bundle", Path(__file__).parent / "packaging/windows/build_bundle.py")
@@ -41,10 +44,155 @@ class PackagingIntegrityTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def build(self, output="fixture.zip", sha=None):
+    def build(self, output="fixture.zip", sha=None, **kwargs):
         return bundle_module.bundle(self.frozen, self.driver, sha or self.sha, "5" * 40, "fixture-dev-1", self.root / output, self.provenance,
             runtime_provenance=self.runtime_provenance, runtime_notices=self.runtime_notices, driver_notices=self.driver_notices,
-            allow_unsigned_development=True)
+            allow_unsigned_development=True, **kwargs)
+
+    def test_admitted_inputs_replaced_before_copy_are_rejected(self):
+        # Replace real files after admission, at the first path-based copy read.
+        dll = self.frozen / "runtime.dll"; dll.write_bytes(b"INERT ORIGINAL DLL")
+        management = self.root / "management"; management.mkdir()
+        for name in bundle_module.MANAGEMENT_SCRIPTS:
+            shutil.copyfile(Path(bundle_module.__file__).parent / name, management / name)
+        runtime = json.loads(self.runtime_provenance.read_text())
+        runtime["unsignedFiles"][dll.name] = bundle_module.file_hash(dll)
+        self.runtime_provenance.write_text(json.dumps(runtime))
+        paths = (dll, self.driver, management / bundle_module.MANAGEMENT_SCRIPTS[0],
+                 self.runtime_notices / "fixture-license.txt")
+        copyfile = shutil.copyfile
+        for index, path in enumerate(paths):
+            with self.subTest(path=path.name):
+                original = path.read_bytes()
+                replaced = []
+                def replace_then_copy(source, target, *args, **kwargs):
+                    if Path(source) == path and not replaced:
+                        replacement = path.with_name(path.name + ".replacement")
+                        replacement.write_bytes(b"INERT REPLACEMENT, NOT ADMITTED")
+                        os.replace(replacement, path)
+                        replaced.append(True)
+                    return copyfile(source, target, *args, **kwargs)
+                output = f"replaced-{index}.zip"
+                try:
+                    with mock.patch.object(bundle_module.shutil, "copyfile", side_effect=replace_then_copy):
+                        with self.assertRaisesRegex(ValueError, "admitted"):
+                            self.build(output, management_dir=management)
+                    self.assertEqual([True], replaced)
+                    self.assertFalse((self.root / output).exists())
+                finally:
+                    path.write_bytes(original)
+
+    def test_signed_final_input_replacement_does_not_inherit_signing_evidence(self):
+        original = self.sha
+        self.driver.write_bytes(b"INERT SIGNED-FINAL FIXTURE")
+        final = bundle_module.file_hash(self.driver)
+        signing = self.root / "signing.json"
+        signing.write_text(json.dumps({"format": "pocketworld.windows-signing.v1", "sourceCommit": "5"*40, "complete": True,
+            "artifacts": {"driver/cua-driver.exe": {"unsignedSha256": original, "finalSha256": final,
+                "signatureStatus": "Valid", "signerThumbprint": "FIXTURE-NOT-A-TRUSTED-SIGNATURE"}}}))
+        copyfile = shutil.copyfile
+        replaced = []
+        def replace_then_copy(source, target, *args, **kwargs):
+            if Path(source) == self.driver and not replaced:
+                replacement = self.driver.with_suffix(".replacement")
+                replacement.write_bytes(b"INERT DIFFERENT POST-SIGN BYTES")
+                os.replace(replacement, self.driver)
+                replaced.append(True)
+            return copyfile(source, target, *args, **kwargs)
+        with mock.patch.object(bundle_module.shutil, "copyfile", side_effect=replace_then_copy):
+            with self.assertRaisesRegex(ValueError, "admitted"):
+                self.build(sha=final, signing_provenance=signing)
+        self.assertEqual([True], replaced)
+        self.assertFalse((self.root / "fixture.zip").exists())
+
+    def test_driver_identity_cannot_change_after_the_supplied_digest_check(self):
+        final_bytes = b"INERT OTHER SIGNED DRIVER"
+        signing = self.root / "signing.json"
+        signing.write_text(json.dumps({"format": "pocketworld.windows-signing.v1", "sourceCommit": "5"*40, "complete": True,
+            "artifacts": {"driver/cua-driver.exe": {"unsignedSha256": self.sha,
+                "finalSha256": hashlib.sha256(final_bytes).hexdigest(),
+                "signatureStatus": "Valid", "signerThumbprint": "FIXTURE-NOT-A-TRUSTED-SIGNATURE"}}}))
+        file_hash = bundle_module.file_hash
+        replaced = []
+        def replace_after_hash(path):
+            result = file_hash(path)
+            if path == self.driver and not replaced:
+                replacement = self.driver.with_suffix(".replacement")
+                replacement.write_bytes(final_bytes)
+                os.replace(replacement, self.driver)
+                replaced.append(True)
+            return result
+        with mock.patch.object(bundle_module, "file_hash", side_effect=replace_after_hash):
+            with self.assertRaisesRegex(ValueError, "admitted"):
+                self.build(signing_provenance=signing)
+        self.assertEqual([True], replaced)
+        self.assertFalse((self.root / "fixture.zip").exists())
+
+    def test_new_runtime_member_after_admission_is_not_bundled(self):
+        walk = bundle_module.tree
+        calls = []
+        def add_after_admission(path):
+            result = walk(path)
+            if Path(path) == self.frozen and not calls:
+                calls.append(True)
+                # The admitted list has already been captured; no later scan may
+                # silently admit another member using only a new manifest hash.
+                (self.frozen / "late.dll").write_bytes(b"INERT UNADMITTED ADDITION")
+            return result
+        with mock.patch.object(bundle_module, "tree", side_effect=add_after_admission):
+            result = self.build()
+        with zipfile.ZipFile(result["path"]) as archive:
+            self.assertNotIn("app/late.dll", archive.namelist())
+
+    def test_archive_read_replacement_cannot_disagree_with_manifest(self):
+        read_bytes = Path.read_bytes
+        replaced = []
+        def replace_then_read(path):
+            if path.name == "PocketWorld-Companion.exe" and path.parent.name == "app" and not replaced:
+                replacement = path.with_suffix(".replacement")
+                replacement.write_bytes(b"INERT STAGE REPLACEMENT AFTER MANIFEST")
+                os.replace(replacement, path)
+                replaced.append(True)
+            return read_bytes(path)
+        with mock.patch.object(Path, "read_bytes", replace_then_read):
+            with self.assertRaisesRegex(ValueError, "admitted"):
+                self.build()
+        self.assertEqual([True], replaced)
+
+    def test_release_verifier_receives_admitted_staged_paths(self):
+        # Stub-only routing test: these inert bytes have no real signatures, and
+        # this does not establish Windows or Authenticode acceptance.
+        artifacts = {"app/PocketWorld-Companion.exe": self.frozen / "PocketWorld-Companion.exe",
+                     "driver/cua-driver.exe": self.driver}
+        artifacts.update({"tools/"+name: Path(bundle_module.__file__).parent / name
+                          for name in bundle_module.MANAGEMENT_SCRIPTS})
+        records = {name: {"unsignedSha256": bundle_module.file_hash(path), "finalSha256": bundle_module.file_hash(path),
+                          "signatureStatus": "Valid", "signerThumbprint": "FIXTURE-ONLY"}
+                   for name, path in artifacts.items()}
+        signing = self.root / "signing.json"
+        signing.write_text(json.dumps({"format": "pocketworld.windows-signing.v1", "sourceCommit": "5"*40,
+                                       "complete": True, "artifacts": records}))
+        verified = []
+        def verify_staged(path, thumbprint):
+            self.assertIn(path.parent.name, {"app", "driver", "tools"})
+            name = path.parent.name + "/" + path.name
+            self.assertNotEqual(artifacts[name], path)
+            self.assertEqual(records[name]["finalSha256"], bundle_module.file_hash(path))
+            self.assertEqual("FIXTURE-ONLY", thumbprint)
+            verified.append(name)
+        with mock.patch.object(bundle_module, "os", SimpleNamespace(name="nt", walk=os.walk)), \
+                mock.patch.object(bundle_module, "verify_authenticode", side_effect=verify_staged):
+            bundle_module.bundle(self.frozen, self.driver, self.sha, "5"*40, "fixture-release-routing", self.root / "routing.zip", self.provenance,
+                runtime_provenance=self.runtime_provenance, runtime_notices=self.runtime_notices, driver_notices=self.driver_notices,
+                signing_provenance=signing)
+        self.assertCountEqual(artifacts, verified)
+        with mock.patch.object(bundle_module, "os", SimpleNamespace(name="nt", walk=os.walk)), \
+                mock.patch.object(bundle_module, "verify_authenticode", side_effect=ValueError("signature rejected")):
+            with self.assertRaisesRegex(ValueError, "signature rejected"):
+                bundle_module.bundle(self.frozen, self.driver, self.sha, "5"*40, "fixture-release-routing", self.root / "rejected.zip", self.provenance,
+                    runtime_provenance=self.runtime_provenance, runtime_notices=self.runtime_notices, driver_notices=self.driver_notices,
+                    signing_provenance=signing)
+        self.assertFalse((self.root / "rejected.zip").exists())
 
     def test_each_actual_archive_file_is_hash_pinned_and_reproducible(self):
         first, second = self.build(), self.build("fixture-second.zip")
