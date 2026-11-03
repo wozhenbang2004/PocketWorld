@@ -46,6 +46,24 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
         checkUsable();JSONObject selected=null;JSONArray current=resources(control);
         for(int i=0;i<current.length();i++)if(uri.equals(current.getJSONObject(i).optString("uri")))selected=current.getJSONObject(i);
         if(selected==null||!McpData.digest(selected).equals(descriptorDigest))throw new SecurityException("资源已删除或声明已变化，请重新选择");
+        return readResource(uri,descriptorDigest,control);
+    }
+
+    /** Re-list the exact current template before the same resources/read RPC. A preview URI
+     * is not authority to fetch a different endpoint, a local file or an unlisted template. */
+    JSONObject templateResource(String template,String descriptorDigest,JSONObject arguments,String reviewedUri,RunControl control)throws Exception{
+        if(descriptorDigest==null||!descriptorDigest.matches("[a-f0-9]{64}")||reviewedUri==null)throw new IllegalArgumentException("请先选择准确模板并审阅展开URI");
+        if(arguments==null)throw new IllegalArgumentException("模板参数需为对象");arguments=McpData.copy(arguments);
+        checkUsable();control.check();JSONObject selected=null;JSONArray current=resourceTemplates(control);
+        for(int i=0;i<current.length();i++)if(template.equals(current.getJSONObject(i).optString("uriTemplate")))selected=current.getJSONObject(i);
+        if(selected==null||!McpData.digest(selected).equals(descriptorDigest))throw new SecurityException("资源模板已删除或声明已变化，请重新选择并审阅URI");
+        if(McpData.containsSecret(arguments,token,0))throw new SecurityException("模板参数包含当前连接凭据，已拒绝作为资源标识发送或保存");
+        JSONObject preview=McpResourceTemplateData.preview(selected,arguments);String uri=preview.getString("uri");
+        if(!reviewedUri.equals(uri))throw new SecurityException("模板参数已变化，展开URI与已审阅值不同；未读取正文");
+        control.check();return readResource(uri,descriptorDigest,control).put("resourceTemplate",preview.getJSONObject("resourceTemplate"));
+    }
+
+    private JSONObject readResource(String uri,String descriptorDigest,RunControl control)throws Exception{
         JSONObject result=requiredResult(rpc("resources/read",new JSONObject().put("uri",uri),control));
         JSONArray raw=result.getJSONArray("contents"),contents=new JSONArray(),omitted=new JSONArray();
         if(raw.length()>64)throw new McpException("资源返回块超过64项，未截断为完整资源");
@@ -197,6 +215,27 @@ public final class McpClient implements AutoCloseable, dev.pocketengine.features
             cursor=(String)next;
         }
         throw new McpException("MCP资源清单超过8页，请缩小服务端范围");
+    }
+
+    /** Templates have their own paginated RPC; resources/list may legitimately be empty. */
+    JSONArray resourceTemplates(RunControl control)throws Exception{
+        checkUsable();control.check();if(!resourceSupport)throw new McpException("此MCP服务未声明resources能力");
+        JSONArray all=new JSONArray();Set<String> templates=new HashSet<>(),cursors=new HashSet<>();String cursor=null;int bytes=0;
+        for(int page=0;page<8;page++){
+            JSONObject params=new JSONObject();if(cursor!=null)params.put("cursor",cursor);
+            JSONObject result=requiredResult(rpc("resources/templates/list",params,control));JSONArray definitions=result.getJSONArray("resourceTemplates");
+            if(all.length()+definitions.length()>McpResourceTemplateData.MAX_TEMPLATES)throw new McpException("MCP资源模板目录超过96项，请缩小服务端范围");
+            for(int i=0;i<definitions.length();i++){
+                JSONObject definition=definitions.getJSONObject(i);Object uriTemplate=definition.opt("uriTemplate");
+                if(uriTemplate instanceof String&&!templates.add((String)uriTemplate))throw new McpException("MCP资源模板URI重复，未静默选择其中一项");
+                if(McpData.containsSecret(definition,token,0))throw new McpException("MCP资源模板声明包含凭据，已拒绝投影");
+                bytes+=definition.toString().getBytes(StandardCharsets.UTF_8).length;if(bytes>MAX_BYTES)throw new McpException("MCP资源模板清单超过256KiB");
+                all.put(McpData.copy(definition));
+            }
+            control.check();if(!result.has("nextCursor"))return all;
+            Object next=result.get("nextCursor");if(!(next instanceof String)||((String)next).length()>4096||!cursors.add((String)next))throw new McpException("MCP资源模板分页游标无效或循环");cursor=(String)next;
+        }
+        throw new McpException("MCP资源模板目录超过8页，请缩小服务端范围");
     }
 
     /** Exact advertised skill:// text only. There is no local-file or HTTP-link resolver here. */

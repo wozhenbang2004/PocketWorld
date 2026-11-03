@@ -434,10 +434,28 @@ public final class PluginsModule implements EngineModule {
     public JSONObject getMcpResource(String id,String installation,long revision,String uri,String digest,RunControl original,String operation)throws Exception {
         try(McpResourceEvidence.Snapshot snapshot=readMcpResourceForOwner(id,installation,revision,uri,digest,original,operation)){return snapshot.view();}
     }
+    public JSONObject listMcpResourceTemplates(String id,String installation,long revision,RunControl original,String operation)throws Exception{
+        try(McpSourceConnection source=openMcpSource(id,installation,revision,original,operation)){
+            source.discover();JSONArray templates=McpResourceTemplateData.catalogue(source.client.resourceTemplates(original));
+            original.check();synchronized(this){currentMcpSourceInstallation(source.binding);}
+            return new JSONObject().put("source",McpData.copy(source.binding)).put("operationId",operation).put("resourceTemplates",templates)
+                    .put("metadataOnly",true).put("untrustedReference",true).put("executionAuthorized",false);
+        }
+    }
     /** Native-only retained bytes. The UI receives a handle, never authority to replace the body. */
     public McpResourceEvidence.Snapshot readMcpResourceForOwner(String id,String installation,long revision,String uri,String digest,RunControl original,String operation)throws Exception {
+        return readMcpResourceForOwner(id,installation,revision,uri,digest,null,original,operation);
+    }
+    public McpResourceEvidence.Snapshot readMcpResourceForOwner(String id,String installation,long revision,String uri,String digest,JSONObject templateSelection,RunControl original,String operation)throws Exception{
+        if(templateSelection!=null){
+            if(templateSelection.length()!=2||!(templateSelection.opt("uriTemplate") instanceof String)||!(templateSelection.opt("arguments") instanceof JSONObject))
+                throw new SecurityException("模板读取只接受已选择的uriTemplate和参数；正文与权限不能回传");
+            templateSelection=McpData.copy(templateSelection);
+        }
         try(McpSourceConnection source=openMcpSource(id,installation,revision,original,operation)){
-            source.discover();JSONObject result=source.client.resource(uri,digest,original);original.check();synchronized(this){currentMcpSourceInstallation(source.binding);}
+            source.discover();JSONObject result=templateSelection==null?source.client.resource(uri,digest,original)
+                    :source.client.templateResource(templateSelection.getString("uriTemplate"),digest,templateSelection.getJSONObject("arguments"),uri,original);
+            original.check();synchronized(this){currentMcpSourceInstallation(source.binding);}
             JSONObject binding=McpData.copy(source.binding);
             return McpResourceEvidence.captured(result.put("source",binding).put("operationId",operation).put("executionAuthorized",false),()->{synchronized(PluginsModule.this){currentMcpSourceInstallation(binding);}});
         }

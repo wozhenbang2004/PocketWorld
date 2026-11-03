@@ -32,6 +32,7 @@ import java.util.Enumeration;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -58,6 +59,7 @@ public final class McpResourceEvidenceNativeJourneyTest {
     private static final String PROVIDER = "SyntheticMcpResourceEvidenceKeyStore";
     private static final String TOKEN = "synthetic-mcp-resource-evidence-token";
     private static final String URI = "memo://fixture/private/original";
+    private static final String TEMPLATE = "memo://fixture/private/{id}{?q}";
     private static final String NEEDLE = "RETAINED_MCP_RESOURCE_AFTER_128_KIB_7192";
     private static final String SUBSCRIPTION = "io.modelcontextprotocol/subscriptionId";
     private static final String BODY = "Original private resource\n" + "a".repeat(139000) + NEEDLE
@@ -90,8 +92,14 @@ public final class McpResourceEvidenceNativeJourneyTest {
         final String task;
         String run;
         int epoch;
+        final boolean templatesOnly;
+        final String protocol;
+        volatile String templateDescription = "original template", readUri = URI;
+        volatile CountDownLatch readEntered, readRelease;
 
-        Fixture() throws Exception {
+        Fixture() throws Exception { this(false, McpData.VERSION); }
+        Fixture(boolean templatesOnly, String protocol) throws Exception {
+            this.templatesOnly = templatesOnly; this.protocol = protocol; server.modern = McpData.VERSION.equals(protocol);
             android.deleteDatabase("pocket-world.db");
             File manifests = new File(android.getFilesDir(), "plugins/manifests.json");
             if (manifests.exists()) assertTrue(manifests.delete());
@@ -104,7 +112,7 @@ public final class McpResourceEvidenceNativeJourneyTest {
             // credential-bearing JSON; all actual resource reads and saves below use that workflow.
             JSONObject preview = plugins.handle("discoverMcp", new JSONObject().put("id", "retained-native")
                     .put("name", "原资源保存测试服务").put("endpoint", server.endpoint()).put("token", TOKEN)
-                    .put("protocolVersion", McpData.VERSION).put("_operationId", id()));
+                    .put("protocolVersion", protocol).put("_operationId", id()));
             installation = owner.mcp("installMcp", new JSONObject().put("previewId", preview.getString("previewId"))
                     .put("expectedInstallationId", preview.getString("expectedInstallationId")).put("tools", new JSONArray()));
             task = tasks.createCapabilityTask("明确保存所选MCP资源到原私人任务", "resource-evidence-native-fixture").getString("id");
@@ -135,24 +143,31 @@ public final class McpResourceEvidenceNativeJourneyTest {
 
         void respond(McpFixture.Exchange exchange) throws Exception {
             switch (exchange.method()) {
-                case "server/discover": {
+                case "server/discover": case "initialize": {
                     JSONObject discovery = server.discovery();
                     discovery.getJSONObject("capabilities").remove("tools");
                     discovery.getJSONObject("capabilities").put("resources", new JSONObject().put("subscribe", true).put("listChanged", true));
+                    if (!server.modern) { discovery.remove("resultType"); exchange.headers.put("MCP-Session-Id", server.session); }
                     exchange.json(discovery); break;
                 }
                 case "resources/list":
                     assertEquals("Bearer " + TOKEN, exchange.requestHeaders.get("authorization"));
-                    exchange.json(new JSONObject().put("resultType", "complete").put("resources", new JSONArray().put(new JSONObject()
-                            .put("uri", URI).put("name", "private original").put("mimeType", "text/plain")))); break;
-                case "resources/read":
-                    assertEquals("resources/read", exchange.requestHeaders.get("mcp-method"));
-                    assertEquals(URI, exchange.requestHeaders.get("mcp-name"));
-                    assertEquals(McpData.VERSION, exchange.requestHeaders.get("mcp-protocol-version"));
+                    exchange.json(complete(new JSONObject().put("resources", templatesOnly ? new JSONArray() : new JSONArray().put(new JSONObject()
+                            .put("uri", URI).put("name", "private original").put("mimeType", "text/plain"))))); break;
+                case "resources/templates/list":
+                    assertTrue(templatesOnly);
+                    exchange.json(complete(new JSONObject().put("resourceTemplates", new JSONArray().put(new JSONObject()
+                            .put("uriTemplate", TEMPLATE).put("name", "private parameterized original").put("description", templateDescription).put("mimeType", "text/plain"))))); break;
+                case "resources/read": {
+                    if (server.modern) { assertEquals("resources/read", exchange.requestHeaders.get("mcp-method")); assertEquals(readUri, exchange.requestHeaders.get("mcp-name")); }
+                    assertEquals(protocol, exchange.requestHeaders.get("mcp-protocol-version"));
                     assertEquals("Bearer " + TOKEN, exchange.requestHeaders.get("authorization"));
-                    assertEquals(URI, exchange.body.getJSONObject("params").getString("uri"));
-                    exchange.json(new JSONObject().put("resultType", "complete").put("contents", new JSONArray().put(new JSONObject()
-                            .put("uri", URI).put("mimeType", "text/plain").put("text", BODY)))); break;
+                    assertEquals(readUri, exchange.body.getJSONObject("params").getString("uri"));
+                    CountDownLatch entered = readEntered, release = readRelease;
+                    if (entered != null) { entered.countDown(); assertTrue(release.await(3, TimeUnit.SECONDS)); }
+                    exchange.json(complete(new JSONObject().put("contents", new JSONArray().put(new JSONObject()
+                            .put("uri", readUri).put("mimeType", "text/plain").put("text", BODY))))); break;
+                }
                 case "subscriptions/listen": {
                     JSONObject params = exchange.body.getJSONObject("params"), requested = params.getJSONObject("notifications");
                     assertEquals(URI, requested.getJSONArray("resourceSubscriptions").getString(0));
@@ -165,6 +180,8 @@ public final class McpResourceEvidenceNativeJourneyTest {
                 default: server.standard(exchange);
             }
         }
+
+        JSONObject complete(JSONObject result) throws Exception { if (server.modern) result.put("resultType", "complete"); return result; }
 
         JSONObject notification(String method, Object request, JSONObject values) throws Exception {
             return new JSONObject().put("jsonrpc", "2.0").put("method", method)
@@ -180,6 +197,13 @@ public final class McpResourceEvidenceNativeJourneyTest {
         JSONObject snapshot(RunControl control) throws Exception {
             JSONObject resource = owner.mcp("listMcpResources", args()).getJSONArray("resources").getJSONObject(0);
             return owner.mcp("getMcpResource", args().put("uri", URI).put("descriptorDigest", resource.getString("descriptorDigest")), control);
+        }
+        JSONObject templatePayload() throws Exception {
+            JSONObject row = owner.mcp("listMcpResourceTemplates", args()).getJSONArray("resourceTemplates").getJSONObject(0);
+            JSONObject preview = McpResourceTemplateData.preview(row.getJSONObject("definition"), new JSONObject().put("id", "chosen/本机").put("q", "~* %2F"));
+            readUri = preview.getString("uri");
+            return args().put("uri", readUri).put("descriptorDigest", row.getString("descriptorDigest"))
+                    .put("templateSelection", new JSONObject().put("uriTemplate", TEMPLATE).put("arguments", preview.getJSONObject("resourceTemplate").getJSONObject("arguments")));
         }
         JSONObject savePayload(JSONObject snapshot, JSONObject target) throws Exception {
             return new JSONObject().put("snapshotId", snapshot.getString("snapshotId")).put("taskId", target.getString("taskId"))
@@ -334,6 +358,84 @@ public final class McpResourceEvidenceNativeJourneyTest {
             assertEquals(0, fixture.tasks.savedMemorySources(fixture.task, 0, 20).getJSONArray("entries").length());
             assertEquals(requests, fixture.server.received.size()); assertEquals(1, fixture.server.count("resources/read"));
             assertEquals(1, fixture.tasks.list().length()); fixture.noExecution();
+        }
+    }
+
+    @Test public void modernTemplateOnlySourceSavesOneHistoricalOriginalThroughPartialLinkAndColdBook() throws Exception {
+        templateOnlyHistoricalSource(McpData.VERSION);
+    }
+
+    @Test public void legacyTemplateOnlySourceSavesOneHistoricalOriginalThroughPartialLinkAndColdBook() throws Exception {
+        templateOnlyHistoricalSource(McpData.LEGACY);
+    }
+
+    private void templateOnlyHistoricalSource(String protocol) throws Exception {
+        try (Fixture fixture = new Fixture(true, protocol)) {
+            assertEquals(0, fixture.owner.mcp("listMcpResources", fixture.args()).getJSONArray("resources").length());
+            RunControl download = new RunControl(); JSONObject payload = fixture.templatePayload();
+            JSONObject snapshot = fixture.owner.mcp("getMcpResource", payload, download), target = fixture.target(); download.cancel();
+            assertFalse(snapshot.getBoolean("executionAuthorized")); assertEquals(TEMPLATE, snapshot.getJSONObject("resourceTemplate").getString("uriTemplate"));
+            assertEquals("chosen/本机", snapshot.getJSONObject("resourceTemplate").getJSONObject("arguments").getString("id"));
+            assertFalse(snapshot.toString().contains(TOKEN));
+            fixture.failIndex(); JSONObject partial = fixture.save(snapshot, target); assertFalse(partial.getBoolean("linked"));
+            JSONObject attachment = partial.getJSONObject("attachment"); String bytes = fixture.retained(attachment);
+            JSONObject retained = new JSONObject(bytes); assertEquals(snapshot.getJSONObject("resourceTemplate").toString(), retained.getJSONObject("resourceTemplate").toString());
+            assertEquals(1, fixture.repo.book.list().length()); fixture.allowIndex();
+            JSONObject saved = fixture.save(snapshot, target), duplicate = fixture.save(snapshot, target);
+            assertTrue(saved.getBoolean("linked")); assertTrue(duplicate.getBoolean("duplicate"));
+            assertEquals(attachment.toString(), saved.getJSONObject("attachment").toString()); assertEquals(1, fixture.events(McpResourceEvidence.EVENT_TYPE));
+            JSONObject event = fixture.savedEvent(); assertFalse(event.getJSONObject("resourceTemplate").has("arguments"));
+            JSONObject publicSource = fixture.repo.book.get(attachment.getString("id")).getJSONObject("source");
+            assertFalse(publicSource.has("uri")); assertFalse(publicSource.has("resourceTemplate")); assertTrue(publicSource.has("resourceTemplateDigest"));
+            JSONObject forged = new JSONObject(event.toString()); forged.getJSONObject("resourceTemplate").put("argumentsDigest", McpData.digest("replacement"));
+            assertThrows(SecurityException.class, () -> fixture.io(() -> McpResourceEvidence.readRetainedText(fixture.repo.book, forged, new RunControl())));
+            int offset = bytes.indexOf(NEEDLE) - 12;
+            SourceRef selected = fixture.tasks.selectSavedMemorySource(fixture.task, fixture.run, saved.getLong("eventSeq"), offset, NEEDLE.length() + 24);
+            fixture.nextRun(); fixture.enabled(true); fixture.enabled(false); fixture.cold();
+            int requests = fixture.server.received.size(); assertTrue(fixture.read(selected).contains(NEEDLE));
+            assertEquals(requests, fixture.server.received.size()); assertEquals(1, fixture.server.count("resources/read"));
+            assertEquals(1, fixture.tasks.list().length()); assertEquals(1, fixture.repo.book.list().length()); fixture.noExecution();
+        }
+    }
+
+    @Test public void templateDescriptorRevisionCancellationAndLateReplyCannotCreateOrSaveOldSourceAuthority() throws Exception {
+        try (Fixture fixture = new Fixture(true, McpData.VERSION)) {
+            JSONObject payload = fixture.templatePayload(); fixture.templateDescription = "changed before read";
+            assertThrows(SecurityException.class, () -> fixture.owner.mcp("getMcpResource", payload)); assertEquals(0, fixture.server.count("resources/read"));
+            fixture.templateDescription = "original template"; RunControl stopped = new RunControl(); stopped.cancel();
+            int requests = fixture.server.received.size();
+            assertThrows(InterruptedException.class, () -> fixture.owner.mcp("getMcpResource", payload, stopped)); assertEquals(requests, fixture.server.received.size());
+            JSONObject snapshot = fixture.owner.mcp("getMcpResource", payload), target = fixture.target(); fixture.enabled(true);
+            assertThrows(SecurityException.class, () -> fixture.save(snapshot, target)); assertEquals(0, fixture.repo.book.list().length());
+            requests = fixture.server.received.size();
+            assertThrows(SecurityException.class, () -> fixture.owner.mcp("getMcpResource", payload)); assertEquals(requests, fixture.server.received.size());
+            JSONObject fresh = fixture.templatePayload(); fixture.readEntered = new CountDownLatch(1); fixture.readRelease = new CountDownLatch(1);
+            RunControl original = new RunControl(); var pending = fixture.worker.submit(() -> fixture.owner.mcp("getMcpResource", fresh, original));
+            try {
+                assertTrue(fixture.readEntered.await(3, TimeUnit.SECONDS)); fixture.enabled(false); fixture.readRelease.countDown();
+                assertThrows(ExecutionException.class, () -> pending.get(3, TimeUnit.SECONDS)); assertTrue(original.isCancelled());
+            } finally { fixture.readRelease.countDown(); }
+            assertEquals(0, fixture.repo.book.list().length()); assertEquals(0, fixture.events(McpResourceEvidence.EVENT_TYPE));
+            assertEquals(2, fixture.server.count("resources/read")); fixture.noExecution();
+        }
+    }
+
+    @Test public void templateReadsShareTheOriginalFourSnapshotWindowAndDiscardNeverRestoresSaveAuthority() throws Exception {
+        try (Fixture fixture = new Fixture(true, McpData.VERSION)) {
+            JSONArray opened = new JSONArray();
+            for (int i = 0; i < 4; i++) opened.put(fixture.owner.mcp("getMcpResource", fixture.templatePayload()));
+            assertThrows(IllegalStateException.class, () -> fixture.owner.mcp("getMcpResource", fixture.templatePayload()));
+            JSONObject first = opened.getJSONObject(0), target = fixture.target();
+            assertTrue(fixture.owner.mcp("discardMcpResourceSnapshot", new JSONObject().put("snapshotId", first.getString("snapshotId"))).getBoolean("discarded"));
+            assertThrows(SecurityException.class, () -> fixture.save(first, target));
+            JSONObject replacement = fixture.owner.mcp("getMcpResource", fixture.templatePayload());
+            assertNotEquals(first.getString("snapshotId"), replacement.getString("snapshotId"));
+            JSONObject saved = fixture.save(replacement, target); assertTrue(saved.getBoolean("linked"));
+            fixture.owner.mcp("discardMcpResourceSnapshot", new JSONObject().put("snapshotId", replacement.getString("snapshotId")));
+            assertThrows(SecurityException.class, () -> fixture.save(replacement, target));
+            assertEquals(1, fixture.repo.book.list().length()); assertEquals(1, fixture.events(McpResourceEvidence.EVENT_TYPE));
+            assertTrue(fixture.retained(saved.getJSONObject("attachment")).contains(NEEDLE));
+            assertEquals(6, fixture.server.count("resources/read")); fixture.noExecution();
         }
     }
 

@@ -295,8 +295,9 @@ public final class NativeOwnerWorkflows {
             }
             case "pingMcp":return plugins().pingMcpInstallation(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),observation,payload.getString("_operationId"));
             case "listMcpResources":return plugins().listMcpResources(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),observation,payload.getString("_operationId"));
+            case "listMcpResourceTemplates":return plugins().listMcpResourceTemplates(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),observation,payload.getString("_operationId"));
             case "getMcpResource":{
-                var snapshot=plugins().readMcpResourceForOwner(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),payload.getString("uri"),payload.getString("descriptorDigest"),observation,payload.getString("_operationId"));
+                var snapshot=plugins().readMcpResourceForOwner(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),payload.getString("uri"),payload.getString("descriptorDigest"),payload.has("templateSelection")?payload.getJSONObject("templateSelection"):null,observation,payload.getString("_operationId"));
                 boolean retained=false;try{
                     JSONObject view=snapshot.view();observation.check();
                     synchronized(mcpResourceSnapshots){

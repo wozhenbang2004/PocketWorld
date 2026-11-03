@@ -846,6 +846,8 @@
       "dev.pocketengine.ui.McpInstallPreviewStateTest",
       "dev.pocketengine.features.plugins.McpResourceEvidenceTest",
       "dev.pocketengine.features.plugins.McpResourceEvidenceNativeJourneyTest",
+      "dev.pocketengine.features.plugins.McpResourceTemplateDataTest",
+      "dev.pocketengine.features.plugins.McpResourceTemplateClientTest",
       "dev.pocketengine.features.memory.SavedDocumentMemorySourceNativeTest"
     ],
     "helpers": [

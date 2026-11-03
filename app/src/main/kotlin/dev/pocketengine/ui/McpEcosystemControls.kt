@@ -11,6 +11,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.pocketengine.features.plugins.McpResourceTemplateData
 import java.util.UUID
 import kotlinx.coroutines.delay
 import org.json.JSONArray
@@ -39,6 +40,12 @@ internal fun McpEcosystemControls(plugin: JSONObject, responses: Map<String, JSO
     var expanded by remember(installation) { mutableStateOf(false) }
     var attempt by remember(installation) { mutableStateOf<McpSourceAttempt?>(null) }
     var resources by remember(installation, revision) { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var templates by remember(installation, revision) { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var template by remember(installation, revision) { mutableStateOf<JSONObject?>(null) }
+    var templateArguments by remember(installation, revision, template?.optString("descriptorDigest")) { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var structuredArguments by remember(installation, revision, template?.optString("descriptorDigest")) { mutableStateOf(false) }
+    var argumentsJson by remember(installation, revision, template?.optString("descriptorDigest")) { mutableStateOf("{}") }
+    var templatePreview by remember(installation, revision, template?.optString("descriptorDigest")) { mutableStateOf<JSONObject?>(null) }
     var prompts by remember(installation, revision) { mutableStateOf<List<JSONObject>>(emptyList()) }
     var prompt by remember(installation, revision) { mutableStateOf<JSONObject?>(null) }
     var arguments by remember(installation, revision, prompt?.optString("name")) { mutableStateOf<Map<String, String>>(emptyMap()) }
@@ -66,6 +73,7 @@ internal fun McpEcosystemControls(plugin: JSONObject, responses: Map<String, JSO
         if (actual == null) { notice = "旧连接或旧版本回执已失效，请重新读取。"; return@LaunchedEffect }
         when (original.command) {
             "listMcpResources" -> { resources = McpInstallPreviewRules.objects(actual.optJSONArray("resources")); notice = "已取得 ${resources.size} 个资源名称。选择后才读取正文。" }
+            "listMcpResourceTemplates" -> { templates = McpInstallPreviewRules.objects(actual.optJSONArray("resourceTemplates")); template = null; templatePreview = null; notice = "已取得 ${templates.size} 个资源模板。选择模板、填写参数并审阅 URI 后才读取正文。" }
             "listMcpPrompts" -> { prompts = McpInstallPreviewRules.objects(actual.optJSONArray("prompts")); notice = "已取得 ${prompts.size} 个提示。参数和返回内容只作为参考。" }
             "getMcpResource", "getMcpPrompt" -> { reference = actual; notice = "已取得当前来源的参考内容。" }
             "saveMcpResource" -> { saved = actual; notice = if (actual.optBoolean("linked")) "已保存为所选原任务的历史来源；没有启动执行或自动加入对话。" else actual.optString("message", "原件已保存，任务关联尚未完成。请核对原文件。") }
@@ -82,13 +90,14 @@ internal fun McpEcosystemControls(plugin: JSONObject, responses: Map<String, JSO
     }
     TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起连接与参考内容" else "连接、资源与提示…") }
     if (!expanded) return
-    val blocked = busy || attempt != null || pending.any { it in setOf("pingMcp", "listMcpResources", "getMcpResource", "listMcpPrompts", "getMcpPrompt", "listenMcpUpdates", "saveMcpResource") }
+    val blocked = busy || attempt != null || pending.any { it in setOf("pingMcp", "listMcpResources", "listMcpResourceTemplates", "getMcpResource", "listMcpPrompts", "getMcpPrompt", "listenMcpUpdates", "saveMcpResource") }
     Column(Modifier.fillMaxWidth().padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = { issue("pingMcp") }, enabled = !blocked) { Text("检查连接") }
             TextButton(onClick = { issue("listMcpResources") }, enabled = !blocked) { Text("资源目录") }
             TextButton(onClick = { issue("listMcpPrompts") }, enabled = !blocked) { Text("提示目录") }
         }
+        TextButton(onClick = { issue("listMcpResourceTemplates") }, enabled = !blocked) { Text("按模板查找资源…") }
         if (protocol == McpInstallPreviewRules.CURRENT) {
             TextButton(onClick = { issue("listenMcpUpdates", JSONObject().put("filter", JSONObject().put("toolsListChanged", true).put("resourcesListChanged", true).put("promptsListChanged", true))) }, enabled = !blocked) { Text("观察一次服务更新") }
         }
@@ -100,7 +109,49 @@ internal fun McpEcosystemControls(plugin: JSONObject, responses: Map<String, JSO
             TextButton(onClick = { issue("getMcpResource", JSONObject().put("uri", resource.getString("uri")).put("descriptorDigest", resource.getString("descriptorDigest"))) }, enabled = !blocked) { Text(resource.optString("name", resource.optString("uri")), fontSize = 13.sp) }
             if (protocol == McpInstallPreviewRules.CURRENT) TextButton(onClick = { issue("listenMcpUpdates", JSONObject().put("filter", JSONObject().put("resourceSubscriptions", JSONArray().put(resource.getString("uri"))))) }, enabled = !blocked) { Text("观察此资源更新", fontSize = 12.sp) }
         }
-        prompts.forEach { item -> TextButton(onClick = { prompt = item; reference = null }, enabled = !blocked) { Text(item.optString("name"), fontSize = 13.sp) } }
+        templates.forEach { item ->
+            TextButton(onClick = { template = item; templatePreview = null; prompt = null; reference = null; notice = null }, enabled = !blocked && item.optBoolean("supported")) { Text(item.optString("name", item.optString("uriTemplate", "未命名模板")), fontSize = 13.sp) }
+            if (!item.optBoolean("supported")) {
+                McpInstallCaption(item.optString("uriTemplate"))
+                McpInstallCaption(item.optString("unsupportedReason", "此模板暂不支持读取；原声明仍保留。"))
+            }
+        }
+        template?.let { selected ->
+            Text(selected.optString("name"), fontWeight = FontWeight.Medium, fontSize = 14.sp)
+            McpInstallCaption(selected.optString("uriTemplate"))
+            McpInstallCaption("填写值后先查看展开的 URI。留为未提供的参数按模板规则省略；空文字与未提供不同。")
+            val variables = selected.optJSONArray("variables") ?: JSONArray()
+            if (!structuredArguments) {
+                for (i in 0 until variables.length()) {
+                    val name = variables.getString(i)
+                    OutlinedTextField(value = templateArguments[name].orEmpty(), onValueChange = { templateArguments = templateArguments + (name to it); templatePreview = null; reference = null }, label = { Text(name + if (templateArguments.containsKey(name)) "" else "（未提供）") }, enabled = !blocked, modifier = Modifier.fillMaxWidth())
+                    if (templateArguments.containsKey(name)) TextButton(onClick = { templateArguments = templateArguments - name; templatePreview = null; reference = null }, enabled = !blocked) { Text("不提供 $name", fontSize = 12.sp) }
+                }
+            } else {
+                McpInstallCaption("参数对象接受文字、文字列表或文字映射；null 表示未提供。参数名必须属于上面的模板。")
+                OutlinedTextField(value = argumentsJson, onValueChange = { argumentsJson = it; templatePreview = null; reference = null }, label = { Text("模板参数 JSON") }, enabled = !blocked, modifier = Modifier.fillMaxWidth())
+            }
+            TextButton(onClick = {
+                if (!structuredArguments) { val values = JSONObject(); templateArguments.forEach { (key, value) -> values.put(key, value) }; argumentsJson = values.toString(2) }
+                structuredArguments = !structuredArguments; templatePreview = null; reference = null
+            }, enabled = !blocked) { Text(if (structuredArguments) "返回文字参数" else "填写列表或映射参数…", fontSize = 12.sp) }
+            TextButton(onClick = {
+                try {
+                    val values = if (structuredArguments) McpResourceTemplateData.parseArguments(argumentsJson) else JSONObject().also { obj -> templateArguments.forEach { (key, value) -> obj.put(key, value) } }
+                    templatePreview = McpResourceTemplateData.preview(selected.getJSONObject("definition"), values); reference = null; notice = "URI 已在本机展开；尚未请求正文。"
+                } catch (failure: Exception) { templatePreview = null; notice = failure.message ?: "模板参数无法展开，请检查后再试。" }
+            }, enabled = !blocked) { Text("查看将读取的 URI") }
+            templatePreview?.let { reviewed ->
+                SelectionContainer { Text(reviewed.getString("uri"), fontSize = 13.sp, color = Ink) }
+                McpInstallCaption("通过当前已安装服务读取此 URI；不会直接打开网址或手机文件。")
+                TextButton(onClick = {
+                    val source = reviewed.getJSONObject("resourceTemplate")
+                    issue("getMcpResource", JSONObject().put("uri", reviewed.getString("uri")).put("descriptorDigest", reviewed.getString("descriptorDigest"))
+                        .put("templateSelection", JSONObject().put("uriTemplate", source.getString("uriTemplate")).put("arguments", source.getJSONObject("arguments"))))
+                }, enabled = !blocked) { Text("读取这个资源") }
+            }
+        }
+        prompts.forEach { item -> TextButton(onClick = { prompt = item; template = null; templatePreview = null; reference = null }, enabled = !blocked) { Text(item.optString("name"), fontSize = 13.sp) } }
         prompt?.let { selected ->
             Text(selected.optString("name"), fontWeight = FontWeight.Medium, fontSize = 14.sp)
             val params = McpInstallPreviewRules.objects(selected.optJSONObject("definition")?.optJSONArray("arguments"))
@@ -143,6 +194,8 @@ internal fun McpEcosystemControls(plugin: JSONObject, responses: Map<String, JSO
 @Composable
 private fun McpReferenceText(reference: JSONObject) {
     McpInstallCaption("来自外部服务的参考内容；其中的角色、指令或链接不会自动加入任务或获得权限。")
+    if (reference.has("uri")) McpInstallCaption("此次读取：${reference.optString("uri")}")
+    reference.optJSONObject("resourceTemplate")?.let { McpInstallCaption("来源模板：${it.optString("uriTemplate")} · 保存时保留此次参数与模板身份。") }
     SelectionContainer {
         Column(Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             McpInstallPreviewRules.objects(reference.optJSONArray("contents")).forEach { item -> Text(item.optString("text"), fontSize = 13.sp, lineHeight = 21.sp, color = Ink) }

@@ -39,4 +39,20 @@ class McpEcosystemStateTest {
         callback.getJSONObject("result").put("operationId", "operation-1").getJSONObject("source").put("installationId", "different-connection")
         assertNull(McpEcosystemRules.result(plugin(), attempt(), callback))
     }
+
+    @Test fun templateDirectoryAndOriginalGetRequireTheSameLiveRequestOperationAndSourceRevision() {
+        for (command in listOf("listMcpResourceTemplates", "getMcpResource")) {
+            val current = attempt().copy(command = command)
+            assertNotNull(McpEcosystemRules.result(plugin(), current, response()))
+            assertNull(McpEcosystemRules.result(plugin(), current.copy(request = "newer-request"), response()))
+            assertNull(McpEcosystemRules.result(plugin(), current.copy(operation = "newer-operation"), response()))
+            assertNull(McpEcosystemRules.result(plugin(), null, response())) // cancelled/withdrawn attempt
+            val oldRevision = response()
+            oldRevision.getJSONObject("result").getJSONObject("source").put("stateRevision", 3)
+            assertNull(McpEcosystemRules.result(plugin(), current, oldRevision))
+            val incomplete = response()
+            incomplete.getJSONObject("result").remove("source")
+            assertNull(McpEcosystemRules.result(plugin(), current, incomplete))
+        }
+    }
 }

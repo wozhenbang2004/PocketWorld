@@ -139,6 +139,8 @@ public final class McpResourceEvidence {
                     .put("contentsCount",retained.getJSONArray("contents").length()).put("omittedContentCount",retained.getJSONArray("omittedContent").length())
                     .put("readContext","native_owner_resource_save").put("coverage",COVERAGE).put("historicalSnapshot",true).put("originalBodyIncluded",false)
                     .put("untrustedReference",true).put("instructionsAreData",true).put("automaticConversationInjection",false).put("executionAuthorized",false).put("businessVerified",false);
+            if(retained.has("resourceTemplate"))event.put("resourceTemplate",McpResourceTemplateData.index(retained.getJSONObject("resourceTemplate")));
+            requireTemplatePublicationMetadata(event,source);
             requireIndexEvent(event);index=event.toString();
         }
         public Target target(){return target;}
@@ -165,6 +167,7 @@ public final class McpResourceEvidence {
         for(String key:new String[]{"sha256","descriptorDigest","contentDigest"})hash(event,key);
         if(!event.optString("attachmentGeneration").matches("sha256:[a-f0-9]{64}"))throw new SecurityException("原MCP原件缺少准确本机代次");
         text(event,"uri",2048,false);checkedSource(event.getJSONObject("source"));
+        if(event.has("resourceTemplate"))McpResourceTemplateData.checkIndex(event.getJSONObject("resourceTemplate"),event.getString("descriptorDigest"));
     }
 
     /** Explicit IO warmup, outside Tasks and MemoryBook locks. Saved source currentness is
@@ -188,6 +191,7 @@ public final class McpResourceEvidence {
                 ||!COVERAGE.equals(saved.optString("coverage"))||saved.opt("serverResourceRevision")!=JSONObject.NULL)throw new SecurityException("原MCP快照格式或发布身份不同");
         JSONObject actual=McpData.copy(saved).put("operationId",saved.getString("readOperationId"));checkedResult(actual);
         for(String key:new String[]{"uri","descriptorDigest","contentDigest","readOperationId"})if(!event.getString(key).equals(saved.optString(key)))throw new SecurityException("原MCP快照与保存事件的来源不一致");
+        requireTemplateIdentity(event,saved);
         if(event.getLong("retrievedAt")!=saved.getLong("retrievedAt")||event.getInt("contentsCount")!=saved.getJSONArray("contents").length()
                 ||event.getInt("omittedContentCount")!=saved.getJSONArray("omittedContent").length()||!McpData.digest(event.getJSONObject("source")).equals(McpData.digest(saved.getJSONObject("source"))))throw new SecurityException("原MCP快照的来源、时间或范围改变");
         requirePublicationMetadata(originals.get(event.getString("attachmentId")),event);
@@ -196,11 +200,15 @@ public final class McpResourceEvidence {
     }
 
     private static JSONObject origin(Target target,JSONObject retained)throws Exception{
-        return new JSONObject().put("kind",ROLE).put("taskId",target.taskId).put("runId",target.runId).put("epoch",target.epoch)
+        JSONObject source=new JSONObject().put("kind",ROLE).put("taskId",target.taskId).put("runId",target.runId).put("epoch",target.epoch)
                 .put("publicationId",retained.getString("snapshotId")).put("readOperationId",retained.getString("readOperationId"))
                 .put("mcpSource",McpData.copy(retained.getJSONObject("source"))).put("uri",retained.getString("uri"))
                 .put("descriptorDigest",retained.getString("descriptorDigest")).put("contentDigest",retained.getString("contentDigest"))
                 .put("retrievedAt",retained.getLong("retrievedAt")).put("historicalSnapshot",true).put("untrustedReference",true).put("executionAuthorized",false);
+        // The Book's public metadata omits private source URIs. Keep only an identity digest
+        // here; the exact template and arguments live in the SHA-bound saved JSON.
+        if(retained.has("resourceTemplate"))source.put("resourceTemplateDigest",McpData.digest(McpResourceTemplateData.index(retained.getJSONObject("resourceTemplate"))));
+        return source;
     }
     private static void requirePublicationMetadata(JSONObject actual,JSONObject event)throws Exception{
         JSONObject origin=actual.getJSONObject("source"),nativePublication=origin.getJSONObject("nativePublication");
@@ -219,12 +227,25 @@ public final class McpResourceEvidence {
                 ||!event.getString("readOperationId").equals(origin.optString("readOperationId"))||!event.getString("contentDigest").equals(origin.optString("contentDigest"))
                 ||!event.getString("descriptorDigest").equals(origin.optString("descriptorDigest"))
                 ||!McpData.digest(event.getJSONObject("source")).equals(McpData.digest(origin.getJSONObject("mcpSource"))))throw new SecurityException("原MCP快照保存来源不匹配");
+        requireTemplatePublicationMetadata(event,origin);
+    }
+    private static void requireTemplatePublicationMetadata(JSONObject event,JSONObject origin)throws Exception{
+        if(event.has("resourceTemplate")!=origin.has("resourceTemplateDigest"))throw new SecurityException("原资源发布的模板来源被增加或移除");
+        if(event.has("resourceTemplate")&&!McpData.digest(event.getJSONObject("resourceTemplate")).equals(origin.optString("resourceTemplateDigest")))
+            throw new SecurityException("原资源发布的模板身份不同");
+    }
+    private static void requireTemplateIdentity(JSONObject index,JSONObject source)throws Exception{
+        if(index.has("resourceTemplate")!=source.has("resourceTemplate"))throw new SecurityException("原资源模板来源被增加或移除");
+        if(!index.has("resourceTemplate"))return;
+        JSONObject expected=index.getJSONObject("resourceTemplate"),actual=McpResourceTemplateData.index(source.getJSONObject("resourceTemplate"));
+        if(!McpData.digest(expected).equals(McpData.digest(actual)))throw new SecurityException("原资源模板或参数身份变化");
     }
     private static JSONObject checkedResult(JSONObject supplied)throws Exception{
         if(supplied==null||!uuid(supplied.optString("operationId"))||!Boolean.TRUE.equals(supplied.opt("instructionsAreData"))
                 ||!Boolean.FALSE.equals(supplied.opt("automaticConversationInjection"))||!Boolean.FALSE.equals(supplied.opt("executionAuthorized")))throw new SecurityException("只接受原MCP宿主实际读取的低信任文本回执");
         JSONObject result=new JSONObject().put("source",checkedSource(supplied.getJSONObject("source"))).put("operationId",supplied.getString("operationId"))
                 .put("uri",text(supplied,"uri",2048,false)).put("descriptorDigest",hash(supplied,"descriptorDigest")).put("contentDigest",hash(supplied,"contentDigest"));
+        if(supplied.has("resourceTemplate"))result.put("resourceTemplate",McpResourceTemplateData.checkedProvenance(supplied.getJSONObject("resourceTemplate"),result.getString("uri"),result.getString("descriptorDigest")));
         JSONArray contents=supplied.getJSONArray("contents"),omitted=supplied.getJSONArray("omittedContent"),copied=new JSONArray(),missing=new JSONArray();
         if(contents.length()+omitted.length()>64)throw new SecurityException("原MCP资源返回块超过64项");
         for(int i=0;i<contents.length();i++){

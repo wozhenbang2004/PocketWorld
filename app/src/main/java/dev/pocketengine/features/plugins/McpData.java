@@ -29,6 +29,15 @@ final class McpData {
                 .put("contentTypes",new JSONArray().put("text").put("structuredContent"))
                 .put("resources",new JSONObject().put("sourceImplemented",true).put("readOnly",true).put("skillImportRequiresReview",true)
                         .put("sourceOnlyInstallation",true).put("maxPages",8).put("maxResources",96).put("maxSkillCharacters",64000).put("relativeResourceResolver",false))
+                .put("resourceTemplates",new JSONObject().put("sourceImplemented",true).put("transport","streamable_http")
+                        .put("protocolVersions",new JSONArray().put(VERSION).put(LEGACY)).put("method","resources/templates/list").put("readMethod","resources/read")
+                        .put("nativeOwnerOnly",true).put("installedOnly",true).put("sourceOnlyInstallation",true).put("maxPages",8).put("maxTemplates",McpResourceTemplateData.MAX_TEMPLATES)
+                        .put("maxTemplateCharacters",McpResourceTemplateData.MAX_TEMPLATE_CHARS).put("maxVariables",McpResourceTemplateData.MAX_VARIABLES).put("maxArgumentBytes",McpResourceTemplateData.MAX_ARGUMENT_BYTES).put("maxExpandedUriCharacters",McpResourceTemplateData.MAX_URI_CHARS)
+                        .put("expansionProfile",McpResourceTemplateData.PROFILE).put("prefixModifier",false).put("stringListMapParameters",true).put("localUriReview",true).put("descriptorRevalidatedBeforeRead",true)
+                        .put("originalResourceSnapshot",true).put("unsupportedRowsRetained",true).put("externalUriResolution",false).put("templateSubscriptions",false).put("automaticConversationInjection",false)
+                        .put("unsupportedValues",new JSONArray().put("square brackets in reserved/fragment values").put("empty composite matrix members")
+                                .put("empty scalar with matrix explode").put("empty values in non-query exploded maps")
+                                .put("non-final empty list members except query/continuation explode").put("non-final defined empty variables in unnamed expressions")))
                 .put("prompts",new JSONObject().put("sourceImplemented",true).put("nativeOwnerOnly",true).put("installedOnly",true).put("readOnly",true)
                         .put("sourceOnlyInstallation",true).put("maxPages",8).put("maxPrompts",96).put("maxMessages",64).put("maxTextCharacters",64000).put("automaticConversationInjection",false).put("contentSupport","text_only_with_explicit_omissions"))
                 .put("tasks",new JSONObject().put("protocolVersion",VERSION).put("extension","io.modelcontextprotocol/tasks")
@@ -38,7 +47,7 @@ final class McpData {
                         .put("registration","pre_registered_or_existing_cimd").put("automaticRefresh",false))
                 .put("unsupported",new JSONArray().put("stdio environment/credential input").put("automatic package manager installation; unreviewed dependencies/lifecycle scripts").put("stdio resources/prompts/OAuth/tasks").put("legacy HTTP+SSE")
                         .put("SSE reconnect/resumption").put("GET subscriptions").put("legacy experimental tasks").put("sampling").put("elicitation")
-                        .put("roots").put("legacy resource subscriptions").put("prompt completion").put("multimodal prompt content").put("tasks/update input").put("binary content"));
+                        .put("roots").put("legacy resource subscriptions").put("resource template prefix modifiers").put("template resource subscriptions").put("prompt completion").put("multimodal prompt content").put("tasks/update input").put("binary content"));
     }
 
     static JSONObject previewTool(JSONObject remote,String endpoint,String version,String serverDigest)throws Exception {
