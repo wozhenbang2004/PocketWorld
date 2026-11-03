@@ -61,11 +61,14 @@
       "dev.pocketengine.features.local.project.ProjectFileMoveTest",
       "dev.pocketengine.features.local.project.ProjectBinaryImportNativeTest",
       "dev.pocketengine.ui.LocalWorkbenchGuardTest",
-      "dev.pocketengine.features.local.project.ProjectDirectoryCreateTest"
+      "dev.pocketengine.features.local.project.ProjectDirectoryCreateTest",
+      "dev.pocketengine.features.local.project.ProjectByteDeleteTest",
+      "dev.pocketengine.features.local.project.ProjectPackageSelectionTest",
+      "dev.pocketengine.features.local.project.ProjectPackageArchiveTest"
     ],
     "helpers": [],
     "robolectric": true,
-    "description": "Original SQLite approval/planRef/CapabilityPort -> LocalModule CAS copy/append and per-file receipts, plus exact-patch/reversal regression; no Android device/SAF/SSH acceptance. Original read-file route also captures exact binary hex windows through original ReadCall/Book9 without creating a write intent or process. Fixed-length source byte overwrite (1..2048 bytes, existing file <=256KiB) uses exact SHA/old-byte window, original planRef/approval/CAS and separately approved conditional reversal; full encoded bodies remain only in native plan records. No binary create/resize or execution grant. Exact source byte copy freezes actual manifest-bound bytes <=256KiB into an absent new target; original conditional undo only removes that same copied target. No model Base64 input, existing-target binary overwrite, recursive/cross-provider copy or process execution. Existing manual-owner review/import now has an explicit raw-byte branch using issued original Workspace FileSnapshot version/SHA/revision CAS, bounded metadata/64-byte hex, and no model body input or new task/grant. Matching formal bytes can explicitly repair only the original baseline without a duplicate version; legacy UTF8 path retained. Exact move pairs reuse the original prepared patch/approval/receipts and call one Files.move without REPLACE, not copy/delete: selected checkout source <=256KiB, absent target and existing parent. Collision after dispatch stays unknown/no replay; a separate approved reverse requires both original applied path receipts, unchanged afterSHA and absent old source. No cross-provider, directory/recursive move, permanent version-store write or atomic path-CAS claim. Explicit singleton mkdir plans use a separately sealed native directory-state pin, original concrete approval/debit/lease/receipts, and real Files.createDirectory (not an empty file). Missing parents require explicit createParents, <=40 levels; an unchanged existing directory is already_exists with no mkdir dispatch. Generic file-edit scopes do not implicitly grant structural changes. Post-entry failure/partial creation preserves unknown and observed createdPaths, no automatic rollback/replay/rmdir; original revert accurately rejects this directory-only leaf. No formal version-store directory write."
+    "description": "Original SQLite approval/planRef/CapabilityPort -> LocalModule CAS copy/append and per-file receipts, plus exact-patch/reversal regression; no Android device/SAF/SSH acceptance. Original read-file route also captures exact binary hex windows through original ReadCall/Book9 without creating a write intent or process. Fixed-length source byte overwrite (1..2048 bytes, existing file <=256KiB) uses exact SHA/old-byte window, original planRef/approval/CAS and separately approved conditional reversal; full encoded bodies remain only in native plan records. No binary create/resize or execution grant. Exact source byte copy freezes actual manifest-bound bytes <=256KiB into an absent new target; original conditional undo only removes that same copied target. No model Base64 input, existing-target binary overwrite, recursive/cross-provider copy or process execution. Existing manual-owner review/import now has an explicit raw-byte branch using issued original Workspace FileSnapshot version/SHA/revision CAS, bounded metadata/64-byte hex, and no model body input or new task/grant. Matching formal bytes can explicitly repair only the original baseline without a duplicate version; legacy UTF8 path retained. Exact move pairs reuse the original prepared patch/approval/receipts and call one Files.move without REPLACE, not copy/delete: selected checkout source <=256KiB, absent target and existing parent. Collision after dispatch stays unknown/no replay; a separate approved reverse requires both original applied path receipts, unchanged afterSHA and absent old source. No cross-provider, directory/recursive move, permanent version-store write or atomic path-CAS claim. Explicit singleton mkdir plans use a separately sealed native directory-state pin, original concrete approval/debit/lease/receipts, and real Files.createDirectory (not an empty file). Missing parents require explicit createParents, <=40 levels; an unchanged existing directory is already_exists with no mkdir dispatch. Generic file-edit scopes do not implicitly grant structural changes. Post-entry failure/partial creation preserves unknown and observed createdPaths, no automatic rollback/replay/rmdir; original revert accurately rejects this directory-only leaf. No formal version-store directory write. Dedicated delete_bytes on the existing command/edit chain freezes actual manifest-bound <=256KiB source bytes, requires exact oldSHA and original destructive approval/debit/CAS, then uses the unchanged Files.delete writer. No model body/Base64/recursive input. A new original revert can restore only confirmed-applied deletion into a still-absent path using private original TaskStore before bytes and original approval/explicit create scope; unknown or reused paths refuse and restore does not recursively undo itself. Not a claim that phone file deletion was previously impossible. Existing source-package freeze gains optional literal includePaths for selected source files/directories, not a new ZIP/export implementation. Same codec/private exclusions/generated-root choice, exact archive identity, original approval and immutable catalog; absent selection keeps byte-identical legacy full package. Source-only, not web-output scope; no auto export/share. Explicit omissions and subset label, actual raw binary ZIP round-trip, selected-byte/source drift/cancel and default codec adversarial regression covered. Original full sourceDigest fence still applies; not arbitrary provider ZIP or general extraction."
   },
   "project-file-search": {
     "class": "dev.pocketengine.features.local.project.ProjectSearchContextTest",
@@ -112,7 +115,8 @@
     ],
     "robolectric": true,
     "python": true,
-    "description": "Original App/SQL/Service plus original Companion fixture on loopback; not a phone/WAN test."
+    "description": "Original App/SQL/Service plus original Companion/drivers on loopback. Original script peer cases remain unchanged; exact Profile target cases use a real temporary ELF fixture entrypoint (requires CC/cc), with version/content/execution-chain verification still false. No real CLI/account, phone or WAN acceptance.",
+    "nativeCompiler": true
   },
   "memory-automatic": {
     "class": "dev.pocketengine.features.memory.AutomaticUserLearningHostNativeTest",
@@ -139,11 +143,16 @@
       "dev.pocketengine.features.memory.MemoryReadAudienceTest",
       "dev.pocketengine.features.memory.MemoryEntityAliasRetrievalNativeTest",
       "dev.pocketengine.features.memory.MemoryHybridCandidateRetrievalNativeTest",
-      "dev.pocketengine.features.memory.OwnerMemoryHistoryNativeTest"
+      "dev.pocketengine.features.memory.OwnerMemoryHistoryNativeTest",
+      "dev.pocketengine.ui.MemoryHistoryReviewGuardTest",
+      "dev.pocketengine.ui.OwnerMemoryHistoryControllerNativeTest",
+      "dev.pocketengine.ui.OwnerMemoryHistoryMountedNativeTest"
     ],
-    "helpers": [],
+    "helpers": [
+      "dev.pocketengine.ui.ProjectMemoryReviewUiNativeTest"
+    ],
     "robolectric": true,
-    "description": "Sixty-three exact typed-field/native SQLite/lexical fusion and native owner retained-history methods, including explicit typed-ID labels, read-only dated pages, exact original workspace span/hash, version/cursor/source/forget/cold and original audience boundaries. Default model recall remains current-only; unknown archiveOnly is counted, never activated. No new model call, inferred identity merge, member/group historical grant, Compose visual or device acceptance."
+    "description": "Seventy-two exact typed-field/native SQLite/lexical fusion, retained-history, existing private cognition controls and actual Controller/Compose methods. Native owner history is readonly; exact request/query/revision, reopen/scope/old callbacks and original span/hash are fenced. Default model recall remains current-only; unknown archiveOnly is counted, never activated. No new model call, inferred identity merge, member/group historical grant, screenshots, visual or device acceptance."
   },
   "memory-consolidation": {
     "class": "dev.pocketengine.features.memory.MemoryConsolidationConfidenceTest",
@@ -158,11 +167,14 @@
   "memory-learning-assertions": {
     "class": "dev.pocketengine.features.KnowledgeLearningAssertionWorkflowTest",
     "additionalClasses": [
-      "dev.pocketengine.features.memory.LearningAssertionDraftTest"
+      "dev.pocketengine.features.memory.LearningAssertionDraftTest",
+      "dev.pocketengine.features.memory.MemoryCandidateAssertionEditTest",
+      "dev.pocketengine.features.memory.MemoryLearningCandidateTest",
+      "dev.pocketengine.features.memory.MemoryFormalAssertionEditTest"
     ],
     "helpers": [],
     "robolectric": true,
-    "description": "Twelve exact typed source-draft and original workflow/Book/native-review checks; no semantic quality, automatic background learning or device acceptance."
+    "description": "Forty-two exact typed source-draft, original workflow/Book/native review, body-edit/correction and candidate lifecycle methods. Pending prose edits withdraw stale typed hypotheses; ordinary formal saves cannot retain unchanged typed meaning under new prose. Original native correction receipts, explicit new typed drafts, metadata saves, source lineage, CAS, retry/cold and source withdrawal remain fenced. No extra model call, general semantic quality, screenshots or device acceptance."
   },
   "memory-experience": {
     "class": "dev.pocketengine.features.workspace.OwnerExperienceArchiveNativeTest",
@@ -304,7 +316,8 @@
       "dev.pocketengine.features.assistant.ConversationOrganizationTest",
       "dev.pocketengine.features.assistant.ConversationTransferTest",
       "dev.pocketengine.store.ConversationV9MigrationNativeTest",
-      "dev.pocketengine.store.DeviceV8MigrationNativeTest"
+      "dev.pocketengine.store.DeviceV8MigrationNativeTest",
+      "dev.pocketengine.features.assistant.ConversationOwnerTitleNativeTest"
     ],
     "helpers": [],
     "robolectric": true,
@@ -513,7 +526,10 @@
     "class": "dev.pocketengine.phone.display.PhoneAudioNativeBridgeTest",
     "additionalClasses": [
       "dev.pocketengine.phone.PhoneAudioRecoveryTest",
-      "dev.pocketengine.ui.PhoneAudioOwnerUiNativeTest"
+      "dev.pocketengine.ui.PhoneAudioOwnerUiNativeTest",
+      "dev.pocketengine.phone.PhoneDiagnosticReportTest",
+      "dev.pocketengine.phone.AndroidPhoneDiagnosticsNativeTest",
+      "dev.pocketengine.ui.PhoneDiagnosticsOwnerNativeTest"
     ],
     "helpers": [],
     "robolectric": true,
@@ -627,12 +643,15 @@
   "alma-child-sources": {
     "class": "dev.pocketengine.features.remote.RemoteJobEventsTest",
     "additionalClasses": [
-      "dev.pocketengine.features.remote.RemoteEventCursorJourneyTest"
+      "dev.pocketengine.features.remote.RemoteEventCursorJourneyTest",
+      "dev.pocketengine.features.remote.RemoteCodexChildSourceTest",
+      "dev.pocketengine.features.remote.RemoteCodexChildOwnerJourneyTest",
+      "dev.pocketengine.features.remote.RemoteCodexChildProgressMountedNativeTest"
     ],
     "helpers": [],
     "robolectric": true,
     "python": true,
-    "description": "Public Claude child message lineage and original authenticated cursor/SQLite owner journeys. No hidden thinking, child control, recovery or new authority."
+    "description": "Public Claude child message lineage and original authenticated cursor/SQLite owner journeys. No hidden thinking, child control, recovery or new authority. Also pinned Codex public direct-child native-runtime/parent-turn evidence through the original persisted event cursor. No hidden thinking, child usage, foreign approval, grandchild or new authority."
   },
   "alma-pi-no-tools": {
     "class": "dev.pocketengine.features.remote.RemotePiOwnerJourneyTest",
@@ -744,5 +763,32 @@
     ],
     "robolectric": true,
     "description": "Nineteen exact original owner/read-scope/native SQLite/Runner and mounted Compose semantics methods in six classes. Original parent pool, native worker scope and stale approval boundaries; explicit HTTP/model/project fixtures, not real provider, network, visual or device acceptance. Kotlin sources are exact registered includes, not the ordinary test matrix."
+  },
+  "runtime-diagnostic-metadata": {
+    "class": "dev.pocketengine.features.local.runtime.NativeDiagnosticSourcesTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.local.runtime.NativeDiagnosticCollectorTest",
+      "dev.pocketengine.features.local.runtime.NativeDiagnosticWindowTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Fifteen focused native owner metadata checks: actual LocalModule and fixed production platform/runtime/shared PhoneDiagnosticReport/storage sources, independently bounded read lanes and strict body-free scalar schema. Exact reviewed immutable bytes flow through original owner-window ticket to a real private host file; old picker/window, owner/task scope, cancellation and unknown partial writes never replay. Simulated Android35 readiness, no process command, diagnostic trial, raw task/memory/log/config/session content, automatic upload, physical SAF/visual/device or resource-release proof."
+  },
+  "legacy-command-receipt-recovery": {
+    "class": "dev.pocketengine.features.local.LocalCommandReceiptRecoveryJourneyTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.local.NativeCommandReceiptRecoveryTest",
+      "dev.pocketengine.features.local.NativeCommandExecutorTest",
+      "dev.pocketengine.ui.LocalWorkbenchGuardTest",
+      "dev.pocketengine.features.local.NativeCommandStreamBoundaryTest",
+      "dev.pocketengine.features.local.NativeCommandOutputDecoderTest",
+      "dev.pocketengine.features.local.NativeCommandUnavailableBoundaryTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.local.NativeCommandUnavailableProbe"
+    ],
+    "robolectric": true,
+    "description": "Twenty-four focused original readonly command checks: damaged original records retain bytes and block unsafe redispatch/writes without disabling readable projects. The same original operation/worker/argv now consumes the existing NativeProcessSupervisor, not ProcessBuilder; only typed native groupAbsent/outputComplete releases busy, cold/unknown scopes remain held. Actual own4s inherited-child late-writer containment, Unicode split/caps/separate streams, original six process/cancel cases and forked real missing-library capability/no-dispatch boundary; no weak fallback, new Runner/TaskStore, shell permission or physical device proof.",
+    "native": true
   }
 }

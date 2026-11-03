@@ -13,7 +13,7 @@ import org.json.JSONObject;
 public final class NativeHarnessConfigs {
     private static final Set<String> COMMANDS=Set.of("openHarnessConfig","previewHarnessConfig","confirmHarnessConfig","queryHarnessConfig","cancelHarnessConfigPreview");
     private static final class Window {
-        final String id,task;final Object owner;final JSONObject selection;TaskStore.HarnessGatewayConfiguration gateway;
+        final String id,task;final Object owner;final JSONObject selection;TaskStore.HarnessGatewayConfiguration gateway;NativeHarnessGatewayOwner.ConfigurationSource sourceCurrent;
         volatile boolean closed,busy;volatile long revision;String profileBinding,operation;JSONObject source,probe,record,plan,receipt;
         Window(String id,String task,Object owner,JSONObject selection){this.id=id;this.task=task;this.owner=owner;this.selection=selection;}
     }
@@ -52,6 +52,9 @@ public final class NativeHarnessConfigs {
     /** Original native gateway object, never reconstructible from openHarnessConfig JSON. */
     public JSONObject openGateway(Object owner,String id,String task,TaskStore.HarnessGatewayConfiguration gateway)throws Exception {
         synchronized(this){if(owner==null||foregroundOwner!=owner||!id.matches("[a-f0-9-]{36}")||windows.containsKey(id)||windows.size()>=4)throw new SecurityException("请返回并重开原任务配置页；不覆盖旧操作");gateway.checkCurrent();Window window=new Window(id,task,owner,gateway.view());window.gateway=gateway;window.source=tasks.remoteOwnerTarget(task);windows.put(id,window);return response(window);}
+    }
+    public JSONObject openGateway(Object owner,String id,String task,NativeHarnessGatewayOwner.ConfigurationSource source)throws Exception {
+        source.checkCurrent();openGateway(owner,id,task,source.configuration());synchronized(this){Window window=windows.get(id);window.sourceCurrent=source;return response(window);}
     }
     public JSONObject handle(Object owner,String command,JSONObject input)throws Exception {
         Set<String> allowed=command.equals("openHarnessConfig")?Set.of("windowId","taskId","selection","operationId"):command.equals("confirmHarnessConfig")?Set.of("windowId","taskId","acceptedPlanDigest"):Set.of("windowId","taskId");
@@ -114,11 +117,14 @@ public final class NativeHarnessConfigs {
     }
     private JSONObject confirm(Window window,String accepted)throws Exception {
         long revision=window.revision;current(window,revision);if(window.plan==null||!accepted.equals(window.plan.optString("planDigest")))throw new SecurityException("只可确认屏幕上的准确配置计划，不接受不同digest");
+        JSONArray conflicts=window.plan.optJSONArray("conflicts");
+        if(conflicts==null||conflicts.length()!=0)throw new SecurityException("原配置计划有外部修改冲突或冲突事实未确认；保留原文件，不领取apply，只核对原编号");
+        if(window.sourceCurrent!=null)window.sourceCurrent.checkCurrent();
         Approval approval=new Approval(this,window);TaskStore.HarnessConfigClaim claim=tasks.claimHarnessConfigOperation(approval);
         if(!claim.canDispatch()){query(window);return response(window);}
         JSONObject record=claim.view(),request=record.getJSONObject("request"),plan=window.plan;
         JSONObject body=new JSONObject().put("operationId",window.operation).put("planDigest",plan.getString("planDigest"));for(String key:new String[]{"environmentId","environmentBinding","bindingId"})body.put(key,request.get(key));
-        try{JSONObject actual;try{actual=remote().harnessConfigApply(transport(window).put("planId",plan.getString("planId")).put("request",body),claim::beforeDispatch);}
+        try{JSONObject actual;try{actual=remote().harnessConfigApply(transport(window).put("planId",plan.getString("planId")).put("request",body),()->{if(window.sourceCurrent!=null)window.sourceCurrent.checkCurrent();claim.beforeDispatch();});}
             catch(java.io.IOException unavailable){actual=unknown(window);}
             tasks.recordHarnessConfigReceipt(claim,actual);current(window,revision);window.receipt=actual;emit(window.task);return response(window);
         }finally{claim.endGatewayObservation();}
@@ -148,6 +154,7 @@ public final class NativeHarnessConfigs {
         JSONObject result=new JSONObject().put("windowId",window.id).put("taskId",window.task).put("configurationOnly",true).put("executionAuthorized",false).put("runtimeVerified",false)
             .put("risk","将替换所示目标的有效认证/endpoint字段，仅使用有期限的gateway引用；不复制ChatGPT会话凭据，不授权运行。关闭页面不自动恢复。外部修改会保留并阻止不安全恢复。")
             .put("message",window.receipt==null?"先核对真实目标与逐字段差异，再确认准确计划":"以原operationId查询真实回执，不盲重发");
+        if(window.sourceCurrent!=null){JSONObject profile=window.sourceCurrent.profileView();if(profile!=null)result.put("workProfileSource",profile).put("targetConfigurationReadback",window.receipt!=null&&"COMMITTED".equals(window.receipt.optString("state"))&&window.receipt.optBoolean("configApplied")&&window.receipt.optBoolean("effectiveReadback"));}
         if(window.source!=null)result.put("source",window.source);if(window.operation!=null)result.put("operationId",window.operation);if(window.record!=null)result.put("operationState",window.record.optString("state"));if(window.probe!=null)result.put("target",window.probe);if(window.plan!=null)result.put("plan",new JSONObject(window.plan.toString()));if(window.receipt!=null)result.put("receipt",new JSONObject(window.receipt.toString()));return new JSONObject().put("snapshot",result);
     }
     private void emit(String task)throws Exception {events.emit(new JSONObject().put("type","task_changed").put("taskId",task));}

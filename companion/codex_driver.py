@@ -11,6 +11,7 @@ import time
 import uuid
 from remote_interactions import QuestionMailbox, Progress, question
 import group_input_audience
+from codex_child_sources import CodexChildSources
 
 
 class DriverError(Exception):
@@ -61,6 +62,7 @@ class CodexAppServerDriver:
         self.diff = ""
         self.reported_file_changes = set()
         self.runtime_version = None
+        self.child_sources = CodexChildSources()
         self.model_options = None
         self.requested_model = self.requested_effort = None
         self.reported_model = self.reported_effort = None
@@ -368,6 +370,23 @@ class CodexAppServerDriver:
                 self._send({"id": message["id"], "result": {"action": "decline", "content": None}})
             else:
                 self._send({"id": message["id"], "error": {"code": -32601, "message": "Unsupported interactive request; no tool was approved"}})
+            return
+        # Existing foreign-child interactive requests above are still declined. Only
+        # public observations with exact native parent proof enter this read-only lane.
+        child = None
+        if self.protocol_verified:
+            if method == "thread/started":
+                child = self.child_sources.register(params, self.thread_id, self.turn_id, self.runtime_version)
+                thread = params.get("thread")
+                if child is None and isinstance(thread, dict) and thread.get("parentThreadId") == self.thread_id and thread.get("id") != self.thread_id:
+                    self.progress.add("notice", "codex/child_source/unavailable", summary="A native direct-child start could not be attributed: only pinned0.166.0-alpha.1, exact parent proof and at most16 direct sources are supported. No session inferred or permission granted.")
+                    self._state()
+                    return
+            elif params.get("threadId") != self.thread_id:
+                child = self.child_sources.event(method, params, self.thread_id, self.turn_id, self.runtime_version)
+        if child is not None:
+            self.progress.add(child.pop("kind"), child.pop("nativeType"), child.pop("itemId"), **child)
+            self._state()
             return
         if params.get("threadId") is not None and self.thread_id is not None and params["threadId"] != self.thread_id:
             return

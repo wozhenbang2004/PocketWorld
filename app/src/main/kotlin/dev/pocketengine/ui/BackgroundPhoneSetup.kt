@@ -65,6 +65,10 @@ internal fun BackgroundPhoneSetup(state: PocketUiState, controller: PocketWorldC
     var audioEnabled by remember { mutableStateOf(display.optBoolean("audioSilenceEnabled", false)) }
     var audioReceipt by remember { mutableStateOf<String?>(null) }
     var audioError by remember { mutableStateOf<String?>(null) }
+    var diagnosticBusy by remember { mutableStateOf(false) }
+    var diagnosticReport by remember { mutableStateOf<dev.pocketengine.phone.diagnostics.PhoneDiagnosticReport.Report?>(null) }
+    var diagnosticMessage by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(controller.phoneDiagnosticsOwnerVisible) { if (!controller.phoneDiagnosticsOwnerVisible) { diagnosticBusy = false; diagnosticReport = null; diagnosticMessage = null } }
     val audioAvailable = display.opt("audioSilenceEnabled") is Boolean
     LaunchedEffect(display.opt("audioSilenceEnabled")) { if (audioAvailable) audioEnabled = display.getBoolean("audioSilenceEnabled") }
     LaunchedEffect(controller.backgroundAudioOwnerVisible) { if (!controller.backgroundAudioOwnerVisible) { audioBusy = false; audioReceipt = null; audioError = null } }
@@ -96,6 +100,21 @@ internal fun BackgroundPhoneSetup(state: PocketUiState, controller: PocketWorldC
                             }
                         }
                     }
+                    TextButton(onClick = {
+                        diagnosticBusy = true; diagnosticReport = null; diagnosticMessage = null
+                        controller.previewPhoneDiagnostics { report, error -> diagnosticBusy = false; diagnosticReport = report; diagnosticMessage = error }
+                    }, enabled = controller.phoneDiagnosticsOwnerVisible && !diagnosticBusy) { Text(if (diagnosticBusy) "正在读取诊断…" else "预览脱敏诊断报告") }
+                    diagnosticReport?.let { report ->
+                        SetupHeading("手机诊断预览")
+                        SetupCaption("这是预览时的版本、权限与连接事实，不证明设备任务已完成。未打包的源码身份为unknown；不会运行演练或申请新权限。")
+                        SelectionContainer { Text(report.text(), modifier = Modifier.fillMaxWidth().heightIn(max = 220.dp).verticalScroll(rememberScrollState()), fontFamily = FontFamily.Monospace, fontSize = 10.sp, lineHeight = 14.sp) }
+                        SetupCaption("复制会替换系统剪贴板。系统分享仅打开选择器，不代表已经发送；请先核对这份预览。")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = { diagnosticMessage = controller.copyPhoneDiagnostics(report) ?: "已交给系统剪贴板；未对外发送。" }, enabled = controller.phoneDiagnosticsOwnerVisible && !diagnosticBusy) { Text("复制这份诊断") }
+                            TextButton(onClick = { diagnosticMessage = controller.sharePhoneDiagnostics(report) ?: "已请求系统分享选择器；发送结果未知。" }, enabled = controller.phoneDiagnosticsOwnerVisible && !diagnosticBusy) { Text("系统分享…") }
+                        }
+                    }
+                    diagnosticMessage?.let { SetupCaption(it) }
                     TextButton(onClick = { practice = !practice }, enabled = !connection.taskOwned && !state.phoneSubmitting) { Text(if (practice) "收起实际演练" else "开始一条实际手机演练…") }
                     if (practice) {
                         SetupCaption("这会创建一条原手机任务并真实输入“中文输入演练”。仅选可安全修改的普通测试字段；不会提交。暂停、停止和回执仍在原任务中。")

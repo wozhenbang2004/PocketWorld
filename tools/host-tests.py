@@ -49,6 +49,8 @@ def select(registry, groups, classes):
 
 def preflight(args, registry, groups):
     entries = [registry[group] for group in groups]
+    if any(entry.get('nativeCompiler', False) for entry in entries):
+        executable(os.environ.get('CC', 'cc'), 'C compiler for the native CLI protocol fixture')
     java_home = args.java_home or os.environ.get('JAVA_HOME')
     if not java_home:
         java = executable('javac', 'Java 17 JDK')
@@ -197,7 +199,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, epilog=(
         'Requirements: JDK 17; SDK 35/build-tools 35.0.0 and the declared NDK 28.2.13676358 '
         'for AGP configuration. managed-runtime additionally needs Linux, C++17/JNI headers, '
-        '/bin/sh, Python 3.8+ and Node.js; gateway-continuation needs Python 3.11+. '
+        '/bin/sh, Python 3.8+ and Node.js; gateway-continuation needs Python 3.11+ and CC/cc for its native CLI fixture. '
         'Robolectric offline groups need the pinned SDK 35 jar. '
         'See --list for exact registered classes and scope. Results: a unique run directory '
         'with invocation/selection, exact locked classpath, JUnit XML and result.json; '

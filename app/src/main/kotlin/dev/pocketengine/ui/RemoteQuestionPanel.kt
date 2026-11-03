@@ -70,12 +70,17 @@ import org.json.JSONObject
     if(committed==null&&!progress.optBoolean("available"))return
     val events=progress.optJSONArray("events").objects()
     val originalSource=committed?.optJSONObject("scope")?:snapshot.optJSONObject("source")?:JSONObject()
+    if(originalSource.optString("worker")=="codex_app_server") {
+        val runtime=originalSource.optJSONObject("modelRuntime")
+        val actualVersion=originalSource.optString("nativeRuntimeVersion").ifBlank { if(runtime?.optString("protocol")=="native_model_runtime_v1"&&runtime.optString("worker")=="codex_app_server"&&runtime.optString("threadId")==originalSource.optString("threadId")&&runtime.optString("turnId")==originalSource.optString("turnId"))runtime.optString("runtimeVersion") else "" }
+        if(actualVersion!=dev.pocketengine.features.remote.RemoteJobEvents.CODEX_CHILD_VERSION||originalSource.optString("threadId").isBlank()||originalSource.optString("turnId").isBlank())Text("此原版本或父thread/turn的子来源尚不可核对；仅保留原任务进度，不猜测或打开外部child会话。",fontSize=13.sp,color=SecondaryInk)
+    }
     val sourced=events.mapNotNull { event -> runCatching { event to dev.pocketengine.features.remote.RemoteJobEvents.sourceView(event,originalSource) }.getOrNull() }
     val children=sourced.map{it.second}.filter{it.optString("kind")=="child"}.distinctBy{it.getString("key")}
     var sourceFilter by remember(snapshot.optString("taskId"),originalSource.optString("jobOperationId"),progress.optString("generation")){mutableStateOf("*")}
     var sourceMenu by remember(snapshot.optString("taskId"),progress.optString("generation")){mutableStateOf(false)}
     var expanded by remember(snapshot.optString("taskId"),progress.optString("generation"),sourceFilter){mutableStateOf(false)}
-    fun sourceLabel(source:JSONObject)=if(source.optString("kind")=="child")"子来源 ${source.optString("nativeAgentId",source.optString("parentToolUseId")).take(24)}" else "主／未标记来源"
+    fun sourceLabel(source:JSONObject)=if(source.optString("sourceProtocol")==dev.pocketengine.features.remote.RemoteJobEvents.CODEX_CHILD_SOURCE_PROTOCOL)"Codex子来源 ${source.optString("nativeChildThreadId").take(24)}" else if(source.optString("kind")=="child")"子来源 ${source.optString("nativeAgentId",source.optString("parentToolUseId")).take(24)}" else "主／未标记来源"
     val visible=sourced.filter{sourceFilter=="*"||it.second.getString("key")==sourceFilter}
     HorizontalDivider()
     Text(if(committed!=null&&readStatus!="confirmed")"已保存的执行进度"else if(snapshot.optBoolean("fresh"))"本次读取的执行进度"else"上次读取的执行进度",fontWeight=FontWeight.SemiBold,fontSize=15.sp)
@@ -87,7 +92,7 @@ import org.json.JSONObject
         if(progress.optLong("locallyDiscardedEvents")>0)Text("本机只保留最近64条／24KiB事件；更早已读记录未常驻缓存。",fontSize=13.sp,color=SecondaryInk)
     }else Text("原job最近事件快照，由查询更新，不是实时直播或完整历史。已省略${progress.optInt("droppedCount")}条，当前保留序号${progress.optLong("retainedFromSequence")}–${progress.optLong("lastSequence")}。",fontSize=13.sp,color=SecondaryInk)
     if(children.isNotEmpty()||sourceFilter!="*") {
-        Text("仅按原完整公开消息的原生parent tool-use来源分看；不是可操作子会话，不新增权限、用量或恢复能力。只显示CLI已提供内容，无子token直播、隐藏thinking或完整transcript保证。",fontSize=13.sp,color=SecondaryInk)
+        Text("仅按已核对的原生父子来源分看：Claude完整公开消息的parent tool-use；固定版本Codex的直接子thread/turn公开观察。不是可操作子会话，不新增权限、用量或恢复能力；有界读取不是子token直播，不读取隐藏thinking、不保证完整transcript。",fontSize=13.sp,color=SecondaryInk)
         Box {
             OutlinedButton(onClick={sourceMenu=true}) { Text(if(sourceFilter=="*")"全部原来源"else if(sourceFilter=="main_or_unspecified")"主／未标记来源"else children.firstOrNull{it.getString("key")==sourceFilter}?.let(::sourceLabel)?:"已移出保留窗口的子来源") }
             DropdownMenu(expanded=sourceMenu,onDismissRequest={sourceMenu=false}) {
@@ -101,9 +106,10 @@ import org.json.JSONObject
     if(events.isEmpty())Text("尚无可显示的已保存事件。",fontSize=14.sp)
     if(events.isNotEmpty()&&visible.isEmpty())Text("当前保留窗口没有此来源的可核对记录；可切换其他来源，不会补造或重发。",fontSize=13.sp,color=SecondaryInk)
     (if(expanded)visible else visible.takeLast(6)).forEach { (event,lineage)->
-        if(lineage.optString("kind")=="child")Text("${sourceLabel(lineage)} · parent tool-use ${lineage.getString("parentToolUseId")} · 只读",fontSize=12.sp,color=SecondaryInk)
+        if(lineage.optString("kind")=="child")Text(if(lineage.optString("sourceProtocol")==dev.pocketengine.features.remote.RemoteJobEvents.CODEX_CHILD_SOURCE_PROTOCOL)"${sourceLabel(lineage)} · 原parent thread ${lineage.optString("nativeParentThreadId").take(24)} / turn ${lineage.optString("nativeParentTurnId").take(24)} · 只读" else "${sourceLabel(lineage)} · parent tool-use ${lineage.getString("parentToolUseId")} · 只读",fontSize=12.sp,color=SecondaryInk)
         else if(children.isNotEmpty())Text("主／未标记来源（旧事件未声明子归属）",fontSize=12.sp,color=SecondaryInk)
         Text(listOf(event.optString("tool",event.optString("kind")),event.optString("status")).filter{it.isNotBlank()}.joinToString(" · "),fontSize=14.sp,fontWeight=FontWeight.Medium)
+        if(event.optString("textForm")=="received_public_delta_not_complete_message")Text("已收到的公开增量观察，不代表完整消息；本地观察序号不是provider重放身份。",fontSize=12.sp,color=SecondaryInk)
         for(key in listOf("summary","command","text","explanation","counters"))event.optString(key).takeIf{it.isNotBlank()}?.let { text->SelectionContainer{Text(text,fontSize=14.sp)};if(event.optBoolean(key+"Truncated"))Text("本段已截断，不能视作完整输出。",fontSize=13.sp,color=SecondaryInk) }
         if(event.optString("kind")=="usage")Text("供应商原thread累计观察，不作本job请求计数、硬预算或账单，不逐快照累加。",fontSize=10.sp,color=SecondaryInk)
     }
