@@ -1,0 +1,13 @@
+package dev.pocketengine.features.skills;
+
+import org.json.JSONObject;
+import org.junit.Test;
+import static org.junit.Assert.*;
+
+public final class SkillRemovalPolicyTest {
+    private JSONObject original()throws Exception{return new JSONObject().put("id","11111111-1111-1111-1111-111111111111").put("revision",1).put("digest","a".repeat(64)).put("executionGeneration",0L).put("ownerId","owner").put("spaceId","private").put("enabled",false);}
+    @Test public void onlyExactDisabledPrivateInstallationIsRemovable()throws Exception{JSONObject row=original();SkillRemovalPolicy.requireRemovable(row,SkillRemovalPolicy.pin(row));for(String field:new String[]{"enabled","origin","ownerId","spaceId"}){JSONObject changed=new JSONObject(row.toString());changed.put(field,field.equals("enabled")?true:field.equals("origin")?new JSONObject():"other");assertThrows(SecurityException.class,()->SkillRemovalPolicy.requireRemovable(changed,row));}}
+    @Test public void revisionDigestAndApprovalGenerationMustStillMatch()throws Exception{JSONObject row=original();for(String key:new String[]{"revision","digest","executionGeneration"}){JSONObject changed=new JSONObject(row.toString());changed.put(key,key.equals("digest")?"b".repeat(64):2);assertThrows(SecurityException.class,()->SkillRemovalPolicy.requireRemovable(changed,row));}assertThrows(SecurityException.class,()->SkillRemovalPolicy.pin(new JSONObject(row.toString()).put("revision",1.5)));}
+    @Test public void originalMissingGenerationKeepsItsExistingZeroMeaning()throws Exception{JSONObject old=original();old.remove("executionGeneration");assertEquals(0,SkillRemovalPolicy.pin(old).getLong("executionGeneration"));SkillRemovalPolicy.requireRemovable(old,original());}
+    @Test public void terminalSuccessAndUnknownDoNotProveNoDispatchOrReleasedResources()throws Exception{JSONObject denied=new JSONObject().put("approvalState","denied").put("dispatchState","settled"),rejected=new JSONObject().put("status","rejected");assertTrue(SkillRemovalPolicy.knownNeverDispatched("receipt",denied,rejected));assertFalse(SkillRemovalPolicy.knownNeverDispatched("unknown",denied,rejected));assertFalse(SkillRemovalPolicy.knownNeverDispatched("receipt",new JSONObject(denied.toString()).put("claimedAt",1),rejected));assertFalse(SkillRemovalPolicy.knownNeverDispatched("receipt",new JSONObject(denied.toString()).put("nativeManagedJob",new JSONObject()),rejected));assertFalse(SkillRemovalPolicy.knownNeverDispatched("receipt",denied,new JSONObject().put("status","completed").put("exitCode",0)));assertFalse(SkillRemovalPolicy.knownNeverDispatched("receipt",null,rejected));}
+}

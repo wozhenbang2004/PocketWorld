@@ -158,6 +158,12 @@ public final class SkillExecutionTest {
         assertThrows(SecurityException.class,()->f.execution.dispatch(plan,f.grant(plan),f.control));assertEquals(0,f.backend.submitted);
         Fixture g=new Fixture();SkillExecution.Plan gp=g.plan();g.host.beforeSubmission=g.control::cancel;assertThrows(InterruptedException.class,()->g.execution.dispatch(gp,g.grant(gp),g.control));assertEquals(0,g.backend.submitted);
     }
+    @Test public void preparedOperationCannotSubmitAfterSameTickDisableReenableOrPackageRemoval()throws Exception {
+        Fixture f=new Fixture();SkillExecution.Plan plan=f.plan();f.host.beforeSubmission=()->{try{f.disable();f.book.setEnabled(scope(),f.row.getString("id"),true,f.row.getString("digest"),true,now[0]);}catch(Exception failure){throw new RuntimeException(failure);}};
+        assertThrows(SecurityException.class,()->f.execution.dispatch(plan,f.grant(plan),f.control));assertEquals(0,f.backend.submitted);
+        Fixture removed=new Fixture();SkillExecution.Plan old=removed.plan();removed.host.beforeSubmission=()->{try{removed.disable();removed.book.delete(scope(),removed.row.getString("id"));}catch(Exception failure){throw new RuntimeException(failure);}};
+        assertThrows(IllegalArgumentException.class,()->removed.execution.dispatch(old,removed.grant(old),removed.control));assertEquals(0,removed.backend.submitted);
+    }
     @Test public void cancelOrExpiryDuringBackendProbeCannotReachSubmit()throws Exception {
         Fixture f=new Fixture();SkillExecution.Plan plan=f.plan();f.backend.onDescribe=f.control::cancel;assertThrows(InterruptedException.class,()->f.execution.dispatch(plan,f.grant(plan),f.control));assertEquals(0,f.backend.submitted);
         Fixture g=new Fixture();SkillExecution.Plan gp=g.plan();g.backend.onDescribe=()->now[0]=gp.expiresAt;assertThrows(SecurityException.class,()->g.execution.dispatch(gp,g.grant(gp),g.control));assertEquals(0,g.backend.submitted);
