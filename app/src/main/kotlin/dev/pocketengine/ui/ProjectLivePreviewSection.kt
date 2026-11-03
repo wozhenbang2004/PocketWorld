@@ -33,7 +33,12 @@ internal fun ProjectLivePreviewSection(task: UiTask, checkoutId: String, control
     val executionId = operation?.optString("operationId")
     val context = LocalContext.current
     val lifecycle = remember(context) { generateSequence(context) { (it as? ContextWrapper)?.baseContext?.takeUnless { next -> next === it } }.filterIsInstance<LifecycleOwner>().firstOrNull()?.lifecycle }
-    DisposableEffect(checkoutId, task.id) { onDispose { controller.closeProjectLivePreview() } }
+    DisposableEffect(checkoutId, task.id, lifecycle) {
+        // A pending probe owns the same transient window as a published page.
+        val listener = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) controller.closeProjectLivePreview() }
+        lifecycle?.addObserver(listener)
+        onDispose { lifecycle?.removeObserver(listener); controller.closeProjectLivePreview() }
+    }
     if (executionId != null) {
         val actual = operation?.optJSONObject("receipt")?.optJSONObject("executionReceipt")
         var details by remember(task.id, executionId) { mutableStateOf(false) }
@@ -56,7 +61,7 @@ internal fun ProjectLivePreviewSection(task: UiTask, checkoutId: String, control
         var web by remember { mutableStateOf<ProjectLiveWebView?>(null) }
         var error by remember { mutableStateOf<String?>(null) }
         DisposableEffect(observed.identity, lifecycle) {
-            val listener = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) { web?.release(); web = null; if (controller.projectLivePreview === observed) controller.closeProjectLivePreview() } }
+            val listener = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) { web?.release(); web = null } }
             lifecycle?.addObserver(listener)
             onDispose { lifecycle?.removeObserver(listener); web?.release(); web = null }
         }
