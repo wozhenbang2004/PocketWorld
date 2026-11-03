@@ -66,8 +66,22 @@ public final class BrowserTaskHost {
     public JSONObject startForOwner(String goal,JSONObject expectedProfile,boolean consent,BrowserReadScope.Consent readConsent,BrowserFrameOrigins.Consent frameOrigins,BrowserActionScope.Consent actions,JSONObject executionChoice)throws Exception {
         worker();if(!consent)throw new SecurityException("请先确认将研究网页观察发送给当前模型");if(goal==null||goal.codePoints().allMatch(Character::isWhitespace)||goal.length()>4000)throw new IllegalArgumentException("请填写1–4000字的研究目标");originals.checkModelConfigured();
         JSONObject selected=onMain(()->{JSONObject current=browser.snapshot();requireProfile(current,expectedProfile);JSONObject tabs=browser.nativeTabs();if(tabs.optJSONObject("taskSpace")!=null&&!tabs.getJSONObject("taskSpace").optString("status").equals("ended"))throw new IllegalStateException("请先结束或接管当前浏览研究");return profileIdentity(current);});
-        JSONObject task=tasks.createCapabilityTask(goal.trim(),"");String id=task.getString("id");originals.prepareOwnerExecutionScope(id,executionChoice==null?null:new JSONObject(executionChoice.toString()));Plan plan=new Plan(id,selected,null,readConsent,frameOrigins,null,actions);plans.put(id,plan);latestTask=id;
-        try{tasks.event(id,new JSONObject().put("type","browser_research_requested").put("profile",selected).put("extraFrameOrigins",frameOrigins.summary()).put("frameOriginPolicy","same_origin_plus_explicit_native_task_origins").put("maxTaskTabs",BrowserTaskSpace.MAX_TASK_TABS).put("sourceTrust","untrusted_page_content"));originals.launch(id);}catch(Exception failed){plans.remove(id,plan);tasks.status(id,"failed","研究已登记但原任务执行器未启动，请核对原任务");throw failed;}
+        JSONObject choice=executionChoice==null?null:new JSONObject(executionChoice.toString());
+        JSONObject task=tasks.createCapabilityTask(goal.trim(),"");String id=task.getString("id");latestTask=id;Plan plan=null;
+        try{
+            tasks.event(id,new JSONObject().put("type","browser_research_requested").put("profile",selected).put("extraFrameOrigins",frameOrigins.summary()).put("frameOriginPolicy","same_origin_plus_explicit_native_task_origins").put("maxTaskTabs",BrowserTaskSpace.MAX_TASK_TABS).put("sourceTrust","untrusted_page_content").put("executionChoice",choice==null?JSONObject.NULL:new JSONObject(choice.toString())));
+            originals.prepareOwnerExecutionScope(id,choice==null?null:new JSONObject(choice.toString()));
+            plan=new Plan(id,selected,null,readConsent,frameOrigins,null,actions);plans.put(id,plan);
+        }catch(Exception failed){
+            if(plan!=null)plans.remove(id,plan);
+            String summary="研究未启动，已保留原任务 "+id+"，请重新审阅范围";
+            IllegalStateException rejected=new IllegalStateException(summary+"："+failed.getMessage(),failed);
+            try{tasks.status(id,"failed",summary);}catch(Exception unavailable){rejected.addSuppressed(unavailable);}
+            try{tasks.event(id,new JSONObject().put("type","browser_research_start_failed").put("taskId",id).put("phase","before_launch").put("launchEntered",false).put("status","failed"));}catch(Exception unavailable){rejected.addSuppressed(unavailable);}
+            throw rejected;
+        }
+        // Once launch is entered its outcome belongs to the original executor, even if its acknowledgement throws.
+        originals.launch(id);
         emit(id,new JSONObject().put("type","browser_research_started").put("taskId",id));return tasks.get(id,false);
     }
     /** Actual App factory calls this after original task/run/control admission, before plugin wrapping. */

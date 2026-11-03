@@ -9,6 +9,7 @@ import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.store.TaskStore;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -18,6 +19,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -106,6 +108,74 @@ public final class BrowserTaskHostAdmissionTest {
             browser.close();Shadows.shadowOf(Looper.getMainLooper()).idle();activity.pause().stop().destroy();
             BrowserActivity.setEvents(null);BrowserActivity.setOwnerPanelInstaller(null);
             Field db=TaskStore.class.getDeclaredField("db");db.setAccessible(true);((android.database.sqlite.SQLiteDatabase)db.get(tasks)).close();
+        }
+    }
+    interface Prepare {void run(String id,JSONObject choice)throws Exception;}
+    interface Launch {void run(String id)throws Exception;}
+    static BrowserTaskHost starting(F f,Prepare prepare,Launch launch){
+        return new BrowserTaskHost(f.browser,f.tasks,new ExecutionResources(),new BrowserTaskHost.OriginalTasks(){
+            public void checkModelConfigured(){}
+            public void prepareOwnerExecutionScope(String id,JSONObject choice)throws Exception {prepare.run(id,choice);}
+            public void launch(String id)throws Exception {launch.run(id);}
+            public RunControl currentControl(String id){return null;}
+        },event->{});
+    }
+    static JSONObject event(JSONObject task,String type)throws Exception {
+        JSONArray events=task.getJSONArray("events");
+        for(int i=0;i<events.length();i++)if(type.equals(events.getJSONObject(i).optString("type")))return events.getJSONObject(i);
+        fail("Missing "+type+" in "+events);return null;
+    }
+    static int planCount(BrowserTaskHost host)throws Exception {
+        Field plans=BrowserTaskHost.class.getDeclaredField("plans");plans.setAccessible(true);return ((Map<?,?>)plans.get(host)).size();
+    }
+    static JSONObject choice(long deadline)throws Exception {return new JSONObject().put("deadlineAt",deadline).put("toolLimit",23).put("modelCallLimit",29);}
+    static Future<JSONObject> start(F f,BrowserTaskHost host,JSONObject choice){
+        return f.workers.submit(()->host.startForOwner("保留本轮原研究目标",f.profile,true,BrowserReadScope.disabled(),BrowserFrameOrigins.sameOriginOnly(),BrowserActionScope.disabled(),choice));
+    }
+    @Test public void expiredChoiceSettlesOnlyTheCreatedUnlaunchedTaskAndRetainsItsOriginalChoice()throws Exception {
+        try(F f=new F()){
+            AtomicReference<String> id=new AtomicReference<>();AtomicInteger launches=new AtomicInteger();
+            BrowserTaskHost host=starting(f,(task,scope)->{id.set(task);f.tasks.configureExecutionScope(task,0,scope.getLong("deadlineAt"),scope.getInt("toolLimit"),scope.getInt("modelCallLimit"));},task->launches.incrementAndGet());
+            JSONObject scope=choice(System.currentTimeMillis()-1),original=new JSONObject(scope.toString());
+            ExecutionException error=assertThrows(ExecutionException.class,()->f.pump(start(f,host,scope)));
+            assertNotNull(id.get());assertTrue(error.getCause().getMessage(),error.getCause().getMessage().contains(id.get()));
+            JSONObject rejected=f.tasks.get(id.get(),false);assertEquals("failed",rejected.getString("status"));assertEquals("",rejected.optString("runId"));
+            assertFalse(rejected.has("executionScope"));assertEquals(0,launches.get());assertEquals(0,planCount(host));
+            assertEquals(original.toString(),scope.toString());assertEquals(original.toString(),event(rejected,"browser_research_requested").getJSONObject("executionChoice").toString());
+            JSONObject failure=event(rejected,"browser_research_start_failed");assertEquals(id.get(),failure.getString("taskId"));assertEquals("before_launch",failure.getString("phase"));assertFalse(failure.getBoolean("launchEntered"));
+            assertEquals("running",f.tasks.get(f.task,false).getString("status"));assertEquals(2,f.tasks.list().length());
+            JSONObject state=f.pump(f.workers.submit(host::snapshotForOwner));assertEquals(id.get(),state.getJSONObject("researchTask").getString("id"));assertFalse(state.has("pendingBrowserTask"));
+            JSONArray history=host.historyForOwner();assertEquals(1,history.length());assertEquals(id.get(),history.getJSONObject(0).getString("taskId"));assertEquals("failed",history.getJSONObject(0).getString("status"));
+        }
+    }
+    @Test public void preparationCannotMutateTheRetainedOwnerChoiceOrRetryWithDefaults()throws Exception {
+        try(F f=new F()){
+            AtomicReference<String> id=new AtomicReference<>();AtomicInteger preparations=new AtomicInteger(),launches=new AtomicInteger();
+            BrowserTaskHost host=starting(f,(task,scope)->{id.set(task);preparations.incrementAndGet();scope.put("deadlineAt",0L);throw new SecurityException("明确拒绝原范围");},task->launches.incrementAndGet());
+            JSONObject scope=choice(System.currentTimeMillis()+60_000),original=new JSONObject(scope.toString());
+            assertThrows(ExecutionException.class,()->f.pump(start(f,host,scope)));
+            JSONObject rejected=f.tasks.get(id.get(),false);assertEquals("failed",rejected.getString("status"));assertEquals(1,preparations.get());assertEquals(0,launches.get());
+            assertEquals(original.toString(),scope.toString());assertEquals(original.toString(),event(rejected,"browser_research_requested").getJSONObject("executionChoice").toString());
+            assertEquals(0,planCount(host));assertFalse(rejected.has("executionScope"));
+        }
+    }
+    @Test public void validChoiceReachesTheOriginalLauncherExactlyOnceWithoutRefreshingItsDeadline()throws Exception {
+        try(F f=new F()){
+            AtomicReference<String> id=new AtomicReference<>();AtomicInteger launches=new AtomicInteger();
+            BrowserTaskHost host=starting(f,(task,scope)->{id.set(task);f.tasks.configureExecutionScope(task,0,scope.getLong("deadlineAt"),scope.getInt("toolLimit"),scope.getInt("modelCallLimit"));},task->{launches.incrementAndGet();f.tasks.startAttempt(task,"capabilities",23);f.tasks.status(task,"running","original launcher admitted");});
+            JSONObject scope=choice(System.currentTimeMillis()+60_000),started=f.pump(start(f,host,scope));
+            assertEquals(id.get(),started.getString("id"));assertEquals("running",started.getString("status"));assertEquals(1,launches.get());assertEquals(1,planCount(host));
+            JSONObject accepted=started.getJSONObject("executionScope");assertEquals(scope.getLong("deadlineAt"),accepted.getLong("deadlineAt"));assertEquals(23,accepted.getInt("toolLimit"));assertEquals(29,accepted.getInt("modelCallLimit"));
+            assertFalse(started.getJSONArray("events").toString().contains("browser_research_start_failed"));
+        }
+    }
+    @Test public void launcherExceptionAfterAdmissionCannotOverwriteTheOriginalRunOrRemoveItsPlan()throws Exception {
+        try(F f=new F()){
+            AtomicReference<String> id=new AtomicReference<>(),run=new AtomicReference<>();IOException lost=new IOException("original launch acknowledgement unavailable");
+            BrowserTaskHost host=starting(f,(task,scope)->{id.set(task);f.tasks.initializeExecutionScope(task,23);},task->{JSONObject admitted=f.tasks.startAttempt(task,"capabilities",23);run.set(admitted.getString("runId"));f.tasks.status(task,"running","original executor owns this run");throw lost;});
+            ExecutionException error=assertThrows(ExecutionException.class,()->f.pump(start(f,host,null)));assertSame(lost,error.getCause());
+            JSONObject task=f.tasks.get(id.get(),false);assertEquals("running",task.getString("status"));assertEquals(run.get(),task.getString("runId"));assertEquals(1,planCount(host));
+            assertFalse(task.getJSONArray("events").toString().contains("browser_research_start_failed"));
         }
     }
     @Test public void appPauseAndOwnerAdmissionCannotInvertAppAndStoreMonitors()throws Exception {
