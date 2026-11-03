@@ -52,7 +52,11 @@ internal fun SourceLearningJobPanel(task: JSONObject, controller: PocketWorldCon
             Text("已处理 ${job.getInt("nextIndex")} / ${input?.length() ?: 0} · 已预留模型尝试 ${job.getInt("reservedModelAttempts")}", style = MaterialTheme.typography.bodyMedium)
             Text("预留尝试不等于服务商已计费；真实用量/未知状态在本任务推理回执中核对。", style = MaterialTheme.typography.bodySmall)
             snapshot.optJSONObject("active")?.let { active -> Text(when (active.optString("stage")) {
-                "draft_recorded" -> "真实模型 draft 已保存；继续时先核对来源并提交同一候选，不重新调用模型。"
+                "draft_recorded" -> when (active.optString("extractionContractStatus")) {
+                    "legacy_contract_unknown" -> "旧版提炼稿已保存；继续会按原格式核对来源并提交同一候选。历史提炼策略未记录，不会补记为当前策略或重新调用模型。"
+                    "contract_changed_requires_review", "contract_unverifiable_requires_review" -> "原提炼稿仍保留，但当前提炼规则与其版本不兼容，不能直接提交或重新调用模型。可先核对原回执，再明确跳过此批。"
+                    else -> "真实模型提炼稿已保存；继续时核对原来源和提炼版本，并提交同一候选，不重新调用模型。"
+                }
                 "inflight" -> "原批次正在执行，尚未确认收到模型 draft。"
                 else -> "这批模型结果未知；不能当未发生或退款，也不会自动重试。"
             }, style = MaterialTheme.typography.bodySmall) }

@@ -77,8 +77,8 @@ public final class SourceLearningJob {
                 recorded=tasks.sourceLearningDraft(task,active.getString("operationId"));
             }else{
                 // This pre-read avoids reserving a new model attempt for an already invalid source.
-                learning.requireCurrentLearningInput(scope(),ref,input.getString("sourceFingerprint"),control);
-                active=tasks.beginSourceLearningBatch(task,run,epoch,index,control);String operation=active.getString("operationId");
+                JSONObject contract=learning.sourceLearningContract(scope(),ref,input.getString("sourceFingerprint"),control);
+                active=tasks.beginSourceLearningBatch(task,run,epoch,index,control,contract);String operation=active.getString("operationId");
                 try{
                     recorded=learning.extractRecordedLearning(scope(),ref,input.getString("sourceFingerprint"),control);calls++;
                     InferenceReceipt receipt=actualReceipt.call();

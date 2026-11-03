@@ -1,6 +1,7 @@
 package dev.pocketengine.runtime.context;
 
 import dev.pocketengine.core.ModelConfig;
+import dev.pocketengine.features.memory.TaskMemoryHistory;
 import java.util.ArrayList;
 import java.util.List;
 import org.json.JSONArray;
@@ -86,6 +87,33 @@ public final class CompactionPlanTest {
 
     @Test public void oldGenericNotReplayedRemainsUnsettledAndNeverBecomesProvenUndispatched()throws Exception {
         JSONArray raw=history();raw.getJSONObject(3).put("content",new JSONObject().put("ok",false).put("code","not_replayed").put("message","no complete historical receipt").toString());assertThrows(CompactionPlan.Unavailable.class,()->plan(raw));
+    }
+
+    @Test public void exactNativeRetiredWireKeepsPairingAndPinsArgumentsWhileOtherSettledEvidenceCompacts()throws Exception {
+        JSONArray raw=history();JSONObject retired=raw.getJSONObject(2);
+        retired.put("memoryContextRetired",true).put("content",TaskMemoryHistory.RETIRED).put("extraBody","RETIRED_ARGUMENT_OLD_SOURCE");
+        retired.getJSONArray("tool_calls").getJSONObject(0).getJSONObject("function").put("arguments","{\"query\":\"RETIRED_ARGUMENT_OLD_SOURCE\"}");
+        JSONObject unknown=new JSONObject().put("state","unknown").put("accepted",JSONObject.NULL).put("operationId","original-unknown-operation");
+        raw.getJSONObject(11).put("content",unknown.toString());String original=raw.toString();
+        JSONArray visible=TaskMemoryHistory.wireMessages(raw);CompactionPlan plan=CompactionPlan.choose(raw,visible,indexes(raw),null,config(),budget());
+        assertEquals(original,raw.toString());assertFalse(plan.coveredIndexes().contains(2));assertFalse(plan.coveredIndexes().contains(3));assertFalse(plan.coveredIndexes().contains(10));assertFalse(plan.coveredIndexes().contains(11));
+        assertFalse(plan.coveredIndexes().isEmpty());assertFalse(plan.summaryMessages().toString().contains("RETIRED_ARGUMENT_OLD_SOURCE"));
+        JSONArray result=plan.project(visible,indexes(raw),"Other settled sources remain available.");assertFalse(result.toString().contains("RETIRED_ARGUMENT_OLD_SOURCE"));assertTrue(result.toString().contains("original-unknown-operation"));
+        assertEquals("{}",result.getJSONObject(2).getJSONArray("tool_calls").getJSONObject(0).getJSONObject("function").getString("arguments"));
+        assertTrue(ContextWindow.plan(result,null,budget(),ContextWindow.Retention.preserveAll()).canSend());
+        for(String change:List.of("id","name","type","arguments","callExtra","functionExtra","rowExtra","content")){
+            JSONArray altered=new JSONArray(visible.toString());JSONObject row=altered.getJSONObject(2),call=row.getJSONArray("tool_calls").getJSONObject(0),function=call.getJSONObject("function");
+            if(change.equals("id"))call.put("id","another-call");else if(change.equals("name"))function.put("name","another-tool");else if(change.equals("type"))call.put("type","custom");
+            else if(change.equals("arguments"))function.put("arguments","{\"query\":\"another value\"}");else if(change.equals("callExtra"))call.put("extra","body");else if(change.equals("functionExtra"))function.put("extra","body");
+            else if(change.equals("rowExtra"))row.put("extra","body");else row.put("content","other content");
+            assertEquals(change,"raw_projection_mismatch",assertThrows(CompactionPlan.Unavailable.class,()->CompactionPlan.choose(raw,altered,indexes(raw),null,config(),budget())).code);
+        }
+        for(Object marker:List.of(false,"true")){
+            JSONArray untrusted=new JSONArray(raw.toString());untrusted.getJSONObject(2).put("memoryContextRetired",marker);
+            assertEquals("raw_projection_mismatch",assertThrows(CompactionPlan.Unavailable.class,()->CompactionPlan.choose(untrusted,visible,indexes(untrusted),null,config(),budget())).code);
+        }
+        JSONArray unmarked=new JSONArray(raw.toString());unmarked.getJSONObject(2).remove("memoryContextRetired");
+        assertEquals("raw_projection_mismatch",assertThrows(CompactionPlan.Unavailable.class,()->CompactionPlan.choose(unmarked,visible,indexes(unmarked),null,config(),budget())).code);
     }
 
 }

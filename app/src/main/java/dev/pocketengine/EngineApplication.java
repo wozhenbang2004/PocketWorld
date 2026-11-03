@@ -1934,7 +1934,11 @@ public final class EngineApplication extends Application implements dev.pocketen
         };
         try{
             memorySources.synchronize(json("ownerId","owner","spaceId","private"));
-            var workflow=new dev.pocketengine.features.memory.MemoryConsolidationWorkflow(memory,(messages,control)->dev.pocketengine.runtime.ModelGateway.complete(request.model,messages,null,control,dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(tasks.journal(request.taskId,request.runId,request.epoch,request.control).inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.SUMMARY,""),dev.pocketengine.features.memory.LearningInputAdmission.consolidation(memory,json("ownerId","owner","spaceId","private"),selected,new JSONObject(messages.getJSONObject(1).getString("content")),memorySources::requireLearningReference))));
+            var workflow=new dev.pocketengine.features.memory.MemoryConsolidationWorkflow(memory,(messages,control)->{
+                var admission=dev.pocketengine.features.memory.LearningInputAdmission.consolidation(memory,json("ownerId","owner","spaceId","private"),selected,new JSONObject(messages.getJSONObject(1).getString("content")),memorySources::requireLearningReference);
+                var response=dev.pocketengine.runtime.ModelGateway.complete(request.model,messages,null,control,dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(tasks.journal(request.taskId,request.runId,request.epoch,request.control).inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.SUMMARY,""),admission));
+                control.check();admission.check();return response;
+            });
             JSONObject result=workflow.propose(json("ownerId","owner","spaceId","private"),selected,original,fence);
             synchronized(this){
                 request.settled=true;JSONObject candidate=result.optJSONObject("candidate");String status=candidate==null?"none":candidate.optString("status");
@@ -1974,7 +1978,11 @@ public final class EngineApplication extends Application implements dev.pocketen
         };
         try{
             memorySources.synchronize(json("ownerId","owner","spaceId","private"));
-            var workflow=new dev.pocketengine.features.KnowledgeLearningWorkflow(memory,skills,memorySources::read,(messages,control)->dev.pocketengine.runtime.ModelGateway.complete(request.model,messages,null,control,dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(tasks.journal(request.taskId,request.runId,request.epoch,request.control).inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.SUMMARY,""),dev.pocketengine.features.memory.LearningInputAdmission.source(memory,memorySources::read,json("ownerId","owner","spaceId","private"),expected,new JSONObject(messages.getJSONObject(1).getString("content"))))),fence);
+            var workflow=new dev.pocketengine.features.KnowledgeLearningWorkflow(memory,skills,memorySources::read,(messages,control)->{
+                var admission=dev.pocketengine.features.memory.LearningInputAdmission.source(memory,memorySources::read,json("ownerId","owner","spaceId","private"),expected,new JSONObject(messages.getJSONObject(1).getString("content")));
+                var response=dev.pocketengine.runtime.ModelGateway.complete(request.model,messages,null,control,dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(tasks.journal(request.taskId,request.runId,request.epoch,request.control).inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.SUMMARY,""),admission));
+                control.check();admission.check();return response;
+            },fence);
             JSONObject result=workflow.proposeLearning(json("ownerId","owner","spaceId","private"),expected,original);
             synchronized(this){
                 request.settled=true;JSONObject candidate=result.optJSONObject("candidate");String status=candidate==null?"none":candidate.optString("status");

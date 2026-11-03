@@ -1139,6 +1139,7 @@ public final class AgentRunner {
                 if(!scope.matches("[a-f0-9]{64}")||!scope.equals(result.optString("skillScopeFingerprint")))return false;
             }
             if(name.equals("skills_read"))return currentReference(result,validation.optJSONArray("skills"),true);
+            if(name.equals("memory_recall")&&"retained_history".equals(result.optString("readMode")))return dev.pocketengine.features.memory.TaskMemoryUse.historicalReceiptCurrent(result,validation.optJSONArray("historicalMemory"));
             JSONArray rows=result.optJSONArray(name.startsWith("memory_")?"records":"skills"),live=validation.optJSONArray(name.startsWith("memory_")?"memory":"skills");
             if(rows==null||live==null)return false;
             for(int i=0;i<rows.length();i++)if(!currentReference(rows.getJSONObject(i),live,name.startsWith("skills_")))return false;
