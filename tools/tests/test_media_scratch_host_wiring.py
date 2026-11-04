@@ -27,7 +27,7 @@ class MediaScratchHostWiringTest(unittest.TestCase):
     def test_codec_worker_runs_only_as_an_explicit_child_and_not_a_registered_main(self):
         source = (ROOT / 'app/src/hostTest/java/dev/pocketengine/features/attachments/NativeMediaScratchRecoveryTest.java').read_text()
         main, worker = source.split('@RunWith(RobolectricTestRunner.class)', 1)
-        self.assertEqual(14, len(re.findall(r'@Test\s+public\s+void\s+\w+\s*\(', main)))
+        self.assertEqual(16, len(re.findall(r'@Test\s+public\s+void\s+\w+\s*\(', main)))
         self.assertEqual(1, len(re.findall(r'@Test\s+public\s+void\s+\w+\s*\(', worker)))
         self.assertIn('"org.junit.runner.JUnitCore",CodecWorker.class.getName()', main)
         self.assertIn('child.destroyForcibly()', main)
@@ -44,6 +44,9 @@ class MediaScratchHostWiringTest(unittest.TestCase):
         self.assertNotIn('File.createTempFile', trim + validation)
         self.assertIn('catch(Exception|Error failure){copy.close();throw failure;}', trim)
         self.assertIn('try{extractor.release();}finally{if(muxer!=null)', trim)
+        self.assertEqual(2, validation.count('synchronized(codecRelease)'))
+        self.assertIn('if(!releaseFinished[0])extractor.release();', validation)
+        self.assertIn('finally{releaseFinished[0]=true;}', validation)
 
     def test_cleanup_registration_and_deletion_share_a_lock_and_retain_unknowns(self):
         helper = (ROOT / 'app/src/main/java/dev/pocketengine/media/NativeMediaScratch.java').read_text()

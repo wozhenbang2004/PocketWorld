@@ -117,6 +117,8 @@ public final class NativeMediaScratchRecoveryTest {
     }
     @Test public void validationCopyKeepsItsLeaseDuringAnotherValidation()throws Exception {runWorker(temporary.newFolder(),"live-validation-copy");}
     @Test public void codecReleaseStillOwnsTheValidationLease()throws Exception {runWorker(temporary.newFolder(),"live-validation-release");}
+    @Test public void cancellingReleaseMustFinishBeforeFinallyCanDropTheValidationLease()throws Exception {runWorker(temporary.newFolder(),"live-validation-cancel-release");}
+    @Test public void aLateSnapshottedCancelCallbackCannotReleaseAfterFinally()throws Exception {runWorker(temporary.newFolder(),"late-validation-cancel-release");}
     @Test public void extractorConstructorFailuresDoNotLeaveValidationOrOutputCopies()throws Exception {runWorker(temporary.newFolder(),"constructor-failure");}
     @Test public void releaseFailuresStillReleaseTheOtherCodecAndRemoveBothCopies()throws Exception {runWorker(temporary.newFolder(),"release-failure");}
     @Test public void unknownEntriesStillRefuseQuotaAndAreNeverReclassifiedAsScratch()throws Exception {
@@ -147,6 +149,8 @@ public final class NativeMediaScratchRecoveryTest {
         static volatile CountDownLatch releasing,release;
         static volatile boolean extractorReleased,muxerReleased;
         static final java.util.concurrent.atomic.AtomicBoolean releaseClaimed=new java.util.concurrent.atomic.AtomicBoolean();
+        static final java.util.concurrent.atomic.AtomicBoolean cancelReleaseClaimed=new java.util.concurrent.atomic.AtomicBoolean();
+        static final java.util.concurrent.atomic.AtomicInteger releaseCalls=new java.util.concurrent.atomic.AtomicInteger();
         static String action(){return System.getProperty("pocketworld.media.action");}
         static File cache(){return new File(System.getProperty("pocketworld.media.cache"));}
         private static void park(Path path)throws Exception {
@@ -160,8 +164,32 @@ public final class NativeMediaScratchRecoveryTest {
             OwnerFilePreviewSource source=source(mp4(),c->{});JSONObject track=new JSONObject().put("index",0).put("mimeType","video/avc").put("durationUs",1000000);if(action().equals("release-failure"))track.put("width",16).put("height",16);JSONArray tracks=new JSONArray().put(track);var constructor=NativeMediaTrim.Review.class.getDeclaredConstructor(OwnerFilePreviewSource.class,long.class,long.class,long.class,long.class,JSONArray.class);constructor.setAccessible(true);
             NativeMediaTrim.execute(constructor.newInstance(source,0L,1000000L,0L,1000000L,tracks),cache(),new RunControl());
         }
+        private static void cancellationReleaseRace()throws Exception {
+            RunControl control=new RunControl();CountDownLatch copied=new CountDownLatch(1),finishCopy=new CountDownLatch(1);releasing=new CountDownLatch(1);release=new CountDownLatch(1);var owner=new java.util.concurrent.atomic.AtomicReference<Thread>();var pool=Executors.newFixedThreadPool(2);
+            control.setAuthorityCheck(()->{Path[] files=files(cache(),"provider-media-validation");if(files.length==1&&Files.size(files[0])==mp4().length){copied.countDown();await(finishCopy);}});
+            var validation=pool.submit(()->{owner.set(Thread.currentThread());assertThrows(InterruptedException.class,()->validate(mp4(),cache(),control));return null;});
+            try{await(copied);Path live=only(cache(),"provider-media-validation","original-provider-");var cancelling=pool.submit(()->{control.cancel();return null;});await(releasing);finishCopy.countDown();
+                long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);while(!validation.isDone()&&owner.get().getState()!=Thread.State.BLOCKED&&System.nanoTime()<until)Thread.sleep(10);
+                assertFalse("Validation finally returned while cancellation release was still in progress",validation.isDone());assertEquals(Thread.State.BLOCKED,owner.get().getState());assertTrue(Arrays.stream(owner.get().getStackTrace()).anyMatch(frame->frame.getClassName().equals("dev.pocketengine.media.NativeMediaValidation")&&frame.getMethodName().equals("mp4")));
+                assertArrayEquals(mp4(),Files.readAllBytes(live));validationUntilCopied();assertArrayEquals(mp4(),Files.readAllBytes(live));
+                release.countDown();cancelling.get(10,TimeUnit.SECONDS);validation.get(10,TimeUnit.SECONDS);assertEquals(0,files(cache(),"provider-media-validation").length);
+            }finally{finishCopy.countDown();release.countDown();pool.shutdownNow();assertTrue(pool.awaitTermination(10,TimeUnit.SECONDS));releasing=null;release=null;}
+        }
+        private static void lateCancellationRelease()throws Exception {
+            RunControl control=new RunControl();CountDownLatch copied=new CountDownLatch(1),finishCopy=new CountDownLatch(1),snapshotEntered=new CountDownLatch(1),resumeCancellation=new CountDownLatch(1);var pool=Executors.newFixedThreadPool(2);
+            // RunControl's iterator has captured the validation callback before this
+            // earlier registration blocks. Removing it later cannot retract that snapshot.
+            control.onCancel(()->{snapshotEntered.countDown();try{await(resumeCancellation);}catch(Exception failure){throw new AssertionError(failure);}});
+            control.setAuthorityCheck(()->{Path[] files=files(cache(),"provider-media-validation");if(files.length==1&&Files.size(files[0])==mp4().length){copied.countDown();await(finishCopy);}});
+            var validation=pool.submit(()->{assertThrows(InterruptedException.class,()->validate(mp4(),cache(),control));return null;});
+            try{await(copied);var cancelling=pool.submit(()->{control.cancel();return null;});await(snapshotEntered);finishCopy.countDown();validation.get(10,TimeUnit.SECONDS);assertEquals(0,files(cache(),"provider-media-validation").length);assertEquals(1,releaseCalls.get());
+                resumeCancellation.countDown();cancelling.get(10,TimeUnit.SECONDS);assertEquals("Late callback must not enter actual extractor release",1,releaseCalls.get());
+            }finally{finishCopy.countDown();resumeCancellation.countDown();pool.shutdownNow();assertTrue(pool.awaitTermination(10,TimeUnit.SECONDS));}
+        }
         @Test public void scenario()throws Exception {
             String action=action();
+            if(action.equals("live-validation-cancel-release")){cancellationReleaseRace();return;}
+            if(action.equals("late-validation-cancel-release")){lateCancellationRelease();return;}
             if(action.equals("crash-source")){try(var original=original(cache(),source(mp4(),c->{Path[] files=files(cache(),"original-media-processing");if(files.length==1&&Files.size(files[0])==mp4().length)park(files[0]);}),new RunControl())){}throw new AssertionError("Crash source returned");}
             if(action.equals("crash-output")){executeUntilCodec();throw new AssertionError("Crash output returned");}
             if(action.startsWith("crash-validation")){RunControl control=new RunControl();copyBoundary(control,action.endsWith("partial"));validate(mp4(),cache(),control);throw new AssertionError("Crash validation returned");}
@@ -193,7 +221,7 @@ public final class NativeMediaScratchRecoveryTest {
         @Implementation protected int getTrackCount(){return 1;}
         @Implementation protected MediaFormat getTrackFormat(int index){MediaFormat format=MediaFormat.createVideoFormat("video/avc",16,16);format.setLong(MediaFormat.KEY_DURATION,1000000L);return format;}
         @Implementation protected void selectTrack(int index){}
-        @Implementation protected void release()throws Exception {if(CodecWorker.action().equals("release-failure")){CodecWorker.extractorReleased=true;throw new ExtractorReleaseFailure();}if(firstRelease){CodecWorker.releasing.countDown();await(CodecWorker.release);}}
+        @Implementation protected void release()throws Exception {CodecWorker.releaseCalls.incrementAndGet();if(CodecWorker.action().equals("release-failure")){CodecWorker.extractorReleased=true;throw new ExtractorReleaseFailure();}if(CodecWorker.action().equals("live-validation-cancel-release")){if(CodecWorker.cancelReleaseClaimed.compareAndSet(false,true)){CodecWorker.releasing.countDown();await(CodecWorker.release);}return;}if(firstRelease){CodecWorker.releasing.countDown();await(CodecWorker.release);}}
     }
     @Implements(MediaMuxer.class)
     public static final class MuxerBoundary {
