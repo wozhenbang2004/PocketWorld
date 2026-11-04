@@ -1754,5 +1754,12 @@
     ],
     "robolectric": true,
     "description": "Original TaskStore desktop viewer one-shot tickets and signed grants, exact owner window lifecycle, model-delivered semantic references and shared protocol corpus. Native remote-result fixtures after the actual write gate; no physical Windows input, Android device or WAN acceptance."
+  },
+  "bootstrap-first-launch-diagnostics": {
+    "class": "dev.pocketengine.bootstrap.BootstrapInitializationNativeTest",
+    "additionalClasses": ["dev.pocketengine.bootstrap.BootstrapDiagnosticsTest", "dev.pocketengine.bootstrap.BootstrapStatusTest"],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Actual background initializer with empty native SQLite storage and injected required-module failure. UI resource integrity and platform FTS are substituted boundaries, not Android device acceptance; verifies closed admission and message/path-free diagnostics."
   }
 }
