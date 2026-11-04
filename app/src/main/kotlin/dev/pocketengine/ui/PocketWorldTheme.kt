@@ -68,18 +68,18 @@ private val PocketDarkColors = darkColorScheme(
     errorContainer = Color(0xff363636), onErrorContainer = Color(0xffededed)
 )
 private val PocketTypography = Typography(
-    headlineLarge = TextStyle(fontSize = 28.sp, lineHeight = 36.sp, fontWeight = FontWeight.Medium),
-    headlineMedium = TextStyle(fontSize = 24.sp, lineHeight = 32.sp, fontWeight = FontWeight.Medium),
-    headlineSmall = TextStyle(fontSize = 20.sp, lineHeight = 28.sp, fontWeight = FontWeight.Medium),
-    titleLarge = TextStyle(fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.Medium),
+    headlineLarge = TextStyle(fontSize = 22.sp, lineHeight = 30.sp, fontWeight = FontWeight.Medium),
+    headlineMedium = TextStyle(fontSize = 20.sp, lineHeight = 28.sp, fontWeight = FontWeight.Medium),
+    headlineSmall = TextStyle(fontSize = 18.sp, lineHeight = 26.sp, fontWeight = FontWeight.Medium),
+    titleLarge = TextStyle(fontSize = 18.sp, lineHeight = 26.sp, fontWeight = FontWeight.Medium),
     titleMedium = TextStyle(fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium),
     titleSmall = TextStyle(fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium),
     bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 24.sp, fontFamily = FontFamily.SansSerif),
-    bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 20.sp, fontFamily = FontFamily.SansSerif),
-    bodySmall = TextStyle(fontSize = 13.sp, lineHeight = 18.sp, fontFamily = FontFamily.SansSerif),
+    bodyMedium = TextStyle(fontSize = 15.sp, lineHeight = 24.sp, fontFamily = FontFamily.SansSerif),
+    bodySmall = TextStyle(fontSize = 13.sp, lineHeight = 20.sp, fontFamily = FontFamily.SansSerif),
     labelLarge = TextStyle(fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium),
-    labelMedium = TextStyle(fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium),
-    labelSmall = TextStyle(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium)
+    labelMedium = TextStyle(fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Normal),
+    labelSmall = TextStyle(fontSize = 12.sp, lineHeight = 18.sp, fontWeight = FontWeight.Normal)
 )
 
 @Composable
