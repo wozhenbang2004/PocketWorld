@@ -50,7 +50,7 @@ internal fun teamRunReferences(task: UiTask): List<String> {
     task.raw.optJSONArray("relatedTasks").objects().filter { it.optString("kind", it.optString("feature")) == "teams" }.forEach { result += it.optString("runId", it.optString("taskId")) }
     return result.filter { it.isNotBlank() }
 }
-internal fun teamRunnerLabel(id: String): String = when (id) { "model" -> "模型服务"; "codex_app_server" -> "Codex app-server"; "claude" -> "Claude Code"; "kimi" -> "Kimi（未接入）"; else -> id }
+internal fun teamRunnerLabel(id: String): String = when (id) { "model" -> "模型服务"; "codex_app_server" -> "Codex app-server"; "claude" -> "Claude Code"; "pi" -> "Pi"; "phone_agent" -> "手机操作成员"; else -> id }
 internal fun teamModeLabel(id: String): String = when(id){"produce"->"文件协作";"collaborate"->"共同分析";else->"取证与讨论"}
 internal fun teamMemberStatus(id: String): String = when (id) { "model", "running" -> "工作中"; "queued" -> "等待本轮"; "paused" -> "已暂停"; "completed" -> "本轮完成"; "failed" -> "未完成"; "unsupported" -> "执行器未接入"; "blocked" -> "环境未就绪"; "blocked_unknown" -> "结果待核对"; "waiting_dependency" -> "等待前置分工"; "blocked_dependency" -> "前置未完成，已阻断"; "partial" -> "部分分工未完成"; "awaiting_approval" -> "等待本机授权"; else -> taskStatus(id) }
 
@@ -102,11 +102,18 @@ internal fun TeamLaunchSheet(state: PocketUiState, controller: PocketWorldContro
             if (teams.isEmpty()) { TeamCaption("尚未创建团队。可在连接与能力中配置角色、模型和真实执行位置。" ); TextButton(onClick = { controller.openConnection("teams"); close() }) { Text("配置团队") } }
             teams.forEach { team -> Row(Modifier.fillMaxWidth().clickable { selected = team.optString("id") }, verticalAlignment = Alignment.CenterVertically) { RadioButton(selected == team.optString("id"), { selected = team.optString("id") }); Column { Text(team.optString("name"), fontSize = 14.sp); TeamCaption(teamModeLabel(team.optString("mode")) + " · " + team.optJSONArray("members").objects().size + " 名成员") } } }
             val chosen = teams.find { it.optString("id") == selected }
-            chosen?.optJSONArray("members").objects().filter { it.optString("runner") in setOf("codex_app_server", "claude") }.forEach { slot ->
+            chosen?.optJSONArray("members").objects().filter { externalTeamHarness(it.optString("runner")) }.forEach { slot ->
+                val target = slot.optJSONObject("device")
+                val computer = state.feature("remote").optJSONArray("profiles").objects().firstOrNull { it.optString("id") == target?.optString("profileId") }
+                TeamCaption(slot.optString("name") + " · " + teamRunnerLabel(slot.optString("runner")) + " · " + computer?.optString("name").orEmpty().ifBlank { target?.optString("profileId").orEmpty() } + " / " + target?.optString("environmentId").orEmpty())
                 TextButton(onClick = { controller.requestFeature("teams", "probeMember", JSONObject().put("teamId", selected).put("memberId", slot.optString("id"))) }, enabled = "teams.probeMember" !in state.moduleBusy) { Text("实际探测 " + slot.optString("name"), fontSize = 12.sp) }
+                val saved = state.teamMemberProbes[chosen?.optString("id") + ":" + slot.optString("id")]
+                saved?.takeIf { it.optString("slot") == slot.toString() }?.optJSONObject("receipt")?.let { probe ->
+                    TeamCaption(if (probe.optBoolean("available") && (!configuredTeamHarness(slot.optString("runner")) || probe.optBoolean("protocolVerified"))) "本次核对通过；开始时仍会核对实际配置与能力。" else probe.optJSONObject("reason")?.optString("message").orEmpty().ifBlank { probe.optString("message", "当前未确认可用，请核对原电脑。") })
+                }
             }
             if(chosen?.optString("mode")=="produce")TeamCaption("文件协作请从已选项目的原任务交给此团队，项目与审批沿用原任务。")
-            else if (chosen != null && !teamLaunchable(chosen, state)) TeamCaption("请先配置模型连接，或实际探测团队中每个 Codex 成员。未接入的执行器不能开始任务。")
+            else if (chosen != null && !teamLaunchable(chosen, state)) TeamCaption("请核对模型连接，并实际探测每个电脑成员；手机成员在手机团队工作区逐一选择范围后启动。未确认可用的成员不能开始任务。")
             OutlinedTextField(goal, { goal = it }, label = { Text("本次共同目标") }, minLines = 3, maxLines = 7, modifier = Modifier.fillMaxWidth(), enabled = !busy)
             val structuredDiscussion=chosen?.optString("discussionFormat")==dev.pocketengine.features.teams.TeamEvidenceDiscussion.FORMAT
             if(structuredDiscussion){val count=chosen!!.optJSONArray("members").objects().size;TeamCaption("本次依次完成独立观点、具体质疑、原作者回应，再由协调者给条件结论。模型请求上限 ${count*6+1} 次，阶段基础预计 ${count*3+1} 次；取证和重试同享上限。只读工具上限 ${count*4} 次，耗尽不会自动补满；不保证复杂问题足额。") }
