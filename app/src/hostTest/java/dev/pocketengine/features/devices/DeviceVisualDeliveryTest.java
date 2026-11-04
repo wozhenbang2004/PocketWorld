@@ -1,7 +1,7 @@
 package dev.pocketengine.features.devices;
 
 import android.graphics.Bitmap;
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.CapabilityPort;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
@@ -35,18 +35,68 @@ import org.robolectric.annotation.GraphicsMode;
 import static org.junit.Assert.*;
 
 /** Actual EngineApplication outer factory -> original SQL -> verified cache bytes/Bitmap -> Runner ->
- * controlled HTTP image request. Remote desktop execution is an EXPLICIT authenticated native
+ * controlled HTTP image request. OS startup and host-only SecretVault keys are explicit fixtures.
+ * Remote desktop execution is an EXPLICIT authenticated native
  * receipt fixture, not a real PC/Windows capture, remote SQL acceptance or cross-network AC. */
 @RunWith(RobolectricTestRunner.class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk=35,manifest=Config.NONE,application=dev.pocketengine.EngineApplication.class)
+@org.robolectric.annotation.ConscryptMode(org.robolectric.annotation.ConscryptMode.Mode.OFF)
+@Config(sdk=35,manifest=Config.NONE,application=dev.pocketengine.EngineApplication.class,shadows=DeviceVisualDeliveryTest.NoUnrelatedStartup.class)
 public final class DeviceVisualDeliveryTest {
-    @org.junit.Before public void keys(){java.security.Security.addProvider(new java.security.Provider("DeviceJourneyKeyStore","1","Explicit test-only AndroidKeyStore"){{put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
+    // App startup/resource packaging is a separate gate. Use the real app and original
+    // feature composition deterministically; the actual task/admission gates stay installed.
+    @org.robolectric.annotation.Implements(dev.pocketengine.EngineApplication.class)
+    public static class NoUnrelatedStartup extends org.robolectric.shadows.ShadowApplication {
+        @org.robolectric.annotation.Implementation protected void onCreate(){}
+    }
+    private dev.pocketengine.EngineApplication fixtureApplication;
+    private void prepareApplication() throws Exception {
+        var app = (dev.pocketengine.EngineApplication)org.robolectric.RuntimeEnvironment.getApplication();
+        fixtureApplication = app;
+        app.deleteDatabase("pocket-world.db");
+        app.tasks = new TaskStore(app);
+        app.settings = new dev.pocketengine.store.SettingsStore(app);
+        invoke(app, "initializeModelConnections");
+        invoke(app, "initializeFeatures");
+        dev.pocketengine.testutil.ReadyApplicationFixture.complete(app);
+        RunControl.installHostAdmission((original,id,run,epoch)->{
+            if(!app.businessReady())throw new SecurityException("Fixture application is not ready");
+            return app.tasks.admitExecutionControl(original,id,run,epoch);
+        });
+        dev.pocketengine.runtime.usage.InferenceCapture.installBudgetAttribution((capture,identity)->{
+            if(!app.businessReady())throw new SecurityException("Fixture application is not ready");
+            app.tasks.requireTokenBudgetAttribution(capture,identity);
+        });
+    }
+    @org.junit.Before public void keys(){java.security.Security.addProvider(new java.security.Provider("DeviceJourneyKeyStore",1.0,"Explicit test-only AndroidKeyStore"){{put("KeyStore.AndroidKeyStore",FixtureKeyStore.class.getName());}});}
+    @org.junit.After public void removeKeys(){if(fixtureApplication!=null){fixtureApplication.onTerminate();if(fixtureApplication.features!=null)fixtureApplication.features.close();}java.security.Security.removeProvider("DeviceJourneyKeyStore");}
+    // Explicit host-only SecretVault key fixture, identical to ChannelTaskHostTest.
+    // This proves real encryption paths but makes no Android hardware-keystore claim.
+    public static final class FixtureKeyStore extends java.security.KeyStoreSpi {
+        private static final javax.crypto.SecretKey KEY=new javax.crypto.spec.SecretKeySpec(new byte[32],"AES");
+        public java.security.Key engineGetKey(String alias,char[] password){return KEY;}
+        public java.security.cert.Certificate[] engineGetCertificateChain(String alias){return null;}
+        public java.security.cert.Certificate engineGetCertificate(String alias){return null;}
+        public java.util.Date engineGetCreationDate(String alias){return new java.util.Date(0);}
+        public void engineSetKeyEntry(String alias,java.security.Key key,char[] password,java.security.cert.Certificate[] chain){throw new UnsupportedOperationException();}
+        public void engineSetKeyEntry(String alias,byte[] key,java.security.cert.Certificate[] chain){throw new UnsupportedOperationException();}
+        public void engineSetCertificateEntry(String alias,java.security.cert.Certificate cert){throw new UnsupportedOperationException();}
+        public void engineDeleteEntry(String alias){throw new UnsupportedOperationException();}
+        public java.util.Enumeration<String> engineAliases(){return java.util.Collections.enumeration(java.util.Collections.singleton("pocketengine.feature-secrets.v1"));}
+        public boolean engineContainsAlias(String alias){return alias.equals("pocketengine.feature-secrets.v1");}
+        public int engineSize(){return 1;}
+        public boolean engineIsKeyEntry(String alias){return engineContainsAlias(alias);}
+        public boolean engineIsCertificateEntry(String alias){return false;}
+        public String engineGetCertificateAlias(java.security.cert.Certificate cert){return null;}
+        public void engineStore(java.io.OutputStream out,char[] password){}
+        public void engineLoad(java.io.InputStream in,char[] password){}
+    }
     private static Object get(Object source,String field)throws Exception{Field f=source.getClass().getDeclaredField(field);f.setAccessible(true);return f.get(source);}
     private static Object invoke(Object source,String method)throws Exception{Method m=source.getClass().getDeclaredMethod(method);m.setAccessible(true);return m.invoke(source);}
     @Test public void verifiedDevicePixelsAndIdentityReachRealModelHttpBeforeNextDesktopAction()throws Exception{scenario(true);}
     @Test public void modelWithoutExplicitImageSupportNeverDispatchesDesktopCapture()throws Exception{scenario(false);}
     private void scenario(boolean imageSupport)throws Exception{
+        prepareApplication();
         DeviceIngressNativeTest fixture=new DeviceIngressNativeTest();fixture.open(((dev.pocketengine.EngineApplication)org.robolectric.RuntimeEnvironment.getApplication()).tasks);HttpServer http=null;byte[] png=null;
         try{
             TaskStore tasks=(TaskStore)get(fixture,"tasks");PairingCoordinator pairing=(PairingCoordinator)get(fixture,"pairing");DeviceIdentity.AuthenticatedPeer remote=(DeviceIdentity.AuthenticatedPeer)get(fixture,"caller");String local=(String)get(fixture,"target");DeviceIdentity.LocalIdentity identity=(DeviceIdentity.LocalIdentity)invoke(fixture,"syntheticLocalIdentity");long deadline=System.currentTimeMillis()+240000;
@@ -62,7 +112,7 @@ public final class DeviceVisualDeliveryTest {
             var exchange=new DeviceNativeRoute.Exchange(){public DeviceCapabilityPort.Reply once(String target,DeviceTaskEnvelope request,RunControl io){throw new AssertionError("no raw effect or operation polling in this fixture");}public DeviceCapabilityPort.Reply once(String target,DeviceTaskEnvelope request,dev.pocketengine.store.TaskStoreDeviceTasks.OutboundSendTicket ticket,RunControl io)throws Exception{assertArrayEquals(DeviceProtocol.canonicalBytes(request.json()),ticket.claimForWrite(remote));String tool=request.toolInvocation().toolName();int sequence=remoteDispatches.incrementAndGet();if(tool.equals("desktop.act")){assertEquals(3,sequence);assertTrue(DeviceProtocol.resourceEquals(latest.get(),request.observationRef()));}
                 long captured=System.currentTimeMillis();if(tool.equals("desktop.control")){JSONObject lease=new JSONObject().put("id","12345678123456781234567812345678").put("fence",1).put("expiresAt",captured+30000).put("resource","fixture-native-desktop-resource");latestLease.set(lease);JSONObject audience=audience(request,resource,captured,deadline);JSONObject typed=DeviceProtocol.operationReceipt(remote.deviceId(),"caller-fixture",request.operationId(),request.argumentsDigest(),"succeeded",true,"reported",new JSONObject().put("desktopReceipt",new JSONObject().put("lease",lease)),new JSONObject().put("acceptedAt",captured).put("audience",audience).put("jobId","native-fixture-job-"+sequence));return new DeviceCapabilityPort.Reply(remote,response(request,remote.deviceId(),typed));}JSONObject reference=new JSONObject().put("id",UUID.randomUUID().toString().replace("-","")).put("sessionId",1).put("displayId","primary").put("windowId",JSONObject.NULL).put("binding",new JSONObject().put("nativeFixtureWindow",true)).put("driverGeneration","1".repeat(32)).put("capturedAt",captured).put("expiresAt",captured+30000);latest.set(reference);JSONObject descriptor=new JSONObject().put("protocolVersion",DeviceProtocol.VERSION).put("protocolProfile",DeviceProtocol.PROFILE).put("messageType","ArtifactDescriptor").put("executorDeviceId",remote.deviceId()).put("instanceId","caller-fixture").put("artifactId",UUID.randomUUID().toString()).put("transferId",UUID.randomUUID().toString()).put("versionId",imageHash).put("revision",1).put("taskId",request.localTaskId()).put("requestRunId",request.runId()).put("requestExecutorEpoch",request.executorEpoch()).put("operationId",request.operationId()).put("kind","screenshot").put("mediaType","image/png").put("name","native-fixture.png").put("size",actualPng.length).put("contentDigest",imageHash).put("observationRef",reference).put("resourceBinding",resource).put("expiresAt",captured+300000);DeviceProtocol.validateMessage(descriptor);
                 JSONObject observation=new JSONObject().put("observationRef",reference).put("capture",descriptor).put("image",new JSONObject().put("width",2).put("height",3).put("mediaType","image/png"));JSONObject body=tool.equals("desktop.observe")?observation:new JSONObject().put("desktopReceipt",new JSONObject().put("afterObservation",observation));JSONObject audience=new JSONObject().put("kind","operation").put("objectId",request.operationId()).put("originDeviceId",request.originDeviceId()).put("callerDeviceId",request.callerDeviceId()).put("targetDeviceId",request.targetDeviceId()).put("instanceId","caller-fixture").put("rootTaskId",request.rootTaskId()).put("localTaskId",request.localTaskId()).put("requestRunId",request.runId()).put("requestExecutorEpoch",request.executorEpoch()).put("grantId",request.grantId()).put("authorizationEpoch",request.authorizationEpoch()).put("resourceBinding",resource).put("acceptedAt",captured).put("retainedUntil",deadline+60000);JSONObject typed=DeviceProtocol.operationReceipt(remote.deviceId(),"caller-fixture",request.operationId(),request.argumentsDigest(),"succeeded",true,"reported",body,new JSONObject().put("acceptedAt",captured).put("audience",audience).put("jobId","native-fixture-job-"+sequence));return new DeviceCapabilityPort.Reply(remote,response(request,remote.deviceId(),typed));}};
-            AtomicInteger unseenActionsBlocked=new AtomicInteger();AtomicReference<CapabilityPort> factoryPort=new AtomicReference<>();List<String> bodies=new java.util.concurrent.CopyOnWriteArrayList<>();AtomicInteger requests=new AtomicInteger();http=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);final String selectedRoute=route;http.createContext("/",request->{try{int round=requests.incrementAndGet();if(round==1&&imageSupport)try{factoryPort.get().beforeTool("device_invoke_tool",new JSONObject().put("routeId",selectedRoute).put("targetDeviceId",remote.deviceId()).put("toolName","desktop.act").put("observationRef",new JSONObject()),original);}catch(SecurityException unseen){unseenActionsBlocked.incrementAndGet();}bodies.add(new String(request.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));JSONObject message=new JSONObject().put("role","assistant");if(round==1||round<=3&&imageSupport){JSONObject args=new JSONObject().put("routeId",selectedRoute).put("targetDeviceId",remote.deviceId()).put("toolName",round==1?"desktop.observe":round==2?"desktop.control":"desktop.act").put("arguments",round==1?new JSONObject().put("pid",77).put("windowId",99):round==2?new JSONObject().put("action","acquire").put("durationMs",30000):new JSONObject().put("kind","click").put("elementToken","s1234abcd:1").put("lease",latestLease.get()).put("verification",new JSONObject().put("kind","element_present").put("selector",new JSONObject().put("role","button").put("label","fixture")))).put("toolBudget",4);if(round==3)args.put("observationRef",latest.get());message.put("content",JSONObject.NULL).put("tool_calls",new JSONArray().put(new JSONObject().put("id","native-call-"+round).put("type","function").put("function",new JSONObject().put("name","device_invoke_tool").put("arguments",args.toString()))));}else message.put("content","Controlled model fixture finished");byte[] encoded=new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("finish_reason",message.has("tool_calls")?"tool_calls":"stop").put("message",message))).toString().getBytes(StandardCharsets.UTF_8);request.getResponseHeaders().set("Content-Type","application/json");request.sendResponseHeaders(200,encoded.length);request.getResponseBody().write(encoded);}catch(Exception failure){throw new RuntimeException(failure);}finally{request.close();}});http.start();
+            AtomicInteger unseenActionsBlocked=new AtomicInteger();AtomicReference<CapabilityPort> factoryPort=new AtomicReference<>();List<String> bodies=new java.util.concurrent.CopyOnWriteArrayList<>();AtomicInteger requests=new AtomicInteger();http=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);final String selectedRoute=route;http.createContext("/",request->{try{int round=requests.incrementAndGet();if(round==1&&imageSupport)try{factoryPort.get().beforeTool("device_invoke_tool",new JSONObject().put("routeId",selectedRoute).put("targetDeviceId",remote.deviceId()).put("toolName","desktop.act").put("observationRef",new JSONObject()),original);}catch(SecurityException unseen){unseenActionsBlocked.incrementAndGet();}bodies.add(new String(request.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));JSONObject message=new JSONObject().put("role","assistant");if(round==1||round<=3&&imageSupport){JSONObject args=new JSONObject().put("routeId",selectedRoute).put("targetDeviceId",remote.deviceId()).put("toolName",round==1?"desktop.observe":round==2?"desktop.control":"desktop.act").put("arguments",round==1?new JSONObject().put("pid",77).put("windowId",99).put("observationMode","hybrid"):round==2?new JSONObject().put("action","acquire").put("durationMs",30000):new JSONObject().put("kind","click").put("elementToken","s1234abcd:1").put("lease",latestLease.get()).put("verification",new JSONObject().put("kind","element_present").put("selector",new JSONObject().put("role","button").put("label","fixture")))).put("toolBudget",4);if(round==3)args.put("observationRef",latest.get());message.put("content",JSONObject.NULL).put("tool_calls",new JSONArray().put(new JSONObject().put("id","native-call-"+round).put("type","function").put("function",new JSONObject().put("name","device_invoke_tool").put("arguments",args.toString()))));}else message.put("content","Controlled model fixture finished");byte[] encoded=new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("finish_reason",message.has("tool_calls")?"tool_calls":"stop").put("message",message))).toString().getBytes(StandardCharsets.UTF_8);request.getResponseHeaders().add("Content-Type","application/json");request.sendResponseHeaders(200,encoded.length);request.getResponseBody().write(encoded);}catch(Exception failure){throw new RuntimeException(failure);}finally{request.close();}});http.start();
             dev.pocketengine.EngineApplication app=(dev.pocketengine.EngineApplication)org.robolectric.RuntimeEnvironment.getApplication();
             app.getSharedPreferences("private_settings",0).edit().putString("baseUrl","http://127.0.0.1:"+http.getAddress().getPort()).putString("model","native-visual-fixture-model").putBoolean("sendScreenshots",true).putBoolean("supportsImageInput",imageSupport).putInt("maxSteps",8).putInt("requestTimeoutSeconds",60).commit();
             ((java.util.Map<String,RunControl>)get(app,"capabilityControls")).put(id,original);

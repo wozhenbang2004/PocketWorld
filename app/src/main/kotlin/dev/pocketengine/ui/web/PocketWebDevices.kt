@@ -30,12 +30,16 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     private val generation = AtomicLong(0)
     @Volatile private var review: Review? = null
     @Volatile private var latest = JSONObject()
+    @Volatile private var desktop: Host.DesktopWindow? = null
+    private val desktopGeneration = AtomicLong(0)
+    private val desktopInFlight = AtomicReference<String?>(null)
     companion object {
         val COMMANDS = setOf("devices.snapshot", "devices.createInvitation", "devices.inspectInvitation", "devices.reviewPairing", "devices.advancePairing", "devices.reviewPeerGrant",
             "devices.reviewGrant", "devices.reviewConnection", "devices.reviewRelay", "devices.reviewAction", "devices.reviewGoal", "devices.reviewResult", "devices.reviewApproval",
             "devices.confirm", "devices.reject", "devices.discard", "devices.recoveryAddresses", "devices.openRecovery", "devices.recoverPairing", "devices.reviewAbandonment", "devices.openTask", "devices.readTask", "devices.reviewResumeRequest",
             "devices.openHistory", "devices.queryHistory", "devices.stopHistory",
-            "devices.desktop.open", "devices.desktop.negotiate", "devices.desktop.status", "devices.desktop.control", "devices.desktop.input", "devices.desktop.close")
+            "devices.desktop.open", "devices.desktop.negotiate", "devices.desktop.status",
+            "devices.desktop.control", "devices.desktop.input", "devices.desktop.close")
         private fun fields(value: JSONObject, vararg allowed: String) = PocketWebGroupReviews.fields(value, *allowed)
         private fun text(value: JSONObject, key: String, max: Int = 240) = PocketWebGroupReviews.text(value, key, max)
         private fun integer(value: JSONObject, key: String, min: Long, max: Long) = PocketWebGroupReviews.integer(value, key, min, max)
@@ -50,8 +54,9 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         // Keep running-lane gates until their own callbacks settle; an invalidated read cannot
         // race a new review on this same native Window and close its resources.
         generation.incrementAndGet(); review = null; latest = JSONObject()
+        desktopGeneration.incrementAndGet(); desktop?.close(); desktop = null
+        desktopInFlight.set(null); runCatching { window()?.closeDesktop() }
         runCatching { window()?.discardReview() }
-        runCatching { window()?.closeDesktop() }
     }
     @Synchronized private fun discard(original: Host.Window, handle: String = ""): Boolean {
         if (handle.isNotBlank() && review?.handle != handle) return false
@@ -120,14 +125,84 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             historyExpires, methods, origins, forwarding, forwardTools, forwardModels, whole)
     }
 
+    private fun desktopCurrent(original: Host.Window, epoch: Long) {
+        check(visible() && controller.webPrivateOwnerVisible() && window() === original && desktopGeneration.get() == epoch) {
+            "原桌面窗口已关闭，请重新连接"
+        }
+    }
+    private fun dispatchDesktop(action: String, args: JSONObject, original: Host.Window, done: (JSONObject?, String?) -> Unit) {
+        require(action in COMMANDS)
+        if (action == "devices.desktop.close") {
+            fields(args, "sessionId"); val id = text(args, "sessionId")
+            val current = desktop
+            if (current?.id() == id) {
+                desktopGeneration.incrementAndGet(); desktop = null; desktopInFlight.set(null)
+                val closed = original.closeDesktop(id)
+                done(JSONObject().put("value", closed), null)
+                return
+            }
+            done(JSONObject().put("value", JSONObject().put("sessionId", id).put("closed", false).put("remoteCloseConfirmed", false)), null)
+            return
+        }
+        val call = UUID.randomUUID().toString()
+        check(desktopInFlight.compareAndSet(null, call)) { "请先等待当前桌面操作的回执" }
+        val epoch = if (action == "devices.desktop.open") desktopGeneration.incrementAndGet() else desktopGeneration.get()
+        if (action == "devices.desktop.open") { desktop?.close(); desktop = null }
+        val work = Runnable {
+            var value: JSONObject? = null; var failure: String? = null; var opened: Host.DesktopWindow? = null
+            try {
+                desktopCurrent(original, epoch)
+                if (action == "devices.desktop.open") {
+                    fields(args, "deviceId", "grantId", "resourceBinding")
+                    val deviceId = text(args, "deviceId"); val grantId = text(args, "grantId")
+                    val binding = args.getJSONObject("resourceBinding")
+                    DeviceProtocol.validateResourceBinding("desktop-v2", binding)
+                    val selected = peer(original.snapshot(), deviceId)
+                    require(!selected.optBoolean("revoked")) { "此设备已撤销配对" }
+                    require(selected.optJSONArray("receivedGrantScopes").objects().any { grant ->
+                        grant.optString("grantId") == grantId && grant.optLong("expiresAt") > System.currentTimeMillis() &&
+                            strings(grant.optJSONArray("capabilities")).contains("desktop.viewer") &&
+                            grant.optJSONArray("resources").objects().any { DeviceProtocol.resourceEquals(it, binding) }
+                    }) { "请从电脑当前已授予的桌面范围打开" }
+                    val source = original.openDesktop(deviceId, grantId, binding, Host.DesktopCurrent { desktopCurrent(original, epoch) }); opened = source
+                    value = source.view()
+                    synchronized(this) { desktopCurrent(original, epoch); desktop = source }
+                } else {
+                    val source = desktop ?: error("原桌面会话已关闭")
+                    check(source.id() == text(args, "sessionId")) { "桌面请求属于旧会话" }
+                    val input = JSONObject(args.toString()).also { it.remove("sessionId") }
+                    val operation = when (action) {
+                        "devices.desktop.negotiate" -> { fields(args, "sessionId", "offer"); "negotiate" }
+                        "devices.desktop.status" -> { fields(args, "sessionId"); "status" }
+                        "devices.desktop.control" -> {
+                            fields(args, "sessionId", "action", "expectedRevision")
+                            text(args, "action").also { require(it in setOf("take", "release")); input.remove("action") }
+                        }
+                        "devices.desktop.input" -> { fields(args, "sessionId", "controlLease", "frameRef", "input"); "input" }
+                        else -> error("桌面操作尚未接入")
+                    }
+                    value = source.request(operation, input)
+                }
+                desktopCurrent(original, epoch)
+            } catch (error: Exception) {
+                if (action == "devices.desktop.open") opened?.close()
+                failure = if (error is org.json.JSONException) "桌面回执不完整，请重新连接核对。" else error.message?.take(400) ?: "桌面操作结果待核对"
+            }
+            main.post {
+                desktopInFlight.compareAndSet(call, null)
+                if (runCatching { desktopCurrent(original, epoch) }.isFailure) {
+                    opened?.close(); done(null, "原桌面窗口已关闭，未重放输入")
+                } else done(JSONObject().put("value", value?.let { PocketWebState.publicValue(it) } ?: JSONObject.NULL), failure)
+            }
+        }
+        try { controller.runDeviceWorkspaceWork(work) }
+        catch (failure: Exception) { desktopInFlight.compareAndSet(call, null); done(null, failure.message ?: "桌面工作线程不可用") }
+    }
+
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
         val original = window() ?: error("原设备窗口已关闭，请重新进入")
         current(original, generation.get())
-        if (action == "devices.desktop.close") {
-            fields(args, "sessionId")
-            val value = original.closeDesktop(text(args, "sessionId", 128))
-            done(JSONObject().put("value", value).put("snapshot", JSONObject.NULL), null); return
-        }
+        if (action.startsWith("devices.desktop.")) { dispatchDesktop(action, args, original, done); return }
         if (action == "devices.discard") {
             fields(args, "viewHandle")
             val handle = if (args.has("viewHandle")) text(args, "viewHandle") else ""
@@ -151,29 +226,6 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                 current(original, epoch)
                 val before by lazy { captureSnapshot(original, ids) }
                 value = when (action) {
-                    "devices.desktop.open" -> {
-                        fields(args, "deviceId", "grantId", "resourceBinding", "target")
-                        val id = text(args, "deviceId", 128); peer(before, id)
-                        original.openDesktop(id, text(args, "grantId", 128), args.getJSONObject("resourceBinding"), args.optJSONObject("target"))
-                    }
-                    "devices.desktop.negotiate" -> {
-                        fields(args, "sessionId", "offer")
-                        original.desktopCommand(text(args, "sessionId", 128), "negotiate", JSONObject().put("offer", args.getJSONObject("offer")))
-                    }
-                    "devices.desktop.status", "devices.desktop.close" -> {
-                        fields(args, "sessionId")
-                        original.desktopCommand(text(args, "sessionId", 128), action.substringAfterLast('.'), JSONObject())
-                    }
-                    "devices.desktop.control" -> {
-                        fields(args, "sessionId", "action", "expectedRevision")
-                        val control = text(args, "action", 16); require(control in setOf("take", "release"))
-                        original.desktopCommand(text(args, "sessionId", 128), control, JSONObject().put("expectedRevision", integer(args, "expectedRevision", 0, 10000)))
-                    }
-                    "devices.desktop.input" -> {
-                        fields(args, "sessionId", "controlLease", "frameRef", "input")
-                        original.desktopCommand(text(args, "sessionId", 128), "input", JSONObject().put("controlLease", args.getJSONObject("controlLease"))
-                            .put("frameRef", args.getJSONObject("frameRef")).put("input", args.getJSONObject("input")))
-                    }
                     "devices.snapshot" -> { fields(args, "deviceId"); if (args.has("deviceId")) { val id = text(args, "deviceId"); peer(before, id); original.refreshPeerFacts(id) }; JSONObject().put("readOnly", true) }
                     "devices.createInvitation" -> {
                         fields(args, "address"); val address = text(args, "address", 512)

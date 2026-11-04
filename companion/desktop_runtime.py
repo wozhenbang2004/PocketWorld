@@ -6,6 +6,8 @@ from agent_desktop_driver import AgentDesktopCli, AgentDesktopDriver
 from desktop_adapter import DesktopAdapter, DesktopError
 from desktop_jobs import DesktopJobs
 from desktop_sessions import WindowsDesktopHealth
+from desktop_stream import DesktopStreamService
+from desktop_viewer import DesktopViewer
 from platform_backend import get_backend
 
 
@@ -21,19 +23,22 @@ class UnavailableDesktop:
         raise DesktopError(self.reason, 409)
 
     query = invoke
+    viewer = invoke
 
     def close(self):
         return {"notStarted": True, "processGroupStoppedVerified": True}
 
 
 class DesktopRuntime:
-    def __init__(self, jobs):
+    def __init__(self, jobs, *, streams=None):
         self.jobs = jobs
+        self.viewers = DesktopViewer(jobs, streams=streams)
 
     def describe(self):
         value = self.jobs.adapter.describe()
         value["originalBudgetConnected"] = callable(self.jobs.budget_claim)
         value["receivingBudgetPolicy"] = self.jobs.native_budget.describe()
+        value["streaming"] = self.viewers.describe()
         if not value["originalBudgetConnected"]:
             value.update(available=False, reason="original_task_budget_reservation_not_connected")
         return value
@@ -46,6 +51,9 @@ class DesktopRuntime:
 
     def cancel(self, job_id):
         return self.jobs.cancel(job_id)
+
+    def viewer(self, envelope, permission):
+        return self.viewers.invoke(envelope, permission)
 
     def close(self):
         return self.jobs.close()
@@ -76,6 +84,15 @@ def attach_desktop(manager, local_identity, artifact_store, *, budget_claim=None
         return UnavailableDesktop("pinned_agent_desktop_artifact_not_configured")
     if artifact_store.source_device_id != local_identity.device_id:
         return UnavailableDesktop("artifact_source_device_identity_mismatch")
+    viewer_settings = settings.get("streaming", {})
+    if (not isinstance(viewer_settings, dict) or set(viewer_settings) - {"enabled", "iceServers", "fps", "maxEdge"}
+            or type(viewer_settings.get("enabled", True)) is not bool):
+        return UnavailableDesktop("unknown_desktop_viewer_configuration")
+    try:
+        streams = DesktopStreamService(WindowsDesktopHealth(), ice_servers=viewer_settings.get("iceServers", []),
+                                       fps=viewer_settings.get("fps", 10), max_edge=viewer_settings.get("maxEdge", 1200))
+    except Exception:
+        return UnavailableDesktop("invalid_desktop_viewer_configuration")
     from desktop_recovery import apply_pending_local_request
     try:
         apply_pending_local_request(manager, local_identity, backend)
@@ -95,4 +112,7 @@ def attach_desktop(manager, local_identity, artifact_store, *, budget_claim=None
         driver = AgentDesktopDriver(driver, AgentDesktopCli(semantic["binary"], semantic["sha256"], backend,
                                                            private_state=manager.state / "agent-desktop"))
     adapter = DesktopAdapter(manager, driver, WindowsDesktopHealth(), capture_store, local_identity.device_id)
-    return DesktopRuntime(DesktopJobs(manager, adapter, budget_claim=budget_claim))
+    runtime = DesktopRuntime(DesktopJobs(manager, adapter, budget_claim=budget_claim), streams=streams)
+    if viewer_settings.get("enabled", True) is False:
+        runtime.viewers.close()
+    return runtime

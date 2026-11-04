@@ -177,8 +177,6 @@ class CompanionDeviceReceiver:
             self.desktop = UnavailableDesktop("native_pairing_management_only_no_execution_worker")
         else:
             self.desktop = attach_desktop(manager, local_identity, self.artifacts, budget_claim=self.budget.claim)
-        from desktop_viewer import DesktopViewer
-        self.desktop_viewer = DesktopViewer(self)
         self.artifact_endpoint = ArtifactEndpoint(self.artifacts, native_instance_id=local_identity.instance_id, revision=1,
                                                   access=self._artifact_access, bulk_sender=self._send_bulk,
                                                   history_access=self._history_artifact_access, history_bulk_sender=self._send_history_bulk,
@@ -213,7 +211,6 @@ class CompanionDeviceReceiver:
 
     def describe(self):
         desktop = self.desktop.describe()
-        desktop["streaming"] = self.desktop_viewer.describe()
         commands = any(worker.get("id") == "command" and worker.get("available") is True for item in self.manager.list_environments()["environments"] for worker in item["workers"] if item["kind"] == "local")
         workspace_capabilities = []
         for key, environment in self.manager.environments.items():
@@ -820,7 +817,7 @@ class CompanionDeviceReceiver:
                 result = protocol.device_description(self.identity.device_id, self.identity.instance_id, now,
                                                      min(permission.deadline, now + 15000), result["capabilities"], result["grantReceipts"], metadata)
             elif envelope.method == "desktop.viewer":
-                result = await asyncio.to_thread(self.desktop_viewer.invoke, envelope, permission)
+                result = await asyncio.to_thread(self.desktop.viewer, envelope, permission)
             elif envelope.method == "tool.invoke":
                 tool = envelope.arguments["toolName"]
                 if tool in {"desktop.observe", "desktop.act", "workspace.export", "workspace.project.export"}:
@@ -871,8 +868,6 @@ class CompanionDeviceReceiver:
                 with self.manager.lock:
                     row = self.manager.ledger.execute("SELECT fingerprint FROM operations WHERE operation_id=?", (envelope.get("operationId"),)).fetchone()
                     unknown = row is not None and row[0] == protocol.arguments_digest(envelope.json())
-                if envelope.method == "desktop.viewer":
-                    unknown = self.desktop_viewer.effect_unknown(envelope)
             code = failure.code if isinstance(failure, protocol.ProtocolError) else "permission_denied" if isinstance(failure, PermissionError) or isinstance(failure, PlatformError) and failure.status == 403 else "native_tool_unavailable"
             message = str(failure)[:300] if isinstance(failure, (protocol.ProtocolError, PermissionError, PlatformError)) else "Native device request could not be confirmed; inspect the original operation"
             response = {"protocolVersion": protocol.VERSION, "protocolProfile": protocol.PROFILE, "messageType": "DeviceError", "requestId": envelope.get("requestId") if envelope else None,
@@ -883,7 +878,6 @@ class CompanionDeviceReceiver:
         return self.desktop.cancel(job_id)
 
     def close(self):
-        self.desktop_viewer.close()
         self.closed = True
         if self._input_cache is not None:
             self._input_cache.close()

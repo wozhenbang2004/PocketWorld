@@ -7,6 +7,15 @@ SDP answer and sends DTLS-SRTP video; no unauthenticated HTTP/MJPEG endpoint is
 created. Input uses the existing owner grant, human lease and durable operation
 ledger, never a WebRTC input channel.
 
+Each newly claimed human input spends one unit from the original PairGrant's
+finite `device_budget_pools`, shared with Agent tools. The spend and the original
+`operations` insert are atomic; duplicates never spend again, and claimed
+failures/unknowns are not refunded. Viewing and control/status requests create
+no Agent task or task-budget allocation. Restart/new viewer/new grant epoch
+cannot refill that original grant pool. Already-existing claims from main's old
+viewer table are retained as tombstones in `operations`; collisions fail closed,
+and neither old receipts nor resource fences are rewritten as settlement proof.
+
 ## Prepared Windows build
 
 The product media pins are `../windows-stream-dependencies.json` and
@@ -29,7 +38,8 @@ The standard `pocket-companion.spec` collects aiortc, PyAV, SRTP/CRC extensions,
 their Windows wheel DLL directories, Pillow capture, the owner viewer router,
 and agent-desktop pin/license material. The actual build must run both
 `PocketWorld-Companion.exe --help` and `--stream-self-test` before recording
-provenance. The latter imports the real media libraries and encodes one 64×48
+provenance. The latter verifies the pinned RTP/VP8 source and loaded method code,
+imports the real media libraries and encodes one 64×48
 synthetic VP8 keyframe entirely in memory, before configuration, installation or
 identity access. It opens no peer/socket and captures no desktop. Missing native
 dependencies produce a nonzero exit; a successful help screen alone is
@@ -43,21 +53,13 @@ Android playback, interactive input, hardware acceleration or WAN connectivity.
 
 ## Capture and lifetime
 
-Window grants use a native HWND `PrintWindow` call into a bounded top-down DIB,
-then Pillow scales the RGB image. Pillow 13's own `ImageGrab(window=...)` uses
-client-area `GetClientRect`/`BitBlt` and is deliberately not used for the full
-`GetWindowRect` input viewport. The `PW_RENDERFULLCONTENT` flag follows the
-[Chromium Windows capture implementation](https://chromium.googlesource.com/chromium/src/+/f50f372d7a7ba63d24b0b5aef7a4aec791e19c19/ui/gl/direct_composition_surface_win_unittest.cc)
-to include DirectComposition content on the supported Windows versions; it is
-not a promise that every protected or unusual renderer can be captured. The
-call uses the original authorized window and cannot broaden into a
+Window grants use Pillow's native HWND capture path. They cannot broaden into a
 rectangle of the desktop containing other foreground windows. A whole-primary
 display view requires the corresponding desktop grant. The bridge verifies the
 interactive session, default input desktop, original process generation, HWND,
 primary display and physical bounds before and after capture. Lock/disconnect,
 revocation, capture failure or expiry ends the stream. Unsupported/off-primary
-window captures fail explicitly. Native successful capture of a protected or
-unsupported renderer may still appear blank and needs real Windows acceptance.
+window captures fail explicitly.
 
 Default video is at most 10 frames per second and 1200 pixels on the long edge,
 with a configurable hard ceiling of 15 frames per second, at most two viewers,
@@ -72,9 +74,33 @@ metadata. The bridge retains at most 32 references for at most two seconds.
 Human input must cite an authentic recent reference, the original owner and
 resource, and unchanged native geometry, foreground and local-input state. The
 adapter checks health again under its dispatch lock. Control handoffs invalidate
-all references. Metadata delivery and video decoding have independent buffers;
-this is bounded recent geometry evidence, not proof of exact displayed pixels
-or a business operation's success. The stream never becomes an LLM image
+all references, including captures already in flight at a handoff.
+
+An uncertain input keeps `control.needsReconcile` true. The original human can
+explicitly release its UI lease, producing `none` with the reconciliation flag
+still set; this never clears the global `NEEDS_RECONCILE` resource state. Another
+viewer sees `other_human` while the exact human lease remains held and receives
+no lease or owner identity. Closing a session retires only its own settled
+`HELD` lease. Executing/unknown/paused inputs remain fenced, including when
+Windows locks or a stream callback races the dispatch lock.
+
+Each metadata reference includes the actual transmitted unsigned 32-bit
+`rtpTimestamp`. `desktop_rtp.py` admits only aiortc 1.15.0's exact reviewed source
+hashes and the matching loaded sender, DTLS and VP8 method code. It correlates
+the single capture in an original encoding call with every original RTP
+payload/SSRC/sequence/marker and publishes once, after the final packet's real
+DTLS/SRTP send completes. It does not infer RTP identity from AV PTS: aiortc adds
+a random timestamp origin, and PyAV can rescale PTS. Retransmits and RTX cannot
+publish again. The freezer includes the source needed to recheck this contract.
+
+The phone admits input only when the latest displayed `requestVideoFrameCallback`
+reports the same RTP timestamp, dimensions and live stream as this authenticated
+reference. Its bounded metadata cache permits either channel to arrive first;
+an older decoded frame cannot unlock a newer frame. Missing callback timestamps,
+changed private media code, duplicate/mismatched transmission or stale geometry
+leave viewing available and disable input. This binds the input coordinates to
+the actual displayed encoded frame; it does not prove the desktop is unchanged
+after capture or that an input achieved a business result. The stream never becomes an LLM image
 artifact and never refreshes an Agent's semantic observation.
 
 `desktop.streaming.iceServers` is an explicit operator configuration; the default
@@ -90,13 +116,14 @@ pretend that periodic snapshots are a live media stream.
 From `companion`, run:
 
 ```text
-python -B -m unittest -v test_desktop_stream test_desktop_worker_stream test_windows_runtime_build test_windows_packaging
+python -B -m unittest -v test_desktop_rtp test_desktop_stream test_desktop_viewer test_desktop_semantic_human test_desktop_worker_stream test_windows_runtime_build test_windows_packaging
 ```
 
 Contract fixtures exercise bounds, revocation, scope, stale input, cancellation,
 and packaging without a real desktop. If the prepared aiortc/PyAV SDKs exist, the
 same suite also negotiates a real no-STUN local DTLS-SRTP connection, decodes a
-labelled synthetic video frame, receives metadata, and executes the native
+labelled synthetic video frame, checks its actual received RTP header and
+decoder timestamp mapping against metadata, and executes the native
 codec probe. Missing SDKs skip only those actual-media tests and do not yield a
 success claim. Source-only development without the media SDK reports viewing
 unavailable. A real Windows build/capture and Android/remote-network acceptance

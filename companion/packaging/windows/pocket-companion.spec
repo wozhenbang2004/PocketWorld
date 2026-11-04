@@ -3,14 +3,14 @@ from pathlib import Path
 import hashlib
 import importlib.metadata
 import json
-from PyInstaller.utils.hooks import collect_all, collect_delvewheel_libs_directory, copy_metadata
+from PyInstaller.utils.hooks import collect_all, collect_delvewheel_libs_directory, copy_metadata, get_package_paths
 
 ROOT = Path(SPECPATH).resolve().parents[2]
 COMPANION = ROOT / "companion"
 if not COMPANION.is_dir():
     raise RuntimeError("Spec must live in the product companion/packaging/windows directory")
 required = ["device_protocol.py", "device_identity.py", "device_pairing.py", "device_artifacts.py", "desktop_runtime.py",
-            "desktop_stream.py", "desktop_viewer.py", "agent_desktop_driver.py"]
+            "desktop_stream.py", "desktop_rtp.py", "desktop_viewer.py", "agent_desktop_driver.py"]
 if any(not (COMPANION / name).is_file() for name in required):
     raise RuntimeError("Build the integrated product tree; required shared protocol/identity/artifact modules are missing")
 hidden = [path.stem for path in COMPANION.glob("*.py")
@@ -71,6 +71,11 @@ for package in ("aiortc", "av", "aioice", "pylibsrtp", "google_crc32c", "pyee", 
     hidden += package_hidden
 for package in ("av", "pylibsrtp", "google_crc32c"):
     stream_data, stream_binaries = collect_delvewheel_libs_directory(package, datas=stream_data, binaries=stream_binaries)
+# Exact source accompanies the loaded bytecode so the bounded RTP observer can
+# verify both under this interpreter, including in an archived frozen runtime.
+_, aiortc_root = get_package_paths("aiortc")
+for relative in ("rtcrtpsender.py", "rtcdtlstransport.py", "codecs/vpx.py"):
+    stream_data.append((str(Path(aiortc_root) / relative), "aiortc/" + str(Path(relative).parent)))
 agent_pin_path = COMPANION / "packaging" / "agent-desktop-pin.json"
 agent_pin = json.loads(agent_pin_path.read_text(encoding="utf-8"))
 agent_license = ROOT / agent_pin["licenseFile"]

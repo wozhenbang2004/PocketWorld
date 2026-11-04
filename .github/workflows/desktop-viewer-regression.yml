@@ -6,6 +6,7 @@ on:
     types: [opened, synchronize, reopened]
     paths:
       - 'web-ui/src/desktop-viewer.ts'
+      - 'web-ui/src/DesktopViewer.tsx'
       - 'web-ui/tests/desktop-viewer*.test.ts'
       - '.github/workflows/desktop-viewer-regression.yml'
   workflow_dispatch:

@@ -785,14 +785,36 @@ i.load_existing_identity(sys.argv[1]).load_context(CrashBeforeLoad())
             db_a.close()
 
     def test_persisted_phone_task_grant_restores_only_original_sql_and_frozen_methods(self):
-        from cryptography.exceptions import InvalidSignature
         old_profile = "pwp1_953641fabc7e4316996f69c2c3ac9b74db1a30f3750ee83adbfd95768730ae8b"
+        self.assertEqual(old_profile, p.PERSISTED_PHONE_TASK_GRANT_PROFILE)
+        self._assert_persisted_grant_restores_only_original_sql_and_frozen_methods(old_profile)
+
+    def test_pre_viewer_grant_keeps_original_scope_and_cannot_gain_desktop_viewer(self):
+        old_profile = "pwp1_cdf06c78390cb32246ba396f9ab45ca88a7d6964591fa25f69ccd605d0c8b2a6"
+        self.assertEqual(old_profile, p.PERSISTED_PRE_VIEWER_GRANT_PROFILE)
+        self._assert_persisted_grant_restores_only_original_sql_and_frozen_methods(old_profile)
+
+    def test_released_desktop_viewer_grant_restores_exact_seventeen_methods(self):
+        old_profile = "pwp1_37a2c7990f46ec2f9ea27ac7223cd2a845eb8b7ff491a7ede3f2d31a626e6675"
+        self.assertEqual(old_profile, p.PERSISTED_DESKTOP_VIEWER_GRANT_PROFILE)
+        self._assert_persisted_grant_restores_only_original_sql_and_frozen_methods(old_profile, viewer=True)
+
+    def test_released_android_user_grant_restores_exact_seventeen_methods(self):
+        old_profile = "pwp1_94a3b250d77be4eadd62d184dfa70facfe4e78444f0cd80903d00e339ef25147"
+        self.assertEqual(old_profile, p.PERSISTED_ANDROID_USER_GRANT_PROFILE)
+        self.binding["androidUserId"] = 0
+        self._assert_persisted_grant_restores_only_original_sql_and_frozen_methods(old_profile, viewer=True)
+
+    def _assert_persisted_grant_restores_only_original_sql_and_frozen_methods(self, old_profile, viewer=False):
+        from cryptography.exceptions import InvalidSignature
         original_methods = {"device.describe", "tool.invoke", "operation.get", "operation.cancel", "task.submitGoal",
                             "task.get", "task.events", "task.respond", "task.pause", "task.cancel", "task.acquireControl",
                             "artifact.describe", "artifact.readChunk", "task.answerQuestion", "task.steer", "task.requestResume"}
         previous_methods = original_methods - {"task.answerQuestion", "task.steer", "task.requestResume"}
-        self.assertEqual(old_profile, p.PERSISTED_PHONE_TASK_GRANT_PROFILE)
         self.assertEqual(original_methods, p.PERSISTED_PHONE_TASK_GRANT_METHODS)
+        if viewer:
+            original_methods = original_methods | {"desktop.viewer"}
+            self.assertEqual(original_methods, p.PERSISTED_DESKTOP_VIEWER_GRANT_METHODS)
         invitation, _, _, local_a, receipt = self.pair(history=True)
         database = Path(self.scratch.name) / "fixture-only-retained-caller.sqlite3"
         connection = sqlite3.connect(database)
@@ -836,6 +858,13 @@ i.load_existing_identity(sys.argv[1]).load_context(CrashBeforeLoad())
             query.require_target_peer(self.peer_b, late)
             self.assertEqual(wire.PROFILE, query.envelope.get("protocolProfile"))
             self.assertNotIn("budget", query.envelope.json())
+            if "androidUserId" in self.binding:
+                omitted_user = {key: value for key, value in self.binding.items() if key != "androidUserId"}
+                for other_resource in (omitted_user, dict(self.binding, androidUserId=1)):
+                    with self.assertRaises(PermissionError):
+                        route.operation_cancel(self.a, "original-operation", "a" * 64, "wrong-user-stop", other_resource, self.now)
+                    with self.assertRaises(PermissionError):
+                        history.history_query(self.a, "operation.get", "original-operation", other_resource, late)
             with self.assertRaises(PermissionError):
                 caller.restore_outgoing_grant(self.peer_b, "grant-1", late)
             with self.assertRaises(PermissionError):
@@ -863,6 +892,8 @@ i.load_existing_identity(sys.argv[1]).load_context(CrashBeforeLoad())
                        (PermissionError, signed(dict(grant, authorizationEpoch=2))),
                        (PermissionError, signed(dict(grant, revoked=True))),
                        (PermissionError, signed(dict(grant, capabilities=sorted(original_methods | {"future.ownerControl"}))))]
+            if not viewer:
+                invalid.append((PermissionError, signed(dict(grant, capabilities=sorted(original_methods | {"desktop.viewer"})))))
             for expected, row in invalid:
                 with self.subTest(invalid=row["body"]["grant"]):
                     trust.put_outgoing_grant(self.b.device_id, "grant-1", row, received_at)

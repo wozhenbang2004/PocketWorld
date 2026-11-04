@@ -837,26 +837,6 @@
                     "type": "string",
                     "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
                   },
-                  "target": {
-                    "type": "object",
-                    "required": [
-                      "pid",
-                      "windowId"
-                    ],
-                    "properties": {
-                      "pid": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 9007199254740991
-                      },
-                      "windowId": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 9007199254740991
-                      }
-                    },
-                    "additionalProperties": false
-                  },
                   "offer": {
                     "type": "object",
                     "required": [
@@ -879,7 +859,60 @@
                     "type": "object"
                   },
                   "frameRef": {
-                    "type": "object"
+                    "type": "object",
+                    "properties": {
+                      "streamId": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "frameId": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 240
+                      },
+                      "geometryRevision": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 240
+                      },
+                      "width": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 16384
+                      },
+                      "height": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 16384
+                      },
+                      "capturedAt": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      "expiresAt": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      "rtpTimestamp": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4294967295
+                      }
+                    },
+                    "required": [
+                      "streamId",
+                      "frameId",
+                      "geometryRevision",
+                      "width",
+                      "height",
+                      "capturedAt",
+                      "expiresAt",
+                      "rtpTimestamp"
+                    ],
+                    "additionalProperties": false
                   },
                   "input": {
                     "type": "object"
@@ -887,164 +920,131 @@
                   "expectedRevision": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 10000
+                    "maximum": 9007199254740991
                   }
                 },
                 "additionalProperties": false,
                 "oneOf": [
                   {
-                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "const": "configuration"
+                      }
+                    },
                     "required": [
                       "action",
                       "viewerSessionId"
                     ],
-                    "properties": {
-                      "action": {
-                        "const": "configuration"
-                      },
-                      "viewerSessionId": {
-                        "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
-                      },
-                      "target": {
-                        "type": "object",
-                        "required": [
-                          "pid",
-                          "windowId"
-                        ],
-                        "properties": {
-                          "pid": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 9007199254740991
-                          },
-                          "windowId": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 9007199254740991
-                          }
-                        },
-                        "additionalProperties": false
-                      }
-                    },
-                    "additionalProperties": false
+                    "propertyNames": {
+                      "enum": [
+                        "action",
+                        "viewerSessionId"
+                      ]
+                    }
                   },
                   {
-                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "const": "negotiate"
+                      }
+                    },
                     "required": [
                       "action",
                       "viewerSessionId",
                       "offer"
                     ],
-                    "properties": {
-                      "action": {
-                        "const": "negotiate"
-                      },
-                      "viewerSessionId": {
-                        "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
-                      },
-                      "offer": {
-                        "type": "object",
-                        "required": [
-                          "type",
-                          "sdp"
-                        ],
-                        "properties": {
-                          "type": {
-                            "const": "offer"
-                          },
-                          "sdp": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 32768
-                          }
-                        },
-                        "additionalProperties": false
-                      }
-                    },
-                    "additionalProperties": false
+                    "propertyNames": {
+                      "enum": [
+                        "action",
+                        "viewerSessionId",
+                        "offer"
+                      ]
+                    }
                   },
                   {
-                    "type": "object",
-                    "required": [
-                      "action",
-                      "viewerSessionId",
-                      "streamId"
-                    ],
                     "properties": {
                       "action": {
                         "const": "status"
-                      },
-                      "viewerSessionId": {
-                        "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
-                      },
-                      "streamId": {
-                        "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
                       }
                     },
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "object",
                     "required": [
                       "action",
-                      "viewerSessionId",
-                      "streamId",
-                      "expectedRevision"
+                      "viewerSessionId"
                     ],
+                    "propertyNames": {
+                      "enum": [
+                        "action",
+                        "viewerSessionId",
+                        "streamId"
+                      ]
+                    }
+                  },
+                  {
+                    "properties": {
+                      "action": {
+                        "const": "close"
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "viewerSessionId"
+                    ],
+                    "propertyNames": {
+                      "enum": [
+                        "action",
+                        "viewerSessionId",
+                        "streamId"
+                      ]
+                    }
+                  },
+                  {
                     "properties": {
                       "action": {
                         "const": "take"
-                      },
-                      "viewerSessionId": {
-                        "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
-                      },
-                      "streamId": {
-                        "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
-                      },
-                      "expectedRevision": {
-                        "type": "integer",
-                        "minimum": 0,
-                        "maximum": 10000
                       }
                     },
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "object",
                     "required": [
                       "action",
                       "viewerSessionId",
                       "streamId",
                       "expectedRevision"
                     ],
+                    "propertyNames": {
+                      "enum": [
+                        "action",
+                        "viewerSessionId",
+                        "streamId",
+                        "expectedRevision"
+                      ]
+                    }
+                  },
+                  {
                     "properties": {
                       "action": {
                         "const": "release"
-                      },
-                      "viewerSessionId": {
-                        "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
-                      },
-                      "streamId": {
-                        "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
-                      },
-                      "expectedRevision": {
-                        "type": "integer",
-                        "minimum": 0,
-                        "maximum": 10000
                       }
                     },
-                    "additionalProperties": false
+                    "required": [
+                      "action",
+                      "viewerSessionId",
+                      "streamId",
+                      "expectedRevision"
+                    ],
+                    "propertyNames": {
+                      "enum": [
+                        "action",
+                        "viewerSessionId",
+                        "streamId",
+                        "expectedRevision"
+                      ]
+                    }
                   },
                   {
-                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "const": "input"
+                      }
+                    },
                     "required": [
                       "action",
                       "viewerSessionId",
@@ -1053,50 +1053,16 @@
                       "frameRef",
                       "input"
                     ],
-                    "properties": {
-                      "action": {
-                        "const": "input"
-                      },
-                      "viewerSessionId": {
-                        "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
-                      },
-                      "streamId": {
-                        "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
-                      },
-                      "controlLease": {
-                        "type": "object"
-                      },
-                      "frameRef": {
-                        "type": "object"
-                      },
-                      "input": {
-                        "type": "object"
-                      }
-                    },
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "object",
-                    "required": [
-                      "action",
-                      "viewerSessionId"
-                    ],
-                    "properties": {
-                      "action": {
-                        "const": "close"
-                      },
-                      "viewerSessionId": {
-                        "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
-                      },
-                      "streamId": {
-                        "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
-                      }
-                    },
-                    "additionalProperties": false
+                    "propertyNames": {
+                      "enum": [
+                        "action",
+                        "viewerSessionId",
+                        "streamId",
+                        "controlLease",
+                        "frameRef",
+                        "input"
+                      ]
+                    }
                   }
                 ]
               }
@@ -2952,51 +2918,169 @@
       "additionalProperties": false
     },
     "DesktopViewerReceipt": {
-      "type": "object",
-      "required": [
-        "viewerSessionId",
-        "operationId",
-        "status"
-      ],
-      "properties": {
-        "viewerSessionId": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+      "description": "Direct owner result with exact executor/session; close is terminal. SDP and ICE configuration are transient and never an Agent authority claim.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "viewerSessionId",
+            "operationId",
+            "status"
+          ],
+          "properties": {
+            "viewerSessionId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+            },
+            "operationId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+            },
+            "status": {
+              "const": "closed"
+            }
+          },
+          "additionalProperties": false
         },
-        "operationId": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
-        },
-        "status": {
-          "enum": [
-            "completed",
-            "unknown",
-            "failed"
-          ]
-        },
-        "expiresAt": {},
-        "width": {},
-        "height": {},
-        "control": {},
-        "state": {},
-        "streamId": {},
-        "answer": {},
-        "iceServers": {},
-        "bundlePolicy": {},
-        "transport": {},
-        "lastFrame": {},
-        "inputChannel": {},
-        "metadataChannel": {},
-        "reason": {},
-        "transportClosedVerified": {},
-        "target": {},
-        "frameRef": {},
-        "inputReceipt": {},
-        "noAutomaticReplay": {},
-        "message": {}
-      },
-      "additionalProperties": false,
-      "description": "Direct owner session receipt; not an Agent task, operation retry instruction or grant. SDP and TURN credentials are transient native UI data only."
+        {
+          "type": "object",
+          "required": [
+            "viewerSessionId",
+            "operationId",
+            "kind",
+            "deviceId",
+            "sessionId",
+            "resourceBinding",
+            "expiresAt",
+            "width",
+            "height",
+            "control",
+            "iceServers"
+          ],
+          "properties": {
+            "viewerSessionId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+            },
+            "operationId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+            },
+            "sessionId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+            },
+            "streamId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+            },
+            "kind": {
+              "const": "desktopSession"
+            },
+            "deviceId": {
+              "type": "string",
+              "pattern": "^pw1_[a-f0-9]{64}$"
+            },
+            "resourceBinding": {
+              "$ref": "#/$defs/DesktopResource"
+            },
+            "expiresAt": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "width": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16384
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16384
+            },
+            "control": {
+              "type": "object",
+              "required": [
+                "owner",
+                "revision"
+              ],
+              "properties": {
+                "owner": {
+                  "enum": [
+                    "none",
+                    "human",
+                    "agent",
+                    "other_human"
+                  ]
+                },
+                "revision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "needsReconcile": {
+                  "type": "boolean"
+                },
+                "lease": {
+                  "type": "object"
+                }
+              },
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "owner": {
+                        "enum": [
+                          "none",
+                          "agent",
+                          "other_human"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "not": {
+                      "required": [
+                        "lease"
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "iceServers": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "answer": {
+              "type": "object",
+              "required": [
+                "type",
+                "sdp"
+              ],
+              "properties": {
+                "type": {
+                  "const": "answer"
+                },
+                "sdp": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32768
+                }
+              },
+              "additionalProperties": false
+            },
+            "inputReceipt": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     }
   },
   "x-canonicalization": {
@@ -3057,6 +3141,8 @@
   "desktopViewerPolicy": {
     "authority": "Direct receiving-owner desktop.viewer grant, exact desktop resource, native owner-window session; never a model tool or fabricated Agent run.",
     "transport": "Owner actions use TaskStore persistent single-use send tickets; WebRTC media is separate from model observation.",
-    "control": "Human input and Agent leases are mutually exclusive. Input uses recent retained frame geometry, not a claim of exact rendered RTP pixels. Unknown actions are never replayed."
+    "control": "Human input and Agent leases are mutually exclusive. Inputs bind current decoded RTP pixels, original stream/frame/geometry and a live own lease. Unknown actions are never replayed; needsReconcile blocks taking or input but allows releasing the exact own lease.",
+    "frameDelivery": "Input binds the exact original stream/frame/geometry and actual emitted RTP timestamp to the current decoded browser frame; missing RTP proof is view-only. Metadata and encoded video may arrive in either order; old decoded frames cannot authorize new input.",
+    "budget": "Manual input consumes the original receiving grant lifetime tool pool in the same SQL operation claim; duplicate operations do not spend again, and unknown input is never refunded. Viewing/control negotiation creates no Agent run or fake task budget."
   }
 }

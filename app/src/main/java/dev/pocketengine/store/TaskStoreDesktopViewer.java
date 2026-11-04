@@ -27,7 +27,8 @@ public final class TaskStoreDesktopViewer {
         private final String id = UUID.randomUUID().toString(), binding;
         private final long expires;
         private final Current ownerCurrent;
-        private volatile boolean closed;
+        private volatile boolean closed, released;
+        private boolean cleanupPrepared;
         private int operations;
         private Session(DeviceIdentity.LocalIdentity local, PairingCoordinator.OutgoingGrant grant,
                 JSONObject binding, Current current) throws Exception {
@@ -41,28 +42,35 @@ public final class TaskStoreDesktopViewer {
         public long expiresAt() { return expires; }
         public JSONObject resourceBinding() throws Exception { return new JSONObject(binding); }
         public void require() throws Exception {
-            require(false);
+            ownerCurrent.require();
+            if (closed) throw new SecurityException("原桌面观看会话已关闭");
+            requireGrant();
         }
-        private void require(boolean cleanup) throws Exception {
-            if (!cleanup) ownerCurrent.require();
+        private void requireGrant() throws Exception {
             grant.checkCurrent(System.currentTimeMillis());
-            if (closed || System.currentTimeMillis() >= expires || !local.deviceId().equals(grant.grant().getString("peerDeviceId")))
+            if (released || System.currentTimeMillis() >= expires || !local.deviceId().equals(grant.grant().getString("peerDeviceId")))
                 throw new SecurityException("原桌面观看会话已关闭或过期");
             JSONObject actual = grant.grant();
             if (!contains(actual.getJSONArray("allowedOrigins"), local.deviceId())
                     || !contains(actual.getJSONArray("capabilities"), "desktop.viewer") || !containsResource(actual.getJSONArray("resources"), binding))
                 throw new SecurityException("电脑未授予当前准确范围的桌面观看与接管权限");
         }
-        public synchronized Send prepare(JSONObject input) throws Exception {
-            return prepare(input, false);
+        public Send prepare(JSONObject input) throws Exception {
+            synchronized (owner) { return prepare(input, false); }
         }
-        /** Only authority-reducing cleanup may outlive its original owner page. */
-        public synchronized Send prepareClose() throws Exception {
-            return prepare(new JSONObject().put("action", "close"), true);
+        /** Cleanup is one exact close on the already-granted session. It may outlive its page,
+         * but cannot create or replay input. Mark closed before the cleanup enters the queue. */
+        public Send prepareClose() throws Exception {
+            synchronized (owner) {
+                if (cleanupPrepared) throw new SecurityException("原桌面关闭已申请");
+                closed = true; cleanupPrepared = true;
+                return prepare(new JSONObject().put("action", "close"), true);
+            }
         }
         private Send prepare(JSONObject input, boolean cleanup) throws Exception {
-            require(cleanup);
-            if (++operations > 1200) throw new SecurityException("桌面会话操作窗口已满，请关闭后重新进入");
+            if (cleanup) requireGrant(); else require();
+            if (!cleanup && operations >= 1200) throw new SecurityException("桌面会话操作窗口已满，请关闭后重新进入");
+            operations++;
             String operation = UUID.randomUUID().toString();
             JSONObject args = new JSONObject(input.toString()).put("viewerSessionId", id);
             JSONObject wire = new JSONObject().put("protocolVersion", DeviceProtocol.VERSION).put("protocolProfile", DeviceProtocol.PROFILE)
@@ -76,12 +84,16 @@ public final class TaskStoreDesktopViewer {
             DeviceTaskEnvelope request = DeviceProtocol.parseRequest(DeviceProtocol.canonicalBytes(wire));
             Send send = new Send(this, request, cleanup);
             synchronized (owner) {
-                require(cleanup);
+                if (cleanup) requireGrant(); else require();
                 // Bounded metadata only: SDP, TURN credentials, input text and frames are never logged.
                 if (operations == 1 || operations % 64 == 0) {
                     try (Cursor expired = db.rawQuery("SELECT key,value FROM meta WHERE key LIKE ? LIMIT 4096", new String[]{PREFIX + "%"})) {
-                        while (expired.moveToNext()) if (new JSONObject(expired.getString(1)).optLong("expiresAt") < System.currentTimeMillis() - 86400000)
-                            db.delete("meta", "key=?", new String[]{expired.getString(0)});
+                        while (expired.moveToNext()) {
+                            JSONObject record = new JSONObject(expired.getString(1));
+                            String state = record.optString("state");
+                            long retainUntil = record.optLong("expiresAt") + (("write_claimed".equals(state) || "unknown".equals(state)) ? 86400000 : 0);
+                            if (retainUntil < System.currentTimeMillis()) db.delete("meta", "key=?", new String[]{expired.getString(0)});
+                        }
                     }
                 }
                 try (Cursor rows = db.rawQuery("SELECT count(*) FROM meta WHERE key LIKE ?", new String[]{PREFIX + "%"})) {
@@ -92,7 +104,7 @@ public final class TaskStoreDesktopViewer {
             }
             return send;
         }
-        @Override public void close() { closed = true; }
+        @Override public void close() { synchronized (owner) { closed = true; released = true; } }
     }
     public final class Send {
         private final Session session;
@@ -101,8 +113,7 @@ public final class TaskStoreDesktopViewer {
         private final String hash, key;
         private final boolean cleanup;
         private Send(Session session, DeviceTaskEnvelope request, boolean cleanup) {
-            this.cleanup = cleanup;
-            this.session = session; this.request = request; wire = DeviceProtocol.canonicalBytes(request.json());
+            this.cleanup = cleanup; this.session = session; this.request = request; wire = DeviceProtocol.canonicalBytes(request.json());
             hash = DeviceProtocol.sha256(wire); key = PREFIX + request.operationId();
         }
         public DeviceTaskEnvelope request() { return request; }
@@ -111,7 +122,8 @@ public final class TaskStoreDesktopViewer {
         byte[] bytes() { return wire.clone(); }
         byte[] claim(DeviceIdentity.AuthenticatedPeer actual) throws Exception {
             synchronized (owner) {
-                session.require(cleanup); session.grant.requireTargetPeer(actual);
+                if (cleanup) session.requireGrant(); else session.require();
+                session.grant.requireTargetPeer(actual);
                 db.beginTransaction();
                 try {
                     JSONObject record = read(key);
@@ -133,7 +145,23 @@ public final class TaskStoreDesktopViewer {
             }
         }
         public void accept(DeviceIdentity.AuthenticatedPeer actual, JSONObject response) throws Exception {
-            session.require(cleanup); session.grant.requireTargetPeer(actual); DeviceProtocol.validateMessage(response);
+            if (cleanup) session.requireGrant(); else session.require();
+            session.grant.requireTargetPeer(actual); DeviceProtocol.validateMessage(response);
+            if ("DeviceError".equals(response.optString("messageType"))) {
+                if (!request.requestId().equals(response.optString("requestId"))
+                        || response.has("method") && !request.method().equals(response.optString("method"))
+                        || response.has("executorDeviceId") && !session.deviceId().equals(response.optString("executorDeviceId"))
+                        || response.has("instanceId") && !session.grant.targetInstanceId().equals(response.optString("instanceId")))
+                    throw new SecurityException("桌面错误回执不属于原请求与设备");
+                JSONObject error = response.getJSONObject("error");
+                synchronized (owner) {
+                    JSONObject record = read(key);
+                    if (!"write_claimed".equals(record.optString("state"))) throw new SecurityException("桌面回执缺少原发送记录");
+                    write(key, record.put("state", "unknown".equals(error.getString("effectState")) ? "unknown" : "rejected")
+                            .put("status", "peer_error"));
+                }
+                throw new java.io.IOException("电脑未确认本次桌面操作：" + error.getString("message"));
+            }
             if (!"DeviceResponse".equals(response.optString("messageType")) || !request.requestId().equals(response.optString("requestId"))
                     || !request.method().equals(response.optString("method")) || !session.deviceId().equals(response.optString("executorDeviceId"))
                     || !session.grant.targetInstanceId().equals(response.optString("instanceId"))) throw new SecurityException("桌面回执不是原请求/设备实例");
@@ -143,7 +171,7 @@ public final class TaskStoreDesktopViewer {
             synchronized (owner) {
                 JSONObject record = read(key);
                 if (!"write_claimed".equals(record.optString("state"))) throw new SecurityException("桌面回执缺少原发送记录");
-                write(key, record.put("state", "receipt").put("status", result.optString("status", "reported")));
+                write(key, record.put("state", "receipt").put("status", "received"));
             }
         }
     }
@@ -159,7 +187,8 @@ public final class TaskStoreDesktopViewer {
     }
     private void write(String key, JSONObject value) {
         ContentValues row = new ContentValues(); row.put("key", key); row.put("value", value.toString());
-        db.insertWithOnConflict("meta", null, row, SQLiteDatabase.CONFLICT_REPLACE);
+        if (db.insertWithOnConflict("meta", null, row, SQLiteDatabase.CONFLICT_REPLACE) == -1)
+            throw new IllegalStateException("原桌面发送记录未持久化，未允许派发");
     }
     private static boolean contains(JSONArray list, String wanted) { for (int i=0;i<list.length();i++) if (wanted.equals(list.optString(i))) return true; return false; }
     private static boolean containsResource(JSONArray list, String binding) { for (int i=0;i<list.length();i++) if (binding.equals(DeviceProtocol.canonical(list.opt(i)))) return true; return false; }

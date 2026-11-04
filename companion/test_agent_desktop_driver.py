@@ -133,7 +133,9 @@ class SemanticCompositionTests(unittest.TestCase):
         self.assertEqual([], secret["actions"])
         self.native.secure = False
         self.native.identity_unproven = True
-        observed = self.observe()
+        with self.assertRaisesRegex(DesktopError, "Complete native UIA"):
+            self.observe()
+        observed = self.observe("hybrid")
         with self.assertRaises(CuaError):
             self.adapter.act(self.binding, observed["observationRef"], "peer-A",
                 {"kind": "click", "lease": lease, "elementToken": self.element(observed, "Button")["element_token"]}, self.metadata, self.current, lambda: None)
@@ -142,6 +144,15 @@ class SemanticCompositionTests(unittest.TestCase):
         with self.assertRaises(DesktopError):
             self.adapter.act(self.binding, observed["observationRef"], "peer-A",
                 {"kind": "set_text", "lease": lease, "elementToken": self.element(observed, "Edit")["element_token"], "text": "x"}, self.metadata, self.current, lambda: None)
+        self.assertFalse(any(mutation for _, mutation in self.native.calls))
+
+    def test_incomplete_semantic_tree_requires_explicit_image_observation(self):
+        self.native.complete = False
+        with self.assertRaisesRegex(DesktopError, "hybrid.*visual"):
+            self.observe()
+        observed = self.observe("hybrid")
+        self.assertIn("image", observed)
+        self.assertFalse(observed["state"]["elements_complete"])
         self.assertFalse(any(mutation for _, mutation in self.native.calls))
 
     def test_actual_dispositions_do_not_turn_error_into_no_effect(self):

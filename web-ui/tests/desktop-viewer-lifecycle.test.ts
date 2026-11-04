@@ -29,7 +29,8 @@ class Peer extends EventTarget {
 }
 
 function fixture(autoConnect = true) {
-  let now = START, sequence = 0;
+  let now = START, sequence = 0, frameSequence = 0;
+  let latestFrame: { streamId: string; rtpTimestamp: number } | null = null;
   const calls: { action: string; args: any }[] = [], peers: Peer[] = [], streams: unknown[] = [];
   const sessions = new Map<string, any>();
   const delayed = new Set<string>();
@@ -50,7 +51,7 @@ function fixture(autoConnect = true) {
     }
     if (action === 'devices.desktop.control') {
       value.control = { owner: args.action === 'take' ? 'human' : 'none', revision: value.control.revision + 1,
-        ...(args.action === 'take' ? { lease: { id: 'lease-' + args.sessionId } } : {}) };
+        ...(args.action === 'take' ? { lease: { id: 'lease-' + args.sessionId, fence: value.control.revision + 1, expiresAt: START + 600_000, resource: 'windows-session:1:primary' } } : {}) };
       return { value };
     }
     if (action === 'devices.desktop.input') return { value: { ...value, inputReceipt: { status: 'completed', inputDispatched: true } } };
@@ -66,9 +67,13 @@ function fixture(autoConnect = true) {
     clock: () => now, onChange: () => {}, onStream: stream => streams.push(stream),
     createPeer: () => { const peer = new Peer(); peer.autoConnect = autoConnect; peers.push(peer); return peer as any; },
   });
-  const metadata = (geometryRevision = 'geometry-1') => ({ type: 'frame', streamId: owner.state.session!.streamId,
-    frameId: 'frame-' + (++now), capturedAt: now, expiresAt: now + 2000, width: 1280, height: 800, geometryRevision });
-  const fresh = () => { const value = metadata(); owner.receiveFrame(value); owner.decodedFrame(1280, 800); return value; };
+  const metadata = (geometryRevision = 'geometry-1') => {
+    const value = { type: 'frame', streamId: owner.state.session!.streamId!,
+      frameId: 'frame-' + (++now), capturedAt: now, expiresAt: now + 2000, width: 1280, height: 800, geometryRevision, rtpTimestamp: ++frameSequence * 9000 };
+    latestFrame = value; return value;
+  };
+  const decode = () => owner.decodedFrame(1280, 800, latestFrame!.streamId, latestFrame!.rtpTimestamp);
+  const fresh = () => { const value = metadata(); owner.receiveFrame(value); decode(); return value; };
   const attach = () => {
     const track = new VideoTrack();
     peers.at(-1)!.ontrack({ track, streams: [{ getTracks: () => [track], getVideoTracks: () => [track] }] });
@@ -80,7 +85,7 @@ function fixture(autoConnect = true) {
   };
   const inputCount = () => calls.filter(c => c.action === 'devices.desktop.input').length;
   const closeIds = () => calls.filter(c => c.action === 'devices.desktop.close').map(c => c.args.sessionId);
-  return { owner, peers, streams, calls, delayed, pending, metadata, fresh, attach, settle, inputCount, closeIds, advance: (ms: number) => { now += ms; } };
+  return { owner, peers, streams, calls, delayed, pending, metadata, decode, fresh, attach, settle, inputCount, closeIds, advance: (ms: number) => { now += ms; } };
 }
 
 async function human(h: ReturnType<typeof fixture>) {
@@ -88,7 +93,7 @@ async function human(h: ReturnType<typeof fixture>) {
   assert.equal(h.owner.canInput(), true);
 }
 
-test('control handoff needs a decoded frame after the new metadata, not the pre-handoff picture', async () => {
+test('control handoff needs a new exact decoded RTP pair, not the pre-handoff picture', async () => {
   const h = fixture();
   try {
     await h.owner.open('pc', scope); h.fresh(); await h.owner.control('take');
@@ -96,7 +101,7 @@ test('control handoff needs a decoded frame after the new metadata, not the pre-
     assert.equal(h.owner.canInput(), false);
     assert.equal(await h.owner.input({ kind: 'press_key', key: 'enter' }), false);
     assert.equal(h.inputCount(), 0);
-    h.owner.decodedFrame(1280, 800); assert.equal(h.owner.canInput(), true);
+    h.decode(); assert.equal(h.owner.canInput(), true);
   } finally { h.owner.dispose(); }
 });
 
@@ -105,7 +110,7 @@ test('a same-size geometry change cannot inherit the previous decoded picture', 
   try {
     await human(h); h.owner.receiveFrame(h.metadata('window-moved'));
     assert.equal(h.owner.canInput(), false);
-    h.owner.decodedFrame(1280, 800); assert.equal(h.owner.canInput(), true);
+    h.decode(); assert.equal(h.owner.canInput(), true);
   } finally { h.owner.dispose(); }
 });
 
@@ -113,7 +118,7 @@ test('duplicate metadata cannot renew an expired frame by its arrival time', asy
   const h = fixture();
   try {
     await human(h); const value = h.fresh(); h.advance(2001);
-    h.owner.decodedFrame(1280, 800); h.owner.receiveFrame(value);
+    h.decode(); h.owner.receiveFrame(value);
     assert.equal(h.owner.canInput(), false);
     assert.equal(await h.owner.input({ kind: 'press_key', key: 'enter' }), false);
     assert.equal(h.inputCount(), 0);
@@ -127,7 +132,7 @@ test('frames delivered during a disconnect never unlock input after transport re
     await human(h); h.peers[0].connect('disconnected');
     const duringOutage = h.fresh(); h.peers[0].connect('connected');
     assert.equal(h.owner.canInput(), false);
-    h.owner.receiveFrame(duringOutage); h.owner.decodedFrame(1280, 800);
+    h.owner.receiveFrame(duringOutage); h.decode();
     assert.equal(h.owner.canInput(), false, 'Disconnected metadata is retired, not reaccepted after reconnect');
     h.fresh(); assert.equal(h.owner.canInput(), true);
   } finally { h.owner.dispose(); }
@@ -192,7 +197,7 @@ test('muted remote track disables input until unmuted and freshly decoded', asyn
     h.fresh(); assert.equal(h.owner.canInput(), false);
     track.mute(false); assert.equal(h.owner.canInput(), false);
     h.owner.receiveFrame(h.metadata()); assert.equal(h.owner.canInput(), false);
-    h.owner.decodedFrame(1280, 800); assert.equal(h.owner.canInput(), true);
+    h.decode(); assert.equal(h.owner.canInput(), true);
   } finally { h.owner.dispose(); }
 });
 
@@ -217,6 +222,51 @@ test('a healthy viewer cancels the startup deadline instead of closing at 45 sec
   try {
     await human(h); t.mock.timers.tick(45_000);
     assert.equal(h.owner.state.phase, 'live'); assert.deepEqual(h.closeIds(), []);
+  } finally { h.owner.dispose(); }
+});
+
+for (const identity of ['missing-metadata', 'missing-decoded', 'mismatched'] as const) {
+  for (const order of ['metadata-first', 'decoded-first'] as const) {
+    test(`continuous watch-only playback survives startup and stall deadlines with ${identity} RTP identity, ${order}`, async t => {
+      t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+      const h = fixture();
+      try {
+        await h.owner.open('pc', scope);
+        for (let i = 0; i < 50; i++) {
+          h.advance(1000); const value = h.metadata();
+          const metadata = () => h.owner.receiveFrame(identity === 'missing-metadata' ? { ...value, rtpTimestamp: undefined } : value);
+          const decoded = () => h.owner.decodedFrame(value.width, value.height, value.streamId,
+            identity === 'missing-decoded' ? undefined : value.rtpTimestamp + (identity === 'mismatched' ? 1 : 0));
+          // Either transport may arrive first. Retiring input evidence after a
+          // decode must preserve the independent observation of live playback.
+          if (order === 'metadata-first') { metadata(); decoded(); }
+          else { decoded(); metadata(); }
+          t.mock.timers.tick(1000); await Promise.resolve();
+          assert.equal(h.owner.state.phase, 'live');
+          assert.equal(h.owner.state.frameReady, false);
+          assert.equal(h.owner.canInput(), false);
+        }
+        assert.equal(h.owner.state.frameIssue, identity === 'mismatched' ? 'unmatched' : 'unavailable');
+        await h.owner.control('take');
+        assert.equal(h.calls.some(call => call.action === 'devices.desktop.control'), false);
+        assert.equal(await h.owner.input({ kind: 'press_key', key: 'enter' }), false);
+        assert.equal(h.inputCount(), 0); assert.deepEqual(h.closeIds(), []);
+      } finally { h.owner.dispose(); }
+    });
+  }
+}
+
+test('watch-only playback still closes a genuinely stalled video after a bounded interval', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const h = fixture();
+  try {
+    await h.owner.open('pc', scope);
+    h.owner.decodedFrame(1280, 800, h.owner.state.session!.streamId);
+    assert.equal(h.owner.state.frameIssue, 'unavailable');
+    h.advance(2000); t.mock.timers.tick(1000);
+    h.advance(10_000); t.mock.timers.tick(10_000);
+    assert.equal(h.owner.state.phase, 'failed'); assert.match(h.owner.state.error, /持续未更新/);
+    assert.deepEqual(h.closeIds(), ['view-1']); assert.equal(h.inputCount(), 0);
   } finally { h.owner.dispose(); }
 });
 

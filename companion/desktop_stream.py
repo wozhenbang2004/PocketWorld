@@ -14,7 +14,6 @@ import asyncio
 from collections import OrderedDict
 from concurrent.futures import Future, TimeoutError as FutureTimeout
 import copy
-import ctypes
 from dataclasses import dataclass, field
 from fractions import Fraction
 import hashlib
@@ -158,77 +157,12 @@ def _geometry(health, identity, bounds, display, width, height):
     return hashlib.sha256(json.dumps(geometry, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-class _BitmapInfoHeader(ctypes.Structure):
-    _fields_ = [("size", ctypes.c_uint32), ("width", ctypes.c_int32), ("height", ctypes.c_int32),
-                ("planes", ctypes.c_uint16), ("bitCount", ctypes.c_uint16), ("compression", ctypes.c_uint32),
-                ("sizeImage", ctypes.c_uint32), ("xPixelsPerMeter", ctypes.c_int32), ("yPixelsPerMeter", ctypes.c_int32),
-                ("colorsUsed", ctypes.c_uint32), ("colorsImportant", ctypes.c_uint32)]
-
-
-def _window_capture_native():
-    user = ctypes.WinDLL("user32", use_last_error=True)
-    gdi = ctypes.WinDLL("gdi32", use_last_error=True)
-    user.PrintWindow.argtypes, user.PrintWindow.restype = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32], ctypes.c_int
-    gdi.CreateCompatibleDC.argtypes, gdi.CreateCompatibleDC.restype = [ctypes.c_void_p], ctypes.c_void_p
-    gdi.CreateDIBSection.argtypes = [ctypes.c_void_p, ctypes.POINTER(_BitmapInfoHeader), ctypes.c_uint32,
-                                   ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.c_uint32]
-    gdi.CreateDIBSection.restype = ctypes.c_void_p
-    gdi.SelectObject.argtypes, gdi.SelectObject.restype = [ctypes.c_void_p, ctypes.c_void_p], ctypes.c_void_p
-    gdi.DeleteObject.argtypes, gdi.DeleteObject.restype = [ctypes.c_void_p], ctypes.c_int
-    gdi.DeleteDC.argtypes, gdi.DeleteDC.restype = [ctypes.c_void_p], ctypes.c_int
-    gdi.GdiFlush.argtypes, gdi.GdiFlush.restype = [], ctypes.c_int
-    return user, gdi
-
-
-def _capture_window(window_id, bounds):
-    """Capture the full authorized HWND, including non-client window geometry.
-
-    Pillow 13's HWND grab uses GetClientRect/BitBlt; it cannot represent the
-    GetWindowRect physical viewport used by input. PrintWindow asks the owning
-    application to render into a bounded DIB, without copying overlaid windows.
-    It may block: the service's single bounded daemon worker owns this call.
-    """
-    from PIL import Image
-    width, height = bounds[2] - bounds[0], bounds[3] - bounds[1]
-    if min(width, height) <= 0 or width * height > MAX_NATIVE_PIXELS:
-        raise DesktopStreamError("Viewer window capture dimensions exceed their bound", 409)
-    user, gdi = _window_capture_native()
-    context = gdi.CreateCompatibleDC(None)
-    if not context:
-        raise DesktopStreamError("Viewer window capture context is unavailable", 409)
-    bitmap = previous = None
-    try:
-        info = _BitmapInfoHeader()
-        info.size, info.width, info.height = ctypes.sizeof(info), width, -height  # top-down physical pixels
-        info.planes, info.bitCount, info.compression = 1, 32, 0  # BI_RGB / BGRX
-        info.sizeImage = width * height * 4
-        bits = ctypes.c_void_p()
-        bitmap = gdi.CreateDIBSection(context, ctypes.byref(info), 0, ctypes.byref(bits), None, 0)
-        if not bitmap or not bits.value:
-            raise DesktopStreamError("Viewer window pixel buffer is unavailable", 409)
-        previous = gdi.SelectObject(context, bitmap)
-        if not previous or previous == ctypes.c_void_p(-1).value:
-            previous = None
-            raise DesktopStreamError("Viewer window pixel buffer could not be selected", 409)
-        # PW_RENDERFULLCONTENT (Windows 8.1+, also used by Chromium) includes
-        # DirectComposition content; do not set PW_CLIENTONLY. No BitBlt fallback.
-        if not user.PrintWindow(window_id, context, 2) or not gdi.GdiFlush():
-            raise DesktopStreamError("Authorized window did not provide a native capture", 409)
-        raw = ctypes.string_at(bits, info.sizeImage)
-        return Image.frombytes("RGB", (width, height), raw, "raw", "BGRX", 0, 1)
-    finally:
-        if previous is not None:
-            gdi.SelectObject(context, previous)
-        if bitmap:
-            gdi.DeleteObject(bitmap)
-        gdi.DeleteDC(context)
-
-
 class PillowDesktopCapture:
-    """Native full-window/primary-display capture with prepared Pillow scaling.
+    """Use the prepared Pillow Windows capture, never crop another app's screen.
 
-    A window grant uses PrintWindow, never a screen rectangle which could reveal
-    another app covering it. Native dimensions are checked before RGB scaling.
+    A window grant uses ImageGrab's HWND path (PrintWindow), not a rectangle of
+    the desktop where an unrelated foreground window might cover the target.
+    Native dimensions are checked before scaling; unsupported captures fail.
     """
 
     def __call__(self, target, bounds, max_edge):
@@ -238,7 +172,7 @@ class PillowDesktopCapture:
         if target is None:
             image = ImageGrab.grab(include_layered_windows=True, all_screens=False)
         else:
-            image = _capture_window(target["windowId"], bounds)
+            image = ImageGrab.grab(window=target["windowId"])
         try:
             if image.size != (bounds[2] - bounds[0], bounds[3] - bounds[1]):
                 raise DesktopStreamError("Native viewer capture dimensions differ from the granted geometry", 409)
@@ -263,6 +197,7 @@ class _Captured:
     display: dict
     identity: dict
     captured_at: int
+    input_revision: int = 0
 
 
 class _CaptureWorker:
@@ -347,6 +282,8 @@ class _Session:
     track: object = None
     channel: object = None
     sequence: int = 0
+    input_revision: int = 0
+    frame_observer: object = None
     frames: OrderedDict = field(default_factory=OrderedDict)
     last_frame: dict | None = None
 
@@ -358,9 +295,10 @@ def _load_rtc():
         from av import VideoFrame
     except (ImportError, OSError) as failure:
         raise DesktopStreamError("Prepared aiortc/PyAV desktop streaming dependencies are unavailable", 409) from failure
+    from desktop_rtp import TransmittedFrameObserver
     return {"configuration": RTCConfiguration, "iceServer": RTCIceServer, "peer": RTCPeerConnection,
             "description": RTCSessionDescription, "track": VideoStreamTrack,
-            "mediaError": MediaStreamError, "frame": VideoFrame}
+            "mediaError": MediaStreamError, "frame": VideoFrame, "frameObserver": TransmittedFrameObserver}
 
 
 def runtime_probe():
@@ -371,6 +309,8 @@ def runtime_probe():
     keyframe so a frozen executable missing native DLLs cannot pass on --help.
     """
     rtc = _load_rtc()
+    from desktop_rtp import verify_runtime_contract
+    verify_runtime_contract()
     from aiortc.codecs import CODECS, get_encoder
     from PIL import Image
     codec = next(codec for codec in CODECS["video"] if codec.mimeType.lower() == "video/vp8")
@@ -391,7 +331,7 @@ def runtime_probe():
 
 class DesktopStreamService:
     def __init__(self, health, *, ice_servers=(), capture=None, clock=None, fps=10, max_edge=1200,
-                 rtc_loader=None, negotiation_timeout=15.0, capture_timeout=2.0):
+                 rtc_loader=None, negotiation_timeout=15.0, capture_timeout=2.0, on_terminal=None):
         self.health = health
         self.capture = capture if capture is not None else PillowDesktopCapture()
         self.clock = clock if clock is not None else lambda: int(time.time() * 1000)
@@ -407,6 +347,7 @@ class DesktopStreamService:
         self.thread = None
         self.worker = None
         self.closed = False
+        self.on_terminal = on_terminal
 
     def describe(self):
         missing = [name for name in ("aiortc", "av", "PIL") if importlib.util.find_spec(name) is None]
@@ -486,6 +427,8 @@ class DesktopStreamService:
         return health, bounds, display
 
     def _capture_frame(self, session):
+        with self.lock:
+            input_revision = session.input_revision
         before, bounds, display = self._health(session)
         image = self.capture(session.target, bounds, self.max_edge)
         try:
@@ -495,11 +438,12 @@ class DesktopStreamService:
                 raise DesktopStreamError("Viewer capture did not return a bounded RGB video frame", 409)
             after, after_bounds, after_display = self._health(session)
             if (_geometry(before, session.identity, bounds, display, image.width, image.height)
-                    != _geometry(after, session.identity, after_bounds, after_display, image.width, image.height)
-                    or before.get("binding") != after.get("binding")
-                    or before.get("lastInputTick") != after.get("lastInputTick")):
+                    != _geometry(after, session.identity, after_bounds, after_display, image.width, image.height)):
                 raise _GeometryChanged("Viewer geometry changed during capture", 409)
-            return _Captured(image, after, bounds, display, session.identity, self.clock())
+            with self.lock:
+                if session.input_revision != input_revision:
+                    raise _GeometryChanged("Viewer control changed during capture", 409)
+            return _Captured(image, after, bounds, display, session.identity, self.clock(), input_revision)
         except BaseException:
             image.close()
             raise
@@ -537,7 +481,8 @@ class DesktopStreamService:
                         pts = max(self.last_pts + 1, int((time.monotonic() - self.started) * 90000))
                         self.last_pts = pts
                         frame.pts, frame.time_base = pts, Fraction(1, 90000)
-                        service._publish(session, captured)
+                        if session.frame_observer is not None:
+                            session.frame_observer.capture(frame, captured)
                         return frame
                     finally:
                         captured.image.close()
@@ -552,15 +497,18 @@ class DesktopStreamService:
 
         return ViewerTrack()
 
-    def _publish(self, session, captured):
+    def _publish(self, session, captured, rtp_timestamp):
         with self.lock:
             self._authorize(session)
+            if captured.input_revision != session.input_revision or captured.captured_at + FRAME_TTL_MS <= self.clock():
+                return  # A pre-handoff capture cannot mint a post-handoff input reference.
+            _integer(rtp_timestamp, 0, 4294967295, "rtpTimestamp")
             session.sequence += 1
             frame_id = uuid.uuid4().hex
             revision = _geometry(captured.health, captured.identity, captured.bounds, captured.display,
                                  captured.image.width, captured.image.height)
             reference = {"streamId": session.id, "frameId": frame_id, "width": captured.image.width,
-                         "height": captured.image.height, "geometryRevision": revision,
+                         "height": captured.image.height, "geometryRevision": revision, "rtpTimestamp": rtp_timestamp,
                          "capturedAt": captured.captured_at,
                          "expiresAt": min(captured.captured_at + FRAME_TTL_MS, session.expires_at)}
             cutoff = self.clock()
@@ -624,9 +572,18 @@ class DesktopStreamService:
             async def negotiate():
                 await pc.setRemoteDescription(rtc["description"](sdp=offer["sdp"], type="offer"))
                 self._authorize(session)
-                pc.addTrack(track)
+                sender = pc.addTrack(track)
+                def no_input_mapping():
+                    with self.lock:
+                        session.input_revision += 1
+                        session.frames.clear()
+                        session.last_frame = None
+                session.frame_observer = rtc["frameObserver"](sender, lambda captured, timestamp: self._publish(session, captured, timestamp), no_input_mapping)
                 for transceiver in pc.getTransceivers():
                     transceiver.direction = "sendonly" if transceiver.kind == "video" else "inactive"
+                    if transceiver.kind == "video" and sender is not None:
+                        transceiver.setCodecPreferences([codec for codec in sender.getCapabilities("video").codecs
+                                                         if codec.mimeType.lower() in {"video/vp8", "video/rtx"}])
                 await pc.setLocalDescription(await pc.createAnswer())
                 self._authorize(session)
 
@@ -656,6 +613,7 @@ class DesktopStreamService:
         return {"streamId": session.id, "transport": "webrtc", "state": session.state, "reason": session.reason,
                 "expiresAt": session.expires_at, "target": copy.deepcopy(session.target),
                 "lastFrame": copy.deepcopy(session.last_frame), "inputChannel": False,
+                "inputFrameMapping": bool(session.frame_observer is not None and session.frame_observer.available),
                 "metadataChannel": METADATA_CHANNEL, "transportClosedVerified": session.transport_closed}
 
     def status(self, stream_id, owner, binding, current):
@@ -681,15 +639,13 @@ class DesktopStreamService:
         revision = _geometry(health, session.identity, bounds, display, frame_ref["width"], frame_ref["height"])
         if revision != frame_ref["geometryRevision"] or bounds != frame["bounds"]:
             raise DesktopStreamError("Viewer geometry changed; wait for the current frame before input", 409)
-        if (health.get("binding") != frame["health"].get("binding")
-                or health.get("lastInputTick") != frame["health"].get("lastInputTick")):
-            raise DesktopStreamError("Viewer foreground or local input changed; wait for a current frame before input", 409)
         current()
         with self.lock:
             self._authorize(session)
             if frame_ref.get("frameId") not in session.frames:
                 raise DesktopStreamError("Viewer input was invalidated by a control handoff", 409)
         return {"target": copy.deepcopy(session.target), "healthBinding": copy.deepcopy(health),
+                "observedHealth": copy.deepcopy(frame["health"]),
                 "captureBounds": bounds, "width": frame_ref["width"], "height": frame_ref["height"],
                 "geometryRevision": revision, "frameId": frame_ref["frameId"],
                 "capturedAt": frame_ref["capturedAt"], "expiresAt": frame_ref["expiresAt"]}
@@ -698,6 +654,7 @@ class DesktopStreamService:
         session = self._get(stream_id, owner, binding, current)
         with self.lock:
             self._authorize(session)
+            session.input_revision += 1
             session.frames.clear()
             session.last_frame = None
 
@@ -708,13 +665,23 @@ class DesktopStreamService:
         return self._status(session)
 
     def _mark_terminal(self, session, state, reason):
+        changed = False
         with self.lock:
             if session.state not in TERMINAL_STATES:
                 session.state, session.reason, session.ended_at = state, reason, self.clock()
+                changed = True
+            session.input_revision += 1
             session.frames.clear()
             session.last_frame = None
         if session.track is not None:
             session.track.stop()
+        if changed and callable(self.on_terminal):
+            # The owner callback never blocks on an input worker or calls back
+            # into this media loop. A busy/unknown lease stays fenced.
+            try:
+                self.on_terminal(session.id, session.owner)
+            except Exception:
+                pass
 
     async def _close_peer(self, session):
         if session.pc is not None:
@@ -750,6 +717,9 @@ class DesktopStreamService:
                 sessions = list(self.sessions.values())
             for session in sessions:
                 if session.state in TERMINAL_STATES:
+                    continue
+                if session.track is not None and session.track.readyState != "live":
+                    await self._end(session, "failed", "video_sender_stopped")
                     continue
                 try:
                     self._authorize(session)

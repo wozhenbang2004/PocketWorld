@@ -1,302 +1,398 @@
 package dev.pocketengine.features.devices;
 
-import com.sun.net.httpserver.HttpServer;
-import dev.pocketengine.core.CapabilityPort;
-import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
-import dev.pocketengine.runtime.AgentRunner;
-import java.net.InetSocketAddress;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicLong;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
 import static org.junit.Assert.*;
 
-/** Actual semantic delivery gate and Runner/HTTP projection. Native PC receipts
- * are explicit fixtures; these tests do not claim mTLS, UIA or physical input. */
+/** The real native delivery gate with already-authenticated receipt fixtures.
+ * This is not a Windows, model transport, SQL or device integration test. */
 public final class DeviceSemanticObservationsTest {
-    private static final String ROUTE = "fixture-original-route";
-    private static final String DEVICE = "pw1_" + "1".repeat(64);
+    private static final String ROUTE = "desktop-window-a";
+    private static final String DEVICE = "pw1_" + "a".repeat(64);
 
-    private static JSONObject copy(JSONObject value) throws Exception { return new JSONObject(value.toString()); }
-    private static JSONObject wire(String operation) throws Exception {
-        return new JSONObject().put("operationId", operation).put("targetDeviceId", DEVICE)
-                .put("deadline", System.currentTimeMillis() + 60000);
+    private static RunControl run() {
+        RunControl control = new RunControl();
+        control.bindHostRun("original-task", "original-run", 1);
+        return control;
     }
-    private static JSONObject observation(String id, long captured) throws Exception {
-        JSONObject reference = new JSONObject().put("id", id).put("sessionId", 1).put("displayId", "primary")
-                .put("windowId", 456).put("binding", "fixture-native-binding").put("driverGeneration", "a".repeat(32))
-                .put("capturedAt", captured).put("expiresAt", captured + 30000);
-        JSONObject state = new JSONObject().put("pid", 123).put("window_id", 456).put("snapshot_id", "s1234abcd")
-                .put("window_title", "Fixture editor").put("semantic_provider", "agent-desktop")
-                .put("elements_complete", true).put("elements", new JSONArray().put(new JSONObject()
-                        .put("element_token", "s1234abcd:1").put("role", "Edit").put("label", "Document")
-                        .put("value", "真实结构 fixture").put("enabled", true).put("actions", new JSONArray().put("set_value"))));
-        return new JSONObject().put("observationMode", "semantic").put("observationRef", reference)
-                .put("coordinateSpace", "uia_elements").put("state", state).put("businessResultVerified", false);
-    }
-    private static JSONObject receipt(String operation, JSONObject observation) throws Exception {
+
+    private static JSONObject receipt(String operation, String id, long captured) throws Exception {
+        JSONObject ref = new JSONObject().put("id", id).put("sessionId", 1).put("displayId", "primary")
+                .put("windowId", 10).put("binding", new JSONObject().put("nativeWindow", 10))
+                .put("driverGeneration", "b".repeat(32)).put("capturedAt", captured).put("expiresAt", captured + 30000);
+        JSONObject state = new JSONObject().put("snapshot_id", id).put("semantic_provider", "agent-desktop")
+                .put("elements_complete", true).put("truncated", false).put("identity_unproven", false)
+                .put("elements", new JSONArray().put(new JSONObject().put("element_token", "s12345678:0")
+                        .put("label", "Save").put("role", "Button").put("enabled", true)
+                        .put("actions", new JSONArray().put("invoke"))));
         return new JSONObject().put("messageType", "OperationReceipt").put("operationId", operation)
-                .put("executorDeviceId", DEVICE).put("state", "succeeded").put("terminal", true)
-                .put("payload", observation);
-    }
-    private static JSONArray messages(String role, Object content) throws Exception {
-        return new JSONArray().put(new JSONObject().put("role", role).put("tool_call_id", "fixture-call")
-                .put("content", content));
-    }
-    private static final class Fixture implements AutoCloseable {
-        final RunControl control = new RunControl();
-        final DeviceSemanticObservations gate = new DeviceSemanticObservations(control);
-        final long base = System.currentTimeMillis() - 1000;
-        boolean current = true;
-        void requireCurrent() throws Exception {
-            control.check();
-            if (!current || control.isPaused()) throw new SecurityException("Fixture original grant/run revoked");
-        }
-        JSONObject capture(String operation, String id, long captured) throws Exception {
-            JSONObject result = receipt(operation, observation(id, captured));
-            gate.capture(ROUTE, wire(operation), result, this::requireCurrent);
-            return result;
-        }
-        JSONObject ref(JSONObject result) throws Exception { return result.getJSONObject("payload").getJSONObject("observationRef"); }
-        JSONObject deliver(String request, JSONObject result) throws Exception {
-            gate.beforeRequest(request, messages("tool", result.toString()), control);
-            return gate.afterResponse(request, control);
-        }
-        @Override public void close() { gate.close(); }
+                .put("executorDeviceId", DEVICE).put("payload", new JSONObject().put("observationMode", "semantic")
+                        .put("observationRef", ref).put("state", state));
     }
 
-    @Test public void structureMustReachCompletedOriginalModelRequestBeforeOneAction() throws Exception {
-        try (Fixture f = new Fixture()) {
-            JSONObject result = f.capture("observe-a", "1".repeat(32), f.base);
-            assertThrows(SecurityException.class, () -> f.gate.requireAction(ROUTE, f.ref(result)));
-            f.gate.beforeRequest("request-a", messages("tool", result.toString()), f.control);
-            assertThrows(SecurityException.class, () -> f.gate.requireAction(ROUTE, f.ref(result)));
-            JSONObject evidence = f.gate.afterResponse("request-a", f.control);
-            assertEquals("paired_device_semantic_delivery", evidence.getString("kind"));
-            assertEquals(1, evidence.getInt("structuresProvided"));
-            assertFalse(evidence.getBoolean("businessVerified"));
-            f.gate.requireAction(ROUTE, f.ref(result));
-            assertTrue("Mode recognition may remember retired refs without authorizing them", f.gate.contains(ROUTE, f.ref(result)));
-            assertThrows(SecurityException.class, () -> f.gate.requireAction(ROUTE, f.ref(result)));
+    private static JSONObject ref(JSONObject receipt) throws Exception {
+        return receipt.getJSONObject("payload").getJSONObject("observationRef");
+    }
+
+    private static JSONObject wire(JSONObject receipt) throws Exception {
+        return new JSONObject().put("operationId", receipt.getString("operationId"))
+                .put("targetDeviceId", DEVICE).put("deadline", System.currentTimeMillis() + 60000);
+    }
+
+    private static JSONArray messages(JSONObject receipt) throws Exception {
+        return new JSONArray().put(new JSONObject().put("role", "tool").put("tool_call_id", "native-tool-call")
+                .put("content", new JSONObject().put("deviceReceipt", receipt).toString()));
+    }
+
+    private static void deliver(DeviceSemanticObservations gate, RunControl run, String request, JSONObject receipt) throws Exception {
+        gate.beforeRequest(request, messages(receipt), run);
+        assertEquals(1, gate.afterResponse(request, run).getInt("structuresProvided"));
+    }
+
+    @Test public void retiredReferenceCannotUseDeliveryOfNewerObservation() throws Exception {
+        RunControl control = run();
+        try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control)) {
+            long now = System.currentTimeMillis();
+            JSONObject old = receipt("old-operation", "old-observation", now - 1000);
+            JSONObject latest = receipt("new-operation", "new-observation", now - 500);
+            gate.capture(ROUTE, wire(old), old, () -> { });
+            gate.capture(ROUTE, wire(latest), latest, () -> { });
+            deliver(gate, control, "current-request", latest);
+            assertTrue("Keep retired semantic refs on the semantic rejection path", gate.contains(ROUTE, ref(old)));
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(old)));
+            gate.requireAction(ROUTE, ref(latest));
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(latest)));
         }
     }
 
-    @Test public void userAssistantSystemAndNestedTextCannotSpoofToolDelivery() throws Exception {
-        try (Fixture f = new Fixture()) {
-            JSONObject result = f.capture("observe-a", "1".repeat(32), f.base);
-            for (String role : new String[] {"user", "assistant", "system"}) {
-                f.gate.beforeRequest(role, messages(role, result.toString()), f.control);
-                assertNull(f.gate.afterResponse(role, f.control));
-                assertThrows(SecurityException.class, () -> f.gate.requireAction(ROUTE, f.ref(result)));
-            }
-            f.gate.beforeRequest("nested", messages("tool", new JSONObject().put("untrusted", result).toString()), f.control);
-            assertNull(f.gate.afterResponse("nested", f.control));
-            assertThrows(SecurityException.class, () -> f.gate.requireAction(ROUTE, f.ref(result)));
+    @Test public void compactedRequestCannotReusePreviousResponseDelivery() throws Exception {
+        RunControl control = run();
+        try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control)) {
+            JSONObject receipt = receipt("operation", "observation", System.currentTimeMillis());
+            gate.capture(ROUTE, wire(receipt), receipt, () -> { });
+            deliver(gate, control, "request-with-structure", receipt);
+            gate.beforeRequest("compacted-request", new JSONArray().put(new JSONObject().put("role", "system")
+                    .put("content", "A summary mentions an earlier Save button.")), control);
+            assertNull(gate.afterResponse("compacted-request", control));
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(receipt)));
         }
     }
 
-    @Test public void wrappedToolTextPartsAndPostActionObservationUseSameExactGate() throws Exception {
-        try (Fixture f = new Fixture()) {
-            JSONObject observed = observation("1".repeat(32), f.base);
-            JSONObject action = receipt("action-a", new JSONObject().put("desktopReceipt", new JSONObject().put("afterObservation", observed)));
-            JSONObject wrapped = new JSONObject().put("ok", true).put("deviceReceipt", action);
-            f.gate.capture(ROUTE, wire("action-a"), wrapped, f::requireCurrent);
-            JSONArray parts = new JSONArray().put(new JSONObject().put("type", "text").put("text", wrapped.toString()));
-            f.gate.beforeRequest("parts", messages("tool", parts), f.control);
-            assertEquals(1, f.gate.afterResponse("parts", f.control).getInt("structuresProvided"));
-            f.gate.requireAction(ROUTE, observed.getJSONObject("observationRef"));
-        }
-    }
-
-    @Test public void clippedChangedWrongExecutorOrWrongOperationReceiptNeverGrantsAction() throws Exception {
-        try (Fixture f = new Fixture()) {
-            JSONObject result = f.capture("observe-a", "1".repeat(32), f.base);
-            JSONObject clipped = copy(result);
-            clipped.getJSONObject("payload").getJSONObject("state").put("elements", new JSONArray()).put("adapter_truncated", true);
-            JSONObject changedRef = copy(result);
-            changedRef.getJSONObject("payload").getJSONObject("observationRef").put("windowId", 999);
-            JSONObject changedMode = copy(result);
-            changedMode.getJSONObject("payload").put("observationMode", "hybrid");
-            for (JSONObject bad : new JSONObject[] {clipped, changedRef, changedMode,
-                    copy(result).put("executorDeviceId", "pw1_" + "2".repeat(64)), copy(result).put("operationId", "another-operation")}) {
-                f.gate.beforeRequest("bad", messages("tool", bad.toString()), f.control);
-                assertNull(f.gate.afterResponse("bad", f.control));
-                assertThrows(SecurityException.class, () -> f.gate.requireAction(ROUTE, f.ref(result)));
-            }
-            assertNotNull("A complete exact copy remains deliverable", f.deliver("exact", copy(result)));
-            f.gate.requireAction(ROUTE, f.ref(result));
-        }
-    }
-
-    @Test public void abandonedWrongRunnerAndUnknownRequestCannotReportDelivery() throws Exception {
-        try (Fixture f = new Fixture()) {
-            JSONObject result = f.capture("observe-a", "1".repeat(32), f.base);
-            assertThrows(SecurityException.class, () -> f.gate.beforeRequest("other", messages("tool", result.toString()), new RunControl()));
-            f.gate.beforeRequest("pending", messages("tool", result.toString()), f.control);
-            assertThrows(SecurityException.class, () -> f.gate.afterResponse("pending", new RunControl()));
-            f.gate.abandoned("pending");
-            assertNull(f.gate.afterResponse("pending", f.control));
-            assertNull(f.gate.afterResponse("unknown-request", f.control));
-            assertThrows(SecurityException.class, () -> f.gate.requireAction(ROUTE, f.ref(result)));
-            assertNotNull(f.deliver("new-real-request", result));
-            f.gate.requireAction(ROUTE, f.ref(result));
-        }
-    }
-
-    @Test public void retiredReferenceCannotBorrowLatestDeliveredObservation() throws Exception {
-        try (Fixture f = new Fixture()) {
-            JSONObject first = f.capture("observe-a", "1".repeat(32), f.base);
-            f.deliver("request-a", first); f.gate.requireAction(ROUTE, f.ref(first));
-            JSONObject latest = f.capture("observe-b", "2".repeat(32), f.base + 1);
-            f.deliver("request-b", latest);
-            assertTrue(f.gate.contains(ROUTE, f.ref(first)));
-            assertThrows(SecurityException.class, () -> f.gate.requireAction(ROUTE, f.ref(first)));
-            f.gate.requireAction(ROUTE, f.ref(latest));
-        }
-    }
-
-    @Test public void consumedUnknownHistoryAndPreviouslyUncachedOlderHistoryCannotReauthorize() throws Exception {
-        try (Fixture f = new Fixture()) {
-            JSONObject latest = f.capture("observe-new", "2".repeat(32), f.base + 10);
-            f.deliver("request-new", latest); f.gate.requireAction(ROUTE, f.ref(latest));
-            JSONObject unknown = copy(latest).put("state", "unknown").put("terminal", false);
-            assertThrows(SecurityException.class, () -> f.gate.capture(ROUTE, wire("observe-new"), unknown, f::requireCurrent));
-            JSONObject uncachedHistory = receipt("observe-old", observation("1".repeat(32), f.base));
-            assertThrows(SecurityException.class, () -> f.gate.capture(ROUTE, wire("observe-old"), uncachedHistory, f::requireCurrent));
-            f.gate.beforeRequest("history", messages("tool", unknown.toString()), f.control);
-            assertNull(f.gate.afterResponse("history", f.control));
-            assertThrows(SecurityException.class, () -> f.gate.requireAction(ROUTE, f.ref(latest)));
-        }
-    }
-
-    @Test public void invalidatedOrReplacedObservationCannotBeDeliveredByLateResponse() throws Exception {
-        try (Fixture f = new Fixture()) {
-            JSONObject first = f.capture("observe-a", "1".repeat(32), f.base);
-            f.gate.beforeRequest("pending-a", messages("tool", first.toString()), f.control);
-            JSONObject next = f.capture("observe-b", "2".repeat(32), f.base + 1);
-            assertThrows(SecurityException.class, () -> f.gate.afterResponse("pending-a", f.control));
-            assertThrows(SecurityException.class, () -> f.gate.requireAction(ROUTE, f.ref(next)));
-            f.deliver("next", next); f.gate.invalidate(ROUTE);
-            assertThrows(SecurityException.class, () -> f.gate.capture(ROUTE, wire("observe-b"), next, f::requireCurrent));
-            assertThrows(SecurityException.class, () -> f.gate.requireAction(ROUTE, f.ref(next)));
-        }
-    }
-
-    @Test public void nativeExpiryWireDeadlineAndThirtySecondMaximumAllNarrowAuthority() throws Exception {
-        try (Fixture f = new Fixture()) {
-            JSONObject expired = receipt("observe-expired", observation("1".repeat(32), f.base));
-            expired.getJSONObject("payload").getJSONObject("observationRef").put("expiresAt", System.currentTimeMillis() - 1);
-            assertThrows(SecurityException.class, () -> f.gate.capture(ROUTE, wire("observe-expired"), expired, f::requireCurrent));
-            JSONObject expiredWire = wire("observe-deadline").put("deadline", System.currentTimeMillis() - 1);
-            JSONObject validRef = receipt("observe-deadline", observation("2".repeat(32), f.base));
-            assertThrows(SecurityException.class, () -> f.gate.capture(ROUTE, expiredWire, validRef, f::requireCurrent));
-            JSONObject old = receipt("observe-old", observation("3".repeat(32), System.currentTimeMillis() - 31000));
-            old.getJSONObject("payload").getJSONObject("observationRef").put("expiresAt", System.currentTimeMillis() + 60000);
-            assertThrows(SecurityException.class, () -> f.gate.capture(ROUTE, wire("observe-old"), old, f::requireCurrent));
-        }
-    }
-
-    @Test public void liveGrantRevocationBetweenRequestAndResponseOrActionIsRechecked() throws Exception {
-        try (Fixture f = new Fixture()) {
-            JSONObject result = f.capture("observe-a", "1".repeat(32), f.base);
-            f.gate.beforeRequest("pending", messages("tool", result.toString()), f.control);
-            f.current = false;
-            assertThrows(SecurityException.class, () -> f.gate.afterResponse("pending", f.control));
-            assertThrows(SecurityException.class, () -> f.gate.requireAction(ROUTE, f.ref(result)));
-        }
-        try (Fixture f = new Fixture()) {
-            JSONObject result = f.capture("observe-a", "1".repeat(32), f.base);
-            f.deliver("delivered", result); f.control.pause();
-            assertThrows(SecurityException.class, () -> f.gate.requireAction(ROUTE, f.ref(result)));
-        }
-    }
-
-    @Test public void actualRunnerSendsStructureThroughHttpBeforeDispatchWithImagesDisabled() throws Exception {
-        try (Fixture f = new Fixture()) {
-            JSONObject result = receipt("native-observe", observation("1".repeat(32), f.base));
-            JSONObject reference = f.ref(result);
-            AtomicInteger requests = new AtomicInteger(), inputs = new AtomicInteger(), completedDeliveries = new AtomicInteger();
-            AtomicReference<Throwable> httpFailure = new AtomicReference<>();
-            List<String> bodies = Collections.synchronizedList(new ArrayList<>());
-            CapabilityPort port = new CapabilityPort() {
-                public JSONArray tools() throws Exception {
-                    JSONArray tools = new JSONArray();
-                    for (String name : new String[] {"fixture_semantic_observe", "fixture_semantic_act"}) {
-                        JSONObject parameters = new JSONObject().put("type", "object");
-                        if (name.endsWith("act")) parameters.put("properties", new JSONObject().put("observationRef", new JSONObject().put("type", "object")));
-                        tools.put(new JSONObject().put("type", "function").put("function", new JSONObject().put("name", name).put("parameters", parameters)));
-                    }
-                    return tools;
-                }
-                public boolean supports(String name) { return name.equals("fixture_semantic_observe") || name.equals("fixture_semantic_act"); }
-                public boolean sideEffecting(String name) { return name.equals("fixture_semantic_act"); }
-                public void beforeModelRequest(String request, JSONArray messages, RunControl control) throws Exception { f.gate.beforeRequest(request, messages, control); }
-                public JSONObject afterModelResponse(String request, String answer, RunControl control) throws Exception {
-                    JSONObject receipt = f.gate.afterResponse(request, control);
-                    if (receipt != null) completedDeliveries.incrementAndGet();
-                    return receipt;
-                }
-                public void modelRequestAbandoned(String request) { f.gate.abandoned(request); }
-                public JSONObject beforeTool(String name, JSONObject args, RunControl control) throws Exception {
-                    if (name.equals("fixture_semantic_act")) f.gate.requireAction(ROUTE, args.getJSONObject("observationRef"));
-                    return null;
-                }
-                public JSONObject execute(String name, JSONObject args, RunControl control) throws Exception {
-                    if (name.equals("fixture_semantic_observe")) {
-                        f.gate.capture(ROUTE, wire("native-observe"), result, f::requireCurrent);
-                        return new JSONObject().put("ok", true).put("deviceReceipt", result);
-                    }
-                    assertEquals("Action must follow actual completed model delivery", 1, completedDeliveries.get());
-                    inputs.incrementAndGet();
-                    return new JSONObject().put("ok", true).put("status", "completed").put("businessResultVerified", false);
-                }
-            };
-            HttpServer http = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-            http.createContext("/", exchange -> {
-                try {
-                    bodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
-                    int round = requests.incrementAndGet();
-                    JSONObject message = new JSONObject().put("role", "assistant");
-                    if (round <= 2) {
-                        JSONObject args = round == 1 ? new JSONObject() : new JSONObject().put("observationRef", reference);
-                        String name = round == 1 ? "fixture_semantic_observe" : "fixture_semantic_act";
-                        message.put("content", JSONObject.NULL).put("tool_calls", new JSONArray().put(new JSONObject()
-                                .put("id", "fixture-call-" + round).put("type", "function")
-                                .put("function", new JSONObject().put("name", name).put("arguments", args.toString()))));
-                    } else message.put("content", "Controlled semantic delivery finished");
-                    byte[] bytes = new JSONObject().put("choices", new JSONArray().put(new JSONObject().put("message", message)
-                            .put("finish_reason", round <= 2 ? "tool_calls" : "stop"))).toString().getBytes(StandardCharsets.UTF_8);
-                    exchange.getResponseHeaders().set("Content-Type", "application/json");
-                    exchange.sendResponseHeaders(200, bytes.length); exchange.getResponseBody().write(bytes);
-                } catch (Throwable failure) { httpFailure.set(failure); }
-                finally { exchange.close(); }
+    @Test public void revokedObservationDoesNotDiscardAnOtherwiseValidModelAnswer() throws Exception {
+        RunControl control = run();
+        AtomicBoolean current = new AtomicBoolean(true);
+        try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control)) {
+            JSONObject receipt = receipt("operation", "observation", System.currentTimeMillis());
+            gate.capture(ROUTE, wire(receipt), receipt, () -> {
+                if (!current.get()) throw new SecurityException("Original desktop route was revoked");
             });
-            http.start();
-            try {
-                ModelConfig config = new ModelConfig("http://127.0.0.1:" + http.getAddress().getPort(), "fixture-only-model-key", "fixture-model", false, 5, 10);
-                assertFalse(config.sendScreenshots); assertFalse(config.supportsImageInput);
-                var outcome = new AgentRunner(null, port).run("semantic-delivery-fixture", "读取结构并执行一次获准的 fixture 操作", config, f.control, event -> { });
-                assertNull(httpFailure.get());
-                assertEquals(outcome.summary, 3, requests.get());
-                assertEquals(outcome.summary, 1, inputs.get());
-                assertEquals(1, completedDeliveries.get());
-                JSONObject actualSecondRequest = new JSONObject(bodies.get(1));
-                JSONArray projected = actualSecondRequest.getJSONArray("messages");
-                boolean delivered = false;
-                for (int i = 0; i < projected.length(); i++) {
-                    JSONObject row = projected.getJSONObject(i);
-                    if ("tool".equals(row.optString("role")) && row.optString("content").contains("s1234abcd:1")) delivered = true;
-                }
-                assertTrue("Actual outgoing HTTP must contain the exact tool tree", delivered);
-                assertFalse(bodies.toString().contains("image_url"));
-                assertThrows(SecurityException.class, () -> f.gate.requireAction(ROUTE, reference));
-            } finally { http.stop(0); }
+            gate.beforeRequest("request", messages(receipt), control);
+            current.set(false);
+            assertNull(gate.afterResponse("request", control));
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(receipt)));
+        }
+    }
+
+    @Test public void truncatedNativeTreeCannotAuthorizeSemanticInput() throws Exception {
+        RunControl control = run();
+        for (String flag : new String[]{"truncated", "adapter_truncated", "identity_unproven", "hasMore", "elements_complete"}) {
+            try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control)) {
+                JSONObject receipt = receipt("operation", "observation", System.currentTimeMillis());
+                receipt.getJSONObject("payload").getJSONObject("state").put(flag, !flag.equals("elements_complete"));
+                assertThrows(flag, SecurityException.class, () -> gate.capture(ROUTE, wire(receipt), receipt, () -> { }));
+            }
+        }
+    }
+
+    @Test public void onlyMatchingCompletedRequestDeliversTheActualStructure() throws Exception {
+        RunControl control = run();
+        try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control)) {
+            JSONObject receipt = receipt("operation", "observation", System.currentTimeMillis());
+            gate.capture(ROUTE, wire(receipt), receipt, () -> { });
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(receipt)));
+            gate.beforeRequest("original-request", messages(receipt), control);
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(receipt)));
+            assertNull(gate.afterResponse("unrelated-request", control));
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(receipt)));
+            JSONObject delivered = gate.afterResponse("original-request", control);
+            assertEquals(1, delivered.getInt("structuresProvided"));
+            assertFalse(delivered.getBoolean("businessVerified"));
+            gate.requireAction(ROUTE, ref(receipt));
+            assertNull(gate.afterResponse("original-request", control));
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(receipt)));
+        }
+    }
+
+    @Test public void textPartsDeliverTheCompleteReceiptButAnotherRunCannot() throws Exception {
+        RunControl control = run(), differentControlForSameIds = run();
+        try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control)) {
+            JSONObject receipt = receipt("operation", "observation", System.currentTimeMillis());
+            gate.capture(ROUTE, wire(receipt), receipt, () -> { });
+            JSONArray parts = new JSONArray().put(new JSONObject().put("type", "text").put("text", receipt.toString()));
+            JSONArray messages = new JSONArray().put(new JSONObject().put("role", "tool").put("content", parts));
+            assertThrows(SecurityException.class, () -> gate.beforeRequest("other-run", messages, differentControlForSameIds));
+            gate.beforeRequest("original", messages, control);
+            assertThrows(SecurityException.class, () -> gate.afterResponse("original", differentControlForSameIds));
+            assertEquals(1, gate.afterResponse("original", control).getInt("structuresProvided"));
+            gate.requireAction(ROUTE, ref(receipt));
+        }
+    }
+
+    @Test public void summariesOrAlteredReceiptsCannotStandInForTheOriginalTree() throws Exception {
+        RunControl control = run();
+        try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control)) {
+            JSONObject receipt = receipt("operation", "observation", System.currentTimeMillis());
+            gate.capture(ROUTE, wire(receipt), receipt, () -> { });
+            for (String altered : new String[]{"operation", "executor", "mode", "reference", "state", "missing-state", "role", "clipped-json"}) {
+                JSONObject changed = new JSONObject(receipt.toString());
+                if (altered.equals("operation")) changed.put("operationId", "other-operation");
+                if (altered.equals("executor")) changed.put("executorDeviceId", "pw1_" + "c".repeat(64));
+                if (altered.equals("mode")) changed.getJSONObject("payload").put("observationMode", "hybrid");
+                if (altered.equals("reference")) ref(changed).put("id", "another-observation");
+                if (altered.equals("state")) changed.getJSONObject("payload").getJSONObject("state").getJSONArray("elements").remove(0);
+                if (altered.equals("missing-state")) changed.getJSONObject("payload").remove("state");
+                JSONArray modelMessages = messages(changed);
+                if (altered.equals("role")) modelMessages.getJSONObject(0).put("role", "user");
+                if (altered.equals("clipped-json")) modelMessages.getJSONObject(0).put("content", changed.toString().substring(0, 100));
+                gate.beforeRequest(altered, modelMessages, control);
+                assertNull(altered, gate.afterResponse(altered, control));
+                assertThrows(altered, SecurityException.class, () -> gate.requireAction(ROUTE, ref(receipt)));
+            }
+            deliver(gate, control, "complete-original", receipt);
+            gate.requireAction(ROUTE, ref(receipt));
+        }
+    }
+
+    @Test public void abandonedAndReplacedRequestsCannotRestoreDelivery() throws Exception {
+        RunControl control = run();
+        try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control)) {
+            JSONObject receipt = receipt("operation", "observation", System.currentTimeMillis());
+            gate.capture(ROUTE, wire(receipt), receipt, () -> { });
+            gate.beforeRequest("abandoned", messages(receipt), control);
+            gate.abandoned("abandoned");
+            assertNull(gate.afterResponse("abandoned", control));
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(receipt)));
+            gate.beforeRequest("older", messages(receipt), control);
+            gate.beforeRequest("current-empty", new JSONArray(), control);
+            assertNull(gate.afterResponse("older", control));
+            assertNull(gate.afterResponse("current-empty", control));
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(receipt)));
+            deliver(gate, control, "valid", receipt);
+            gate.abandoned("older");
+            gate.abandoned("valid");
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(receipt)));
+            deliver(gate, control, "fresh-request", receipt);
+            gate.requireAction(ROUTE, ref(receipt));
+        }
+    }
+
+    @Test public void aLateResponseForReplacedObservationCannotConsumeTheNewOne() throws Exception {
+        RunControl control = run();
+        AtomicLong time = new AtomicLong(System.currentTimeMillis());
+        try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control, time::get)) {
+            JSONObject old = receipt("old-operation", "old", time.get());
+            gate.capture(ROUTE, wire(old), old, () -> { });
+            gate.beforeRequest("old-request", messages(old), control);
+            JSONObject latest = receipt("new-operation", "new", time.incrementAndGet());
+            gate.capture(ROUTE, wire(latest), latest, () -> { });
+            assertNull(gate.afterResponse("old-request", control));
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(old)));
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(latest)));
+            deliver(gate, control, "latest-request", latest);
+            gate.requireAction(ROUTE, ref(latest));
+        }
+    }
+
+    @Test public void expiryWhileWaitingForModelDoesNotRejectItsAnswerOrAuthorizeInput() throws Exception {
+        RunControl control = run();
+        AtomicLong time = new AtomicLong(System.currentTimeMillis());
+        try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control, time::get)) {
+            JSONObject receipt = receipt("operation", "observation", time.get());
+            gate.capture(ROUTE, wire(receipt), receipt, () -> { });
+            gate.beforeRequest("slow-model", messages(receipt), control);
+            time.addAndGet(30000);
+            assertNull(gate.afterResponse("slow-model", control));
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(receipt)));
+            gate.beforeRequest("unrelated-answer", new JSONArray(), control);
+            assertNull(gate.afterResponse("unrelated-answer", control));
+        }
+    }
+
+    @Test public void originalReferenceExpiryAndWireDeadlineBothBoundInput() throws Exception {
+        for (boolean referenceExpiresFirst : new boolean[]{true, false}) {
+            RunControl control = run();
+            AtomicLong time = new AtomicLong(System.currentTimeMillis());
+            try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control, time::get)) {
+                JSONObject receipt = receipt("operation", "observation", time.get());
+                JSONObject wire = wire(receipt);
+                if (referenceExpiresFirst) ref(receipt).put("expiresAt", time.get() + 1000);
+                else wire.put("deadline", time.get() + 1000);
+                gate.capture(ROUTE, wire, receipt, () -> { });
+                deliver(gate, control, "request", receipt);
+                time.addAndGet(1000);
+                assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(receipt)));
+            }
+        }
+    }
+
+    @Test public void staleOrFutureCaptureIsRejectedWithoutAClockWait() throws Exception {
+        RunControl control = run();
+        AtomicLong time = new AtomicLong(System.currentTimeMillis());
+        try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control, time::get)) {
+            for (long capture : new long[]{time.get() - 30000, time.get() + 1001}) {
+                JSONObject receipt = receipt("operation", "observation", capture);
+                assertThrows(SecurityException.class, () -> gate.capture(ROUTE, wire(receipt), receipt, () -> { }));
+            }
+            JSONObject expiredRef = receipt("expired-operation", "expired", time.get() - 1000);
+            ref(expiredRef).put("expiresAt", time.get());
+            assertThrows(SecurityException.class, () -> gate.capture(ROUTE, wire(expiredRef), expiredRef, () -> { }));
+        }
+    }
+
+    @Test public void oldOperationReadCannotReviveAnUnseenPredecessorAfterInvalidation() throws Exception {
+        RunControl control = run();
+        AtomicLong time = new AtomicLong(System.currentTimeMillis());
+        try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control, time::get)) {
+            JSONObject latest = receipt("new-operation", "new", time.get());
+            gate.capture(ROUTE, wire(latest), latest, () -> { });
+            gate.invalidate(ROUTE);
+            JSONObject unseenOld = receipt("historic-operation", "historic", time.get() - 1000);
+            assertThrows(SecurityException.class, () -> gate.capture(ROUTE, wire(unseenOld), unseenOld, () -> { }));
+            assertThrows(SecurityException.class, () -> gate.capture(ROUTE, wire(latest), latest, () -> { }));
+            JSONObject fresh = receipt("fresh-operation", "fresh", time.incrementAndGet());
+            gate.capture(ROUTE, wire(fresh), fresh, () -> { });
+            deliver(gate, control, "fresh-request", fresh);
+            gate.requireAction(ROUTE, ref(fresh));
+        }
+    }
+
+    @Test public void unrelatedCompactedRequestDoesNotCheckARevokedDesktopRoute() throws Exception {
+        RunControl control = run();
+        AtomicInteger checks = new AtomicInteger();
+        try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control)) {
+            JSONObject receipt = receipt("operation", "observation", System.currentTimeMillis());
+            gate.capture(ROUTE, wire(receipt), receipt, () -> {
+                if (checks.incrementAndGet() > 1) throw new SecurityException("Native desktop route is no longer current");
+            });
+            gate.beforeRequest("answer-without-desktop", new JSONArray(), control);
+            assertNull(gate.afterResponse("answer-without-desktop", control));
+            assertEquals(1, checks.get());
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(receipt)));
+        }
+    }
+
+    @Test public void routesCannotBorrowEachOthersDeliveryAndRevokedOneDoesNotBlockAnother() throws Exception {
+        RunControl control = run();
+        AtomicBoolean currentA = new AtomicBoolean(true);
+        try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control)) {
+            long now = System.currentTimeMillis();
+            JSONObject a = receipt("operation-a", "observation-a", now);
+            JSONObject b = receipt("operation-b", "observation-b", now);
+            gate.capture(ROUTE, wire(a), a, () -> {
+                if (!currentA.get()) throw new SecurityException("Route A revoked");
+            });
+            gate.capture("route-b", wire(b), b, () -> { });
+            deliver(gate, control, "only-a", a);
+            assertThrows(SecurityException.class, () -> gate.requireAction("route-b", ref(a)));
+            assertThrows(SecurityException.class, () -> gate.requireAction("route-b", ref(b)));
+            JSONArray both = messages(a).put(messages(b).getJSONObject(0));
+            gate.beforeRequest("both", both, control);
+            currentA.set(false);
+            assertEquals(1, gate.afterResponse("both", control).getInt("structuresProvided"));
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(a)));
+            gate.requireAction("route-b", ref(b));
+        }
+    }
+
+    @Test public void pauseResumeAndOwnerSteeringCannotUseAnEarlierResponse() throws Exception {
+        RunControl control = run();
+        AtomicLong time = new AtomicLong(System.currentTimeMillis());
+        try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control, time::get)) {
+            JSONObject receipt = receipt("operation", "observation", time.get());
+            gate.capture(ROUTE, wire(receipt), receipt, () -> { });
+            gate.beforeRequest("before-pause", messages(receipt), control);
+            control.pause();
+            control.resume();
+            assertNull(gate.afterResponse("before-pause", control));
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(receipt)));
+            JSONObject fresh = receipt("fresh-operation", "fresh", time.incrementAndGet());
+            gate.capture(ROUTE, wire(fresh), fresh, () -> { });
+            gate.beforeRequest("before-steer", messages(fresh), control);
+            assertTrue(control.requestModelReplan("original-task", "original-run", 1));
+            assertNull(gate.afterResponse("before-steer", control));
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(fresh)));
+            deliver(gate, control, "after-steer", fresh);
+            assertTrue(control.requestModelReplan("original-task", "original-run", 1));
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(fresh)));
+            deliver(gate, control, "latest-intent", fresh);
+            gate.requireAction(ROUTE, ref(fresh));
+        }
+    }
+
+    @Test public void nativeReceiptIdentityAndRepeatedReferenceContentRemainFixed() throws Exception {
+        RunControl control = run();
+        try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control)) {
+            JSONObject receipt = receipt("operation", "observation", System.currentTimeMillis());
+            JSONObject foreign = new JSONObject(receipt.toString()).put("executorDeviceId", "pw1_" + "c".repeat(64));
+            assertThrows(SecurityException.class, () -> gate.capture(ROUTE, wire(foreign), foreign, () -> { }));
+            gate.capture(ROUTE, wire(receipt), receipt, () -> { });
+            JSONObject changed = new JSONObject(receipt.toString());
+            changed.getJSONObject("payload").getJSONObject("state").getJSONArray("elements").getJSONObject(0).put("label", "Delete");
+            assertThrows(SecurityException.class, () -> gate.capture(ROUTE, wire(changed), changed, () -> { }));
+            gate.capture(ROUTE, wire(receipt), receipt, () -> { });
+            deliver(gate, control, "unchanged-original", receipt);
+            gate.requireAction(ROUTE, ref(receipt));
+        }
+    }
+
+    @Test public void cancellationAndCloseCannotRevivePendingDelivery() throws Exception {
+        RunControl control = run();
+        DeviceSemanticObservations gate = new DeviceSemanticObservations(control);
+        JSONObject receipt = receipt("operation", "observation", System.currentTimeMillis());
+        gate.capture(ROUTE, wire(receipt), receipt, () -> { });
+        gate.beforeRequest("pending", messages(receipt), control);
+        control.cancel();
+        assertThrows(InterruptedException.class, () -> gate.afterResponse("pending", control));
+        assertThrows(InterruptedException.class, () -> gate.requireAction(ROUTE, ref(receipt)));
+        gate.close();
+        assertThrows(SecurityException.class, () -> gate.afterResponse("pending", control));
+        assertFalse(gate.contains(ROUTE, ref(receipt)));
+    }
+
+    @Test public void actionCannotPassWhenCurrentnessCallbackPausesTheOriginalRun() throws Exception {
+        RunControl control = run();
+        AtomicBoolean pauseOnCheck = new AtomicBoolean();
+        try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control)) {
+            JSONObject receipt = receipt("operation", "observation", System.currentTimeMillis());
+            gate.capture(ROUTE, wire(receipt), receipt, () -> { if (pauseOnCheck.get()) control.pause(); });
+            deliver(gate, control, "request", receipt);
+            pauseOnCheck.set(true);
+            assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(receipt)));
+        }
+    }
+
+    @Test public void actionCannotPassWhenCurrentnessCallbackSteersOrCancelsTheOriginalRun() throws Exception {
+        for (boolean cancel : new boolean[]{false, true}) {
+            RunControl control = run();
+            AtomicBoolean changeOnCheck = new AtomicBoolean();
+            try (DeviceSemanticObservations gate = new DeviceSemanticObservations(control)) {
+                JSONObject receipt = receipt("operation", "observation", System.currentTimeMillis());
+                gate.capture(ROUTE, wire(receipt), receipt, () -> {
+                    if (changeOnCheck.get()) {
+                        if (cancel) control.cancel();
+                        else control.requestModelReplan("original-task", "original-run", 1);
+                    }
+                });
+                deliver(gate, control, "request", receipt);
+                changeOnCheck.set(true);
+                if (cancel) assertThrows(InterruptedException.class, () -> gate.requireAction(ROUTE, ref(receipt)));
+                else assertThrows(SecurityException.class, () -> gate.requireAction(ROUTE, ref(receipt)));
+            }
         }
     }
 }

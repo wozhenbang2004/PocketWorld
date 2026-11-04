@@ -208,8 +208,9 @@ class PairingOwnerController:
                   "workspacePaths": {item["id"]: self.manager._environment(item["resources"][0]["environmentId"])["root"] for item in selected if item["version"] == "workspace-v1"},
                   "endpoint": self.endpoint, "enableDesktop": "desktop" in selected_ids}
         summary = ("仅下列资源和工具；电脑不运行第二Agent/Goal，不需要Codex，模型额度为0。\r\n"
-                   "主屏desktop授权覆盖当前交互会话的所有窗口，包括手机实时观看与人工接管；不是文件沙箱。命令也不是OS沙箱。\r\n"
-                   "这不会恢复任何旧任务。完整指纹、地址、额度和期限：\r\n" + json.dumps(record, ensure_ascii=False, indent=2))
+                   "主屏desktop授权覆盖当前交互会话的所有窗口，不是文件沙箱；命令也不是OS沙箱。\r\n"
+                   + ("本次桌面授权包含手机实时查看电脑画面，以及人工鼠标和键盘接管；交还控制权后，AI必须重新观察再操作。\r\n" if "desktop.viewer" in grant["capabilities"] else "")
+                   + "这不会恢复任何旧任务。完整指纹、地址、额度和期限：\r\n" + json.dumps(record, ensure_ascii=False, indent=2))
         if len(summary) > 16000:
             raise PlatformError("Select fewer scopes so the COMPLETE review fits the native confirmation window")
         return NativeScopeReview(_REVIEW, self, candidate, record, summary)

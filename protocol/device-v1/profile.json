@@ -3,8 +3,8 @@
   "protocolVersion": "1.0",
   "files": {
     "schema.json": {
-      "sha256": "65121fda3aa5e2bcb8d74c6df51e576d300bd9d9e3c31bca0e82d9a926e1814c",
-      "bytes": 87650
+      "sha256": "6dd760bcc1d316fc9cb96eb503cae1afd272afa0ab76eb38d2a47795c037e8a4",
+      "bytes": 89730
     },
     "onboarding-schema.json": {
       "sha256": "bb90a84565660837fb89bd0b3158f8e268b42e65ec01d27bbb123c5b380be2b0",
@@ -105,5 +105,24 @@
     "handoff": "Exact native resource fencing across Agent and human; unknown input remains needs_reconcile; expiry never proves native input stopped.",
     "legacyGrants": "Pinned old SQL receipt profiles retain only their old method allowlists. New desktop.viewer authority requires explicit current owner review."
   },
-  "profileId": "pwp1_94a3b250d77be4eadd62d184dfa70facfe4e78444f0cd80903d00e339ef25147"
+  "profileId": "pwp1_d605876f8926ee6c6d5d1fe9c4e19987e7466c672557d6483723009099b42009",
+  "desktopViewer": {
+    "method": "desktop.viewer",
+    "authority": "direct current receiving-owner grant; retained native owner page; no fabricated Agent task or run",
+    "actions": [
+      "configuration",
+      "negotiate",
+      "status",
+      "take",
+      "release",
+      "input",
+      "close"
+    ],
+    "effect": "write; one original single-use outbound operation per request; unknown input is never replayed",
+    "maxSessionMs": 300000,
+    "control": "original resource lease and fence; foreign human has no exposed lease; needsReconcile blocks take/input and survives release/close; AI requires fresh observation after human control",
+    "media": "receive-only video; frame metadata channel only; no input over RTC data channel",
+    "budget": "human input consumes original receiving grant lifetime tool pool in the atomic one-use operation claim; duplicate never double-spends and unknown never refunds",
+    "frameDelivery": "actual emitted uint32 RTP timestamp from the pinned sender packet path must equal the current decoded frame; missing or changed evidence is view-only"
+  }
 }

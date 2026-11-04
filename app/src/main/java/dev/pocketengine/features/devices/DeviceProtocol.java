@@ -17,7 +17,7 @@ import org.json.JSONObject;
 public final class DeviceProtocol {
     private DeviceProtocol(){}
     public static final String VERSION="1.0";
-    public static final String PROFILE="pwp1_94a3b250d77be4eadd62d184dfa70facfe4e78444f0cd80903d00e339ef25147";
+    public static final String PROFILE="pwp1_d605876f8926ee6c6d5d1fe9c4e19987e7466c672557d6483723009099b42009";
     public static final int MAX_CONTROL_BYTES=65536,MAX_PAIRING_BYTES=16384,MAX_DEPTH=16,MAX_NODES=4096;
     public static final long MAX_SAFE_INTEGER=9007199254740991L;
     public static final Set<String> TASK_STATES=set("queued_local submitting accepted waiting_approval waiting_dependency waiting_resource running pause_requested paused cancel_requested cancelled succeeded failed interrupted needs_reconcile");
@@ -100,12 +100,28 @@ public final class DeviceProtocol {
             if(args.has("delegationAuthorization"))DelegationGrant.validateWireProof(args.optJSONObject("delegationAuthorization"));
         }else if("desktop.viewer".equals(method)){
             String action=args.optString("action");Set<String> required=new HashSet<>(set("action viewerSessionId")),optional=new HashSet<>();
-            switch(action){case "configuration"->optional.add("target");case "negotiate"->required.add("offer");case "status"->required.add("streamId");case "take","release"->required.addAll(set("streamId expectedRevision"));case "input"->required.addAll(set("streamId controlLease frameRef input"));case "close"->optional.add("streamId");default->throw fail("invalid_request","Unknown owner desktop action");}
-            keys(args,required,optional);identifier(args.opt("viewerSessionId"),"viewerSessionId");if(args.has("streamId"))identifier(args.opt("streamId"),"streamId");if(args.has("expectedRevision"))integer(args.opt("expectedRevision"),"expectedRevision",0,10000);
-            for(String field:set("target offer controlLease frameRef input"))if(args.has(field)&&args.optJSONObject(field)==null)throw fail("invalid_request","Invalid desktop "+field);
-            if(args.has("target")){JSONObject t=args.optJSONObject("target");keys(t,set("pid windowId"),Set.of());integer(t.opt("pid"),"pid",1,MAX_SAFE_INTEGER);integer(t.opt("windowId"),"windowId",1,MAX_SAFE_INTEGER);}
+            switch(action){
+                case "configuration":break;
+                case "negotiate":required.add("offer");break;
+                case "status":case "close":optional.add("streamId");break;
+                case "take":case "release":required.addAll(set("streamId expectedRevision"));break;
+                case "input":required.addAll(set("streamId controlLease frameRef input"));break;
+                default:throw fail("invalid_request","Unknown owner desktop action");
+            }
+            keys(args,required,optional);identifier(args.opt("viewerSessionId"),"viewerSessionId");
+            if(args.has("streamId"))identifier(args.opt("streamId"),"streamId");
+            if(args.has("expectedRevision"))integer(args.opt("expectedRevision"),"expectedRevision",0,MAX_SAFE_INTEGER);
+            for(String name:set("offer controlLease frameRef input"))if(args.has(name)&&args.optJSONObject(name)==null)throw fail("invalid_request","Invalid desktop "+name);
             if(args.has("offer")){JSONObject offer=args.optJSONObject("offer");keys(offer,set("type sdp"),Set.of());if(!"offer".equals(offer.optString("type")))throw fail("invalid_request","Expected WebRTC offer");text(offer.opt("sdp"),"sdp",32768);}
-            if(!set("configuration negotiate status take release input close").contains(args.optString("action"))||!"desktop-v2".equals(value.optString("capabilityVersion"))||!value.optString("originDeviceId").equals(value.optString("callerDeviceId"))||chain.length()!=0)throw fail("invalid_request","Desktop viewer needs a direct native owner desktop grant");
+            if("input".equals(action)){
+                JSONObject frame=args.optJSONObject("frameRef");keys(frame,set("streamId frameId geometryRevision width height capturedAt expiresAt rtpTimestamp"),Set.of());
+                if(!args.optString("streamId").equals(frame.opt("streamId")))throw fail("invalid_request","Desktop frame belongs to another stream");
+                for(String name:set("frameId geometryRevision"))text(frame.opt(name),name,240);
+                for(String name:set("width height"))integer(frame.opt(name),name,1,16384);
+                long captured=integer(frame.opt("capturedAt"),"capturedAt",1,MAX_SAFE_INTEGER-30000);
+                integer(frame.opt("expiresAt"),"expiresAt",captured+1,captured+30000);integer(frame.opt("rtpTimestamp"),"rtpTimestamp",0,0xffffffffL);
+            }
+            if(!"desktop-v2".equals(value.optString("capabilityVersion"))||!value.optString("originDeviceId").equals(value.optString("callerDeviceId"))||chain.length()!=0)throw fail("invalid_request","Desktop viewer needs a direct native owner desktop grant");
             validateResourceBinding("desktop-v2",value.optJSONObject("resourceBinding"));
         }else if("device.describe".equals(method))keys(args,Set.of(),Set.of());
         else if(set("operation.get operation.cancel").contains(method)){keys(args,"operation.cancel".equals(method)?set("operationId argumentsDigest"):set("operationId"),Set.of());identifier(args.opt("operationId"),"operationId");if("operation.cancel".equals(method)&&!(args.opt("argumentsDigest") instanceof String&&args.optString("argumentsDigest").matches("[a-f0-9]{64}")))throw fail("invalid_request","Cancellation needs the exact original target semantic digest");if("operation.cancel".equals(method)&&args.optString("operationId").equals(value.optString("operationId")))throw fail("invalid_request","Cancellation requires its own original control operation identity");}
@@ -151,6 +167,24 @@ public final class DeviceProtocol {
         requireProfile(receipt);keys(receipt,set("protocolVersion protocolProfile messageType issuerDeviceId issuerCertificateFingerprint body signature"),Set.of());if(!VERSION.equals(receipt.opt("protocolVersion"))||!"PairGrantReceipt".equals(receipt.opt("messageType")))throw fail("invalid_request","Invalid signed owner grant receipt");deviceId(receipt.opt("issuerDeviceId"),"issuerDeviceId");if(!(receipt.opt("issuerCertificateFingerprint") instanceof String)||!receipt.optString("issuerCertificateFingerprint").matches("[a-f0-9]{64}"))throw fail("invalid_request","Invalid issuer certificate fingerprint");JSONObject body=receipt.optJSONObject("body");keys(body,set("grant targetInstanceId issuedAt"),Set.of());identifier(body.opt("targetInstanceId"),"targetInstanceId");integer(body.opt("issuedAt"),"issuedAt",1,MAX_SAFE_INTEGER);JSONObject grant=body.optJSONObject("grant");if(grant==null)throw fail("invalid_request","Invalid receiving owner grant");try{PairingCoordinator.validateGrant(grant,receipt.optString("issuerDeviceId"),grant.optString("peerDeviceId"),integer(grant.opt("issuedAt"),"issuedAt",1,MAX_SAFE_INTEGER));}catch(SecurityException invalid){throw fail("invalid_request","Invalid receiving owner grant");}String encoded=text(receipt.opt("signature"),"signature",200);try{byte[] raw=java.util.Base64.getDecoder().decode(encoded);if(raw.length<8||raw.length>72||!java.util.Base64.getEncoder().encodeToString(raw).equals(encoded))throw new IllegalArgumentException();}catch(IllegalArgumentException invalid){throw fail("invalid_request","Invalid canonical owner receipt signature");}
     }
     /** Bounded read-model records; a received event is never execution authority. */
+    private static void validateDesktopViewerResult(JSONObject result,String executor){
+        if("closed".equals(result.opt("status"))){keys(result,set("viewerSessionId operationId status"),Set.of());identifier(result.opt("viewerSessionId"),"viewerSessionId");identifier(result.opt("operationId"),"operationId");return;}
+        keys(result,set("viewerSessionId operationId kind deviceId sessionId resourceBinding expiresAt width height control iceServers"),set("streamId answer inputReceipt"));
+        for(String name:set("viewerSessionId operationId sessionId"))identifier(result.opt(name),name);
+        if(!"desktopSession".equals(result.opt("kind"))||!result.optString("viewerSessionId").equals(result.opt("sessionId")))throw fail("invalid_request","Desktop response has the wrong session");
+        if(!executor.equals(result.opt("deviceId")))throw fail("wrong_audience","Desktop response belongs to another executor");
+        validateResourceBinding("desktop-v2",result.optJSONObject("resourceBinding"));integer(result.opt("expiresAt"),"expiresAt",1,MAX_SAFE_INTEGER);
+        for(String name:set("width height"))integer(result.opt(name),name,1,16384);
+        JSONObject control=result.optJSONObject("control");keys(control,set("owner revision"),set("lease needsReconcile"));
+        if(!set("none human agent other_human").contains(control.optString("owner")))throw fail("invalid_request","Unknown desktop control owner");
+        integer(control.opt("revision"),"revision",0,MAX_SAFE_INTEGER);
+        if(control.has("needsReconcile")&&!(control.opt("needsReconcile") instanceof Boolean))throw fail("invalid_request","Invalid reconciliation state");
+        if(control.has("lease")&&(!"human".equals(control.optString("owner"))||control.optJSONObject("lease")==null))throw fail("invalid_request","Another owner cannot expose a lease");
+        if(result.optJSONArray("iceServers")==null)throw fail("invalid_request","Invalid desktop ICE configuration");
+        if(result.has("streamId"))identifier(result.opt("streamId"),"streamId");
+        if(result.has("answer")){JSONObject answer=result.optJSONObject("answer");keys(answer,set("type sdp"),Set.of());if(!"answer".equals(answer.opt("type")))throw fail("invalid_request","Expected WebRTC answer");text(answer.opt("sdp"),"sdp",32768);}
+        if(result.has("inputReceipt")&&result.optJSONObject("inputReceipt")==null)throw fail("invalid_request","Invalid desktop input receipt");
+    }
     public static JSONObject validateMessage(JSONObject input){
         JSONObject value=parseObject(canonical(input).getBytes(StandardCharsets.UTF_8));requireProfile(value);
         if(!VERSION.equals(value.opt("protocolVersion")))throw fail("incompatible_version","Unsupported device protocol version");String kind=value.optString("messageType");
@@ -160,7 +194,7 @@ public final class DeviceProtocol {
         if("DeviceResponse".equals(kind)){
             keys(value,set("protocolVersion protocolProfile messageType requestId method executorDeviceId instanceId result"),Set.of());identifier(value.opt("requestId"),"requestId");deviceId(value.opt("executorDeviceId"),"executorDeviceId");identifier(value.opt("instanceId"),"instanceId");String method=value.optString("method");JSONObject result=value.optJSONObject("result");if(!METHODS.contains(method)||result==null)throw fail("invalid_request","Unknown response method or invalid result");
             if("device.describe".equals(method)){if(!"DeviceDescription".equals(result.opt("messageType")))throw fail("invalid_request","Describe requires typed paired metadata");validateMessage(result);if(!result.optString("deviceId").equals(value.optString("executorDeviceId"))||!result.optString("instanceId").equals(value.optString("instanceId")))throw fail("wrong_audience","Description belongs to another native device instance");}
-            else if("desktop.viewer".equals(method)){keys(result,set("viewerSessionId operationId status"),set("expiresAt width height control state streamId answer iceServers bundlePolicy transport lastFrame inputChannel metadataChannel reason transportClosedVerified target frameRef inputReceipt noAutomaticReplay message"));identifier(result.opt("viewerSessionId"),"viewerSessionId");identifier(result.opt("operationId"),"operationId");if(!set("completed unknown failed").contains(result.optString("status")))throw fail("invalid_request","Invalid desktop viewer receipt status");}
+            else if("desktop.viewer".equals(method))validateDesktopViewerResult(result,value.optString("executorDeviceId"));
             else if(set("tool.invoke task.submitGoal operation.get operation.cancel task.respond task.pause task.cancel task.acquireControl task.answerQuestion task.steer task.requestResume").contains(method)){if(!"OperationReceipt".equals(result.opt("messageType")))throw fail("invalid_request","Method requires an original typed operation receipt");validateMessage(result);if(!result.optString("executorDeviceId").equals(value.optString("executorDeviceId"))||!result.optString("instanceId").equals(value.optString("instanceId")))throw fail("wrong_audience","Receipt belongs to another native executor instance");if("operation.cancel".equals(method)&&!result.has("cancellation")||!set("operation.cancel operation.get").contains(method)&&result.has("cancellation"))throw fail("invalid_request","Cancellation result is not this method receipt");if("task.submitGoal".equals(method)&&result.optBoolean("accepted")&&!result.has("localTaskId"))throw fail("invalid_request","Accepted Goal requires its actual receiver task");if("task.acquireControl".equals(method)&&result.optBoolean("accepted")&&"succeeded".equals(result.opt("status"))){identifier(result.optJSONObject("payload").opt("leaseId"),"leaseId");integer(result.optJSONObject("payload").opt("expiresAt"),"expiresAt",1,MAX_SAFE_INTEGER);}}
             else if(set("task.get artifact.describe").contains(method)){String expected="task.get".equals(method)?"TaskSnapshot":"ArtifactDescriptor";if(!expected.equals(result.optString("messageType")))throw fail("invalid_request","Response result has the wrong typed record");validateMessage(result);if(!result.optString("executorDeviceId").equals(value.optString("executorDeviceId"))||!result.optString("instanceId").equals(value.optString("instanceId")))throw fail("wrong_audience","Response record belongs to another device instance");}
             else if("task.events".equals(method)){
