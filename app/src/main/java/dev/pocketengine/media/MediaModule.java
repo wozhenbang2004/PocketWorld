@@ -178,6 +178,7 @@ public final class MediaModule implements EngineModule {
     private synchronized JSONObject configure(JSONObject input) throws Exception {
         if (closed) throw new IllegalStateException("媒体模块已关闭");
         if (active != null || !progressControls.isEmpty()) throw new IllegalStateException("媒体请求或进度观察期间不能更改服务配置，请先停止原观察");
+        if(input.has("expectedConfigurationRevision")&&(!(input.opt("expectedConfigurationRevision") instanceof String)||!MediaJobs.configurationRevision(read()).equals(input.getString("expectedConfigurationRevision"))))throw new SecurityException("原媒体服务配置已变化，请重新读取后保存");
         String base = input.getString("baseUrl").trim();
         MediaTransport.base(base);
         String provider = input.optString("provider", "openai_compatible");

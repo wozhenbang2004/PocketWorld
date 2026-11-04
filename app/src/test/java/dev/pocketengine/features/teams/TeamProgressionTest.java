@@ -85,4 +85,19 @@ public class TeamProgressionTest {
             c.resume(id,null,config(),null,null);JSONObject revised=await(c,id);assertEquals("completed",revised.getString("status"));assertEquals(2,aCalls.get());assertEquals(2,bCalls.get());JSONObject dependency=revised.getJSONArray("members").getJSONObject(1).getJSONArray("roundStates").getJSONObject(0).getJSONArray("dependencyOutputs").getJSONObject(0);assertEquals("前置版本 2",dependency.getString("content"));assertTrue(dependency.getInt("generation")>0);
         }
     }
+    @Test public void reviewedCancelCannotStopANewerGenerationOrTreatAMemberAsTheWholeTeam()throws Exception {
+        try(TeamCoordinator c=new TeamCoordinator(file(),(m,p,t)->new JSONObject().put("content","原成员成果"),e->{})){
+            String id=c.start(team(),"原共同目标",1,config()).getString("id");JSONObject completed=await(c,id);
+            JSONObject stale=new JSONObject().put("runId",id).put("expectedRevision",completed.getLong("revision")).put("expectedGeneration",completed.getInt("generation"));
+            JSONObject paused=c.feedback(id,"a","核对原前置结果");
+            assertThrows(IllegalStateException.class,()->c.reviewedControl("cancel",stale,config(),null,null));
+            assertEquals(paused.getInt("generation"),c.get(id).getInt("generation"));assertNotEquals("cancelled",c.get(id).getString("status"));
+            JSONObject current=new JSONObject().put("runId",id).put("expectedRevision",paused.getLong("revision")).put("expectedGeneration",paused.getInt("generation"));
+            JSONObject member=new JSONObject(current.toString()).put("memberId","a").put("expectedMemberGeneration",paused.getJSONArray("members").getJSONObject(0).getInt("generation"));
+            assertThrows(IllegalArgumentException.class,()->c.reviewedControl("cancel",member,config(),null,null));
+            assertNotEquals("cancelled",c.get(id).getString("status"));
+            assertEquals("cancelled",c.reviewedControl("cancel",current,config(),null,null).getString("status"));
+            assertThrows(IllegalStateException.class,()->c.reviewedControl("cancel",current,config(),null,null));
+        }
+    }
 }

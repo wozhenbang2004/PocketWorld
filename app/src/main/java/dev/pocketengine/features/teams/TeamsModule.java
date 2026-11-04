@@ -9,6 +9,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 public final class TeamsModule implements EngineModule {
+    /** Read-only owner preview; save still validates the same original member dependency graph. */
+    public static void validateDefinitionMembers(JSONArray members)throws Exception {TeamWorkPlan.validate(members);}
     private final FeatureContext context;
     private final File file;
     private final TeamCoordinator coordinator;
@@ -78,7 +80,14 @@ public final class TeamsModule implements EngineModule {
     }
     private JSONObject handleLocked(String command,JSONObject input)throws Exception {
         if(command.matches("resume|continueMessages")&&coordinator.get(input.getString("runId")).optString("mode").equals("produce")&&(!input.has("expectedRevision")||!input.has("expectedGeneration")))throw new SecurityException("文件协作继续需要本次主人审阅的原团队快照");
-        if(command.matches("pause|resume|feedback|continueMessages")&&(input.has("expectedRevision")||input.has("expectedGeneration"))){JSONObject result=coordinator.reviewedControl(command,input,context.model(),evidenceFactory,externalFactory);if(writeHost!=null&&input.optString("memberId").isEmpty()){if(command.equals("pause"))writeHost.pause(input.getString("runId"));if(command.equals("resume"))writeHost.resume(input.getString("runId"));}return result;}
+        if(command.matches("pause|resume|feedback|continueMessages|cancel")&&(input.has("expectedRevision")||input.has("expectedGeneration"))){JSONObject result=coordinator.reviewedControl(command,input,context.model(),evidenceFactory,externalFactory);if(writeHost!=null&&input.optString("memberId").isEmpty()){if(command.equals("pause"))writeHost.pause(input.getString("runId"));if(command.equals("resume"))writeHost.resume(input.getString("runId"));if(command.equals("cancel"))writeHost.cancel(input.getString("runId"));}return result;}
+        if(input.has("expectedDefinition")&&command.matches("save|remove|start")) {
+            String id=input.getString(command.equals("start")?"teamId":"id");JSONObject current=null;JSONArray all=definitions();
+            for(int i=0;i<all.length();i++)if(id.equals(all.getJSONObject(i).optString("id")))current=all.getJSONObject(i);
+            Object expected=input.get("expectedDefinition");
+            if(!(expected instanceof String)||!((String)expected).equals(current==null?"":current.toString()))throw new SecurityException("原团队配置已变化，请重新读取后核对");
+            if(!command.equals("save")&&current==null)throw new SecurityException("原团队已移除");
+        }
         switch(command){
             case "roleCatalog":return TeamRoleCatalog.snapshot(JsonFiles.read(file),snapshot().getJSONArray("runnerCapabilities"),TeamResearchContext.toolNames());
             case "saveRole":case "archiveRole":case "removeRole":case "saveTemplate":case "archiveTemplate":case "removeTemplate":{

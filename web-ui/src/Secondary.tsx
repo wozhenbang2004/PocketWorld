@@ -13,6 +13,11 @@ import { AppearanceSettings, SystemSpeechSettings } from './PresentationSettings
 import {LocalWorkspace} from './LocalWorkspace';
 import {MemoryWorkspace} from './MemoryWorkspace';
 import {LearningWorkspace, type LearningCandidateTarget} from './LearningWorkspace';
+import {TeamsWorkspace} from './TeamsWorkspace';
+import {GroupsWorkspace} from './GroupsWorkspace';
+import {MediaWorkspace} from './MediaWorkspace';
+import {DevicesWorkspace} from './DevicesWorkspace';
+import {PluginsWorkspace} from './PluginsWorkspace';
 import { ModelPicker, PressButton } from './library';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import {
@@ -32,7 +37,7 @@ import { backgroundConnection, modelConnectionCommand, wirelessEndpoints, wirele
  * A command acknowledgement is never treated as a saved setting or approval.
  */
 type Data = Record<string, any>;
-type Snapshot = { state?: Data; composer?: Data | null; capabilities?: { commands?: string[] } };
+type Snapshot = { state?: Data; view?: { resumeRevision?: number; taskId?: string | null }; composer?: Data | null; capabilities?: { commands?: string[] } };
 type BackHandlerRegistration = (handler: (() => boolean) | null) => void;
 type Props = { route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration };
 type Run = (action: string, args?: Data) => Promise<any>;
@@ -784,19 +789,11 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack }: { 
   </>;
 }
 
-function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void }) {
+function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate, onOpenModels, onNavigate }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void; onOpenModels: () => void; onNavigate: (domain: 'plugins' | 'pluginCatalog' | 'mcp') => void }) {
   const act = (action: string, args: Data, label: string, primary = false) => <CapabilityAction action={action} args={args} supported={supported} run={run} primary={primary}>{label}</CapabilityAction>;
   const title = SECONDARY_DOMAINS.find(x => x.id === domain)?.title || '连接与能力';
   if (domain === 'accounts') return <AccountsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
-  if (domain === 'devices') return <Card title="我的设备" description="配对与能力授予保留双方完整身份和原审阅版本。">
-    <Facts items={[[ '本机名称', first(object(data.localDevice), ['name', 'label']) ], ['本机完整指纹', first(object(data.localDevice), ['fingerprint', 'identityFingerprint']) ], ['接收', typeof data.receiverEnabled === 'boolean' ? data.receiverEnabled ? '已开启' : '已关闭' : undefined]]} />
-    <div className="pw-form-actions">{act('devices.createInvitation', {}, '创建配对邀请', true)}{act('devices.reviewReceiver', { enabled: data.receiverEnabled !== true }, data.receiverEnabled ? '核对并停用接收' : '核对并启用接收')}</div>
-    <Collection data={data} keys={['peers', 'devices']} label="已配对设备">{row => <>
-      <Facts items={[[ '设备类型', row.kind ], ['完整指纹', row.fingerprint || row.identityFingerprint ], ['授权版本', row.grantRevision ], ['连接状态', row.connectionStatus]]} />
-      <div className="pw-form-actions">{act('devices.reviewPeer', { peerId: recordId(row), expectedRevision: row.revision }, '核对连接与授权')}{act('devices.connectPeer', { peerId: recordId(row), expectedRevision: row.revision }, '连接')}{act('devices.disconnectPeer', { peerId: recordId(row), expectedRevision: row.revision }, '断开')}</div>
-    </>}</Collection>
-    <Collection data={data} keys={['pendingPairings', 'recoverablePairings']} label="待核对配对">{row => <div className="pw-form-actions">{act('devices.reviewPairing', { pairingId: recordId(row), expectedRevision: row.revision }, '打开原配对审阅')}{act('devices.openRecovery', { pairingId: recordId(row) }, '核对恢复地址')}</div>}</Collection>
-  </Card>;
+  if (domain === 'devices') return <DevicesWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} openModels={onOpenModels} />;
   if (domain === 'remote' || domain === 'ssh') return <ConnectionWorkspace domain={domain} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'memory' || domain === 'memoryReview') return <MemoryWorkspace domain={domain} run={run} registerTransientBack={registerTransientBack} initialCandidate={candidateTarget} />;
   if (domain === 'learning') return <LearningWorkspace state={state} data={data} run={run} registerTransientBack={registerTransientBack} onReviewCandidate={onReviewCandidate} />;
@@ -814,23 +811,16 @@ function DomainPage({ domain, state, data, supported, run, registerTransientBack
   if (domain === 'channels') return <ChannelsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'mcp') return <McpWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'skills') return <SkillsWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
-  if (domain === 'plugins' || domain === 'pluginCatalog') return <>
-    <Card title={title} description="安装、正文、权限和启用状态分开；每项决定对应原版本与宿主审阅。">
-      <Collection data={data} keys={['plugins', 'installed']} label={title}>{row => <>
-        <Facts items={[[ '版本', row.revision || row.version ], ['摘要', row.digest ], ['来源', first(row, ['source', 'sourceKind']) ], ['凭据', row.credentialsConfigured ? '已配置' : undefined]]} />
-        <div className="pw-form-actions">{act(domain + '.read', { id: recordId(row), expectedRevision: row.revision, expectedDigest: row.digest }, '查看工具与权限')}{act(domain + '.reviewEnabled', { id: recordId(row), enabled: row.enabled !== true, expectedRevision: row.revision, expectedDigest: row.digest }, row.enabled ? '核对并停用' : '核对并启用')}</div>
-      </>}</Collection>
-      <p className="pw-field-hint">插件配置文件选择与导入尚未接入此页面。</p>
-    </Card>
-    <Collection data={data} keys={['pendingOperations', 'previews']} label="当前准备与审阅记录">{row => <div className="pw-form-actions">{act(domain + '.openReview', { id: recordId(row), expectedRevision: row.revision }, '打开原审阅')}{act(domain + '.cancel', { operationId: row.operationId || recordId(row) }, '取消本次准备')}</div>}</Collection>
-  </>;
-  if (domain === 'teams' || domain === 'groups') return <TeamWorkspace domain={domain} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
-  if (domain === 'media' || domain === 'realtime') return <Card title={title} description="请求准备、实际提交、等待结果与未知提交分开；不会因界面动效宣称已完成。">
+  if (domain === 'plugins' || domain === 'pluginCatalog') return <PluginsWorkspace mode={domain} state={state} supported={supported} run={run} registerTransientBack={registerTransientBack} onNavigate={onNavigate} />;
+  if (domain === 'teams') return <TeamsWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
+  if (domain === 'groups') return <GroupsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
+  if (domain === 'media') return <MediaWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
+  if (domain === 'realtime') return <Card title={title} description="请求准备、实际提交、等待结果与未知提交分开；不会因界面动效宣称已完成。">
     <Facts items={[[ '提供方', first(data, ['provider', 'providerName']) ], ['凭据', typeof data.configured === 'boolean' ? data.configured ? '已配置' : '未配置' : undefined], ['当前会话', first(object(data.session), ['state', 'stage']) ]]} />
     {domain === 'realtime' && <div className="pw-form-actions">{act('realtime.requestMicrophonePermission', {}, '麦克风权限')}{act('realtime.requestCameraPermission', {}, '摄像头权限')}{act('realtime.prepareCall', {}, '准备通话', true)}{act('realtime.disconnect', { sessionId: data.session?.id }, '结束当前通话')}</div>}
-    <Collection data={data} keys={domain === 'media' ? ['jobs', 'operations'] : ['invitations', 'sessions', 'voiceTasks']} label={domain === 'media' ? '原媒体任务' : '通话与语音任务'}>{row => <>
+    <Collection data={data} keys={['invitations', 'sessions', 'voiceTasks']} label="通话与语音任务">{row => <>
       <Facts items={[[ '原提交', row.operationId ], ['阶段', row.stage ], ['关联任务', row.taskId ]]} />
-      <div className="pw-form-actions">{row.taskId && act('tasks.open', { id: row.taskId }, '打开原任务')}{act(domain === 'media' ? 'media.fetchResults' : 'realtime.inspect', { operationId: row.operationId || recordId(row), sessionId: row.sessionId || row.id }, domain === 'media' ? '核对原结果' : '核对当前会话')}{act(domain === 'media' ? 'media.reconcileOperation' : 'realtime.reconcile', { operationId: row.operationId || recordId(row), sessionId: row.sessionId || row.id }, '核对未决状态')}</div>
+      <div className="pw-form-actions">{row.taskId && act('tasks.open', { id: row.taskId }, '打开原任务')}{act('realtime.inspect', { operationId: row.operationId || recordId(row), sessionId: row.sessionId || row.id }, '核对当前会话')}{act('realtime.reconcile', { operationId: row.operationId || recordId(row), sessionId: row.sessionId || row.id }, '核对未决状态')}</div>
     </>}</Collection>
   </Card>;
   if (domain === 'proxy') return <Card title="本机模型服务" description="本机端点、路由和近期调用；服务状态由手机实际运行回执提供。">
@@ -990,7 +980,7 @@ const COMMON_SETTINGS = [
 ];
 
 export default function Secondary({ route, onBack, snapshot, registerBackHandler }: Props) {
-  const state = object(snapshot.state);
+  const state: Data = { ...object(snapshot.state), webWorkspaceResumeRevision: Number(snapshot.view?.resumeRevision || 0), webWorkspaceTaskOpen: !!snapshot.view?.taskId };
   const commands = snapshot.capabilities?.commands || [];
   const supported = (action: string) => commands.includes(action);
   const normalize = (next: string) => (next || 'settings').replace(/^connections[:/]/, '').replace(/^settings[:/]/, '');
@@ -1052,7 +1042,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   // moduleResults; an in-flight or failed reread must not present an old list.
   const memoryListReady = !object(state.moduleErrors)['memory.list'] && !(Array.isArray(state.moduleBusy) && state.moduleBusy.includes('memory.list'));
   const memoryList = memoryListReady ? object(object(state.moduleResults)['memory.list']) : {};
-  const data = { ...feature, ...owner, ...specialized, ...(page === 'memory' ? { records: memoryList.records } : {}) };
+  const data: Data = { ...feature, ...owner, ...specialized, ...(page === 'memory' ? { records: memoryList.records } : {}) };
   const domainError = text(object(state.ownerErrors)[dataPage]) || Object.entries(object(state.moduleErrors)).filter(([key]) => key.startsWith(dataPage + '.')).map(([, value]) => text(value)).filter(Boolean).join('\n');
   const settingsGroup = SETTINGS_GROUPS.find(group => page === 'group:' + group.id);
   const connection = modelConnectionRows(data).find(row => recordId(row) === modelView.id);
@@ -1122,7 +1112,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
           : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} navigate={navigate} />
           : page === 'history' || page === 'usage' ? <HistoryPage key={page} usage={page === 'usage'} supported={supported} run={run} />
           : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} registerTransientBack={registerTransientBack} navigate={navigate} />
-          : domain ? <DomainPage key={page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} />
+          : domain ? <DomainPage key={page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} />
           : <Empty>此入口未找到，可返回设置。</Empty>}
       </div>
     </div>

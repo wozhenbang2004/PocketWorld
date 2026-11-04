@@ -6718,6 +6718,21 @@ public final class TaskStore {
         }
     }
     public synchronized JSONObject startAttempt(String id,String mode,int allocation)throws Exception{return startAttempt(id,mode,allocation,false);}
+    /** Reserve the reviewed original capability continuation and its feedback in the same SQL gate. */
+    public synchronized JSONObject startOriginalCapabilityAttempt(String id,String expectedRun,int expectedEpoch,int allocation,RunControl original,String feedback)throws Exception {
+        if(expectedRun==null||expectedEpoch<0||expectedRun.isEmpty()!=(expectedEpoch==0)||original==null||original.hasHostRun()||original.isPaused())throw new SecurityException("原能力续接身份或控制器无效");
+        db.beginTransaction();try{
+            JSONObject task=required(id);requirePrivateOwner(task);
+            if(!"assistant".equals(task.optString("kind"))||!"capabilities".equals(task.optString("executionMode"))||!expectedRun.equals(task.optString("runId"))||expectedEpoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("原能力执行已变化，请重新核对后继续");
+            if(task.optBoolean("cancelRequested")||!task.optString("status").matches("queued|paused|interrupted|awaiting_user|needs_confirmation|failed")||hasUnresolved(id))throw new SecurityException("原能力任务仍在执行、已停止或有未决动作，请先核对");
+            if(task.optJSONObject("origin")==null&&task.optJSONObject("executionScope")==null)throw new SecurityException("旧任务须先审阅累计范围，继续不会自动增加额度");
+            try(Cursor active=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND status='running' LIMIT 1",new String[]{id})){if(active.moveToFirst())throw new SecurityException("原执行尚未结束，不并发创建下一次执行");}
+            original.check();
+            if(feedback!=null&&!feedback.isBlank())feedback(id,feedback.trim());
+            JSONObject attempt=startAttempt(id,"capabilities",allocation,false,false,null,null,null,null,true);original.bindHostRun(id,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"));original.check();
+            db.setTransactionSuccessful();return attempt;
+        }finally{db.endTransaction();}
+    }
     /** A reviewed old phone attempt may only become the next attempt inside this same SQL gate. */
     public synchronized JSONObject startOriginalPhoneAttempt(String id,String run,int epoch,String mode,int allocation)throws Exception {
         return startOriginalPhoneAttempt(id,run,epoch,mode,allocation,null,null);
@@ -6750,6 +6765,9 @@ public final class TaskStore {
         return startAttempt(id,mode,allocation,nativeTeam,nativeLearning,nativeRoundReview,nativeGatewayReview,phoneRequest,null);
     }
     private JSONObject startAttempt(String id,String mode,int allocation,boolean nativeTeam,boolean nativeLearning,TeamRoundContinuationReview nativeRoundReview,GatewayParentRunReview nativeGatewayReview,dev.pocketengine.features.channels.HostTaskPort.Request phoneRequest,dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection nativeProfile)throws Exception{
+        return startAttempt(id,mode,allocation,nativeTeam,nativeLearning,nativeRoundReview,nativeGatewayReview,phoneRequest,nativeProfile,false);
+    }
+    private JSONObject startAttempt(String id,String mode,int allocation,boolean nativeTeam,boolean nativeLearning,TeamRoundContinuationReview nativeRoundReview,GatewayParentRunReview nativeGatewayReview,dev.pocketengine.features.channels.HostTaskPort.Request phoneRequest,dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection nativeProfile,boolean reviewedCapabilityContinuation)throws Exception{
         requireExecutionEnabled();
         if(required(id).has("ownerLocalTerminal"))throw new SecurityException("原手动终端只查询、输入或停止同一进程，不能恢复为模型或重新启动");
         db.beginTransaction();try{
@@ -6767,8 +6785,10 @@ public final class TaskStore {
             JSONObject origin=t.optJSONObject("origin");boolean planContinuation=origin!=null&&"automation".equals(origin.optString("kind"))&&!origin.optString("planId").isEmpty()&&!t.optString("runId").isEmpty();
             if(planContinuation&&(t.optBoolean("cancelRequested")||!t.optString("status").matches("paused|interrupted|awaiting_user|needs_confirmation")))throw new SecurityException("原目标已停止或尚未结束，不能重新派发");
             if(planContinuation&&!mode.equals(t.optString("executionMode")))throw new SecurityException("原目标恢复须保持原执行位置");
-            JSONObject retainedGrant=planContinuation?grant(t.getString("runId")):null;
+            boolean retainReviewedBudget=reviewedCapabilityContinuation&&!t.optString("runId").isEmpty()&&t.optJSONObject("executionScope")==null;
+            JSONObject retainedGrant=planContinuation||retainReviewedBudget?grant(t.getString("runId")):null;
             if(retainedGrant!=null&&(!"owner".equals(retainedGrant.optString("principalId"))||!"private".equals(retainedGrant.optString("spaceId"))||!mode.equals(retainedGrant.optString("mode"))))throw new SecurityException("原目标预算不属于这个执行位置");
+            if(retainReviewedBudget&&(retainedGrant==null||retainedGrant.optLong("expiresAt")<=System.currentTimeMillis()||retainedGrant.optInt("remainingOperations")<1))throw new SecurityException("原能力执行范围已到期或剩余额度不足，继续不会自动补满");
             long now=System.currentTimeMillis();if(phoneMode)requireExclusivePhoneLeaseFree();
             int epoch=t.optInt("coordinatorEpoch")+1;String runId=UUID.randomUUID().toString();
             JSONObject previous=planContinuation?checkpoint(t.getString("runId")):checkpointForTask(id);int consumed=previous.optInt("steps");
@@ -6777,6 +6797,7 @@ public final class TaskStore {
             JSONObject taskScope=t.optJSONObject("executionScope");if(nativeProfile!=null&&t.optJSONObject("workProfileIntent")!=null&&taskScope==null)throw new SecurityException("待启动工作配置尚无有效主人执行范围，请重新审阅目标与范围；没有采用默认授权");
             if(taskScope!=null){if(phoneRequest==null)executionScopeTask(id);else requireChannelIdentity(t,channelOrigin(phoneRequest.origin()));if(!t.optString("runId").isEmpty())taskScope.put("toolsPinned",true);if(!mode.equals(taskScope.getString("mode")))throw new SecurityException("原任务范围不能借继续切换执行位置，请明确审阅新任务");long scopeDeadline=TaskExecutionScope.effectiveDeadline(taskScope);if(scopeDeadline<=now)throw new SecurityException("原任务范围已到期，请主人明确续期");ceiling=Math.min(400,consumed+taskScope.getInt("toolLimit")-taskScope.getInt("toolsUsed"));if(!gatewayOnly&&consumed>=ceiling||taskScope.getInt("modelCallsUsed")>=taskScope.getInt("modelCallLimit"))throw new IllegalStateException("原任务累计预算已耗尽，请审阅原范围；没有自动补额度");}
             long expires=taskScope==null?now+600_000L:TaskExecutionScope.effectiveDeadline(taskScope);
+            if(retainReviewedBudget)expires=Math.min(expires,retainedGrant.getLong("expiresAt"));
             if(nativeTeam&&teamProjectSelection(t)!=null)expires=teamNativeProjectDeadline(t);
             if(conditionWait!=null)expires=Math.min(expires,conditionWait.getLong("validUntil"));
             JSONObject grant=new JSONObject().put("principalId","owner").put("spaceId","private").put("mode",mode).put("expiresAt",expires).put("stepCeiling",ceiling)

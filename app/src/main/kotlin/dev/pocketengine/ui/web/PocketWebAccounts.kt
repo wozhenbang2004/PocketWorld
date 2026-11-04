@@ -65,6 +65,9 @@ internal class PocketWebAccounts(
         JSONObject().put("accountSnapshot", JSONObject(snapshot.value().toString()))
             .put("selectionRevision", snapshot.revision()).put("viewGeneration", generation)
 
+    /** Local read only. Opening a model picker never refreshes credentials or selects an account. */
+    fun snapshot(): JSONObject = project(localSnapshot(), reviews.generation())
+
     /** Worker only. No automatic retry of a catalog request that may have refreshed credentials. */
     fun readModels(accountId: String, expectedVersion: Long): JSONObject {
         idleRevision()

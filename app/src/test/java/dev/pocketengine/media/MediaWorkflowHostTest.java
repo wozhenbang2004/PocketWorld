@@ -69,6 +69,16 @@ public final class MediaWorkflowHostTest {
     private JSONObject args()throws Exception{return new JSONObject().put("configurationRevision",media.snapshot().getString("configurationRevision")).put("workflow",new JSONObject().put("6",new JSONObject().put("class_type","CLIPTextEncode").put("inputs",new JSONObject().put("text","labelled loopback fixture"))));}
     private JSONObject prepared(JSONObject args)throws Exception{JSONObject prepared=host.prepareFromOwner(media,"submitWorkflow",args);taskId.set(prepared.getString("taskId"));return new JSONObject(args.toString()).put("taskId",taskId.get());}
     private int rows(String table)throws Exception{try(SQLiteDatabase db=SQLiteDatabase.openDatabase(app.getDatabasePath("pocket-world.db").getAbsolutePath(),null,SQLiteDatabase.OPEN_READONLY);Cursor cursor=db.rawQuery("SELECT count(*) FROM "+table,null)){cursor.moveToFirst();return cursor.getInt(0);}}
+    @Test public void reviewedServiceConfigurationCannotReplaceANewerSavedVersion()throws Exception{
+        String reviewed=media.snapshot().getString("configurationRevision");configure();
+        String current=media.snapshot().getString("configurationRevision");
+        JSONObject input=new JSONObject().put("provider","comfyui").put("baseUrl","http://127.0.0.1:"+server.getAddress().getPort()+"/proxy")
+                .put("expectedConfigurationRevision",reviewed).put("comfyJobsApi",true);
+        assertThrows(SecurityException.class,()->media.handle("configure",input));
+        assertEquals(current,media.snapshot().getString("configurationRevision"));
+        JSONObject saved=media.handle("configure",new JSONObject(input.toString()).put("expectedConfigurationRevision",current));
+        assertTrue(saved.getJSONObject("configuration").getBoolean("comfyJobsApi"));assertEquals(0,posts.get());
+    }
     @Test public void cleanFirstSuccessHasRealIntentGrantAndOriginalArtifactWithoutTaskSuccess()throws Exception{
         JSONObject input=prepared(args());assertEquals(0,posts.get());assertEquals(0,rows("runs"));assertEquals(0,rows("operations"));
         JSONObject receipt=host.submitFromOwner(media,"submitWorkflow",input);String operation=receipt.getString("operationId");

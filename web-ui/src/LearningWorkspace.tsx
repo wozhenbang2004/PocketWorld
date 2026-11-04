@@ -32,7 +32,7 @@ export function LearningWorkspace({ state, data, run, registerTransientBack, onR
   const selected = ended.find(task => task.id === taskId);
   const stop = () => {
     const task = current?.taskId; if (!task || stopping) return;
-    const original = operation?.taskId === task && !operation.settled ? operation : null;
+    const original = operation && operation.taskId === task && !operation.settled ? operation : null;
     const args = original ? { operationHandle: original.operationHandle } : { taskId: task, runId: current.runId, epoch: current.epoch };
     if (!original && (typeof current.runId !== 'string' || !Number.isInteger(current.epoch) || current.epoch < 0)) { setError('原任务身份尚未读取，请重新核对原水位。'); return; }
     setStopping(true); void run(original ? 'learning.operation.stop' : 'learning.stop', args).then(value => { if (alive.current && originalTask.current === task) { if (!original) setCurrent(value); setNotice('已收到原停止回执。已有草稿、候选和未知调用保留，请核对当前水位。'); } }).catch(failure => { if (alive.current) setError(failure.message); }).finally(() => { if (alive.current) setStopping(false); });

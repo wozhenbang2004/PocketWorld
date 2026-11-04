@@ -67,6 +67,7 @@ internal object PocketWebState {
             .put("taskScreenshotPolicy", publicValue(controller.taskScreenshotPolicy))
             .put("taskScreenshotSaving", controller.taskScreenshotSaving)
             .put("memoryRefreshRevision", state.memoryRefreshRevision)
+            .put("deviceWorkspaceRevision", controller.deviceWorkspaceRevision)
             .put("modelName", state.modelName).put("baseUrl", state.baseUrl).put("hasApiKey", state.hasApiKey)
             .put("screenshots", state.screenshots).put("localCaptureAllowed", state.localCaptureAllowed)
             .put("localOcrAllowed", state.localOcrAllowed).put("supportsImageInput", state.supportsImageInput)

@@ -82,6 +82,14 @@ public final class ChannelTaskCoordinator implements HostTaskPort {
         if(tasks.hasUnresolved(id))throw new IllegalStateException("请先核对未决操作");
         ModelConfig config=configs.get();SettingsStore.validate(config);if(feedback!=null&&!feedback.trim().isEmpty())tasks.feedback(id,feedback.trim());schedule(task,null,config,true);
     }
+    /** A reviewed local-owner continuation retains its original run through the same native admission. */
+    public void resumeOriginal(String id,String run,int epoch,String feedback)throws Exception{
+        JSONObject task=tasks.get(id,false);
+        if(task==null||run==null||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("原渠道执行已变化，请重新核对后继续");
+        if("phone".equals(task.optString("kind")))throw new SecurityException("请从原手机任务确认屏幕后继续");
+        JSONObject origin=origin(task);channels.checkHostTaskAuthority(origin.getString("requestId"));tasks.channelTask(id,origin);
+        ModelConfig config=configs.get();SettingsStore.validate(config);schedule(task,null,config,true,run,epoch,feedback);
+    }
     /** Called again by the shared attempt entry, so no native route can omit the origin guard. */
     public void protect(String id,RunControl control)throws Exception{
         JSONObject task=tasks.get(id,false);if(task==null)throw new IllegalArgumentException("任务不存在");
@@ -90,11 +98,14 @@ public final class ChannelTaskCoordinator implements HostTaskPort {
         control.setAuthorityCheck(()->{channels.checkHostTaskAuthority(requestId);tasks.checkChannelTaskControl(id,expected,control);});
     }
     private void schedule(JSONObject task,JSONArray initial,ModelConfig config,boolean announceStart)throws Exception{
+        schedule(task,initial,config,announceStart,null,-1,"");
+    }
+    private void schedule(JSONObject task,JSONArray initial,ModelConfig config,boolean announceStart,String expectedRun,int expectedEpoch,String feedback)throws Exception{
         String id=task.getString("id");RunControl control=new RunControl();protect(id,control);
         if(controls.putIfAbsent(id,control)!=null)throw new IllegalStateException("该任务仍在执行");JSONObject attempt=null;
         try{
             synchronized(tasks){
-                control.check();attempt=tasks.startAttempt(id,"capabilities",config.maxSteps);control.bindHostRun(id,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"));control.check();
+                control.check();attempt=expectedRun==null?tasks.startAttempt(id,"capabilities",config.maxSteps):tasks.startOriginalCapabilityAttempt(id,expectedRun,expectedEpoch,config.maxSteps,control,feedback);control.bindHostRun(id,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"));control.check();
                 // Persist the actual channel instructions before enqueue, including crash/rejected-worker recovery.
                 if(initial!=null)tasks.journal(id,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"),control).checkpoint(initial,0,new JSONObject());
             }
