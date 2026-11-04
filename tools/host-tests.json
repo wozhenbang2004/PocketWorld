@@ -1301,5 +1301,15 @@
     ],
     "robolectric": true,
     "description": "Original Application/Gateway/Book/source retirement and owner-channel HTTP/SSE/outbox paths. Exact physical-send and post-response checks, already-accepted QQ ACK preservation, cancellation and unknown-no-replay. Original approved schedule source transaction also covers its local notification dispatch; source deletion races and post-dispatch uncertainty retain the same occurrence. Controlled loopback endpoints and native notification shadows; no live provider/platform or phone acceptance."
+  },
+  "team-original-research-stop": {
+    "class": "dev.pocketengine.features.teams.TeamResearchOriginalStartNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.teams.TeamResearchOriginalGenerationTest",
+      "dev.pocketengine.features.teams.TeamResearchParentResourceStateTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Actual approved native research start through HostToolSupervisor/FeatureHost/Module/Coordinator/SQLite, delayed original callback versus explicit replacement generation, dynamic original child cancellation, physical-finally retention and existing durable unknown resource-state regression. Controlled research workers only; no model, remote, device or UI acceptance."
   }
 }

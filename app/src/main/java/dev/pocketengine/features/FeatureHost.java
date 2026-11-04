@@ -339,8 +339,12 @@ public final class FeatureHost implements AutoCloseable {
                 if(module instanceof dev.pocketengine.features.teams.TeamsModule selected&&selected.continuousResearchConfigured()){
                     JSONObject owner=tasks.get(parent,false);researchSource=tasks.teamParentOrigin(parent,parentRun,owner.getInt("coordinatorEpoch"),"teams_start",operationId,args,control);tasks.bindTeamResearchParentStart(researchSource,consumedApprovalId,expectedDefinition);
                 }
-                researchStartEntered=researchSource!=null;result=module.handle("start",nativeInput);
-                if(researchSource!=null){tasks.completeTeamResearchParentStart(researchSource);String originalTeam=operationId;control.onCancel(()->nativeOwnerCleanup(()->{try{module("teams").handle("cancel",json("runId",originalTeam));}catch(Exception ignored){}}));}
+                researchStartEntered=researchSource!=null;
+                if(researchSource!=null){
+                    var started=((dev.pocketengine.features.teams.TeamsModule)module).startOriginalResearch(nativeInput);result=started.accepted();
+                    control.onCancel(()->nativeOwnerCleanup(()->{try{started.requestStop();}catch(Exception ignored){}}));
+                    tasks.completeTeamResearchParentStart(researchSource);
+                }else result=module.handle("start",nativeInput);
             }}updateTask(operationId,result);return result.put("hostTaskId",operationId).put("taskId",operationId).put("parentTaskId",parent);}
         catch(Exception failure){updateTask(operationId,json("status",researchStartEntered?"unknown":failure instanceof IllegalArgumentException||failure instanceof SecurityException?"failed":"unknown","message",safe(failure)));throw failure;}
     }
