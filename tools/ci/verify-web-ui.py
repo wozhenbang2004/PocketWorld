@@ -32,9 +32,9 @@ CAPTURE_ANDROID_API = 35
 CAPTURE_SYSTEM_IMAGE = "system-images;android-35;google_apis;x86_64"
 WEB_ERROR_PATTERN = r"PocketWebUi.*(?:resource-error|console-error|renderer-exit|render-process-gone|main-frame-error)"
 SCENE_LABELS = {
-    "workroom": ("全部工作", "工作输入"),
-    "workroom-ime": ("全部工作", "工作输入"),
-    "work-menu": ("PocketWorld", "关闭全部工作", "最近工作", "设置与连接"),
+    "workroom": ("打开导航", "工作输入"),
+    "workroom-ime": ("打开导航", "工作输入"),
+    "work-menu": ("PocketWorld", "关闭导航", "最近对话", "设置"),
     "tasks": ("任务", "暂无任务"),
     "projects": ("选择项目继续", "从顶部打开项目，或新建一份项目。"),
     "settings": ("设置", "当前模型", "手机能力", "模型与连接"),
@@ -44,7 +44,7 @@ SCENE_LABELS = {
     "model-editor": ("返回连接管理", "接口协议", "接口地址", "模型名称", "API 密钥", "高级设置"),
     "model-advanced": ("返回连接管理", "高级设置", "每次回复的输出上限"),
 }
-SIDEBAR_DESTINATIONS = ("对话", "任务", "项目与文件", "团队协作", "记忆", "任务历史", "设置与连接")
+SIDEBAR_DESTINATIONS = ("对话", "任务", "项目", "团队", "记忆", "任务历史", "设置")
 CAPTURE_SCENES = (
     ("01-workroom.png", "entry.xml", "workroom"),
     ("02-all-work.png", "all-work.xml", "work-menu"),
@@ -346,7 +346,7 @@ def section_editor_controls(root, label):
 
 def navigation_identity(root, drawer_open):
     """Check actual sidebar controls; IME visibility does not remove navigation."""
-    labels = ("关闭全部工作", *SIDEBAR_DESTINATIONS) if drawer_open else ("全部工作",)
+    labels = ("关闭导航", *SIDEBAR_DESTINATIONS) if drawer_open else ("打开导航",)
     controls = {label: accessible_controls(root, label) for label in labels}
     assert all(len(items) == 1 for items in controls.values()), "Expected one actual app control per sidebar entry: " + " / ".join(labels)
     nodes = [next(iter(items.values())) for items in controls.values()]
@@ -377,7 +377,7 @@ def navigation_identity(root, drawer_open):
         assert common_left < common_right and all(common_left <= point[0] < common_right for point in entry_points), "Sidebar destinations do not share one visible column"
         assert all(item[0] < left + (right - left) // 3 and item[2] < right for item in entries), "Expected destinations in a left sidebar with part of the workspace visible"
     else:
-        assert not accessible_controls(root, "关闭全部工作"), "The sidebar did not close after returning or selecting a page"
+        assert not accessible_controls(root, "关闭导航"), "The sidebar did not close after returning or selecting a page"
         assert not any(accessible_controls(root, label) for label in SIDEBAR_DESTINATIONS[:3]), "Closed sidebar destinations remained actionable over the workspace"
         assert bounds[0][0] < left + (right - left) // 3, "The sidebar opener is not at the leading app-header edge"
     # As with target(), validate the real center hit rather than inferring
@@ -703,18 +703,18 @@ def verify_capture(args):
         assert json.loads((root / (name + "-ime.json")).read_text()) == observed, "IME receipt differs from actual Android visibility and navigation evidence"
         ime_checks.append({"xml": name + ".xml", "input_method_dump": name + "-input-method.txt", **observed})
     target_labels = {
-        "open-work-target.json": ("entry.xml", ("全部工作",)),
-        "close-work-target.json": ("all-work.xml", ("关闭全部工作",)),
-        "return-work-target.json": ("return.xml", ("全部工作",)),
-        "primary-tasks-menu-target.json": ("return.xml", ("全部工作",)),
+        "open-work-target.json": ("entry.xml", ("打开导航",)),
+        "close-work-target.json": ("all-work.xml", ("关闭导航",)),
+        "return-work-target.json": ("return.xml", ("打开导航",)),
+        "primary-tasks-menu-target.json": ("return.xml", ("打开导航",)),
         "primary-tasks-target.json": ("primary-tasks-menu.xml", ("任务",)),
-        "primary-projects-menu-target.json": ("tasks-root.xml", ("全部工作",)),
-        "primary-projects-target.json": ("primary-projects-menu.xml", ("项目与文件",)),
-        "primary-work-menu-target.json": ("projects-root.xml", ("全部工作",)),
+        "primary-projects-menu-target.json": ("tasks-root.xml", ("打开导航",)),
+        "primary-projects-target.json": ("primary-projects-menu.xml", ("项目",)),
+        "primary-work-menu-target.json": ("projects-root.xml", ("打开导航",)),
         "primary-work-target.json": ("primary-work-menu.xml", ("对话",)),
         "work-input-target.json": ("primary-work-return.xml", ("工作输入",)),
-        "settings-work-target.json": ("workroom-ime-return.xml", ("全部工作",)),
-        "settings-target.json": ("settings-menu.xml", ("设置与连接",)),
+        "settings-work-target.json": ("workroom-ime-return.xml", ("打开导航",)),
+        "settings-target.json": ("settings-menu.xml", ("设置",)),
         "models-group-target.json": ("settings.xml", ("模型与连接",)),
         "models-list-target.json": ("model-purpose.xml", ("选择模型",)),
         "model-connections-target.json": ("model-list.xml", ("管理连接",)),

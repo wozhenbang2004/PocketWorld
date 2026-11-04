@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import {
   RiAddLine, RiArrowLeftLine, RiArrowRightSLine, RiCheckLine, RiComputerLine, RiDatabase2Line,
   RiFileList3Line, RiKey2Line, RiLink, RiMicLine, RiPuzzle2Line, RiRefreshLine,
-  RiMenuLine, RiSettings3Line, RiShieldCheckLine, RiSmartphoneLine, RiTeamLine,
+  RiSettings3Line, RiShieldCheckLine, RiSmartphoneLine, RiTeamLine,
 } from '@remixicon/react';
 import { bridge } from './bridge';
 import ReminderWorkspace from './ReminderWorkspace';
@@ -47,7 +47,7 @@ import { ACCOUNT_RECEIPT_ACTIONS, accountActionReceipt, accountLoginArguments } 
 type Data = Record<string, any>;
 type Snapshot = { state?: Data; view?: { resumeRevision?: number; taskId?: string | null }; composer?: Data | null; capabilities?: { commands?: string[] } };
 type BackHandlerRegistration = (handler: (() => boolean) | null) => void;
-type Props = { route: string; onBack: () => void; onOpenNavigation?: () => void; navigationOpen?: boolean; navigationRevision?: number; onNavigationPageChange?: (page: string) => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration };
+type Props = { route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration; navigationTrigger?: ReactNode; navigationRevision?: number; onNavigationPageChange?: (page: string) => void };
 type Run = (action: string, args?: Data) => Promise<any>;
 const object = (value: any): Data => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const list = (value: any): Data[] => Array.isArray(value) ? value.filter(x => x && typeof x === 'object' && !Array.isArray(x)) : [];
@@ -1086,7 +1086,7 @@ const COMMON_SETTINGS = [
   { id: 'storage', title: '项目存储', detail: '占用与清理审阅', icon: RiDatabase2Line },
 ];
 
-export default function Secondary({ route, onBack, onOpenNavigation, navigationOpen, navigationRevision, onNavigationPageChange, snapshot, registerBackHandler }: Props) {
+export default function Secondary({ route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange }: Props) {
   const state: Data = { ...object(snapshot.state), webWorkspaceResumeRevision: Number(snapshot.view?.resumeRevision || 0), webWorkspaceTaskOpen: !!snapshot.view?.taskId };
   const commands = snapshot.capabilities?.commands || [];
   const supported = (action: string) => commands.includes(action);
@@ -1195,7 +1195,7 @@ export default function Secondary({ route, onBack, onOpenNavigation, navigationO
   const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof RiKey2Line }>, showCurrentModel = false) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate(item.id)}><span><span>{item.title}</span>{showCurrentModel && item.id === 'model-settings' && <small>{text(state.modelName) || '尚未连接'}</small>}</span></Button>)}</div>;
   const refreshAction = page === 'background' ? 'background.refresh' : isModelPage ? 'models.snapshot' : page === 'memory' ? 'memory.list' : 'app.refresh';
   return <section className="pw-secondary pw-secondary-refactor" data-secondary-page={page} aria-label={pageTitle}>
-    <header className="pw-secondary-header">{onOpenNavigation && <IconButton icon={RiMenuLine} aria-label="全部工作" data-testid="all_work" aria-haspopup="dialog" aria-expanded={navigationOpen} aria-controls="pw-work-navigation" onClick={onOpenNavigation} />}<IconButton icon={RiArrowLeftLine} aria-label={isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} onClick={back} /><div><h1>{pageTitle}</h1></div>{!['memory', 'memoryReview', 'teams'].includes(page) && <IconButton icon={RiRefreshLine} aria-label="刷新当前状态" title="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} />}</header>
+    <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label={isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} onClick={back} /><div><h1>{pageTitle}</h1></div>{!['memory', 'memoryReview', 'teams'].includes(page) && <IconButton icon={RiRefreshLine} aria-label="刷新当前状态" title="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} />}{navigationTrigger}</header>
     <div className="pw-secondary-scroll" ref={scroll}>
       {notice && <p className="pw-request-notice" role="status">{notice}</p>}
       {(error || domainError) && <p className="pw-field-error" role="alert">{error || domainError}</p>}

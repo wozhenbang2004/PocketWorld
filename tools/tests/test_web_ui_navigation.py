@@ -24,14 +24,14 @@ class SidebarEvidenceTest(unittest.TestCase):
         root = ET.Element("hierarchy")
         viewport = self.node(root, "", "[0,24][720,900]" if ime else "[0,24][720,1480]", kind="android.webkit.WebView")
         if opened:
-            self.node(viewport, "关闭全部工作", "[488,40][584,136]", clickable=True)
+            self.node(viewport, "关闭导航", "[488,40][584,136]", clickable=True)
             nav = self.node(viewport, "工作与功能", "[0,160][608,1120]")
             for index, label in enumerate(verify.SIDEBAR_DESTINATIONS):
                 top = 184 + index * 104
                 control = self.node(nav, "", f"[24,{top}][584,{top + 96}]", clickable=True)
                 self.node(control, label, f"[72,{top + 28}][360,{top + 68}]", kind="android.widget.TextView")
         else:
-            self.node(viewport, "全部工作", "[24,40][120,136]", clickable=True)
+            self.node(viewport, "打开导航", "[24,40][120,136]", clickable=True)
             section = self.node(viewport, "工作输入", "[8,680][712,880]" if ime else "[8,1280][712,1464]")
             self.node(section, "", "[30,704][600,840]" if ime else "[30,1304][600,1424]",
                       clickable=True, kind="android.widget.EditText", focused=str(ime).lower(), password="false")
@@ -44,23 +44,23 @@ class SidebarEvidenceTest(unittest.TestCase):
         root, _ = self.hierarchy()
         result = verify.navigation_identity(root, False)
         self.assertFalse(result["drawer_open"])
-        self.assertEqual(["全部工作"], result["labels"])
+        self.assertEqual(["打开导航"], result["labels"])
 
     def test_left_sidebar_requires_all_actual_destinations(self):
         root, _ = self.hierarchy(opened=True)
         result = verify.navigation_identity(root, True)
         self.assertTrue(result["drawer_open"])
-        self.assertEqual(["关闭全部工作", *verify.SIDEBAR_DESTINATIONS], result["labels"])
+        self.assertEqual(["关闭导航", *verify.SIDEBAR_DESTINATIONS], result["labels"])
 
     def test_duplicate_menu_entry_is_rejected(self):
         root, viewport = self.hierarchy()
-        self.node(viewport, "全部工作", "[144,40][240,136]", clickable=True)
+        self.node(viewport, "打开导航", "[144,40][240,136]", clickable=True)
         with self.assertRaises(AssertionError):
             verify.navigation_identity(root, False)
 
     def test_drawer_that_failed_to_close_is_rejected(self):
         root, viewport = self.hierarchy()
-        self.node(viewport, "关闭全部工作", "[488,40][584,136]", clickable=True)
+        self.node(viewport, "关闭导航", "[488,40][584,136]", clickable=True)
         with self.assertRaises(AssertionError):
             verify.navigation_identity(root, False)
 
@@ -68,7 +68,7 @@ class SidebarEvidenceTest(unittest.TestCase):
         for attributes in ({"focusable": "false"}, {"enabled": "false"}, {"bounds": "[24,4][120,100]"}):
             with self.subTest(attributes=attributes):
                 root, _ = self.hierarchy()
-                self.control(root, "全部工作").attrib.update(attributes)
+                self.control(root, "打开导航").attrib.update(attributes)
                 with self.assertRaises(AssertionError):
                     verify.navigation_identity(root, False)
 
@@ -97,7 +97,7 @@ class SidebarEvidenceTest(unittest.TestCase):
     def test_control_from_another_webview_is_rejected(self):
         root, viewport = self.hierarchy(opened=True)
         another = self.node(root, "", "[0,24][720,1480]", kind="android.webkit.WebView")
-        target = self.control(root, "设置与连接")
+        target = self.control(root, "设置")
         parents = {child: parent for parent in root.iter() for child in parent}
         parents[target].remove(target)
         another.append(target)
@@ -113,7 +113,7 @@ class SidebarEvidenceTest(unittest.TestCase):
                 flag = str(visible).lower()
                 result = verify.ime_identity(xml, f"mInputShown={flag}\nmDecorViewVisible={flag}", visible)
                 self.assertEqual(visible, result["visible"])
-                self.assertEqual(["全部工作"], result["navigation"]["labels"])
+                self.assertEqual(["打开导航"], result["navigation"]["labels"])
                 for invalid in ("mInputShown=true", "mInputShown=true\nmDecorViewVisible=false",
                                 "mInputShown=true mInputShown=false\nmDecorViewVisible=true"):
                     with self.assertRaises(AssertionError):

@@ -580,11 +580,11 @@ async function capture(page, viewport, name, selectors, options = {}) {
     capturedAt: new Date().toISOString(), ...options.metadata });
 }
 
-const navigationRoutes = { '对话': 'chat', '任务': 'tasks', '项目与文件': 'projects',
-  '团队协作': 'teams', '记忆': 'memory', '任务历史': 'history', '设置与连接': 'settings' };
+const navigationRoutes = { '对话': 'chat', '任务': 'tasks', '项目': 'projects',
+  '团队': 'teams', '记忆': 'memory', '任务历史': 'history', '设置': 'settings' };
 
 async function openNavigation(page) {
-  const open = page.getByRole('button', { name: '全部工作', exact: true });
+  const open = page.getByRole('button', { name: '打开导航', exact: true });
   await reachable(open, { minSize: 48 }); await open.click();
   const content = page.locator('.pw-navigation-drawer');
   await content.waitFor({ state: 'visible' });
@@ -608,7 +608,7 @@ async function navigate(page, name) {
   await reachable(target, { minSize: 48 }); await target.click();
   await content.waitFor({ state: 'hidden' });
   await page.locator(`.pw-app[data-route="${navigationRoutes[name]}"]`).waitFor({ state: 'visible' });
-  assert.equal(await page.getByRole('button', { name: '全部工作', exact: true }).count(), 1, 'Destination lost its unique global navigation entry');
+  assert.equal(await page.getByRole('button', { name: '打开导航', exact: true }).count(), 1, 'Destination lost its unique global navigation entry');
   await settle(page);
 }
 
@@ -718,8 +718,11 @@ async function runViewport(origin, viewport) {
     assert.equal(await editor.inputValue(), emptyDraft, 'Cancelled press lost the input');
 
     const conversation = page.locator('.pw-conversation-scroll');
-    const linkedTask = page.locator('.pw-linked-task').filter({ hasText: '整理项目资料' });
-    await linkedTask.scrollIntoViewIfNeeded();
+    const conversationTaskEntry = page.locator('.pw-chat-attention').filter({ hasText: '整理项目资料' });
+    const sourceMessageIndex = populatedSnapshot().state.messages.findIndex(message => message.taskId === 'visual-fixture-task-review');
+    assert(sourceMessageIndex >= 0, 'The task entry must retain a source message in the current conversation');
+    await conversation.locator(`[data-message-index="${sourceMessageIndex}"]`).scrollIntoViewIfNeeded();
+    await reachable(conversationTaskEntry, { minSize: 44 });
     const conversationDraft = '会议记录仍按日期保留。';
     await editor.fill(conversationDraft);
     await settle(page, 250);
@@ -730,7 +733,7 @@ async function runViewport(origin, viewport) {
         anchor: first?.getAttribute('data-message-index') ?? null };
     });
     const sourceReading = await reading();
-    await capture(page, viewport, '03-current-work', ['.pw-message-stream', '.pw-linked-task', '.afa-composer']);
+    await capture(page, viewport, '03-current-work', ['.pw-message-stream', '.pw-chat-attention', '.afa-composer']);
     const workMenu = await openNavigation(page);
     assert.deepEqual(await workMenu.getByRole('link').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label'))),
       Object.keys(navigationRoutes), 'Sidebar destinations are missing, duplicated or out of their task groups');
@@ -738,7 +741,7 @@ async function runViewport(origin, viewport) {
     assert(sidebarBounds && Math.abs(sidebarBounds.x) <= 1 && sidebarBounds.width < viewport.width && sidebarBounds.height >= viewport.height * 0.85,
       'The global drawer does not occupy the left edge while leaving the current workspace visible');
     await capture(page, viewport, '04-work-menu', ['.pw-navigation-drawer', '.pw-work-sidebar']);
-    await workMenu.getByRole('button', { name: '关闭全部工作', exact: true }).click();
+    await workMenu.getByRole('button', { name: '关闭导航', exact: true }).click();
     await workMenu.waitFor({ state: 'hidden' });
     assert.equal(await editor.inputValue(), conversationDraft, 'Closing navigation lost the conversation draft');
     assert.deepEqual(await reading(), sourceReading, 'Closing navigation lost the conversation reading position');
@@ -962,7 +965,7 @@ async function runViewport(origin, viewport) {
     assert(Math.abs(returnedReading.top - sourceReading.top) <= 2, 'Tasks navigation lost the source reading position');
     assert.equal(await editor.inputValue(), conversationDraft, 'Tasks navigation lost the composer draft');
     const beforeDirectReview = await page.evaluate(() => window.__POCKET_VISUAL_FIXTURE__.summary().requests.length);
-    await reachable(linkedTask, { minSize: 44 }); await linkedTask.click();
+    await reachable(conversationTaskEntry, { minSize: 44 }); await conversationTaskEntry.click();
     await page.locator('.pw-task-drawer[data-task-layer="overview"]').waitFor({ state: 'visible' });
     await feedbackDisclosure.click();
     await feedback.waitFor({ state: 'visible' });
@@ -1003,7 +1006,7 @@ async function runViewport(origin, viewport) {
     await drawer.waitFor({ state: 'hidden' });
     await page.evaluate(() => window.__POCKET_VISUAL_FIXTURE__.setScenario('populated'));
 
-    await navigate(page, '项目与文件');
+    await navigate(page, '项目');
     const firstFile = page.locator('.pw-file-list .pw-file-object').first();
     const fileGeometry = await reachable(firstFile, { minSize: 44 });
     assert(fileGeometry.y <= 240, `First project file starts too low: ${fileGeometry.y}px`);
@@ -1017,7 +1020,7 @@ async function runViewport(origin, viewport) {
     await page.getByRole('dialog', { name: '文件显示方式', exact: true, includeHidden: true }).waitFor({ state: 'hidden' });
     await capture(page, viewport, '11-project-tree', ['.pw-file-tree', '[role="tree"]']);
 
-    await navigate(page, '设置与连接');
+    await navigate(page, '设置');
     const settingsSearch = page.getByRole('searchbox', { name: '搜索设置', exact: true });
     record.checks.push({ stage: 'settings-search-dom-semantics', role: 'searchbox', accessibleName: '搜索设置',
       geometry: await reachable(settingsSearch),
@@ -1134,7 +1137,7 @@ async function runViewport(origin, viewport) {
     await nativeBack();
     await page.locator('.pw-app[data-route="chat"] [data-testid="all_work"]').waitFor({ state: 'visible' });
     stage = `${viewport.width}:team-workspace`;
-    await navigate(page, '团队协作');
+    await navigate(page, '团队');
     const teamList = page.locator('.pw-team-workspace[data-team-layer="list"]');
     const teamDetail = page.locator('.pw-team-workspace[data-team-layer="detail"]');
     await teamList.waitFor({ state: 'visible' });
