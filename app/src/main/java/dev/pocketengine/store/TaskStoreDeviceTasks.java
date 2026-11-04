@@ -493,15 +493,20 @@ public final class TaskStoreDeviceTasks {
         /** Additive native check, installed before transport; never replaces original SQL authority. */
         public synchronized void installNativeWriteGuard(NativeWriteGuard guard){if(nativeWriteGuard!=null||claimed||abandoned)throw new SecurityException("原发送门不可替换");nativeWriteGuard=java.util.Objects.requireNonNull(guard);}
 
-        private final ChildReservation reservation;private final StopSend stop;private final TaskStoreDeviceTasks issuer;private final dev.pocketengine.features.devices.PairingCoordinator.OutgoingGrant target;private final byte[] wire;private final String wireHash;private volatile boolean claimed,abandoned;
-        private OutboundSendTicket(ChildReservation reservation,dev.pocketengine.features.devices.PairingCoordinator.OutgoingGrant target,byte[] wire){this.reservation=reservation;this.stop=null;this.issuer=reservation.issuer;this.target=target;this.wire=wire.clone();wireHash=dev.pocketengine.features.devices.DeviceProtocol.sha256(wire);}
-        private OutboundSendTicket(StopSend stop,dev.pocketengine.features.devices.PairingCoordinator.OutgoingGrant target,byte[] wire){reservation=null;this.stop=stop;issuer=stop.issuer;this.target=target;this.wire=wire.clone();wireHash=dev.pocketengine.features.devices.DeviceProtocol.sha256(wire);}
+        private final ChildReservation reservation;private final StopSend stop;private final TaskStoreDesktopViewer.Send viewer;private final TaskStoreDeviceTasks issuer;private final dev.pocketengine.features.devices.PairingCoordinator.OutgoingGrant target;private final byte[] wire;private final String wireHash;private volatile boolean claimed,abandoned;
+        private OutboundSendTicket(ChildReservation reservation,dev.pocketengine.features.devices.PairingCoordinator.OutgoingGrant target,byte[] wire){this.reservation=reservation;this.stop=null;this.viewer=null;this.issuer=reservation.issuer;this.target=target;this.wire=wire.clone();wireHash=dev.pocketengine.features.devices.DeviceProtocol.sha256(wire);}
+        private OutboundSendTicket(StopSend stop,dev.pocketengine.features.devices.PairingCoordinator.OutgoingGrant target,byte[] wire){reservation=null;this.stop=stop;this.viewer=null;issuer=stop.issuer;this.target=target;this.wire=wire.clone();wireHash=dev.pocketengine.features.devices.DeviceProtocol.sha256(wire);}
+        private OutboundSendTicket(TaskStoreDeviceTasks issuer,TaskStoreDesktopViewer.Send viewer){this.issuer=issuer;this.viewer=viewer;reservation=null;stop=null;target=viewer.grant();wire=viewer.bytes();wireHash=dev.pocketengine.features.devices.DeviceProtocol.sha256(wire);}
         public int size(){return wire.length;}
-        public byte[] claimForWrite(dev.pocketengine.features.devices.DeviceIdentity.AuthenticatedPeer actualPeer)throws Exception{NativeWriteGuard guard=nativeWriteGuard;if(guard!=null)guard.requireCurrent();return stop==null?issuer.claimForWrite(this,actualPeer):issuer.claimStopForWrite(this,actualPeer);}
+        public byte[] claimForWrite(dev.pocketengine.features.devices.DeviceIdentity.AuthenticatedPeer actualPeer)throws Exception{NativeWriteGuard guard=nativeWriteGuard;if(guard!=null)guard.requireCurrent();return viewer!=null?viewer.claim(actualPeer):stop==null?issuer.claimForWrite(this,actualPeer):issuer.claimStopForWrite(this,actualPeer);}
         /** Fail closed if the original SQL cannot be read. A failed claim must not be treated as abandoned. */
-        public boolean isClaimed(){synchronized(issuer.owner){try{JSONObject marker=stop==null?issuer.sendMarker(reservation):issuer.stopMarker(stop);return claimed||marker==null||!"not_claimed".equals(marker.optString("state"));}catch(Exception unknown){return true;}}}
-        public void abandonBeforeWrite()throws Exception{if(stop==null)issuer.abandonBeforeWrite(this);else issuer.abandonStopBeforeWrite(this);}
+        public boolean isClaimed(){if(viewer!=null)return viewer.claimed();synchronized(issuer.owner){try{JSONObject marker=stop==null?issuer.sendMarker(reservation):issuer.stopMarker(stop);return claimed||marker==null||!"not_claimed".equals(marker.optString("state"));}catch(Exception unknown){return true;}}}
+        public void abandonBeforeWrite()throws Exception{if(viewer!=null){viewer.abandon();return;}if(stop==null)issuer.abandonBeforeWrite(this);else issuer.abandonStopBeforeWrite(this);}
     }
+    public TaskStoreDesktopViewer.Session openDesktopViewer(dev.pocketengine.features.devices.DeviceIdentity.LocalIdentity local,dev.pocketengine.features.devices.PairingCoordinator.OutgoingGrant grant,JSONObject binding,TaskStoreDesktopViewer.Current current)throws Exception{
+        return new TaskStoreDesktopViewer(db,owner).open(local,grant,binding,current);
+    }
+    public OutboundSendTicket desktopViewerTicket(TaskStoreDesktopViewer.Send send){if(send==null||!send.belongsTo(owner))throw new SecurityException("桌面发送不属于本TaskStore");return new OutboundSendTicket(this,send);}
     TaskStoreDeviceTasks(SQLiteDatabase originalDb, TaskStore originalOwner, Access nativeAccess) {
         db = java.util.Objects.requireNonNull(originalDb); owner = java.util.Objects.requireNonNull(originalOwner);
         access = java.util.Objects.requireNonNull(nativeAccess);

@@ -27,7 +27,10 @@ class RuntimeBuildContracts(unittest.TestCase):
                 "basePrefixSha256": "2" * 64, "environmentSha256": "3" * 64, "pythonLicenseSha256": "4" * 64,
                 "toolchainDescription": "INERT contract fixture, NOT an approved or installed Windows builder",
                 "packages": [{"name": name, "version": version, "wheel": name + "-" + version + "-py3-none-any.whl", "sha256": "5" * 64}
-                             for name, version in [("pyinstaller", "6.0.0"), ("cryptography", "50.0.0"), ("qrcode", "8.2"), ("colorama", "0.4.6"), ("pillow", "13.0.0")]]}
+                             for name, version in [("pyinstaller", "6.0.0"), ("cryptography", "50.0.0"), ("qrcode", "8.2"), ("colorama", "0.4.6"),
+                                                   ("pillow", "13.0.0"), ("aiortc", "1.15.0"), ("av", "17.0.1"), ("aioice", "0.10.2"),
+                                                   ("google-crc32c", "1.7.0"), ("pyee", "13.0.0"), ("pylibsrtp", "0.10.0"), ("pyopenssl", "25.0.0"),
+                                                   ("ifaddr", "0.2.0"), ("dnspython", "2.7.0"), ("cffi", "1.17.1")]]}
 
     def write_lock(self, value):
         path = self.root / "reviewed-inputs.json"
@@ -121,6 +124,9 @@ class RuntimeBuildContracts(unittest.TestCase):
         for key in ("pythonVersion", "pyinstallerVersion", "cryptographyVersion", "toolchainDescription", "inputLockSha256", "licenseFiles"):
             self.assertTrue(record[key])  # Exact fields read by the original build_bundle consumer.
         self.assertNotIn("runtimeHelpProbe", record)  # Only actual build() can assert its real probe.
+        self.assertNotIn("runtimeStreamProbe", record)
+        self.assertEqual("1.15.0", record["aiortcVersion"])
+        self.assertEqual("17.0.1", record["pyavVersion"])
         self.assertNotIn("sourceClean", record)
         self.assertEqual("unverified", record["guiAcceptance"])
         (frozen / "runtime.dll").write_bytes(b"CHANGED INERT DLL")
@@ -150,6 +156,51 @@ class RuntimeBuildContracts(unittest.TestCase):
             self.assertNotIn(name, child)
         self.assertEqual("1", child["PIP_NO_INDEX"])
         self.assertEqual(str(self.root / "pyinstaller-cache"), child["PYINSTALLER_CONFIG_DIR"])
+
+    def test_stream_requires_exact_official_media_wheels_and_complete_transitives(self):
+        product = json.loads((Path(__file__).parent / "packaging/windows-stream-dependencies.json").read_text())
+        lock = self.locked()
+        for component in product["components"]:
+            record = next(item for item in lock["packages"] if item["name"] == component["name"])
+            record.update(component["wheels"][0])
+            license_path = Path(__file__).parent.parent / component["licenseFile"]
+            self.assertEqual(component["licenseSha256"], builder.file_hash(license_path))
+        builder.require_stream_wheels(lock, product)
+        for component in product["components"]:
+            record = next(item for item in lock["packages"] if item["name"] == component["name"])
+            digest = record["sha256"]
+            record["sha256"] = "0" * 64
+            with self.assertRaisesRegex(ValueError, "official wheel lock"):
+                builder.require_stream_wheels(lock, product)
+            record["sha256"] = digest
+        lock["packages"] = [item for item in lock["packages"] if item["name"] != "pylibsrtp"]
+        with self.assertRaisesRegex(ValueError, "Complete product media"):
+            builder.require_stream_wheels(lock, product)
+
+    def test_codec_probe_contract_rejects_missing_native_runtime_and_false_success(self):
+        versions = {"aiortc": "1.15.0", "av": "17.0.1"}
+        # INERT parser fixture only; these bytes are never Windows runtime proof.
+        valid = {"format": "pocketworld.desktop-stream-probe.v1", "available": True,
+                 "aiortcVersion": "1.15.0", "pyavVersion": "17.0.1", "codec": "video/VP8",
+                 "width": 64, "height": 48, "encodedBytes": 128,
+                 "networkOpened": False, "desktopCaptured": False}
+        self.assertEqual(valid, builder.validate_stream_probe(json.dumps(valid).encode(), versions))
+        for change in ({"available": False}, {"encodedBytes": 0}, {"encodedBytes": True},
+                       {"pyavVersion": "19.0.0"}, {"networkOpened": True}, {"desktopCaptured": True},
+                       {"width": 1920}, {"unexpected": "field"}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                builder.validate_stream_probe(json.dumps({**valid, **change}).encode(), versions)
+        for raw in (b"not JSON", b"x" * 65537, b"[]"):
+            with self.assertRaises(ValueError):
+                builder.validate_stream_probe(raw, versions)
+
+    def test_spec_collects_media_dlls_router_and_static_upstream_material(self):
+        source = (Path(__file__).parent / "packaging/windows/pocket-companion.spec").read_text()
+        compile(source, "pocket-companion.spec", "exec")
+        for required in ("desktop_stream.py", "desktop_viewer.py", "agent_desktop_driver.py",
+                         "collect_delvewheel_libs_directory", "windows-stream-dependencies.json",
+                         "agent-desktop-pin.json", "agent_pin[\"licenseSha256\"]", "PIL.ImageGrab"):
+            self.assertIn(required, source)
 
 
 if __name__ == "__main__":

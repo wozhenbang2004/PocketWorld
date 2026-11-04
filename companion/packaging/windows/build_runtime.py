@@ -26,6 +26,7 @@ FORMAT = "pocketworld.windows-runtime-inputs.v1"
 MANAGEMENT = ("Install-Companion.ps1", "Manage-Companion.ps1", "Launch-Companion.ps1", "Companion-InstallState.ps1")
 HASH = re.compile(r"[a-f0-9]{64}")
 SOURCE = Path(__file__).resolve().parents[3]
+STREAM_DISTRIBUTIONS = {"aiortc", "av", "aioice", "google-crc32c", "pyee", "pylibsrtp", "pyopenssl", "cryptography", "ifaddr", "dnspython", "cffi", "pillow"}
 
 
 def require_windows_x64():
@@ -151,8 +152,8 @@ def read_lock(path, approved_sha256):
         if "/" in wheel or not wheel.endswith(".whl") or wheel.casefold() in wheels or not isinstance(item["sha256"], str) or not HASH.fullmatch(item["sha256"]):
             raise ValueError("Unique local hash-locked wheel filenames required")
         names.add(name); wheels.add(wheel.casefold())
-    if not {"pyinstaller", "cryptography", "qrcode", "colorama", "pillow"} <= names:
-        raise ValueError("PyInstaller, cryptography, pinned native QR and desktop PNG decoder dependencies required")
+    if not {"pyinstaller", "qrcode", "colorama"} | STREAM_DISTRIBUTIONS <= names:
+        raise ValueError("PyInstaller, native QR/desktop decoder and complete WebRTC dependencies required")
     return value
 
 
@@ -203,12 +204,27 @@ def prepared_environment(lock, wheelhouse):
     locked = {normalized(item["name"]): item["version"] for item in lock["packages"]}
     if installed != locked:
         raise ValueError("Prepared distribution set/versions differ; use an already-prepared dedicated builder")
-    if locked["cryptography"] != "50.0.0" or locked["qrcode"] != "8.2" or locked["colorama"] != "0.4.6" or locked["pillow"] != "13.0.0" or locked["pyinstaller"].split(".")[0] != "6":
+    if (locked["cryptography"] != "50.0.0" or locked["qrcode"] != "8.2" or locked["colorama"] != "0.4.6"
+            or locked["pillow"] != "13.0.0" or locked["aiortc"] != "1.15.0" or locked["av"] != "17.0.1"
+            or locked["pyinstaller"].split(".")[0] != "6"):
         raise ValueError("Runtime dependencies differ from current product/spec contract")
     pairing = json.loads(regular(SOURCE / "companion/packaging/windows-pairing-dependencies.json").read_text(encoding="utf-8"))
     require_pairing_wheels(lock, pairing)
     desktop = json.loads(regular(SOURCE / "companion/packaging/windows-desktop-dependencies.json").read_text(encoding="utf-8"))
     require_desktop_wheel(lock, desktop)
+    media = json.loads(regular(SOURCE / "companion/packaging/windows-stream-dependencies.json").read_text(encoding="utf-8"))
+    require_stream_wheels(lock, media)
+    # An exact environment can still contain incompatible dependency versions.
+    # Read the actual installed metadata; do not resolve/install anything here.
+    from packaging.requirements import Requirement
+    for name in locked:
+        for raw in importlib.metadata.requires(name) or []:
+            requirement = Requirement(raw)
+            if requirement.marker is not None and not requirement.marker.evaluate({"extra": ""}):
+                continue
+            actual = locked.get(normalized(requirement.name))
+            if actual is None or actual not in requirement.specifier:
+                raise ValueError("Prepared dependency metadata is incomplete or incompatible: " + name)
     licenses = {"python/LICENSE.txt": regular(Path(sys.base_prefix) / "LICENSE.txt").read_bytes()}
     for item in lock["packages"]:
         for name, raw in wheel_licenses(Path(wheelhouse) / item["wheel"], item).items():
@@ -228,6 +244,38 @@ def require_desktop_wheel(lock, product_lock):
     actual = next((item for item in lock["packages"] if normalized(item["name"]) == product_lock["component"]), {})
     if actual.get("version") != product_lock["version"] or not any(all(actual.get(key) == wheel[key] for key in ("wheel", "sha256")) for wheel in product_lock["wheels"]):
         raise ValueError("Desktop PNG decoder differs from the product's fixed official wheel lock")
+
+
+def require_stream_wheels(lock, product_lock):
+    records = {normalized(item["name"]): item for item in lock["packages"]}
+    if (set(product_lock["requiredDistributions"]) != STREAM_DISTRIBUTIONS
+            or {item["name"]: item["version"] for item in product_lock["components"]} != {"aiortc": "1.15.0", "av": "17.0.1"}
+            or not STREAM_DISTRIBUTIONS <= records.keys()):
+        raise ValueError("Complete product media dependency contract required")
+    for component in product_lock["components"]:
+        actual = records[component["name"]]
+        if (actual["version"] != component["version"]
+                or not any(all(actual.get(key) == wheel[key] for key in ("wheel", "sha256")) for wheel in component["wheels"])):
+            raise ValueError("Desktop media differs from the product's fixed official wheel lock")
+
+
+def validate_stream_probe(raw, versions):
+    """Only accept an actual frozen synthetic-codec report, not --help success."""
+    if len(raw) > 65536:
+        raise ValueError("Frozen desktop stream probe exceeds its bound")
+    try:
+        result = json.loads(raw)
+    except (ValueError, UnicodeError) as failure:
+        raise ValueError("Frozen desktop stream probe did not return bounded JSON") from failure
+    expected = {"format", "available", "aiortcVersion", "pyavVersion", "codec", "width", "height", "encodedBytes", "networkOpened", "desktopCaptured"}
+    if (not isinstance(result, dict) or set(result) != expected
+            or result["format"] != "pocketworld.desktop-stream-probe.v1" or result["available"] is not True
+            or result["aiortcVersion"] != versions["aiortc"] or result["pyavVersion"] != versions["av"]
+            or result["codec"] != "video/VP8" or result["width"] != 64 or result["height"] != 48
+            or type(result["encodedBytes"]) is not int or not 1 <= result["encodedBytes"] <= 262144
+            or result["networkOpened"] is not False or result["desktopCaptured"] is not False):
+        raise ValueError("Actual frozen native desktop-stream runtime was not confirmed")
+    return result
 
 
 def build_environment(output):
@@ -263,6 +311,7 @@ def record_outputs(source, source_commit, lock, lock_sha256, versions, frozen, n
     return {"format": "pocketworld.windows-runtime-build.v1", "sourceCommit": source_commit,
             "platform": "windows-x64", "pythonVersion": lock["pythonVersion"], "pyinstallerVersion": versions["pyinstaller"],
             "cryptographyVersion": versions["cryptography"], "qrcodeVersion": versions["qrcode"], "coloramaVersion": versions["colorama"], "pillowVersion": versions["pillow"],
+            "aiortcVersion": versions["aiortc"], "pyavVersion": versions["av"],
             "toolchainDescription": lock["toolchainDescription"], "inputLockSha256": lock_sha256, "inputs": lock,
             "unsignedFiles": unsigned, "licenseFiles": licenses, "managementUnsignedFiles": management,
             "specSha256": file_hash(Path(source) / "companion/packaging/windows/pocket-companion.spec"),
@@ -311,10 +360,19 @@ def build(source_commit, input_lock, input_lock_sha256, wheelhouse, output):
                        stdout=log, stderr=subprocess.STDOUT, check=True, timeout=15)
     with (output / "runtime-help.log").open("rb") as log:
         help_output = log.read(65537)
-    if len(help_output) > 65536 or any(option not in help_output for option in (b"--serve", b"--pairing", b"--config")):
+    if len(help_output) > 65536 or any(option not in help_output for option in (b"--serve", b"--pairing", b"--config", b"--stream-self-test")):
         raise ValueError("Actual frozen runtime entry contract not confirmed")
+    # No installation/config/identity, desktop capture, peer or network is used.
+    # This must execute inside the frozen runtime to expose missing native DLLs.
+    stream_log = output / "runtime-stream-probe.log"
+    with stream_log.open("xb") as log:
+        subprocess.run([str(executable), "--stream-self-test"], cwd=output, env=environment, stdin=subprocess.DEVNULL,
+                       stdout=log, stderr=subprocess.STDOUT, check=True, timeout=20)
+    with stream_log.open("rb") as log:
+        stream_probe = validate_stream_probe(log.read(65537), versions)
     provenance = record_outputs(source, source_commit, lock, input_lock_sha256, versions, frozen, notices)
-    provenance.update(sourceClean=True, runtimeHelpProbe="passed")
+    provenance.update(sourceClean=True, runtimeHelpProbe="passed", runtimeStreamProbe=stream_probe,
+                      runtimeStreamProbeSha256=file_hash(stream_log))
     path = output / "runtime-build-provenance.json"
     with path.open("x", encoding="utf-8") as stream:
         json.dump(provenance, stream, sort_keys=True, indent=2); stream.write("\n"); stream.flush(); os.fsync(stream.fileno())
