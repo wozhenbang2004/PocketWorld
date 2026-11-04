@@ -364,6 +364,7 @@ public final class AgentRunner {
                 }}
                 // The restoration boundary was reclaimed before initial observation. Later polls
                 // accept only the original current-turn native steer until its next real boundary.
+                long modelInputRevision=control.modelReplanRevision();
                 JSONArray acceptedInputs=pollOwnerInputs(history,false,false,control);appendOwnerInputs(history,acceptedInputs,config);
                 if(acceptedInputs.length()>0)stepRouting.ownerBoundary();
                 recallIntent=latestOwnerRecallQuery(history,recallIntent);
@@ -502,13 +503,21 @@ public final class AgentRunner {
                             if(requestProjection!=null){JSONArray current=dev.pocketengine.features.memory.TaskMemoryHistory.wireMessages(requestProjection.project(nativeProvenance,config,control));if(!CompactionPlan.fingerprint(retryProjection).equals(CompactionPlan.fingerprint(current)))throw new ModelGateway.RequestRefreshRequired();}
                             if(capabilities!=null&&!capabilities.responseCurrent(control))throw new ModelGateway.RequestRefreshRequired();
                         }
-                    });if(stepRouting.selectedLight())response=safeJson(response,requestConfig,false);break;
+                    },modelInputRevision);if(stepRouting.selectedLight())response=safeJson(response,requestConfig,false);break;
                     }catch(Exception failed){
                         if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);
                         // The UI's bounded visible prefix survives an interrupted attempt in the
                         // original audit, never in assistant history or as an accepted answer.
                         if(!prefixRetained[0])retainInterruptedPrefix(taskId,visibleCall[0],visibleAttempt,requestConfig,sink);
                         control.check();
+                        if(failed instanceof RunControl.ModelReplanRequested){
+                            JSONArray incoming=pollOwnerInputs(history,false,false,control);
+                            stepRouting.ownerBoundary();appendOwnerInputs(history,incoming,config);
+                            recallIntent=latestOwnerRecallQuery(history,recallIntent);
+                            checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);
+                            emit(taskId,"owner_input","running","已收到主人补充；本次模型请求已结束，正在按原任务重新规划。",null,new JSONObject().put("toolReplay",false).put("usageRefunded",false),config,sink);
+                            continue modelTurns;
+                        }
                         if(failed instanceof ModelGateway.RequestRefreshRequired){
                             if(retryOwnerInputs[0]!=null){stepRouting.ownerBoundary();appendOwnerInputs(history,retryOwnerInputs[0],config);recallIntent=latestOwnerRecallQuery(history,recallIntent);checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);}
                             continue modelTurns;
@@ -536,7 +545,8 @@ public final class AgentRunner {
                         journal.restore();
                         emit(taskId,"model_recovery","running","本次推理未完整结束，正在原范围内稍后重新推理；没有重放工具，已发生的模型用量仍计入。",null,
                                 new JSONObject().put("previousCallId",nativeRequest[0]).put("retryNumber",turnRetries+1).put("waitMillis",delay).put("totalWaitLimitMillis",SafeModelRecovery.MAX_TOTAL_WAIT_MILLIS).put("toolReplay",false).put("usageRefunded",false),config,sink);
-                        modelRecovery.waitBeforeRetry(delay,control);turnRetries++;
+                        try{modelRecovery.waitBeforeRetry(delay,control,modelInputRevision);turnRetries++;}
+                        catch(RunControl.ModelReplanRequested steered){control.check();continue modelTurns;}
                         if(control.pauseRevision()!=pauseSeen[0])continue modelTurns;
                         if(capabilities!=null&&!capabilities.responseCurrent(control))continue modelTurns;
                     }

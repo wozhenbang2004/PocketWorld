@@ -59,4 +59,25 @@ public final class ModelCallAdmissionTest {
     @Test public void boundedWaitQueueDoesNotBlockIndependentTasksThatCanEnterImmediately()throws Exception{
         ModelCallAdmission gate=new ModelCallAdmission(2);try(var held=gate.enter(limited(1),"task",deadline())){RunControl first=limited(1),second=limited(1);Future<?> a=workers.submit(()->gate.enter(first,"task",deadline()));await(()->gate.waitingCount()==1);Future<?> b=workers.submit(()->gate.enter(second,"task",deadline()));await(()->gate.waitingCount()==2);assertThrows(ModelCallAdmission.Refused.class,()->gate.enter(limited(1),"task",deadline()));try(var independent=gate.enter(limited(1),"other",deadline())){assertEquals(2,gate.activeCount());}first.cancel();second.cancel();assertTrue(failed(a) instanceof InterruptedException);assertTrue(failed(b) instanceof InterruptedException);assertEquals(0,gate.waitingCount());}
     }
+    @Test public void steeringRemovesOnlyTheWaitingRequestAndRetainsTheOccupiedPhysicalCall()throws Exception{
+        ModelCallAdmission gate=new ModelCallAdmission();RunControl control=limited(1);control.bindHostRun("task","run",1);
+        try(var held=gate.enter(control,"task",deadline());var request=control.openModelRequest(control.modelReplanRevision())){
+            Future<?> waiting=workers.submit(()->gate.enter(control,"task",deadline(),1,request));await(()->gate.waitingCount()==1);
+            assertTrue(control.requestModelReplan("task","run",1));assertTrue(failed(waiting) instanceof RunControl.ModelReplanRequested);
+            assertEquals(0,gate.waitingCount());assertEquals(1,gate.activeCount());assertFalse(control.isCancelled());control.check();
+        }
+        assertEquals(0,gate.activeCount());
+        try(var fresh=control.openModelRequest(control.modelReplanRevision());var admitted=gate.enter(control,"task",deadline(),1,fresh)){assertEquals(1,gate.activeCount());}
+    }
+    @Test public void steeringCannotReleaseInFlightOccupancyBeforeTheOriginalTransportExits()throws Exception{
+        ModelCallAdmission gate=new ModelCallAdmission();RunControl control=limited(1);control.bindHostRun("task","run",1);
+        try(var stale=control.openModelRequest(control.modelReplanRevision())){
+            var held=gate.enter(control,"task",deadline(),1,stale);assertTrue(control.requestModelReplan("task","run",1));
+            try(var fresh=control.openModelRequest(control.modelReplanRevision())){
+                Future<ModelCallAdmission.Permit> next=workers.submit(()->gate.enter(control,"task",deadline(),1,fresh));
+                await(()->gate.waitingCount()==1);assertFalse(next.isDone());assertEquals(1,gate.activeCount());
+                held.close();next.get(3,TimeUnit.SECONDS).close();assertEquals(0,gate.activeCount());
+            }finally{held.close();}
+        }
+    }
 }
