@@ -3,7 +3,7 @@ package dev.pocketengine.ui
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal data class UiMessage(val role: String, val content: String, val at: Long, val taskId: String? = null, val id: String? = null, val submission: JSONObject? = null, val attachmentCount: Int = 0, val attachments: List<UiChatAttachment> = emptyList(), val sourceRevision: Long = 1, val attachmentFiles: List<JSONObject> = emptyList(), val memoryReference: JSONObject? = null, val ownerOriginalLocator: JSONObject? = null)
+internal data class UiMessage(val role: String, val content: String, val at: Long, val taskId: String? = null, val id: String? = null, val submission: JSONObject? = null, val attachmentCount: Int = 0, val attachments: List<UiChatAttachment> = emptyList(), val sourceRevision: Long = 1, val attachmentFiles: List<JSONObject> = emptyList(), val memoryReference: JSONObject? = null, val ownerOriginalLocator: JSONObject? = null, val phoneResult: UiPhoneResult? = null)
 internal data class UiAttachmentOpen(val checking: Boolean = false, val requested: Boolean = false, val error: String? = null)
 internal data class UiConversation(val id: String, val title: String, val updatedAt: Long)
 internal data class UiProject(val id: String, val name: String)

@@ -61,6 +61,7 @@
 .pw-start h2{font-size:19px;line-height:28px}
 .pw-message-stream{padding:20px 16px 16px;gap:24px}
 .pw-message-assistant .afa-answerbody p{font-size:14px;line-height:24px}
+.pw-phone-result{display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;margin-top:8px;font-size:12px;line-height:20px;color:#666}.pw-phone-result>button{margin-left:auto;min-height:40px;padding:6px 0;background:transparent;border:0;box-shadow:none;font-size:12px}.pw-conversation-phone-tasks{display:flex;flex-direction:column;gap:8px;width:min(100%,760px);margin:auto;padding:0 16px 16px}.pw-conversation-phone-task{display:flex;align-items:center;gap:12px;width:100%;min-height:56px;padding:10px 12px;text-align:left;background:#ededed;border:0;box-shadow:none}.pw-conversation-phone-task>span{flex:1;min-width:0;justify-content:flex-start;white-space:normal;padding:0}.pw-phone-task-copy{display:flex;flex-direction:column;gap:3px;min-width:0}.pw-conversation-phone-task small{font-size:12px;line-height:20px;color:#666}.pw-conversation-phone-task b{font-size:13px;line-height:21px;font-weight:500;white-space:normal;overflow-wrap:anywhere}.pw-conversation-phone-task>svg{flex:none;color:#666}
 .pw-user-text{font-size:14px;line-height:24px}
 .pw-work-drawer{height:min(90dvh,760px)}
 .pw-work-drawer .pw-drawer-header{padding:6px 12px 8px 18px;min-height:56px}

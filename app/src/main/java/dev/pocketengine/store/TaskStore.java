@@ -10575,7 +10575,19 @@ public final class TaskStore {
     public synchronized JSONObject ownerExperienceOutputsForOwner(OwnerExperienceProjection.Gate gate,String task,String cursor,RunControl control)throws Exception{return OwnerExperienceProjection.outputs(db,conversationRepository,gate,task,cursor,control);}
     /** Owner presentation only. Native authorization/recovery continues to use get/hasUnresolved. */
     public synchronized JSONObject taskSummaryPage(String cursor,int limit)throws Exception{
-        JSONObject page=TaskAuditStore.summaryPage(db,cursor,limit);JSONArray rows=page.getJSONArray("tasks"),visible=new JSONArray();for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if("inference".equals(row.optString("kind")))continue;row=phoneOwnerQuestionForUi(row);row.put("hasUnresolvedOperations",hasUnresolved(row.getString("id"))).put("historyHasUnconfirmedOperations",hasUnconfirmedForUi(row.getString("id")));visible.put(row);}return page.put("tasks",visible).put("accountingRecordsExcluded",rows.length()-visible.length());
+        JSONObject page=TaskAuditStore.summaryPage(db,cursor,limit);JSONArray rows=page.getJSONArray("tasks"),visible=new JSONArray();for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if("inference".equals(row.optString("kind")))continue;conversationPhoneLinkForUi(row);row=phoneOwnerQuestionForUi(row);row.put("hasUnresolvedOperations",hasUnresolved(row.getString("id"))).put("historyHasUnconfirmedOperations",hasUnconfirmedForUi(row.getString("id")));visible.put(row);}return page.put("tasks",visible).put("accountingRecordsExcluded",rows.length()-visible.length());
+    }
+    /** Old headers are completed only in the already selected, bounded summary window. No persisted
+     * backfill, full audit read, extra task discovery or execution authority is introduced. */
+    private void conversationPhoneLinkForUi(JSONObject summary)throws Exception{
+        if(summary.has("conversationPhoneLink")||!"phone".equals(summary.optString("kind"))||!"owner".equals(summary.optString("actorId"))||!"private".equals(summary.optString("spaceId")))return;
+        String id=summary.getString("id");
+        try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<="+TaskAuditStore.MAX_CORE_BYTES+" THEN document END FROM tasks WHERE task_id=?",new String[]{id})){
+            if(!row.moveToFirst()||row.isNull(0))return;
+            JSONObject original;try{original=new JSONObject(row.getString(0));}catch(org.json.JSONException unavailable){return;}
+            if(!id.equals(original.optString("id")))return;
+            JSONObject link=TaskAuditStore.conversationPhoneLink(original);if(link!=null)summary.put("conversationPhoneLink",link);
+        }
     }
     /** A source withdrawal retires this derived view, never the original task or audit.
      * Header rows retain enough original identity to apply the same source gate without
@@ -10585,7 +10597,7 @@ public final class TaskStore {
         try{dev.pocketengine.features.assistant.OwnerPhoneQuestions.requirePhoneTask(task);}catch(SecurityException otherScope){return task;}
         try{requireOwnerPhoneQuestionSources(task,task.getString("runId"));return task;}
         catch(Exception unavailable){
-            JSONObject view=new JSONObject();for(String key:new String[]{"id","kind","executionMode","actorId","spaceId","status","conversationId","runId","coordinatorEpoch","createdAt","updatedAt","cancelRequested","taskCoreBytes","taskCoreReadLimited"})if(task.has(key))view.put(key,task.get(key));
+            JSONObject view=new JSONObject();for(String key:new String[]{"id","kind","executionMode","actorId","spaceId","status","conversationId","conversationPhoneLink","runId","coordinatorEpoch","createdAt","updatedAt","cancelRequested","taskCoreBytes","taskCoreReadLimited"})if(task.has(key))view.put(key,task.get(key));
             return view.put("goal","原手机任务").put("summary","原问题来源已撤回或尚不可核对。已保留原任务，请核对来源；你仍可停止原任务。")
                     .put("taskProjection","source_unavailable").put("ownerQuestionReadState","source_unavailable").put("sourceCurrentReadRequired",true)
                     .put("auditBodyIncluded",false).put("executionAuthorized",false).put("hasUnresolvedOperations",hasUnresolved(task.getString("id"))).put("historyHasUnconfirmedOperations",hasUnconfirmedForUi(task.getString("id")));
@@ -10606,6 +10618,9 @@ public final class TaskStore {
             if(!limited&&"needs_confirmation".equals(result.optString("status")))result.put("resultReviewDigest",resultReviewDigest(result));
             result.put("taskCoreBytes",row.getLong(2)).put("taskCoreReadLimited",limited);
         }
+        // Full cores derive the same navigation-only identity as summaries before any source gate
+        // hides their body. Limited cores already carry the native header's verified projection.
+        if(!limited){result.remove("conversationPhoneLink");JSONObject link=TaskAuditStore.conversationPhoneLink(result);if(link!=null)result.put("conversationPhoneLink",link);}
         JSONObject sourceView=phoneOwnerQuestionForUi(result);if(sourceView!=result)return sourceView;
         JSONObject events=TaskAuditStore.eventPage(db,id,"",32,65536),operations=TaskAuditStore.operationPage(db,id,"",24,65536);
         JSONArray eventBodies=new JSONArray(),operationBodies=new JSONArray(),eventRows=events.getJSONArray("entries"),operationRows=operations.getJSONArray("entries");

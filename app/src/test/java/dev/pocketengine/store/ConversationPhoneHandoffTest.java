@@ -75,6 +75,50 @@ public final class ConversationPhoneHandoffTest {
         JSONObject changed=new JSONObject(task.toString());changed.getJSONObject("conversationPhoneHandoff").put("executionMode","main_screen");
         assertThrows(SecurityException.class,()->ConversationPhoneHandoff.association(changed));
     }
+    @Test public void summaryLinkSurvivesLongChineseGoalWithoutCopyingTheReviewOrGrantingARun()throws Exception {
+        String goal="查看".repeat(2000);JSONObject task=task(ConversationPhoneHandoff.review(TASK,source(),goal,"background",facts())).put("status","awaiting_user");
+        assertTrue(task.getJSONObject("conversationPhoneHandoff").toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>8192);
+        String original=task.toString();JSONObject header=TaskAuditStore.header(task),link=header.getJSONObject("conversationPhoneLink");
+        assertEquals(2,link.length());assertEquals(TASK,link.getString("taskId"));assertEquals(CONVERSATION,link.getString("conversationId"));
+        assertFalse(header.has("conversationPhoneHandoff"));assertFalse(header.has("conversationId"));assertFalse(header.has("runId"));
+        assertEquals(0,header.getInt("coordinatorEpoch"));assertEquals("awaiting_user",header.getString("status"));
+        assertTrue(header.getString("goal").length()<goal.length());assertEquals(original,task.toString());
+    }
+    @Test public void summaryLinkUsesOriginalConversationAndPreservesTheCurrentTaskState()throws Exception {
+        JSONObject task=ended().put("status","failed").put("executionMode","main_screen")
+                .put("conversationPhoneLink",new JSONObject().put("taskId",NEXT).put("conversationId","other-conversation"));
+        JSONObject header=TaskAuditStore.header(task);
+        assertEquals(TASK,header.getJSONObject("conversationPhoneLink").getString("taskId"));
+        assertEquals(CONVERSATION,header.getJSONObject("conversationPhoneLink").getString("conversationId"));
+        assertEquals("failed",header.getString("status"));assertEquals("main_screen",header.getString("executionMode"));assertEquals(RUN,header.getString("runId"));
+    }
+    @Test public void invalidAssociationOmitsOnlyTheSummaryLink()throws Exception {
+        JSONObject[] invalid={task(review()).put("goal","changed"),task(review()).put("actorId","member"),
+                task(review()).put("spaceId","shared"),task(review()).put("origin",new JSONObject()),task(review()).put("parentTaskId",NEXT),task(review())};
+        invalid[invalid.length-1].getJSONObject("conversationPhoneHandoff").put("conversationId","other-conversation");
+        for(JSONObject task:invalid){String original=task.toString();JSONObject header=TaskAuditStore.header(task);
+            assertFalse(header.has("conversationPhoneLink"));assertEquals(TASK,header.getString("id"));assertEquals(task.getString("goal"),header.getString("goal"));
+            assertEquals("preparing",header.getString("status"));assertEquals(original,task.toString());
+        }
+    }
+    @Test public void missingOrSwappedIdentityCannotBeRecoveredFromAnUnverifiedSummaryHint()throws Exception {
+        for(String missing:new String[]{"requestId","taskId","conversationId","reviewDigest"}){
+            JSONObject task=task(review());task.getJSONObject("conversationPhoneHandoff").remove(missing);
+            task.put("conversationPhoneLink",new JSONObject().put("taskId",TASK).put("conversationId",CONVERSATION));
+            assertFalse(TaskAuditStore.header(task).has("conversationPhoneLink"));
+        }
+        JSONObject task=task(review());task.getJSONObject("conversationPhoneHandoff").put("taskId",NEXT);assertFalse(TaskAuditStore.header(task).has("conversationPhoneLink"));
+        task=task(review());task.remove("actorId");assertFalse(TaskAuditStore.header(task).has("conversationPhoneLink"));
+        task=task(review());task.remove("id");assertFalse(TaskAuditStore.header(task).has("conversationPhoneLink"));
+        task=task(review());task.remove("conversationPhoneHandoff");task.put("conversationPhoneLink",new JSONObject().put("taskId",TASK).put("conversationId",CONVERSATION));
+        assertFalse(TaskAuditStore.header(task).has("conversationPhoneLink"));
+    }
+    @Test public void summaryLinkRequiresBoundedConversationIdentityMatchingItsOriginalSource()throws Exception {
+        for(String conversation:new String[]{"other-conversation","", "会".repeat(241)}){
+            JSONObject review=review();review.put("conversationId",conversation);review.remove("reviewDigest");review.put("reviewDigest",ConversationPhoneHandoff.digest(review));
+            assertFalse(TaskAuditStore.header(task(review)).has("conversationPhoneLink"));
+        }
+    }
     @Test public void activeRunCannotBecomeACompletedDelivery()throws Exception {
         for(String state:new String[]{"running","pausing","preparing","queued","stopping"}){
             assertFalse(ConversationPhoneHandoff.ended(state));assertThrows(SecurityException.class,()->ConversationPhoneHandoff.result(ended(),RUN,1,state,81));

@@ -1,6 +1,7 @@
 package dev.pocketengine.store;
 
 import android.app.Application;
+import android.content.ContentValues;
 import android.database.sqlite.SQLiteDatabase;
 import dev.pocketengine.features.assistant.ConversationRepository;
 import dev.pocketengine.features.memory.SourceRef;
@@ -26,6 +27,11 @@ public final class ConversationPhoneStorageNativeTest {
     private static SQLiteDatabase database(TaskStore tasks)throws Exception{var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);return (SQLiteDatabase)field.get(tasks);}
     private static JSONObject facts()throws Exception{return new JSONObject().put("modelName","fixture").put("provider","openai").put("toolLimit",4).put("modelCallLimit",12).put("scopeMinutes",30).put("modelSelectionRevision",1L);}
     private static String sha(String text)throws Exception{StringBuilder out=new StringBuilder();for(byte b:MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8)))out.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return out.toString();}
+    private static String taskColumn(SQLiteDatabase db,String task,String column){try(var row=db.rawQuery("SELECT "+column+" FROM tasks WHERE task_id=?",new String[]{task})){assertTrue(row.moveToFirst());return row.getString(0);}}
+    private static void taskColumn(SQLiteDatabase db,String task,String column,String value){ContentValues values=new ContentValues();values.put(column,value);assertEquals(1,db.update("tasks",values,"task_id=?",new String[]{task}));}
+    private static void oldHeader(SQLiteDatabase db,String task)throws Exception{JSONObject header=new JSONObject(taskColumn(db,task,"ui_header"));header.remove("conversationPhoneLink");taskColumn(db,task,"ui_header",header.toString());}
+    private static JSONObject summary(JSONObject page,String task)throws Exception{var rows=page.getJSONArray("tasks");for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(task.equals(row.getString("id")))return row;}return null;}
+    private static long count(SQLiteDatabase db,String table){try(var row=db.rawQuery("SELECT count(*) FROM "+table,null)){assertTrue(row.moveToFirst());return row.getLong(0);}}
     private static final class Fixture implements AutoCloseable {
         final Application app=RuntimeEnvironment.getApplication();final TaskStore tasks;final SQLiteDatabase db;final ConversationRepository history;
         final String conversation="original-conversation",message="original-user";final JSONObject pinned;
@@ -68,6 +74,62 @@ public final class ConversationPhoneStorageNativeTest {
         assertEquals(1,allocations.get());assertFalse(duplicate.getBoolean("created"));assertTrue(duplicate.getBoolean("duplicate"));assertTrue(duplicate.getBoolean("admitted"));
         assertEquals(run.getString("runId"),duplicate.getString("runId"));assertEquals(tasks+1,f.count("tasks"));assertEquals(runs+1,f.count("runs"));
         JSONObject stored=f.tasks.get(task,false);assertFalse(stored.has("origin"));assertFalse(stored.has("parentTaskId"));assertEquals("owner",stored.getString("actorId"));
+    }}
+    @Test public void oldSavedHeaderRecoversItsLinkAfterReopenWithoutCreatingARunOrMessage()throws Exception {try(Fixture f=new Fixture()){
+        String goal="查看".repeat(2000);var review=f.tasks.prepareConversationPhone(f.pinned,goal,"background",facts());
+        String task=f.tasks.createReviewedConversationPhone(review,id->{}).getString("taskId");
+        assertEquals(f.conversation,summary(f.tasks.taskSummaryPage("",40),task).getJSONObject("conversationPhoneLink").getString("conversationId"));
+        JSONObject detail=f.tasks.getForUi(task,false);assertEquals("detail_window",detail.getString("taskProjection"));
+        assertEquals(goal,detail.getJSONObject("conversationPhoneHandoff").getString("goal"));assertFalse(detail.getBoolean("taskCoreReadLimited"));
+        f.tasks.status(task,"awaiting_user","手机任务未获准运行");
+        JSONObject hot=f.tasks.getForUi(task,false);assertEquals("source_unavailable",hot.getString("taskProjection"));
+        assertEquals("原手机任务",hot.getString("goal"));assertFalse(hot.has("conversationPhoneHandoff"));assertFalse(hot.getBoolean("executionAuthorized"));
+        assertEquals(f.conversation,hot.getJSONObject("conversationPhoneLink").getString("conversationId"));
+        JSONObject current=summary(f.tasks.taskSummaryPage("",40),task);assertEquals("原手机任务",current.getString("goal"));assertEquals(task,current.getJSONObject("conversationPhoneLink").getString("taskId"));
+        oldHeader(f.db,task);
+        String core=taskColumn(f.db,task,"document"),oldHeader=taskColumn(f.db,task,"ui_header");f.db.close();
+        TaskStore reopened=new TaskStore(f.app);SQLiteDatabase db=database(reopened);
+        try{
+            JSONObject row=summary(reopened.taskSummaryPage("",40),task);assertNotNull(row);assertEquals("awaiting_user",row.getString("status"));
+            assertEquals(task,row.getJSONObject("conversationPhoneLink").getString("taskId"));assertEquals(f.conversation,row.getJSONObject("conversationPhoneLink").getString("conversationId"));
+            assertFalse(row.has("conversationPhoneHandoff"));assertFalse(row.has("runId"));assertEquals(0,row.getInt("coordinatorEpoch"));
+            assertEquals("source_unavailable",row.getString("taskProjection"));assertEquals("原手机任务",row.getString("goal"));assertFalse(row.getBoolean("executionAuthorized"));
+            JSONObject coldDetail=reopened.getForUi(task,false);assertEquals("source_unavailable",coldDetail.getString("taskProjection"));assertEquals("原手机任务",coldDetail.getString("goal"));
+            assertEquals(task,coldDetail.getJSONObject("conversationPhoneLink").getString("taskId"));assertFalse(coldDetail.has("conversationPhoneHandoff"));assertFalse(coldDetail.has("runId"));
+            assertEquals(core,taskColumn(db,task,"document"));assertEquals(oldHeader,taskColumn(db,task,"ui_header"));
+            assertEquals(1,count(db,"tasks"));assertEquals(0,count(db,"runs"));assertEquals(1,count(db,"assistant_messages"));
+        }finally{db.close();}
+    }}
+    @Test public void olderSavedTaskRemainsBehindTheExistingHistoryCursor()throws Exception {try(Fixture f=new Fixture()){
+        String task=f.create();oldHeader(f.db,task);JSONObject header=new JSONObject(taskColumn(f.db,task,"ui_header")).put("updatedAt",1L);
+        ContentValues older=new ContentValues();older.put("updated_at",1L);older.put("ui_header",header.toString());assertEquals(1,f.db.update("tasks",older,"task_id=?",new String[]{task}));
+        for(int i=0;i<40;i++)f.tasks.create("较新的手机任务 "+i,"background");
+        JSONObject first=f.tasks.taskSummaryPage("",40);assertEquals(40,first.getJSONArray("tasks").length());assertTrue(first.getBoolean("hasMore"));assertNull(summary(first,task));
+        JSONObject next=f.tasks.taskSummaryPage(first.getString("nextCursor"),40);assertEquals(1,next.getJSONArray("tasks").length());assertFalse(next.getBoolean("hasMore"));
+        assertEquals(f.conversation,summary(next,task).getJSONObject("conversationPhoneLink").getString("conversationId"));
+        assertFalse(new JSONObject(taskColumn(f.db,task,"ui_header")).has("conversationPhoneLink"));
+        assertEquals(41,f.count("tasks"));assertEquals(0,f.count("runs"));assertEquals(1,f.count("assistant_messages"));
+    }}
+    @Test public void oldHeadersKeepTasksWhenTheirOriginalCoreIsOversizedOrUnverified()throws Exception {try(Fixture f=new Fixture()){
+        String oversized=f.create(),invalid=f.create();oldHeader(f.db,oversized);oldHeader(f.db,invalid);
+        JSONObject large=new JSONObject(taskColumn(f.db,oversized,"document")).put("legacyBody","旧正文".repeat(TaskAuditStore.MAX_CORE_BYTES/3));
+        assertTrue(large.toString().getBytes(StandardCharsets.UTF_8).length>TaskAuditStore.MAX_CORE_BYTES);taskColumn(f.db,oversized,"document",large.toString());
+        JSONObject changed=new JSONObject(taskColumn(f.db,invalid,"document"));changed.getJSONObject("conversationPhoneHandoff").put("conversationId","other-conversation");taskColumn(f.db,invalid,"document",changed.toString());
+        JSONObject page=f.tasks.taskSummaryPage("",40);assertEquals(2,page.getJSONArray("tasks").length());
+        for(String task:new String[]{oversized,invalid}){JSONObject row=summary(page,task);assertNotNull(row);assertFalse(row.has("conversationPhoneLink"));assertEquals("preparing",row.getString("status"));}
+        assertEquals(large.toString(),taskColumn(f.db,oversized,"document"));assertEquals(changed.toString(),taskColumn(f.db,invalid,"document"));
+        assertTrue(f.tasks.getForUi(oversized,false).getBoolean("taskCoreReadLimited"));assertEquals(0,f.count("runs"));assertEquals(1,f.count("assistant_messages"));
+    }}
+    @Test public void limitedDetailRetainsTheCompactLinkAlreadyDerivedFromTheOriginalTask()throws Exception {try(Fixture f=new Fixture()){
+        String task=f.create();JSONObject large=new JSONObject(taskColumn(f.db,task,"document")).put("legacyBody","旧正文".repeat(TaskAuditStore.MAX_CORE_BYTES/3));
+        taskColumn(f.db,task,"document",large.toString());JSONObject detail=f.tasks.getForUi(task,false);
+        assertTrue(detail.getBoolean("taskCoreReadLimited"));assertEquals("detail_window",detail.getString("taskProjection"));
+        assertFalse(detail.has("conversationPhoneHandoff"));assertEquals(task,detail.getJSONObject("conversationPhoneLink").getString("taskId"));
+        assertEquals(f.conversation,detail.getJSONObject("conversationPhoneLink").getString("conversationId"));assertEquals("preparing",detail.getString("status"));
+        f.tasks.status(task,"awaiting_user","手机任务未获准运行");JSONObject unavailable=f.tasks.getForUi(task,false);
+        assertTrue(unavailable.getBoolean("taskCoreReadLimited"));assertEquals("source_unavailable",unavailable.getString("taskProjection"));
+        assertEquals("原手机任务",unavailable.getString("goal"));assertFalse(unavailable.has("conversationPhoneHandoff"));assertFalse(unavailable.has("runId"));
+        assertFalse(unavailable.getBoolean("executionAuthorized"));assertEquals(task,unavailable.getJSONObject("conversationPhoneLink").getString("taskId"));
     }}
     @Test public void sourceChangesBeforeFirstWriteAreRefusedButNeverEraseAnExistingAck()throws Exception {try(Fixture f=new Fixture()){
         var old=f.prepare();f.history.transaction(()->{JSONObject source=f.history.source(f.message);source.put("revision",2L);f.history.saveSource(source);JSONObject message=f.history.message(f.conversation,f.message);message.put("revision",2L).put("content","已更改目标");f.history.saveMessage(f.conversation,message);return null;});

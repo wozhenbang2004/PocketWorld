@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { phoneStartReceipt, phoneStartFailure, phoneRunIdentity } from '../src/phone-start.ts';
+import { phoneStartReceipt, phoneStartFailure, phoneRunIdentity, messagePhoneResult, phoneConversationId } from '../src/phone-start.ts';
 
 test('phone start needs an explicit original task receipt before clearing the reviewed draft', () => {
   assert.equal(phoneStartReceipt({ accepted: true }).status, 'unknown');
@@ -69,4 +69,42 @@ test('another conversation or task cannot consume the reviewed phone draft', () 
     assert.equal(receipt.conversationId, expected.conversationId);
   }
   assert.equal(phoneStartReceipt({ status: 'accepted', taskId: expected.requestId }, expected).status, 'unknown');
+});
+
+test('a phone result keeps its own ended run while the task resumes and later completes', () => {
+  const frozen = { taskId: 'task', runId: 'run-one', epoch: 1, deliveryId: 'phone_handoff:task:run-one:1',
+    status: 'failed', endedAt: 1793764860000, summaryTruncated: true, summaryChars: 25000 };
+  const message = { role: 'assistant', taskId: 'task', content: 'Original failed result', phoneResult: frozen };
+  const projection = messagePhoneResult(message);
+  assert.deepEqual(projection, frozen);
+  assert.notEqual(projection, frozen);
+  assert.equal(messagePhoneResult({ ...message, phoneResult: { ...frozen, status: 'running' } }), null);
+  for (const change of [{ taskId: 'another-task' }, { runId: 'run-two' }, { epoch: 2 }, { endedAt: 0 }, { summaryChars: '25000' }]) {
+    assert.equal(messagePhoneResult({ ...message, phoneResult: { ...frozen, ...change } }), null);
+  }
+  assert.equal(messagePhoneResult({ ...message, role: 'user' }), null);
+  assert.equal(messagePhoneResult({ role: 'assistant', taskId: 'task', content: message.content }), null);
+  assert.equal(message.content, 'Original failed result');
+});
+
+test('a saved phone task is discoverable from its compact native header without a start receipt or message', () => {
+  const task = { id: 'task', goal: 'Clipped goal', status: 'awaiting_user', raw: {
+    id: 'task', kind: 'phone', actorId: 'owner', spaceId: 'private', taskProjection: 'summary',
+    conversationPhoneLink: { taskId: 'task', conversationId: 'original-conversation' },
+  } };
+  assert.equal(phoneConversationId(task), 'original-conversation');
+  for (const change of [{ kind: 'assistant' }, { actorId: 'other' }, { spaceId: 'group' }, { origin: {} }, { parentTaskId: 'parent' },
+    { conversationPhoneLink: { taskId: 'other', conversationId: 'original-conversation' } }]) {
+    assert.equal(phoneConversationId({ ...task, raw: { ...task.raw, ...change } }), null);
+  }
+});
+
+test('a hot detail association must retain the original task and conversation identities', () => {
+  const raw = { id: 'task', goal: 'Original goal', createdAt: 42, kind: 'phone', actorId: 'owner', spaceId: 'private',
+    conversationPhoneHandoff: { format: 'pocketworld.conversation-phone-handoff.v1', taskId: 'task', requestId: 'task',
+      conversationId: 'original-conversation', goal: 'Original goal', createdAt: 42, source: { conversationId: 'original-conversation' } } };
+  assert.equal(phoneConversationId({ id: 'task', raw }), 'original-conversation');
+  assert.equal(phoneConversationId({ id: 'task', raw: { ...raw, conversationPhoneHandoff: { ...raw.conversationPhoneHandoff, source: { conversationId: 'other' } } } }), null);
+  assert.equal(phoneConversationId({ id: 'task', raw: { ...raw, conversationPhoneLink: null } }), null);
+  assert.equal(phoneConversationId({ id: 'task', raw: { ...raw, createdAt: 43 } }), null);
 });

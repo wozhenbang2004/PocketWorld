@@ -364,7 +364,11 @@ internal class PocketWebBridge(
                         reference?.optString("taskId") == taskId && reference.optString("purpose") == "CHANNEL_CHAT" &&
                             reference.optBoolean("accountingOnly") && !reference.optBoolean("executionAuthorized", true)
                     }
-                require(controller.state.tasks.any { it.id == taskId } || taskHistory.contains(taskId) || channelUsageVisible) { "请先重新读取这个原任务的历史窗口" }
+                val phoneResultVisible = canReadTaskFromVisiblePhoneResult(
+                    taskId, section, taskViewId, controller.webPrivateOwnerVisible(), controller.state.conversationId,
+                    controller.state.messages.asSequence().map { it.phoneResult },
+                )
+                require(controller.state.tasks.any { it.id == taskId } || taskHistory.contains(taskId) || channelUsageVisible || phoneResultVisible) { "请先重新读取这个原任务的历史窗口" }
                 val requestNavigation = if (args.has("requestNavigation")) requiredBoolean(args, "requestNavigation") else true
                 openOriginalTask(id, taskId, requestNavigation)
                 return

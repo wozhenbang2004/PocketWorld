@@ -3,6 +3,8 @@
     "class": "dev.pocketengine.ConversationPhoneStartNativeTest",
     "additionalClasses": [
       "dev.pocketengine.store.ConversationPhoneHandoffTest",
+      "dev.pocketengine.ui.PhoneResultProjectionTest",
+      "dev.pocketengine.ui.web.PocketWebPhoneResultNavigationTest",
       "dev.pocketengine.features.assistant.ConversationPhoneDeliveryPassTest",
       "dev.pocketengine.store.ConversationPhoneStorageNativeTest",
       "dev.pocketengine.features.assistant.ConversationPhoneHandoffNativeTest",

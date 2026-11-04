@@ -49,3 +49,43 @@ export function phoneRunIdentity(task: unknown): { taskId: string; runId: string
       || !Number.isInteger(raw.coordinatorEpoch) || raw.coordinatorEpoch < 1) return null;
   return { taskId: row.id, runId: raw.runId, epoch: raw.coordinatorEpoch };
 }
+
+export type PhoneResult = {
+  taskId: string; runId: string; epoch: number; deliveryId: string;
+  status: string; endedAt: number; summaryTruncated: boolean; summaryChars: number;
+};
+const endedPhoneStatuses = new Set(['completed', 'needs_confirmation', 'awaiting_user', 'failed', 'cancelled', 'interrupted', 'reconciling', 'paused']);
+
+/** This native message snapshot describes one ended run, never the task's current state. */
+export function messagePhoneResult(message: unknown): PhoneResult | null {
+  if (!message || typeof message !== 'object') return null;
+  const row = message as Record<string, any>, result = row.phoneResult;
+  if (row.role !== 'assistant' || !result || typeof result !== 'object'
+      || !identity(row.taskId) || result.taskId !== row.taskId || !identity(result.runId)
+      || !Number.isSafeInteger(result.epoch) || result.epoch < 1
+      || result.deliveryId !== `phone_handoff:${result.taskId}:${result.runId}:${result.epoch}`
+      || !endedPhoneStatuses.has(result.status) || !Number.isSafeInteger(result.endedAt) || result.endedAt < 1
+      || typeof result.summaryTruncated !== 'boolean' || !Number.isSafeInteger(result.summaryChars) || result.summaryChars < 0) return null;
+  return { taskId: result.taskId, runId: result.runId, epoch: result.epoch, deliveryId: result.deliveryId,
+    status: result.status, endedAt: result.endedAt, summaryTruncated: result.summaryTruncated, summaryChars: result.summaryChars };
+}
+
+/** Display association only. Opening and reviewing still use the original native task. */
+export function phoneConversationId(task: unknown): string | null {
+  if (!task || typeof task !== 'object') return null;
+  const row = task as Record<string, any>, raw = row.raw;
+  if (!identity(row.id) || !raw || raw.id !== row.id || raw.kind !== 'phone' || raw.actorId !== 'owner'
+      || raw.spaceId !== 'private' || 'origin' in raw || 'parentTaskId' in raw) return null;
+  // Bounded native task headers carry only these two verified display identities.
+  if ('conversationPhoneLink' in raw) {
+    const link = raw.conversationPhoneLink;
+    return link && link.taskId === row.id ? identity(link.conversationId) || null : null;
+  }
+  // Detail windows retain the original association rather than the compact header.
+  const link = raw.conversationPhoneHandoff;
+  if (!link || link.format !== 'pocketworld.conversation-phone-handoff.v1'
+      || link.taskId !== row.id || link.requestId !== row.id || !identity(link.conversationId)
+      || link.source?.conversationId !== link.conversationId || link.goal !== raw.goal
+      || !Number.isSafeInteger(link.createdAt) || link.createdAt < 1 || link.createdAt !== raw.createdAt) return null;
+  return link.conversationId;
+}
