@@ -47,6 +47,9 @@ public final class HostToolSupervisor implements CapabilityPort {
     private final Map<String,Tool> routes=new LinkedHashMap<>();
     private final Map<String,Tool> nativeRoutes=new LinkedHashMap<>();
     private final Map<String,Boolean> availability=new LinkedHashMap<>();
+    private Map<String,JSONObject> ownerWorkReferences=new LinkedHashMap<>();
+    private final Map<String,JSONObject> ownerWorkReads=new LinkedHashMap<>();
+    private final Map<String,JSONArray> ownerWorkRequests=new LinkedHashMap<>();
     @FunctionalInterface public interface NativeDeviceRoutes { CapabilityPort current()throws Exception; }
     private NativeDeviceRoutes nativeDeviceRoutes;private CapabilityPort nativeDevicePort;
     /** Native App wiring only. Paired-device goals take their closed project/device path BEFORE this
@@ -71,6 +74,7 @@ public final class HostToolSupervisor implements CapabilityPort {
     public void installProjectMemoryRead(dev.pocketengine.features.memory.ProjectMemoryAccess selected,RunControl original)throws Exception{
         if(memoryControl!=null||projectMemory!=null)throw new SecurityException("项目记忆范围只能在原run开始前显选一次");selected.requireOriginal(original,taskId,runId,epoch);tasks.checkExtensionRun(taskId,runId,epoch,original);projectMemory=selected;
         routes.remove("memory_method_decision");nativeRoutes.remove("memory_method_decision");
+        routes.keySet().removeIf(name->name.startsWith("owner_work_"));nativeRoutes.keySet().removeIf(name->name.startsWith("owner_work_"));
         for(String name:new String[]{"memory_search","memory_recall"}){Tool tool=routes.get(name);if(tool!=null)tool.definition.getJSONObject("function").put("description","只检索主人为本次run显选的项目记忆及原来源；不混入主人全局脑，不扩大原冻结版本或字符预算。memory_recall可显式mode=historical读取原授权内保留的历史版本；历史不是当前事实或原始证据，不扩展身份关系。");}
     }
     /** Read-only preparation even before a Run exists. The unbound port never leaves this factory. */
@@ -107,7 +111,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         }
         if(host.hasConversationMemoryDrafts()&&(catalogueOnly||tasks.memoryProposalsEligible(this.taskId))){
             add("memory","$memory_draft_sources","memory_draft_sources","列出原私人会话本run最终主请求已准备、当前仍可核对的完整主人消息身份；不返回正文，不证明模型已消费或完整会话。仅这些sourceId/revision可用于多轮记忆提案。",false,new JSONObject());
-            add("memory","$memory_propose","memory_propose","根据1至20条已核对主人消息提出记忆新增、纠正或遗忘草稿。新增只建立待审候选；纠正与遗忘须指明确切原记忆版本。主人展开新旧正文、来源和影响后另行确认，才修改正式记忆；模型总结不等于主人事实确认。未知结果只查询原回执，不重复应用。",true,dev.pocketengine.features.memory.NativeConversationMemoryDraftHost.proposalProperties(),"action","sources","reason");
+            add("memory","$memory_propose","memory_propose","根据1至20条已核对主人消息提出记忆新增、纠正或遗忘草稿。新增只建立待审候选；纠正与遗忘须指明确切原记忆版本。主人展开新旧正文、来源和影响后另行确认，才修改正式记忆；模型总结不等于主人事实确认。未知结果只查询原回执，不重复应用。可选assertion保留主体、条件和时间；quote必须逐字原句，offset为原消息UTF-16起点，sourceIndex为sources的从0开始索引。user_said的text/object/quote须一致，推断或转述另标kind；未知eventTime/validFrom/validTo/reviewAfter省略，不能用今天补事件时间，计划不是既成事实。",true,dev.pocketengine.features.memory.NativeConversationMemoryDraftHost.proposalProperties(),"action","sources","reason");
         }
         add("skills","$skill_reference_decision","skills_reference_decision","记录已读取的准确Skill版本在本轮实际采用的原步骤。须提供1至8个已返回确定回执的stepOperationIds；这只记录模型采用决定与原步骤证据，不证明业务成功或授予工具权限。",true,
                 props("id",text(80),"revision",integer(1,Integer.MAX_VALUE),"digest",text(64),"reason",text(1000),"stepOperationIds",new JSONObject().put("type","array").put("minItems",1).put("maxItems",8).put("items",text(80))),"id","revision","digest","reason","stepOperationIds");
@@ -129,6 +133,17 @@ public final class HostToolSupervisor implements CapabilityPort {
             addTeamParentTool("$parent_wait","teams_wait","有界等待原团队事件cursor，超时仍pending；主人steer优先打断，不轮询模型或重新spawn。",false);
             addTeamParentTool("$parent_control","teams_control","按原团队版本暂停/停止、只恢复父代理所暂停的原工作项/准确researchRound且不增额、交接未开始项、请求独审/主人精确整合或修订。没有模型approve动作。",true);
         }
+        }
+        JSONObject ownerTask=catalogueOnly?null:tasks.get(this.taskId,false);
+        boolean ownerWorkTools=catalogueOnly||workProfile==null&&host.hasOwnerWorkHost()&&ownerTask!=null&&"assistant".equals(ownerTask.optString("kind"))&&"owner".equals(ownerTask.optString("actorId"))&&"private".equals(ownerTask.optString("spaceId"))&&ownerTask.optJSONObject("origin")==null&&!ownerTask.has("developmentContext")&&!ownerTask.has("workProfileRef")&&!ownerTask.has("workProfileIntent")&&!ownerTask.has("projectMemoryRead")&&!ownerTask.has("teamWriteScope");
+        if(ownerWorkTools){
+            add("assistant","$owner_work_list","owner_work_list","分页读取本会话私人管家已接手的工作摘要及准确执行身份。前台回复不会停止这些工作；终态结果不是新执行授权。详情用owner_work_get。",false,props("offset",integer(0,128),"limit",integer(1,24)));
+            add("assistant","$owner_work_get","owner_work_get","读取本会话一个原工作及冻结结果，不重新派发。deliveryId指定确切结果，省略则读最新；offset/maxChars分页，hasMore时用nextOffset继续读取。",false,props("taskId",text(80),"deliveryId",text(240),"offset",integer(0,240000),"maxChars",integer(1,8000)),"taskId");
+            if(catalogueOnly||!"owner_work".equals(ownerTask.optString("executionRole"))){
+                add("assistant","$owner_work_start","owner_work_start","把当前主人明确委托的长工作交给后台私人管家，返回真实持久接收回执后可以继续回答主人。goal是工作说明，不是主人新原话。toolLimit/modelCallLimit从本任务剩余额度实际分配，不能复制或新增授权。后台可使用原团队工具，完成后回到原会话；不要为短问答派后台。",true,props("goal",text(12000),"title",text(200),"toolLimit",integer(1,400),"modelCallLimit",integer(1,512)),"goal","toolLimit","modelCallLimit");
+                add("assistant","$owner_work_input","owner_work_input","将本轮确切主人原话补充给本会话指定工作；只接受原生来源，不接受模型改写的content。queue在当前步骤后处理，steer让原任务重新考虑下一步。不会重绑本轮输入或启动第二个同目标任务。",true,props("taskId",text(80),"runId",text(80),"epoch",integer(1,Integer.MAX_VALUE),"mode",new JSONObject().put("type","string").put("enum",new JSONArray().put("queue").put("steer")),"messageIds",new JSONObject().put("type","array").put("maxItems",16).put("items",text(80))),"taskId","runId","epoch","mode");
+                add("assistant","$owner_work_control","owner_work_control","按准确工作task/run/epoch请求停止后续派发，并清理其真实子任务；不能把请求停止说成外部动作已撤销。",true,props("taskId",text(80),"runId",text(80),"epoch",integer(1,Integer.MAX_VALUE),"action",new JSONObject().put("type","string").put("enum",new JSONArray().put("cancel"))),"taskId","runId","epoch","action");
+            }
         }
         nativeRoutes.putAll(routes);refreshPluginRoutes();
     }
@@ -241,15 +256,26 @@ public final class HostToolSupervisor implements CapabilityPort {
         synchronized(toolMemorySelections){if(toolMemoryEnded)throw new SecurityException("原run已经结束");for(var selected:historicalMemorySelections.values())references.put(selected.validation());}
         return references;
     }
+    private JSONArray ownerWorkReadValidation()throws Exception{
+        JSONArray result=new JSONArray();if(ownerWorkReads.isEmpty())return result;
+        String conversation=tasks.get(taskId,false).getString("conversationId");
+        for(JSONObject selected:ownerWorkReads.values()){
+            JSONObject current=tasks.ownerWorkResult(selected.getString("taskId"),conversation,selected.getString("deliveryId"),0,2);
+            if(!current.optBoolean("available")||!selected.getString("resultDigest").equals(current.optString("resultDigest")))throw new SecurityException("原工作结果来源已变化或撤回，请重新核对原任务；没有继续使用旧正文");
+            result.put(new JSONObject(selected.toString()));
+        }
+        return result;
+    }
     @Override public boolean responseCurrent(RunControl original)throws Exception{
+        ownerWorkReadValidation();
         validateToolMemorySelections(original);
         if(workProfile!=null)try{workProfile.checkCurrent();}catch(Exception withdrawn){original.check();return false;}
         if(projectMemory!=null)projectMemory.requireOriginal(original,taskId,runId,epoch);
         host.checkTeamResearchParentInputs(taskId,runId,epoch,original);
         if(nativeDevicePort!=null&&!nativeDevicePort.responseCurrent(original))return false;
         if(workingControl!=null&&original!=workingControl)throw new SecurityException("参考校验不是原执行控制");
-        var originalSelection=memorySelection;
-        String expected=admittedReferences;long generation=admittedMemoryRevision;boolean temporary=admittedWorkingMemory;JSONObject current=contextSnapshot(referenceQuery);memorySelection=originalSelection;
+        var originalSelection=memorySelection;var originalWorks=ownerWorkReferences;
+        String expected=admittedReferences;long generation=admittedMemoryRevision;boolean temporary=admittedWorkingMemory;JSONObject current=contextSnapshot(referenceQuery);memorySelection=originalSelection;ownerWorkReferences=originalWorks;
         return temporary==admittedWorkingMemory&&generation==host.memoryContextRevision()&&expected.equals(TaskStore.capabilityFingerprint(current.getJSONObject("referenceValidation")));
     }
     @Override public boolean stepReadSourceCurrent(String tool,JSONObject receipt,RunControl original)throws Exception{
@@ -257,9 +283,19 @@ public final class HostToolSupervisor implements CapabilityPort {
         return nativeDevicePort!=null&&nativeDevicePort.supports(tool)&&nativeDevicePort.stepReadSourceCurrent(tool,receipt,original);
     }
     @Override public void beforeModelRequest(String requestId,JSONArray messages,RunControl original)throws Exception{
+        ownerWorkReadValidation();
         if(workProfile!=null)workProfile.checkCurrent();host.checkTeamResearchParentInputs(taskId,runId,epoch,original);
         validateToolMemorySelections(original);
         if(nativeDevicePort!=null)nativeDevicePort.beforeModelRequest(requestId,messages,original);
+        JSONArray suppliedWorkResults=new JSONArray();
+        for(JSONObject selected:ownerWorkReferences.values()){
+            String text=selected.getString("referenceText");boolean included=false;
+            for(int i=0;i<messages.length();i++)if(dev.pocketengine.runtime.RecoveryProjection.referenceIncludes(messages.getJSONObject(i),text))included=true;
+            if(!included)continue;
+            JSONObject receipt=tasks.claimOwnerWorkReceipt(selected.getString("taskId"),selected.getString("deliveryId"),taskId,runId,epoch,original);
+            if(receipt.optBoolean("claimed"))suppliedWorkResults.put(selected.getString("deliveryId"));
+        }
+        if(suppliedWorkResults.length()>0)ownerWorkRequests.put(requestId,suppliedWorkResults);
         if(taskMemory==null||memorySelection==null)return;if(original!=memoryControl)throw new SecurityException("记忆发送不是原执行控制");
         if(admittedMemoryRevision!=host.memoryContextRevision())throw new SecurityException("参考上下文已变化，尚未提供旧片段");
         JSONObject selected=taskMemory.validateTaskMemorySelection(privateScope(),memorySelection,memoryFence);String context=selected.getString("context");
@@ -272,11 +308,13 @@ public final class HostToolSupervisor implements CapabilityPort {
         if(!included)return;
         memoryFence.admit(()->{taskMemory.validateTaskMemorySelection(privateScope(),memorySelection,memoryFence);
             if(admittedMemoryRevision!=host.memoryContextRevision())throw new SecurityException("参考上下文已变化，尚未提供旧片段");
-            modelRequestAbandoned("");memoryIntent=dev.pocketengine.features.memory.TaskMemoryJournal.prepare(UUID.randomUUID().toString(),memoryTask,requestId,memorySelection);
+            var previous=memoryIntent;if(previous!=null){tasks.abandonMemoryReference(previous);memoryIntent=null;}memoryIntent=dev.pocketengine.features.memory.TaskMemoryJournal.prepare(UUID.randomUUID().toString(),memoryTask,requestId,memorySelection);
             tasks.prepareMemoryReference(memoryIntent,original);return new JSONObject();});
     }
     @Override public JSONObject afterModelResponse(String requestId,String answerId,RunControl original)throws Exception{
+        ownerWorkReadValidation();
         validateToolMemorySelections(original);
+        JSONArray workResults=ownerWorkRequests.remove(requestId);if(workResults!=null&&workResults.length()>0)tasks.markOwnerWorkReceiptsPrepared(taskId,runId,epoch,workResults,requestId,original);
         JSONObject device=nativeDevicePort==null?null:nativeDevicePort.afterModelResponse(requestId,answerId,original);
         if(memoryIntent==null||!requestId.equals(memoryIntent.requestId))return device;
         JSONObject memory=memoryFence.admit(()->{
@@ -289,6 +327,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         });return device==null?memory:memory.put("deviceVisual",device);
     }
     @Override public void modelRequestAbandoned(String requestId)throws Exception{
+        if(requestId.isEmpty())ownerWorkRequests.clear();else ownerWorkRequests.remove(requestId);
         if(nativeDevicePort!=null)nativeDevicePort.modelRequestAbandoned(requestId);
         var intent=memoryIntent;if(intent!=null&&(requestId.isEmpty()||requestId.equals(intent.requestId))){tasks.abandonMemoryReference(intent);memoryIntent=null;}
     }
@@ -313,10 +352,37 @@ public final class HostToolSupervisor implements CapabilityPort {
         host.synchronizeMemory(privateScope());
         EngineModule module=host.module("memory");JSONObject snapshot=new JSONObject();
         if(module instanceof dev.pocketengine.features.memory.MemoryModule){
-            if(taskMemory!=null&&memoryFence!=null){memorySelection=taskMemory.prepareTaskRecall(privateScope(),memoryTask,query,16,12000,memoryFence);snapshot=memorySelection.snapshot();}
-            else snapshot=((dev.pocketengine.features.memory.MemoryModule)module).contextSnapshot(privateScope(),query,16,12000);
+            boolean ownerContext=projectMemory==null&&task.optJSONObject("origin")==null;
+            if(taskMemory!=null&&memoryFence!=null){memorySelection=ownerContext?taskMemory.prepareOwnerTaskRecall(privateScope(),memoryTask,query,16,12000,memoryFence):taskMemory.prepareTaskRecall(privateScope(),memoryTask,query,16,12000,memoryFence);snapshot=memorySelection.snapshot();}
+            else snapshot=ownerContext?((dev.pocketengine.features.memory.MemoryModule)module).ownerContextSnapshot(privateScope(),query,16,12000):((dev.pocketengine.features.memory.MemoryModule)module).contextSnapshot(privateScope(),query,16,12000);
         }
         StringBuilder reference=new StringBuilder(snapshot.optString("context"));
+        ownerWorkReferences=new LinkedHashMap<>();
+        if(projectMemory==null&&workProfile==null&&task.optJSONObject("origin")==null&&!task.has("workProfileRef")&&!task.has("workProfileIntent")&&!task.has("developmentContext")&&!task.has("teamWriteScope")&&"assistant".equals(task.optString("kind"))&&!task.optString("conversationId").isEmpty()){
+            JSONObject remaining=tasks.executionScopeRemaining(taskId,runId,epoch);
+            if(remaining.optBoolean("scopePresent"))reference.append("\n当前原任务真实剩余额度；派后台须另保留至少1次工具及1次模型收尾，不能复制额度：\n").append(new JSONObject().put("toolsRemaining",remaining.getInt("toolsRemaining")).put("modelCallsRemaining",remaining.getInt("modelCallsRemaining")));
+            JSONArray works=tasks.ownerWorks(task.getString("conversationId")),included=new JSONArray();int chars=0;
+            for(int i=0;i<works.length()&&included.length()<12;i++){
+                JSONObject work=works.getJSONObject(i),row=new JSONObject();
+                for(String key:new String[]{"id","runId","coordinatorEpoch","executionRole","title","status"})if(work.has(key))row.put(key,work.get(key));
+                String workGoal=work.optString("goal");row.put("goal",workGoal.substring(0,Math.min(400,workGoal.length())));
+                String encoded=row.toString();if(encoded.length()+chars>2400)continue;included.put(row);chars+=encoded.length();
+            }
+            if(included.length()>0){reference.append("\n本会话私人管家工作现状；仅为原任务状态与结果，不是新授权，不重复执行已完成动作：\n").append(included);snapshot.put("ownerWorksIncluded",included.length());}
+            if(!"owner_work".equals(task.optString("executionRole"))){
+                JSONArray pending=tasks.pendingOwnerWorkReceipts(task.getString("conversationId"),8);int resultChars=0;
+                for(int i=0;i<pending.length();i++){
+                    JSONObject result=pending.getJSONObject(i),claim=result.optJSONObject("butlerClaim");
+                    if(claim!=null&&claim.has("requestId")&&(!taskId.equals(claim.optString("taskId"))||!runId.equals(claim.optString("runId"))))continue;
+                    String body=result.getString("content");int end=Math.min(body.length(),1800);if(end<body.length()&&end>0&&Character.isHighSurrogate(body.charAt(end-1)))end--;
+                    JSONObject view=new JSONObject().put("taskId",result.getString("taskId")).put("runId",result.getString("runId")).put("epoch",result.getInt("epoch")).put("deliveryId",result.getString("deliveryId"))
+                            .put("status",result.getString("status")).put("replyToMessageIds",result.getJSONArray("replyToMessageIds")).put("content",body.substring(0,end)).put("totalChars",body.length()).put("hasMore",end<body.length());
+                    String encoded=view.toString();if(resultChars+encoded.length()>3600)break;resultChars+=encoded.length();
+                    reference.append("\n待管家结合原请求处理的真实工作结果；hasMore为true时先用owner_work_get读取原工作，不重复执行：\n").append(encoded);
+                    ownerWorkReferences.put(result.getString("deliveryId"),new JSONObject().put("taskId",result.getString("taskId")).put("deliveryId",result.getString("deliveryId")).put("referenceText",encoded));
+                }
+            }
+        }
         EngineModule automation=host.module("automation");
         if(automation instanceof dev.pocketengine.features.automation.AutomationModule){
             JSONObject due=((dev.pocketengine.features.automation.AutomationModule)automation).dueCommitments(privateScope(),10);JSONArray candidates=due.getJSONArray("commitments");
@@ -344,6 +410,8 @@ public final class HostToolSupervisor implements CapabilityPort {
         // Full live version identities only: validation is not limited to the query's top matches,
         // contains no memory/Skill body, and is consumed by the runner, not injected as instructions.
         JSONObject validation=new JSONObject().put("memory",memoryVersions).put("historicalMemory",historicalReferenceValidation()).put("skills",skillVersions);snapshot.put("referenceValidation",validation);
+        if(snapshot.optJSONObject("ownerContext")!=null)validation.put("ownerContextRevision",snapshot.getJSONObject("ownerContext").getString("revision"));
+        JSONArray workReads=ownerWorkReadValidation();if(workReads.length()>0)validation.put("ownerWorkResults",workReads);
         if(admittedSkillAssetScope!=null)validation.put("skillScopeFingerprint",dev.pocketengine.features.skills.SkillSourcePolicy.scopeFingerprint(admittedSkillAssetScope));
         JSONObject temporary=workingSnapshot();admittedWorkingMemory=temporary!=null;if(temporary!=null&&!temporary.optString("context").isEmpty()){reference.append("\n").append(temporary.getString("context"));snapshot.put("workingMemory",new JSONObject().put("taskId",taskId).put("runId",runId).put("epoch",epoch).put("revision",temporary.getLong("revision")).put("persisted",false));}
         if(workProfile!=null&&workProfile.hasInstructions()){
@@ -418,6 +486,7 @@ public final class HostToolSupervisor implements CapabilityPort {
             case "automation"->"$schedule_list".equals(tool.command);
             case "attachments"->Set.of("list","readText").contains(tool.command);
             case "teams"->"$teams".equals(tool.command);
+            case "assistant"->Set.of("$owner_work_list","$owner_work_get").contains(tool.command);
             default->false;
         };
         if(!read)return dev.pocketengine.core.ExecutionPlanning.Access.DENY;
@@ -431,6 +500,14 @@ public final class HostToolSupervisor implements CapabilityPort {
         java.util.Objects.requireNonNull(control).check();tasks.checkCapability(taskId,runId,epoch,name,control);
         JSONObject args=new JSONObject((arguments==null?new JSONObject():arguments).toString());String operationId=args.optString("_hostOperationId");args.remove("_hostOperationId");
         if(!operationId.isEmpty())identifier(operationId);validate(name,args,profileCheck);
+        if(tool.feature.equals("assistant")&&tool.command.startsWith("$owner_work_")){
+            if(tool.write&&!allowWrites)throw new SecurityException("只读任务不能派发或控制私人工作");
+            if(name.equals("owner_work_get")&&ownerWorkReads.size()>=16&&!ownerWorkReads.containsKey(args.optString("deliveryId")))throw new IllegalStateException("本轮已读取16份工作结果，请先处理已取得的结果");
+            JSONObject result=host.ownerWorkCall(taskId,runId,epoch,name,operationId,args,control);control.check();tasks.checkCapability(taskId,runId,epoch,name,control);
+            JSONObject frozen=name.equals("owner_work_get")?result.optJSONObject("result"):null;
+            if(frozen!=null&&frozen.optBoolean("available"))ownerWorkReads.put(frozen.getString("deliveryId"),new JSONObject().put("taskId",frozen.getString("taskId")).put("deliveryId",frozen.getString("deliveryId")).put("resultDigest",frozen.getString("resultDigest")));
+            return result;
+        }
         if(tool.feature.equals("teams")&&(tool.command.startsWith("$parent_")||tool.command.equals("get")&&host.hasParentTeamOrchestration()||tool.command.equals("start")&&args.has("planRef"))){
             if(tool.write&&!allowWrites)throw new SecurityException("只读成员不能取得父编排执行权");return host.teamParentCall(taskId,runId,epoch,name,operationId,args,control);
         }
