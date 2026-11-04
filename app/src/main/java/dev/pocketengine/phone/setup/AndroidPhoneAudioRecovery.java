@@ -24,5 +24,13 @@ public final class AndroidPhoneAudioRecovery {
     }
     public static boolean silenceEnabled(Context context){return context.getApplicationContext().getSharedPreferences("phone_audio_policy",0).getBoolean("enabled",false);}
     public static <T>T withCommands(Commands commands,Body<T> body)throws Exception {Commands old=ADMITTED.get();ADMITTED.set(commands);try{return body.run();}finally{if(old==null)ADMITTED.remove();else ADMITTED.set(old);}}
+    /** Cleanup has no system-setting write capability, even if a future ledger change
+     * mistakenly tries to use read-then-set as conditional restoration. */
+    public static <T>T withObservationCommands(Commands commands,Body<T> body)throws Exception {
+        return withCommands((command,args)->{
+            if(!"audio.get".equals(command))throw new SecurityException("automatic_audio_restore_not_atomic");
+            return commands.call(command,args);
+        },body);
+    }
     public static void setOwnerSilenceEnabled(Context context,boolean enabled){if(!context.getApplicationContext().getSharedPreferences("phone_audio_policy",0).edit().putBoolean("enabled",enabled).commit())throw new IllegalStateException("phone_audio_policy_save_failed");}
 }

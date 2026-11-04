@@ -16,8 +16,12 @@ public final class NativeTransportContractTest {
                 .resolve("app/src/main/java/dev/pocketengine/features/local/runtime/native");
         String pty=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(root.resolve("pty_supervisor.cpp"))));
         String pipes=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(root.resolve("pipe_supervisor.cpp"))));
-        assertEquals("pocketworld.posix-pty-exit8-owner-v2:"+pty,NativeProcessSupervisor.PTY_EXIT_RESULT_CONTRACT);
-        assertEquals("pocketworld.posix-duplex-exit8-owner-v2:"+pipes,NativeProcessSupervisor.PIPE_EXIT_RESULT_CONTRACT);
+        assertEquals("pocketworld.posix-pty-exit8-owner-v3:"+pty,NativeProcessSupervisor.PTY_EXIT_RESULT_CONTRACT);
+        assertEquals("pocketworld.posix-duplex-exit8-owner-v3:"+pipes,NativeProcessSupervisor.PIPE_EXIT_RESULT_CONTRACT);
+        String owner=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(root.resolve("child_owner.h"))));
+        for(String source:List.of("process_supervisor.cpp","pipe_supervisor.cpp","pty_supervisor.cpp"))assertTrue(Files.readString(root.resolve(source)).contains("// child_owner.h SHA256: "+owner));
+        String ordinary=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(root.resolve("process_supervisor.cpp"))));
+        assertEquals("pocketworld.posix-exit7-owner-v4:"+ordinary,NativeProcessSupervisor.EXIT_RESULT_CONTRACT);
     }
     @Test public void historicalSessionReceiptsKeepTheirExactFactsWithoutBecomingNewBindings()throws Exception {
         assertEquals("pocketworld.posix-pty-exit8-v1:f9132cee828fcbafd4252e71a139cb7c21839b1336111e1a762fab0afe487524",NativeProcessSupervisor.LEGACY_PTY_EXIT_RESULT_CONTRACT);
@@ -25,6 +29,7 @@ public final class NativeTransportContractTest {
         assertNotEquals(NativeProcessSupervisor.LEGACY_PTY_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.PTY_EXIT_RESULT_CONTRACT);
         assertNotEquals(NativeProcessSupervisor.LEGACY_PIPE_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.PIPE_EXIT_RESULT_CONTRACT);
         for(String contract:List.of(NativeProcessSupervisor.PTY_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.PIPE_EXIT_RESULT_CONTRACT,
+                NativeProcessSupervisor.OWNER_V2_PTY_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.OWNER_V2_PIPE_EXIT_RESULT_CONTRACT,
                 NativeProcessSupervisor.LEGACY_PTY_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.LEGACY_PIPE_EXIT_RESULT_CONTRACT)) {
             JSONObject receipt=new JSONObject().put("nativeResultContract",contract).put("status","completed").put("receiptReceived",true)
                     .put("resourcesReleased",true).put("processExited",true).put("processGroupAbsent",true).put("processSessionAbsent",true);

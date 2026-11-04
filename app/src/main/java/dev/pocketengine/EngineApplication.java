@@ -630,6 +630,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             modelStreams=new dev.pocketengine.features.NativeModelStreamUi(tasks,main,this::ownsRunControl,event->{for(Observer observer:observers)try{observer.onEvent(event);}catch(RuntimeException ignored){}});
             initializeFeatures();initializeDeviceWorkspace();
             // These are the original recovery consumers, completed on this same initializer before ready.
+            dev.pocketengine.features.attachments.AttachmentRepository.get(this).book.recoverInterruptedImports();
             if(channelTaskHost!=null)channelTaskHost.recover();
             memorySources.synchronize(json("ownerId","owner","spaceId","private"));
             automationHost=new dev.pocketengine.features.HostAutomationCoordinator(this,features,tasks,automationPlans);

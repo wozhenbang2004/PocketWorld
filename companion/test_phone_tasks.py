@@ -13,6 +13,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
+import uuid
 from unittest.mock import patch
 
 import device_pairing as pairing
@@ -21,7 +22,7 @@ from phone_task_bridge import PhoneTaskError, PhoneTaskRouter
 from phone_task_client import Client
 from phone_task_desk import TaskDesk
 from phone_task_mcp import rpc, stdio, VERSION
-from phone_task_usb import OwnedUsbForward, UsbForwardError
+from phone_task_usb import UsbForwardError
 import test_device_pairing as pairing_fixtures
 
 
@@ -162,6 +163,18 @@ class PhoneDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.mode = "wrong-instance"
         second = await self.router.execute("run", dict(self.params, operationId="second-original-op"))
         self.assertEqual("unknown", second["status"])
+
+    async def test_cold_private_stream_and_legacy_forward_receipts_never_claim_a_live_connection(self):
+        for protocol in ("pocketworld.usb-forward.v1", "pocketworld.usb-stream.v1"):
+            for status in ("dispatch_prepared", "usb_connected"):
+                operation="usb-"+str(uuid.uuid4())
+                value=dict(protocol=protocol,operationId=operation,peerDeviceId=self.params["peerDeviceId"],status=status,cleanupConfirmed=False)
+                self.db.execute("INSERT INTO operations VALUES(?,?,?,?,?,?)",(operation,"fixed","usb:"+operation,status,self.manager.now(),json.dumps(value)))
+                self.db.commit()
+                cold=PhoneTaskRouter(self.service)
+                answer=await cold.execute("usb_status",dict(operationId=operation,peerDeviceId=self.params["peerDeviceId"]))
+                self.assertEqual("unknown",answer["status"]);self.assertFalse(answer["cleanupConfirmed"])
+                self.assertEqual({},cold.usb);self.assertEqual([],self.sent)
 
     async def test_revoke_before_next_new_request_and_wait_never_cancel(self):
         await self.router.execute("run", self.params)
@@ -372,38 +385,28 @@ class LocalSurfaceTests(unittest.TestCase):
 
 
 class UsbOwnershipTests(unittest.TestCase):
-    def test_serial_boot_and_cleanup_only_our_exact_forward(self):
+    def test_serial_boot_and_cleanup_only_our_private_stream(self):
+        from test_phone_task_usb import AdbFixture
         with tempfile.TemporaryDirectory() as root:
-            adb=Path(root)/"adb-fixture";adb.touch();calls=[];mapping={};boot=[7]
-            def run(argv,**kwargs):
-                calls.append(argv);self.assertEqual([str(adb),"-s","selected-serial"],argv[:3]);args=argv[3:]
-                if args==["shell","settings","get","global","boot_count"]:out=str(boot[0])
-                elif args[:2]==["forward","--no-rebind"]:mapping[40123]="tcp:9991";out="40123"
-                elif args==["forward","--list"]:out="\n".join("selected-serial tcp:"+str(port)+" "+target for port,target in mapping.items())
-                elif args==["forward","--remove","tcp:40123"]:mapping.pop(40123,None);out=""
-                else:raise AssertionError(args)
-                return subprocess.CompletedProcess(argv,0,out.encode(),b"")
-            forward=OwnedUsbForward(adb,"selected-serial",7,9991,run=run)
-            self.assertEqual(40123,forward.open());mapping[49999]="tcp:8888"
-            boot[0]=8
+            adb=AdbFixture(root);self.addCleanup(adb.close);forward=adb.forward()
+            stream=forward.open();adb.rows[49999]=(adb.serial,"tcp:8888")
+            adb.boot=8
             with self.assertRaises(UsbForwardError):forward.check_boot()
-            self.assertTrue(forward.close());self.assertEqual({49999:"tcp:8888"},mapping)
-            self.assertFalse(any("--remove-all" in argv for argv in calls))
-            stale=OwnedUsbForward(adb,"selected-serial",7,9991,run=run)
+            self.assertTrue(forward.close());self.assertEqual(-1,stream.fileno())
+            self.assertEqual({49999:(adb.serial,"tcp:8888")},adb.rows)
+            self.assertFalse(any("forward" in argv for argv in adb.calls))
+            stale=adb.forward()
             with self.assertRaises(UsbForwardError):stale.open()
-            self.assertEqual("not_started",stale.state)
-    def test_unknown_adb_creation_never_retries_or_removes_other_forwards(self):
+            self.assertTrue(stale.cleanup_confirmed);self.assertEqual("closed",stale.state)
+            self.assertEqual(1,adb.connect_count)
+    def test_unavailable_adb_stream_never_retries_or_removes_other_forwards(self):
+        from test_phone_task_usb import AdbFixture
         with tempfile.TemporaryDirectory() as root:
-            adb=Path(root)/"adb-fixture";adb.touch();calls=[]
-            def run(argv,**kwargs):
-                calls.append(argv)
-                if "boot_count" in argv:return subprocess.CompletedProcess(argv,0,b"3",b"")
-                raise subprocess.TimeoutExpired(argv,6)
-            forward=OwnedUsbForward(adb,"fixed",3,9991,run=run)
-            with self.assertRaises(subprocess.TimeoutExpired):forward.open()
-            self.assertEqual("unknown",forward.state);self.assertFalse(forward.close())
+            adb=AdbFixture(root);self.addCleanup(adb.close);adb.connect_failure=True;forward=adb.forward()
+            with self.assertRaises(TimeoutError):forward.open()
+            self.assertEqual("closed",forward.state);self.assertTrue(forward.close())
             with self.assertRaises(UsbForwardError):forward.open()
-            self.assertEqual(2,len(calls))
+            self.assertEqual(1,adb.connect_count);self.assertEqual(1,len(adb.calls))
 
 
 if __name__ == "__main__":unittest.main()

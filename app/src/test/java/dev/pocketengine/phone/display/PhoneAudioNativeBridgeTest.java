@@ -91,7 +91,7 @@ public final class PhoneAudioNativeBridgeTest {
     @Test public void defaultOffSendsNoAudioCommandAndExplicitPolicyUsesPinnedNativeWire()throws Exception{try(Fixture f=new Fixture()){
         f.quiet();assertEquals(0,payloads);assertEquals(0,f.pending());f.enable();f.quiet();assertEquals(1,sets);assertEquals("ignore",mode);assertEquals(1,f.pending());
         assertEquals("example.music",lastSet.getString("packageName"));assertEquals(0,lastSet.getInt("userId"));assertEquals("original-audio-session",lastSet.getString("sessionId"));assertEquals(5,lastSet.getInt("displayId"));
-        JSONObject restored=f.port.restoreTaskAudio();assertEquals(0,restored.getInt("pending"));assertEquals(1,restored.getInt("restored"));assertEquals("allow",mode);assertEquals(2,sets);
+        JSONObject restored=f.port.restoreTaskAudio();assertEquals(1,restored.getInt("pending"));assertEquals(0,restored.getInt("restored"));assertTrue(restored.getBoolean("needsOwnerAction"));assertEquals("ignore",mode);assertEquals(1,sets);
     }}
     @Test public void pauseResumeDuringReadLeavesClaimButCannotWriteAnOldSet()throws Exception{try(Fixture f=new Fixture()){
         f.enable();afterGet=()->{f.original.pause();f.original.resume();};assertThrows(Exception.class,f::quiet);assertEquals(0,sets);assertEquals(1,f.pending());assertEquals("allow",mode);
@@ -102,10 +102,10 @@ public final class PhoneAudioNativeBridgeTest {
     @Test public void replacedNativeSessionCannotReceiveTheOldAudioSet()throws Exception{try(Fixture f=new Fixture()){
         f.enable();afterGet=()->{try{session="replacement-session";field(f.module,"state",status());}catch(Exception failure){throw new RuntimeException(failure);}};assertThrows(Exception.class,f::quiet);assertEquals(0,sets);assertEquals(1,f.pending());
     }}
-    @Test public void cancellationAfterSetKeepsUnknownUntilTheOriginalPeerIsReconnectedForCleanup()throws Exception{try(Fixture f=new Fixture()){
+    @Test public void cancellationAndReconnectionNeverTurnAReadIntoAutomaticRestoreAuthority()throws Exception{try(Fixture f=new Fixture()){
         f.enable();cancelAfterSet=f.original;assertThrows(Exception.class,f::quiet);assertTrue(f.original.isCancelled());assertEquals(1,sets);assertEquals(1,f.pending());assertEquals("ignore",mode);
         assertThrows(Exception.class,f::quiet);assertEquals(1,sets);assertEquals(1,f.port.restoreTaskAudio().getInt("pending"));assertEquals("ignore",mode);assertEquals(1,sets);
-        f.module.acceptStatus(status());assertEquals(0,f.port.restoreTaskAudio().getInt("pending"));assertEquals("allow",mode);assertEquals(2,sets);
+        f.module.acceptStatus(status());assertEquals(1,f.port.restoreTaskAudio().getInt("pending"));assertEquals("ignore",mode);assertEquals(1,sets);
     }}
     @Test public void ownerRestoredBaselineIsNotSilencedAgainThroughTheRealPort()throws Exception{try(Fixture f=new Fixture()){
         f.enable();f.quiet();mode="allow";int before=sets;assertThrows(Exception.class,f::quiet);assertEquals(before,sets);assertEquals("allow",mode);assertEquals(0,f.port.restoreTaskAudio().getInt("pending"));assertEquals(before,sets);
@@ -119,6 +119,7 @@ public final class PhoneAudioNativeBridgeTest {
         assertThrows(SecurityException.class,()->f.module.audioForTask("audio.set",args,"other-task",session,5,f.original,0,()->{}));
         assertThrows(SecurityException.class,()->f.module.audioForTask("audio.set",args,"original-task","other-session",5,f.original,0,()->{}));
         assertThrows(SecurityException.class,()->f.module.audioForTask("launch",args,"original-task",session,5,f.original,0,()->{}));
+        assertThrows(SecurityException.class,()->f.module.audioForTask("audio.set",args,"original-task",session,5,null,-1,null));
         assertThrows(SecurityException.class,()->f.module.audioRecovery("audio.set",args));assertEquals(0,payloads);assertEquals(0,sets);
     }}
     @Test public void disconnectedAccessibilityCannotPassTheActualOriginalAdmission()throws Exception{try(Fixture f=new Fixture()){
@@ -131,8 +132,9 @@ public final class PhoneAudioNativeBridgeTest {
         assertEquals(1,ownershipReads);assertFalse(f.module.isConnected());assertEquals("ignore",mode);
         assertEquals(1,f.port.restoreTaskAudio().getInt("pending"));assertEquals(1,sets);assertEquals(0,releases);
         dropSetReceipt=false;f.module.acceptStatus(status());JSONObject cleaned=f.port.closeSession();
-        assertTrue(cleaned.getBoolean("releaseConfirmed"));assertEquals(0,cleaned.getJSONObject("audioRestore").getInt("pending"));assertEquals(1,cleaned.getJSONObject("audioRestore").getInt("restored"));
-        assertEquals("allow",mode);assertEquals(2,sets);assertEquals(0,launches);assertEquals(0,f.pending());assertEquals(1,releases);
+        assertTrue(cleaned.getBoolean("releaseConfirmed"));assertEquals(1,cleaned.getJSONObject("audioRestore").getInt("pending"));assertEquals(0,cleaned.getJSONObject("audioRestore").getInt("restored"));
+        assertTrue(cleaned.getJSONObject("audioRestore").getBoolean("mayRemainMuted"));
+        assertEquals("ignore",mode);assertEquals(1,sets);assertEquals(0,launches);assertEquals(1,f.pending());assertEquals(1,releases);
         assertEquals("original-audio-session",lastRelease.getString("sessionId"));assertEquals(5,lastRelease.getInt("displayId"));assertFalse(f.module.hasSession());
     }}
     @Test public void nativeOwnerPolicyDefaultsOffCannotEnableOverALiveTaskAndCanRevokeImmediately()throws Exception{try(Fixture f=new Fixture()){
@@ -152,6 +154,12 @@ public final class PhoneAudioNativeBridgeTest {
         assertTrue(f.original.isPaused());assertThrows(Exception.class,()->onWorker(()->f.port.setAudioForOwner(review.getString("reviewId"),true,f.original,()->{})));assertEquals(1,sets);
         JSONObject restoredReview=onWorker(()->f.port.reviewAudioForOwner(f.original,()->{}));JSONObject restored=onWorker(()->f.port.setAudioForOwner(restoredReview.getString("reviewId"),false,f.original,()->{}));
         assertTrue(restored.getBoolean("confirmed"));assertEquals("allow",mode);assertEquals(2,sets);assertEquals(0,f.pending());assertTrue(f.original.isPaused());
+        assertTrue(restored.getJSONObject("receipt").getBoolean("ownerRequestedWrite"));assertFalse(restored.getJSONObject("receipt").getBoolean("atomicRestore"));
+    }}
+    @Test public void externalModeChangedAfterActualWireReadIsNotOverwrittenDuringCleanup()throws Exception{try(Fixture f=new Fixture()){
+        f.enable();f.quiet();assertEquals("ignore",mode);afterGet=()->mode="deny";
+        JSONObject receipt=f.port.restoreTaskAudio();assertEquals("deny",mode);assertEquals(1,sets);assertEquals(1,receipt.getInt("pending"));assertTrue(receipt.getBoolean("needsOwnerAction"));
+        JSONObject reconciled=f.port.restoreTaskAudio();assertEquals(0,reconciled.getInt("pending"));assertEquals(1,reconciled.getInt("supersededByOwner"));assertEquals("deny",mode);assertEquals(1,sets);
     }}
     @Test public void ownerReviewCannotCrossPauseGenerationOrCurrentAppAtSetTime()throws Exception{try(Fixture f=new Fixture()){
         ownedApp="example.music";JSONObject review=onWorker(()->f.port.reviewAudioForOwner(f.original,()->{}));f.original.pause();f.original.resume();

@@ -81,6 +81,9 @@ public final class PhoneSetupModule implements EngineModule {
     @Override public String id() { return "phone_setup"; }
 
     @Override public JSONObject snapshot() throws Exception {
+        JSONObject audio;
+        try { audio=AndroidPhoneAudioRecovery.get(context.android).snapshot().put("available",true); }
+        catch(Exception unavailable) { audio=new JSONObject().put("available",false); }
         synchronized (pairingLock) {
             JSONObject entry = pairing.snapshot();
             if (!entry.optBoolean("active") && "awaiting_owner_code".equals(lastPairingOutcome)) {
@@ -90,7 +93,7 @@ public final class PhoneSetupModule implements EngineModule {
             return new JSONObject().put("pairing", entry.put("lastOutcome", lastPairingOutcome))
                     .put("recovery", recovery.snapshot().put("connectionOutcome", lastConnectionOutcome)
                             .put("busy", recoveryRunning.get()).put("unlockSignalsAvailable", lifecycleSignalsRegistered))
-                    .put("modelCommandsAvailable", false);
+                    .put("audioRecovery",audio).put("modelCommandsAvailable", false);
         }
     }
 

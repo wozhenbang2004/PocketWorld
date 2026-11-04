@@ -66,13 +66,14 @@ internal fun BackgroundPhoneSetup(state: PocketUiState, controller: PocketWorldC
     var audioEnabled by remember { mutableStateOf(display.optBoolean("audioSilenceEnabled", false)) }
     var audioReceipt by remember { mutableStateOf<String?>(null) }
     var audioError by remember { mutableStateOf<String?>(null) }
+    var audioConfirm by remember { mutableStateOf(false) }
     var diagnosticBusy by remember { mutableStateOf(false) }
     var diagnosticReport by remember { mutableStateOf<dev.pocketengine.phone.diagnostics.PhoneDiagnosticReport.Report?>(null) }
     var diagnosticMessage by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(controller.phoneDiagnosticsOwnerVisible) { if (!controller.phoneDiagnosticsOwnerVisible) { diagnosticBusy = false; diagnosticReport = null; diagnosticMessage = null } }
     val audioAvailable = display.opt("audioSilenceEnabled") is Boolean
     LaunchedEffect(display.opt("audioSilenceEnabled")) { if (audioAvailable) audioEnabled = display.getBoolean("audioSilenceEnabled") }
-    LaunchedEffect(controller.backgroundAudioOwnerVisible) { if (!controller.backgroundAudioOwnerVisible) { audioBusy = false; audioReceipt = null; audioError = null } }
+    LaunchedEffect(controller.backgroundAudioOwnerVisible) { if (!controller.backgroundAudioOwnerVisible) { audioBusy = false; audioReceipt = null; audioError = null; audioConfirm = false } }
     LaunchedEffect(mode, connection.wirelessAvailable) {
         if (mode == "wireless_adb" && connection.wirelessAvailable && !connection.taskOwned) controller.display("adb.discover")
         if (mode != "wireless_adb") controller.cancelPairingNotification()
@@ -146,15 +147,23 @@ internal fun BackgroundPhoneSetup(state: PocketUiState, controller: PocketWorldC
                                 }
                             }, modifier = Modifier.semantics { contentDescription = "打开应用前静音" }, enabled = audioAvailable && !audioBusy && (!connection.taskOwned || audioEnabled) && !connection.busy)
                         }
-                        SetupCaption("默认关闭。仅改变本机原后台启动用户的指定应用音频模式，不改全局音量。先保存原模式，接管或结束时尝试恢复；关闭只阻止后续静音。")
-                        SetupCaption("查询后设置不是系统原子操作。已观察到主人更改的模式不会覆盖；恢复未确认时保留原记录，不当作成功。此开关不会授予系统或Shizuku权限。")
-                        OutlinedButton(onClick = {
-                            audioBusy = true; audioError = null; audioReceipt = null
-                            controller.restoreBackgroundAudio { actual, failure ->
-                                audioBusy = false; audioError = failure
-                                if (actual != null) audioReceipt = "已核实恢复 ${actual.optInt("restored")} 项；仍有 ${actual.optInt("pending")} 项原记录待核对。"
-                            }
-                        }, enabled = !audioBusy && !connection.taskOwned && !connection.busy && connection.helperConnected) { Text("按原记录恢复声音") }
+                        SetupCaption("默认关闭。仅设置本机原后台启动用户的指定 App 静音，不改全局音量。结束任务或接管后只核对声音；仍静音的 App 需要你明确处理，关闭开关只阻止后续静音。")
+                        SetupCaption("自动写回旧模式可能覆盖其他程序的新修改，因此保留原声音记录并提示待处理。切换目标 App 前也需处理上一目标的记录。此开关不会授予系统或 Shizuku 权限。")
+                        val pendingAudio = state.feature("phone_setup").optJSONObject("audioRecovery")?.optInt("pendingCount") ?: 0
+                        if (pendingAudio > 0) Text("还有 $pendingAudio 项声音记录待处理，原 App 可能仍静音。", color = MaterialTheme.colorScheme.error)
+                        OutlinedButton(onClick = { audioConfirm = true }, enabled = !audioBusy && !connection.taskOwned && !connection.busy && connection.helperConnected) { Text("处理原声音记录…") }
+                        if (audioConfirm) AlertDialog(onDismissRequest = { audioConfirm = false },
+                            title = { Text("按原记录设置声音？") },
+                            text = { Text("将仍静音且留有记录的 App 设为任务前保存的声音模式。若其他程序同时更改，结果可能以这次设置为准。已读到不同模式的 App 会保留当前模式；未确认的记录继续保留。") },
+                            confirmButton = { TextButton(onClick = {
+                                audioConfirm = false; audioBusy = true; audioError = null; audioReceipt = null
+                                controller.restoreBackgroundAudio { actual, failure ->
+                                    audioBusy = false; audioError = failure
+                                    if (actual != null) audioReceipt = "已核对 ${actual.optInt("restored")} 项原模式，保留 ${actual.optInt("supersededByOwner")} 项后来的模式。" +
+                                        if (actual.optInt("pending") > 0) "仍有 ${actual.optInt("pending")} 项待处理，原 App 可能仍静音。" else "当前原声音记录已结算。"
+                                }
+                            }, enabled = !audioBusy && !connection.taskOwned && !connection.busy && connection.helperConnected) { Text("按记录设置声音") } },
+                            dismissButton = { TextButton(onClick = { audioConfirm = false }) { Text("暂不设置") } })
                         if (!audioAvailable) SetupCaption("尚未读取到真实音频策略，请刷新后再修改。")
                         if (audioBusy) SetupCaption("正在核对原音频回执…")
                         audioReceipt?.let { SetupCaption(it) }
@@ -181,7 +190,7 @@ internal fun BackgroundPhoneSetup(state: PocketUiState, controller: PocketWorldC
                     }
                     if (controller.backgroundAudioOwnerVisible) {
                         PhoneOwnerExecutionControls(state, connection, controller)
-                        PhoneSetupControls(state.feature("phone_setup"), controller::phoneSetup)
+                        PhoneSetupControls(state.feature("phone_setup"), controller::phoneSetup, controller::openAccessibility)
                     }
                     TextButton(onClick = { alternatives = !alternatives }, modifier = Modifier.padding(top = 20.dp)) { Text(if (alternatives) "收起高级设置" else "高级兼容与连接恢复", fontSize = 12.sp) }
                     if (alternatives) {

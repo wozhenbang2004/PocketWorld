@@ -38,7 +38,7 @@ class PhoneTaskRouter:
             rows = self.manager.ledger.execute("SELECT operation_id,details FROM operations WHERE details IS NOT NULL").fetchall()
             for operation_id, raw in rows:
                 value = json.loads(raw)
-                if value.get("protocol") in {PROTOCOL, "pocketworld.usb-forward.v1"} and value.get("status") in {"dispatch_prepared", "usb_connected"}:
+                if value.get("protocol") in {PROTOCOL, "pocketworld.usb-forward.v1", "pocketworld.usb-stream.v1"} and value.get("status") in {"dispatch_prepared", "usb_connected"}:
                     value.update(status="unknown", effectState="unknown")
                     self._save(operation_id, value)
 
@@ -562,7 +562,7 @@ class PhoneTaskRouter:
             row = self.manager.ledger.execute("SELECT fingerprint,details FROM operations WHERE operation_id=?", (operation_id,)).fetchone()
         if row:
             value = json.loads(row[1] or "{}")
-            if value.get("protocol") != "pocketworld.usb-forward.v1" or value.get("peerDeviceId") != params["peerDeviceId"]:
+            if value.get("protocol") not in {"pocketworld.usb-forward.v1", "pocketworld.usb-stream.v1"} or value.get("peerDeviceId") != params["peerDeviceId"]:
                 raise PhoneTaskError("USB operation belongs to another fixed native resource", 409)
             if action == "usb_open" and row[0] != fingerprint:
                 raise PhoneTaskError("Original USB operation parameters changed", 409)
@@ -587,8 +587,9 @@ class PhoneTaskRouter:
         self.service._paired(params["peerDeviceId"])
         if self.service.receiver.trust.outgoing_grant(params["peerDeviceId"], params["grantId"]) is None:
             raise PhoneTaskError("USB requires an existing native signed paired grant", 403)
-        value = dict(protocol="pocketworld.usb-forward.v1", operationId=operation_id, peerDeviceId=params["peerDeviceId"],
-                     status="dispatch_prepared", effectState="unknown", cleanupConfirmed=False)
+        value = dict(protocol="pocketworld.usb-stream.v1", operationId=operation_id, peerDeviceId=params["peerDeviceId"],
+                     status="dispatch_prepared", effectState="unknown", cleanupConfirmed=False,
+                     transport="adb_direct_stream", sharedForwardCreated=False, cleanupScope="owned_adb_stream")
         with self.manager.lock:
             self.manager.ledger.execute("INSERT INTO operations(operation_id,fingerprint,job_id,last_status,updated_at,details) VALUES(?,?,?,?,?,?)",
                                         (operation_id, fingerprint, "usb:" + operation_id, value["status"], self.manager.now(), json.dumps(value)))
@@ -596,7 +597,7 @@ class PhoneTaskRouter:
         try:
             connection = await attach(self.service, params["peerDeviceId"], params["grantId"], forward)
             self.usb[operation_id] = (forward, connection)
-            value.update(status="usb_connected", effectState="reported", localPort=forward.local_port)
+            value.update(status="usb_connected", effectState="reported")
         except Exception:
             value.update(status="unknown", effectState="unknown", cleanupConfirmed=forward.cleanup_confirmed)
         with self.manager.lock:
@@ -609,7 +610,7 @@ class PhoneTaskRouter:
         self.closed = True
         for connection in tuple(self.connections):
             self.connection_closed(connection)
-        # Only these owned forwards are released. Closing a local surface never
+        # Only these private streams are released. Closing a local surface never
         # sends cancel/pause/resume to any accepted phone operation.
         for operation_id, (forward, connection) in list(self.usb.items()):
             await connection.close()
