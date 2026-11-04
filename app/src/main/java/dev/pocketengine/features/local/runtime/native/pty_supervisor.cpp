@@ -53,14 +53,13 @@ Scan scan(pid_t leader,Tracked& tracked,bool& escaped){
     return out;
 }
 bool members(const Scan& current,pid_t leader,const Tracked& tracked){for(const auto& p:current.processes){auto known=tracked.find(p.pid);if(p.pid!=leader&&(p.session==leader||(known!=tracked.end()&&known->second==p.born)))return true;}return false;}
-// The leader stays unreaped, reserving its PID/PGID. Other processes are signalled only through a
-// pidfd after before/after birth checks; unsupported kernels fail closed rather than guessing IDs.
+// Numeric leader/group signals are guarded by current original-child ownership below.
+// Other processes use pidfds after birth checks; unsupported kernels fail closed.
 void signal_members(pid_t leader,const Scan& current,const Tracked& tracked,int signal){
-    kill(-leader,signal);kill(leader,signal);
 #if defined(__NR_pidfd_open) && defined(__NR_pidfd_send_signal)
     for(const auto& p:current.processes){auto known=tracked.find(p.pid);if(p.pid==leader||known==tracked.end()||known->second!=p.born)continue;int fd=static_cast<int>(syscall(__NR_pidfd_open,p.pid,0));if(fd<0)continue;Process actual;if(process(p.pid,actual)&&actual.born==known->second)syscall(__NR_pidfd_send_signal,fd,signal,nullptr,0);close(fd);}
 #else
-    (void)current;(void)tracked;
+    (void)leader;(void)current;(void)tracked;(void)signal;
 #endif
 }
 unsigned int u32(const std::string& value,size_t at){unsigned int n=0;for(size_t i=0;i<4;i++)n=(n<<8)|static_cast<unsigned char>(value[at+i]);return n;}
@@ -69,7 +68,7 @@ struct Input {jlong token=0;unsigned int kind=0,rows=0,columns=0;std::string dat
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_ptyProtocol(JNIEnv*,jclass){return 1;}
+Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_ptyProtocol(JNIEnv*,jclass){return 2;}
 
 extern "C" JNIEXPORT jlongArray JNICALL
 Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_runPty(
@@ -94,16 +93,35 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_runPty(
         execve(argv_ptr[0],argv_ptr.data(),env_ptr.data());child_error(launch[1],errno);
     }}
     close_fd(slave);close_fd(launch[1]);nonblocking(master);nonblocking(launch[0]);
-    bool stopped=entry_cancelled,timed_out=false,io_complete=true,leader_done=false,reaped=false,start_notified=false,escaped=false,session_absent=pid<=0;long long begin=clock_ms(),stop_at=0,leader_at=0;int status=0;Tracked tracked;Input pending;
+    bool stopped=entry_cancelled,timed_out=false,io_complete=true,leader_done=false,reaped=false,start_notified=false,escaped=false,session_absent=pid<=0,owns_leader=pid>0;long long begin=clock_ms(),stop_at=0,leader_at=0;int status=0;unsigned long long leader_born=0;Tracked tracked;Input pending;
     auto request_stop=[&](){if(!stopped){stopped=true;stop_at=clock_ms();}};
     auto acknowledge=[&](int error,int actual_rows,int actual_columns,bool effects){env->CallVoidMethod(observer,ack,pending.token,static_cast<jint>(pending.written),error,actual_rows,actual_columns,effects?JNI_TRUE:JNI_FALSE);pending.active=false;if(env->ExceptionCheck()){env->ExceptionClear();io_complete=false;request_stop();}};
+    auto observe_leader=[&](){
+        if(!owns_leader)return false;
+        siginfo_t info{};int waited;const auto deadline=clock_ms()+50;
+        do{waited=waitid(P_PID,static_cast<id_t>(pid),&info,WEXITED|WNOHANG|WNOWAIT);}while(waited<0&&errno==EINTR&&clock_ms()<deadline);
+        Process actual;
+        if(waited<0||(info.si_pid!=0&&info.si_pid!=pid)||!process(pid,actual)||actual.parent!=getpid()||actual.born!=leader_born){owns_leader=false;io_complete=false;request_stop();return false;}
+        if(info.si_pid==pid&&!leader_done){leader_done=true;leader_at=clock_ms();}
+        return true;
+    };
+    auto signal_owned=[&](const Scan& current,int signal){
+        // WNOWAIT keeps the original child unreaped. ECHILD or an unreadable/
+        // changed birth cannot authorize either numeric signal, even after exit.
+        if(!observe_leader())return false;
+        kill(-pid,signal);
+        if(!observe_leader())return false;
+        kill(pid,signal);
+        signal_members(pid,current,tracked,signal);return true;
+    };
     if(pid>0){
-        while(true){
+        Process original;if(process(pid,original)&&original.parent==getpid())leader_born=original.born;else{owns_leader=false;io_complete=false;request_stop();}
+        while(owns_leader){
             long long time=clock_ms();Scan current=scan(pid,tracked,escaped);
             bool wants_stop=env->CallBooleanMethod(observer,cancelled)==JNI_TRUE;if(env->ExceptionCheck()){env->ExceptionClear();wants_stop=true;io_complete=false;}if(time-begin>=timeout_ms){timed_out=true;wants_stop=true;}if(!current.complete||escaped)wants_stop=true;if(wants_stop)request_stop();
-            if(stopped)signal_members(pid,current,tracked,time-stop_at>=grace_ms?SIGKILL:SIGTERM);
-            if(!leader_done){siginfo_t info{};if(waitid(P_PID,static_cast<id_t>(pid),&info,WEXITED|WNOHANG|WNOWAIT)==0&&info.si_pid==pid){leader_done=true;leader_at=time;}}
-            if(leader_done)signal_members(pid,current,tracked,time-leader_at>=grace_ms?SIGKILL:SIGTERM);
+            if(!observe_leader())break;
+            if(stopped&&!signal_owned(current,time-stop_at>=grace_ms?SIGKILL:SIGTERM))break;
+            if(leader_done&&!signal_owned(current,time-leader_at>=grace_ms?SIGKILL:SIGTERM))break;
             if(start_notified&&!stopped&&!leader_done&&!pending.active){
                 auto packet=static_cast<jbyteArray>(env->CallObjectMethod(observer,next));if(env->ExceptionCheck()){env->ExceptionClear();io_complete=false;request_stop();}
                 else if(packet){std::string value=bytes(env,packet);env->DeleteLocalRef(packet);if(env->ExceptionCheck()){env->ExceptionClear();io_complete=false;request_stop();}
@@ -123,7 +141,7 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_runPty(
                 for(int batch=0;batch<16;batch++){
                     char buffer[8192];ssize_t n=read(fd,buffer,sizeof(buffer));
                     if(n==0||(n<0&&source==0&&errno==EIO)){close_fd(fd);if(source==1&&!launch_error&&!leader_done&&!stopped&&!start_notified){
-                        Process leader;if(!process(pid,leader)||leader.session!=pid){io_complete=false;request_stop();}
+                        Process leader;if(!observe_leader()||!process(pid,leader)||leader.born!=leader_born||leader.parent!=getpid()||leader.session!=pid){io_complete=false;request_stop();}
                         else if(leader.state!='Z'&&leader.state!='X'){tracked.emplace(pid,leader.born);env->CallVoidMethod(observer,identity,static_cast<jlong>(pid),static_cast<jlong>(leader.born),static_cast<jlong>(leader.session));bool accepted=false;if(!env->ExceptionCheck())accepted=env->CallBooleanMethod(observer,started)==JNI_TRUE;if(env->ExceptionCheck())env->ExceptionClear();if(!accepted){io_complete=false;request_stop();}else start_notified=true;}
                     }break;}
                     if(n<0){if(errno==EINTR)continue;if(errno!=EAGAIN&&errno!=EWOULDBLOCK){io_complete=false;close_fd(fd);request_stop();}break;}
@@ -131,13 +149,17 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_runPty(
                     if(io_complete){jbyteArray data=env->NewByteArray(static_cast<jsize>(n));bool accepted=false;if(data){env->SetByteArrayRegion(data,0,static_cast<jsize>(n),reinterpret_cast<jbyte*>(buffer));if(!env->ExceptionCheck())accepted=env->CallBooleanMethod(observer,output,1,data)==JNI_TRUE;env->DeleteLocalRef(data);}if(env->ExceptionCheck())env->ExceptionClear();if(!accepted){io_complete=false;request_stop();}}
                 }
             }
+            if(!owns_leader)break;
             if(leader_done&&master<0&&launch[0]<0&&current.complete&&!members(current,pid,tracked))break;
             if((leader_done&&time-leader_at>grace_ms+2000)||(stopped&&time-stop_at>grace_ms+3000)){if(master>=0||launch[0]>=0)io_complete=false;break;}
         }
-        Scan current=scan(pid,tracked,escaped);signal_members(pid,current,tracked,SIGKILL);
-        pid_t waited;do{waited=waitpid(pid,&status,WNOHANG);}while(waited<0&&errno==EINTR);reaped=waited==pid;
-        if(!reaped){io_complete=false;}
-        Scan final_scan=scan(pid,tracked,escaped);session_absent=reaped&&final_scan.complete&&!escaped&&!members(final_scan,pid,tracked);
+        if(owns_leader){Scan current=scan(pid,tracked,escaped);
+            if(signal_owned(current,SIGKILL)){
+                pid_t waited;do{waited=waitpid(pid,&status,WNOHANG);}while(waited<0&&errno==EINTR);reaped=waited==pid;
+                if(!reaped)io_complete=false;
+                Scan final_scan=scan(pid,tracked,escaped);session_absent=reaped&&final_scan.complete&&!escaped&&!members(final_scan,pid,tracked);
+            }
+        }
         if(pending.active)acknowledge(EPIPE,0,0,pending.written>0);
     }
     close_fd(master);close_fd(slave);close_fd(launch[0]);close_fd(launch[1]);bool group_absent=pid<=0||(reaped&&kill(-pid,0)<0&&errno==ESRCH);

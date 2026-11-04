@@ -45,27 +45,28 @@ public final class ChannelTaskCoordinator implements HostTaskPort {
         authority.check();channels.checkHostTaskAuthority(request.requestId);JSONObject task=tasks.channelTask(request.taskId,request.origin());return task==null?null:state(task);
     }
     @Override public TaskState cancel(Request request,Authority authority)throws Exception{
+        if(Thread.holdsLock(tasks))throw new IllegalStateException("related_task_capture_requires_unlocked_tasks");
         authority.check();channels.checkHostTaskAuthority(request.requestId);JSONObject task;RunControl original=originalControl(request.taskId);
+        JSONObject before=tasks.get(request.taskId,false);var related=before!=null&&before.optBoolean("cancelRequested")||original!=null&&original.isCancelled()?null:features.captureRelatedTaskCancellation(request.taskId,request.expectedRunId,request.expectedCoordinatorEpoch);
         synchronized(tasks){
+            JSONObject current=tasks.get(request.taskId,false);if(current!=null&&current.optBoolean("cancelRequested")||original!=null&&original.isCancelled())related=null;
             task=tasks.cancelChannelTask(request.taskId,request.origin(),request.expectedRunId,request.expectedCoordinatorEpoch,original);
-            // The same TaskStore monitor keeps a newer parent run from adding children while
-            // the existing host's bounded cancellation routing captures the old children.
-            features.cancelRelatedTasks(request.taskId,request.expectedRunId,request.expectedCoordinatorEpoch);
         }
-        changed.accept(request.taskId);return state(task);
+        if(related==null)deliveryFailure.accept("原子任务清场范围未确认；没有重取已取消父任务的团队执行代次");features.cancelRelatedTasks(related);changed.accept(request.taskId);return state(task);
     }
     /** Local-owner stop remains available even after the external account/grant was revoked. */
     public void stop(String id)throws Exception{
         JSONObject task=tasks.get(id,false);stopOriginal(id,task.optString("runId"),task.optInt("coordinatorEpoch"));
     }
     public void stopOriginal(String id,String run,int epoch)throws Exception {
+        if(Thread.holdsLock(tasks))throw new IllegalStateException("related_task_capture_requires_unlocked_tasks");
         RunControl original=originalControl(id);
+        JSONObject before=tasks.get(id,false);var related=before!=null&&before.optBoolean("cancelRequested")||original!=null&&original.isCancelled()?null:features.captureRelatedTaskCancellation(id,run,epoch);
         synchronized(tasks){
-            JSONObject task=tasks.get(id,false),source=origin(task);
+            JSONObject task=tasks.get(id,false),source=origin(task);if(task.optBoolean("cancelRequested")||original!=null&&original.isCancelled())related=null;
             tasks.cancelChannelTask(id,source,run,epoch,original);
-            features.cancelRelatedTasks(id,run,epoch);
         }
-        changed.accept(id);publishTaskState(id);
+        if(related==null)deliveryFailure.accept("原子任务清场范围未确认；没有重取已取消父任务的团队执行代次");features.cancelRelatedTasks(related);changed.accept(id);publishTaskState(id);
     }
     /** Startup reconciles receipts only. Never re-admit a request or restart a model/unknown effect. */
     public void recover()throws Exception{

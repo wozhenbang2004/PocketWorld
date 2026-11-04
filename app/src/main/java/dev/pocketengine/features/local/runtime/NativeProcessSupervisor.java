@@ -16,8 +16,11 @@ public final class NativeProcessSupervisor {
     public static final String PRE_FORMAT_OWNER_V3_EXIT_RESULT_CONTRACT="pocketworld.posix-exit7-owner-v3:1c6845c201fde62f4435084b24e7763c10f1806c1797139b42b5d3a0c7dff47a";
     public static final String DRAIN_V2_EXIT_RESULT_CONTRACT="pocketworld.posix-exit7-drain-v2:102484ca83ac7225c45df1c1d8bc25a357e944017aea3eb24ccfe4957fc472d1";
     public static final String LEGACY_EXIT_RESULT_CONTRACT="pocketworld.posix-exit7-no-child-v1:cb2abfe8465e654402d1344d11345bb7f43047fecb3dd0220fed44e07ef0571f";
-    public static final String PTY_EXIT_RESULT_CONTRACT="pocketworld.posix-pty-exit8-v1:f9132cee828fcbafd4252e71a139cb7c21839b1336111e1a762fab0afe487524";
-    public static final String PIPE_EXIT_RESULT_CONTRACT="pocketworld.posix-duplex-exit8-v1:0e9ce13c7e6438484c8f855f763227e0d4c5a0ffa0ae06c1b2490fad68f92423";
+    public static final String PTY_EXIT_RESULT_CONTRACT="pocketworld.posix-pty-exit8-owner-v2:f3970ba7a234b090c1764b5f79ac35233fdd7c226d157aa1b7ab166276a64eab";
+    public static final String PIPE_EXIT_RESULT_CONTRACT="pocketworld.posix-duplex-exit8-owner-v2:20aba69e58c644e454792f9aa43f67216cfdd1a2fb07edc7dd785f352b6b4cc3";
+    // Exact historical receipts remain observations of the old algorithms, never new execution bindings.
+    public static final String LEGACY_PTY_EXIT_RESULT_CONTRACT="pocketworld.posix-pty-exit8-v1:f9132cee828fcbafd4252e71a139cb7c21839b1336111e1a762fab0afe487524";
+    public static final String LEGACY_PIPE_EXIT_RESULT_CONTRACT="pocketworld.posix-duplex-exit8-v1:0e9ce13c7e6438484c8f855f763227e0d4c5a0ffa0ae06c1b2490fad68f92423";
     /** Native-only ordered stdin packets. No FD, PID, JSON grant or terminal emulation. */
     public interface PipeObserver extends Observer {
         byte[] nextStdinCommand();
@@ -62,7 +65,7 @@ public final class NativeProcessSupervisor {
      * Missing/old/unknown receipts are not upgraded by inferring a new noChildCreated flag. */
     public static boolean validatesNoChildReceipt(JSONObject receipt) {
         boolean knownPipe=knownOrdinaryExitContract(receipt.optString("nativeResultContract"));
-        boolean knownPty=(PTY_EXIT_RESULT_CONTRACT.equals(receipt.optString("nativeResultContract"))||PIPE_EXIT_RESULT_CONTRACT.equals(receipt.optString("nativeResultContract")))&&Boolean.TRUE.equals(receipt.opt("processSessionAbsent"));
+        boolean knownPty=knownSessionExitContract(receipt.optString("nativeResultContract"))&&Boolean.TRUE.equals(receipt.opt("processSessionAbsent"));
         return (knownPipe||knownPty)&&"no_child_created".equals(receipt.optString("launchPhase"))
                 &&Boolean.TRUE.equals(receipt.opt("noChildCreated"))&&Boolean.FALSE.equals(receipt.opt("processLaunched"))&&Boolean.FALSE.equals(receipt.opt("processExited"))
                 &&integer(receipt.opt("exitCode"),-1)&&integer(receipt.opt("terminationSignal"),0)&&positiveInteger(receipt.opt("launchErrno"))
@@ -72,6 +75,7 @@ public final class NativeProcessSupervisor {
     private static boolean positiveInteger(Object value){return (value instanceof Integer||value instanceof Long)&&((Number)value).longValue()>0&&((Number)value).longValue()<=Integer.MAX_VALUE;}
     /** Exact historical native contracts only. Callers still prove original host/job ownership. */
     public static boolean knownOrdinaryExitContract(String contract){return EXIT_RESULT_CONTRACT.equals(contract)||PRE_FORMAT_OWNER_V3_EXIT_RESULT_CONTRACT.equals(contract)||DRAIN_V2_EXIT_RESULT_CONTRACT.equals(contract)||LEGACY_EXIT_RESULT_CONTRACT.equals(contract);}
+    public static boolean knownSessionExitContract(String contract){return PTY_EXIT_RESULT_CONTRACT.equals(contract)||PIPE_EXIT_RESULT_CONTRACT.equals(contract)||LEGACY_PTY_EXIT_RESULT_CONTRACT.equals(contract)||LEGACY_PIPE_EXIT_RESULT_CONTRACT.equals(contract);}
     private static final class Library {
         static final Throwable ERROR;
         static {
@@ -88,11 +92,11 @@ public final class NativeProcessSupervisor {
     }
     private static final class PtyLibrary {
         static final boolean AVAILABLE;
-        static {boolean yes=false;try{yes=Library.ERROR==null&&ptyProtocol()==1;}catch(LinkageError|SecurityException unavailable){/* Old native libraries remain usable only for their declared pipe API. */}AVAILABLE=yes;}
+        static {boolean yes=false;try{yes=Library.ERROR==null&&ptyProtocol()==2;}catch(LinkageError|SecurityException unavailable){/* Old native libraries remain usable only for their declared ordinary API. */}AVAILABLE=yes;}
     }
     private static final class PipeLibrary {
         static final boolean AVAILABLE;
-        static {boolean yes=false;try{yes=Library.ERROR==null&&pipeProtocol()==1;}catch(LinkageError|SecurityException unavailable){/* No fallback to /dev/null or a PTY. */}AVAILABLE=yes;}
+        static {boolean yes=false;try{yes=Library.ERROR==null&&pipeProtocol()==2;}catch(LinkageError|SecurityException unavailable){/* No fallback to /dev/null or a PTY. */}AVAILABLE=yes;}
     }
     public boolean available() { return Library.ERROR==null&&OrdinaryLibrary.PROTOCOL!=0; }
     public boolean ptyAvailable(){return PtyLibrary.AVAILABLE;}

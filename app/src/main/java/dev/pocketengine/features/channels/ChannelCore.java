@@ -508,6 +508,16 @@ public final class ChannelCore {
     public synchronized void eventStatus(String id,String status,String message)throws Exception {
         JSONObject row=find("inbox","id",id);if(row==null)return;row.put("status",status).put("message",message);save();
     }
+    /** Presentation pointer only; usage and all older attempts stay in the original TaskStore. */
+    synchronized void answerInference(JSONObject captured,JSONObject capturedRoute,JSONObject reference)throws Exception {
+        checkAnswerOrigin(captured,capturedRoute);
+        if(!"CHANNEL_CHAT".equals(reference.optString("purpose"))||!reference.optBoolean("accountingOnly")
+                ||reference.optBoolean("executionAuthorized",true)||!reference.optString("taskId").matches("[a-f0-9-]{36}")
+                ||!reference.optString("runId").matches("[a-f0-9-]{36}")||reference.optInt("epoch")<1)
+            throw new SecurityException("原问答用量记录不完整，未调用模型");
+        JSONObject row=find("inbox","id",captured.getString("id"));
+        row.put("latestInferenceReference",copy(reference)).put("latestInferenceStartedAt",System.currentTimeMillis());save();
+    }
     public synchronized JSONObject beginAnswer(String id)throws Exception {
         JSONObject row=find("inbox","id",id);if(row==null)throw new IllegalArgumentException("消息记录不存在");
         if(row.optString("status").equals("queued")||row.optString("status").equals("answering"))throw new IllegalStateException("此消息已在处理");

@@ -46,11 +46,13 @@ class NativeCommandError extends Error {
 }
 let documentBound = false;
 let hostDocumentToken: string | null = null;
+let hostDocumentEpoch = 0;
 const tokenListeners = new Set<() => void>();
 let hostDocumentResolve: (() => void) | null = null;
 const hostDocumentReady = new Promise<void>(resolve => { hostDocumentResolve = resolve; });
 function acceptHostDocumentToken(value: unknown) {
   if (typeof value !== 'string' || !value) return;
+  if (hostDocumentToken !== value) hostDocumentEpoch++;
   if (hostDocumentToken !== null && hostDocumentToken !== value) {
     for (const [id, request] of pending) {
       if (request.action === 'app.ready') {
@@ -145,6 +147,8 @@ function sendCommand<T>(action: string, args: Record<string, unknown>): Promise<
 
 export const bridge = {
   getState: () => current,
+  // UI request tickets can observe a changed native document without reading its secret token.
+  getDocumentEpoch: () => hostDocumentEpoch,
   waitForHostDocument: () => hostDocumentReady,
   async bindHostDocument() {
     await hostDocumentReady;

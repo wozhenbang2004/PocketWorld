@@ -16,6 +16,7 @@ import java.util.UUID
 import java.io.File
 import android.net.Uri
 import dev.pocketengine.features.attachments.AttachmentsModule
+import dev.pocketengine.features.attachments.OwnerAttachmentImport
 import dev.pocketengine.media.RealtimeSessionModule
 import dev.pocketengine.features.assistant.OwnerComposerState
 import dev.pocketengine.features.assistant.OwnerComposerStore
@@ -938,6 +939,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             complete(if (failure != null) Result.failure(failure) else if (value != null) Result.success(value) else Result.failure(IllegalStateException("原项目工作配置继续回执缺失")))
         }
     }
+    internal fun nativeTokenBudgetHost(): dev.pocketengine.EngineApplication = app
     fun nativeModelConnections(): dev.pocketengine.runtime.models.ModelConnectionService? = app.modelConnections
     internal fun nativeAccountWorkflows(): dev.pocketengine.features.NativeOwnerWorkflows = app.nativeOwnerWorkflows
     internal fun nativeModelSelection(): dev.pocketengine.runtime.models.ModelSelectionCoordinator = app.settings.modelSelection()
@@ -1631,10 +1633,21 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         check(Looper.myLooper() == Looper.getMainLooper()) { "视频只能绑定当前原生视图" }
         return (app.features.module("realtime") as? RealtimeSessionModule ?: error("实时媒体模块不可用")).bindVideo(activity, sessionId, trackSid)
     }
-    fun requestRealtime(command: String, payload: JSONObject = JSONObject()): String {
+    fun requestRealtime(command: String, payload: JSONObject = JSONObject()): String = enqueueRealtime(command, payload, null, -1, null)
+    internal fun requestWebRealtimeReceipt(command: String, payload: JSONObject, expectedConfigurationRevision: Long,
+        current: () -> Boolean, done: (JSONObject?, String?) -> Unit): String {
+        check(webPrivateOwnerVisible() && current()) { "原通话窗口已关闭，请重新核对" }
+        val owner = webWindowTicket()
+        return enqueueRealtime(command, payload, { webPrivateOwnerVisible() && webWindowTicket() == owner && current() }, expectedConfigurationRevision, done)
+    }
+    private fun enqueueRealtime(command: String, payload: JSONObject, current: (() -> Boolean)?, expectedConfigurationRevision: Long,
+        done: ((JSONObject?, String?) -> Unit)?): String {
         val key = "realtime.$command"
-        if((voiceInput.active()||voiceInput.leaseHeld())&&command in setOf("prepareNaturalVoice","prepareCall","prepareProviderCall","acceptInvitation","startVoiceTurn","readVoiceTask")) { state=state.copy(moduleErrors=state.moduleErrors+(key to "请先结束系统听写并等待音频释放，再开始另一项语音"));return UUID.randomUUID().toString() }
-        pending.entries.firstOrNull { it.value.first == key }?.let { return it.key }
+        if((voiceInput.active()||voiceInput.leaseHeld())&&command in setOf("prepareNaturalVoice","prepareCall","prepareProviderCall","acceptInvitation","startVoiceTurn","readVoiceTask")) {
+            val reason = "请先结束系统听写并等待音频释放，再开始另一项语音"
+            state=state.copy(moduleErrors=state.moduleErrors+(key to reason)); done?.invoke(null, reason); return UUID.randomUUID().toString()
+        }
+        pending.entries.firstOrNull { it.value.first == key }?.let { done?.invoke(null, "这项原通话操作仍在处理，请核对当前状态，未重复提交"); return it.key }
         val requestId = UUID.randomUUID().toString()
         // Credentials stay only in this bounded worker closure, never UI metadata or generic events.
         val input = JSONObject(payload.toString())
@@ -1644,30 +1657,64 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         state = state.copy(moduleBusy = state.moduleBusy + key, moduleErrors = state.moduleErrors - key)
         val urgent = command in setOf("disconnect", "rejectInvitation", "stopVoiceTurn", "interruptOutput", "cancelVoiceTask", "snapshot") || command == "mute" && input.optBoolean("muted") || command == "setCamera" && !input.optBoolean("enabled")
         try { (if (urgent) controls else realtimeIo).execute {
-            var answer: JSONObject? = null; var current: JSONObject? = null; var failure: Exception? = null
+            var answer: JSONObject? = null; var currentSnapshot: JSONObject? = null; var failure: Exception? = null
             val module = app.features.module("realtime") as? RealtimeSessionModule
-            try { check(!closed) { "通话界面已关闭" }; answer = (module ?: error("实时媒体模块不可用")).handleOwner(activity, command, input) }
+            try {
+                check(!closed && (current == null || current())) { "原通话窗口已关闭，请重新核对" }
+                val original = module ?: error("实时媒体模块不可用")
+                answer = if (current == null) original.handleOwner(activity, command, input)
+                    else original.handleReviewedOwner(activity, command, input, expectedConfigurationRevision, java.util.function.BooleanSupplier(current))
+            }
             catch (error: Exception) { failure = error }
-            try { current = module?.snapshot() } catch (_: Exception) { }
+            try { currentSnapshot = module?.snapshot() } catch (_: Exception) { }
             // No provider credential is retained after the native call returns.
             input.remove("participantToken"); input.remove("authenticationToken")
-            val result = answer; val snapshot = current; val failed = failure
+            val result = answer; val snapshot = currentSnapshot; val failed = failure
             main.post {
-                if (closed || !pending.containsKey(requestId)) return@post
+                if (closed || !pending.containsKey(requestId)) { done?.invoke(null, "原通话页面已关闭，请重新读取实际状态"); return@post }
                 snapshot?.let(::receiveRealtimeSnapshot)
                 val expectedSession = metadata.optString("sessionId")
                 if (expectedSession.isNotBlank() && expectedSession != state.feature("realtime").optString("sessionId")) {
-                    pending.remove(requestId); state = state.copy(moduleBusy = state.moduleBusy - key); return@post
+                    pending.remove(requestId); state = state.copy(moduleBusy = state.moduleBusy - key); done?.invoke(null, "原通话会话已经变化，请核对原记录"); return@post
                 }
                 val event = JSONObject().put("feature", "realtime").put("command", command).put("requestId", requestId).put("ok", failed == null)
                 if (failed == null) event.put("result", result ?: JSONObject()) else event.put("message", message(failed))
                 featureResult(event)
+                if (current != null && !current()) done?.invoke(null, "原通话窗口已变化，请重新读取实际状态；没有重放")
+                else done?.invoke(if (failed == null) result ?: JSONObject() else null, failed?.let(::message))
             }
         } } catch (_: java.util.concurrent.RejectedExecutionException) {
             input.remove("participantToken"); input.remove("authenticationToken"); pending.remove(requestId)
             state = state.copy(moduleBusy = state.moduleBusy - key, moduleErrors = state.moduleErrors + (key to "通话操作尚未发送，请稍后重新核对"))
+            done?.invoke(null, "通话操作尚未发送，请稍后重新核对")
         }
         return requestId
+    }
+    internal fun requestWebProxyReceipt(command: String, payload: JSONObject, expectedSelectionRevision: Long, expectedSessionId: String,
+        current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        check(webPrivateOwnerVisible() && current()) { "原本机服务窗口已关闭，请重新核对" }
+        val owner = webWindowTicket(); val input = JSONObject(payload.toString())
+        val key = "proxy.$command"
+        check(key !in state.moduleBusy) { "原本机服务操作仍在处理，请等待真实回执" }
+        state = state.copy(moduleBusy = state.moduleBusy + key, moduleErrors = state.moduleErrors - key)
+        try { (if (command == "stop") controls else io).execute {
+            val result = runCatching {
+                val module = app.features.module("proxy") as? dev.pocketengine.features.proxy.ProxyModule ?: error("本机模型服务尚未接入")
+                module.handleReviewedOwner(command, input, expectedSelectionRevision, expectedSessionId,
+                    java.util.function.BooleanSupplier { webPrivateOwnerVisible() && webWindowTicket() == owner && current() })
+            }
+            input.remove("token")
+            main.post {
+                if (closed) { done(null, "原本机服务页面已关闭，请重新读取实际状态"); return@post }
+                state = state.copy(moduleBusy = state.moduleBusy - key)
+                result.getOrNull()?.let { value -> state = state.copy(features = JSONObject(state.features.toString()).put("proxy", value)) }
+                if (!webPrivateOwnerVisible() || webWindowTicket() != owner || !current()) done(null, "原本机服务窗口已变化，请重新核对实际状态；没有重放")
+                else result.fold({ done(it, null) }, { done(null, message(it)) })
+            }
+        } } catch (_: java.util.concurrent.RejectedExecutionException) {
+            input.remove("token"); state = state.copy(moduleBusy = state.moduleBusy - key)
+            done(null, "工作队列不可用，本机服务操作未开始")
+        }
     }
     private fun receiveRealtimeSnapshot(incoming: JSONObject) {
         val previous = state.feature("realtime")
@@ -1683,23 +1730,38 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun openBrowserResearch() { native("openBrowserResearch") }
     fun openBrowserResearch(taskId: String) { native("openBrowserResearch", JSONObject().put("taskId", taskId)) }
     fun pickAttachments(projectId: String? = null) { activity.pickAttachments(null, projectId) }
-    fun importAttachments(intent: Intent, taskId: String?, projectId: String?) {
-        state = state.copy(attachmentImporting = true)
-        io.execute {
+    internal fun attachmentImportContextUnavailable() { state = state.copy(error = "原文件选择上下文无法恢复；不会改用当前任务或项目，也不会自动重新选择。请先核对附件库和原入口") }
+    internal fun attachmentImportSelectionEnded(cancelled: Boolean) { state = state.copy(notice = if (cancelled) "已取消文件选择，本次未开始导入" else null, error = if (cancelled) null else "文件选择已返回，但没有可接收的内容；本次未开始导入") }
+    internal fun attachmentImportPickerStatus(status: AttachmentImportPicker.Launch) {
+        state = when (status) {
+            AttachmentImportPicker.Launch.REQUESTED -> state.copy(notice = null, error = null)
+            AttachmentImportPicker.Launch.BUSY -> state.copy(error = "上一次文件选择或导入尚未结束，请先完成或取消原选择")
+            AttachmentImportPicker.Launch.NOT_STARTED -> state.copy(error = "未找到可用的文件选择器，本次未开始导入")
+            AttachmentImportPicker.Launch.UNKNOWN -> state.copy(error = "原文件选择是否打开尚未确认；请先返回原选择完成或取消，不会自动重开")
+        }
+    }
+    fun importAttachments(intent: Intent, taskId: String?, projectId: String?) = importAttachments(intent, OwnerAttachmentImport.Target(taskId, projectId))
+    fun importAttachments(intent: Intent, original: OwnerAttachmentImport.Target?) {
+        if (closed) return
+        val received = Intent(intent)
+        state = state.copy(attachmentImporting = true, notice = null, error = null)
+        try { io.execute {
             try {
                 val module = app.features.module("attachments") as? AttachmentsModule ?: throw IllegalStateException("附件能力尚未接入")
-                val result = module.importIntent(intent, "", projectId ?: "")
-                if(!taskId.isNullOrBlank())for(file in result.optJSONArray("attachments").objects())app.selectOutcomeForTask(taskId,file.getString("id"),file.getString("sha256"),dev.pocketengine.core.RunControl())
+                val receipt = OwnerAttachmentImport.receive(module, received, original) { task, file ->
+                    app.selectOutcomeForTask(task, file.getString("id"), file.getString("sha256"), dev.pocketengine.core.RunControl())
+                }
                 main.post {
                     if (!closed) {
-                        val count = result.optJSONArray("attachments")?.length() ?: 0
-                        val errors = result.optJSONArray("errors").objects().joinToString("；") { it.optString("message") }
-                        state = state.copy(attachmentImporting = false, notice = if (count > 0) "已导入 " + count + " 个附件" else null, error = errors.takeIf { it.isNotBlank() })
+                        state = state.copy(attachmentImporting = false, notice = receipt.notice, error = receipt.error)
                         attachmentOutcomes.imported()
                     }
                 }
-                app.features.sendState()
-            } catch (error: Exception) { main.post { if (!closed) state = state.copy(attachmentImporting = false, error = message(error)) } }
+                // A display-refresh failure cannot turn already saved bytes into an import failure.
+                runCatching { app.features.sendState() }
+            } catch (error: Exception) { main.post { if (!closed) state = state.copy(attachmentImporting = false, error = "附件接收结果未完整确认，可能已有文件保留在附件库；未自动重试，请先核对附件库和原任务") } }
+        } } catch (rejected: java.util.concurrent.RejectedExecutionException) {
+            state = state.copy(attachmentImporting = false, error = "本次附件尚未开始接收，请返回原入口重新选择")
         }
     }
     fun exportProject() { if (!state.exportPending && "workspace.prepareExport" !in state.moduleBusy) state.projectId?.let { feature("workspace", "prepareExport", JSONObject().put("projectId", it)) } }
@@ -2129,7 +2191,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     fun pausePhone() { state.tasks.find { it.id == state.activeTaskId }?.let { controlOriginalPhone(it, "pause") } }
     fun continuePhone() { state.tasks.find { it.id == state.activeTaskId }?.let { controlOriginalPhone(it, "resume") } }
-    fun stopPhone() { state.tasks.find { it.id == state.activeTaskId }?.let { controlOriginalPhone(it, "stop") } }
+    fun stopPhone() {
+        val task = state.tasks.find { it.id == state.activeTaskId }
+        if (task != null && isPhoneTask(task)) stopReviewedTask(task) else state = state.copy(error = "请先读取原手机任务，再停止该次执行")
+    }
     internal fun controlOriginalPhone(task: UiTask, action: String, feedback: String = "", completed: ((JSONObject?, String?) -> Unit)? = null) {
         val id = task.id; val run = task.raw.optString("runId"); val epoch = task.raw.optInt("coordinatorEpoch", -1)
         val group = task.raw.optJSONObject("origin")?.optString("kind") == "group"
@@ -2180,10 +2245,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             state = state.copy(notice = "已请求停止原任务并释放其独立屏；实际结果以原回执为准。")
         } catch (_: Exception) { state = state.copy(notice = "原保留会话暂不可核对，请刷新原任务；未停止其他执行。") }
     }
-    fun stopTask(taskId: String) { val task = state.tasks.find { it.id == taskId }; if (task != null) stopReviewedTask(task) else state = state.copy(error = "请先读取原任务，再停止该次执行") }
-    private fun reviewedTaskInput(task: UiTask): JSONObject = JSONObject().put("taskId", task.id).also {
-        if (task.raw.optString("runId").isNotBlank() && task.raw.has("coordinatorEpoch")) it.put("runId", task.raw.optString("runId")).put("epoch", task.raw.optInt("coordinatorEpoch"))
+    fun stopTask(taskId: String) {
+        val task = state.tasks.find { it.id == taskId }
+        if (task != null) stopReviewedTask(task) else state = state.copy(error = "请先读取原任务，再停止该次执行")
     }
+    private fun reviewedTaskInput(task: UiTask): JSONObject = JSONObject().put("taskId", task.id)
+        .put("runId", task.raw.optString("runId")).put("epoch", task.raw.optInt("coordinatorEpoch"))
     fun stopReviewedTask(task: UiTask) { if (isPhoneTask(task)) controlOriginalPhone(task, "stop") else native("stopTask", reviewedTaskInput(task)) }
     fun confirmReviewedTask(task: UiTask, done: Boolean, feedback: String) { native("confirmResult", reviewedTaskInput(task).put("resultReviewDigest", task.raw.optString("resultReviewDigest")).put("completed", done).put("feedback", feedback)) }
     fun resolveReviewedTask(task: UiTask, operationId: String, outcome: String) { native("resolveOperation", reviewedTaskInput(task).put("operationId", operationId).put("outcome", outcome)) }
@@ -2249,6 +2316,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val id = UUID.randomUUID().toString(); val key = "owner." + action
         state = state.copy(moduleBusy = state.moduleBusy + key, moduleErrors = state.moduleErrors - key)
         native(action, JSONObject(input.toString()), id, completed = done)
+        return id
+    }
+    /** A native liveness predicate, never an input field or another permission source. */
+    internal fun requestWebOwnerActionReceipt(action: String, input: JSONObject, current: () -> Boolean, done: (JSONObject?, String?) -> Unit): String {
+        check(webPrivateOwnerVisible() && current()) { "原审阅窗口已关闭" }
+        val id = UUID.randomUUID().toString(); val key = "owner." + action
+        state = state.copy(moduleBusy = state.moduleBusy + key, moduleErrors = state.moduleErrors - key)
+        native(action, JSONObject(input.toString()), id, completed = done, originalOwnerCurrent = current)
         return id
     }
     private data class ProjectStartMemoryRequest(val retryOriginal: Boolean)
@@ -2643,6 +2718,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         webFeatureReceipts[request] = done
         return request
     }
+    internal fun requestWebFeatureReceipt(id: String, command: String, payload: JSONObject, current: () -> Boolean, done: (JSONObject?, String?) -> Unit): String {
+        check(webPrivateOwnerVisible() && current()) { "原审阅窗口已关闭" }
+        check(webFeatureReceipts.size < 32) { "已有原操作仍在核对，请等待原回执" }
+        val request = feature(id, command, JSONObject(payload.toString()), current)
+        webFeatureReceipts[request] = done
+        return request
+    }
     fun openInspection(taskId: String) {
         phoneInlinePreview = null
         phoneInlineWindow = null
@@ -2869,7 +2951,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         } } catch (error: Exception) { state = state.copy(modelTesting = false, modelTest = message(error)); throw error }
     }
-    private fun feature(feature: String, command: String, payload: JSONObject = JSONObject()): String {
+    private fun feature(feature: String, command: String, payload: JSONObject = JSONObject(), originalOwnerCurrent: (() -> Boolean)? = null): String {
         val id = UUID.randomUUID().toString()
         val key = "$feature.$command"
         state = state.copy(moduleBusy = state.moduleBusy + key, moduleErrors = state.moduleErrors - key)
@@ -2880,7 +2962,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
         if(feature=="assistant"&&command=="get")latestChatGet=id
         pending[id] = Pair(key, metadata)
-        native("featureRequest", JSONObject().put("feature", feature).put("command", command).put("payload", payload).put("requestId", id))
+        native("featureRequest", JSONObject().put("feature", feature).put("command", command).put("payload", payload).put("requestId", id), originalOwnerCurrent = originalOwnerCurrent)
         return id
     }
     internal var nativeEvaluationOpen by mutableStateOf(false)
@@ -3064,7 +3146,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             } catch (error: Exception) { main.post { if (!closed) done(null, message(error)) } }
         }
     }
-    private fun native(action: String, input: JSONObject = JSONObject(), ownerRequestId: String? = null, projectMemoryRequest: ProjectStartMemoryRequest? = null, completed: ((JSONObject?, String?) -> Unit)? = null) {
+    private fun native(action: String, input: JSONObject = JSONObject(), ownerRequestId: String? = null, projectMemoryRequest: ProjectStartMemoryRequest? = null, completed: ((JSONObject?, String?) -> Unit)? = null, originalOwnerCurrent: (() -> Boolean)? = null) {
         val viewerEpoch = inspectionEpoch
         val inlinePreview = phoneInlinePreview.takeIf { action == "observeTask" }
         val targetTask = input.optString("taskId")
@@ -3077,6 +3159,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         (if (urgent) controls else io).execute {
             var createdPhoneTaskId: String? = null
             try {
+                if (originalOwnerCurrent != null && action != "featureRequest") check(originalOwnerCurrent()) { "原审阅窗口已关闭，未执行排队操作" }
                 if (inlinePreview != null) check(viewerEpoch == inspectionEpoch && inlinePhonePreviewCurrent(inlinePreview)) { "原预览窗口或任务已变化，未读取替代画面" }
                 if (action == "startOwnedPhonePractice") check(privateWorkspaceView() && state.backgroundSetupOpen
                     && input.optLong("_ownerViewRevision", -1) == phoneSetupViewRevision.get()) { "原演练确认窗口已关闭，未创建任务" }
@@ -3085,7 +3168,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 val result = if (action == "startRun") app.startOriginalPhoneRun(input) { createdPhoneTaskId = it }
                     else if (projectMemoryRequest != null) startProjectWithReviewedMemory(input, projectMemoryRequest)
                     else if (needsGroupOwner) app.groupOwnerWorkflows.call(groupWindow ?: throw SecurityException("请在当前原群任务详情重新建立本机审核窗口")) { app.dispatchOwnerAction(action, reviewedInput) }
-                    else app.dispatchOwnerAction(action, input)
+                    else if (originalOwnerCurrent != null && action == "featureRequest") {
+                        app.features.request(input, java.util.function.BooleanSupplier { originalOwnerCurrent() })
+                        null
+                    } else if (originalOwnerCurrent != null) synchronized(app) {
+                        check(originalOwnerCurrent()) { "原审阅窗口已关闭，未执行排队操作" }
+                        app.dispatchOwnerAction(action, input)
+                    } else app.dispatchOwnerAction(action, input)
                 if (action == "answerOwnerQuestion" && taskAction != null) requireOwnerQuestionAccepted(result)
                 main.post {
                     if (closed) { completed?.invoke(result, null); return@post }

@@ -74,7 +74,7 @@ public final class NativeWorkProfileHost {
         JSONObject task=tasks.get(review.view().getString("parentTaskId"),false);JSONArray choices=new JSONArray();
         if(task.optJSONObject("workProfileRef")!=null||task.optJSONObject("workProfileIntent")!=null)return choices;
         JSONArray saved=settings.workProfilesSnapshot().getJSONArray("profiles");
-        for(int i=0;i<saved.length();i++){WorkProfile profile=WorkProfile.fromJson(saved.getJSONObject(i));JSONObject definition=profile.toJson();
+        for(int i=0;i<saved.length();i++){WorkProfile profile=WorkProfile.fromJson(saved.getJSONObject(i));if(profile.restoredPendingReview)continue;JSONObject definition=profile.toJson();
             if(definition.getJSONObject("modelPolicies").has("RELAY"))choices.put(new JSONObject().put("profileId",profile.id).put("revision",profile.revision).put("name",profile.name).put("configurationApplied",false));}
         review.checkCurrent();return choices;
     }
@@ -424,6 +424,10 @@ public final class NativeWorkProfileHost {
         public ModelConfig baseModel()throws Exception{checkCurrent();return base;}
     }
     private WorkProfile stored(String id, long revision) throws Exception {
+        WorkProfile value=storedDefinition(id,revision);value.requireExecutable();return value;
+    }
+    /** Editing can read a pending restore, while every execution path uses stored()/the resolver gate. */
+    private WorkProfile storedDefinition(String id,long revision)throws Exception {
         JSONArray rows = settings.workProfilesSnapshot().getJSONArray("profiles");
         for (int i = 0; i < rows.length(); i++) {
             WorkProfile row = WorkProfile.fromJson(rows.getJSONObject(i));
@@ -431,12 +435,24 @@ public final class NativeWorkProfileHost {
         }
         throw new SecurityException("work_profile_definition_missing");
     }
+    /** One foreground owner review of a pending restore; it authorizes saving references only. */
+    public final class RestoredReview {
+        private final Page page;private final long generation,expires;private final WorkProfile original;
+        private final WorkProfileResolver.Resolution resolution;private final RunControl observation;private boolean entered;
+        private RestoredReview(Page page,long generation,WorkProfile original,WorkProfileResolver.Resolution resolution,RunControl observation){this.page=page;this.generation=generation;this.original=original;this.resolution=resolution;this.observation=observation;expires=System.currentTimeMillis()+600_000L;}
+        private void current()throws Exception {
+            observation.checkpoint();synchronized(page){page.current(true);if(entered||page.restoredReview!=this||generation!=page.generation||System.currentTimeMillis()>=expires)throw new SecurityException("恢复工作配置审阅已失效，请保留编辑并重新核对");}
+            if(!original.digest().equals(storedDefinition(original.id,original.revision).digest()))throw new SecurityException("原恢复工作配置已改变");
+        }
+        public JSONObject view()throws Exception {current();return new JSONObject().put("profileId",original.id).put("revision",original.revision).put("nextRevision",Math.addExact(original.revision,1)).put("definition",resolution.profile().toJson()).put("review",resolution.view()).put("restoredReferences",original.toJson().getJSONArray("restoredReferences")).put("expiresAt",expires).put("startsTask",false).put("restoresPermissions",false);}
+    }
     public final class Page implements AutoCloseable {
         private boolean alive = true, foreground;
         private Review pending;
+        private RestoredReview restoredReview;
         private long generation;
         private Page() { }
-        public synchronized void setForeground(boolean value) { if (alive && foreground != value) { foreground = value; generation++; pending = null; } }
+        public synchronized void setForeground(boolean value) { if (alive && foreground != value) { foreground = value; generation++; pending = null; restoredReview = null; } }
         private void current(boolean editing) { if (!alive || editing && !foreground) throw new SecurityException("work_profile_owner_page_not_current"); }
         public synchronized JSONObject snapshot() throws Exception { current(false); return settings.workProfilesSnapshot().put("executionAuthorized", false).put("permissionsChanged", false); }
         /** Read-through owner choices, never a second asset/credential store or an implicit approval. */
@@ -448,16 +464,32 @@ public final class NativeWorkProfileHost {
             JSONObject data = sources.forProject(project,observation).choices(observation); synchronized(this) { current(false); if(observed != generation) throw new SecurityException("work_profile_owner_page_changed"); return data; }
         }
         public synchronized JSONObject save(String id, long revision, String name, JSONObject definition) throws Exception {
-            current(true); generation++; pending = null; return settings.saveWorkProfile(id, revision, name, definition);
+            current(true); generation++; pending = null; restoredReview = null; return settings.saveWorkProfile(id, revision, name, definition);
+        }
+        public RestoredReview reviewRestored(String id,long revision,String name,JSONObject definition,RunControl observation,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection project)throws Exception {
+            final long request;synchronized(this){current(true);pending=null;restoredReview=null;request=++generation;}
+            WorkProfile original=storedDefinition(id,revision);if(!original.restoredPendingReview)throw new SecurityException("此工作配置不再处于待重绑状态，请读取原记录");
+            JSONObject candidate=new JSONObject(definition.toString()).put("profileId",id).put("revision",revision).put("name",name).put("restoredPendingReview",false).put("restoredReferences",original.toJson().getJSONArray("restoredReferences"));
+            if(!candidate.getJSONObject("modelPolicies").has("MAIN"))throw new SecurityException("恢复工作配置必须明确选择本机主模型，不能借当前默认模型静默补齐");
+            WorkProfileResolver.Resolution resolution=WorkProfileResolver.resolve(WorkProfile.fromJson(candidate),sources.forProject(project,observation),observation);resolution.requireReady();resolution.checkCurrent(observation);
+            synchronized(this){current(true);if(request!=generation||!original.digest().equals(storedDefinition(id,revision).digest()))throw new SecurityException("恢复工作配置或主人窗口已变化");restoredReview=new RestoredReview(this,request,original,resolution,observation);return restoredReview;}
+        }
+        /** Consumes only the original review. Lost replies are checked by profileId/nextRevision, never replayed. */
+        public JSONObject rebindRestored(RestoredReview reviewed)throws Exception {
+            if(reviewed==null||reviewed.page!=this)throw new SecurityException("原主人恢复审阅必需");reviewed.current();reviewed.resolution.checkCurrent(reviewed.observation);
+            synchronized(this){reviewed.current();reviewed.entered=true;restoredReview=null;
+                try{return settings.saveReboundWorkProfile(reviewed.original.id,reviewed.original.revision,reviewed.resolution.profile().name,reviewed.resolution,reviewed.observation);}
+                finally{generation++;pending=null;}
+            }
         }
         public synchronized JSONObject remove(String id, long revision) throws Exception {
-            current(true); generation++; pending = null; return settings.removeWorkProfile(id, revision);
+            current(true); generation++; pending = null; restoredReview = null; return settings.removeWorkProfile(id, revision);
         }
         public Review review(String id, long revision, RunControl observation) throws Exception {
             return review(id,revision,observation,null);
         }
         public Review review(String id,long revision,RunControl observation,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection project)throws Exception {
-            final long request; synchronized (this) { current(true); pending = null; request = ++generation; }
+            final long request; synchronized (this) { current(true); pending = null; restoredReview = null; request = ++generation; }
             WorkProfile row = stored(id, revision); WorkProfileResolver.Resolution resolution = WorkProfileResolver.resolve(row, sources.forProject(project,observation), observation);
             synchronized (this) { current(true); if(request != generation) throw new SecurityException("work_profile_review_superseded"); if (!row.digest().equals(stored(id, revision).digest())) throw new SecurityException("work_profile_definition_changed"); pending = new Review(this, generation, resolution, () -> { if (!row.digest().equals(stored(id, revision).digest())) throw new SecurityException("work_profile_definition_changed"); }); return pending; }
         }
@@ -467,7 +499,7 @@ public final class NativeWorkProfileHost {
             return reviewForTask(tasks,taskId,runId,epoch,observation,null);
         }
         public Review reviewForTask(dev.pocketengine.store.TaskStore tasks,String taskId,String runId,int epoch,RunControl observation,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection project)throws Exception {
-            final long request; synchronized (this) { current(true); pending = null; request = ++generation; }
+            final long request; synchronized (this) { current(true); pending = null; restoredReview = null; request = ++generation; }
             JSONObject original = runId.isEmpty()?tasks.pendingWorkProfileTaskSnapshot(taskId):tasks.workProfileRunSnapshot(taskId, runId, epoch);
             JSONObject task=tasks.get(taskId,false);if(project!=null&&task.has("developmentContext"))throw new SecurityException("原工作配置任务已有项目绑定，不能借恢复更换");
             WorkProfileResolver.Sources originalSources=project==null?sources.forTask(tasks,taskId,observation):sources.forProject(project,observation);
@@ -490,7 +522,7 @@ public final class NativeWorkProfileHost {
                 review.consumed = true; pending = null; return new Selection(NativeWorkProfileHost.this, review.resolution, observation, review.taskReview);
             }
         }
-        @Override public synchronized void close() { alive = false; foreground = false; generation++; pending = null; }
+        @Override public synchronized void close() { alive = false; foreground = false; generation++; pending = null; restoredReview = null; }
     }
     private record TaskReview(String taskId,String runId,int epoch,String snapshotDigest) { }
     @FunctionalInterface private interface CurrentDefinition { void check() throws Exception; }

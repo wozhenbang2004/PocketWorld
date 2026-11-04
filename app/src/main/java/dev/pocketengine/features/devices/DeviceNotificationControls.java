@@ -29,7 +29,7 @@ public final class DeviceNotificationControls {
                 if(!handles(intent.getAction())||id==null||run==null||!id.equals(serviceTask)||!run.equals(serviceRun)||epoch!=serviceEpoch||original==null||original!=app.control(id)||!id.equals(app.activeId())||!original.matchesHostRun(id,run,epoch))return false;
                 JSONObject task=app.tasks.get(id,false);if(!TaskStoreDeviceTasks.deviceTask(task)||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))return false;
                 owner=true;
-                if(STOP.equals(intent.getAction())){app.stop(id);return true;}
+                if(STOP.equals(intent.getAction())){app.stop(id,original);return true;}
                 if(original.isCancelled())return false;
                 if(PAUSE.equals(intent.getAction()))app.pause();else app.resumeDeviceExecution(id);
                 return true;

@@ -28,6 +28,9 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import dev.pocketengine.core.RunControl;
+import dev.pocketengine.features.controlplane.WorkProfile;
+import dev.pocketengine.features.workspace.OwnerConfigurationBackupSections;
 
 /** Private, versioned skill packages. Instructions never confer tool grants. */
 public final class SkillBook {
@@ -60,6 +63,9 @@ public final class SkillBook {
         return installRetained(scope,input,now,origin,nativeGit,restoredFrom,nativeMcp,inheritedPolicy,null);
     }
     private JSONObject installRetained(JSONObject scope,JSONObject input,long now,ExperienceOrigin origin,JSONObject nativeGit,JSONObject restoredFrom,JSONObject nativeMcp,JSONObject inheritedPolicy,JSONObject nativeConversation)throws Exception {
+        return installRetained(scope,input,now,origin,nativeGit,restoredFrom,nativeMcp,inheritedPolicy,nativeConversation,null);
+    }
+    private JSONObject installRetained(JSONObject scope,JSONObject input,long now,ExperienceOrigin origin,JSONObject nativeGit,JSONObject restoredFrom,JSONObject nativeMcp,JSONObject inheritedPolicy,JSONObject nativeConversation,JSONObject nativeArchive)throws Exception {
         synchronized(lock){String[] owner=scope(scope);JSONObject state=state();JSONArray records=state.getJSONArray("skills");String id=input.optString("id");JSONObject old=id.isEmpty()?null:required(records,owner,id);
             if(old!=null&&((origin==null&&old.has("origin"))||(origin!=null&&!old.has("origin"))))throw new SecurityException("普通技能和来源型技能不能互相覆盖，请登记为新技能");
             if(origin!=null){requireOrigin(owner,origin);if(old!=null&&!origin.ref.sameIdentity(ExperienceOrigin.fromJson(old.getJSONObject("origin")).ref))throw new SecurityException("更新不能改变经验身份");}
@@ -69,7 +75,7 @@ public final class SkillBook {
             String source=text(input.optString("source"),1,1000,"来源"),version=text(input.optString("sourceVersion",metadata.getJSONObject("metadata").optString("version","未注明")),1,120,"来源版本");
             JSONArray permissions=permissions(input.optJSONArray("requiredCapabilities"));long expires=expiry(input.opt("expiresAt"));
             JSONObject files=draftFiles(input);long bytes=packageBytes(files);
-            String stable=old==null?UUID.randomUUID().toString():id;int revision=old==null?1:Math.addExact(old.getInt("revision"),1);String digest=digest(files);
+            String stable=old==null?(nativeArchive==null?UUID.randomUUID().toString():nativeArchive.getString("id")):id;int revision=old==null?1:Math.addExact(old.getInt("revision"),1);String digest=digest(files);
             File destination=new File(root,stable+"/"+revision+"/"+metadata.getString("name"));if(destination.exists())throw new IllegalStateException("技能版本目录已存在，请检查未完成的导入");
             // Only an actually current, verified old package can acquire retained metadata. Older
             // unrecorded directories stay unknown; no source version or install time is backfilled.
@@ -87,6 +93,8 @@ public final class SkillBook {
                 else if(restoredFrom==null&&old!=null&&old.has("gitSource"))record.put("gitSource",new JSONObject(old.getJSONObject("gitSource").toString()));
                 else if(restoredFrom==null&&old!=null&&old.has("mcpSource"))record.put("mcpSource",new JSONObject(old.getJSONObject("mcpSource").toString()));
                 if(restoredFrom!=null)record.put("restoredFrom",new JSONObject(restoredFrom.toString()));
+                if(nativeArchive!=null)record.put("ownerArchiveRestore",nativeArchive.getJSONObject("receipt"));
+                else if(old!=null&&old.has("ownerArchiveRestore"))record.put("ownerArchiveRestore",old.getJSONObject("ownerArchiveRestore"));
                 if(nativeConversation!=null){conversationDraftSource(nativeConversation);record.put("conversationDraftReceipt",new JSONObject(nativeConversation.toString()).put("format","pocketworld.conversation-skill-save.v1").put("id",stable).put("revision",revision).put("digest",digest));}
                 if(!record.has("origin"))retainRevision(record,now);
                 if(old!=null)remove(records,stable);records.put(record);save(state);return present(record,now);
@@ -564,6 +572,53 @@ public final class SkillBook {
                     .put("digest",expectedDigest).put("archiveBytes",archive.length).put("containsApproval",false).put("scriptsExecutable",false);
         }
         output.write(archive);return result;
+    }
+    /** Verified package contents without copied source authority, approval or device/project binding. */
+    public JSONObject exportBackupForOwner(JSONObject scope,RunControl original)throws Exception {
+        synchronized(lock){String[] owner=scope(scope);original.checkpoint();JSONArray records=state().getJSONArray("skills"),packages=new JSONArray(),omitted=new JSONArray();
+            for(int i=0;i<records.length();i++){original.checkpoint();JSONObject row=records.getJSONObject(i);if(!matches(row,owner))continue;
+                if(row.has("origin")){omitted.put(new JSONObject().put("id",row.getString("id")).put("reason","经验来源型技能不能剥离原来源授权；保留在原数据与经历档案中"));continue;}
+                JSONObject files=verifiedFiles(row);SkillArchive.read(new java.io.ByteArrayInputStream(SkillArchive.write(row.getString("name"),files)));
+                packages.put(new JSONObject().put("sourceId",row.getString("id")).put("name",row.getString("name")).put("digest",digest(files)).put("files",files)
+                        .put("requiredCapabilities",row.getJSONArray("requiredCapabilities")).put("expiresAt",row.opt("expiresAt")).put("projectBindingRequired","PROJECT".equals(SkillSourcePolicy.current(row).getString("layer"))));
+            }
+            return OwnerConfigurationBackupSections.create("skills",new JSONObject().put("packages",packages),omitted);
+        }
+    }
+    private static JSONArray backupPackages(JSONObject section)throws Exception {
+        JSONObject content=OwnerConfigurationBackupSections.checked("skills",section).getJSONObject("content");OwnerConfigurationBackupSections.fields(content,"packages");JSONArray rows=content.getJSONArray("packages");if(rows.length()>100)throw new SecurityException("技能归档超过100项");Set<String> ids=new HashSet<>();
+        for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);OwnerConfigurationBackupSections.fields(row,"sourceId","name","digest","files","requiredCapabilities","expiresAt","projectBindingRequired");String source=OwnerConfigurationBackupSections.text(row,"sourceId",200);if(!ids.add(source))throw new SecurityException("技能归档来源重复");
+            JSONObject files=row.getJSONObject("files"),metadata=SkillManifest.parse(files.getString("SKILL.md"));if(!metadata.getString("name").equals(row.getString("name"))||!digest(files).equals(row.getString("digest")))throw new SecurityException("技能归档正文与摘要不一致");
+            SkillArchive.read(new java.io.ByteArrayInputStream(SkillArchive.write(row.getString("name"),files)));permissions(row.getJSONArray("requiredCapabilities"));expiry(row.opt("expiresAt"));if(!(row.opt("projectBindingRequired") instanceof Boolean))throw new SecurityException("归档项目范围状态无效");
+        }return rows;
+    }
+    public OwnerConfigurationBackupSections.Review reviewBackupForOwner(JSONObject scope,JSONObject selected,String action,RunControl original)throws Exception {
+        JSONObject section=OwnerConfigurationBackupSections.checked("skills",selected);JSONArray imported=backupPackages(section);String sectionDigest=section.getString("sectionDigest");String[] owner=scope(scope);JSONObject frozenScope=new JSONObject(scope.toString());
+        final String before;final JSONObject preview;
+        synchronized(lock){original.checkpoint();JSONObject state=state();JSONArray existing=state.getJSONArray("skills");if(existing.length()+imported.length()>100)throw new IllegalStateException("本机技能位置不足，未覆盖或部分恢复");before=WorkProfile.fingerprint(state);JSONArray conflicts=new JSONArray();int unbound=0;
+            for(int i=0;i<imported.length();i++){JSONObject row=imported.getJSONObject(i);OwnerConfigurationBackupSections.originalId("skills",action,row.getString("sourceId"));if(row.getBoolean("projectBindingRequired"))unbound++;for(int n=0;n<existing.length();n++)if(matches(existing.getJSONObject(n),owner)&&row.getString("name").equals(existing.getJSONObject(n).getString("name")))conflicts.put(row.getString("name"));}
+            preview=new JSONObject().put("counts",new JSONObject().put("skills",imported.length()).put("requiresProjectRebinding",unbound)).put("sameNameConflicts",conflicts).put("mergeMode","new_disabled_identities").put("omitted",section.getJSONArray("omitted")).put("restoredEnabled",false).put("requiresNewApproval",true).put("modelInvocationEnabled",false);
+        }
+        return new OwnerConfigurationBackupSections.Review(){private boolean entered;
+            public JSONObject metadata()throws Exception{return new JSONObject(preview.toString());}
+            public JSONObject restore()throws Exception{synchronized(lock){if(entered)throw new SecurityException("原技能恢复已进入，只能查询");entered=true;original.checkpoint();if(!before.equals(WorkProfile.fingerprint(state())))throw new SecurityException("原技能目录已变化，请重新核对恢复计划");
+                for(int i=0;i<imported.length();i++){original.checkpoint();JSONObject row=imported.getJSONObject(i),files=new JSONObject(row.getJSONObject("files").toString());String source=row.getString("sourceId"),id=OwnerConfigurationBackupSections.originalId("skills",action,source);
+                    for(JSONObject actual:skillRows(state().getJSONArray("skills")))if(id.equals(actual.getString("id")))throw new SecurityException("原技能恢复身份已存在，未重放");
+                    JSONObject input=new JSONObject().put("manifest",files.getString("SKILL.md")).put("source","owner_archive").put("sourceVersion",row.getString("digest")).put("requiredCapabilities",row.getJSONArray("requiredCapabilities")).put("expiresAt",row.opt("expiresAt"));files.remove("SKILL.md");input.put("resources",files);
+                    JSONObject policy=SkillSourcePolicy.of(SkillSourcePolicy.Layer.USER,SkillSourcePolicy.Invocation.OWNER_ONLY);if(row.getBoolean("projectBindingRequired"))policy.put("layer","PROJECT");
+                    installRetained(frozenScope,input,System.currentTimeMillis(),null,null,null,null,policy,null,new JSONObject().put("id",id).put("receipt",OwnerConfigurationBackupSections.receipt(action,sectionDigest,source)));
+                }
+                return queryBackupForOwner(frozenScope,section,action,original);
+            }}
+        };
+    }
+    private static List<JSONObject> skillRows(JSONArray rows)throws Exception{List<JSONObject> result=new ArrayList<>();for(int i=0;i<rows.length();i++)result.add(rows.getJSONObject(i));return result;}
+    public JSONObject queryBackupForOwner(JSONObject scope,JSONObject selected,String action,RunControl original)throws Exception {
+        JSONObject section=OwnerConfigurationBackupSections.checked("skills",selected);JSONArray expected=backupPackages(section),result=new JSONArray();String sectionDigest=section.getString("sectionDigest");String[] owner=scope(scope);
+        synchronized(lock){JSONArray actual=state().getJSONArray("skills");for(int i=0;i<expected.length();i++){original.checkpoint();String source=expected.getJSONObject(i).getString("sourceId"),id=OwnerConfigurationBackupSections.originalId("skills",action,source);JSONObject found=null;for(JSONObject row:skillRows(actual))if(id.equals(row.getString("id"))&&matches(row,owner)){found=row;break;}
+            boolean saved=found!=null&&OwnerConfigurationBackupSections.matches(found.optJSONObject("ownerArchiveRestore"),action,sectionDigest,source);if(saved){try{verifiedFiles(found);}catch(Exception unavailable){saved=false;}}
+            result.put(new JSONObject().put("sourceId",source).put("id",id).put("found",saved).put("enabled",found==null?JSONObject.NULL:found.opt("enabled")));
+        }}return OwnerConfigurationBackupSections.result(result);
     }
     /** Native owner review of the exact single-document transfer. The original package and
      * its omitted resources remain unchanged; source-bound experience cannot be detached. */

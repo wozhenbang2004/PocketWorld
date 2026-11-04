@@ -25,7 +25,7 @@ public final class AttachmentOutcomeHost {
 
     public JSONObject snapshot(String taskId,RunControl control)throws Exception {
         control.check();JSONObject task=ownerTask(taskId);JSONArray selected=task==null?new JSONArray():tasks.ownerAttachmentReferences(taskId);
-        JSONArray files=repository.book.list(),sources=new JSONArray(),results=new JSONArray(),jobs=new JSONArray();Set<String> included=new HashSet<>();
+        JSONObject inventory=documents.ownerAttachmentInventoryForHost();JSONArray files=inventory.getJSONArray("attachments"),sources=new JSONArray(),results=new JSONArray(),jobs=new JSONArray();Set<String> included=new HashSet<>();
         for(int i=0;i<selected.length();i++){
             JSONObject pinned=selected.getJSONObject(i),meta=find(files,pinned.getString("id"));
             if(meta==null||!sameReference(pinned,meta))sources.put(new JSONObject(pinned.toString()).put("availability","input_changed").put("name","原来源文件不可读"));
@@ -61,10 +61,14 @@ public final class AttachmentOutcomeHost {
             }
         }
         ownerTask(taskId);control.check();JSONObject result=new JSONObject().put("taskId",taskId==null?"":taskId).put("sources",sources).put("artifacts",results)
-                .put("media",jobs).put("documentCapabilities",documents.documentCapabilities()).put("verifiedBusinessSuccess",false);
+                .put("media",jobs).put("documentCapabilities",documents.documentCapabilities()).put("indexDiagnostics",inventory.getJSONObject("indexDiagnostics")).put("verifiedBusinessSuccess",false);
         if(task!=null){result.put("taskRunId",task.optString("runId")).put("coordinatorEpoch",task.optInt("coordinatorEpoch")).put("taskStatus",task.optString("status"));if("attachments".equals(task.optString("feature"))&&"createDocument".equals(task.optString("command")))result.put("originalDocumentActionId",task.getString("operationId"));}
+        else result.put("documentActions",documentActions("",control));
         return result;
     }
+
+    /** One explicit metadata page, including completed originals whose UI callback was lost. */
+    public JSONObject documentActions(String cursor,RunControl control)throws Exception {return tasks.ownerDocumentActionsForOwner(cursor,control);}
 
     /** The file picker supplies a real imported record. JSON callers cannot create an association here. */
     public JSONObject selectForTask(String taskId,String artifactId,String expectedSha256,RunControl control)throws Exception {

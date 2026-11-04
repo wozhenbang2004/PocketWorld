@@ -14,9 +14,8 @@ final class RuntimeActivity {
     }
     static JSONObject describe(String operation,JSONObject original,Long silenceMillis,boolean outputObserved,Long uptimeMillis)throws Exception {
         String contract=original.optString("nativeResultContract");
-        boolean nativeContract=NativeProcessSupervisor.knownOrdinaryExitContract(contract)
-                ||NativeProcessSupervisor.PTY_EXIT_RESULT_CONTRACT.equals(contract)||NativeProcessSupervisor.PIPE_EXIT_RESULT_CONTRACT.equals(contract);
-        boolean pty=NativeProcessSupervisor.PTY_EXIT_RESULT_CONTRACT.equals(contract)||NativeProcessSupervisor.PIPE_EXIT_RESULT_CONTRACT.equals(contract);
+        boolean pty=NativeProcessSupervisor.knownSessionExitContract(contract);
+        boolean nativeContract=NativeProcessSupervisor.knownOrdinaryExitContract(contract)||pty;
         boolean released=yes(original,"resourcesReleased"),exit=yes(original,"processExited")&&nativeContract;
         boolean settled=exit&&released&&yes(original,"receiptReceived")&&yes(original,"processGroupAbsent")
                 &&(!pty||yes(original,"processSessionAbsent"))&&Set.of("completed","failed").contains(original.optString("status"));

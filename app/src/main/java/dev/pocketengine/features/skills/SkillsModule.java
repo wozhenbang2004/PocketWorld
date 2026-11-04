@@ -21,6 +21,9 @@ public final class SkillsModule implements EngineModule {
     SkillsModule(FeatureContext context,SkillBook book,SkillGitClient gitClient){this.context=java.util.Objects.requireNonNull(context);this.book=java.util.Objects.requireNonNull(book);this.gitClient=java.util.Objects.requireNonNull(gitClient);}
     @Override public String id(){return "skills";}
     private static JSONObject privateScope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
+    public JSONObject exportBackupForOwner(dev.pocketengine.core.RunControl original)throws Exception{return book.exportBackupForOwner(privateScope(),original);}
+    public dev.pocketengine.features.workspace.OwnerConfigurationBackupSections.Review reviewBackupForOwner(JSONObject section,String action,dev.pocketengine.core.RunControl original)throws Exception{return book.reviewBackupForOwner(privateScope(),section,action,original);}
+    public JSONObject queryBackupForOwner(JSONObject section,String action,dev.pocketengine.core.RunControl original)throws Exception{return book.queryBackupForOwner(privateScope(),section,action,original);}
     @Override public JSONObject snapshot()throws Exception{return new JSONObject().put("available",true).put("skills",book.list(privateScope(),System.currentTimeMillis()))
             .put("progressiveReading",true).put("textResourcesOnly",true).put("grantsFromInstructions",false).put("scriptExecution",false).put("validationOnLoad",true)
             .put("nativeGitSourceReview",true).put("gitSourceProvider","github_public_https").put("nativeRetainedRevisionReview",true)

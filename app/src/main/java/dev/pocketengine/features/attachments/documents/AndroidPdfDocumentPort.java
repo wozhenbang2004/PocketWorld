@@ -14,9 +14,14 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** Platform PDF API only. Mount on a worker, preferably in a minimal-permission isolated parser process. */
 public final class AndroidPdfDocumentPort implements DocumentReader.PdfTextPort {
@@ -84,15 +89,45 @@ public final class AndroidPdfDocumentPort implements DocumentReader.PdfTextPort 
     private void withPdf(byte[] bytes,RunControl control,PdfAction action)throws Exception {
         if(Looper.myLooper()==Looper.getMainLooper())throw new IllegalStateException("PDF decoding requires a native worker thread");
         if(bytes.length>DocumentReader.MAX_INPUT_BYTES)throw new DocumentReader.DocumentLimitException("PDF exceeds 20 MiB");
-        control.checkpoint();File temporary=File.createTempFile("attachment-document-",".pdf",context.getCacheDir());
-        try {
+        control.checkpoint();
+        try(TemporaryPdf lease=TemporaryPdf.create(context.getCacheDir())) {
+            File temporary=lease.file;
             try(FileOutputStream output=new FileOutputStream(temporary)) {
                 for(int at=0;at<bytes.length;at+=32768){control.checkpoint();output.write(bytes,at,Math.min(32768,bytes.length-at));}
             }
             control.checkpoint();
             try(ParcelFileDescriptor descriptor=ParcelFileDescriptor.open(temporary,ParcelFileDescriptor.MODE_READ_ONLY);
                     PdfRenderer renderer=open(descriptor)) {action.run(renderer);control.checkpoint();}
-        }finally{temporary.delete();}
+        }
+    }
+    /** Unpublished parser input only. All current text/OCR callers run in the default
+     * app process. Creation, registration and sweep share a monitor; a lease remains
+     * live until the renderer and descriptor have closed. This is not a cross-process
+     * lock, an age-based expiry, or a policy for attachments or issued view copies. */
+    private static final class TemporaryPdf implements AutoCloseable {
+        private static final Object DISK=new Object();
+        private static final Set<Path> LIVE=new HashSet<>();
+        private final File file;
+        private final Path path;
+        private boolean closed;
+        private TemporaryPdf(File file){this.file=file;this.path=file.toPath();}
+        static TemporaryPdf create(File cache)throws IOException {
+            synchronized(DISK){
+                if(Files.isSymbolicLink(cache.toPath()))throw new IOException("PDF temporary cache must not be a link");
+                File root=cache.getCanonicalFile();
+                if(!Files.isDirectory(root.toPath(),LinkOption.NOFOLLOW_LINKS))throw new IOException("PDF temporary cache is unavailable");
+                // Only this exact File.createTempFile namespace is recoverable here.
+                // Never infer that an old file is dead while a reader still owns it.
+                try(var files=Files.newDirectoryStream(root.toPath(),"attachment-document-*.pdf")) {
+                    for(Path candidate:files)if(!LIVE.contains(candidate)&&candidate.getFileName().toString().matches("attachment-document-[0-9]{1,20}\\.pdf")&&Files.isRegularFile(candidate,LinkOption.NOFOLLOW_LINKS))Files.deleteIfExists(candidate);
+                }
+                TemporaryPdf lease=new TemporaryPdf(File.createTempFile("attachment-document-",".pdf",root));
+                LIVE.add(lease.path);return lease;
+            }
+        }
+        @Override public void close()throws IOException {
+            synchronized(DISK){if(closed)return;try{Files.deleteIfExists(path);}finally{LIVE.remove(path);closed=true;}}
+        }
     }
     private static PdfRenderer open(ParcelFileDescriptor descriptor)throws Exception {
         try{return new PdfRenderer(descriptor);}catch(SecurityException encrypted){throw new DocumentReader.EncryptedDocumentException();}

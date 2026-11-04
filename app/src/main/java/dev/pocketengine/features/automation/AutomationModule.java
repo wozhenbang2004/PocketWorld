@@ -231,6 +231,9 @@ public final class AutomationModule implements EngineModule {
     public JSONObject evaluateFollowUp(JSONObject scope,String id,long revision,String candidateKey)throws Exception {
         return commitments.evaluateFollowUp(scope,id,revision,candidateKey,System.currentTimeMillis());
     }
+    public JSONObject exportBackupForOwner(dev.pocketengine.core.RunControl original)throws Exception{return book.exportBackupForOwner(original);}
+    public dev.pocketengine.features.workspace.OwnerConfigurationBackupSections.Review reviewBackupForOwner(JSONObject section,String action,dev.pocketengine.core.RunControl original)throws Exception{return book.reviewBackupForOwner(section,action,original);}
+    public JSONObject queryBackupForOwner(JSONObject section,String action,dev.pocketengine.core.RunControl original)throws Exception{return book.queryBackupForOwner(section,action,original);}
     /** Native explicit user-settings hook only; do not route model-generated settings here. */
     public JSONObject setFollowUpPolicy(JSONObject scope,long revision,JSONObject policy)throws Exception {
         JSONObject result=commitments.setFollowUpPolicy(scope,revision,policy,System.currentTimeMillis());commitmentsChanged();return result;

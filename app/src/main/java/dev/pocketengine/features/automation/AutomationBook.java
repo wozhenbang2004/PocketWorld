@@ -10,6 +10,9 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import dev.pocketengine.core.RunControl;
+import dev.pocketengine.features.controlplane.WorkProfile;
+import dev.pocketengine.features.workspace.OwnerConfigurationBackupSections;
 
 /** Persist claims before delivery. Unknown delivery is retained and never automatically replayed. */
 public final class AutomationBook {
@@ -109,6 +112,7 @@ public final class AutomationBook {
                     .put("taskRequestsRevoked",!enabled).put("executionPolicy","notify_then_user_start");
             if(onceRearmBlocked)rule.put("resumeBlockedReason","once_requires_new_future_time");
             if(nativeOrigin!=null)rule.put("nativeOrigin",copy(nativeOrigin));else if(old!=null&&old.optJSONObject("nativeOrigin")!=null)rule.put("nativeOrigin",copy(old.getJSONObject("nativeOrigin")));
+            if(old!=null&&old.optJSONObject("ownerArchiveRestore")!=null)rule.put("ownerArchiveRestore",copy(old.getJSONObject("ownerArchiveRestore")));
             // Positive route provenance is minted by this writer, never copied from input.
             // Do not upgrade legacy rows merely because an owner edited their contents.
             if(nativeOrigin==null&&(old==null?forcedId==null:!old.has("nativeOrigin")&&sameInteger(old.opt("manualOriginVersion"),1)))rule.put("manualOriginVersion",1);
@@ -252,6 +256,51 @@ public final class AutomationBook {
             for(int i=0;i<receipts.length();i++){JSONObject value=receipts.getJSONObject(i);if(id.equals(value.optString("ruleId")))removed.put(value);else kept.put(value);}
             state.put("receipts",kept);write(state);return removed;
         }
+    }
+    /** Owner-selected portable manual rules only. Original source-bound rules cannot lose provenance. */
+    public JSONObject exportBackupForOwner(RunControl original)throws Exception {
+        synchronized(lock){original.checkpoint();JSONArray rules=read().getJSONArray("rules"),portable=new JSONArray(),omitted=new JSONArray();
+            for(int i=0;i<rules.length();i++){original.checkpoint();JSONObject row=rules.getJSONObject(i);
+                if(row.has("nativeOrigin")||!sameInteger(row.opt("manualOriginVersion"),1)||row.optBoolean("sourceInvalidated")||row.optBoolean("sourceCheckPending")||row.has("semanticCondition")){
+                    omitted.put(new JSONObject().put("id",row.getString("id")).put("reason","来源型或待核对规则不能恢复旧来源权限；本分区仅迁移主人手建规则"));continue;
+                }
+                portable.put(new JSONObject().put("sourceId",row.getString("id")).put("title",row.getString("title")).put("kind",row.getString("kind")).put("goal",row.optString("goal"))
+                        .put("schedule",validateSchedule(row.getJSONObject("schedule"))).put("policy",AutomationPolicy.rule(row.optJSONObject("policy"),row.getJSONObject("schedule").optString("zone","UTC"))));
+            }
+            return OwnerConfigurationBackupSections.create("schedules",new JSONObject().put("rules",portable),omitted);
+        }
+    }
+    private static JSONArray backupRules(JSONObject section)throws Exception {
+        JSONObject content=OwnerConfigurationBackupSections.checked("schedules",section).getJSONObject("content");OwnerConfigurationBackupSections.fields(content,"rules");JSONArray rows=content.getJSONArray("rules");
+        if(rows.length()>100)throw new SecurityException("排程归档超过100条");java.util.Set<String> ids=new java.util.HashSet<>();
+        for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);OwnerConfigurationBackupSections.fields(row,"sourceId","title","kind","goal","schedule","policy");String id=OwnerConfigurationBackupSections.text(row,"sourceId",200);if(!ids.add(id))throw new SecurityException("排程归档来源重复");
+            text(row.getString("title"),1,200,"提醒名称");String kind=row.getString("kind");if(!kind.equals("reminder")&&!kind.equals("phone_goal"))throw new SecurityException("排程归档类型无效");if(kind.equals("phone_goal"))text(row.getString("goal"),1,4000,"手机目标");else if(!row.getString("goal").isEmpty())throw new SecurityException("普通提醒不能携带执行目标");JSONObject schedule=validateSchedule(row.getJSONObject("schedule"));AutomationPolicy.rule(row.getJSONObject("policy"),schedule.optString("zone","UTC"));
+        }return rows;
+    }
+    public OwnerConfigurationBackupSections.Review reviewBackupForOwner(JSONObject selected,String action,RunControl original)throws Exception {
+        JSONObject section=OwnerConfigurationBackupSections.checked("schedules",selected);JSONArray imported=backupRules(section);String digest=section.getString("sectionDigest");
+        final String before;final JSONObject preview;
+        synchronized(lock){original.checkpoint();JSONObject state=read();JSONArray existing=state.getJSONArray("rules");if(existing.length()+imported.length()>100)throw new IllegalStateException("本机排程位置不足，未覆盖或部分恢复");before=WorkProfile.fingerprint(state);JSONArray conflicts=new JSONArray();
+            for(int i=0;i<imported.length();i++){JSONObject row=imported.getJSONObject(i);OwnerConfigurationBackupSections.originalId("schedules",action,row.getString("sourceId"));for(int n=0;n<existing.length();n++)if(row.getString("title").equals(existing.getJSONObject(n).getString("title")))conflicts.put(row.getString("title"));}
+            preview=new JSONObject().put("counts",new JSONObject().put("schedules",imported.length())).put("sameNameConflicts",conflicts).put("mergeMode","new_disabled_identities").put("omitted",section.getJSONArray("omitted")).put("restoredEnabled",false).put("oldOccurrencesRestored",false);
+        }
+        return new OwnerConfigurationBackupSections.Review(){private boolean entered;
+            public JSONObject metadata()throws Exception{return new JSONObject(preview.toString());}
+            public JSONObject restore()throws Exception{synchronized(lock){if(entered)throw new SecurityException("原排程恢复已进入，只能查询");entered=true;original.checkpoint();JSONObject state=read();if(!before.equals(WorkProfile.fingerprint(state)))throw new SecurityException("原排程或发生回执已变化，请重新核对恢复计划");JSONArray rules=state.getJSONArray("rules");long now=System.currentTimeMillis();
+                for(int i=0;i<imported.length();i++){original.checkpoint();JSONObject row=imported.getJSONObject(i),schedule=validateSchedule(row.getJSONObject("schedule"));String id=OwnerConfigurationBackupSections.originalId("schedules",action,row.getString("sourceId"));if(indexOf(rules,id)>=0)throw new SecurityException("原恢复身份已存在，未重放");
+                    rules.put(new JSONObject().put("id",id).put("title",row.getString("title")).put("kind",row.getString("kind")).put("goal",row.getString("goal")).put("schedule",schedule).put("policy",AutomationPolicy.rule(row.getJSONObject("policy"),schedule.optString("zone","UTC")))
+                        .put("enabled",false).put("revision",1).put("createdAt",now).put("updatedAt",now).put("claimedCount",0).put("taskRequestsRevoked",true).put("executionPolicy","notify_then_user_start").put("manualOriginVersion",1)
+                        .put("nextAt",JSONObject.NULL).put("scheduledAt",JSONObject.NULL).put("ruleState","paused").put("ownerArchiveRestore",OwnerConfigurationBackupSections.receipt(action,digest,row.getString("sourceId"))));
+                }
+                original.checkpoint();write(state);return queryBackupForOwner(section,action,original);
+            }}
+        };
+    }
+    public JSONObject queryBackupForOwner(JSONObject selected,String action,RunControl original)throws Exception {
+        JSONObject section=OwnerConfigurationBackupSections.checked("schedules",selected);JSONArray expected=backupRules(section),result=new JSONArray();String digest=section.getString("sectionDigest");
+        synchronized(lock){JSONArray actual=read().getJSONArray("rules");for(int i=0;i<expected.length();i++){original.checkpoint();String source=expected.getJSONObject(i).getString("sourceId"),id=OwnerConfigurationBackupSections.originalId("schedules",action,source);int at=indexOf(actual,id);JSONObject found=at<0?null:actual.getJSONObject(at);
+            result.put(new JSONObject().put("sourceId",source).put("id",id).put("found",found!=null&&OwnerConfigurationBackupSections.matches(found.optJSONObject("ownerArchiveRestore"),action,digest,source)).put("enabled",found==null?JSONObject.NULL:found.opt("enabled")));
+        }}return OwnerConfigurationBackupSections.result(result);
     }
     public JSONArray rules()throws Exception{synchronized(lock){return read().getJSONArray("rules");}}
     public JSONArray receipts()throws Exception{

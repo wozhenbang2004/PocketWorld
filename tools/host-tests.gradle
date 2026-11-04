@@ -50,8 +50,8 @@ tasks.withType(Test).configureEach {
     maxHeapSize = '1024m'
     // Robolectric's real document FD close needs the JDK17 java.io bridge; host JVM only.
     if (selected.contains('project-file-operations')) jvmArgs '--add-opens=java.base/java.io=ALL-UNNAMED'
-    // The exact Linux/JDK17 attachment fixture uses real POSIX dup, not Robolectric's rw copy.
-    if (selected.contains('attachment-legacy-integrity') || classes.contains('dev.pocketengine.features.attachments.LegacyAttachmentIntegrityTest')) {
+    // Only explicitly selected Linux/JDK17 attachment fixtures use this real POSIX bridge.
+    if (entries.any { it.linuxPosixFd == true }) {
         jvmArgs '--add-opens=java.base/java.io=ALL-UNNAMED', '--add-opens=java.base/sun.nio.fs=ALL-UNNAMED'
     }
     // SDK35 host Conscrypt inspects InetAddress on JDK17 for the real phone/OAuth TLS peers.
@@ -65,7 +65,7 @@ tasks.withType(Test).configureEach {
     // cwd makes Robolectric look for app resources/APK under the wrong build/ tree.
     workingDir project.projectDir
     systemProperty 'pocket.gateway.source', rootProject.projectDir.absolutePath
-    ['a25.python', 'a25.node', 'pocket.gateway.python', 'robolectric.dependency.dir', 'pocketworldHostLostWaitDir', 'pocketworldHostOldLostWaitDir'].each { key ->
+    ['a25.python', 'a25.node', 'pocket.gateway.python', 'robolectric.dependency.dir', 'pocketworldHostLostWaitDir', 'pocketworldHostOldLostWaitDir', 'pocketworldHostTransportLostWaitDir'].each { key ->
         def value = providers.gradleProperty(key).orNull
         if (value != null) systemProperty key, value
     }

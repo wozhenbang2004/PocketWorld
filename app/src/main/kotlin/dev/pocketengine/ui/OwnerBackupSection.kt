@@ -61,7 +61,7 @@ import org.json.JSONObject
             TextButton(onClick = { details = !details }) { Text(if (details) "收起范围说明" else "包含什么，不包含什么") }
             if (details) {
                 Caption("项目保留当前版本库中的最近八版与删除标记，并复制可读、已停止的私人活动副本。活动副本按项目包规则排除工具环境、依赖缓存、Git 历史及已知账号配置，保留实际排除清单；版本库中的原文件按所选内容保存，仍可能包含敏感文本。未完成的团队活动副本不纳入。模块之间不是一次跨库事务，任何读取失败都不会发布半份备份。")
-                Caption("备份上限 1.5GiB，原件仍受原单件和总量限制。文件在磁盘中分段复制，不把整包装入内存；空间不足会明确失败。本机审阅缓存未加密；默认导出为口令加密的 .pwbackup 文件。口令不保存，丢失无法恢复。用户文本、图片或项目内容仍可能含敏感信息。登录凭据、密钥、SSH 信任、会话、执行授权、未决委派与未保存草稿不迁移。Skills/Plugins 安装、模型/API设置、设备配对、自动化规则及运行环境不在此六分区档案中；这不是整机或完整应用备份。")
+                Caption("备份上限 1.5GiB，原件仍受原单件和总量限制。文件在磁盘中分段复制，不把整包装入内存；空间不足会明确失败。本机审阅缓存未加密；默认导出为口令加密的 .pwbackup 文件。口令不保存，丢失无法恢复。用户文本、图片或项目内容仍可能含敏感信息。登录凭据、密钥、SSH 信任、会话、执行授权、未决委派与未保存草稿不迁移。设置、技能和排程分区可在备份工作台单独选择，恢复后保持停用并重新核对来源；插件安装、设备配对及运行环境不迁移。这不是整机备份。")
                 TextButton(onClick = flow::choosePlainImport, enabled = !state.busy) { Text("读取旧版未加密 ZIP，只读核对…") }
                 state.inventory?.let { Caption("当前 ${it.optJSONArray("projects")?.length() ?: 0} 个项目，${it.optJSONArray("privateCheckouts")?.length() ?: 0} 个私人副本，${it.optJSONArray("workspaceArtifacts")?.length() ?: 0} 项固定成果，${it.optJSONArray("attachments")?.length() ?: 0} 个原件。实际可读取性会在生成时重核。") }
             }

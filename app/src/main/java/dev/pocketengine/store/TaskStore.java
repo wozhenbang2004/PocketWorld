@@ -103,6 +103,56 @@ public final class TaskStore {
             return row.moveToFirst()?OwnerExecutionPolicy.validate(new JSONObject(row.getString(0))):OwnerExecutionPolicy.initial();
         }
     }
+    /** Owner presentation over the original task/connection budget projections. No model entry point. */
+    public synchronized JSONObject ownerTokenBudgetState(String taskId,JSONArray nativeRoutes)throws Exception{
+        if(nativeRoutes==null||nativeRoutes.length()>64)throw new SecurityException("原模型连接清单不可核对");
+        JSONObject result=new JSONObject().put("format","pocketworld.owner-token-budgets.v1").put("defaults",TaskTokenBudgets.defaults(db))
+                .put("coverage","本机原HTTP模型调用；主调用、摘要、重试及原团队子调用。其它设备、远端CLI内部调用、实时音频服务自动生成和最终账单不在此上限内。")
+                .put("reserveMeaning","使用原上下文的UTF-8文本保守计价、显式图像预留和输出预留；不是精确分词或服务端硬上限。若真实回执超预留，完整记超额并阻止后续。")
+                .put("unknownMeaning","未结算及用量未知的预留继续占用；取消、重启、跨日、改模型或更新密钥不会退款。")
+                .put("historyMeaning","历史种子只来自本机仍保留的原调用回执；缺失、读取不完整或无界未知不会计为0。")
+                .put("readOnly",true).put("executionAuthorized",false);
+        JSONArray routes=new JSONArray();long now=System.currentTimeMillis();
+        for(int i=0;i<nativeRoutes.length();i++){JSONObject route=nativeRoutes.getJSONObject(i);String key=route.getString("routeKey");
+            routes.put(new JSONObject().put("routeKey",key).put("label",route.getString("label")).put("budget",TaskTokenBudgets.view(TaskTokenBudgets.daily(db,key,java.time.ZoneId.systemDefault().getId(),now),true)));}
+        result.put("routes",routes);
+        if(taskId!=null&&!taskId.isEmpty()){
+            JSONObject task=required(taskId);requirePrivateOwner(task);JSONObject owner=teamPoolOwnerForChild(task);if(owner==null)owner=task;requirePrivateOwner(owner);
+            JSONObject budget=TaskTokenBudgets.task(db,owner,"");
+            result.put("task",new JSONObject().put("taskId",taskId).put("ownerTaskId",owner.getString("id")).put("goal",owner.optString("goal"))
+                    .put("editable",budget!=null&&taskId.equals(owner.getString("id"))&&owner.optJSONObject("origin")==null&&!owner.has("sourceLearningJob"))
+                    .put("budget",budget==null?JSONObject.NULL:TaskTokenBudgets.view(budget,false)));
+        }
+        return result;
+    }
+    public synchronized JSONObject setDefaultTokenBudgetForOwner(long expected,boolean enabled,long limit)throws Exception{
+        return setDefaultTokenBudgetForOwner(expected,enabled,limit,()->true);
+    }
+    public synchronized JSONObject setDefaultTokenBudgetForOwner(long expected,boolean enabled,long limit,java.util.function.BooleanSupplier originalOwnerCurrent)throws Exception{
+        db.beginTransaction();try{requireTokenBudgetOwnerCurrent(originalOwnerCurrent);JSONObject value=TaskTokenBudgets.setDefaults(db,expected,enabled,limit,System.currentTimeMillis());requireTokenBudgetOwnerCurrent(originalOwnerCurrent);db.setTransactionSuccessful();return value;}finally{db.endTransaction();}
+    }
+    public synchronized JSONObject setTaskTokenBudgetForOwner(String id,long expected,boolean enabled,long limit)throws Exception{
+        return setTaskTokenBudgetForOwner(id,expected,enabled,limit,()->true);
+    }
+    public synchronized JSONObject setTaskTokenBudgetForOwner(String id,long expected,boolean enabled,long limit,java.util.function.BooleanSupplier originalOwnerCurrent)throws Exception{
+        db.beginTransaction();try{requireTokenBudgetOwnerCurrent(originalOwnerCurrent);JSONObject task=required(id);requirePrivateOwner(task);
+            JSONObject parent=teamPoolOwnerForChild(task);if(parent!=null&&!id.equals(parent.getString("id"))||task.optJSONObject("origin")!=null||task.has("sourceLearningJob")||!task.optString("kind").matches("phone|assistant|teams"))throw new SecurityException("请回原主人父任务调整累计token预算");
+            JSONObject value=TaskTokenBudgets.setTask(db,task,expected,enabled,limit);write(task);
+            appendEvent(task,new JSONObject().put("type","owner_token_budget").put("budgetRevision",value.getLong("revision")).put("enabled",enabled).put("limit",value.getLong("limit")).put("executionStarted",false).put("effectsApproved",false));
+            requireTokenBudgetOwnerCurrent(originalOwnerCurrent);db.setTransactionSuccessful();return value;}finally{db.endTransaction();}
+    }
+    /** Caller rechecks that key is an exact native saved route; JSON from tools never reaches this method. */
+    public synchronized JSONObject setDailyTokenBudgetForOwner(String key,long expected,boolean enabled,long limit,String zone)throws Exception{
+        return setDailyTokenBudgetForOwner(key,expected,enabled,limit,zone,()->true);
+    }
+    public synchronized JSONObject setDailyTokenBudgetForOwner(String key,long expected,boolean enabled,long limit,String zone,java.util.function.BooleanSupplier originalOwnerCurrent)throws Exception{
+        db.beginTransaction();try{requireTokenBudgetOwnerCurrent(originalOwnerCurrent);JSONObject value=TaskTokenBudgets.setDaily(db,key,expected,enabled,limit,zone,System.currentTimeMillis());requireTokenBudgetOwnerCurrent(originalOwnerCurrent);db.setTransactionSuccessful();return value;}finally{db.endTransaction();}
+    }
+    private static void requireTokenBudgetOwnerCurrent(java.util.function.BooleanSupplier current){if(current==null||!current.getAsBoolean())throw new SecurityException("原预算审阅窗口已关闭；本次事务未保存，请重新核对");}
+    public synchronized void requireTokenBudgetAttribution(InferenceReceipt.Context context,dev.pocketengine.runtime.usage.InferenceTokenReservation.NativeIdentity identity)throws Exception{
+        String key=TaskTokenBudgets.requireIdentity(db,identity,false);
+        if(context.taskId.isEmpty()&&TaskTokenBudgets.dailyEnabled(db,key))throw new dev.pocketengine.runtime.models.ModelRequestPolicy.Rejected("token_budget_attribution_required","此原连接已启用每日token预算；请求必须使用原生调用账本，未走未归因通路。");
+    }
     /** Immutable-effect projection for alarm/service gates; it never calls back under a Book lock. */
     public boolean executionEnabled(){return executionPolicySnapshot.enabled;}
     public synchronized void requireExecutionEnabled()throws Exception{if(!executionPolicySnapshot.enabled)throw new SecurityException("本机执行准入已停用或保存结果待核对");OwnerExecutionPolicy.requireEnabled(ownerExecutionState());}
@@ -860,6 +910,7 @@ public final class TaskStore {
             if(old==null&&current!=null&&current.optJSONArray("tools")!=null){names=new JSONArray(current.getJSONArray("tools").toString());pinned=true;}
             JSONObject scope=TaskExecutionScope.create(id,task.getString("executionMode"),revision+1,deadlineAt,totalTools,totalModels,usedTools,usedModels,names,pinned);
             if(old!=null&&old.has("browserActions"))scope.put("browserActions",new JSONObject(old.getJSONObject("browserActions").toString()));
+            if(old!=null&&old.has("tokenBudget"))scope.put("tokenBudget",new JSONObject(old.getJSONObject("tokenBudget").toString()));
             task.put("executionScope",scope);
             if(current!=null&&task.optString("status").matches("preparing|running|paused|pausing|awaiting_user")){
                 current.put("executionScopeRevision",revision+1).put("expiresAt",TaskExecutionScope.effectiveDeadline(scope)).put("remainingOperations",totalTools-usedTools);
@@ -1137,7 +1188,7 @@ public final class TaskStore {
         };
     }
     /** Native accounting-only origin. These records have no tools, phone lease or restart entry. */
-    public enum NativeInferenceKind {CONNECTION_TEST,MODEL_CAPABILITY_PROBE,VOICE_TURN,REALTIME,RELAY,SKILL_DRAFT}
+    public enum NativeInferenceKind {CONNECTION_TEST,MODEL_CAPABILITY_PROBE,VOICE_TURN,REALTIME,RELAY,SKILL_DRAFT,CHANNEL_CHAT}
     public final class NativeInferenceSession implements AutoCloseable {
         public final String taskId,runId;public final int epoch;public final NativeInferenceKind kind;
         private final RunControl original;private final int maxCalls;private volatile boolean closed;
@@ -1181,7 +1232,7 @@ public final class TaskStore {
         requireExecutionEnabled();
         Objects.requireNonNull(kind);Objects.requireNonNull(original);original.check();if(original.hasHostRun()||nativeSourceId==null||!nativeSourceId.matches("[A-Za-z0-9_.:-]{1,200}"))throw new SecurityException("用量会话需要新的原生来源控制器，不能借用已有任务授权");
         String id=UUID.randomUUID().toString(),run=UUID.randomUUID().toString();long now=System.currentTimeMillis(),expires=now+(kind==NativeInferenceKind.REALTIME?30*60_000L:10*60_000L);
-        String title=switch(kind){case CONNECTION_TEST->"模型连接测试";case MODEL_CAPABILITY_PROBE->"模型能力诊断";case VOICE_TURN->"语音文字对话";case REALTIME->"自然语音会话";case RELAY->"本机模型服务请求";case SKILL_DRAFT->"经验技能草稿整理";};
+        String title=switch(kind){case CONNECTION_TEST->"模型连接测试";case MODEL_CAPABILITY_PROBE->"模型能力诊断";case VOICE_TURN->"语音文字对话";case REALTIME->"自然语音会话";case RELAY->"本机模型服务请求";case SKILL_DRAFT->"经验技能草稿整理";case CHANNEL_CHAT->"消息渠道问答";};
         db.beginTransaction();try{
             JSONObject task=base(id,title,"inference","inference").put("runId",run).put("coordinatorEpoch",1).put("status","recording").put("approvalState","not_applicable")
                 .put("origin",new JSONObject().put("kind","native_inference").put("sourceKind",kind.name()).put("sourceId",nativeSourceId))
@@ -1590,6 +1641,27 @@ public final class TaskStore {
     public synchronized void checkChannelTaskControl(String id,JSONObject origin,RunControl control)throws Exception{
         JSONObject task=required(id);requireChannelIdentity(task,channelOrigin(origin));
         if(control.hasHostRun()&&(!control.matchesHostRun(id,task.optString("runId"),task.optInt("coordinatorEpoch"))||task.optBoolean("cancelRequested")))throw new SecurityException("渠道任务的执行代次或取消状态已失效");
+    }
+    /** The native owner's original nonempty task/run/epoch tuple is mandatory; never infer a current run. */
+    public synchronized JSONObject requireReviewedPrivateTaskAttempt(JSONObject input)throws Exception{
+        Object id=input.opt("taskId"),run=input.opt("runId"),epoch=input.opt("epoch");
+        if(!(id instanceof String)||!(run instanceof String)||((String)run).isEmpty()||!(epoch instanceof Integer||epoch instanceof Long)
+                ||((Number)epoch).longValue()<1||((Number)epoch).longValue()>Integer.MAX_VALUE)throw new SecurityException("请重新读取原私人任务的执行身份");
+        JSONObject task=required((String)id);requirePrivateOwner(task);JSONObject source=task.optJSONObject("origin");
+        if(!task.optString("kind").matches("phone|assistant")||source!=null&&!source.optString("kind").equals("owner_reviewed_realtime")
+                ||!run.equals(task.optString("runId"))||((Number)epoch).intValue()!=task.optInt("coordinatorEpoch"))throw new SecurityException("原私人任务执行已变化，未处理后继执行");
+        return copy(task,false);
+    }
+    /** Recheck the original review, persist feedback and reserve/bind one fresh run atomically before enqueue. */
+    public synchronized JSONObject startReviewedPrivateTaskAttempt(JSONObject input,String mode,int allocation,String feedback,RunControl control)throws Exception{
+        db.beginTransaction();try{
+            JSONObject task=requireReviewedPrivateTaskAttempt(input);if(control==null||control.hasHostRun()||control.isPaused())throw new SecurityException("不能替换原私人任务的执行控制");control.check();
+            // The strict private tuple never grants a fresh allowance to a continuation.
+            JSONObject admitted;
+            if("capabilities".equals(mode))admitted=startOriginalCapabilityAttempt(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),allocation,control,feedback);
+            else {admitted=startOriginalPhoneAttempt(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),mode,allocation,null,control,feedback);control.bindHostRun(task.getString("id"),admitted.getString("runId"),admitted.getInt("coordinatorEpoch"));}
+            control.check();db.setTransactionSuccessful();return admitted;
+        }finally{db.endTransaction();}
     }
     /** Reuse only the actually reserved running attempt; never start a second run for a queued worker. */
     public synchronized JSONObject requireCapabilityAttempt(String id,RunControl control)throws Exception{
@@ -2859,6 +2931,26 @@ public final class TaskStore {
         if(id==null||!id.matches("[a-f0-9-]{36}")||draft==null)throw new SecurityException("缺少原主人文档动作");JSONObject previous=read(id);
         if(previous!=null){requirePrivateOwner(previous);JSONObject exact=previous.optJSONObject("externalRefs");exact=exact==null?null:exact.optJSONObject("documentCreation");if(!"attachments".equals(previous.optString("feature"))||!"createDocument".equals(previous.optString("command"))||exact==null||!draft.identity.equals(exact.optString("planDigest")))throw new SecurityException("原动作已经属于另一份实际文档计划，未重新保存");return get(id,false).put("knownOperation",true);}
         db.beginTransaction();try{JSONObject task=beginExternal("attachments","createDocument",id,dev.pocketengine.features.attachments.creation.DocumentDraft.sourceInput(draft.source()).put("_nativeDocumentPlanDigest",draft.identity));task.put("coordinatorEpoch",1);write(task);db.setTransactionSuccessful();return task.put("knownOperation",false);}finally{db.endTransaction();}
+    }
+    /** Cold native-owner recovery is a bounded view of the original ledger, never a
+     * restored draft, grant, latest-action guess or instruction to repeat creation. */
+    public synchronized JSONObject ownerDocumentActionsForOwner(String cursor,RunControl control)throws Exception {
+        java.util.Objects.requireNonNull(control).checkpoint();JSONObject page=TaskAuditStore.summaryPage(db,cursor,20);
+        JSONArray headers=page.getJSONArray("tasks"),actions=new JSONArray(),gaps=new JSONArray();long readBytes=0;
+        for(int i=0;i<headers.length();i++){
+            control.checkpoint();JSONObject header=headers.getJSONObject(i);String id=header.optString("id");
+            if(!id.matches("[a-f0-9-]{36}")||!"owner".equals(header.optString("actorId"))||!"private".equals(header.optString("spaceId"))||header.has("origin")||!"attachments".equals(header.optString("feature"))||!"createDocument".equals(header.optString("command"))||!id.equals(header.optString("runId"))||header.optInt("coordinatorEpoch",-1)!=1)continue;
+            JSONObject task;long remaining=Math.min(65536,262144-readBytes);
+            try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<=CAST(? AS INTEGER) THEN document END,length(CAST(document AS BLOB)) FROM tasks WHERE task_id=?",new String[]{Long.toString(remaining),id})){
+                if(!row.moveToFirst()||row.isNull(0)){gaps.put(new JSONObject().put("taskId",id).put("reason","original_document_metadata_read_limited"));continue;}
+                readBytes+=row.getLong(1);task=new JSONObject(row.getString(0));
+            }
+            JSONObject refs=task.optJSONObject("externalRefs"),document=refs==null?null:refs.optJSONObject("documentCreation");
+            if(!id.equals(task.optString("id"))||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||task.has("origin")||!"attachments".equals(task.optString("feature"))||!"createDocument".equals(task.optString("command"))||!id.equals(task.optString("operationId"))||!id.equals(task.optString("runId"))||task.optInt("coordinatorEpoch",-1)!=1)continue;
+            if(document==null||!document.optString("planDigest").matches("[a-f0-9]{64}")||!Set.of("docx","pdf","xlsx","pptx").contains(document.optString("format"))||document.optString("name").isEmpty()||document.optString("name").length()>80){gaps.put(new JSONObject().put("taskId",id).put("reason","original_document_identity_unavailable"));continue;}
+            actions.put(new JSONObject().put("taskId",id).put("operationId",id).put("runId",id).put("coordinatorEpoch",1).put("name",document.getString("name")).put("format",document.getString("format")).put("status",task.optString("status")).put("createdAt",task.optLong("createdAt")).put("updatedAt",task.optLong("updatedAt")).put("replayAllowed",false).put("executionAuthorized",false));
+        }
+        control.checkpoint();return new JSONObject().put("actions",actions).put("gaps",gaps).put("nextCursor",page.getString("nextCursor")).put("hasMore",page.getBoolean("hasMore")).put("headerRowsExamined",headers.length()).put("coreBytesRead",readBytes).put("auditBodyIncluded",false).put("executionAuthorized",false).put("coverage","original_document_actions_in_current_task_header_window_updates_require_refresh");
     }
     public synchronized JSONObject beginExternal(String feature,String command,String operationId,JSONObject input)throws Exception{
         return beginExternal(feature,command,operationId,input,null);
@@ -8940,14 +9032,19 @@ public final class TaskStore {
                 JSONObject chargedOwner=budgetOwner==null?task:required(budgetOwner.getString("id"));
                 String chargedRun=expected.runId;
                 if(budgetOwner!=null&&!originalStandaloneTeamBudgetContext(chargedOwner,teamBudget(chargedOwner),expected)&&!standaloneResearchBudgetContext(task,chargedOwner,teamBudget(chargedOwner),expected)){String anchor=teamBudget(chargedOwner).getString("parentRunId");if(!teamParentExecutionCurrent(chargedOwner,anchor,originalRunEpoch(chargedOwner.getString("id"),anchor)))throw new SecurityException("原模型预算没有当前原生父执行关系，不能借旧scope扣账");chargedRun=chargedOwner.getString("runId");if(grant(chargedRun).has("executionScopeRevision")&&!chargedOwner.has("executionScope"))throw new SecurityException("原已声明任务范围缺失，不能按无scope扣账");}
+                TaskTokenBudgets.started(db,chargedOwner,next,receipt.nativeBudgetIdentity());
                 debitExecutionScope(chargedOwner,chargedRun,true);
                 if(chargedOwner.getString("id").equals(task.getString("id")))task=chargedOwner;else write(chargedOwner);
                 next.put("at",System.currentTimeMillis());TaskAuditStore.append(db,expected.taskId,next);
             }else{
                 JSONObject oldRoute=new JSONObject(old.getJSONObject("route").toString()),newRoute=new JSONObject(next.getJSONObject("route").toString());oldRoute.remove("responseModel");newRoute.remove("responseModel");oldRoute.remove("historyDigest");newRoute.remove("historyDigest");
                 if(!canonical(old.getJSONObject("context")).equals(canonical(next.getJSONObject("context")))||!canonical(oldRoute).equals(canonical(newRoute))||old.getLong("startedAt")!=receipt.startedAt)throw new SecurityException("不能替换原模型调用的归属或连接");
+                if(old.has("tokenBudget"))next.put("tokenBudget",new JSONObject(old.getJSONObject("tokenBudget").toString()));
                 if(!"STARTED".equals(old.getString("outcome"))){JSONObject prior=new JSONObject(old.toString());prior.remove("at");prior.remove("seq");if(starting||canonical(prior).equals(canonical(next))){db.setTransactionSuccessful();return;}throw new SecurityException("本次模型调用已有不同终态计量");}
                 if(starting){db.setTransactionSuccessful();return;}
+                JSONObject tokenOwner=budgetOwner==null?task:required(budgetOwner.getString("id"));
+                TaskTokenBudgets.finished(db,tokenOwner,old,next,receipt.nativeBudgetIdentity());
+                if(tokenOwner.getString("id").equals(task.getString("id")))task=tokenOwner;else write(tokenOwner);
                 next.put("seq",old.getLong("seq")).put("at",System.currentTimeMillis());TaskAuditStore.replace(db,expected.taskId,old.getLong("seq"),next);
             }
             InferenceRequestStore.receipt(db,next,starting);
@@ -10639,7 +10736,7 @@ public final class TaskStore {
         boolean channel=value.optJSONObject("origin")!=null&&value.getJSONObject("origin").optString("kind").equals("channel"),group=value.optJSONObject("origin")!=null&&value.getJSONObject("origin").optString("kind").equals("group");db.beginTransaction();
         try{
             JSONObject resultPrevious=read(value.getString("id"));
-            if(resultPrevious==null)value.put("executionAdmissionRevision",ownerExecutionState().getLong("revision"));
+            if(resultPrevious==null){value.put("executionAdmissionRevision",ownerExecutionState().getLong("revision"));TaskTokenBudgets.initializeDefault(db,value);}
             else if(!value.optString("runId").isEmpty()&&!value.optString("runId").equals(resultPrevious.optString("runId")))
                 value.put("executionAdmissionRevision",OwnerExecutionPolicy.requireEnabled(ownerExecutionState()));
             else value.put("executionAdmissionRevision",resultPrevious.optLong("executionAdmissionRevision",1));

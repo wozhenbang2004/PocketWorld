@@ -127,7 +127,7 @@ public final class WorkProfileResolver {
     private WorkProfileResolver() { }
     public static Resolution resolve(WorkProfile profile, Sources sources, RunControl observation) throws Exception {return resolve(profile,sources,observation,true);}
     private static Resolution resolve(WorkProfile profile,Sources sources,RunControl observation,boolean captureDefault) throws Exception {
-        java.util.Objects.requireNonNull(profile); java.util.Objects.requireNonNull(sources); observation.check();
+        java.util.Objects.requireNonNull(profile); profile.requireExecutable(); java.util.Objects.requireNonNull(sources); observation.check();
         JSONObject definition = profile.toJson(), capturedModels = new JSONObject(),skillScope=sources.skillScope(observation); JSONArray rows = new JSONArray();
         Set<String> availableCapabilities=sources.hostCapabilities();
         Set<String> selectedPluginCapabilities = new java.util.HashSet<>();JSONArray pluginRefs=definition.getJSONArray("pluginRefs");for(int i=0;i<pluginRefs.length();i++){JSONObject plugin=pluginRefs.getJSONObject(i);JSONArray tools=plugin.getJSONArray("tools");for(int n=0;n<tools.length();n++)selectedPluginCapabilities.add("plugin:"+plugin.getString("id")+":"+tools.getString(n));}

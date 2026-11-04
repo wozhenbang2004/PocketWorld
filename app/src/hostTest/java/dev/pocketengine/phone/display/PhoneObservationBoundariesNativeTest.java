@@ -59,7 +59,10 @@ public final class PhoneObservationBoundariesNativeTest {
     private static volatile JSONObject topology;
     private static volatile RunControl pauseOnAction;
     private static volatile long frameGeneration;
+    private static volatile int helperDisplay=9;
+    private static volatile dev.pocketengine.displayhelper.DisplayGeometry helperGeometry;
     private final ExecutorService caller=Executors.newSingleThreadExecutor();
+    private final List<BackgroundPhonePort> backgroundPorts=new ArrayList<>();
     private PhoneAccessibilityService service;
 
     @Implements(PhoneAccessibilityService.class) public static final class Screen extends NativeWindows {
@@ -95,29 +98,34 @@ public final class PhoneObservationBoundariesNativeTest {
         @Implementation protected void connect(RunControl control){}
         @Implementation protected boolean ownedBy(String task){return task.equals("task");}
         @Implementation protected void attachInstalledAppEvidence(JSONObject ignored){}
+        @Implementation protected android.content.Context hostContext(){return RuntimeEnvironment.getApplication();}
         @Implementation protected JSONObject session()throws Exception {
-            return new JSONObject().put("sessionId","original-bg").put("displayId",9).put("width",320).put("height",470)
+            JSONObject session=new JSONObject().put("sessionId","original-bg").put("displayId",helperDisplay).put("width",320).put("height",470)
                     .put("sessionActive",true).put("backgroundOnly",true).put("focusIsolationRequested",true)
                     .put("displayFlagsConfirmed",true).put("frameMetadataOnly",true).put("imeIsolation","available");
+            return helperGeometry==null?session:helperGeometry.writeTo(session,true);
         }
         @Implementation protected JSONObject request(String command,JSONObject args,RunControl control,long revision,boolean owner)throws Exception {
             control.check();assertEquals(control.pauseRevision(),revision);assertEquals(owner,control.isPaused());
             if("ownership".equals(command))return new JSONObject().put("ok",true).put("ownership",new JSONObject(topology.toString()));
             if(command.equals("tap")||command.equals("swipe")){helperMutations.incrementAndGet();actions.incrementAndGet();return new JSONObject().put("ok",true).put("accepted",true).put("verified",false);}
             assertEquals("frame",command);
-            JSONObject frame=new JSONObject().put("ok",true).put("sessionId","original-bg").put("displayId",9).put("width",320).put("height",470)
+            JSONObject frame=new JSONObject().put("ok",true).put("sessionId","original-bg").put("displayId",helperDisplay).put("width",320).put("height",470)
                     .put("frameGeneration",frameGeneration).put("framePending",frameGeneration>1).put("empty",false).put("capturedAt",10);
+            if(helperGeometry!=null)helperGeometry.writeTo(frame,true);
             if(args.getBoolean("includeImage"))frame.put("imageMimeType","image/png").put("imageBase64",fixtureImage());return frame;
         }
     }
     @Before public void start()throws Exception {
-        reads.set(0);actions.set(0);mainReads.set(0);helperMutations.set(0);noTree=false;display=0;blockAt=-1;entered=new CountDownLatch(1);release=new CountDownLatch(1);extraWindow=false;inlineCover=false;blockAction=false;animateEveryRead=false;unrelatedWindow=false;extraOverlay=false;blockGlobalReceipt=false;frameGeneration=1;pauseOnAction=null;
+        reads.set(0);actions.set(0);mainReads.set(0);helperMutations.set(0);noTree=false;display=0;blockAt=-1;entered=new CountDownLatch(1);release=new CountDownLatch(1);extraWindow=false;inlineCover=false;blockAction=false;animateEveryRead=false;unrelatedWindow=false;extraOverlay=false;blockGlobalReceipt=false;frameGeneration=1;pauseOnAction=null;helperDisplay=9;helperGeometry=null;
         service=Robolectric.buildService(PhoneAccessibilityService.class).create().get();Field instance=PhoneAccessibilityService.class.getDeclaredField("instance");instance.setAccessible(true);instance.set(null,service);
         rootView=new View(RuntimeEnvironment.getApplication());targetView=new View(RuntimeEnvironment.getApplication());tickerView=new View(RuntimeEnvironment.getApplication());buildTree(false);
         topology=facts("owner.reader",11,9,false);
     }
     @After public void stop()throws Exception {
         release.countDown();caller.shutdownNow();caller.awaitTermination(3,TimeUnit.SECONDS);
+        java.lang.reflect.Method stopWatch=BackgroundPhonePort.class.getDeclaredMethod("stopGeometryWatch");stopWatch.setAccessible(true);for(BackgroundPhonePort port:backgroundPorts)stopWatch.invoke(port);
+        if(helperGeometry!=null)org.robolectric.shadows.ShadowDisplayManager.removeDisplay(helperDisplay);
         Field instance=PhoneAccessibilityService.class.getDeclaredField("instance");instance.setAccessible(true);instance.set(null,null);
     }
     private static AccessibilityWindowInfo window(int id,int display,int layer,Rect bounds,AccessibilityNodeInfo node) {
@@ -146,7 +154,26 @@ public final class PhoneObservationBoundariesNativeTest {
         return new JSONObject().put("observationId",observed.getString("observationId")).put("nodeId",id);
     }
     private PhonePort foreground(){display=0;return new AndroidPhonePort(RuntimeEnvironment.getApplication());}
-    private BackgroundPhonePort background()throws Exception {display=9;buildTree(false);return new BackgroundPhonePort(new DisplayModule(null));}
+    private BackgroundPhonePort background()throws Exception {display=helperDisplay;buildTree(false);BackgroundPhonePort port=new BackgroundPhonePort(new DisplayModule(null));backgroundPorts.add(port);return port;}
+    private BackgroundPhonePort geometryBackground()throws Exception {
+        helperDisplay=org.robolectric.shadows.ShadowDisplayManager.addDisplay("w320dp-h470dp-mdpi");
+        helperGeometry=new dev.pocketengine.displayhelper.DisplayGeometry(1,320,470,160,0);
+        topology=facts("owner.reader",11,helperDisplay,false);return background();
+    }
+    @Test public void sameSizeGeometryRoundTripRejectsOldNodeButFreshObservationKeepsSameSession()throws Exception {
+        BackgroundPhonePort port=geometryBackground();RunControl run=control();JSONObject first=observe(port,run);
+        helperGeometry=new dev.pocketengine.displayhelper.DisplayGeometry(3,320,470,160,0);frameGeneration=99;
+        JSONObject refused=complete(caller.submit(()->port.execute("phone_click_node",click(first),run)));
+        assertFalse(refused.toString(),refused.optBoolean("accepted"));assertEquals(0,actions.get());assertFalse(run.isPaused());
+        JSONObject fresh=observe(port,run);assertEquals(3,fresh.getLong("geometryGeneration"));assertEquals(first.getString("sessionId"),fresh.getString("sessionId"));assertEquals(first.getInt("displayId"),fresh.getInt("displayId"));
+        JSONObject accepted=complete(caller.submit(()->port.execute("phone_click_node",click(fresh),run)));assertTrue(accepted.toString(),accepted.optBoolean("accepted"));assertEquals(1,actions.get());
+    }
+    @Test public void geometryChangeWhileNativeTreeWorkerIsBlockedCannotDispatchOldNodeAfterReturn()throws Exception {
+        BackgroundPhonePort port=geometryBackground();RunControl run=control();JSONObject observed=observe(port,run);blockAt=reads.get()+2;
+        Future<JSONObject> pending=caller.submit(()->port.execute("phone_click_node",click(observed),run));assertTrue(entered.await(2,TimeUnit.SECONDS));
+        helperGeometry=new dev.pocketengine.displayhelper.DisplayGeometry(2,320,470,160,0);release.countDown();
+        JSONObject refused=complete(pending);assertFalse(refused.toString(),refused.optBoolean("accepted"));assertEquals(0,actions.get());assertEquals(0,helperMutations.get());assertEquals(0,mainReads.get());
+    }
     @Test public void foregroundUnrelatedTickerDoesNotInvalidateExactStableButton()throws Exception {
         PhonePort port=foreground();RunControl run=control();JSONObject observed=observe(port,run);ticker.setText("00:02");
         JSONObject receipt=complete(caller.submit(()->port.execute("phone_click_node",click(observed),run)));assertTrue(receipt.toString(),receipt.optBoolean("accepted"));assertEquals(1,actions.get());
@@ -332,7 +359,7 @@ public final class PhoneObservationBoundariesNativeTest {
     private static JSONObject resumed(int id,int display,String pkg)throws Exception{return new JSONObject().put("taskId",id).put("displayId",display).put("packageName",pkg);}
     private static JSONObject facts(String primary,int primaryTask,int originalDisplay,boolean replacementOwned)throws Exception {
         JSONArray tasks=new JSONArray().put(task(primaryTask,0,primary)).put(task(22,originalDisplay,"agent.worker"));JSONArray owned=new JSONArray();
-        if(originalDisplay==9)owned.put(resumed(22,9,"agent.worker"));else if(replacementOwned){tasks.put(task(44,9,"agent.replacement"));owned.put(resumed(44,9,"agent.replacement"));}
+        if(originalDisplay==helperDisplay)owned.put(resumed(22,helperDisplay,"agent.worker"));else if(replacementOwned){tasks.put(task(44,helperDisplay,"agent.replacement"));owned.put(resumed(44,helperDisplay,"agent.replacement"));}
         return new JSONObject().put("status","observed").put("primary",new JSONArray().put(resumed(primaryTask,0,primary))).put("owned",owned)
                 .put("taskTopology",new JSONObject().put("schemaVersion",1).put("status","observed").put("complete",true).put("readOnly",true).put("tasks",tasks));
     }

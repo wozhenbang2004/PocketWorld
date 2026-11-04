@@ -22,10 +22,14 @@ public final class AttachmentsModule implements EngineModule {
     public void setNativeRecordRead(NativeRecordRead check){nativeRecordRead=java.util.Objects.requireNonNull(check);}
     private void ownerRecord(JSONObject record)throws Exception{JSONObject source=record.optJSONObject("source");if(source!=null&&source.has("groupSpaceId"))throw new SecurityException("群媒体技术副本请通过原群成果读取");nativeRecordRead.check(record);}
     private JSONArray ownerFiles()throws Exception{JSONArray result=new JSONArray(),all=repository.book.list();for(int i=0;i<all.length();i++)try{JSONObject row=all.getJSONObject(i);ownerRecord(row);result.put(row);}catch(SecurityException hidden){}return result;}
+    /** Display only. Archive and original-publication consumers keep the complete ownerFiles scan. */
+    public JSONObject ownerAttachmentInventoryForHost()throws Exception{
+        JSONObject inventory=repository.book.inspectIndex();JSONArray result=new JSONArray(),all=inventory.getJSONArray("attachments");for(int i=0;i<all.length();i++)try{JSONObject row=all.getJSONObject(i);ownerRecord(row);result.put(row);}catch(SecurityException hidden){}return inventory.put("attachments",result);
+    }
     public AttachmentsModule(FeatureContext context){this(context,new DocumentReader(null,null));}
     public AttachmentsModule(FeatureContext context,DocumentReader reader){this.context=context;repository=AttachmentRepository.get(context.android);documents=new AttachmentDocuments(repository.book,reader);}
     @Override public String id(){return "attachments";}
-    @Override public JSONObject snapshot()throws Exception{return new JSONObject().put("attachments",ownerFiles()).put("maxFileBytes",AttachmentBook.MAX_FILE_BYTES).put("maxTotalBytes",AttachmentBook.MAX_TOTAL_BYTES).put("commands",new JSONArray("[\"list\",\"get\",\"readText\",\"importUri\",\"createText\",\"exportToUri\",\"view\",\"share\",\"remove\"]")).put("scope","owner/private");}
+    @Override public JSONObject snapshot()throws Exception{return ownerAttachmentInventoryForHost().put("maxFileBytes",AttachmentBook.MAX_FILE_BYTES).put("maxTotalBytes",AttachmentBook.MAX_TOTAL_BYTES).put("commands",new JSONArray("[\"list\",\"get\",\"readText\",\"importUri\",\"createText\",\"exportToUri\",\"view\",\"share\",\"remove\"]")).put("scope","owner/private");}
     public JSONObject importIntent(Intent intent,String taskId,String projectId)throws Exception{JSONObject result=repository.importIntent(intent,taskId,projectId);context.emit(id(),new JSONObject().put("status",result.getString("status")).put("attachments",result.getJSONArray("attachments")));return result;}
     /** Native capability host only; handle() has no run authority and intentionally cannot dispatch this. */
     public JSONObject readDocument(String attachmentId,String expectedSha256,DocumentContent.Request range,RunControl control)throws Exception{ownerRecord(repository.book.get(attachmentId));return documents.read(attachmentId,expectedSha256,range,control);}
@@ -77,7 +81,7 @@ public final class AttachmentsModule implements EngineModule {
     }
     public JSONObject editableDocumentForOwner(String parent,String sha,RunControl control)throws Exception{return documentCreation().readEditableSource(parent,sha,control);}
     @Override public JSONObject handle(String command,JSONObject input)throws Exception{
-        if(command.equals("list"))return new JSONObject().put("attachments",ownerFiles());
+        if(command.equals("list"))return ownerAttachmentInventoryForHost();
         if(command.equals("importUri"))return repository.importUri(Uri.parse(input.getString("uri")),0,input.optString("taskId"),input.optString("projectId"));
         if(command.equals("createText")){String name=input.optString("name","note.txt"),mime=input.optString("mimeType","text/plain");if(!java.util.Set.of("text/plain","text/markdown","text/csv","text/tab-separated-values").contains(mime)||name.toLowerCase(java.util.Locale.ROOT).matches(".*\\.(docx?|xlsx?|pptx?|pdf|png|jpe?g|webp|mp[34]|wav|apk)$"))throw new IllegalArgumentException("文字保存只能创建真实文本格式；不能将文字命名为Office、PDF或媒体文件");String text=input.getString("content");if(text.length()>65536)throw new IllegalArgumentException("新文本附件最多65536字符");JSONObject source=new JSONObject().put("kind","created_text");if(input.has("taskId"))source.put("taskId",input.getString("taskId"));if(input.has("projectId"))source.put("projectId",input.getString("projectId"));return repository.book.importBytes(new ByteArrayInputStream(text.getBytes(StandardCharsets.UTF_8)),input.optString("name","note.txt"),input.optString("mimeType","text/plain"),source);}
         if(command.matches("createDocument|transformImage|trimMedia"))throw new SecurityException("文档生成必须沿原宿主动作和原执行控制；普通JSON不能提供身份");

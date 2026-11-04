@@ -52,7 +52,7 @@ def check_posix_descriptor_fixture(entries):
     if not any(entry.get('linuxPosixFd', False) for entry in entries):
         return
     if sys.platform != 'linux':
-        raise PrerequisiteError('attachment-legacy-integrity requires Linux JDK17 POSIX descriptors and readable /proc/self/fd; not an Android/device test')
+        raise PrerequisiteError('Selected attachment POSIX fixture requires Linux JDK17 POSIX descriptors and readable /proc/self/fd; not an Android/device test')
     descriptor = None
     try:
         descriptor = os.open(os.devnull, os.O_RDONLY | os.O_CLOEXEC)
@@ -60,7 +60,7 @@ def check_posix_descriptor_fixture(entries):
             next(entries, None)  # One bounded directory read, never a recursive scan.
         os.readlink('/proc/self/fd/' + str(descriptor))
     except OSError as error:
-        raise PrerequisiteError('attachment-legacy-integrity requires permission to read /proc/self/fd and its own descriptor links: ' + str(error)) from error
+        raise PrerequisiteError('Selected attachment POSIX fixture requires permission to read /proc/self/fd and its own descriptor links: ' + str(error)) from error
     finally:
         if descriptor is not None:
             os.close(descriptor)
@@ -204,6 +204,15 @@ def run(args):
                     '-o', str(isolated / 'libpocketprocess.so')]
                 subprocess.run(fault_command, cwd=ROOT, env=env, check=True)
                 props['pocketworldHost' + name + 'Dir'] = str(isolated)
+        if 'native-transport-wait-ownership' in groups:
+            isolated = report / 'native-TransportLostWait'
+            isolated.mkdir()
+            fixture = ROOT / 'app/src/test/java/dev/pocketengine/features/local/runtime/native_wait_reap_fixture.cpp'
+            fault_command = command[:-2] + [str(fixture), '-DPOCKETWORLD_TRANSPORT_WAIT_FIXTURE=1',
+                '-pthread', '-Wl,--wrap=waitid', '-Wl,--wrap=kill', '-Wl,--wrap=opendir',
+                '-o', str(isolated / 'libpocketprocess.so')]
+            subprocess.run(fault_command, cwd=ROOT, env=env, check=True)
+            props['pocketworldHostTransportLostWaitDir'] = str(isolated)
     command = [gradle, '--no-daemon', '--no-parallel', '--max-workers=1', '--console=plain', '-p', str(ROOT)]
     if not args.online:
         command.append('--offline')
@@ -231,7 +240,7 @@ def main(argv=None):
         'Requirements: JDK 17; SDK 35/build-tools 35.0.0 and the declared NDK 28.2.13676358 '
         'for AGP configuration. managed-runtime additionally needs Linux, C++17/JNI headers, '
         '/bin/sh, Python 3.8+ and Node.js; gateway-continuation needs Python 3.11+ and CC/cc for its native CLI fixture. '
-        'attachment-legacy-integrity additionally needs Linux and readable /proc/self/fd for its scoped JDK17 POSIX fixture. '
+        'Attachment POSIX groups additionally need Linux and readable /proc/self/fd for their scoped JDK17 fixture. '
         'Robolectric offline groups need the pinned SDK 35 jar. '
         'See --list for exact registered classes and scope. Results: a unique run directory '
         'with invocation/selection, exact locked classpath, JUnit XML and result.json; '

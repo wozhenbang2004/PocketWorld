@@ -224,6 +224,9 @@ public final class DisplayModule implements EngineModule {
     // place also covers a release whose successful reply was lost before reaching the app.
     synchronized void acceptStatus(JSONObject answer)throws Exception {
         validateStatus(answer);
+        dev.pocketengine.displayhelper.DisplayGeometry incoming=dev.pocketengine.displayhelper.DisplayGeometry.read(answer);
+        if(answer.optBoolean("sessionActive")&&answer.optString("sessionId").equals(state.optString("sessionId"))
+                &&answer.optInt("displayId",-1)==state.optInt("displayId",-1))requireGeometryAdvance(state,incoming);
         boolean active=answer.optBoolean("sessionActive");
         boolean recovery=releasePending||state.optBoolean("recoveryRequired")
                 ||active&&!answer.optString("sessionId").equals(state.optString("sessionId"));
@@ -249,6 +252,7 @@ public final class DisplayModule implements EngineModule {
         if(state.optBoolean("sessionActive"))throw new IllegalStateException("后台屏已有会话，请先释放");
         JSONObject answer=client().call("create",input,control);
         requireOk(answer);if(answer.optInt("displayId",-1)<=0)throw new SecurityException("后台助手返回了无效显示");
+        dev.pocketengine.displayhelper.DisplayGeometry.read(answer);
         state=publicState(answer).put("sessionActive",true);connected=true;message="独立后台屏已创建；主屏不会作为备用执行位置。";
         return snapshot();
     }
@@ -336,7 +340,24 @@ public final class DisplayModule implements EngineModule {
         catch(Exception unavailable){connected=false;message="后台连接中断，停止后续操作。";throw unavailable;}
         if(result.optBoolean("ok")&&(result.optInt("displayId",-1)!=display||!sessionId.equals(result.optString("sessionId"))))
             throw new SecurityException("后台显示或会话回执身份不匹配");
+        if("frame".equals(command)&&result.optBoolean("ok"))adoptFrameGeometry(result,sessionId,display);
         return result;
+    }
+    /** Only the authenticated original helper may advance this session's geometry. */
+    private synchronized void adoptFrameGeometry(JSONObject frame,String originalSession,int originalDisplay)throws Exception {
+        if(!originalSession.equals(state.optString("sessionId"))||originalDisplay!=state.optInt("displayId",-1))
+            throw new SecurityException("原后台帧返回时会话已变化");
+        dev.pocketengine.displayhelper.DisplayGeometry incoming=dev.pocketengine.displayhelper.DisplayGeometry.read(frame);
+        requireGeometryAdvance(state,incoming);
+        if(incoming!=null){
+            JSONObject next=new JSONObject(state.toString());incoming.writeTo(next,frame.optBoolean("geometryReady"));
+            state=next.put("captureAvailable",!frame.optBoolean("empty"));
+        }
+    }
+    private static void requireGeometryAdvance(JSONObject previous,dev.pocketengine.displayhelper.DisplayGeometry incoming) {
+        dev.pocketengine.displayhelper.DisplayGeometry known=dev.pocketengine.displayhelper.DisplayGeometry.read(previous);
+        if(known!=null&&(incoming==null||!incoming.canFollow(known)))
+            throw new SecurityException("后台几何身份已过期或缺失，未恢复旧尺寸");
     }
     /** Native task supervisor only. It supplies a freshly checked canonical deadline, never a model duration. */
     public synchronized JSONObject renewTaskLease(String taskId,String runId,int epoch,RunControl control,String expectedSession,int expectedDisplay,long taskDeadline)throws Exception {
@@ -402,7 +423,7 @@ public final class DisplayModule implements EngineModule {
     }
     static void requireOk(JSONObject result){if(!result.optBoolean("ok"))throw new IllegalStateException(result.optString("message","后台请求未成功"));}
     private static JSONObject publicState(JSONObject input)throws Exception {
-        JSONObject out=new JSONObject();for(String key:new String[]{"sessionActive","displayId","sessionId","width","height","density","sdk","requestedPackageName","backgroundOnly","focusIsolationRequested","displayFlagsConfirmed","recoveryRequired","frameMetadataOnly","imeIsolation","imeReason","inputInjectionAvailable","captureAvailable"})if(input.has(key))out.put(key,input.get(key));return out;
+        JSONObject out=new JSONObject();for(String key:new String[]{"sessionActive","displayId","sessionId","width","height","density","sdk","requestedPackageName","backgroundOnly","focusIsolationRequested","displayFlagsConfirmed","recoveryRequired","frameMetadataOnly","imeIsolation","imeReason","inputInjectionAvailable","captureAvailable","geometryTracking","geometryReady","geometryGeneration","rotation","captureWidth","captureHeight"})if(input.has(key))out.put(key,input.get(key));return out;
     }
     private static String randomHex(int count){byte[] data=new byte[count];new SecureRandom().nextBytes(data);StringBuilder result=new StringBuilder();for(byte b:data)result.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return result.toString();}
 }

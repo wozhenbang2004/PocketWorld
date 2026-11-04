@@ -12,6 +12,12 @@ import static org.junit.Assert.*;
 
 /** Own disk fixtures only. No application DB, account, provider or external path. */
 public final class OwnerDataArchivePrimitiveTest {
+    @Test public void oldSixSectionV1ArchiveAndNewConfigurationSectionsRemainExplicitlyCompatible()throws Exception {
+        Path root=Files.createTempDirectory("owner-archive-sections-");var object=OwnerBackupArchive.ObjectBytes.json(new JSONObject().put("passive",true));Map<String,String> old=new LinkedHashMap<>();for(String name:List.of("projects","artifacts","memory","experiences","remoteConnections","sshConnections"))old.put(name,object.sha256);
+        File legacy=root.resolve("legacy.zip").toFile();OwnerBackupArchive.create(legacy,Map.of(object.sha256,object),old,new RunControl());assertEquals(6,OwnerBackupArchive.verify(legacy,new RunControl()).metadata().getJSONObject("sections").length());
+        Map<String,String> current=new LinkedHashMap<>(old);for(String name:List.of("settings","skills","schedules"))current.put(name,object.sha256);File extended=root.resolve("extended.zip").toFile();OwnerBackupArchive.create(extended,Map.of(object.sha256,object),current,new RunControl());assertEquals(9,OwnerBackupArchive.verify(extended,new RunControl()).metadata().getJSONObject("sections").length());
+        current.put("unknownPermissions",object.sha256);assertThrows(Exception.class,()->OwnerBackupArchive.create(root.resolve("unknown.zip").toFile(),Map.of(object.sha256,object),current,new RunControl()));
+    }
     private static String id(){return UUID.randomUUID().toString();}
     private static String sha(byte[] bytes)throws Exception{return ProjectSources.sha256(bytes);}
     private static OwnerBackupArchive.ObjectBytes object(byte[] bytes)throws Exception{return new OwnerBackupArchive.ObjectBytes(sha(bytes),bytes.length,()->new ByteArrayInputStream(bytes));}

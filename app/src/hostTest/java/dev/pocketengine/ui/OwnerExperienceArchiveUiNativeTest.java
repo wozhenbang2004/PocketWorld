@@ -49,4 +49,31 @@ public final class OwnerExperienceArchiveUiNativeTest {
             flow.readExperiencePage(0);f.settle();assertNotNull(flow.getState().getExperiencePage());flow.closePage();assertFalse(flow.getState().getOpen());
         }
     }
+    @Test public void confirmedSettingsStillQueuedWhenPageHidesReleaseSelectionAndNeverRestore()throws Exception {
+        try(var f=new ProjectMemoryReviewUiNativeTest.Fixture()){
+            assertTrue(f.app.getSharedPreferences("private_settings",0).edit().clear().commit());
+            OwnerBackupCoordinator flow=backup(f);flow.open();f.settle();flow.create(Set.of("settings"));f.settle();
+            assertNull(flow.getState().getError());flow.reviewPhase("settings");f.settle();assertNotNull(flow.getState().getReview());
+            CountDownLatch release=hold(f);String action;
+            try{
+                flow.confirmPhase();action=flow.getState().getOriginalAction();assertNotNull(action);
+                assertTrue(f.app.settings.modelSelection().status().pending());
+                flow.foreground(false);
+                assertFalse(f.app.settings.modelSelection().status().pending());assertNull(flow.getState().getOriginalAction());
+            }finally{release.countDown();}
+            f.settle();assertNull(f.app.tasks.get(action,false));
+            assertFalse(f.app.getSharedPreferences("private_settings",0).contains("ownerConfigurationArchiveOrigins"));
+        }
+    }
+    @Test public void rejectedSettingsSubmissionReleasesTheOriginalReservation()throws Exception {
+        try(var f=new ProjectMemoryReviewUiNativeTest.Fixture()){
+            assertTrue(f.app.getSharedPreferences("private_settings",0).edit().clear().commit());
+            OwnerBackupCoordinator flow=backup(f);flow.open();f.settle();flow.create(Set.of("settings"));f.settle();
+            assertNull(flow.getState().getError());flow.reviewPhase("settings");f.settle();assertNotNull(flow.getState().getReview());
+            f.io.shutdown();
+            assertThrows(java.util.concurrent.RejectedExecutionException.class,flow::confirmPhase);
+            assertFalse(f.app.settings.modelSelection().status().pending());assertNull(flow.getState().getOriginalAction());
+            assertFalse(f.app.getSharedPreferences("private_settings",0).contains("ownerConfigurationArchiveOrigins"));
+        }
+    }
 }

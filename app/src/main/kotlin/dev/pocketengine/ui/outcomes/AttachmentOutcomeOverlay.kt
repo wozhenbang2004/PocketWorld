@@ -73,6 +73,24 @@ internal fun AttachmentOutcomeOverlay(flow:AttachmentOutcomeCoordinator) {
                         else {
                             Text(if(state.choosingSource)"选择当前目标需要的来源"else "来源和成果留在同一个任务里",fontWeight=FontWeight.SemiBold,fontSize=22.sp,lineHeight=30.sp)
                             Text(if(state.group!=null)"仅查看原群、原受众的真实文件。生成、保存和群消息回执分别显示。" else "按当前目标选择来源、读取需要的部分，再继续处理。任务结束后，真实文件和原操作仍可回来查看。",color=SecondaryInk,fontSize=13.sp,lineHeight=22.sp)
+                            if(state.taskId==null&&state.group==null)state.snapshot?.optJSONObject("documentActions")?.let{page->
+                                val actions=page.optJSONArray("actions").objects();val gaps=page.optJSONArray("gaps").objects()
+                                if(actions.isNotEmpty()||gaps.isNotEmpty()||page.optBoolean("hasMore")){
+                                    Text("原文档生成记录",fontWeight=FontWeight.SemiBold,fontSize=15.sp)
+                                    Text("这里只定位原动作。已完成或待核的结果都需明确打开，不会重新生成。",color=SecondaryInk,fontSize=12.sp,lineHeight=20.sp)
+                                    for(action in actions){
+                                        val id=action.getString("taskId")
+                                        Column(verticalArrangement=Arrangement.spacedBy(4.dp)){
+                                            Text("${action.optString("name")} · ${action.optString("format").uppercase()}",fontWeight=FontWeight.Medium,fontSize=14.sp)
+                                            Text("原动作 $id · ${action.optString("status")}",color=SecondaryInk,fontSize=12.sp,lineHeight=20.sp)
+                                            OutlinedButton(onClick={flow.openDocumentAction(id)},enabled=!state.busy){Text("打开原文档动作 ${id.take(12)}")}
+                                        }
+                                    }
+                                    for(gap in gaps)Text("原记录 ${gap.optString("taskId")} 详情暂不可完整核对，请从原任务查看。",color=SecondaryInk,fontSize=12.sp,lineHeight=20.sp)
+                                    if(page.optBoolean("hasMore"))TextButton(onClick=flow::olderDocumentActions,enabled=!state.busy){Text("读取更早的原文档记录")}
+                                    Text("这是有界任务摘要窗口，不是全部记录；刷新会回到最新窗口。",color=SecondaryInk,fontSize=12.sp,lineHeight=20.sp)
+                                }
+                            }
                             if(state.group==null){
                                 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
                                     OutlinedButton(onClick=flow::importSource,enabled=!state.busy){Text("选择手机文件")}

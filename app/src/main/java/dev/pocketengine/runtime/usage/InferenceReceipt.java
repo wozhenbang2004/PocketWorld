@@ -4,7 +4,7 @@ import org.json.JSONObject;
 
 /** Content-free, native-origin evidence. This receipt grants no task or tool authority. */
 public final class InferenceReceipt {
-    public enum Purpose { MAIN, SUMMARY, MEMBER, TOOL, CONNECTION_TEST, MODEL_CAPABILITY_PROBE, VOICE_TURN, REALTIME, REALTIME_TRANSCRIPTION, RELAY, SKILL_DRAFT, UNATTRIBUTED }
+    public enum Purpose { MAIN, SUMMARY, MEMBER, TOOL, CONNECTION_TEST, MODEL_CAPABILITY_PROBE, VOICE_TURN, REALTIME, REALTIME_TRANSCRIPTION, RELAY, SKILL_DRAFT, CHANNEL_CHAT, UNATTRIBUTED }
     public enum Outcome { STARTED, COMPLETED, FAILED, CANCELLED }
     public enum BindingKind { HOST_RUN, EXTERNAL_TASK_RUN, UNATTRIBUTED }
     /** Native coordinator identity; it describes a call site and grants no execution authority. */
@@ -50,15 +50,23 @@ public final class InferenceReceipt {
     public final Outcome outcome;
     public final long startedAt,finishedAt,elapsedNanos;
     private final String routeJson,usageJson,failureJson;
+    private final InferenceTokenReservation.NativeIdentity budgetIdentity;
     InferenceReceipt(String callId,Context context,Outcome outcome,long startedAt,long finishedAt,long elapsedNanos,
                      JSONObject route,JSONObject usage)throws Exception{
         this(callId,context,outcome,startedAt,finishedAt,elapsedNanos,route,usage,null);
     }
     InferenceReceipt(String callId,Context context,Outcome outcome,long startedAt,long finishedAt,long elapsedNanos,
                      JSONObject route,JSONObject usage,InferenceFailure failure)throws Exception{
+        this(callId,context,outcome,startedAt,finishedAt,elapsedNanos,route,usage,failure,InferenceTokenReservation.unknownIdentity());
+    }
+    InferenceReceipt(String callId,Context context,Outcome outcome,long startedAt,long finishedAt,long elapsedNanos,
+                     JSONObject route,JSONObject usage,InferenceFailure failure,InferenceTokenReservation.NativeIdentity budgetIdentity)throws Exception{
         this.callId=callId;this.context=context;this.outcome=outcome;this.startedAt=startedAt;
         this.finishedAt=finishedAt;this.elapsedNanos=elapsedNanos;routeJson=route.toString();usageJson=usage.toString();failureJson=failure==null?null:failure.toJson().toString();
+        this.budgetIdentity=java.util.Objects.requireNonNull(budgetIdentity);
     }
+    /** Native TaskStore only. Private binding is intentionally excluded from toJson(). */
+    public InferenceTokenReservation.NativeIdentity nativeBudgetIdentity(){return budgetIdentity;}
     public JSONObject toJson()throws Exception{JSONObject value=new JSONObject().put("type","inference_receipt").put("version",1)
             .put("receiptVersion",1).put("state",outcome==Outcome.STARTED?"started":"finished")
             .put("callId",callId).put("context",context.toJson()).put("outcome",outcome.name())

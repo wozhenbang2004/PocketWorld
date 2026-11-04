@@ -15,13 +15,18 @@ public final class WorkProfile {
     public static final int MAX_PROFILES = 32, MAX_BYTES = 65536, MAX_ASSETS = 32;
     public final String id, name;
     public final long revision;
+    public final boolean restoredPendingReview;
     private final String json;
 
     private WorkProfile(JSONObject value) throws Exception {
-        fields(value, "format", "profileId", "revision", "name", "modelPolicies", "instructionRefs", "skillRefs", "pluginRefs", "extensionRefs", "targetBindings", "teamTemplateRef", "resourcePreferences");
+        fields(value, "format", "profileId", "revision", "name", "modelPolicies", "instructionRefs", "skillRefs", "pluginRefs", "extensionRefs", "targetBindings", "teamTemplateRef", "resourcePreferences", "restoredPendingReview", "restoredReferences");
         if (!FORMAT.equals(value.getString("format"))) throw new IllegalArgumentException("unsupported_work_profile_format");
         id = identifier(value, "profileId", 100); revision = integer(value, "revision", 1, Long.MAX_VALUE);
         name = text(value, "name", 80);
+        if(value.has("restoredPendingReview")&&!(value.get("restoredPendingReview") instanceof Boolean))throw new IllegalArgumentException("explicit_restore_review_state_required");
+        restoredPendingReview=value.optBoolean("restoredPendingReview",false);
+        if(restoredPendingReview&&!value.has("restoredReferences"))throw new IllegalArgumentException("restored_reference_review_required");
+        if(value.has("restoredReferences"))checkRestoredReferences(value.getJSONArray("restoredReferences"));
         JSONObject models = value.getJSONObject("modelPolicies");
         if (models.length() > 20) throw new IllegalArgumentException("too_many_profile_model_roles");
         for (String purpose : keys(models)) {
@@ -80,6 +85,23 @@ public final class WorkProfile {
     }
     public JSONObject toJson() throws Exception { return new JSONObject(json); }
     public String digest() throws Exception { return fingerprint(toJson()); }
+    /** A restored definition is editable evidence, never an execution choice or a recovered grant. */
+    public void requireExecutable(){if(restoredPendingReview)throw new SecurityException("这份恢复的工作配置尚未重新绑定本机来源，请先在主人页审阅并确认；未启动任务");}
+    private static void checkRestoredReferences(JSONArray rows)throws Exception {
+        if(rows.length()>200)throw new IllegalArgumentException("too_many_restored_profile_references");
+        Set<String> seen=new HashSet<>();
+        for(int i=0;i<rows.length();i++){
+            JSONObject row=rows.getJSONObject(i);fields(row,"kind","reference");String kind=row.getString("kind");JSONObject reference=row.getJSONObject("reference");
+            if(!seen.add(kind+":"+fingerprint(reference)))throw new IllegalArgumentException("duplicate_restored_profile_reference");
+            // Validate historical data with the same strict public-reference schema. It is never read by a resolver.
+            JSONObject isolated=definition("historical-reference",1,"待核对原引用");
+            if(kind.startsWith("model:"))isolated.getJSONObject("modelPolicies").put(kind.substring(6),reference);
+            else if(Set.of("instructionRefs","skillRefs","pluginRefs","extensionRefs","targetBindings").contains(kind))isolated.getJSONArray(kind).put(reference);
+            else if(kind.equals("teamTemplateRef"))isolated.put(kind,reference);
+            else throw new IllegalArgumentException("unsupported_restored_profile_reference");
+            fromJson(isolated);
+        }
+    }
     /** Display/duplicate key derived from original references, never a new target registry identity. */
     public static String targetKey(JSONObject row) throws Exception {
         return switch (row.getString("kind")) {

@@ -10,6 +10,7 @@ public final class ObservationSafety {
             case "task_paused": case "paused_or_changed": case "screenshots_disabled":
             case "visual_engines_unavailable": case "screenshot_secure_window":
             case "display_unavailable": case "display_lost": case "wrong_display":
+            case "geometry_unavailable":
             case "invalid_lease": case "focus_isolation_unavailable": case "focus_isolation_lost":
             case "background_unavailable": case "metadata_only_unavailable": case "main_screen_conflict": case "identity_mismatch":
             case "observation_metadata_missing": case "image_unavailable":

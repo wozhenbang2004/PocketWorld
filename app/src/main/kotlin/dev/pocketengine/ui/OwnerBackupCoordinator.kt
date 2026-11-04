@@ -38,6 +38,7 @@ internal class OwnerBackupCoordinator(
     @Volatile private var closed = false
     private var observation: RunControl? = null
     private var future: Future<*>? = null
+    private val pendingArchiveSubmission = java.util.concurrent.atomic.AtomicReference<OwnerDataArchives.Confirmed?>()
     private var selected: OwnerDataArchives.Selection? = null
     // Live native selection only. Bundle/JSON never restores this opaque authority.
     private var projectMemorySelection: dev.pocketengine.features.memory.ProjectMemoryNamespaces.Selection? = null
@@ -286,7 +287,25 @@ internal class OwnerBackupCoordinator(
         // acknowledgement can only be queried, never silently confirmed again.
         pendingReview = null; reviewControl = null
         state = state.copy(review = null, originalAction = action, originalPhase = null, result = null, notice = "已确认原分区动作；正在登记原任务。")
-        work { _ -> val original = app.features.submitOwnerArchivePhaseForOwner(confirmed); { state = state.copy(originalPhase = original, notice = "原恢复任务已登记。离开本页不会重新恢复；应用重开后按原编号只读核对。") } }
+        if (!pendingArchiveSubmission.compareAndSet(null, confirmed)) {
+            confirmed.original().cancel()
+            error("已有原恢复等待登记")
+        }
+        try {
+            work { _ ->
+                if (!pendingArchiveSubmission.compareAndSet(confirmed, null)) throw InterruptedException("恢复确认在队列执行前已取消")
+                // Ownership transfers once to FeatureHost. Closing the observation page
+                // after this point cannot replay or cancel the original admitted phase.
+                val original = app.features.submitOwnerArchivePhaseForOwner(confirmed)
+                return@work { state = state.copy(originalPhase = original, notice = "原恢复任务已登记。离开本页不会重新恢复；应用重开后按原编号只读核对。") }
+            }
+        } catch (failure: Exception) {
+            if (pendingArchiveSubmission.compareAndSet(confirmed, null)) {
+                confirmed.original().cancel()
+                state = state.copy(busy = false, originalAction = null, originalPhase = null, error = "恢复未进入工作队列；未写入恢复数据。")
+            } else state = state.copy(busy = false, error = "原恢复登记结果待核对，请保留原编号。")
+            throw failure
+        }
     }
     fun pollOriginal() {
         val id = state.originalAction ?: return
@@ -327,7 +346,13 @@ internal class OwnerBackupCoordinator(
     }
     private fun clearReview() { pendingReview = null; reviewControl?.cancel(); reviewControl = null }
     private fun clearPassword(password: CharArray?) { password?.fill('\u0000'); if (passwordInFlight === password) passwordInFlight = null }
-    private fun cancelRead() { clearPassword(passwordInFlight); generation++; observation?.cancel(); observation = null; future?.cancel(true); future = null }
+    private fun cancelRead() {
+        pendingArchiveSubmission.getAndSet(null)?.let { pending ->
+            pending.original().cancel()
+            if (state.originalAction == pending.actionId()) state = state.copy(originalAction = null, originalPhase = null, result = null, notice = "恢复确认在队列执行前已取消；未写入数据，可重新审阅。")
+        }
+        clearPassword(passwordInFlight); generation++; observation?.cancel(); observation = null; future?.cancel(true); future = null
+    }
     private fun requireContent(uri: Uri) { check(uri.scheme == "content" && !uri.authority.isNullOrBlank()) { "系统未返回可用的文件引用，没有读写其他路径。" } }
     private fun work(onFailure: (() -> Unit)? = null, read: (RunControl) -> (() -> Unit)) {
         owner(); if (state.busy) return

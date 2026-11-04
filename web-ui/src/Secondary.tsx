@@ -16,6 +16,11 @@ import {LearningWorkspace, type LearningCandidateTarget} from './LearningWorkspa
 import {TeamsWorkspace} from './TeamsWorkspace';
 import {GroupsWorkspace} from './GroupsWorkspace';
 import {MediaWorkspace} from './MediaWorkspace';
+import {RealtimeWorkspace} from './RealtimeWorkspace';
+import {ProxyWorkspace} from './ProxyWorkspace';
+import {CommitmentsWorkspace} from './CommitmentsWorkspace';
+import {TokenBudgetsWorkspace} from './TokenBudgetsWorkspace';
+import {WorkProfilesWorkspace} from './WorkProfilesWorkspace';
 import {DevicesWorkspace} from './DevicesWorkspace';
 import {PluginsWorkspace} from './PluginsWorkspace';
 import { ModelPicker, PressButton } from './library';
@@ -62,6 +67,7 @@ const timeText = (value: any) => {
 
 export const SECONDARY_DOMAINS = [
   { id: 'models', title: 'API 模型目录', detail: '连接、能力、模型组与用途', group: '模型与连接', icon: RiKey2Line },
+  { id: 'workProfiles', title: '工作配置', detail: '模型、技能与工具来源，恢复后重新绑定', group: '模型与连接', icon: RiFileList3Line },
   { id: 'accounts', title: 'ChatGPT 账号', detail: '授权、模型目录与套餐用量', group: '模型与连接', icon: RiKey2Line },
   { id: 'devices', title: '我的设备', detail: '手机与电脑、配对、接收和权限', group: '模型与连接', icon: RiComputerLine },
   { id: 'remote', title: '电脑与服务器', detail: 'Companion 环境与原任务', group: '模型与连接', icon: RiComputerLine },
@@ -790,7 +796,6 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack }: { 
 }
 
 function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate, onOpenModels, onNavigate }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void; onOpenModels: () => void; onNavigate: (domain: 'plugins' | 'pluginCatalog' | 'mcp') => void }) {
-  const act = (action: string, args: Data, label: string, primary = false) => <CapabilityAction action={action} args={args} supported={supported} run={run} primary={primary}>{label}</CapabilityAction>;
   const title = SECONDARY_DOMAINS.find(x => x.id === domain)?.title || '连接与能力';
   if (domain === 'accounts') return <AccountsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'devices') return <DevicesWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} openModels={onOpenModels} />;
@@ -798,16 +803,8 @@ function DomainPage({ domain, state, data, supported, run, registerTransientBack
   if (domain === 'memory' || domain === 'memoryReview') return <MemoryWorkspace domain={domain} run={run} registerTransientBack={registerTransientBack} initialCandidate={candidateTarget} />;
   if (domain === 'learning') return <LearningWorkspace state={state} data={data} run={run} registerTransientBack={registerTransientBack} onReviewCandidate={onReviewCandidate} />;
   if (domain === 'automation') return <ReminderWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
-  if (domain === 'commitments') return <>
-    <Card title={title} description="时间、时区、原目标与发生回执绑定；打开目标不自动执行。">
-      <Collection data={data} keys={['commitments']} label={'承诺'}>{row => <>
-        <Facts items={[[ '计划', first(object(row.schedule), ['type', 'frequency'], text(row.scheduleType)) ], ['时区', first(object(row.schedule), ['timezone'], text(row.timezone)) ], ['期限', timeText(row.dueAt) ], ['版本', row.revision]]} />
-        <div className="pw-form-actions">{act(domain + '.review', { id: recordId(row), expectedRevision: row.revision }, '查看原目标与操作')}{row.taskId && act('tasks.open', { id: row.taskId }, '打开关联任务')}</div>
-      </>}</Collection>
-    </Card>
-    <Collection data={data} keys={['receipts', 'followUpReceipts']} label="发生回执">{row => <div className="pw-form-actions">{act(domain + '.openReceipt', { receiptId: recordId(row), claimId: row.claimId }, '打开原发生记录')}</div>}</Collection>
-
-  </>;
+  if (domain === 'workProfiles') return <WorkProfilesWorkspace state={state} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
+  if (domain === 'commitments') return <CommitmentsWorkspace state={state} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'channels') return <ChannelsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'mcp') return <McpWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'skills') return <SkillsWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
@@ -815,24 +812,13 @@ function DomainPage({ domain, state, data, supported, run, registerTransientBack
   if (domain === 'teams') return <TeamsWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'groups') return <GroupsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'media') return <MediaWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
-  if (domain === 'realtime') return <Card title={title} description="请求准备、实际提交、等待结果与未知提交分开；不会因界面动效宣称已完成。">
-    <Facts items={[[ '提供方', first(data, ['provider', 'providerName']) ], ['凭据', typeof data.configured === 'boolean' ? data.configured ? '已配置' : '未配置' : undefined], ['当前会话', first(object(data.session), ['state', 'stage']) ]]} />
-    {domain === 'realtime' && <div className="pw-form-actions">{act('realtime.requestMicrophonePermission', {}, '麦克风权限')}{act('realtime.requestCameraPermission', {}, '摄像头权限')}{act('realtime.prepareCall', {}, '准备通话', true)}{act('realtime.disconnect', { sessionId: data.session?.id }, '结束当前通话')}</div>}
-    <Collection data={data} keys={['invitations', 'sessions', 'voiceTasks']} label="通话与语音任务">{row => <>
-      <Facts items={[[ '原提交', row.operationId ], ['阶段', row.stage ], ['关联任务', row.taskId ]]} />
-      <div className="pw-form-actions">{row.taskId && act('tasks.open', { id: row.taskId }, '打开原任务')}{act('realtime.inspect', { operationId: row.operationId || recordId(row), sessionId: row.sessionId || row.id }, '核对当前会话')}{act('realtime.reconcile', { operationId: row.operationId || recordId(row), sessionId: row.sessionId || row.id }, '核对未决状态')}</div>
-    </>}</Collection>
-  </Card>;
-  if (domain === 'proxy') return <Card title="本机模型服务" description="本机端点、路由和近期调用；服务状态由手机实际运行回执提供。">
-    <Facts items={[[ '服务', typeof data.running === 'boolean' ? data.running ? '运行中' : '未运行' : undefined ], ['端点', data.endpoint ], ['协议', data.protocol ], ['模型', data.model ], ['令牌', data.tokenConfigured ? '已配置' : undefined]]} />
-    <div className="pw-form-actions">{act('proxy.status', {}, '刷新状态')}{act('proxy.reviewStart', {}, '核对启动配置')}{act('proxy.stop', {}, '停止服务')}</div>
-    <Collection data={data} keys={['recentInferenceReferences']} label="近期实际调用">{row => <div className="pw-form-actions">{act('tasks.open', { id: row.taskId || row.id }, '查看实际调用')}</div>}</Collection>
-  </Card>;
+  if (domain === 'realtime') return <RealtimeWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
+  if (domain === 'proxy') return <ProxyWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'local') return <LocalWorkspace state={state} data={data} run={run} supported={supported} registerTransientBack={registerTransientBack} />;
   return <Card title={title}><Empty>尚未读取此能力的当前记录。</Empty></Card>;
 }
 
-const ARCHIVE_SECTIONS: Record<string, string> = { projects: '项目与私人工作副本', artifacts: '固定成果与私人原件', memory: '记忆档案', experiences: '聊天、任务与工具回执快照', remoteConnections: '电脑连接配置', sshConnections: 'SSH 配置' };
+const ARCHIVE_SECTIONS: Record<string, string> = { projects: '项目与私人工作副本', artifacts: '固定成果与私人原件', memory: '记忆档案', experiences: '聊天、任务与工具回执快照', remoteConnections: '电脑连接配置', sshConnections: 'SSH 配置', settings: '模型连接与工作配置', skills: '技能正文与来源', schedules: '提醒与排程规则' };
 const bytesText = (value: any) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value >= 1024 ** 3 ? (value / 1024 ** 3).toFixed(2) + ' GiB' : value >= 1024 ** 2 ? (value / 1024 ** 2).toFixed(1) + ' MiB' : value >= 1024 ? (value / 1024).toFixed(1) + ' KiB' : value + ' B' : '未完整读取';
 type DataPageProps = { data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; navigate: (page: string) => void };
 
@@ -849,14 +835,29 @@ function ArchivePassword({ data, supported, run }: Pick<DataPageProps, 'data' | 
   </SettingsDialog>;
 }
 
-function ArchiveWorkspace({ data, supported, run, registerTransientBack }: DataPageProps) {
-  const [selected, setSelected] = useState(['projects', 'artifacts', 'memory', 'remoteConnections', 'sshConnections']);
+const ARCHIVE_COUNT_LABELS: Record<string, string> = { apiConnections: '模型连接', modelGroups: '模型组', workProfiles: '工作配置', preferences: '偏好', skills: '技能', schedules: '排程', requiresProjectRebinding: '待重选项目' };
+function ArchiveConfigurationDetails({ value, result = false }: { value: Data; result?: boolean }) {
+  const counts = object(value.counts), rows = result ? list(value.rows) : list(value.entries).length ? list(value.entries) : list(value.identities);
+  const pending = list(value.requiresRecreation), conflicts = list(value.sameNameConflicts), omitted = list(value.omitted);
+  return <>
+    <Facts items={Object.entries(counts).map(([key, count]) => [ARCHIVE_COUNT_LABELS[key] || key, count])} />
+    {rows.length > 0 && <Accordion><AccordionItem title={result ? '逐项核对原恢复写入' : '查看包含条目'}>{rows.map((row, index) => <SourceRecord key={first(row, ['id', 'sourceId'], String(index))} item={{ title: first(row, ['name', 'title'], row.kind === 'preferences' ? '回答与操作偏好' : '条目 ' + (index + 1)) }}><Facts items={[[ '模型', row.model ], ['接口', row.baseUrl ], ['原来源', row.sourceId ], ['新身份', row.id ], ['结果', result ? row.found === true ? '已核对原恢复写入' : '尚未确认写入' : undefined ], ['工作配置', row.restoredPendingReview === true ? '待重新选择来源并审核' : undefined ]]} /></SourceRecord>)}</AccordionItem></Accordion>}
+    {pending.length > 0 && <div className="pw-selected-object"><h3>以下连接仍需在本机重新创建</h3><p>这些条目没有恢复为可用连接，请在模型连接页重新填写并确认本机传输设置。</p>{pending.map((row, index) => <SourceRecord key={first(row, ['sourceId', 'id'], String(index))} item={{ title: first(row, ['name'], '待重建连接') }}><Facts items={[[ '接口', object(row.configuration).baseUrl ], ['模型', object(row.configuration).model ], ['原因', row.reason ]]} /></SourceRecord>)}</div>}
+    {conflicts.length > 0 && <p>发现 {conflicts.length} 个同名条目：{conflicts.map(row => text(row.name)).join('、')}。此次创建新身份，保留已有条目。</p>}
+    {omitted.length > 0 && <Accordion><AccordionItem title={'未纳入项目 · ' + omitted.length}>{omitted.map((row, index) => <p key={index}>{text(row.id)} · {text(row.reason)}</p>)}</AccordionItem></Accordion>}
+    {value.preferences && <Facts items={[[ '回答详略', object(value.preferences).response_detail ], ['操作节奏', object(value.preferences).operation_pace ]]} />}
+  </>;
+}
+
+function ArchiveWorkspace({ data, supported, run, registerTransientBack, navigate }: DataPageProps) {
+  const [selected, setSelected] = useState(['projects', 'artifacts', 'memory', 'remoteConnections', 'sshConnections', 'settings', 'skills', 'schedules']);
   const [discard, setDiscard] = useState<Data | null>(null), [configDraft, setConfigDraft] = useState<Data | null>(null);
   const [originalId, setOriginalId] = useState(''), [uploadId, setUploadId] = useState(''), [fileName, setFileName] = useState('');
   const [confirmed, setConfirmed] = useState(false);
   const selection = object(data.selection), pin = { selectionId: selection.selectionId, sha256: selection.archiveSha256 };
   const preview = object(object(data.preview).review), config = object(data.webDavConfig), review = object(data.review), uploadReview = object(data.webDavReview);
   const original = object(data.originalPhase), upload = object(data.webDavUpload), busy = Boolean(data.busy), phasePending = Boolean(data.originalAction && !['completed', 'failed'].includes(original.status));
+  const nativeResult = object(object(data.result).nativeResult), nativeScope = object(review.nativeScope);
   const hasReview = Boolean(data.review || data.webDavReview), locked = busy || hasReview || Boolean(data.passwordPromptId);
   const command: Run = (action, args) => run(action, args);
   const act = (action: string, args: Data, label: string, disabled = false, primary = false) => <CapabilityAction action={action} args={args} supported={supported} run={command} disabled={busy || disabled} primary={primary}>{label}</CapabilityAction>;
@@ -873,14 +874,14 @@ function ArchiveWorkspace({ data, supported, run, registerTransientBack }: DataP
       <div className="pw-form-actions">{act('archives.create', { sections: visibleSections }, '生成所选范围的备份', locked || phasePending || visibleSections.length === 0 || Boolean(data.projectMemoryName && !data.projectMemoryCurrent), true)}{act('archives.chooseImport', { encrypted: true }, '选择加密备份…', locked || phasePending)}{act('archives.refresh', {}, '刷新清单', locked)}</div>
       <Accordion><AccordionItem title="包含范围与旧版 ZIP">
         <p>备份中的用户文本、图片和项目文件可能包含敏感内容。本机审阅缓存未加密；默认导出为口令加密文件。</p>
-        <p>登录凭据、密钥、SSH 信任、执行授权和未保存草稿不会迁移。Skills／Plugins 安装、模型设置、设备配对、自动化规则和运行环境不在这份分区档案中。</p>
+        <p>模型连接、工作配置、技能和排程可分别备份；恢复后保持停用并重新核对来源。登录凭据、密钥、SSH 信任、执行授权、设备配对、插件安装、运行环境和未保存草稿不会迁移。</p>
         <div className="pw-form-actions">{act('archives.chooseImport', { encrypted: false }, '只读核对旧版 ZIP…', locked || phasePending)}{selection.selectionId && act('archives.offerExport', { ...pin, encrypted: false }, '导出未加密 ZIP…', locked)}</div>
       </AccordionItem></Accordion>
     </Card>
     {selection.selectionId && <Card title="当前固定备份" description="核对实际内容后选择导出或恢复分区。">
       <Facts items={[[ '备份大小', bytesText(selection.archiveBytes) ], ['本机缓存', '未加密'], ['创建时间', timeText(selection.createdAt) ]]} />
       <div className="pw-form-actions">{act('archives.offerExport', { ...pin, encrypted: true }, '设置口令并导出…', locked, true)}<Button variant="secondary" disabled={locked} onClick={() => setDiscard({ ...pin })}>移除本机缓存…</Button></div>
-      {Object.entries(preview).map(([key, value]) => { const part = object(value); return <SourceRecord key={key} item={{ title: ARCHIVE_SECTIONS[key] || key }}><Facts items={[[ '项目', part.projects ], ['私人副本', part.checkouts ], ['原件', part.attachments ], ['成果', part.artifacts ], ['配置', Array.isArray(part.profiles) ? part.profiles.length : undefined ], ['快照时间', timeText(part.snapshotAt) ]]} /><div className="pw-form-actions">{act('archives.reviewPhase', { ...pin, phase: key }, '审阅恢复此分区', locked || phasePending)}{key === 'experiences' && act('archives.experiences', { ...pin, page: 0 }, '查看只读经历', locked)}</div></SourceRecord>; })}
+      {Object.entries(preview).map(([key, value]) => { const part = object(value); return <SourceRecord key={key} item={{ title: ARCHIVE_SECTIONS[key] || key }}><Facts items={[[ '项目', part.projects ], ['私人副本', part.checkouts ], ['原件', part.attachments ], ['成果', part.artifacts ], ['配置', Array.isArray(part.profiles) ? part.profiles.length : undefined ], ['快照时间', timeText(part.snapshotAt) ]]} /><ArchiveConfigurationDetails value={part} /><div className="pw-form-actions">{act('archives.reviewPhase', { ...pin, phase: key }, '审阅恢复此分区', locked || phasePending)}{key === 'experiences' && act('archives.experiences', { ...pin, page: 0 }, '查看只读经历', locked)}</div></SourceRecord>; })}
     </Card>}
     <Card title="加密 WebDAV 备份" description="每次上传一个新版本，发送前核对固定备份和目标目录。">
       <div className="pw-form-actions">{act('archives.webdav.load', {}, '读取连接设置', locked)}{data.webDavConfig && <Button variant="secondary" disabled={locked} onClick={() => setConfigDraft({ revision: config.revision, collection: text(config.collection), username: text(config.username), enabled: config.enabled === true, password: '' })}>编辑连接</Button>}</div>
@@ -895,6 +896,7 @@ function ArchiveWorkspace({ data, supported, run, registerTransientBack }: DataP
     {data.experiencePage && <Card title="归档中的只读经历" description="这是固定时间的快照，不恢复旧授权，也不证明之后的状态。"><Facts items={[[ '快照时间', timeText(data.experiencePage.snapshotAt) ], ['页码', text(data.experiencePage.pageIndex + 1) + ' / ' + text(data.experiencePage.pageCount) ]]} /><p>{first(object(data.experiencePage.data), ['title', 'goal', 'text', 'summary'])}</p><Accordion><AccordionItem title="查看这页完整原记录"><pre className="pw-source-code">{JSON.stringify(object(data.experiencePage.data), null, 2)}</pre></AccordionItem></Accordion><div className="pw-form-actions">{act('archives.experiences', { ...pin, page: data.experiencePage.pageIndex - 1 }, '上一页', data.experiencePage.pageIndex <= 0)}{act('archives.experiences', { ...pin, page: data.experiencePage.pageIndex + 1 }, '下一页', !data.experiencePage.hasMore)}</div></Card>}
     <Card title="恢复结果与原动作">
       {data.originalAction && <><Facts items={[[ '状态', statusText(original.status || 'unknown') ], ['原动作', data.originalAction ]]} /><div className="pw-form-actions">{act('archives.query', { actionId: data.originalAction }, '只读核对原恢复结果')}{['running', 'queued', 'stopping'].includes(original.status) && act('archives.stop', { actionId: data.originalAction }, '请求停止后续恢复')}</div></>}
+      {Object.keys(nativeResult).length > 0 && <><ArchiveConfigurationDetails value={nativeResult} result />{['settings', 'skills', 'schedules'].includes(object(original.scope).phase) && <p>恢复写入与启用分开核对：连接和排程保持停用，技能须重新批准，工作配置须重选本机来源；当前模型选择保留。</p>}<div className="pw-form-actions">{object(original.scope).phase === 'settings' && <><Button variant="secondary" onClick={() => navigate('models')}>管理模型连接</Button><Button variant="secondary" onClick={() => navigate('workProfiles')}>核对工作配置</Button></>}{object(original.scope).phase === 'skills' && <Button variant="secondary" onClick={() => navigate('skills')}>审核恢复的技能</Button>}{object(original.scope).phase === 'schedules' && <Button variant="secondary" onClick={() => navigate('automation')}>核对恢复的排程</Button>}</div></>}
       {list(object(data.result).checkouts).filter(row => row.found).map(row => <div className="pw-form-actions" key={text(row.checkoutId)}>{act('archives.openCheckout', { actionId: data.originalAction, id: row.checkoutId }, '打开恢复项目：' + text(row.name, '项目'))}</div>)}
       {list(object(data.result).attachments).filter(row => row.id).map(row => <div className="pw-form-actions" key={text(row.id)}>{act('archives.openAttachment', { actionId: data.originalAction, id: row.id }, '查看原件：' + text(row.name, '恢复的文件'))}</div>)}
       <Accordion><AccordionItem title="按已有恢复编号读取"><TextField label="原恢复任务编号" value={originalId} onChange={value => setOriginalId(value.slice(0, 36))} /><div className="pw-form-actions">{act('archives.readOriginal', { actionId: originalId }, '读取原恢复定位', !/^[a-f0-9-]{36}$/.test(originalId))}</div></AccordionItem></Accordion>
@@ -902,7 +904,7 @@ function ArchiveWorkspace({ data, supported, run, registerTransientBack }: DataP
     </Card>
     {data.passwordPromptId && <ArchivePassword key={data.passwordPromptId} data={data} supported={supported} run={run} />}
     <SettingsDialog isOpen={hasReview} title={data.review ? '确认恢复这个分区？' : '确认上传这个新版本？'} onClose={() => { if (!busy) cancelReview(); }}>
-      {data.review ? <><Facts items={[[ '分区', ARCHIVE_SECTIONS[review.phase] || review.phase ]]} /><p>仅从这份固定备份创建新数据。现有项目保留；原登录、信任和执行授权不会恢复。</p></> : <><Facts items={[[ '目标', uploadReview.destination ], ['加密后大小', bytesText(uploadReview.encryptedBytes) ], ['分区', Object.keys(object(uploadReview.sections)).map(key => ARCHIVE_SECTIONS[key] || key).join('、') ]]} /><p>仅发送这份密文到上述目录；不会自动重传或覆盖已有版本。</p></>}
+      {data.review ? <><Facts items={[[ '分区', ARCHIVE_SECTIONS[review.phase] || review.phase ]]} /><p>仅从这份固定备份创建新数据。现有项目保留；原登录、信任和执行授权不会恢复。</p><ArchiveConfigurationDetails value={nativeScope} />{['settings', 'skills', 'schedules'].includes(review.phase) && <p>连接和排程恢复为停用状态，技能需要重新批准，工作配置需要重新绑定本机来源。恢复不会切换当前模型或自动开始任务。</p>}</> : <><Facts items={[[ '目标', uploadReview.destination ], ['加密后大小', bytesText(uploadReview.encryptedBytes) ], ['分区', Object.keys(object(uploadReview.sections)).map(key => ARCHIVE_SECTIONS[key] || key).join('、') ]]} /><p>仅发送这份密文到上述目录；不会自动重传或覆盖已有版本。</p></>}
       <CheckboxField isSelected={confirmed} isDisabled={busy} onChange={setConfirmed}>{data.review ? '我已核对此分区，确认恢复到这台设备' : '我已核对这份备份和上传目录'}</CheckboxField>
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={cancelReview}>取消</Button>{act(data.review ? 'archives.confirmPhase' : 'archives.webdav.confirm', { actionId: data.review ? review.actionId : uploadReview.actionId }, data.review ? '仅恢复这个分区' : '仅上传这个新版本', !confirmed, true)}</div>
     </SettingsDialog>
@@ -963,7 +965,7 @@ function DataManagement({ kind, ...props }: DataPageProps & { kind: 'archives' |
 }
 
 const SETTINGS_GROUPS = [
-  { id: 'models', title: '模型与连接', detail: '当前模型、API 与 ChatGPT 账号', icon: RiKey2Line, entries: ['model-settings', 'accounts'] },
+  { id: 'models', title: '模型与连接', detail: '当前模型、API 与 ChatGPT 账号', icon: RiKey2Line, entries: ['model-settings', 'accounts', 'workProfiles'] },
   { id: 'devices', title: '设备与执行', detail: '手机、电脑、服务器与本机环境', icon: RiComputerLine, entries: ['phone', 'devices', 'remote', 'ssh', 'local'] },
   { id: 'work', title: '工作与数据', detail: '历史、调用记录、存储与备份', icon: RiFileList3Line, entries: ['history', 'usage', 'storage', 'archives'] },
   { id: 'memory', title: '记忆与主动任务', detail: '私人记忆、学习、提醒与跟进', icon: RiDatabase2Line, entries: ['memory', 'memoryReview', 'learning', 'automation', 'commitments'] },
@@ -1104,7 +1106,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
               {modelView.kind !== 'model' && state.modelRoute === 'account' && <div className="pw-account-model-entry"><Button variant="secondary" trailingIcon={RiArrowRightSLine} onClick={() => navigate('accounts')}>打开账号模型</Button><p className="pw-field-hint">下面是保留的 API 模型目录。</p></div>}
               <ModelCatalog key={page} state={state} data={data} active={modelBrowseActive} selectedId={modelView.kind === 'model' ? modelView.id : undefined} supported={supported} run={run} open={openModel} registerTransientBack={registerTransientBack} />
             </div>
-            {modelView.kind === 'connections' ? <ModelConnections state={state} data={data} supported={supported} run={run} navigate={navigate} open={openModel} />
+            {modelView.kind === 'connections' ? <><ModelConnections state={state} data={data} supported={supported} run={run} navigate={navigate} open={openModel} /><TokenBudgetsWorkspace supported={supported} registerTransientBack={registerTransientBack} /></>
               : modelView.kind === 'edit' || modelView.kind === 'add' ? <ModelSettings key={modelDraftKey} state={state} connection={editConnection} supported={supported} run={run} adding={modelView.kind === 'add'} draft={modelDrafts.current[modelDraftKey]} onDraftChange={value => { if (value) modelDrafts.current[modelDraftKey] = value; else delete modelDrafts.current[modelDraftKey]; }} onInspect={() => { void run('models.snapshot', {}).catch(() => {}); setModelView(modelView.kind === 'add' ? { kind: 'connections' } : { kind: 'connection', id: recordId(editConnection || {}) }); }} onSaved={saved => { const id = modelView.kind === 'add' ? text(object(saved.connections).selectedConnectionId) : recordId(editConnection || {}); setModelView(id ? { kind: 'connection', id } : { kind: 'connections' }); }} registerTransientBack={registerTransientBack} />
               : modelView.kind === 'connection' ? <ModelConnectionDetail connection={connection} supported={supported} run={run} open={openModel} busy={Boolean(state.modelSelectionBusy || state.modelSaving || state.modelTesting || state.chatSubmitting || state.phoneSubmitting)} /> : null}
           </>

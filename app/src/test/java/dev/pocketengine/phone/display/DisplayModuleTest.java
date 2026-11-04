@@ -34,6 +34,31 @@ public final class DisplayModuleTest {
     private void field(DisplayModule module,String name,Object value)throws Exception {
         Field field=DisplayModule.class.getDeclaredField(name);field.setAccessible(true);field.set(module,value);
     }
+    private JSONObject geometryStatus(long generation,int rotation)throws Exception {
+        return new dev.pocketengine.displayhelper.DisplayGeometry(generation,(rotation&1)==0?720:1280,(rotation&1)==0?1280:720,240,rotation)
+                .writeTo(status(true,"original",7),true);
+    }
+    @Test public void authenticatedGeometryAdvancesOriginalSessionWithoutCreatingAnotherDisplay()throws Exception {
+        DisplayModule module=module();field(module,"state",geometryStatus(1,0));module.acceptStatus(geometryStatus(2,1));
+        JSONObject current=module.session();assertEquals("original",current.getString("sessionId"));assertEquals(7,current.getInt("displayId"));
+        assertEquals(2,current.getLong("geometryGeneration"));assertEquals(1280,current.getInt("width"));assertEquals(720,current.getInt("height"));
+        assertEquals(720,current.getInt("captureWidth"));assertEquals(1280,current.getInt("captureHeight"));assertTrue(module.hasSession());
+    }
+    @Test public void delayedOrDowngradedStatusCannotRestoreAnOldGeometry()throws Exception {
+        DisplayModule module=module();field(module,"state",geometryStatus(3,0));
+        assertThrows(SecurityException.class,()->module.acceptStatus(geometryStatus(1,0)));
+        assertThrows(SecurityException.class,()->module.acceptStatus(geometryStatus(3,2)));
+        assertThrows(SecurityException.class,()->module.acceptStatus(status(true,"original",7)));
+        assertEquals(3,module.session().getLong("geometryGeneration"));assertEquals(0,module.session().getInt("rotation"));
+    }
+    @Test public void delayedFrameCannotRollBackOrWriteIntoAReplacementSession()throws Exception {
+        DisplayModule module=module();field(module,"state",geometryStatus(3,0));
+        java.lang.reflect.Method adopt=DisplayModule.class.getDeclaredMethod("adoptFrameGeometry",JSONObject.class,String.class,int.class);adopt.setAccessible(true);
+        java.lang.reflect.InvocationTargetException stale=assertThrows(java.lang.reflect.InvocationTargetException.class,()->adopt.invoke(module,geometryStatus(1,0),"original",7));assertTrue(stale.getCause() instanceof SecurityException);
+        field(module,"state",status(true,"replacement",9));
+        java.lang.reflect.InvocationTargetException replaced=assertThrows(java.lang.reflect.InvocationTargetException.class,()->adopt.invoke(module,geometryStatus(4,1),"original",7));assertTrue(replaced.getCause() instanceof SecurityException);
+        assertEquals("replacement",module.session().getString("sessionId"));assertEquals(9,module.session().getInt("displayId"));
+    }
     @Test public void authenticatedAbsenceSettlesLostReleaseAndAllowsNewAdmission()throws Exception {
         DisplayModule module=module();field(module,"state",status(true,"previous",7));field(module,"releasePending",true);
         module.acceptStatus(status(false,"",-1));

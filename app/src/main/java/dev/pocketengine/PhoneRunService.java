@@ -455,7 +455,7 @@ public final class PhoneRunService extends Service {
                 if(end!=Long.MAX_VALUE&&System.currentTimeMillis()>=end){deadlineReached=true;throw new SecurityException("任务期限已到");}
                 BackgroundPhonePort background=taskBackgroundPort;if(background!=null&&background.isConnected())background.renewTaskLease(id,run,epoch,original,end);
                 synchronized(this){if(wakeLock!=null&&!waitingForUser)wakeLock.acquire(30_000L);}
-            }catch(Exception stopped){var completed=deviceGoal;if(completed!=null&&completed.originalControl()==original&&completed.ownerResultClosed())return;original.cancel();main.post(()->{var current=deviceGoal;if(id.equals(runningId)&&original==ownerControl&&waitingForUser&&(current==null||current.originalControl()!=original||!current.ownerResultClosed()))app.stop(id);});}
+            }catch(Exception stopped){var completed=deviceGoal;if(completed!=null&&completed.originalControl()==original&&completed.ownerResultClosed())return;original.cancel();main.post(()->{var current=deviceGoal;if(id.equals(runningId)&&original==ownerControl&&waitingForUser&&(current==null||current.originalControl()!=original||!current.ownerResultClosed()))app.stop(id,original);});}
         },0,1,java.util.concurrent.TimeUnit.SECONDS);
     }
     private JSONObject closeHeld(String id,String run,int epoch){PhonePort port=heldPort;heldPort=null;return releaseOriginalPort(id,run,epoch,port);}

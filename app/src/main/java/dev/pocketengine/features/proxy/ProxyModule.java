@@ -50,10 +50,34 @@ public final class ProxyModule implements EngineModule {
                 try{context.secrets.put("proxy.bearer",token);}catch(Exception error){next.close();throw error;}
                 relay=next;bound=selection;sessionId=next.sessionId();return snapshot();
             }
-            case "stop":close();return snapshot();
+            case "stop":stopRelay();return snapshot();
             case "status":return snapshot();
             default:throw new IllegalArgumentException("不支持的反代操作");
         }
+    }
+    /** Restrictive owner admission for the Web surface; the selected native model remains
+     * the only route source. No credential is returned to the presentation layer. */
+    public synchronized JSONObject handleReviewedOwner(String command,JSONObject input,long expectedSelectionRevision,
+            String expectedSessionId,java.util.function.BooleanSupplier window)throws Exception {
+        if(window==null||!window.getAsBoolean())throw new SecurityException("原本机服务窗口已关闭，请重新核对");
+        if(command.equals("stop")){
+            if(expectedSessionId==null||expectedSessionId.isEmpty()||!expectedSessionId.equals(sessionId))
+                throw new IllegalStateException("本机服务已经变化，未停止后继服务");
+            stopRelay();return ownerSnapshot();
+        }
+        if(!command.equals("snapshot")&&!command.equals("start"))throw new IllegalArgumentException("不支持的本机服务操作");
+        synchronized(context.settings){
+            if(!window.getAsBoolean())throw new SecurityException("原本机服务窗口已关闭，请重新核对");
+            if(command.equals("start")){
+                if(expectedSelectionRevision<0||context.settings.relaySelectionRevision()!=expectedSelectionRevision)
+                    throw new IllegalStateException("所选模型或连接已变化，请重新核对启动配置");
+                handle("start",input);
+            }
+            return ownerSnapshot();
+        }
+    }
+    private JSONObject ownerSnapshot()throws Exception {
+        synchronized(context.settings){return snapshot().put("selectionRevision",context.settings.relaySelectionRevision());}
     }
     /** Existing native owner/run entry only, not a model command. The actual task grant stays authoritative. */
     public synchronized NativeHarnessGatewayBridge prepareHarnessGateway(dev.pocketengine.store.TaskStore tasks,dev.pocketengine.core.RunControl original,
@@ -89,5 +113,6 @@ public final class ProxyModule implements EngineModule {
     }
     private JSONArray recentInference()throws Exception{JSONArray result=new JSONArray();for(JSONObject ref:recentInference)result.put(new JSONObject(ref.toString()));return result;}
     private static JSONArray endpoints(ModelConfig selected)throws Exception{JSONArray result=new JSONArray();if(selected.usesAccount())return result;result.put("/v1/models");JSONArray paths=NativeRelayPolicy.paths(selected);for(int i=0;i<paths.length();i++)result.put(paths.get(i));return result;}
-    @Override public synchronized void close(){if(harnessGateway!=null){harnessGateway.close();harnessGateway=null;}if(relay!=null){relay.close();relay=null;}bound=null;}
+    private void stopRelay(){if(relay!=null){relay.close();relay=null;}bound=null;}
+    @Override public synchronized void close(){if(harnessGateway!=null){harnessGateway.close();harnessGateway=null;}stopRelay();}
 }
