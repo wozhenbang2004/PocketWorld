@@ -5,6 +5,7 @@ import { Drawer } from './shell-library';
 import { Button, CheckboxField, IconButton } from './forms-library';
 import { ShimmerText } from './library';
 import type { ConversationDraftTarget } from './SkillDraftReview';
+import { MemoryAssertionFields } from './MemoryAssertionFields';
 
 type Data = Record<string, any>;
 const list = (value: any): Data[] => Array.isArray(value) ? value : [];
@@ -35,6 +36,8 @@ export function MemoryDraftReview({ target, onClose }: { target: ConversationDra
       {proposal.reason && <p>{proposal.reason}</p>}{review && <>
         {review.before && <section className="pw-source-record"><h3>原记忆</h3><p className="pw-reading-copy">{review.before.text}</p><p className="pw-muted">原修订 {review.before.revision}</p></section>}
         {review.after && <section className="pw-source-record"><h3>{action === 'create' ? '拟保存内容' : '纠正后的内容'}</h3><p className="pw-reading-copy">{review.after.text}</p>{review.after.applicability && <p>适用范围：{review.after.applicability}</p>}</section>}
+        {review.after?.assertion && <MemoryAssertionFields readOnly candidate={review.after} />}
+        {action === 'forget' && review.before?.assertion && <MemoryAssertionFields readOnly candidate={review.before} title="将遗忘的主体与依据" />}
         <section className="pw-source-record"><h3>本次提案来源</h3><p className="pw-muted">这是助手根据已准备的主人消息整理的提案；接受保存不会把归纳内容变成已独立核实的事实。</p><div className="pw-action-row">{list(review.sourceRefs).map((ref, index) => <Button key={ref.sourceId + ':' + ref.revision} variant="ghost" disabled={busy || attempted || !handle.current} onClick={() => { void request('memoryDraft.source', { handle: handle.current, index, offset: 0 }, setSource); }}>来源 {index + 1} · 修订 {ref.revision}</Button>)}</div>
           {source && <><h4>{source.title}</h4><pre className="pw-source-copy" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{source.text}</pre><p className="pw-muted">已显示原文 {source.offset}–{source.nextOffset} / {source.totalChars} 字符</p>{source.hasMore && <Button variant="ghost" disabled={busy || attempted} onClick={() => { void request('memoryDraft.source', { handle: handle.current, index: source.index, offset: source.nextOffset }, setSource); }}>继续读取原文</Button>}</>}
         </section>
