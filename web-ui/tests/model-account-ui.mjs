@@ -42,7 +42,7 @@ try {
     await page.getByText('本次授权', { exact: true }).waitFor();
   }, 'accounts');
   await check('api-models-retain-connection-identity', async page => {
-    await page.getByRole('button', { name: 'same-model', exact: true }).click();
+    await page.getByRole('button', { name: '切换模型：same-model', exact: true }).click();
     await page.getByText('备用连接', { exact: false }).first().waitFor({ timeout: 2500 });
     assert.ok(await page.getByText('工作连接', { exact: false }).count());
     assert.ok(await page.getByText('最近使用', { exact: false }).count());
@@ -88,7 +88,7 @@ try {
       await page.getByRole('textbox', { name: '账号名称（可选）', exact: true }).waitFor({ state: 'hidden' });
     }, 'accounts');
     await check('api-selection-keeps-original-connection', async page => {
-      await page.getByRole('button', { name: 'same-model', exact: true }).click();
+      await page.getByRole('button', { name: '切换模型：same-model', exact: true }).click();
       await page.getByRole('option', { name: /备用连接/ }).click();
       await page.getByRole('button', { name: '确认切换主模型', exact: true }).click();
       await page.getByRole('button', { name: '关闭模型选择', exact: true }).waitFor({ state: 'hidden' });
@@ -101,7 +101,7 @@ try {
       assert.equal(models.find(row => row.selected).connectionId, 'api-b');
     });
     await check('api-favorite-recent-and-disabled-model', async page => {
-      await page.getByRole('button', { name: 'same-model', exact: true }).click();
+      await page.getByRole('button', { name: '切换模型：same-model', exact: true }).click();
       await page.getByText('最近使用', { exact: true }).click();
       assert.equal(await page.getByRole('option').count(), 1);
       await page.getByRole('option', { name: /备用连接/ }).click();
@@ -118,11 +118,11 @@ try {
     });
     await check('old-model-review-cannot-replace-reopened-picker', async page => {
       await page.evaluate(() => window.modelFixture.setDelay(['models.api.review']));
-      await page.getByRole('button', { name: 'same-model', exact: true }).click();
+      await page.getByRole('button', { name: '切换模型：same-model', exact: true }).click();
       await page.getByRole('option', { name: /备用连接/ }).click();
       await page.waitForFunction(() => window.modelFixture.pending.some(call => call.action === 'models.api.review'));
       await page.getByRole('button', { name: '关闭模型选择', exact: true }).click();
-      await page.getByRole('button', { name: 'same-model', exact: true }).click();
+      await page.getByRole('button', { name: '切换模型：same-model', exact: true }).click();
       await page.getByRole('option', { name: /备用连接/ }).waitFor();
       await page.evaluate(() => window.modelFixture.settle('models.api.review', { windowId: 'api-window-1', viewGeneration: 1, selectionRevision: 8, reviewHandle: 'old', model: window.modelFixture.getModels()[1] }));
       await page.waitForTimeout(50);
