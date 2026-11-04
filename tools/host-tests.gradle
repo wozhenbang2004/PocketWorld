@@ -65,7 +65,7 @@ tasks.withType(Test).configureEach {
     // cwd makes Robolectric look for app resources/APK under the wrong build/ tree.
     workingDir project.projectDir
     systemProperty 'pocket.gateway.source', rootProject.projectDir.absolutePath
-    ['a25.python', 'a25.node', 'pocket.gateway.python', 'robolectric.dependency.dir', 'pocketworldHostLostWaitDir', 'pocketworldHostOldLostWaitDir'].each { key ->
+    ['a25.python', 'a25.node', 'pocket.gateway.python', 'robolectric.dependency.dir', 'pocketworldHostLostWaitDir', 'pocketworldHostOldLostWaitDir', 'pocketworldHostTransportLostWaitDir'].each { key ->
         def value = providers.gradleProperty(key).orNull
         if (value != null) systemProperty key, value
     }

@@ -12,14 +12,14 @@ import org.junit.Test;
 /** Actual Linux JNI via a separate, self-owned reaper fixture. No App-wide subreaper,
  * guessed PID signal, task/grant, cached termination proof or Android-device claim. */
 public final class NativeNormalCleanupTest {
-    @Test public void currentContractNamesTheExactBundledOrdinarySourceWithoutChangingOtherModes()throws Exception {
+    @Test public void currentContractsNameTheExactBundledSourcesWithoutRelabellingHistoricalModes()throws Exception {
         Path root=Path.of(Objects.requireNonNull(System.getProperty("pocket.gateway.source"),"original repository source required"));
         String hash=dev.pocketengine.features.local.project.ProjectSources.sha256(Files.readAllBytes(root.resolve("app/src/main/java/dev/pocketengine/features/local/runtime/native/process_supervisor.cpp")));
         assertEquals("pocketworld.posix-exit7-owner-v3:"+hash,NativeProcessSupervisor.EXIT_RESULT_CONTRACT);
         String oldHash=dev.pocketengine.features.local.project.ProjectSources.sha256(Files.readAllBytes(root.resolve("app/src/test/resources/runtime/ordinary-process-protocol2.cpp")));
         assertEquals("pocketworld.posix-exit7-drain-v2:"+oldHash,NativeProcessSupervisor.DRAIN_V2_EXIT_RESULT_CONTRACT);
-        assertEquals("pocketworld.posix-pty-exit8-v1:f9132cee828fcbafd4252e71a139cb7c21839b1336111e1a762fab0afe487524",NativeProcessSupervisor.PTY_EXIT_RESULT_CONTRACT);
-        assertEquals("pocketworld.posix-duplex-exit8-v1:0e9ce13c7e6438484c8f855f763227e0d4c5a0ffa0ae06c1b2490fad68f92423",NativeProcessSupervisor.PIPE_EXIT_RESULT_CONTRACT);
+        assertEquals("pocketworld.posix-pty-exit8-v1:f9132cee828fcbafd4252e71a139cb7c21839b1336111e1a762fab0afe487524",NativeProcessSupervisor.LEGACY_PTY_EXIT_RESULT_CONTRACT);
+        assertEquals("pocketworld.posix-duplex-exit8-v1:0e9ce13c7e6438484c8f855f763227e0d4c5a0ffa0ae06c1b2490fad68f92423",NativeProcessSupervisor.LEGACY_PIPE_EXIT_RESULT_CONTRACT);
     }
     private static JSONObject fixture(String mode)throws Exception {
         String python=Objects.requireNonNull(System.getProperty("a25.python"),"exact actual host Python required");

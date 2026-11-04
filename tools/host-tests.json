@@ -971,6 +971,20 @@
     "python": true,
     "description": "Pinned Pi no-tools owner/session continuation through original SQL and Companion; synthetic vendor peer, not real account or coding capability acceptance. Original queued next-turn drafts add four actual owner SQL/Companion fixture journeys, eleven pure dispatch/draft contracts and eight mounted Compose semantics methods, including visible editor/cursor changes. No live Pi steering, implicit send, model adoption, real vendor or visual acceptance."
   },
+  "native-transport-wait-ownership": {
+    "class": "dev.pocketengine.features.local.runtime.NativeTransportWaitOwnershipTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.local.runtime.NativeTransportContractTest",
+      "dev.pocketengine.features.local.runtime.NativePtyTransportTest",
+      "dev.pocketengine.features.local.runtime.NativePipeTransportTest",
+      "dev.pocketengine.features.local.runtime.RuntimeActivityTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.local.runtime.NativeTransportWaitOwnershipProbe"
+    ],
+    "native": true,
+    "description": "Actual Linux JNI PTY/duplex transport and isolated competing exact-child waitpid before initial exit observation and after a real zombie observation at the next/final scan. After observing ECHILD or changed identity, no further numeric signal or group/session release proof is permitted. Checks and signals are not atomic against arbitrary competing reapers. Historical precise transport receipts stay read-only; no real PID reuse, unrelated signal target, App-wide reaper, Android device or full-suite claim."
+  },
   "native-normal-cleanup": {
     "class": "dev.pocketengine.features.local.runtime.NativeNormalCleanupTest",
     "additionalClasses": [
