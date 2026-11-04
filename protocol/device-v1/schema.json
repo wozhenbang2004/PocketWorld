@@ -1730,6 +1730,7 @@
               "device.describe",
               "tool.invoke",
               "operation.get",
+              "operation.cancel",
               "task.submitGoal",
               "task.get",
               "task.events",
