@@ -76,7 +76,9 @@ object BrowserTaskOwnerPanel {
 }
 
 private class OwnerController(val host: BrowserTaskHost, private val activity: BrowserActivity, initialExpanded: Boolean) : AutoCloseable {
-    var snapshot by mutableStateOf(JSONObject())
+    private var ownerSnapshot by mutableStateOf<BrowserTaskHost.OwnerSnapshot?>(null)
+    val snapshot get() = ownerSnapshot?.state ?: JSONObject()
+    val stopTicket get() = ownerSnapshot?.stopTicket
     var snapshotError by mutableStateOf(false)
     var expanded by mutableStateOf(initialExpanded)
     var workspaceView by mutableStateOf(if (initialExpanded) "research" else "page")
@@ -175,7 +177,7 @@ private class OwnerController(val host: BrowserTaskHost, private val activity: B
         if (closed || refreshing || busy) return
         val requested = runCatching { activity.researchTaskContextForOwner() }.getOrElse { error = "入口原任务不可核对，未切换任务或执行。"; draftReady = false; return }
         refreshing = true
-        try { io.execute { if (closed) return@execute; val result = runCatching { if (handledContext != requested) { entryTask = if (requested.isNotEmpty()) { val exact = host.selectHistoryForOwner(requested).getJSONObject("task"); JSONObject().put("id", exact.getString("id")).put("goal", exact.optString("goal")) } else JSONObject(); handledContext = requested }; host.snapshotForOwner().put("entryTask", JSONObject(entryTask.toString())) }; main.post { refreshing = false; if (!closed) result.onSuccess { snapshot = it; snapshotError = false; loadGoal(it, requested) }.onFailure { snapshotError = true; error = it.message ?: "工作区状态暂不可读，请刷新" } } } }
+        try { io.execute { if (closed) return@execute; val result = runCatching { if (handledContext != requested) { entryTask = if (requested.isNotEmpty()) { val exact = host.selectHistoryForOwner(requested).getJSONObject("task"); JSONObject().put("id", exact.getString("id")).put("goal", exact.optString("goal")) } else JSONObject(); handledContext = requested }; host.snapshotWithStopForOwner().also { it.state.put("entryTask", JSONObject(entryTask.toString())) } }; main.post { refreshing = false; if (!closed) result.onSuccess { ownerSnapshot = it; snapshotError = false; loadGoal(it.state, requested) }.onFailure { snapshotError = true; error = it.message ?: "工作区状态暂不可读，请刷新" } } } }
         catch (_: RuntimeException) { refreshing = false; error = "工作区正在处理请求，请稍后刷新" }
     }
     fun command(action: () -> Unit, done: () -> Unit = {}) = runOwnerCommand(action, done, false)
@@ -220,7 +222,11 @@ private class OwnerController(val host: BrowserTaskHost, private val activity: B
             }
         } } catch (_: RuntimeException) { fileRead = null; busy = false; read.cancel(); error = "原文件请求未开始，请稍后重试。" }
     }
-    fun stop() { host.cancelForOwner(); if (!busy) command({ host.endForOwner() }) else refresh() }
+    fun stop(ticket: BrowserTaskHost.OwnerStopTicket?) {
+        if (closed) return
+        runCatching { host.cancelForOwner(ticket) }.onSuccess { if (!busy) command({ host.endForOwner(ticket) }) else refresh() }
+            .onFailure { error = it.message ?: "原浏览任务已变化，请刷新后核对。"; refresh() }
+    }
     fun backToPage(): Boolean {
         if (closed || !expanded || workspaceView == "page") return false
         flushGoal(force = true); cancelFileOpen(); workspaceView = "page"; expanded = false
@@ -309,7 +315,7 @@ private fun statusLabel(status: String) = when (status) {
 }
 private data class ResearchResultPin(val text: String, val taskId: String, val citations: List<JSONObject>)
 @Composable private fun ResearchWorkspace(c: OwnerController, mode: String, page: () -> Unit) {
-    val state = c.snapshot
+    val stopTicket = c.stopTicket; val state = c.snapshot
     val profiles = state.child("profiles")
     val profileRows = profiles.array("profiles").rows()
     val profile = profileRows.firstOrNull { it.optString("id") == state.optString("profileId") }
@@ -480,13 +486,13 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("${pages.count { it.optString("openedBy") == "task" }} / 4 个任务页", style = MaterialTheme.typography.bodyMedium)
-                    OutlinedButton(onClick = { c.stop() }, enabled = !control.optBoolean("cancelRequested")) { Text("结束当前研究") }
+                    OutlinedButton(onClick = { c.stop(stopTicket) }, enabled = !control.optBoolean("cancelRequested")) { Text("结束当前研究") }
                 }
             } else if (pendingTask.optString("id").isNotBlank()) {
                 Text(if (pendingTask.optString("kind") == "phone") "网页已授权，等待原手机任务切换" else "等待原助手下一轮接入网页", fontWeight = FontWeight.SemiBold)
                 Text(pendingTask.optString("goal"), maxLines = 3)
                 Text(if (pendingTask.optString("kind") == "phone") "沿用当前任务和执行。助手选择网页后，原 App 会保留但停止自动输入；切回时重新观察。" else "沿用原任务与执行控制；当前模型请求结束后才取得本资料的任务页。", style = MaterialTheme.typography.bodySmall)
-                OutlinedButton(onClick = { c.stop() }) { Text("停止此任务的浏览请求") }
+                OutlinedButton(onClick = { c.stop(stopTicket) }) { Text("停止此任务的浏览请求") }
             } else {
                 if (state.child("model").optString("model").isNotBlank()) Text("模型：${state.child("model").optString("model")}", style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(value = c.goal, onValueChange = c::editGoal, label = { Text("想研究什么") }, placeholder = { Text("例如：比较三个方案，保留依据和可下载资料") }, modifier = Modifier.fillMaxWidth(), minLines = 2, maxLines = 4, enabled = !c.busy && c.draftReady)

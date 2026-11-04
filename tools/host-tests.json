@@ -187,9 +187,10 @@
     "class": "dev.pocketengine.browser.BrowserTaskHostAdmissionTest",
     "helpers": [],
     "robolectric": true,
-    "description": "Targeted original App/TaskStore monitor-order and same-run private-owner browser admission races; no model, device or renderer acceptance. Read-only profile-change preflight, exact original research cancellation and honest post-stop CAS/persistence failures; metadata provider fixtures do not prove WebView support.",
+    "description": "Targeted original App/TaskStore monitor-order and same-run private-owner browser admission races; no model, device or renderer acceptance. Read-only profile-change preflight, exact original research cancellation and honest post-stop CAS/persistence failures; metadata provider fixtures do not prove WebView support. Original native stop tickets pin displayed task/run/epoch and control/plan/space objects; delayed A cleanup cannot stop B. Controlled cross-caller scheduling, not a single-panel or device reproduction.",
     "additionalClasses": [
-      "dev.pocketengine.browser.BrowserProfileChangePreflightTest"
+      "dev.pocketengine.browser.BrowserProfileChangePreflightTest",
+      "dev.pocketengine.browser.BrowserOriginalStopTest"
     ]
   },
   "browser-expression": {
