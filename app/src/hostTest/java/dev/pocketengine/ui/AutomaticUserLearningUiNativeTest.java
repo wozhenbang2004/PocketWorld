@@ -6,6 +6,7 @@ import dev.pocketengine.EngineApplication;
 import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.features.FeatureHost;
 import dev.pocketengine.features.memory.MemoryModule;
+import dev.pocketengine.media.MediaController;
 import dev.pocketengine.store.SecretVault;
 import dev.pocketengine.store.SettingsStore;
 import dev.pocketengine.store.TaskStore;
@@ -18,6 +19,7 @@ import kotlin.jvm.functions.Function2;
 import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
@@ -39,15 +41,23 @@ public final class AutomaticUserLearningUiNativeTest {
     }
     private static final class Fixture implements AutoCloseable {
         final EngineApplication app=new EngineApplication();final PocketWorldController controller;final ExecutorService io;final android.database.sqlite.SQLiteDatabase db;
+        final org.robolectric.android.controller.ActivityController<ComposeActivity> activityOwner;
+        final MediaController media;
         Fixture()throws Exception {
             Method attach=Application.class.getDeclaredMethod("attach",android.content.Context.class);attach.setAccessible(true);attach.invoke(app,RuntimeEnvironment.getApplication());
             app.deleteDatabase("pocket-world.db");app.settings=new SettingsStore(app);app.tasks=new TaskStore(app);var database=TaskStore.class.getDeclaredField("db");database.setAccessible(true);db=(android.database.sqlite.SQLiteDatabase)database.get(app.tasks);app.features=new FeatureHost(event->{},app.tasks,()->false);
-            app.features.register(new MemoryModule(new FeatureContext(app,app.settings,new SecretVault(app),event->{})));controller=new PocketWorldController(new ComposeActivity(),app);
+            app.features.register(new MemoryModule(new FeatureContext(app,app.settings,new SecretVault(app),event->{})));
+            // Honor the original Activity's media-before-controller mount contract without running unrelated startup.
+            activityOwner=Robolectric.buildActivity(ComposeActivity.class);
+            ComposeActivity activity=activityOwner.get();Shadows.shadowOf(activity).setApplication(app);
+            media=new MediaController(activity,app::publish);
+            var mediaField=ComposeActivity.class.getDeclaredField("media");mediaField.setAccessible(true);mediaField.set(activity,media);
+            controller=new PocketWorldController(activity,app);
             var field=PocketWorldController.class.getDeclaredField("io");field.setAccessible(true);io=(ExecutorService)field.get(controller);
         }
         void call(String prefix,Object...args)throws Exception {Method selected=null;for(Method method:PocketWorldController.class.getDeclaredMethods())if(method.getName().startsWith(prefix)&&method.getParameterCount()==args.length){assertNull("ambiguous original controller entry",selected);selected=method;}assertNotNull(prefix+" was not compiled from current controller",selected);selected.setAccessible(true);selected.invoke(controller,args);}
         void settle()throws Exception {io.submit(()->{}).get(5,TimeUnit.SECONDS);Shadows.shadowOf(Looper.getMainLooper()).idle();}
-        public void close(){controller.detach();app.onTerminate();db.close();}
+        public void close(){controller.detach();media.close();activityOwner.close();app.onTerminate();db.close();}
     }
     @Test public void ownerReadsDefaultOffAndMustConfirmBeforeEnablingThenCanWithdraw()throws Exception {try(Fixture f=new Fixture()){
         Reply read=new Reply();f.call("readAutomaticUserLearningPolicy",read);f.settle();assertNull(read.error.get());assertFalse(read.value.get().getBoolean("enabled"));
