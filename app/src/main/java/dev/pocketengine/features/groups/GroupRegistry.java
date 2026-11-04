@@ -296,7 +296,8 @@ final class GroupRegistry implements AutoCloseable {
             if(!row.getString("platformMessageId").isEmpty()&&!receipt.platformMessageId.isEmpty()&&!row.getString("platformMessageId").equals(receipt.platformMessageId))throw new SecurityException("平台消息身份发生变化");
             row.put("state",receipt.state);if(!receipt.platformMessageId.isEmpty())row.put("platformMessageId",receipt.platformMessageId);commit(next);
         }
-        JSONObject safe=GroupJson.copy(row);safe.remove("event");safe.remove("output");return safe;
+        // Keep only the stored output identity after stripping its content and transport event.
+        JSONObject safe=GroupJson.copy(row).put("outputId",row.getJSONObject("output").getString("outputId"));safe.remove("event");safe.remove("output");return safe;
     }
     private static boolean visible(JSONObject row,String sender) throws Exception {return row.getString("senderId").equals(sender)||row.getString("visibility").equals("members");}
     private static JSONObject reference(JSONObject row) throws Exception {return new JSONObject().put("requestId",row.getString("requestId")).put("taskId",row.getString("taskId"))

@@ -1,5 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Button, CheckboxField, SelectField, SettingsDialog, TextField } from './forms-library';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ChevronRight, MessageSquare, RefreshCw, Settings } from 'lucide-react';
+import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextField } from './forms-library';
+import { Tabs, TabList, Tab, TabPanel } from './shell-library';
+import './channels-workspace.css';
 import { channelCanStop, channelConnectionStatus, channelIdentity, channelObjects as rows, channelOriginalCurrent, channelOwnerCandidates, channelOwnerIdentity, channelProfilePayload, channelReceivingStatus, channelText as text, type ChannelData as Data } from './channel-contracts';
 
 type Run = (action: string, args?: Data) => Promise<any>;
@@ -7,7 +10,6 @@ type Back = (handler: (() => boolean) | null) => void;
 type Props = { state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: Back };
 type Modal = { kind: 'profile' | 'login' | 'owner' | 'history' | 'media' | 'receiving' | 'remove'; original?: Data; operation?: string; event?: Data; index?: number; review?: Data };
 const object = (value: any): Data => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-const section = (title: string, children: ReactNode, description?: string) => <section className="pw-settings-section"><header className="pw-section-heading"><h2>{title}</h2>{description && <p>{description}</p>}</header>{children}</section>;
 const clone = (value: Data) => JSON.parse(JSON.stringify(value)) as Data;
 const deliveryState = (state: any) => ({ queued: '等待发送', sending: '正在发送，结果待核对', sent: '平台已接受，不代表已读', delivered: '平台已接受，不代表已读', unknown: '投递结果未知', cancelled: '已取消待发回复', failed: '发送未完成' } as Data)[text(state)] || text(state);
 function Facts({ values }: { values: Array<[string, any]> }) { return <dl className="pw-facts">{values.filter(([, value]) => value !== '' && value !== undefined && value !== null).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{text(value)}</dd></div>)}</dl>; }
@@ -28,13 +30,39 @@ function useBack(register: Back, busy: boolean, close: () => void) {
   useEffect(() => { register(() => { if (!busy) close(); return true; }); return () => register(null); }, [register, busy, close]);
 }
 
-/** Uses the existing BoardUI forms and the original native channel workflows. */
+const providerName = (provider: string) => provider === 'qq' ? 'QQ 官方机器人' : provider === 'weixin' ? '微信 iLink' : '可信中继';
+const admissionState = (value: any) => ({ admitting: '正在交给原宿主', admitted: '原宿主已接收', awaiting_owner: '等待本机主人确认', admission_unknown: '宿主接收结果未知', cancelled: '已取消准入', cancellation_unknown: '取消结果未知' } as Data)[text(value)] || text(value) || '原回执待核对';
+const cancellationState = (value: any) => ({ requesting: '已请求取消，等待回执', requested: '原宿主已收到取消请求', cancellation_unknown: '取消结果未知' } as Data)[text(value)] || text(value);
+const taskNeedsReview = (row: Data) => ['admission_unknown', 'cancellation_unknown'].includes(row.admission) || row.cancellation === 'cancellation_unknown';
+const messageTime = (value: any) => typeof value === 'number' && Number.isFinite(value) && value > 0 && Number.isFinite(new Date(value).getTime()) ? new Date(value).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+
+/** BoardUI Tabs, Accordion and SettingsDialog retain the original native workflows.
+ * Compact connection rows adapt OpenMuse LinkRow's title/detail/chevron hierarchy:
+ * MIT 61796eb2, apps/mobile/src/ui.tsx:368. No upstream artwork is copied. */
 export default function ChannelsWorkspace({ state, data, supported, run, registerTransientBack }: Props) {
   const [modal, setModal] = useState<Modal | null>(null), [selected, setSelected] = useState<string[]>([]), [receipt, setReceipt] = useState<Data | null>(null);
-  const { request, busy, error } = useRequest(run), profiles = rows(data.profiles), bindings = rows(data.bindings), background = object(data.background), platform = object(background.platform);
+  const [panel, setPanel] = useState('inbox'), [connectionsOpen, setConnectionsOpen] = useState(false), [accountId, setAccountId] = useState('');
+  const [connectionExpanded, setConnectionExpanded] = useState<Set<string | number>>(new Set()), [accountExpanded, setAccountExpanded] = useState<Set<string | number>>(new Set());
+  const origin = useRef<HTMLElement | null>(null), root = useRef<HTMLElement | null>(null), positions = useRef<Record<string, number>>({});
+  const { request, busy, error } = useRequest(run), profiles = rows(data.profiles), bindings = rows(data.bindings), background = object(data.background);
   const receiving = channelCanStop(background), candidates = profiles.filter(profile => ['qq', 'weixin'].includes(profile.provider) && profile.enabled === true && profile.hasSecret === true);
-  const close = () => setModal(null);
-  const act = (action: string, args: Data = {}) => { void request(action, args).then(setReceipt).catch(() => {}); };
+  const tasks = rows(data.taskRequests).slice().reverse(), outbox = rows(data.outbox).slice().reverse();
+  const unknownTasks = tasks.filter(taskNeedsReview), unknownDeliveries = outbox.filter(row => row.status === 'unknown');
+  const account = profiles.find(profile => profile.id === accountId);
+  const close = () => { setModal(null); if (!accountId && !connectionsOpen) origin.current?.focus({ preventScroll: true }); };
+  const selectPanel = (next: string) => {
+    positions.current[panel] = root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop || 0;
+    setPanel(next);
+  };
+  useLayoutEffect(() => {
+    const scroller = root.current?.closest<HTMLElement>('.pw-secondary-scroll');
+    if (scroller) scroller.scrollTop = positions.current[panel] || 0;
+  }, [panel]);
+  const rememberOrigin = () => { origin.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; };
+  const returnToWorkspace = () => { setConnectionsOpen(false); setAccountId(''); origin.current?.focus({ preventScroll: true }); };
+  const openConnections = () => { rememberOrigin(); setConnectionsOpen(true); };
+  const openAccount = (id: string) => { if (id !== accountId) setAccountExpanded(new Set()); setAccountId(id); };
+  const act = (action: string, args: Data = {}) => { void request(action, args).then(value => { if (action !== 'channels.inspect') setReceipt(value); }).catch(() => {}); };
   useEffect(() => {
     if (supported('channels.open')) void run('channels.open').catch(() => {});
     return () => { if (supported('channels.close')) void run('channels.close').catch(() => {}); };
@@ -44,67 +72,128 @@ export default function ChannelsWorkspace({ state, data, supported, run, registe
     const bound = bindings.find(binding => binding.profileId === profile.id);
     setModal({ kind: 'owner', operation, original: clone({ ...profile, ownerIdentity: channelOwnerIdentity(profile, bound), ownerBinding: bound, requestedEnabled: enabled }) });
   };
-  return <>
-    {section('渠道账号', <>
-      <div className="pw-form-actions"><Button disabled={!supported('channels.loginStart')} onClick={() => setModal({ kind: 'login' })}>连接微信私聊</Button><Button variant="secondary" disabled={!supported('channels.saveProfile')} onClick={() => setModal({ kind: 'profile', original: { id: crypto.randomUUID(), adding: true, provider: 'qq', name: '我的 QQ 机器人', enabled: true } })}>添加 QQ 官方机器人</Button><Button variant="ghost" disabled={busy || !supported('channels.inspect')} onClick={() => act('channels.inspect')}>刷新真实状态</Button></div>
-      {!profiles.length && <p>还没有渠道账号。配置保存后，再从本人账号发送私聊，在本机核对主人身份。</p>}
-      {profiles.map(profile => {
-        const bound = bindings.find(binding => binding.profileId === profile.id), connection = rows(object(data[profile.provider]).connections).find(row => row.profileId === profile.id);
-        return <article className="pw-selected-object" key={profile.id}>
-          <h3>{profile.name}</h3><Facts values={[[ '类型', profile.provider === 'qq' ? 'QQ 官方机器人' : profile.provider === 'weixin' ? '微信 iLink' : '可信中继' ], ['配置', profile.enabled ? '已启用，平台状态单独核对' : '已停用' ], ['主人账号', bound?.senderId || '尚未绑定' ]]} />
-          {['qq', 'weixin'].includes(profile.provider) && <p>{channelConnectionStatus(profile.provider, connection)}</p>}{connection?.message && <p className="pw-field-hint">{connection.message}</p>}
-          {receiving && rows(background.profiles).some(row => row.id === profile.id) && <p className="pw-field-hint">由下方原前台接收会话管理。</p>}
-          <div className="pw-form-actions">
-            {['qq', 'weixin'].includes(profile.provider) && <Button variant="secondary" disabled={!supported('channels.saveProfile')} onClick={() => setModal({ kind: 'profile', original: clone(profile) })}>连接设置</Button>}
-            <Button variant="secondary" disabled={!supported('channels.reviewOwner')} onClick={() => owner(profile, 'bind')}>{bound ? '重新核对主人' : '核对主人私聊'}</Button>
-            <Button variant="ghost" disabled={!supported('channels.history')} onClick={() => setModal({ kind: 'history', original: clone(profile) })}>已读历史范围</Button>
-            {profile.provider === 'weixin' && <Button variant="ghost" disabled={busy || !profile.enabled || !supported('channels.syncOnce')} onClick={() => act('channels.syncOnce', channelIdentity(profile))}>同步一次</Button>}
-            {profile.provider === 'qq' && <Button variant="ghost" disabled={busy || !supported('channels.probeProfile')} onClick={() => act('channels.probeProfile', channelIdentity(profile))}>核对平台凭据</Button>}
-            {bound && <Button variant="ghost" disabled={!supported('channels.reviewOwner')} onClick={() => owner(profile, 'unbind')}>解除绑定</Button>}
-            <Button variant="ghost" disabled={busy || !supported('channels.reviewRemoval')} onClick={() => { void request('channels.reviewRemoval', channelIdentity(profile)).then(review => setModal({ kind: 'remove', original: clone(profile), review })).catch(() => {}); }}>移除连接</Button>
+  return <section ref={root} className="pw-channels-workspace pw-settings-section">
+    <header className="pw-channels-heading"><div><h2>渠道消息</h2><p>先看消息，再沿原记录查看任务与回复。</p></div><div className="pw-form-actions">
+      <Button variant="ghost" leadingIcon={Settings} onClick={openConnections}>连接与接收</Button>
+      <Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="刷新真实状态" disabled={busy || !supported('channels.inspect')} onClick={() => act('channels.inspect')} />
+    </div></header>
+
+    <div className="pw-channels-receiving" aria-label="当前接收状态">
+      <div><p className="pw-channels-status">{channelReceivingStatus(background)}</p>
+        {background.foregroundActive && <p className="pw-channels-caption">进程内接收 {Number(background.runningReceivers || 0)} 个 · 已认证或同步 {Number(background.authenticatedReceivers || 0)} 个。服务建立不代表每个账号在线。</p>}
+        {background.message && <p className="pw-channels-caption">{background.message}</p>}
+      </div>
+      {receiving && <Button variant="secondary" disabled={busy || !supported('channels.stopReceiving')} onClick={() => act('channels.stopReceiving', { sessionId: background.sessionId })}>请求停止本次接收</Button>}
+    </div>
+    {(unknownTasks.length > 0 || unknownDeliveries.length > 0) && <div className="pw-channels-attention" role="status">
+      <p>有原操作结果待核对。只查原记录，不重新提交或重发。</p><div className="pw-form-actions">
+        {unknownTasks.length > 0 && <Button variant="ghost" onClick={() => selectPanel('tasks')}>{unknownTasks.length} 项任务回执待核对</Button>}
+        {unknownDeliveries.length > 0 && <Button variant="ghost" onClick={() => selectPanel('outbox')}>{unknownDeliveries.length} 项投递结果未知</Button>}
+      </div>
+    </div>}
+    {error && <p className="pw-channels-feedback" role="alert">{error}</p>}
+    {receipt && <div className="pw-channels-feedback" role="status"><p>这次实际回执</p><Facts values={[[ '状态', receipt.status ], ['已认证', receipt.authenticated === true ? '是' : undefined ], ['实际接收条数', receipt.received ], ['尚未识别的项目', receipt.skippedUnsupported ], ['服务停止信号', receipt.serviceStopSignalAccepted === true ? '已交给系统' : receipt.serviceStopSignalAccepted === false ? '系统未确认' : undefined ]]} />{receipt.message && <p>{receipt.message}</p>}{receipt.connected === false && <p>配置存在，尚未确认平台联通。</p>}{receipt.foregroundEstablished === false && <p>已提交原服务请求；等待上方真实服务和账号状态。</p>}{receipt.removed === true && <p>原连接已移除。</p>}</div>}
+
+    <Tabs selectedKey={panel} onSelectionChange={key => selectPanel(String(key))} className="pw-channels-tabs">
+      <TabList aria-label="渠道记录"><Tab id="inbox">最近消息</Tab><Tab id="tasks">原任务</Tab><Tab id="outbox">回复投递</Tab></TabList>
+      <TabPanel id="inbox" shouldForceMount hidden={panel !== 'inbox'}>
+        <ChannelInbox data={data} supported={supported} run={run} connect={openConnections} account={id => { rememberOrigin(); openAccount(id); }} media={(event, index) => { rememberOrigin(); setModal({ kind: 'media', event: clone(event), index }); }} />
+      </TabPanel>
+      <TabPanel id="tasks" shouldForceMount hidden={panel !== 'tasks'}>
+        <p className="pw-channels-caption">从已认证的主人私聊创建，始终回到同一个本机任务。</p>
+        {!tasks.length && <div className="pw-channels-empty"><p>还没有主人私聊任务</p><span>核对主人身份并单独允许 /task 后，原任务会留在这里。</span><Button variant="ghost" onClick={openConnections}>查看连接与主人权限</Button></div>}
+        <Accordion className="pw-channels-records" allowsMultipleExpanded>{tasks.map(row => <AccordionItem id={row.requestId} key={row.requestId} title={rows(state.tasks).find(task => task.id === row.taskId)?.goal || '原任务等待本机核对'} description={taskNeedsReview(row) ? '上次请求结果未知 · 只核对原宿主任务' : admissionState(row.admission)}>
+          <ChannelTask row={row} task={rows(state.tasks).find(task => task.id === row.taskId)} supported={supported} run={run} />
+        </AccordionItem>)}</Accordion>
+      </TabPanel>
+      <TabPanel id="outbox" shouldForceMount hidden={panel !== 'outbox'}>
+        <p className="pw-channels-caption">本机保留的投递记录。平台接受不代表收件人已读。</p>
+        {!outbox.length && <div className="pw-channels-empty"><p>还没有回复投递</p><span>回复产生后，可在这里核对原投递状态。</span></div>}
+        <Accordion className="pw-channels-records" allowsMultipleExpanded>{outbox.map(row => <AccordionItem id={row.id} key={row.id} title={<span className="pw-channels-preview">{row.text || '原回复正文未保留'}</span>} description={deliveryState(row.status)}>
+          <div className="pw-channels-record-detail"><p className="pw-channels-body">{row.text}</p>{row.message && <p className="pw-field-hint">{row.message}</p>}
+            {row.nativeQqStream && <p className="pw-field-hint">QQ 原消息已确认 {Number(row.nativeQqStream.lastAckIndex ?? -1) + 1} 帧 · {row.nativeQqStream.complete ? '最终帧已被平台接受' : '完整结束尚未确认，部分草稿可能已显示'}</p>}
+            {row.status === 'queued' && <Button variant="secondary" disabled={busy || !supported('channels.cancelOutbox')} onClick={() => act('channels.cancelOutbox', { id: row.id })}>取消这项待发回复</Button>}
+            {row.status === 'unknown' && <p>请到原平台核对结果；保留同一条投递记录，不自动重发。</p>}
           </div>
-          {bound && <><p>主人私聊创建任务：{bound.ownerTasksEnabled ? '已允许' : '未允许'}</p><Button variant="secondary" disabled={!supported('channels.reviewOwner') || !bound.ownerTasksEnabled && (!profile.enabled || !object(data.capabilities).ownerTaskHostConfigured)} onClick={() => owner(profile, 'tasks', !bound.ownerTasksEnabled)}>{bound.ownerTasksEnabled ? '核对并关闭任务权限' : '核对并允许 /task'}</Button><p className="pw-field-hint">仅原本人私聊的明确 /task 目标；写入与外发仍须按原参数在本机审批，私聊消息不能批准手机工具。</p></>}
-        </article>;
-      })}
-    </>, '微信沿用官方 iLink 扫码；QQ 使用有权管理的官方机器人。账号配置、主人绑定、自动回答和持续接收分别确认。')}
+        </AccordionItem>)}</Accordion>
+      </TabPanel>
+    </Tabs>
 
-    {section('持续接收', <>
-      <h3>{channelReceivingStatus(background)}</h3>{background.message && <p>{background.message}</p>}
-      {background.foregroundActive && <p>进程内接收 {Number(background.runningReceivers || 0)} 个 · 已认证或同步 {Number(background.authenticatedReceivers || 0)} 个。服务建立不代表每个账号在线。</p>}
-      {receiving ? <Button variant="secondary" disabled={busy || !supported('channels.stopReceiving')} onClick={() => act('channels.stopReceiving', { sessionId: background.sessionId })}>请求停止本次接收</Button> : <>
-        {!candidates.length && <p>先配置并启用 QQ 或微信账号，再选择接收范围。</p>}
-        {candidates.map(profile => <CheckboxField key={profile.id} isSelected={selected.includes(profile.id)} isDisabled={busy} onChange={checked => setSelected(previous => checked ? [...previous, profile.id] : previous.filter(id => id !== profile.id))}>{profile.name} · {profile.provider === 'qq' ? 'QQ 官方机器人' : '微信 iLink'}</CheckboxField>)}
-        <div className="pw-form-actions"><Button disabled={busy || !selected.length || platform.serviceDeclared !== true || !supported('channels.reviewReceiving')} onClick={() => { void request('channels.reviewReceiving', { profileIds: selected }).then(review => setModal({ kind: 'receiving', review })).catch(() => {}); }}>核对所选账号并开启</Button></div>
-      </>}
-      {platform.serviceDeclared !== true && <p className="pw-field-hint">当前版本未确认已安装接收服务。</p>}
-      {platform.notificationsVisible !== true && <Button variant="ghost" disabled={!supported('channels.notifications')} onClick={() => act('channels.notifications')}>允许或检查接收通知</Button>}
-      <p className="pw-field-hint">明确开启后会显示常驻通知并增加耗电；系统省电仍可能延迟消息。强停、进程结束或重启后需回到本机重新开启。关闭此页不会停止接收；停止接收不会停止已有任务。</p>
-    </>)}
-    {error && <p role="alert">{error}</p>}
-    {receipt && <div className="pw-selected-object" role="status"><h3>这次实际回执</h3><Facts values={[[ '状态', receipt.status ], ['已认证', receipt.authenticated === true ? '是' : undefined ], ['实际接收条数', receipt.received ], ['尚未识别的项目', receipt.skippedUnsupported ], ['服务停止信号', receipt.serviceStopSignalAccepted === true ? '已交给系统' : receipt.serviceStopSignalAccepted === false ? '系统未确认' : undefined ]]} />{receipt.message && <p>{receipt.message}</p>}{receipt.connected === false && <p>配置存在，尚未确认平台联通。</p>}{receipt.foregroundEstablished === false && <p>已提交原服务请求；等待上方真实服务和账号状态。</p>}{receipt.removed === true && <p>原连接已移除。</p>}</div>}
-
-    <ChannelInbox data={data} supported={supported} run={run} media={(event, index) => setModal({ kind: 'media', event: clone(event), index })} />
-    {section('主人私聊原任务', <>
-      {!rows(data.taskRequests).length && <p>尚无本机保留的主人私聊任务。</p>}
-      {rows(data.taskRequests).slice().reverse().map(row => <ChannelTask key={row.requestId} row={row} task={rows(state.tasks).find(task => task.id === row.taskId)} supported={supported} run={run} />)}
-    </>)}
-    {section('最近回复投递', <>
-      {!rows(data.outbox).length && <p>尚无保留的回复投递记录。</p>}
-      {rows(data.outbox).slice(-20).reverse().map(row => <article className="pw-selected-object" key={row.id}><p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{row.text}</p><p>{deliveryState(row.status)}</p>{row.message && <p className="pw-field-hint">{row.message}</p>}
-        {row.nativeQqStream && <p className="pw-field-hint">QQ 原消息已确认 {Number(row.nativeQqStream.lastAckIndex ?? -1) + 1} 帧 · {row.nativeQqStream.complete ? '最终帧已被平台接受' : '完整结束尚未确认，部分草稿可能已显示'}</p>}
-        {row.status === 'queued' && <Button variant="secondary" disabled={busy || !supported('channels.cancelOutbox')} onClick={() => act('channels.cancelOutbox', { id: row.id })}>取消这项待发回复</Button>}
-        {row.status === 'unknown' && <p>请到原平台核对结果；保留同一条投递记录，不自动重发。</p>}
-      </article>)}
-    </>)}
-    {supported('channels.advanced') && <Button variant="ghost" onClick={() => act('channels.advanced')}>可信中继与现有诊断入口</Button>}
-
+    {connectionsOpen && !accountId && !modal && <ChannelConnections data={data} candidates={candidates} selected={selected} select={setSelected} supported={supported} busy={busy} error={error} expanded={connectionExpanded} expand={setConnectionExpanded} openAccount={openAccount} openModal={setModal} request={request} act={act} close={returnToWorkspace} register={registerTransientBack} />}
+    {accountId && !modal && <ChannelAccount profile={account} data={data} supported={supported} busy={busy} error={error} receipt={receipt} expanded={accountExpanded} expand={setAccountExpanded} openModal={setModal} owner={owner} request={request} act={act} close={() => { if (connectionsOpen) setAccountId(''); else returnToWorkspace(); }} register={registerTransientBack} />}
     {modal?.kind === 'profile' && <ChannelProfile original={modal.original!} data={data} run={run} close={close} register={registerTransientBack} />}
     {modal?.kind === 'login' && <ChannelLogin run={run} close={close} register={registerTransientBack} />}
     {modal?.kind === 'owner' && <ChannelOwner original={modal.original!} operation={modal.operation!} data={data} run={run} close={close} register={registerTransientBack} />}
     {modal?.kind === 'history' && <ChannelHistory original={modal.original!} data={data} run={run} close={close} register={registerTransientBack} />}
     {modal?.kind === 'media' && <ChannelMedia event={modal.event!} index={modal.index!} run={run} close={close} register={registerTransientBack} />}
     {modal && ['receiving', 'remove'].includes(modal.kind) && <ChannelConfirmation modal={modal} run={run} close={close} register={registerTransientBack} />}
-  </>;
+  </section>;
+}
+
+type DisclosureControl = { expanded: Set<string | number>; expand: (keys: Set<string | number>) => void };
+type ManagerProps = DisclosureControl & { data: Data; supported: (action: string) => boolean; busy: boolean; error: string; openModal: (modal: Modal) => void; request: (action: string, args?: Data) => Promise<Data>; act: (action: string, args?: Data) => void; close: () => void; register: Back };
+function ChannelConnections({ data, candidates, selected, select, supported, busy, error, expanded, expand, openAccount, openModal, request, act, close, register }: ManagerProps & { candidates: Data[]; selected: string[]; select: (value: string[] | ((previous: string[]) => string[])) => void; openAccount: (id: string) => void }) {
+  useBack(register, busy, close);
+  const profiles = rows(data.profiles), background = object(data.background), platform = object(background.platform), receiving = channelCanStop(background);
+  return <SettingsDialog isOpen title="连接与接收" onClose={() => { if (!busy) close(); }}><div className="pw-channels-settings">
+    <p className="pw-channels-caption">连接账号、绑定主人、自动回答与持续接收分别确认。</p>
+    {receiving && <div className="pw-channels-receiving"><div><p className="pw-channels-status">{channelReceivingStatus(background)}</p><p className="pw-channels-caption">关闭此页不会停止接收，停止接收不会停止已有任务。</p></div><Button variant="secondary" disabled={busy || !supported('channels.stopReceiving')} onClick={() => act('channels.stopReceiving', { sessionId: background.sessionId })}>请求停止本次接收</Button></div>}
+    <div className="pw-channels-account-list">{profiles.map(profile => {
+      const connection = rows(object(data[profile.provider]).connections).find(row => row.profileId === profile.id);
+      return <Button className="pw-channels-link-row" key={profile.id} variant="ghost" disabled={busy} onClick={() => openAccount(profile.id)}><span className="pw-channels-account-icon" aria-hidden><MessageSquare size={20} /></span><span className="pw-channels-link-copy"><strong>{profile.name}</strong><small>{providerName(profile.provider)} · {['qq', 'weixin'].includes(profile.provider) ? channelConnectionStatus(profile.provider, connection) : profile.enabled ? '配置已启用' : '配置已停用'}</small></span><ChevronRight size={16} aria-hidden /></Button>;
+    })}</div>
+    {!profiles.length && <p>还没有渠道账号。连接后，从自己的账号发送私聊，再在本机核对主人身份。</p>}
+    <div className="pw-form-actions"><Button disabled={busy || !supported('channels.loginStart')} onClick={() => openModal({ kind: 'login' })}>连接微信私聊</Button><Button variant="secondary" disabled={busy || !supported('channels.saveProfile')} onClick={() => openModal({ kind: 'profile', original: { id: crypto.randomUUID(), adding: true, provider: 'qq', name: '我的 QQ 机器人', enabled: true } })}>添加 QQ 官方机器人</Button></div>
+    <Accordion className="pw-channels-settings-disclosure" expandedKeys={expanded} onExpandedChange={keys => expand(new Set(keys))}><AccordionItem id="receiving-scope" title="接收范围与通知" description={channelReceivingStatus(background)}>
+      {background.message && <p>{background.message}</p>}
+      {receiving ? <p>原接收会话仍在管理所选账号。先停止这次接收，再更改接收范围。</p> : <>
+        {!candidates.length && <p>先配置并启用 QQ 或微信账号，再选择接收范围。</p>}
+        {candidates.map(profile => <CheckboxField key={profile.id} isSelected={selected.includes(profile.id)} isDisabled={busy} onChange={checked => select(previous => checked ? [...previous, profile.id] : previous.filter(id => id !== profile.id))}>{profile.name} · {providerName(profile.provider)}</CheckboxField>)}
+        <div className="pw-form-actions"><Button disabled={busy || !selected.length || selected.length > 6 || platform.serviceDeclared !== true || !supported('channels.reviewReceiving')} onClick={() => { void request('channels.reviewReceiving', { profileIds: selected }).then(review => openModal({ kind: 'receiving', review })).catch(() => {}); }}>核对所选账号并开启</Button></div>
+        {selected.length > 6 && <p role="alert">本次最多选择 6 个账号。</p>}
+      </>}
+      {platform.serviceDeclared !== true && <p className="pw-field-hint">当前版本未确认已安装接收服务。</p>}
+      {platform.notificationsVisible !== true && <Button variant="ghost" disabled={busy || !supported('channels.notifications')} onClick={() => act('channels.notifications')}>允许或检查接收通知</Button>}
+      <p className="pw-field-hint">明确开启后会显示常驻通知并增加耗电；系统省电仍可能延迟消息。强停、进程结束或重启后需回到本机重新开启。关闭此页不会停止接收；停止接收不会停止已有任务。</p>
+    </AccordionItem></Accordion>
+    {error && <p role="alert">{error}</p>}
+    <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={close}>返回消息工作区</Button>{supported('channels.advanced') && <Button variant="ghost" disabled={busy} onClick={() => act('channels.advanced')}>可信中继与现有诊断入口</Button>}</div>
+  </div></SettingsDialog>;
+}
+
+function ChannelAccount({ profile, data, supported, busy, error, receipt, expanded, expand, openModal, owner, request, act, close, register }: ManagerProps & { profile?: Data; receipt: Data | null; owner: (profile: Data, operation: string, enabled?: boolean) => void }) {
+  useBack(register, busy, close);
+  const bound = rows(data.bindings).find(binding => binding.profileId === profile?.id), background = object(data.background);
+  const connection = profile && rows(object(data[profile.provider]).connections).find(row => row.profileId === profile.id);
+  return <SettingsDialog isOpen title={profile?.name || '原连接已不在本机'} onClose={() => { if (!busy) close(); }}><div className="pw-channels-settings">
+    {profile ? <>
+      <p className="pw-channels-caption">{providerName(profile.provider)} · {profile.enabled ? '配置已启用，平台状态单独核对' : '配置已停用'}</p>
+      {['qq', 'weixin'].includes(profile.provider) && <p className="pw-channels-status">{channelConnectionStatus(profile.provider, connection)}</p>}{connection?.message && <p>{connection.message}</p>}
+      {channelCanStop(background) && rows(background.profiles).some(row => row.id === profile.id) && <p className="pw-field-hint">此账号由原前台接收会话管理；可回工作区停止本次接收。</p>}
+      <Facts values={[[ '主人账号', bound?.senderId || '尚未绑定' ], ['私聊创建任务', bound?.ownerTasksEnabled ? '已允许' : '未允许' ], ['自动文字问答', profile.autoReply ? '已配置，仍需实际接收' : '未开启' ]]} />
+      <div className="pw-form-actions"><Button variant="secondary" disabled={busy || !supported('channels.reviewOwner')} onClick={() => owner(profile, 'bind')}>{bound ? '重新核对主人' : '核对主人私聊'}</Button><Button variant="ghost" disabled={busy || !supported('channels.history')} onClick={() => openModal({ kind: 'history', original: clone(profile) })}>已读历史范围</Button></div>
+      <Accordion className="pw-channels-settings-disclosure" allowsMultipleExpanded expandedKeys={expanded} onExpandedChange={keys => expand(new Set(keys))}>
+        <AccordionItem id="account-permissions" title="主人权限与原件" description="任务权限、图片与音视频保存范围">
+          {bound ? <><Button variant="secondary" disabled={busy || !supported('channels.reviewOwner') || !bound.ownerTasksEnabled && (!profile.enabled || !object(data.capabilities).ownerTaskHostConfigured)} onClick={() => owner(profile, 'tasks', !bound.ownerTasksEnabled)}>{bound.ownerTasksEnabled ? '核对并关闭任务权限' : '核对并允许 /task'}</Button><p className="pw-field-hint">仅原本人私聊的明确 /task 目标；写入与外发仍须按原参数在本机审批，私聊消息不能批准手机工具。</p></> : <p>先核对原主人私聊，再单独允许创建任务。</p>}
+          <Facts values={[[ '本人私聊图片', profile.ownerImagesEnabled ? '已允许下载并提供给所选图像模型' : '未允许' ], ['本人私聊文件、语音与视频', profile.ownerMediaEnabled ? '已允许逐项核对保存' : '未允许' ]]} />
+          <p className="pw-field-hint">开关在连接设置中。保存原件不代表已转写、播放或理解，也不会自动上传电脑或回发。</p>
+        </AccordionItem>
+        <AccordionItem id="account-connection" title="连接设置与核对" description="凭据、启用范围与平台联通状态">
+          <div className="pw-form-actions">{['qq', 'weixin'].includes(profile.provider) && <Button variant="secondary" disabled={busy || !supported('channels.saveProfile')} onClick={() => openModal({ kind: 'profile', original: clone(profile) })}>连接设置</Button>}
+            {profile.provider === 'weixin' && <Button variant="ghost" disabled={busy || !profile.enabled || !supported('channels.syncOnce')} onClick={() => act('channels.syncOnce', channelIdentity(profile))}>同步一次</Button>}
+            {profile.provider === 'qq' && <Button variant="ghost" disabled={busy || !supported('channels.probeProfile')} onClick={() => act('channels.probeProfile', channelIdentity(profile))}>核对平台凭据</Button>}
+          </div>
+        </AccordionItem>
+        <AccordionItem id="account-removal" title="解绑与移除" description="先核对原账号及影响范围">
+          <div className="pw-form-actions">{bound && <Button variant="ghost" disabled={busy || !supported('channels.reviewOwner')} onClick={() => owner(profile, 'unbind')}>解除绑定</Button>}
+            <Button variant="ghost" disabled={busy || !supported('channels.reviewRemoval')} onClick={() => { void request('channels.reviewRemoval', channelIdentity(profile)).then(review => openModal({ kind: 'remove', original: clone(profile), review })).catch(() => {}); }}>移除连接</Button>
+          </div>
+        </AccordionItem>
+      </Accordion>
+      {receipt?.message && <p role="status">{receipt.message}</p>}
+    </> : <p>这个账号已移除或不在当前保留范围。不会改选其他账号。</p>}
+    {error && <p role="alert">{error}</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={close}>返回原列表</Button></div>
+  </div></SettingsDialog>;
 }
 
 function ChannelProfile({ original, data, run, close, register }: { original: Data; data: Data; run: Run; close: () => void; register: Back }) {
@@ -211,19 +300,30 @@ function ChannelHistory({ original, data, run, close, register }: { original: Da
   </SettingsDialog>;
 }
 
-function ChannelInbox({ data, supported, run, media }: { data: Data; supported: (action: string) => boolean; run: Run; media: (event: Data, index: number) => void }) {
-  const { request, busy, error } = useRequest(run);
+function ChannelInbox({ data, supported, run, connect, account, media }: { data: Data; supported: (action: string) => boolean; run: Run; connect: () => void; account: (id: string) => void; media: (event: Data, index: number) => void }) {
+  const { request, busy, error } = useRequest(run), [limit, setLimit] = useState(12), [expanded, setExpanded] = useState<Set<string | number>>(new Set());
+  const inbox = rows(data.inbox).slice().reverse(), profiles = rows(data.profiles);
+  // Expanded original messages stay mounted when new arrivals move them beyond the initial window.
+  const visible = inbox.filter((event, index) => index < limit || expanded.has(event.id));
   const descriptions: Data = { frozen_bytes_not_model_understanding: '实际图片已保存，尚无本次模型响应证明', model_request_prepared: '图片输入已准备，模型结果仍待确认', model_response_received: '模型已返回本次图片输入的响应', model_result_unconfirmed: '模型结果未确认，原文件已保留' };
-  return section('本机最近收到的消息', <>
-    {!rows(data.inbox).length && <p>尚无本机保留的消息。</p>}
-    {rows(data.inbox).slice(-12).reverse().map(event => <article className="pw-selected-object" key={event.id}><Facts values={[[ '来源', event.senderId ], ['会话', event.kind === 'group' ? event.roomId : event.conversationKind || '私聊' ], ['认证', event.authenticatedBy ]]} /><p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{event.text || '媒体消息；正文为空不代表已读取媒体内容。'}</p>
-      {event.imageInputState && <p className="pw-field-hint">{descriptions[event.imageInputState] || '图片尚未提供给模型'}</p>}
-      {object(event.latestInferenceReference).taskId && <Button variant="ghost" disabled={busy || !supported('tasks.open')} onClick={() => { void request('tasks.open', { id: event.latestInferenceReference.taskId }).catch(() => {}); }}>查看本消息最近一次模型用量</Button>}
-      {rows(event.ownerImageArtifacts).map(ref => <Button key={ref.artifactId} variant="secondary" disabled={busy || !supported('channels.openImage')} onClick={() => { void request('channels.openImage', { eventId: event.id, id: ref.artifactId, sha256: ref.sha256 }).catch(() => {}); }}>查看固定原图 · 第 {Number(ref.itemIndex) + 1} 项</Button>)}
-      {rows(object(event.messageParts).parts).map((part, index) => ['media', 'unsupported_media'].includes(part.kind) && (part.kind === 'media' || part.media) ? <div key={index}><Button variant="secondary" disabled={!supported('channels.reviewMedia')} onClick={() => media(event, index)}>核对原件 · {part.declaredName || object(part.media).name || (part.mediaKind === 'voice' ? '原语音' : part.mediaKind === 'video' ? '原视频' : '原文件')}</Button></div> : null)}
-      {event.message && <p className="pw-field-hint">{event.message}</p>}
-    </article>)}{error && <p role="alert">{error}</p>}
-  </>, '只显示本机保留范围。图片响应不等于已经理解全部内容，保存音视频原件也不代表已转写或已播放。');
+  return <div className="pw-channels-inbox">
+    <p className="pw-channels-caption">仅本机保留的消息，不代表平台完整历史。图片响应不等于理解全部内容，音视频保存不代表转写或播放。</p>
+    {!inbox.length && <div className="pw-channels-empty"><MessageSquare size={26} aria-hidden /><p>最近消息会出现在这里</p><span>连接账号并明确开启接收后，从自己的账号发送一条私聊。</span><Button variant="secondary" onClick={connect}>查看连接与接收</Button></div>}
+    <Accordion className="pw-channels-records" allowsMultipleExpanded expandedKeys={expanded} onExpandedChange={keys => setExpanded(new Set(keys))}>
+      {visible.map(event => <AccordionItem id={event.id} key={event.id} title={<span className="pw-channels-preview">{event.text || '媒体消息'}</span>} description={<span className="pw-channels-message-meta"><span>{profiles.find(profile => profile.id === event.profileId)?.name || '原连接'} · {event.kind === 'group' ? event.roomId : event.senderId}</span>{messageTime(event.receivedAt) && <time dateTime={new Date(event.receivedAt).toISOString()}>{messageTime(event.receivedAt)}</time>}</span>}>
+        <div className="pw-channels-record-detail"><Facts values={[[ '来源', event.senderId ], ['会话', event.kind === 'group' ? event.roomId : event.conversationKind || '私聊' ], ['认证', event.authenticatedBy ]]} /><p className="pw-channels-body">{event.text || '媒体消息；正文为空不代表已读取媒体内容。'}</p>
+          {event.imageInputState && <p className="pw-field-hint">{descriptions[event.imageInputState] || '图片尚未提供给模型'}</p>}
+          <div className="pw-form-actions">{event.profileId && <Button variant="ghost" onClick={() => account(event.profileId)}>查看原连接</Button>}
+            {object(event.latestInferenceReference).taskId && <Button variant="ghost" disabled={busy || !supported('tasks.open')} onClick={() => { void request('tasks.open', { id: event.latestInferenceReference.taskId }).catch(() => {}); }}>查看本消息最近一次模型用量</Button>}
+            {rows(event.ownerImageArtifacts).map(ref => <Button key={ref.artifactId} variant="secondary" disabled={busy || !supported('channels.openImage')} onClick={() => { void request('channels.openImage', { eventId: event.id, id: ref.artifactId, sha256: ref.sha256 }).catch(() => {}); }}>查看固定原图 · 第 {Number(ref.itemIndex) + 1} 项</Button>)}
+            {rows(object(event.messageParts).parts).map((part, index) => ['media', 'unsupported_media'].includes(part.kind) && (part.kind === 'media' || part.media) ? <Button key={index} variant="secondary" disabled={!supported('channels.reviewMedia')} onClick={() => media(event, index)}>核对原件 · {part.declaredName || object(part.media).name || (part.mediaKind === 'voice' ? '原语音' : part.mediaKind === 'video' ? '原视频' : '原文件')}</Button> : null)}
+          </div>{event.message && <p className="pw-field-hint">{event.message}</p>}
+        </div>
+      </AccordionItem>)}
+    </Accordion>
+    {visible.length < inbox.length && <Button className="pw-channels-load-more" variant="ghost" onClick={() => setLimit(value => value + 12)}>查看更多本机消息</Button>}
+    {error && <p role="alert">{error}</p>}
+  </div>;
 }
 
 function ChannelMedia({ event, index, run, close, register }: { event: Data; index: number; run: Run; close: () => void; register: Back }) {
@@ -242,7 +342,7 @@ function ChannelMedia({ event, index, run, close, register }: { event: Data; ind
 
 function ChannelTask({ row, task, supported, run }: { row: Data; task?: Data; supported: (action: string) => boolean; run: Run }) {
   const [value, setValue] = useState<Data | null>(null), { request, busy, error } = useRequest(run);
-  return <article className="pw-selected-object"><h3>{task?.goal || '原任务等待本机核对'}</h3><Facts values={[[ '入站状态', row.admission ], ['原任务状态', task?.status ], ['取消回执', row.cancellation ]]} />
+  return <article className="pw-channels-record-detail"><Facts values={[[ '入站状态', admissionState(row.admission) ], ['原任务状态', task?.status ], ['取消回执', cancellationState(row.cancellation) ]]} />
     {['admission_unknown', 'cancellation_unknown'].includes(row.admission) || row.cancellation === 'cancellation_unknown' ? <p>上次请求结果未知；只核对原宿主任务，不重新提交或执行。</p> : null}
     {value && <p>{value.found === true ? '已核对同一宿主原任务，未重新执行。' : value.message || '原宿主结果仍待核对。'}</p>}{error && <p role="alert">{error}</p>}
     <div className="pw-form-actions"><Button variant="secondary" disabled={busy || !supported('channels.inspectTask')} onClick={() => { void request('channels.inspectTask', { requestId: row.requestId }).then(setValue).catch(() => {}); }}>核对原宿主回执</Button>{task && <Button variant="ghost" disabled={!supported('tasks.open')} onClick={() => { void run('tasks.open', { id: task.id }).catch(() => {}); }}>打开原任务</Button>}</div>

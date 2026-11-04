@@ -1,0 +1,71 @@
+/* Existing BoardUI controls, with OpenMuse LinkRow's compact title/detail rhythm.
+ * One quiet surface for records. Low-frequency controls remain in object dialogs. */
+.pw-channels-workspace.pw-settings-section { max-width: 860px; min-width: 0; }
+.pw-channels-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin: 4px 0 20px; }
+.pw-channels-heading > div { min-width: 0; }
+.pw-channels-heading h2 { margin: 0; font-size: 24px; line-height: 32px; font-weight: 500; letter-spacing: -.035em; }
+.pw-channels-heading p { margin: 5px 0 0; color: var(--pw-copy,#626262); font-size: 13px; line-height: 21px; }
+.pw-channels-heading .pw-form-actions { flex: none; margin: 0; gap: 4px; }
+.pw-channels-heading .pw-form-actions button { min-height: 44px; }
+.pw-channels-caption { margin: 5px 0 13px; color: var(--pw-copy,#626262); font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }
+.pw-channels-status { margin: 0; color: var(--pw-ink,#292929); font-size: 13px; line-height: 21px; font-weight: 500; }
+.pw-channels-receiving { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-bottom: 18px; padding: 13px 16px; border: 0; border-radius: 12px; background: var(--pw-inset,#ededed); }
+.pw-channels-receiving > div { min-width: 0; }
+.pw-channels-receiving .pw-channels-caption { margin: 3px 0 0; }
+.pw-channels-receiving > button { flex: none; min-height: 40px; }
+.pw-channels-attention, .pw-channels-feedback { margin: 0 0 16px; padding: 12px 16px; border: 0; border-radius: 12px; background: var(--pw-surface,#fff); box-shadow: 0 2px 6px -2px #00000006, 0 12px 24px -10px #0000000d; font-size: 13px; line-height: 21px; overflow-wrap: anywhere; }
+.pw-channels-attention > p, .pw-channels-feedback > p { margin: 0; }
+.pw-channels-attention .pw-form-actions { margin-top: 5px; gap: 6px; }
+.pw-channels-tabs { gap: 14px; }
+.pw-channels-tabs [role="tablist"] { border-color: var(--pw-hairline,#e9e9e9); }
+.pw-channels-tabs [role="tab"] { min-height: 44px; padding-inline: 14px; }
+.pw-channels-tabs [role="tabpanel"][hidden] { display: none; }
+.pw-channels-records { overflow: hidden; border: 0; border-radius: 15px; padding: 2px 18px; background: var(--pw-surface,#fff); box-shadow: 0 2px 6px -2px #00000005, 0 14px 26px -13px #00000010; }
+.pw-channels-records:empty { display: none; }
+.pw-channels-records > * { border: 0; border-radius: 0; box-shadow: none; background: transparent; }
+.pw-channels-records > * + * { border-top: 1px solid var(--pw-hairline,#eeeeef); }
+.pw-channels-records button[slot="trigger"] { min-height: 76px; padding: 14px 0; gap: 14px; }
+.pw-channels-records button[slot="trigger"] > span { gap: 4px; }
+.pw-channels-records button[slot="trigger"] > span > span:first-child { font-size: 14px; line-height: 22px; font-weight: 500; overflow-wrap: anywhere; }
+.pw-channels-records button[slot="trigger"] > span > span:last-child { font-size: 12px; line-height: 19px; }
+.pw-channels-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pw-channels-message-meta { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 3px 12px; min-width: 0; color: var(--pw-copy,#626262); }
+.pw-channels-message-meta > span { min-width: 0; overflow-wrap: anywhere; }
+.pw-channels-message-meta time { white-space: nowrap; font-size: 11px; }
+.pw-channels-record-detail { min-width: 0; color: var(--pw-ink,#292929); }
+.pw-channels-record-detail .pw-facts { margin: 0 0 14px; }
+.pw-channels-record-detail .pw-facts > div { padding-block: 5px; }
+.pw-channels-body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 24px; margin: 0 0 14px; }
+.pw-channels-record-detail .pw-form-actions { margin: 12px 0 4px; }
+.pw-channels-load-more { width: 100%; margin-top: 12px; min-height: 44px; }
+.pw-channels-empty { padding: 30px 16px; display: flex; flex-direction: column; align-items: flex-start; gap: 9px; color: var(--pw-copy,#626262); }
+.pw-channels-empty > svg { margin-bottom: 3px; }
+.pw-channels-empty p { margin: 0; color: var(--pw-ink,#292929); font-size: 15px; line-height: 24px; font-weight: 500; }
+.pw-channels-empty > span { max-width: 410px; font-size: 13px; line-height: 22px; }
+.pw-channels-empty > button { margin-top: 4px; min-height: 44px; }
+.pw-channels-settings { min-width: 0; }
+.pw-channels-settings > .pw-form-actions { margin: 16px 0; }
+.pw-channels-account-list { margin: 4px 0 12px; }
+.pw-channels-settings .pw-channels-link-row { display: flex; width: 100%; height: auto; min-height: 74px; padding: 13px 10px; border: 0; background: transparent; box-shadow: none; text-align: start; justify-content: flex-start; border-radius: 10px; }
+.pw-channels-link-row > span { display: flex; width: 100%; min-width: 0; gap: 14px; padding: 0; justify-content: flex-start; }
+.pw-channels-link-row .pw-channels-link-copy { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 3px; }
+.pw-channels-link-copy strong { color: var(--pw-ink,#292929); font-size: 14px; line-height: 22px; font-weight: 500; white-space: normal; overflow-wrap: anywhere; }
+.pw-channels-link-copy small { color: var(--pw-copy,#626262); font-size: 12px; line-height: 19px; font-weight: 400; white-space: normal; overflow-wrap: anywhere; }
+.pw-channels-account-icon { display: grid; place-items: center; flex: none; width: 38px; height: 40px; color: var(--pw-copy,#626262); background: var(--pw-canvas,#f5f5f5); border-radius: 11px; }
+.pw-channels-link-row > span > svg { flex: none; color: var(--pw-copy,#626262); }
+.pw-channels-settings-disclosure { margin-top: 18px; }
+.pw-channels-settings-disclosure > * { border: 0; box-shadow: none; }
+.pw-channels-settings-disclosure button[slot="trigger"] { min-height: 58px; padding-inline: 0; }
+.pw-channels-settings-disclosure button[slot="trigger"] > span > span:first-child { font-size: 14px; line-height: 22px; font-weight: 500; }
+.pw-channels-settings-disclosure button[slot="trigger"] > span > span:last-child { font-size: 12px; line-height: 20px; }
+.pw-channels-settings-disclosure [role="region"] { overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  .pw-channels-heading { gap: 10px; }
+  .pw-channels-heading h2 { font-size: 22px; line-height: 30px; }
+  .pw-channels-heading > div:first-child { flex: 1; }
+  .pw-channels-heading .pw-form-actions { gap: 0; }
+  .pw-channels-heading .pw-form-actions button { padding-inline: 6px; }
+  .pw-channels-receiving { align-items: flex-start; flex-wrap: wrap; padding: 12px 14px; }
+  .pw-channels-records { padding-inline: 14px; }
+  .pw-channels-records button[slot="trigger"] { gap: 10px; }
+}
