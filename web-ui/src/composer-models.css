@@ -61,6 +61,12 @@
   min-width: 44px;
   min-height: 44px;
 }
+.pw-composer-host.pw-composer-compact :is(.afa-stop, .pw-press) {
+  width: 48px;
+  min-width: 48px;
+  height: 48px;
+  min-height: 48px;
+}
 .pw-composer-host.pw-composer-compact .pw-press .pw-press-front {
   display: flex;
   align-items: center;
