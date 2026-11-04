@@ -44,6 +44,16 @@ public final class BrowserTaskHost {
         volatile BrowserTaskCapabilityPort port;volatile JSONObject closeReceipt;volatile BrowserTaskApprovalPort approvals;volatile boolean closed;volatile String readScopeId="";
         Scope(Plan plan,ModelCapabilityAdapters.Binding binding,RunControl control){this.plan=plan;this.binding=binding;this.control=control;token=binding.taskId+":"+binding.runId+":"+binding.epoch;}
     }
+    /** Native-only stop authority, paired with the displayed snapshot and never restored from JSON. */
+    public static final class OwnerStopTicket {
+        private final BrowserTaskHost host;private final Plan plan;private final Scope scope;private final BrowserTaskCapabilityPort port;private final RunControl control;
+        private final String taskId,runId;private final int epoch;private volatile boolean requested;
+        private OwnerStopTicket(BrowserTaskHost host,Plan plan,Scope scope,RunControl control,String taskId,String runId,int epoch){this.host=host;this.plan=plan;this.scope=scope;this.port=scope==null?null:scope.port;this.control=control;this.taskId=taskId;this.runId=runId;this.epoch=epoch;}
+    }
+    public static final class OwnerSnapshot {
+        public final JSONObject state;public final OwnerStopTicket stopTicket;
+        private OwnerSnapshot(JSONObject state,OwnerStopTicket stopTicket){this.state=state;this.stopTicket=stopTicket;}
+    }
     private final BrowserModule browser;
     private final TaskStore tasks;
     private final ExecutionResources resources;
@@ -96,7 +106,7 @@ public final class BrowserTaskHost {
     }
     private CapabilityPort attachRequested(ModelCapabilityAdapters.Binding binding,RunControl original,CapabilityPort existing,dev.pocketengine.features.memory.ToolOutputCapture.Factory outputCapture)throws Exception {
         worker();Plan plan=plans.get(binding.taskId);if(plan==null)return existing;
-        if(plan.cancelled){plans.remove(binding.taskId,plan);if(plan.selectedControl==null||plan.selectedControl==original)original.cancel();throw new SecurityException("主人已结束此浏览请求");}
+        if(plan.cancelled){plans.remove(binding.taskId,plan);if(plan.selectedControl==original)original.cancel();return existing;}
         if(plan.selectedControl!=null&&plan.selectedControl!=original)throw new SecurityException("浏览授权只适用于主人选定的原执行");
         if(originals.currentControl(binding.taskId)!=original||!original.matchesHostRun(binding.taskId,binding.runId,binding.epoch))throw new SecurityException("研究没有原任务当前控制器");
         Scope scope=new Scope(plan,binding,original);if(active.putIfAbsent(binding.taskId,scope)!=null)throw new SecurityException("原任务已有浏览空间");boolean attached=false;
@@ -135,6 +145,8 @@ public final class BrowserTaskHost {
                 }
             };
             scope.port=onMain(()->{requireProfile(browser.snapshot(),plan.identity);return browser.nativeAttachTaskSpace(binding,original,authority,resource,scope.approvals,sources,lifecycle,existing,plan.identity.getString("browserSessionId"));});
+            if(plan.cancelled)return existing;
+            if(original.isCancelled())throw new SecurityException("主人已结束此原浏览请求");
             if(plan.readConsent.enabled())grantReadScope(scope,scope.port.readScopeIdentityForOwner(),plan.readConsent);
             if(plan.actionConsent.enabled())grantTaskScope(scope,scope.port.readScopeIdentityForOwner(),tasks.browserActionsForOwner(binding.taskId,binding.runId,binding.epoch,original).optLong("revision",0),plan.actionConsent);
             if(scope.closed||active.get(binding.taskId)!=scope)throw new SecurityException("空间建立时原任务已停止");attached=true;watchScope(scope);return scope.port;
@@ -205,11 +217,12 @@ public final class BrowserTaskHost {
         Scope scope=active.get(taskId);RunControl current=originals.currentControl(taskId);if(scope==null||scope.approvals==null||!scope.approvals.isWaiting(taskId,approvalId,current))return null;
         JSONObject task=tasks.decideCapabilityApproval(taskId,approvalId,approved);scope.approvals.nativeDecisionChanged(taskId,approvalId,current);emit(taskId,new JSONObject().put("type","browser_approval_decided").put("taskId",taskId).put("approvalId",approvalId));return task;
     }
-    public JSONObject snapshotForOwner()throws Exception {
-        worker();JSONObject result=onMain(()->{JSONObject out=browser.snapshot();out.put("profiles",browser.nativeProfiles()).put("pages",browser.nativeTabs()).put("downloads",browser.nativeDownloads());return out;});
-        for(Scope scope:active.values())if(!scope.closed){JSONObject task=tasks.get(scope.binding.taskId,false);if(task!=null)result.put("activeResearchTask",task);result.put("researchControl",new JSONObject().put("taskId",scope.binding.taskId).put("paused",scope.control.isPaused()).put("cancelRequested",scope.control.isCancelled()).put("resourceHeld",resources.ownsBrowser(scope.token)).put("unresolved",tasks.hasUnresolved(scope.binding.taskId)).put("scopeConfigurationWhilePending",scope.approvals!=null&&scope.approvals.pendingScopeConfigurationForOwner()!=null));try{result.put("taskActionScope",tasks.browserActionsForOwner(scope.binding.taskId,scope.binding.runId,scope.binding.epoch,scope.control));result.put("readScope",tasks.browserReadScopeForOwner(scope.binding.taskId,scope.binding.runId,scope.binding.epoch,scope.control.pauseRevision()));if(!scope.control.isPaused())result.put("readScopeIdentity",scope.port.readScopeIdentityForOwner());}catch(Exception unavailable){result.put("readScope",new JSONObject().put("state","unavailable"));}break;}
-        if(active.isEmpty())for(Plan plan:plans.values()){JSONObject pending=tasks.get(plan.taskId,false);if(pending!=null)result.put("pendingBrowserTask",pending);break;}
-        result.put("model",originals.modelForOwner()).put("currentAssistantTasks",currentTasksForOwner());String id=latestTask;if(!id.isEmpty()){JSONObject task=tasks.get(id,false);if(task!=null){result.put("researchTask",task).put("sources",BrowserTaskSourcePort.sourcesForOwner(tasks,id)).put("downloads",onMain(()->browser.nativeDownloadsForTask(id)));JSONObject pages=BrowserResearchPages.fromTask(task);if(pages!=null)result.put("researchPages",pages).put("researchPagesFingerprint",TaskStore.capabilityFingerprint(pages)).put("researchRecoveryUnresolved",tasks.hasUnresolved(id)).put("researchRecoveryAvailable",originals.currentControl(id)==null&&!tasks.hasUnresolved(id)&&!task.optString("status").equals("completed")&&!task.has("origin"));}}return result;
+    public JSONObject snapshotForOwner()throws Exception {return snapshotWithStopForOwner().state;}
+    public OwnerSnapshot snapshotWithStopForOwner()throws Exception {
+        worker();OwnerStopTicket stop=null;JSONObject result=onMain(()->{JSONObject out=browser.snapshot();out.put("profiles",browser.nativeProfiles()).put("pages",browser.nativeTabs()).put("downloads",browser.nativeDownloads());return out;});
+        for(Scope scope:active.values())if(!scope.closed){JSONObject task=tasks.get(scope.binding.taskId,false);if(task!=null)result.put("activeResearchTask",task);stop=new OwnerStopTicket(this,scope.plan,scope,scope.control,scope.binding.taskId,scope.binding.runId,scope.binding.epoch);result.put("researchControl",new JSONObject().put("taskId",scope.binding.taskId).put("paused",scope.control.isPaused()).put("cancelRequested",scope.control.isCancelled()).put("resourceHeld",resources.ownsBrowser(scope.token)).put("unresolved",tasks.hasUnresolved(scope.binding.taskId)).put("scopeConfigurationWhilePending",scope.approvals!=null&&scope.approvals.pendingScopeConfigurationForOwner()!=null));try{result.put("taskActionScope",tasks.browserActionsForOwner(scope.binding.taskId,scope.binding.runId,scope.binding.epoch,scope.control));result.put("readScope",tasks.browserReadScopeForOwner(scope.binding.taskId,scope.binding.runId,scope.binding.epoch,scope.control.pauseRevision()));if(!scope.control.isPaused())result.put("readScopeIdentity",scope.port.readScopeIdentityForOwner());}catch(Exception unavailable){result.put("readScope",new JSONObject().put("state","unavailable"));}break;}
+        if(active.isEmpty())for(Plan plan:plans.values()){JSONObject pending=tasks.get(plan.taskId,false);if(pending!=null){result.put("pendingBrowserTask",pending);RunControl control=plan.selectedControl==null?originals.currentControl(plan.taskId):plan.selectedControl;String run=pending.optString("runId");int epoch=pending.optInt("coordinatorEpoch");if(control==null?run.isEmpty()&&epoch==0:control.matchesHostRun(plan.taskId,run,epoch))stop=new OwnerStopTicket(this,plan,null,control,plan.taskId,run,epoch);}break;}
+        result.put("model",originals.modelForOwner()).put("currentAssistantTasks",currentTasksForOwner());String id=latestTask;if(!id.isEmpty()){JSONObject task=tasks.get(id,false);if(task!=null){result.put("researchTask",task).put("sources",BrowserTaskSourcePort.sourcesForOwner(tasks,id)).put("downloads",onMain(()->browser.nativeDownloadsForTask(id)));JSONObject pages=BrowserResearchPages.fromTask(task);if(pages!=null)result.put("researchPages",pages).put("researchPagesFingerprint",TaskStore.capabilityFingerprint(pages)).put("researchRecoveryUnresolved",tasks.hasUnresolved(id)).put("researchRecoveryAvailable",originals.currentControl(id)==null&&!tasks.hasUnresolved(id)&&!task.optString("status").equals("completed")&&!task.has("origin"));}}return new OwnerSnapshot(result,stop);
     }
     public JSONObject taskForOwner(String taskId)throws Exception {BrowserTaskSpace.uuid(taskId);JSONObject task=tasks.get(taskId,false);if(task==null||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId")))throw new SecurityException("请从主人原任务打开研究成果");JSONObject result=new JSONObject().put("task",task).put("sources",BrowserTaskSourcePort.sourcesForOwner(tasks,taskId));JSONObject pages=BrowserResearchPages.fromTask(task);if(pages!=null)result.put("researchPages",pages).put("researchPagesFingerprint",TaskStore.capabilityFingerprint(pages));return result;}
     /** View-only draft identity. No task/run/lease/approval is persisted or restored by these APIs. */
@@ -309,16 +322,27 @@ public final class BrowserTaskHost {
             browser.nativeAdoptOwnerTab(tab);return new JSONObject().put("taskId",task).put("tabId",tab).put("status","adopted").put("freshObservationRequired",true);
         });
     }
-    public JSONObject endForOwner()throws Exception {
-        Scope selected=null;for(Scope scope:active.values())if(!scope.closed){selected=scope;break;}if(selected==null){boolean pending=!plans.isEmpty();cancelForOwner();return new JSONObject().put("status",pending?"admission_cancelled":"not_active");}selected.control.cancel();return selected.port==null?new JSONObject().put("status","admission_cancelled"):selected.port.endForOwner("owner_ended_research");
+    /** Synchronous native click. Pin before cancellation callbacks; never resolve a successor. */
+    public void cancelForOwner(OwnerStopTicket ticket){
+        if(ticket==null||ticket.host!=this)throw new SecurityException("请刷新后停止原浏览任务");
+        RunControl current=ticket.control==null?null:originals.currentControl(ticket.taskId);
+        if(plans.get(ticket.taskId)!=ticket.plan||ticket.scope!=null&&(ticket.scope.closed||active.get(ticket.taskId)!=ticket.scope)||ticket.control!=null&&(current!=ticket.control||!ticket.control.matchesHostRun(ticket.taskId,ticket.runId,ticket.epoch)))throw new SecurityException("原浏览任务或执行已变化，请刷新后核对");
+        ticket.plan.cancelled=true;ticket.requested=true;if(ticket.scope==null)plans.remove(ticket.taskId,ticket.plan);if(ticket.control!=null)ticket.control.cancel();
     }
-    public void cancelForOwner(){for(Scope scope:active.values())if(!scope.closed)scope.control.cancel();for(Plan plan:plans.values()){plan.cancelled=true;RunControl current=originals.currentControl(plan.taskId);if(current!=null&&(plan.selectedControl==null||plan.selectedControl==current))current.cancel();}}
+    /** Delayed cleanup only touches the ticket's original native space, even after another task enters. */
+    public JSONObject endForOwner(OwnerStopTicket ticket)throws Exception {
+        if(ticket==null||ticket.host!=this||!ticket.requested)throw new SecurityException("请先停止所选原浏览任务");
+        if(ticket.scope!=null&&ticket.scope.closed&&ticket.scope.closeReceipt!=null)return new JSONObject(ticket.scope.closeReceipt.toString());
+        return ticket.port==null?new JSONObject().put("status","admission_cancelled").put("taskId",ticket.taskId).put("runId",ticket.runId).put("epoch",ticket.epoch):ticket.port.endForOwner("owner_ended_research");
+    }
     /** Reopen the exact saved private URL in its original selected Profile, in a new owner page. */
     public JSONObject openSourceForOwner(String taskId,String sourceId)throws Exception {
         BrowserTaskSpace.uuid(sourceId);JSONArray sources=taskForOwner(taskId).getJSONArray("sources");JSONObject found=null;for(int i=0;i<sources.length();i++)if(sourceId.equals(sources.getJSONObject(i).getString("sourceId")))found=sources.getJSONObject(i);if(found==null)throw new IllegalArgumentException("原任务没有这个来源");final JSONObject source=found;
         return onMain(()->{JSONObject selected=browser.snapshot();if(!source.getString("profileId").equals(selected.optString("profileId")))throw new SecurityException("请先明确选回来源原登录资料，再打开原出处");return browser.nativeOpenOwnerTab(source.getString("privateUrl"));});
     }
-    private void watchScope(Scope scope){main.postDelayed(()->{if(scope.closed||active.get(scope.binding.taskId)!=scope||scope.control.isPaused())return;
+    private void watchScope(Scope scope){main.postDelayed(()->{if(scope.closed||active.get(scope.binding.taskId)!=scope)return;
+        if(scope.plan.cancelled){try{if(scope.port!=null)scope.port.endForOwner("owner_ended_research");}catch(Exception ignored){resources.releaseBrowser(scope.token);}return;}
+        if(scope.control.isPaused())return;
         try{if(originals.currentControl(scope.binding.taskId)!=scope.control||scope.control.isCancelled()||!resources.renewBrowser(scope.token,tasks.taskExecutionDeadline(scope.binding.taskId,scope.binding.runId,scope.binding.epoch)))throw new SecurityException("原任务浏览资源已失效");watchScope(scope);}
         catch(Exception expired){scope.control.cancel();if(scope.port!=null)try{scope.port.endForOwner("task_scope_expired");}catch(Exception ignored){resources.releaseBrowser(scope.token);}}
     },1_000);}
