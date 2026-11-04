@@ -134,6 +134,12 @@ export class DesktopViewerConnection {
   private disposed = false;
   private peer: RTCPeerConnection | null = null;
   private abort: AbortController | null = null;
+  private metadataChannel: RTCDataChannel | null = null;
+  private videoTrack: MediaStreamTrack | null = null;
+  private removeTrackListeners: (() => void) | null = null;
+  private startup: ReturnType<typeof setTimeout> | null = null;
+  private hasPlayed = false;
+  private stalledAt: number | null = null;
   private frame: { value: DesktopFrame; received: number } | null = null;
   private frameFloor = 0;
   private decoded: { width: number; height: number; at: number } | null = null;
@@ -155,6 +161,10 @@ export class DesktopViewerConnection {
     this.createPeer = options.createPeer || (config => new RTCPeerConnection(config)); this.clock = options.clock || Date.now;
   }
   private publish(patch: Partial<DesktopViewerState>): void {
+    if (patch.frameReady === true) {
+      if (this.startup) clearTimeout(this.startup); this.startup = null;
+      this.hasPlayed = true; this.stalledAt = null;
+    }
     this.state = { ...this.state, ...patch }; if (!this.disposed) this.change(this.state);
   }
   private current(generation: number): boolean { return !this.disposed && generation === this.generation; }
@@ -163,8 +173,19 @@ export class DesktopViewerConnection {
     return pending.finally(() => { if (this.bridgePending === pending) this.bridgePending = null; });
   }
   private closeRemote(sessionId: string): void { void this.run('devices.desktop.close', { sessionId }).catch(() => {}); }
+  private stopVideoTrack(): void {
+    this.removeTrackListeners?.(); this.removeTrackListeners = null;
+    this.videoTrack?.stop(); this.videoTrack = null;
+  }
   private detach(): void {
     this.abort?.abort(); this.abort = null;
+    if (this.startup) clearTimeout(this.startup); this.startup = null;
+    this.hasPlayed = false; this.stalledAt = null;
+    if (this.metadataChannel) {
+      this.metadataChannel.onmessage = null; this.metadataChannel.onclose = null; this.metadataChannel.onerror = null;
+      this.metadataChannel = null;
+    }
+    this.stopVideoTrack();
     if (this.timer) clearInterval(this.timer); this.timer = null;
     if (this.disconnected) clearTimeout(this.disconnected); this.disconnected = null;
     if (this.peer) { this.peer.ontrack = null; this.peer.onconnectionstatechange = null; this.peer.close(); this.peer = null; }
@@ -181,12 +202,14 @@ export class DesktopViewerConnection {
     if (!expected) throw new Error('桌面会话已关闭。');
     const actual = desktopSession(value, expected, this.clock());
     if (actual.control.revision < expected.control.revision) return expected;
-    if (actual.control.revision !== expected.control.revision || actual.control.owner !== expected.control.owner) this.lastPoint = null;
+    if (actual.control.revision !== expected.control.revision || actual.control.owner !== expected.control.owner) {
+      this.lastPoint = null; this.invalidateFrame();
+    }
     this.publish({ session: actual, ...(actual.control.needsReconcile ? { inputUncertain: true, error: this.state.error || '桌面控制需要核对，请重新连接查看。' } : {}) }); return actual;
   }
   private invalidateFrame(): void {
     this.frameFloor = Math.max(this.frameFloor, this.frame?.value.capturedAt || 0);
-    this.frame = null; this.publish({ frameReady: false });
+    this.frame = null; this.decoded = null; this.publish({ frameReady: false });
   }
   async open(deviceId: string, scope: DesktopScope): Promise<void> {
     const previousRequest = this.bridgePending;
@@ -195,6 +218,10 @@ export class DesktopViewerConnection {
     if (!scope.available || scope.expiresAt <= this.clock()) { this.publish({ phase: 'failed', error: scope.reason || '桌面授权已到期。' }); return; }
     const binding = copy(scope.resourceBinding);
     this.publish({ phase: 'opening' });
+    // Bounds native signalling, browser setup and first usable media, not just ICE gathering.
+    this.startup = setTimeout(() => {
+      if (this.current(generation)) this.fail('桌面连接或首帧等待超时，请检查电脑和网络后重新连接。');
+    }, 45_000);
     try {
       // The native owner has one ordinary request lane. Closing still fences
       // immediately; a replacement waits for the retired request's callback.
@@ -209,19 +236,35 @@ export class DesktopViewerConnection {
       const peer = this.createPeer({ iceServers: session.iceServers }); this.peer = peer;
       const abort = new AbortController(); this.abort = abort;
       peer.addTransceiver('video', { direction: 'recvonly' });
-      const channel = peer.createDataChannel('pocketworld.desktop.frames', { ordered: true });
+      const channel = this.metadataChannel = peer.createDataChannel('pocketworld.desktop.frames', { ordered: true });
       channel.onmessage = event => {
         if (!this.current(generation) || typeof event.data !== 'string' || event.data.length > 8192 || !this.state.session?.streamId) return;
         try { this.receiveFrame(JSON.parse(event.data)); } catch { this.fail('电脑返回的画面标识无效，已关闭观看。'); }
       };
-      peer.ontrack = event => { if (this.current(generation) && event.track.kind === 'video') this.stream(event.streams[0] || new MediaStream([event.track])); };
+      channel.onclose = () => { if (this.current(generation)) this.fail('桌面画面校验通道已关闭，请重新连接。'); };
+      channel.onerror = () => { if (this.current(generation)) this.fail('桌面画面校验通道出错，请重新连接。'); };
+      peer.ontrack = event => {
+        if (!this.current(generation) || event.track.kind !== 'video') return;
+        if (this.videoTrack === event.track) return;
+        this.stopVideoTrack(); this.invalidateFrame();
+        const track = this.videoTrack = event.track;
+        const ended = () => { if (this.current(generation) && this.videoTrack === track) this.fail('电脑视频流已结束，请重新连接。'); };
+        const changed = () => { if (this.current(generation) && this.videoTrack === track) this.invalidateFrame(); };
+        track.addEventListener('ended', ended); track.addEventListener('mute', changed); track.addEventListener('unmute', changed);
+        this.removeTrackListeners = () => {
+          track.removeEventListener('ended', ended); track.removeEventListener('mute', changed); track.removeEventListener('unmute', changed);
+        };
+        if (track.readyState === 'ended') { ended(); return; }
+        this.stream(event.streams[0] || new MediaStream([track]));
+      };
       peer.onconnectionstatechange = () => {
         if (!this.current(generation)) return;
         if (peer.connectionState === 'connected') {
           if (this.disconnected) clearTimeout(this.disconnected); this.disconnected = null;
+          if (this.state.phase !== 'live') this.invalidateFrame();
           this.publish({ phase: 'live', frameReady: this.fresh() });
         } else if (peer.connectionState === 'disconnected') {
-          this.frame = null; this.decoded = null; this.publish({ phase: 'disconnected', frameReady: false });
+          this.invalidateFrame(); this.lastPoint = null; this.publish({ phase: 'disconnected', frameReady: false });
           if (!this.disconnected) this.disconnected = setTimeout(() => { if (this.current(generation)) this.fail('桌面连接已中断，请重新连接。'); }, 10_000);
         } else if (peer.connectionState === 'failed' || peer.connectionState === 'closed') this.fail('桌面连接已中断，请重新连接。');
       };
@@ -242,22 +285,31 @@ export class DesktopViewerConnection {
   receiveFrame(value: unknown): void {
     const streamId = this.state.session?.streamId; if (!streamId) return;
     const actual = desktopFrame(value, streamId);
-    if (actual.capturedAt <= this.frameFloor || this.frame && actual.capturedAt < this.frame.value.capturedAt) return;
-    const geometryChanged = this.frame?.value.geometryRevision !== actual.geometryRevision;
+    if (actual.capturedAt <= this.frameFloor) return;
+    // The ordered channel must advance capture time. Repeated or disconnected metadata
+    // cannot renew a frame's local lifetime or unlock a recovered connection.
+    this.frameFloor = actual.capturedAt;
+    if (this.state.phase !== 'live') return;
+    const geometryChanged = this.frame?.value.geometryRevision !== actual.geometryRevision
+      || this.frame?.value.width !== actual.width || this.frame?.value.height !== actual.height;
+    if (geometryChanged) this.decoded = null;
     if (this.lastPoint && (this.lastPoint.streamId !== actual.streamId || this.lastPoint.geometryRevision !== actual.geometryRevision)) this.lastPoint = null;
     this.frame = { value: actual, received: this.clock() };
     const ready = this.fresh(); if (geometryChanged || ready !== this.state.frameReady) this.publish({ frameReady: ready });
   }
   decodedFrame(width: number, height: number): void {
-    if (!integer(width, 1, 16384) || !integer(height, 1, 16384)) return;
+    if (this.state.phase !== 'live' || !this.frame || this.videoTrack?.muted || this.videoTrack?.readyState === 'ended'
+      || !integer(width, 1, 16384) || !integer(height, 1, 16384)) return;
     this.decoded = { width, height, at: this.clock() };
     const ready = this.fresh(); if (ready !== this.state.frameReady) this.publish({ frameReady: ready });
   }
   private fresh(): boolean {
-    if (this.state.phase !== 'live' || !this.frame || !this.decoded) return false;
-    const now = this.clock(), frame = this.frame;
-    return now - frame.received <= Math.min(2000, frame.value.expiresAt - frame.value.capturedAt)
-      && now - this.decoded.at <= 2000 && frame.value.width === this.decoded.width && frame.value.height === this.decoded.height;
+    if (this.state.phase !== 'live' || !this.frame || !this.decoded || this.videoTrack?.muted || this.videoTrack?.readyState === 'ended'
+      || this.metadataChannel?.readyState === 'closed' || this.metadataChannel?.readyState === 'closing') return false;
+    const now = this.clock(), frame = this.frame, frameAge = now - frame.received, decodedAge = now - this.decoded.at;
+    return !!this.state.session && this.state.session.expiresAt > now
+      && frameAge >= 0 && frameAge < Math.min(2000, frame.value.expiresAt - frame.value.capturedAt)
+      && decodedAge >= 0 && decodedAge < 2000 && frame.value.width === this.decoded.width && frame.value.height === this.decoded.height;
   }
   canInput(): boolean {
     return this.fresh() && this.state.session?.control.owner === 'human' && !!this.state.session.control.lease
@@ -269,7 +321,13 @@ export class DesktopViewerConnection {
   private tick(): void {
     const session = this.state.session; if (!session) return;
     if (session.expiresAt <= this.clock()) { this.fail('桌面观看已到期，请重新连接。'); return; }
-    const ready = this.fresh(); if (ready !== this.state.frameReady) this.publish({ frameReady: ready });
+    const ready = this.fresh();
+    if (ready) this.stalledAt = null;
+    else if (this.hasPlayed && this.state.phase === 'live') {
+      if (this.stalledAt === null) this.stalledAt = this.clock();
+      else if (this.clock() - this.stalledAt >= 10_000) { this.fail('桌面画面持续未更新，请重新连接。'); return; }
+    }
+    if (ready !== this.state.frameReady) this.publish({ frameReady: ready });
     if (this.clock() - this.lastStatusAt >= 5000 && !this.statusPending && !this.state.controlPending && !this.state.inputPending) void this.status();
   }
   async status(): Promise<void> {
@@ -307,10 +365,16 @@ export class DesktopViewerConnection {
     } finally { if (this.current(generation)) this.publish({ controlPending: false }); }
   }
   async input(input: DesktopInput): Promise<boolean> {
-    const generation = this.generation;
+    const generation = this.generation, intendedSession = this.state.session, intendedFrame = this.frame;
+    if (!intendedSession || !intendedFrame || !this.canInput()) return false;
     if (this.statusSettled) { await this.statusSettled; if (!this.current(generation)) return false; }
     const session = this.state.session, frame = this.frame;
     if (!session || !frame || !this.canInput()) return false;
+    // Coordinates and text belong to the view/control generation at the user's gesture.
+    // Waiting for the native lane must never silently retarget them to a later picture.
+    if (frame !== intendedFrame || session.sessionId !== intendedSession.sessionId || session.control.revision !== intendedSession.control.revision) {
+      this.publish({ error: '桌面画面或控制状态已变化，请重新操作。' }); return false;
+    }
     if (input.kind === 'insert_text') desktopText(input.text);
     let command = copy(input);
     if (command.kind === 'scroll' && command.x === undefined && command.y === undefined && this.lastPoint?.streamId === frame.value.streamId && this.lastPoint.geometryRevision === frame.value.geometryRevision) command = { ...command, x: this.lastPoint.x, y: this.lastPoint.y };
