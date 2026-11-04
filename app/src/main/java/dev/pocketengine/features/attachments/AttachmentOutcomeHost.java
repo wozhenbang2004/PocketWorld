@@ -63,8 +63,12 @@ public final class AttachmentOutcomeHost {
         ownerTask(taskId);control.check();JSONObject result=new JSONObject().put("taskId",taskId==null?"":taskId).put("sources",sources).put("artifacts",results)
                 .put("media",jobs).put("documentCapabilities",documents.documentCapabilities()).put("verifiedBusinessSuccess",false);
         if(task!=null){result.put("taskRunId",task.optString("runId")).put("coordinatorEpoch",task.optInt("coordinatorEpoch")).put("taskStatus",task.optString("status"));if("attachments".equals(task.optString("feature"))&&"createDocument".equals(task.optString("command")))result.put("originalDocumentActionId",task.getString("operationId"));}
+        else result.put("documentActions",documentActions("",control));
         return result;
     }
+
+    /** One explicit metadata page, including completed originals whose UI callback was lost. */
+    public JSONObject documentActions(String cursor,RunControl control)throws Exception {return tasks.ownerDocumentActionsForOwner(cursor,control);}
 
     /** The file picker supplies a real imported record. JSON callers cannot create an association here. */
     public JSONObject selectForTask(String taskId,String artifactId,String expectedSha256,RunControl control)throws Exception {
