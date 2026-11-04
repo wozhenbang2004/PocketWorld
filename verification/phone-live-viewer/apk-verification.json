@@ -1,0 +1,56 @@
+{
+  "status": "verified-built-not-device-installed",
+  "apk": "/workspace/scratch/498814bf3f67/PocketWorld/app/build/outputs/apk/debug/app-debug.apk",
+  "bytes": 119782914,
+  "sha256": "8ad77c4a43bf07054e7c99420480109f75f3aad352702a640a53ddb7f3e239fd",
+  "previousApkSha256": "9e45dae6787a2524a433d546f15d61980aaac9207a7f8f7adcc24554a6184287",
+  "productionInputCheckpointUnchanged": true,
+  "inputCheckpoint": "/workspace/scratch/498814bf3f67/toolchains/phone-viewer-apk-metadata-repack-inputs.json",
+  "inputFileCount": 19,
+  "packagedWebFilesExact": 181,
+  "packagedHelperExact": true,
+  "packagedNativeCatalogExact": true,
+  "packagedBuildIdentitySha256": "2078cbc56602e214c662008a0b249fa67af41b60bd6f7f0c8048fc99a493cca5",
+  "packagedNoticeSha256": "39528836555056ca083eb04531bbf39639da650bf8c598cb6a7e20cecad18fe6",
+  "payloadComparison": {
+    "comparedEntries": 1062,
+    "identicalEntries": 1059,
+    "changedEntries": [
+      "assets/pocket-ui/build-identity.json",
+      "assets/pocket-ui/licenses/THIRD-PARTY-NOTICES.md",
+      "assets/pocket-ui/licenses/dependencies.json"
+    ],
+    "addedEntries": [],
+    "removedEntries": [],
+    "allDexEntriesIdentical": true,
+    "allNativeLibraryEntriesIdentical": true,
+    "jsAndCssIdentical": true
+  },
+  "behavioralTestsRerunForRepack": false,
+  "behavioralTestResult": "app/build/reports/host-tests/run-vucobv0d/result.json",
+  "physicalDeviceTest": false,
+  "package": "dev.pocketengine",
+  "versionName": "0.3.0-dev",
+  "versionCode": 3,
+  "abi": "arm64-v8a",
+  "signature": {
+    "verified": true,
+    "scheme": "v2",
+    "signers": 1
+  },
+  "latestProductionMarkers": {
+    "webPhoneViewerWindowTicket$app_debug": true,
+    "Ldev/pocketengine/phone/display/PhoneLivePreview$NotReady;": true,
+    "phone.viewer.frame": true,
+    "readPhonePreview": true
+  },
+  "buildLog": "/workspace/scratch/498814bf3f67/toolchains/assemble-phone-viewer-metadata-repack.log",
+  "buildScope": "Metadata-only repack after the recorded 23/23 behavioral result; original Gradle dependency gates retained.",
+  "packagingCorrection": {
+    "initialPackageRejected": true,
+    "reason": "One stale generated JS asset was absent from the frozen source bundle and build receipt.",
+    "unexpectedAsset": "assets/pocket-ui/assets/index-DiWhkOAI.js",
+    "resolution": "Explicit task-scoped rerun of mergeDebugAssets, compressDebugAssets and packageDebug; final full APK entry set has no additions or removals.",
+    "rejectedAttempt": "/workspace/scratch/498814bf3f67/toolchains/phone-viewer-metadata-repack-rejected.json"
+  }
+}

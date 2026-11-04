@@ -1,0 +1,44 @@
+{
+  "scope": "Production UI with isolated synthetic native host and clearly labelled generated test frames; no device acceptance.",
+  "checks": [
+    "Native preparing error, pending geometry and ready pixels recover automatically on the same handle, without an error surface or manual retry.",
+    "One in-flight frame per native handle, continuously changing decoded frames and one conversation viewer.",
+    "Mobile bottom sheet shares the feed; exact-run pause/resume keeps frames updating; Android back preserves task and composer.",
+    "Switching the selected phone discards a late frame and never selects by global activeTaskId.",
+    "Hidden document closes native viewer and stops polling; return opens one fresh handle with cursor -1.",
+    "Substituted display is rejected, last frame is marked stale, automatic reads stop, deliberate retry stays on original task.",
+    "Desktop centered 790px sheet, Escape/focus return and nested task-detail Android back preserve the parent workspace; no duplicate viewer.",
+    "Task end releases the feed and labels the retained last frame without reopening or resuming execution."
+  ],
+  "errors": [],
+  "screenshots": [
+    "phone-viewer-loading-390.png",
+    "phone-viewer-card-390.png",
+    "phone-viewer-sheet-390.png",
+    "phone-viewer-stale-390.png",
+    "phone-viewer-sheet-1280.png"
+  ],
+  "bundle": "index-Cp4HYogZ.js",
+  "sha256": "8b460ee7bcc326f47aa0847ee00b9d540ea95e08fd925ece9b9f6d2fffc35069",
+  "startup": {
+    "replies": [
+      {
+        "viewerId": "viewer-1",
+        "afterFrameGeneration": -1,
+        "state": "phone_viewer_starting"
+      },
+      {
+        "viewerId": "viewer-1",
+        "afterFrameGeneration": -1,
+        "state": "pending"
+      },
+      {
+        "viewerId": "viewer-1",
+        "afterFrameGeneration": 0,
+        "state": "ready"
+      }
+    ],
+    "opens": 1
+  },
+  "status": "passed"
+}
