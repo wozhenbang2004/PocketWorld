@@ -33,6 +33,8 @@ public final class AssistantModule implements EngineModule {
         default JSONObject startProject(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart selected)throws Exception{throw new SecurityException("原宿主未接显式项目记忆同意，未回退全局任务");}
         default JSONObject continueProject(JSONObject reviewedTask,String feedback,ModelConfig config,RunControl control,java.util.function.BooleanSupplier currentOwnerWindow)throws Exception{throw new SecurityException("原宿主尚未支持原项目续接，请保留草稿并核对原任务");}
         JSONObject append(String conversationId,JSONObject message,String mode,JSONObject expected,RunControl control)throws Exception;
+        default OwnerWorkInputTarget ownerWorkTarget(String conversation,JSONObject expected)throws Exception{throw new IllegalStateException("私人工作输入宿主尚未就绪");}
+        default JSONObject appendOwnerWork(String conversation,JSONObject message,String mode,JSONObject expected,RunControl original)throws Exception{throw new IllegalStateException("私人工作输入宿主尚未就绪");}
         /** Native task hosts also persist cancellation and enqueue their original child stops. */
         default void cancel(RunControl control)throws Exception{control.cancel();}
         default boolean retainsDevelopment(RunControl control){return false;}
@@ -40,6 +42,8 @@ public final class AssistantModule implements EngineModule {
         /** Native original-run resource hint only; this never changes model, budget or execution authority. */
         default void resourceState(JSONObject binding,RunControl original,String state)throws Exception{}
     }
+    /** Actual captured native model/control, never reconstructed from Web or model JSON. */
+    public record OwnerWorkInputTarget(ModelConfig model,RunControl control) { }
     public interface CheckedAction {void run()throws Exception;}
     private static JSONObject nativeExecutionScope(JSONObject input)throws Exception {
         if(!input.has("executionScope"))return null;
@@ -374,6 +378,46 @@ public final class AssistantModule implements EngineModule {
         }
     }
     private static void requireContinuationWindow(java.util.function.BooleanSupplier current){if(current==null||!current.getAsBoolean())throw new SecurityException("原项目审阅窗口已关闭，请重新核对；对话草稿未发送");}
+    /** Direct owner UI ingress to an exact durable work. Does not reserve the foreground chat. */
+    public JSONObject sendOwnerWorkInput(String conversation,JSONObject input)throws Exception{
+        if(historyTasks==null||!durable()||nativeInputHost==null)throw new IllegalStateException("原私人会话存储尚未就绪");
+        String text=input.optString("message").trim(),client=input.getString("clientMessageId"),mode=input.optString("mode","queue");
+        if(text.isEmpty()||text.length()>12000||!client.matches("[a-fA-F0-9-]{36}")||!Set.of("queue","steer").contains(mode))throw new IllegalArgumentException("补充内容、消息身份或方式无效");
+        JSONObject expected=new JSONObject().put("taskId",input.getString("taskId")).put("runId",input.getString("runId")).put("epoch",input.getInt("epoch"));
+        JSONArray attachments=input.optJSONArray("attachments");if(attachments==null)attachments=new JSONArray();
+        if(input.has("attachments")&&input.optJSONArray("attachments")==null)throw new IllegalArgumentException("附件选择必须是数组");
+        if(input.has("ownerSourceRefs")&&input.optJSONArray("ownerSourceRefs")==null)throw new IllegalArgumentException("原文引用必须为来源数组");
+        final JSONArray selectedSources=OwnerSourceReferences.checked(input.optJSONArray("ownerSourceRefs")==null?new JSONArray():input.getJSONArray("ownerSourceRefs"));
+        if(input.optJSONArray("ownerPreviewRefs")!=null&&input.getJSONArray("ownerPreviewRefs").length()>0)throw new IllegalArgumentException("项目元素引用请留在原项目任务；引用草稿未发送");
+        String request=dev.pocketengine.store.TaskStore.capabilityFingerprint(new JSONObject().put("payloadFingerprint",fingerprint(text,mode,attachments,selectedSources,new JSONArray())).put("target",expected));
+        synchronized(admission){
+            if(migrationInProgress)throw new IllegalStateException("原文迁移正在对账，补充尚未发送");
+            JSONObject prior=findSubmission(client);
+            if(prior!=null){if(!conversation.equals(prior.getString("conversationId"))||!request.equals(prior.getString("requestFingerprint")))throw new SecurityException("同一输入不能更换内容或目标工作");return copy(prior.getJSONObject("ack")).put("duplicate",true);}
+            OwnerWorkInputTarget target=nativeInputHost.ownerWorkTarget(conversation,expected);RunControl original=target.control();ModelConfig captured=target.model();
+            if(original==null||captured==null||!original.matchesHostRun(expected.getString("taskId"),expected.getString("runId"),expected.getInt("epoch")))throw new SecurityException("目标工作执行代次已变化");original.check();
+            final JSONArray selected=attachments.length()==0?new JSONArray():java.util.Objects.requireNonNull(attachmentProjection,"附件宿主尚未就绪").select(attachments,captured,original);
+            final JSONArray sourcesForWork=OwnerSourceRequestProjection.admit(this,selectedSources,original);
+            JSONObject saved=commit(()->{
+                JSONObject current=find(conversation),message=newMessage(conversation,"user",text,captured).put("clientMessageId",client).put("requestFingerprint",request).put("inputMode",mode).put("attachments",selected).put("ownerWorkTarget",copy(expected));
+                if(sourcesForWork.length()>0)message.put("ownerSourceRefs",sourcesForWork);
+                JSONObject ack=copy(expected).put("status","unconfirmed").put("messageId",message.getString("id")).put("clientMessageId",client).put("conversationId",conversation).put("mode",mode).put("reconciliationRequired",true);
+                message.put("submission",ack);source(message.getString("id")).put("clientMessageId",client).put("requestFingerprint",request).put("submission",copy(ack));
+                current.getJSONArray("messages").put(message);trimMessages(current);current.put("updatedAt",System.currentTimeMillis());return copy(message);
+            });
+            synchronizeSources();JSONObject accepted;
+            try{accepted=nativeInputHost.appendOwnerWork(conversation,copy(saved),mode,expected,original);}
+            catch(Exception uncertain){context.emit(id(),copy(saved.getJSONObject("submission")).put("phase","unconfirmed"));return copy(saved.getJSONObject("submission"));}
+            JSONObject ack=copy(accepted).put("status","queued").put("messageId",saved.getString("id")).put("clientMessageId",client).put("conversationId",conversation).put("mode",mode).put("reconciliationRequired",false);
+            commit(()->{findMessage(find(conversation),saved.getString("id")).put("submission",copy(ack));source(saved.getString("id")).put("submission",copy(ack));return null;});
+            context.emit(id(),copy(ack).put("phase","queued"));return ack;
+        }
+    }
+    /** Read-only owner navigation. The stored reply lineage is the only source selector. */
+    public JSONObject readOriginalReplySource(String conversation,String replyMessageId,String sourceMessageId,int offset,int maxChars)throws Exception{
+        if(historyTasks==null||!durable())throw new IllegalStateException("原会话来源存储尚未就绪");
+        return sourceRead(()->historyRepository.readOriginalReplySource(conversation,replyMessageId,sourceMessageId,offset,maxChars));
+    }
     private JSONObject sendNative(JSONObject input)throws Exception{return sendNative(input,null);}
     private JSONObject sendNative(JSONObject input,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart)throws Exception {
         if(migrationInProgress)throw new IllegalStateException("原文迁移正在对账，未接收新消息；不会重复新建任务");
@@ -937,6 +981,21 @@ public final class AssistantModule implements EngineModule {
         if(historyTasks==null||!durable()||conversationId==null||conversationId.isBlank())throw new SecurityException("原手机结果索引尚不可核对");
         return sourceRead(()->historyRepository.queryPhoneHandoffResult(conversationId,taskId,runId,epoch));
     }
+    /** Only the original typed TaskStore outbox may publish a durable work's final answer. */
+    public JSONObject appendOwnerWorkResult(String taskId,String runId,int epoch)throws Exception{
+        JSONObject saved;boolean added;
+        synchronized(admission){
+            if(migrationInProgress||historyTasks==null||!durable())throw new IllegalStateException("私人工作结果与原会话尚未就绪");
+            Set<String> busy=new HashSet<>();for(var lease:liveTurns.snapshot())busy.add(lease.conversationId());busy.addAll(developmentTurns.keySet());for(Cancellation pending:pendingCancellations.values())busy.add(pending.conversation());
+            saved=historyTasks.withOwnerWorkDelivery(taskId,runId,epoch,delivery->historyRepository.appendOwnerWorkResult(historyTasks,delivery,busy.contains(delivery.snapshot().getString("conversationId"))));
+            added=saved.optBoolean("accepted")&&!saved.optBoolean("duplicate");if(added){sourceGeneration++;synchronizationPending=true;}
+        }
+        if(added)try{synchronizeSources();}finally{
+            JSONArray consumed=saved.optJSONArray("consumed");for(int i=0;consumed!=null&&i<consumed.length();i++)context.emit(id(),copy(consumed.getJSONObject(i)).put("phase","consumed"));
+            context.emit(id(),copy(saved).put("phase","owner_work_result"));
+        }
+        return copy(saved);
+    }
     @FunctionalInterface public interface NativeTaskDeliverySource {JSONObject use(JSONObject original,java.util.concurrent.Callable<JSONObject> action)throws Exception;}
     private volatile NativeTaskDeliverySource nativeTaskDeliverySource;
     /** Bind the existing canonical source bridge once; not a model/feature command. */
@@ -968,6 +1027,11 @@ public final class AssistantModule implements EngineModule {
                 if(!Set.of("completed","needs_confirmation","failed","cancelled","interrupted","awaiting_user").contains(current.optString("status"))||!current.optString("runId").equals(response.optString("runId"))||current.optInt("coordinatorEpoch")!=response.optInt("epoch")||!current.optString("summary").equals(text))throw new SecurityException("只能投递原任务当前确切结果，不能换正文或轮次");
                 JSONObject publication=pinned.optJSONObject("publication");if(publication==null||!"publication_unknown".equals(publication.optString("phase"))||!response.getString("publicationClaimId").equals(publication.optString("publicationClaimId")))throw new SecurityException("原结果发布claim已改变，不能迟到重发");
                 JSONObject conversation=find(conversationId),message=newMessage(conversationId,"assistant",text,context.model()).put("taskId",taskId).put("nativeDeliveryId",deliveryId).put("nativeRunId",pinned.getString("runId")).put("nativeEpoch",pinned.getInt("epoch"));
+                message.put("nativeDeliveryKind","automation").put("nativeStatus",current.getString("status")).put("status",current.getString("status"))
+                        .put("taskEndedAt",current.optLong("endedAt",current.optLong("updatedAt"))).put("summaryChars",text.length()).put("summaryTruncated",false)
+                        .put("taskReference",new JSONObject().put("taskId",taskId).put("runId",pinned.getString("runId")).put("epoch",pinned.getInt("epoch")));
+                JSONObject nativeSource=origin.optJSONObject("nativeOrigin");JSONArray sourceRefs=nativeSource==null?null:nativeSource.optJSONArray("sourceRefs"),replyTo=new JSONArray();
+                for(int i=0;sourceRefs!=null&&i<sourceRefs.length();i++){JSONObject ref=sourceRefs.getJSONObject(i);if("message".equals(ref.optString("kind")))replyTo.put(ref.getString("sourceId"));}message.put("replyToMessageIds",replyTo);
                 copyMemoryReference(response,message);JSONObject state=source(message.getString("id"));state.put("nativeReplyId",deliveryId).put("nativeReplyDigest",digest).put("nativeTaskId",taskId).put("nativeRunId",pinned.getString("runId")).put("nativeEpoch",pinned.getInt("epoch"));
                 conversation.getJSONArray("messages").put(message);trimMessages(conversation);conversation.put("updatedAt",System.currentTimeMillis());return new JSONObject().put("accepted",true).put("duplicate",false).put("messageId",message.getString("id")).put("available",true);
             });
