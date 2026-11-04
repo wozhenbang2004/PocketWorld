@@ -32,33 +32,39 @@ final class ModelCallAdmission {
         return enter(original,originalTask,deadlineAt,Integer.MAX_VALUE);
     }
     Permit enter(RunControl original,String originalTask,long deadlineAt,int inheritedLimit)throws Exception {
+        return enter(original,originalTask,deadlineAt,inheritedLimit,null);
+    }
+    Permit enter(RunControl original,String originalTask,long deadlineAt,int inheritedLimit,RunControl.ModelRequest modelRequest)throws Exception {
         if(inheritedLimit!=Integer.MAX_VALUE&&(inheritedLimit<1||inheritedLimit>2))throw new SecurityException("Invalid original model resource scope");
         Object key=originalTask.isEmpty()?original:originalTask;
         long pause=original.pauseRevision();
         Waiter request=new Waiter(key,Math.min(original.modelConcurrencyLimit(),inheritedLimit));
         Runnable wake=()->{synchronized(this){notifyAll();}};
-        original.onCancel(wake);
+        AutoCloseable cancellation;
+        if(modelRequest!=null)cancellation=modelRequest.onCancel(wake);
+        else {original.onCancel(wake);cancellation=()->original.removeCancelAction(wake);}
         try {
-            original.check();current(original,pause,deadlineAt);
+            check(original,modelRequest);current(original,pause,deadlineAt);
             Permit immediate;
             synchronized(this){
                 current(original,pause,deadlineAt);immediate=admit(request);
                 if(immediate==null){if(waiting.size()>=maximumWaiters)throw new Refused("本任务的模型并发等待队列已满，尚未派发请求；请核对原任务后继续。",false);waiting.addLast(request);}
             }
-            if(immediate!=null)try{original.check();current(original,pause,deadlineAt);return immediate;}catch(Exception|Error revoked){immediate.close();throw revoked;}
+            if(immediate!=null)try{check(original,modelRequest);current(original,pause,deadlineAt);return immediate;}catch(Exception|Error revoked){immediate.close();throw revoked;}
             while(true){
                 // May enter TaskStore/other native source checks. Never execute this under our monitor.
-                original.check();current(original,pause,deadlineAt);
+                check(original,modelRequest);current(original,pause,deadlineAt);
                 Permit admitted=null;
                 synchronized(this){
                     current(original,pause,deadlineAt);
                     admitted=admit(request);
                     if(admitted==null)wait(Math.min(100,Math.max(1,deadlineAt-System.currentTimeMillis())));
                 }
-                if(admitted!=null)try{original.check();current(original,pause,deadlineAt);return admitted;}catch(Exception|Error revoked){admitted.close();throw revoked;}
+                if(admitted!=null)try{check(original,modelRequest);current(original,pause,deadlineAt);return admitted;}catch(Exception|Error revoked){admitted.close();throw revoked;}
             }
-        }finally{original.removeCancelAction(wake);synchronized(this){waiting.remove(request);notifyAll();}}
+        }finally{cancellation.close();synchronized(this){waiting.remove(request);notifyAll();}}
     }
+    private static void check(RunControl original,RunControl.ModelRequest request)throws InterruptedException {if(request==null)original.check();else request.check();}
     // Called only under this monitor; no original authority/ledger callback is made here.
     private Permit admit(Waiter request){
         for(Waiter prior:waiting){if(prior==request)break;if(prior.key.equals(request.key))return null;}

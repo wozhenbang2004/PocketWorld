@@ -224,16 +224,28 @@ public final class ModelGateway {
     public static final class RequestRefreshRequired extends Exception {public RequestRefreshRequired(){super("original_request_context_changed");}}
     public static JSONObject completeStreaming(ModelConfig config,JSONArray messages,JSONArray tools,
             RunControl control,StreamSink sink,InferenceCapture.Target target,RetryObserver retryObserver)throws Exception {
+        return completeStreaming(config,messages,tools,control,sink,target,retryObserver,null);
+    }
+    /** The original Runner captures this revision before polling its durable owner mailbox. */
+    public static JSONObject completeStreaming(ModelConfig config,JSONArray messages,JSONArray tools,
+            RunControl control,StreamSink sink,InferenceCapture.Target target,RetryObserver retryObserver,long ownerInputRevision)throws Exception {
+        try(RunControl.ModelRequest request=control.openModelRequest(ownerInputRevision)){
+            return completeStreaming(config,messages,tools,control,sink,target,retryObserver,request);
+        }
+    }
+    private static JSONObject completeStreaming(ModelConfig config,JSONArray messages,JSONArray tools,
+            RunControl control,StreamSink sink,InferenceCapture.Target target,RetryObserver retryObserver,RunControl.ModelRequest request)throws Exception {
         InferenceCapture.requireOriginalContext(control,target);
         try{return executeLogical(config,messages,tools,control,target,"INTERNAL",null,new PhysicalAttempt(){
             private StreamSession stream;
+            public RunControl.ModelRequest modelRequest(){return request;}
             public JSONObject run(ModelConfig candidate,InferenceCapture capture,SemanticCommit commit)throws Exception {
-                stream=new StreamSession(candidate,control,sink,capture.callId,commit);
+                stream=new StreamSession(candidate,control,sink,capture.callId,commit,request);
                 stream.emit(StreamKind.STARTED,"","request_started",true);
                 return candidate.usesAccount()?completeAccount(candidate,messages,tools,control,stream,capture):completeApi(candidate,messages,tools,control,stream,capture,target);
             }
             public void afterPersist(InferenceCapture capture)throws Exception {stream.finish();}
-            public void rejected(String logical,ModelConfig candidate)throws Exception {stream=new StreamSession(candidate,control,sink,logical,(call,sequence)->{throw new SecurityException("rejected_request_cannot_flush");});stream.failed(StreamKind.FAILED,"candidate_admission_failed");}
+            public void rejected(String logical,ModelConfig candidate)throws Exception {stream=new StreamSession(candidate,control,sink,logical,(call,sequence)->{throw new SecurityException("rejected_request_cannot_flush");},request);stream.failed(StreamKind.FAILED,"candidate_admission_failed");}
             public void failed(Exception failure){if(stream!=null)stream.failed(failure instanceof InterruptedException||failure instanceof java.util.concurrent.CancellationException?StreamKind.CANCELLED:StreamKind.FAILED,"stream_failed");}
             public boolean receivedText(){return stream!=null&&stream.textReceived;}
             public void beforeWait(String logical,String call,int retry,long delay)throws Exception {if(retryObserver!=null)retryObserver.beforeWait(logical,call,retry,delay);}
@@ -261,6 +273,7 @@ public final class ModelGateway {
     @FunctionalInterface public interface SemanticCommit {void beforeFlush(String callId,long sequence)throws Exception;}
     @FunctionalInterface private interface PhysicalAttempt {
         JSONObject run(ModelConfig candidate,InferenceCapture capture,SemanticCommit commit)throws Exception;
+        default RunControl.ModelRequest modelRequest(){return null;}
         default void afterPersist(InferenceCapture capture)throws Exception { }
         default void rejected(String logical,ModelConfig candidate)throws Exception { }
         default void failed(Exception failure){ }
@@ -282,7 +295,8 @@ public final class ModelGateway {
     private static JSONObject executeLogical(ModelConfig config,JSONArray messages,JSONArray tools,RunControl control,InferenceCapture.Target target,String ingress,String nativeDigest,PhysicalAttempt physical,CandidateAdmission preflight,long originalDeadlineAt)throws Exception {
         InferenceCapture.requireOriginalContext(control,target);
         config=config.forPurpose(target.context.purpose.name());
-        control.check();LogicalInferenceAuthority authority=target.logical;
+        RunControl.ModelRequest request=physical.modelRequest();
+        checkRequest(control,request);LogicalInferenceAuthority authority=target.logical;
         if(config.routePlan!=null&&authority==null)throw new SecurityException("模型组需要原TaskStore逻辑请求准入；没有调用未归因通路");
         ModelRoutePlan plan=config.routePlan==null?new ModelRoutePlan(config.model,0,target.context.purpose.name(),target.context.purpose==InferenceReceipt.Purpose.RELAY?"EXTERNAL_RELAY":"APP_OWNER",java.util.List.of(new ModelRoutePlan.Candidate("exact",config,"")),authority==null?1:3,0):config.routePlan;
         long deadline=Math.min(originalDeadlineAt,System.currentTimeMillis()+config.requestTimeoutSeconds*1000L);JSONObject snapshot=plan.toJson();JSONArray rows=snapshot.getJSONArray("orderedCandidates");java.util.List<ModelRoutePlan.Candidate> eligible=new java.util.ArrayList<>();Exception rejection=null;
@@ -313,17 +327,17 @@ public final class ModelGateway {
         }
         int candidateIndex=0,switches=0;String retryReason="initial_ordered_candidate";long waited=0;boolean semantic=false,anyDispatched=false;
         try { for(int attempt=1;attempt<=maximum;attempt++){
-            control.check();if(System.currentTimeMillis()>=deadline){if(authority!=null)authority.finish(logical,"FAILED","unknown","none");throw controlled(localFailure("模型请求总期限已到，等待与重试没有重置期限。",InferenceFailure.Kind.TIMEOUT),authority!=null);}
+            checkRequest(control,request);if(System.currentTimeMillis()>=deadline){if(authority!=null)authority.finish(logical,"FAILED","unknown","none");throw controlled(localFailure("模型请求总期限已到，等待与重试没有重置期限。",InferenceFailure.Kind.TIMEOUT),authority!=null);}
             ModelRoutePlan.Candidate chosen=eligible.get(candidateIndex);ModelConfig selected=chosen.config();
             RunControl.HostRunIdentity originalRun=control.hostRunIdentity();String originalTask=resourceOwner!=null?resourceOwner:originalRun==null?target.context.taskId:originalRun.taskId();
-            ModelCallAdmission.Permit permit=MODEL_CALLS.enter(control,originalTask,deadline,inheritedResourceLimit);InferenceCapture capture;
+            ModelCallAdmission.Permit permit=MODEL_CALLS.enter(control,originalTask,deadline,inheritedResourceLimit,request);InferenceCapture capture;
             try{checkGroup(plan,chosen);preflight.check(selected);capture=new InferenceCapture(selected,control,InferenceCapture.withAdmission(target,()->checkGroup(plan,chosen)));capture.limitDeadlineAt(deadline);capture.tokenReservation(messages,tools);
                 if(authority!=null){capture.logical(logical,attempt,chosen.candidateId(),plan.requestedAlias,ingress,retryReason,deadline);authority.reserve(logical,capture.callId,attempt,chosen.candidateId(),retryReason);}
             }catch(Exception|Error refused){permit.close();throw refused;}
-            final boolean[] committed={false};SemanticCommit commit=(call,sequence)->{control.check();checkGroup(plan,chosen);if(!capture.callId.equals(call))throw new SecurityException("semantic_call_identity_changed");if(!committed[0]){if(authority!=null)authority.commit(logical,call,sequence);committed[0]=true;}};
+            final boolean[] committed={false};SemanticCommit commit=(call,sequence)->{checkRequest(control,request);checkGroup(plan,chosen);if(!capture.callId.equals(call))throw new SecurityException("semantic_call_identity_changed");if(!committed[0]){if(authority!=null)authority.commit(logical,call,sequence);committed[0]=true;}};
             try{
-                JSONObject result=physical.run(selected,capture,commit);control.check();commit.beforeFlush(capture.callId,1);
-                capture.returnedHistory(result);capture.finish(InferenceReceipt.Outcome.COMPLETED);physical.afterPersist(capture);
+                JSONObject result=physical.run(selected,capture,commit);checkRequest(control,request);commit.beforeFlush(capture.callId,1);
+                capture.returnedHistory(result);capture.finish(InferenceReceipt.Outcome.COMPLETED);physical.afterPersist(capture);checkRequest(control,request);
                 if(authority!=null){authority.attemptEnded(logical,capture.callId,capture.wasDispatched(),"complete");authority.finish(logical,"SUCCEEDED","complete","complete");JSONObject metadata=result.optJSONObject("provider_data");if(metadata!=null&&!selected.usesAccount())metadata.put("originCallId",capture.callId);}
                 return result;
             }catch(Exception failure){
@@ -340,7 +354,7 @@ public final class ModelGateway {
                 if(!retry){if(authority!=null)authority.finish(logical,cancelled?"CANCELLED":semantic?"PARTIAL":capture.wasDispatched()&&facts!=null&&(facts.kind==InferenceFailure.Kind.NETWORK||facts.kind==InferenceFailure.Kind.TIMEOUT)?"UNKNOWN":"FAILED",semantic||capture.wasDispatched()&&facts!=null&&(facts.kind==InferenceFailure.Kind.NETWORK||facts.kind==InferenceFailure.Kind.TIMEOUT)?"unknown":"failed",semantic?"partial":"none");if(semantic&&facts!=null&&facts.kind==InferenceFailure.Kind.INCOMPLETE_STREAM)failure=new GatewayException("本次输出已提交，但模型流在终态前中断；没有自动重发或切换模型。请在原任务核对片段并明确继续，本次未派发工具。",facts);throw controlled(failure,authority!=null);}
                 // Explicit transient 429 never changes RouteKey. Unknown 429 is not retryable.
                 if(facts.httpStatus!=429&&switches<plan.maxRouteSwitches&&candidateIndex+1<eligible.size()){candidateIndex++;switches++;retryReason="transient_failure_next_candidate";}else retryReason="transient_failure_same_route";
-                physical.beforeWait(logical,capture.callId,attempt,delay);waited+=delay;control.sleep(delay);control.check();physical.afterWait();
+                physical.beforeWait(logical,capture.callId,attempt,delay);waited+=delay;if(request==null)control.sleep(delay);else request.sleep(delay);checkRequest(control,request);physical.afterWait();
             }finally{permit.close();}
         }
         throw new IllegalStateException("logical_attempt_loop_exhausted");
@@ -357,12 +371,19 @@ public final class ModelGateway {
         if(failure instanceof ModelRequestPolicy.Rejected)failure=new GatewayException(failure.getMessage(),InferenceFailure.local(InferenceFailure.Kind.LOCAL_REFUSAL,System.currentTimeMillis()));
         if(controlled&&failure instanceof GatewayException gateway)gateway.logicalControlled=true;return failure;
     }
+    private static void checkRequest(RunControl control,RunControl.ModelRequest request)throws InterruptedException {
+        if(request==null)control.check();else request.check();
+    }
+    private static AutoCloseable cancelTransport(RunControl control,StreamSession stream,Runnable cancel) {
+        if(stream!=null&&stream.request!=null)return stream.request.onCancel(cancel);
+        control.onCancel(cancel);return ()->control.removeCancelAction(cancel);
+    }
 
     private static JSONObject completeApi(ModelConfig config,JSONArray messages,JSONArray tools,
                                           RunControl control,StreamSession stream,InferenceCapture capture,InferenceCapture.Target target)throws Exception {
         ProviderAdapter provider=ProviderAdapters.selected(config.provider);
         URL endpoint=endpoint(config);
-        control.check();
+        checkRequest(control,stream==null?null:stream.request);
         JSONObject request=provider.request(config,messages,tools);
         if(stream!=null){request=ApiTurnStream.request(config.provider,request,config.maxOutputTokens);endpoint=ApiTurnStream.endpoint(config.provider,endpoint);}
         try{request=applyRequestPolicy(config,messages,tools,request,target,control);}catch(ModelRequestPolicy.Rejected refused){throw new GatewayException(refused.getMessage(),InferenceFailure.local(InferenceFailure.Kind.LOCAL_REFUSAL,System.currentTimeMillis()));}
@@ -484,13 +505,13 @@ public final class ModelGateway {
                 .post(RequestBody.create(payload,MediaType.get("application/json; charset=utf-8")))
                 .header("Accept","text/event-stream, application/json");
         for(java.util.Map.Entry<String,String> header:provider.headers(config).entrySet())request.header(header.getKey(),header.getValue());
-        Call call=client.newCall(request.build());Runnable cancel=call::cancel;control.onCancel(cancel);
+        Call call=client.newCall(request.build());AutoCloseable cancellation=cancelTransport(control,stream,call::cancel);
         long deadline=System.nanoTime()+capture.remainingMillis(config)*1_000_000L;
         try{
-            control.check();
-            capture.dispatch();control.check();ModelRequestPolicy.resolve(config);
+            stream.check();
+            capture.dispatch();stream.check();ModelRequestPolicy.resolve(config);
             try(Response response=call.execute()){
-                control.check();if(!response.isSuccessful())throw httpFailure(config,response.code(),response.headers().values("Retry-After"),response.headers().values("Date"),response.body()==null?null:response.body().byteStream());
+                stream.check();if(!response.isSuccessful())throw httpFailure(config,response.code(),response.headers().values("Retry-After"),response.headers().values("Date"),response.body()==null?null:response.body().byteStream());
                 if(response.body()==null)throw new GatewayException("模型没有返回正文，未派发工具。");
                 JSONObject assistant;
                 try(InputStream input=response.body().byteStream()){
@@ -499,7 +520,7 @@ public final class ModelGateway {
                         assistant=ApiTurnStream.read(input,config.provider,provider,tools,control,stream::text,capture.usage);
                     else{
                         ByteArrayOutputStream buffer=new ByteArrayOutputStream();byte[] chunk=new byte[8192];int count;
-                        while((count=input.read(chunk))!=-1){control.check();if(buffer.size()+count>MAX_RESPONSE_BYTES)throw new GatewayException("模型回复过大，未派发工具。");buffer.write(chunk,0,count);}
+                        while((count=input.read(chunk))!=-1){stream.check();if(buffer.size()+count>MAX_RESPONSE_BYTES)throw new GatewayException("模型回复过大，未派发工具。");buffer.write(chunk,0,count);}
                         String body=StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
                                 .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
                                 .decode(java.nio.ByteBuffer.wrap(buffer.toByteArray())).toString();
@@ -515,22 +536,23 @@ public final class ModelGateway {
                 catch(InterruptedException stopped){throw stopped;}
                 catch(IOException network){throw network;}
                 catch(Exception malformed){throw localFailure("模型流的事件、终态、工具参数或显示回调无法核对；未派发工具，没有自动重试。",InferenceFailure.Kind.PROTOCOL,response.code());}
-                control.check();
+                stream.check();
                 if(System.nanoTime()>=deadline)throw localFailure("模型请求超时；本次未派发工具。是否有界恢复由原任务范围决定。",InferenceFailure.Kind.TIMEOUT);
                 return assistant;
             }
         }catch(IOException network){
-            control.check();
+            stream.check();
             if(network instanceof java.io.InterruptedIOException||System.nanoTime()>=deadline)
                 throw localFailure("模型请求超时；本次未派发工具。是否有界恢复由原任务范围决定。",InferenceFailure.Kind.TIMEOUT);
             throw localFailure("模型流连接中断；本次未派发工具。",network instanceof javax.net.ssl.SSLException?InferenceFailure.Kind.PROTOCOL:InferenceFailure.Kind.NETWORK);
-        }finally{control.removeCancelAction(cancel);}
+        }finally{cancellation.close();}
     }
 
     /** One invocation's ordered presentation channel; no reusable global sink or task authority. */
     private static final class StreamSession {
         final ModelConfig config;
         final RunControl control;
+        final RunControl.ModelRequest request;
         final StreamSink sink;
         final String requestId;
         final long pauseRevision;
@@ -540,15 +562,16 @@ public final class ModelGateway {
         long sequence;
         int visibleChars;
         boolean presentationClosed,textReceived;
-        StreamSession(ModelConfig config,RunControl control,StreamSink sink,String requestId,SemanticCommit commit)throws GatewayException {
-            this.commit=commit;
+        StreamSession(ModelConfig config,RunControl control,StreamSink sink,String requestId,SemanticCommit commit,RunControl.ModelRequest request)throws GatewayException {
+            this.commit=commit;this.request=request;
             this.config=config;this.control=control;this.sink=sink;this.requestId=requestId;pauseRevision=control.pauseRevision();key=config.apiKey;
             if(key.length()>16384)throw new GatewayException("API凭据过长，未发送流式请求，请检查模型设置。");
             String chosen="[密钥已隐藏]";if(!key.isEmpty()&&chosen.contains(key))chosen="●";if(chosen.equals(key))chosen="○";mask=chosen;
         }
+        void check()throws InterruptedException {checkRequest(control,request);}
         void text(String value)throws Exception {
             if(!value.isEmpty())textReceived=true;
-            control.check();visibleChars+=value.length();if(visibleChars>MAX_RESPONSE_BYTES)throw new GatewayException("模型可见流文本超过本地大小限制，已停止；没有自动重试。");
+            check();visibleChars+=value.length();if(visibleChars>MAX_RESPONSE_BYTES)throw new GatewayException("模型可见流文本超过本地大小限制，已停止；没有自动重试。");
             pending.append(value);drain(false);
         }
         private void drain(boolean end)throws Exception {
@@ -572,7 +595,7 @@ public final class ModelGateway {
         void finish()throws Exception {drain(true);emit(StreamKind.COMPLETED,"","turn_completed",true);}
         void failed(StreamKind kind,String code){pending.setLength(0);try{emit(kind,"",code,false);}catch(Exception ignored){/* Original failure remains authoritative. */}}
         void emit(StreamKind kind,String text,String code,boolean live)throws Exception {
-            if(live)control.check();
+            if(live)check();
             if(sink==null||presentationClosed)return;
             // The only event allowed past a presentation fence clears this exact request's draft.
             // It carries no text, completed result, grant or tool action.
@@ -595,10 +618,11 @@ public final class ModelGateway {
     }
 
     private static JSONObject completeAccount(ModelConfig config,JSONArray messages,JSONArray tools,RunControl control,StreamSession stream,InferenceCapture capture)throws Exception {
-        control.check();AccountInferencePort port=accountInference;
+        RunControl.ModelRequest requestScope=stream==null?null:stream.request;
+        checkRequest(control,requestScope);AccountInferencePort port=accountInference;
         if(port==null)throw new GatewayException("账号推理宿主已关闭，请重新打开应用。");
         try(GatewayCall operation=new GatewayCall(capture.remainingMillis(config))){
-            Runnable cancel=operation::cancel;control.onCancel(cancel);
+            AutoCloseable cancellation=cancelTransport(control,stream,operation::cancel);
             // The account version callback keeps its stable checked GatewayFailure protocol.
             // Only this invocation's exact native source refusal may cross back to the Runner.
             final java.util.concurrent.atomic.AtomicReference<dev.pocketengine.features.memory.ToolOutputCapture.OutputSourceUnavailable> sourceRefusal=new java.util.concurrent.atomic.AtomicReference<>();
@@ -608,7 +632,7 @@ public final class ModelGateway {
                 ModelConfig.AccountModelRef expected=binding.current();
                 ResponsesRequest request=AccountResponsesAdapter.request(config.withAccountModel(expected),messages,tools,binding.versions(),port.imageInputSupported(expected));
                 request.admit(accountModelFacts(expected));
-                final JSONObject[] completed={null};final ModelConfig.AccountModelRef[] admitted={null};control.check();
+                final JSONObject[] completed={null};final ModelConfig.AccountModelRef[] admitted={null};checkRequest(control,requestScope);
                 port.streamWithVersion(expected,request,operation,actualVersion->{
                     operation.check();
                     if(admitted[0]!=null||actualVersion<expected.accountVersion)throw new GatewayFailure("STALE_ACCOUNT_VERSION");
@@ -620,7 +644,7 @@ public final class ModelGateway {
                 },new ChatGptProvider.EventSink(){
                   @Override public void usage(JSONObject counters){capture.usage.observe(counters,ProviderUsage.Stage.FINAL);ApiTurnStream.terminalUsage("openai_responses",counters,capture.usage);}
                   @Override public void event(JSONObject event)throws Exception{
-                    operation.check();control.check();
+                    checkRequest(control,requestScope);operation.check();
                     if(port!=accountInference||admitted[0]==null||!admitted[0].matches(binding.current()))throw new GatewayFailure("STALE_ACCOUNT_VERSION");
                     if(completed[0]!=null)throw new GatewayFailure("INVALID_PROVIDER_STREAM");
                     if("text_delta".equals(event.optString("type"))&&stream!=null)stream.text(event.getString("delta"));
@@ -631,17 +655,17 @@ public final class ModelGateway {
                     }
                   }
                 });
-                control.check();operation.check();
+                checkRequest(control,requestScope);operation.check();
                 if(port!=accountInference)throw new GatewayException("账号推理宿主已变化，已丢弃旧回复；请重新确认连接。");
                 if(admitted[0]==null||!admitted[0].matches(binding.current()))throw new GatewayFailure("STALE_ACCOUNT_VERSION");
                 return AccountResponsesAdapter.response(config.withAccountModel(admitted[0]),completed[0],tools);
             }catch(GatewayFailure failure){
-                control.check();
+                checkRequest(control,requestScope);
                 dev.pocketengine.features.memory.ToolOutputCapture.OutputSourceUnavailable source=sourceRefusal.get();if(source!=null)throw source;
                 if(budgetRefusal.get()!=null)throw budgetRefusal.get();
                 if(stream!=null&&"CANCELLED".equals(failure.code))throw new java.util.concurrent.CancellationException(accountFailure(failure.code));
                 throw new GatewayException(accountFailure(failure.code),InferenceFailure.account(failure.code,failure.httpStatus,failure.retryAt,System.currentTimeMillis()));
-            }finally{control.removeCancelAction(cancel);}
+            }finally{cancellation.close();}
         }
     }
     private static AccountBinding binding(RunControl control,ModelConfig.AccountModelRef reference,AccountInferencePort port)throws GatewayException {
