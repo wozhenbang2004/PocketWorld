@@ -45,7 +45,7 @@ public final class BackgroundOwnerHandoffTest {
     }
     @Test public void actualOwnerHostJournalsSameRunAndDoesNotResumeWithoutFreshReturnedFrame()throws Exception {
         dev.pocketengine.EngineApplication app=(dev.pocketengine.EngineApplication)RuntimeEnvironment.getApplication();
-        dev.pocketengine.store.TaskStore store=new dev.pocketengine.store.TaskStore(app);app.tasks=store;
+        dev.pocketengine.store.TaskStore store=new dev.pocketengine.store.TaskStore(app);app.tasks=store;dev.pocketengine.testutil.ReadyApplicationFixture.complete(app);
         java.util.concurrent.ExecutorService worker=java.util.concurrent.Executors.newSingleThreadExecutor();
         try {
             String id=store.create("亲自操作原应用再交还","background").getString("id");JSONObject task=store.startAttempt(id,"background",10);RunControl original=new RunControl();original.bindHostRun(id,task.getString("runId"),task.getInt("coordinatorEpoch"));original.pause();store.status(id,"paused","owner fixture");DisplayFixture.expectedTask=id;
@@ -56,7 +56,7 @@ public final class BackgroundOwnerHandoffTest {
         } finally {worker.shutdownNow();java.lang.reflect.Field db=dev.pocketengine.store.TaskStore.class.getDeclaredField("db");db.setAccessible(true);((android.database.sqlite.SQLiteDatabase)db.get(store)).close();}
     }
     @Test public void unknownTransportWithUnexecutedPreparedPlanCanReconcileWithoutReplay()throws Exception {
-        dev.pocketengine.EngineApplication app=(dev.pocketengine.EngineApplication)RuntimeEnvironment.getApplication();dev.pocketengine.store.TaskStore store=new dev.pocketengine.store.TaskStore(app);app.tasks=store;java.util.concurrent.ExecutorService worker=java.util.concurrent.Executors.newSingleThreadExecutor();
+        dev.pocketengine.EngineApplication app=(dev.pocketengine.EngineApplication)RuntimeEnvironment.getApplication();dev.pocketengine.store.TaskStore store=new dev.pocketengine.store.TaskStore(app);app.tasks=store;dev.pocketengine.testutil.ReadyApplicationFixture.complete(app);java.util.concurrent.ExecutorService worker=java.util.concurrent.Executors.newSingleThreadExecutor();
         try{String id=store.create("移屏未发出后核对","background").getString("id");JSONObject task=store.startAttempt(id,"background",10);RunControl original=new RunControl();original.bindHostRun(id,task.getString("runId"),task.getInt("coordinatorEpoch"));original.pause();DisplayFixture.expectedTask=id;DisplayFixture.loseNextMain=false;BackgroundPhonePort port=new BackgroundPhonePort(new DisplayModule(null));org.robolectric.util.ReflectionHelpers.setField(app,"activeTaskId",id);org.robolectric.util.ReflectionHelpers.setField(app,"activeControl",original);org.robolectric.util.ReflectionHelpers.setField(app,"activePort",port);
             worker.submit(()->app.dispatchOwnerAction("ownerPhoneHandoff",new JSONObject().put("taskId",id).put("handoffAction","prepare"))).get();DisplayFixture.failBeforeMain=true;
             JSONObject result=worker.submit(()->app.dispatchOwnerAction("ownerPhoneHandoff",new JSONObject().put("taskId",id).put("handoffAction","main").put("handoffId","native-plan"))).get();assertTrue(result.getJSONObject("receipt").isNull("accepted"));assertTrue(store.hasUnresolved(id));

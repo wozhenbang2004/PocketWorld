@@ -99,7 +99,7 @@ public final class CapabilityApprovalConsumptionNativeTest {
         PresentationBoundary.afterPush=null;app=(EngineApplication)RuntimeEnvironment.getApplication();model=new ModelFixture();
         app.getSharedPreferences("private_settings",0).edit().putString("baseUrl","http://127.0.0.1:"+model.server.getAddress().getPort()+"/v1").putString("model","controlled-approval-model")
             .putBoolean("sendScreenshots",false).putInt("maxSteps",8).putInt("requestTimeoutSeconds",10).putInt("maxOutputTokens",64).commit();
-        app.tasks=new TaskStore(app);app.settings=new SettingsStore(app);app.features=new FeatureHost(events::add,app.tasks,()->false);app.addObserver(events::add);
+        app.tasks=new TaskStore(app);dev.pocketengine.testutil.ReadyApplicationFixture.complete(app);app.settings=new SettingsStore(app);app.features=new FeatureHost(events::add,app.tasks,()->false);app.addObserver(events::add);
         ((ExecutorService)get(app,EngineApplication.class,"capabilityWorkers")).shutdownNow();queue=new Queue();set(app,"capabilityWorkers",queue);
         workspace=new WorkspaceFixture();app.features.register(workspace);
         var plugins=new dev.pocketengine.features.plugins.PluginsModule(new dev.pocketengine.features.FeatureContext(app,app.settings,new dev.pocketengine.store.SecretVault(app),events::add));app.features.register(plugins);

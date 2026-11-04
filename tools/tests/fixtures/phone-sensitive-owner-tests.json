@@ -54,7 +54,9 @@
         "nativeOtpPurposeSurvivesPublicBodyClippingWithoutRetainingPrivateText",
         "linkedPlatformLabelIsFreshnessBoundAndStillGatesAnOtherwiseEmptyField",
         "existingOrdinaryMessageValueTalkingAboutOtpIsNotTheFieldPurpose",
-        "ordinarySearchAndEditorIdentityKeepsItsMeaningBesideOtpDocumentation"
+        "ordinarySearchAndEditorIdentityKeepsItsMeaningBesideOtpDocumentation",
+        "geometryChangeWhileNativeTreeWorkerIsBlockedCannotDispatchOldNodeAfterReturn",
+        "sameSizeGeometryRoundTripRejectsOldNodeButFreshObservationKeepsSameSession"
       ]
     },
     {

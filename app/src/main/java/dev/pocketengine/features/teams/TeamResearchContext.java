@@ -74,6 +74,8 @@ public final class TeamResearchContext implements AutoCloseable {
         RunJournal metered=new RunJournal(){
             public JSONObject restore()throws Exception{return originalJournal.restore();}
             public void checkpoint(JSONArray history,int steps,JSONObject observation)throws Exception{originalJournal.checkpoint(history,steps,observation);}
+            public boolean progressGuardSupported(){return originalJournal.progressGuardSupported();}
+            public void checkpoint(JSONArray messages,int steps,JSONObject observation,JSONObject progressGuard)throws Exception{originalJournal.checkpoint(messages,steps,observation,progressGuard);}
             public String beginOperation(String tool,JSONObject args)throws Exception{throw new SecurityException("只读研究child不接外部副作用prepared工具");}
             public void finishOperation(String op,JSONObject receipt)throws Exception{throw new SecurityException("只读研究工具沿原单次native read账结算");}
             public boolean reserveModelRecovery(String call,long millis)throws Exception{return originalJournal.reserveModelRecovery(call,millis);}
@@ -104,6 +106,7 @@ public final class TeamResearchContext implements AutoCloseable {
         public boolean current(FrozenPrefix published,RunControl live)throws Exception{fence.metadata();boolean value=original.current(published,live);fence.metadata();return value;}
         public boolean scopeCurrent(RunControl live)throws Exception{fence.metadata();boolean value=original.scopeCurrent(live);fence.metadata();return value;}
         public void checkpoint(RunJournal journal,JSONArray messages,int steps,JSONObject observation)throws Exception{if(!control.isPaused())fence.metadata();original.checkpoint(journal,messages,steps,observation);if(!control.isPaused())fence.metadata();}
+        public void checkpoint(RunJournal journal,JSONArray messages,int steps,JSONObject observation,JSONObject progressGuard)throws Exception{if(!control.isPaused())fence.metadata();original.checkpoint(journal,messages,steps,observation,progressGuard);if(!control.isPaused())fence.metadata();}
         public JSONObject restore(RunJournal journal)throws Exception {
             if(control.isPaused()){binding.checkRetained();return original.restore(journal);}
             fence.metadata();JSONObject value=binding.admitSql(()->original.restore(journal));fence.metadata();return value;

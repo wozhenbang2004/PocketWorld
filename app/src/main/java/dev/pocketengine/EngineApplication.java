@@ -37,6 +37,11 @@ public final class EngineApplication extends Application implements dev.pocketen
     public interface Observer { void onEvent(JSONObject event); }
     private final CopyOnWriteArrayList<Observer> observers=new CopyOnWriteArrayList<>();
     private final Handler main=new Handler(Looper.getMainLooper());
+    private final dev.pocketengine.bootstrap.BootstrapStatus bootstrap=new dev.pocketengine.bootstrap.BootstrapStatus(TaskStore.DATABASE_SCHEMA);
+    private final Object bootstrapCommands=new Object();
+    private final java.util.concurrent.ExecutorService bootstrapWorker=java.util.concurrent.Executors.newSingleThreadExecutor(work->{Thread thread=new Thread(work,"original-bootstrap");thread.setDaemon(true);return thread;});
+    private volatile dev.pocketengine.store.TaskDatabaseMaintenance databaseMaintenance;
+    private volatile boolean bootstrapCleanupConfirmed=true,hasReachedBusinessReady,adbBootstrapProcess;
     public SettingsStore settings;
     public dev.pocketengine.runtime.models.ModelConnectionService modelConnections;
     public TaskStore tasks;
@@ -68,7 +73,46 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     public FeatureHost features;
     public final ExecutionResources resources=new ExecutionResources();
-    @Override public boolean executionAllowed(){return tasks!=null&&tasks.executionEnabled();}
+    public boolean businessReady(){return !adbBootstrapProcess&&bootstrap.ready()&&tasks!=null;}
+    @Override public boolean executionAllowed(){return businessReady()&&tasks.executionEnabled();}
+    public JSONObject bootstrapState()throws Exception {
+        JSONObject state=bootstrap.snapshot();var maintenance=databaseMaintenance;
+        if(maintenance!=null){JSONObject current=maintenance.snapshot();state.put("maintenance",current);if(maintenance.blocksBusinessOpen()&&(current==null||!current.optBoolean("originalRetryAvailable")))state.put("retryAvailable",false);}
+        if(!bootstrapCleanupConfirmed||adbBootstrapProcess)state.put("retryAvailable",false);
+        return state;
+    }
+    /** This narrow native owner entry is reachable before any ordinary Controller exists. */
+    public JSONObject bootstrapOwnerCommand(String command,JSONObject payload,java.util.function.BooleanSupplier currentOwnerWindow)throws Exception {
+        if(payload==null)throw new IllegalArgumentException("缺少原启动操作参数");
+        if("bootstrap.read".equals(command))return bootstrapState();
+        if("repair.read".equals(command)){var maintenance=databaseMaintenance;if(maintenance==null)return bootstrapState();maintenance.command(command,payload,currentOwnerWindow);return bootstrapState();}
+        synchronized(bootstrapCommands){
+            if(currentOwnerWindow==null||!currentOwnerWindow.getAsBoolean()||adbBootstrapProcess)throw new SecurityException("原本机维护窗口已关闭");
+            if("bootstrap.retry".equals(command)){
+                var maintenance=databaseMaintenance;
+                if(maintenance!=null&&maintenance.originalRetryRecorded(payload))return bootstrapState();
+                JSONObject current=maintenance==null?null:maintenance.snapshot();
+                boolean retryOriginal=current!=null&&current.optBoolean("originalRetryAvailable");
+                if(!bootstrapCleanupConfirmed||tasks!=null||maintenance!=null&&maintenance.blocksBusinessOpen()&&!retryOriginal)throw new SecurityException("原连接、资源或维护记录尚未关闭，不能再次初始化");
+                Object expected=payload.get("expectedGeneration");if(!(expected instanceof Integer||expected instanceof Long))throw new SecurityException("缺少准确启动代次");
+                String requestId=payload.getString("requestId");
+                // Owner commands are serialized, and checkRetry rejects an active initializer.
+                // Do not persist a permit for a request the bootstrap state will reject.
+                if(!bootstrap.checkRetry(((Number)expected).longValue(),requestId))return bootstrapState();
+                String originalRepair=retryOriginal?maintenance.prepareOriginalRetry(payload,currentOwnerWindow):null;
+                long generation=bootstrap.retry(((Number)expected).longValue(),requestId);
+                if(generation!=0){if(originalRepair==null)queueBootstrap(generation);else queueOriginalBootstrap(generation,maintenance,originalRepair,currentOwnerWindow);}
+                return bootstrapState();
+            }
+            if(!command.startsWith("repair."))throw new SecurityException("不是原启动维护命令");
+            if(bootstrap.current(bootstrap.generation()))throw new SecurityException("原初始化仍在运行，请等它完成，不另开维护操作");
+            var maintenance=databaseMaintenance;if(maintenance==null)throw new IllegalStateException("原维护记录存储不可用，未新建替代记录");
+            maintenance.command(command,payload,currentOwnerWindow);
+            JSONObject read=maintenance.snapshot();boolean completed=read!=null&&"completed".equals(read.optString("phase")),retryOriginal=read!=null&&read.optBoolean("originalRetryAvailable");
+            bootstrap.maintenance(completed?"maintenance_completed":"database_maintenance",completed?"已保全原件并完成所选维护，请明确重试启动":retryOriginal?"原件已保全，原数据库尚未替换":"原数据库维护仍未完成",completed?"重试将调用原任务恢复器；新库执行保持停用":retryOriginal?"可明确重新核对同一原数据库；保全不会恢复历史或重放旧操作":"按原维护记录核对，不自动重放",(completed||retryOriginal)&&bootstrapCleanupConfirmed&&tasks==null);
+            return bootstrapState();
+        }
+    }
     public JSONObject ownerExecutionState()throws Exception {
         String phone=activeId();
         return tasks.ownerExecutionState().put("acceptingNewWork",executionAllowed())
@@ -84,7 +128,9 @@ public final class EngineApplication extends Application implements dev.pocketen
         JSONObject task=tasks.deleteTaskScreenshotForOwner(taskId,runId,epoch,imageId);pushTask(taskId);return task;
     }
     private void queueTaskScreenshotMaintenance(){
+        if(!businessReady())return;
         capabilityWorkers.execute(()->{try{
+            if(!businessReady())return;
             JSONObject result=tasks.maintainTaskScreenshots();dev.pocketengine.features.automation.AutomationModule.reschedule(this);
             if(result.optInt("changed")>0)sendState();
         }catch(Exception unavailable){/* Per-image unreadable/deletionPending remains visible; no plaintext fallback. */}});
@@ -536,7 +582,144 @@ public final class EngineApplication extends Application implements dev.pocketen
     @Override public dev.pocketengine.features.automation.AutomationModule.AlarmHost automationAlarmHost(){return automationHost;}
     public dev.pocketengine.features.teams.TeamResearchHost.Page openTeamResearchBudgetPage(String run)throws Exception{if(!(features.module("teams") instanceof dev.pocketengine.features.teams.TeamsModule))throw new SecurityException("原团队模块不可用");return ((dev.pocketengine.features.teams.TeamsModule)features.module("teams")).newResearchBudgetPage(run);}
     public dev.pocketengine.features.teams.TeamMemberEvidenceHost.Page openTeamMemberMaterialsPage(String run,String member)throws Exception{if(teamMemberEvidence==null||!(features.module("teams") instanceof dev.pocketengine.features.teams.TeamsModule))throw new IllegalStateException("原团队资料宿主未准备好");return ((dev.pocketengine.features.teams.TeamsModule)features.module("teams")).newMemberEvidencePage(teamMemberEvidence,run,member);}
-    @Override public void onCreate(){super.onCreate();if((getPackageName()+":adb_bootstrap").equals(Application.getProcessName()))return;settings=new SettingsStore(this);tasks=new TaskStore(this);dev.pocketengine.runtime.usage.InferenceCapture.installBudgetAttribution(tasks::requireTokenBudgetAttribution);RunControl.installHostAdmission(tasks::admitExecutionControl);deviceOwnerInputs=new dev.pocketengine.features.devices.DeviceOwnerInputs(tasks,id->{var session=deviceGoalSessions.get(id);return session!=null&&session.originalControl()==activeControl&&id.equals(activeTaskId)?session:null;});assistantTaskNotifications=new dev.pocketengine.features.assistant.notifications.AssistantTaskNotifications(this,tasks);initializeModelConnections();attachmentRoutePins=new dev.pocketengine.features.AssistantAttachmentRoutePins(new SecretVault(this));localOcr=new dev.pocketengine.vision.ocr.TesseractLocalOcrEngine(this);modelStreams=new dev.pocketengine.features.NativeModelStreamUi(tasks,main,this::ownsRunControl,event->{for(Observer observer:observers)try{observer.onEvent(event);}catch(RuntimeException ignored){}});initializeFeatures();initializeDeviceWorkspace();if(channelTaskHost!=null)capabilityWorkers.execute(()->{try{channelTaskHost.recover();}catch(Exception failure){error("渠道原任务回执暂未恢复，请检查任务详情");}});automationHost=new dev.pocketengine.features.HostAutomationCoordinator(this,features,tasks,automationPlans);tasks.setTaskScreenshotChangeListener(this::queueTaskScreenshotMaintenance);queueTaskScreenshotMaintenance();capabilityWorkers.execute(()->{try{memorySources.synchronize(json("ownerId","owner","spaceId","private"));queueAutomaticLearningIdle();JSONArray recover=tasks.appLearningRecoveryTasks();for(int i=0;i<recover.length();i++)queueAppLearning(recover.getString(i));}catch(Exception failure){error("记忆来源与派生技能尚未完成核对，请在记忆管理中检查");}});capabilityWorkers.execute(()->{try{dev.pocketengine.features.automation.AutomationModule.reschedule(this);}catch(Exception failure){error("跟进调度尚未恢复，请在提醒详情中检查");}});queueScheduledConversationIdle();}
+    @Override public void onCreate(){
+        super.onCreate();adbBootstrapProcess=(getPackageName()+":adb_bootstrap").equals(Application.getProcessName());if(adbBootstrapProcess)return;
+        // Install the one native admission before opening any business store or constructing modules.
+        RunControl.installHostAdmission((original,id,run,epoch)->{requireBusinessReady();TaskStore current=tasks;return current.admitExecutionControl(original,id,run,epoch);});
+        dev.pocketengine.runtime.usage.InferenceCapture.installBudgetAttribution((capture,identity)->{requireBusinessReady();tasks.requireTokenBudgetAttribution(capture,identity);});
+        queueBootstrap(bootstrap.beginInitial());
+    }
+    private void requireBusinessReady(){if(!businessReady())throw new SecurityException("原启动恢复或维护尚未完成，没有派发模型或工具");}
+    private void queueBootstrap(long generation){
+        try{bootstrapWorker.execute(()->initializeOriginalBusiness(generation));}
+        catch(java.util.concurrent.RejectedExecutionException stopped){bootstrap.failed(generation,"initializer_closed","原初始化队列已关闭","重新打开应用后读取原状态",false);}
+    }
+    private void queueOriginalBootstrap(long generation,dev.pocketengine.store.TaskDatabaseMaintenance maintenance,String repair,java.util.function.BooleanSupplier owner){
+        try{bootstrapWorker.execute(()->{
+            try{maintenance.runPreparedOriginalRetry(repair,generation,owner,()->initializeOriginalBusiness(generation));}
+            catch(Exception|LinkageError unavailable){bootstrap.failed(generation,"original_retry_unconfirmed","原数据库重新打开的结果尚未确认","只读取同一维修记录；不重复打开或替换",false);}
+        });}catch(java.util.concurrent.RejectedExecutionException stopped){bootstrap.failed(generation,"initializer_closed","原初始化队列已关闭","只读取同一维修记录；本次未重新派发",false);}
+    }
+    private void initializeOriginalBusiness(long generation){
+        if(!bootstrap.current(generation))return;Integer observed=null;
+        try{
+            if(tasks!=null||!bootstrapCleanupConfirmed)throw new IllegalStateException("原任务库或资源仍存在，不能创建第二任务权威");
+            bootstrap.installed(generation,dev.pocketengine.bootstrap.BootstrapChecks.installation(this));
+            if(databaseMaintenance==null)databaseMaintenance=new dev.pocketengine.store.TaskDatabaseMaintenance(this,new dev.pocketengine.store.TaskDatabaseMaintenance.Host(){
+                public long generation(){return bootstrap.generation();}
+                public boolean quiesce()throws Exception{return quiesceOriginalDatabaseForMaintenance();}
+            });
+            if(databaseMaintenance.blocksBusinessOpen()){
+                JSONObject current=databaseMaintenance.snapshot();
+                boolean retryOriginal=current!=null&&current.optBoolean("originalRetryAvailable")&&bootstrapCleanupConfirmed&&tasks==null;
+                bootstrap.maintenance("database_maintenance","发现原数据库维护记录，未重新打开业务库",retryOriginal?"可明确重新核对同一原数据库；保全不会恢复历史或重放旧操作":"只核对同一维护编号和原件",retryOriginal);return;
+            }
+            dev.pocketengine.bootstrap.BootstrapChecks.storage(this);
+            try{dev.pocketengine.bootstrap.BootstrapChecks.requiredUi(this);}catch(Exception missing){throw new dev.pocketengine.bootstrap.BootstrapChecks.Failure("required_resource_incompatible","当前安装包的必要界面资源未通过核验，请重新安装可信兼容版本");}
+            observed=dev.pocketengine.bootstrap.BootstrapChecks.observedSchema(getDatabasePath(TaskStore.DATABASE_NAME));bootstrap.stage(generation,"configured",observed);
+            if(observed!=null&&observed>TaskStore.DATABASE_SCHEMA)throw new dev.pocketengine.bootstrap.BootstrapChecks.Failure("newer_schema","原库版本比当前安装包更新；未打开或清空原库");
+            settings=new SettingsStore(this);bootstrap.recovering(generation);
+            tasks=new TaskStore(this,this::businessReady,new TaskStore.OpenObserver(){
+                public void stage(String stage,int schema){bootstrap.stage(generation,stage,schema);}
+                public void corruption(String reason){databaseMaintenance.corruptionObserved();}
+            });
+            deviceOwnerInputs=new dev.pocketengine.features.devices.DeviceOwnerInputs(tasks,id->{var session=deviceGoalSessions.get(id);return session!=null&&session.originalControl()==activeControl&&id.equals(activeTaskId)?session:null;});
+            assistantTaskNotifications=new dev.pocketengine.features.assistant.notifications.AssistantTaskNotifications(this,tasks);
+            initializeModelConnections();attachmentRoutePins=new dev.pocketengine.features.AssistantAttachmentRoutePins(new SecretVault(this));
+            localOcr=new dev.pocketengine.vision.ocr.TesseractLocalOcrEngine(this);
+            modelStreams=new dev.pocketengine.features.NativeModelStreamUi(tasks,main,this::ownsRunControl,event->{for(Observer observer:observers)try{observer.onEvent(event);}catch(RuntimeException ignored){}});
+            initializeFeatures();initializeDeviceWorkspace();
+            // These are the original recovery consumers, completed on this same initializer before ready.
+            if(channelTaskHost!=null)channelTaskHost.recover();
+            memorySources.synchronize(json("ownerId","owner","spaceId","private"));
+            automationHost=new dev.pocketengine.features.HostAutomationCoordinator(this,features,tasks,automationPlans);
+            tasks.maintainTaskScreenshots();tasks.verifyBootstrapReadback();
+            if(!java.util.Arrays.asList(android.os.Build.SUPPORTED_ABIS).contains("arm64-v8a"))bootstrap.optional(generation,"managed_project_runtime","原可选CLI环境仅支持arm64-v8a，普通助手不因此停用");
+            if(!localOcr.available())bootstrap.optional(generation,"local_ocr","本机OCR资源尚不可用，未代为下载");
+            bootstrap.stage(generation,"features_ready",TaskStore.DATABASE_SCHEMA);tasks.setTaskScreenshotChangeListener(this::queueTaskScreenshotMaintenance);
+            databaseMaintenance.completeOriginalRetryIfPrepared();
+            if(!bootstrap.complete(generation))throw new IllegalStateException("原初始化代次已变化，未发布ready");
+            hasReachedBusinessReady=true;
+            try{queueReadyMaintenance(generation);}catch(java.util.concurrent.RejectedExecutionException stopped){error("原启动后的维护队列已关闭，未重新派发");}
+        }catch(Exception|LinkageError failure){
+            // Module close() is best-effort and can swallow a worker-close failure.
+            // Once feature resources exist, only a fresh process can establish a clean capture boundary.
+            boolean featureResourcesStarted=features!=null;
+            boolean resourcesClosed=closeFailedBootstrap();String code=bootstrapFailureCode(failure);
+            bootstrapCleanupConfirmed=bootstrapCleanupConfirmed&&resourcesClosed&&!featureResourcesStarted&&!code.equals("cleanup_unconfirmed");
+            String next=bootstrapNextStep(code);String text=bootstrapFailureMessage(code);
+            if(!bootstrapCleanupConfirmed){text+="；原资源完全关闭尚未证实";next="保留原件，完全关闭应用进程后重新打开，再读取原启动与维护记录";}
+            try{if(databaseMaintenance!=null)databaseMaintenance.failure(code,text,observed);}catch(Exception unavailable){bootstrapCleanupConfirmed=false;code="maintenance_record_unreadable";text="原维护记录无法可靠保存，原库未被清空";next="核对本机存储后重新打开应用，不重建原记录";}
+            bootstrap.failed(generation,code,text,next,bootstrapCleanupConfirmed&&!code.equals("newer_schema")&&!code.equals("migration_failed"));
+        }
+    }
+    private void queueReadyMaintenance(long generation){
+        // Existing bounded startup/idle paths keep their original unknown/not-started checks.
+        capabilityWorkers.execute(()->{if(!businessReady()||bootstrap.generation()!=generation)return;
+            try{if(nativeOwnerWorkflows.warmSelectedAccountMetadata())main.post(()->{if(businessReady()&&bootstrap.generation()==generation){sendState();features.sendState();}});}catch(Exception unavailable){error("ChatGPT账号状态尚待核对，未清空旧状态");}
+            if(!businessReady()||bootstrap.generation()!=generation)return;
+            try{dev.pocketengine.features.automation.AutomationModule.reschedule(this);}catch(Exception unavailable){error("跟进调度尚待核对，请查看原提醒");}
+            try{JSONArray recover=tasks.appLearningRecoveryTasks();for(int i=0;i<recover.length();i++){if(!businessReady()||bootstrap.generation()!=generation)return;queueAppLearning(recover.getString(i));}}catch(Exception unavailable){error("原学习回执尚待核对，没有重放未知操作");}
+            queueAutomaticLearningIdle();queueScheduledConversationIdle();
+        });
+    }
+    /** After ordinary operation, cancellation acknowledgements cannot prove every module worker quiescent.
+     * Keep that process query-only; a fresh process can preserve the same repair record before DB open. */
+    private boolean quiesceOriginalDatabaseForMaintenance()throws Exception {
+        bootstrap.maintenance("database_maintenance","正在关闭新派发并核对原资源","未证实静止前不会替换数据库",false);
+        if(!bootstrapCleanupConfirmed)return false;
+        if(hasReachedBusinessReady){
+            TaskStore original=tasks;if(original!=null){JSONObject policy=original.ownerExecutionState();changeOwnerExecutionEnabled(policy.getLong("revision"),false);}
+            if(features!=null)features.close();if(deviceWorkspaceOwner!=null)deviceWorkspaceOwner.close();
+            bootstrapCleanupConfirmed=false;return false;
+        }
+        bootstrapCleanupConfirmed=closeFailedBootstrap();return bootstrapCleanupConfirmed&&tasks==null;
+    }
+    private boolean closeFailedBootstrap(){
+        boolean closed=true;
+        try{if(deviceWorkspaceOwner!=null)deviceWorkspaceOwner.close();}catch(Exception unavailable){closed=false;}
+        try{if(groupOwnerWorkflows!=null)groupOwnerWorkflows.close();}catch(RuntimeException unavailable){closed=false;}
+        try{if(groupTaskHost!=null)groupTaskHost.close();}catch(RuntimeException unavailable){closed=false;}
+        try{if(skillExecutionHost!=null)skillExecutionHost.close();}catch(RuntimeException unavailable){closed=false;}
+        try{if(pluginHost!=null)pluginHost.close();}catch(RuntimeException unavailable){closed=false;}
+        try{if(features!=null)features.close();}catch(RuntimeException unavailable){closed=false;}
+        try{if(localOcr!=null)localOcr.close();}catch(RuntimeException unavailable){closed=false;}
+        TaskStore original=tasks;if(original!=null){try{original.closeForMaintenance();if(!original.closedForMaintenance())closed=false;}catch(RuntimeException unavailable){closed=false;}if(original.closedForMaintenance())tasks=null;}
+        features=null;deviceWorkspaceOwner=null;deviceWorkspaceHost=null;deviceTaskScopeHost=null;groupOwnerWorkflows=null;groupTaskHost=null;groups=null;skillExecutionHost=null;pluginHost=null;localOcr=null;memorySources=null;nativeOwnerWorkflows=null;remoteOwnerWorkflows=null;remoteAttentionNotifications=null;automaticUserLearning=null;automationHost=null;automationPlans=null;channelTaskHost=null;modelStreams=null;workProfileHost=null;browserTaskHost=null;assistantAttachments=null;projectOwnerWorkflows=null;teamProjectRounds=null;sshOwnerWorkflows=null;sshPreviewWorkflows=null;return closed;
+    }
+    private static String bootstrapFailureCode(Throwable failure){
+        for(Throwable cause=failure;cause!=null;cause=cause.getCause()){
+            if(cause instanceof dev.pocketengine.bootstrap.BootstrapChecks.Failure known)return known.code;
+            if(cause instanceof TaskStore.DatabaseOpenFailure known)return known.reasonCode;
+            String type=cause.getClass().getSimpleName();if(type.equals("SQLiteDatabaseCorruptException"))return "suspected_corruption";
+            if(type.equals("SQLiteFullException")||cause.getMessage()!=null&&cause.getMessage().contains("ENOSPC"))return "storage_full";
+            if(type.equals("SQLiteDatabaseLockedException")||type.equals("SQLiteTableLockedException"))return "database_locked";
+            if(type.equals("SQLiteReadOnlyDatabaseException")||type.equals("SQLiteCantOpenDatabaseException")||type.equals("SQLiteAccessPermException"))return "storage_unwritable";
+            if(cause instanceof LinkageError)return "package_incompatible";
+            if("database_maintenance_record_unreadable".equals(cause.getMessage()))return "maintenance_record_unreadable";
+        }return "initialization_failed";
+    }
+    private static String bootstrapFailureMessage(String code){return switch(code){
+        case "cleanup_unconfirmed"->"原数据库连接是否关闭尚未确认，当前进程已停止再次打开或替换数据库";
+        case "suspected_corruption"->"原数据库疑似损坏；默认删除与自动重开已阻止，原件尚未宣称完成保全";
+        case "storage_full"->"本机空间不足，原启动未完成";
+        case "storage_unwritable"->"本机必要存储不可写，原启动未完成";
+        case "database_locked"->"原数据库暂被占用，未当作损坏清空";
+        case "newer_schema"->"原数据库来自较新版本，当前包不能读取";
+        case "migration_failed"->"原数据库迁移未完成，保留原数据和失败阶段";
+        case "package_incompatible","required_resource_incompatible"->"当前安装身份、平台或必要资源不兼容";
+        case "maintenance_record_unreadable"->"原维护记录无法核对，未创建替代记录";
+        default->"原初始化或恢复尚未完成，执行准入保持关闭";
+    };}
+    private static String bootstrapNextStep(String code){return switch(code){
+        case "cleanup_unconfirmed"->"保留原件，完全关闭应用进程后重新打开，再读取原启动与维护记录";
+        case "suspected_corruption"->"先保全并核验原文件，再审阅明确的恢复或空库方案";
+        case "storage_full"->"释放本机空间后重试；不要删除数据库或journal文件";
+        case "storage_unwritable"->"核对本机存储可写状态后重试";
+        case "database_locked"->"等待原占用结束后重试，不重复打开数据库";
+        case "newer_schema","migration_failed","package_incompatible","required_resource_incompatible"->"安装与原数据兼容的可信版本；可先保全原件";
+        default->"保留原失败阶段，核对本机存储后重试或保全原件";
+    };}
     private void initializeModelConnections(){
         try{
             modelConnections=new dev.pocketengine.runtime.models.ModelConnectionService(settings,new java.io.File(getFilesDir(),"model-capabilities.json").toPath(),java.time.Clock.systemUTC());
@@ -544,6 +727,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             modelConnections.install();
         }catch(Exception unavailable){
             modelConnections=null;
+            bootstrap.optional(bootstrap.generation(),"model_capability_catalog","原模型能力目录不可用，绑定模型不会使用猜测能力");
             settings.installImageCapabilities(config->false);
             dev.pocketengine.runtime.models.ModelRequestPolicy.installHostSource(config->{throw new dev.pocketengine.runtime.models.ModelRequestPolicy.Rejected("catalog_state_unavailable","模型能力目录无法读取，请核对本机存储；没有清空旧状态。");});
             dev.pocketengine.runtime.context.ContextBudgetPolicy.installHostSource(config->{if(config.usesAccount()){dev.pocketengine.runtime.models.AccountCatalogFacts facts=dev.pocketengine.runtime.ModelGateway.accountModelFacts(config.accountModel);return facts==null?null:facts.budget(config);}if(config.capabilityBinding!=null)throw new IllegalStateException("catalog_state_unavailable");return null;});
@@ -584,10 +768,6 @@ public final class EngineApplication extends Application implements dev.pocketen
         installPhoneRouteSources();
         nativeOwnerWorkflows=new dev.pocketengine.features.NativeOwnerWorkflows(features,context,tasks,memorySources);
         nativeOwnerWorkflows.installAccountInference();
-        capabilityWorkers.execute(()->{
-            try{if(nativeOwnerWorkflows.warmSelectedAccountMetadata())main.post(()->{try{sendState();features.sendState();}catch(Exception ignored){}});}
-            catch(Exception unavailable){error("ChatGPT 账号状态尚未准备，请打开账号页核对；未清空旧状态。");}
-        });
         remoteOwnerWorkflows=new dev.pocketengine.features.RemoteOwnerWorkflows(features,tasks,this::publish);
         remoteOwnerWorkflows.bindGatewayOwner(new dev.pocketengine.features.remote.NativeHarnessGatewayOwner.Host(){
             public dev.pocketengine.features.remote.NativeHarnessGatewayOwner.ParentAccess parentResume(String child)throws Exception{return reviewGatewayParentAccess(child);}
@@ -633,7 +813,6 @@ public final class EngineApplication extends Application implements dev.pocketen
         pluginHost=new dev.pocketengine.features.NativePluginHost(this,plugins,tasks,this::checkLiveExtensionControl,this::pushTask);
         EngineModule workspace=addModule("workspace",()->new dev.pocketengine.features.workspace.WorkspaceModule(context));
         if(workspace instanceof dev.pocketengine.features.workspace.WorkspaceModule)memorySources.bindWorkspace((dev.pocketengine.features.workspace.WorkspaceModule)workspace);
-        capabilityWorkers.execute(()->{try{memorySources.synchronize(json("ownerId","owner","spaceId","private"));}catch(Exception unavailable){main.post(()->error("部分原文来源尚待核对，请在原来源页刷新；未发送未知来源"));}});
         EngineModule development=addModule("local",()->new dev.pocketengine.features.local.LocalModule(context,workspace));
         if(development instanceof dev.pocketengine.features.local.LocalModule&&assistant instanceof dev.pocketengine.features.assistant.AssistantModule){
             var local=(dev.pocketengine.features.local.LocalModule)development;
@@ -829,7 +1008,10 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     private interface ModuleFactory{EngineModule create()throws Exception;}
     private EngineModule addModule(String id,ModuleFactory factory){
-        EngineModule module;try{module=factory.create();}catch(Exception failure){module=new EngineModule(){public String id(){return id;}public JSONObject snapshot(){return json("available",false,"message","模块初始化失败，请检查可用空间后重新打开应用");}public JSONObject handle(String command,JSONObject input){throw new IllegalStateException("模块暂不可用，请重新打开应用");}};}
+        EngineModule module;try{module=factory.create();}catch(Exception|LinkageError failure){
+            if(java.util.Set.of("assistant","memory","workspace").contains(id))throw new IllegalStateException("必要的原"+id+"记录尚未恢复",failure);
+            bootstrap.optional(bootstrap.generation(),id,"原可选模块初始化未完成，已保持该能力不可用");
+            module=new EngineModule(){public String id(){return id;}public JSONObject snapshot(){return json("available",false,"message","模块初始化失败，请检查可用空间后重新打开应用");}public JSONObject handle(String command,JSONObject input){throw new IllegalStateException("模块暂不可用，请重新打开应用");}};}
         features.register(module);return module;
     }
     public void addObserver(Observer observer){observers.add(observer);}
@@ -2323,8 +2505,10 @@ public final class EngineApplication extends Application implements dev.pocketen
     /** Terminal notification schedules finite work on the existing worker, never another runner/loop. */
     private final java.util.Set<String> appLearningPending=java.util.concurrent.ConcurrentHashMap.newKeySet();
     private void queueAppLearning(String taskId){
+        if(!businessReady())return;
         if(!appLearningPending.add(taskId))return;
         try{capabilityWorkers.execute(()->{try{
+            if(!businessReady())return;
             JSONArray inputs=tasks.appLearningInputs(taskId);if(inputs.length()==0)return;var memory=learningJobMemory();
             for(int i=0;i<inputs.length();i++){
                 JSONObject input=inputs.getJSONObject(i),app=input.getJSONObject("app"),baseline=memory.appBaseline(json("ownerId","owner","spaceId","private"),app.getString("packageName"),app.getString("appVersion"));
@@ -2774,16 +2958,19 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     /** Only real idle/release/startup events enter here. Metadata continuations never set dirty. */
     private void queueAutomaticLearningIdle(){
+        if(!businessReady())return;
         var host=automaticUserLearning;if(host==null||capabilityWorkers.isShutdown())return;
         automaticLearningIdleDirty.set(true);startAutomaticLearningIdleDrain(host);
     }
     private void startAutomaticLearningIdleDrain(dev.pocketengine.features.memory.AutomaticUserLearningHost host){
+        if(!businessReady())return;
         if(automaticUserLearning!=host||capabilityWorkers.isShutdown()||!automaticLearningIdlePending.compareAndSet(false,true))return;
         try{capabilityWorkers.execute(()->readAutomaticLearningIdlePage(host,true));}catch(java.util.concurrent.RejectedExecutionException closed){automaticLearningIdlePending.set(false);}
     }
     private void readAutomaticLearningIdlePage(dev.pocketengine.features.memory.AutomaticUserLearningHost host,boolean actualIdleStart){
         boolean continued=false;
         try{
+            if(!businessReady())return;
             if(actualIdleStart){automaticLearningIdleDirty.set(false);host.beginOriginalIdleScan();}
             JSONObject page=host.onOriginalIdle(automaticLearningFence(host));
             if(page.optBoolean("hasMoreNativeMetadata")){capabilityWorkers.execute(()->readAutomaticLearningIdlePage(host,false));continued=true;}
@@ -2800,8 +2987,9 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     /** Only delivery runs on the existing worker. No Android binder call under a caller's Tasks monitor. */
     private void queueTaskNotice(String id){
+        if(!businessReady())return;
         if(id==null||assistantTaskNotifications==null&&automaticUserLearning==null)return;taskNoticeDirty.add(id);if(!taskNoticePending.add(id))return;
-        try{capabilityWorkers.execute(()->{try{do{taskNoticeDirty.remove(id);try{if(assistantTaskNotifications!=null)assistantTaskNotifications.update(id);}catch(Exception unavailable){/* Actual task/effect stays unchanged; no execution retry. */}try{processAutomaticUserLearningTaskEvent(id);}catch(Exception unavailable){/* Original candidate source/job remains inspectable; no model replay. */}}while(taskNoticeDirty.remove(id));}
+        try{capabilityWorkers.execute(()->{try{if(!businessReady())return;do{taskNoticeDirty.remove(id);try{if(assistantTaskNotifications!=null)assistantTaskNotifications.update(id);}catch(Exception unavailable){/* Actual task/effect stays unchanged; no execution retry. */}try{processAutomaticUserLearningTaskEvent(id);}catch(Exception unavailable){/* Original candidate source/job remains inspectable; no model replay. */}}while(taskNoticeDirty.remove(id));}
             finally{taskNoticePending.remove(id);if(taskNoticeDirty.contains(id))queueTaskNotice(id);}});}
         catch(java.util.concurrent.RejectedExecutionException stopped){taskNoticePending.remove(id);taskNoticeDirty.remove(id);}
     }
@@ -2817,10 +3005,12 @@ public final class EngineApplication extends Application implements dev.pocketen
         else return;
         tasks.recordAutomationConversationDelivery(selected,receipt);
     }
-    private void queueScheduledConversationIdle(){scheduledConversationIdleDirty.set(true);startScheduledConversationPage();}
+    private void queueScheduledConversationIdle(){if(!businessReady())return;scheduledConversationIdleDirty.set(true);startScheduledConversationPage();}
     private void startScheduledConversationPage(){
+        if(!businessReady())return;
         if(features==null||capabilityWorkers.isShutdown()||!scheduledConversationIdlePending.compareAndSet(false,true))return;
         try{capabilityWorkers.execute(()->{boolean more=false;try{
+            if(!businessReady())return;
             if(scheduledConversationDeliveryCursor.isEmpty())scheduledConversationIdleDirty.set(false);
             JSONObject page=tasks.automationConversationDeliveryPage(scheduledConversationDeliveryCursor,20);more=page.optBoolean("hasMore");scheduledConversationDeliveryCursor=more?page.getString("nextCursor"):"";
             JSONArray ids=page.getJSONArray("taskIds");for(int i=0;i<ids.length();i++){
@@ -2833,8 +3023,10 @@ public final class EngineApplication extends Application implements dev.pocketen
         }});}catch(java.util.concurrent.RejectedExecutionException closed){scheduledConversationIdlePending.set(false);}
     }
     private void queueAutomationResultRefresh(String id){
+        if(!businessReady())return;
         automationResultDirty.add(id);if(!automationResultPending.add(id))return;
         try{capabilityWorkers.execute(()->{try{
+            if(!businessReady())return;
             int passes=0;do{
                 automationResultDirty.remove(id);JSONObject before=tasks.get(id,false);completeBoundCommitments(id);processScheduledConversationResult(id);JSONObject after=tasks.get(id,true);
                 if(after!=null&&(before==null||!before.optString("status").equals(after.optString("status"))||!String.valueOf(before.opt("automationResultRefs")).equals(String.valueOf(after.opt("automationResultRefs")))))publish(json("type","task","task",tasks.getForUi(id,false)));
@@ -2850,7 +3042,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         JSONObject configuration=selected.publicJson().put("accountModelAvailable",selected.usesAccount()&&dev.pocketengine.runtime.ModelGateway.accountModelAvailableForDisplay(selected.accountModel));
         return json("type","state","payload",json("config",configuration,"agentPreferences",settings.agentPreferences(),"ownerExecutionPolicy",ownerExecutionState(),"taskScreenshotPolicy",taskScreenshotPolicy(),"accessibilityEnabled",PhoneAccessibilityService.get()!=null,"notificationsEnabled",nm!=null&&nm.areNotificationsEnabled(),"phoneReadiness",phoneReadiness(),"tasks",page.getJSONArray("tasks"),"tasksNextCursor",page.getString("nextCursor"),"activeTaskId",activeId()==null?JSONObject.NULL:activeId()));
     }
-    @Override public void onTerminate(){deviceControlWorkers.shutdownNow();deviceStopWorkers.shutdownNow();if(!deviceChildStopPending.isEmpty())error("设备停止通道已关闭；排队或进行中的下游停止结果仍未确认，请在原任务核对");var deviceOwner=deviceWorkspaceOwner;deviceWorkspaceHost=null;deviceTaskScopeHost=null;if(deviceOwner!=null)try{deviceOwner.close();}catch(Exception unavailable){error("设备通道关闭结果尚未确认");}for(GatewayParentRun gateway:gatewayParentRuns.values())gateway.close();if(groupOwnerWorkflows!=null)groupOwnerWorkflows.close();if(groupTaskHost!=null)groupTaskHost.close();if(skillExecutionHost!=null)skillExecutionHost.close();try{if(pluginHost!=null)pluginHost.close();}finally{try{if(localOcr!=null)localOcr.close();}finally{capabilityWorkers.shutdownNow();super.onTerminate();}}}
+    @Override public void onTerminate(){bootstrap.maintenance("host_closed","原宿主已关闭","重新打开应用后读取原状态",false);bootstrapWorker.shutdownNow();deviceControlWorkers.shutdownNow();deviceStopWorkers.shutdownNow();if(!deviceChildStopPending.isEmpty())error("设备停止通道已关闭；排队或进行中的下游停止结果仍未确认，请在原任务核对");var deviceOwner=deviceWorkspaceOwner;deviceWorkspaceHost=null;deviceTaskScopeHost=null;if(deviceOwner!=null)try{deviceOwner.close();}catch(Exception unavailable){error("设备通道关闭结果尚未确认");}for(GatewayParentRun gateway:gatewayParentRuns.values())gateway.close();if(groupOwnerWorkflows!=null)groupOwnerWorkflows.close();if(groupTaskHost!=null)groupTaskHost.close();if(skillExecutionHost!=null)skillExecutionHost.close();try{if(pluginHost!=null)pluginHost.close();}finally{try{if(localOcr!=null)localOcr.close();}finally{capabilityWorkers.shutdownNow();super.onTerminate();}}}
     public void sendState(){try{publish(state());}catch(dev.pocketengine.store.SettingsStore.PersistenceUncertain uncertain){error(uncertain.getMessage());}catch(Exception e){error("设置或任务记录无法读取，请重新配置模型密钥");}}
     public static JSONObject json(Object... values){JSONObject j=new JSONObject();try{for(int i=0;i+1<values.length;i+=2)j.put(String.valueOf(values[i]),values[i+1]);}catch(Exception ignored){}return j;}
 }

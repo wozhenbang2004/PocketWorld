@@ -38,16 +38,21 @@ import java.io.ByteArrayInputStream
 import org.json.JSONObject
 
 /** Android hosts capabilities; the selected, bundled Web components own every business control. */
-internal class PocketWebHost(
+internal class PocketWebHost private constructor(
     private val activity: ComposeActivity,
-    private val controller: PocketWorldController,
+    endpoint: ((JSONObject) -> Unit) -> PocketWebEndpoint,
     private val savedPresentation: JSONObject? = null
 ) {
+    constructor(activity: ComposeActivity, controller: PocketWorldController, savedPresentation: JSONObject? = null) :
+        this(activity, { emit -> PocketWebWorkspaceEndpoint(controller, emit) }, savedPresentation)
+
     companion object {
         private const val TAG = "PocketWebUi"
         private const val HOST = "pocketengine.local"
         private const val PREFIX = "/assets/pocket-ui/"
         private const val ENTRY = "https://$HOST${PREFIX}index.html"
+        fun bootstrap(activity: ComposeActivity, app: dev.pocketengine.EngineApplication, saved: JSONObject?, ready: () -> Unit) =
+            PocketWebHost(activity, { emit -> PocketWebBootstrap(activity, app, emit, ready) }, saved)
     }
 
     val view = FrameLayout(activity).apply { setBackgroundColor(Color.rgb(245, 245, 245)) }
@@ -62,7 +67,7 @@ internal class PocketWebHost(
     private var reopenShown = false
     private var keyboardVisible = false
     private var pendingState: JSONObject? = null
-    private val bridge = PocketWebBridge(controller, ::send)
+    private val bridge = endpoint(::send)
     private val loader = WebViewAssetLoader.Builder().setDomain(HOST)
         .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(activity)).build()
 
@@ -150,33 +155,26 @@ internal class PocketWebHost(
         }
         web.setDownloadListener { _, _, _, _, _ -> Log.w(TAG, "blocked-page-download") }
         bridge.restorePresentationState(savedPresentation)
-        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-            view.addView(android.widget.TextView(activity).apply {
-                text = "当前系统 WebView 不支持安全工作台，请更新 Android System WebView 后重试。"
-                contentDescription = text
-            })
-            bridge.start()
-            return
-        }
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
         WebViewCompat.addWebMessageListener(web, "PocketNative", setOf("https://$HOST")) { _, message, origin, isMainFrame, _ ->
             val raw = runCatching { message.data }.getOrNull() ?: return@addWebMessageListener
             if (raw.length > 16 * 1024 * 1024) return@addWebMessageListener
             val token = runCatching { JSONObject(raw).optString("hostDocumentToken") }.getOrNull()
-            val generation = documentFence.capture(isMainFrame, origin.scheme, origin.host, origin.port, token, controller.webUiCanInteract())
+            val generation = documentFence.capture(isMainFrame, origin.scheme, origin.host, origin.port, token, bridge.canInteract())
                 ?: return@addWebMessageListener
-            val window = bridge.captureWindow()
             val isReady = runCatching { JSONObject(raw).optString("action") == "app.ready" }.getOrDefault(false)
             fun documentStillCurrent() = !closed && documentLoaded && trusted(Uri.parse(web.url ?: "")) &&
-                documentFence.accepts(generation, token, controller.webUiCanInteract())
+                documentFence.accepts(generation, token, bridge.canInteract())
             fun staleWindow() { if (isReady && documentStillCurrent()) showReopenPrompt() }
+            val dispatch = bridge.captureDispatch(raw, ::staleWindow)
             main.post {
                 if (!documentStillCurrent()) return@post
-                if (!bridge.acceptsWindow(window)) { staleWindow(); return@post }
                 if (!documentCommandSeen) { documentCommandSeen = true; sendConfiguration() }
-                bridge.postMessage(raw, window, ::staleWindow)
+                dispatch()
             }
         }
         listenerRegistered = true
+        }
         view.addView(web, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         view.setOnApplyWindowInsetsListener { target, insets ->
             val bars = insets.getInsets(WindowInsets.Type.systemBars())
@@ -192,6 +190,8 @@ internal class PocketWebHost(
 
     private fun showReopenPrompt() {
         if (closed || reopenShown) return
+        // Maintenance never falls through to an invented native repair surface.
+        if (bridge.surface == "bootstrap") { close(); activity.finish(); return }
         reopenShown = true
         documentFence.close(); documentToken = null; documentLoaded = false
         bridge.invalidatePresentation(documentReplaced = true)
@@ -235,8 +235,13 @@ internal class PocketWebHost(
         val version = WebView.getCurrentWebViewPackage()?.versionName.orEmpty()
         Log.i(TAG, "host source=library-web provider=$version")
         val values = JSONObject().put("webViewVersion", version).put("fontScale", activity.resources.configuration.fontScale)
-            .put("keyboardVisible", keyboardVisible)
-        val token = documentToken?.takeIf { controller.webUiCanInteract() }
+            .put("keyboardVisible", keyboardVisible).put("surface", bridge.surface)
+            .put("bridgeAvailable", listenerRegistered)
+        runCatching { values.put("appearance", JSONObject()
+            .put("mode", dev.pocketengine.ui.UiAppearance.mode(dev.pocketengine.ui.UiAppearance.preferences(activity)))
+            .put("dark", dev.pocketengine.ui.UiAppearance.dark(activity))) }
+        if (!listenerRegistered) values.put("bridgeUnavailableReason", "当前系统 WebView 不支持安全通信。请更新 Android System WebView 后重新打开；本页不能重试或维修数据。")
+        val token = documentToken?.takeIf { listenerRegistered && bridge.canInteract() }
         if (token != null) values.put("documentToken", token)
         val bootstrap = token?.let { "window.__pocketDocumentToken=" + JSONObject.quote(it) + ";" }.orEmpty()
         web.evaluateJavascript(bootstrap + "window.PocketWeb&&window.PocketWeb.hostConfiguration(${values})", null)
@@ -249,13 +254,13 @@ internal class PocketWebHost(
         }
     }
 
-    fun resume() { if (!closed) { web.onResume(); view.requestApplyInsets(); main.post {
+    fun resume() { if (!closed) { bridge.foreground(true); web.onResume(); view.requestApplyInsets(); main.post {
         if (!closed && !documentFence.isRejected()) {
             if (documentLoaded) documentToken = documentFence.loaded()
             sendConfiguration()
         }
     } } }
-    fun pause() { if (!closed) { documentFence.pause(); documentToken = null; bridge.invalidatePresentation(documentReplaced = false); web.onPause() } }
+    fun pause() { if (!closed) { documentFence.pause(); documentToken = null; bridge.foreground(false); bridge.invalidatePresentation(documentReplaced = false); web.onPause() } }
     fun canSwitchPresentation(): Boolean = !closed && bridge.canSwitchPresentation()
     fun savePresentationState(): String = bridge.savePresentationState().toString()
     fun close() {

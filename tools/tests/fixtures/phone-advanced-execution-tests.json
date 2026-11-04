@@ -374,6 +374,10 @@
         {
           "class": "dev.pocketengine.testutil.HttpServer",
           "source": "app/src/test/java/dev/pocketengine/testutil/HttpServer.java"
+        },
+        {
+          "class": "dev.pocketengine.testutil.ReadyApplicationFixture",
+          "source": "app/src/test/java/dev/pocketengine/testutil/ReadyApplicationFixture.java"
         }
       ]
     }

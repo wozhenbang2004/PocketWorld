@@ -27,6 +27,8 @@ public interface RunJournal {
             public dev.pocketengine.runtime.context.CompactionJournal compaction(){return host;}
             public JSONObject restore()throws Exception{return host.restore(original);}
             public void checkpoint(JSONArray messages,int steps,JSONObject observation)throws Exception{host.checkpoint(original,messages,steps,observation);}
+            public boolean progressGuardSupported(){return original.progressGuardSupported();}
+            public void checkpoint(JSONArray messages,int steps,JSONObject observation,JSONObject progressGuard)throws Exception{host.checkpoint(original,messages,steps,observation,progressGuard);}
             public String beginOperation(String tool,JSONObject arguments)throws Exception{return original.beginOperation(tool,arguments);}
             public void finishOperation(String operationId,JSONObject receipt)throws Exception{original.finishOperation(operationId,receipt);}
             public boolean hasNativeProjectRunningAck(String operationId,JSONObject deliveredReceipt)throws Exception{return original.hasNativeProjectRunningAck(operationId,deliveredReceipt);}
@@ -42,6 +44,13 @@ public interface RunJournal {
     default int executionStepCeiling(int captured)throws Exception{return captured;}
     JSONObject restore() throws Exception;
     void checkpoint(JSONArray messages, int steps, JSONObject observation) throws Exception;
+    /** The native store commits guard state atomically with the original protocol checkpoint.
+     * Isolated/legacy journals retain live protection but cannot claim cold-recovery support. */
+    default boolean progressGuardSupported(){return false;}
+    default void checkpoint(JSONArray messages,int steps,JSONObject observation,JSONObject progressGuard)throws Exception{
+        if(progressGuardSupported())throw new IllegalStateException("native_progress_guard_checkpoint_missing");
+        checkpoint(messages,steps,observation);
+    }
     String beginOperation(String tool, JSONObject arguments) throws Exception;
     void finishOperation(String operationId, JSONObject receipt) throws Exception;
     /** Native original-row proof only; JSON running/accepted fields never grant continued dispatch. */
