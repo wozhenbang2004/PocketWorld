@@ -8,6 +8,7 @@
   --pw-mono: "JetBrains Mono", ui-monospace, monospace;
   --pw-canvas: #fff;
   --pw-surface: #fff;
+  --pw-navigation: #fafafa;
   --pw-inset: #f6f6f6;
   --pw-selected: #ededed;
   --pw-edge: transparent;
@@ -22,9 +23,10 @@
   --pw-radius-control: 10px;
   --pw-radius-popover: 14px;
   --pw-shadow-input: none;
-  --pw-shadow-surface: none;
-  --pw-shadow-floating: none;
-  --pw-shadow-sheet: none;
+  --pw-shadow-surface: 0 8px 32px rgb(20 20 20 / .055);
+  --pw-shadow-floating: 0 16px 48px rgb(20 20 20 / .10);
+  --pw-shadow-sheet: 0 -12px 56px rgb(20 20 20 / .09);
+  --pw-shadow-sidebar: 16px 0 56px rgb(20 20 20 / .10);
 
   /* BoardUI semantic aliases also reach its portaled menus. */
   --font-inter: var(--pw-font);
@@ -608,7 +610,7 @@
 /* A shared fill groups related content. Resting surfaces have no decorative
  * outline, separator or inset shadow. Focus and actual progress/graph marks
  * keep their own semantics; portaled menus use the same recipe as pages. */
-:is(.pw-drawer, .pw-settings-dialog, .pw-secondary-header,
+:is(.pw-secondary-header,
   .pw-drawer-header, .pw-settings-dialog > header, .pw-file-actions,
   .pw-model-save-actions, .pw-task-footer, .pw-work-primary,
   .pw-settings-divided, .pw-selected-object, .pw-selection-object,
@@ -618,7 +620,7 @@
   border: 0;
   box-shadow: none;
 }
-.pw-drawer, .pw-settings-dialog { background: var(--pw-surface); }
+.pw-drawer, .pw-settings-dialog { border: 0; background: var(--pw-surface); box-shadow: var(--pw-shadow-sheet); }
 :is(.pw-error, .pw-banner, .pw-banner-error, .pw-field-error, .pw-background-attention) {
   border: 0;
   border-radius: 10px;
