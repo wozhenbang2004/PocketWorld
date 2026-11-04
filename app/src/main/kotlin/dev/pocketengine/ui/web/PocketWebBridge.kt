@@ -5,6 +5,7 @@ import android.os.Looper
 import android.os.SystemClock
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.snapshots.SnapshotStateObserver
+import dev.pocketengine.EngineApplication
 import dev.pocketengine.core.ModelConfig
 import dev.pocketengine.features.devices.NativeDeviceWorkspaceHost
 import dev.pocketengine.runtime.models.ModelBinding
@@ -111,15 +112,17 @@ internal class PocketWebBridge(
     private val localPages = PocketWebLocal(controller)
     private val commandReceipts = linkedMapOf<String, Pair<String, JSONObject>>()
     private val pendingCommands = mutableMapOf<String, String>()
-    private data class PhoneReview(val goal: String, val mode: String, val tools: Int, val models: Int, val minutes: Int, val viewEpoch: Int, val expires: Long)
+    private data class PhoneReview(val goal: String, val mode: String, val tools: Int, val models: Int, val minutes: Int,
+        val viewEpoch: Int, val expires: Long, val window: PocketWebWindowTicket, val composerKey: String,
+        val conversation: String, val draftEpoch: Int, val draftRevision: Long,
+        val linked: EngineApplication.ConversationPhoneStartReview?)
     private val phoneReviews = mutableMapOf<String, PhoneReview>()
     @Volatile private var documentId: String? = null
-    private var presentationEpoch = 0
+    @Volatile private var presentationEpoch = 0
     private var phoneDraft = ""
-    private var phoneDraftRevision = 0L
+    @Volatile private var phoneDraftRevision = 0L
     private var phoneIntent = false
     private var phoneExecutionMode = "background"
-    private var acceptedPhoneRevision = 0L
     private var phoneStartReceipt: JSONObject? = null
     private data class VoiceReview(val inputId: String, val phone: Boolean, val recovered: Boolean, val key: String, val draftRevision: Long, val epoch: Int, val phoneRevision: Long, val expires: Long)
     private val voiceReviews = mutableMapOf<String, VoiceReview>()
@@ -153,7 +156,7 @@ internal class PocketWebBridge(
             "projects.refresh", "projects.select", "projects.create", "projects.open", "projects.newFile", "projects.edit", "projects.save", "projects.close", "projects.history", "projects.revision", "projects.useRevision", "projects.retry",
             "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser",
             "connections.enter", "connections.leave", "models.snapshot", "models.review", "models.select", "models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select", "devices.snapshot", "history.read", "usage.read", "usage.task", "usage.close", "usage.reestimate",
-            "phone.prepare", "phone.start", "phone.draft.edit", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
+            "phone.prepare", "phone.start", "phone.query", "phone.draft.edit", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
             "queued.open", "queued.refresh", "queued.close", "queued.edit", "queued.change", "queued.save", "queued.editor.close",
             "accounts.beginLogin", "accounts.cancelLogin", "accounts.openAuthorization", "accounts.select", "accounts.refresh", "accounts.models", "accounts.retryPlanUsage", "accounts.model.review", "accounts.model.select", "accounts.logout.review", "accounts.logout.confirm", "accounts.setEnabled", "accounts.refreshAuthorization", "accounts.reauthorize", "accounts.acknowledgePlanWelcome", "accounts.manageUsage",
             "memory.list", "memory.search", "memoryReview.list", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource",
@@ -263,11 +266,6 @@ internal class PocketWebBridge(
             projection?.getJSONObject("state")?.put("mcpImport", PocketWebState.publicValue(mcpImports.snapshot()))
             projection?.getJSONObject("state")?.put("ownerArchives", dataPages.archivesSnapshot())
             projection?.getJSONObject("state")?.put("projectStorage", dataPages.storageSnapshot())
-            val accepted = controller.phoneDraftAcceptedRevision
-            if (accepted > acceptedPhoneRevision) {
-                acceptedPhoneRevision = accepted
-                if (phoneDraft.trim() == controller.phoneDraftAcceptedText) { phoneDraft = ""; phoneDraftRevision++ }
-            }
         }
         val snapshot = projection ?: return
         val projectedState = snapshot.getJSONObject("state")
@@ -589,6 +587,7 @@ internal class PocketWebBridge(
             if (action in PocketWebAccountCommands.COMMANDS) { accountOwnerCommand(id, action, args); return }
             if (action in setOf("models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select")) { modelConnection(id, action, args); return }
             if (action == "phone.start") { startPhone(id, args); return }
+            if (action == "phone.query") { queryPhone(id, args); return }
             if (action in setOf("phone.pause", "phone.resume", "phone.stop")) {
                 val task = requireTask(requiredString(args, "taskId"))
                 require(isPhoneTask(task) && canUseTaskControls(task) && task.raw.optString("runId") == requiredString(args, "runId") && task.raw.optInt("coordinatorEpoch", -1) == requiredInt(args, "epoch")) { "原手机任务或执行代次已变化，请刷新核对" }
@@ -618,24 +617,78 @@ internal class PocketWebBridge(
         emit(response)
     }
 
+    private fun phoneReviewCurrent(review: PhoneReview): Boolean = !closed && controller.webPrivateOwnerVisible() &&
+        SystemClock.elapsedRealtime() < review.expires && acceptsWindow(review.window) &&
+        review.viewEpoch == controller.composerViewEpoch && review.composerKey == controller.composerDraft?.key.orEmpty() &&
+        review.conversation == controller.state.conversationId.orEmpty() && review.draftEpoch == presentationEpoch && review.draftRevision == phoneDraftRevision &&
+        review.tools == controller.newTaskToolBudget && review.models == controller.newTaskModelBudget && review.minutes == controller.newTaskScopeMinutes
+
+    private fun phoneReceiptIdentity(handle: String, review: PhoneReview): JSONObject = JSONObject()
+        .put("reviewHandle", handle).put("goal", review.goal).put("mode", review.mode)
+        .put("draftEpoch", review.draftEpoch).put("draftRevision", review.draftRevision)
+        .put("composerKey", review.composerKey).put("composerEpoch", review.viewEpoch).put("draftConversationId", review.conversation)
+        .also { identity -> review.linked?.view()?.let { identity.put("requestId", it.getString("requestId")).put("conversationId", it.getString("conversationId")) } }
+
+    private fun consumePhoneDraft(receipt: JSONObject) {
+        if (receipt.optString("status") == "accepted" && receipt.optLong("draftRevision", -1) == phoneDraftRevision &&
+            receipt.optInt("draftEpoch", -1) == presentationEpoch && receipt.optInt("composerEpoch", -1) == controller.composerViewEpoch &&
+            receipt.optString("composerKey") == controller.composerDraft?.key.orEmpty() &&
+            receipt.optString("draftConversationId") == controller.state.conversationId.orEmpty() && phoneDraft.trim() == receipt.optString("goal").trim()) {
+            phoneDraft = ""; phoneDraftRevision++
+        }
+    }
+
+    private fun recordPhoneReceipt(original: JSONObject, result: JSONObject?, error: String?): JSONObject {
+        val receipt = JSONObject(original.toString())
+        val linked = original.has("requestId")
+        val task = result?.optString("taskId")?.takeIf { it.isNotBlank() }
+        val same = !linked || result != null && result.optString("requestId") == original.getString("requestId") &&
+            result.optString("conversationId") == original.getString("conversationId") && task == original.getString("requestId")
+        val rejected = linked && error != null && result != null && result.optString("status") == "rejected" && !result.has("taskId") &&
+            result.optString("requestId") == original.getString("requestId") && result.optString("conversationId") == original.getString("conversationId")
+        val accepted = error == null && task != null && same && (!linked || result?.optBoolean("accepted") == true)
+        if (same && task != null) receipt.put("taskId", task)
+        if (same && result != null) {
+            for (key in listOf("runId", "epoch", "admitted")) if (result.has(key)) receipt.put(key, result.get(key))
+            if (result.has("status")) receipt.put("taskStatus", result.get("status"))
+        }
+        receipt.put("status", if (rejected) "rejected" else if (accepted) "accepted" else "unknown")
+            .put("message", if (rejected) error + "。尚未创建手机任务，草稿仍保留；请明确重新审阅。" else if (accepted && linked) {
+                if (result?.optBoolean("admitted") == true) "手机任务已获准执行，结果会回到原对话。" else "手机任务已保存到原对话；尚未确认获准执行，请查看原任务。"
+            } else if (accepted) "原手机任务已创建。" else "启动结果待核对。请查询原请求，避免再次提交同一目标。")
+        phoneStartReceipt = receipt
+        consumePhoneDraft(receipt)
+        return receipt
+    }
+
+    private fun queryPhone(id: String, args: JSONObject) {
+        checkedPayload(args, setOf("requestId", "conversationId"))
+        val original = phoneStartReceipt?.let { JSONObject(it.toString()) } ?: error("没有可查询的原手机请求")
+        require(original.optString("requestId") == requiredString(args, "requestId") && original.optString("conversationId") == requiredString(args, "conversationId")) { "请查询原手机启动回执中的请求" }
+        controller.queryConversationPhoneStart(original.getString("requestId"), original.getString("conversationId")) { result, error ->
+            // A late read remains about its original request and must not replace a newer receipt.
+            if (phoneStartReceipt?.optString("requestId") == original.getString("requestId")) {
+                complete(id, recordPhoneReceipt(original, result, error), null); publishState()
+            } else complete(id, original, null)
+        }
+    }
+
     private fun startPhone(id: String, args: JSONObject) {
+        checkedPayload(args, setOf("reviewHandle"))
         val handle = requiredString(args, "reviewHandle")
         val review = phoneReviews[handle] ?: error("原手机目标审阅已关闭或已使用")
-        require(SystemClock.elapsedRealtime() < review.expires && review.viewEpoch == controller.composerViewEpoch && review.tools == controller.newTaskToolBudget && review.models == controller.newTaskModelBudget && review.minutes == controller.newTaskScopeMinutes) { "原目标窗口或执行范围已变化，请重新核对" }
+        require(phoneReviewCurrent(review)) { "原对话、目标窗口或执行范围已变化，请重新核对" }
         require(!controller.state.phoneSubmitting && controller.state.activeTaskId == null) { "已有原工作正在处理，未重复开始" }
-        val admitted = controller.startPhone(review.goal, review.mode) { result, error ->
-            val taskId = result?.optString("taskId")?.takeIf { it.isNotBlank() }
-            val receipt = JSONObject().put("reviewHandle", handle).put("goal", review.goal).put("mode", review.mode)
-                .put("status", if (error == null && taskId != null) "accepted" else "unknown")
-                .put("message", if (error == null && taskId != null) "原手机任务已创建。" else "启动结果待核对。请先查看原任务记录，避免再次提交同一目标。")
-            if (taskId != null) receipt.put("taskId", taskId)
-            phoneStartReceipt = receipt
-            complete(id, receipt, null)
+        val original = phoneReceiptIdentity(handle, review)
+        val completed: (JSONObject?, String?) -> Unit = { result, error ->
+            complete(id, recordPhoneReceipt(original, result, error), null)
             publishState()
         }
+        val admitted = review.linked?.let { controller.startConversationPhone(it, { phoneReviewCurrent(review) }, completed) }
+            ?: controller.startPhone(review.goal, review.mode, completed)
         if (admitted) {
             phoneReviews.remove(handle)
-            phoneStartReceipt = JSONObject().put("reviewHandle", handle).put("goal", review.goal).put("mode", review.mode).put("status", "pending").put("message", "正在等待原手机任务的启动回执。")
+            phoneStartReceipt = original.put("status", "pending").put("message", "正在等待原手机任务的启动回执。")
         } else {
             complete(id, JSONObject().put("status", "rejected").put("message", controller.state.error ?: controller.state.notice ?: "这次任务尚未接纳，草稿仍保留。"), null)
         }
@@ -840,17 +893,27 @@ internal class PocketWebBridge(
             }
             "usage.close" -> controller.closeNativeInferenceHistory()
             "phone.prepare" -> {
+                checkedPayload(args, setOf("goal", "mode", "epoch"))
+                require(controller.webPrivateOwnerVisible() && requiredInt(args, "epoch") == presentationEpoch) { "原手机输入窗口已变化，请重新核对保留草稿" }
                 val goal = requiredString(args, "goal"); val mode = requiredString(args, "mode")
                 require(goal.trim().isNotEmpty() && goal.trim().length <= 4000 && mode in setOf("background", "main_screen")) { "请填写 1–4000 字的手机任务目标，并选择执行位置" }
+                require(phoneDraft.trim() == goal.trim() && phoneIntent && phoneExecutionMode == mode) { "原手机草稿或执行位置已变化，请重新核对" }
                 require(!controller.state.phoneSubmitting && controller.state.activeTaskId == null) { "请先处理当前工作；没有创建第二个手机任务" }
-                require(phoneStartReceipt?.optString("status") !in setOf("pending", "unknown") || phoneStartReceipt?.optString("goal")?.trim() != goal.trim()) { "上一次相同目标的启动结果待核对，请先查看任务记录。草稿仍保留。" }
+                require(phoneStartReceipt?.optString("status") !in setOf("pending", "unknown") || phoneStartReceipt?.has("requestId") != true && phoneStartReceipt?.optString("goal")?.trim() != goal.trim()) { "原手机请求的启动结果待核对，请先查询原请求。草稿仍保留。" }
                 phoneReviews.clear()
                 val handle = UUID.randomUUID().toString()
-                val review = PhoneReview(goal, mode, controller.newTaskToolBudget, controller.newTaskModelBudget, controller.newTaskScopeMinutes, controller.composerViewEpoch, SystemClock.elapsedRealtime() + 120_000L)
+                val conversation = controller.state.conversationId.orEmpty()
+                val linked = if (conversation.isNotBlank() && !controller.hasChannelPhoneOrigin) controller.prepareConversationPhoneStart(conversation, goal, mode) else null
+                val shown = linked?.view()
+                val review = PhoneReview(goal, mode, shown?.getInt("toolLimit") ?: controller.newTaskToolBudget,
+                    shown?.getInt("modelCallLimit") ?: controller.newTaskModelBudget, shown?.getInt("scopeMinutes") ?: controller.newTaskScopeMinutes,
+                    controller.composerViewEpoch, SystemClock.elapsedRealtime() + 120_000L, captureWindow(),
+                    controller.composerDraft?.key.orEmpty(), conversation, presentationEpoch, phoneDraftRevision, linked)
                 phoneReviews[handle] = review
-                return JSONObject().put("reviewHandle", handle).put("goal", goal).put("mode", mode)
+                return (shown ?: JSONObject()).put("reviewHandle", handle).put("goal", goal).put("mode", mode)
                     .put("toolLimit", review.tools).put("modelCallLimit", review.models).put("scopeMinutes", review.minutes)
-                    .put("expiresInMs", 120000).put("message", if (mode == "background") "在后台独立屏处理这个目标；连接不可用时等待，不切换到手机主屏。" else "在手机主屏处理这个目标，会使用当前屏幕。")
+                    .put("expiresInMs", 120000).put("screenDisclosure", shown?.optString("screenDisclosure") ?: "执行时，屏幕与可见文字会发送到本次配置的模型。")
+                    .put("message", if (mode == "background") "在后台独立屏处理这个目标；连接不可用时等待，不切换到手机主屏。" else "在手机主屏处理这个目标，会使用当前屏幕。")
             }
             "phone.draft.edit" -> {
                 require(requiredInt(args, "epoch") == presentationEpoch) { "原手机输入窗口已变化，草稿仍保留" }
