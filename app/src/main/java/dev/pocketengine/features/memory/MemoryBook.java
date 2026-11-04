@@ -832,6 +832,9 @@ public final class MemoryBook {
 
     private JSONObject save(JSONObject scope,JSONObject input,long now,boolean imported,boolean explicitResave)throws Exception {return save(scope,input,now,imported,explicitResave,false);}
     private JSONObject save(JSONObject scope,JSONObject input,long now,boolean imported,boolean explicitResave,boolean nativeCorrection)throws Exception {
+        return save(scope,input,now,imported,explicitResave,nativeCorrection,false);
+    }
+    private JSONObject save(JSONObject scope,JSONObject input,long now,boolean imported,boolean explicitResave,boolean nativeCorrection,boolean reviewedEvidenceUpdate)throws Exception {
         Scope s=Scope.from(scope);
         String requested=input.optString("id").trim();
         JSONObject old=requested.isEmpty()?null:require(s,requested);
@@ -866,8 +869,11 @@ public final class MemoryBook {
         }
         if(old!=null&&!(old.optJSONArray("sourceIds")==null?"[]":old.optJSONArray("sourceIds").toString()).equals(checked.toString()))throw new IllegalArgumentException("修改来源请建立新记忆，避免形成循环依赖");
         JSONArray refs=checkedRefs(s,input.has("sourceRefs")?input.get("sourceRefs"):old==null?null:old.opt("sourceRefs"));
-        if(old!=null&&!checkedRefs(s,old.opt("sourceRefs")).toString().equals(refs.toString()))
-            throw new IllegalArgumentException("修改外部来源请建立新记忆，不能抹去已有来源链");
+        if(old!=null&&!checkedRefs(s,old.opt("sourceRefs")).toString().equals(refs.toString())){
+            if(!nativeCorrection||!reviewedEvidenceUpdate)throw new IllegalArgumentException("修改外部来源请建立新记忆，不能抹去已有来源链");
+            Set<SourceRef> retained=new HashSet<>();for(int i=0;i<refs.length();i++)retained.add(SourceRef.fromJson(refs.getJSONObject(i)));
+            JSONArray prior=checkedRefs(s,old.opt("sourceRefs"));for(int i=0;i<prior.length();i++)if(!retained.contains(SourceRef.fromJson(prior.getJSONObject(i))))throw new SecurityException("原生人本纠正也不能移除旧来源链");
+        }
         JSONObject assertion=input.has("assertion")?MemoryAssertion.checked(input.getJSONObject("assertion")):old!=null&&old.has("assertion")?MemoryAssertion.checked(old.getJSONObject("assertion")):null;
         if(!nativeCorrection&&old!=null&&old.has("assertion")&&!old.getString("text").equals(text)
                 &&MemoryArchive.canonical(assertion).equals(MemoryArchive.canonical(old.getJSONObject("assertion"))))
@@ -1133,6 +1139,29 @@ public final class MemoryBook {
         }
         JSONObject record=save(scope,change,now,false,false,true);
         return new JSONObject().put("record",viewRecord(record)).put("removedRefs",refs).put("executionAuthorized",false);
+    }
+    /** Native reviewed semantic correction. New verified utterances extend the original lineage;
+     * ordinary save/JSON cannot replace sources or acquire the native correction priority. */
+    public synchronized JSONObject correctAssertionReviewed(JSONObject scope,String id,long expectedRevision,String text,JSONObject assertion,JSONArray newSources,BeforeForget receipt,long now)throws Exception {
+        Scope identity=learningScope(scope);JSONObject old=reviewedRecord(identity,id,expectedRevision);
+        if(receipt==null||old.optBoolean("archiveOnly")||old.has("appKnowledge"))throw new SecurityException("人本纠正须使用原正式记忆和原生清理回执");
+        String corrected=bounded(text,1,4000,"记忆内容");JSONObject checked=MemoryAssertion.checked(assertion);
+        if(!"owner".equals(checked.getString("subjectId"))||!"owner".equals(checked.getString("subjectType")))throw new SecurityException("对话纠正不能凭文本建立另一主体身份");
+        JSONArray selected=checkedRefs(identity,newSources);if(selected.length()<1||checked.getJSONArray("evidenceSpans").length()!=1)throw new SecurityException("人本纠正缺少新核对的原句来源");
+        for(int i=0;i<selected.length();i++)if(!"message".equals(SourceRef.fromJson(selected.getJSONObject(i)).kind))throw new SecurityException("对话人本纠正只接真实主人消息来源");
+        MemoryAssertion.requireEvidence(checked,selected);requireAssertionSourceProof(new JSONObject().put("text",corrected).put("assertion",checked));
+        verifiedLearningSources(identity,selected);
+        Map<String,SourceRef> lineage=new LinkedHashMap<>();collectRefs(old.getJSONArray("sourceRefs"),lineage);collectRefs(selected,lineage);JSONArray combined=new JSONArray();for(SourceRef ref:lineage.values())combined.put(ref.toJson());combined=checkedRefs(identity,combined);
+        // Fail before retiring contexts if either old or newly reviewed evidence is unavailable.
+        verifiedLearningSources(identity,combined);
+        if(old.getString("text").equals(corrected)&&MemoryArchive.canonical(old.optJSONObject("assertion")).equals(MemoryArchive.canonical(checked)))throw new IllegalArgumentException("正文及结构化认知与原记忆相同");
+        Set<String> retired=new LinkedHashSet<>();retired.add(id);boolean changed;
+        do{changed=false;for(JSONObject row:records.values())if(identity.matches(row)&&!retired.contains(row.getString("id"))){JSONArray parents=row.optJSONArray("sourceIds");for(int i=0;parents!=null&&i<parents.length();i++)if(retired.contains(parents.getString(i))){retired.add(row.getString("id"));changed=true;break;}}}while(changed);
+        JSONArray removed=removalRefs(identity,retired);receipt.record(new JSONArray(removed.toString()));reviewedRecord(identity,id,expectedRevision);
+        if(!removed.toString().equals(removalRefs(identity,retired).toString()))throw new IllegalStateException("人本纠正的旧版本在清理期间变化");
+        JSONObject update=new JSONObject().put("id",id).put("revision",expectedRevision).put("text",corrected).put("assertion",checked).put("sourceRefs",combined);
+        JSONObject record=save(scope,update,now,false,false,true,true);
+        return new JSONObject().put("record",viewRecord(record)).put("removedRefs",removed).put("sourceLineagePreserved",true).put("executionAuthorized",false);
     }
     public synchronized JSONObject forgetReviewed(JSONObject scope,String id,long expectedRevision,BeforeForget receipt)throws Exception {
         Scope identity=learningScope(scope);JSONObject current=require(identity,id);
@@ -1569,6 +1598,18 @@ public final class MemoryBook {
     public synchronized JSONObject contextSnapshot(JSONObject scope,String query,int limit,int maxChars)throws Exception {
         return contextSnapshotScoped(scope,query,limit,maxChars,null);
     }
+    /** Personal-owner view over the same formal rows as cognitionProjection. No new store or grant. */
+    public synchronized JSONObject ownerContextSnapshot(JSONObject scope,String query,int limit,int maxChars)throws Exception {
+        return ownerContextSnapshotScoped(scope,query,limit,maxChars,null);
+    }
+    /** Automatic relevance selection may only narrow an already issued native audience. */
+    public JSONObject ownerContextSnapshot(JSONObject scope,String query,int limit,int maxChars,ReadAudience audience)throws Exception {
+        if(audience==null)throw new SecurityException("成员主人资料选择须保留原生范围");
+        MemoryAudienceSelection selected=MemoryAudienceSelection.capture(audience,Scope.from(scope));JSONObject result;
+        synchronized(this){result=ownerContextSnapshotScoped(scope,query,limit,maxChars,selected);}
+        selected.check();synchronized(this){requireAudienceSnapshotCurrent(Scope.from(scope),result,selected);requireOwnerContextCurrent(Scope.from(scope),result,selected);}
+        selected.check();return result.put("audience",selected.metadata());
+    }
     /** Member/native audience only. No audience is the unchanged personal owner entry point. */
     public JSONObject contextSnapshot(JSONObject scope,String query,int limit,int maxChars,ReadAudience audience)throws Exception {
         if(audience==null)return contextSnapshot(scope,query,limit,maxChars);
@@ -1583,10 +1624,17 @@ public final class MemoryBook {
     synchronized JSONObject contextSnapshotScoped(JSONObject scope,String query,int limit,int maxChars,MemoryAudienceSelection audience)throws Exception {
         String original=normalize(query==null?"":query);return contextSnapshotQueriesScoped(scope,MemoryQueryPlan.lexical(MemoryRecallBudget.boundedQuery(original),"not_requested"),limit,maxChars,audience,original.length()>500);
     }
+    synchronized JSONObject ownerContextSnapshotScoped(JSONObject scope,String query,int limit,int maxChars,MemoryAudienceSelection audience)throws Exception {
+        Scope owner=Scope.from(scope);if(!"owner".equals(owner.ownerId)||!"private".equals(owner.spaceId))throw new SecurityException("主人上下文只属于原私人记忆范围");
+        String original=normalize(query==null?"":query);return contextSnapshotQueriesScoped(scope,MemoryQueryPlan.lexical(MemoryRecallBudget.boundedQuery(original),"not_requested"),limit,maxChars,audience,original.length()>500,true);
+    }
     synchronized JSONObject contextSnapshotQueriesScoped(JSONObject scope,MemoryQueryPlan plan,int limit,int maxChars,MemoryAudienceSelection audience)throws Exception {
         return contextSnapshotQueriesScoped(scope,java.util.Objects.requireNonNull(plan),limit,maxChars,audience,false);
     }
     private JSONObject contextSnapshotQueriesScoped(JSONObject scope,MemoryQueryPlan plan,int limit,int maxChars,MemoryAudienceSelection audience,boolean queryTruncated)throws Exception {
+        return contextSnapshotQueriesScoped(scope,plan,limit,maxChars,audience,queryTruncated,false);
+    }
+    private JSONObject contextSnapshotQueriesScoped(JSONObject scope,MemoryQueryPlan plan,int limit,int maxChars,MemoryAudienceSelection audience,boolean queryTruncated,boolean personal)throws Exception {
         Scope s=Scope.from(scope);
         if(limit<0||maxChars<0)throw new IllegalArgumentException("上下文预算不能为负数");
         int boundedLimit=Math.min(MAX_CONTEXT_RECORDS,limit),boundedChars=Math.min(MAX_CONTEXT_CHARS,maxChars);
@@ -1608,20 +1656,28 @@ public final class MemoryBook {
                 hits.put(viewRecord(records.get(candidate.id)).put("retrievalEvidence",new JSONObject().put("path",MemorySemanticRecall.pathRefs(semantic,candidate))
                         .put("role","relevance_path_not_causal_or_truth_proof").put("originalEvidenceRead",false)));
         }
-        List<JSONObject> retrieved=new ArrayList<>();
+        List<JSONObject> retrieved=new ArrayList<>();Set<String> retrievedIds=new HashSet<>(),ownerOnly=new HashSet<>();
         for(int i=0;i<hits.length();i++){
             JSONObject hit=hits.getJSONObject(i);
-            if(!coreIds.contains(hit.getString("id")))retrieved.add(hit);
+            if(!coreIds.contains(hit.getString("id"))){retrieved.add(hit);retrievedIds.add(hit.getString("id"));}
         }
+        JSONObject owner=personal?ownerContextState(s,audience,now):null;
+        if(owner!=null){JSONArray current=owner.getJSONArray("current");for(int i=0;i<current.length();i++){JSONObject row=current.getJSONObject(i);String id=row.getString("id");if(active.contains(id)&&!coreIds.contains(id)&&retrievedIds.add(id)){retrieved.add(row);ownerOnly.add(id);}}}
         List<JSONObject> candidates=new ArrayList<>(core);candidates.addAll(retrieved);Map<String,JSONObject> admitted=new LinkedHashMap<>();
+        // Owner fallback may contain the whole formal projection. Check each source below,
+        // then revalidate the projection after packing, without recomputing it N times here.
+        Set<String> ownerActive=personal?activeIds(System.currentTimeMillis()):null;
         for(JSONObject candidate:candidates){
             JSONObject current=records.get(candidate.getString("id"));
-            if(current==null||current.getLong("revision")!=candidate.getLong("revision")||!activeIds(System.currentTimeMillis()).contains(candidate.getString("id"))||!retrievalSourcesLive(candidate,new LinkedHashMap<>()))continue;
+            if(current==null||current.getLong("revision")!=candidate.getLong("revision")||!(personal?ownerActive:activeIds(System.currentTimeMillis())).contains(candidate.getString("id"))||!retrievalSourcesLive(candidate,new LinkedHashMap<>()))continue;
             boolean isCore=coreIds.contains(candidate.getString("id"));
-            JSONObject record=viewRecord(candidate).put("active",true).put("core",isCore).put("selection",isCore?"core":"retrieved").put("selectionReason",isCore?"owner_core":"task_query_match");
+            JSONObject record=viewRecord(candidate).put("active",true).put("core",isCore).put("selection",isCore?"core":"retrieved").put("selectionReason",isCore?"owner_core":ownerOnly.contains(candidate.getString("id"))?"owner_current":"task_query_match");
             admitted.put(record.getString("id"),record);
         }
-        JSONObject packed=MemoryRecallBudget.pack(core,retrieved,admitted,boundedLimit,boundedChars,CONTEXT_HEADER,queryTruncated,lexicalQuery.length(),retrieval.status().getString("backend"));
+        String notice=owner==null?"":"主人当前认知来自同一份正式记忆；条件和有效时间须一并理解，历史与计划不作为当前事实。\n";
+        if(owner!=null&&owner.getInt("pendingConflictGroups")>0)notice+="主人当前认知有"+owner.getInt("pendingConflictGroups")+"组待核对差异，候选没有代替当前事实。\n";
+        JSONObject packed=MemoryRecallBudget.pack(core,retrieved,admitted,boundedLimit,boundedChars,CONTEXT_HEADER+notice,queryTruncated,lexicalQuery.length(),retrieval.status().getString("backend"),personal);
+        if(owner!=null&&boundedLimit>0&&owner.getInt("pendingConflictGroups")>0&&packed.getString("context").isEmpty()&&notice.length()<=boundedChars){packed.put("context",notice);packed.getJSONObject("selectionDiagnostics").put("charsUsed",notice.length());}
         JSONArray kept=packed.getJSONArray("records");String context=packed.getString("context");int keptCore=packed.getInt("coreSelected"),keptRetrieved=packed.getInt("retrievedSelected"),retrievedAvailable=retrieved.size();
         JSONObject snapshot=new JSONObject().put("scope",new JSONObject().put("ownerId",s.ownerId).put("spaceId",s.spaceId))
                 .put("generatedAt",now).put("records",kept).put("context",context).put("selectionDiagnostics",packed.getJSONObject("selectionDiagnostics"))
@@ -1630,11 +1686,35 @@ public final class MemoryBook {
                 .put("coreAvailable",core.size()).put("retrievedAvailable",retrievedAvailable)
                 .put("omittedCore",core.size()-keptCore).put("omittedRetrieved",retrievedAvailable-keptRetrieved)
                 .put("truncated",kept.length()<core.size()+retrievedAvailable).put("queryPlan",plan.metadata());
+        if(owner!=null){JSONObject view=new JSONObject(owner.toString());view.remove("current");snapshot.put("ownerContext",view);requireOwnerContextCurrent(s,snapshot,audience);}
         if(semantic!=null){
             Set<String> selected=new HashSet<>(),seen=new HashSet<>();for(int i=0;i<kept.length();i++)selected.add(kept.getJSONObject(i).getString("id"));JSONArray dependencies=new JSONArray();
             for(MemorySemanticRecall.Candidate candidate:semantic.candidates)if(selected.contains(candidate.id))for(String id:candidate.path)if(seen.add(id))dependencies.put(retrievalReference(s,semantic.rows.get(id)));
             snapshot.put("retrievalDependencies",dependencies).put("retrievalDiagnostics",semantic.diagnostics());requireRetrievalDependencies(s,snapshot,audience);
         }return snapshot;
+    }
+
+    /** Same current/conflict projection as the owner page, filtered by exact native selection. */
+    private JSONObject ownerContextState(Scope scope,MemoryAudienceSelection audience,long now)throws Exception {
+        if(!"owner".equals(scope.ownerId)||!"private".equals(scope.spaceId))throw new SecurityException("主人上下文不能跨空间");
+        JSONObject projection=cognitionProjection(newScope(scope.ownerId,scope.spaceId),"owner",now);
+        List<JSONObject> current=new ArrayList<>();Map<String,JSONObject> versions=new java.util.TreeMap<>();Set<String> conflicts=new HashSet<>();Map<SourceRef,Boolean> verified=new LinkedHashMap<>();
+        for(String field:new String[]{"current","pendingConflicts"}){JSONArray rows=projection.getJSONArray(field);for(int i=0;i<rows.length();i++){
+            JSONObject row=rows.getJSONObject(i);String id=row.getString("id");long revision=row.getLong("revision");
+            // A protected current row is also shown beside its challengers in owner review.
+            // It is already tracked above; alone it must not reveal an unselected challenger.
+            if(field.equals("pendingConflicts")&&"protected_current".equals(row.optString("reviewRole")))continue;
+            if(audience!=null&&!audience.permits(id,revision)||!retrievalSourcesLive(row,verified))continue;
+            JSONObject ref=versions.get(id);if(ref==null){ref=new JSONObject().put("id",id).put("revision",revision).put("current",false).put("pendingReview",false);versions.put(id,ref);}
+            if(field.equals("current")){current.add(row);ref.put("current",true);}else{ref.put("pendingReview",true);conflicts.add(MemoryAssertion.key(row));}
+        }}
+        current.sort(Comparator.comparingLong((JSONObject row)->row.optLong("updatedAt")).reversed().thenComparing(row->row.optString("id")));
+        return new JSONObject().put("format",1).put("subjectId","owner").put("revision",TaskMemoryUse.digest(MemoryArchive.canonical(new JSONArray(versions.values()))))
+                .put("current",new JSONArray(current)).put("currentAvailable",current.size()).put("pendingConflictGroups",conflicts.size()).put("source","formal_cognition_projection");
+    }
+    synchronized void requireOwnerContextCurrent(Scope scope,JSONObject snapshot,MemoryAudienceSelection audience)throws Exception {
+        if(!snapshot.has("ownerContext"))return;JSONObject selected=snapshot.getJSONObject("ownerContext");
+        if(selected.optInt("format")!=1||!"owner".equals(selected.optString("subjectId"))||!selected.optString("revision").equals(ownerContextState(scope,audience,System.currentTimeMillis()).getString("revision")))throw new SecurityException("主人当前认知、条件或待核对差异已变化，未继续使用旧上下文");
     }
 
     synchronized void requireAudienceSnapshotCurrent(Scope scope,JSONObject snapshot,MemoryAudienceSelection audience)throws Exception{
@@ -1654,12 +1734,14 @@ public final class MemoryBook {
             if(!prior.getString("text").equals(require(scope,prior.getString("id")).getString("text")))throw new SecurityException("记忆正文已变化");
             refs.put(reference.put("textDigest",dev.pocketengine.runtime.usage.InferenceCapture.historyDigest(new JSONObject().put("text",prior.getString("text")))));
         }
-        requireRetrievalDependencies(scope,snapshot,null);JSONObject result=new JSONObject().put("scope",new JSONObject().put("ownerId",scope.ownerId).put("spaceId",scope.spaceId)).put("records",refs);
+        requireRetrievalDependencies(scope,snapshot,null);requireOwnerContextCurrent(scope,snapshot,null);JSONObject result=new JSONObject().put("scope",new JSONObject().put("ownerId",scope.ownerId).put("spaceId",scope.spaceId)).put("records",refs);
+        if(snapshot.has("ownerContext"))result.put("ownerContext",copy(snapshot.getJSONObject("ownerContext")));
         if(snapshot.has("retrievalDependencies"))result.put("retrievalDependencies",new JSONArray(snapshot.getJSONArray("retrievalDependencies").toString()));return result;
     }
     public synchronized void requireContextDependency(JSONObject dependency)throws Exception {
         Scope scope=Scope.from(dependency.getJSONObject("scope"));JSONArray refs=dependency.getJSONArray("records");
         requireRetrievalDependencies(scope,dependency,null);
+        requireOwnerContextCurrent(scope,dependency,null);
         if(refs.length()>MAX_CONTEXT_RECORDS)throw new SecurityException("记忆选择超出范围");
         for(int i=0;i<refs.length();i++){
             JSONObject ref=refs.getJSONObject(i),state=taskReferenceState(scope,ref);

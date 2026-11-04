@@ -134,16 +134,29 @@ public final class TaskMemoryUse {
     public Selection prepareTaskRecall(JSONObject authenticatedScope,TaskRef task,String query,int limit,int maxChars,MemoryHostFence fence,ReadAudience readAudience)throws Exception{
         return prepareRecallPlan(authenticatedScope,task,query,null,limit,maxChars,fence,readAudience);
     }
+    /** The private butler's current owner facts share the same bounded records and receipts. */
+    public Selection prepareOwnerTaskRecall(JSONObject authenticatedScope,TaskRef task,String query,int limit,int maxChars,MemoryHostFence fence)throws Exception{
+        return prepareOwnerTaskRecall(authenticatedScope,task,query,limit,maxChars,fence,null);
+    }
+    /** An existing member audience may narrow this selection; it never grants new records. */
+    public Selection prepareOwnerTaskRecall(JSONObject authenticatedScope,TaskRef task,String query,int limit,int maxChars,MemoryHostFence fence,ReadAudience readAudience)throws Exception{
+        if(projectAccess!=null)throw new SecurityException("项目读取不能借用主人的私有上下文");
+        MemoryBook.Scope scope=scope(authenticatedScope);if(!"owner".equals(scope.ownerId)||!"private".equals(scope.spaceId))throw new SecurityException("主人上下文只属于本人私有空间");
+        return prepareRecallPlan(authenticatedScope,task,query,null,limit,maxChars,fence,readAudience,true);
+    }
     /** A native metered query rewrite only changes candidate ranking, never caller authority. */
     public Selection prepareSemanticTaskRecall(JSONObject authenticatedScope,TaskRef task,MemoryQueryPlan plan,int limit,int maxChars,MemoryHostFence fence)throws Exception{
         return prepareRecallPlan(authenticatedScope,task,"",java.util.Objects.requireNonNull(plan),limit,maxChars,fence,null);
     }
     private Selection prepareRecallPlan(JSONObject authenticatedScope,TaskRef task,String query,MemoryQueryPlan plan,int limit,int maxChars,MemoryHostFence fence,ReadAudience readAudience)throws Exception{
+        return prepareRecallPlan(authenticatedScope,task,query,plan,limit,maxChars,fence,readAudience,false);
+    }
+    private Selection prepareRecallPlan(JSONObject authenticatedScope,TaskRef task,String query,MemoryQueryPlan plan,int limit,int maxChars,MemoryHostFence fence,ReadAudience readAudience,boolean ownerContext)throws Exception{
         MemoryBook.Scope scope=scope(authenticatedScope);requireScope(scope,task);requireFence(fence);
         MemoryAudienceSelection audience=captureAudience(readAudience,bookScope(scope));final Selection[] selection={null};
         fence.admit(()->{checkAudience(audience);synchronized(book){
             TaskState state=task(scope,task);if(!"current".equals(taskStatus(state,task))||!Set.of("preparing","running").contains(state.status))throw new IllegalStateException("任务不可用于新的记忆请求");
-            JSONObject snapshot=plan==null?book.contextSnapshotScoped(bookScopeValue(authenticatedScope),query,limit,maxChars,audience):book.contextSnapshotQueriesScoped(bookScopeValue(authenticatedScope),plan,limit,maxChars,audience);JSONArray rows=snapshot.getJSONArray("records"),refs=new JSONArray(),projected=new JSONArray();
+            JSONObject snapshot=ownerContext?book.ownerContextSnapshotScoped(bookScopeValue(authenticatedScope),query,limit,maxChars,audience):plan==null?book.contextSnapshotScoped(bookScopeValue(authenticatedScope),query,limit,maxChars,audience):book.contextSnapshotQueriesScoped(bookScopeValue(authenticatedScope),plan,limit,maxChars,audience);JSONArray rows=snapshot.getJSONArray("records"),refs=new JSONArray(),projected=new JSONArray();
             for(int i=0;i<rows.length();i++){JSONObject ref=book.taskReference(bookScope(scope),rows.getJSONObject(i));refs.put(ref);projected.put(book.taskReferenceState(bookScope(scope),ref));}
             String id=UUID.randomUUID().toString(),digest=digest(snapshot.getString("context"));
             JSONObject metadata=task.toJson().put("selectionId",id).put("contextDigest",digest).put("records",refs)
@@ -167,7 +180,7 @@ public final class TaskMemoryUse {
             JSONArray refs=selection.metadata().getJSONArray("records");for(int i=0;i<refs.length();i++)
                 if(!"current".equals(book.taskReferenceState(bookScope(scope),refs.getJSONObject(i)).getString("status")))throw new IllegalStateException("选中记忆已变化，不能提供旧片段");
             if(!"current".equals(taskStatus(task(scope,selection.task),selection.task)))throw new IllegalStateException("任务已变化");
-            JSONObject result=selection.snapshot();book.requireRetrievalDependencies(bookScope(scope),result,selection.audience);book.requireAudienceSnapshotCurrent(bookScope(scope),result,selection.audience);checkAudience(selection.audience);return result;
+            JSONObject result=selection.snapshot();book.requireRetrievalDependencies(bookScope(scope),result,selection.audience);book.requireAudienceSnapshotCurrent(bookScope(scope),result,selection.audience);book.requireOwnerContextCurrent(bookScope(scope),result,selection.audience);checkAudience(selection.audience);return result;
         }});
     }
     /** Confirm only the native journal's exact original projection; do not infer use from a search. */
@@ -180,7 +193,7 @@ public final class TaskMemoryUse {
             if(!proof.selectionId.equals(metadata.getString("selectionId"))||!proof.contextDigest.equals(metadata.getString("contextDigest"))
                     ||!canonical(proof.references()).equals(canonical(metadata.getJSONArray("records")))
                     ||proof.selectionDiagnostics()!=null&&!canonical(proof.selectionDiagnostics()).equals(canonical(metadata.getJSONObject("selectionDiagnostics"))))return unavailable(expected,"native_proof_mismatch");
-            requireAudienceReferences(selection.audience,proof.references());JSONObject result=project(scope,expected,proof);checkAudience(selection.audience);return result;
+            requireAudienceReferences(selection.audience,proof.references());book.requireOwnerContextCurrent(bookScope(scope),selection.snapshot(),selection.audience);JSONObject result=project(scope,expected,proof);checkAudience(selection.audience);return result;
         }});
     }
     /** Recovery reads the original host journal. It never calls search or accepts a supplied receipt JSON. */
