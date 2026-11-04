@@ -58,6 +58,12 @@ class RemoteDraftDeliveryMountedTest {
         remove("turnId")
         if (settled) { put("executorStatus", "completed").put("nativeSettled", true).put("resourcesHeld", false).put("processCleanupProof", JSONObject().put("processGroupStoppedVerified", true)); getJSONObject("controls").put("threadResume", true) }
     }
+    private fun configured(worker: String) = source(worker, if (worker == "muse_msp") "muse_msp_v1" else "acp_v1")
+        .put("promptRequestId", "prompt").put("executorStatus", "completed").put("nativeSettled", true)
+        .put("promptTerminalConfirmed", true).put("resumeSupported", true)
+        .put("harnessSelection", JSONObject().put("protocol", "pocketworld.harness-selection.v1").put("workerId", worker)
+            .put("configurationRevision", "b".repeat(64)).put("capabilityRevision", "c".repeat(64)).put("ownerManagedExecution", true))
+        .apply { getJSONObject("controls").put("threadResume", true).put("inputSteering", false) }
     private fun snapshot(source: JSONObject, canContinue: Boolean, queued: String? = null, savedSource: JSONObject = source): JSONObject {
         val drafts = JSONArray()
         if (queued != null) drafts.put(JSONObject().put("id", UUID.randomUUID().toString()).put("revision", 1).put("state", "queued").put("text", "queued owner input").put("mode", queued).put("scope", RemoteTaskDrafts.scope(savedSource, "a".repeat(64), queued)))
@@ -157,6 +163,32 @@ class RemoteDraftDeliveryMountedTest {
             f.selectQueued(); val old = f.node("明确发送这条并继续原会话").config[SemanticsActions.OnClick].action!!
             f.click("待明确发送 · other queued input"); old.invoke(); f.frame()
             assertTrue("old send must not borrow the newly selected draft's id/revision", f.sent.isEmpty())
+        }
+    }
+
+    @Test fun configuredHarnessOnlyExposesProvenNextTurnAndSendsTheOriginalDraftReference() {
+        for (worker in listOf("acp_owner_agent", "muse_msp")) {
+            val view = snapshot(configured(worker), true, "next_turn")
+            val id = view.getJSONArray("inputDrafts").getJSONObject(0).getString("id")
+            Fixture(view).use { f ->
+                assertTrue(nodes().any { text(it).contains("未开放运行中补充") })
+                assertFalse(nodes().any { text(it).contains("当前Codex turn补充") || text(it).contains("当前Pi队列") })
+                f.selectQueued(); assertTrue(f.sent.isEmpty()); f.click("明确发送这条并继续原会话")
+                assertEquals("sendDraft", f.sent.single().first)
+                assertEquals(2, f.sent.single().second.length())
+                assertEquals(id, f.sent.single().second.getString("draftId"))
+                assertEquals(1, f.sent.single().second.getLong("draftRevision"))
+            }
+        }
+    }
+
+    @Test fun configuredHarnessCannotBorrowAStaleCanContinueFlagWithoutRealSettlementAndResume() {
+        val saved = configured("acp_owner_agent")
+        for (source in listOf(JSONObject(saved.toString()).put("nativeSettled", false), JSONObject(saved.toString()).put("resumeSupported", false), JSONObject(saved.toString()).put("protocolVerified", false))) {
+            Fixture(snapshot(source, true, "next_turn", saved)).use { f ->
+                assertFalse(nodes().any { text(it) == "明确发送这条并继续原会话" || text(it) == "保存并排队" })
+                assertTrue(f.sent.isEmpty())
+            }
         }
     }
 
