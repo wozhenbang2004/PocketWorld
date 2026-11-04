@@ -7,7 +7,8 @@
     ],
     "helpers": [],
     "robolectric": true,
-    "description": "Exact legacy module/export/provider bytes, pinned SHA, owner/group/retirement and quota tests. The JDK17 native dup fixture requires test JVM --add-opens=java.base/java.io=ALL-UNNAMED and --add-opens=java.base/sun.nio.fs=ALL-UNNAMED; no device, mounted UI or external-reader acceptance."
+    "linuxPosixFd": true,
+    "description": "Exact legacy module/export/provider bytes, pinned SHA, owner/group/retirement and quota tests. Requires Linux JDK17 with readable /proc/self/fd; the selected host-test JVM alone opens java.io and sun.nio.fs for the real POSIX dup fixture. No device, mounted UI or external-reader acceptance."
   },
   "mika-skill-lifecycle": {
     "class": "dev.pocketengine.features.skills.NativeSkillExecutionHostTest",

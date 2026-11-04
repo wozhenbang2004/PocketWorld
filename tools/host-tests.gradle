@@ -50,6 +50,10 @@ tasks.withType(Test).configureEach {
     maxHeapSize = '1024m'
     // Robolectric's real document FD close needs the JDK17 java.io bridge; host JVM only.
     if (selected.contains('project-file-operations')) jvmArgs '--add-opens=java.base/java.io=ALL-UNNAMED'
+    // The exact Linux/JDK17 attachment fixture uses real POSIX dup, not Robolectric's rw copy.
+    if (selected.contains('attachment-legacy-integrity') || classes.contains('dev.pocketengine.features.attachments.LegacyAttachmentIntegrityTest')) {
+        jvmArgs '--add-opens=java.base/java.io=ALL-UNNAMED', '--add-opens=java.base/sun.nio.fs=ALL-UNNAMED'
+    }
     // SDK35 host Conscrypt inspects InetAddress on JDK17 for the real phone/OAuth TLS peers.
     // Open only this host-test JVM package; production TLS and certificate checks are unchanged.
     if (selected.contains('phone-task-platform') || classes.contains('dev.pocketengine.features.plugins.McpOAuthNativeRunnerJourneyTest')) {
