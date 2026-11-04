@@ -67,7 +67,7 @@
     ],
     "helpers": [],
     "robolectric": true,
-    "description": "Original SQL and Engine approval decisions: old or missing runs are rejected, current exact decisions remain single use, late phone replacement and queued assistant pickup cannot continue a successor, and unresolved effects remain fenced. Only startup/presentation and service/executor boundaries are controlled. No normal fresh-run approval-loop, device or visual acceptance."
+    "description": "Original SQL and Engine approval decisions: old or missing runs are rejected, current exact decisions remain single use, late phone replacement and queued assistant pickup cannot continue a successor, and unresolved effects remain fenced. Current assistant pickup reaches its real same-task attempt and tool grant before an explicit pre-Runner fixture stop; current phone resumes only its original control. Only startup/presentation and service/executor boundaries are controlled, with a real empty native plugin host. No normal fresh-run full approval-loop, external model/tool, device or visual acceptance."
   },
   "capability-approval-ui-run-projection": {
     "class": "dev.pocketengine.ui.CapabilityApprovalRunProjectionTest",

@@ -45,7 +45,7 @@ public final class CapabilityApprovalContinuationNativeTest {
         @Override public boolean awaitTermination(long timeout,TimeUnit unit){return isTerminated();}
         void pickUp(){assertEquals(1,pending.size());pending.remove(0).run();}
     }
-    private EngineApplication app;private Queue queue;private final List<JSONObject> events=new ArrayList<>();
+    private EngineApplication app;private Queue queue;private dev.pocketengine.features.NativePluginHost pluginFixture;private final List<JSONObject> events=new ArrayList<>();
     private static void set(EngineApplication app,String name,Object value)throws Exception{Field field=EngineApplication.class.getDeclaredField(name);field.setAccessible(true);field.set(app,value);}
     private static Object get(EngineApplication app,String name)throws Exception{Field field=EngineApplication.class.getDeclaredField(name);field.setAccessible(true);return field.get(app);}
     @Before public void prepare()throws Exception{
@@ -54,7 +54,7 @@ public final class CapabilityApprovalContinuationNativeTest {
         app.addObserver(events::add);
         ((ExecutorService)get(app,"capabilityWorkers")).shutdownNow();queue=new Queue();set(app,"capabilityWorkers",queue);
     }
-    @After public void close()throws Exception{PresentationBoundary.afterPush=null;queue.shutdownNow();app.features.close();shadowOf(Looper.getMainLooper()).idle();Field field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);((android.database.sqlite.SQLiteDatabase)field.get(app.tasks)).close();}
+    @After public void close()throws Exception{PresentationBoundary.afterPush=null;queue.shutdownNow();if(pluginFixture!=null)pluginFixture.close();app.features.close();shadowOf(Looper.getMainLooper()).idle();Field field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);((android.database.sqlite.SQLiteDatabase)field.get(app.tasks)).close();}
     private JSONObject start(boolean phone)throws Exception{
         String id=(phone?app.tasks.create("isolated original phone approval","background"):app.tasks.createCapabilityTask("isolated original assistant approval","")).getString("id");
         return app.tasks.startAttempt(id,phone?"background":"capabilities",4);
@@ -106,6 +106,50 @@ public final class CapabilityApprovalContinuationNativeTest {
         assertEquals(0,after.getJSONArray("operations").length());assertFalse(app.tasks.hasUnresolved(id));
         assertTrue(receipt.getBoolean("approvalDecisionSaved"));assertTrue(receipt.getBoolean("continuationScheduled"));assertFalse(receipt.getBoolean("continuedOriginalRun"));
         assertTrue(events.stream().anyMatch(event->event.optString("type").equals("error")&&event.optString("message").startsWith("审批已保存，但未继续执行")));
+    }
+
+    @Test public void currentAssistantDecisionPicksUpItsOriginalTaskThroughTheRealAttemptAndToolGate()throws Exception{
+        // Mount the real empty plugin host required by the actual App capability composition.
+        // No plugin catalogue download, model transport, tool execution or source body is used.
+        var plugins=new dev.pocketengine.features.plugins.PluginsModule(new dev.pocketengine.features.FeatureContext(app,app.settings,new dev.pocketengine.store.SecretVault(app),events::add));
+        app.features.register(plugins);
+        var live=EngineApplication.class.getDeclaredMethod("checkLiveExtensionControl",dev.pocketengine.runtime.extensions.ExtensionRuntime.Binding.class,RunControl.class);live.setAccessible(true);
+        pluginFixture=new dev.pocketengine.features.NativePluginHost(app,plugins,app.tasks,(binding,control)->{
+            try{live.invoke(app,binding,control);}catch(java.lang.reflect.InvocationTargetException wrapped){Throwable cause=wrapped.getCause();if(cause instanceof Exception failure)throw failure;if(cause instanceof Error error)throw error;throw new AssertionError(cause);}
+        },ignored->{});set(app,"pluginHost",pluginFixture);
+        JSONObject original=start(false);String id=original.getString("id"),approval=pending(original);waitForDecision(original);
+        JSONObject receipt=decide(original,approval);
+        assertTrue(receipt.getBoolean("approvalDecisionSaved"));assertTrue(receipt.getBoolean("continuationScheduled"));assertFalse(receipt.getBoolean("continuedOriginalRun"));
+        assertEquals(original.getString("runId"),app.tasks.get(id,false).getString("runId"));
+        JSONObject[] admitted={null};RunControl[] captured={null};
+        PresentationBoundary.afterPush=()->{try{
+            // This is after the actual startAttempt/bind/capabilitiesForTask/authorizeTools/journal.
+            // Record the actual relationship to the approved run; this does not close §9.
+            JSONObject actual=app.tasks.get(id,false);
+            @SuppressWarnings("unchecked") var controls=(java.util.concurrent.ConcurrentHashMap<String,RunControl>)get(app,"capabilityControls");
+            RunControl originalWorker=controls.get(id);assertNotNull(originalWorker);assertTrue(app.ownsNativeTaskControl(id,originalWorker));
+            JSONObject reserved=app.tasks.requireCapabilityAttempt(id,originalWorker);
+            assertEquals(id,reserved.getString("id"));assertEquals("preparing",reserved.getString("status"));
+            assertEquals(actual.getString("runId"),reserved.getString("runId"));assertEquals(actual.getInt("coordinatorEpoch"),reserved.getInt("coordinatorEpoch"));
+            assertTrue(originalWorker.matchesHostRun(id,reserved.getString("runId"),reserved.getInt("coordinatorEpoch")));
+            // A real current tool grant exists; an unavailable write is still denied, not executed.
+            app.tasks.checkCapability(id,reserved.getString("runId"),reserved.getInt("coordinatorEpoch"),"memory_raw_query",originalWorker);
+            assertThrows(SecurityException.class,()->app.tasks.checkCapabilityCurrent(id,reserved.getString("runId"),reserved.getInt("coordinatorEpoch"),"workspace_write"));
+            assertEquals(0,actual.getJSONArray("operations").length());assertFalse(app.tasks.hasUnresolved(id));
+            admitted[0]=reserved;captured[0]=originalWorker;
+            System.out.println("approval_positive_boundary "+new JSONObject().put("taskId",id).put("approvalRunId",original.getString("runId")).put("approvalEpoch",original.getInt("coordinatorEpoch"))
+                .put("admittedRunId",reserved.getString("runId")).put("admittedEpoch",reserved.getInt("coordinatorEpoch")).put("actualSameRun",original.getString("runId").equals(reserved.getString("runId")))
+                .put("realAttemptAndToolGateChecked",true).put("toolExecuted",false).put("runnerEntered",false));
+        }catch(Exception failure){throw new AssertionError(failure);}
+            throw new IllegalStateException("fixture_stop_after_real_attempt_and_tool_gate_before_runner");
+        };
+        queue.pickUp();shadowOf(Looper.getMainLooper()).idle();
+        assertNotNull("current original approval never reached the real attempt and tool gate",admitted[0]);
+        assertTrue(queue.pending.isEmpty());assertFalse(app.ownsNativeTaskControl(id,captured[0]));
+        JSONObject stopped=app.tasks.get(id,false);assertEquals(admitted[0].getString("runId"),stopped.getString("runId"));assertEquals("failed",stopped.getString("status"));
+        assertEquals(0,stopped.getJSONArray("operations").length());assertFalse(app.tasks.hasUnresolved(id));
+        assertEquals(0,app.tasks.inferenceUsage(id).getJSONArray("receipts").length());
+        assertTrue(events.stream().anyMatch(event->event.optString("type").equals("error")&&event.optString("message").contains("fixture_stop_after_real_attempt_and_tool_gate_before_runner")));
     }
 
     @Test public void currentPhoneDecisionContinuesOnlyItsCapturedOriginalControl()throws Exception{
