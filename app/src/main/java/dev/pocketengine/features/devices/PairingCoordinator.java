@@ -164,6 +164,7 @@ public final class PairingCoordinator {
         JSONObject body=verifyPersistedGrantRecord(target,receipt);
         DeviceProtocol.keys(body,DeviceProtocol.set("grant targetInstanceId issuedAt"),Set.of());
         JSONObject grant=body.getJSONObject("grant");validateGrant(grant,target.deviceId(),localDeviceId,now,forHistory);
+        if(!persistedGrantEpochCurrent(known,receipt,grant))throw new SecurityException("Persisted original grant epoch changed");
         DeviceProtocol.identifier(body.opt("targetInstanceId"),"targetInstanceId");
         if(!grantId.equals(grant.optString("grantId"))||grant.optBoolean("revoked",false)
                 ||!known.optString("instanceId").equals(body.optString("targetInstanceId"))
@@ -183,7 +184,7 @@ public final class PairingCoordinator {
             if(local==null||!owner.localDeviceId.equals(local.deviceId()))throw new SecurityException("Current native local identity required");DeviceProtocol.integer(ttlMs,"managementTtl",1,30000);DeviceProtocol.identifier(targetOperationId,"targetOperationId");DeviceProtocol.identifier(cancelOperationId,"cancelOperationId");if(targetArgumentsDigest==null||!targetArgumentsDigest.matches("[a-f0-9]{64}"))throw new SecurityException("Use the original SQL/opaque accepted target digest, never a caller authority claim");if(targetOperationId.equals(cancelOperationId))throw new SecurityException("Cancellation must keep its own original control operation identity");checkCurrent(now);if(!contains(grant.optJSONArray("capabilities"),"operation.cancel")||!resourceContains(grant.optJSONArray("resources"),exactResource))throw new SecurityException("No current owner management scope");JSONObject value=new JSONObject().put("protocolVersion",DeviceProtocol.VERSION).put("protocolProfile",DeviceProtocol.PROFILE).put("messageType","DeviceRequest").put("method","operation.cancel").put("requestId",UUID.randomUUID().toString()).put("operationId",cancelOperationId).put("originDeviceId",local.deviceId()).put("callerDeviceId",local.deviceId()).put("targetDeviceId",target.deviceId()).put("instanceId",instance).put("grantId",grantId()).put("authorizationEpoch",authorizationEpoch()).put("resourceBinding",copy(exactResource)).put("deadline",Math.addExact(now,ttlMs)).put("arguments",new JSONObject().put("operationId",targetOperationId).put("argumentsDigest",targetArgumentsDigest));value.put("argumentsDigest",DeviceProtocol.argumentsDigest(value));return new OperationManagementRequest(this,DeviceProtocol.parseRequest(DeviceProtocol.canonicalBytes(value)));
         }
         private void checkHistoryCurrent(String method,JSONObject binding,long now)throws Exception{
-            JSONObject known=owner.store.peer(target.deviceId()),stored=owner.store.outgoingGrant(target.deviceId(),grantId());if(known==null||known.optBoolean("revoked",true)||!target.certificateFingerprint().equals(known.optString("fingerprint"))||!instance.equals(known.optString("instanceId"))||stored==null||!DeviceProtocol.canonical(stored.getJSONObject("body").getJSONObject("grant")).equals(DeviceProtocol.canonical(grant))||!instance.equals(stored.getJSONObject("body").optString("targetInstanceId")))throw new SecurityException("Native history route changed or revoked");validateGrant(grant,target.deviceId(),owner.localDeviceId,now,true);JSONObject history=grant.optJSONObject("historyRead");boolean ordinary=now<grant.optLong("expiresAt")&&contains(grant.optJSONArray("capabilities"),method),retained=history!=null&&now<history.optLong("expiresAt")&&contains(history.optJSONArray("methods"),method);if(!HISTORY_METHODS.contains(method)||!ordinary&&!retained||!resourceContains(grant.optJSONArray("resources"),binding))throw new SecurityException("No current signed route policy permits this fixed-result read");
+            JSONObject known=owner.store.peer(target.deviceId()),stored=owner.store.outgoingGrant(target.deviceId(),grantId());if(known==null||known.optBoolean("revoked",true)||!target.certificateFingerprint().equals(known.optString("fingerprint"))||!instance.equals(known.optString("instanceId"))||!persistedGrantEpochCurrent(known,receipt,grant)||stored==null||!DeviceProtocol.canonical(stored.getJSONObject("body").getJSONObject("grant")).equals(DeviceProtocol.canonical(grant))||!instance.equals(stored.getJSONObject("body").optString("targetInstanceId")))throw new SecurityException("Native history route changed or revoked");validateGrant(grant,target.deviceId(),owner.localDeviceId,now,true);JSONObject history=grant.optJSONObject("historyRead");boolean ordinary=now<grant.optLong("expiresAt")&&contains(grant.optJSONArray("capabilities"),method),retained=history!=null&&now<history.optLong("expiresAt")&&contains(history.optJSONArray("methods"),method);if(!HISTORY_METHODS.contains(method)||!ordinary&&!retained||!resourceContains(grant.optJSONArray("resources"),binding))throw new SecurityException("No current signed route policy permits this fixed-result read");
         }
         public HistoryQuery historyQuery(DeviceIdentity.LocalIdentity local,String method,String objectId,JSONObject exactResource,long now,long ttlMs,JSONObject options)throws Exception{
             if(local==null||!owner.localDeviceId.equals(local.deviceId()))throw new SecurityException("Current native local identity required");DeviceProtocol.integer(ttlMs,"queryTtl",1,30000);DeviceProtocol.identifier(objectId,"objectId");checkHistoryCurrent(method,exactResource,now);JSONObject args=options==null?new JSONObject():copy(options);DeviceProtocol.keys(args,"artifact.readChunk".equals(method)?DeviceProtocol.set("contentDigest offset length"):Set.of(),"task.events".equals(method)?DeviceProtocol.set("cursor limit"):Set.of());args.put("operation.get".equals(method)?"operationId":method.startsWith("task.")?"taskId":"artifactId",objectId);
@@ -192,7 +193,7 @@ public final class PairingCoordinator {
         public void requireTargetPeer(DeviceIdentity.AuthenticatedPeer actual)throws Exception{requireTargetPeer(actual,System.currentTimeMillis());}
         public void requireTargetPeer(DeviceIdentity.AuthenticatedPeer actual,long now)throws Exception{checkCurrent(now);if(actual==null||!target.deviceId().equals(actual.deviceId())||!target.certificateFingerprint().equals(actual.certificateFingerprint()))throw new SecurityException("Outgoing grant belongs to another authenticated target");}
         public void checkCurrent(long now)throws Exception{
-            JSONObject known=owner.store.peer(target.deviceId()),stored=owner.store.outgoingGrant(target.deviceId(),grantId());if(known==null||known.optBoolean("revoked",true)||!target.certificateFingerprint().equals(known.optString("fingerprint"))||!instance.equals(known.optString("instanceId"))||stored==null||!DeviceProtocol.canonical(stored.getJSONObject("body").getJSONObject("grant")).equals(DeviceProtocol.canonical(grant))||!instance.equals(stored.getJSONObject("body").optString("targetInstanceId")))throw new SecurityException("Native outgoing route changed or was revoked");validateGrant(grant,target.deviceId(),owner.localDeviceId,now);
+            JSONObject known=owner.store.peer(target.deviceId()),stored=owner.store.outgoingGrant(target.deviceId(),grantId());if(known==null||known.optBoolean("revoked",true)||!target.certificateFingerprint().equals(known.optString("fingerprint"))||!instance.equals(known.optString("instanceId"))||!persistedGrantEpochCurrent(known,receipt,grant)||stored==null||!DeviceProtocol.canonical(stored.getJSONObject("body").getJSONObject("grant")).equals(DeviceProtocol.canonical(grant))||!instance.equals(stored.getJSONObject("body").optString("targetInstanceId")))throw new SecurityException("Native outgoing route changed or was revoked");validateGrant(grant,target.deviceId(),owner.localDeviceId,now);
         }
     }
     public Permission checkPermission(DeviceIdentity.AuthenticatedPeer peer,DeviceTaskEnvelope envelope,long now)throws Exception{return new Permission(this,peer,envelope,evaluate(peer,envelope,now));}
@@ -544,17 +545,30 @@ public final class PairingCoordinator {
     private static JSONObject verifyRecordCertificate(byte[] certificate,JSONObject signed,String type)throws Exception{
         DeviceProtocol.requireProfile(signed);return verifyRecordSignature(certificate,signed,type);
     }
-    // One pinned persisted-record upgrade, never a second accepted wire profile.
+    // Pinned persisted-record upgrades, never another accepted wire profile.
     static final String PERSISTED_GRANT_PROFILE="pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e55f57d2a7c9b97fdb";
     private static final Set<String> PERSISTED_GRANT_METHODS=Set.of(
             "device.describe","tool.invoke","operation.get","operation.cancel","task.submitGoal",
             "task.get","task.events","task.respond","task.pause","task.cancel","task.acquireControl",
             "artifact.describe","artifact.readChunk");
+    // Separate frozen scope for the immediately preceding phone-task profile.
+    // This is only an original-SQL restore policy, never another wire profile.
+    static final String PERSISTED_PHONE_TASK_GRANT_PROFILE="pwp1_953641fabc7e4316996f69c2c3ac9b74db1a30f3750ee83adbfd95768730ae8b";
+    private static final Set<String> PERSISTED_PHONE_TASK_GRANT_METHODS=Set.of(
+            "device.describe","tool.invoke","operation.get","operation.cancel","task.submitGoal",
+            "task.get","task.events","task.respond","task.pause","task.cancel","task.acquireControl",
+            "artifact.describe","artifact.readChunk","task.answerQuestion","task.steer","task.requestResume");
+    private static boolean persistedGrantEpochCurrent(JSONObject known,JSONObject receipt,JSONObject grant){
+        return !PERSISTED_PHONE_TASK_GRANT_PROFILE.equals(receipt.optString("protocolProfile"))||known.optLong("authorizationEpoch") == grant.optLong("authorizationEpoch");
+    }
     private static JSONObject verifyPersistedGrantRecord(DeviceIdentity.AuthenticatedPeer target,JSONObject receipt)throws Exception{
-        if(!PERSISTED_GRANT_PROFILE.equals(receipt.optString("protocolProfile")))return verifyRecord(target,receipt,"PairGrantReceipt");
+        Set<String> methods;
+        if(PERSISTED_GRANT_PROFILE.equals(receipt.optString("protocolProfile")))methods=PERSISTED_GRANT_METHODS;
+        else if(PERSISTED_PHONE_TASK_GRANT_PROFILE.equals(receipt.optString("protocolProfile")))methods=PERSISTED_PHONE_TASK_GRANT_METHODS;
+        else return verifyRecord(target,receipt,"PairGrantReceipt");
         JSONObject body=verifyRecordSignature(target.certificateDer(),receipt,"PairGrantReceipt");
         JSONArray capabilities=body.getJSONObject("grant").getJSONArray("capabilities");
-        for(int i=0;i<capabilities.length();i++)if(!PERSISTED_GRANT_METHODS.contains(capabilities.getString(i)))
+        for(int i=0;i<capabilities.length();i++)if(!methods.contains(capabilities.getString(i)))
             throw new SecurityException("Legacy grants require explicit native review for capabilities outside their pinned profile");
         return body;
     }

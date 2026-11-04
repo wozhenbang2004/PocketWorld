@@ -442,6 +442,87 @@ public final class PhoneTaskInputsNativeTest {
             assertEquals(DeviceProtocol.canonical(original),DeviceProtocol.canonical(trust.outgoingGrant(tls.caller.deviceId(),grantId)));
         }finally{sql.close();}
     }
+    @Test public void persistedPhoneTaskSignedGrantSurvivesSchemaProfileUpgradeWithinOriginalSqlScope()throws Exception{
+        final String oldProfile="pwp1_953641fabc7e4316996f69c2c3ac9b74db1a30f3750ee83adbfd95768730ae8b",grantId="retained-before-schema-profile-upgrade",instance="retained-peer-instance";
+        Peers tls=authenticatedPeers();var app=RuntimeEnvironment.getApplication();app.deleteDatabase("pocket-world.db");TaskStore first=new TaskStore(app);
+        var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);SQLiteDatabase initial=(SQLiteDatabase)field.get(first);
+        long now=System.currentTimeMillis(),executionExpiry=now+60000,historyExpiry=now+120000,receivedAt=now-500;
+        JSONObject binding=new JSONObject().put("screenMode","capabilities"),grant=new JSONObject().put("grantId",grantId).put("localDeviceId",tls.caller.deviceId()).put("peerDeviceId",tls.target)
+            .put("authorizationEpoch",1).put("issuedAt",now-1000).put("expiresAt",executionExpiry)
+            .put("capabilities",new JSONArray(new String[]{"device.describe","tool.invoke","operation.get","operation.cancel","task.submitGoal","task.get","task.events","task.respond","task.pause","task.cancel","task.acquireControl","artifact.describe","artifact.readChunk","task.answerQuestion","task.steer","task.requestResume"}))
+            .put("toolNames",new JSONArray().put("phone_observe")).put("resources",new JSONArray().put(binding)).put("allowedOrigins",new JSONArray().put(tls.target))
+            .put("allowDelegation",false).put("maxDelegationDepth",0).put("toolBudget",2).put("modelBudget",2)
+            .put("historyRead",new JSONObject().put("expiresAt",historyExpiry).put("methods",new JSONArray().put("operation.get").put("task.get")));
+        JSONObject original=signedGrant(tls.source,grant,oldProfile,instance,"PairGrantReceipt",now-1000);
+        ContentValues known=new ContentValues();known.put("device_id",tls.caller.deviceId());known.put("certificate_der",tls.caller.certificateDer());known.put("fingerprint",tls.caller.certificateFingerprint());known.put("instance_id",instance);known.put("authorization_epoch",1);known.put("revoked",0);known.put("updated_at",now);
+        try{initial.insertOrThrow("device_peers",null,known);new TaskStoreDeviceTrust(initial).putOutgoingGrant(tls.caller.deviceId(),grantId,original,receivedAt);}finally{initial.close();}
+        // A real reopen of the same TaskStore file, not an in-memory route cache.
+        TaskStore reopened=new TaskStore(app);SQLiteDatabase sql=(SQLiteDatabase)field.get(reopened);
+        try{
+            TaskStoreDeviceTrust trust=new TaskStoreDeviceTrust(sql);PairingCoordinator pairing=new PairingCoordinator(trust,tls.target,"retained-local-instance");
+            DeviceIdentity.LocalIdentity local=localIdentity(tls.receiver,"retained-local-instance");
+            PairingCoordinator.OutgoingGrant route=pairing.restoreOutgoingGrant(tls.caller,grantId,now);route.requireTargetPeer(tls.caller,now);
+            assertEquals(DeviceProtocol.canonical(grant),DeviceProtocol.canonical(route.grant()));assertEquals(1,route.authorizationEpoch());assertEquals(executionExpiry,route.deadline());
+            assertEquals(tls.caller.deviceId(),route.targetDeviceId());assertEquals(instance,route.targetInstanceId());
+            var stop=route.operationCancel(local,"original-unknown-operation","a".repeat(64),"original-stop-request",binding,now,1000);stop.requireTargetPeer(tls.caller,now);
+            assertEquals("operation.cancel",stop.envelope().method());assertEquals(DeviceProtocol.PROFILE,stop.envelope().json().getString("protocolProfile"));assertFalse(stop.envelope().json().has("budget"));
+            var history=pairing.historyRoute(tls.caller,grantId,executionExpiry+1);
+            var query=history.historyQuery(local,"operation.get","original-unknown-operation",binding,executionExpiry+1,1000,null);query.requireTargetPeer(tls.caller,executionExpiry+1);
+            assertEquals("original-unknown-operation",query.envelope().arguments().getString("operationId"));assertEquals(DeviceProtocol.PROFILE,query.envelope().json().getString("protocolProfile"));assertFalse(query.envelope().json().has("budget"));
+            assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,executionExpiry+1));
+            assertThrows(SecurityException.class,()->history.historyQuery(local,"operation.get","original-unknown-operation",binding,historyExpiry+1,1000,null));
+            assertEquals(DeviceProtocol.canonical(original),DeviceProtocol.canonical(trust.outgoingGrant(tls.caller.deviceId(),grantId)));
+            try(Cursor row=sql.rawQuery("SELECT receipt_json,received_at FROM device_outgoing_grants WHERE target_device_id=? AND grant_id=?",new String[]{tls.caller.deviceId(),grantId})){assertTrue(row.moveToFirst());assertEquals(DeviceProtocol.canonical(original),row.getString(0));assertEquals(receivedAt,row.getLong(1));}
+            assertEquals(1,trust.peer(tls.caller.deviceId()).getLong("authorizationEpoch"));
+            assertEquals(16,route.grant().getJSONArray("capabilities").length());
+            for(String method:List.of("task.answerQuestion","task.steer","task.requestResume"))assertTrue(PairingCoordinator.contains(route.grant().getJSONArray("capabilities"),method));
+            sql.delete("device_outgoing_grants","target_device_id=? AND grant_id=?",new String[]{tls.caller.deviceId(),grantId});
+            assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));
+            assertThrows(SecurityException.class,()->pairing.historyRoute(tls.caller,grantId,now));
+            assertThrows(DeviceProtocol.ProtocolException.class,()->pairing.acceptOutgoingGrant(tls.caller,original,now));
+            try(Cursor row=sql.rawQuery("SELECT COUNT(*) FROM device_outgoing_grants",null)){assertTrue(row.moveToFirst());assertEquals(0,row.getInt(0));}
+            trust.putOutgoingGrant(tls.caller.deviceId(),grantId,original,receivedAt);
+            // Original network parsing stays strict even though this stored record can restore.
+            assertThrows(DeviceProtocol.ProtocolException.class,()->pairing.acceptOutgoingGrant(tls.caller,original,now));
+            assertThrows(DeviceProtocol.ProtocolException.class,()->pairing.acceptHistoryGrantReceipt(tls.caller,original,now));
+            JSONObject oldWire=new JSONObject(query.envelope().json().toString()).put("protocolProfile",oldProfile);assertThrows(DeviceProtocol.ProtocolException.class,()->DeviceProtocol.parseRequest(DeviceProtocol.canonicalBytes(oldWire)));
+            for(String added:List.of("future.ownerControl")){
+                trust.putOutgoingGrant(tls.caller.deviceId(),grantId,original,receivedAt);
+                assertFalse(PairingCoordinator.contains(route.grant().getJSONArray("capabilities"),added));
+                assertThrows(SecurityException.class,()->history.historyQuery(local,added,"original-unknown-operation",binding,now,1000,null));
+                JSONObject expanded=new JSONObject(grant.toString());expanded.getJSONArray("capabilities").put(added);
+                trust.putOutgoingGrant(tls.caller.deviceId(),grantId,signedGrant(tls.source,expanded,oldProfile,instance,"PairGrantReceipt",now-1000),receivedAt);
+                assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));assertThrows(SecurityException.class,()->pairing.historyRoute(tls.caller,grantId,now));
+            }
+            trust.putOutgoingGrant(tls.caller.deviceId(),grantId,signedGrant(tls.source,grant,"pwp1_"+"0".repeat(64),instance,"PairGrantReceipt",now-1000),receivedAt);
+            assertThrows(DeviceProtocol.ProtocolException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));
+            JSONObject tampered=new JSONObject(original.toString());tampered.getJSONObject("body").getJSONObject("grant").put("toolBudget",3);trust.putOutgoingGrant(tls.caller.deviceId(),grantId,tampered,receivedAt);
+            assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));
+            trust.putOutgoingGrant(tls.caller.deviceId(),grantId,signedGrant(tls.source,grant,oldProfile,instance,"DeviceKeyRotation",now-1000),receivedAt);
+            assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));
+            trust.putOutgoingGrant(tls.caller.deviceId(),grantId,signedGrant(tls.receiver,grant,oldProfile,instance,"PairGrantReceipt",now-1000),receivedAt);
+            assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));
+            trust.putOutgoingGrant(tls.caller.deviceId(),grantId,signedGrant(tls.source,grant,oldProfile,"different-peer-instance","PairGrantReceipt",now-1000),receivedAt);
+            assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));
+            JSONObject wrongEpoch=new JSONObject(grant.toString()).put("authorizationEpoch",2);
+            trust.putOutgoingGrant(tls.caller.deviceId(),grantId,signedGrant(tls.source,wrongEpoch,oldProfile,instance,"PairGrantReceipt",now-1000),receivedAt);
+            assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));
+            trust.putOutgoingGrant(tls.caller.deviceId(),grantId,original,receivedAt);
+            ContentValues epoch=new ContentValues();epoch.put("authorization_epoch",2);sql.update("device_peers",epoch,"device_id=?",new String[]{tls.caller.deviceId()});
+            assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));
+            assertThrows(SecurityException.class,()->pairing.historyRoute(tls.caller,grantId,now));
+            assertThrows(SecurityException.class,()->route.checkCurrent(now));
+            assertThrows(SecurityException.class,()->query.requireTargetPeer(tls.caller,executionExpiry+1));
+            epoch.put("authorization_epoch",1);sql.update("device_peers",epoch,"device_id=?",new String[]{tls.caller.deviceId()});
+            trust.putOutgoingGrant(tls.caller.deviceId(),grantId,original,receivedAt);Peers other=authenticatedPeers();
+            assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(other.caller,grantId,now));assertThrows(SecurityException.class,()->route.requireTargetPeer(other.caller,now));
+            ContentValues changed=new ContentValues();changed.put("instance_id","different-current-instance");sql.update("device_peers",changed,"device_id=?",new String[]{tls.caller.deviceId()});
+            assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));assertThrows(SecurityException.class,()->route.checkCurrent(now));
+            changed.put("instance_id",instance);sql.update("device_peers",changed,"device_id=?",new String[]{tls.caller.deviceId()});
+            pairing.revokeLocally(tls.caller.deviceId(),now);assertThrows(SecurityException.class,()->pairing.restoreOutgoingGrant(tls.caller,grantId,now));assertThrows(SecurityException.class,()->pairing.historyRoute(tls.caller,grantId,now));assertThrows(SecurityException.class,()->query.requireTargetPeer(tls.caller,executionExpiry+1));
+            assertEquals(DeviceProtocol.canonical(original),DeviceProtocol.canonical(trust.outgoingGrant(tls.caller.deviceId(),grantId)));
+        }finally{sql.close();}
+    }
     private record Material(KeyPair keys,X509Certificate cert){}
     private record Peers(DeviceIdentity.AuthenticatedPeer caller,String target,Material source,Material receiver){}
     private static JSONObject signedGrant(Material signer,JSONObject grant,String profile,String instance,String type,long issuedAt)throws Exception{

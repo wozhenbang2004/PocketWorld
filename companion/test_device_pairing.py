@@ -766,6 +766,119 @@ i.load_existing_identity(sys.argv[1]).load_context(CrashBeforeLoad())
         finally:
             db_a.close()
 
+    def test_persisted_phone_task_grant_restores_only_original_sql_and_frozen_methods(self):
+        from cryptography.exceptions import InvalidSignature
+        old_profile = "pwp1_953641fabc7e4316996f69c2c3ac9b74db1a30f3750ee83adbfd95768730ae8b"
+        original_methods = {"device.describe", "tool.invoke", "operation.get", "operation.cancel", "task.submitGoal",
+                            "task.get", "task.events", "task.respond", "task.pause", "task.cancel", "task.acquireControl",
+                            "artifact.describe", "artifact.readChunk", "task.answerQuestion", "task.steer", "task.requestResume"}
+        previous_methods = original_methods - {"task.answerQuestion", "task.steer", "task.requestResume"}
+        self.assertEqual(old_profile, p.PERSISTED_PHONE_TASK_GRANT_PROFILE)
+        self.assertEqual(original_methods, p.PERSISTED_PHONE_TASK_GRANT_METHODS)
+        invitation, _, _, local_a, receipt = self.pair(history=True)
+        database = Path(self.scratch.name) / "fixture-only-retained-caller.sqlite3"
+        connection = sqlite3.connect(database)
+        try:
+            trust = p.DeviceTrust(connection, threading.RLock())
+            trust.create_schema()
+            caller = p.PairingCoordinator(trust, self.a.device_id, self.a.instance_id)
+            reciprocal = self.reciprocal_grant()
+            caller.accept_pairing_receipt(invitation, self.peer_b, local_a, receipt, reciprocal, self.now)
+            grant = self.grant()
+            grant["capabilities"] = sorted(original_methods)
+            grant["historyRead"] = {"expiresAt": self.now + 13 * 3600000, "methods": ["operation.get"]}
+            received_at = self.now - 500
+
+            def signed(value, profile=old_profile, signer=None, instance=None):
+                signer = self.b if signer is None else signer
+                record = {"protocolVersion": wire.VERSION, "protocolProfile": profile, "messageType": "PairGrantReceipt",
+                          "issuerDeviceId": signer.device_id, "issuerCertificateFingerprint": signer.certificate_fingerprint,
+                          "body": {"grant": copy.deepcopy(value), "targetInstanceId": self.b.instance_id if instance is None else instance,
+                                   "issuedAt": self.now}}
+                record["signature"] = base64.b64encode(signer.sign(wire.canonical_bytes(record))).decode()
+                return record
+
+            original = signed(grant)
+            trust.put_outgoing_grant(self.b.device_id, "grant-1", original, received_at)
+            connection.close()
+            connection = sqlite3.connect(database)
+            trust = p.DeviceTrust(connection, threading.RLock())
+            caller = p.PairingCoordinator(trust, self.a.device_id, self.a.instance_id)
+            route = caller.restore_outgoing_grant(self.peer_b, "grant-1", self.now)
+            route.require_target_peer(self.peer_b, self.now)
+            self.assertEqual(grant, route.grant)
+            self.assertEqual(original_methods, set(route.grant["capabilities"]))
+            stop = route.operation_cancel(self.a, "original-operation", "a" * 64, "original-stop", self.binding, self.now)
+            stop.require_target_peer(self.peer_b, self.now)
+            self.assertEqual(wire.PROFILE, stop.envelope.get("protocolProfile"))
+            self.assertNotIn("budget", stop.envelope.json())
+            late = grant["expiresAt"] + 1
+            history = caller.history_route(self.peer_b, "grant-1", late)
+            query = history.history_query(self.a, "operation.get", "original-operation", self.binding, late)
+            query.require_target_peer(self.peer_b, late)
+            self.assertEqual(wire.PROFILE, query.envelope.get("protocolProfile"))
+            self.assertNotIn("budget", query.envelope.json())
+            with self.assertRaises(PermissionError):
+                caller.restore_outgoing_grant(self.peer_b, "grant-1", late)
+            with self.assertRaises(PermissionError):
+                history.history_query(self.a, "operation.get", "original-operation", self.binding, grant["historyRead"]["expiresAt"] + 1)
+            self.assertEqual((wire.canonical_bytes(original).decode(), received_at), connection.execute(
+                "SELECT receipt_json,received_at FROM device_outgoing_grants WHERE target_device_id=? AND grant_id=?",
+                (self.b.device_id, "grant-1")).fetchone())
+            for accept in (caller.accept_outgoing_grant, caller.accept_history_grant_receipt):
+                with self.assertRaises(wire.ProtocolError) as error:
+                    accept(self.peer_b, original, self.now)
+                self.assertEqual("incompatible_profile", error.exception.code)
+            old_wire = query.envelope.json()
+            old_wire["protocolProfile"] = old_profile
+            with self.assertRaises(wire.ProtocolError) as error:
+                wire.parse_request(wire.canonical_bytes(old_wire))
+            self.assertEqual("incompatible_profile", error.exception.code)
+            with self.assertRaises(PermissionError):
+                caller.restore_outgoing_grant(self.peer_a, "grant-1", self.now)
+            with self.assertRaises(PermissionError):
+                route.require_target_peer(self.peer_a, self.now)
+            tampered = copy.deepcopy(original)
+            tampered["body"]["grant"]["toolBudget"] += 1
+            invalid = [(InvalidSignature, tampered), (PermissionError, signed(grant, signer=self.a)),
+                       (PermissionError, signed(grant, instance="wrong-instance")),
+                       (PermissionError, signed(dict(grant, authorizationEpoch=2))),
+                       (PermissionError, signed(dict(grant, revoked=True))),
+                       (PermissionError, signed(dict(grant, capabilities=sorted(original_methods | {"future.ownerControl"}))))]
+            for expected, row in invalid:
+                with self.subTest(invalid=row["body"]["grant"]):
+                    trust.put_outgoing_grant(self.b.device_id, "grant-1", row, received_at)
+                    with self.assertRaises(expected):
+                        caller.restore_outgoing_grant(self.peer_b, "grant-1", self.now)
+            # The older pre-phone-input profile keeps exactly its original 13 methods.
+            self.assertEqual(previous_methods, p.PERSISTED_GRANT_METHODS)
+            earlier = dict(grant, capabilities=sorted(previous_methods))
+            trust.put_outgoing_grant(self.b.device_id, "grant-1", signed(earlier, p.PERSISTED_GRANT_PROFILE), received_at)
+            self.assertEqual(previous_methods, set(caller.restore_outgoing_grant(self.peer_b, "grant-1", self.now).grant["capabilities"]))
+            for added in ("task.answerQuestion", "task.steer", "task.requestResume"):
+                trust.put_outgoing_grant(self.b.device_id, "grant-1", signed(dict(earlier, capabilities=sorted(previous_methods | {added})), p.PERSISTED_GRANT_PROFILE), received_at)
+                with self.assertRaises(PermissionError):
+                    caller.restore_outgoing_grant(self.peer_b, "grant-1", self.now)
+            trust.put_outgoing_grant(self.b.device_id, "grant-1", original, received_at)
+            connection.execute("UPDATE device_peers SET authorization_epoch=2 WHERE device_id=?", (self.b.device_id,))
+            for action in (lambda: caller.restore_outgoing_grant(self.peer_b, "grant-1", self.now),
+                           lambda: caller.history_route(self.peer_b, "grant-1", self.now),
+                           lambda: route.check_current(self.now),
+                           lambda: query.require_target_peer(self.peer_b, late)):
+                with self.assertRaises(PermissionError):
+                    action()
+            connection.execute("UPDATE device_peers SET authorization_epoch=1 WHERE device_id=?", (self.b.device_id,))
+            connection.execute("DELETE FROM device_outgoing_grants WHERE target_device_id=? AND grant_id=?", (self.b.device_id, "grant-1"))
+            connection.commit()
+            for restore in (caller.restore_outgoing_grant, caller.history_route):
+                with self.assertRaises(PermissionError):
+                    restore(self.peer_b, "grant-1", self.now)
+            with self.assertRaises(wire.ProtocolError):
+                caller.accept_outgoing_grant(self.peer_b, original, self.now)
+            self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM device_outgoing_grants").fetchone()[0])
+        finally:
+            connection.close()
+
     def test_two_pairings_do_not_implicitly_grant_delegation(self):
         self.pair()
         c = i.provision_identity(Path(self.scratch.name) / "test-only-c")
