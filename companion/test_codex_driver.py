@@ -20,7 +20,9 @@ def emit(value):
 for line in sys.stdin:
     value=json.loads(line)
     method=value.get('method')
-    if method=='initialize': emit({'id':value['id'],'result':{'userAgent':'protocol-fixture'}})
+    if method=='initialize':
+        if mode.startswith('team'): assert value['params']['capabilities']['experimentalApi'] is True
+        emit({'id':value['id'],'result':{'userAgent':'protocol-fixture'}})
     elif method=='turn/steer':
         params=value['params']
         if params['threadId']!='fixture-thread':
@@ -59,9 +61,15 @@ for line in sys.stdin:
         emit({'id':value['id'],'result':{'data':[{'tools':{'write':{}}}] if mode=='external-tools' else []}})
     elif method in {'thread/start','thread/resume'}:
         assert not mode.startswith('probe')
-        if method=='thread/resume': assert value['params']['threadId']=='fixture-thread'
+        if method=='thread/resume':
+            assert value['params']['threadId']=='fixture-thread'
+            assert 'dynamicTools' not in value['params']
         assert value['params']['sandbox']=='readOnly'
         assert value['params']['approvalPolicy']=='unlessTrusted'
+        if mode.startswith('team') and method=='thread/start':
+            tools=value['params']['dynamicTools']
+            assert {t['name'] for t in tools}=={'team_send_message','team_read_messages','team_list_members'}
+            assert all(t['type']=='function' and t['inputSchema']['additionalProperties'] is False for t in tools)
         if 'config' in value['params']:
             config=value['params']['config']
             assert config['mcp_servers']['fixture-server']['enabled'] is False
@@ -78,6 +86,9 @@ for line in sys.stdin:
         if mode not in {'start-ack-lost','final-without-start-ack'}:
             emit({'id':value['id'],'result':{'turn':{'id':'fixture-turn'}}})
         emit({'method':'turn/started','params':{'threadId':'fixture-thread','turn':{'id':'fixture-turn'}}})
+        if mode.startswith('team'):
+            emit({'id':43,'method':'item/tool/call','params':{'threadId':'fixture-thread','turnId':'foreign-turn' if mode=='team-foreign' else 'fixture-turn','callId':'team-call','namespace':None,'tool':'team_send_message','arguments':{'targetMemberId':'reviewer','text':'Review this evidence'}}})
+            continue
         if mode=='final-without-start-ack':
             emit({'method':'turn/completed','params':{'threadId':'fixture-thread','turn':{'id':'fixture-turn','status':'completed'}}})
             continue
@@ -95,6 +106,11 @@ for line in sys.stdin:
         count=Path('codex-approval-count')
         count.write_text(count.read_text()+'1' if count.exists() else '1')
         emit({'method':'item/agentMessage/delta','params':{'delta':'fixture decision='+value['result']['decision']}})
+        emit({'method':'turn/completed','params':{'threadId':'fixture-thread','turn':{'id':'fixture-turn','status':'completed'}}})
+    elif value.get('id')==43 and 'result' in value:
+        assert value['result']['success'] is (mode!='team-foreign')
+        assert value['result']['contentItems'][0]['type']=='inputText'
+        emit({'method':'item/agentMessage/delta','params':{'threadId':'fixture-thread','delta':'Team tool answered'}})
         emit({'method':'turn/completed','params':{'threadId':'fixture-thread','turn':{'id':'fixture-turn','status':'completed'}}})
 '''
 
@@ -118,12 +134,26 @@ class CodexDriverTests(unittest.TestCase):
         self.pool.shutdown(wait=True)
         self.temp.cleanup()
 
-    def driver(self, mode, stopped=None, restricted=False):
+    def driver(self, mode, stopped=None, restricted=False, team_tools=None):
         process=subprocess.Popen([sys.executable,str(self.fixture),mode],cwd=str(self.root),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
         self.processes.append(process)
         states=[]
-        driver=CodexAppServerDriver(process,str(self.root),False,states.append,stopped or (lambda:False),5,restricted)
+        driver=CodexAppServerDriver(process,str(self.root),False,states.append,stopped or (lambda:False),5,restricted,team_tools=team_tools)
         return driver,states
+
+    def test_team_tools_use_original_dynamic_rpc_in_restricted_and_resumed_threads(self):
+        for mode, thread in (('team', None), ('team', 'fixture-thread'), ('team-foreign', 'fixture-thread')):
+            calls=[]
+            def team_tool(name,arguments,cancelled):
+                calls.append((name,arguments))
+                return {'status':'queued','messageId':'original-message','untrusted':True}
+            driver,_=self.driver(mode,restricted=True,team_tools=team_tool)
+            result=driver.run('Collaborate',thread_id=thread)
+            self.assertEqual('completed',result['status'])
+            self.assertTrue(result['readOnlyConfirmed'])
+            self.assertTrue(result['externalToolsDisabled'])
+            self.assertTrue(result['teamTools'])
+            self.assertEqual(0 if mode=='team-foreign' else 1,len(calls))
 
     def pending(self, states):
         deadline=time.monotonic()+3
