@@ -43,6 +43,10 @@ final class ShellBridgeClient {
             }else if(command.startsWith("owner_handoff_")&&control!=null){
                 if(!ownerTakeover)throw new SecurityException("移屏仅供原生主人");
                 control.dispatchAtPauseState(expectedRevision,true,()->{writeEntered.set(true);DisplayWire.write(output,request.toString(),32*1024);});
+            }else if(control!=null&&!ownerTakeover){
+                // Only the bounded wire write shares pause admission, never the response wait.
+                try{control.dispatchAtPauseState(expectedRevision,false,()->{writeEntered.set(true);DisplayWire.write(output,request.toString(),32*1024);});}
+                catch(SecurityException changed){if(writeEntered.get())throw changed;StaleRequestException stale=new StaleRequestException();stale.initCause(changed);throw stale;}
             }else {writeEntered.set(true);DisplayWire.write(output,request.toString(),32*1024);}
             DataInputStream stream=new DataInputStream(socket.getInputStream());String response=DisplayWire.read(stream,8*1024*1024);
             if(control!=null)control.check();
