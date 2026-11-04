@@ -3,8 +3,6 @@ package dev.pocketengine.runtime.context;
 import dev.pocketengine.core.ModelConfig;
 import org.json.JSONObject;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.Objects;
 
 /** Native route metadata seam. No catalog, model-name heuristic, persistence or model-side setter. */
@@ -101,16 +99,12 @@ public final class ContextBudgetPolicy {
         // No credential is returned or logged; the digest only prevents metadata crossing credentials.
         try {
             JSONObject route = new JSONObject().put("provider", config.provider).put("model", config.model)
-                    .put("baseUrl", config.baseUrl).put("credential", digest(config.apiKey));
+                    .put("baseUrl", config.baseUrl).put("credential", config.credentialIdentityDigest());
             if (config.usesAccount()) route.put("account", config.accountModel.toJson());
+            if (config.usesBedrock()) route.put("bedrockRegion",config.bedrockRegion).put("binding",config.capabilityBinding==null?JSONObject.NULL:config.capabilityBinding.toJson());
             return route.toString();
         } catch (Exception impossible) { throw new IllegalStateException("Cannot bind context metadata", impossible); }
     }
 
-    private static String digest(String value) throws Exception {
-        byte[] bytes = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
-        StringBuilder hex = new StringBuilder();
-        for (byte b : bytes) hex.append(String.format(java.util.Locale.ROOT, "%02x", b & 255));
-        return hex.toString();
-    }
+
 }

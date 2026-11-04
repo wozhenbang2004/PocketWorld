@@ -34,6 +34,12 @@ public final class InferenceFailurePresentation {
                 default -> title="本次调用未完成，具体原因未观察到";
             }
             if(failure.kind!=InferenceFailure.Kind.HTTP&&failure.httpStatus>0)lines.add("已观察到HTTP "+failure.httpStatus+"，但这不证明模型决策或本机处理完成。");
+            if(failure.nativeCode.startsWith("BEDROCK_")){
+                if(failure.kind==InferenceFailure.Kind.PROTOCOL)title="Bedrock 在事件流中返回错误";
+                lines.add("Bedrock 已核对的错误类型："+failure.nativeCode+"；本次没有自动重发或切换区域、模型与凭据。");
+                if(java.util.Set.of("BEDROCK_ACCESS_DENIED","BEDROCK_INVALID_IDENTITY","BEDROCK_SIGNATURE_INVALID","BEDROCK_NOT_AUTHORIZED").contains(failure.nativeCode))lines.add("请核对原连接的完整临时凭据、到期时间、区域及 AWS 权限；保存成功不代表服务已接受该身份。");
+                if("BEDROCK_REQUEST_EXPIRED".equals(failure.nativeCode))lines.add("服务报告请求时间戳已失效，请核对设备时钟；没有延长原会话或后台刷新凭据。");
+            }
             lines.add("观察时间："+time(failure.observedAt)+"。");
             if(failure.partialTextReceived)lines.add("已收到部分模型文本，但没有完整决策；没有自动重发这次请求。");
             JSONObject retry=failure.retry();

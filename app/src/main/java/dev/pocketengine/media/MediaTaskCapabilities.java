@@ -49,6 +49,12 @@ public final class MediaTaskCapabilities implements CapabilityPort {
     @Override public JSONArray tools()throws Exception {JSONArray result=new JSONArray(existing.tools().toString());for(int i=0;i<definitions.length();i++)result.put(new JSONObject(definitions.getJSONObject(i).toString()));return result;}
     @Override public boolean supports(String name){return own(name)||existing.supports(name);}
     @Override public boolean sideEffecting(String name){return own(name)?generators.contains(name):existing.sideEffecting(name);}
+    @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception {
+        if(!own(name))return existing.planningAccess(name,arguments);
+        if(!name.equals("media_read_original"))return dev.pocketengine.core.ExecutionPlanning.Access.DENY;
+        if(arguments!=null){JSONObject checked=new JSONObject(arguments.toString());checked.remove("_hostOperationId");validate(name,checked);if(!"status".equals(checked.getString("action")))return dev.pocketengine.core.ExecutionPlanning.Access.DENY;}
+        return dev.pocketengine.core.ExecutionPlanning.Access.READ;
+    }
     @Override public void validate(String name,JSONObject args)throws Exception {
         if(!own(name)){existing.validate(name,args);return;}
         Set<String> allowed=name.equals("media_read_original")?Set.of("operationId","action"):name.equals("media_edit_image")?Set.of("prompt","configurationRevision","imageId","imageSha256","maskId","maskSha256"):Set.of(name.equals("media_synthesize_speech")?"text":"prompt","configurationRevision","observeUntilComplete");

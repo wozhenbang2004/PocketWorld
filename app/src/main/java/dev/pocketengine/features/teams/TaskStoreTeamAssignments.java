@@ -32,6 +32,7 @@ public final class TaskStoreTeamAssignments implements TeamAssignmentHost.Tasks 
     @Override public RunJournal journal(JSONObject binding,RunControl original)throws Exception {
         RunJournal journal=tasks.journal(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"),original);String member=binding.getString("memberId");
         return new RunJournal(){
+            public dev.pocketengine.core.ExecutionPlanning planning()throws Exception{return journal.planning();}
             public dev.pocketengine.runtime.context.CompactionJournal compaction(){return journal.compaction();}
             public JSONObject restore()throws Exception{return journal.restore();}
             public void checkpoint(JSONArray messages,int steps,JSONObject observation)throws Exception{journal.checkpoint(messages,steps,observation);}

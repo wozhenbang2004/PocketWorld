@@ -66,6 +66,38 @@ It models native responses and does not prove SQLite, Android admission or devic
 execution. Native tests are registered in the `conversation-phone-handoff` host
 group; full Android compilation and a source-matched APK are separate checks.
 
+## Reading and team continuity
+
+The message menu opens a frozen, in-memory reading view. Later host snapshots
+continue updating the original conversation without moving the reading text or
+the background scroll position. Read and select modes keep their own position;
+expanded tables return to their parent reader before returning to the original
+message. Tables are parsed with their full Markdown context, including quoted
+tables and reference links. Table copy uses tab-separated cells; select mode
+exposes the original Markdown. Clipboard failure remains visible and retryable.
+
+Team details show member identity, frozen model information and actual current
+work before the summary. Details expand by member/work-item ID, including when
+the host reorders them. List/detail positions, search and per-run input context
+remain local to the workspace. Existing native read leases and review handles
+remain responsible for authority; these views grant no new command capability.
+
+After a production Web build, run the focused browser regressions from the
+repository root:
+
+```sh
+node web-ui/tests/reading-continuity-ui.mjs
+node web-ui/tests/team-continuity-ui.mjs
+```
+
+They write labelled screenshots and JSON results beside the repository in
+`qa-reading/current` and `qa-team`. `READING_UI_EVIDENCE` and the team script's
+first positional argument can select another output directory. These tests use
+an isolated synthetic host, block external requests and refuse business actions.
+They cover reading/selection, copy feedback, nested return paths, draft/scroll
+continuity and team identity. They do not prove physical Android selection
+handles, the system clipboard, native execution or APK acceptance.
+
 ## Reminder workspace
 
 The reminder page uses the original `AutomationSchedule` preview and the

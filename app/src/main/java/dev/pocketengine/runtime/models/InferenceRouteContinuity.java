@@ -3,8 +3,6 @@ package dev.pocketengine.runtime.models;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.runtime.ModelGateway;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.Objects;
 
 /** Native captured-request continuity, not model selection, credential access or a new inference grant. */
@@ -15,7 +13,7 @@ public final class InferenceRouteContinuity {
         boolean same=capturedInference.usesAccount()==selectedSettings.usesAccount()
                 &&capturedInference.provider.equals(selectedSettings.provider)&&capturedInference.model.equals(selectedSettings.model)
                 &&capturedInference.baseUrl.equals(selectedSettings.baseUrl)
-                &&MessageDigest.isEqual(capturedInference.apiKey.getBytes(StandardCharsets.UTF_8),selectedSettings.apiKey.getBytes(StandardCharsets.UTF_8))
+                &&capturedInference.sameCredentials(selectedSettings)
                 &&capturedInference.cleartextConsent.equals(selectedSettings.cleartextConsent)
                 &&Objects.equals(capturedInference.capabilityBinding,selectedSettings.capabilityBinding)
                 &&capturedInference.catalogEnforced==selectedSettings.catalogEnforced

@@ -50,6 +50,9 @@ public interface CapabilityPort extends AutoCloseable {
     JSONArray tools() throws Exception;
     boolean supports(String name);
     boolean sideEffecting(String name);
+    /** Native route classification only. Null arguments ask about the catalogue; actual arguments
+     * must recheck any dynamic read restriction. Effect declarations never establish read authority. */
+    default ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{return ExecutionPlanning.Access.DENY;}
     default void validate(String name,JSONObject arguments)throws Exception { }
     JSONObject execute(String name,JSONObject arguments,RunControl control)throws Exception;
 }

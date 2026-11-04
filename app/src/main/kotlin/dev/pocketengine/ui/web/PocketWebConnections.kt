@@ -20,7 +20,7 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
     private val probes = mutableMapOf<String, Pair<String, JSONObject>>()
     private val screens = mutableMapOf<String, SshTerminalScreen>()
     private var doctor: SshOwnerWorkflows.DoctorPage? = null
-    private var generation = 0L
+    @Volatile private var generation = 0L
     private val main = Handler(Looper.getMainLooper())
 
     companion object {
@@ -83,7 +83,7 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
                 require(actual.optString("operationId") == string(args, "jobOperationId") && actual.optString("serviceBase") == string(args, "serviceBase", 2048) && actual.optString("profileBinding") == string(args, "_profileBinding", 64)) { "未沿用旧任务控制另一执行" }
             }
             "reviewTask" -> {
-                val checked = RemoteTaskRequest.first(args)
+                val checked = RemoteTaskRequest.firstForPrivateConnection(args)
                 currentProfile(domain, checked)
                 val observed = environments[checked.getString("profileId")] ?: error("请先读取这台电脑的实际环境")
                 check(observed.optString("profileBinding") == checked.getString("_profileBinding")) { "环境读取属于旧连接" }
@@ -94,6 +94,13 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
                     val proof = JSONObject(target)
                     for (key in listOf("profileId", "_profileBinding", "environmentId", "environmentBinding", "worker", "model", "effort")) check(proof.optString(key) == checked.optString(key)) { "执行器核对已变化，请按当前选项重新核对" }
                     check(observedProbe.optBoolean("available")) { "尚未核实此执行器可用" }
+                    if (checked.getString("worker") == "gemini_acp") {
+                        check(environment.opt("writeAllowed") == true) { "此 Gemini 后端只接受原环境已明确允许写入的私人工作；不支持只读分析" }
+                        val observation = observedProbe.optJSONObject("backendObservation") ?: error("未取得原 Gemini 后端核对，请重新探测")
+                        check(observedProbe.optString("capabilityRevision") == checked.getString("capabilityRevision")) { "原后端核对版本已变化，请重新审阅" }
+                        check(observation.optString("format") == "pocketworld.remote-backend-observation.v1" && observation.optString("backendId") == checked.getString("backendId") && observation.optString("backendVersion") == "0.66.0" && observation.optInt("protocolVersion") == 1 && observation.optString("modeId") == checked.getString("modeId")) { "原后端或模式尚未核对一致" }
+                        check(observation.optString("environmentId") == checked.getString("environmentId") && observation.optString("environmentBinding") == checked.getString("environmentBinding") && observation.optString("requestedModel") == checked.optString("model") && observation.optLong("expiresAt") > System.currentTimeMillis()) { "原后端来源已变化或探测过期，请重新核对" }
+                    }
                     if (checked.has("modelOptionsDigest")) check(observedProbe.optJSONObject("modelOptions")?.optString("digest") == checked.getString("modelOptionsDigest")) { "模型目录已变化" }
                 }
                 check(controller.state.feature("remote").optJSONArray("operations").objects().none { it.optString("profileId") == checked.getString("profileId") && it.optString("status") in setOf("unknown", "submitting") }) { "请先核对这台电脑尚未确认的原提交" }
@@ -141,7 +148,9 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
             else -> error("原连接操作未接入")
         }
         val capturedCommand = command; val capturedInput = JSONObject(input.toString())
-        controller.requestFeatureReceipt(domain, command, input) { actual, error ->
+        controller.requestWebFeatureReceipt(domain, command, input, {
+            originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()
+        }) { actual, error ->
             if (error != null || actual == null) deliver(null, error ?: "原操作未返回结果")
             else try {
                 if (generation == originalGeneration && window == controller.webWindowTicket()) {

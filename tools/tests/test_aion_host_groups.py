@@ -1,4 +1,4 @@
-"""Exact original Aion slices, not an implicit all-tests task or product test substitute."""
+"""Exact current Aion inventory; original snapshots remain in Git, not product test results."""
 import json
 from pathlib import Path
 import re
@@ -10,8 +10,25 @@ FIXTURE = json.loads((ROOT / 'tools/tests/fixtures/aion-absorption-tests.json').
 
 
 class AionHostGroups(unittest.TestCase):
+    def source(self, name):
+        # Match the explicit Java/Kotlin roots used by tools/host-tests.gradle.
+        relative = name.replace('.', '/')
+        candidates = [ROOT / root / (relative + suffix) for root, suffix in (
+            ('app/src/hostTest/java', '.java'),
+            ('app/src/test/java', '.java'),
+            ('app/src/test/kotlin', '.kt'),
+        )]
+        sources = [path for path in candidates if path.is_file()]
+        self.assertEqual(1, len(sources), name)
+        return sources[0]
+
+    def methods(self, name):
+        source = self.source(name)
+        declaration = r'public\s+void' if source.suffix == '.java' else r'(?:public\s+)?fun'
+        return re.findall(r'@Test(?:\s*\([^)]*\))?\s+' + declaration + r'\s+(\w+)\s*\(', source.read_text())
+
     def test_exact_original_classes_counts_and_compile_only_helpers(self):
-        self.assertEqual({'aion-core': 49, 'aion-mcp-skills': 60, 'aion-office': 15},
+        self.assertEqual({'aion-core': 52, 'aion-mcp-skills': 140, 'aion-office': 18},
                          {key: value['testCount'] for key, value in FIXTURE.items()})
         selected = set()
         for key, expected in FIXTURE.items():
@@ -23,13 +40,12 @@ class AionHostGroups(unittest.TestCase):
                 self.assertEqual(expected['robolectric'], actual.get('robolectric', False))
                 self.assertFalse(selected.intersection(classes))
                 selected.update(classes)
+                self.assertEqual(expected['testCount'], sum(len(item['methods']) for item in expected['classes']))
                 for item in expected['classes']:
-                    source = ROOT / 'app/src/test/java' / (item['class'].replace('.', '/') + '.java')
-                    methods = re.findall(r'@Test(?:\s*\([^)]*\))?\s+public\s+void\s+(\w+)\s*\(', source.read_text())
-                    self.assertEqual(item['methods'], methods)
+                    self.assertEqual(item['methods'], self.methods(item['class']), item['class'])
                 for name in actual['helpers']:
-                    self.assertTrue((ROOT / 'app/src/test/java' / (name.replace('.', '/') + '.java')).is_file())
-        self.assertEqual(18, len(selected))
+                    self.assertTrue(self.source(name).is_file())
+        self.assertEqual(26, len(selected))
         for key, expected in FIXTURE.items():
             self.assertFalse(selected.intersection(expected['helpers']), key)
 
@@ -41,19 +57,33 @@ class AionHostGroups(unittest.TestCase):
             'dev.pocketengine.features.assistant.ConversationTransferTest': 7,
             'dev.pocketengine.store.ConversationV9MigrationNativeTest': 5,
             'dev.pocketengine.store.DeviceV8MigrationNativeTest': 2,
+            'dev.pocketengine.features.assistant.ConversationOwnerTitleNativeTest': 4,
+            'dev.pocketengine.features.conversation.ConversationPinnedHistoryTest': 3,
+            'dev.pocketengine.ui.ConversationOrganizationUiNativeTest': 3,
+            'dev.pocketengine.features.conversation.InterruptedAttemptsTest': 3,
+            'dev.pocketengine.features.assistant.notifications.OwnerQuestionReferenceTest': 1,
+            'dev.pocketengine.features.assistant.OwnerQuestionInputsNativeTest': 5,
+            'dev.pocketengine.features.assistant.OwnerPhoneQuestionsNativeTest': 14,
+            'dev.pocketengine.features.assistant.OwnerPhoneQuestionContinuationJourneyTest': 1,
+            'dev.pocketengine.features.assistant.OwnerQuestionRunnerNativeTest': 5,
+            'dev.pocketengine.features.assistant.ConversationInterruptedNativeJourneyTest': 2,
         }
         entry = REGISTRY['aion-conversations']
         self.assertEqual(list(expected), [entry['class']] + entry['additionalClasses'])
-        self.assertEqual([], entry['helpers'])
+        self.assertEqual([
+            'dev.pocketengine.testutil.HttpServer',
+            'dev.pocketengine.features.channels.ChannelTaskHostTest',
+            'dev.pocketengine.features.channels.ChannelSecurityTest',
+        ], entry['helpers'])
         self.assertTrue(entry['robolectric'])
         for name, count in expected.items():
-            roots = ('app/src/test/java', 'app/src/hostTest/java')
-            sources = [ROOT / root / (name.replace('.', '/') + '.java') for root in roots]
-            source, = [item for item in sources if item.is_file()]
-            self.assertEqual(count, len(re.findall(r'@Test(?:\s*\([^)]*\))?\s+public\s+void\s+(\w+)\s*\(', source.read_text())), name)
+            self.assertEqual(count, len(self.methods(name)), name)
+        for name in entry['helpers']:
+            self.assertTrue(self.source(name).is_file())
+            self.assertNotIn(name, expected)
 
 
-    def test_team_catalog_new_module_journey_does_not_broaden_original_124(self):
+    def test_team_catalog_new_module_journey_stays_separate_from_absorption_inventory(self):
         entry = REGISTRY['aion-team-catalog']
         name = 'dev.pocketengine.features.teams.TeamRoleModuleNativeTest'
         self.assertEqual(name, entry['class'])
@@ -67,7 +97,7 @@ class AionHostGroups(unittest.TestCase):
 
     def test_work_profile_targets_are_two_native_modules_with_one_http_helper(self):
         expected = {
-            'dev.pocketengine.features.remote.WorkProfileRemoteTargetFactsNativeTest': 10,
+            'dev.pocketengine.features.remote.WorkProfileRemoteTargetFactsNativeTest': 15,
             'dev.pocketengine.features.ssh.WorkProfileSshTargetFactsNativeTest': 3,
             'dev.pocketengine.features.remote.WorkProfileHarnessCompositionNativeTest': 2,
         }
@@ -99,7 +129,7 @@ class AionHostGroups(unittest.TestCase):
     def test_original_successor_observation_and_config_groups_are_exact(self):
         groups = {
             'aion-capability-observations': ({
-                'dev.pocketengine.features.remote.HarnessCapabilityObservationTest': 10,
+                'dev.pocketengine.features.remote.HarnessCapabilityObservationTest': 18,
                 'dev.pocketengine.runtime.usage.ConnectionInferenceObservationsTest': 12,
             }, [], False),
             'aion-team-templates': ({

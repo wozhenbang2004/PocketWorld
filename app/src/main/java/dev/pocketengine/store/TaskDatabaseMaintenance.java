@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -21,12 +22,13 @@ import org.json.JSONObject;
 public final class TaskDatabaseMaintenance {
     public interface Host {
         long generation();
+        default String installedVersion(){return "unknown";}
         /** Closes admission and uses original resource stops. False means no byte replacement. */
         boolean quiesce()throws Exception;
     }
     private static final String FORMAT="pocketworld.database-maintenance.v1";
     private static final Set<String> INCOMPLETE=Set.of("preserving","reviewing","switching","verifying","original_retry_prepared","unknown");
-    private static final ThreadLocal<OriginalRetry> ORIGINAL_RETRY=new ThreadLocal<>();
+    private static final Set<String> COMPLETED=Set.of("completed","original_retry_completed");
     private final Context context;
     private final Host host;
     private final File database,root;
@@ -34,19 +36,21 @@ public final class TaskDatabaseMaintenance {
     private final String process=UUID.randomUUID().toString();
     private JSONObject record;
     private volatile String visible="null";
+    private volatile boolean persistenceUnconfirmed;
     private String failureCode="unknown",failureMessage="";
     private Integer observedSchema;
     private volatile Review review;
-    private OriginalRetry preparedOriginalRetry;
-    private static final class OriginalRetry {
-        final TaskDatabaseMaintenance coordinator;
-        final String repair,source,backup,databasePath,recordPath;
-        final long previousGeneration,deadlineNanos=System.nanoTime()+300_000_000_000L;
-        final BooleanSupplier owner;
-        long generation;
-        boolean started,opened,completed;
-        OriginalRetry(TaskDatabaseMaintenance coordinator,long generation,BooleanSupplier owner)throws Exception{this.coordinator=coordinator;this.previousGeneration=generation;this.owner=owner;repair=coordinator.record.getString("repairId");source=coordinator.record.getString("sourceFingerprint");backup=coordinator.record.getString("backupFingerprint");databasePath=coordinator.database.getCanonicalPath();recordPath=coordinator.state.getBaseFile().getCanonicalPath();}
-        boolean current(){return !Thread.currentThread().isInterrupted()&&started&&coordinator.host.generation()==generation&&System.nanoTime()-deadlineNanos<0&&owner.getAsBoolean();}
+    /** Native object only: one original-store open, never a JSON or persisted execution grant. */
+    public static final class OriginalReadPermit {
+        private final TaskDatabaseMaintenance issuer;
+        private final String process,repair,source,backup,request;
+        private final long generation;
+        private final BooleanSupplier owner;
+        private final AtomicBoolean consumed=new AtomicBoolean();
+        private OriginalReadPermit(TaskDatabaseMaintenance issuer,String request,long generation,BooleanSupplier owner)throws Exception {
+            this.issuer=issuer;this.process=issuer.process;this.request=request;this.generation=generation;this.owner=owner;
+            repair=issuer.record.getString("repairId");source=issuer.record.getString("sourceFingerprint");backup=issuer.record.getString("backupFingerprint");
+        }
     }
     private static final class Review {
         final String id,repair,source,backup,mode,staging,extraction;
@@ -56,78 +60,101 @@ public final class TaskDatabaseMaintenance {
         boolean current(long generation){return this.generation==generation&&System.nanoTime()-deadlineNanos<0&&owner.getAsBoolean();}
     }
     public TaskDatabaseMaintenance(Context context,Host host)throws Exception {
-        this.context=context.getApplicationContext();this.host=host;database=nativeDatabase(context);root=new File(context.getNoBackupFilesDir().getCanonicalFile(),"database-maintenance");state=new AtomicFile(new File(root,"current.json"));
+        this.context=context.getApplicationContext();this.host=host;database=originalDatabase(context);root=maintenanceRoot(context);state=new AtomicFile(new File(root,"current.json"));
         record=readRecord(state);if(record!=null){failureCode=record.optString("cause","unknown");if(record.has("observedSchema")&&!record.isNull("observedSchema"))observedSchema=record.getInt("observedSchema");}refresh();
     }
     /** Runs before every original TaskStore open, including cold startup. Never repairs by opening. */
-    public static void requireBusinessOpen(Context context) {
-        try{File current=new File(context.getNoBackupFilesDir().getCanonicalFile(),"database-maintenance/current.json");JSONObject record=readRecord(new AtomicFile(current));
-            if(record!=null&&!Set.of("completed","original_retry_completed").contains(record.getString("phase"))){
-                File database=nativeDatabase(context);OriginalRetry permit=ORIGINAL_RETRY.get();
-                if(!originalPermitMatches(permit,record,database,current)||permit.opened)throw new SecurityException("database_maintenance_record_requires_owner_read");
-                DatabaseFilePreservation.Snapshot expected=DatabaseFilePreservation.fromManifest(TaskStore.DATABASE_NAME,record.getJSONArray("files"),permit.source);
-                DatabaseFilePreservation.verify(database,expected);DatabaseFilePreservation.verify(new File(new File(new File(current.getParentFile(),permit.repair),"preserved"),TaskStore.DATABASE_NAME),expected);
-                DatabaseFilePreservation.requireCurrent(permit::current);permit.opened=true;
-            }
+    public static void requireBusinessOpen(Context context) {requireBusinessOpen(context,null);}
+    static void requireBusinessOpen(Context context,OriginalReadPermit permit) {
+        try{File database=originalDatabase(context);JSONObject record=readRecord(new AtomicFile(new File(maintenanceRoot(context),"current.json")));
+            if(permit!=null)permit.issuer.consumeOriginalRead(context,record,permit);
+            else if(record!=null&&!COMPLETED.contains(record.getString("phase")))throw new SecurityException("database_maintenance_record_requires_owner_read");
+            if(Files.isSymbolicLink(database.toPath())||Files.exists(database.toPath(),LinkOption.NOFOLLOW_LINKS)&&!Files.isRegularFile(database.toPath(),LinkOption.NOFOLLOW_LINKS))throw new SecurityException("original_database_file_not_regular");
+            // A missing main file with surviving SQLite auxiliaries is not a fresh installation.
+            if((!Files.exists(database.toPath(),LinkOption.NOFOLLOW_LINKS)||database.length()==0)&&hasAuxiliaryFiles(database))throw new android.database.sqlite.SQLiteDatabaseCorruptException("original_database_missing_with_auxiliary_files");
         }catch(RuntimeException failure){throw failure;}catch(Exception failure){throw new IllegalStateException("database_maintenance_record_unreadable",failure);}
     }
-    private static File nativeDatabase(Context context)throws Exception{File supplied=context.getDatabasePath(TaskStore.DATABASE_NAME).getAbsoluteFile();return new File(supplied.getParentFile().getCanonicalFile(),supplied.getName());}
-    public boolean blocksBusinessOpen(){JSONObject shown=snapshot();if(shown==null||Set.of("completed","original_retry_completed","not_started").contains(shown.optString("phase")))return false;try{return !originalPermitMatches(ORIGINAL_RETRY.get(),shown,database,state.getBaseFile());}catch(Exception unavailable){return true;}}
-    private static boolean originalPermitMatches(OriginalRetry permit,JSONObject record,File database,File state)throws Exception{return permit!=null&&permit.current()&&"original_retry_prepared".equals(record.getString("phase"))&&permit.databasePath.equals(database.getCanonicalPath())&&permit.recordPath.equals(state.getCanonicalPath())&&permit.repair.equals(record.getString("repairId"))&&permit.source.equals(record.getString("sourceFingerprint"))&&permit.backup.equals(record.getString("backupFingerprint"));}
+    private static File originalDatabase(Context context)throws Exception {
+        File supplied=context.getDatabasePath(TaskStore.DATABASE_NAME);if(!TaskStore.DATABASE_NAME.equals(supplied.getName()))throw new SecurityException("original_database_path_unconfirmed");
+        // Resolve the platform-owned parent alias, never follow a database-file symlink.
+        return new File(supplied.getParentFile().getCanonicalFile(),TaskStore.DATABASE_NAME);
+    }
+    private static File maintenanceRoot(Context context)throws Exception{return new File(context.getNoBackupFilesDir().getCanonicalFile(),"database-maintenance");}
+    private static boolean hasOriginalFiles(File database)throws Exception {
+        return Files.exists(database.toPath(),LinkOption.NOFOLLOW_LINKS)||hasAuxiliaryFiles(database);
+    }
+    private static boolean hasAuxiliaryFiles(File database)throws Exception {
+        if(!Files.isDirectory(database.toPath().getParent(),LinkOption.NOFOLLOW_LINKS))return false;
+        String base=database.getName();try(var files=Files.list(database.toPath().getParent())){return files.anyMatch(path->{String name=path.getFileName().toString();return name.equals(base+"-wal")||name.equals(base+"-shm")||name.equals(base+"-journal")||name.startsWith(base+"-mj");});}
+    }
+    public boolean blocksBusinessOpen(){JSONObject snapshot=snapshot();return snapshot!=null&&!COMPLETED.contains(snapshot.optString("phase"))&&!"not_started".equals(snapshot.optString("phase"));}
+    public boolean originalRetryAvailable(){JSONObject shown=snapshot();return shown!=null&&shown.optBoolean("originalRetryAvailable");}
     public JSONObject snapshot(){try{if("null".equals(visible))return null;JSONObject shown=new JSONObject(visible);Review exact=review;if(exact==null||!exact.current(host.generation())){shown.put("review",JSONObject.NULL);JSONArray commands=shown.optJSONArray("allowedCommands"),filtered=new JSONArray();for(int i=0;commands!=null&&i<commands.length();i++)if(!"repair.confirm".equals(commands.getString(i)))filtered.put(commands.getString(i));shown.put("allowedCommands",filtered);}return shown;}catch(Exception impossible){throw new IllegalStateException(impossible);}}
     /** The corruption callback never returns to Android. This best-effort record is not a backup claim. */
     public synchronized void corruptionObserved() {
-        try{failureCode="suspected_corruption";failureMessage="原数据库疑似损坏；默认删除与自动重开已阻止";if(record==null||Set.of("completed","original_retry_completed").contains(record.optString("phase")))newRepair();save();}
+        try{failureCode="suspected_corruption";failureMessage="原数据库疑似损坏；默认删除与自动重开已阻止";if(record==null||COMPLETED.contains(record.optString("phase")))newRepair();save();}
         catch(Exception unavailable){throw new IllegalStateException("corruption_record_unconfirmed",unavailable);}
     }
     public synchronized void failure(String code,String message,Integer observed)throws Exception {
         failureCode=code;failureMessage=message;observedSchema=observed;
-        if("suspected_corruption".equals(code)&&(record==null||Set.of("completed","original_retry_completed").contains(record.optString("phase")))){newRepair();save();}else refresh();
+        if("suspected_corruption".equals(code)&&(record==null||COMPLETED.contains(record.optString("phase")))){newRepair();save();}else refresh();
     }
-    /** A repeated bootstrap request only observes the recorded attempt; it never opens again. */
-    public synchronized boolean originalRetryRecorded(JSONObject input)throws Exception {
-        if(record==null)return false;String request=input.getString("requestId");dev.pocketengine.bootstrap.BootstrapStatus.request(request);
+    public synchronized boolean observesOriginalRetry(JSONObject input)throws Exception {
+        if(record==null||!input.has("repairId"))return false;
+        requireRecord(input);String request=input.getString("requestId");dev.pocketengine.bootstrap.BootstrapStatus.request(request);
         return duplicate("bootstrap.retry",request,input);
     }
-    /** Owner-selected reopening of the same preserved, non-corrupt original. No database replacement. */
-    public synchronized String prepareOriginalRetry(JSONObject input,BooleanSupplier owner)throws Exception {
-        long generation=exactGeneration(input);DatabaseFilePreservation.requireCurrent(owner);if(generation!=host.generation())throw new SecurityException("原启动代次已变化");
-        requireRecord(input);requireFingerprints(input);if(!originalRetryAvailable(record))throw new SecurityException("原数据库当前不能重新打开；只读取同一维护记录");
-        String request=input.getString("requestId");dev.pocketengine.bootstrap.BootstrapStatus.request(request);if(duplicate("bootstrap.retry",request,input))throw new SecurityException("原重新打开请求已记录，不能重放");
+    /** The original Application has closed its resources and will advance its one generation next. */
+    public synchronized OriginalReadPermit prepareOriginalRetry(JSONObject input,BooleanSupplier owner,long nextGeneration)throws Exception {
+        if(persistenceUnconfirmed)throw new SecurityException("原维护记录保存未确认，仅可查询");
+        long expected=exactGeneration(input);DatabaseFilePreservation.requireCurrent(owner);
+        if(expected!=host.generation()||nextGeneration!=Math.addExact(expected,1))throw new SecurityException("原启动代次已变化");
+        requireRecord(input);requireFingerprints(input);if(!eligibleOriginalRetry())throw new SecurityException("当前原维护记录不允许重新打开原库");
+        String request=input.getString("requestId");dev.pocketengine.bootstrap.BootstrapStatus.request(request);
+        if(duplicate("bootstrap.retry",request,input))throw new SecurityException("原重试已经记录，只查询原结果，不重新签发授权");
         verifyOriginalAndBackup();DatabaseFilePreservation.requireCurrent(owner);
-        OriginalRetry prepared=new OriginalRetry(this,generation,owner);remember("bootstrap.retry",request,input);review=null;record.remove("review");
-        record.put("phase","original_retry_prepared").put("originalRetryRequestId",request).put("originalRetryPreviousGeneration",generation);save();preparedOriginalRetry=prepared;return prepared.repair;
+        if(expected!=host.generation())throw new SecurityException("原启动代次已变化");
+        remember("bootstrap.retry",request,input);review=null;record.remove("review");
+        record.put("phase","original_retry_prepared").put("originalRetryRequestId",request).put("originalRetryGeneration",nextGeneration).put("originalRetryProcess",process);
+        save();return new OriginalReadPermit(this,request,nextGeneration,owner);
     }
-    /** Runs only on the existing bootstrap worker. The permit cannot survive a process or thread change. */
-    public void runPreparedOriginalRetry(String repairId,long bootstrapGeneration,BooleanSupplier owner,Runnable initialize)throws Exception {
-        OriginalRetry prepared;
-        synchronized(this){
-            prepared=preparedOriginalRetry;
-            if(prepared==null||prepared.started||prepared.owner!=owner||!prepared.repair.equals(repairId)||bootstrapGeneration!=Math.addExact(prepared.previousGeneration,1)||bootstrapGeneration!=host.generation()||ORIGINAL_RETRY.get()!=null)throw new SecurityException("原数据库重新打开许可不是当前一次原请求");
-            DatabaseFilePreservation.requireCurrent(owner);prepared.started=true;prepared.generation=bootstrapGeneration;
+    private synchronized void consumeOriginalRead(Context requested,JSONObject disk,OriginalReadPermit permit)throws Exception {
+        if(!database.equals(originalDatabase(requested))||!root.equals(maintenanceRoot(requested)))throw new SecurityException("原数据库重试授权不能跨存储使用");
+        requireOriginalPermit(permit,disk);DatabaseFilePreservation.requireCurrent(permit.owner);
+        verifyOriginalAndBackup();DatabaseFilePreservation.requireCurrent(permit.owner);
+        if(!permit.consumed.compareAndSet(false,true))throw new SecurityException("原数据库重试授权已经消费，不能打开第二个TaskStore");
+    }
+    private void requireOriginalPermit(OriginalReadPermit permit,JSONObject disk)throws Exception {
+        if(persistenceUnconfirmed||permit==null||permit.issuer!=this||!process.equals(permit.process)||permit.generation!=host.generation()||record==null||disk==null)throw new SecurityException("原数据库重试授权已失效");
+        for(JSONObject value:new JSONObject[]{record,disk}){
+            if(!"original_retry_prepared".equals(value.getString("phase"))||!permit.repair.equals(value.getString("repairId"))||!permit.source.equals(value.getString("sourceFingerprint"))||!permit.backup.equals(value.getString("backupFingerprint"))||!permit.request.equals(value.getString("originalRetryRequestId"))||permit.generation!=value.getLong("originalRetryGeneration")||!permit.process.equals(value.getString("originalRetryProcess"))||!value.getBoolean("preservationVerified")||"suspected_corruption".equals(value.getString("cause")))throw new SecurityException("原数据库重试记录与授权不相符");
         }
-        try{
-            DatabaseFilePreservation.requireCurrent(prepared::current);synchronized(this){verifyOriginalAndBackup();}
-            ORIGINAL_RETRY.set(prepared);initialize.run();
-            if(!prepared.completed)throw new IllegalStateException("original_retry_unconfirmed");
-        }catch(Exception|LinkageError failure){
-            if(!prepared.completed)synchronized(this){review=null;record.put("interruptedPhase",record.optString("phase")).put("phase","unknown").put("reasonCode","original_retry_unconfirmed");try{save();}catch(Exception uncertain){failure.addSuppressed(uncertain);}}
-            throw failure;
-        }finally{ORIGINAL_RETRY.remove();}
     }
-    /** Original initializer calls this after its normal readback, before it publishes ready. */
-    public synchronized void completeOriginalRetryIfPrepared()throws Exception {
-        OriginalRetry prepared=ORIGINAL_RETRY.get();if(prepared==null||prepared.completed)return;
-        if(!originalPermitMatches(prepared,record,database,state.getBaseFile())||!prepared.opened)throw new SecurityException("原数据库打开与当前维护许可不能核对");
-        DatabaseFilePreservation.verify(new File(new File(repairDirectory(),"preserved"),TaskStore.DATABASE_NAME),manifest());DatabaseFilePreservation.requireCurrent(prepared::current);
-        record.put("phase","original_retry_completed").put("completedAt",System.currentTimeMillis()).put("result",new JSONObject().put("mode","original_database").put("summary","已核对并重新打开同一原数据库；原保全副本仍保留，没有替换数据库或导入旧执行授权").put("replacedDatabase",false).put("restoredHistory",false).put("restoredExecutionAuthority",false));
-        record.remove("reasonCode");save();prepared.completed=true;
+    /** Called after the sole initializer's original recoverers; verify its actual store once more. */
+    public void completeOriginalRetry(OriginalReadPermit permit,TaskStore original)throws Exception {
+        synchronized(this){requireOriginalPermit(permit,readRecord(state));DatabaseFilePreservation.requireCurrent(permit.owner);if(!permit.consumed.get()||original==null)throw new SecurityException("原数据库尚未由本次唯一初始化读取");}
+        // Do not hold Maintenance while taking Tasks: a SQLite corruption callback takes the reverse path.
+        original.verifyBootstrapReadback();
+        synchronized(this){
+            requireOriginalPermit(permit,readRecord(state));DatabaseFilePreservation.requireCurrent(permit.owner);
+            DatabaseFilePreservation.verify(new File(new File(repairDirectory(),"preserved"),TaskStore.DATABASE_NAME),manifest());DatabaseFilePreservation.requireCurrent(permit.owner);
+            record.put("phase","original_retry_completed").put("completedAt",System.currentTimeMillis()).put("result",new JSONObject().put("mode","original_database").put("summary","已重新核对原数据库并完成原任务恢复；未切换数据库或导入保全副本").put("originalRecoveryCompleted",true).put("replacedOriginalDatabase",false).put("preservedCopyRetained",true));
+            record.remove("reasonCode");save();
+        }
     }
-    private static boolean originalRetryAvailable(JSONObject value){return value!=null&&"preserved".equals(value.optString("phase"))&&!"suspected_corruption".equals(value.optString("cause"))&&Boolean.TRUE.equals(value.opt("preservationVerified"));}
+    /** Failed or abandoned retries remain query-only; a cold process never re-mints the permit. */
+    public synchronized void failOriginalRetry(OriginalReadPermit permit,String code)throws Exception {
+        if(permit==null||permit.issuer!=this||record==null||!permit.repair.equals(record.optString("repairId"))||!permit.request.equals(record.optString("originalRetryRequestId")))return;
+        if(!Set.of("original_retry_prepared","original_retry_completed").contains(record.optString("phase")))return;
+        record.put("interruptedPhase",record.getString("phase")).put("phase","unknown").put("reasonCode",code);review=null;save();
+    }
+    private boolean eligibleOriginalRetry(){
+        return !persistenceUnconfirmed&&record!=null&&"preserved".equals(record.optString("phase"))&&record.optBoolean("preservationVerified")&&!"suspected_corruption".equals(record.optString("cause"))&&(record.isNull("observedSchema")?!"newer_schema".equals(record.optString("cause")):record.optInt("observedSchema",Integer.MAX_VALUE)<=TaskStore.DATABASE_SCHEMA);
+    }
     private void newRepair()throws Exception {
         if(record!=null)archiveRecord();
         record=new JSONObject().put("format",FORMAT).put("repairId",UUID.randomUUID().toString()).put("phase","detected").put("cause",failureCode)
-            .put("observedSchema",observedSchema==null?JSONObject.NULL:observedSchema).put("sourceFingerprint","").put("backupFingerprint","")
+            .put("installedVersion",host.installedVersion()).put("requiredSchema",TaskStore.DATABASE_SCHEMA).put("observedSchema",observedSchema==null?JSONObject.NULL:observedSchema).put("sourceFingerprint","").put("backupFingerprint","")
             .put("preservationVerified",false).put("files",new JSONArray()).put("createdAt",System.currentTimeMillis()).put("requests",new JSONObject());review=null;
     }
     public JSONObject command(String command,JSONObject input,BooleanSupplier owner)throws Exception {
@@ -136,9 +163,10 @@ public final class TaskDatabaseMaintenance {
             if(shown==null||shown.isNull("repairId")){if(!input.optString("repairId").isEmpty())throw new SecurityException("原维护编号未找到；不能用空状态代替未知结果");return shown;}
             if(!shown.getString("repairId").equals(input.getString("repairId")))throw new SecurityException("查询编号不是当前原维护记录；未用另一记录替代未知结果");
             JSONObject observed=readPhysicalState(shown);
-            synchronized(this){if(visible.equals(basis))visible=observed.toString();return snapshot();}
+            synchronized(this){if(!visible.equals(basis))throw new SecurityException("原维护状态在读取期间已变化，请按同一编号重新核对");visible=observed.toString();return snapshot();}
         }
         synchronized(this){
+            if(persistenceUnconfirmed)throw new SecurityException("原维护记录保存未确认，本进程仅可查询，不重新派发");
             long generation=exactGeneration(input);DatabaseFilePreservation.requireCurrent(owner);if(generation!=host.generation())throw new SecurityException("原启动代次已变化");
             String request=input.getString("requestId");dev.pocketengine.bootstrap.BootstrapStatus.request(request);
             if(!Set.of("repair.preserve","repair.review","repair.confirm","repair.discard").contains(command))throw new SecurityException("不是原数据库维护命令");
@@ -156,17 +184,21 @@ public final class TaskDatabaseMaintenance {
         }
     }
     private void preserve(JSONObject input,BooleanSupplier current,String request)throws Exception {
-        if(record==null){if(!input.has("repairId")||!input.isNull("repairId"))throw new SecurityException("保全必须核对当前尚未创建的维护身份");newRepair();}
-        else requireRecord(input);
+        if(record==null){
+            if(!input.has("repairId")||!input.isNull("repairId"))throw new SecurityException("保全必须核对当前尚未创建的维护身份");
+            if(!hasOriginalFiles(database))throw new IllegalStateException("没有原数据库文件可保全；未新建维护记录或将空安装当成损坏");newRepair();
+        }else requireRecord(input);
         if(!Set.of("detected","quiescence_unconfirmed").contains(record.getString("phase")))throw new SecurityException("原保全动作已经记录；请只读取，不重新复制");
         if("quiescence_unconfirmed".equals(record.optString("phase"))&&process.equals(record.optString("uncertainProcess")))throw new SecurityException("原资源停止未确认；请关闭并重新打开应用后查询此记录");
         remember("repair.preserve",request,input);record.put("phase","quiescence_unconfirmed").put("uncertainProcess",process);save();
         if(!host.quiesce()){record.put("reasonCode","quiescence_unconfirmed");save();return;}
         DatabaseFilePreservation.requireCurrent(current);DatabaseFilePreservation.Snapshot before=DatabaseFilePreservation.inspect(database,current);
-        if(before.members().stream().noneMatch(member->member.name().equals(TaskStore.DATABASE_NAME)&&member.exists()))throw new IllegalStateException("原数据库文件不存在，不能将缺失当作损坏重置");
+        if(before.members().stream().noneMatch(DatabaseFilePreservation.Member::exists))throw new IllegalStateException("原数据库文件集合不存在，不能将缺失当作损坏重置");
+        Integer headerSchema=dev.pocketengine.bootstrap.BootstrapChecks.observedSchema(database);
         record.put("sourceFingerprint",before.fingerprint()).put("files",before.files()).put("phase","preserving")
+            .put("sourceHeaderSchema",headerSchema==null?JSONObject.NULL:headerSchema)
             .put("consistency",new JSONObject().put("quiescence","original_business_handles_closed_before_capture").put("sqliteLogicalIntegrity","not_claimed").put("sourceBefore",before.fingerprint()).put("sourceAfter",JSONObject.NULL).put("preCorruptionCallbackBytes","not_claimed"))
-            .put("originalDirectoryReferences",new JSONArray(new String[]{"files/artifacts","files/tasks.json","files/assistant","files/workspace","files/memory"}));save();
+            .put("originalDirectoryReferences",originalDirectoryReferences());save();
         try {
             File directory=repairDirectory(),backup=new File(directory,"preserved");DatabaseFilePreservation.Snapshot copy=DatabaseFilePreservation.preserve(database,backup,before,current);
             JSONObject consistency=record.getJSONObject("consistency");consistency.put("sourceAfter",DatabaseFilePreservation.inspect(database).fingerprint()).put("copiesSha256AndLengthVerified",true);
@@ -253,7 +285,7 @@ public final class TaskDatabaseMaintenance {
                 validateRecord(value);identities.add(value.getString("repairId"));if(selected==null)selected=value;
             }catch(Exception failure){uncertain=true;if(invalid==null)invalid=failure;else invalid.addSuppressed(failure);}
         }
-        if(!found)return null;if(selected==null)throw new java.io.IOException("maintenance_record_unreadable",invalid);
+        if(!found)return null;if(selected==null){if(invalid instanceof SecurityException rejected)throw rejected;throw new java.io.IOException("maintenance_record_unreadable",invalid);}
         if(identities.size()!=1)throw new SecurityException("maintenance_record_repair_identity_ambiguous");
         // AtomicFile.openRead may delete .new or rename .bak. Cold maintenance observes them
         // without mutation; any interrupted record commit remains query-only for this repair.
@@ -267,9 +299,14 @@ public final class TaskDatabaseMaintenance {
         if(!value.getString("sourceFingerprint").isEmpty())DatabaseFilePreservation.fromManifest(TaskStore.DATABASE_NAME,value.getJSONArray("files"),value.getString("sourceFingerprint"));
         else if(value.getJSONArray("files").length()!=0)throw new SecurityException("原保全清单缺少指纹");
         if(value.getBoolean("preservationVerified")&&(!value.getString("sourceFingerprint").equals(value.getString("backupFingerprint"))||value.getString("backupFingerprint").isEmpty()))throw new SecurityException("原保全指纹不可核对");
+            if(value.optBoolean("preservationVerified")){JSONArray files=value.getJSONArray("files");for(int i=0;i<files.length();i++){JSONObject row=files.getJSONObject(i);if(!Boolean.TRUE.equals(row.opt("verified"))||!(row.opt("copiedLength") instanceof Long||row.opt("copiedLength") instanceof Integer)||row.getLong("copiedLength")!=row.getLong("length")||!row.getString("sha256").equals(row.optString("copiedSha256")))throw new SecurityException("原副本校验清单不可核对");}}
         if(value.has("stagingFiles"))DatabaseFilePreservation.fromManifest(TaskStore.DATABASE_NAME,value.getJSONArray("stagingFiles"),value.getString("stagingFingerprint"));
         if("completed".equals(value.getString("phase"))&&(!value.getBoolean("preservationVerified")||!value.has("stagingFiles")||!Set.of("empty_database","verified_copy").contains(value.getString("mode"))||!Boolean.FALSE.equals(value.getJSONObject("result").get("executionEnabled"))))throw new SecurityException("原维护完成证据不可核对");
-        if("original_retry_completed".equals(value.getString("phase"))&&(!value.getBoolean("preservationVerified")||!"original_database".equals(value.getJSONObject("result").getString("mode"))||!Boolean.FALSE.equals(value.getJSONObject("result").get("replacedDatabase"))))throw new SecurityException("原数据库重新打开完成证据不可核对");
+            String phase=value.getString("phase");
+            if(Set.of("preserved","reviewing","review_failed","staged","switching","verifying","completed","original_retry_prepared","original_retry_completed").contains(phase)&&!Boolean.TRUE.equals(value.opt("preservationVerified")))throw new SecurityException("原维护阶段没有已核保全身份");
+            if("completed".equals(phase)&&(!value.has("stagingFiles")||!Set.of("empty_database","verified_copy").contains(value.getString("mode"))||!value.getString("mode").equals(value.getJSONObject("result").getString("mode"))))throw new SecurityException("原切换完成记录不可核对");
+            if(phase.startsWith("original_retry_")){dev.pocketengine.bootstrap.BootstrapStatus.request(value.getString("originalRetryRequestId"));if(!(value.get("originalRetryGeneration") instanceof Long||value.get("originalRetryGeneration") instanceof Integer)||value.getLong("originalRetryGeneration")<=0||!value.getString("originalRetryProcess").matches("[a-f0-9-]{36}")||"suspected_corruption".equals(value.getString("cause")))throw new SecurityException("原库重试身份不可核对");if("original_retry_completed".equals(phase)&&(!"original_database".equals(value.getJSONObject("result").getString("mode"))||!Boolean.TRUE.equals(value.getJSONObject("result").opt("originalRecoveryCompleted"))))throw new SecurityException("原库恢复完成记录不可核对");}
+        if("original_retry_completed".equals(phase)&&!Boolean.FALSE.equals(value.getJSONObject("result").get("replacedOriginalDatabase")))throw new SecurityException("原数据库重新打开完成证据不可核对");
     }
     private static void atomicWrite(AtomicFile file,JSONObject value)throws Exception {
         byte[] bytes=value.toString().getBytes(StandardCharsets.UTF_8);if(bytes.length>1048576)throw new SecurityException("maintenance_record_size_unconfirmed");
@@ -280,8 +317,9 @@ public final class TaskDatabaseMaintenance {
         catch(Exception failure){if(output!=null)file.failWrite(output);throw failure;}
     }
     private void save()throws Exception {
+        if(persistenceUnconfirmed)throw new java.io.IOException("maintenance_record_persistence_unconfirmed");
         try{ensureRoot();record.put("updatedAt",System.currentTimeMillis());atomicWrite(state,record);DatabaseFilePreservation.syncDirectory(root.toPath());refresh();}
-        catch(Exception uncertain){review=null;record.put("interruptedPhase",record.optString("phase")).put("phase","unknown").put("reasonCode","maintenance_record_commit_unconfirmed");refresh();throw uncertain;}
+        catch(Exception unavailable){persistenceUnconfirmed=true;review=null;JSONObject shown=new JSONObject(record.toString());shown.remove("requests");shown.remove("uncertainProcess");shown.remove("originalRetryProcess");shown.put("interruptedPhase",record.optString("phase")).put("phase","unknown").put("review",JSONObject.NULL).put("allowedCommands",new JSONArray().put("repair.read")).put("reviewModes",new JSONArray()).put("originalRetryAvailable",false).put("reason",reason("maintenance_record_persistence_unconfirmed","原维护记录保存结果未确认；本进程不重新复制、切换或重开业务库","保留同一维护编号，重新打开应用后仅核对原记录和文件"));visible=shown.toString();throw unavailable;}
     }
     private void archiveRecord()throws Exception {File directory=repairDirectory();atomicWrite(new AtomicFile(new File(directory,"last-record.json")),record);}
     private boolean duplicate(String command,String request,JSONObject input)throws Exception {JSONObject previous=record.getJSONObject("requests").optJSONObject(request);if(previous==null)return false;if(!command.equals(previous.getString("command"))||!payloadHash(input).equals(previous.getString("payload")))throw new SecurityException("同一请求编号不能改为其他维护操作");return true;}
@@ -309,24 +347,29 @@ public final class TaskDatabaseMaintenance {
         actual.put("preservedMatchesCaptured",preserved).put("liveMatchesCaptured",!expected.isEmpty()&&expected.equals(actual.getJSONObject("original").optString("fingerprint")))
             .put("liveMatchesStaging",!shown.optString("stagingFingerprint").isEmpty()&&shown.getString("stagingFingerprint").equals(actual.getJSONObject("original").optString("fingerprint")));
         shown.put("currentReadback",actual);
-        if(shown.optBoolean("preservationVerified")&&!preserved){shown.put("preservationVerified",false).put("originalRetryAvailable",false).put("allowedCommands",new JSONArray().put("repair.read")).put("reviewModes",new JSONArray()).put("review",JSONObject.NULL).put("reason",reason("preserved_bytes_unconfirmed","原保全副本的当前字节未通过核对，替换保持关闭","保留同一repairId并核对私有原件，不重复确认"));}
+        if(!preserved||!actual.getBoolean("liveMatchesCaptured"))shown.put("originalRetryAvailable",false);
+        if(shown.optBoolean("preservationVerified")&&!preserved){shown.put("preservationVerified",false).put("allowedCommands",new JSONArray().put("repair.read")).put("reviewModes",new JSONArray()).put("review",JSONObject.NULL).put("reason",reason("preserved_bytes_unconfirmed","原保全副本的当前字节未通过核对，替换保持关闭","保留同一repairId并核对私有原件，不重复确认"));}
         return shown;
     }
     private static JSONObject fileObservation(File file)throws Exception {
-        try{if(DatabaseFilePreservation.optionalAttributes(file.toPath().getParent())==null)return new JSONObject().put("state","absent");var bytes=DatabaseFilePreservation.inspect(file);return new JSONObject().put("state",Files.isRegularFile(file.toPath(),LinkOption.NOFOLLOW_LINKS)?"present":"main_absent").put("fingerprint",bytes.fingerprint()).put("files",bytes.files());}
+        if(!Files.isDirectory(file.toPath().getParent(),LinkOption.NOFOLLOW_LINKS))return new JSONObject().put("state","absent");
+        try{var bytes=DatabaseFilePreservation.inspect(file);return new JSONObject().put("state",Files.isRegularFile(file.toPath(),LinkOption.NOFOLLOW_LINKS)?"present":"main_absent").put("fingerprint",bytes.fingerprint()).put("files",bytes.files());}
         catch(Exception unavailable){return new JSONObject().put("state","unconfirmed");}
     }
+    private JSONArray originalDirectoryReferences()throws Exception {
+        JSONArray references=new JSONArray();for(String name:new String[]{"artifacts","tasks.json","private_conversations.json","workspace","workspace-artifacts","memory","skills"}){File original=new File(context.getFilesDir(),name);references.put(new JSONObject().put("reference","files/"+name).put("exists",Files.exists(original.toPath(),LinkOption.NOFOLLOW_LINKS)).put("copiedByDatabasePreservation",false));}return references;
+    }
     private void refresh()throws Exception {
+        if(persistenceUnconfirmed)return;
         if(record==null){visible=new JSONObject().put("repairId",JSONObject.NULL).put("phase","not_started").put("sourceFingerprint","").put("backupFingerprint","").put("preservationVerified",false).put("originalRetryAvailable",false).put("files",new JSONArray()).put("review",JSONObject.NULL).put("allowedCommands",new JSONArray(new String[]{"repair.read","repair.preserve"})).put("reason",reason(failureCode,failureMessage,"可先保全本机原件；保全不会恢复或清空历史")).toString();return;}
-        JSONObject shown=new JSONObject(record.toString());shown.remove("requests");shown.remove("uncertainProcess");JSONArray allowed=new JSONArray().put("repair.read");String phase=record.getString("phase");
+        JSONObject shown=new JSONObject(record.toString());shown.remove("requests");shown.remove("uncertainProcess");shown.remove("originalRetryProcess");JSONArray allowed=new JSONArray().put("repair.read");String phase=record.getString("phase");
         if(phase.equals("detected")||phase.equals("quiescence_unconfirmed")&&!process.equals(record.optString("uncertainProcess")))allowed.put("repair.preserve");
         if(Set.of("preserved","staged","review_failed").contains(phase)&&"suspected_corruption".equals(record.optString("cause"))&&record.optBoolean("preservationVerified"))allowed.put("repair.review");
         if(phase.equals("staged")&&review!=null&&review.current(host.generation()))allowed.put("repair.confirm");
         if(Set.of("detected","preserved","staged","review_failed","preservation_failed","quiescence_unconfirmed").contains(phase))allowed.put("repair.discard");
-        String explanation=INCOMPLETE.contains(phase)?"原维护动作尚未确认完成，保留所有原件，仅查询同一记录":phase.equals("quiescence_unconfirmed")?"原资源停止尚未证实，未复制或替换数据库":phase.equals("preservation_failed")?"保全未完成验证，替换保持禁用":phase.equals("review_failed")?reviewFailureMessage(record.optString("reasonCode")):Set.of("completed","original_retry_completed").contains(phase)?record.getJSONObject("result").getString("summary"):"原数据库与保全身份可供本机主人核对";
-        shown.put("originalRetryAvailable",originalRetryAvailable(record));
+        String explanation=INCOMPLETE.contains(phase)?"原维护动作尚未确认完成，保留所有原件，仅查询同一记录":phase.equals("quiescence_unconfirmed")?"原资源停止尚未证实，未复制或替换数据库":phase.equals("preservation_failed")?"保全未完成验证，替换保持禁用":phase.equals("review_failed")?reviewFailureMessage(record.optString("reasonCode")):COMPLETED.contains(phase)?record.getJSONObject("result").getString("summary"):"原数据库与保全身份可供本机主人核对";
         shown.put("reviewModes",Set.of("preserved","staged","review_failed").contains(phase)&&"suspected_corruption".equals(record.optString("cause"))&&record.optBoolean("preservationVerified")?new JSONArray(new String[]{"empty_database","verified_copy"}):new JSONArray());
-        shown.put("allowedCommands",allowed).put("review",review==null?JSONObject.NULL:record.opt("review")).put("reason",reason(record.optString("reasonCode",phase),explanation,INCOMPLETE.contains(phase)?"请保留原repairId并核对原文件状态；不要重复确认":phase.equals("completed")?"明确重试启动；原任务恢复器会重新读取，执行仍停用":"按当前可用操作继续，离开窗口后需重新审阅"));visible=shown.toString();
+        shown.put("originalRetryAvailable",eligibleOriginalRetry()).put("allowedCommands",allowed).put("review",review==null?JSONObject.NULL:record.opt("review")).put("reason",reason(record.optString("reasonCode",phase),explanation,INCOMPLETE.contains(phase)?"请保留原repairId并核对原文件状态；不要重复确认":phase.equals("completed")?"明确重试启动；原任务恢复器会重新读取，执行仍停用":phase.equals("original_retry_completed")?"原恢复已核对；仅由当前唯一初始化发布业务就绪":eligibleOriginalRetry()?"可明确重新核对原数据库，不切换或导入副本":"按当前可用操作继续，离开窗口后需重新审阅"));visible=shown.toString();
     }
     private static JSONObject reason(String code,String message,String next)throws Exception{return new JSONObject().put("code",code).put("message",message).put("nextStep",next);}
 }

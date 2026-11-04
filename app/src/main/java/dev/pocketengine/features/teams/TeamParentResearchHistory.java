@@ -28,6 +28,7 @@ public final class TeamParentResearchHistory {
     }
     public static RunJournal journal(RunJournal original,RunControl.AuthorityCheck current){
         return new RunJournal(){
+            public dev.pocketengine.core.ExecutionPlanning planning()throws Exception{return original.planning();}
             public dev.pocketengine.runtime.context.CompactionJournal compaction(){return original.compaction();}
             public JSONObject restore()throws Exception{return original.restore();}
             public void checkpoint(JSONArray history,int steps,JSONObject observation)throws Exception{original.checkpoint(history,steps,observation);}

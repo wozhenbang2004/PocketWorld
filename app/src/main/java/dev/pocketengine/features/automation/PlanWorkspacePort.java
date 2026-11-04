@@ -24,6 +24,7 @@ public final class PlanWorkspacePort implements CapabilityPort {
     @Override public JSONArray tools()throws Exception{return filter(original.tools());}
     @Override public boolean supports(String name){return TOOLS.contains(name)&&original.supports(name);}
     @Override public boolean sideEffecting(String name){return supports(name)&&original.sideEffecting(name);}
+    @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{return supports(name)?original.planningAccess(name,arguments==null?null:scoped(name,arguments)):dev.pocketengine.core.ExecutionPlanning.Access.DENY;}
     private JSONObject scoped(String name,JSONObject args)throws Exception{
         if(!supports(name))throw new SecurityException("此目标仅准备了所选项目的文件能力");JSONObject checked=new JSONObject(args.toString());checked.remove("_hostOperationId");
         if(name.equals("workspace_read_artifact")||name.equals("workspace_diff_artifact")){

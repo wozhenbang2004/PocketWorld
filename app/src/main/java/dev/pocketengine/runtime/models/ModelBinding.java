@@ -11,8 +11,8 @@ import java.util.Objects;
 public record ModelBinding(String connectionId, String providerId, Protocol protocol, Format format,
                            URI modelsEndpoint, String credentialId, long credentialRevision,
                            String installationId, long installationRevision, boolean cleartextApproved) {
-    public enum Protocol { OPENAI_CHAT, OPENAI_RESPONSES, ANTHROPIC, GEMINI }
-    public enum Format { OPENAI, ANTHROPIC, GEMINI, OPENROUTER }
+    public enum Protocol { OPENAI_CHAT, OPENAI_RESPONSES, ANTHROPIC, GEMINI, BEDROCK_ANTHROPIC }
+    public enum Format { OPENAI, ANTHROPIC, GEMINI, OPENROUTER, NONE }
 
     public ModelBinding {
         connectionId = identity(connectionId);
@@ -27,9 +27,13 @@ public record ModelBinding(String connectionId, String providerId, Protocol prot
             case ANTHROPIC -> protocol == Protocol.ANTHROPIC;
             case GEMINI -> protocol == Protocol.GEMINI;
             case OPENROUTER -> protocol == Protocol.OPENAI_CHAT;
+            case NONE -> protocol == Protocol.BEDROCK_ANTHROPIC;
         };
         if (!compatible) throw new IllegalArgumentException("catalog_protocol_mismatch");
-        modelsEndpoint = endpoint(modelsEndpoint, cleartextApproved);
+        if (format == Format.NONE) {
+            if (modelsEndpoint == null || !modelsEndpoint.toString().isEmpty() || cleartextApproved)
+                throw new IllegalArgumentException("bedrock_identity_has_no_catalog_endpoint");
+        } else modelsEndpoint = endpoint(modelsEndpoint, cleartextApproved);
     }
 
     private static String identity(String value) {

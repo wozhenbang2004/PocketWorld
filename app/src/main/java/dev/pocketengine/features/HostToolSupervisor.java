@@ -2,6 +2,7 @@ package dev.pocketengine.features;
 
 import dev.pocketengine.core.CapabilityPort;
 import dev.pocketengine.core.RunControl;
+import dev.pocketengine.core.ScopedToolCatalog;
 import dev.pocketengine.features.plugins.PluginRules;
 import dev.pocketengine.features.plugins.PluginsModule;
 import dev.pocketengine.features.skills.SkillsModule;
@@ -154,11 +155,36 @@ public final class HostToolSupervisor implements CapabilityPort {
         host.retainWorkingMemory(working,privateScope().put("taskId",taskId).put("runId",runId).put("epoch",epoch),original,workingPause);var retained=working;workingCancellation=()->host.releaseWorkingMemory(retained);original.onCancel(workingCancellation);String text=noteText(goal);if(!text.isEmpty())working.replace(1,new JSONArray().put(new JSONObject().put("kind","plan").put("text",text)));
     }
     @Override public void admitCapabilities(dev.pocketengine.core.CapabilitySnapshot snapshot,RunControl original)throws Exception{
-        tasks.checkExtensionRun(taskId,runId,epoch,original);snapshot.current(taskId,runId,epoch,original);
+        tasks.checkExtensionRun(taskId,runId,epoch,original);Set<String> candidates=snapshot.current(taskId,runId,epoch,original);
         // tools() may later refresh this mutable route map. Retain the originally admitted
         // immutable presets so a same-name replacement cannot refresh a waiting Skill review.
         Map<String,Tool> pinned=Map.copyOf(routes);
-        snapshot.retainRouteCheck(()->{for(var route:pinned.entrySet())if(route.getValue().preset!=null&&!pluginCurrent(route.getKey(),route.getValue()))throw new SecurityException("原请求的插件安装、端点、版本或授权已变化，请重新审阅");});
+        Map<String,ScopedToolCatalog.SourcePin> sources=new LinkedHashMap<>();
+        Map<String,EngineModule> modules=new LinkedHashMap<>();Map<String,String> definitions=new LinkedHashMap<>();
+        for(var route:pinned.entrySet()){
+            String name=route.getKey();Tool tool=route.getValue();if(!candidates.contains(name))continue;
+            EngineModule module=host.module(tool.feature);if(module==null)throw new SecurityException("原工具模块已不可用");modules.put(tool.feature,module);
+            if(tool.preset!=null){
+                sources.put(name,new ScopedToolCatalog.SourcePin(ScopedToolCatalog.SourceKind.PLUGIN,
+                        tool.preset.getString("expectedInstallationId"),tool.preset.getString("expectedVersion"),tool.preset.getString("expectedExecutionIdentity")));
+            }else if(nativeRoutes.get(name)==tool){
+                String definition=ScopedToolCatalog.fingerprint(tool.definition);definitions.put(name,definition);
+                JSONObject identity=new JSONObject().put("owner",HostToolSupervisor.class.getName()).put("module",module.getClass().getName())
+                        .put("feature",tool.feature).put("command",tool.command).put("toolName",name).put("write",tool.write).put("definitionHash",definition);
+                // This is the fixed native route contract version, not an invented APK installation.
+                sources.put(name,new ScopedToolCatalog.SourcePin(ScopedToolCatalog.SourceKind.NATIVE,
+                        "native:host:"+tool.feature+":"+name,"host-route-v1",ScopedToolCatalog.fingerprint(identity)));
+            }
+        }
+        snapshot.retainSources(sources);
+        snapshot.retainRouteCheck(()->{
+            for(var module:modules.entrySet())if(host.module(module.getKey())!=module.getValue())throw new SecurityException("原工具模块身份已变化");
+            for(var definition:definitions.entrySet()){
+                Tool tool=pinned.get(definition.getKey());
+                if(nativeRoutes.get(definition.getKey())!=tool||!definition.getValue().equals(ScopedToolCatalog.fingerprint(tool.definition)))throw new SecurityException("原生工具定义已变化");
+            }
+            for(var route:pinned.entrySet())if(route.getValue().preset!=null&&!pluginCurrent(route.getKey(),route.getValue()))throw new SecurityException("原请求的插件安装、端点、版本或授权已变化，请重新审阅");
+        });
         if(workProfile!=null)snapshot.retainRouteCheck(workProfile::checkBindingCurrent);finalCapabilities=snapshot;
     }
     @Override public void afterTool(String name,JSONObject arguments,JSONObject receipt,RunControl original)throws Exception{
@@ -379,7 +405,27 @@ public final class HostToolSupervisor implements CapabilityPort {
                     &&admitted.write==!row.optString("effect","write").equals("read")&&TaskStore.capabilityFingerprint(admitted.schema).equals(TaskStore.capabilityFingerprint(row.getJSONObject("schema")));
         }return false;
     }
+    @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{
+        if(name!=null&&name.matches("device_invoke_tool|device_delegate_goal|device_operation_get")&&nativeDeviceRoutes!=null){refreshNativeDeviceRoutes();return nativeDevicePort==null?dev.pocketengine.core.ExecutionPlanning.Access.DENY:nativeDevicePort.planningAccess(name,arguments);}
+        Tool tool=routes.get(name);
+        // Only the actual fixed native route can make this statement. Plugin effect/read hints cannot.
+        if(tool==null||tool!=nativeRoutes.get(name)||tool.preset!=null)return dev.pocketengine.core.ExecutionPlanning.Access.DENY;
+        boolean read=switch(tool.feature){
+            case "memory"->Set.of("search","recall","$memory_draft_sources").contains(tool.command);
+            case "workspace"->Set.of("$projects","list","read","history","diff","listArtifacts","readArtifact","diffArtifact").contains(tool.command);
+            case "remote"->Set.of("$profiles","environments","listJobs","getJob","readFile").contains(tool.command);
+            case "skills"->Set.of("$skills_list","$skills_read","$skills_draft_sources").contains(tool.command);
+            case "automation"->"$schedule_list".equals(tool.command);
+            case "attachments"->Set.of("list","readText").contains(tool.command);
+            case "teams"->"$teams".equals(tool.command);
+            default->false;
+        };
+        if(!read)return dev.pocketengine.core.ExecutionPlanning.Access.DENY;
+        if(arguments!=null){JSONObject checked=new JSONObject(arguments.toString());checked.remove("_hostOperationId");validate(name,checked);}
+        return dev.pocketengine.core.ExecutionPlanning.Access.READ;
+    }
     @Override public JSONObject execute(String name,JSONObject arguments,RunControl control)throws Exception{
+        tasks.requireExecutionPlanningAccess(taskId,runId,epoch,name,arguments,control,planningAccess(name,arguments));
         var profileCheck=workProfile==null?null:workProfile.forTool(name,arguments,control);if(name!=null&&name.matches("device_invoke_tool|device_delegate_goal|device_operation_get")&&nativeDeviceRoutes!=null){refreshNativeDeviceRoutes();if(nativeDevicePort==null||!nativeDevicePort.supports(name))throw new CapabilityPort.Unavailable();return nativeDevicePort.execute(name,arguments,control);}
         Tool tool=routes.get(name);if(tool==null)throw new SecurityException("本任务没有该工具路由");
         java.util.Objects.requireNonNull(control).check();tasks.checkCapability(taskId,runId,epoch,name,control);

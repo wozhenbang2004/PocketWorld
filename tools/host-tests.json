@@ -1,4 +1,30 @@
 {
+  "phone-team-sessions": {
+    "class": "dev.pocketengine.BackgroundPhoneRunTest",
+    "additionalClasses": [
+      "dev.pocketengine.core.ExecutionResourcesTest",
+      "dev.pocketengine.store.LocalPhoneLeaseIsolationNativeTest",
+      "dev.pocketengine.PhoneNotificationControlsTest",
+      "dev.pocketengine.PhoneRunServiceTest",
+      "dev.pocketengine.phone.PhoneOwnerControlsTest",
+      "dev.pocketengine.displayhelper.DisplaySessionRegistryTest",
+      "dev.pocketengine.phone.display.DisplayModuleParallelTest",
+      "dev.pocketengine.phone.display.PhoneParallelCapabilitiesTest",
+      "dev.pocketengine.phone.display.DisplayModuleTest",
+      "dev.pocketengine.features.devices.DeviceGoalPhonePortTest",
+      "dev.pocketengine.features.teams.TeamPhoneBudgetTest",
+      "dev.pocketengine.features.devices.DevicePhoneGoalReadinessTest",
+      "dev.pocketengine.features.teams.TeamPhoneOriginalHostJourneyTest",
+      "dev.pocketengine.features.devices.DeviceControlDispatchIsolationTest",
+      "dev.pocketengine.features.devices.DeviceProtocolTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest"
+    ],
+    "robolectric": true,
+    "description": "Bounded original App/Service/TaskStore multi-run lifecycle, per-display routing, exact phone scope, team allocations and previous notification/display regressions. Native frame/model responses are explicit test boundaries; no physical Android, APK, WAN or visual acceptance."
+  },
   "conversation-phone-handoff": {
     "class": "dev.pocketengine.ConversationPhoneStartNativeTest",
     "additionalClasses": [
@@ -771,7 +797,7 @@
       "dev.pocketengine.runtime.usage.ConnectionInferenceObservationsTest"
     ],
     "helpers": [],
-    "description": "Two exact original Aion observation data classes, 22 tests: scoped Companion facts/catalog and committed provider cache counters, explicit unknowns and no execution/apply/billing authority. No native factory, real CLI/account or device acceptance."
+    "description": "Two exact original Aion observation data classes, 30 tests: scoped Companion facts/catalog, fixed Gemini ACP source and complete original permission observations, and committed provider cache counters. Explicit unknowns and no execution/apply/billing authority. No native factory, real CLI/account or device acceptance."
   },
   "aion-team-templates": {
     "class": "dev.pocketengine.features.teams.TeamRoleCatalogReadTest",
@@ -805,7 +831,8 @@
       "dev.pocketengine.ui.PhoneAudioOwnerUiNativeTest",
       "dev.pocketengine.phone.PhoneDiagnosticReportTest",
       "dev.pocketengine.phone.AndroidPhoneDiagnosticsNativeTest",
-      "dev.pocketengine.ui.PhoneDiagnosticsOwnerNativeTest"
+      "dev.pocketengine.ui.PhoneDiagnosticsOwnerNativeTest",
+      "dev.pocketengine.phone.display.OwnerTaskAudioTest"
     ],
     "helpers": [],
     "robolectric": true,
@@ -900,12 +927,16 @@
     "class": "dev.pocketengine.runtime.RepeatToolNoticeTest",
     "additionalClasses": [
       "dev.pocketengine.runtime.RepeatToolRunnerTest",
-      "dev.pocketengine.runtime.RunProgressCheckpointNativeTest"
+      "dev.pocketengine.runtime.RunProgressCheckpointNativeTest",
+      "dev.pocketengine.runtime.ExecutionPlanningRunnerTest",
+      "dev.pocketengine.core.ExecutionPlanTest",
+      "dev.pocketengine.store.TaskExecutionScopeTest",
+      "dev.pocketengine.features.capabilities.PlanningCapabilityPortTest"
     ],
     "helpers": [
       "dev.pocketengine.testutil.HttpServer"
     ],
-    "description": "Original Runner persisted, bounded failed-round and short-cycle guard: real pre-dispatch refusal coverage, one warning, terminal handoff, original SQLite/compaction checkpoint retention and cold continuation without new allowance. Unknown effects retain original reconciliation; pagination, source changes and legitimate polling do not become repeated failures. No extra inference, replay, grant or second execution ledger. Android/device acceptance remains separately evidenced.",
+    "description": "Original Runner persisted, bounded failed-round and short-cycle guard: real pre-dispatch refusal coverage, one warning, terminal handoff, original SQLite/compaction checkpoint retention and cold continuation without new allowance. Planning scope/proposal values and final native capability filtering; actual Runner loopback journeys reject forged writes, charge original reads, retain phase requests and stop after a proposal or stale source. Unknown effects retain original reconciliation; pagination, source changes and legitimate polling do not become repeated failures. No extra inference, replay, grant or second execution ledger. Android/device acceptance remains separately evidenced.",
     "robolectric": true
   },
   "runner-budget-stream": {
@@ -975,7 +1006,7 @@
       "dev.pocketengine.features.local.runtime.RuntimeContractsTest"
     ],
     "native": true,
-    "description": "Actual Linux JNI ordinary protocol3 bounded read-only original-group drain and original ManagedProcessJobs/preparation leases: controlled orphan reap settles, beyond-deadline held member keeps its actual lease and unknown receipt across cold reads, cancel and close. Isolated real competing waitpid fixtures compare the pinned historical protocol2 nonconvergence with current lost-wait convergence before/after observed exit; lost identity forbids later signals and release. Exact historical exit7 contracts preserved; failed lease close also remains unresolved. Separate fixture launcher only, not App-wide subreaper, full task/device or global PID cleanup."
+    "description": "Actual Linux JNI ordinary protocol4 private command-parent ownership and original ManagedProcessJobs/preparation leases. Controlled orphan reap settles; missing original control-channel proof, beyond-deadline members or failed lease close retain unknown receipts and original leases. Isolated competing-reaper and historical protocol2 nonconvergence fixtures keep historical exit7 assertions. No App-wide subreaper, unrelated PID signals, Android device or full-suite acceptance."
   },
   "memory-archive-currentness": {
     "class": "dev.pocketengine.features.memory.MemoryArchiveCurrentnessTest",
@@ -1372,11 +1403,23 @@
     "additionalClasses": [
       "dev.pocketengine.features.FeatureOwnerQueueAdmissionTest",
       "dev.pocketengine.features.ProxyReviewedOwnerTest",
-      "dev.pocketengine.media.RealtimeReviewedOwnerTest"
+      "dev.pocketengine.media.RealtimeReviewedOwnerTest",
+      "dev.pocketengine.store.TaskExecutionPlanningNativeTest",
+      "dev.pocketengine.store.TaskStoreToolCatalogTest",
+      "dev.pocketengine.store.TaskStoreRemoteBackendAdmissionTest",
+      "dev.pocketengine.store.OriginalRemoteStopClaimTest",
+      "dev.pocketengine.features.remote.RemoteBackendNativeJourneyTest",
+      "dev.pocketengine.CapabilityApprovalContinuationNativeTest",
+      "dev.pocketengine.ui.web.PocketWebApprovalsTest",
+      "dev.pocketengine.ui.web.PocketWebTaskReviewsTest"
     ],
-    "helpers": [],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture",
+      "dev.pocketengine.features.remote.HarnessCapabilityObservationTest",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
     "robolectric": true,
-    "description": "Original compatibility bridge and FeatureHost queue fences for old task/run/epoch, shared model selection, closed owner pages, and realtime/proxy reviewed owner CAS. Controlled native fixtures; no actual device, platform service or network-provider acceptance."
+    "description": "Original compatibility bridge and FeatureHost queue fences for old task/run/epoch, shared model selection, closed owner pages, and realtime/proxy reviewed owner CAS. Original TaskStore planning and catalogue reads, unchanged 100-tool SQL grants, one original expense, prepared-effect currentness, exact immutable proposal approvals, legacy new-task initialization, stale scope/window rejection, cold retention and queued continuation boundaries; existing Web review handles require the full original plan. Fixed Gemini private first-create persists its exact native selection before one POST, with original SQL-only recovery, one-use approval and typed cancellation through the actual native modules and controlled HTTP peer. Controlled native fixtures and pure review contracts; no actual device, platform service, vendor or network-provider acceptance."
   },
   "native-token-budgets": {
     "class": "dev.pocketengine.store.NativeTokenBudgetJourneyTest",
@@ -1441,27 +1484,6 @@
     "helpers": [],
     "robolectric": true,
     "description": "Original task/project nonce pin, no-replay AndroidX registry save/restore, real repository/task-link receipts, missing-context library preservation and partial/unknown association. No mounted Activity, actual process-death or device acceptance."
-  },
-  "attachment-import-recovery": {
-    "class": "dev.pocketengine.features.attachments.AttachmentImportRecoveryTest",
-    "additionalClasses": [
-      "dev.pocketengine.features.attachments.AttachmentBookTest"
-    ],
-    "helpers": [],
-    "description": "Original ordinary attachment import interruption, saved-byte/index reconciliation, unknown/native preservation and cross-Book file-lock exclusion. Pure JVM fixtures; no Android process-death or device acceptance."
-  },
-  "pocket-web-model-accounts": {
-    "class": "dev.pocketengine.ui.web.PocketWebApiModelsTest",
-    "additionalClasses": [
-      "dev.pocketengine.ui.web.PocketWebAccountCommandsTest"
-    ],
-    "helpers": [],
-    "description": "Original Web API model identity projection and account command receipts. Pure JVM contracts; no OAuth provider or mounted Android acceptance."
-  },
-  "pocket-web-bundle": {
-    "class": "dev.pocketengine.ui.web.PocketWebBundleTest",
-    "helpers": [],
-    "description": "Original runtime resource allowlist, exact origin, canonical paths and bounded receipt admission. No mounted Android WebView or APK acceptance."
   },
   "attachment-index-recovery": {
     "class": "dev.pocketengine.features.attachments.AttachmentIndexRecoveryTest",
@@ -1530,9 +1552,11 @@
     "robolectric": true,
     "description": "Opt-in original media scratch IO with hard-killed JDK17 host children, fresh JVM recovery, default-process live leases, unknown-file quota and durable Book preservation. Codec-only boundaries use extractor/muxer shadows, not real container parsing or encoding. No Android/device process death or cross-process lease guarantee."
   },
-  "bootstrap-maintenance": {
-    "class": "dev.pocketengine.bootstrap.BootstrapStatusTest",
+  "bootstrap-database-maintenance": {
+    "class": "dev.pocketengine.bootstrap.BootstrapAdmissionNativeTest",
     "additionalClasses": [
+      "dev.pocketengine.BootstrapAdmissionNativeTest",
+      "dev.pocketengine.bootstrap.BootstrapStatusTest",
       "dev.pocketengine.store.DatabaseFilePreservationTest",
       "dev.pocketengine.store.TaskDatabaseRecoveryManifestTest",
       "dev.pocketengine.store.TaskDatabaseMaintenanceNativeTest",
@@ -1540,38 +1564,160 @@
       "dev.pocketengine.bootstrap.LegacyBootstrapEntryNativeTest",
       "dev.pocketengine.features.assistant.ConversationReadOnlyRecoveryNativeTest"
     ],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
+    ],
+    "robolectric": true,
+    "description": "Exact original bootstrap admission, staged status, real-file preservation, verified-copy cutover and one-use original-store retry. Android/SQLite/service cases require SDK35 host runtime; pure file checks are not database cutover or device acceptance."
+  },
+  "model-connection-owner-policy": {
+    "class": "dev.pocketengine.store.ProviderCompatibilityNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.ui.ModelConnectionTestIdentityTest",
+      "dev.pocketengine.runtime.models.ProviderCompatProfileTest",
+      "dev.pocketengine.runtime.ProviderCompatibilityTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Saved original provider compatibility/cache policy, real loopback SettingsStore/Gateway projection and native test identity matching. No external-provider or Android UI acceptance."
+  },
+  "team-member-fallback": {
+    "class": "dev.pocketengine.features.teams.TeamMemberFallbackNativeJourneyTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.teams.TeamMemberModelTargetNativeJourneyTest",
+      "dev.pocketengine.features.teams.TeamMemberModelsTest",
+      "dev.pocketengine.features.teams.TeamParentBudgetTest",
+      "dev.pocketengine.store.TeamResearchRetryTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.features.teams.TeamResearchAgentNativeJourneyTest",
+      "dev.pocketengine.features.teams.TeamBudgetPersistentApplication",
+      "dev.pocketengine.store.ResearchModelFixtureSettings"
+    ],
+    "robolectric": true,
+    "description": "Default native TeamResearchHost/Coordinator -> original child Runner -> ModelGateway -> exact SQLite logical/physical receipts and original parent reservations. New frozen API groups may reserve one next candidate after a definite presemantic HTTP 5xx; original cap1 pins, summaries, unknown completion, partial output, cancellation and revoked sources do not gain retries. Distinct call IDs, shared deadline, atomic parent budget and unknown billing retained. Pure strict failure-policy tests do not establish Android/SQLite/HTTP runtime acceptance."
+  },
+  "project-image-model-input": {
+    "class": "dev.pocketengine.features.local.project.ProjectImageSourceNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.local.project.ProjectImageRunnerNativeTest",
+      "dev.pocketengine.core.NativeToolObservationTest",
+      "dev.pocketengine.browser.BrowserVisualRunnerTest",
+      "dev.pocketengine.features.teams.TeamProjectImageNativeTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.browser.BrowserSemanticReadTest",
+      "dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest",
+      "dev.pocketengine.browser.BrowserProfileCapabilityBindingTest",
+      "dev.pocketengine.browser.BrowserSemanticReadSqlTest",
+      "dev.pocketengine.browser.BrowserTaskPersistenceTest",
+      "dev.pocketengine.browser.BrowserTaskSpaceTest",
+      "dev.pocketengine.browser.BrowserVisualPortNativeTest",
+      "dev.pocketengine.features.teams.TeamProjectRunnerDeliveryJourneyTest"
+    ],
+    "robolectric": true,
+    "description": "Original selected checkout or same-private-task artifact image bytes through magic/MIME/SHA validation, native one-use observation and original Runner image request budget. Current source/grant/run/epoch/cancel/pause checks repeat at actual inference admission; metadata and preview are not model vision, team artifacts cannot borrow private scope. Max two images, source withdrawal and late delivery regression. Native fixtures require Android SDK35; pure carrier checks are separately evidenced.",
+    "native": true
+  },
+  "attachment-import-recovery": {
+    "class": "dev.pocketengine.features.attachments.AttachmentImportRecoveryTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.attachments.AttachmentBookTest"
+    ],
     "helpers": [],
+    "description": "Original ordinary attachment import interruption, saved-byte/index reconciliation, unknown/native preservation and cross-Book file-lock exclusion. Pure JVM fixtures; no Android process-death or device acceptance."
+  },
+  "pocket-web-model-accounts": {
+    "class": "dev.pocketengine.ui.web.PocketWebApiModelsTest",
+    "additionalClasses": [
+      "dev.pocketengine.ui.web.PocketWebAccountCommandsTest"
+    ],
+    "helpers": [],
+    "description": "Original Web API model identity projection and account command receipts. Pure JVM contracts; no OAuth provider or mounted Android acceptance."
+  },
+  "pocket-web-bundle": {
+    "class": "dev.pocketengine.ui.web.PocketWebBundleTest",
+    "helpers": [],
+    "description": "Original runtime resource allowlist, exact origin, canonical paths and bounded receipt admission. No mounted Android WebView or APK acceptance."
+  },
+  "bootstrap-maintenance": {
+    "class": "dev.pocketengine.bootstrap.BootstrapStatusTest",
+    "additionalClasses": [
+      "dev.pocketengine.bootstrap.BootstrapAdmissionNativeTest",
+      "dev.pocketengine.BootstrapAdmissionNativeTest",
+      "dev.pocketengine.store.DatabaseFilePreservationTest",
+      "dev.pocketengine.store.TaskDatabaseRecoveryManifestTest",
+      "dev.pocketengine.store.TaskDatabaseMaintenanceNativeTest",
+      "dev.pocketengine.bootstrap.BootstrapOriginalRetryNativeTest",
+      "dev.pocketengine.bootstrap.LegacyBootstrapEntryNativeTest",
+      "dev.pocketengine.features.assistant.ConversationReadOnlyRecoveryNativeTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
+    ],
     "robolectric": true,
     "description": "Original bootstrap state, nondestructive database preservation, exact recovery manifest and maintenance/open gates; real repository read-only export and legacy Activity entry lifecycle. Native SQLite and Activity bodies require the host SDK35/Robolectric gate. Pure-file checks alone do not prove Android cutover or physical-device WebView behavior."
   },
   "model-connection-identity": {
-    "class": "dev.pocketengine.ui.models.ModelConnectionTestIdentityTest",
+    "class": "dev.pocketengine.ui.ModelConnectionTestIdentityTest",
     "additionalClasses": [
       "dev.pocketengine.store.ProviderCompatibilityNativeTest",
       "dev.pocketengine.runtime.models.ProviderCompatProfileTest",
       "dev.pocketengine.runtime.ProviderCompatibilityTest"
     ],
-    "helpers": [],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
     "robolectric": true,
     "description": "Original connection/editor/draft/native test identities, strict receipt projection, per-profile compatibility and cache settings CAS. Controlled provider/repository fixtures; no live provider, real cache hit or Android visual acceptance."
   },
-  "device-desktop-owner": {
-    "class": "dev.pocketengine.features.devices.NativeDesktopViewerSqlTest",
+  "aion-preview-element-reference": {
+    "class": "dev.pocketengine.features.local.preview.ProjectPreviewReferencesNativeTest",
     "additionalClasses": [
-      "dev.pocketengine.features.devices.NativeDesktopOwnerWindowTest",
-      "dev.pocketengine.features.devices.DeviceSemanticObservationsTest",
-      "dev.pocketengine.features.devices.DeviceProtocolTest",
-      "dev.pocketengine.features.devices.DeviceDesktopViewerNativeTest",
-      "dev.pocketengine.features.devices.DeviceSemanticRunnerDeliveryTest",
-      "dev.pocketengine.features.devices.DeviceVisualDeliveryTest"
+      "dev.pocketengine.features.local.preview.PreviewElementRefTest",
+      "dev.pocketengine.features.local.preview.ProjectPreviewDocumentTest",
+      "dev.pocketengine.features.assistant.OwnerComposerPreviewRefsTest",
+      "dev.pocketengine.ui.ChatInputRulesTest",
+      "dev.pocketengine.store.OwnerInputQueueTest",
+      "dev.pocketengine.features.local.project.ProjectPackageNativeDeliveryJourneyTest",
+      "dev.pocketengine.store.ReviewedDevelopmentContinuationTest",
+      "dev.pocketengine.ProjectConversationContinuationNativeTest",
+      "dev.pocketengine.ui.web.PocketWebProjectContinuationTest",
+      "dev.pocketengine.ui.ProjectWorkbenchStateTest"
     ],
     "helpers": [
-      "dev.pocketengine.features.devices.DeviceIngressNativeTest",
-      "dev.pocketengine.testutil.HttpServer",
-      "dev.pocketengine.testutil.ReadyApplicationFixture"
+      "dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest",
+      "dev.pocketengine.testutil.ReadyApplicationFixture",
+      "dev.pocketengine.testutil.HttpServer"
     ],
     "robolectric": true,
-    "description": "Original TaskStore desktop viewer one-shot tickets and signed grants, exact owner window lifecycle, model-delivered semantic references and shared protocol corpus. Native remote-result fixtures after the actual write gate; no physical Windows input, Android device or WAN acceptance."
+    "description": "Original immutable active-workspace and settled private fixed-package preview selection: bounded values, native document lifetime, independent composer CAS, original SQL carrier, exact package operation/producing run/archive identity and receiving run/source checks before MAIN and SUMMARY. Reviewed ended-project continuation retains the same task, original cumulative scope/checkpoint and actual Assistant conversation slot/mailbox; separate Send remains explicit. Real TaskStore/Local/Workspace/Engine/request fixtures; package SQL fixtures reuse the original managed host without npm. Native JNI/SDK dependencies required. Authored native fixtures require actual execution; pure value or Web checks do not prove Android touch/WebView, SQL, model/file-CAS or device acceptance. Live-service selection remains a separate original requirement.",
+    "native": true
+  },
+  "bedrock-sts-session": {
+    "class": "dev.pocketengine.runtime.providers.bedrock.BedrockSigV4Test",
+    "additionalClasses": [
+      "dev.pocketengine.runtime.providers.bedrock.BedrockEventStreamTest",
+      "dev.pocketengine.core.AwsSessionCredentialsTest",
+      "dev.pocketengine.runtime.models.BedrockConnectionConfigTest",
+      "dev.pocketengine.runtime.providers.BedrockProviderTest",
+      "dev.pocketengine.runtime.providers.BedrockStreamIntegrationTest",
+      "dev.pocketengine.runtime.usage.BedrockUsageTest",
+      "dev.pocketengine.runtime.usage.BedrockTokenReservationTest",
+      "dev.pocketengine.runtime.usage.BedrockFailureTest",
+      "dev.pocketengine.runtime.BedrockRecoveryProjectionTest",
+      "dev.pocketengine.runtime.BedrockGatewayBoundaryTest",
+      "dev.pocketengine.store.SettingsBedrockProfilesTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.store.SettingsApiProfilesTest"
+    ],
+    "robolectric": true,
+    "description": "Explicit owner STS session on original saved connections: independent AWS SigV4/binary fixtures, actual original Anthropic accumulator and Gateway logical/receipt/presentation boundaries, typed credential projection and original SharedPreferences/vault CAS with controlled test seams. SDK35/full production closure is required for the complete group; separately recorded pure JVM checks do not prove AndroidKeyStore, actual AWS calls, device or whole-task acceptance. No hidden provider retry, metadata/CLI discovery, credential refresh or inferred catalog/pricing."
   },
   "desktop-hybrid": {
     "class": "dev.pocketengine.features.devices.DeviceDesktopViewerNativeTest",
@@ -1591,30 +1737,22 @@
     "robolectric": true,
     "description": "Original SQLite, native grant and one-use TLS send gates; semantic structure delivery through the real AgentRunner; shared protocol vectors. Explicit loopback peers and UIA receipts, not Windows/Android physical acceptance."
   },
-  "phone-team-sessions": {
-    "class": "dev.pocketengine.BackgroundPhoneRunTest",
+  "device-desktop-owner": {
+    "class": "dev.pocketengine.features.devices.NativeDesktopViewerSqlTest",
     "additionalClasses": [
-      "dev.pocketengine.core.ExecutionResourcesTest",
-      "dev.pocketengine.store.LocalPhoneLeaseIsolationNativeTest",
-      "dev.pocketengine.PhoneNotificationControlsTest",
-      "dev.pocketengine.PhoneRunServiceTest",
-      "dev.pocketengine.phone.PhoneOwnerControlsTest",
-      "dev.pocketengine.displayhelper.DisplaySessionRegistryTest",
-      "dev.pocketengine.phone.display.DisplayModuleParallelTest",
-      "dev.pocketengine.phone.display.PhoneParallelCapabilitiesTest",
-      "dev.pocketengine.phone.display.DisplayModuleTest",
-      "dev.pocketengine.features.devices.DeviceGoalPhonePortTest",
-      "dev.pocketengine.features.teams.TeamPhoneBudgetTest",
-      "dev.pocketengine.features.devices.DevicePhoneGoalReadinessTest",
-      "dev.pocketengine.features.teams.TeamPhoneOriginalHostJourneyTest",
-      "dev.pocketengine.features.devices.DeviceControlDispatchIsolationTest",
-      "dev.pocketengine.features.devices.DeviceProtocolTest"
+      "dev.pocketengine.features.devices.NativeDesktopOwnerWindowTest",
+      "dev.pocketengine.features.devices.DeviceSemanticObservationsTest",
+      "dev.pocketengine.features.devices.DeviceProtocolTest",
+      "dev.pocketengine.features.devices.DeviceDesktopViewerNativeTest",
+      "dev.pocketengine.features.devices.DeviceSemanticRunnerDeliveryTest",
+      "dev.pocketengine.features.devices.DeviceVisualDeliveryTest"
     ],
     "helpers": [
-      "dev.pocketengine.features.channels.ChannelTaskHostTest",
-      "dev.pocketengine.features.channels.ChannelSecurityTest"
+      "dev.pocketengine.features.devices.DeviceIngressNativeTest",
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
     ],
     "robolectric": true,
-    "description": "Bounded original App/Service/TaskStore multi-run lifecycle, per-display routing, exact phone scope, team allocations and previous notification/display regressions. Native frame/model responses are explicit test boundaries; no physical Android, APK, WAN or visual acceptance."
+    "description": "Original TaskStore desktop viewer one-shot tickets and signed grants, exact owner window lifecycle, model-delivered semantic references and shared protocol corpus. Native remote-result fixtures after the actual write gate; no physical Windows input, Android device or WAN acceptance."
   }
 }

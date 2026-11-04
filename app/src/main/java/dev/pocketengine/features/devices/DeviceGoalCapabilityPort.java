@@ -54,6 +54,7 @@ public final class DeviceGoalCapabilityPort implements CapabilityPort {
     }
     @Override public boolean supports(String name) { return !closed && allowed.contains(name) && nativeScoped.supports(name); }
     @Override public boolean sideEffecting(String name) { return !allowed.contains(name) || nativeScoped.sideEffecting(name); }
+    @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{return supports(name)?nativeScoped.planningAccess(name,arguments):dev.pocketengine.core.ExecutionPlanning.Access.DENY;}
     @Override public void validate(String name, JSONObject args) throws Exception { tool(name, original); nativeScoped.validate(name, args); }
     @Override public JSONObject contextSnapshot(String query) throws Exception {
         check(original);

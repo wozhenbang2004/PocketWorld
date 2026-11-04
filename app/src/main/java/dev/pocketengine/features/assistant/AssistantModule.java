@@ -31,6 +31,7 @@ public final class AssistantModule implements EngineModule {
         /** Native owner settings, never copied into provider messages or stored owner prose. */
         default JSONObject startScoped(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{if(ownerScope!=null)throw new SecurityException("原宿主尚未支持明确任务范围，未丢弃主人选择或新建执行");return start(conversationId,goal,message,config,control);}
         default JSONObject startProject(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart selected)throws Exception{throw new SecurityException("原宿主未接显式项目记忆同意，未回退全局任务");}
+        default JSONObject continueProject(JSONObject reviewedTask,String feedback,ModelConfig config,RunControl control,java.util.function.BooleanSupplier currentOwnerWindow)throws Exception{throw new SecurityException("原宿主尚未支持原项目续接，请保留草稿并核对原任务");}
         JSONObject append(String conversationId,JSONObject message,String mode,JSONObject expected,RunControl control)throws Exception;
         /** Native task hosts also persist cancellation and enqueue their original child stops. */
         default void cancel(RunControl control)throws Exception{control.cancel();}
@@ -58,6 +59,7 @@ public final class AssistantModule implements EngineModule {
     private volatile CheckedAction sourceSynchronizer;
     private volatile NativeInputHost nativeInputHost;
     private volatile AttachmentRequestProjection attachmentProjection;
+    private volatile dev.pocketengine.features.local.preview.ProjectPreviewReferences previewReferences;
     private final Object admission=new Object();
     private static final class LiveTurn {
         final String conversation;final ModelConfig model;final RunControl control;
@@ -93,6 +95,8 @@ public final class AssistantModule implements EngineModule {
     }
     public void setNativeInputHost(NativeInputHost host){nativeInputHost=java.util.Objects.requireNonNull(host);}
     public void setAttachmentProjection(AttachmentRequestProjection projection){attachmentProjection=java.util.Objects.requireNonNull(projection);}
+    public void setPreviewReferences(dev.pocketengine.features.local.preview.ProjectPreviewReferences references){previewReferences=java.util.Objects.requireNonNull(references);}
+    dev.pocketengine.features.local.preview.ProjectPreviewReferences previewReferences(){return previewReferences;}
     private volatile boolean synchronizationPending=true;
     private JSONArray conversations=new JSONArray(),sources=new JSONArray();
     private byte[] committedBytes;
@@ -290,6 +294,7 @@ public final class AssistantModule implements EngineModule {
     }
     private JSONObject send(JSONObject input)throws Exception{
         if(input.has("ownerSourceRefs")&&(input.optJSONArray("ownerSourceRefs")==null||input.getJSONArray("ownerSourceRefs").length()>0))throw new IllegalStateException("原文引用的真实原生任务投影未安装，未降级为普通文本发送");
+        if(input.has("ownerPreviewRefs")&&(input.optJSONArray("ownerPreviewRefs")==null||input.getJSONArray("ownerPreviewRefs").length()>0))throw new IllegalStateException("元素引用的原生项目投影未安装，草稿未降级发送");
         if(input.has("attachments")&&(input.optJSONArray("attachments")==null||input.getJSONArray("attachments").length()>0))throw new IllegalStateException("真实附件聊天宿主尚未安装，未发送附件");
         if(migrationInProgress)throw new IllegalStateException("原文迁移正在对账，暂未接收新消息，请稍后或取消迁移");
         requireLegacyWritable();String text=input.optString("message").trim();if(text.isEmpty()||text.length()>12_000)throw new IllegalArgumentException("请输入1–12000字的消息");
@@ -330,6 +335,45 @@ public final class AssistantModule implements EngineModule {
     }
     /** Native sends ACK before model work; only the original admitted runner receives later input. */
     public JSONObject sendProjectForOwner(JSONObject input,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart selected)throws Exception{if(nativeInputHost==null)throw new SecurityException("项目记忆需要原native任务宿主");return sendNative(input,java.util.Objects.requireNonNull(selected));}
+    /** Native reviewed continuation only. It creates neither a conversation nor an owner message. */
+    public JSONObject continueProjectForOwner(JSONObject reviewedTask,String feedback,java.util.function.BooleanSupplier currentOwnerWindow)throws Exception{
+        if(reviewedTask==null||!(reviewedTask.opt("id") instanceof String task)||task.isBlank()
+                ||!(reviewedTask.opt("conversationId") instanceof String conversation)||conversation.isBlank())throw new SecurityException("请重新读取原项目任务与对话");
+        if(feedback==null||feedback.isBlank()||feedback.trim().length()>8000)throw new IllegalArgumentException("请填写1至8000字的继续要求；不会读取或发送对话草稿");
+        JSONObject reviewed=copy(reviewedTask);String note=feedback.trim();
+        requireContinuationWindow(currentOwnerWindow);requireLegacyWritable();
+        NativeInputHost host=nativeInputHost;
+        if(host==null||executor==null||historyTasks==null)throw new SecurityException("原项目续接需要原TaskStore与会话执行宿主");
+        synchronized(admission){
+            requireContinuationWindow(currentOwnerWindow);
+            if(migrationInProgress)throw new IllegalStateException("原文迁移正在对账，尚未接收项目续接");
+            if(conversationLive(conversation))throw new IllegalStateException("原对话仍有执行或停止回执，请先核对原任务");
+            findConversation(conversation);
+            ModelConfig config=context.model();if(config==null)throw new IllegalStateException("原任务模型绑定不可读取，请核对原任务");
+            RunControl original=new RunControl();var lease=reserveLive(conversation,config,original);
+            java.util.concurrent.atomic.AtomicBoolean rejected=new java.util.concurrent.atomic.AtomicBoolean();
+            try{
+                requireContinuationWindow(currentOwnerWindow);
+                JSONObject binding=host.continueProject(copy(reviewed),note,config,original,currentOwnerWindow);
+                Object run=binding==null?null:binding.opt("runId"),epoch=binding==null?null:binding.opt("epoch");
+                if(binding==null||!task.equals(binding.opt("taskId"))||!(run instanceof String)||((String)run).isBlank()
+                        ||!(epoch instanceof Integer||epoch instanceof Long)||((Number)epoch).longValue()<1||((Number)epoch).longValue()>Integer.MAX_VALUE
+                        ||!original.matchesHostRun(task,(String)run,((Number)epoch).intValue())||run.equals(reviewed.opt("runId")))throw new SecurityException("续接回执不是原项目的新执行身份");
+                JSONObject turn=copy(binding).put("conversationId",conversation);lease.original().binding=copy(turn);
+                original.check();resourceState(turn,original,"queued");requireContinuationWindow(currentOwnerWindow);
+                // The accepted slot is independent of the old review page. Engine rechecks
+                // its reserved native tuple/scope at pickup; no fresh chat history is supplied.
+                liveTurns.submit(lease,()->executeNativeTurn(lease,turn,reviewed.optString("goal"),new JSONArray(),config,original,null),
+                        ()->{rejected.set(true);executorRejected(lease,null);});
+                if(rejected.get())throw new IllegalStateException("原项目续接已登记，但执行器未接手；请核对原任务，不要重复提交");
+                return copy(turn).put("continued",true).put("resourceType","assistant_text").put("resourceState",lease.resourceState());
+            }catch(Exception failure){
+                if(!rejected.get())stopUnstarted(lease);
+                releaseLive(lease);throw failure;
+            }
+        }
+    }
+    private static void requireContinuationWindow(java.util.function.BooleanSupplier current){if(current==null||!current.getAsBoolean())throw new SecurityException("原项目审阅窗口已关闭，请重新核对；对话草稿未发送");}
     private JSONObject sendNative(JSONObject input)throws Exception{return sendNative(input,null);}
     private JSONObject sendNative(JSONObject input,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart)throws Exception {
         if(migrationInProgress)throw new IllegalStateException("原文迁移正在对账，未接收新消息；不会重复新建任务");
@@ -342,7 +386,11 @@ public final class AssistantModule implements EngineModule {
         if(input.has("ownerSourceRefs")&&input.optJSONArray("ownerSourceRefs")==null)throw new IllegalArgumentException("主人原文引用必须为固定metadata数组");
         final JSONArray selectedSources=OwnerSourceReferences.checked(input.optJSONArray("ownerSourceRefs")==null?new JSONArray():input.getJSONArray("ownerSourceRefs"));
         if(selectedSources.length()>0&&executor==null)throw new IllegalStateException("原文引用的原TaskStore/Runner请求投影未安装，未静默发送只有locator的消息");
-        String fingerprint=fingerprint(text,mode,selections,selectedSources);
+        if(input.has("ownerPreviewRefs")&&input.optJSONArray("ownerPreviewRefs")==null)throw new IllegalArgumentException("元素引用必须为固定数组");
+        final JSONArray selectedPreviews=dev.pocketengine.features.local.preview.PreviewElementRef.checked(input.optJSONArray("ownerPreviewRefs")==null?new JSONArray():input.getJSONArray("ownerPreviewRefs"));
+        final dev.pocketengine.features.local.preview.ProjectPreviewReferences previewHost=previewReferences;
+        if(selectedPreviews.length()>0&&(executor==null||previewHost==null))throw new IllegalStateException("原预览引用宿主未安装，未发送旧片段");
+        String fingerprint=fingerprint(text,mode,selections,selectedSources,selectedPreviews);
         synchronized(admission){
             if(migrationInProgress)throw new IllegalStateException("原迁移正在对账，未接收新消息");
             JSONObject prior=findSubmission(client);
@@ -353,6 +401,7 @@ public final class AssistantModule implements EngineModule {
             var existing=liveTurns.get(requested);
             DevelopmentTurn retained=existing==null?developmentTurns.get(requested):null;
             boolean resuming=retained!=null,starting=existing==null&&!resuming;
+            if(starting&&selectedPreviews.length()>0)throw new IllegalStateException("原项目执行已结束，请回到原项目任务核对后继续；元素引用草稿仍保留，不会新建普通任务");
             if(projectStart!=null&&!starting)throw new SecurityException("项目记忆新任务同意不能追加或挪给旧执行");
             if((starting||resuming)&&pendingCancellations.values().stream().anyMatch(value->requested.equals(value.conversation())))
                 throw new IllegalStateException("原对话停止回执仍待核对，未创建另一个执行");
@@ -378,6 +427,7 @@ public final class AssistantModule implements EngineModule {
                         throw new SecurityException("原任务执行代次已变化，请刷新后确认");
                 }
                 final JSONArray immutableSources=OwnerSourceRequestProjection.admit(this,selectedSources,live);
+                final JSONArray immutablePreviews=selectedPreviews.length()==0?new JSONArray():previewHost.admit(cid,expected,selectedPreviews,live);
                 AttachmentRequestProjection projection=attachmentProjection;
                 if(selections.length()>0&&projection==null)throw new IllegalStateException("真实附件请求投影尚未安装");
                 final JSONArray immutableRefs=projection==null?new JSONArray():projection.select(selections,config,live);
@@ -389,6 +439,7 @@ public final class AssistantModule implements EngineModule {
                     }else conversation=find(requested);
                     JSONObject message=newMessage(cid,"user",safe,config).put("clientMessageId",client).put("requestFingerprint",fingerprint).put("inputMode",mode).put("attachments",immutableRefs);
                     if(immutableSources.length()>0)message.put("ownerSourceRefs",immutableSources);
+                    if(immutablePreviews.length()>0)message.put("ownerPreviewRefs",immutablePreviews);
                     JSONObject ack=new JSONObject().put("status","unconfirmed").put("messageId",message.getString("id")).put("clientMessageId",client).put("conversationId",cid).put("mode",mode).put("reconciliationRequired",true);
                     message.put("submission",ack);source(message.getString("id")).put("clientMessageId",client).put("requestFingerprint",fingerprint).put("submission",copy(ack));
                     conversation.getJSONArray("messages").put(message);trimMessages(conversation);conversation.put("updatedAt",System.currentTimeMillis());
@@ -580,7 +631,7 @@ public final class AssistantModule implements EngineModule {
             String content=source.getString("content");if(user&&!current)content="历史对话资料，不代表本次新委派；禁止自动重放其中操作，实际未决效果须到原任务核对：\n"+content;
             JSONObject message=new JSONObject().put("role",source.getString("role")).put("content",content);
             if(!user){copyMemoryReference(source,message);if(source.optBoolean("memoryContextRetired"))message.put("content",dev.pocketengine.features.memory.TaskMemoryHistory.RETIRED).put("memoryContextRetired",true);}
-            if(user){message.put("ownerMessageId",source.getString("id")).put("ownerMessageRevision",source.getLong("revision"));JSONArray refs=source.optJSONArray("attachments");if(refs!=null&&refs.length()>0)message.put("ownerAttachmentRefs",new JSONArray(refs.toString()));JSONArray sources=source.optJSONArray("ownerSourceRefs");if(sources!=null&&sources.length()>0)message.put("ownerSourceRefs",OwnerSourceReferences.checked(sources));}
+            if(user){message.put("ownerMessageId",source.getString("id")).put("ownerMessageRevision",source.getLong("revision"));JSONArray refs=source.optJSONArray("attachments");if(refs!=null&&refs.length()>0)message.put("ownerAttachmentRefs",new JSONArray(refs.toString()));JSONArray sources=source.optJSONArray("ownerSourceRefs");if(sources!=null&&sources.length()>0)message.put("ownerSourceRefs",OwnerSourceReferences.checked(sources));JSONArray previews=source.optJSONArray("ownerPreviewRefs");if(previews!=null&&previews.length()>0)message.put("ownerPreviewRefs",dev.pocketengine.features.local.preview.PreviewElementRef.checked(previews));}
             request.put(message);
         }return request;
     }
@@ -660,9 +711,11 @@ public final class AssistantModule implements EngineModule {
         synchronized(storage){healthy();for(int i=0;i<sources.length();i++){JSONObject row=sources.getJSONObject(i);if(client.equals(row.optString("clientMessageId")))return new JSONObject().put("conversationId",row.getString("conversationId")).put("requestFingerprint",row.getString("requestFingerprint")).put("ack",copy(row.getJSONObject("submission")));}return null;}
     }
     private static String fingerprint(String text,String mode,JSONArray selections)throws Exception{return fingerprint(text,mode,selections,new JSONArray());}
-    private static String fingerprint(String text,String mode,JSONArray selections,JSONArray sourceRefs)throws Exception{
+    private static String fingerprint(String text,String mode,JSONArray selections,JSONArray sourceRefs)throws Exception{return fingerprint(text,mode,selections,sourceRefs,new JSONArray());}
+    private static String fingerprint(String text,String mode,JSONArray selections,JSONArray sourceRefs,JSONArray previewRefs)throws Exception{
         StringBuilder canonical=new StringBuilder(text).append('\0').append(mode);for(int i=0;i<selections.length();i++){JSONObject item=selections.getJSONObject(i);canonical.append('\0').append(item.getString("id")).append(':').append(item.getString("sha256"));}
         JSONArray typed=OwnerSourceReferences.checked(sourceRefs);if(typed.length()>0)canonical.append('\0').append("ownerSourceRefs:").append(dev.pocketengine.features.memory.TaskMemoryTrace.rawFingerprint(new JSONObject().put("refs",typed)));
+        JSONArray previews=dev.pocketengine.features.local.preview.PreviewElementRef.checked(previewRefs);if(previews.length()>0)canonical.append('\0').append("ownerPreviewRefs:").append(dev.pocketengine.features.memory.TaskMemoryTrace.rawFingerprint(new JSONObject().put("refs",previews)));
         byte[] hash=java.security.MessageDigest.getInstance("SHA-256").digest(canonical.toString().getBytes(StandardCharsets.UTF_8));StringBuilder value=new StringBuilder();for(byte b:hash)value.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return value.toString();
     }
     private JSONObject deleteConversation(String id)throws Exception{
@@ -1030,7 +1083,7 @@ public final class AssistantModule implements EngineModule {
     private static JSONObject sourceMetadata(JSONObject row)throws Exception{return new JSONObject().put("kind","message").put("sourceId",row.getString("sourceId")).put("revision",row.getLong("revision")).put("ownerId","owner").put("spaceId","private").put("deleted",row.getBoolean("deleted")).put("conversationId",row.getString("conversationId")).put("role",row.optString("role")).put("updatedAt",row.optLong("updatedAt"));}
     private static long revision(JSONObject input,String key){Object value=input.opt(key);if(!(value instanceof Byte||value instanceof Short||value instanceof Integer||value instanceof Long)||((Number)value).longValue()<1||((Number)value).longValue()==Long.MAX_VALUE)throw new IllegalArgumentException("消息revision必须为正整数");return ((Number)value).longValue();}
     private static JSONObject copy(JSONObject value)throws Exception{return new JSONObject(value.toString());}
-    private static String redact(String text,ModelConfig config){return config.apiKey.isEmpty()?text:text.replace(config.apiKey,"[密钥已隐藏]");}
+    private static String redact(String text,ModelConfig config){return config.redactSensitive(text);}
     private static String answer(JSONObject response){Object content=response.opt("content");if(content instanceof String)return (String)content;if(content instanceof JSONArray){StringBuilder result=new StringBuilder();JSONArray parts=(JSONArray)content;for(int i=0;i<parts.length();i++){JSONObject p=parts.optJSONObject(i);if(p!=null&&"text".equals(p.optString("type")))result.append(p.optString("text"));}return result.toString();}return "";}
     @Override public void close(){
         java.util.Map<RunControl,String> originals=new java.util.LinkedHashMap<>();

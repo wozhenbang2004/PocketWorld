@@ -22,6 +22,7 @@ public final class TaskStoreCapabilityAuthority implements ModelCapabilityAdapte
     @Override public void requirePrepared(String operationId,String tool,JSONObject originalArgs)throws Exception {
         JSONObject task=tasks.get(binding.taskId,false);
         if(task==null||!binding.runId.equals(task.optString("runId"))||binding.epoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("原operation执行身份已失效");
+        if(tasks.requireExecutionPlanningRead(binding.taskId,binding.runId,binding.epoch,operationId,tool,originalArgs,binding.originalControl()))return;
         requirePreparedRecord(task.getJSONArray("operations"),binding.runId,operationId,tool,originalArgs);
     }
     /** Pure record check is also used by fixture tests; the source of records remains TaskStore. */

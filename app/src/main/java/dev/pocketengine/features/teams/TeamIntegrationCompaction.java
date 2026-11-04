@@ -98,6 +98,7 @@ final class TeamIntegrationCompaction {
         });
         RunJournal originalJournal=tasks.journal(raw.taskId,raw.runId,raw.epoch,original);
         RunJournal metered=new RunJournal(){
+            public dev.pocketengine.core.ExecutionPlanning planning()throws Exception{return originalJournal.planning();}
             public JSONObject restore()throws Exception{return originalJournal.restore();}
             public void checkpoint(JSONArray messages,int steps,JSONObject observation)throws Exception{originalJournal.checkpoint(messages,steps,observation);}
             public boolean progressGuardSupported(){return originalJournal.progressGuardSupported();}
@@ -174,6 +175,7 @@ final class TeamIntegrationCompaction {
         public JSONArray tools()throws Exception{return surface(raw.tools());}
         public boolean supports(String name){return raw.supports(name);}
         public boolean sideEffecting(String name){return raw.sideEffecting(name);}
+        @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{if(arguments!=null&&name.equals(TaskStoreMemoryReader.RAW_QUERY))requireSection(arguments);return raw.planningAccess(name,arguments);}
         public void validate(String name,JSONObject args)throws Exception{if(name.equals(TaskStoreMemoryReader.RAW_QUERY))requireSection(args);raw.validate(name,args);}
         public JSONObject execute(String name,JSONObject args,RunControl control)throws Exception{if(name.equals(TaskStoreMemoryReader.RAW_QUERY)||name.equals(TaskStoreMemoryReader.RAW_READ))validate(name,args);return raw.execute(name,args,control);}
         public JSONObject contextSnapshot(String query)throws Exception{return raw.contextSnapshot(query);}

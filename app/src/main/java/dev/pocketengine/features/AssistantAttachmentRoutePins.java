@@ -10,7 +10,7 @@ public final class AssistantAttachmentRoutePins {
  public synchronized void require(String taskId,ModelConfig config,boolean allowInitialPin)throws Exception{
   String slot="assistant-attachment-route:"+taskId;JSONObject current=new JSONObject().put("route",config.usesAccount()?"account":"api");
   if(config.usesAccount())current.put("accountId",config.accountModel.accountId).put("modelId",config.accountModel.modelId).put("version",config.accountModel.accountVersion);
-  else current.put("fingerprint",TaskStore.capabilityFingerprint(new JSONObject().put("provider",config.provider).put("baseUrl",config.baseUrl).put("model",config.model).put("credential",config.apiKey).put("cleartextConsent",config.cleartextConsent)));
+  else current.put("fingerprint",TaskStore.capabilityFingerprint(new JSONObject().put("provider",config.provider).put("baseUrl",config.baseUrl).put("model",config.model).put("credential",config.usesBedrock()?config.credentialIdentityDigest():config.apiKey).put("cleartextConsent",config.cleartextConsent)));
   String stored=vault.get(slot);
   if(stored.isEmpty()){if(!allowInitialPin)throw denied();vault.put(slot,current.toString());return;}
   JSONObject pin=new JSONObject(stored);boolean same=pin.optString("route").equals(current.getString("route"));

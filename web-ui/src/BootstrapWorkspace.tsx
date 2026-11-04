@@ -15,7 +15,7 @@ const newRequest = () => crypto.randomUUID();
 const fileSize = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? `${value.toLocaleString('zh-CN')} 字节` : '尚未取得';
 const modeLabel = (mode: RepairMode) => mode === 'verified_copy' ? '恢复对话文字' : '建立空库';
 function RestorationSummary({ value }: { value: RepairRestoration }) {
-  const gapReasons: Record<string, string> = { message_deleted: '原消息已删除', source_deleted: '原来源已删除', role_not_exportable: '不属于可导出的对话文字', role_not_conversation_content: '不属于可导出的对话文字', source_integrity_unavailable: '原内容完整性未确认', source_revision_or_role_unavailable: '原记录版本或角色无法核对', message_read_limited: '原记录读取受限', conversation_unreadable: '原对话无法完整读取', source_conversation_corrupt: '原对话数据损坏，未能读取', source_conversation_read_limited: '原对话读取受限', source_conversation_validation_failed: '原对话完整性核对未通过', source_conversation_unreadable: '原对话无法完整读取', retired_for_derived_context: '原记录已退出派生上下文' };
+  const gapReasons: Record<string, string> = { deleted_or_unavailable: '原消息已删除或不可用', unsupported_historical_record_role: '原记录不属于可恢复的对话角色', attachment_bytes_and_grants_not_exported: '附件原件及授权不恢复', external_source_grants_not_exported: '外部来源授权不恢复', message_deleted: '原消息已删除', source_deleted: '原来源已删除', role_not_exportable: '不属于可导出的对话文字', role_not_conversation_content: '不属于可导出的对话文字', source_integrity_unavailable: '原内容完整性未确认', source_revision_or_role_unavailable: '原记录版本或角色无法核对', message_read_limited: '原记录读取受限', conversation_unreadable: '原对话无法完整读取', source_conversation_corrupt: '原对话数据损坏，未能读取', source_conversation_read_limited: '原对话读取受限', source_conversation_validation_failed: '原对话完整性核对未通过', source_conversation_unreadable: '原对话无法完整读取', retired_for_derived_context: '原记录已退出派生上下文' };
   return <section className="pw-bootstrap-restoration" aria-label="本次对话文字恢复范围">
     <h3>{value.partial ? '本次可恢复部分对话文字' : '本次仅恢复对话文字'}</h3>
     <dl className="pw-bootstrap-facts"><div><dt>对话 / 消息</dt><dd>{value.conversationCount} 段 / {value.messageCount} 条</dd></div><div><dt>明确省略</dt><dd>{value.omittedCount} 条原记录</dd></div><div><dt>未能读取</dt><dd>{value.unreadableConversationCount} 段对话</dd></div><div><dt>内容包大小</dt><dd>{fileSize(value.contentUtf8Bytes)}</dd></div><div><dt>内容身份</dt><dd>以新对话身份导入，原对话 ID 不继承</dd></div></dl>
@@ -132,7 +132,15 @@ export default function BootstrapWorkspace({ snapshot }: { snapshot: PocketSnaps
       await run('repair.confirm', payload, true);
     } catch (failure) { setError(failure instanceof Error ? failure.message : '原审阅已变化，请重新读取。'); }
   }
-  const title = unavailable ? '当前界面无法安全通信' : readFailure ? '本机启动状态暂时无法读取' : outcome ? restored ? '原件已保全，对话文字已恢复' : maintenance?.result?.mode === 'empty_database' ? '原件已保全，新空库已建立' : '核对本次维修结果' : !view ? '正在连接本机启动状态' : view.state === 'initializing' ? '正在准备 PocketWorld' : view.state === 'ready' ? '本机数据已就绪' : maintenance?.repairId ? '核对本机数据与保全副本' : '需要处理启动问题';
+  let title = '需要处理启动问题';
+  if (unavailable) title = '当前界面无法安全通信';
+  else if (readFailure) title = '本机启动状态暂时无法读取';
+  else if (outcome && restored) title = restored.messageCount > 0 ? '原件已保全，对话文字已恢复' : '原件已保全，本次未恢复文字消息';
+  else if (outcome) title = maintenance?.result?.mode === 'empty_database' ? '原件已保全，新空库已建立' : '核对本次维修结果';
+  else if (!view) title = '正在连接本机启动状态';
+  else if (view.state === 'initializing') title = '正在准备 PocketWorld';
+  else if (view.state === 'ready') title = unknown ? '启动已完成，先核对原回执' : '本机数据已就绪';
+  else if (maintenance?.repairId) title = '核对本机数据与保全副本';
   return <main className="pw-bootstrap" aria-label="启动与数据维护">
     <header className="pw-bootstrap-header"><span className="pw-bootstrap-brand">PocketWorld</span><span className="pw-bootstrap-context">启动与数据维护</span></header>
     <section className="pw-bootstrap-summary" aria-live="polite">

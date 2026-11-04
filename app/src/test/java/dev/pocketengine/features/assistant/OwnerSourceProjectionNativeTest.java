@@ -33,6 +33,15 @@ public final class OwnerSourceProjectionNativeTest {
     private static final String TARGET="target-private",SOURCE="source-private",CANARY="OLD-ORIGINAL-LOW-TRUST-CANARY";
     private static JSONObject scope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
     private static String id(){return UUID.randomUUID().toString();}
+    /** DB metadata fixture only. It deliberately creates no native Document/registry selection. */
+    private static JSONArray previewMetadata()throws Exception{return new JSONArray().put(new JSONObject()
+        .put("referenceId",id()).put("taskId",id()).put("runId",id()).put("epoch",1).put("conversationId",TARGET)
+        .put("projectId",id()).put("checkoutId",id()).put("previewId","a".repeat(64)).put("sourceDigest","b".repeat(64))
+        .put("documentId",id()).put("documentGeneration",2L).put("path","dist/index.html").put("resourceSha256","c".repeat(64))
+        .put("selectorHint","button span").put("text",CANARY).put("htmlSnippet","<span>"+CANARY+"</span>")
+        .put("bounds",new JSONObject().put("x",1).put("y",2).put("width",40).put("height",20))
+        .put("truncated",new JSONObject().put("selectorHint",false).put("text",false).put("htmlSnippet",false))
+        .put("untrusted",true).put("selectorIsSourceLocation",false));}
     // Test-only package bridge over rows returned by the actual native producer. The model still
     // receives only opaque Capability selections; the production locator factory stays private.
     private static ConversationHistory.SourceLocator locator(JSONObject nativeRow)throws Exception{var method=ConversationHistory.SourceLocator.class.getDeclaredMethod("from",JSONObject.class);method.setAccessible(true);return (ConversationHistory.SourceLocator)method.invoke(null,nativeRow);}
@@ -56,13 +65,22 @@ public final class OwnerSourceProjectionNativeTest {
         }
         void conversation(String conversation)throws Exception{repo.transaction(()->{repo.saveConversation(new JSONObject().put("conversationId",conversation).put("title",conversation).put("messages",new JSONArray()));return null;});}
         JSONObject save(String conversation,String message,long revision,String body,JSONArray refs)throws Exception{
+            return save(conversation,message,revision,body,refs,null);
+        }
+        JSONObject save(String conversation,String message,long revision,String body,JSONArray refs,JSONArray previews)throws Exception{
             JSONObject row=new JSONObject().put("id",message).put("revision",revision).put("role","user").put("content",body);if(refs!=null)row.put("ownerSourceRefs",OwnerSourceReferences.checked(refs));
+            if(previews!=null)row.put("ownerPreviewRefs",dev.pocketengine.features.local.preview.PreviewElementRef.checked(previews));
             repo.transaction(()->{repo.saveSource(new SourceRef("message",message,revision,"owner","private").toJson().put("conversationId",conversation).put("role","user").put("deleted",false));repo.saveMessage(conversation,row);return null;});return row;
         }
         JSONObject hit(String text)throws Exception{return nativeHost.handle("searchOwnerOriginals",new JSONObject().put("query",text).put("cursor","").put("limit",20).put("maxChars",16000),new RunControl()).getJSONArray("entries").getJSONObject(0);}
         JSONObject selection(JSONObject hit,int offset,int chars)throws Exception{return nativeHost.handle("selectOwnerOriginalReference",new JSONObject().put("ownerLocator",hit.getJSONObject("ownerLocator")).put("offset",offset).put("chars",chars),new RunControl());}
         JSONArray source(String body)throws Exception{save(SOURCE,id(),9_000_000_000L,body,null);return new JSONArray().put(selection(hit(body.substring(0,Math.min(20,body.length()))),0,Math.min(100,body.length())).getJSONObject("ownerSourceRef"));}
         JSONObject carrier(JSONArray refs,String instruction)throws Exception{JSONObject nativeMessage=save(TARGET,id(),1,instruction,refs);return new JSONObject().put("role","user").put("content",instruction).put("ownerMessageId",nativeMessage.getString("id")).put("ownerMessageRevision",1).put("ownerSourceRefs",OwnerSourceReferences.checked(refs));}
+        JSONObject previewCarrier(JSONArray refs,JSONArray previews,String instruction)throws Exception{
+            JSONObject message=save(TARGET,id(),1,instruction,refs,previews);
+            return new JSONObject().put("role","user").put("content",instruction).put("ownerMessageId",message.getString("id")).put("ownerMessageRevision",1)
+                .put("ownerSourceRefs",OwnerSourceReferences.checked(refs)).put("ownerPreviewRefs",dev.pocketengine.features.local.preview.PreviewElementRef.checked(previews));
+        }
         RunControl control()throws Exception{JSONObject attempt=tasks.startAttempt(tasks.createCapabilityTask("仅主人的新要求",TARGET).getString("id"),"capabilities",8);RunControl control=new RunControl();control.bindHostRun(attempt.getString("id"),attempt.getString("runId"),attempt.getInt("coordinatorEpoch"));tasks.openOwnerInputMailbox(attempt.getString("id"),attempt.getString("runId"),attempt.getInt("coordinatorEpoch"),TARGET,control);bindings.put(control,new JSONObject().put("taskId",attempt.getString("id")).put("runId",attempt.getString("runId")).put("epoch",attempt.getInt("coordinatorEpoch")));return control;}
         OwnerSourceRequestProjection projection(RunControl control)throws Exception{return projection(control,null);}
         OwnerSourceRequestProjection projection(RunControl control,AttachmentRequestProjection attachments)throws Exception{
@@ -144,6 +162,7 @@ public final class OwnerSourceProjectionNativeTest {
                 AgentRunner.RequestProjection projection=new AgentRunner.RequestProjection(){
                     public JSONArray project(JSONArray history,ModelConfig selected,RunControl live)throws Exception{Set<String> delegated=new HashSet<>();JSONArray rows=f.tasks.get(binding.getString("taskId"),false).optJSONArray("ownerInputs");for(int i=0;rows!=null&&i<rows.length();i++)delegated.add(rows.getJSONObject(i).getString("messageId"));JSONArray current=f.assistant.projectMemoryHistory(history,delegated,cid);current=f.tasks.projectConversationHistoryReferences(current,cid);current=f.tasks.projectOwnerSourceContext(binding.getString("taskId"),binding.getString("runId"),binding.getInt("epoch"),live,current);return sources.project(current,selected,live);}
                     public void prepared(JSONArray original,JSONArray actual,ModelConfig selected,RunControl live)throws Exception{sources.prepared(original,actual,selected,live);}
+                    public void derivedPrepared(JSONArray original,RunControl live)throws Exception{sources.derivedPrepared(original,live);}
                 };
                 outcome=new AgentRunner(null,port,ContextBudgetPolicy.currentHostSource(),projection,this).run(binding.getString("taskId"),goal,config,original,event->{try{f.tasks.event(binding.getString("taskId"),binding.getString("runId"),binding.getInt("epoch"),event);}catch(Exception failed){throw new IllegalStateException(failed);}},journal);
             }
@@ -151,6 +170,51 @@ public final class OwnerSourceProjectionNativeTest {
         }
     }
     private static void idle(AssistantModule assistant)throws Exception{long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(6);while(System.nanoTime()<until){if(!assistant.snapshot().getBoolean("running"))return;Thread.sleep(5);}throw new AssertionError("original assistant remained active");}
+
+    @Test public void previewCarrierRequiresExactNativeSelectionAndOriginalConversation()throws Exception{try(Fixture f=new Fixture()){
+        JSONObject owner=f.previewCarrier(new JSONArray(),previewMetadata(),"只改原按钮的文字");
+        try(var check=f.repo.inspectOwnerSources()){check.requirePreviewCarrier(owner,TARGET);}
+        JSONObject changed=new JSONObject(owner.toString());changed.getJSONArray("ownerPreviewRefs").getJSONObject(0).put("text","forged DOM");
+        assertThrows(SecurityException.class,()->{try(var check=f.repo.inspectOwnerSources()){check.requirePreviewCarrier(changed,TARGET);}});
+        assertThrows(SecurityException.class,()->{try(var check=f.repo.inspectOwnerSources()){check.requirePreviewCarrier(owner,SOURCE);}});
+        assertThrows(SecurityException.class,()->{try(var check=f.repo.inspectOwnerSources()){check.requirePreviewCarrier(new JSONObject(owner.toString()).put("role","assistant"),TARGET);}});
+        f.save(TARGET,owner.getString("ownerMessageId"),2,"新版主人消息",new JSONArray(),owner.getJSONArray("ownerPreviewRefs"));
+        assertThrows(SecurityException.class,()->{try(var check=f.repo.inspectOwnerSources()){check.requirePreviewCarrier(owner,TARGET);}});
+    }}
+    @Test public void originalQuoteAndPreviewCarrierRechecksRemainIndependentAtBatchClose()throws Exception{try(Fixture f=new Fixture()){
+        JSONArray quotes=f.source("被独立选择的原文范围");JSONObject owner=f.previewCarrier(quotes,previewMetadata(),"同时参考原文与按钮");
+        var check=f.repo.inspectOwnerSources();check.requireCarrier(owner,TARGET);check.requirePreviewCarrier(owner,TARGET);
+        JSONArray changedQuotes=new JSONArray(quotes.toString());changedQuotes.getJSONObject(0).put("chars",1);
+        // Same native message metadata changes between the two reads: checking DOM last
+        // must not overwrite the earlier quote dependency in this same real SQL batch.
+        f.save(TARGET,owner.getString("ownerMessageId"),1,owner.getString("content"),changedQuotes,owner.getJSONArray("ownerPreviewRefs"));
+        assertThrows(SecurityException.class,check::close);
+        var previewCheck=f.repo.inspectOwnerSources();JSONObject current=new JSONObject(owner.toString()).put("ownerSourceRefs",changedQuotes);
+        previewCheck.requirePreviewCarrier(current,TARGET);previewCheck.requireCarrier(current,TARGET);
+        JSONArray changedPreviews=new JSONArray(owner.getJSONArray("ownerPreviewRefs").toString());changedPreviews.getJSONObject(0).put("text","changed DOM");
+        f.save(TARGET,owner.getString("ownerMessageId"),1,owner.getString("content"),changedQuotes,changedPreviews);
+        assertThrows(SecurityException.class,previewCheck::close);
+    }}
+    @Test public void savedPreviewJsonAloneCannotReachAModelRequest()throws Exception{try(Fixture f=new Fixture()){
+        JSONObject owner=f.previewCarrier(new JSONArray(),previewMetadata(),"只改原按钮");RunControl control=f.control();
+        try(var projection=f.projection(control)){
+            assertThrows(IllegalStateException.class,()->projection.project(new JSONArray().put(owner),config(),control));
+        }
+        assertEquals(1,f.repo.message(TARGET,owner.getString("ownerMessageId")).getJSONArray("ownerPreviewRefs").length());
+    }}
+    @Test public void coldPreviewProjectionRetiresDerivedContentButKeepsAuditAndNewOwnerBoundary()throws Exception{try(Fixture f=new Fixture()){
+        JSONObject owner=f.previewCarrier(new JSONArray(),previewMetadata(),"原按钮要求"),next=f.carrier(new JSONArray(),"独立的新要求");
+        JSONArray raw=new JSONArray().put(owner).put(new JSONObject().put("role","assistant").put("content",CANARY).put("reasoning_content",CANARY)
+            .put("provider_data",new JSONObject().put("text",CANARY)).put("tool_calls",new JSONArray().put(new JSONObject().put("id","preview-call").put("type","function").put("function",new JSONObject().put("name","project_read_file").put("arguments",new JSONObject().put("old",CANARY).toString())))))
+            .put(new JSONObject().put("role","tool").put("tool_call_id","preview-call").put("content",CANARY))
+            .put(next).put(new JSONObject().put("role","assistant").put("content","新要求的独立答复"));
+        JSONArray projected=new JSONArray(raw.toString());OwnerSourceRequestProjection.projectCurrentness(f.assistant,projected,TARGET,null);
+        assertFalse(projected.getJSONObject(0).has("ownerPreviewRefs"));assertTrue(projected.getJSONObject(0).has("ownerPreviewRefsUnavailable"));
+        assertEquals(TaskMemoryHistory.RETIRED,projected.getJSONObject(1).getString("content"));assertFalse(projected.getJSONObject(1).has("provider_data"));assertFalse(projected.getJSONObject(1).has("reasoning_content"));
+        assertEquals("{}",projected.getJSONObject(1).getJSONArray("tool_calls").getJSONObject(0).getJSONObject("function").getString("arguments"));
+        assertFalse(projected.getJSONObject(2).getString("content").contains(CANARY));assertEquals("新要求的独立答复",projected.getJSONObject(4).getString("content"));
+        assertTrue(raw.toString().contains(CANARY));assertEquals(1,f.repo.message(TARGET,owner.getString("ownerMessageId")).getJSONArray("ownerPreviewRefs").length());
+    }}
 
     @Test public void fullUserProofRequiresTheFinalRequestAndAccumulatesOnlyRealPreparedParts()throws Exception{try(Fixture f=new Fixture()){
         JSONObject first=f.carrier(new JSONArray(),"第一轮真实约束🙂"),second=f.carrier(new JSONArray(),"第二轮确认的补充");RunControl control=f.control();try(var projection=f.projection(control)){

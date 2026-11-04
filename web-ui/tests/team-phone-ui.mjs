@@ -127,7 +127,9 @@ try {
       await review(page).getByRole('button', { name: '确认这一次操作', exact: true }).click();
       await expect(page.getByRole('heading', { name: goal, exact: true })).toBeVisible();
       await expect(page.getByText('已收到原操作回执。', { exact: true })).toBeVisible();
-      await expect(page.getByText('工作中', { exact: true })).toBeVisible();
+      const runStatus = page.locator('.pw-team-reading > header .pw-detail-status');
+      await expect(runStatus).toHaveText('工作中');
+      await expect(runStatus).toBeVisible();
       const state = await host(page), confirmations = state.calls.filter(call => call.action === 'teams.confirm');
       assert.deepEqual(confirmations.map(call => call.args), [{ reviewHandle }], 'Only the acknowledged final review starts once');
       assert.equal(state.confirmedStarts, 1);

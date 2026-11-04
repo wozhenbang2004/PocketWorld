@@ -99,7 +99,11 @@ public final class OwnerInputQueueTest {
     }
     @Test public void detailReferencesAreDefensiveCopiesAndCheckpointViewIsNeverEditable()throws Exception{
         JSONObject row=row();row.getJSONArray("attachments").put(new JSONObject().put("id","original"));
+        row.put("ownerPreviewRefs",new JSONArray().put(new JSONObject().put("referenceId","native-preview-selection")));
         JSONObject view=OwnerInputQueue.view(row,true,true);view.getJSONArray("attachments").getJSONObject(0).put("id","changed");
+        view.getJSONArray("ownerPreviewRefs").getJSONObject(0).put("referenceId","changed");
+        assertEquals(1,view.getInt("previewReferenceCount"));assertEquals("native-preview-selection",row.getJSONArray("ownerPreviewRefs").getJSONObject(0).getString("referenceId"));
+        assertFalse(OwnerInputQueue.view(row,false,false).has("ownerPreviewRefs"));
         assertEquals("original",row.getJSONArray("attachments").getJSONObject(0).getString("id"));assertFalse(view.getBoolean("editable"));
         assertEquals("materialized",view.getString("queueState"));
     }

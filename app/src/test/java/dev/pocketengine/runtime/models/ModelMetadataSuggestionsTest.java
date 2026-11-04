@@ -32,6 +32,15 @@ public final class ModelMetadataSuggestionsTest {
         JSONObject different=ModelMetadataSuggestions.parse(binding(1),"model-a","example",document().replace("https://provider.invalid/v1","https://other.invalid/v1"),1000);assertEquals("different_origin",different.getString("originMatch"));assertTrue(different.getBoolean("adviceOnly"));
         JSONObject secret=ModelMetadataSuggestions.parse(binding(1),"model-a","example",document().replace("https://provider.invalid/v1","https://user:secret@other.invalid/v1?key=private"),1000);assertEquals("",secret.getString("providerApi"));assertFalse(secret.toString().contains("secret"));
     }
+    @Test public void bedrockWithoutCatalogEndpointKeepsMetadataOriginUnverified()throws Exception{
+        ModelBinding bedrock=new ModelBinding("connection","bedrock",ModelBinding.Protocol.BEDROCK_ANTHROPIC,ModelBinding.Format.NONE,URI.create(""),"credential",1,"installation",1,false);
+        String model="anthropic.claude-sonnet-4-6",api="https://bedrock-runtime.us-east-1.amazonaws.com";
+        String body=new JSONObject().put("amazon-bedrock",new JSONObject().put("api",api).put("models",new JSONObject().put(model,new JSONObject().put("id",model).put("tool_call",true)))).toString();
+        JSONObject advice=ModelMetadataSuggestions.parse(bedrock,model,"amazon-bedrock",body,1000);
+        assertEquals("provider_origin_unverified",advice.getString("originMatch"));assertEquals(api,advice.getString("providerApi"));
+        assertTrue(advice.getBoolean("adviceOnly"));assertFalse(advice.getBoolean("capabilityMetadataChanged"));
+        assertEquals(bedrock,ModelBinding.fromJson(advice.getJSONObject("binding")));assertEquals("",advice.getJSONObject("binding").getString("modelsEndpoint"));
+    }
     @Test public void damagedCacheIsPreservedAndCannotOverwriteAWorkingOwnerSetting()throws Exception{
         Files.writeString(file(),"invalid-cache");var cache=new ModelMetadataSuggestions(file());assertFalse(cache.snapshot(binding(1),"model-a",1000).getBoolean("cacheReadable"));assertThrows(IllegalStateException.class,()->cache.clear(binding(1),"model-a"));assertEquals("invalid-cache",Files.readString(file()));
     }

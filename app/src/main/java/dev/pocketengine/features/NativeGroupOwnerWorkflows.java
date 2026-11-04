@@ -135,7 +135,7 @@ public final class NativeGroupOwnerWorkflows implements GroupOwnerAuthority, Aut
         public void bindOriginalControl(dev.pocketengine.core.RunControl original){checkOwnerCurrent();if(window.materialControl!=null&&window.materialControl!=original)throw new SecurityException("本页已有原材料执行");window.materialControl=original;try{checkWindowCurrent();}catch(RuntimeException closed){original.cancel();throw closed;}}
         public void releaseOriginalControl(dev.pocketengine.core.RunControl original){if(window.materialControl==original)window.materialControl=null;}
         public dev.pocketengine.core.ModelConfig selectedModel(){return selected;}
-        public void checkModel(dev.pocketengine.core.ModelConfig actual)throws Exception {if(actual.usesAccount()||!selected.apiKey.equals(actual.apiKey)||!dev.pocketengine.store.TaskStore.capabilityFingerprint(selected.publicJson()).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(actual.publicJson())))throw new SecurityException("材料处理的原API模型连接已变化，未自动切换或使用账号套餐");}
+        public void checkModel(dev.pocketengine.core.ModelConfig actual)throws Exception {if(actual.usesAccount()||!selected.sameCredentials(actual)||!dev.pocketengine.store.TaskStore.capabilityFingerprint(selected.publicJson()).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(actual.publicJson())))throw new SecurityException("材料处理的原API模型连接已变化，未自动切换或使用账号套餐");}
     }
     private static final class ReturnReview {
         final dev.pocketengine.store.TaskStore.ReviewedExternalReturn original;final String digest;final long expiresAt=System.currentTimeMillis()+120_000L;String outboxId;

@@ -156,6 +156,12 @@ public final class TaskStoreMemoryReader implements TaskMemoryUse.HostReader,Tas
         @Override public JSONArray tools()throws Exception{return append(existing.tools());}
         @Override public boolean supports(String name){return !binding.readerRetired()&&own(name)||existing.supports(name);}
         @Override public boolean sideEffecting(String name){return !own(name)&&existing.sideEffecting(name);}
+        @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{
+            if(!own(name))return existing.planningAccess(name,arguments);
+            if(binding.readerRetired())return dev.pocketengine.core.ExecutionPlanning.Access.DENY;
+            if(arguments!=null){JSONObject checked=new JSONObject(arguments.toString());checked.remove("_hostOperationId");validate(name,checked);}
+            return dev.pocketengine.core.ExecutionPlanning.Access.READ;
+        }
         @Override public void validate(String name,JSONObject args)throws Exception{
             if(!own(name)){existing.validate(name,args);return;}if(binding.readerRetired())throw new SecurityException("原证据工具已永久退役，请新建明确来源的任务");
             if(RAW_QUERY.equals(name))new TaskStoreMemoryQuery.RawRequest(args);

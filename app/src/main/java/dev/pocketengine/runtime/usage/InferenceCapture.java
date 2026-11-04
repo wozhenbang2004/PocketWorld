@@ -50,7 +50,6 @@ public final class InferenceCapture {
     private final Target target;
     private final Sink observer;
     private InferenceFailure failure;
-    private final String secret;
     private final ModelConfig pricingConfig;
     private final InferenceTokenReservation.NativeIdentity budgetIdentity;
     private JSONObject frozenPrice;
@@ -61,20 +60,21 @@ public final class InferenceCapture {
     public InferenceCapture(ModelConfig config,RunControl control,Target target)throws Exception{this(config,control,target,config.usesAccount()?"openai_responses":config.provider);}
     private InferenceCapture(ModelConfig config,RunControl control,Target target,String protocol)throws Exception{
         this.target=java.util.Objects.requireNonNull(target);observer=presentationObserver;
-        secret=config.apiKey;pricingConfig=config;budgetIdentity=InferenceTokenReservation.captureIdentity(config);
+        pricingConfig=config;budgetIdentity=InferenceTokenReservation.captureIdentity(config);
         requireOriginalContext(control,target);
         usage=new ProviderUsage.Collector(protocol);
         route.put("kind",config.usesAccount()?"account":"api_key").put("protocol",protocol).put("requestedModel",config.model)
                 .put("responseModel",JSONObject.NULL).put("historyDigest",JSONObject.NULL);
         if(config.usesAccount())route.put("accountId",config.accountModel.accountId).put("accountVersion",config.accountModel.accountVersion);
+        if(config.usesBedrock())route.put("bedrockRegion",config.bedrockRegion).put("credentialKind","aws_sts_session");
         ModelBinding binding=config.capabilityBinding;
         if(binding!=null)route.put("connectionId",binding.connectionId()).put("providerId",binding.providerId())
                 .put("credentialId",binding.credentialId()).put("credentialRevision",binding.credentialRevision())
                 .put("installationId",binding.installationId()).put("installationRevision",binding.installationRevision());
         // A key accidentally pasted into a public model/connection label is still a secret.
         boolean redacted=false;java.util.Iterator<String> keys=route.keys();java.util.List<String> hidden=new java.util.ArrayList<>();
-        if(!secret.isEmpty())while(keys.hasNext()){
-            String key=keys.next();Object value=route.opt(key);if(value instanceof String&&((String)value).contains(secret))hidden.add(key);
+        while(keys.hasNext()){
+            String key=keys.next();Object value=route.opt(key);if(value instanceof String&&config.containsSensitive((String)value))hidden.add(key);
         }
         for(String key:hidden){route.put(key,JSONObject.NULL);redacted=true;}
         route.put("identityRedacted",redacted);
@@ -98,7 +98,7 @@ public final class InferenceCapture {
     public void requestProjection(JSONObject finalWire)throws Exception {
         if(started||finished)throw new SecurityException("request_projection_after_dispatch");
         JSONObject diagnostics=dev.pocketengine.runtime.providers.ProviderCompatibility.diagnostics(pricingConfig,finalWire);
-        if(!secret.isEmpty()&&diagnostics.toString().contains(secret))diagnostics=new JSONObject().put("format","pocketworld.provider-projection.v1").put("identityRedacted",true).put("cacheHitKnown",false);
+        if(pricingConfig.containsSensitive(diagnostics.toString()))diagnostics=new JSONObject().put("format","pocketworld.provider-projection.v1").put("identityRedacted",true).put("cacheHitKnown",false);
         route.put("providerProjection",diagnostics);
     }
     public void tokenReservation(org.json.JSONArray messages,org.json.JSONArray tools)throws Exception {
@@ -114,6 +114,12 @@ public final class InferenceCapture {
     public boolean wasDispatched(){return started;}
     public boolean terminalPersisted(){return !started||terminalPersisted;}
     public InferenceFailure failureObservation(){return failure;}
+    /** Service correlation only. The original physical callId remains the receipt identity. */
+    public void observedBedrockRequestId(java.util.List<String> values)throws Exception {
+        if(!pricingConfig.usesBedrock()||!started||finished||values==null||values.size()!=1)return;
+        String value=values.get(0);
+        if(value!=null&&value.matches("[A-Za-z0-9_.:-]{1,200}")&&!pricingConfig.containsSensitive(value))route.put("providerRequestId",value);
+    }
     /** Native Realtime API-key transport only, not a ChatGPT plan or a guessed model route. */
     public static InferenceCapture realtime(ModelConfig captured,long profileRevision,RunControl original,Target target)throws Exception{
         if(captured.usesAccount()||profileRevision<1)throw new SecurityException("native_realtime_api_profile_required");
@@ -126,12 +132,12 @@ public final class InferenceCapture {
     /** Actual committed native input item, not a response.created event or proof of provider charge. */
     public void observedServerTranscription(String itemId)throws Exception{
         if(started||!"server_transcription_observed".equals(route.optString("requestOrigin"))||itemId==null||!itemId.matches("[A-Za-z0-9_.:-]{1,200}"))throw new SecurityException("invalid_native_transcription_observation");
-        route.put("providerItemId",secret.isEmpty()||!itemId.contains(secret)?itemId:JSONObject.NULL).put("startEvidence","input_audio_buffer.committed");dispatch();
+        route.put("providerItemId",!pricingConfig.containsSensitive(itemId)?itemId:JSONObject.NULL).put("startEvidence","input_audio_buffer.committed");dispatch();
     }
     /** The server's response id is session-local correlation, never the physical callId or a grant. */
     public void observedServerResponse(String responseId)throws Exception{
         if(started||!"server_response_observed".equals(route.optString("requestOrigin"))||responseId==null||!responseId.matches("[A-Za-z0-9_.:-]{1,200}"))throw new SecurityException("invalid_native_response_observation");
-        route.put("providerResponseId",secret.isEmpty()||!responseId.contains(secret)?responseId:JSONObject.NULL);dispatch();
+        route.put("providerResponseId",!pricingConfig.containsSensitive(responseId)?responseId:JSONObject.NULL);dispatch();
     }
     /** Register uncertain dispatch before network I/O; a storage failure prevents dispatch. */
     public void dispatch()throws Exception{
@@ -161,8 +167,11 @@ public final class InferenceCapture {
     }
     private InferenceReceipt receipt(InferenceReceipt.Outcome outcome)throws Exception{
         String model=usage.reportedModel();
-        if(model!=null&&(secret.isEmpty()||!model.contains(secret)))route.put("responseModel",model);
+        if(model!=null&&!pricingConfig.containsSensitive(model))route.put("responseModel",model);
+        JSONObject observedUsage=usage.toJson();
+        Object reason=observedUsage.opt("finishReason");
+        if(reason instanceof String&&pricingConfig.containsSensitive((String)reason))observedUsage.put("finishReason",JSONObject.NULL);
         return new InferenceReceipt(callId,target.context,outcome,startedAt,
-                outcome==InferenceReceipt.Outcome.STARTED?0:System.currentTimeMillis(),Math.max(0,System.nanoTime()-startNanos),route,InferencePricing.apply(usage.toJson(),frozenPrice),outcome==InferenceReceipt.Outcome.STARTED?null:failure,budgetIdentity);
+                outcome==InferenceReceipt.Outcome.STARTED?0:System.currentTimeMillis(),Math.max(0,System.nanoTime()-startNanos),route,InferencePricing.apply(observedUsage,frozenPrice),outcome==InferenceReceipt.Outcome.STARTED?null:failure,budgetIdentity);
     }
 }

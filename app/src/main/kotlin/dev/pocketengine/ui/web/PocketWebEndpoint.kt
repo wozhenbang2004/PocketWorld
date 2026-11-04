@@ -9,6 +9,7 @@ internal interface PocketWebEndpoint {
     fun canInteract(): Boolean
     fun start()
     fun foreground(value: Boolean) {}
+    fun attachProjectPreview(container: android.widget.FrameLayout) {}
     fun captureDispatch(raw: String, stale: () -> Unit): () -> Unit
     fun invalidatePresentation(documentReplaced: Boolean)
     fun restorePresentationState(saved: JSONObject?)
@@ -25,6 +26,8 @@ internal class PocketWebWorkspaceEndpoint(
     override val surface = "business"
     override fun canInteract() = (controller.webPresentationActivity().application as dev.pocketengine.EngineApplication).businessReady() && controller.webUiCanInteract()
     override fun start() = bridge.start()
+    override fun foreground(value: Boolean) = bridge.foreground(value)
+    override fun attachProjectPreview(container: android.widget.FrameLayout) = bridge.attachProjectPreview(container)
     override fun captureDispatch(raw: String, stale: () -> Unit): () -> Unit {
         val original = bridge.captureWindow()
         return { if (bridge.acceptsWindow(original)) bridge.postMessage(raw, original, stale) else stale() }

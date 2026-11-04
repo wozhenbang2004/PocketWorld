@@ -53,7 +53,13 @@ internal class PocketWebBootstrap(
                 if (readable && app.businessReady() && operation == null && !readyDelivered) {
                     readyDelivered = true
                     val original = window
-                    main.post { if (current(original) && app.businessReady() && operation == null) ready() else readyDelivered = false }
+                    main.post {
+                        if (current(original) && app.businessReady() && operation == null) {
+                            ready()
+                            // The Activity may defer mounting if its final status read failed.
+                            if (!closed) readyDelivered = false
+                        } else readyDelivered = false
+                    }
                 }
             }
             if (foreground) main.postDelayed(this, 500L)
@@ -128,7 +134,7 @@ internal class PocketWebBootstrap(
             receipts[id] = signature to receipt
             emit(receipt); return
         }
-        if (mutation(action) && operation?.optString("status") in setOf("pending", "unknown")) { fail("原操作仍在处理或回执待核对，请先读取原现状。"); return }
+        if (mutation(action) && operation != null) { fail("原操作仍在处理或回执尚未收讫，请先核对原现状。"); return }
         if (action == "repair.review" && operation?.optString("status") == "unknown") { fail("请先核对原操作，不沿用未确认的维修结果。"); return }
         if (mutation(action)) {
             operation = JSONObject().put("requestId", payload.optString("requestId", id)).put("command", action)

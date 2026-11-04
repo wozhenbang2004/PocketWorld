@@ -21,7 +21,7 @@ import org.json.JSONTokener;
 /** Read-only definitions inside one original native capability scope. It owns no grants or executor. */
 public final class ScopedToolCatalog {
     public static final String SEARCH_TOOL="tools_search";
-    public static final int MAX_TOOLS=512,MAX_PAGE_TOOLS=12,MAX_PAGE_BYTES=48*1024,MAX_CATALOG_BYTES=24*1024*1024;
+    public static final int MAX_TOOLS=100,MAX_PAGE_TOOLS=12,MAX_PAGE_BYTES=48*1024,MAX_CATALOG_BYTES=24*1024*1024;
     public enum SourceKind { NATIVE, PLUGIN, EXTENSION, UNKNOWN }
     /** Supplied by the original native route/installation owner; never decoded from model arguments. */
     public record SourcePin(SourceKind kind,String installationId,String version,String identityDigest) {
@@ -67,8 +67,8 @@ public final class ScopedToolCatalog {
     public static ScopedToolCatalog capture(CapabilitySnapshot scope,String taskId,String runId,int epoch,RunControl original,
                                             JSONArray definitions,Map<String,SourcePin> sources,Set<String> residentNames)throws Exception {
         java.util.Objects.requireNonNull(scope);java.util.Objects.requireNonNull(sources);java.util.Objects.requireNonNull(residentNames);
-        Set<String> allowed=scope.current(taskId,runId,epoch,original);
-        if(!allowed.contains(SEARCH_TOOL)||definitions.length()>MAX_TOOLS)throw new SecurityException("tool_catalog_not_in_original_scope");
+        Set<String> allowed=scope.catalogTools(taskId,runId,epoch,original);
+        if(definitions.length()>MAX_TOOLS)throw new SecurityException("tool_catalog_not_in_original_scope");
         Map<String,Entry> entries=new TreeMap<>();JSONArray identities=new JSONArray();long bytes=0;
         for(int i=0;i<definitions.length();i++){
             JSONObject definition=definitions.getJSONObject(i),function=definition.getJSONObject("function");String name=function.getString("name");
@@ -84,20 +84,22 @@ public final class ScopedToolCatalog {
             entries.put(name,new Entry(name,description,value,metadata.toString(),identity,resident));
         }
         if(!entries.keySet().equals(sources.keySet()))throw new SecurityException("tool_source_map_not_exact");
+        if(!sources.equals(scope.sourcePinsFor(taskId,runId,epoch,original,entries.keySet())))throw new SecurityException("tool_sources_not_original_snapshot_pins");
         for(Entry entry:entries.values())identities.put(new JSONObject(entry.metadata));
-        String revision=fingerprint(new JSONObject().put("taskId",taskId).put("runId",runId).put("epoch",epoch).put("tools",identities));
-        scope.current(taskId,runId,epoch,original);return new ScopedToolCatalog(scope,taskId,runId,epoch,original,entries,revision);
+        String revision=fingerprint(new JSONObject().put("taskId",taskId).put("runId",runId).put("epoch",epoch).put("scopeDigest",scope.catalogScopeDigest()).put("pauseRevision",original.pauseRevision()).put("tools",identities));
+        scope.catalogTools(taskId,runId,epoch,original);return new ScopedToolCatalog(scope,taskId,runId,epoch,original,entries,revision);
     }
     public void check()throws Exception {
         if(retired)throw new SecurityException("tool_catalog_retired");
-        try{scope.current(taskId,runId,epoch,original);}catch(Exception stale){retired=true;throw stale;}
+        try{scope.catalogTools(taskId,runId,epoch,original);}catch(Exception stale){retired=true;throw stale;}
     }
     public String revision(){return revision;}
     public boolean containsIdentity(String identity){return entries.values().stream().anyMatch(row->row.identity.equals(identity));}
-    public boolean exposes(String name,Set<String> activated)throws Exception{check();Entry row=entries.get(name);return row!=null&&(row.resident||activated.contains(row.identity));}
+    public boolean exposes(String name,Set<String> activated)throws Exception{check();if(SEARCH_TOOL.equals(name))return hasHidden(activated);Entry row=entries.get(name);return row!=null&&(row.resident||activated.contains(row.identity));}
     public JSONArray requestTools(Set<String> activated)throws Exception {
-        check();JSONArray tools=new JSONArray();for(Entry row:ordered())if(row.resident||activated.contains(row.identity))tools.put(new JSONObject(row.definition));tools.put(searchDefinition());check();return tools;
+        check();JSONArray tools=new JSONArray();for(Entry row:ordered())if(row.resident||activated.contains(row.identity))tools.put(new JSONObject(row.definition));if(hasHidden(activated))tools.put(searchDefinition());check();return tools;
     }
+    private boolean hasHidden(Set<String> activated){for(Entry row:entries.values())if(!row.resident&&!activated.contains(row.identity))return true;return false;}
     public JSONObject summary(Set<String> activated)throws Exception {
         check();JSONArray rows=new JSONArray();int hidden=0;for(Entry row:ordered())if(!row.resident&&!activated.contains(row.identity)){hidden++;if(rows.length()<12)rows.put(new JSONObject(row.metadata));}
         JSONObject out=new JSONObject().put("format","pocketworld.tool-catalog-summary.v1").put("catalogRevision",revision).put("tools",rows).put("hiddenCount",hidden).put("listedCount",rows.length()).put("truncated",hidden>rows.length()).put("executionAuthorized",false);check();return out;
@@ -141,8 +143,11 @@ public final class ScopedToolCatalog {
                 .put("parameters",new JSONObject().put("type","object").put("properties",properties).put("required",new JSONArray().put("query")).put("additionalProperties",false)));
     }
     private static boolean requiresOriginalTransport(Object value)throws Exception {
-        if(value instanceof JSONObject object){var keys=object.keys();while(keys.hasNext()){String key=keys.next();if(key.equalsIgnoreCase("apiKey")||key.equalsIgnoreCase("authorization")||key.equals("imageBase64")||key.equals("image_url")||requiresOriginalTransport(object.get(key)))return true;}}
-        else if(value instanceof JSONArray array)for(int i=0;i<array.length();i++)if(requiresOriginalTransport(array.get(i)))return true;
+        // A definition that the existing Runner or SQL receipt sanitizer would change must
+        // stay on its original schema transport, never become a partial discovery result.
+        if(value instanceof JSONObject object){var keys=object.keys();while(keys.hasNext()){String key=keys.next();if(key.equalsIgnoreCase("apiKey")||key.equalsIgnoreCase("authorization")||key.equalsIgnoreCase("token")||key.equalsIgnoreCase("secret")||key.equals("imageBase64")||key.equals("imageDataUrl")||key.equals("image_url")||requiresOriginalTransport(object.get(key)))return true;}}
+        else if(value instanceof JSONArray array){if(array.length()>200)return true;for(int i=0;i<array.length();i++)if(requiresOriginalTransport(array.get(i)))return true;}
+        else if(value instanceof String text&&text.length()>12000)return true;
         return false;
     }
     private static String excerpt(String text,int max){String normalized=text.replaceAll("[\\p{Cntrl}]"," ");int end=normalized.offsetByCodePoints(0,Math.min(max,normalized.codePointCount(0,normalized.length())));return normalized.substring(0,end);}

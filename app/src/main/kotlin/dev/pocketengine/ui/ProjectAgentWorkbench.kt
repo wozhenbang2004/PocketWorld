@@ -423,8 +423,8 @@ internal fun NativeProjectAgentWorkbench(checkout: JSONObject, inspection: JSONO
             val sending = continuation?.taskId == current.id
             OutlinedTextField(text, { if (it.length <= 8000) feedback[current.id] = it }, label = { Text("看过结果后，继续修改什么") }, minLines = 2, maxLines = 5, modifier = Modifier.fillMaxWidth().testTag("project_continue_draft"), enabled = !sending)
             repairNotice?.let { WorkbenchCaption(it) }
-            OutlinedButton(onClick = { continuation = ProjectContinuationRequest(controller.requestOwnerAction("continueDevelopmentTask", JSONObject().put("taskId", current.id).put("feedback", text.trim())), current.id, text) }, enabled = text.isNotBlank() && !sending && continuation == null && unconfirmedSubmission == null && "owner.continueDevelopmentTask" !in state.moduleBusy && ProjectWorkbenchGuard.canContinue(current), modifier = Modifier.testTag("project_continue_task")) { Text(if (sending) "等待原任务确认…" else "继续原项目任务") }
-            if (!ProjectWorkbenchGuard.canContinue(current)) WorkbenchCaption("先处理原任务的审批或未决操作；现有文件、日志和修改草稿保留。")
+            OutlinedButton(onClick = { controller.focusTask(current.id) }, enabled = !sending && continuation == null && unconfirmedSubmission == null, modifier = Modifier.testTag("project_continue_task")) { Text(if (sending) "等待原任务确认…" else if (ProjectWorkbenchGuard.canContinue(current)) "在原任务中核对继续" else "查看原任务") }
+            WorkbenchCaption(if (ProjectWorkbenchGuard.canContinue(current)) "打开原任务后重新核对范围并填写本次反馈。这里的修改草稿保留，不会自动继续或发送。" else "原任务当前不能继续。可查看原记录；现有文件、日志和修改草稿保留，已停止或取消的任务不会重新启动。")
             if (continueInput?.optString("taskId") == current.id) state.moduleErrors["owner.continueDevelopmentTask"]?.let { Text(it, color = Danger, fontSize = 13.sp) }
             TextButton(onClick = { newTask = !newTask }) { Text(if (newTask) "收起新任务" else "为此项目另开任务") }
         }

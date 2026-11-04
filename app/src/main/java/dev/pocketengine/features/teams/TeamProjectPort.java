@@ -35,6 +35,7 @@ final class TeamProjectPort implements CapabilityPort {
     @Override public boolean supports(String name){return fileTool(name)&&files.supports(name)||project!=null&&projectTool(name)&&project.supports(name)&&(!name.equals("project_package")||binding.optString("memberId").equals("integrator"));}
     private CapabilityPort selected(String name)throws Exception {if(!supports(name))throw new SecurityException("没有此成员已挂载项目能力；先准备真实副本，不降级成另写文字文件");return projectTool(name)?project:files;}
     @Override public boolean sideEffecting(String name){return projectTool(name)?project==null||project.sideEffecting(name):files.sideEffecting(name);}
+    @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{return !supports(name)?dev.pocketengine.core.ExecutionPlanning.Access.DENY:projectTool(name)?project.planningAccess(name,arguments):files.planningAccess(name,arguments);}
     @Override public void validate(String name,JSONObject args)throws Exception{selected(name).validate(name,args);}
     @Override public JSONObject execute(String name,JSONObject args,RunControl control)throws Exception {check(control);JSONObject result=selected(name).execute(name,args,control);
         if(name.equals("project_plan")&&result.has("planRef")&&result.has("planDigest")){result=new JSONObject(result.toString());result.remove("plan");result.put("inlineCompatibilityCopyOmitted",true).put("fullPlanStoredInOriginalTaskStore",true).put("readFullManifestWith","project_plan_manifest");}

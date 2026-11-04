@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
+import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
+import { bridge } from './bridge';
 import { connectionProfilePayload, wirelessPort } from './forms-library/host-contracts';
 import TerminalSurface from './TerminalSurface';
 import { resumeSshFile } from './workspace-resume';
@@ -14,6 +15,7 @@ const status = (value: any) => ({ completed: '已完成', failed: '未完成', r
 const originalJob = (job: Data) => ({ profileId: job.profileId, jobId: job.id, jobOperationId: job.operationId, serviceBase: job.serviceBase, _profileBinding: job.profileBinding });
 const binding = (profile: Data) => ({ profileId: profile.id, _profileBinding: profile.bindingHash });
 const section = (title: string, children: ReactNode, description?: string) => <section className="pw-settings-section"><header className="pw-section-heading"><h2>{title}</h2>{description && <p>{description}</p>}</header>{children}</section>;
+const connectionWindow = () => { const view = bridge.getState().view as Data | undefined; return JSON.stringify([view?.section, view?.taskId, view?.resumeRevision, bridge.getDocumentEpoch()]); };
 function Facts({ values }: { values: Array<[string, any]> }) { return <dl className="pw-facts">{values.filter(([, value]) => value !== undefined && value !== null && value !== '').map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{text(value)}</dd></div>)}</dl>; }
 function Receipt({ value, run }: { value: Data | null; run: Run }) {
   if (!value) return null;
@@ -30,11 +32,19 @@ function useRequest(run: Run, state: Data) {
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   useEffect(() => { alive.current = true; return () => { alive.current = false; generation.current++; }; }, []);
   useLayoutEffect(() => { generation.current++; waiting.current = false; setBusy(false); setError(''); }, [scope]);
+  useEffect(() => {
+    let owner = connectionWindow();
+    const invalidate = () => { generation.current++; waiting.current = false; setBusy(false); };
+    const hidden = () => { if (document.visibilityState !== 'visible') invalidate(); };
+    const unsubscribe = bridge.subscribe(() => { const incoming = connectionWindow(); if (incoming !== owner) { owner = incoming; invalidate(); } });
+    document.addEventListener('visibilitychange', hidden); window.addEventListener('pagehide', invalidate);
+    return () => { unsubscribe(); document.removeEventListener('visibilitychange', hidden); window.removeEventListener('pagehide', invalidate); };
+  }, []);
   const request = async (action: string, args: Data = {}) => {
-    if (state.webWorkspaceTaskOpen) throw new Error('请先返回原连接页面，再读取或操作。');
+    if (state.webWorkspaceTaskOpen || document.visibilityState !== 'visible') throw new Error('请先返回原连接页面，再读取或操作。');
     if (waiting.current) throw new Error('请等待原操作回执。');
-    const original = ++generation.current;
-    const current = () => alive.current && original === generation.current && currentScope.current === scope;
+    const original = ++generation.current, owner = connectionWindow();
+    const current = () => alive.current && original === generation.current && currentScope.current === scope && owner === connectionWindow() && document.visibilityState === 'visible';
     waiting.current = true; setBusy(true); setError('');
     try { const value = await run(action, args); if (!current()) throw new Error('原读取窗口已变化，请核对原操作。'); return object(value); }
     catch (failure) { if (current()) setError(failure instanceof Error ? failure.message : String(failure)); throw failure; }
@@ -46,11 +56,12 @@ function useRequest(run: Run, state: Data) {
 /** Product composition of the existing BoardUI forms and settings dialog. */
 export default function ConnectionWorkspace({ domain, state, data, supported, run, registerTransientBack }: Props) {
   const profiles = list(data.profiles), [editing, setEditing] = useState<Data | null>(null), [selected, setSelected] = useState<Data | null>(null), [removing, setRemoving] = useState<Data | null>(null);
+  const remoteBack = useRef<(() => boolean) | null>(null);
   const [probe, setProbe] = useState<Data | null>(null), [trust, setTrust] = useState<Data | null>(null), [checked, setChecked] = useState(false), [receipt, setReceipt] = useState<Data | null>(null);
   const { request, busy, error } = useRequest(run, state);
   const resume = Number(state.webWorkspaceResumeRevision || 0), previousResume = useRef(resume);
   useEffect(() => { if (previousResume.current === resume) return; previousResume.current = resume; setProbe(null); setTrust(null); setRemoving(null); setChecked(false); }, [resume]);
-  useEffect(() => { registerTransientBack(editing || trust || removing ? () => { if (!busy) { setEditing(null); setTrust(null); setRemoving(null); } return true; } : null); return () => registerTransientBack(null); }, [editing, trust, removing, busy, registerTransientBack]);
+  useEffect(() => { registerTransientBack(() => { if (editing || trust || removing) { if (!busy) { setEditing(null); setTrust(null); setRemoving(null); } return true; } return remoteBack.current?.() || false; }); return () => registerTransientBack(null); }, [editing, trust, removing, busy, registerTransientBack]);
   const stale = selected && !profiles.some(profile => profile.id === selected.id && profile.bindingHash === selected.bindingHash);
   const act = (action: string, args: Data, completed?: (value: Data) => void) => { void request(action, args).then(value => { setReceipt(value); completed?.(value); }).catch(() => {}); };
   const available = (action: string) => supported(domain + '.' + action) && !busy;
@@ -68,7 +79,7 @@ export default function ConnectionWorkspace({ domain, state, data, supported, ru
     {probe && domain === 'ssh' && section('本次实际主机指纹', <><Facts values={[[ '主机', probe.originalProfile?.name ], ['指纹', probe.fingerprint ], ['密钥类型', probe.keyType ]]} /><p>请与这台主机已有可信渠道提供的指纹核对。探测没有发送登录凭据。</p>
       {probe.changed ? <><p role="alert">主机密钥已变化，当前连接不会执行。核对原因后，可先移除原信任，再重新探测。</p><Button variant="secondary" disabled={busy} onClick={() => { setTrust({ kind: 'forget', profile: probe.originalProfile }); setChecked(false); }}>核对并移除原信任</Button></> : <Button variant="secondary" disabled={busy || !probe.probeId} onClick={() => { setTrust({ kind: 'approve', ...probe }); setChecked(false); }}>核对并信任这个指纹</Button>}</>)}
     <Receipt value={receipt} run={run} />
-    {selected && section('当前连接 · ' + selected.name, stale ? <><p role="alert">连接已在另一页面修改。旧目标仍显示在这里，尚未沿用它开始新工作。</p><Button variant="secondary" onClick={() => { setSelected(profiles.find(profile => profile.id === selected.id) || null); }}>重新读取当前连接</Button></> : domain === 'remote' ? <RemoteWork key={selected.id + selected.bindingHash} profile={selected} state={state} data={data} run={run} supported={supported} /> : <SshWork key={selected.id + selected.bindingHash} profile={selected} state={state} data={data} run={run} supported={supported} />)}
+    {selected && section('当前连接 · ' + selected.name, stale ? <><p role="alert">连接已在另一页面修改。旧目标仍显示在这里，尚未沿用它开始新工作。</p><Button variant="secondary" onClick={() => { setSelected(profiles.find(profile => profile.id === selected.id) || null); }}>重新读取当前连接</Button></> : domain === 'remote' ? <RemoteWork key={selected.id + selected.bindingHash} profile={selected} state={state} data={data} run={run} supported={supported} back={remoteBack} /> : <SshWork key={selected.id + selected.bindingHash} profile={selected} state={state} data={data} run={run} supported={supported} />)}
     {domain === 'remote' && list(data.jobs).length > 0 && section('电脑上的原任务', list(data.jobs).map(job => <article className="pw-source-record" key={job.id}><header><h3>{job.worker || '电脑任务'}</h3><span>{status(job.status)}</span></header>{job.message && <p>{job.message}</p>}<div className="pw-form-actions">
       <Button variant="secondary" disabled={busy} onClick={() => act('remote.getJob', originalJob(job))}>读取原回执</Button>
       {['queued', 'running', 'stopping', 'awaiting_approval', 'awaiting_input'].includes(job.status) && <Button variant="secondary" disabled={busy} onClick={() => act('remote.cancelJob', originalJob(job))}>请求停止原任务</Button>}
@@ -101,59 +112,133 @@ function ProfileEditor({ domain, original, current, state, run, close }: { domai
     </>}</div>{stale && <p role="alert">连接已在其他页面修改，请关闭后重新读取。</p>}{error && <p role="alert">{error} 请先核对当前连接列表，不重复这次保存。</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { clear(); close(); }}>关闭</Button><Button disabled={!canSave} onClick={() => { const payload = connectionProfilePayload(domain, form, original); setAttempted(true); clear(); void request(domain + '.saveProfile', payload).then(close).catch(() => {}); }}>{busy ? '等待保存回执…' : '保存这项连接'}</Button></div></SettingsDialog>;
 }
 
-function RemoteWork({ profile, state, data, run, supported }: { profile: Data; state: Data; data: Data; run: Run; supported: (action: string) => boolean }) {
-  const [environments, setEnvironments] = useState<Data[] | null>(null), [environmentId, setEnvironment] = useState(''), [worker, setWorker] = useState('codex_app_server'), [probe, setProbe] = useState<Data | null>(null);
-  const [goal, setGoal] = useState(''), [argv, setArgv] = useState('["git","status","--short"]'), [model, setModel] = useState(''), [effort, setEffort] = useState(''), [readOnly, setReadOnly] = useState(true), [timeout, setTimeoutValue] = useState('300');
-  const [draftError, setDraftError] = useState(''), [review, setReview] = useState<Data | null>(null), [operation, setOperation] = useState<Data | null>(null), [receipt, setReceipt] = useState<Data | null>(null), { request, busy, error } = useRequest(run, state);
-  const resume = Number(state.webWorkspaceResumeRevision || 0), previousResume = useRef(resume);
+type RemoteDraft = { environmentId: string; worker: string; goal: string; argv: string; model: string; effort: string; readOnly: boolean; timeout: string; operation: Data | null; uncertain: boolean };
+const remoteDrafts = new Map<string, RemoteDraft>();
+function keepRemoteDraft(key: string, draft: RemoteDraft) {
+  remoteDrafts.delete(key); remoteDrafts.set(key, { ...draft, operation: draft.operation ? { ...draft.operation, reviewHandle: undefined } : null });
+  while (remoteDrafts.size > 8) remoteDrafts.delete(remoteDrafts.keys().next().value!);
+}
+const geminiId = 'gemini_cli_acp_v1';
+function currentGeminiProbe(probe: Data | null, environment: Data | undefined, model: string): boolean {
+  const value = object(probe?.backendObservation);
+  return probe?.available === true && /^[a-f0-9]{64}$/.test(text(probe.capabilityRevision))
+    && value.format === 'pocketworld.remote-backend-observation.v1' && value.backendId === geminiId
+    && value.worker === 'gemini_acp' && value.backendVersion === '0.66.0' && value.protocolVersion === 1
+    && value.available === true && value.modeId === 'default' && value.environmentId === environment?.id
+    && value.environmentBinding === environment?.bindingHash && value.requestedModel === model.trim()
+    && Number.isSafeInteger(value.expiresAt) && value.expiresAt > Date.now()
+    && object(value.installObservation).state === 'observed' && object(value.protocol).state === 'verified';
+}
+function GeminiEvidence({ probe }: { probe: Data }) {
+  const value = object(probe.backendObservation), install = object(value.installObservation), protocol = object(value.protocol), auth = object(value.authentication);
+  const installation = ({ observed: '已核对固定版本 ' + text(install.packageVersion), missing: '未找到固定安装', unsupported: '当前平台不支持', changed: '原安装来源已变化', unavailable: '安装来源尚不可核验' } as Data)[text(install.state)] || '尚未核实安装';
+  const handshake = ({ verified: '已核对 ACP 1 初始化握手', mismatch: '协议或执行器版本不匹配', unknown: '握手结果未知', not_checked: '尚未检查握手' } as Data)[text(protocol.state)] || '尚未核实握手';
+  const authentication = auth.state === 'credential_missing' ? '未检测到预配置凭据'
+    : auth.state === 'credential_present' ? '检测到凭据配置；登录与认证尚未验证' : '凭据与认证状态未知';
+  return <div aria-label="Gemini 本次能力证据">
+    <p role="status">{value.available === true ? '本次安装与初始化核对可用，尚未开始模型工作。' : '当前不能创建 Gemini 工作，请按本次核对原因处理。'}</p>
+    <Facts values={[[ '安装', installation ], ['协议握手', handshake ], ['登录与认证', authentication ]]} />
+    {object(value.reason).message && <p>{object(value.reason).message}</p>}
+    <Accordion><AccordionItem id="gemini-evidence" title="模型、模式与本次证据范围">
+      <Facts values={[[ '请求模型', value.requestedModel || '执行端默认' ], ['模型目录与实际推理', '尚未核实；首次原任务再核对实际模型' ], ['请求模式', '默认审批模式；实际会话尚未核实' ], ['后端', 'Gemini CLI 0.66.0 · ACP 1' ]]} />
+      <p>这次探测没有创建会话、发送任务或验证登录。凭据存在不代表认证成功；安装来源核对也不代表整个执行链或操作系统沙箱已验证。</p>
+      <p>首个版本仅用于本机 Linux 环境里的私人可写工作；不提供只读隔离、SSH、团队、群组、设备或工作配置接入。</p>
+    </AccordionItem></Accordion>
+  </div>;
+}
+function RemoteWork({ profile, state, data, run, supported, back }: { profile: Data; state: Data; data: Data; run: Run; supported: (action: string) => boolean; back: { current: (() => boolean) | null } }) {
+  const key = profile.id + ':' + profile.bindingHash, initial = useRef(remoteDrafts.get(key));
+  const [environments, setEnvironments] = useState<Data[] | null>(null), [environmentFresh, setEnvironmentFresh] = useState(false);
+  const [environmentId, setEnvironment] = useState(initial.current?.environmentId || ''), [worker, setWorker] = useState(initial.current?.worker || 'codex_app_server'), [probe, setProbe] = useState<Data | null>(null);
+  const [goal, setGoal] = useState(initial.current?.goal || ''), [argv, setArgv] = useState(initial.current?.argv || '["git","status","--short"]'), [model, setModel] = useState(initial.current?.model || ''), [effort, setEffort] = useState(initial.current?.effort || ''), [readOnly, setReadOnly] = useState(initial.current?.readOnly ?? true), [timeout, setTimeoutValue] = useState(initial.current?.timeout || '300');
+  const [writeIntent, setWriteIntent] = useState(false), [draftError, setDraftError] = useState(''), [review, setReview] = useState<Data | null>(null);
+  const [operation, setOperation] = useState<Data | null>(initial.current?.operation || null), [uncertain, setUncertain] = useState(initial.current?.uncertain || false), [receipt, setReceipt] = useState<Data | null>(null), { request, busy, error, alive } = useRequest(run, state);
+  const pendingConfirm = useRef<Data | null>(null), currentState = useRef(state);
+  currentState.current = state;
+  const nativeActive = () => { const view = bridge.getState().view as Data | undefined; return document.visibilityState === 'visible' && view?.section === 'remote' && !view.taskId && !currentState.current.webWorkspaceTaskOpen; };
+  const [active, setActive] = useState(nativeActive);
+  const draft = useRef<RemoteDraft>({ environmentId, worker, goal, argv, model, effort, readOnly, timeout, operation, uncertain });
+  draft.current = { environmentId, worker, goal, argv, model, effort, readOnly, timeout, operation, uncertain };
+  useEffect(() => { back.current = () => { if (busy) return true; if (review) { setReview(null); return true; } return false; }; return () => { back.current = null; }; }, [busy, review, back]);
+  useEffect(() => () => { const pending = pendingConfirm.current; keepRemoteDraft(key, { ...draft.current, operation: pending || draft.current.operation, uncertain: draft.current.uncertain || !!pending }); }, [key]);
   useEffect(() => {
-    if (previousResume.current === resume) return; previousResume.current = resume;
-    let current = true; const hadEnvironments = environments !== null;
-    setReview(null); setProbe(null); setDraftError(''); setEnvironments(null);
-    void (async () => {
-      if (hadEnvironments) try { const value = await request('remote.environments', binding(profile)); if (current) setEnvironments(list(value.environments)); } catch {}
-      if (current && operation?.operationId) try { const value = await request('remote.reconcileOperation', { profileId: profile.id, operationId: operation.operationId }); if (current) setReceipt(value); } catch {}
-    })();
-    return () => { current = false; };
-  }, [resume]);
-  const environment = environments?.find(item => item.id === environmentId), workers = list(environment?.workers).filter(item => ['codex_app_server', 'claude', 'pi', 'command'].includes(item.id));
+    let owner = connectionWindow();
+    const invalidate = () => {
+      setActive(nativeActive()); setReview(null); setProbe(null); setWriteIntent(false); setEnvironmentFresh(false);
+      if (pendingConfirm.current) { draft.current = { ...draft.current, operation: pendingConfirm.current, uncertain: true }; setUncertain(true); setReceipt(null); pendingConfirm.current = null; }
+    };
+    const unsubscribe = bridge.subscribe(() => { const incoming = connectionWindow(); if (incoming !== owner) { owner = incoming; invalidate(); } });
+    const visibility = () => { if (document.visibilityState !== 'visible') invalidate(); else setActive(nativeActive()); };
+    document.addEventListener('visibilitychange', visibility); window.addEventListener('pagehide', invalidate);
+    return () => { unsubscribe(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener('pagehide', invalidate); };
+  }, []);
+  useEffect(() => {
+    const expiresAt = Number(object(probe?.backendObservation).expiresAt);
+    if (worker !== 'gemini_acp' || !Number.isSafeInteger(expiresAt)) return;
+    const timer = setTimeout(() => { setProbe(null); setReview(null); setDraftError('本次 Gemini 能力核对已过期，请按原目标重新核对。'); }, Math.max(0, expiresAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [probe, worker]);
+  const environment = environments?.find(item => item.id === environmentId), workers = list(environment?.workers).filter(item => ['codex_app_server', 'claude', 'pi', 'command', 'gemini_acp'].includes(item.id));
   const unresolved = list(data.operations).filter(item => item.profileId === profile.id && ['unknown', 'submitting'].includes(item.status));
-  const nativeTask = list(state.tasks).find(task => task.id === operation?.operationId);
-  const locked = busy || !!operation;
+  const nativeTask = list(state.tasks).find(task => task.id === operation?.operationId), gemini = worker === 'gemini_acp';
+  const locked = busy || !!operation || !active, geminiReady = currentGeminiProbe(probe, environment, model);
   const target = () => ({ ...binding(profile), environmentId, environmentBinding: environment?.bindingHash, worker, ...(model.trim() ? { model: model.trim() } : {}), ...(worker === 'codex_app_server' && effort.trim() ? { effort: effort.trim() } : {}) });
-  const changed = (change: () => void) => { setProbe(null); setReview(null); change(); };
+  const changed = (change: () => void) => { if (locked) return; setProbe(null); setReview(null); setWriteIntent(false); setDraftError(''); change(); };
   const prepare = async () => {
+    if (locked || !environmentFresh) return;
     setDraftError('');
     const input: Data = { profileId: profile.id, bindingHash: profile.bindingHash, environmentId, environmentBinding: environment?.bindingHash, worker, timeoutSeconds: Number(timeout) };
     try {
-      if (worker === 'command') input.argv = JSON.parse(argv); else Object.assign(input, { prompt: goal, readOnly: worker === 'codex_app_server' && readOnly }, model.trim() ? { model: model.trim() } : {}, worker === 'codex_app_server' && effort.trim() ? { effort: effort.trim() } : {}, worker === 'codex_app_server' && model.trim() && probe?.modelOptions?.digest ? { modelOptionsDigest: probe.modelOptions.digest } : {});
+      if (gemini && (environment?.writeAllowed !== true || !writeIntent || !geminiReady)) throw new Error('请核对当前 Gemini 能力，并明确确认这次私人工作的写入意图。此后端不支持只读分析。');
+      if (worker === 'command') input.argv = JSON.parse(argv);
+      else Object.assign(input, { prompt: goal, readOnly: worker === 'codex_app_server' && readOnly }, model.trim() ? { model: model.trim() } : {}, worker === 'codex_app_server' && effort.trim() ? { effort: effort.trim() } : {}, worker === 'codex_app_server' && model.trim() && probe?.modelOptions?.digest ? { modelOptionsDigest: probe.modelOptions.digest } : {});
+      if (gemini) Object.assign(input, { backendId: geminiId, capabilityRevision: probe!.capabilityRevision, modeId: 'default', readOnly: false });
       setReview(await request('remote.reviewTask', input));
-    } catch (failure) { setDraftError(failure instanceof Error ? failure.message : '请核对这次任务参数。'); }
+    } catch (failure) { if (alive.current) setDraftError(failure instanceof Error ? failure.message : '请核对这次任务参数。'); }
   };
-  return <>
+  const readEnvironments = () => {
+    if (locked) return;
+    setReview(null); setProbe(null); setWriteIntent(false); setEnvironmentFresh(false); setDraftError('');
+    void request('remote.environments', binding(profile)).then(value => { setEnvironments(list(value.environments)); setEnvironmentFresh(true); }).catch(() => {});
+  };
+  const confirm = () => {
+    if (!review || locked || pendingConfirm.current || !environmentFresh || gemini && (!writeIntent || !geminiReady)) return;
+    const captured = review; pendingConfirm.current = captured; draft.current = { ...draft.current, operation: captured, uncertain: false }; setOperation(captured); setReview(null); setUncertain(false); setReceipt(null);
+    void request('remote.confirmTask', { reviewHandle: captured.reviewHandle }).then(value => {
+      if (pendingConfirm.current !== captured) return;
+      setReceipt(value); setUncertain(value.status === 'unknown');
+    }).catch(() => { if (alive.current && draft.current.operation?.operationId === captured.operationId) { draft.current = { ...draft.current, uncertain: true }; setUncertain(true); } }).finally(() => { if (pendingConfirm.current === captured) pendingConfirm.current = null; });
+  };
+  return <div style={{ position: 'relative', minWidth: 0, overflowAnchor: 'none' }}>
     <p>先读取实际工作环境，再选择执行器。每项新工作保留唯一原操作，未知提交不会重发。</p>
-    {unresolved.map(item => <div className="pw-selected-object" key={item.operationId}><p>此连接有原提交待核对。</p><Button variant="secondary" disabled={busy} onClick={() => { void request('remote.reconcileOperation', { profileId: profile.id, operationId: item.operationId }).then(setReceipt).catch(() => {}); }}>只读核对原提交</Button><Button variant="secondary" onClick={() => { void run('tasks.open', { id: item.operationId }).catch(() => {}); }}>打开原任务</Button></div>)}
-    <Button variant="secondary" disabled={locked || !profile.hasToken} onClick={() => { changed(() => { setEnvironment(''); }); void request('remote.environments', binding(profile)).then(value => setEnvironments(list(value.environments))).catch(() => {}); }}>读取当前工作环境</Button>
+    {unresolved.map(item => <div className="pw-selected-object" key={item.operationId}><p>此连接有原提交待核对。</p><Button variant="secondary" disabled={busy || !active} onClick={() => { void request('remote.reconcileOperation', { profileId: profile.id, operationId: item.operationId }).then(setReceipt).catch(() => {}); }}>只读核对原提交</Button><Button variant="secondary" onClick={() => { void run('tasks.open', { id: item.operationId }).catch(() => {}); }}>打开原任务</Button></div>)}
+    <Button variant="secondary" disabled={locked || !profile.hasToken} onClick={readEnvironments}>读取当前工作环境</Button>
+    {!environmentFresh && (environmentId || operation) && <p className="pw-field-hint">草稿与原操作保留；开始另一项工作前，需要重新读取环境与核对执行器。</p>}
     {environments?.length === 0 && <p>未取得可用工作环境；不会自动创建电脑目录或安装执行器。</p>}
-    {!!environments?.length && <SelectField label="工作环境" value={environmentId} options={environments.map(item => ({ id: item.id, label: `${item.label || item.id} · ${item.kind || ''}` }))} onChange={value => changed(() => setEnvironment(value))} />}
-    {environment && <><Facts values={[[ '实际工作区', environment.workspace ], ['允许写入', environment.writeAllowed ? '是' : '未启用' ]]} /><SelectField label="执行器" value={worker} options={workers.map(item => ({ id: item.id, label: `${item.id === 'pi' ? 'Pi · 无工具对话' : item.id === 'command' ? '明确命令' : item.id === 'codex_app_server' ? 'Codex' : 'Claude'}${item.available === false ? ' · 未安装' : ''}`, disabled: item.available === false }))} onChange={value => changed(() => { setWorker(value); setEffort(''); })} />
-      {worker === 'command' ? <TextAreaField label="明确参数 JSON 数组" value={argv} onChange={setArgv} hint="只执行电脑 allowlist 中的参数数组，不将拼接文本当 Shell。" /> : <>
-        <TextAreaField label="这次要完成什么" value={goal} onChange={setGoal} /><TextField label="请求模型 ID（可留空）" value={model} onChange={value => changed(() => { setModel(value); setEffort(''); })} />
-        {worker === 'codex_app_server' && <><CheckboxField isSelected={readOnly} onChange={setReadOnly}>只读分析，不授权修改文件</CheckboxField>{model.trim() && <TextField label="请求推理档位（可留空）" value={effort} onChange={value => changed(() => setEffort(value))} hint="须来自实际 Codex 模型目录；选择变化后重新核对。" />}</>}
+    {!!environments?.length && <SelectField label="工作环境" value={environmentId} isDisabled={locked} options={environments.map(item => ({ id: item.id, label: String(item.label || item.id) + ' · ' + String(item.kind || '') }))} onChange={value => changed(() => setEnvironment(value))} />}
+    {environment && <><Facts values={[[ '实际工作区', environment.workspace ], ['允许写入', environment.writeAllowed === true ? '是' : '未启用' ]]} /><SelectField label="执行器" value={worker} isDisabled={locked} options={workers.map(item => ({ id: item.id, label: ({ pi: 'Pi · 无工具对话', command: '明确命令', codex_app_server: 'Codex', claude: 'Claude', gemini_acp: 'Gemini CLI · ACP' } as Data)[item.id] + (item.available === false ? ' · 当前不可用' : ''), disabled: item.available === false && item.id !== 'gemini_acp' }))} onChange={value => changed(() => { setWorker(value); setEffort(''); })} />
+      {worker === 'command' ? <TextAreaField label="明确参数 JSON 数组" value={argv} isDisabled={locked} onChange={value => { setReview(null); setArgv(value); }} hint="只执行电脑 allowlist 中的参数数组，不将拼接文本当 Shell。" /> : <>
+        <TextAreaField label="这次要完成什么" value={goal} isDisabled={locked} onChange={value => { setReview(null); setGoal(value); }} /><TextField label="请求模型 ID（可留空）" value={model} isDisabled={locked} onChange={value => changed(() => { setModel(value); setEffort(''); })} hint={gemini ? '留空使用执行端默认模型；本次探测不证明该模型已登录或已完成推理。' : undefined} />
+        {worker === 'codex_app_server' && <><CheckboxField isSelected={readOnly} isDisabled={locked} onChange={value => { setReview(null); setReadOnly(value); }}>只读分析，不授权修改文件</CheckboxField>{model.trim() && <TextField label="请求推理档位（可留空）" value={effort} isDisabled={locked} onChange={value => changed(() => setEffort(value))} hint="须来自实际 Codex 模型目录；选择变化后重新核对。" />}</>}
         {worker === 'pi' && <p className="pw-field-hint">仅无工具对话，不提供项目读写、命令、扩展或 MCP；执行器配置可能重试或压缩，费用与内部调用次数尚未核实。</p>}
         {worker === 'claude' && <p className="pw-field-hint">使用执行端的受限工具配置；此处不声明操作系统只读沙箱。原任务仍需实际验证账号和推理。</p>}
-        <Button variant="secondary" disabled={locked} onClick={() => { void request('remote.probeWorker', target()).then(setProbe).catch(() => {}); }}>核对执行器与模型能力</Button>
-        {probe && <><p>{probe.message || (probe.available ? '执行器已返回可用声明，尚未发起模型任务。' : '尚未核实可用。')}</p>{list(probe.models).length > 0 && <details><summary>已返回的模型目录</summary>{list(probe.models).map(item => <Button key={item.id} variant="secondary" onClick={() => changed(() => { setModel(item.id); setEffort(''); })}>{item.name || item.id}</Button>)}</details>}</>}
-      </>}<TextField label="任务时限（10–3600 秒）" value={timeout} inputMode="numeric" onChange={value => setTimeoutValue(value.replace(/\D/g, '').slice(0, 4))} />
-      <Button disabled={locked || !supported('remote.reviewTask') || unresolved.length > 0 || (worker !== 'command' && (!goal.trim() || probe?.available !== true)) || Number(timeout) < 10 || Number(timeout) > 3600} onClick={() => { void prepare(); }}>审阅这次新工作</Button>
+        {gemini && <><p className="pw-field-hint">Gemini ACP 仅支持私人可写工作，不支持只读分析。使用固定版本与默认审批模式，实际工具权限仍在原任务逐次审阅；不会自动安装或登录。</p>
+          {environment.writeAllowed !== true && <p role="alert">所选环境尚未允许写入，不能创建 Gemini 工作。可核对能力，或选择支持只读的执行器。</p>}
+          <CheckboxField isSelected={writeIntent} isDisabled={locked || environment.writeAllowed !== true} onChange={value => { setReview(null); setWriteIntent(value); }}>我明确要在此环境开展可写工作，已知 Gemini 不提供只读隔离</CheckboxField>
+        </>}
+        <Button variant="secondary" disabled={locked || !environmentFresh || !supported('remote.probeWorker')} onClick={() => { setProbe(null); setReview(null); void request('remote.probeWorker', target()).then(setProbe).catch(() => {}); }}>核对执行器与模型能力</Button>
+        {probe && (gemini ? <GeminiEvidence probe={probe} /> : <><p>{probe.message || (probe.available ? '执行器已返回可用声明，尚未发起模型任务。' : '尚未核实可用。')}</p>{list(probe.models).length > 0 && <details><summary>已返回的模型目录</summary>{list(probe.models).map(item => <Button key={item.id} variant="secondary" onClick={() => changed(() => { setModel(item.id); setEffort(''); })}>{item.name || item.id}</Button>)}</details>}</>)}
+      </>}<TextField label="任务时限（10–3600 秒）" value={timeout} isDisabled={locked} inputMode="numeric" onChange={value => { setReview(null); setTimeoutValue(value.replace(/\D/g, '').slice(0, 4)); }} />
+      <Button disabled={locked || !environmentFresh || !supported('remote.reviewTask') || unresolved.length > 0 || !workers.some(item => item.id === worker && item.available !== false) || (worker !== 'command' && (!goal.trim() || probe?.available !== true)) || gemini && (!geminiReady || !writeIntent || environment.writeAllowed !== true) || Number(timeout) < 10 || Number(timeout) > 3600} onClick={() => { void prepare(); }}>审阅这次新工作</Button>
     </>}
     {(error || draftError) && <p role="alert">{error || draftError}</p>}
-    {operation && <div className="pw-selected-object"><p>已保留这次原操作。离开页面不会重提或停止电脑任务。</p><Button variant="secondary" disabled={busy} onClick={() => { void request('remote.reconcileOperation', { profileId: profile.id, operationId: operation.operationId }).then(setReceipt).catch(() => {}); }}>查询原操作</Button><Button variant="secondary" onClick={() => { void run('tasks.open', { id: operation.operationId }).catch(() => {}); }}>打开原任务 · 审批、成果与继续</Button>{nativeTask && ['completed', 'failed', 'cancelled'].includes(nativeTask.status) && list(data.operations).some(item => item.operationId === operation.operationId && ['settled', 'rejected'].includes(item.status)) && <Button variant="secondary" onClick={() => { setOperation(null); setReceipt(null); setGoal(''); }}>新建另一项工作</Button>}</div>}
+    {operation && <div className="pw-selected-object"><p role="status">{uncertain ? '这次原提交的结果待核对。草稿与原操作已保留，不会再次确认或重发。' : '已保留这次原操作。离开页面不会重提或停止电脑任务。'}</p><Facts values={[[ '原操作', operation.operationId ]]} />
+      <Accordion><AccordionItem id="original-remote-work" title="保留的原工作草稿"><Facts values={[[ '原环境', operation.environmentId ], ['原执行器', operation.worker ], ['请求模型', operation.model || '执行端默认' ]]} /><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{operation.prompt || JSON.stringify(operation.argv)}</pre></AccordionItem></Accordion>
+      <Button variant="secondary" disabled={busy || !active} onClick={() => { void request('remote.reconcileOperation', { profileId: profile.id, operationId: operation.operationId }).then(setReceipt).catch(() => {}); }}>查询原操作</Button><Button variant="secondary" onClick={() => { void run('tasks.open', { id: operation.operationId }).catch(() => {}); }}>打开原任务 · 审批、成果与继续</Button>{nativeTask && ['completed', 'failed', 'cancelled'].includes(nativeTask.status) && list(data.operations).some(item => item.operationId === operation.operationId && ['settled', 'rejected'].includes(item.status)) && <Button variant="secondary" disabled={busy || !active} onClick={() => { setOperation(null); setUncertain(false); setReceipt(null); setGoal(''); setProbe(null); setWriteIntent(false); setEnvironmentFresh(false); }}>已核对原任务，新建另一项工作</Button>}</div>}
     <Receipt value={receipt} run={run} />
-    <SettingsDialog isOpen={!!review} title="确认在所选电脑创建工作" onClose={() => { if (!busy) setReview(null); }}><Facts values={[[ '连接', profile.name ], ['地址', profile.baseUrl ], ['工作区', environment?.workspace ], ['执行器', review?.worker ], ['请求模型', review?.model || '执行端默认' ], ['时限', review?.timeoutSeconds ]]} /><pre style={{ whiteSpace: 'pre-wrap' }}>{review?.prompt || JSON.stringify(review?.argv)}</pre><p>{review?.worker === 'pi' ? '仅进行无工具对话。' : review?.readOnly ? '本次为 Codex 只读分析。' : '本次可能修改所选工作区；工具审批在原任务逐次核对。'}</p><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setReview(null)}>返回修改</Button><Button disabled={busy || !!operation} onClick={() => { if (!review) return; const captured = review; setOperation(captured); setReview(null); void request('remote.confirmTask', { reviewHandle: captured.reviewHandle }).then(setReceipt).catch(() => {}); }}>确认创建一次</Button></div></SettingsDialog>
-  </>;
+    <SettingsDialog isOpen={!!review} title="确认在所选电脑创建工作" onClose={() => { if (!busy) setReview(null); }}><Facts values={[[ '连接', profile.name ], ['地址', profile.baseUrl ], ['工作区', environment?.workspace ], ['执行器', review?.worker === 'gemini_acp' ? 'Gemini CLI 0.66.0 · ACP 1' : review?.worker ], ['请求模型', review?.model || '执行端默认' ], ['审批模式', review?.worker === 'gemini_acp' ? '默认审批 · 仅本次私人可写工作' : null ], ['时限', review?.timeoutSeconds ]]} /><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{review?.prompt || JSON.stringify(review?.argv)}</pre><p>{review?.worker === 'pi' ? '仅进行无工具对话。' : review?.readOnly ? '本次为 Codex 只读分析。' : '本次可能修改所选工作区；工具审批在原任务逐次核对。'}</p>{review?.worker === 'gemini_acp' && <p>已明确选择可写工作；登录、实际模型与会话模式仍须在原任务核对。不支持只读隔离，不自动登录或更换后端。</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setReview(null)}>返回修改</Button><Button disabled={locked || !environmentFresh || gemini && (!writeIntent || !geminiReady)} onClick={confirm}>确认创建一次</Button></div></SettingsDialog>
+  </div>;
 }
-
 function SshWork({ profile, state, data, run, supported }: { profile: Data; state: Data; data: Data; run: Run; supported: (action: string) => boolean }) {
   const [mode, setMode] = useState('agent'), [goal, setGoal] = useState(''), [client, setClient] = useState<string | null>(null), [command, setCommand] = useState('');
   const [directory, setDirectory] = useState(''), [files, setFiles] = useState<Data | null>(null), [file, setFile] = useState<Data | null>(null), [content, setContent] = useState(''), [review, setReview] = useState<Data | null>(null), [receipt, setReceipt] = useState<Data | null>(null), [uncertain, setUncertain] = useState(false), [cooperative, setCooperative] = useState(false);

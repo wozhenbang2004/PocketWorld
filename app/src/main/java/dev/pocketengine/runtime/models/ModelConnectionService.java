@@ -191,7 +191,8 @@ public final class ModelConnectionService {
     public JSONObject price(ModelBinding expected,String model,long ownerRevision,JSONObject values,boolean clear)throws Exception{
         synchronized(settings){ModelConfig current=settings.apiConfigForCatalog();
             if(expected==null||!expected.equals(current.capabilityBinding)||!current.model.equals(model)||!settings.matchesApiCatalogRoute(current))throw new ModelRequestPolicy.Rejected("stale_model_binding","原连接/模型已变化，未保存旧价目。请重新核对原模型。");
-            if(!current.apiKey.isEmpty()&&values!=null&&values.toString().contains(current.apiKey))throw new IllegalArgumentException("请勿把当前API密钥放入公开价目说明");
+            if(values!=null&&current.containsSensitive(values.toString()))throw new IllegalArgumentException("请勿把当前API密钥放入公开价目说明");
+            if(current.usesBedrock())throw new IllegalArgumentException("此 Bedrock 连接尚无已接入的原生价目记录");
             catalog.bind(expected);catalog.updateOwnerPrice(new ModelCatalog.ModelKey(expected,model),ownerRevision,clear?null:ModelPrice.owner(expected,model,values,clock.millis()));return snapshot();}
     }
 
@@ -199,7 +200,7 @@ public final class ModelConnectionService {
     public JSONObject snapshot() throws Exception {
         synchronized(settings){
             ModelConfig current=settings.apiConfigForCatalog();ModelBinding binding=current.catalogEnforced?current.capabilityBinding:null;
-            JSONObject out=new JSONObject().put("api",current.publicJson()).put("activeRoute",settings.selectedAccountModel()!=null?"account":"api_key")
+            JSONObject out=new JSONObject().put("api",current.publicJson()).put("catalogAvailable",!current.usesBedrock()).put("catalogUnavailableReason",current.usesBedrock()?"Bedrock 当前使用明确的模型 ID，未接入模型目录":"").put("activeRoute",settings.selectedAccountModel()!=null?"account":"api_key")
                     .put("modelGroups",settings.modelGroupsSnapshot()).put("catalogEnabled",binding!=null).put("connections",settings.apiConnectionsSnapshot()).put("maxCatalogAgeMillis",MAX_CATALOG_AGE_MILLIS).put("catalogTimeoutMillis",http.totalBudgetMillis())
                     .put("modelsEndpoint",binding==null?defaultEndpoint(current):binding.modelsEndpoint().toASCIIString())
                     .put("catalogFormat",binding==null?ModelCatalogRoutes.defaultFormat(current.provider).name():binding.format().name());
@@ -226,11 +227,11 @@ public final class ModelConnectionService {
             if(current.capabilityBinding!=null&&!current.model.isEmpty())out.put("metadataSuggestion",metadataSuggestions.snapshot(current.capabilityBinding,current.model,clock.millis()));
             out.put("models",models).put("reasoning",current.reasoning.toJson()).put("imageTokenReserve",current.imageTokenReserve);
             JSONObject pricing=new JSONObject().put("known",false).put("quote",JSONObject.NULL).put("reason","price_not_observed");
-            if(current.capabilityBinding!=null&&!current.model.isEmpty()&&settings.matchesApiCatalogRoute(current)){
+            if(!current.usesBedrock()&&current.capabilityBinding!=null&&!current.model.isEmpty()&&settings.matchesApiCatalogRoute(current)){
                 catalog.bind(current.capabilityBinding);var key=new ModelCatalog.ModelKey(current.capabilityBinding,current.model);ModelPrice observed=catalog.priceObservation(key),active=catalog.price(key,MAX_CATALOG_AGE_MILLIS);
                 pricing.put("binding",current.capabilityBinding.toJson()).put("model",current.model).put("ownerRevision",catalog.get(key,MAX_CATALOG_AGE_MILLIS).ownerRevision())
                     .put("known",active!=null).put("quote",observed==null?JSONObject.NULL:observed.toJson()).put("reason",active!=null?"quote_available_not_a_bill":observed!=null?"quote_not_current":"price_not_observed");
-            }out.put("pricing",pricing);
+            }if(current.usesBedrock())pricing.put("reason","bedrock_price_not_observed");out.put("pricing",pricing);
             Attempt observed; synchronized(this){observed=attempt;}
             if(observed!=null&&Objects.equals(observed.binding,binding))out.put("refreshAttempt",new JSONObject().put("startedAtMillis",observed.started).put("status",observed.status).put("code",observed.code));
             else out.put("refreshAttempt",JSONObject.NULL);
@@ -314,6 +315,7 @@ public final class ModelConnectionService {
         return current;
     }
     private void requireBinding(ModelBinding expected) throws Exception {
+        if(settings.apiConfigForCatalog().usesBedrock()||expected!=null&&expected.protocol()==ModelBinding.Protocol.BEDROCK_ANTHROPIC)throw new ModelRequestPolicy.Rejected("catalog_unavailable","Bedrock 当前未提供模型目录；请在原连接明确填写支持的模型 ID");
         if(expected==null||!expected.equals(settings.apiCatalogBinding())||!settings.matchesApiCatalogRoute(settings.apiConfigForCatalog()))throw new ModelRequestPolicy.Rejected("stale_model_binding","模型目录、连接或密钥修订已变化，请刷新；没有使用旧能力或切换模型。");
     }
     private boolean stillBound(ModelBinding binding) {try{return binding.equals(settings.apiCatalogBinding())&&settings.matchesApiCatalogRoute(settings.apiConfigForCatalog());}catch(Exception unavailable){return false;}}
@@ -348,6 +350,10 @@ public final class ModelConnectionService {
                 for(String model:models){
                     ModelCatalog.View view=catalog.get(new ModelCatalog.ModelKey(binding,model),MAX_CATALOG_AGE_MILLIS);
                     String reason=!profile.getBoolean("enabled")?"connection_disabled":!model.equals(profile.getString("model"))&&(!view.listed().known||!Boolean.TRUE.equals(view.listed().value))?"catalog_model_unavailable":"";
+                    if(reason.isEmpty()&&ModelConfig.BEDROCK_PROVIDER.equals(profile.getString("provider"))){
+                        if(!profile.optBoolean("hasAwsSession"))reason="credential_not_configured";
+                        else if("expired".equals(profile.optString("credentialStatus")))reason="credential_expired";
+                    }
                     if(reason.isEmpty()&&view.endpointSupport()!=null&&!view.endpointSupport().supports(binding.protocol()))reason="catalog_protocol_mismatch";
                     try{ModelTargetRef.exact(binding.connectionId(),model);}catch(IllegalArgumentException invalid){reason="model_reference_not_supported";}
                     ModelSelectionPreferences.Key key=new ModelSelectionPreferences.Key(binding.connectionId(),model);ModelSelectionPreferences.Entry pref=modelPreferences.get(key);

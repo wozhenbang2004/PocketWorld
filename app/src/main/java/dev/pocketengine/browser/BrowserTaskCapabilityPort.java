@@ -111,6 +111,18 @@ public final class BrowserTaskCapabilityPort implements CapabilityPort {
     }
     @Override public boolean supports(String name){return !closed&&!space.ended()&&schemas.containsKey(name)||existing!=null&&existing.supports(name);}
     @Override public boolean sideEffecting(String name){return schemas.containsKey(name)||existing==null||existing.sideEffecting(name);}
+    @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception {
+        if(!schemas.containsKey(name))return existing==null?dev.pocketengine.core.ExecutionPlanning.Access.DENY:existing.planningAccess(name,arguments);
+        if(closed||space.ended()||!BrowserReadScope.readTool(name))return dev.pocketengine.core.ExecutionPlanning.Access.DENY;
+        if(arguments==null)return dev.pocketengine.core.ExecutionPlanning.Access.READ;
+        JSONObject checked=copy(arguments);checked.remove("_hostOperationId");JSONObject args=normalized(name,checked);
+        JSONObject scope=approvals.readScopeSnapshot(space.binding,space.originalControl);
+        if(!"active".equals(scope.optString("state"))||scope.optJSONObject("policy")==null||scope.optJSONObject("identity")==null)return dev.pocketengine.core.ExecutionPlanning.Access.DENY;
+        BrowserReadRecipeCatalog.Prepared recipe=space.prepareReadRecipe(args);
+        JSONObject pin=onMain(()->{live(name,space.originalControl);return name.equals(PublicHttpReader.TOOL)?space.publicHttpPin(args):space.pinRecipe(recipe,args);},space.originalControl);
+        return BrowserReadScope.sameIdentity(scope.getJSONObject("identity"),pin,space.originalControl.pauseRevision())&&BrowserReadScope.eligible(scope.getJSONObject("policy"),name,args,pin)
+                ?dev.pocketengine.core.ExecutionPlanning.Access.READ:dev.pocketengine.core.ExecutionPlanning.Access.DENY;
+    }
     @Override public void validate(String name,JSONObject args)throws Exception {if(!schemas.containsKey(name)){if(existing==null)throw new Unavailable();existing.validate(name,args);return;}normalized(name,args);}
     private JSONObject normalized(String name,JSONObject input)throws Exception {
         JSONObject args=copy(input==null?new JSONObject():input);if(args.toString().length()>16000)throw new IllegalArgumentException("任务浏览参数过大");PluginRules.validateArguments(args,schemas.get(name));

@@ -13,6 +13,7 @@ public final class ModelCatalogRoutes {
             case "openai_responses" -> ModelBinding.Protocol.OPENAI_RESPONSES;
             case "anthropic" -> ModelBinding.Protocol.ANTHROPIC;
             case "gemini" -> ModelBinding.Protocol.GEMINI;
+            case "bedrock_anthropic" -> ModelBinding.Protocol.BEDROCK_ANTHROPIC;
             default -> throw new IllegalArgumentException("unsupported_catalog_protocol");
         };
     }
@@ -21,10 +22,12 @@ public final class ModelCatalogRoutes {
             case "openai_chat", "openai_responses" -> ModelBinding.Format.OPENAI;
             case "anthropic" -> ModelBinding.Format.ANTHROPIC;
             case "gemini" -> ModelBinding.Format.GEMINI;
+            case "bedrock_anthropic" -> ModelBinding.Format.NONE;
             default -> throw new IllegalArgumentException("unsupported_catalog_protocol");
         };
     }
     public static URI modelsEndpoint(ModelConfig config) throws Exception {
+        if (config.usesBedrock()) return URI.create("");
         URI inference = ProviderAdapters.selected(config.provider).endpoint(config).toURI();
         String path = inference.getPath();
         if (config.provider.equals("gemini")) path = path.substring(0, path.lastIndexOf("/models/")) + "/models";
@@ -32,6 +35,14 @@ public final class ModelCatalogRoutes {
         return new URI(inference.getScheme(), null, inference.getHost(), inference.getPort(), path, null, null);
     }
     public static void requireSameOrigin(ModelConfig config, URI models) throws Exception {
+        if (config.usesBedrock()) {
+            if (models == null || !models.toString().isEmpty() || config.catalogEnforced)
+                throw new IllegalArgumentException("Bedrock 未提供模型目录，不能指定或刷新目录地址");
+            dev.pocketengine.runtime.providers.bedrock.BedrockEndpoint.validate(config.bedrockRegion, config.model);
+            if (!config.baseUrl.equals(dev.pocketengine.runtime.providers.bedrock.BedrockEndpoint.baseUrl(config.bedrockRegion)))
+                throw new IllegalArgumentException("Bedrock 目标与原区域不一致");
+            return;
+        }
         URI inference = ProviderAdapters.selected(config.provider).endpoint(config).toURI();
         if (models.getHost() == null || !inference.getScheme().equalsIgnoreCase(models.getScheme())
                 || !inference.getHost().equalsIgnoreCase(models.getHost()) || port(inference) != port(models))

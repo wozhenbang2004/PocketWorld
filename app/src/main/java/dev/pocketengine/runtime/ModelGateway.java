@@ -10,6 +10,7 @@ import dev.pocketengine.features.proxy.providers.ResponsesRequest;
 import dev.pocketengine.features.proxy.providers.ChatGptProvider;
 import dev.pocketengine.runtime.providers.ProviderAdapters;
 import dev.pocketengine.runtime.providers.ApiTurnStream;
+import dev.pocketengine.runtime.providers.bedrock.BedrockEventStream;
 import dev.pocketengine.runtime.models.ModelRequestPolicy;
 import dev.pocketengine.runtime.models.ModelRoutePlan;
 import dev.pocketengine.runtime.usage.LogicalInferenceAuthority;
@@ -344,14 +345,17 @@ public final class ModelGateway {
                 permit.close();anyDispatched|=capture.wasDispatched();
                 semantic|=committed[0];boolean cancelled=failure instanceof InterruptedException||failure instanceof java.util.concurrent.CancellationException||control.isCancelled();
                 observeFailure(capture,failure,physical.receivedText(),cancelled);capture.failed(cancelled?InferenceReceipt.Outcome.CANCELLED:InferenceReceipt.Outcome.FAILED,failure);physical.failed(failure);
-                if(authority!=null)try{authority.attemptEnded(logical,capture.callId,capture.wasDispatched(),cancelled?"cancelled":semantic?"partial":"failed");}catch(Exception storage){failure.addSuppressed(storage);throw controlled(failure,true);}
                 InferenceFailure facts=failure instanceof GatewayException e?e.observation():null;
-                boolean retry=capture.terminalPersisted()&&!cancelled&&!semantic&&!opaque&&!selected.usesAccount()&&capture.wasDispatched()&&attempt<maximum&&retryableLogical(facts);
+                boolean uncertain=uncertainCompletion(selected,capture.wasDispatched(),facts);
+                if(authority!=null)try{authority.attemptEnded(logical,capture.callId,capture.wasDispatched(),cancelled?"cancelled":semantic?"partial":uncertain?"unknown":"failed");}catch(Exception storage){failure.addSuppressed(storage);throw controlled(failure,true);}
+                // A failed physical receipt does not prove that Bedrock did not process or bill
+                // the request. Its original call stays available for owner reconciliation.
+                boolean retry=capture.terminalPersisted()&&!cancelled&&!semantic&&!opaque&&!selected.usesAccount()&&!selected.usesBedrock()&&capture.wasDispatched()&&attempt<maximum&&retryableLogical(facts);
                 long delay=500L*attempt;
                 if(retry&&facts!=null){JSONObject after=facts.retry();if("INVALID".equals(after.optString("status")))retry=false;else if("VALID".equals(after.optString("status")))delay=Math.max(delay,after.getLong("estimatedNotBefore")-System.currentTimeMillis());}
                 if(delay>30_000-waited||delay>=deadline-System.currentTimeMillis())retry=false;
                 if(retry&&authority!=null&&!authority.reserveRetry(logical,capture.callId,delay))retry=false;
-                if(!retry){if(authority!=null)authority.finish(logical,cancelled?"CANCELLED":semantic?"PARTIAL":capture.wasDispatched()&&facts!=null&&(facts.kind==InferenceFailure.Kind.NETWORK||facts.kind==InferenceFailure.Kind.TIMEOUT)?"UNKNOWN":"FAILED",semantic||capture.wasDispatched()&&facts!=null&&(facts.kind==InferenceFailure.Kind.NETWORK||facts.kind==InferenceFailure.Kind.TIMEOUT)?"unknown":"failed",semantic?"partial":"none");if(semantic&&facts!=null&&facts.kind==InferenceFailure.Kind.INCOMPLETE_STREAM)failure=new GatewayException("本次输出已提交，但模型流在终态前中断；没有自动重发或切换模型。请在原任务核对片段并明确继续，本次未派发工具。",facts);throw controlled(failure,authority!=null);}
+                if(!retry){if(authority!=null)authority.finish(logical,cancelled?"CANCELLED":semantic?"PARTIAL":uncertain?"UNKNOWN":"FAILED",semantic||uncertain?"unknown":"failed",semantic?"partial":"none");if(semantic&&facts!=null&&facts.kind==InferenceFailure.Kind.INCOMPLETE_STREAM)failure=new GatewayException("本次输出已提交，但模型流在终态前中断；没有自动重发或切换模型。请在原任务核对片段并明确继续，本次未派发工具。",facts);throw controlled(failure,authority!=null);}
                 // Explicit transient 429 never changes RouteKey. Unknown 429 is not retryable.
                 if(facts.httpStatus!=429&&switches<plan.maxRouteSwitches&&candidateIndex+1<eligible.size()){candidateIndex++;switches++;retryReason="transient_failure_next_candidate";}else retryReason="transient_failure_same_route";
                 physical.beforeWait(logical,capture.callId,attempt,delay);waited+=delay;if(request==null)control.sleep(delay);else request.sleep(delay);checkRequest(control,request);physical.afterWait();
@@ -366,6 +370,12 @@ public final class ModelGateway {
         }
     }
     private static boolean retryableLogical(InferenceFailure f){return f!=null&&f.httpStatus!=401&&f.httpStatus!=403&&f.httpStatus!=402&&(f.kind==InferenceFailure.Kind.RATE_LIMIT||f.kind==InferenceFailure.Kind.NETWORK||f.kind==InferenceFailure.Kind.TIMEOUT||f.kind==InferenceFailure.Kind.INCOMPLETE_STREAM||f.kind==InferenceFailure.Kind.HTTP&&java.util.Set.of(500,502,503,504).contains(f.httpStatus));}
+    private static boolean uncertainCompletion(ModelConfig selected,boolean dispatched,InferenceFailure failure){
+        if(!dispatched)return false;
+        if(failure!=null&&(failure.kind==InferenceFailure.Kind.NETWORK||failure.kind==InferenceFailure.Kind.TIMEOUT))return true;
+        return selected.usesBedrock()&&(failure==null||failure.kind==InferenceFailure.Kind.INCOMPLETE_STREAM
+                ||failure.kind==InferenceFailure.Kind.PROTOCOL||failure.kind==InferenceFailure.Kind.UNKNOWN);
+    }
     private static String requestDigest(JSONArray messages,JSONArray tools)throws Exception {byte[] bytes=java.security.MessageDigest.getInstance("SHA-256").digest(new JSONObject().put("messages",messages==null?new JSONArray():messages).put("tools",tools==null?new JSONArray():tools).toString().getBytes(StandardCharsets.UTF_8));StringBuilder out=new StringBuilder();for(byte b:bytes)out.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return out.toString();}
     private static Exception controlled(Exception failure,boolean controlled)throws Exception {
         if(failure instanceof ModelRequestPolicy.Rejected)failure=new GatewayException(failure.getMessage(),InferenceFailure.local(InferenceFailure.Kind.LOCAL_REFUSAL,System.currentTimeMillis()));
@@ -385,7 +395,9 @@ public final class ModelGateway {
         URL endpoint=endpoint(config);
         checkRequest(control,stream==null?null:stream.request);
         JSONObject request=provider.request(config,messages,tools);
-        if(stream!=null){request=ApiTurnStream.request(config.provider,request,config.maxOutputTokens);endpoint=ApiTurnStream.endpoint(config.provider,endpoint);}
+        if(stream!=null){request=ApiTurnStream.request(config.provider,request,config.maxOutputTokens);endpoint=config.usesBedrock()
+                ?dev.pocketengine.runtime.providers.bedrock.BedrockEndpoint.endpoint(config.bedrockRegion,config.model,true)
+                :ApiTurnStream.endpoint(config.provider,endpoint);}
         try{request=applyRequestPolicy(config,messages,tools,request,target,control);}catch(ModelRequestPolicy.Rejected refused){throw new GatewayException(refused.getMessage(),InferenceFailure.local(InferenceFailure.Kind.LOCAL_REFUSAL,System.currentTimeMillis()));}
         capture.requestProjection(request);
         byte[] payload = request.toString().getBytes(StandardCharsets.UTF_8);
@@ -399,7 +411,7 @@ public final class ModelGateway {
         connection.setReadTimeout((int)capture.remainingMillis(config));
         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
         connection.setRequestProperty("Accept", "application/json");
-        for(java.util.Map.Entry<String,String> header:provider.headers(config).entrySet())connection.setRequestProperty(header.getKey(),header.getValue());
+        for(java.util.Map.Entry<String,String> header:provider.headers(config,endpoint,payload).entrySet())connection.setRequestProperty(header.getKey(),header.getValue());
         connection.setFixedLengthStreamingMode(payload.length);
 
         AtomicBoolean finished = new AtomicBoolean();
@@ -426,10 +438,15 @@ public final class ModelGateway {
         try {
             control.check();
             capture.dispatch();control.check();ModelRequestPolicy.resolve(config);
-            try (OutputStream output = connection.getOutputStream()) { output.write(payload); }
+            try (OutputStream output = connection.getOutputStream()) {
+                if(config.usesBedrock()){control.check();ModelRequestPolicy.resolve(config);}
+                output.write(payload);
+            }
             control.check();
             int status = connection.getResponseCode();
-            if (status < 200 || status >= 300) throw httpFailure(config,status,headers(connection.getHeaderFields(),"Retry-After"),headers(connection.getHeaderFields(),"Date"),connection.getErrorStream());
+            if(config.usesBedrock())capture.observedBedrockRequestId(headers(connection.getHeaderFields(),"x-amzn-requestid"));
+            if (status < 200 || status >= 300) throw httpFailure(config,status,headers(connection.getHeaderFields(),"Retry-After"),headers(connection.getHeaderFields(),"Date"),headers(connection.getHeaderFields(),"x-amzn-errortype"),connection.getErrorStream());
+            if(config.usesBedrock()&&status!=200)throw localFailure("Bedrock 未返回所选操作的完整响应状态；本次未派发工具。",InferenceFailure.Kind.PROTOCOL,status);
             String body;
             try (InputStream input = connection.getInputStream()) {
                 ByteArrayOutputStream buffer = new ByteArrayOutputStream();
@@ -500,23 +517,34 @@ public final class ModelGateway {
                 .readTimeout(config.requestTimeoutSeconds,TimeUnit.SECONDS).writeTimeout(config.requestTimeoutSeconds,TimeUnit.SECONDS)
                 // OkHttp can follow some retryable HTTP statuses even with connection retry off.
                 // A second network exchange may connect but can never write this inference again.
-                .addNetworkInterceptor(chain->{if(!sent.compareAndSet(false,true))throw new IOException("Inference resubmission refused");return chain.proceed(chain.request());}).build();
+                .addNetworkInterceptor(chain->{
+                    if(!sent.compareAndSet(false,true))throw new IOException("Inference resubmission refused");
+                    if(config.usesBedrock())try{stream.check();ModelRequestPolicy.resolve(config);}
+                    catch(Exception stale){throw new IOException("Selected Bedrock session is no longer current");}
+                    return chain.proceed(chain.request());
+                }).build();
         Request.Builder request=new Request.Builder().url(endpoint)
-                .post(RequestBody.create(payload,MediaType.get("application/json; charset=utf-8")))
+                .post(RequestBody.create(payload,MediaType.get(config.usesBedrock()?"application/json":"application/json; charset=utf-8")))
                 .header("Accept","text/event-stream, application/json");
-        for(java.util.Map.Entry<String,String> header:provider.headers(config).entrySet())request.header(header.getKey(),header.getValue());
+        for(java.util.Map.Entry<String,String> header:provider.headers(config,endpoint,payload).entrySet())request.header(header.getKey(),header.getValue());
         Call call=client.newCall(request.build());AutoCloseable cancellation=cancelTransport(control,stream,call::cancel);
         long deadline=System.nanoTime()+capture.remainingMillis(config)*1_000_000L;
         try{
             stream.check();
             capture.dispatch();stream.check();ModelRequestPolicy.resolve(config);
             try(Response response=call.execute()){
-                stream.check();if(!response.isSuccessful())throw httpFailure(config,response.code(),response.headers().values("Retry-After"),response.headers().values("Date"),response.body()==null?null:response.body().byteStream());
+                stream.check();
+                if(config.usesBedrock())capture.observedBedrockRequestId(response.headers().values("x-amzn-requestid"));
+                if(!response.isSuccessful())throw httpFailure(config,response.code(),response.headers().values("Retry-After"),response.headers().values("Date"),response.headers().values("x-amzn-errortype"),response.body()==null?null:response.body().byteStream());
+                if(config.usesBedrock()&&response.code()!=200)throw localFailure("Bedrock 未返回所选流操作的完整响应状态；本次未派发工具。",InferenceFailure.Kind.PROTOCOL,response.code());
                 if(response.body()==null)throw new GatewayException("模型没有返回正文，未派发工具。");
                 JSONObject assistant;
                 try(InputStream input=response.body().byteStream()){
                     String contentType=response.header("Content-Type","").split(";",2)[0].trim();
-                    if(contentType.equalsIgnoreCase("text/event-stream"))
+                    if(config.usesBedrock()){
+                        if(!contentType.equalsIgnoreCase("application/vnd.amazon.eventstream"))throw localFailure("Bedrock 未返回所选流操作的二进制事件流；本次未派发工具。",InferenceFailure.Kind.PROTOCOL,response.code());
+                        assistant=ApiTurnStream.readBedrock(input,provider,tools,control,stream::text,capture.usage);
+                    }else if(contentType.equalsIgnoreCase("text/event-stream"))
                         assistant=ApiTurnStream.read(input,config.provider,provider,tools,control,stream::text,capture.usage);
                     else{
                         ByteArrayOutputStream buffer=new ByteArrayOutputStream();byte[] chunk=new byte[8192];int count;
@@ -526,6 +554,10 @@ public final class ModelGateway {
                                 .decode(java.nio.ByteBuffer.wrap(buffer.toByteArray())).toString();
                         assistant=ApiTurnStream.completeJson(config.provider,provider,body,tools,stream::text,capture.usage);
                     }
+                }catch(BedrockEventStream.Failure invalid){
+                    if(invalid.kind==BedrockEventStream.Kind.SERVICE)
+                        throw new GatewayException("Bedrock 在原事件流中报告错误；请核对这次调用记录，没有自动重发。",InferenceFailure.bedrockStream(invalid.code,response.code(),System.currentTimeMillis()));
+                    throw localFailure(invalid.kind==BedrockEventStream.Kind.INCOMPLETE?"Bedrock 事件流未完整结束；请在原任务核对，没有自动重发或派发工具。":"Bedrock 事件流的完整性或格式无法核对；本次未派发工具。",invalid.kind==BedrockEventStream.Kind.INCOMPLETE?InferenceFailure.Kind.INCOMPLETE_STREAM:InferenceFailure.Kind.PROTOCOL,response.code());
                 }catch(GatewayException known){
                     if(known.failure!=null){
                         if(known.failure.kind==InferenceFailure.Kind.INCOMPLETE_STREAM&&known.failure.httpStatus==0)throw new GatewayException(known.getMessage(),InferenceFailure.local(InferenceFailure.Kind.INCOMPLETE_STREAM,response.code(),known.failure.observedAt).withPartialText(known.failure.partialTextReceived));
@@ -556,7 +588,6 @@ public final class ModelGateway {
         final StreamSink sink;
         final String requestId;
         final long pauseRevision;
-        final String key,mask;
         final SemanticCommit commit;
         final StringBuilder pending=new StringBuilder();
         long sequence;
@@ -564,9 +595,8 @@ public final class ModelGateway {
         boolean presentationClosed,textReceived;
         StreamSession(ModelConfig config,RunControl control,StreamSink sink,String requestId,SemanticCommit commit,RunControl.ModelRequest request)throws GatewayException {
             this.commit=commit;this.request=request;
-            this.config=config;this.control=control;this.sink=sink;this.requestId=requestId;pauseRevision=control.pauseRevision();key=config.apiKey;
-            if(key.length()>16384)throw new GatewayException("API凭据过长，未发送流式请求，请检查模型设置。");
-            String chosen="[密钥已隐藏]";if(!key.isEmpty()&&chosen.contains(key))chosen="●";if(chosen.equals(key))chosen="○";mask=chosen;
+            this.config=config;this.control=control;this.sink=sink;this.requestId=requestId;pauseRevision=control.pauseRevision();
+            if(config.apiKey.length()>16384)throw new GatewayException("API凭据过长，未发送流式请求，请检查模型设置。");
         }
         void check()throws InterruptedException {checkRequest(control,request);}
         void text(String value)throws Exception {
@@ -576,13 +606,12 @@ public final class ModelGateway {
         }
         private void drain(boolean end)throws Exception {
             String held=pending.toString();
-            if(!key.isEmpty())held=held.replace(key,mask);
-            int keep=0;
-            if(!end&&!key.isEmpty())for(int size=Math.min(key.length()-1,held.length());size>0;size--)
-                if(held.regionMatches(held.length()-size,key,0,size)){keep=size;break;}
+            // Retain the original bytes represented by an unfinished credential prefix.
+            // Masking a shorter credential first could destroy a longer session-token prefix.
+            int keep=end?0:config.sensitiveSuffixLength(held);
             int take=held.length()-keep;
             if(take>0&&Character.isHighSurrogate(held.charAt(take-1)))take--;
-            String ready=held.substring(0,take);checkVisibleUnicode(ready);
+            String ready=config.redactSensitive(held.substring(0,take));checkVisibleUnicode(ready);
             pending.setLength(0);pending.append(held.substring(take));
             int offset=0;
             while(offset<ready.length()){
@@ -725,7 +754,7 @@ public final class ModelGateway {
 
     static String safeMessage(Exception error, ModelConfig config) {
         String message = error instanceof GatewayException ? error.getMessage() : "执行遇到错误，请检查模型设置和手机权限后重试。";
-        return redact(message, config == null ? "" : config.apiKey);
+        return config==null?message:config.redactSensitive(message);
     }
 
     public static String redact(String value, String key) {
@@ -737,11 +766,19 @@ public final class ModelGateway {
         try { object.put("ok", false).put("message", message).put("code", code); } catch (Exception ignored) { }
     }
 
-    private static GatewayException httpFailure(ModelConfig captured,int status,java.util.List<String> retryAfter,java.util.List<String> date,InputStream errorBody)throws Exception {
+    private static GatewayException httpFailure(ModelConfig captured,int status,java.util.List<String> retryAfter,java.util.List<String> date,java.util.List<String> errorTypes,InputStream errorBody)throws Exception {
         String bounded=boundedError(errorBody);
-        if((status==400||status==413)&&contextLimitCode(bounded))return localFailure("模型明确报告上下文超限；尚未派发工具。",InferenceFailure.Kind.CONTEXT_LIMIT,status);
+        if(!captured.usesBedrock()&&(status==400||status==413)&&contextLimitCode(bounded))return localFailure("模型明确报告上下文超限；尚未派发工具。",InferenceFailure.Kind.CONTEXT_LIMIT,status);
         var reason=dev.pocketengine.runtime.models.ModelConnectionFailure.reason(status,bounded);
-        return new GatewayException(dev.pocketengine.runtime.models.ModelConnectionFailure.message(reason)+"（HTTP "+status+"）",InferenceFailure.classifiedHttp(status,withoutCapturedSecret(retryAfter,captured.apiKey),withoutCapturedSecret(date,captured.apiKey),System.currentTimeMillis(),bounded),reason.name());
+        InferenceFailure observation=captured.usesBedrock()
+                ?InferenceFailure.bedrockHttp(status,withoutCapturedSecret(retryAfter,captured),withoutCapturedSecret(date,captured),withoutCapturedSecret(errorTypes,captured),System.currentTimeMillis(),bounded)
+                :InferenceFailure.classifiedHttp(status,withoutCapturedSecret(retryAfter,captured),withoutCapturedSecret(date,captured),System.currentTimeMillis(),bounded);
+        String explanation=dev.pocketengine.runtime.models.ModelConnectionFailure.message(reason);
+        if(captured.usesBedrock()){
+            if(status==401||status==403||java.util.Set.of("BEDROCK_SIGNATURE_INVALID","BEDROCK_NOT_AUTHORIZED","BEDROCK_INVALID_IDENTITY").contains(observation.nativeCode))explanation="Bedrock 拒绝了原临时身份或签名，请核对该连接的完整会话、到期时间、区域和权限；没有换连接。";
+            if("BEDROCK_REQUEST_EXPIRED".equals(observation.nativeCode))explanation="Bedrock 报告请求时间戳已失效，请核对设备时钟和原会话；没有重发请求。";
+        }
+        return new GatewayException(explanation+"（HTTP "+status+"）",observation,reason.name());
     }
     /** Only exact protocol error codes authorize one compaction; never match arbitrary provider prose. */
     private static boolean contextLimitCode(InputStream input){return contextLimitCode(boundedError(input));}
@@ -758,8 +795,8 @@ public final class ModelGateway {
             return text;
         }catch(Exception unavailable){return "";}
     }
-    private static java.util.List<String> withoutCapturedSecret(java.util.List<String> values,String secret) {
-        if(values!=null&&secret!=null&&!secret.isEmpty())for(String value:values)if(value!=null&&value.contains(secret))return java.util.List.of("invalid_header");
+    private static java.util.List<String> withoutCapturedSecret(java.util.List<String> values,ModelConfig captured) {
+        if(values!=null)for(String value:values)if(captured.containsSensitive(value))return java.util.List.of("invalid_header");
         return values;
     }
     private static GatewayException localFailure(String message,InferenceFailure.Kind kind)throws Exception { return localFailure(message,kind,0); }

@@ -65,7 +65,7 @@ public final class TaskMemoryHistory {
                 }retired.put("tool_calls",identities);}
                 copy.put(i,retired);row=retired;
             }
-            row.remove("memoryContext");row.remove("memoryReference");row.remove("memoryContextRetired");row.remove("ownerMessageRevision");row.remove("ownerSourceRefs");row.remove("ownerSourceRefsUnavailable");row.remove("ownerRecallFeedback");row.remove("hostObservation");row.remove("toolOutputCapture");
+            row.remove("memoryContext");row.remove("memoryReference");row.remove("memoryContextRetired");row.remove("ownerMessageRevision");row.remove("ownerSourceRefs");row.remove("ownerSourceRefsUnavailable");row.remove("ownerPreviewRefs");row.remove("ownerPreviewRefsUnavailable");row.remove("ownerRecallFeedback");row.remove("hostObservation");row.remove("toolOutputCapture");
         }return copy;
     }
     /** F012: only a validated private carrier exactly matching its public tool receipt is
@@ -77,7 +77,7 @@ public final class TaskMemoryHistory {
         if(!TaskMemoryTrace.rawFingerprint(saved).equals(TaskMemoryTrace.rawFingerprint(exposed)))throw new SecurityException("原输出private/public定位不一致");copy.remove("toolOutputCapture");return copy;
     }
     private static boolean retireObservationProjection(JSONObject row)throws Exception{
-        if(!"user".equals(row.optString("role"))||row.has("ownerMessageId")||row.has("ownerInputMode")||row.has("ownerAttachmentRefs")||row.has("ownerSourceRefs")||row.has("ownerRecallFeedback"))return false;
+        if(!"user".equals(row.optString("role"))||row.has("ownerMessageId")||row.has("ownerInputMode")||row.has("ownerAttachmentRefs")||row.has("ownerSourceRefs")||row.has("ownerPreviewRefs")||row.has("ownerRecallFeedback"))return false;
         JSONArray parts=row.optJSONArray("content");if(parts==null)return false;boolean changed=false;
         for(int i=0;i<parts.length();i++){
             JSONObject part=parts.optJSONObject(i);if(part==null||!"text".equals(part.optString("type")))continue;

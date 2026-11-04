@@ -90,6 +90,11 @@ public final class DeviceCapabilityPort implements CapabilityPort {
     }
     @Override public boolean supports(String name) {if(closed||name==null||!name.matches("device_invoke_tool|device_delegate_goal|device_operation_get"))return false;for(var route:routes.values())if(route.supportsFunction(name))return true;return false;}
     @Override public boolean sideEffecting(String name) { return !"device_operation_get".equals(name); }
+    @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{
+        // Even operation.get can receive/send files and settle the original child allocation.
+        // Its journal flag is not proof of a planning-only read.
+        return dev.pocketengine.core.ExecutionPlanning.Access.DENY;
+    }
     private NativeRoute route(JSONObject args, RunControl control) throws Exception {
         if (closed || control != original || !control.matchesHostRun(taskId, runId, epoch) || original.isPaused()) throw new SecurityException("原设备调用控制已变化");
         original.check(); NativeRoute route = routes.get(args.optString("routeId"));
