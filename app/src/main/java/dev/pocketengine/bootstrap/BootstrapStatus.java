@@ -10,6 +10,8 @@ public final class BootstrapStatus {
     private long revision=1,generation;
     private volatile boolean ready;
     private String state="initializing",stage="configured",recovery="not_started",version="unknown";
+    private String activity="installation",module="";
+    private JSONObject diagnostics=new JSONObject();
     private final int schema;
     private Integer observed;
     private String code="initializing",message="正在准备本机存储与原任务恢复",next="请等待当前初始化完成";
@@ -20,7 +22,7 @@ public final class BootstrapStatus {
     public boolean ready(){return ready;}
     public synchronized long generation(){return generation;}
     public synchronized long beginInitial(){if(generation!=0||inFlight)throw new IllegalStateException("初始化已开始");return begin();}
-    private long begin(){ready=false;inFlight=true;generation++;revision++;state="initializing";stage="configured";recovery="not_started";observed=null;optional.clear();retryAvailable=false;code="initializing";message="正在准备本机存储与原任务恢复";next="请等待当前初始化完成";return generation;}
+    private long begin(){ready=false;inFlight=true;generation++;revision++;state="initializing";stage="configured";activity="installation";module="";diagnostics=new JSONObject();recovery="not_started";observed=null;optional.clear();retryAvailable=false;code="initializing";message="正在准备本机存储与原任务恢复";next="请等待当前初始化完成";return generation;}
     /** Validate before a caller persists a one-use maintenance permit; this does not start work. */
     public synchronized boolean checkRetry(long expected,String requestId){
         request(requestId);if(requestId.equals(lastRetry))return false;
@@ -38,6 +40,15 @@ public final class BootstrapStatus {
         if(!java.util.Set.of("configured","data_opened","migrated","features_ready").contains(value))throw new IllegalArgumentException("stage");
         stage=value;if(observedSchema!=null)observed=observedSchema;revision++;
     }
+    public synchronized void activity(long original,String value){
+        if(!current(original))return;
+        if(!java.util.Set.of("installation","storage","ui_resources","opening_store","models","features","devices","attachments_recovery","channels_recovery","source_sync","final_checks","ready").contains(value))throw new IllegalArgumentException("activity");
+        activity=value;module="";revision++;
+    }
+    public synchronized void module(long original,String value){
+        if(current(original)&&"features".equals(activity)&&value!=null&&(value.isEmpty()||value.matches("[a-z_]{1,40}"))){module=value;revision++;}
+    }
+    public synchronized void diagnose(long original,Throwable failure){if(current(original)){diagnostics=BootstrapDiagnostics.capture(failure);revision++;}}
     public synchronized void recovering(long original){if(current(original)){recovery="running";revision++;}}
     public synchronized void optional(long original,String capability,String why){if(current(original)){optional.put(capability,why);revision++;}}
     public synchronized boolean complete(long original){if(!current(original)||!"running".equals(recovery)||!"features_ready".equals(stage))return false;recovery="completed";state="ready";code="ready";message="原任务恢复与数据库读取已完成";next="可进入工作区";inFlight=false;retryAvailable=false;revision++;ready=true;return true;}
@@ -50,7 +61,7 @@ public final class BootstrapStatus {
         JSONArray unavailable=new JSONArray();for(var item:optional.entrySet())unavailable.put(new JSONObject().put("capability",item.getKey()).put("reason",item.getValue()));
         return new JSONObject().put("surface","bootstrap").put("revision",revision).put("generation",generation).put("state",state).put("stage",stage).put("recovery",recovery)
             .put("reason",new JSONObject().put("code",code).put("message",message).put("nextStep",next)).put("installedVersion",version).put("requiredSchema",schema)
-            .put("observedSchema",observed==null?JSONObject.NULL:observed).put("retryAvailable",retryAvailable).put("optionalUnavailable",unavailable).put("maintenance",JSONObject.NULL);
+            .put("observedSchema",observed==null?JSONObject.NULL:observed).put("retryAvailable",retryAvailable).put("optionalUnavailable",unavailable).put("maintenance",JSONObject.NULL).put("activity",activity).put("module",module).put("diagnostics",new JSONObject(diagnostics.toString()));
     }
     public static void request(String request){if(request==null||!request.matches("[A-Za-z0-9_-]{8,120}"))throw new IllegalArgumentException("需要本次原生请求编号");}
 }

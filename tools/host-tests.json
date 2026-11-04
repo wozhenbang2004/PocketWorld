@@ -1791,5 +1791,15 @@
     "helpers": [],
     "robolectric": true,
     "description": "Mounted original Compose draft controls and native team state for observed generic harnesses, plus original Pi/Codex/Claude delivery/draft/session projection regressions. Synthetic protocol receipts are boundaries; no device screenshots, visual acceptance or live vendor accounts."
+  },
+  "bootstrap-first-launch-diagnostics": {
+    "class": "dev.pocketengine.bootstrap.BootstrapInitializationNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.bootstrap.BootstrapDiagnosticsTest",
+      "dev.pocketengine.bootstrap.BootstrapStatusTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Actual background initializer with empty native SQLite storage and injected required-module failure. UI resource integrity and platform FTS are substituted boundaries, not Android device acceptance; verifies closed admission and message/path-free diagnostics."
   }
 }

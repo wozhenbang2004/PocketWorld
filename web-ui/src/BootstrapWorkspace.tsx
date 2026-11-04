@@ -8,6 +8,8 @@ import { bootstrapView, bootstrapRetryPayload, currentBootstrapView, retainedBoo
   type BootstrapOperation, type BootstrapView, type RepairFile, type RepairGap, type RepairMode, type RepairRestoration, type RepairReview } from './bootstrap-contract';
 import './bootstrap.css';
 
+const moduleLabels: Record<string, string> = { memory: '记忆', assistant: '对话', workspace: '工作区', display: '屏幕', phone_setup: '手机设置', notifications: '通知', automation: '提醒与跟进', remote: '远程连接', channels: '消息渠道', teams: '团队', plugins: '插件', local: '本地工具', skills: '技能', attachments: '附件', media: '媒体', realtime: '语音', ssh: 'SSH 连接', proxy: '账号连接', browser: '浏览器', semantic: '界面理解', groups: '群组' };
+const activities: Record<string, string> = { installation: '检查安装', storage: '检查存储', ui_resources: '核验界面资源', opening_store: '打开本机数据', models: '准备模型连接', features: '准备工作能力', devices: '准备设备连接', attachments_recovery: '核对附件状态', channels_recovery: '核对渠道任务', source_sync: '核对内容来源', final_checks: '完成启动检查', ready: '启动已完成' };
 const stages = { configured: '检查安装与配置', data_opened: '打开本机记录', migrated: '核对数据格式', features_ready: '准备工作能力' };
 const recoveries = { not_started: '尚未开始核对原任务', running: '正在核对原任务与原回执', completed: '原任务核对已完成', failed: '原任务核对尚未完成' };
 const phaseLabels: Record<string, string> = { not_started: '尚未保全原件', detected: '已识别原件', inspecting: '核对原件', preserving: '正在保全原件', preserved: '原件副本已核验', preservation_failed: '保全尚未完成', quiescence_unconfirmed: '尚未确认原资源已静止', reviewing: '核验所选隔离方案', review_failed: '所选方案尚未通过核验', staging: '准备隔离暂存', staged: '隔离暂存已核验', reviewed: '等待本次确认', switching: '正在切换本机数据', verifying: '核对本次切换结果', completed: '本次维修已完成', unknown: '操作结果待核对', original_retry_prepared: '原库重新打开已登记', original_retry_completed: '原库重新核对已完成' };
@@ -132,7 +134,8 @@ export default function BootstrapWorkspace({ snapshot }: { snapshot: PocketSnaps
       await run('repair.confirm', payload, true);
     } catch (failure) { setError(failure instanceof Error ? failure.message : '原审阅已变化，请重新读取。'); }
   }
-  let title = '需要处理启动问题';
+  const preparationFailed = view?.state === 'failed' && view.reason?.code === 'initialization_failed' && !maintenance?.repairId;
+  let title = preparationFailed ? '启动准备未完成' : '需要处理启动问题';
   if (unavailable) title = '当前界面无法安全通信';
   else if (readFailure) title = '本机启动状态暂时无法读取';
   else if (outcome && restored) title = restored.messageCount > 0 ? '原件已保全，对话文字已恢复' : '原件已保全，本次未恢复文字消息';
@@ -145,11 +148,11 @@ export default function BootstrapWorkspace({ snapshot }: { snapshot: PocketSnaps
     <header className="pw-bootstrap-header"><span className="pw-bootstrap-brand">PocketWorld</span><span className="pw-bootstrap-context">启动与数据维护</span></header>
     <section className="pw-bootstrap-summary" aria-live="polite">
       <div className="pw-bootstrap-heading">{view?.state === 'initializing' && <Spinner />}<h1>{title}</h1></div>
-      {outcome ? <p>{outcome}</p> : <p>{view?.reason?.message || (view?.state === 'initializing' ? '正在核对本机安装、数据和原任务。期间不会接收新的模型、工具或渠道执行。' : '正在读取原宿主状态，不会另建数据库或重放旧操作。')}</p>}
-      {view?.reason?.nextStep && <p className="pw-bootstrap-next">{view.reason.nextStep}</p>}
+      {outcome ? <p>{outcome}</p> : preparationFailed ? <p>启动尚未完成，暂时无法进入工作区。请保留当前安装，展开下方详情查看具体失败位置。</p> : <p>{view?.reason?.message || (view?.state === 'initializing' ? '正在核对本机安装、数据和原任务。期间不会接收新的模型、工具或渠道执行。' : '正在读取原宿主状态，不会另建数据库或重放旧操作。')}</p>}
+      {view?.reason?.nextStep && <p className="pw-bootstrap-next">{preparationFailed ? '可在系统设置中强行停止 PocketWorld 后重新打开一次；若仍失败，请保留诊断详情。不要清除应用数据或建立空库。' : view.reason.nextStep}</p>}
       {unavailable && <p className="pw-field-error" role="alert">{unavailable}</p>}
       {readFailure && <p className="pw-field-error" role="alert">{readFailure}</p>}
-      {view && <dl className="pw-bootstrap-facts"><div><dt>当前阶段</dt><dd>{stages[view.stage]}</dd></div><div><dt>原任务核对</dt><dd>{recoveries[view.recovery]}</dd></div></dl>}
+      {view && <dl className="pw-bootstrap-facts"><div><dt>当前阶段</dt><dd>{activities[view.activity || ''] || stages[view.stage]}{view.module && ` · ${moduleLabels[view.module] || '组件'}`}</dd></div><div><dt>{preparationFailed ? '启动检查' : '任务状态核对'}</dt><dd>{preparationFailed && view.recovery === 'failed' ? '尚未完成' : recoveries[view.recovery]}</dd></div></dl>}
       {outcome && restored && <RestorationSummary value={restored} />}
       <div className="pw-form-actions">
         {view?.retryAvailable && supported('bootstrap.retry') && <Button disabled={locked || view.state === 'initializing'} onClick={retryBootstrap} leadingIcon={RiRefreshLine}>{maintenance?.originalRetryAvailable ? '重新核对原数据库' : '重新核对并启动'}</Button>}
@@ -189,7 +192,7 @@ export default function BootstrapWorkspace({ snapshot }: { snapshot: PocketSnaps
     </section>}
 
     <Accordion><AccordionItem title="数据恢复与备份的区别"><div className="pw-bootstrap-explanations"><div><h3>保全损坏原件</h3><p>保存实际存在的数据库、WAL、SHM 与 journal 等原文件，并逐项核对长度与 SHA。校验未完成时，替换入口保持关闭。</p></div><div><h3>从已核副本恢复</h3><p>当前支持范围是经过只读核验的对话文字，以新对话身份导入隔离暂存。审阅会列出真实数量与省略项；任务历史、附件原件及授权、密钥和配对不迁入。未通过核验时保留原件，不自动改为空库。</p></div><div><h3>建立空库</h3><p>只有本次原生允许且完成二次审阅后才可进行。原历史未恢复；执行保持停用，不继承旧运行、租约、授权或设备配对。</p></div><div><h3>可移植分区备份</h3><p>本机数据恢复可用后，可在正常工作台的“备份与迁移”审阅所选分区。当前数据库不可用时，此处不能导出这些分区；分区恢复也不代表恢复全 App。</p></div></div></AccordionItem>
-      <AccordionItem title="安装、数据格式与能力详情"><dl className="pw-bootstrap-facts"><div><dt>安装版本</dt><dd>{view?.installedVersion || '尚未取得'}</dd></div><div><dt>需要的数据格式</dt><dd>{view?.requiredSchema ?? '尚未取得'}</dd></div><div><dt>检测到的数据格式</dt><dd>{view?.observedSchema ?? '尚未取得'}</dd></div><div><dt>启动代次</dt><dd>{view?.generation ?? '尚未取得'}</dd></div>{view?.reason?.code && <div><dt>原因编号</dt><dd className="pw-bootstrap-code">{view.reason.code}</dd></div>}</dl>{(view?.optionalUnavailable || []).map((item, index) => <p key={`${item.capability}:${index}`}>{item.capability}：{item.reason}</p>)}<p className="pw-muted">可选能力不可用只影响对应功能。诊断内容不会自动外发。</p></AccordionItem>
+      <AccordionItem title="安装、数据格式与能力详情"><dl className="pw-bootstrap-facts"><div><dt>安装版本</dt><dd>{view?.installedVersion || '尚未取得'}</dd></div><div><dt>需要的数据格式</dt><dd>{view?.requiredSchema ?? '尚未取得'}</dd></div><div><dt>检测到的数据格式</dt><dd>{view?.observedSchema ?? '尚未取得'}</dd></div><div><dt>启动代次</dt><dd>{view?.generation ?? '尚未取得'}</dd></div>{view?.reason?.code && <div><dt>原因编号</dt><dd className="pw-bootstrap-code">{view.reason.code}</dd></div>}</dl>{(view?.optionalUnavailable || []).map((item, index) => <p key={`${item.capability}:${index}`}>{item.capability}：{item.reason}</p>)}{(view?.diagnostics?.causes || []).slice(0, 4).map((cause, index) => <div key={index}><p className="pw-bootstrap-code">{cause.type}</p>{(cause.frames || []).slice(0, 5).map((frame, frameIndex) => <p className="pw-bootstrap-code" key={frameIndex}>{frame.class}.{frame.method}:{frame.line}</p>)}</div>)}<p className="pw-muted">可选能力不可用只影响对应功能。诊断仅含程序位置，不含错误消息或文件路径，也不会自动外发。</p></AccordionItem>
     </Accordion>
 
     <SettingsDialog isOpen={review !== null && reviewOpen} title={review?.mode === 'verified_copy' ? '核对本次对话文字恢复' : '核对原件保全后，建立空库？'} onClose={() => { setReviewOpen(false); setChecked(false); }}>

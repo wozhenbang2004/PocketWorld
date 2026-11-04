@@ -702,35 +702,36 @@ public final class EngineApplication extends Application implements dev.pocketen
                 public boolean quiesce()throws Exception{return quiesceOriginalDatabaseForMaintenance();}
             });
             if(databaseMaintenance.blocksBusinessOpen()&&permit==null){bootstrap.maintenance("database_maintenance","发现原数据库维护记录，未重新打开业务库","只核对同一维护编号和原件；可用时明确请求重新读取原库",databaseMaintenance.originalRetryAvailable()&&bootstrapCleanupConfirmed);return;}
-            dev.pocketengine.bootstrap.BootstrapChecks.storage(this);
-            try{dev.pocketengine.bootstrap.BootstrapChecks.requiredUi(this);}catch(Exception missing){throw new dev.pocketengine.bootstrap.BootstrapChecks.Failure("required_resource_incompatible","当前安装包的必要界面资源未通过核验，请重新安装可信兼容版本");}
+            bootstrap.activity(generation,"storage");dev.pocketengine.bootstrap.BootstrapChecks.storage(this);
+            bootstrap.activity(generation,"ui_resources");try{dev.pocketengine.bootstrap.BootstrapChecks.requiredUi(this);}catch(Exception missing){throw new dev.pocketengine.bootstrap.BootstrapChecks.Failure("required_resource_incompatible","当前安装包的必要界面资源未通过核验，请重新安装可信兼容版本");}
             observed=dev.pocketengine.bootstrap.BootstrapChecks.observedSchema(getDatabasePath(TaskStore.DATABASE_NAME));bootstrap.stage(generation,"configured",observed);
             if(observed!=null&&observed>TaskStore.DATABASE_SCHEMA)throw new dev.pocketengine.bootstrap.BootstrapChecks.Failure("newer_schema","原库版本比当前安装包更新；未打开或清空原库");
-            settings=new SettingsStore(this);bootstrap.recovering(generation);
+            bootstrap.activity(generation,"opening_store");settings=new SettingsStore(this);bootstrap.recovering(generation);
             tasks=new TaskStore(this,this::businessReady,new TaskStore.OpenObserver(){
                 public void stage(String stage,int schema){bootstrap.stage(generation,stage,schema);}
                 public void corruption(String reason){databaseMaintenance.corruptionObserved();}
             },permit);
             deviceOwnerInputs=new dev.pocketengine.features.devices.DeviceOwnerInputs(tasks,id->{var session=deviceGoalSessions.get(id);return session!=null&&session.originalControl()==currentPhoneControl(id)?session:null;});
             assistantTaskNotifications=new dev.pocketengine.features.assistant.notifications.AssistantTaskNotifications(this,tasks);
-            initializeModelConnections();attachmentRoutePins=new dev.pocketengine.features.AssistantAttachmentRoutePins(new SecretVault(this));
+            bootstrap.activity(generation,"models");initializeModelConnections();attachmentRoutePins=new dev.pocketengine.features.AssistantAttachmentRoutePins(new SecretVault(this));
             localOcr=new dev.pocketengine.vision.ocr.TesseractLocalOcrEngine(this);
             modelStreams=new dev.pocketengine.features.NativeModelStreamUi(tasks,main,this::ownsRunControl,event->{for(Observer observer:observers)try{observer.onEvent(event);}catch(RuntimeException ignored){}});
-            initializeFeatures();initializeDeviceWorkspace();
+            bootstrap.activity(generation,"features");initializeFeatures();bootstrap.activity(generation,"devices");initializeDeviceWorkspace();
             // These are the original recovery consumers, completed on this same initializer before ready.
-            dev.pocketengine.features.attachments.AttachmentRepository.get(this).book.recoverInterruptedImports();
-            if(channelTaskHost!=null)channelTaskHost.recover();
-            memorySources.synchronize(json("ownerId","owner","spaceId","private"));
-            automationHost=new dev.pocketengine.features.HostAutomationCoordinator(this,features,tasks,automationPlans);
+            bootstrap.activity(generation,"attachments_recovery");dev.pocketengine.features.attachments.AttachmentRepository.get(this).book.recoverInterruptedImports();
+            bootstrap.activity(generation,"channels_recovery");if(channelTaskHost!=null)channelTaskHost.recover();
+            bootstrap.activity(generation,"source_sync");memorySources.synchronize(json("ownerId","owner","spaceId","private"));
+            bootstrap.activity(generation,"final_checks");automationHost=new dev.pocketengine.features.HostAutomationCoordinator(this,features,tasks,automationPlans);
             tasks.maintainTaskScreenshots();tasks.verifyBootstrapReadback();
             if(!java.util.Arrays.asList(android.os.Build.SUPPORTED_ABIS).contains("arm64-v8a"))bootstrap.optional(generation,"managed_project_runtime","原可选CLI环境仅支持arm64-v8a，普通助手不因此停用");
             if(!localOcr.available())bootstrap.optional(generation,"local_ocr","本机OCR资源尚不可用，未代为下载");
             bootstrap.stage(generation,"features_ready",TaskStore.DATABASE_SCHEMA);tasks.setTaskScreenshotChangeListener(this::queueTaskScreenshotMaintenance);
             if(permit!=null)databaseMaintenance.completeOriginalRetry(permit,tasks);
-            if(!bootstrap.complete(generation))throw new IllegalStateException("原初始化代次已变化，未发布ready");
+            bootstrap.activity(generation,"ready");if(!bootstrap.complete(generation))throw new IllegalStateException("原初始化代次已变化，未发布ready");
             hasReachedBusinessReady=true;
             try{queueReadyMaintenance(generation);}catch(java.util.concurrent.RejectedExecutionException stopped){error("原启动后的维护队列已关闭，未重新派发");}
         }catch(Exception|LinkageError failure){
+            bootstrap.diagnose(generation,failure);
             // Feature modules can contain best-effort worker closes; a fresh process must establish their new boundary.
             if(features!=null)bootstrapCleanupConfirmed=false;
             for(Throwable cause=failure;cause!=null;cause=cause.getCause())if(cause instanceof TaskStore.DatabaseOpenFailure known&&java.util.Set.of("database_close_unconfirmed","cleanup_unconfirmed").contains(known.reasonCode))bootstrapCleanupConfirmed=false;
@@ -1094,11 +1095,12 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     private interface ModuleFactory{EngineModule create()throws Exception;}
     private EngineModule addModule(String id,ModuleFactory factory){
+        bootstrap.module(bootstrap.generation(),id);
         EngineModule module;try{module=factory.create();}catch(Exception|LinkageError failure){
             if(java.util.Set.of("assistant","memory","workspace").contains(id))throw new IllegalStateException("必要的原"+id+"记录尚未恢复",failure);
             bootstrap.optional(bootstrap.generation(),id,"原可选模块初始化未完成，已保持该能力不可用");
             module=new EngineModule(){public String id(){return id;}public JSONObject snapshot(){return json("available",false,"message","模块初始化失败，请检查可用空间后重新打开应用");}public JSONObject handle(String command,JSONObject input){throw new IllegalStateException("模块暂不可用，请重新打开应用");}};}
-        features.register(module);return module;
+        features.register(module);bootstrap.module(bootstrap.generation(),"");return module;
     }
     public void addObserver(Observer observer){observers.add(observer);}
     public void removeObserver(Observer observer){observers.remove(observer);}

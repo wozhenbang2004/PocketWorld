@@ -25,6 +25,8 @@ export type BootstrapView = {
   recovery: 'not_started' | 'running' | 'completed' | 'failed'; reason?: BootstrapReason | null;
   installedVersion: string; requiredSchema: number; observedSchema: number | null;
   retryAvailable: boolean; optionalUnavailable: { capability: string; reason: string }[];
+  activity?: string; module?: string;
+  diagnostics?: { causes?: { type: string; frames?: { class: string; method: string; line: number }[] }[] };
   maintenance: MaintenanceView | null;
 };
 export type BootstrapOperation = { requestId: string; command: string; generation: number; repairId: string; status: 'pending' | 'unknown' | 'completed' };
