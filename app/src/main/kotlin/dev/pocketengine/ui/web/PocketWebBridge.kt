@@ -67,6 +67,7 @@ internal class PocketWebBridge(
     private val emit: (JSONObject) -> Unit
 ) {
     private val main = Handler(Looper.getMainLooper())
+    private val presentation = PocketWebPresentation(controller.webPresentationActivity()) { publishState() }
     private val applyScheduled = AtomicBoolean(false)
     private val observer = SnapshotStateObserver { callback -> main.post { if (started && !closed) callback() } }
     private var releaseGlobalObserver: (() -> Unit)? = null
@@ -82,6 +83,7 @@ internal class PocketWebBridge(
     private val reminderReviews = PocketWebReminders()
     private val mcpImports = PocketWebMcp(controller)
     private val sourceReader = PocketWebSources(controller)
+    private val messageQuotes = PocketWebMessageQuotes(controller)
     private val inference = PocketWebInference(controller)
     private val skillDrafts = PocketWebSkillDrafts(controller)
     private val memoryDrafts = PocketWebMemoryDrafts(controller)
@@ -137,7 +139,7 @@ internal class PocketWebBridge(
             "memory.list", "memory.search", "memoryReview.list", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource",
             "memoryReview.candidates", "mcp.snapshot", "mcp.pickConfig", "mcp.cancel", "mcp.discoverImport", "mcp.reviewImport", "mcp.installImport", "mcp.reviewEnabled", "mcp.confirmEnabled", "mcp.read", "mcp.reviewGrant", "mcp.confirmGrant", "learning.snapshot", "groups.snapshot",
             "remote.probe", "remote.environments", "local.termuxProbe", "local.inspectRuntime", "local.readReceipts", "local.prepareCheckout", "local.describeCheckout", "local.terminal.review", "local.terminal.confirm", "local.terminal.query", "local.terminal.stop", "local.terminal.open", "local.terminal.read", "local.terminal.input", "local.terminal.inputReceipt", "local.terminal.close", "automation.receipts", "automation.list", "automation.reviewSchedule", "automation.reviewRule", "automation.confirmReview", "automation.prepareOccurrence", "channels.inspect", "skills.read", "plugins.history", "proxy.status", "proxy.stop"
-        ) + PocketWebData.COMMANDS + PocketWebConnections.COMMANDS + PocketWebMemoryDrafts.COMMANDS + setOf("conversation.drafts") + PocketWebKnowledge.COMMANDS + PocketWebChannels.COMMANDS + PocketWebExperience.COMMANDS + PocketWebRouteReferences.COMMANDS + PocketWebSkills.COMMANDS
+        ) + PocketWebData.COMMANDS + PocketWebConnections.COMMANDS + PocketWebMemoryDrafts.COMMANDS + setOf("conversation.drafts") + PocketWebKnowledge.COMMANDS + PocketWebMessageQuotes.COMMANDS + PocketWebChannels.COMMANDS + PocketWebExperience.COMMANDS + PocketWebRouteReferences.COMMANDS + PocketWebSkills.COMMANDS + PocketWebPresentation.COMMANDS
     }
 
     /** Equivalent to the former Activity saveable presentation state, never an execution grant. */
@@ -162,6 +164,7 @@ internal class PocketWebBridge(
         if (closed || started) return
         check(Looper.myLooper() == Looper.getMainLooper())
         started = true
+        presentation.start()
         observer.start()
         // The Web host creates no AndroidComposeView, so it owns global state notifications.
         val handle = Snapshot.registerGlobalWriteObserver {
@@ -184,12 +187,13 @@ internal class PocketWebBridge(
         if (closed) return
         closed = true
         started = false
+        presentation.close()
         releaseGlobalObserver?.invoke(); releaseGlobalObserver = null
         observer.stop(); observer.clear()
         reviews.clear()
         phoneReviews.clear()
         voiceReviews.clear()
-        modelReviews.clear(); reminderReviews.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); inference.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); localPages.clear(); accountWorkspace.close(); controller.webChannels.clear(); controller.webSkills.clear()
+        modelReviews.clear(); reminderReviews.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); localPages.clear(); accountWorkspace.close(); controller.webChannels.clear(); controller.webSkills.clear()
         section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close)
         section?.takeIf { it in ownerDomains }?.let(controller::leaveOwnerDomain)
         deviceWindow?.close(); deviceWindow = null
@@ -218,7 +222,7 @@ internal class PocketWebBridge(
         commandFence.invalidate()
         taskReviewGeneration++
         domainGeneration++
-        reviews.clear(); phoneReviews.clear(); voiceReviews.clear(); modelReviews.clear(); reminderReviews.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); inference.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); experience.clear(); connectionPages.clear(); localPages.clear(); accountWorkspace.invalidate()
+        reviews.clear(); phoneReviews.clear(); voiceReviews.clear(); modelReviews.clear(); reminderReviews.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); experience.clear(); connectionPages.clear(); localPages.clear(); accountWorkspace.invalidate()
         if (documentReplaced) routeReferences.clear() else routeReferences.background()
         if (documentReplaced) { controller.webChannels.clear(); controller.webSkills.clear() } else { controller.webChannels.background(); controller.webSkills.background() }
         if (documentReplaced) documentId = null
@@ -230,6 +234,8 @@ internal class PocketWebBridge(
         observer.observeReads(this, { _: PocketWebBridge -> publishState() }) {
             controller.modelSelectionRevision
             projection = PocketWebState.snapshot(controller)
+            projection?.getJSONObject("state")?.put("appearance", presentation.snapshot())
+            projection?.getJSONObject("state")?.put("systemSpeech", presentation.speechInfo())
             projection?.getJSONObject("state")?.put("routeReference", routeReferences.snapshot())
             projection?.getJSONObject("state")?.put("skillsWorkspace", controller.webSkills.snapshot())
             projection?.getJSONObject("state")?.put("mcpImport", PocketWebState.publicValue(mcpImports.snapshot()))
@@ -409,6 +415,9 @@ internal class PocketWebBridge(
                 complete(id, result, null); publishState(); return
             }
             if (action in setOf("accounts.models", "accounts.model.review", "accounts.logout.review", "accounts.model.select", "accounts.logout.confirm")) { accountCommand(id, action, args); return }
+            if (action in PocketWebMessageQuotes.COMMANDS) {
+                messageQuotes.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
+            }
             if (action == "sources.open") {
                 checkedPayload(args, setOf("messageId", "taskId"))
                 sourceReader.open(args.optString("messageId").takeIf { it.isNotBlank() }, args.optString("taskId").takeIf { it.isNotBlank() }) { result, error -> complete(id, result, error) }; return
@@ -441,6 +450,10 @@ internal class PocketWebBridge(
                 check(SystemClock.elapsedRealtime() < review.expires) { "原运行开关审阅已过期" }
                 check(controller.webWindowTicket() == review.window) { "原运行开关窗口已变化，请重新核对" }
                 controller.changeOwnerExecution(review.revision, review.enabled) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }; return
+            }
+            if (action in PocketWebPresentation.COMMANDS) {
+                check(controller.webPrivateOwnerVisible()) { "请在前台私人设置中操作外观与系统朗读" }
+                presentation.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
             }
             if (action == "speech.taskAnnouncements") {
                 checkedPayload(args, setOf("enabled"))
@@ -519,7 +532,7 @@ internal class PocketWebBridge(
                 val nextDocument = requiredString(args, "documentId")
                 require(nextDocument.length <= 120)
                 if (nextDocument != documentId) {
-                    documentId = nextDocument; presentationEpoch++; controller.webChannels.clear(); controller.webSkills.clear(); reviews.clear(); phoneReviews.clear(); voiceReviews.clear(); modelReviews.clear(); reminderReviews.clear(); executionReviews.clear(); mcpImports.clear(); sourceReader.clear(); inference.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); localPages.clear(); accountWorkspace.invalidate()
+                    documentId = nextDocument; presentationEpoch++; controller.webChannels.clear(); controller.webSkills.clear(); reviews.clear(); phoneReviews.clear(); voiceReviews.clear(); modelReviews.clear(); reminderReviews.clear(); executionReviews.clear(); mcpImports.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); localPages.clear(); accountWorkspace.invalidate()
                     controller.voiceInputTypeChanged(phoneIntent)
                 }
                 return JSONObject().put("ready", true).put("source", "library-web")
@@ -1100,7 +1113,7 @@ internal class PocketWebBridge(
     private fun canUseTaskControls(task: UiTask) = task.raw.optJSONObject("origin")?.optString("kind") != "paired_device" && (!isGroup(task) || taskPage != null && controller.groupTaskReady)
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")
     private fun leaveTask() { inference.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
-    private fun leaveConnection() { controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); reminderReviews.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); inference.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); localPages.clear(); accountWorkspace.invalidate(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null }
+    private fun leaveConnection() { controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); reminderReviews.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); localPages.clear(); accountWorkspace.invalidate(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null }
     private fun requireSection(expected: String) { require(section == expected) { "原能力窗口已关闭，请重新进入" } }
     private fun requireComposer(args: JSONObject, optional: Boolean = false) {
         val draft = controller.composerDraft ?: error("原输入尚未恢复")

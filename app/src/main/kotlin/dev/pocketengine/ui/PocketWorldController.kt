@@ -305,6 +305,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         syncPhoneWindowIdentity(state)
         return Pair(Triple(webWindowEpoch, chatViewEpoch, projectWorkbench.navigationRevision()), artifactContinuationGeneration)
     }
+    internal fun webPresentationActivity(): ComposeActivity = activity
     internal fun webUiCanInteract(): Boolean = !closed && voiceForeground && !activity.isFinishing && !activity.isDestroyed
     internal fun webPrivateOwnerVisible(): Boolean = webUiCanInteract() && privateWorkspaceView()
     internal fun phoneRouteReferenceHost() = app.nativeOwnerWorkflows.phoneRouteReferencesForOwner()
@@ -516,6 +517,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val request=requestOwnerDomain("taskMemory","selectOwnerOriginalReference",payload)
         if(!originalSourceStages.containsKey(request))originalSourceStages[request]=target
         return request
+    }
+    internal fun stageOwnerOriginalReferenceReceipt(payload: JSONObject, done: (JSONObject?, String?) -> Unit): String {
+        check(webPrivateOwnerVisible()) { "请回到原私人消息页面" }
+        check(webOwnerReceipts.size < 32) { "请先等待已有操作回执" }
+        val owner = webWindowTicket()
+        val original = stageOwnerOriginalReference(JSONObject(payload.toString()))
+        awaitWebOwnerReceipt("taskMemory", "selectOwnerOriginalReference", original, owner, done)
+        return original
     }
     fun removeComposerSource(index:Int,key:String,viewEpoch:Int){
         val model=ownerComposer?:return;val draft=model.active();if(draft.key!=key||viewEpoch!=chatViewEpoch)return
@@ -1081,13 +1090,16 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         check(webOwnerReceipts.size < 32) { "请先等待已有操作回执" }
         val owner = webWindowTicket()
         val original = requestOwnerDomain(domain, command, JSONObject(payload.toString()))
+        awaitWebOwnerReceipt(domain, command, original, owner, done)
+        return original
+    }
+    private fun awaitWebOwnerReceipt(domain: String, command: String, original: String, owner: Any, done: (JSONObject?, String?) -> Unit) {
         val callback: (JSONObject?, String?) -> Unit = { result, error ->
             if (!webPrivateOwnerVisible() || webWindowTicket() != owner) done(null, "原页面已变化，请核对原回执，不要重复提交") else done(result, error)
         }
         val finished = state.ownerResponses(domain)[command]?.takeIf { it.optString("requestId") == original }
         if (finished != null) callback(if (finished.optBoolean("ok")) finished.optJSONObject("result") ?: JSONObject() else null, if (finished.optBoolean("ok")) null else finished.optString("error", finished.optString("message", "原操作未确认")))
         else webOwnerReceipts.getOrPut(original) { mutableListOf() }.add(callback)
-        return original
     }
     fun requestOwnerDomain(domain: String, command: String, payload: JSONObject = JSONObject()): String {
         if (domain == "mcp" && command == "discardMcpResourceSnapshot") {

@@ -5,9 +5,10 @@ import * as AccordionPrimitive from '@radix-ui/react-accordion'
 import { ChevronRight } from 'lucide-react'
 import { cva } from 'class-variance-authority'
 import { cn } from './lib/utils'
+import { treeKeyboardAction, treeTabStop, type TreeKeyboardItem } from './tree-keyboard'
 
 const treeVariants = cva(
-    'group hover:before:opacity-100 before:absolute before:rounded-lg before:left-0 px-2 before:w-full before:opacity-0 before:bg-accent/70 before:h-[2rem] before:-z-10'
+    'group hover:before:opacity-100 before:absolute before:rounded-lg before:left-0 px-2 before:w-full before:opacity-0 before:bg-accent/70 before:h-[2rem] before:-z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-current focus-visible:-outline-offset-2'
 )
 
 const selectedTreeVariants = cva(
@@ -54,6 +55,41 @@ type TreeProps = React.HTMLAttributes<HTMLDivElement> & {
     renderItem?: (params: TreeRenderItemParams) => React.ReactNode
 }
 
+function treeRows(root: HTMLElement): { element: HTMLElement; item: TreeKeyboardItem }[] {
+    return Array.from(root.querySelectorAll<HTMLElement>('[data-tree-item]'))
+        .filter(element => element.closest('[role="tree"]') === root)
+        .map(element => ({
+            element,
+            item: {
+                id: element.dataset.treeItem!,
+                parentId: element.dataset.treeParent,
+                expanded: element.hasAttribute('aria-expanded') ? element.getAttribute('aria-expanded') === 'true' : undefined,
+                disabled: element.getAttribute('aria-disabled') === 'true',
+            },
+        }))
+}
+
+function handleTreeKeyDown(event: React.KeyboardEvent<HTMLElement>, setExpanded?: (open: boolean) => void) {
+    // Controls supplied by renderItem/actions retain their own keyboard and context-menu behavior.
+    if (event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) return
+    const root = event.currentTarget.closest<HTMLElement>('[role="tree"]')
+    if (!root) return
+    const rows = treeRows(root)
+    const action = treeKeyboardAction(rows.map(row => row.item), event.currentTarget.dataset.treeItem!, event.key)
+    if (!action) return
+    event.preventDefault()
+    event.stopPropagation() // Nested Radix accordions must not apply a second, local navigation step.
+    if (action.type === 'focus') rows.find(row => row.item.id === action.id)?.element.focus()
+    else if (action.type === 'expand') setExpanded?.(action.expanded)
+    else if (action.type === 'activate' && !event.repeat) event.currentTarget.click()
+}
+
+function focusClickedRow(event: React.MouseEvent<HTMLElement>) {
+    const control = event.target instanceof Element
+        ? event.target.closest('button, a, input, select, textarea, [tabindex], [contenteditable="true"]') : null
+    if (!control || control === event.currentTarget) event.currentTarget.focus()
+}
+
 const TreeView = React.forwardRef<HTMLDivElement, TreeProps>(
     (
         {
@@ -76,6 +112,14 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeProps>(
         >(initialSelectedItemId)
 
         const selectedItemId = controlledSelectedItemId ?? internalSelectedItemId
+        const rootRef = React.useRef<HTMLDivElement>(null)
+        React.useImperativeHandle(ref, () => rootRef.current!, [])
+        const [focusedItemId, setFocusedItemId] = React.useState(selectedItemId)
+        React.useLayoutEffect(() => {
+            if (!rootRef.current) return
+            const next = treeTabStop(treeRows(rootRef.current).map(row => row.item), focusedItemId, selectedItemId)
+            if (next !== focusedItemId) setFocusedItemId(next)
+        }, [data, focusedItemId, selectedItemId])
 
         const [draggedItem, setDraggedItem] = React.useState<TreeDataItem | null>(null)
 
@@ -134,8 +178,10 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeProps>(
             <div className={cn('overflow-hidden relative p-2', className)}>
                 <TreeItem
                     data={data}
-                    ref={ref}
+                    ref={rootRef}
                     selectedItemId={selectedItemId}
+                    focusedItemId={focusedItemId}
+                    onItemFocus={setFocusedItemId}
                     handleSelectChange={handleSelectChange}
                     expandedItemIds={expandedItemIds}
                     defaultLeafIcon={defaultLeafIcon}
@@ -159,6 +205,9 @@ TreeView.displayName = 'TreeView'
 
 type TreeItemProps = TreeProps & {
     selectedItemId?: string
+    focusedItemId?: string
+    onItemFocus?: (id: string) => void
+    parentId?: string
     handleSelectChange: (item: TreeDataItem | undefined) => void
     expandedItemIds: string[]
     defaultNodeIcon?: React.ComponentType<{ className?: string }>
@@ -175,6 +224,9 @@ const TreeItem = React.forwardRef<HTMLDivElement, TreeItemProps>(
             className,
             data,
             selectedItemId,
+            focusedItemId,
+            onItemFocus,
+            parentId,
             handleSelectChange,
             expandedItemIds,
             defaultNodeIcon,
@@ -193,19 +245,22 @@ const TreeItem = React.forwardRef<HTMLDivElement, TreeItemProps>(
         },
         ref
     ) => {
-        if (!(Array.isArray(data))) {
-            data = [data]
-        }
+        const items = Array.isArray(data) ? data : [data]
         return (
-            <div ref={ref} role="tree" className={className} {...props}>
-                <ul>
-                    {data.map((item) => (
-                        <li key={item.id}>
+            <div ref={ref} role={level ? 'group' : 'tree'} className={className} {...props}>
+                <ul role="none">
+                    {items.map((item, index) => (
+                        <li key={item.id} role="none">
                             {item.children ? (
                                 <TreeNode
                                     item={item}
                                     level={level ?? 0}
                                     selectedItemId={selectedItemId}
+                                    focusedItemId={focusedItemId}
+                                    onItemFocus={onItemFocus}
+                                    parentId={parentId}
+                                    position={index + 1}
+                                    setSize={items.length}
                                     expandedItemIds={expandedItemIds}
                                     handleSelectChange={handleSelectChange}
                                     defaultNodeIcon={defaultNodeIcon}
@@ -220,6 +275,11 @@ const TreeItem = React.forwardRef<HTMLDivElement, TreeItemProps>(
                                     item={item}
                                     level={level ?? 0}
                                     selectedItemId={selectedItemId}
+                                    focusedItemId={focusedItemId}
+                                    onItemFocus={onItemFocus}
+                                    parentId={parentId}
+                                    position={index + 1}
+                                    setSize={items.length}
                                     handleSelectChange={handleSelectChange}
                                     defaultLeafIcon={defaultLeafIcon}
                                     handleDragStart={handleDragStart}
@@ -242,6 +302,11 @@ const TreeNode = ({
     handleSelectChange,
     expandedItemIds,
     selectedItemId,
+    focusedItemId,
+    onItemFocus,
+    parentId,
+    position,
+    setSize,
     defaultNodeIcon,
     defaultLeafIcon,
     handleDragStart,
@@ -254,6 +319,11 @@ const TreeNode = ({
     handleSelectChange: (item: TreeDataItem | undefined) => void
     expandedItemIds: string[]
     selectedItemId?: string
+    focusedItemId?: string
+    onItemFocus?: (id: string) => void
+    parentId?: string
+    position?: number
+    setSize?: number
     defaultNodeIcon?: React.ComponentType<{ className?: string }>
     defaultLeafIcon?: React.ComponentType<{ className?: string }>
     handleDragStart?: (item: TreeDataItem) => void
@@ -269,9 +339,10 @@ const TreeNode = ({
     const hasChildren = !!item.children?.length
     const isSelected = selectedItemId === item.id
     const isOpen = value.includes(item.id)
+    const childrenId = React.useId()
 
     const onDragStart = (e: React.DragEvent) => {
-        if (!item.draggable) {
+        if (!item.draggable || item.disabled) {
             e.preventDefault()
             return
         }
@@ -280,7 +351,7 @@ const TreeNode = ({
     }
 
     const onDragOver = (e: React.DragEvent) => {
-        if (item.droppable !== false && draggedItem && draggedItem.id !== item.id) {
+        if (item.droppable !== false && !item.disabled && draggedItem && draggedItem.id !== item.id) {
             e.preventDefault()
             setIsDragOver(true)
         }
@@ -291,6 +362,7 @@ const TreeNode = ({
     }
 
     const onDrop = (e: React.DragEvent) => {
+        if (item.disabled) return
         e.preventDefault()
         setIsDragOver(false)
         handleDrop?.(item)
@@ -300,21 +372,37 @@ const TreeNode = ({
         <AccordionPrimitive.Root
             type="multiple"
             value={value}
-            onValueChange={(s) => setValue(s)}
+            onValueChange={(s) => { if (!item.disabled) setValue(s) }}
         >
             <AccordionPrimitive.Item value={item.id}>
                 <AccordionTrigger
+                    role="treeitem"
+                    aria-label={item.name}
+                    aria-selected={isSelected}
+                    aria-expanded={hasChildren ? isOpen : undefined}
+                    aria-disabled={item.disabled || undefined}
+                    aria-level={level + 1}
+                    aria-posinset={position}
+                    aria-setsize={setSize}
+                    aria-owns={isOpen && hasChildren ? childrenId : undefined}
+                    data-tree-item={item.id}
+                    data-tree-parent={parentId}
+                    tabIndex={focusedItemId === item.id ? 0 : -1}
+                    onFocus={event => { if (event.target === event.currentTarget) onItemFocus?.(item.id) }}
+                    onKeyDown={event => handleTreeKeyDown(event, open => setValue(open ? [item.id] : []))}
                     className={cn(
                         treeVariants(),
                         isSelected && selectedTreeVariants(),
                         isDragOver && dragOverVariants(),
                         item.className
                     )}
-                    onClick={() => {
+                    onClick={event => {
+                        if (item.disabled) return
+                        focusClickedRow(event)
                         handleSelectChange(item)
                         item.onClick?.()
                     }}
-                    draggable={!!item.draggable}
+                    draggable={!!item.draggable && !item.disabled}
                     onDragStart={onDragStart}
                     onDragOver={onDragOver}
                     onDragLeave={onDragLeave}
@@ -344,10 +432,14 @@ const TreeNode = ({
                         </>
                     )}
                 </AccordionTrigger>
-                <AccordionContent className="ml-4 pl-1 border-l">
+                <AccordionContent className="ml-4 pl-1 border-l" role="presentation" aria-hidden={!isOpen} inert={!isOpen}>
                     <TreeItem
+                        id={childrenId}
                         data={item.children ? item.children : item}
                         selectedItemId={selectedItemId}
+                        focusedItemId={focusedItemId}
+                        onItemFocus={onItemFocus}
+                        parentId={item.id}
                         handleSelectChange={handleSelectChange}
                         expandedItemIds={expandedItemIds}
                         defaultLeafIcon={defaultLeafIcon}
@@ -370,6 +462,11 @@ const TreeLeaf = React.forwardRef<
         item: TreeDataItem
         level: number
         selectedItemId?: string
+        focusedItemId?: string
+        onItemFocus?: (id: string) => void
+        parentId?: string
+        position?: number
+        setSize?: number
         handleSelectChange: (item: TreeDataItem | undefined) => void
         defaultLeafIcon?: React.ComponentType<{ className?: string }>
         handleDragStart?: (item: TreeDataItem) => void
@@ -384,6 +481,11 @@ const TreeLeaf = React.forwardRef<
             item,
             level,
             selectedItemId,
+            focusedItemId,
+            onItemFocus,
+            parentId,
+            position,
+            setSize,
             handleSelectChange,
             defaultLeafIcon,
             handleDragStart,
@@ -427,6 +529,18 @@ const TreeLeaf = React.forwardRef<
         return (
             <div
                 ref={ref}
+                role="treeitem"
+                aria-label={item.name}
+                aria-selected={isSelected}
+                aria-disabled={item.disabled || undefined}
+                aria-level={level + 1}
+                aria-posinset={position}
+                aria-setsize={setSize}
+                data-tree-item={item.id}
+                data-tree-parent={parentId}
+                tabIndex={focusedItemId === item.id ? 0 : -1}
+                onFocus={event => { if (event.target === event.currentTarget) onItemFocus?.(item.id) }}
+                onKeyDown={handleTreeKeyDown}
                 className={cn(
                     'ml-5 flex text-left items-center py-2 cursor-pointer before:right-1',
                     treeVariants(),
@@ -436,8 +550,9 @@ const TreeLeaf = React.forwardRef<
                     item.disabled && 'opacity-50 cursor-not-allowed pointer-events-none',
                     item.className
                 )}
-                onClick={() => {
+                onClick={event => {
                     if (item.disabled) return
+                    focusClickedRow(event)
                     handleSelectChange(item)
                     item.onClick?.()
                 }}
@@ -482,7 +597,7 @@ const AccordionTrigger = React.forwardRef<
     React.ElementRef<typeof AccordionPrimitive.Trigger>,
     React.ComponentPropsWithoutRef<typeof AccordionPrimitive.Trigger>
 >(({ className, children, ...props }, ref) => (
-    <AccordionPrimitive.Header>
+    <AccordionPrimitive.Header role="presentation">
         <AccordionPrimitive.Trigger
             ref={ref}
             className={cn(

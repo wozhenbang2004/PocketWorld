@@ -45,6 +45,7 @@ internal object PocketWebState {
         .put("id", row.id ?: JSONObject.NULL).put("role", row.role).put("content", row.content)
         .put("at", row.at).put("taskId", row.taskId ?: JSONObject.NULL)
         .put("sourceRevision", row.sourceRevision).put("attachmentCount", row.attachmentCount)
+        .put("quoteAvailable", row.ownerOriginalLocator != null && row.content.isNotEmpty())
         .put("retainedSources", dev.pocketengine.ui.memory.finalAnswerSourceSelection(row) != null)
         .put("attachments", JSONArray().also { out -> row.attachments.forEach { out.put(attachment(it)) } })
         .put("attachmentFiles", JSONArray().also { out -> row.attachmentFiles.forEach { out.put(publicValue(it)) } })

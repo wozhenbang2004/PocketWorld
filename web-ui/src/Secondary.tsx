@@ -9,9 +9,10 @@ import {
 import { bridge } from './bridge';
 import ReminderWorkspace from './ReminderWorkspace';
 import ConnectionWorkspace from './ConnectionWorkspace';
+import { AppearanceSettings, SystemSpeechSettings } from './PresentationSettings';
 import {LocalWorkspace} from './LocalWorkspace';
 import {MemoryWorkspace} from './MemoryWorkspace';
-import {LearningWorkspace} from './LearningWorkspace';
+import {LearningWorkspace, type LearningCandidateTarget} from './LearningWorkspace';
 import { ModelPicker, PressButton } from './library';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import {
@@ -374,6 +375,7 @@ function PhoneSettings({ state, supported, run, navigate }: { state: Data; suppo
   const screenshotPolicy = object(state.taskScreenshotPolicy);
   const latestReply = list(state.messages).filter(row => row.role === 'assistant' && typeof row.id === 'string' && row.content).at(-1);
   return <>
+    <Card title="界面外观"><AppearanceSettings state={state} supported={supported} run={run} /></Card>
     <Card title="手机观察与执行" description="本地取图、OCR 和云端发送分别设置。">
       <StretchSwitch label="允许本地按需取图" description="更改用于后续运行；关闭后不为 OCR 采集像素。" checked={state.localCaptureAllowed !== false} disabled={!supported('settings.saveLocalObservation')} onChange={capture => { void run('settings.saveLocalObservation', { capture, ocr: state.localOcrAllowed !== false }).catch(() => {}); }} />
       <StretchSwitch label="允许本地 OCR" description="像素在本地识字；有来源的识别文字可发送给已选推理服务。" checked={state.localOcrAllowed !== false} disabled={!supported('settings.saveLocalObservation')} onChange={ocr => { void run('settings.saveLocalObservation', { capture: state.localCaptureAllowed !== false, ocr }).catch(() => {}); }} />
@@ -383,6 +385,7 @@ function PhoneSettings({ state, supported, run, navigate }: { state: Data; suppo
       <div className="pw-form-actions">{[['accessibility', '界面读取与主屏控制'], ['notifications', '任务通知'], ['wireless', '无线调试设置']].map(([section, title]) => <CapabilityAction key={section} action="settings.openSystem" supported={supported} run={run} args={{ section }}>{title}</CapabilityAction>)}<Button variant="secondary" disabled={!supported('settings.openSystem')} onClick={() => navigate('background')}>后台连接与授权</Button></div>
     </Card>
     <Card title="浏览器与语音" description="语音识别只填入草稿，仍由你决定发送。">
+      <SystemSpeechSettings state={state} supported={supported} run={run} />
       <StretchSwitch label="任务状态语音提示" description="仅前台私有任务的状态提示，不读任务正文；系统语音引擎可能联网。默认关闭。" checked={object(state.taskAnnouncements).enabled === true} disabled={Boolean(state.taskAnnouncementSaving) || !supported('speech.taskAnnouncements')} onChange={enabled => { void run('speech.taskAnnouncements', { enabled }).catch(() => {}); }} />
       {object(object(state.taskAnnouncements).readout).active && <CapabilityAction action="speech.stopTaskAnnouncement" args={{ readoutId: object(object(state.taskAnnouncements).readout).readoutId }} supported={supported} run={run}>停止这次状态提示</CapabilityAction>}
 
@@ -781,7 +784,7 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack }: { 
   </>;
 }
 
-function DomainPage({ domain, state, data, supported, run, registerTransientBack }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration }) {
+function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void }) {
   const act = (action: string, args: Data, label: string, primary = false) => <CapabilityAction action={action} args={args} supported={supported} run={run} primary={primary}>{label}</CapabilityAction>;
   const title = SECONDARY_DOMAINS.find(x => x.id === domain)?.title || '连接与能力';
   if (domain === 'accounts') return <AccountsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
@@ -795,8 +798,8 @@ function DomainPage({ domain, state, data, supported, run, registerTransientBack
     <Collection data={data} keys={['pendingPairings', 'recoverablePairings']} label="待核对配对">{row => <div className="pw-form-actions">{act('devices.reviewPairing', { pairingId: recordId(row), expectedRevision: row.revision }, '打开原配对审阅')}{act('devices.openRecovery', { pairingId: recordId(row) }, '核对恢复地址')}</div>}</Collection>
   </Card>;
   if (domain === 'remote' || domain === 'ssh') return <ConnectionWorkspace domain={domain} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
-  if (domain === 'memory' || domain === 'memoryReview') return <MemoryWorkspace domain={domain} run={run} registerTransientBack={registerTransientBack} />;
-  if (domain === 'learning') return <LearningWorkspace state={state} data={data} run={run} registerTransientBack={registerTransientBack} />;
+  if (domain === 'memory' || domain === 'memoryReview') return <MemoryWorkspace domain={domain} run={run} registerTransientBack={registerTransientBack} initialCandidate={candidateTarget} />;
+  if (domain === 'learning') return <LearningWorkspace state={state} data={data} run={run} registerTransientBack={registerTransientBack} onReviewCandidate={onReviewCandidate} />;
   if (domain === 'automation') return <ReminderWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'commitments') return <>
     <Card title={title} description="时间、时区、原目标与发生回执绑定；打开目标不自动执行。">
@@ -992,6 +995,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const supported = (action: string) => commands.includes(action);
   const normalize = (next: string) => (next || 'settings').replace(/^connections[:/]/, '').replace(/^settings[:/]/, '');
   const [page, setPage] = useState(normalize(route));
+  const [candidateTarget, setCandidateTarget] = useState<LearningCandidateTarget | null>(null);
   const [modelView, setModelView] = useState<ModelView>({ kind: 'list' });
   const modelTrail = useRef<ModelView[]>([]);
   const modelDrafts = useRef<Partial<Record<string, ModelDraft>>>({});
@@ -999,9 +1003,9 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const registerTransientBack = useCallback<BackHandlerRegistration>(handler => { transientBack.current = handler; }, []);
   const [query, setQuery] = useState(''), [notice, setNotice] = useState(''), [error, setError] = useState('');
   const [expandedSettings, setExpandedSettings] = useState<Set<string>>(new Set());
-  const trail = useRef<Array<{ page: string; query: string; modelView: ModelView; modelTrail: ModelView[] }>>([]), scroll = useRef<HTMLDivElement>(null), scrollPositions = useRef(new Map<string, number>());
+  const trail = useRef<Array<{ page: string; query: string; modelView: ModelView; modelTrail: ModelView[]; candidateTarget: LearningCandidateTarget | null }>>([]), scroll = useRef<HTMLDivElement>(null), scrollPositions = useRef(new Map<string, number>());
   const mounted = useRef(true), generation = useRef(0);
-  useEffect(() => { generation.current++; trail.current = []; modelTrail.current = []; setPage(normalize(route)); setModelView({ kind: 'list' }); setNotice(''); setError(''); }, [route]);
+  useEffect(() => { generation.current++; trail.current = []; modelTrail.current = []; setPage(normalize(route)); setCandidateTarget(null); setModelView({ kind: 'list' }); setNotice(''); setError(''); }, [route]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; }; }, []);
   const run: Run = async (action, args = {}) => {
     if (!supported(action)) throw new Error('当前页面尚未开放此操作。');
@@ -1016,7 +1020,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
     }
   };
   const rememberScroll = () => scrollPositions.current.set(page + ((page === 'models' || page === 'model-settings') ? ':' + modelView.kind + ':' + (modelView.id || '') : ''), scroll.current?.scrollTop || 0);
-  const navigate = (next: string) => { rememberScroll(); generation.current++; trail.current.push({ page, query, modelView, modelTrail: [...modelTrail.current] }); modelTrail.current = []; setNotice(''); setError(''); setQuery(''); setModelView({ kind: 'list' }); setPage(next); };
+  const navigate = (next: string, candidate: LearningCandidateTarget | null = null) => { rememberScroll(); generation.current++; trail.current.push({ page, query, modelView, modelTrail: [...modelTrail.current], candidateTarget }); modelTrail.current = []; setNotice(''); setError(''); setQuery(''); setModelView({ kind: 'list' }); setCandidateTarget(candidate); setPage(next); };
   const openModel = (view: ModelView) => { rememberScroll(); generation.current++; modelTrail.current.push(modelView); setNotice(''); setError(''); setModelView(view); };
   const isModelPage = page === 'models' || page === 'model-settings';
   const domain = SECONDARY_DOMAINS.find(x => x.id === page);
@@ -1076,10 +1080,10 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
     rememberScroll();
     if (isModelPage && modelView.kind !== 'list') { generation.current++; setNotice(''); setError(''); setModelView(modelTrail.current.pop() || { kind: 'list' }); return true; }
     const previous = trail.current.pop();
-    if (previous) { generation.current++; setNotice(''); setError(''); setPage(previous.page); setQuery(previous.query); modelTrail.current = previous.modelTrail; setModelView(previous.modelView); return true; }
+    if (previous) { generation.current++; setNotice(''); setError(''); setPage(previous.page); setCandidateTarget(previous.candidateTarget); setQuery(previous.query); modelTrail.current = previous.modelTrail; setModelView(previous.modelView); return true; }
     if (page === normalize(route)) return false;
     if (page === 'settings' || page === 'connections') return false;
-    generation.current++; setPage(page === 'background' ? 'phone' : 'settings'); setModelView({ kind: 'list' }); return true;
+    generation.current++; setCandidateTarget(null); setPage(page === 'background' ? 'phone' : 'settings'); setModelView({ kind: 'list' }); return true;
   };
   // Both the Android back event and the visible back button consume the same
   // current layer. Only the settings root delegates to the enclosing app.
@@ -1118,7 +1122,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
           : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} navigate={navigate} />
           : page === 'history' || page === 'usage' ? <HistoryPage key={page} usage={page === 'usage'} supported={supported} run={run} />
           : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} registerTransientBack={registerTransientBack} navigate={navigate} />
-          : domain ? <DomainPage key={page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />
+          : domain ? <DomainPage key={page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} />
           : <Empty>此入口未找到，可返回设置。</Empty>}
       </div>
     </div>

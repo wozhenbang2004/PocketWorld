@@ -4,10 +4,11 @@ import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsD
 
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
+export type LearningCandidateTarget = { id: string; revision: number; taskId: string; sourceTitle: string };
 const rows = (value: any): Data[] => Array.isArray(value) ? value : [];
 
 /** The original source-learning task keeps its batches, receipts and explicit model admission. */
-export function LearningWorkspace({ state, data, run, registerTransientBack }: { state: Data; data: Data; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void }) {
+export function LearningWorkspace({ state, data, run, registerTransientBack, onReviewCandidate }: { state: Data; data: Data; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; onReviewCandidate: (target: LearningCandidateTarget) => void }) {
   const [jobs, setJobs] = useState<Data[]>([]), [cursor, setCursor] = useState(''), [current, setCurrent] = useState<Data | null>(null);
   const [taskId, setTaskId] = useState(''), [episode, setEpisode] = useState<Data | null>(null), [sources, setSources] = useState<Data[]>([]), [retained, setRetained] = useState(false), [createAttempted, setCreateAttempted] = useState(false);
   const [operation, setOperation] = useState<Data | null>(null);
@@ -60,7 +61,11 @@ export function LearningWorkspace({ state, data, run, registerTransientBack }: {
       {!jobs.length && <p className="pw-secondary-empty">当前读取窗口没有学习任务。</p>}<Accordion variant="divided">{jobs.map(job => <AccordionItem key={job.taskId} id={job.taskId} title={job.job?.inputs?.[0]?.title || '原来源学习任务'} description={`${job.taskStatus || ''} · 已处理 ${job.job?.nextIndex ?? 0} / ${rows(job.job?.inputs).length} 份来源`}><Button variant="secondary" disabled={busy || running} onClick={() => selectJob(job.taskId)}>读取原水位与批次</Button></AccordionItem>)}</Accordion>
     </section>
     {current && <section className="pw-source-record"><h2>当前原任务的处理进度</h2><p className="pw-muted">{current.taskStatus} · 已处理 {current.job?.nextIndex} / {rows(current.job?.inputs).length} 份来源</p>{current.active && <p>{current.active.stage === 'draft_recorded' ? '原模型草稿已记录；继续仅核对原来源并提交同一候选，不重新调用模型。' : current.active.stage === 'inflight' ? '原批次尚未取得确定草稿回执。' : '旧调用结果未知；没有自动重试，也不计作未使用或退款。'}</p>}
-      {rows(current.job?.inputs).map((source, index) => <p key={source.sourceFingerprint || index}>{index + 1}. {source.title} · {batchStatus(current.job, index)}</p>)}
+      {rows(current.job?.inputs).map((source, index) => {
+        const candidate = rows(current.job?.results)[index]?.candidateRef;
+        const canLocate = typeof candidate?.id === 'string' && candidate.id.length > 0 && Number.isSafeInteger(candidate.revision) && candidate.revision > 0;
+        return <div key={source.sourceFingerprint || index}><p>{index + 1}. {source.title} · {batchStatus(current.job, index)}</p>{canLocate && <Button variant="ghost" disabled={busy || running || stopping} onClick={() => onReviewCandidate({ id: candidate.id, revision: candidate.revision, taskId: current.taskId, sourceTitle: source.title || '原学习来源' })}>审阅这条候选</Button>}</div>;
+      })}
       <CheckboxField isSelected={continuous} onChange={setContinuous} isDisabled={busy}>本次连续处理全部已选来源，最多 20 批</CheckboxField>
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => selectJob(current.taskId)}>重新核对原水位</Button><Button disabled={busy || running || current.canContinue !== true} onClick={() => openReview('run')}>核对并继续原批次</Button>{current.canSkipBatch && <Button variant="ghost" disabled={busy} onClick={() => openReview('skip')}>核对并跳过当前来源</Button>}{(busy || running || ['preparing', 'running', 'stopping'].includes(current.taskStatus)) && <Button variant="secondary" disabled={stopping} onClick={stop}>停止这个原任务的本次提炼</Button>}</div>
       <p className="pw-muted">提炼只形成待审候选；采用、方法质量验证和启用技能仍各自核对。离开本页会结束本次调用，原学习计划和已取得结果保留。</p>
