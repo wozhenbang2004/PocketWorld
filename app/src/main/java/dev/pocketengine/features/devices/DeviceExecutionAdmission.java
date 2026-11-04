@@ -67,7 +67,7 @@ public final class DeviceExecutionAdmission {
     public PairingCoordinator.SourceShare sourceShare()throws Exception{PairingCoordinator.SourceShare share=permission.sourceShare();if(share!=null)share.checkCurrent(System.currentTimeMillis());return share;}
     public JSONArray toolNames() throws Exception {
         JSONArray granted=permission.toolNames(),projected=new JSONArray();for(int i=0;i<granted.length();i++){
-            String name=granted.getString(i);if(kind==Kind.DEVICE_TOOLS?DeviceToolsRuntime.supports(name)&&(!DeviceToolsRuntime.requiresWholeDisplayInput(name)||request.resourceBinding().optBoolean("allowWholeDisplayInput",false)):DeviceGoalCapabilityPort.supportedTool(name))projected.put(name);
+            String name=granted.getString(i);if(kind==Kind.DEVICE_TOOLS?DeviceToolsRuntime.supports(name)&&(!DeviceToolsRuntime.requiresWholeDisplayInput(name)||request.resourceBinding().optBoolean("allowWholeDisplayInput",false)):(DeviceGoalCapabilityPort.supportedTool(name)||!mode.equals("capabilities")&&DeviceToolsRuntime.supports(name)&&(!DeviceToolsRuntime.requiresWholeDisplayInput(name)||request.resourceBinding().optBoolean("allowWholeDisplayInput",false))))projected.put(name);
         }return projected;
     }
     public JSONArray resources() throws Exception { return new JSONArray(permission.resources().toString()); }

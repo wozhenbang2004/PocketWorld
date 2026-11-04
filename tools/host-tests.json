@@ -1,4 +1,30 @@
 {
+  "phone-team-sessions": {
+    "class": "dev.pocketengine.BackgroundPhoneRunTest",
+    "additionalClasses": [
+      "dev.pocketengine.core.ExecutionResourcesTest",
+      "dev.pocketengine.store.LocalPhoneLeaseIsolationNativeTest",
+      "dev.pocketengine.PhoneNotificationControlsTest",
+      "dev.pocketengine.PhoneRunServiceTest",
+      "dev.pocketengine.phone.PhoneOwnerControlsTest",
+      "dev.pocketengine.displayhelper.DisplaySessionRegistryTest",
+      "dev.pocketengine.phone.display.DisplayModuleParallelTest",
+      "dev.pocketengine.phone.display.PhoneParallelCapabilitiesTest",
+      "dev.pocketengine.phone.display.DisplayModuleTest",
+      "dev.pocketengine.features.devices.DeviceGoalPhonePortTest",
+      "dev.pocketengine.features.teams.TeamPhoneBudgetTest",
+      "dev.pocketengine.features.devices.DevicePhoneGoalReadinessTest",
+      "dev.pocketengine.features.teams.TeamPhoneOriginalHostJourneyTest",
+      "dev.pocketengine.features.devices.DeviceControlDispatchIsolationTest",
+      "dev.pocketengine.features.devices.DeviceProtocolTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest"
+    ],
+    "robolectric": true,
+    "description": "Bounded original App/Service/TaskStore multi-run lifecycle, per-display routing, exact phone scope, team allocations and previous notification/display regressions. Native frame/model responses are explicit test boundaries; no physical Android, APK, WAN or visual acceptance."
+  },
   "conversation-phone-handoff": {
     "class": "dev.pocketengine.ConversationPhoneStartNativeTest",
     "additionalClasses": [

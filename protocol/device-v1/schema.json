@@ -2183,6 +2183,12 @@
           "type": "boolean",
           "default": false,
           "description": "Independent from whole-display capture. Native execution still enforces current owner input scope and observed app-window binding."
+        },
+        "androidUserId": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 21474,
+          "description": "Optional exact native Android user identity. Omission is distinct from user 0 and does not authorize a default profile. Runtime execution still requires an owner-selected supported user and native app-copy proof."
         }
       },
       "required": [

@@ -21,8 +21,8 @@ public final class TeamParentBudget {
         private Exhausted(JSONObject pool,String dimension)throws Exception{super("原父任务团队总预算已用尽，回答保留但未派发");this.parentTaskId=pool.getString("parentTaskId");this.parentRunId=pool.getString("parentRunId");this.dimension=dimension;used=used(pool,dimension);limit=pool.getInt(dimension.equals("modelRequests")?"modelRequestLimit":"toolOperationLimit");}
     }
     public static JSONObject create(String parentTask,String parentRun,int modelLimit,int operationLimit,JSONObject nativeSource)throws Exception {
-        boolean project=nativeSource.optBoolean("nativeProjectWorkPlan");
-        if(modelLimit<0||modelLimit>(project?MAX_PROJECT_MODEL_REQUESTS:MAX_MODEL_REQUESTS)||operationLimit<0||operationLimit>(project?MAX_PROJECT_TOOL_OPERATIONS:MAX_TEXT_TOOL_OPERATIONS))throw new SecurityException("原父预算上限无效");
+        boolean project=nativeSource.optBoolean("nativeProjectWorkPlan"),phone=nativeSource.optBoolean("nativePhoneWorkPlan");
+        if(modelLimit<0||modelLimit>(project||phone?MAX_PROJECT_MODEL_REQUESTS:MAX_MODEL_REQUESTS)||operationLimit<0||operationLimit>(phone?400:project?MAX_PROJECT_TOOL_OPERATIONS:MAX_TEXT_TOOL_OPERATIONS))throw new SecurityException("原父预算上限无效");
         return new JSONObject().put("parentTaskId",parentTask).put("parentRunId",parentRun)
                 .put("modelRequestLimit",modelLimit).put("toolOperationLimit",operationLimit).put("budgetSource",new JSONObject(nativeSource.toString())).put("reservations",new JSONArray())
                 .put("tokenLimitKnown",false).put("costLimitKnown",false);
@@ -57,9 +57,9 @@ public final class TeamParentBudget {
         if(pool.getString("parentRunId").equals(binding.optString("childRunId")))return true;String digest=binding.optString("nativeRoundContinuationDigest");if(!digest.matches("[a-f0-9]{64}"))return false;JSONArray approved=pool.getJSONObject("budgetSource").optJSONArray("ownerContinuations");for(int i=0;approved!=null&&i<approved.length();i++){JSONObject row=approved.getJSONObject(i);if(digest.equals(row.optString("reviewDigest"))&&pool.getString("parentTaskId").equals(row.optString("taskId"))&&pool.getString("parentRunId").equals(row.optString("scopeId"))&&binding.optString("childRunId").equals(row.optString("toRunId"))&&binding.optInt("childEpoch")==row.optInt("toEpoch"))return true;}return false;
     }
     /** Engineering ceilings only. Neither this marker nor a Reply grants additional units. */
-    public static int modelCeiling(JSONObject pool)throws Exception{return pool.getJSONObject("budgetSource").optBoolean("nativeProjectWorkPlan")?MAX_PROJECT_MODEL_REQUESTS:MAX_MODEL_REQUESTS;}
-    public static int toolCeiling(JSONObject pool)throws Exception{return pool.getJSONObject("budgetSource").optBoolean("nativeProjectWorkPlan")?MAX_PROJECT_TOOL_OPERATIONS:MAX_TEXT_TOOL_OPERATIONS;}
-    public static int reservationCeiling(JSONObject pool)throws Exception{return pool.getJSONObject("budgetSource").optBoolean("nativeProjectWorkPlan")?MAX_PROJECT_MODEL_REQUESTS+MAX_PROJECT_TOOL_OPERATIONS+32:128;}
+    public static int modelCeiling(JSONObject pool)throws Exception{return pool.getJSONObject("budgetSource").optBoolean("nativePhoneWorkPlan")?128:pool.getJSONObject("budgetSource").optBoolean("nativeProjectWorkPlan")?MAX_PROJECT_MODEL_REQUESTS:MAX_MODEL_REQUESTS;}
+    public static int toolCeiling(JSONObject pool)throws Exception{return pool.getJSONObject("budgetSource").optBoolean("nativePhoneWorkPlan")?400:pool.getJSONObject("budgetSource").optBoolean("nativeProjectWorkPlan")?MAX_PROJECT_TOOL_OPERATIONS:MAX_TEXT_TOOL_OPERATIONS;}
+    public static int reservationCeiling(JSONObject pool)throws Exception{return pool.getJSONObject("budgetSource").optBoolean("nativePhoneWorkPlan")?560:pool.getJSONObject("budgetSource").optBoolean("nativeProjectWorkPlan")?MAX_PROJECT_MODEL_REQUESTS+MAX_PROJECT_TOOL_OPERATIONS+32:128;}
     private static int used(JSONObject pool,String unit)throws Exception {
         int used=unit.equals("externalJobs")?pool.optInt("externalJobsBeforePool",0):0;JSONArray rows=pool.getJSONArray("reservations");for(int i=0;i<rows.length();i++){
             JSONObject row=rows.getJSONObject(i);if(!row.getString("state").equals("released_unstarted"))used+=row.optInt(unit,0);

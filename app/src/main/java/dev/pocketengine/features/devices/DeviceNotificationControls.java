@@ -26,12 +26,12 @@ public final class DeviceNotificationControls {
             boolean owner=false;
             try {
                 String id=intent.getStringExtra("taskId"),run=intent.getStringExtra("deviceRunId");int epoch=intent.getIntExtra("deviceEpoch",-1);
-                if(!handles(intent.getAction())||id==null||run==null||!id.equals(serviceTask)||!run.equals(serviceRun)||epoch!=serviceEpoch||original==null||original!=app.control(id)||!id.equals(app.activeId())||!original.matchesHostRun(id,run,epoch))return false;
+                if(!handles(intent.getAction())||id==null||run==null||!id.equals(serviceTask)||!run.equals(serviceRun)||epoch!=serviceEpoch||original==null||original!=app.control(id)||!original.matchesHostRun(id,run,epoch))return false;
                 JSONObject task=app.tasks.get(id,false);if(!TaskStoreDeviceTasks.deviceTask(task)||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))return false;
                 owner=true;
                 if(STOP.equals(intent.getAction())){app.stop(id,original);return true;}
                 if(original.isCancelled())return false;
-                if(PAUSE.equals(intent.getAction()))app.pause();else app.resumeDeviceExecution(id);
+                if(PAUSE.equals(intent.getAction()))app.controlDeviceExecution(id,run,epoch,"pause");else app.controlDeviceExecution(id,run,epoch,"resume");
                 return true;
             } catch(Exception unavailable) {
                 if(owner&&STOP.equals(intent.getAction()))original.cancel();else if(owner&&PAUSE.equals(intent.getAction()))original.pause();

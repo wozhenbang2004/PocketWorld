@@ -13,7 +13,7 @@ final class PhoneOwnerControls {
     PhoneOwnerControls(EngineApplication app,String taskId,RunControl original) {
         this.app=Objects.requireNonNull(app);this.taskId=Objects.requireNonNull(taskId);this.original=Objects.requireNonNull(original);
     }
-    private boolean ownsControl() {return taskId.equals(app.activeId())&&original==app.control(taskId);}
+    private boolean ownsControl() {return original==app.control(taskId);}
     private boolean ownsRun()throws Exception {
         if(!ownsControl()||!original.hasHostRun())return false;
         JSONObject task=app.tasks.get(taskId,false);

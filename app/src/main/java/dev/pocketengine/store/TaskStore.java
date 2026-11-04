@@ -1526,7 +1526,7 @@ public final class TaskStore {
             JSONObject reply=dev.pocketengine.features.assistant.OwnerPhoneQuestions.requireSavedContinuation(original,task,permission,checkpoint(run),System.currentTimeMillis());executionScopeCurrent(task,run,permission);
             if(hasUnresolved(id))throw new SecurityException("原手机动作结果尚未核对，普通回答不重放外效");JSONArray approvals=task.optJSONArray("approvals");for(int i=0;approvals!=null&&i<approvals.length();i++)if("pending".equals(approvals.getJSONObject(i).optString("state")))throw new SecurityException("普通回答不代替原手机具体操作授权");
             JSONObject scope=task.getJSONObject("executionScope");if(scope.getInt("modelCallLimit")-scope.getInt("modelCallsUsed")-deviceTasks.heldBudget(id,run,true)<1||scope.getInt("toolLimit")-scope.getInt("toolsUsed")-deviceTasks.heldBudget(id,run,false)<1)throw new SecurityException("原手机剩余预算已被占用");
-            try(Cursor lease=db.rawQuery("SELECT run_id,epoch,expires_at FROM leases WHERE resource_id='phone.local'",null)){if(!lease.moveToFirst()||!run.equals(lease.getString(0))||epoch!=lease.getInt(1)||lease.getLong(2)<=System.currentTimeMillis())throw new SecurityException("原手机物理执行租约已改变或到期");}
+            requirePhoneLeaseCurrent(id,run,epoch);
             JSONObject mailbox=ownerMailbox(task,run,epoch);if(!Boolean.FALSE.equals(mailbox.opt("open"))||!mailbox.optString("conversationId").isEmpty())throw new SecurityException("原手机邮箱已被接手");
             requireOwnerPhoneQuestionSources(task,run);
             ContentValues claim=new ContentValues();claim.put("updated_at",System.currentTimeMillis());if(db.update("runs",claim,"task_id=? AND run_id=? AND epoch=? AND status='running'",new String[]{id,run,Integer.toString(epoch)})!=1)throw new SecurityException("原手机执行已结束");
@@ -1559,7 +1559,7 @@ public final class TaskStore {
                 else if(scope.getInt("modelCallLimit")-scope.getInt("modelCallsUsed")-deviceTasks.heldBudget(task.getString("id"),run,true)<1||scope.getInt("toolLimit")-scope.getInt("toolsUsed")-deviceTasks.heldBudget(task.getString("id"),run,false)<1||permission.getInt("remainingOperations")<1)state="saved_budget_exhausted";
                 else if(scope.getLong("revision")!=permission.optLong("executionScopeRevision"))state="saved_original_authority_changed";
             }catch(Exception scopeUnknown){state="saved_scope_unavailable";}
-            if(!state.matches("saved_scope_.*|saved_budget_exhausted|saved_original_authority_changed"))try(Cursor lease=db.rawQuery("SELECT run_id,epoch,expires_at FROM leases WHERE resource_id='phone.local'",null)){if(!lease.moveToFirst()||!run.equals(lease.getString(0))||task.getInt("coordinatorEpoch")!=lease.getInt(1)||lease.getLong(2)<=System.currentTimeMillis())state="saved_phone_lease_unavailable";}
+            if(!state.matches("saved_scope_.*|saved_budget_exhausted|saved_original_authority_changed"))try{requirePhoneLeaseCurrent(task.getString("id"),run,task.getInt("coordinatorEpoch"));}catch(SecurityException unavailable){state="saved_phone_lease_unavailable";}
             if(!state.matches("saved_scope_.*|saved_budget_exhausted|saved_original_authority_changed"))try{requireOwnerPhoneQuestionSources(task,run);}catch(Exception sourceUnavailable){state="saved_source_unavailable";}
             String action=state.matches("saved_source_.*")?"review_original_sources":"review_execution_scope";task.put("ownerQuestionReplyState",new JSONObject().put("format","pocketworld.owner-question-reply-state.v1").put("runId",run).put("epoch",task.getInt("coordinatorEpoch")).put("requestId",question.getString("requestId")).put("messageId",accepted.getString("messageId")).put("state",state).put("ownerAction",action).put("sourceKind","native_phone_owner_input").put("formalSourceRefAvailable",false).put("observedAt",System.currentTimeMillis()).put("executionAuthorized",false));write(task);db.setTransactionSuccessful();return new JSONObject(accepted.toString()).put("continuationState",state).put("ownerAction",action);
         }finally{db.endTransaction();}
@@ -2423,8 +2423,9 @@ public final class TaskStore {
             if(origin==null||!"automation".equals(origin.optString("kind"))||origin.optString("planId").isEmpty()||original==null||!original.isPaused()||original.isCancelled()||!original.matchesHostRun(id,run,epoch)||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")||hasUnresolved(id)||validUntil<=now||task.optBoolean("cancelRequested"))throw new SecurityException("原计划执行暂不能继续，未更新授权");
             JSONObject granted=grant(run);if(!"owner".equals(granted.optString("principalId"))||!"private".equals(granted.optString("spaceId")))throw new SecurityException("原任务授权身份无效");
             long expires=Math.min(validUntil,now+600_000L);
-            if("phone".equals(task.optString("kind")))try(Cursor lease=db.rawQuery("SELECT run_id,epoch FROM leases WHERE resource_id='phone.local'",null)){
-                if(!lease.moveToFirst()||!run.equals(lease.getString(0))||epoch!=lease.getInt(1))throw new SecurityException("手机执行位置已变化，请核对原任务");ContentValues update=new ContentValues();update.put("expires_at",expires);db.update("leases",update,"resource_id=? AND run_id=? AND epoch=?",new String[]{"phone.local",run,String.valueOf(epoch)});
+            if("phone".equals(task.optString("kind"))){
+                String resource=requirePhoneLeaseOwner(id,run,epoch,false);ContentValues leaseUpdate=new ContentValues();leaseUpdate.put("expires_at",expires);
+                if(db.update("leases",leaseUpdate,"resource_id=? AND run_id=? AND epoch=?",new String[]{resource,run,String.valueOf(epoch)})!=1)throw new SecurityException("手机执行位置已变化，请核对原任务");
             }
             granted.put("expiresAt",expires);ContentValues update=new ContentValues();update.put("grant_json",granted.toString());update.put("updated_at",now);if(db.update("runs",update,"task_id=? AND run_id=? AND epoch=?",new String[]{id,run,String.valueOf(epoch)})!=1)throw new SecurityException("原执行已变化");
             db.setTransactionSuccessful();
@@ -6959,7 +6960,7 @@ public final class TaskStore {
         try(Cursor row=db.rawQuery("SELECT status FROM runs WHERE run_id=? AND task_id=? AND epoch=?",new String[]{run,id,String.valueOf(epoch)})){if(!row.moveToFirst()||!"running".equals(row.getString(0)))throw new SecurityException("original_profile_capability_run_ended");}
         JSONObject permission=grant(run);executionScopeCurrent(task,run,permission);
         if(permission.optLong("expiresAt")<=System.currentTimeMillis()||!"owner".equals(permission.optString("principalId"))||!"private".equals(permission.optString("spaceId"))||!task.optString("executionMode").equals(permission.optString("mode")))throw new SecurityException("original_profile_capability_grant_changed");
-        if(!"capabilities".equals(task.optString("executionMode")))try(Cursor lease=db.rawQuery("SELECT run_id,epoch,expires_at FROM leases WHERE resource_id='phone.local'",null)){if(!lease.moveToFirst()||!run.equals(lease.getString(0))||epoch!=lease.getInt(1)||lease.getLong(2)<=System.currentTimeMillis())throw new SecurityException("original_profile_capability_lease_changed");}
+        if(!"capabilities".equals(task.optString("executionMode")))requirePhoneLeaseCurrent(id,run,epoch);
         checkFrozenWorkProfileBinding(id,run,epoch,digest);
     }
     /** Only rechecks this Runner's already prepared exact operation. It does not create an op,
@@ -6985,6 +6986,51 @@ public final class TaskStore {
         JSONObject frozen=workProfileRunSnapshot(id,run,epoch),selected=required(id).optJSONObject("extensionSelection");if(!resolutionDigest.equals(frozen.getString("resolutionDigest"))||selected==null||!"explicit".equals(selected.optString("mode"))||selected.optLong("revision",-1)!=frozen.optLong("extensionSelectionRevision",-2)||!capabilityFingerprint(new JSONObject().put("programs",selected.getJSONArray("programs"))).equals(frozen.optString("extensionSelectionDigest")))throw new SecurityException("原run工作配置或准确扩展选用已变化，请在原任务重新审阅");
     }
     private static final String LOCAL_PHONE_LEASES="resource_id='phone.local' OR resource_id GLOB 'phone.local.bg:*'";
+    /** Admission is shared by local and paired-device phone runs. Expired leases still own their slot. */
+    synchronized void requirePhoneLeaseFree(String mode)throws Exception {
+        if(!mode.matches("background|main_screen"))throw new IllegalArgumentException("无效手机执行位置");
+        if("main_screen".equals(mode)){requireExclusivePhoneLeaseFree();return;}
+        int count=0;
+        try(Cursor leases=db.rawQuery("SELECT resource_id,l.run_id,l.epoch,r.task_id,r.epoch FROM leases l LEFT JOIN runs r ON r.run_id=l.run_id WHERE "+LOCAL_PHONE_LEASES,null)){
+            while(leases.moveToNext()){
+                if("phone.local".equals(leases.getString(0)))throw new IllegalStateException("主屏原执行尚未释放，请先核对原任务");
+                if(!leases.getString(0).equals("phone.local.bg:"+leases.getString(1))||leases.getInt(2)<1||leases.isNull(3)||leases.getInt(2)!=leases.getInt(4))throw new IllegalStateException("后台手机原租约身份无法核对，请先核对原执行");
+                if(++count>=dev.pocketengine.core.ExecutionResources.MAX_BACKGROUND_PHONE_RUNS)throw new IllegalStateException("后台手机会话已满，请等待一个原任务释放");
+            }
+        }
+    }
+    /** The surrounding original-run transaction owns this insertion; no lease may be taken over by expiry. */
+    synchronized String acquirePhoneLease(String taskId,String mode,String run,int epoch,long expires)throws Exception {
+        if(!db.inTransaction()||taskId==null||run==null||run.isEmpty()||epoch<1||expires<=System.currentTimeMillis())throw new SecurityException("需要本次原手机执行事务与有效期限");
+        requirePhoneLeaseFree(mode);
+        try(Cursor held=db.rawQuery("SELECT 1 FROM leases l JOIN runs r ON r.run_id=l.run_id WHERE r.task_id=? LIMIT 1",new String[]{taskId})){
+            if(held.moveToFirst())throw new IllegalStateException("这项任务的原执行租约尚未释放，不能重开执行");
+        }
+        String resource="background".equals(mode)?"phone.local.bg:"+run:"phone.local";
+        ContentValues lease=new ContentValues();lease.put("resource_id",resource);lease.put("run_id",run);lease.put("epoch",epoch);lease.put("expires_at",expires);db.insertOrThrow("leases",null,lease);return resource;
+    }
+    synchronized String requirePhoneLeaseCurrent(String taskId,String run,int epoch)throws Exception {
+        return requirePhoneLeaseOwner(taskId,run,epoch,true);
+    }
+    private String requirePhoneLeaseOwner(String taskId,String run,int epoch,boolean unexpired)throws Exception {
+        JSONObject task=required(taskId);String mode=task.optString("executionMode"),resource=task.optString("leaseResource");
+        if(run==null||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")||!mode.matches("background|main_screen"))throw new SecurityException("原手机执行身份或位置已变化");
+        // Existing single-display runs retain their exclusive resource until their original cleanup completes.
+        boolean exclusive="phone.local".equals(resource);
+        if(!exclusive&&(!"background".equals(mode)||!resource.equals("phone.local.bg:"+run)))throw new SecurityException("原手机执行没有准确的显示租约");
+        int count=0;boolean found=false;
+        try(Cursor leases=db.rawQuery("SELECT resource_id,run_id,epoch,expires_at FROM leases WHERE "+LOCAL_PHONE_LEASES,null)){
+            while(leases.moveToNext()){
+                count++;
+                if(resource.equals(leases.getString(0))){
+                    if(!run.equals(leases.getString(1))||epoch!=leases.getInt(2)||unexpired&&leases.getLong(3)<=System.currentTimeMillis())throw new SecurityException("原手机执行租约已变化或到期");
+                    found=true;
+                }else if(exclusive||"phone.local".equals(leases.getString(0)))throw new SecurityException("主屏与后台手机执行租约冲突，请核对原执行");
+            }
+        }
+        if(!found||count>dev.pocketengine.core.ExecutionResources.MAX_BACKGROUND_PHONE_RUNS)throw new SecurityException("原手机执行租约已释放或会话数无效");
+        return resource;
+    }
     /** Expiry is an admission deadline, not proof that the original local executor stopped. */
     synchronized void requireExclusivePhoneLeaseFree()throws Exception {
         try(Cursor lease=db.rawQuery("SELECT resource_id FROM leases WHERE "+LOCAL_PHONE_LEASES+" LIMIT 1",null)){
@@ -7000,6 +7046,11 @@ public final class TaskStore {
         }
     }
     public synchronized JSONObject startAttempt(String id,String mode,int allocation)throws Exception{return startAttempt(id,mode,allocation,false);}
+    synchronized JSONObject startTeamPhoneAttempt(String id,String mode,int allocation)throws Exception {
+        JSONObject task=required(id);JSONObject origin=task.optJSONObject("origin");
+        if(origin==null||!"team_phone".equals(origin.optString("kind"))||!("phone".equals(task.optString("kind"))&&"background".equals(mode)||"assistant".equals(task.optString("kind"))&&"capabilities".equals(mode)))throw new SecurityException("需要原团队手机分工及其准确执行位置");
+        return startAttempt(id,mode,allocation,true);
+    }
     /** Reserve the reviewed original capability continuation and its feedback in the same SQL gate. */
     public synchronized JSONObject startOriginalCapabilityAttempt(String id,String expectedRun,int expectedEpoch,int allocation,RunControl original,String feedback)throws Exception {
         if(expectedRun==null||expectedEpoch<0||expectedRun.isEmpty()!=(expectedEpoch==0)||original==null||original.hasHostRun()||original.isPaused())throw new SecurityException("原能力续接身份或控制器无效");
@@ -7054,7 +7105,7 @@ public final class TaskStore {
         if(required(id).has("ownerLocalTerminal"))throw new SecurityException("原手动终端只查询、输入或停止同一进程，不能恢复为模型或重新启动");
         db.beginTransaction();try{
             boolean gatewayOnly=nativeGatewayReview!=null;if(gatewayOnly){if(nativeGatewayReview.store!=this||!id.equals(nativeGatewayReview.view().getString("parentTaskId"))||!mode.equals("capabilities")||nativeTeam||nativeLearning||nativeRoundReview!=null)throw new SecurityException("不是私构原网关恢复审阅");nativeGatewayReview.checkCurrent();}
-            JSONObject t=required(id);if(t.has("evaluation")&&!t.optString("runId").isEmpty())throw new SecurityException("评测只核对原试验；不能通用恢复、重放或授予真实应用工具");if(t.has("ownerMcpDiscovery"))throw new SecurityException("本机MCP发现只能核对原一次性操作，不能恢复为Runner、重派或借作工具调用");if((t.optJSONObject("workProfileRef")!=null||t.optJSONObject("workProfileIntent")!=null)&&nativeProfile==null)throw new SecurityException("请在原任务工作配置页恢复并审阅准确Profile，再继续；没有改用全局默认配置");if(TaskStoreDeviceTasks.deviceTask(t))throw new SecurityException("设备任务须使用原配对证明的专用准入，不能借通用startAttempt继续");if(nativeTeamRoundPool(t)&&nativeRoundReview==null)throw new SecurityException("原结果round继续须先在native前台审阅原池剩余与本次新run，不从普通JSON恢复或补满");if("attachments".equals(t.optString("feature"))&&t.optString("command").matches("createDocument|transformImage|trimMedia"))throw new SecurityException("主人文档动作只能核对原固定产物，不恢复为通用Runner或重放生成");if(t.has("ownerStorageCleanup"))throw new SecurityException("主人清理只能只读核对原范围，不能恢复为Runner重放删除");if(t.has("ownerArchivePhase"))throw new SecurityException("主人备份恢复只能核对原分区，不恢复为通用Runner或重放写入");if(t.has("ownerBackupUpload"))throw new SecurityException("主人备份上传只核对原编号，不恢复为Runner或重新发送密文");if(t.has("ownerGit"))throw new SecurityException("主人Git动作只能在原项目Git入口核对或另行审阅，不能恢复为通用Runner");if("inference".equals(t.optString("kind")))throw new SecurityException("用量记录不能恢复为任务执行；请从原模型、语音或本机服务入口明确发起新请求");if(t.has("ownerGitImport"))throw new SecurityException("主人Git导入只能查询原下载与另行明确发布，不能恢复为Runner或重送凭据");if(t.has("ownerGitPublication"))throw new SecurityException("主人Git发布只查询原新项目，不恢复为Runner或重放复制");if(t.has("sourceLearningJob")&&!nativeLearning)throw new SecurityException("来源学习只能回原逐批任务入口继续，不能由通用Runner重放");if(!nativeTeam&&t.optJSONObject("origin")!=null&&t.getJSONObject("origin").optString("kind").matches("team_assignment|team_integration|team_review|team_research"))throw new SecurityException("团队分工只能回到原团队assignment入口继续");if(t.optJSONObject("origin")!=null&&t.getJSONObject("origin").optString("kind").matches("group|reviewed_external_group|native_remote_group_inputs"))throw new SecurityException("外部材料或群任务只能使用保留原生受众授权的专用入口");if(hasUnresolved(id))throw new IllegalStateException("有动作结果尚未核对，请先确认这些动作是否已经发生");
+            JSONObject t=required(id);if(t.has("evaluation")&&!t.optString("runId").isEmpty())throw new SecurityException("评测只核对原试验；不能通用恢复、重放或授予真实应用工具");if(t.has("ownerMcpDiscovery"))throw new SecurityException("本机MCP发现只能核对原一次性操作，不能恢复为Runner、重派或借作工具调用");if((t.optJSONObject("workProfileRef")!=null||t.optJSONObject("workProfileIntent")!=null)&&nativeProfile==null)throw new SecurityException("请在原任务工作配置页恢复并审阅准确Profile，再继续；没有改用全局默认配置");if(TaskStoreDeviceTasks.deviceTask(t))throw new SecurityException("设备任务须使用原配对证明的专用准入，不能借通用startAttempt继续");if(nativeTeamRoundPool(t)&&nativeRoundReview==null)throw new SecurityException("原结果round继续须先在native前台审阅原池剩余与本次新run，不从普通JSON恢复或补满");if("attachments".equals(t.optString("feature"))&&t.optString("command").matches("createDocument|transformImage|trimMedia"))throw new SecurityException("主人文档动作只能核对原固定产物，不恢复为通用Runner或重放生成");if(t.has("ownerStorageCleanup"))throw new SecurityException("主人清理只能只读核对原范围，不能恢复为Runner重放删除");if(t.has("ownerArchivePhase"))throw new SecurityException("主人备份恢复只能核对原分区，不恢复为通用Runner或重放写入");if(t.has("ownerBackupUpload"))throw new SecurityException("主人备份上传只核对原编号，不恢复为Runner或重新发送密文");if(t.has("ownerGit"))throw new SecurityException("主人Git动作只能在原项目Git入口核对或另行审阅，不能恢复为通用Runner");if("inference".equals(t.optString("kind")))throw new SecurityException("用量记录不能恢复为任务执行；请从原模型、语音或本机服务入口明确发起新请求");if(t.has("ownerGitImport"))throw new SecurityException("主人Git导入只能查询原下载与另行明确发布，不能恢复为Runner或重送凭据");if(t.has("ownerGitPublication"))throw new SecurityException("主人Git发布只查询原新项目，不恢复为Runner或重放复制");if(t.has("sourceLearningJob")&&!nativeLearning)throw new SecurityException("来源学习只能回原逐批任务入口继续，不能由通用Runner重放");if(!nativeTeam&&t.optJSONObject("origin")!=null&&t.getJSONObject("origin").optString("kind").matches("team_assignment|team_integration|team_review|team_research|team_phone"))throw new SecurityException("团队分工只能回到原团队assignment入口继续");if(t.optJSONObject("origin")!=null&&t.getJSONObject("origin").optString("kind").matches("group|reviewed_external_group|native_remote_group_inputs"))throw new SecurityException("外部材料或群任务只能使用保留原生受众授权的专用入口");if(hasUnresolved(id))throw new IllegalStateException("有动作结果尚未核对，请先确认这些动作是否已经发生");
             if(t.optJSONObject("origin")!=null&&t.getJSONObject("origin").optString("kind").equals("channel")){
                 if(!mode.equals("capabilities")&&(phoneRequest==null||!"phone".equals(t.optString("kind"))||!mode.equals(t.getString("executionMode"))))throw new SecurityException("渠道能力任务不能取得手机执行权限");
                 if(!t.optString("status").matches("queued|paused|awaiting_user|needs_confirmation|cancelled|interrupted|failed"))throw new IllegalStateException("渠道任务已有执行或已完成，不能重复启动");
@@ -7071,13 +7122,13 @@ public final class TaskStore {
             JSONObject retainedGrant=planContinuation||retainReviewedBudget?grant(t.getString("runId")):null;
             if(retainedGrant!=null&&(!"owner".equals(retainedGrant.optString("principalId"))||!"private".equals(retainedGrant.optString("spaceId"))||!mode.equals(retainedGrant.optString("mode"))))throw new SecurityException("原目标预算不属于这个执行位置");
             if(retainReviewedBudget&&(retainedGrant==null||retainedGrant.optLong("expiresAt")<=System.currentTimeMillis()||retainedGrant.optInt("remainingOperations")<1))throw new SecurityException("原能力执行范围已到期或剩余额度不足，继续不会自动补满");
-            long now=System.currentTimeMillis();if(phoneMode)requireExclusivePhoneLeaseFree();
+            long now=System.currentTimeMillis();if(phoneMode){requirePhoneLeaseFree(mode);try(Cursor active=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND status='running' LIMIT 1",new String[]{id})){if(active.moveToFirst())throw new IllegalStateException("这项手机任务已有原执行，不能重复启动");}}
             int epoch=t.optInt("coordinatorEpoch")+1;String runId=UUID.randomUUID().toString();
             JSONObject previous=planContinuation?checkpoint(t.getString("runId")):checkpointForTask(id);int consumed=previous.optInt("steps");
             // Explicit owner pause may revoke automatic recovery, never replenish this occurrence's native budget.
             int ceiling=retainedGrant==null?Math.min(400,consumed+Math.max(1,Math.min(40,allocation))):retainedGrant.getInt("stepCeiling");if(!gatewayOnly&&consumed>=ceiling)throw new IllegalStateException("当前任务已达到累计操作预算，请先核对结果");
             JSONObject taskScope=t.optJSONObject("executionScope");if(nativeProfile!=null&&t.optJSONObject("workProfileIntent")!=null&&taskScope==null)throw new SecurityException("待启动工作配置尚无有效主人执行范围，请重新审阅目标与范围；没有采用默认授权");
-            if(taskScope!=null){if(phoneRequest==null)executionScopeTask(id);else requireChannelIdentity(t,channelOrigin(phoneRequest.origin()));if(!t.optString("runId").isEmpty())taskScope.put("toolsPinned",true);if(!mode.equals(taskScope.getString("mode")))throw new SecurityException("原任务范围不能借继续切换执行位置，请明确审阅新任务");long scopeDeadline=TaskExecutionScope.effectiveDeadline(taskScope);if(scopeDeadline<=now)throw new SecurityException("原任务范围已到期，请主人明确续期");ceiling=Math.min(400,consumed+taskScope.getInt("toolLimit")-taskScope.getInt("toolsUsed"));if(!gatewayOnly&&consumed>=ceiling||taskScope.getInt("modelCallsUsed")>=taskScope.getInt("modelCallLimit"))throw new IllegalStateException("原任务累计预算已耗尽，请审阅原范围；没有自动补额度");}
+            if(taskScope!=null){if(nativeTeam&&origin!=null&&"team_phone".equals(origin.optString("kind"))){requirePrivateOwner(t);if(!id.equals(taskScope.getString("taskId"))||!taskScope.getBoolean("toolsPinned"))throw new SecurityException("原团队手机范围未绑定任务或工具");}else if(phoneRequest==null)executionScopeTask(id);else requireChannelIdentity(t,channelOrigin(phoneRequest.origin()));if(!t.optString("runId").isEmpty())taskScope.put("toolsPinned",true);if(!mode.equals(taskScope.getString("mode")))throw new SecurityException("原任务范围不能借继续切换执行位置，请明确审阅新任务");long scopeDeadline=TaskExecutionScope.effectiveDeadline(taskScope);if(scopeDeadline<=now)throw new SecurityException("原任务范围已到期，请主人明确续期");ceiling=Math.min(400,consumed+taskScope.getInt("toolLimit")-taskScope.getInt("toolsUsed"));if(!gatewayOnly&&consumed>=ceiling||taskScope.getInt("modelCallsUsed")>=taskScope.getInt("modelCallLimit"))throw new IllegalStateException("原任务累计预算已耗尽，请审阅原范围；没有自动补额度");}
             long expires=taskScope==null?now+600_000L:TaskExecutionScope.effectiveDeadline(taskScope);
             if(retainReviewedBudget)expires=Math.min(expires,retainedGrant.getLong("expiresAt"));
             if(nativeTeam&&teamProjectSelection(t)!=null)expires=teamNativeProjectDeadline(t);
@@ -7092,14 +7143,14 @@ public final class TaskStore {
             dev.pocketengine.features.memory.OwnerSourceRunContext.initialize(db,id,runId,epoch,t.optString("runId"),ownerSourceCapable);
             try{if(acceptsPrivateOutputTask(t))dev.pocketengine.features.memory.TaskStoreMemoryQuery.requireOutputContext(db,outputSources,id,runId);}catch(Exception unavailable){throw new dev.pocketengine.features.memory.ToolOutputCapture.OutputSourceUnavailable(unavailable);}
             if(ownerSourceCapable)dev.pocketengine.features.memory.TaskStoreMemoryQuery.requireOwnerSourceContinuation(db,conversationRepository,id,runId,t.getString("conversationId"));
-            if(phoneMode){ContentValues lease=new ContentValues();lease.put("resource_id","phone.local");lease.put("run_id",runId);lease.put("epoch",epoch);lease.put("expires_at",expires);db.insertOrThrow("leases",null,lease);}
+            if(phoneMode)t.put("leaseResource",acquirePhoneLease(id,mode,runId,epoch,expires));else t.remove("leaseResource");
             JSONArray approvals=t.optJSONArray("approvals");if(!phoneMode&&approvals!=null)for(int i=0;i<approvals.length();i++){JSONObject approval=approvals.getJSONObject(i);
                 if(ownerEditApproval(approval)&&approval.optString("state").matches("scope_active|scope_waiting_run")){
                     if("scope_waiting_run".equals(approval.getString("state"))&&!t.optBoolean("cancelRequested")&&approval.optLong("expiresAt")>now&&t.optString("runId").equals(approval.optString("runId"))&&t.optInt("coordinatorEpoch")==approval.optInt("epoch"))approval.put("state","scope_active").put("runId",runId).put("epoch",epoch).put("pauseRevision",0L);
                     else approval.put("state","invalidated").put("reason","original_edit_run_ended");
                 }
                 if(approval.optString("state").equals("approved")&&approval.optLong("expiresAt")>now){if("project_execute".equals(approval.optString("tool"))&&approval.optJSONObject("arguments")!=null&&approval.getJSONObject("arguments").has("planRef"))continueProjectPlanApproval(t,approval,runId,epoch,now);else approval.put("runId",runId);}}
-            t.remove("automationConditionWaitId");t.remove("nativeExecutionMode");t.put("runId",runId).put("coordinatorEpoch",epoch).put("executionMode",mode).put("status","preparing").put("cancelRequested",false).put("stepCeiling",ceiling).put("approvalState","granted").put("leaseResource","phone.local").put("summary","正在恢复任务并重新观察当前现场");write(t);db.setTransactionSuccessful();return copy(t,false);
+            t.remove("automationConditionWaitId");t.remove("nativeExecutionMode");t.put("runId",runId).put("coordinatorEpoch",epoch).put("executionMode",mode).put("status","preparing").put("cancelRequested",false).put("stepCeiling",ceiling).put("approvalState","granted").put("summary","正在恢复任务并重新观察当前现场");write(t);db.setTransactionSuccessful();return copy(t,false);
         }finally{db.endTransaction();}
     }
     /** Read-only current native destination; paused state confers no dispatch or resume authority. */
@@ -7117,9 +7168,7 @@ public final class TaskStore {
         }
         JSONObject allowed=grant(run);long now=System.currentTimeMillis();
         if(allowed.optLong("expiresAt")<=now||!"owner".equals(allowed.optString("principalId"))||!"private".equals(allowed.optString("spaceId"))||!mode.equals(allowed.optString("mode")))throw new SecurityException("原任务授权已失效");
-        if("phone".equals(kind))try(Cursor lease=db.rawQuery("SELECT run_id,epoch,expires_at FROM leases WHERE resource_id='phone.local'",null)){
-            if(!lease.moveToFirst()||!run.equals(lease.getString(0))||epoch!=lease.getInt(1)||lease.getLong(2)<=now)throw new SecurityException("原手机执行租约已变化");
-        }
+        if("phone".equals(kind))requirePhoneLeaseCurrent(id,run,epoch);
         return new JSONObject(task.toString());
     }
 
@@ -7719,7 +7768,7 @@ public final class TaskStore {
         if(!task.optString("status").matches("preparing|running"))throw new SecurityException("任务已暂停或结束，工具执行权已失效");
         try(Cursor run=db.rawQuery("SELECT status FROM runs WHERE run_id=? AND task_id=? AND epoch=?",new String[]{runId,id,String.valueOf(epoch)})){if(!run.moveToFirst()||!run.getString(0).equals("running"))throw new SecurityException("执行尝试已结束");}
         JSONObject grant=grant(runId);executionScopeCurrent(task,runId,grant);if(grant.optLong("expiresAt")<=System.currentTimeMillis()||!"owner".equals(grant.optString("principalId"))||!"private".equals(grant.optString("spaceId"))||!task.optString("executionMode").equals(grant.optString("mode"))||!toolGranted(runId,name))throw new SecurityException("该工具未获得当前任务授权");
-        if(task.optString("kind").equals("phone"))try(Cursor lease=db.rawQuery("SELECT run_id,epoch,expires_at FROM leases WHERE resource_id='phone.local'",null)){if(!lease.moveToFirst()||!runId.equals(lease.getString(0))||epoch!=lease.getInt(1)||lease.getLong(2)<=System.currentTimeMillis())throw new SecurityException("手机执行资源已失效");}
+        if(task.optString("kind").equals("phone"))requirePhoneLeaseCurrent(id,runId,epoch);
     }
     /** Same owner executionScope, not a parallel browser grant. Native page/profile checks stay outside this monitor. */
     private boolean browserScopeConfigurationPendingOnly(String id,String run,JSONObject waiting)throws Exception {
@@ -9976,7 +10025,7 @@ public final class TaskStore {
         if(control!=null)control.check();JSONObject t=required(id);if(!runId.equals(t.optString("runId"))||epoch!=t.optInt("coordinatorEpoch"))throw new SecurityException("旧执行代次已失效");
         if(TaskStoreDeviceTasks.deviceTask(t)){deviceTasks.fence(id,runId,epoch,control,dispatch);if(dispatch&&hasUnresolved(id)&&(!ownedInference||!onlyOwnedProjectPending(id,runId,epoch,preparedStop)))throw new IllegalStateException("原设备动作结果尚未核对，不派发新效果");return;}
         if(dispatch){if(control==null||control.isPaused()||t.optBoolean("cancelRequested"))throw new IllegalStateException("任务已暂停或取消");if(hasUnresolved(id)&&!onlyTeamRoundReadPending(id,runId,epoch,control)&&(!ownedInference||!onlyOwnedProjectPending(id,runId,epoch,preparedStop)))throw new IllegalStateException("有动作结果待核对，禁止继续派发");JSONObject grant=grant(runId);executionScopeCurrent(t,runId,grant);if(grant.optLong("expiresAt")<=System.currentTimeMillis()||!"owner".equals(grant.optString("principalId"))||!"private".equals(grant.optString("spaceId"))||!t.optString("executionMode").equals(grant.optString("mode")))throw new SecurityException("执行授权已失效");
-            if(!t.optString("executionMode").equals("capabilities"))try(Cursor lease=db.rawQuery("SELECT run_id,epoch,expires_at FROM leases WHERE resource_id=?",new String[]{"phone.local"})){if(!lease.moveToFirst()||!runId.equals(lease.getString(0))||epoch!=lease.getInt(1)||lease.getLong(2)<=System.currentTimeMillis())throw new SecurityException("手机资源租约已失效");}
+            if(!t.optString("executionMode").equals("capabilities"))requirePhoneLeaseCurrent(id,runId,epoch);
         }
     }
     /** Native owner inspector only; never advertised or accepted by the model capability journal. */
@@ -9987,7 +10036,7 @@ public final class TaskStore {
         if(!"phone".equals(task.optString("kind"))||!"background".equals(task.optString("executionMode"))||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||task.has("origin")&&!task.isNull("origin")||task.optBoolean("cancelRequested")||hasUnresolved(id))throw new SecurityException("仅原私人副屏任务可明确移屏接管，先核对未决动作");
         JSONObject grant=grant(run);executionScopeCurrent(task,run,grant);
         if(grant.optLong("expiresAt")<=System.currentTimeMillis()||!"owner".equals(grant.optString("principalId"))||!"private".equals(grant.optString("spaceId"))||!"background".equals(grant.optString("mode")))throw new SecurityException("原执行授权已失效");
-        try(Cursor lease=db.rawQuery("SELECT run_id,epoch,expires_at FROM leases WHERE resource_id='phone.local'",null)){if(!lease.moveToFirst()||!run.equals(lease.getString(0))||epoch!=lease.getInt(1)||lease.getLong(2)<=System.currentTimeMillis())throw new SecurityException("原手机租约已失效");}
+        requirePhoneLeaseCurrent(id,run,epoch);
         if(!args.optString("action").matches("main|return")||args.optString("handoffId").isEmpty())throw new SecurityException("缺少原接管确认");
         db.beginTransaction();try{
             int remaining=grant.optInt("remainingOperations"),needed=args.optString("action").equals("main")?2:1;JSONObject scope=task.optJSONObject("executionScope");if(remaining<needed||scope!=null&&scope.getInt("toolLimit")-scope.getInt("toolsUsed")-deviceTasks.heldBudget(id,run,false)<needed)throw new IllegalStateException("移到主屏前须保留交还原副屏的操作额度");debitExecutionScope(task,run,false);write(task);grant.put("remainingOperations",remaining-1);

@@ -22,7 +22,7 @@ public final class DeviceCapabilityRegistry {
         capabilities.put(capability("phone.tools.main","main_screen",current,false));capabilities.put(capability("phone.tools.background","background",current,true));
         JSONObject goal=current.optJSONObject("goalPolicy");boolean sameCaller=permission!=null&&goal!=null&&permission.callerDeviceId().equals(goal.optString("callerDeviceId"));
         boolean configured=sameCaller&&goal.optBoolean("configured"),apiReady=configured&&goal.optBoolean("apiModelReady"),reviewAvailable=current.optBoolean("goalOwnerReviewAvailable");
-        boolean enabled=current.optBoolean("receiverEnabled"),busy=current.optBoolean("busy"),ready=enabled&&!busy&&configured&&apiReady,canReview=enabled&&!busy&&reviewAvailable;
+        boolean enabled=current.optBoolean("receiverEnabled"),busy=current.optBoolean("goalExecutorBusy",current.optBoolean("busy")),ready=enabled&&!busy&&configured&&apiReady,canReview=enabled&&!busy&&reviewAvailable;
         String reason=!enabled?"receiver_disabled":busy?"native_executor_busy":!configured?reviewAvailable?"local_owner_model_review_required":"local_owner_model_policy_unconfigured":!apiReady?"selected_policy_api_model_unavailable":"";
         JSONObject project=new JSONObject().put("implemented",true).put("installed",current.optBoolean("scopedProjectPortInstalled")).put("toolNames",new JSONArray(PROJECT))
                 .put("resourceBinding",new JSONObject().put("screenMode","capabilities").put("required",new JSONArray(new String[]{"projectId","checkoutId","runtimeId"})))
@@ -31,9 +31,9 @@ public final class DeviceCapabilityRegistry {
         capabilities.put(new JSONObject().put("id","agent.goal").put("version","1.0").put("implemented",true).put("installed",true).put("authorized",enabled&&configured).put("ready",ready).put("busy",busy).put("blocked",!ready&&!canReview).put("reason",reason)
                 .put("admissionState",ready?"ready":canReview?"owner_review_available":"blocked").put("canSubmitForLocalReview",canReview).put("requiresLocalModelReview",!configured).put("defaultModelIsNotPolicy",true)
                 .put("requires",new JSONArray(new String[]{"B_native_owner_selected_model_policy","current_exact_PairGrant_revision","finite_original_budget","visible_stop_control"}))
-                .put("modelLocation","owner_selected_authorized_api").put("localInference",false).put("supportedExecutionModes",new JSONArray().put("capabilities"))
+                .put("modelLocation","owner_selected_authorized_api").put("localInference",false).put("supportedExecutionModes",new JSONArray().put("capabilities").put("main_screen").put("background"))
                 .put("supported",new JSONObject().put("scopedProject",project).put("explicitDeviceRoutes",routes))
-                .put("unsupported",new JSONArray(new String[]{"autonomous_phone_GUI","owned_service","PTY","Git","freeze_package","collect","preview","ambient_private_memory","whole_private_workspace"}))
+                .put("unsupported",new JSONArray(new String[]{"owned_service","PTY","Git","freeze_package","collect","preview","ambient_private_memory","whole_private_workspace"}))
                 .put("account",new JSONObject().put("ready",false).put("authorized",false).put("reason","CHATGPT_DEVICE_GOAL_AUDIENCE_UNPROVEN")));
         boolean draftInstalled=current.optBoolean("scheduleDraftsInstalled"),draftAuthorized=current.optBoolean("scheduleDraftsAuthorized"),draftReady=enabled&&draftInstalled&&draftAuthorized;
         capabilities.put(new JSONObject().put("id",DeviceScheduleDrafts.CAPABILITY).put("version",DeviceProtocol.VERSION).put("implemented",true).put("installed",draftInstalled).put("authorized",draftAuthorized).put("ready",draftReady).put("blocked",!draftReady)

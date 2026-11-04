@@ -72,10 +72,76 @@ public final class ExecutionResourcesTest {
         assertFalse(phone.isAlive());assertFalse(browser.isAlive());assertEquals(1, winners.get());
     }
 
+    @Test public void fourBackgroundOwnersRemainIndependentAcrossReleaseAndReadmission() {
+        ExecutionResources fence = new ExecutionResources(() -> 100);
+        for (int i = 0; i < 4; i++) assertTrue(fence.acquireBackgroundPhone("run-" + i));
+        assertEquals(4, fence.backgroundPhoneCount());
+        assertTrue(fence.acquireBackgroundPhone("run-0"));
+        assertFalse(fence.acquireBackgroundPhone("run-4"));
+        assertFalse(fence.acquirePhone("main"));
+        assertFalse(fence.acquireBrowser("browser", 200));
+        fence.releasePhone("run-0");
+        assertTrue(fence.acquireBackgroundPhone("run-4"));
+        fence.releasePhone("run-0"); // A late old cleanup cannot free the replacement.
+        assertEquals(4, fence.backgroundPhoneCount());
+        for (int i = 1; i <= 4; i++) assertTrue(fence.ownsBackgroundPhone("run-" + i));
+        for (int i = 1; i <= 4; i++) fence.releasePhone("run-" + i);
+        assertTrue(fence.acquirePhone("main"));
+        assertFalse(fence.acquireBackgroundPhone("main"));
+        assertFalse(fence.acquireBackgroundPhone("next-background"));
+    }
+
+    @Test public void backgroundAndBrowserKeepTheirOriginalExclusiveBoundary() {
+        AtomicLong now = new AtomicLong(100);
+        ExecutionResources fence = new ExecutionResources(now::get);
+        assertTrue(fence.acquireBrowser("browser", 200));
+        assertFalse(fence.acquireBackgroundPhone("browser"));
+        assertFalse(fence.acquireBackgroundPhone("phone"));
+        now.set(200);
+        assertTrue(fence.acquireBackgroundPhone("phone"));
+        assertFalse(fence.renewBrowser("browser", 300));
+        fence.releaseBrowser("browser");
+        assertTrue(fence.ownsPhone("phone"));
+        assertFalse(fence.acquireBrowser("next-browser", 300));
+        fence.releasePhone("phone");
+        assertTrue(fence.acquireBrowser("next-browser", 300));
+    }
+
+    @Test public void simultaneousBackgroundAdmissionsCannotOverbookFourSlots() throws Exception {
+        ExecutionResources fence = new ExecutionResources(() -> 100);
+        CountDownLatch ready = new CountDownLatch(12), start = new CountDownLatch(1);
+        AtomicInteger winners = new AtomicInteger();
+        java.util.List<Thread> attempts = new java.util.ArrayList<>();
+        for (int i = 0; i < 12; i++) {
+            String token = "run-" + i;
+            Thread contender = new Thread(() -> attempt(ready, start, winners, () -> fence.acquireBackgroundPhone(token)));
+            attempts.add(contender);contender.start();
+        }
+        ready.await();start.countDown();
+        for (Thread contender : attempts) { contender.join(2000);assertFalse(contender.isAlive()); }
+        assertEquals(4, winners.get());assertEquals(4, fence.backgroundPhoneCount());
+        assertFalse(fence.acquirePhone("main"));
+    }
+
+    @Test public void concurrentScreensStillShareOneAppAndAndroidUserConflictRegistry() throws Exception {
+        ExecutionResources fence = new ExecutionResources(() -> 100);
+        assertTrue(fence.acquireBackgroundPhone("run-a"));assertTrue(fence.acquireBackgroundPhone("run-b"));
+        var sameCopy = new dev.pocketengine.phone.access.AppCopyKey("dev.example.chat", 0);
+        var workCopy = new dev.pocketengine.phone.access.AppCopyKey("dev.example.chat", 10);
+        var apps = fence.phoneApps();
+        assertEquals(dev.pocketengine.phone.access.PhoneAppResources.Result.ACQUIRED, apps.reserve("task-a/run-a/1", sameCopy, (key, owner) -> true));
+        assertEquals(dev.pocketengine.phone.access.PhoneAppResources.Result.BUSY, apps.reserve("task-b/run-b/1", sameCopy, (key, owner) -> true));
+        assertEquals(dev.pocketengine.phone.access.PhoneAppResources.Result.ACQUIRED, apps.reserve("task-b/run-b/1", workCopy, (key, owner) -> true));
+        apps.releaseOwner("task-a/run-a/1");
+        assertNull(apps.holder(sameCopy));assertEquals("task-b/run-b/1", apps.holder(workCopy));
+        assertTrue(fence.ownsBackgroundPhone("run-b"));
+    }
+
     @Test public void invalidTokensAreRefused() {
         ExecutionResources fence = new ExecutionResources(() -> 100);
         for (String token : new String[]{null, "", "   ", "x".repeat(201)}) {
             assertThrows(IllegalArgumentException.class, () -> fence.acquirePhone(token));
+            assertThrows(IllegalArgumentException.class, () -> fence.acquireBackgroundPhone(token));
             assertThrows(IllegalArgumentException.class, () -> fence.acquireBrowser(token, 200));
             assertThrows(IllegalArgumentException.class, () -> fence.releasePhone(token));
             assertThrows(IllegalArgumentException.class, () -> fence.releaseBrowser(token));

@@ -4,6 +4,7 @@ import android.content.Context;
 import android.net.LocalServerSocket;
 import android.net.LocalSocket;
 import android.os.Handler;
+import android.os.HandlerThread;
 import dev.pocketengine.phone.display.DisplayWire;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -16,12 +17,12 @@ import org.json.JSONObject;
 
 /** Same authenticated helper transport for ADB bootstrap and Shizuku UserService. */
 public final class DisplayServer implements AutoCloseable {
-    private final DisplayEngine engine;
+    private final DisplaySessionRegistry sessions;
     private final LocalServerSocket server;
     private final Handler handler;
-    private final ThreadPoolExecutor requests=new ThreadPoolExecutor(2,3,20,TimeUnit.SECONDS,new ArrayBlockingQueue<>(8));
+    private final ThreadPoolExecutor requests=new ThreadPoolExecutor(4,6,20,TimeUnit.SECONDS,new ArrayBlockingQueue<>(16));
     private volatile boolean closed;
-    private final Runnable reap=new Runnable(){@Override public void run(){if(!closed){engine.tick();handler.postDelayed(this,1000);}}};
+    private final Runnable reap=new Runnable(){@Override public void run(){if(!closed){sessions.tick();handler.postDelayed(this,1000);}}};
 
     public DisplayServer(Context context,Handler handler,JSONObject setup)throws Exception {
         int identity=android.os.Process.myUid();
@@ -29,7 +30,9 @@ public final class DisplayServer implements AutoCloseable {
         String socket=setup.getString("socketName"),token=setup.getString("token");int owner=setup.getInt("ownerUid");
         if(!socket.matches("pocketengine\\.display\\.[a-f0-9]{32}")||!token.matches("[a-f0-9]{64}")||owner<10000||owner>=100000)
             throw new SecurityException("Invalid bootstrap");
-        this.handler=handler;engine=new DisplayEngine(context,handler);server=new LocalServerSocket(socket);
+        this.handler=handler;
+        sessions=new DisplaySessionRegistry(()->new SessionWorker(context),new SessionWorker(context));
+        try{server=new LocalServerSocket(socket);}catch(Exception unavailable){sessions.close();throw unavailable;}
         Thread accept=new Thread(()->{
             while(!closed)try{
                 LocalSocket client=server.accept();
@@ -55,11 +58,12 @@ public final class DisplayServer implements AutoCloseable {
             JSONObject request=new JSONObject(DisplayWire.read(new DataInputStream(connection.getInputStream()),32*1024));
             if(request.optInt("protocol")!=1||!MessageDigest.isEqual(secret.getBytes(StandardCharsets.UTF_8),request.optString("token").getBytes(StandardCharsets.UTF_8)))return;
             JSONObject reply;
-            try{reply=engine.handle(request);}
+            try{reply=sessions.handle(request);}
             catch(Exception failure){
                 DisplayEngine.Failure known=failure instanceof DisplayEngine.Failure?(DisplayEngine.Failure)failure:null;
-                reply=new JSONObject().put("ok",false).put("error",known==null?"platform_unavailable":known.code)
-                        .put("message",known==null?"系统不支持此后台屏操作，未回落主屏。":known.getMessage())
+                DisplaySessionRegistry.Failure route=failure instanceof DisplaySessionRegistry.Failure?(DisplaySessionRegistry.Failure)failure:null;
+                reply=new JSONObject().put("ok",false).put("error",known!=null?known.code:route!=null?route.code:"platform_unavailable")
+                        .put("message",known!=null?known.getMessage():route!=null?route.getMessage():"系统不支持此后台屏操作，未回落主屏。")
                         .put("accepted",known!=null&&known.dispatched?JSONObject.NULL:false).put("verified",false);
             }
             reply.put("requestId",request.optString("requestId"));
@@ -70,6 +74,22 @@ public final class DisplayServer implements AutoCloseable {
     @Override public void close(){
         if(closed)return;closed=true;handler.removeCallbacks(reap);
         try{server.close();}catch(Exception ignored){}
-        requests.shutdownNow();engine.close();
+        requests.shutdownNow();sessions.close();
+    }
+
+    /** Each display owns its callbacks and input queue; an unrelated slow screen cannot replace them. */
+    private static final class SessionWorker implements DisplaySessionRegistry.Backend {
+        private final HandlerThread thread;
+        private final Handler handler;
+        private final DisplayEngine engine;
+        SessionWorker(Context context){
+            thread=new HandlerThread("pocket-display-session");thread.start();
+            handler=new Handler(thread.getLooper());
+            try{engine=new DisplayEngine(context,handler);}
+            catch(RuntimeException failed){thread.quitSafely();throw failed;}
+        }
+        public JSONObject handle(JSONObject request)throws Exception{return engine.handle(request);}
+        public void tick(){handler.post(engine::tick);}
+        public void close(){engine.close();thread.quitSafely();}
     }
 }
