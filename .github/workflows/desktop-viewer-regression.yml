@@ -1,0 +1,37 @@
+name: Desktop viewer lifecycle regression
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'web-ui/src/desktop-viewer.ts'
+      - 'web-ui/tests/desktop-viewer*.test.ts'
+      - '.github/workflows/desktop-viewer-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-viewer-regression-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  viewer:
+    if: ${{ github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out selected revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up repository-pinned Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.22.0'
+      - name: Run controller contracts and lifecycle regressions
+        working-directory: web-ui
+        # These tests have no npm dependencies and do not replace Android or real-media acceptance.
+        run: node --experimental-strip-types --test tests/desktop-viewer.test.ts tests/desktop-viewer-lifecycle.test.ts
