@@ -192,6 +192,7 @@
 .pw-task-review .pw-permission .cb-permission2-heading .cb-grow { flex: 1; min-width: 0; }
 .pw-task-review .pw-permission .cb-permission2-heading strong { display: block; font-size: 15px; line-height: 22px; }
 .pw-task-review .pw-protected-actions { gap: 8px; }
+.pw-task-review .pw-approval-item { border: 0; }
 .pw-task-review .pw-compact-disclosures { margin-top: 0; }
 .pw-task-review .pw-permission blockquote { padding: 0; background: transparent; }
 .pw-task-footer { padding: 8px 16px max(12px,env(safe-area-inset-bottom)); border: 0; background: var(--pw-surface); }
@@ -210,3 +211,18 @@
   .pw-redesign .pw-start { max-width: 640px; padding-inline: 30px; }
   .pw-task-drawer { height: 94dvh; max-height: 94dvh; }
 }
+
+/* Keep task decisions primary; reveal search and older results on demand. */
+.pw-task-filters { margin: 0 0 14px; }
+.pw-active-filter { display: flex; align-items: center; gap: 4px; min-height: 44px; }
+.pw-active-filter > button:first-child { min-width: 0; max-width: calc(100% - 48px); overflow: hidden; }
+.pw-task-results > .pw-priority-decisions:first-child { margin-top: 0; }
+.pw-priority-decisions .ui-dic__head { padding-top: 8px; padding-bottom: 10px; font-size: 13px; }
+.pw-ended-tasks > .pw-task-list { padding: 0; background: transparent; }
+.pw-show-all-tasks { min-height: 44px; color: var(--pw-copy); font-size: 13px; }
+.pw-task-filter-options { margin-top: 8px; }
+.pw-task-filter-options .pw-field-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.pw-task-filter-options [role="radiogroup"] { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 4px 8px; }
+.pw-task-filter-options .pw-radio-option { min-height: 44px; padding: 8px 10px; }
+
+.pw-task-context-toggle { width: 100%; min-height: 44px; justify-content: space-between; margin-top: 8px; }
