@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, CheckboxField, SettingsDialog, TextField } from './forms-library';
+import { ArrowUpRight, ChevronRight, History, RefreshCw, Server } from 'lucide-react';
+import { Accordion, AccordionItem, Button, CheckboxField, SettingsDialog, TextField } from './forms-library';
+import './proxy-workspace.css';
 import { ProgressBar } from './library';
 
 type Data = Record<string, any>;
@@ -48,26 +50,30 @@ export function ProxyWorkspace({ state, run, registerTransientBack }: { state: D
       setNotice(value.running === true ? '本机服务已启动，端点与调用记录以当前回执为准。' : '已收到原操作回执，请核对服务状态。');
     }, true);
   };
-  return <section className="pw-settings-section">
-    <header className="pw-section-heading"><div><h2>本机模型服务</h2><p>供这台手机的工具使用你明确选择的 API 模型，仅监听本机回环地址。</p></div></header>
-    <div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={refresh}>刷新服务与调用</Button>{!snapshot.running && <Button variant="ghost" disabled={locked || unknown || snapshot.externalRelayAllowed !== true} onClick={() => setSettings(true)}>启动设置</Button>}{snapshot.running && <Button variant="secondary" disabled={locked || !snapshot.sessionId} onClick={() => void invoke('proxy.stop', { sessionId: snapshot.sessionId }, value => { setSnapshot(value); setUnknown(false); setNotice('已收到这次原服务的停止回执。'); }, true)}>停止这次本机服务</Button>}</div>
-    {locked && <ProgressBar label="等待原本机服务回执" isIndeterminate showValueLabel={false} size="sm" />}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
-    {unknown && <><p role="status">上次操作结果待核对。请先刷新实际状态；没有重复启动或自动更换模型。</p><Button variant="secondary" disabled={!readAfterUnknown || locked} onClick={() => { setUnknown(false); setReadAfterUnknown(false); }}>我已核对服务状态，允许重新准备</Button></>}
-    <p>{typeof snapshot.running !== 'boolean' ? '尚未读取服务状态' : snapshot.running ? '服务正在运行' : '服务尚未运行'}{snapshot.model ? ` · ${snapshot.model}` : ''}</p>
-    {snapshot.modelRoute === 'account' && <p>当前是 ChatGPT 账号模型，仅供本应用使用。启动本机服务前，请在 API 模型目录明确选择自己的 API-key 连接。</p>}
-    {snapshot.endpoint && <p className="pw-reading-copy">{snapshot.endpoint}</p>}
-    {snapshot.running && snapshot.routeCurrent === false && <p role="alert">原模型连接已经变化，旧服务不再接受新的推理。请先停止，再审阅新的模型选择。</p>}
-    {snapshot.protocol && <p className="pw-muted">客户端协议：{snapshot.protocol}。不转换协议，也不授予手机或工具执行权限。</p>}
-    {Array.isArray(snapshot.endpoints) && snapshot.endpoints.length > 0 && <details><summary>此模型支持的端点</summary>{snapshot.endpoints.map((path: string) => <p key={path} className="pw-reading-copy">{path}</p>)}</details>}
-    <h3>本次服务近期调用</h3><p className="pw-muted">最多保留当前服务进程最近 8 条引用，不代表累计用量。</p>
-    {rows.length ? [...rows].reverse().map(row => <Button key={row.taskId} variant="ghost" onClick={() => void run('tasks.open', { id: row.taskId }).catch(failure => setError(failure.message))}>查看实际模型调用 · {row.model || row.taskId}</Button>) : <p className="pw-secondary-empty">当前没有返回模型调用记录。</p>}
+  return <section className="pw-proxy-workspace pw-settings-section">
+    <header className="pw-proxy-heading"><div><h2>本机模型服务</h2><p>把明确选定的 API 模型提供给这台手机上的工具。</p></div><Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="刷新服务与调用" disabled={locked} onClick={refresh} /></header>
+    {locked && <ProgressBar label="等待原本机服务回执" isIndeterminate showValueLabel={false} size="sm" />}{error && <p className="pw-proxy-feedback pw-field-error" role="alert">{error}</p>}{notice && <p className="pw-proxy-feedback" role="status">{notice}</p>}
+    {unknown && <div className="pw-proxy-feedback" role="status"><p>上次操作结果待核对。请先刷新实际状态；没有重复启动或自动更换模型。</p><Button variant="secondary" disabled={!readAfterUnknown || locked} onClick={() => { setUnknown(false); setReadAfterUnknown(false); }}>我已核对服务状态，允许重新准备</Button></div>}
+    <section className="pw-proxy-service" aria-label="当前本机服务">
+      <div className="pw-proxy-service-title"><span className="pw-proxy-service-icon"><Server size={22} aria-hidden /></span><div><p className="pw-proxy-eyebrow">仅本机回环地址</p><h3>{typeof snapshot.running !== 'boolean' ? '尚未读取服务状态' : snapshot.running ? '服务正在运行' : '服务尚未运行'}</h3>{snapshot.model && <p className="pw-proxy-model">{snapshot.model}</p>}</div></div>
+      {snapshot.endpoint && <div className="pw-proxy-endpoint"><span>客户端连接地址</span><p>{snapshot.endpoint}</p></div>}
+      {snapshot.modelRoute === 'account' && <p className="pw-proxy-inline-note">当前是 ChatGPT 账号模型，仅供本应用使用。启动本机服务前，请在 API 模型目录明确选择自己的 API-key 连接。</p>}
+      {snapshot.running && snapshot.routeCurrent === false && <p className="pw-proxy-inline-note" role="alert">原模型连接已经变化，旧服务不再接受新的推理。请先停止，再审阅新的模型选择。</p>}
+      <div className="pw-proxy-primary-action">{snapshot.running ? <Button variant="secondary" disabled={locked || !snapshot.sessionId} onClick={() => void invoke('proxy.stop', { sessionId: snapshot.sessionId }, value => { setSnapshot(value); setUnknown(false); setNotice('已收到这次原服务的停止回执。'); }, true)}>停止这次本机服务</Button>
+        : <Button disabled={locked || unknown || snapshot.externalRelayAllowed !== true} trailingIcon={ChevronRight} onClick={() => setSettings(true)}>配置并启动</Button>}<p>只监听这台手机，不开放到局域网或公网。</p></div>
+      {snapshot.protocol && <p className="pw-proxy-inline-note">客户端协议：{snapshot.protocol}。不转换协议，也不授予手机或工具执行权限。</p>}
+      {Array.isArray(snapshot.endpoints) && snapshot.endpoints.length > 0 && <Accordion className="pw-proxy-endpoints"><AccordionItem id="endpoints" title="支持的调用端点" description="使用当前模型的原协议">{snapshot.endpoints.map((path: string) => <p key={path} className="pw-reading-copy">{path}</p>)}</AccordionItem></Accordion>}
+    </section>
+    <section className="pw-proxy-calls" aria-label="近期模型调用"><header><div><h3>近期调用</h3><p>只保留本次服务进程最近 8 条引用，不代表累计用量。</p></div><History size={18} aria-hidden /></header>
+      {rows.length ? <div className="pw-proxy-call-list">{[...rows].reverse().map(row => <Button key={row.taskId} variant="ghost" className="pw-proxy-call-row" trailingIcon={ArrowUpRight} onClick={() => void run('tasks.open', { id: row.taskId }).catch(failure => setError(failure.message))}><span><strong>{row.model || '原模型调用'}</strong><small>查看原任务 · {row.taskId}</small></span></Button>)}</div> : <div className="pw-proxy-empty"><p>还没有返回调用记录</p><span>{snapshot.running === true ? '在客户端调用后，刷新查看这次服务的原记录。' : '服务启动并被客户端实际调用后，可在这里查看原记录。'}</span></div>}
+    </section>
     <SettingsDialog isOpen={settings && !review} title="启动本机模型服务" onClose={() => { if (!locked) { closeReview(); setSettings(false); setToken(''); setShowToken(false); } }}>
       <p>启动后固定本次 API 模型选择。更换连接或模型前先停止服务，不会自动切换计费身份。</p>
       <TextField label="监听端口，0 为自动选择" value={port} onChange={setPort} inputMode="numeric" isDisabled={locked} />
       <TextField label="独立访问令牌" value={token} onChange={setToken} type={showToken ? 'text' : 'password'} isDisabled={locked} hint="24–256 位字母、数字、下划线或短横线；与上游 API 密钥分开。" />
       <div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={() => { const bytes = crypto.getRandomValues(new Uint8Array(32)); setToken(Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('')); }}>生成随机访问令牌</Button><CheckboxField isSelected={showToken} onChange={setShowToken} isDisabled={locked}>显示令牌</CheckboxField></div>
       <p className="pw-muted">请在审阅前为客户端保存这项令牌。审阅后、进入后台或离开页面会清除输入框中的令牌；已保存的服务凭据留在原生加密存储中。</p>
-      {unknown && <><p role="status">原启动结果待核对，草稿已保留。当前读取：{snapshot.running ? `服务正在运行 · ${snapshot.endpoint}` : '服务未运行'}。请核对后再决定是否重新准备。</p><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={refresh}>读取原服务状态</Button><Button variant="secondary" disabled={!readAfterUnknown || locked} onClick={() => { setUnknown(false); setReadAfterUnknown(false); }}>我已核对，允许重新准备</Button></div></>}
+      {unknown && <><p role="status">原启动结果待核对，草稿已保留。当前读取：{typeof snapshot.running !== 'boolean' ? '尚未读取服务状态' : snapshot.running ? `服务正在运行 · ${snapshot.endpoint}` : '服务未运行'}。请核对后再决定是否重新准备。</p><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={refresh}>读取原服务状态</Button><Button variant="secondary" disabled={!readAfterUnknown || locked} onClick={() => { setUnknown(false); setReadAfterUnknown(false); }}>我已核对，允许重新准备</Button></div></>}
       {error && <p className="pw-field-error" role="alert">{error}</p>}
       <Button disabled={!canReview} onClick={prepare}>核对启动配置</Button>
     </SettingsDialog>

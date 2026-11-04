@@ -447,6 +447,7 @@ try {
           });
           await group('media-review-nesting-keeps-original-confirmation', async () => {
             await page.evaluate(() => window.readingFixture.openMedia());
+            await page.getByRole('button', { name: '开始创作', exact: true }).click();
             const input = page.getByRole('textbox', { name: '描述要生成的内容', exact: true });
             await input.fill(table);
             await page.getByRole('button', { name: '准备并核对输入', exact: true }).click();

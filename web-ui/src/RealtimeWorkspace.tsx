@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextField } from './forms-library';
 import { ProgressBar } from './library';
 import { mergeRealtimeSnapshot, realtimeReviewCurrent, realtimeStage } from './realtime-contract';
+import { Mic, Phone, RefreshCw, Settings2, Video, Volume2 } from 'lucide-react';
+import './realtime-workspace.css';
 
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
@@ -10,7 +12,10 @@ const rows = (value: any): Data[] => Array.isArray(value) ? value.filter(row => 
 const operation = (command: string) => ({ configureNaturalVoice: '保存自然语音服务', configureEndpointProvider: '保存通话服务', configure: '保存房间设置', clearNaturalVoice: '移除自然语音配置', clearEndpointProvider: '移除通话服务配置', acceptInvitation: '接受并连接本次通话', mute: '开启麦克风发送', setCamera: '开启摄像头发送', startVoiceTurn: '开始一轮听写与朗读', commitTurn: '只保存这个任务目标', commitVoiceTask: '保存目标并开始原任务', startVoiceTask: '开始处理原任务', cancelVoiceTask: '停止原任务当前执行', readVoiceTask: '朗读原任务记录' } as Data)[command] || '确认本次操作';
 const taskStatus = (value: string) => ({ awaiting_user: '等待你继续', queued: '等待执行', preparing: '正在准备', running: '正在处理', paused: '已暂停', needs_confirmation: '等待原任务确认', stopping: '正在停止，结果待核对', completed: '原任务记录为完成，等待你验收', failed: '未完成，没有自动重跑', interrupted: '已中断，没有自动重跑', cancelled: '已记录取消', reconciling: '正在核对原结果' } as Data)[value] || value || '请读取原任务状态';
 
-/** Adopted BoardUI workspace; all capture, connection and task authority remains native. */
+/** Retained BoardUI controls and SettingsDialog, with compact conversation /
+ * supporting-detail hierarchy informed by OpenMuse mobile LinkRow (MIT,
+ * jerelvelarde/openmuse 61796eb2, apps/mobile/src/ui.tsx).
+ * All capture, connection and task authority remains native. */
 export function RealtimeWorkspace({ state, run, registerTransientBack }: { state: Data; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void }) {
   const [snapshot, setSnapshot] = useState<Data>({}), [review, setReview] = useState<Data | null>(null), [settings, setSettings] = useState<Data | null>(null);
   const [busy, setBusy] = useState(false), [controlBusy, setControlBusy] = useState<string[]>([]), [ack, setAck] = useState(false);
@@ -62,7 +67,7 @@ export function RealtimeWorkspace({ state, run, registerTransientBack }: { state
   const hostBusy: string[] = Array.isArray(state.moduleBusy) ? state.moduleBusy : [];
   const controlPending = (command: string) => controlBusy.includes(command) || hostBusy.includes(`realtime.${command}`);
   const currentReview = realtimeReviewCurrent(snapshot, review), details = object(review?.details);
-  const turns = rows(transcript.turns), visibleTurns = expanded ? turns : turns.slice(-4), taskId = task.taskId || taskView.lastTaskId;
+  const turns = rows(transcript.turns), visibleTurns = expanded ? turns : turns.filter((turn, index) => index >= turns.length - 4 || turn.commitState === 'unknown'), taskId = task.taskId || taskView.lastTaskId;
   const binding = { bindingId: taskView.bindingId, viewToken: taskView.viewToken };
   const openTask = (id: string) => { closeReview(); void run('tasks.open', { id }).catch(failure => setError(failure.message)); };
   const openSettings = (kind: string) => {
@@ -88,91 +93,117 @@ export function RealtimeWorkspace({ state, run, registerTransientBack }: { state
   };
   const prepare = (kind: string) => { void invoke('realtime.prepare', { kind }, () => { setNotice('已准备本次邀请。核对采集范围并接受后才连接。'); }, 'work', true); };
   const permission = (kind: 'Microphone' | 'Camera') => { void invoke(`realtime.request${kind}Permission`, {}, () => setNotice('已请求系统权限。授权后仍需明确核对本次采集范围。')); };
-  return <>
-    <section className="pw-settings-section">
-      <header className="pw-section-heading"><div><h2>实时通话</h2><p>接受后才连接。切到后台会结束采集和通话；已保存的任务继续保留。</p></div></header>
-      <div className="pw-form-actions"><Button variant="secondary" onClick={refresh}>刷新通话状态</Button>{!occupied && <Button variant="ghost" disabled={!loaded || locked || !snapshot.naturalVoiceSupported} onClick={() => openSettings('natural')}>自然语音设置</Button>}</div>
-      {busy && <ProgressBar label="等待原通话回执" isIndeterminate showValueLabel={false} size="sm" />}
-      {error && <p className="pw-field-error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
-      {uncertain && <><p role="status">上次操作结果待核对。请读取当前状态与原记录；页面不会重放连接、采集或任务提交。</p><Button variant="secondary" disabled={!readAfterUnknown || busy} onClick={() => { setUncertain(false); setReadAfterUnknown(false); }}>我已核对原记录，允许重新准备</Button></>}
-      <p aria-live="polite">{loaded ? realtimeStage(session.state) : '尚未读取通话状态'}</p>
-      {!active && !waiting && <>
-        {snapshot.naturalVoiceConfigured ? <><p>{naturalConfig.model} · {naturalConfig.voice}</p><Button disabled={locked || occupied || !ownerReady} onClick={() => prepare('natural')}>准备自然语音对话</Button></> : <p>{loaded && !snapshot.naturalVoiceSupported ? '自然语音适配器尚未接入，当前不能连接。' : '先填写实际语音服务、模型和凭据，再准备通话。'}</p>}
-      </>}
-      {snapshot.invitationMessage && <p className="pw-muted">{snapshot.invitationMessage}</p>}
-      {waiting && !active && <div className="pw-selected-object">
-        <h3>{invitation.displayName || '当前通话邀请'}</h3>
-        <p>{invitation.source === 'provider_invitation' ? `来自已配置服务 ${invitation.providerId || ''} 的邀请。` : '这是你准备发起的通话。'}</p>
-        <p className="pw-reading-copy">{invitation.serverUrl}</p>
-        {invitation.tokenEndpoint && <p className="pw-reading-copy">接受后向 {invitation.tokenEndpoint} 请求参与者凭据；agent：{invitation.agentName}</p>}
-        {natural && <p>语音模型：{invitation.model} · 声音：{invitation.voice}。开启麦克风后原始声音发送到该服务。</p>}
-        <CheckboxField isSelected={microphone} onChange={setMicrophone} isDisabled={locked}>发送本机麦克风声音</CheckboxField>
-        {!natural && <CheckboxField isSelected={camera} onChange={setCamera} isDisabled={locked}>打开并发送本机摄像头</CheckboxField>}
-        <p className="pw-muted">采集默认关闭，也可只接收对端音频。语音服务可能计费；通话不会自动执行任务或敏感操作。</p>
-        <div className="pw-form-actions">{!snapshot.microphonePermission && <Button variant="secondary" disabled={busy} onClick={() => permission('Microphone')}>授予麦克风权限</Button>}{!natural && !snapshot.cameraPermission && <Button variant="secondary" disabled={busy} onClick={() => permission('Camera')}>授予摄像头权限</Button>}</div>
-        <div className="pw-form-actions"><Button disabled={locked || !ownerReady || microphone && !snapshot.microphonePermission || camera && !snapshot.cameraPermission} onClick={() => void invoke('realtime.reviewInvitation', { invitationId: invitation.id, microphone, camera }, receiveReview)}>核对并接受邀请</Button><Button variant="secondary" disabled={controlPending('rejectInvitation')} onClick={() => control('rejectInvitation', { invitationId: invitation.id })}>拒绝本次邀请</Button></div>
-      </div>}
-      {active && <div className="pw-selected-object">
-        <h3>{natural ? '当前自然语音' : '当前房间通话'}</h3>
-        <p>麦克风：{session.microphoneEnabled ? '正在发送' : '关闭'}{!natural && ` · 摄像头：${session.cameraEnabled ? '正在发送' : '关闭'}`}</p>
-        {session.message && <p>{session.message}</p>}
-        {session.state === 'connected' && <div className="pw-form-actions">
-          {session.microphoneEnabled ? <Button variant="secondary" disabled={controlPending('mute')} onClick={() => control('mute', { sessionId: snapshot.sessionId })}>关闭麦克风发送</Button> : <Button variant="secondary" disabled={locked || controlPending('mute') || !snapshot.microphonePermission} onClick={() => reviewAction('enableMicrophone', { sessionId: snapshot.sessionId })}>核对开启麦克风</Button>}
-          {!natural && (session.cameraEnabled ? <Button variant="secondary" disabled={controlPending('setCamera')} onClick={() => control('setCamera', { sessionId: snapshot.sessionId })}>关闭摄像头</Button> : <Button variant="secondary" disabled={locked || controlPending('setCamera') || !snapshot.cameraPermission} onClick={() => reviewAction('enableCamera', { sessionId: snapshot.sessionId })}>核对开启摄像头</Button>)}
-          {natural && <Button variant="secondary" disabled={controlPending('interruptOutput')} onClick={() => control('interruptOutput', { sessionId: snapshot.sessionId })}>打断当前说话</Button>}
-          {!snapshot.microphonePermission && <Button variant="ghost" disabled={busy} onClick={() => permission('Microphone')}>麦克风权限</Button>}{!natural && !snapshot.cameraPermission && <Button variant="ghost" disabled={busy} onClick={() => permission('Camera')}>摄像头权限</Button>}
-        </div>}
-        <Button variant="secondary" disabled={!snapshot.sessionId || controlPending('disconnect') || session.state === 'disconnecting'} onClick={() => control('disconnect', { sessionId: snapshot.sessionId })}>{snapshot.accepting || session.state === 'connecting' ? '取消当前连接' : '挂断当前通话'}</Button>
-        {!natural && <><p>房间远端参与者：{session.remoteParticipants ?? '尚未读取'}。已连接房间不代表 AI 对端已就绪。</p><p className="pw-muted">当前 Web 页尚未接通真实视频显示。摄像头开启时仍会发送实际画面；可随时关闭摄像头或挂断。</p>{rows(session.remoteVideos).map(video => <p key={video.trackSid}>{video.displayName || '远端参与者'} · {video.muted ? '对端已暂停视频' : '已收到视频轨道，当前页面不能显示'}</p>)}</>}
-      </div>}
-      {session.resourceReleaseUnknown && <p className="pw-field-error" role="alert">媒体资源释放未确认。请核对系统采集指示，重启应用后再开始通话。</p>}
-      {loaded && !ownerReady && <p className="pw-muted">当前前台主人或采集协调器尚未就绪，不能开始采集。</p>}
-    </section>
+  const hasTranscript = transcript.active || transcript.retained || turns.length > 0;
+  const hasVoiceRecord = voice.active || voice.recognizedText || voice.replyText || voice.message;
+  const captureLabel = (enabled: any) => enabled === true ? '正在发送' : enabled === false ? '关闭' : '状态待核对';
+  return <div className="pw-realtime-workspace">
+    <header className="pw-realtime-heading">
+      <div><h2>实时通话</h2><p aria-live="polite">{loaded ? realtimeStage(session.state) : '尚未读取通话状态'}</p></div>
+      <Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="刷新通话状态" title="刷新通话状态" onClick={refresh} />
+    </header>
+    <p className="pw-realtime-policy">接受后才连接。切到后台会结束采集和通话，实际释放以原状态为准；已保存的任务继续保留。</p>
+    {busy && <ProgressBar label="等待原通话回执" isIndeterminate showValueLabel={false} size="sm" />}
+    {error && <p className="pw-realtime-alert" role="alert">{error}</p>}
+    {notice && <p className="pw-realtime-notice" role="status">{notice}</p>}
+    {uncertain && <div className="pw-realtime-alert"><p role="status">上次操作结果待核对。请读取当前状态与原记录；页面不会重放连接、采集或任务提交。</p><Button variant="secondary" disabled={!readAfterUnknown || busy} onClick={() => { setUncertain(false); setReadAfterUnknown(false); }}>我已核对原记录，允许重新准备</Button></div>}
+    {session.resourceReleaseUnknown && <p className="pw-realtime-alert" role="alert">媒体资源释放未确认。请核对系统采集指示，重启应用后再开始通话。</p>}
+    {voice.resourceReleaseUnknown && <p className="pw-realtime-alert" role="alert">本轮音频释放未确认，不能开始新一轮。</p>}
+    {readout.resourceReleaseUnknown && <p className="pw-realtime-alert" role="alert">原任务朗读的音频释放未确认，请核对系统采集指示与原状态。</p>}
+    {snapshot.providerError && <p className="pw-realtime-alert" role="alert">{snapshot.providerError}</p>}
+    {loaded && !ownerReady && <p className="pw-realtime-notice">当前前台主人或采集协调器尚未就绪，不能开始采集。</p>}
 
-    {(transcript.active || transcript.retained || turns.length > 0) && <section className="pw-settings-section">
-      <header className="pw-section-heading"><div><h2>{transcript.retained ? '本次保留的转录' : '本次通话字幕'}</h2><p>逐字复核最终文字后才能保存目标。转录来源标记不能证明说话人身份。</p></div></header>
-      {!turns.length && <p className="pw-secondary-empty">尚未收到最终输入转录。自然语音服务需要配置其实际支持的输入转录模型。</p>}
-      {turns.length > 4 && <Button variant="ghost" onClick={() => setExpanded(!expanded)}>{expanded ? '只看最近字幕' : `查看全部 ${turns.length} 段`}</Button>}
-      {visibleTurns.map(turn => <article className="pw-source-record" key={turn.id}>
-        <header><h3>{turn.sourceKind === 'reported_local_microphone' ? '本机麦克风转录（服务标记）' : '远端或来源未核验'}</h3></header><p className="pw-reading-copy">{turn.text || (turn.phase === 'incomplete' ? '这一段未完整接收' : '正在接收…')}</p>
-        <p className="pw-muted">{turn.commitState === 'unknown' ? '保存结果待核对' : turn.commitState === 'committed' ? '已保存到原任务' : turn.phase === 'incomplete' ? '未完整接收，不能提交' : turn.isFinal ? '最终转录，仍需明确复核' : '临时转录，不会执行'}</p>
-        <div className="pw-form-actions">{turn.canReview && <><Button variant="secondary" disabled={locked} onClick={() => void invoke('realtime.reviewTurn', { sessionId: snapshot.sessionId, turnId: turn.id, revision: turn.revision, startTask: false }, receiveReview)}>复核并只保存目标</Button>{capabilities.voiceTaskHost && <Button variant="secondary" disabled={locked} onClick={() => void invoke('realtime.reviewTurn', { sessionId: snapshot.sessionId, turnId: turn.id, revision: turn.revision, startTask: true }, receiveReview)}>复核后交给原任务</Button>}</>}{turn.commitState === 'unknown' && <Button variant="secondary" disabled={busy} onClick={() => void invoke('realtime.reconcileTurn', { commitId: turn.commitId }, () => setNotice('已核对原提交，没有重新创建。'))}>核对这次原提交</Button>}{turn.taskId && <Button variant="ghost" onClick={() => openTask(turn.taskId)}>打开原任务</Button>}</div>
-        {turn.postCommitUpdate && <p>字幕后来发生修订，已确认的原任务没有被自动修改。</p>}
-      </article>)}
-      {transcript.notice && <p role="status">{transcript.notice}</p>}
-      <p className="pw-muted">未保存转录只保留到下一次通话或重启；已保存任务留在原任务记录中。</p>
+    {(active || voice.active || readout.active) && <section className="pw-realtime-live" aria-label="当前音频与停止控制">
+      {active && <>
+        <div className="pw-realtime-live-heading"><Phone size={18} aria-hidden /><h3>{natural ? '当前自然语音' : '当前房间通话'}</h3><span>{realtimeStage(session.state)}</span></div>
+        <div className="pw-realtime-capture" aria-live="polite"><span><Mic size={15} aria-hidden />麦克风：{captureLabel(session.microphoneEnabled)}</span>{!natural && <span><Video size={15} aria-hidden />摄像头：{captureLabel(session.cameraEnabled)}</span>}</div>
+        <div className="pw-realtime-controls">
+          {session.state === 'connected' && <>
+            {session.microphoneEnabled ? <Button variant="secondary" disabled={controlPending('mute')} onClick={() => control('mute', { sessionId: snapshot.sessionId })}>关闭麦克风发送</Button> : <Button variant="secondary" disabled={locked || controlPending('mute') || !snapshot.microphonePermission} onClick={() => reviewAction('enableMicrophone', { sessionId: snapshot.sessionId })}>核对开启麦克风</Button>}
+            {!natural && (session.cameraEnabled ? <Button variant="secondary" disabled={controlPending('setCamera')} onClick={() => control('setCamera', { sessionId: snapshot.sessionId })}>关闭摄像头</Button> : <Button variant="secondary" disabled={locked || controlPending('setCamera') || !snapshot.cameraPermission} onClick={() => reviewAction('enableCamera', { sessionId: snapshot.sessionId })}>核对开启摄像头</Button>)}
+            {natural && <Button variant="secondary" disabled={controlPending('interruptOutput')} onClick={() => control('interruptOutput', { sessionId: snapshot.sessionId })}>打断当前说话</Button>}
+          </>}
+          <Button variant="danger" disabled={!snapshot.sessionId || controlPending('disconnect') || session.state === 'disconnecting'} onClick={() => control('disconnect', { sessionId: snapshot.sessionId })}>{snapshot.accepting || session.state === 'connecting' ? '取消当前连接' : '挂断当前通话'}</Button>
+        </div>
+      </>}
+      {voice.active && <div className="pw-realtime-audio-row"><div><Mic size={17} aria-hidden /><span>单轮语音 · {realtimeStage(voice.status)}</span></div><Button variant="secondary" disabled={controlPending('stopVoiceTurn') || !voice.id} onClick={() => control('stopVoiceTurn', { voiceTurnId: voice.id })}>停止本轮听写与朗读</Button></div>}
+      {readout.active && <div className="pw-realtime-audio-row"><div><Volume2 size={17} aria-hidden /><span>原任务朗读 · {readout.state === 'stopping' ? '正在停止，等待回执' : '进行中'}</span></div><Button variant="secondary" disabled={controlPending('interruptOutput') || readout.state === 'stopping'} onClick={() => control('interruptOutput', { readoutId: readout.readoutId })}>停止朗读，保留任务</Button></div>}
     </section>}
 
-    <section className="pw-settings-section">
-      <header className="pw-section-heading"><div><h2>语音目标与原任务</h2><p>挂断和停止说话不取消任务；权限与敏感操作仍在原任务中确认。</p></div></header>
-      {taskView.available ? <>
-        {taskId && <div className="pw-selected-object"><h3>{taskView.goal || '这次语音的原任务'}</h3><p>{taskStatus(task.status)}</p>{taskView.message && <p>{taskView.message}</p>}{task.summary && <p className="pw-reading-copy">{task.summary}</p>}{taskView.needsRefresh && <p role="status">这是上次读取的记录，请核对当前原任务。</p>}
-          <div className="pw-form-actions"><Button variant="secondary" onClick={() => openTask(taskId)}>查看原任务与产物</Button>{taskView.bindingId && <Button variant="ghost" disabled={busy || taskView.busy} onClick={() => void invoke('realtime.inspectVoiceTask', binding)}>核对原任务状态</Button>}{taskView.canStart && <Button disabled={locked} onClick={() => reviewAction('startVoiceTask', binding)}>核对并开始原任务</Button>}{taskView.canCancel && <Button variant="secondary" disabled={locked} onClick={() => reviewAction('cancelVoiceTask', { ...binding, viewToken: taskView.cancelToken })}>核对取消当前执行</Button>}</div>
-          {readout.active ? <Button variant="secondary" disabled={controlPending('interruptOutput') || readout.state === 'stopping'} onClick={() => control('interruptOutput', { readoutId: readout.readoutId })}>停止朗读，保留任务</Button> : task.summary && <Button variant="ghost" disabled={locked || occupied || taskView.busy || taskView.needsRefresh || readout.resourceReleaseUnknown} onClick={() => reviewAction('readVoiceTask', binding)}>核对朗读原任务记录</Button>}
-          {readout.message && <p className="pw-muted">{readout.message}</p>}
-        </div>}
-        <Accordion><AccordionItem title="找回已保存的语音任务"><Button variant="secondary" disabled={busy} onClick={() => void invoke('realtime.listVoiceTasks')}>读取已保存的任务</Button>{taskView.recoveryMessage && <p>{taskView.recoveryMessage}</p>}{rows(taskView.recentTasks).map(saved => <article className="pw-source-record" key={saved.taskId}><h3>{saved.goal || '已保存语音目标'}</h3><p>{taskStatus(saved.status)}</p><Button variant="secondary" disabled={busy} onClick={() => void invoke('realtime.recoverVoiceTask', { taskId: saved.taskId })}>恢复这项原任务视图</Button></article>)}</AccordionItem></Accordion>
-      </> : <p className="pw-secondary-empty">{loaded ? '语音任务宿主尚未接入，不能从此页创建或控制任务。' : '等待读取语音任务能力。'}</p>}
+    <section className="pw-realtime-session" aria-label="本次会话">
+      {!active && !waiting && <div className="pw-realtime-start">
+        <div className="pw-realtime-start-copy"><span className="pw-realtime-symbol"><Mic size={21} aria-hidden /></span><div><h3>{snapshot.naturalVoiceConfigured ? '开始一次自然语音对话' : '先设置你的语音服务'}</h3><p>{snapshot.naturalVoiceConfigured ? `${naturalConfig.model || '已配置模型'} · ${naturalConfig.voice || '已配置声音'}` : loaded && !snapshot.naturalVoiceSupported ? '自然语音适配器尚未接入，当前不能连接。' : '填写实际语音服务、模型和凭据。准备邀请后，再选择本次采集范围。'}</p></div></div>
+        {snapshot.naturalVoiceConfigured ? <Button disabled={locked || occupied || !ownerReady} onClick={() => prepare('natural')}>准备自然语音对话</Button> : <Button disabled={!loaded || locked || occupied || !snapshot.naturalVoiceSupported} onClick={() => openSettings('natural')}>自然语音设置</Button>}
+      </div>}
+      {snapshot.invitationMessage && <p className="pw-realtime-notice">{snapshot.invitationMessage}</p>}
+      {waiting && !active && <div className="pw-realtime-invitation">
+        <div className="pw-realtime-object-heading"><span className="pw-realtime-symbol"><Phone size={21} aria-hidden /></span><div><span className="pw-realtime-eyebrow">等待你接受</span><h3>{invitation.displayName || '当前通话邀请'}</h3></div></div>
+        <p>{invitation.source === 'provider_invitation' ? `来自已配置服务 ${invitation.providerId || ''} 的邀请。` : '这是你准备发起的通话。'}</p>
+        <p className="pw-realtime-endpoint">{invitation.serverUrl}</p>
+        {invitation.tokenEndpoint && <p className="pw-reading-copy">接受后向 {invitation.tokenEndpoint} 请求参与者凭据；agent：{invitation.agentName}</p>}
+        {natural && <p>语音模型：{invitation.model} · 声音：{invitation.voice}。开启麦克风后原始声音发送到该服务。</p>}
+        <div className="pw-realtime-choices"><CheckboxField isSelected={microphone} onChange={setMicrophone} isDisabled={locked}>发送本机麦克风声音</CheckboxField>{!natural && <CheckboxField isSelected={camera} onChange={setCamera} isDisabled={locked}>打开并发送本机摄像头</CheckboxField>}</div>
+        <p className="pw-realtime-policy">采集默认关闭，也可只接收对端音频。语音服务可能计费；通话不会自动执行任务或敏感操作。</p>
+        <div className="pw-form-actions">{!snapshot.microphonePermission && <Button variant="secondary" disabled={busy} onClick={() => permission('Microphone')}>授予麦克风权限</Button>}{!natural && !snapshot.cameraPermission && <Button variant="secondary" disabled={busy} onClick={() => permission('Camera')}>授予摄像头权限</Button>}</div>
+        <div className="pw-form-actions"><Button disabled={locked || !ownerReady || microphone && !snapshot.microphonePermission || camera && !snapshot.cameraPermission} onClick={() => void invoke('realtime.reviewInvitation', { invitationId: invitation.id, microphone, camera }, receiveReview)}>核对并接受邀请</Button><Button variant="ghost" disabled={controlPending('rejectInvitation')} onClick={() => control('rejectInvitation', { invitationId: invitation.id })}>拒绝本次邀请</Button></div>
+      </div>}
+      {active && <div className="pw-realtime-session-detail">
+        {session.message && <p role="status">{session.message}</p>}
+        {session.state === 'connected' && <div className="pw-form-actions">{!snapshot.microphonePermission && <Button variant="ghost" disabled={busy} onClick={() => permission('Microphone')}>麦克风权限</Button>}{!natural && !snapshot.cameraPermission && <Button variant="ghost" disabled={busy} onClick={() => permission('Camera')}>摄像头权限</Button>}</div>}
+        {!natural && <><p>房间远端参与者：{session.remoteParticipants ?? '尚未读取'}。已连接房间不代表 AI 对端已就绪。</p><p className="pw-realtime-policy">当前 Web 页尚未接通真实视频显示。摄像头开启时仍会发送实际画面；可随时关闭摄像头或挂断。</p>{rows(session.remoteVideos).map(video => <p key={video.trackSid}>{video.displayName || '远端参与者'} · {video.muted ? '对端已暂停视频' : '已收到视频轨道，当前页面不能显示'}</p>)}</>}
+      </div>}
     </section>
 
-    <section className="pw-settings-section"><Accordion>
-      <AccordionItem title="单轮听写与朗读">
-        <p>系统听写转成文字后交给当前文本模型，再由系统朗读。此操作不会自动创建或执行任务。</p>
-        {voice.message && <p>{voice.message}</p>}{voice.status && <p>{realtimeStage(voice.status)}</p>}{voice.recognizedText && <p className="pw-reading-copy">{voice.recognizedText}</p>}{voice.replyText && <p className="pw-reading-copy">{voice.replyText}</p>}
-        {voice.active ? <Button variant="secondary" disabled={controlPending('stopVoiceTurn') || !voice.id} onClick={() => control('stopVoiceTurn', { voiceTurnId: voice.id })}>停止本轮听写与朗读</Button> : <Button variant="secondary" disabled={locked || occupied || !ownerReady || !voice.portReady || voice.resourceReleaseUnknown || !snapshot.microphonePermission} onClick={() => reviewAction('startVoiceTurn')}>核对并开始一轮语音</Button>}
+    {hasVoiceRecord && <section className="pw-realtime-voice" aria-label="本轮听写与回复">
+      <header className="pw-realtime-section-heading"><h3>本轮听写与回复</h3>{voice.status && <span>{realtimeStage(voice.status)}</span>}</header>
+      {voice.message && <p role="status">{voice.message}</p>}
+      {voice.recognizedText && <div className="pw-realtime-utterance"><span className="pw-realtime-eyebrow">听写文字</span><p className="pw-reading-copy">{voice.recognizedText}</p></div>}
+      {voice.replyText && <div className="pw-realtime-utterance"><span className="pw-realtime-eyebrow">本轮回复</span><p className="pw-reading-copy">{voice.replyText}</p></div>}
+      {voice.inferenceReference?.taskId && <Button variant="ghost" onClick={() => openTask(voice.inferenceReference.taskId)}>查看这次模型调用</Button>}
+    </section>}
+
+    <div className="pw-realtime-context" data-has-transcript={!!hasTranscript}>
+      {hasTranscript && <section className="pw-realtime-transcript" aria-label="本次转录">
+        <header className="pw-realtime-section-heading"><div><h3>{transcript.retained ? '本次保留的转录' : '本次通话字幕'}</h3><p>逐字复核最终文字后才能保存目标。转录来源标记不能证明说话人身份。</p></div></header>
+        {!turns.length && <p className="pw-realtime-empty">尚未收到最终输入转录。自然语音服务需要配置其实际支持的输入转录模型。</p>}
+        {(expanded || visibleTurns.length < turns.length) && <Button variant="ghost" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? '只看最近字幕' : `查看全部 ${turns.length} 段`}</Button>}
+        <div className="pw-realtime-turns">{visibleTurns.map(turn => <article className="pw-realtime-turn" key={turn.id} data-turn-id={turn.id}>
+          <header><h4>{turn.sourceKind === 'reported_local_microphone' ? '本机麦克风转录（服务标记）' : '远端或来源未核验'}</h4><span>{turn.commitState === 'unknown' ? '保存结果待核对' : turn.commitState === 'committed' ? '已保存到原任务' : turn.phase === 'incomplete' ? '未完整接收，不能提交' : turn.isFinal ? '最终转录，仍需明确复核' : '临时转录，不会执行'}</span></header>
+          <p className="pw-reading-copy">{turn.text || (turn.phase === 'incomplete' ? '这一段未完整接收' : '正在接收…')}</p>
+          <div className="pw-form-actions">{turn.canReview && <><Button variant="secondary" disabled={locked} onClick={() => void invoke('realtime.reviewTurn', { sessionId: snapshot.sessionId, turnId: turn.id, revision: turn.revision, startTask: false }, receiveReview)}>复核并只保存目标</Button>{capabilities.voiceTaskHost && <Button variant="ghost" disabled={locked} onClick={() => void invoke('realtime.reviewTurn', { sessionId: snapshot.sessionId, turnId: turn.id, revision: turn.revision, startTask: true }, receiveReview)}>复核后交给原任务</Button>}</>}{turn.commitState === 'unknown' && <Button variant="secondary" disabled={busy} onClick={() => void invoke('realtime.reconcileTurn', { commitId: turn.commitId }, () => setNotice('已核对原提交，没有重新创建。'))}>核对这次原提交</Button>}{turn.taskId && <Button variant="ghost" onClick={() => openTask(turn.taskId)}>打开原任务</Button>}</div>
+          {turn.postCommitUpdate && <p className="pw-realtime-policy">字幕后来发生修订，已确认的原任务没有被自动修改。</p>}
+        </article>)}</div>
+        {transcript.notice && <p className="pw-realtime-notice" role="status">{transcript.notice}</p>}
+        <p className="pw-realtime-policy">未保存转录只保留到下一次通话或重启；已保存任务留在原任务记录中。</p>
+      </section>}
+      <section className="pw-realtime-task" aria-label="语音目标与原任务">
+        <header className="pw-realtime-section-heading"><div><h3>语音目标与原任务</h3><p>挂断和停止说话不取消任务；权限与敏感操作仍在原任务中确认。</p></div></header>
+        {taskView.available ? <>
+          {taskId ? <div className="pw-realtime-task-record" data-task-id={taskId}>
+            <h4>{taskView.goal || '这次语音的原任务'}</h4><p className="pw-realtime-task-state">{taskStatus(task.status)}</p>
+            {taskView.message && <p>{taskView.message}</p>}{task.summary && <p className="pw-reading-copy">{task.summary}</p>}{taskView.needsRefresh && <p role="status">这是上次读取的记录，请核对当前原任务。</p>}
+            <div className="pw-form-actions"><Button variant="secondary" onClick={() => openTask(taskId)}>查看原任务与产物</Button>{taskView.bindingId && <Button variant="ghost" disabled={busy || taskView.busy} onClick={() => void invoke('realtime.inspectVoiceTask', binding)}>核对原任务状态</Button>}{taskView.canStart && <Button disabled={locked} onClick={() => reviewAction('startVoiceTask', binding)}>核对并开始原任务</Button>}{taskView.canCancel && <Button variant="secondary" disabled={locked} onClick={() => reviewAction('cancelVoiceTask', { ...binding, viewToken: taskView.cancelToken })}>核对取消当前执行</Button>}</div>
+            {!readout.active && task.summary && <Button variant="ghost" disabled={locked || occupied || taskView.busy || taskView.needsRefresh || readout.resourceReleaseUnknown} onClick={() => reviewAction('readVoiceTask', binding)}>核对朗读原任务记录</Button>}
+            {readout.message && <p className="pw-realtime-policy">{readout.message}</p>}
+          </div> : <p className="pw-realtime-empty">还没有关联的语音目标。通话不会自动创建任务；在最终转录下明确复核后，再选择只保存或开始处理。</p>}
+          <Accordion className="pw-realtime-disclosures"><AccordionItem id="saved-voice-tasks" title="找回已保存的语音任务" description="读取原记录，不会重新创建任务"><Button variant="secondary" disabled={busy} onClick={() => void invoke('realtime.listVoiceTasks')}>读取已保存的任务</Button>{taskView.recoveryMessage && <p>{taskView.recoveryMessage}</p>}{rows(taskView.recentTasks).map(saved => <article className="pw-realtime-saved" key={saved.taskId}><div><h4>{saved.goal || '已保存语音目标'}</h4><p>{taskStatus(saved.status)}</p></div><Button variant="ghost" disabled={busy} onClick={() => void invoke('realtime.recoverVoiceTask', { taskId: saved.taskId })}>恢复这项原任务视图</Button></article>)}</AccordionItem></Accordion>
+        </> : <p className="pw-realtime-empty">{loaded ? '语音任务宿主尚未接入，不能从此页创建或控制任务。' : '等待读取语音任务能力。'}</p>}
+      </section>
+    </div>
+
+    <Accordion className="pw-realtime-services pw-realtime-disclosures">
+      <AccordionItem id="voice-service" title="语音服务与单轮听写" icon={Settings2} description={snapshot.naturalVoiceConfigured ? `${naturalConfig.model || '已配置自然语音'} · ${naturalConfig.voice || '声音待读取'}` : '配置自然语音，或使用系统听写与朗读'}>
+        <div className="pw-realtime-option"><div><h4>自然语音服务</h4><p>{snapshot.naturalVoiceConfigured ? naturalConfig.endpointUrl : '配置实际服务、模型和声音，再准备邀请。'}</p></div><Button variant="secondary" disabled={!loaded || locked || occupied || !snapshot.naturalVoiceSupported} onClick={() => openSettings('natural')}>自然语音设置</Button></div>
+        <div className="pw-realtime-option"><div><h4>单轮听写与朗读</h4><p>系统听写转成文字后交给当前文本模型，再由系统朗读。此操作不会自动创建或执行任务。</p></div>{!voice.active && <Button variant="secondary" disabled={locked || occupied || !ownerReady || !voice.portReady || voice.resourceReleaseUnknown || !snapshot.microphonePermission} onClick={() => reviewAction('startVoiceTurn')}>核对并开始一轮语音</Button>}</div>
         {!snapshot.microphonePermission && <Button variant="ghost" disabled={busy} onClick={() => permission('Microphone')}>授予麦克风权限</Button>}
-        {voice.inferenceReference?.taskId && <Button variant="ghost" onClick={() => openTask(voice.inferenceReference.taskId)}>查看这次模型调用</Button>}
-        {voice.resourceReleaseUnknown && <p role="alert">本轮音频释放未确认，不能开始新一轮。</p>}
       </AccordionItem>
-      <AccordionItem title="房间通话与高级连接">
+      <AccordionItem id="room-service" title="房间通话与高级连接" icon={Phone} description={snapshot.providerConfigured ? providerConfig.endpointUrl || '已配置通话服务' : snapshot.configured ? config.serverUrl || '已配置手动房间' : '通话服务、手动房间与参与者令牌'}>
         <p>使用已经部署的通话服务或短期房间参与者令牌。加入房间不等于 AI 服务已经就绪。</p>
-        <div className="pw-form-actions"><Button variant="secondary" disabled={!loaded || locked || occupied || !capabilities.endpointProviderSupported} onClick={() => openSettings('provider')}>通话服务设置</Button><Button variant="ghost" disabled={!loaded || locked || occupied} onClick={() => openSettings('room')}>手动房间设置</Button></div>
-        <div className="pw-form-actions">{snapshot.providerConfigured && <Button variant="secondary" disabled={locked || occupied || !ownerReady} onClick={() => prepare('provider')}>准备连接通话服务</Button>}{snapshot.configured && <Button variant="secondary" disabled={locked || occupied || !ownerReady} onClick={() => prepare('room')}>准备加入手动房间</Button>}</div>
-        {snapshot.providerError && <p role="alert">{snapshot.providerError}</p>}
+        <div className="pw-realtime-option"><div><h4>通话服务</h4><p>{snapshot.providerConfigured ? providerConfig.endpointUrl : '通过服务取得本次邀请。'}</p></div><div className="pw-form-actions"><Button variant="secondary" disabled={!loaded || locked || occupied || !capabilities.endpointProviderSupported} onClick={() => openSettings('provider')}>通话服务设置</Button>{snapshot.providerConfigured && <Button variant="secondary" disabled={locked || occupied || !ownerReady} onClick={() => prepare('provider')}>准备连接通话服务</Button>}</div></div>
+        <div className="pw-realtime-option"><div><h4>手动房间</h4><p>{snapshot.configured ? config.serverUrl : '使用房间地址与短期参与者令牌。'}</p></div><div className="pw-form-actions"><Button variant="ghost" disabled={!loaded || locked || occupied} onClick={() => openSettings('room')}>手动房间设置</Button>{snapshot.configured && <Button variant="secondary" disabled={locked || occupied || !ownerReady} onClick={() => prepare('room')}>准备加入手动房间</Button>}</div></div>
         {loaded && !capabilities.endpointProviderSupported && <p>通话服务适配器尚未接入。</p>}
-        <p className="pw-muted">当前 Web 视频承载尚未接通；已连接房间的音频、采集状态与停止控制来自真实会话。</p>
+        <p className="pw-realtime-policy">当前 Web 视频承载尚未接通；已连接房间的音频、采集状态与停止控制来自真实会话。</p>
       </AccordionItem>
-    </Accordion></section>
+    </Accordion>
 
     <SettingsDialog isOpen={!!settings && !review} title="通话连接设置" onClose={() => { if (!busy) setSettings(null); }}>{settings && <div className="pw-form-grid">
       <SelectField label="连接类型" value={settings.kind} isDisabled={busy} options={[{ id: 'natural', label: '自然语音服务' }, { id: 'provider', label: '通话服务' }, { id: 'room', label: '手动房间' }]} onChange={openSettings} />
@@ -187,7 +218,7 @@ export function RealtimeWorkspace({ state, run, registerTransientBack }: { state
     <SettingsDialog isOpen={!!review} title={operation(review?.command || '')} onClose={closeReview}>{review && <>
       {details.text && <p className="pw-reading-copy">{details.text}</p>}{details.goal && <p className="pw-reading-copy">{details.goal}</p>}
       {details.endpointUrl && <p className="pw-reading-copy">服务：{details.endpointUrl}</p>}{details.serverUrl && <p className="pw-reading-copy">连接：{details.serverUrl}</p>}{details.model && <p>模型：{details.model}{details.voice ? ` · 声音：${details.voice}` : ''}</p>}{details.agentName && <p>Agent：{details.agentName}</p>}
-      {review.command === 'acceptInvitation' && <><p>麦克风：{details.microphone ? '开启并发送声音' : '关闭'} · 摄像头：{details.camera ? '开启并发送画面' : '关闭'}</p><p>确认后才连接并按这次选择采集。此语音连接不自动执行任务或敏感操作。</p></>}
+      {review.command === 'acceptInvitation' && <><p>麦克风：{details.microphone ? '开启并发送声音' : '关闭'} · 摄像头：{details.camera ? '开启并发送画面' : '关闭'}</p><p>确认后才连接并按这次选择采集。语音服务可能计费；此语音连接不自动执行任务或敏感操作。</p></>}
       {review.command === 'mute' && <p>开启当前会话的麦克风，将本机声音发送给当前服务。</p>}{review.command === 'setCamera' && <p>开启当前会话的摄像头并发送实际画面。当前 Web 页面不能显示视频预览。</p>}
       {review.command === 'startVoiceTurn' && <p>把本轮听写后的文字发给此模型，再用系统朗读。不会创建或启动任务。</p>}
       {review.command === 'commitTurn' && <p>只保存为等待你继续的原任务。请逐字核对以上转录；不准确请返回并改用文字输入。</p>}
@@ -200,5 +231,5 @@ export function RealtimeWorkspace({ state, run, registerTransientBack }: { state
       {!currentReview && <p role="alert">原会话、配置、任务或审阅已变化，请返回后重新读取并核对。</p>}
       <CheckboxField isSelected={ack} onChange={setAck} isDisabled={locked || !currentReview}>我已核对本次范围，确认执行上述操作</CheckboxField><div className="pw-form-actions"><Button variant="secondary" onClick={closeReview}>返回</Button><Button disabled={locked || !ack || !currentReview} onClick={confirm}>确认{operation(review.command)}</Button></div>
     </>}</SettingsDialog>
-  </>;
+  </div>;
 }

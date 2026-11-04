@@ -1,0 +1,45 @@
+/* Retained BoardUI service controls and OpenMuse-style compact object rows.
+ * Native service, credential and review ownership remain in ProxyWorkspace. */
+.pw-proxy-workspace.pw-settings-section { max-width: 780px; min-width: 0; }
+.pw-proxy-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin: 4px 0 20px; }
+.pw-proxy-heading > div { min-width: 0; }
+.pw-proxy-heading h2 { font-size: 24px; line-height: 32px; font-weight: 500; letter-spacing: -.035em; margin: 0; }
+.pw-proxy-heading p { margin: 5px 0 0; color: var(--pw-copy,#626262); font-size: 13px; line-height: 21px; }
+.pw-proxy-service { border: 0; border-radius: 16px; padding: 22px; background: var(--pw-surface,#fff); box-shadow: 0 2px 6px -2px #00000006, 0 12px 24px -10px #0000000e; }
+.pw-proxy-service-title { display: flex; align-items: center; gap: 14px; }
+.pw-proxy-service-title > div { min-width: 0; }
+.pw-proxy-service-icon { display: grid; place-items: center; flex: none; width: 38px; height: 42px; color: var(--pw-copy,#626262); }
+.pw-proxy-eyebrow { margin: 0 0 3px; color: var(--pw-copy,#626262); font-size: 11px; line-height: 18px; }
+.pw-proxy-service-title h3 { margin: 0; font-size: 18px; line-height: 27px; font-weight: 500; letter-spacing: -.025em; }
+.pw-proxy-model { margin: 3px 0 0; font-size: 13px; line-height: 21px; color: var(--pw-copy,#626262); overflow-wrap: anywhere; }
+.pw-proxy-endpoint { margin-top: 18px; padding: 12px 14px; border-radius: 10px; background: var(--pw-canvas,#f5f5f5); }
+.pw-proxy-endpoint > span { color: var(--pw-copy,#626262); font-size: 11px; line-height: 18px; }
+.pw-proxy-endpoint p { margin: 4px 0 0; font-family: var(--font-mono,monospace); font-size: 13px; line-height: 22px; overflow-wrap: anywhere; }
+.pw-proxy-primary-action { margin-top: 20px; }
+.pw-proxy-primary-action > button { min-height: 44px; }
+.pw-proxy-primary-action > p, .pw-proxy-inline-note { margin: 10px 0 0; color: var(--pw-copy,#626262); font-size: 12px; line-height: 21px; overflow-wrap: anywhere; }
+.pw-proxy-inline-note[role="alert"] { color: var(--pw-ink,#292929); }
+.pw-proxy-feedback { margin: 0 0 14px; padding: 12px 14px; border-radius: 12px; background: var(--pw-inset,#ededed); font-size: 13px; line-height: 22px; overflow-wrap: anywhere; }
+.pw-proxy-feedback > p { margin: 0 0 8px; }
+.pw-proxy-workspace .pw-proxy-endpoints { margin-top: 12px; }
+.pw-proxy-workspace .pw-proxy-endpoints > * { border: 0; }
+.pw-proxy-workspace .pw-proxy-endpoints button[slot="trigger"] { padding-inline: 0; min-height: 44px; }
+.pw-proxy-workspace .pw-proxy-endpoints [role="region"] p { font-family: var(--font-mono,monospace); font-size: 12px; line-height: 21px; overflow-wrap: anywhere; }
+.pw-proxy-calls { margin-top: 26px; }
+.pw-proxy-calls > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; padding-inline: 2px; }
+.pw-proxy-calls h3 { font-size: 15px; line-height: 23px; font-weight: 500; margin: 0; }
+.pw-proxy-calls header p { margin: 4px 0 12px; color: var(--pw-copy,#626262); font-size: 12px; line-height: 20px; }
+.pw-proxy-calls header > svg { flex: none; color: var(--pw-copy,#626262); margin-top: 3px; }
+.pw-proxy-call-list { padding: 4px 10px; border-radius: 14px; background: var(--pw-surface,#fff); }
+.pw-proxy-workspace .pw-proxy-call-row { display: flex; width: 100%; min-height: 64px; height: auto; padding: 11px 6px; border: 0; background: transparent; box-shadow: none; justify-content: space-between; text-align: start; }
+.pw-proxy-call-row > span { justify-content: flex-start; flex: 1; min-width: 0; padding: 0; }
+.pw-proxy-call-row > span > span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.pw-proxy-call-row strong { color: var(--pw-ink,#292929); font-size: 14px; font-weight: 500; line-height: 22px; white-space: normal; overflow-wrap: anywhere; }
+.pw-proxy-call-row small { color: var(--pw-copy,#626262); font-size: 11px; font-weight: 400; line-height: 18px; white-space: normal; overflow-wrap: anywhere; }
+.pw-proxy-empty { padding: 18px 2px; color: var(--pw-copy,#626262); }
+.pw-proxy-empty p { margin: 0 0 4px; font-size: 14px; line-height: 22px; color: var(--pw-ink,#292929); }
+.pw-proxy-empty > span { font-size: 12px; line-height: 20px; }
+@media (max-width: 420px) {
+  .pw-proxy-heading h2 { font-size: 22px; line-height: 30px; }
+  .pw-proxy-service { padding: 18px 16px; }
+}
