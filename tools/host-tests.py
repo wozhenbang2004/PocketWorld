@@ -204,6 +204,15 @@ def run(args):
                     '-o', str(isolated / 'libpocketprocess.so')]
                 subprocess.run(fault_command, cwd=ROOT, env=env, check=True)
                 props['pocketworldHost' + name + 'Dir'] = str(isolated)
+        if 'native-transport-wait-ownership' in groups:
+            isolated = report / 'native-TransportLostWait'
+            isolated.mkdir()
+            fixture = ROOT / 'app/src/test/java/dev/pocketengine/features/local/runtime/native_wait_reap_fixture.cpp'
+            fault_command = command[:-2] + [str(fixture), '-DPOCKETWORLD_TRANSPORT_WAIT_FIXTURE=1',
+                '-pthread', '-Wl,--wrap=waitid', '-Wl,--wrap=kill', '-Wl,--wrap=opendir',
+                '-o', str(isolated / 'libpocketprocess.so')]
+            subprocess.run(fault_command, cwd=ROOT, env=env, check=True)
+            props['pocketworldHostTransportLostWaitDir'] = str(isolated)
     command = [gradle, '--no-daemon', '--no-parallel', '--max-workers=1', '--console=plain', '-p', str(ROOT)]
     if not args.online:
         command.append('--offline')
