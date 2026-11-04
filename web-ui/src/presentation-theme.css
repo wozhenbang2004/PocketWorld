@@ -6,8 +6,8 @@
   --pw-surface: #1b1b1b;
   --pw-inset: #2b2b2b;
   --pw-selected: #353535;
-  --pw-edge: rgb(255 255 255 / .09);
-  --pw-edge-hover: rgb(255 255 255 / .2);
+  --pw-edge: transparent;
+  --pw-edge-hover: transparent;
   --pw-ink: #e8e8e8;
   --pw-copy: #bdbdbd;
   --pw-muted: #b7b7b7;
@@ -16,7 +16,7 @@
   --pw-focus: #ededed;
   --pw-on-strong: #181818;
   --ovio-on-accent: var(--pw-on-strong);
-  --pw-shadow-surface: 0 2px 6px rgb(0 0 0 / .08), 0 8px 24px rgb(0 0 0 / .12);
+  --pw-shadow-surface: none;
   --background: var(--pw-surface);
   --foreground: var(--pw-ink);
   --accent: var(--pw-selected);
@@ -33,7 +33,7 @@
  * here so its children and portaled settings agree with the root preference. */
 :root.dark .pw-redesign {
   --pw-canvas: #121212;
-  --pw-edge: rgb(255 255 255 / .09);
+  --pw-edge: transparent;
   --pw-ink: #e8e8e8;
   --pw-strong: #ededed;
 }
@@ -58,7 +58,7 @@
 :root.dark .pw-redesign .pw-user-text { background: var(--pw-inset); color: var(--pw-ink); }
 :root.dark .pw-redesign .pw-active-bar { background: transparent; }
 :root.dark .pw-redesign .pw-composer-region .pw-composer-host .afa-composer > .afa-card {
-  background: var(--pw-surface);
+  background: var(--pw-inset);
   color: var(--pw-ink);
   border-color: var(--pw-edge);
 }

@@ -3,7 +3,7 @@
  * surfaces, Files art and Decision Inbox; BoardUI owns fields and disclosure;
  * Vaul owns the foreground sheets. No replacement control implementation. */
 .pw-redesign {
-  --pw-canvas: #fafafa;
+  --pw-canvas: #fff;
   background: var(--pw-canvas);
 }
 .pw-redesign .pw-app-header {
@@ -57,16 +57,16 @@ html[data-pocket-keyboard="true"] .pw-workspace > div:first-child,
 .pw-redesign .pw-start > p { max-width: 320px; font-size: 14px; line-height: 22px; color: var(--pw-copy); }
 .pw-redesign .pw-composer-region { padding: 6px 12px 4px; }
 .pw-redesign .pw-composer-region .pw-composer-host .afa-composer > .afa-card {
-  border-radius: 18px; border: 1px solid var(--pw-edge); padding: 8px 8px 4px;
-  background: var(--pw-surface); box-shadow: var(--pw-shadow-surface);
+  border-radius: 18px; border: 0; padding: 8px 8px 4px;
+  background: var(--pw-inset); box-shadow: none;
 }
 .pw-redesign .pw-composer-host .afa-composer textarea { padding: 4px 4px 6px; font-size: 15px; line-height: 24px; }
 .pw-redesign .pw-composer-region .pw-composer-host .pw-model-trigger { max-width: min(30vw,144px); }
 .pw-redesign .pw-active-bar { margin: 0 16px 4px; padding: 6px 0; border: 0; border-radius: 0; background: transparent; }
 .pw-redesign .pw-linked-task.button-press-motion {
   display: flex; align-items: center; flex-direction: row; gap: 8px;
-  min-height: 56px; padding: 8px 0; margin-top: 8px; border-radius: 0;
-  border: 0; background: transparent; box-shadow: none;
+  min-height: 56px; padding: 8px 12px; margin-top: 8px; border-radius: 12px;
+  border: 0; background: var(--pw-inset); box-shadow: none;
 }
 .pw-redesign .pw-linked-task.button-press-motion > span {
   display: flex; align-items: center; justify-content: space-between; width: 100%; min-width: 0; gap: 8px; padding: 0; white-space: normal;
@@ -88,7 +88,7 @@ html[data-pocket-keyboard="true"] .pw-workspace > div:first-child,
 .pw-priority-decisions.ui-dic { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .pw-priority-decisions .ui-dic__head { padding: 4px 0 8px; border: 0; font-size: 12px; line-height: 18px; font-weight: 500; color: var(--pw-copy); }
 .pw-priority-decisions .ui-dic__head .ui-dic__glyph { width: 14px; height: 14px; }
-.pw-priority-decisions .ui-dic__card { border: 0; border-radius: 0; background: transparent; box-shadow: none; overflow: hidden; }
+.pw-priority-decisions .ui-dic__card { padding: 2px 12px; border: 0; border-radius: 14px; background: var(--pw-inset); box-shadow: none; overflow: hidden; }
 .pw-priority-decisions .ui-dic__item { padding: 10px 0; }
 .pw-priority-decisions .ui-dic__title { font-size: 15px; line-height: 22px; font-weight: 600; }
 .pw-priority-decisions .ui-dic__detail { margin-top: 2px; font-size: 12px; line-height: 18px; color: var(--pw-copy); }
@@ -98,6 +98,7 @@ html[data-pocket-keyboard="true"] .pw-workspace > div:first-child,
 .pw-priority-decisions .ui-dic__btn:not(.ui-dic__btn--primary) { background: transparent; box-shadow: none; color: #686868; }
 .pw-task-collection { margin-top: 20px; }
 .pw-task-collection > h3 { color: #727272; font-size: 12px; line-height: 18px; font-weight: 500; margin-bottom: 4px; }
+.pw-task-collection > .pw-task-list { padding: 2px 12px; border-radius: 14px; background: var(--pw-inset); }
 .pw-redesign .pw-task-row.button-press-motion {
   display: flex; align-items: center; justify-content: flex-start; gap: 10px;
   min-height: 64px; padding: 10px 0; border-radius: 0; background: transparent;
@@ -123,7 +124,7 @@ html[data-pocket-keyboard="true"] .pw-workspace > div:first-child,
 .pw-file-miniature .au-sc-file-art { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%) scale(.24); }
 .pw-redesign .pw-file-tree { margin-top: 4px; font-size: 14px; }
 .pw-redesign .pw-file-tree button { min-height: 48px; }
-.pw-redesign .pw-file-actions { position: sticky; bottom: -18px; margin-top: 16px; padding: 12px 0; background: #fff; border-top: 1px solid #e5e5e5; }
+.pw-redesign .pw-file-actions { position: sticky; bottom: -18px; margin-top: 16px; padding: 12px 0; background: var(--pw-surface); border: 0; }
 .pw-redesign .pw-code-editor textarea { min-height: 45dvh; font-size: 13px !important; line-height: 23px !important; }
 .pw-work-drawer { height: min(86dvh,720px); border-radius: 20px 20px 0 0; background: var(--pw-surface); }
 .pw-work-drawer .pw-drawer-header { padding: 4px 12px 4px 16px; border-bottom: 0; }
@@ -136,7 +137,7 @@ html[data-pocket-keyboard="true"] .pw-workspace > div:first-child,
 .pw-work-drawer .pw-recent-work > button > span { font-size: 15px; line-height: 23px; }
 .pw-work-drawer .pw-work-management { margin-top: 16px; padding-top: 8px; border: 0; }
 .pw-work-drawer .pw-nav-item a { min-height: 48px; padding-inline: 4px; }
-.pw-task-drawer { height: 96dvh; max-height: 96dvh; border-radius: 20px 20px 0 0; border: 1px solid var(--pw-edge); background: var(--pw-surface); box-shadow: var(--pw-shadow-sheet); }
+.pw-task-drawer { height: 96dvh; max-height: 96dvh; border-radius: 20px 20px 0 0; border: 0; background: var(--pw-surface); box-shadow: none; }
 .pw-task-header { min-height: 56px; border-bottom: 0; padding: 4px 12px; background: var(--pw-surface); }
 .pw-task-header h2 { font-size: 18px; line-height: 26px; font-weight: 600; }
 .pw-task-header .pw-task-context { margin-top: 3px; font-size: 12px; line-height: 19px; color: #777; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -157,7 +158,7 @@ html[data-pocket-keyboard="true"] .pw-workspace > div:first-child,
 .pw-task-review .pw-protected-actions { gap: 8px; }
 .pw-task-review .pw-compact-disclosures { margin-top: 0; }
 .pw-task-review .pw-permission blockquote { padding: 0; background: transparent; }
-.pw-task-footer { padding: 8px 16px max(12px,env(safe-area-inset-bottom)); border-top: 1px solid var(--pw-edge); background: var(--pw-surface); }
+.pw-task-footer { padding: 8px 16px max(12px,env(safe-area-inset-bottom)); border: 0; background: var(--pw-surface); }
 .pw-task-footer > button { min-height: 48px; }
 .pw-task-entry-list { margin-top: 12px; padding-top: 4px; border: 0; }
 .pw-task-entry-list > button { min-height: 48px; border: 0; padding-block: 8px; }
