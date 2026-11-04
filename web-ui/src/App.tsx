@@ -46,6 +46,7 @@ import {ComposerAccountModels} from './ComposerAccountModels';
 import {ComposerApiModels} from './ComposerApiModels';
 import type {OwnerQuestionView} from './owner-task-question';
 import {phoneStartReceipt,phoneStartFailure,phoneRunIdentity,messagePhoneResult,phoneConversationId,type PhoneStartReceipt,type PhoneResult} from './phone-start';
+import {PhoneViewer,type PhoneViewerTask} from './phone-viewer';
 import './app.css';
 
 type Json=Record<string,any>;
@@ -64,6 +65,11 @@ const labelStatus=(s:string)=>({queued:'等待执行',preparing:'准备中',runn
 const running=(t:Task)=>['queued','preparing','running','pausing','stopping','verifying'].includes(t.status);
 const attention=(t:Task)=>!terminal(t)&&(['needs_confirmation','awaiting_user','waiting_user','waiting_approval','awaiting_approval','waiting_permission','reconciling','reconciliation_required','unknown','interrupted','paused'].includes(t.status)||asArray<Json>(t.raw?.approvals).some(x=>['pending','waiting'].includes(x.state||x.status)));
 const terminal=(t:Task)=>['completed','failed','cancelled','canceled','stopped'].includes(t.status);
+function phoneViewerTask(task?:Task):PhoneViewerTask|null{
+ const raw=task?.raw,identity=phoneRunIdentity(task);
+ if(!task||!raw||!identity||raw.id!==task.id||raw.kind!=='phone'||raw.actorId!=='owner'||raw.spaceId!=='private'||task.executionMode!=='background'||raw.origin&&raw.origin.kind!=='team_phone')return null;
+ return {...identity,title:task.goal,status:terminal(task)||task.status==='interrupted'?'ended':running(task)?'running':'paused'};
+}
 const taskBinding=(t?:Task|null)=>t?[t.id,t.updatedAt,t.raw?.runId,t.raw?.coordinatorEpoch,t.raw?.revision,t.raw?.resultReviewDigest,t.raw?.executionScope?.revision,t.raw?.executionScope?.executionPhase,t.raw?.executionScope?.planRevision,t.raw?.executionScope?.planArtifactRef,t.raw?.executionScope?.planHash].join(':'):'';
 const timeLabel=(value:any)=>typeof value==='number'&&value>0?new Date(value).toLocaleString('zh-CN',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
 const sourceRefs=(m:Message)=>asArray<Json>(m.memoryReference?.sources||m.memoryReference?.sourceRefs||m.submission?.sourceRefs).map((s,i)=>({...s,id:String(s.id||s.sourceId||s.sourceRef||i),title:s.title||s.name||s.label||'来源'}));
@@ -97,6 +103,8 @@ export default function App(){
  useEffect(()=>{if(workOpen&&previousCommandOpen.current&&!commandOpen)(commandScope==='conversations'?conversationSearch:workSearch).current?.focus();previousCommandOpen.current=commandOpen;},[workOpen,commandOpen,commandScope]);
  const [taskLayer,setTaskLayer]=useState<TaskLayer>('overview'),[projectPickerOpen,setProjectPickerOpen]=useState(false),[fileDisplayOpen,setFileDisplayOpen]=useState(false);
  const [taskFiltersOpen,setTaskFiltersOpen]=useState(false),[endedExpanded,setEndedExpanded]=useState(false),[taskContextExpanded,setTaskContextExpanded]=useState(false);
+ const [phoneViewerExpanded,setPhoneViewerExpanded]=useState(false),[phoneViewedTaskId,setPhoneViewedTaskId]=useState<string|null>(null);
+ useEffect(()=>{setPhoneViewerExpanded(false)},[state.conversationId,route,taskId,taskOpen]);
  const projectScroll=useRef<HTMLElement>(null),projectListTop=useRef(new Map<string,number>());
  const projectFileBack=useRef<(()=>boolean)|null>(null);const registerProjectFileBack=useCallback((handler:(()=>boolean)|null)=>{projectFileBack.current=handler},[]);
  const [projectViews,setProjectViews]=useState<Record<string,{query:string;view:'files'|'tree'|'grid';expanded:string[];selected:string}>>({});
@@ -113,6 +121,9 @@ export default function App(){
  useEffect(()=>{setReadingDocuments([])},[state.conversationId,route,taskId,taskOpen]);
  const messageTaskAnchors=useMemo(()=>taskMessageAnchors(messages),[messages]);
  const conversationPhoneTasks=tasks.filter(task=>phoneConversationId(task)===state.conversationId&&task.id!==state.activeTaskId&&!messages.some(message=>message.taskId===task.id||message.submission?.taskId===task.id));
+ const conversationViewerTasks=tasks.filter(task=>phoneConversationId(task)===state.conversationId&&phoneViewerTask(task)!==null);
+ const chatPhoneTask=conversationViewerTasks.find(task=>task.id===phoneViewedTaskId)||conversationViewerTasks.find(task=>!terminal(task)&&task.status!=='interrupted')||conversationViewerTasks[0];
+ useEffect(()=>{if(chatPhoneTask?.id!==phoneViewedTaskId)setPhoneViewedTaskId(chatPhoneTask?.id||null)},[chatPhoneTask?.id,phoneViewedTaskId]);
  useEffect(()=>{setSkillDraftTarget(null);setMemoryDraftTarget(null);setRouteReferenceTarget(null);setMessageQuoteTarget(null)},[state.conversationId,route]);
  useEffect(()=>{setRouteReferenceTarget(null)},[taskId,taskOpen]);
  const openConversationDraft=(draft:ConversationDraftTarget&{kind:string})=>{if(draft.kind==='skill'){setMemoryDraftTarget(null);setSkillDraftTarget(draft)}else{setSkillDraftTarget(null);setMemoryDraftTarget(draft)}};
@@ -217,7 +228,7 @@ export default function App(){
  },[invalidateContinuation]);
  const backFromTask=useCallback(()=>{if(taskTransientBack.current?.())return;if(taskLayer!=='overview'){showTaskLayer('overview');return}closeTask()},[taskLayer,showTaskLayer,closeTask]);
  const selectConversation=useCallback((id:string)=>{navigate('chat');if(can('conversation.select'))run('conversation.select',{id});},[can,run,navigate]);
- const previewBlocked=!!(workOpen||commandOpen||taskOpen||projectPickerOpen||fileDisplayOpen||newProjectOpen||newFileOpen||modelPickerOpen||phoneReview||voiceReview||state.chatAttachmentPickerOpen||messageQuoteTarget||sourceSelection||skillDraftTarget||memoryDraftTarget||routeReferenceTarget||state.quickPanelVoice);
+ const previewBlocked=!!(phoneViewerExpanded||workOpen||commandOpen||taskOpen||projectPickerOpen||fileDisplayOpen||newProjectOpen||newFileOpen||modelPickerOpen||phoneReview||voiceReview||state.chatAttachmentPickerOpen||messageQuoteTarget||sourceSelection||skillDraftTarget||memoryDraftTarget||routeReferenceTarget||state.quickPanelVoice);
  const projectPreview=useProjectPreview({value:state.projectPreview,projectId:String(state.projectId||''),resumeRevision:Number(obj(snapshot?.view).resumeRevision||0),active:route==='projects'&&!state.filePath,blocked:previewBlocked,can,onReturned:()=>navigate('chat'),onPackageTask:(id,entry='process')=>openTask(id,entry)});
  const packageSequence=useRef(0),packageNavigation=useRef<PackageNavigation|null>(null);
  const [packageRequest,setPackageRequest]=useState(0),[packageOpening,setPackageOpening]=useState(false),[packageReady,setPackageReady]=useState<{request:PackageNavigation;choices:PackagePreviewChoices}|null>(null);
@@ -283,7 +294,7 @@ export default function App(){
  },[state.requestedTaskRevision,state.requestedTaskId,snapshot?.view?.taskId,tasks,can,openTask]);
  useEffect(()=>{const revision=Number(state.requestedProjectRevision||0);if(revision>previousRequestedProject.current){rememberChatPosition();setWorkOpen(false);setCommandOpen(false);setTaskOpen(false);setRoute('projects')}previousRequestedProject.current=revision;},[state.requestedProjectRevision,rememberChatPosition]);
  useEffect(()=>{const revision=Number(state.requestedConnectionRevision||0);if(revision>previousRequestedConnection.current&&state.requestedConnectionSection){rememberChatPosition();setWorkOpen(false);setCommandOpen(false);setTaskOpen(false);setRoute(state.requestedConnectionSection)}previousRequestedConnection.current=revision;},[state.requestedConnectionRevision,state.requestedConnectionSection,rememberChatPosition]);
- useEffect(()=>{bridge.setBackHandler(()=>{if(readingDocuments.length){closeReading();return true}if(messageQuoteTarget){setMessageQuoteTarget(null);return true}if(routeReferenceTarget){setRouteReferenceTarget(null);return true}if(skillDraftTarget){setSkillDraftTarget(null);return true}if(memoryDraftTarget){setMemoryDraftTarget(null);return true}if(sourceSelection){setSourceSelection(null);return true}if(messageMenu){setMessageMenu(null);return true}if(modelPickerOpen){if(modelWriting.current||state.modelSelectionBusy)return true;finishModelPicker();return true}if(state.chatAttachmentPickerOpen&&can('attachments.closePicker')){run('attachments.closePicker');return true}if(voiceReview){setVoiceReview(null);return true}if(phoneReview){if(!phoneReviewPending)setPhoneReview(null);return true}if(newProjectOpen||newFileOpen){closeCreate();return true}if(voiceOptionsOpen){setVoiceOptionsOpen(false);return true}if(commandOpen){setCommandOpen(false);return true}if(workOpen){setWorkOpen(false);return true}if(projectPickerOpen){setProjectPickerOpen(false);return true}if(fileDisplayOpen){setFileDisplayOpen(false);return true}if(taskOpen){backFromTask();return true}if(route==='tasks'&&taskFiltersOpen){setTaskFiltersOpen(false);return true}if(route==='projects'&&projectPreview.handleBack())return true;if(route==='projects'&&state.filePath){if(fileAdoption.isPending()||bridge.getState().state.fileSaving)return true;if(projectFileBack.current?.())return true;if(can('projects.close')&&!fileAdoption.pending){run('projects.close',fileIdentity);return true}return true}if(route!=='chat'){if(route!=='tasks'&&route!=='projects'&&secondaryBack.current?.())return true;setRoute('chat');return true}return false;});return()=>{bridge.setBackHandler(()=>false)};},[messageQuoteTarget,routeReferenceTarget,skillDraftTarget,memoryDraftTarget,sourceSelection,readingDocuments,closeReading,messageMenu,modelPickerOpen,modelSelectPending,state.modelSelectionBusy,voiceReview,phoneReview,phoneReviewPending,newProjectOpen,newFileOpen,voiceOptionsOpen,commandOpen,workOpen,projectPickerOpen,fileDisplayOpen,taskFiltersOpen,taskOpen,taskLayer,backFromTask,closeTask,route,state.filePath,state.chatAttachmentPickerOpen,fileIdentity,can,run,projectPreview,fileAdoption.pending]);
+ useEffect(()=>{bridge.setBackHandler(()=>{if(phoneViewerExpanded){setPhoneViewerExpanded(false);return true}if(readingDocuments.length){closeReading();return true}if(messageQuoteTarget){setMessageQuoteTarget(null);return true}if(routeReferenceTarget){setRouteReferenceTarget(null);return true}if(skillDraftTarget){setSkillDraftTarget(null);return true}if(memoryDraftTarget){setMemoryDraftTarget(null);return true}if(sourceSelection){setSourceSelection(null);return true}if(messageMenu){setMessageMenu(null);return true}if(modelPickerOpen){if(modelWriting.current||state.modelSelectionBusy)return true;finishModelPicker();return true}if(state.chatAttachmentPickerOpen&&can('attachments.closePicker')){run('attachments.closePicker');return true}if(voiceReview){setVoiceReview(null);return true}if(phoneReview){if(!phoneReviewPending)setPhoneReview(null);return true}if(newProjectOpen||newFileOpen){closeCreate();return true}if(voiceOptionsOpen){setVoiceOptionsOpen(false);return true}if(commandOpen){setCommandOpen(false);return true}if(workOpen){setWorkOpen(false);return true}if(projectPickerOpen){setProjectPickerOpen(false);return true}if(fileDisplayOpen){setFileDisplayOpen(false);return true}if(taskOpen){backFromTask();return true}if(route==='tasks'&&taskFiltersOpen){setTaskFiltersOpen(false);return true}if(route==='projects'&&projectPreview.handleBack())return true;if(route==='projects'&&state.filePath){if(fileAdoption.isPending()||bridge.getState().state.fileSaving)return true;if(projectFileBack.current?.())return true;if(can('projects.close')&&!fileAdoption.pending){run('projects.close',fileIdentity);return true}return true}if(route!=='chat'){if(route!=='tasks'&&route!=='projects'&&secondaryBack.current?.())return true;setRoute('chat');return true}return false;});return()=>{bridge.setBackHandler(()=>false)};},[phoneViewerExpanded,messageQuoteTarget,routeReferenceTarget,skillDraftTarget,memoryDraftTarget,sourceSelection,readingDocuments,closeReading,messageMenu,modelPickerOpen,modelSelectPending,state.modelSelectionBusy,voiceReview,phoneReview,phoneReviewPending,newProjectOpen,newFileOpen,voiceOptionsOpen,commandOpen,workOpen,projectPickerOpen,fileDisplayOpen,taskFiltersOpen,taskOpen,taskLayer,backFromTask,closeTask,route,state.filePath,state.chatAttachmentPickerOpen,fileIdentity,can,run,projectPreview,fileAdoption.pending]);
  useEffect(()=>{document.documentElement.dataset.pocketUi=ready?'ready':'connecting';},[ready]);
  useEffect(()=>{if(phoneDraft.phone===true)setIntent(phoneDraft.mode==='main_screen'?'main_screen':'background');else if(phoneDraft.phone===false)setIntent('chat');},[phoneDraft.phone,phoneDraft.mode]);
  useEffect(()=>{if(route==='projects'&&can('projects.refresh'))run('projects.refresh');else if(route==='tasks'&&can('tasks.refresh'))run('tasks.refresh');},[route,can,run]);
@@ -418,6 +429,13 @@ export default function App(){
  };
  const taskActionLabel=(task:Task)=>task.status==='needs_confirmation'?'核对结果':['waiting_approval','awaiting_approval','waiting_permission'].includes(task.status)?'处理授权':['awaiting_user','waiting_user'].includes(task.status)?'补充信息':['reconciling','reconciliation_required','unknown'].includes(task.status)?'核对操作结果':['interrupted','paused'].includes(task.status)?'继续处理':task.status==='failed'?'查看失败原因':'处理当前事项';
  const showTaskReview=()=>refreshReview();
+ const phoneViewerObscured=!!(workOpen||commandOpen||projectPickerOpen||fileDisplayOpen||newProjectOpen||newFileOpen||modelPickerOpen||phoneReview||voiceReview||state.chatAttachmentPickerOpen||messageQuoteTarget||sourceSelection||skillDraftTarget||memoryDraftTarget||routeReferenceTarget||state.quickPanelVoice||readingDocuments.length);
+ const phoneViewerFor=(task:Task,conversation=false)=>{
+  const target=phoneViewerTask(task);if(!target||!can('phone.viewer.open')||!can('phone.viewer.frame')||!can('phone.viewer.close'))return null;
+  return <PhoneViewer key={`${task.id}:${target.runId}:${target.epoch}`} task={target} expanded={phoneViewerExpanded} onExpandedChange={setPhoneViewerExpanded} nativeVisible={!phoneViewerObscured&&(conversation?!taskOpen:taskOpen&&taskLayer==='overview')}
+   tasks={conversation?conversationViewerTasks.map(item=>phoneViewerTask(item)!):undefined} onSelectTask={conversation?(selected)=>{setPhoneViewedTaskId(selected.taskId)}:undefined}
+   onPause={running(task)&&can('phone.pause')?identity=>act('phone.pause',identity):undefined} onResume={task.status==='paused'&&can('phone.resume')?identity=>act('phone.resume',identity):undefined}/>;
+ };
  const taskReviewBody=(task:Task)=>{
   const progress=getRecentTaskProgress(task);
   const actionNames=asArray<{action:string;label:string}>(review?.actions).map(x=>x.action),approved=asArray<Json>(review?.approvals),unresolved=asArray<Json>(review?.unresolvedOperations);
@@ -458,6 +476,7 @@ export default function App(){
    <div key={task.id} hidden={taskLayer!=='overview'}>
     <section className="pw-task-overview pw-task-review" aria-label="任务结果与处理">
      <div className="pw-task-identity"><span className="pw-task-state-dot" data-state={task.status} aria-hidden="true"/><span data-task-status={task.status}>{labelStatus(task.status)}</span></div>
+     {taskOpen&&phoneViewerFor(task)}
      {currentScope.executionPhase==='planning'&&<p className="pw-muted" role="status">原任务处于只读规划。{Number(currentScope.planRevision)>0?`当前计划版本 ${String(currentScope.planRevision)}，确认准确计划后才能在原范围内继续。`:'尚未提交计划正文，重新打开页面不会启动执行。'}</p>}
      {decisionFirst?[decision,evidence]:[evidence,decision]}
      {running(task)&&<section className="pw-task-progress" aria-label="最近进展"><ProgressCircle aria-label="任务正在执行" isIndeterminate size="sm"/><div><BlurCrossfade identity={`${task.id}:${progress.operationId||progress.position||progress.title}`}><strong>{progress.title}</strong></BlurCrossfade>{progress.detail&&progress.detail!==task.summary&&<p>{progress.detail}</p>}</div></section>}
@@ -557,6 +576,7 @@ export default function App(){
      {linked&&!phoneResult&&linked.id!==conversationAttention?.id&&messageTaskAnchors.get(linked.id)===index&&<Button variant="secondary" className="pw-linked-task" onClick={()=>openTask(linked.id,attention(linked)&&can('tasks.review')?'review':'overview')}><span className="pw-linked-task-copy"><b>{linked.goal}</b><small>{labelStatus(linked.status)}</small></span><span className="pw-linked-task-action">{attention(linked)?taskActionLabel(linked):'查看结果'}<RiArrowRightSLine size={17}/></span></Button>}
     </article>;
    })}</div>}
+   {chatPhoneTask&&!taskOpen&&<div className="pw-conversation-phone-viewer">{phoneViewerFor(chatPhoneTask,true)}</div>}
    {conversationPhoneTasks.length>0&&<div className="pw-conversation-phone-tasks" aria-label="这段对话的手机任务">{conversationPhoneTasks.map(task=><Button key={task.id} variant="ghost" trailingIcon={RiArrowRightSLine} className="pw-conversation-phone-task" aria-label={`查看手机任务：${task.goal}`} disabled={!can('tasks.open')} onClick={()=>openTask(task.id,attention(task)&&can('tasks.review')?'review':'overview')}><span className="pw-phone-task-copy"><small>手机任务 · {labelStatus(task.status)}</small><b>{task.goal}</b></span></Button>)}</div>}
    {state.chatBusy&&<div className="pw-current-thinking"><ThinkingLoader phase={state.chatActiveTurn?.resourceState==='queued'?'等待执行位置':state.chatActiveTurn?.resourceState==='retained'?'原任务等待补充':state.chatActiveTurn?.resourceState==='stopping'?'正在停止':'正在处理这次回复'}/></div>}
    {pendingSteeringItems.length>0&&<AgentSteering data={{items:pendingSteeringItems}}/>}
