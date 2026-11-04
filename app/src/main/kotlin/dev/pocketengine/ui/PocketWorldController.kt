@@ -16,6 +16,7 @@ import java.util.UUID
 import java.io.File
 import android.net.Uri
 import dev.pocketengine.features.attachments.AttachmentsModule
+import dev.pocketengine.features.attachments.OwnerAttachmentImport
 import dev.pocketengine.media.RealtimeSessionModule
 import dev.pocketengine.features.assistant.OwnerComposerState
 import dev.pocketengine.features.assistant.OwnerComposerStore
@@ -1313,23 +1314,38 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun openBrowserResearch() { native("openBrowserResearch") }
     fun openBrowserResearch(taskId: String) { native("openBrowserResearch", JSONObject().put("taskId", taskId)) }
     fun pickAttachments(projectId: String? = null) { activity.pickAttachments(null, projectId) }
-    fun importAttachments(intent: Intent, taskId: String?, projectId: String?) {
-        state = state.copy(attachmentImporting = true)
-        io.execute {
+    internal fun attachmentImportContextUnavailable() { state = state.copy(error = "原文件选择上下文无法恢复；不会改用当前任务或项目，也不会自动重新选择。请先核对附件库和原入口") }
+    internal fun attachmentImportSelectionEnded(cancelled: Boolean) { state = state.copy(notice = if (cancelled) "已取消文件选择，本次未开始导入" else null, error = if (cancelled) null else "文件选择已返回，但没有可接收的内容；本次未开始导入") }
+    internal fun attachmentImportPickerStatus(status: AttachmentImportPicker.Launch) {
+        state = when (status) {
+            AttachmentImportPicker.Launch.REQUESTED -> state.copy(notice = null, error = null)
+            AttachmentImportPicker.Launch.BUSY -> state.copy(error = "上一次文件选择或导入尚未结束，请先完成或取消原选择")
+            AttachmentImportPicker.Launch.NOT_STARTED -> state.copy(error = "未找到可用的文件选择器，本次未开始导入")
+            AttachmentImportPicker.Launch.UNKNOWN -> state.copy(error = "原文件选择是否打开尚未确认；请先返回原选择完成或取消，不会自动重开")
+        }
+    }
+    fun importAttachments(intent: Intent, taskId: String?, projectId: String?) = importAttachments(intent, OwnerAttachmentImport.Target(taskId, projectId))
+    fun importAttachments(intent: Intent, original: OwnerAttachmentImport.Target?) {
+        if (closed) return
+        val received = Intent(intent)
+        state = state.copy(attachmentImporting = true, notice = null, error = null)
+        try { io.execute {
             try {
                 val module = app.features.module("attachments") as? AttachmentsModule ?: throw IllegalStateException("附件能力尚未接入")
-                val result = module.importIntent(intent, "", projectId ?: "")
-                if(!taskId.isNullOrBlank())for(file in result.optJSONArray("attachments").objects())app.selectOutcomeForTask(taskId,file.getString("id"),file.getString("sha256"),dev.pocketengine.core.RunControl())
+                val receipt = OwnerAttachmentImport.receive(module, received, original) { task, file ->
+                    app.selectOutcomeForTask(task, file.getString("id"), file.getString("sha256"), dev.pocketengine.core.RunControl())
+                }
                 main.post {
                     if (!closed) {
-                        val count = result.optJSONArray("attachments")?.length() ?: 0
-                        val errors = result.optJSONArray("errors").objects().joinToString("；") { it.optString("message") }
-                        state = state.copy(attachmentImporting = false, notice = if (count > 0) "已导入 " + count + " 个附件" else null, error = errors.takeIf { it.isNotBlank() })
+                        state = state.copy(attachmentImporting = false, notice = receipt.notice, error = receipt.error)
                         attachmentOutcomes.imported()
                     }
                 }
-                app.features.sendState()
-            } catch (error: Exception) { main.post { if (!closed) state = state.copy(attachmentImporting = false, error = message(error)) } }
+                // A display-refresh failure cannot turn already saved bytes into an import failure.
+                runCatching { app.features.sendState() }
+            } catch (error: Exception) { main.post { if (!closed) state = state.copy(attachmentImporting = false, error = "附件接收结果未完整确认，可能已有文件保留在附件库；未自动重试，请先核对附件库和原任务") } }
+        } } catch (rejected: java.util.concurrent.RejectedExecutionException) {
+            state = state.copy(attachmentImporting = false, error = "本次附件尚未开始接收，请返回原入口重新选择")
         }
     }
     fun exportProject() { if (!state.exportPending && "workspace.prepareExport" !in state.moduleBusy) state.projectId?.let { feature("workspace", "prepareExport", JSONObject().put("projectId", it)) } }

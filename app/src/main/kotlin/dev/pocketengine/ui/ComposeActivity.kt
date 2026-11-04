@@ -9,23 +9,27 @@ import androidx.activity.result.contract.ActivityResultContracts
 import android.app.Activity
 import dev.pocketengine.EngineApplication
 import dev.pocketengine.media.MediaController
+import dev.pocketengine.features.attachments.OwnerAttachmentImport
 
 /** Pocket World's native product UI; Java engine modules retain their existing identity and data. */
 class ComposeActivity : ComponentActivity() {
     private lateinit var controller: PocketWorldController
     internal lateinit var media: MediaController
         private set
-    private var importTaskId: String? = null
-    private var importProjectId: String? = null
+    private var legacyImportTarget: OwnerAttachmentImport.Target? = null
     private var exportPath: String? = null
     private var mcpPickRequestId: String? = null
     private val mcpPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         controller.completeMcpConfig(mcpPickRequestId, uri); mcpPickRequestId = null
     }
-    private val attachmentPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) controller.importAttachments(result.data!!, importTaskId, importProjectId)
-        importTaskId = null; importProjectId = null
+    // Preserve the old static registration slot. An old result cannot consume a new nonce's target.
+    @Suppress("unused")
+    private val legacyAttachmentPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val original = legacyImportTarget; legacyImportTarget = null
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) controller.importAttachments(Intent(result.data!!), original)
+        else controller.attachmentImportSelectionEnded(result.resultCode == Activity.RESULT_CANCELED)
     }
+    private val attachmentPicker = AttachmentImportPicker(activityResultRegistry, { files, original -> controller.importAttachments(files, original) }, { cancelled -> controller.attachmentImportSelectionEnded(cancelled) })
     // Reserve the former static registration position so other saved picker keys do not shift.
     // A legacy result has no request nonce and cannot authorize any current export.
     @Suppress("unused")
@@ -90,8 +94,10 @@ class ComposeActivity : ComponentActivity() {
         controller.projectStorage.restore(savedInstanceState)
         controller.projectGitImports.restore(savedInstanceState)
         savedInstanceState?.getString("channelPhoneEventId")?.let { controller.prepareChannelPhone(it) }
-        importTaskId = savedInstanceState?.getString("ownerImportTask")
-        importProjectId = savedInstanceState?.getString("ownerImportProject")
+        val legacyTask = savedInstanceState?.getString("ownerImportTask")
+        val legacyProject = savedInstanceState?.getString("ownerImportProject")
+        legacyImportTarget = if (legacyTask != null || legacyProject != null) runCatching { OwnerAttachmentImport.Target(legacyTask, legacyProject) }.getOrNull() else null
+        if (!attachmentPicker.restore(savedInstanceState)) controller.attachmentImportContextUnavailable()
         exportPath = savedInstanceState?.getString("ownerExportPath")
         if (exportPath != null) controller.exportRestored()
         setContent { PocketWorldApp(controller) }
@@ -104,7 +110,7 @@ class ComposeActivity : ComponentActivity() {
         deliverAccountEntry(intent)
         deliverCompatibilityChat(intent)
     }
-    override fun onResume() { super.onResume(); if (::controller.isInitialized) { controller.projectLivePreviewForeground(true); controller.notificationPreviewsForeground(true) }; (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, true); (application as EngineApplication).refreshRemoteAttention(); if (::controller.isInitialized) { controller.realtimeForeground(true); controller.refresh(); controller.backgroundSetupResumed(); controller.attachmentOutcomes.exportRequestId?.let(::restoreOutcomeDocument); controller.attachmentOutcomes.foreground(true); controller.projectFileImports.foreground(true);controller.projectPackages.foreground(true); controller.ownerArchives.foreground(true); controller.projectStorage.foreground(true); controller.projectGitImports.foreground(true) } }
+    override fun onResume() { super.onResume(); if (::controller.isInitialized) { controller.projectLivePreviewForeground(true); controller.notificationPreviewsForeground(true) }; (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, true); (application as EngineApplication).refreshRemoteAttention(); if (::controller.isInitialized) { controller.realtimeForeground(true); controller.refresh(); controller.backgroundSetupResumed(); controller.attachmentOutcomes.exportRequestId?.let(::restoreOutcomeDocument); attachmentPicker.resume(); controller.attachmentOutcomes.foreground(true); controller.projectFileImports.foreground(true);controller.projectPackages.foreground(true); controller.ownerArchives.foreground(true); controller.projectStorage.foreground(true); controller.projectGitImports.foreground(true) } }
     override fun onPause() { if (::controller.isInitialized) { controller.projectLivePreviewForeground(false); controller.notificationPreviewsForeground(false) }; (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, false); if (::controller.isInitialized) { controller.persistOwnerComposer(); controller.projectFileImports.foreground(false);controller.projectPackages.foreground(false); controller.ownerArchives.foreground(false); controller.projectStorage.foreground(false); controller.projectGitImports.foreground(false); controller.attachmentOutcomes.foreground(false); controller.realtimeForeground(false) }; if (::media.isInitialized) media.stopListening(); super.onPause() }
     override fun onWindowFocusChanged(hasFocus: Boolean) { super.onWindowFocusChanged(hasFocus); if (::controller.isInitialized) controller.notificationPreviewsFocus(hasFocus) }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverSharedFiles(intent); deliverAccountEntry(intent); deliverCompatibilityChat(intent) }
@@ -170,8 +176,8 @@ class ComposeActivity : ComponentActivity() {
         catch (_: RuntimeException) { mcpPickRequestId = null; controller.completeMcpConfig(requestId, null) }
     }
     internal fun pickAttachments(taskId: String?, projectId: String?) {
-        importTaskId = taskId; importProjectId = projectId
-        attachmentPicker.launch(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION))
+        if (controller.state.attachmentImporting) { controller.attachmentImportPickerStatus(AttachmentImportPicker.Launch.BUSY); return }
+        controller.attachmentImportPickerStatus(attachmentPicker.launch(taskId, projectId))
     }
     internal fun offerExport(name: String, mimeType: String, path: String) {
         if (exportPath != null) { controller.completeExport(null, path); return }
@@ -188,7 +194,8 @@ class ComposeActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         controller.persistOwnerComposer()
         outState.putString("channelPhoneEventId", controller.channelPhoneEventId)
-        outState.putString("ownerImportTask", importTaskId); outState.putString("ownerImportProject", importProjectId); outState.putString("ownerExportPath", exportPath)
+        outState.putString("ownerImportTask", legacyImportTarget?.taskId); outState.putString("ownerImportProject", legacyImportTarget?.projectId); outState.putString("ownerExportPath", exportPath)
+        attachmentPicker.save(outState)
         controller.attachmentOutcomes.save(outState)
         controller.projectPackages.save(outState)
         controller.ownerArchives.save(outState)
@@ -196,5 +203,5 @@ class ComposeActivity : ComponentActivity() {
         controller.projectGitImports.save(outState)
         super.onSaveInstanceState(outState)
     }
-    override fun onDestroy() { outcomeExportPicker.close();workingFilePickers.values.toList().forEach { it.unregister() };workingFilePickers.clear();if (::controller.isInitialized) controller.detach(); if (::media.isInitialized) media.close(); super.onDestroy() }
+    override fun onDestroy() { attachmentPicker.close(); outcomeExportPicker.close();workingFilePickers.values.toList().forEach { it.unregister() };workingFilePickers.clear();if (::controller.isInitialized) controller.detach(); if (::media.isInitialized) media.close(); super.onDestroy() }
 }
