@@ -80,13 +80,15 @@ public final class RemoteTaskRequest {
         return first(input,true);
     }
     private static JSONObject first(JSONObject input,boolean privateConnection)throws Exception {
-        Set<String> allowed=Set.of("profileId","bindingHash","environmentId","environmentBinding","worker","prompt","argv","model","readOnly","timeoutSeconds","effort","modelOptionsDigest","backendId","capabilityRevision","modeId");
+        Set<String> allowed=Set.of("profileId","bindingHash","environmentId","environmentBinding","worker","prompt","argv","model","readOnly","timeoutSeconds","effort","modelOptionsDigest","backendId","capabilityRevision","modeId","harnessSelection","externalExecutionRiskAcknowledged");
         for(java.util.Iterator<String> keys=input.keys();keys.hasNext();)if(!allowed.contains(keys.next()))throw new SecurityException("首创任务不接受会话、原任务、凭据或任意路由参数");
-        String profile=id(input,"profileId"),environment=id(input,"environmentId"),binding=text(input,"bindingHash",64),environmentBinding=text(input,"environmentBinding",64),worker=text(input,"worker",40);
-        if(!binding.matches("[a-f0-9]{64}")||!environmentBinding.matches("[a-f0-9]{64}")||!worker.matches("command|codex_app_server|claude|pi|gemini_acp"))throw new IllegalArgumentException("请选择当前已配置的电脑和受支持执行器");
+        String profile=id(input,"profileId"),environment=id(input,"environmentId"),binding=text(input,"bindingHash",64),environmentBinding=text(input,"environmentBinding",64),worker=text(input,"worker",80);
+        boolean generic=RemoteHarnessSelection.isGenericWorker(worker);
+        if(!binding.matches("[a-f0-9]{64}")||!environmentBinding.matches("[a-f0-9]{64}")||!worker.matches("command|codex_app_server|claude|pi|gemini_acp")&&!generic)throw new IllegalArgumentException("请选择当前已配置的电脑和受支持执行器");
         boolean gemini=worker.equals("gemini_acp");
         if(gemini&&!privateConnection)throw new SecurityException("Gemini后端只在原私人连接页接入，不向模型任务入口开放");
-        if(!gemini&&(input.has("backendId")||input.has("capabilityRevision")||input.has("modeId")))throw new SecurityException("此执行器不接收另一后端的探测或模式选项");
+        if(!gemini&&(input.has("backendId")||input.has("capabilityRevision")||input.has("modeId")&&!generic))throw new SecurityException("此执行器不接收另一后端的探测或模式选项");
+        if(!generic&&input.has("harnessSelection"))throw new SecurityException("不能将通用 Harness 选择附加给另一协议");
         Object timeout=input.opt("timeoutSeconds");int seconds=input.optInt("timeoutSeconds",300);
         if((timeout!=null&&(!(timeout instanceof Number)||((Number)timeout).doubleValue()!=seconds))||seconds<10||seconds>3600)throw new IllegalArgumentException("任务时限需为10至3600秒整数");
         JSONObject result=new JSONObject().put("profileId",profile).put("_profileBinding",binding).put("environmentId",environment).put("environmentBinding",environmentBinding).put("worker",worker).put("timeoutSeconds",seconds);
@@ -106,6 +108,11 @@ public final class RemoteTaskRequest {
                 result.put("backendId","gemini_cli_acp_v1").put("capabilityRevision",revision).put("modeId","default");
             }
             boolean readOnly=input.optBoolean("readOnly",worker.equals("codex_app_server"));
+            if(generic){
+                if(input.opt("readOnly")!=Boolean.FALSE||input.opt("externalExecutionRiskAcknowledged")!=Boolean.TRUE)throw new SecurityException("主人配置 Harness 需明确允许实际工具执行，不能宣称只读沙箱");
+                result.put("harnessSelection",RemoteHarnessSelection.checked(input.optJSONObject("harnessSelection"),worker)).put("externalExecutionRiskAcknowledged",true);
+                if(input.has("modeId"))result.put("modeId",text(input,"modeId",200));
+            }
             if((worker.equals("claude")||worker.equals("pi"))&&readOnly)throw new SecurityException("CLI工具限制不是操作系统只读沙箱，不能声明只读");
             if(input.has("effort")||input.has("modelOptionsDigest")){
                 if(!worker.equals("codex_app_server")||!input.has("model"))throw new SecurityException("首创档位只接受当前Codex目录；Claude须先在已批准原job取得native目录再由主人下一轮选择");

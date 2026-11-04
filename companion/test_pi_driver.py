@@ -31,7 +31,11 @@ if '--help' in args:
     flags='--no-tools --no-mcp --no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files --no-approve --offline --mode --session-id --session-dir --session --no-session'
     print(flags.replace('--no-tools','') if mode=='missing-flags' else flags);sys.exit()
 assert args[args.index('--mode')+1]=='rpc'
-for flag in ('--no-tools','--no-mcp','--no-extensions','--no-skills','--no-prompt-templates','--no-themes','--no-context-files','--no-approve','--offline'):assert flag in args
+for flag in ('--no-tools','--no-mcp','--no-extensions','--no-skills','--no-prompt-templates','--no-themes','--no-context-files','--no-approve','--offline'):
+    if flag=='--no-tools' and mode.startswith('team-'):
+        assert flag not in args and '--extension' in args
+        assert set(args[args.index('--tools')+1].split(','))=={'team_send_message','team_read_messages','team_list_members'}
+    else: assert flag in args
 session='probe-session';file=None
 if '--session-dir' in args:
     directory=Path(args[args.index('--session-dir')+1])
@@ -94,6 +98,13 @@ for line in sys.stdin:
             threading.Thread(target=release_after_explicit_fixture_marker,daemon=True).start()
             continue
         if mode in {'wait','abort-ack-only'} or mode.startswith('steer-'):continue
+        if mode.startswith('team-'):
+            name='bash' if mode=='team-forbidden' else 'team_send_message'
+            emit({'type':'message_end','message':{'role':'assistant','content':[{'type':'toolCall','id':'peer-call','name':name,'arguments':{'targetMemberId':'reviewer','text':'Evidence ready'}}],'stopReason':'toolUse'}})
+            emit({'type':'tool_execution_start','toolCallId':'peer-call','toolName':name,'args':{}})
+            emit({'type':'tool_execution_end','toolCallId':'peer-call','toolName':name,'isError':False,'result':{'content':[{'type':'text','text':'queued'}]}})
+            emit({'type':'message_end','message':{'role':'toolResult','toolCallId':'peer-call','toolName':name,'content':[{'type':'text','text':'queued'}]}})
+            emit({'type':'message_start','message':{'role':'assistant'}})
         done()
     elif kind=='steer':
         assert set(value)=={'id','type','message'}
@@ -152,12 +163,12 @@ class PiDriverTests(unittest.TestCase):
             for stream in (process.stdin,process.stdout):stream.close()
         self.pool.shutdown(wait=True);self.temp.cleanup()
 
-    def driver(self,mode='success',stopped=None,probe=False,timeout=5):
+    def driver(self,mode='success',stopped=None,probe=False,timeout=5,team=False):
         native=str(uuid.uuid4());directory=self.root/native;directory.mkdir(mode=0o700)
-        argv=command() if probe else command(native,str(directory))
+        argv=command() if probe else command(native,str(directory),team_mcp={} if team else None)
         process=subprocess.Popen([sys.executable,str(self.fixture),mode,*argv[1:]],cwd=self.root,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,bufsize=0)
         self.processes.append(process);states=[]
-        driver=PiRpcDriver(process,states.append,stopped or (lambda:False),timeout,native_session=None if probe else native,session_dir=None if probe else str(directory))
+        driver=PiRpcDriver(process,states.append,stopped or (lambda:False),timeout,native_session=None if probe else native,session_dir=None if probe else str(directory),team_tools=team)
         self.drivers.append(driver);return driver,states
 
     def test_fixed_version_and_all_no_tools_flags_required(self):
@@ -168,6 +179,18 @@ class PiDriverTests(unittest.TestCase):
         argv=command('managed-id','/tmp/managed');self.assertTrue(set(SAFE_FLAGS)<=set(argv));self.assertNotIn('--model',argv)
         self.assertEqual('--no-session',command()[-1])
         with self.assertRaises(DriverError):command('id','/tmp/managed','/tmp/foreign.jsonl')
+
+    def test_team_only_tools_follow_native_lifecycle_without_enabling_coding_tools(self):
+        driver,states=self.driver('team-success',team=True)
+        result=driver.run('Share evidence')
+        self.assertEqual('completed',result['status'])
+        self.assertTrue(result['nativeSettled'])
+        self.assertTrue(result['teamToolsOnly'])
+        self.assertTrue(result['teamTools'])
+        self.assertFalse(result['codingToolsSupported'])
+        self.assertEqual({'peer-call':'team_send_message'},driver.team_calls)
+        driver,_=self.driver('team-forbidden',team=True)
+        with self.assertRaises(DriverError):driver.run('Must not execute a shell tool')
 
     def test_readonly_probe_has_no_prompt_or_saved_session_or_secret_metadata(self):
         driver,_=self.driver(probe=True);result=driver.probe('fixture/model-b')

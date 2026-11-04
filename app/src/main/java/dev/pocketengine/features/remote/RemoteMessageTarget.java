@@ -12,7 +12,7 @@ public final class RemoteMessageTarget {
         JSONObject target=new JSONObject();String protocol=source.optString("protocol");
         if("codex_app_server".equals(protocol))return target.put("expectedTurnId",text(source,"turnId"));
         if(!"pi_rpc_v1".equals(protocol)||!"pi".equals(source.optString("worker"))
-                ||!Boolean.TRUE.equals(source.opt("protocolVerified"))||!Boolean.TRUE.equals(source.opt("noTools"))
+                ||!Boolean.TRUE.equals(source.opt("protocolVerified"))||!RemoteHarnessSelection.piScopeConfirmed(source)
                 ||!Boolean.TRUE.equals(source.opt("inputSteeringVerified"))||source.has("turnId"))
             throw new SecurityException("原执行器没有已确认的运行中输入协议");
         String session=text(source,"sessionId");if(!session.equals(text(source,"threadId")))throw new SecurityException("Pi原session/thread不一致");

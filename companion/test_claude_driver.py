@@ -26,15 +26,24 @@ if '--help' in args:
     sys.exit()
 assert '-p' in args
 assert '--restricted' in args
-assert json.loads(args[args.index('--settings')+1]) == {'permissions':{'ask':['Edit','Write','Bash','AskUserQuestion']}}
+settings=json.loads(args[args.index('--settings')+1])
+assert settings['permissions'] == {'ask':['Edit','Write','Bash','AskUserQuestion']}
+if mode.startswith('team-'):
+    assert settings['disableAllHooks'] is True and settings['enabledPlugins']=={}
+    assert '--safe-mode' not in args and '--strict-mcp-config' in args
+    assert args[args.index('--setting-sources')+1]==''
+    assert set(json.loads(args[args.index('--mcp-config')+1])['mcpServers'])=={'pocket_team'}
 assert args[args.index('--input-format')+1] == 'stream-json'
 assert args[args.index('--output-format')+1] == 'stream-json'
 assert args[args.index('--permission-mode')+1] == 'default'
 assert args[args.index('--permission-prompts')+1] == 'host'
 assert args[args.index('--permission-prompt-tool')+1] == 'stdio'
-assert args[args.index('--allowedTools')+1] == 'Read,Glob,Grep'
+assert args[args.index('--allowedTools')+1].startswith('Read,Glob,Grep')
+if not mode.startswith('team-'): assert args[args.index('--allowedTools')+1] == 'Read,Glob,Grep'
 session = args[args.index('--resume' if '--resume' in args else '--session-id')+1]
 tools = args[args.index('--tools')+1].split(',')
+team_tools=['mcp__pocket_team__'+name for name in ('team_send_message','team_read_messages','team_list_members')]
+if mode.startswith('team-'): tools+=team_tools
 child_progress = mode.startswith('child-progress')
 progress_version = '2.1.318' if mode == 'child-progress-unknown-version' else '2.1.317'
 def emit(value):
@@ -71,7 +80,7 @@ for line in sys.stdin:
         if mode == 'child-progress-before-init': emit(progress('a'))
         emit({'type':'system','subtype':'init','session_id':'wrong-session' if mode=='wrong-session' else session,
               'permissionMode':'bypassPermissions' if mode=='wrong-mode' else 'default',
-              'tools':['mcp__external'] if mode=='wrong-tools' else tools,'mcp_servers':[],
+              'tools':['mcp__external'] if mode=='wrong-tools' else tools,'mcp_servers':[{'name':'foreign' if mode=='team-foreign' else 'pocket_team','status':'connected'}] if mode.startswith('team-') else [],
               'model':'fixture-model',
               **({'claude_code_version':'2.1.318' if mode=='child-progress-system-version-changed' else progress_version} if child_progress and mode!='child-progress-missing-system-version' else {})})
         if mode == 'disconnect': sys.exit()
@@ -80,6 +89,9 @@ for line in sys.stdin:
         if mode == 'large-frame':
             print('x'*1048577,flush=True);sys.exit()
         if mode in {'wait','cancel-no-result'}: continue
+        if mode=='team-permission':
+            emit({'type':'control_request','request_id':'tool-request','request':{'subtype':'can_use_tool','tool_name':team_tools[0],'tool_use_id':'peer-call','input':{'targetMemberId':'reviewer','text':'Check evidence'}}})
+            continue
         if mode in {'approval','retract','duplicate','outside','lost-reply'}:
             request={'type':'control_request','request_id':'tool-request','request':{
                 'subtype':'can_use_tool','tool_name':'Write','tool_use_id':'tool-use-1',
@@ -145,6 +157,9 @@ for line in sys.stdin:
         decision=reply['response']
         assert 'updatedPermissions' not in decision
         Path('permission-reply').write_text(json.dumps(decision))
+        if mode=='team-permission':
+            assert decision['behavior']=='allow' and decision['updatedInput']=={'targetMemberId':'reviewer','text':'Check evidence'}
+            result();continue
         if decision['behavior']=='allow':
             assert decision['updatedInput']=={'file_path':'result.txt','content':'fixture'}
             Path('result.txt').write_text('fixture effect')
@@ -178,9 +193,10 @@ class ClaudeDriverTests(unittest.TestCase):
         self.pool.shutdown(wait=True)
         self.temp.cleanup()
 
-    def driver(self, mode="success", stopped=None, write=False, timeout=5, state_callback=None):
+    def driver(self, mode="success", stopped=None, write=False, timeout=5, state_callback=None, team=False):
         session = str(uuid.uuid4())
-        process = subprocess.Popen([sys.executable, str(self.fixture), mode, *command(session, write)[1:]],
+        descriptor={"name":"pocket_team","command":sys.executable,"args":["fixture-mcp"],"env":[]} if team else None
+        process = subprocess.Popen([sys.executable, str(self.fixture), mode, *command(session, write,team_mcp=descriptor)[1:]],
                                    cwd=self.root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.DEVNULL, bufsize=0)
         self.processes.append(process)
@@ -190,7 +206,7 @@ class ClaudeDriverTests(unittest.TestCase):
             if state_callback:
                 state_callback(value)
         driver = ClaudeStreamDriver(process, session, state, stopped or (lambda: False), timeout,
-                                    cwd=self.root, write_allowed=write)
+                                    cwd=self.root, write_allowed=write,team_tools=team)
         self.drivers.append(driver)
         return driver, states
 
@@ -221,7 +237,22 @@ class ClaudeDriverTests(unittest.TestCase):
         self.assertIsNone(valid["accountConfigured"])
         self.assertFalse(valid["modelInferenceVerified"])
         self.assertFalse(inspect_cli("2.1.258", " ".join(REQUIRED_FLAGS))["available"])
-        self.assertFalse(inspect_cli("2.1.259", "--output-format")["available"])
+        partial_help = inspect_cli("2.1.259", "--output-format")
+        self.assertTrue(partial_help["available"])
+        self.assertFalse(partial_help["protocolVerified"])
+        self.assertEqual("documented_version_contract", partial_help["cliFlagEvidence"])
+        self.assertFalse(partial_help["helpListsAllFlags"])
+        self.assertFalse(inspect_cli("3.0.0", " ".join(REQUIRED_FLAGS))["available"])
+
+    def test_team_mcp_is_the_only_loaded_server_and_bounded_tool_permission(self):
+        driver,states=self.driver('team-permission',team=True)
+        result=driver.run('Share evidence')
+        self.assertEqual('completed',result['status'])
+        self.assertTrue(result['teamTools'])
+        self.assertFalse(any(state['pendingApprovals'] for state in states))
+        self.assertFalse((self.root/'result.txt').exists())
+        driver,_=self.driver('team-foreign',team=True)
+        with self.assertRaises(DriverError):driver.run('Reject unexpected MCP server')
 
     def test_real_stdio_handshake_session_deltas_and_structured_result(self):
         driver, states = self.driver()

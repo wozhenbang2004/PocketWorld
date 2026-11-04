@@ -13,6 +13,7 @@ from remote_interactions import QuestionMailbox, Progress, question
 import group_input_audience
 from codex_child_sources import CodexChildSources
 from driver_dispatch import PipeWriter, WriteTicket, DispatchError
+from team_harness import TOOLS as TEAM_TOOLS, TOOL_NAMES as TEAM_TOOL_NAMES
 
 
 class DriverError(Exception):
@@ -20,9 +21,11 @@ class DriverError(Exception):
 
 
 class CodexAppServerDriver:
-    def __init__(self, process, cwd, write_allowed, on_state, stopped, timeout, restricted_read_only=False, dispatch_guard=None, assignment_write=False, output_limit=196608, assignment_paths=None, assignment_project=False):
+    def __init__(self, process, cwd, write_allowed, on_state, stopped, timeout, restricted_read_only=False, dispatch_guard=None, assignment_write=False, output_limit=196608, assignment_paths=None, assignment_project=False, team_tools=None):
         self.process, self.cwd, self.write_allowed = process, cwd, write_allowed
         self.on_state, self.stopped = on_state, stopped
+        self.team_tools = team_tools
+        self.team_calls = set()
         self.restricted_read_only = restricted_read_only
         self.assignment_write = assignment_write
         self.assignment_project = bool(assignment_project)
@@ -318,7 +321,29 @@ class CodexAppServerDriver:
                 self.group_api_revoked = True
             return
         if "id" in message:
-            if method == "item/tool/requestUserInput":
+            if method == "item/tool/call":
+                call_id = params.get("callId")
+                allowed = (self.team_tools is not None and self.protocol_verified and self.turn_dispatched
+                           and not self.stopped() and not self.interrupt_sent and self.completed is None
+                           and (params.get("threadId"), params.get("turnId")) == (self.thread_id, self.turn_id)
+                           and params.get("namespace") is None and params.get("tool") in TEAM_TOOL_NAMES
+                           and isinstance(call_id, str) and 0 < len(call_id) <= 200
+                           and call_id not in self.team_calls and str(message["id"]) not in self.seen_approvals
+                           and len(self.team_calls) < 128
+                           and isinstance(params.get("arguments"), dict))
+                if not allowed:
+                    self._send({"id": message["id"], "result": {"contentItems": [{"type": "inputText", "text": "Team tool is outside this original turn or was already attempted."}], "success": False}})
+                    return
+                self.team_calls.add(call_id)
+                self.seen_approvals.add(str(message["id"]))
+                try:
+                    actual = self.team_tools(params["tool"], params["arguments"], self.stopped)
+                except (ValueError, OSError):
+                    actual = {"ok": False, "message": "Original team tool result was not confirmed; no replay."}
+                self._send({"id": message["id"], "result": {"contentItems": [{"type": "inputText", "text": json.dumps(actual, ensure_ascii=False)}], "success": actual.get("ok") is not False}})
+                self.progress.add("tool", method, call_id, tool=params["tool"], status="completed" if actual.get("ok") is not False else "failed")
+                self._state()
+            elif method == "item/tool/requestUserInput":
                 wire = message["id"]
                 key = str(wire)
                 if key in self.seen_approvals or len(self.seen_approvals) >= 128:
@@ -522,7 +547,7 @@ class CodexAppServerDriver:
         with self.lock:
             approvals = [{key: value for key, value in entry.items() if key != "wireId"} for entry in self.pending.values()]
         questions, answers = self.questions.snapshot()
-        self.on_state({"modelRuntime": self._model_runtime(), "modelOptions": self.model_options, "reportedModel": self.reported_model, "protocol": "codex_app_server", "protocolVerified": self.protocol_verified, "threadId": self.thread_id, "turnId": self.turn_id, "turnStartAcknowledged": self.turn_start_acknowledged, "pendingApprovals": approvals, "approvalReceipts": [dict(value) for value in self.approval_receipts], "pendingQuestions": questions, "questionReceipts": answers, "progress": self.progress.snapshot(), "output": self.output, "diff": self.diff, "reportedFileChanges": sorted(self.reported_file_changes), "outputTruncated": self.output_truncated, "diffTruncated": self.diff_truncated, "inputSteeringVerified": self.input_steering_verified, "steeringUnknown": self.steering_unknown, "readOnlyConfirmed": self.restricted_profile_confirmed, "externalToolsDisabled": self.external_tools_disabled or self.restricted_profile_confirmed, "assignmentWriteSandboxVerified": self.assignment_write_verified, "outputLimitExceeded": self.output_limit_exceeded, "status": "awaiting_approval" if approvals else "awaiting_input" if any(value.get("isBlocking") for value in questions) else "running"})
+        self.on_state({"modelRuntime": self._model_runtime(), "modelOptions": self.model_options, "reportedModel": self.reported_model, "protocol": "codex_app_server", "protocolVerified": self.protocol_verified, "teamTools": self.team_tools is not None and self.protocol_verified and self.thread_id is not None, "threadId": self.thread_id, "turnId": self.turn_id, "turnStartAcknowledged": self.turn_start_acknowledged, "pendingApprovals": approvals, "approvalReceipts": [dict(value) for value in self.approval_receipts], "pendingQuestions": questions, "questionReceipts": answers, "progress": self.progress.snapshot(), "output": self.output, "diff": self.diff, "reportedFileChanges": sorted(self.reported_file_changes), "outputTruncated": self.output_truncated, "diffTruncated": self.diff_truncated, "inputSteeringVerified": self.input_steering_verified, "steeringUnknown": self.steering_unknown, "readOnlyConfirmed": self.restricted_profile_confirmed, "externalToolsDisabled": self.external_tools_disabled or self.restricted_profile_confirmed, "assignmentWriteSandboxVerified": self.assignment_write_verified, "outputLimitExceeded": self.output_limit_exceeded, "status": "awaiting_approval" if approvals else "awaiting_input" if any(value.get("isBlocking") for value in questions) else "running"})
 
     def _question_live(self):
         return self.protocol_verified and self.turn_dispatched and self.thread_id is not None and self.turn_id is not None and self.completed is None and not self.closed and not self.interrupt_sent and not self.stopped() and not self.assignment_write
@@ -555,7 +580,10 @@ class CodexAppServerDriver:
     def _initialize(self):
         if self.initialized:
             return
-        actual = self._request("initialize", {"clientInfo": {"name": "pocket_world", "title": "Pocket World", "version": "0.3.0"}})
+        params = {"clientInfo": {"name": "pocket_world", "title": "Pocket World", "version": "0.3.0"}}
+        if self.team_tools is not None:
+            params["capabilities"] = {"experimentalApi": True}
+        actual = self._request("initialize", params)
         agent = actual.get("userAgent")
         version = re.search(r"(?<![0-9])(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)(?![0-9])", agent) if isinstance(agent, str) else None
         self.runtime_version = version.group(1) if version else None
@@ -762,6 +790,10 @@ class CodexAppServerDriver:
         if thread_id:
             params["threadId"] = thread_id
             params["excludeTurns"] = True
+        # Dynamic tools are stored with the original thread. The resume protocol
+        # does not accept a new declaration; only the current callback is rebound.
+        if self.team_tools is not None and thread_id is None:
+            params["dynamicTools"] = [{"type": "function", **tool} for tool in TEAM_TOOLS]
         admitted = self._request("thread/resume" if thread_id else "thread/start", params)
         thread = admitted.get("thread", {})
         if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
@@ -816,4 +848,4 @@ class CodexAppServerDriver:
                 self.group_api_facts = {"authMode": "unknown", "postTurnAccountReadVerified": False,
                                         "billingBackendVerified": False, "internalTokensKnown": False,
                                         "internalCostKnown": False}
-        return {"modelRuntime": self._model_runtime(), "modelOptions": self.model_options, "reportedModel": self.reported_model, "status": "unknown" if self.group_api_revoked else "completed" if status == "completed" else "cancelled" if status == "interrupted" else "failed", "threadId": self.thread_id, "turnId": self.turn_id, "turnStartAcknowledged": self.turn_start_acknowledged, "output": self.output, "diff": self.diff, "reportedFileChanges": sorted(self.reported_file_changes), "outputTruncated": self.output_truncated, "diffTruncated": self.diff_truncated, "readOnlyConfirmed": self.restricted_profile_confirmed, "externalToolsDisabled": self.external_tools_disabled or self.restricted_profile_confirmed, "assignmentWriteSandboxVerified": self.assignment_write_verified, "outputLimitExceeded": self.output_limit_exceeded, "message": "Codex returned a final turn receipt; inspect its actual changes", "protocol": "codex_app_server", "protocolVerified": True, "approvalReceipts": self.approval_receipts, "pendingApprovals": [], "pendingQuestions": [], "questionReceipts": self.questions.snapshot()[1], "progress": self.progress.snapshot()}
+        return {"modelRuntime": self._model_runtime(), "modelOptions": self.model_options, "reportedModel": self.reported_model, "status": "unknown" if self.group_api_revoked else "completed" if status == "completed" else "cancelled" if status == "interrupted" else "failed", "threadId": self.thread_id, "turnId": self.turn_id, "turnStartAcknowledged": self.turn_start_acknowledged, "output": self.output, "diff": self.diff, "reportedFileChanges": sorted(self.reported_file_changes), "outputTruncated": self.output_truncated, "diffTruncated": self.diff_truncated, "readOnlyConfirmed": self.restricted_profile_confirmed, "externalToolsDisabled": self.external_tools_disabled or self.restricted_profile_confirmed, "assignmentWriteSandboxVerified": self.assignment_write_verified, "outputLimitExceeded": self.output_limit_exceeded, "message": "Codex returned a final turn receipt; inspect its actual changes", "protocol": "codex_app_server", "protocolVerified": True, "teamTools": self.team_tools is not None, "approvalReceipts": self.approval_receipts, "pendingApprovals": [], "pendingQuestions": [], "questionReceipts": self.questions.snapshot()[1], "progress": self.progress.snapshot()}

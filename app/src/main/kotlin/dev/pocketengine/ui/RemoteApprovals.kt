@@ -204,7 +204,7 @@ private fun RemoteOwnerDialog(taskId: String, controller: PocketWorldController,
                         OutlinedTextField(recoveryTimeout,{recoveryTimeout=it},label={Text("本次新执行时限（10–900秒）")},supportingText={Text("沿用原电脑、工作区和读写边界；超时会按原监督流程请求停止并核对。每流输出仍有界，内部模型次数、tokens和费用不可硬限；旧未知费用不清零。")},modifier=Modifier.fillMaxWidth())
                         Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) { Checkbox(checked=recoveryAccepted,onCheckedChange={recoveryAccepted=it},enabled=!busy);Text("我明确授权这次新执行及所示时限，理解内部计费未知；不恢复任何旧批准。",fontSize=14.sp,lineHeight=21.sp,modifier=Modifier.weight(1f)) }
                     }
-                    if (!coldRecovery && !snapshot.optBoolean("teamRemoteWriter")) Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    if (!coldRecovery && !snapshot.optBoolean("teamRemoteWriter") && !configuredTeamHarness(source.optString("worker"))) Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                         Checkbox(checked = useTaskGateway, onCheckedChange = { useTaskGateway = it }, enabled = !busy && !changeModelSettings)
                         Text("这轮使用手机原任务模型网关：先准备，配置后再明确确认执行。", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                     }
@@ -342,11 +342,12 @@ private fun RemoteSnapshotPanel(
 @Composable
 private fun RemoteApprovalSummary(approval: JSONObject) {
     var raw by remember(approval.optString("requestId")) { mutableStateOf(false) }
-    val input = approval.optJSONObject("input") ?: JSONObject()
+    val toolCall = approval.optJSONObject("toolCall") ?: JSONObject()
+    val input = approval.optJSONObject("input") ?: toolCall.optJSONObject("rawInput") ?: JSONObject()
     val command = approval.opt("command")?.takeIf { it != JSONObject.NULL }?.toString().orEmpty().ifBlank { input.optString("command") }
     val cwd = approval.optString("cwd").ifBlank { input.optString("cwd") }
     val path = input.optString("file_path").ifBlank { input.optString("path") }
-    Text("工具：" + approval.optString("tool").ifBlank { approval.optString("method", "执行端未报告") }, fontSize = 13.sp)
+    Text("工具：" + approval.optString("tool").ifBlank { toolCall.optString("title").ifBlank { approval.optString("method", "执行端未报告") } }, fontSize = 13.sp)
     if (command.isNotBlank()) SelectionContainer { Text("命令：$command", fontSize = 12.sp, lineHeight = 20.sp) }
     if (cwd.isNotBlank()) Text("工作目录：$cwd", fontSize = 12.sp)
     if (path.isNotBlank()) Text("目标路径：$path", fontSize = 12.sp)

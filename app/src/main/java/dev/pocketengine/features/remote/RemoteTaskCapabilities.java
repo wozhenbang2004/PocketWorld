@@ -41,11 +41,17 @@ public final class RemoteTaskCapabilities implements CapabilityPort {
     private static JSONObject string(int max)throws Exception{return new JSONObject().put("type","string").put("minLength",1).put("maxLength",max);}
     private static JSONArray definitions()throws Exception {
         JSONObject properties=new JSONObject().put("profileId",string(80)).put("bindingHash",string(64)).put("environmentId",string(80)).put("environmentBinding",string(64))
-                .put("worker",new JSONObject().put("type","string").put("enum",new JSONArray().put("codex_app_server").put("claude").put("pi").put("command")))
+                .put("worker",new JSONObject().put("type","string").put("pattern","^(codex_app_server|claude|pi|command|muse_msp|acp_[a-z][a-z0-9_-]{0,64})$"))
                 .put("prompt",string(12000)).put("model",string(200)).put("effort",string(80)).put("modelOptionsDigest",string(64)).put("readOnly",new JSONObject().put("type","boolean"))
                 .put("argv",new JSONObject().put("type","array").put("minItems",1).put("maxItems",80).put("items",new JSONObject().put("type","string").put("maxLength",12000)))
-                .put("timeoutSeconds",new JSONObject().put("type","integer").put("minimum",10).put("maximum",3600));
-        return new JSONArray().put(definition(START,"在当前私人任务下准备一次全新电脑工作。先用remote_profiles/remote_environments读取真实profile bindingHash及environment bindingHash，再给Codex/Claude目标、Pi无工具对话或明确命令argv。Pi不提供编程工具、逐工具审批或只读沙箱。只在主人对本次环境、权限和参数单次批准后经原TaskStore登记/派发。没有导入thread/resume，不重提未知操作；不是手机本地执行。",properties,new JSONArray().put("profileId").put("bindingHash").put("environmentId").put("environmentBinding").put("worker")))
+                .put("timeoutSeconds",new JSONObject().put("type","integer").put("minimum",10).put("maximum",3600))
+                .put("modeId",string(200)).put("externalExecutionRiskAcknowledged",new JSONObject().put("type","boolean"))
+                .put("harnessSelection",new JSONObject().put("type","object").put("properties",new JSONObject()
+                        .put("protocol",new JSONObject().put("type","string").put("enum",new JSONArray().put(RemoteHarnessSelection.PROTOCOL)))
+                        .put("workerId",string(80)).put("configurationRevision",string(64)).put("capabilityRevision",string(64))
+                        .put("ownerManagedExecution",new JSONObject().put("type","boolean").put("enum",new JSONArray().put(true))))
+                        .put("required",new JSONArray().put("protocol").put("workerId").put("configurationRevision").put("capabilityRevision").put("ownerManagedExecution")).put("additionalProperties",false));
+        return new JSONArray().put(definition(START,"在当前私人任务下准备一次全新电脑工作。先用remote_profiles/remote_environments读取真实profile bindingHash及environment bindingHash，再用remote_probe_worker核对实际执行器。可给Codex/Claude目标、Pi无工具对话、主人配置的ACP/Muse目标或明确命令argv。通用Harness必须沿原探测harnessSelection、readOnly=false与明确执行风险确认，不能提供启动命令。Pi不提供编程工具、逐工具审批或只读沙箱。只在主人对本次环境、权限和参数单次批准后经原TaskStore登记/派发。没有导入thread/resume，不重提未知操作；不是手机本地执行。",properties,new JSONArray().put("profileId").put("bindingHash").put("environmentId").put("environmentBinding").put("worker")))
                 .put(definition(READ,"按原子任务编号查询本私人任务已登记的电脑工作和实际output/diff；只查原操作，不提交、重试、续接或代答工具审批。",new JSONObject().put("operationId",string(80)),new JSONArray().put("operationId")));
     }
     private static JSONObject definition(String name,String description,JSONObject properties,JSONArray required)throws Exception {
@@ -76,9 +82,10 @@ public final class RemoteTaskCapabilities implements CapabilityPort {
                 .put("bindingHash",profile.getString("bindingHash")).put("environment",environment);
         if(!payload.getString("worker").equals("command")){
             JSONObject probeInput=new JSONObject(query.toString()).put("environmentId",payload.getString("environmentId")).put("environmentBinding",payload.getString("environmentBinding")).put("worker",payload.getString("worker"));
-            if(payload.has("model"))probeInput.put("model",payload.getString("model"));if(payload.has("effort"))probeInput.put("effort",payload.getString("effort"));
+            if(payload.has("model"))probeInput.put("model",payload.getString("model"));if(payload.has("effort"))probeInput.put("effort",payload.getString("effort"));if(payload.has("modeId"))probeInput.put("modeId",payload.getString("modeId"));
             JSONObject probe=remote.handle("probeWorker",probeInput);if(payload.has("modelOptionsDigest")&&(probe.optJSONObject("modelOptions")==null||!payload.getString("modelOptionsDigest").equals(probe.getJSONObject("modelOptions").optString("digest"))))throw new SecurityException("原模型目录代次已变化，尚未批准或派发");if(!probe.optBoolean("available"))throw new SecurityException("所选执行器的实际探测未通过，尚未提交电脑任务");
-            JSONObject checked=new JSONObject();for(String key:new String[]{"worker","environmentId","available","protocolVerified","cliVersion","cliFlagsVerified","accountConfigured","configReadVerified","selectedModelAvailable","selectedEffortAvailable","modelOptions","effortFlagVerified","noTools","autoCompactionEnabled","capabilities"})if(probe.has(key))checked.put(key,probe.get(key));proof.put("workerProbe",checked);
+            if(RemoteHarnessSelection.isGenericWorker(payload.getString("worker")))RemoteHarnessSelection.requireSame(payload.getJSONObject("harnessSelection"),RemoteHarnessSelection.fromProbe(probe,payload.getString("worker")),payload.getString("worker"));
+            JSONObject checked=new JSONObject();for(String key:new String[]{"configurationRevision","capabilityRevision","executionPolicy","protocol","agentInfo","worker","environmentId","available","protocolVerified","cliVersion","cliFlagsVerified","accountConfigured","configReadVerified","selectedModelAvailable","selectedEffortAvailable","modelOptions","effortFlagVerified","noTools","autoCompactionEnabled","capabilities"})if(probe.has(key))checked.put(key,probe.get(key));proof.put("workerProbe",checked);
         }
         remote.requireProfileBinding(payload.getString("profileId"),payload.getString("_profileBinding"));return proof;
     }

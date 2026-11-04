@@ -28,17 +28,18 @@ internal fun TeamWritePanel(run:JSONObject,selected:JSONObject?,state:PocketUiSt
         if(selected==null&&!stopped&&run.optJSONObject("workPlan")==null)TeamDraftScopeControls(runId,controller::openTeamDraftScopePage,controller::runEcosystemControlWork)
         if(run.optJSONObject("workPlan")==null)members.forEach{member->
             val original=member.optJSONObject("assignmentTask");val taskId=original?.optString("taskId").orEmpty()
+            val remoteAuthor = dev.pocketengine.features.remote.RemoteHarnessSelection.isProductionWorker(member.optString("runner"))
             Text(member.optString("name")+" · "+teamMemberStatus(member.optString("status")),fontSize=14.sp,fontWeight=FontWeight.Medium)
             if(taskId.isNotBlank())TextButton(onClick={onOpenTask(taskId)}){Text("查看原分工任务与审批")}
-            if(taskId.isNotBlank()&&member.optString("runner")=="codex_app_server"&&member.optString("status")!="completed"&&!stopped)TeamRemoteScopeControls(runId,taskId,controller::openTeamRemoteScopePage,controller::runEcosystemControlWork)
-            if(taskId.isNotBlank()&&member.optString("runner")=="codex_app_server"){
+            if(taskId.isNotBlank()&&remoteAuthor&&member.optString("status")!="completed"&&!stopped)TeamRemoteScopeControls(runId,taskId,controller::openTeamRemoteScopePage,controller::runEcosystemControlWork)
+            if(taskId.isNotBlank()&&remoteAuthor){
                 state.tasks.filter { child->val origin=child.raw.optJSONObject("origin");val remoteAssignment=origin?.optJSONObject("context")?.optJSONObject("nativeAssignment");origin?.optString("kind")=="team_remote_assignment"&&remoteAssignment!=null&&remoteAssignment.optString("assignmentId")==taskId&&remoteAssignment.optString("teamRunId")==runId }.forEach { child->
                     TeamCaption("真实远端作者原任务 · "+child.raw.optString("status")+"。取消请求不等已退出，工作副本尚未声明回收。")
                     RemoteTaskApprovals(child,controller)
-                    TextButton(onClick={onOpenTask(child.id)}){Text("打开该成员的原Codex job、待审请求与真实回执")}
+                    TextButton(onClick={onOpenTask(child.id)}){Text("打开该成员的原电脑任务、待审请求与真实回执")}
                 }
             }
-            if(original!=null&&taskId.isNotBlank()&&member.optString("runner")=="codex_app_server"&&!stopped)TeamRemoteRevisionControls(run,member,original,integration,controller)
+            if(original!=null&&taskId.isNotBlank()&&remoteAuthor&&!stopped)TeamRemoteRevisionControls(run,member,original,integration,controller)
             original?.optJSONArray("questions").objects().forEach{question->
                 key(question.optString("questionId")){
                     var answer by remember{mutableStateOf("")};val saved=value("answerAssignment")?.takeIf{it.optString("assignmentId")==original?.optString("assignmentId")&&it.optString("questionId")==question.optString("questionId")}
@@ -52,14 +53,13 @@ internal fun TeamWritePanel(run:JSONObject,selected:JSONObject?,state:PocketUiSt
             }
             if(original!=null&&member.optString("status") !in setOf("running","completed")&&!stopped)OutlinedButton(onClick={val input=reviewedTeamCollaborationAction(run,teamCollaborationStamp(run),"resume",member.getString("id"));controller.requestFeature("teams","resume",input)},enabled=!busy){Text("继续这名成员的原分工")}
             val refs=original?.optJSONArray("artifacts")?:member.optJSONArray("roundStates").objects().lastOrNull()?.optJSONArray("artifacts")
-            if(original!=null&&refs!=null&&member.optString("status")=="completed"&&!stopped&&member.optString("runner")!="codex_app_server"){
-                val remoteRevisionPending=member.optString("runner")=="codex_app_server"
+            if(original!=null&&refs!=null&&member.optString("status")=="completed"&&!stopped&&!remoteAuthor){
                 val integratedRefs=integration?.optJSONArray("receipts").objects().mapNotNull{it.optJSONObject("teamIntegrated")}
                 val thisVersionIntegrated=integration?.optBoolean("currentFilesComplete")==true&&refs.length()>0&&refs.objects().all{ref->integratedRefs.any{it.optString("artifactId")==ref.optString("artifactId")&&it.optString("runId")==ref.optString("runId")}}
                 var correction by remember(runId,member.optString("id")){mutableStateOf("")}
-                OutlinedTextField(correction,{correction=it},label={Text("对这份成果的修改要求")},minLines=2,maxLines=4,enabled=!busy&&!remoteRevisionPending,modifier=Modifier.fillMaxWidth())
-                TextButton(onClick={val input=reviewedTeamCollaborationAction(run,teamCollaborationStamp(run),"feedback",member.getString("id"),correction);input.put("assignmentId",original.getString("assignmentId")).put("revisionRequestId",UUID.randomUUID().toString()).put("expectedFrozenRunId",if(refs.length()>0)refs.getJSONObject(0).getString("runId") else original.getString("runId")).put("expectedArtifactsHash",TeamWorkFiles.hash(TeamWorkFiles.canonical(JSONObject().put("artifacts",refs))));controller.requestFeature("teams",if(thisVersionIntegrated)"continueOutcome" else "reviseAssignment",input.apply{if(thisVersionIntegrated){put("expectedIntegrationReviewId",integration.getString("reviewId"));put("expectedIntegrationPlanHash",integration.getString("planHash"))}})},enabled=!busy&&!remoteRevisionPending&&correction.isNotBlank()&&correction.length<=4000&&(approved==null||integration?.optBoolean("currentFilesComplete")==true)){Text(if(thisVersionIntegrated)"沿这份已整合成果继续修改" else "请求原分工的新修订")}
-                TeamCaption(if(remoteRevisionPending)"远端新修订/沿原成果继续尚缺准确贡献基线重选；当前不会修改原分工或复用旧快照。现有job查询、贡献审查和唯一整合可继续。" else "新修订另建草稿并保留旧成果；保存要求后还需明确继续和批准。")
+                OutlinedTextField(correction,{correction=it},label={Text("对这份成果的修改要求")},minLines=2,maxLines=4,enabled=!busy,modifier=Modifier.fillMaxWidth())
+                TextButton(onClick={val input=reviewedTeamCollaborationAction(run,teamCollaborationStamp(run),"feedback",member.getString("id"),correction);input.put("assignmentId",original.getString("assignmentId")).put("revisionRequestId",UUID.randomUUID().toString()).put("expectedFrozenRunId",if(refs.length()>0)refs.getJSONObject(0).getString("runId") else original.getString("runId")).put("expectedArtifactsHash",TeamWorkFiles.hash(TeamWorkFiles.canonical(JSONObject().put("artifacts",refs))));controller.requestFeature("teams",if(thisVersionIntegrated)"continueOutcome" else "reviseAssignment",input.apply{if(thisVersionIntegrated){put("expectedIntegrationReviewId",integration.getString("reviewId"));put("expectedIntegrationPlanHash",integration.getString("planHash"))}})},enabled=!busy&&correction.isNotBlank()&&correction.length<=4000&&(approved==null||integration?.optBoolean("currentFilesComplete")==true)){Text(if(thisVersionIntegrated)"沿这份已整合成果继续修改" else "请求原分工的新修订")}
+                TeamCaption("新修订另建草稿并保留旧成果；保存要求后还需明确继续和批准。")
             }
         }
         if(run.optJSONObject("workPlan")!=null)TeamCaption("每个工作项的原assignment、交接与冻结文件在同一现场的「分工」中；此处审查的是全部当前工作项，不按成员最近一个任务替代。")

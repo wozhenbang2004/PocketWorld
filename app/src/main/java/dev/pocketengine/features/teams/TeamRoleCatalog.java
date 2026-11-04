@@ -31,7 +31,7 @@ public final class TeamRoleCatalog {
                 Set<String> allowed=Set.of("id","name","description","instruction","acceptance","runner","suggestedModel","readToolNeeds","inputContract","outputContract");fields(input,allowed);
                 String id=id(input.getString("id"));JSONObject previous=find(catalog.getJSONArray("roles"),id,false);JSONObject role=new JSONObject().put("id",id).put("version",previous==null?1:Math.addExact(previous.getInt("version"),1)).put("archived",false)
                     .put("name",text(input,"name",80,true)).put("description",text(input,"description",1200,true)).put("instruction",text(input,"instruction",2000,true)).put("acceptance",text(input,"acceptance",1200,false)).put("inputContract",text(input,"inputContract",1200,false)).put("outputContract",text(input,"outputContract",1200,false));
-                String runner=input.getString("runner");if(!runner.matches("model|codex_app_server|claude|kimi"))throw new IllegalArgumentException("角色runner未由原成员合同识别");role.put("runner",runner);
+                String runner=input.getString("runner");if(!runner.matches("model|kimi")&&!dev.pocketengine.features.remote.RemoteHarnessSelection.isTeamWorker(runner))throw new IllegalArgumentException("角色runner未由原成员合同识别");role.put("runner",runner);
                 if(input.has("suggestedModel")){String model=text(input,"suggestedModel",200,true);if(!model.matches("[A-Za-z0-9_.:/@+-]+"))throw new IllegalArgumentException("模型建议只能为公开模型标识");role.put("suggestedModel",model);}
                 role.put("readToolNeeds",subset(input.getJSONArray("readToolNeeds"),nativeReadTools));role.put("hash",hash(role));catalog.put("roles",replace(catalog.getJSONArray("roles"),role,MAX_ROLES));result=role;break;
             }

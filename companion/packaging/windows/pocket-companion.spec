@@ -82,8 +82,9 @@ agent_license = ROOT / agent_pin["licenseFile"]
 if hashlib.sha256(agent_license.read_bytes()).hexdigest() != agent_pin["licenseSha256"]:
     raise RuntimeError("Pinned agent-desktop license material changed")
 agent_data = [(str(agent_pin_path), "build-materials"), (str(agent_license), "licenses")]
+team_data = [(str(COMPANION / "pi_team_extension.js"), ".")]
 a = Analysis([str(COMPANION / "desktop_worker.py")], pathex=[str(COMPANION)], binaries=stream_binaries,
-             datas=[(str(ROOT / "licenses" / "cua-driver-MIT.txt"), "licenses")] + pairing_data + desktop_data + stream_data + agent_data,
+             datas=[(str(ROOT / "licenses" / "cua-driver-MIT.txt"), "licenses")] + pairing_data + desktop_data + stream_data + agent_data + team_data,
              hiddenimports=hidden, hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=["png", "qrcode.image.pil"], noarchive=False)
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="PocketWorld-Companion", debug=False,

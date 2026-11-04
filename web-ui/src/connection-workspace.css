@@ -103,7 +103,8 @@
 .pw-remote-work, .pw-ssh-work { min-width: 0; outline: none; overflow-anchor: none; }
 .pw-connection-environment { padding: 16px; margin-bottom: 18px; border-radius: 14px; background: var(--pw-surface, #fff); }
 .pw-connection-section-toolbar { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; margin: -7px -7px 7px 0; }
-.pw-connection-task-composer { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+/* Keep the control library's visually hidden inputs inside this scroll surface. */
+.pw-connection-task-composer { position: relative; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .pw-connection-task-composer > button { align-self: flex-start; max-width: 100%; }
 .pw-connection-task-composer > p { margin: 0; }
 .pw-connection-task-composer textarea { min-height: 136px; }

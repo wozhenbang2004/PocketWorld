@@ -160,13 +160,14 @@ async function select(label, option) {
   await page.getByRole('listbox', { name: label, exact: true }).waitFor(); await page.getByRole('option', { name: option, exact: true }).click(); await layoutReady();
 }
 async function connect() {
-  await page.getByRole('button', { name: '全部工作', exact: true }).click();
-  await page.locator('.pw-work-drawer').getByRole('link', { name: '设置与连接', exact: true }).click();
+  await page.getByRole('button', { name: '打开导航', exact: true }).click();
+  await page.locator('.pw-work-drawer').getByRole('link', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: /^设备与执行/ }).click(); await page.getByRole('button', { name: /^电脑与服务器/ }).click();
   await page.getByRole('button', { name: /^个人 Linux 工作区/ }).click(); await page.getByRole('button', { name: /^进入电脑工作区/ }).click(); await page.getByRole('button', { name: '读取当前工作环境', exact: true }).click();
   await select('工作环境', '个人资料目录 · local');
 }
 async function chooseGemini() {
+  await select('执行器', 'Codex');
   assert.equal(await page.getByRole('checkbox', { name: '只读分析，不授权修改文件', exact: true }).isChecked(), true, 'Codex default stays readOnly');
   await select('执行器', 'Gemini CLI · ACP');
   assert.equal(await intent().isChecked(), false, 'Writable intent is never preselected');
@@ -219,7 +220,7 @@ try {
   check('model change discards prior proof; native revision echoed without selection; original review displays full prompt and Back closes only the review');
   await prepare().click(); await dialog.waitFor(); await dialog.getByRole('button', { name: '确认创建一次', exact: true }).click();
   await page.getByText('原任务已登记；等待执行端实际会话结果。', { exact: true }).waitFor();
-  assert.equal(await count('remote.confirmTask'), 1); assert.equal(await prepare().isEnabled(), false); check('one explicit confirmation starts one original writable job and locks new submissions');
+  assert.equal(await count('remote.confirmTask'), 1); assert.equal(await prepare().count(), 0, 'The submitted composer is retained as a hidden draft, with no new-work action exposed'); assert.equal(await page.locator('.pw-remote-composer').getAttribute('hidden'), ''); check('one explicit confirmation starts one original writable job and locks new submissions');
   record.evidenceJourney = await page.evaluate(() => window.__PW_ACP_TEST__.summary()); assert.deepEqual(record.evidenceJourney.errors, []);
 
   await open('write-disabled'); await probe('available');

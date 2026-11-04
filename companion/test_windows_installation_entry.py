@@ -9,6 +9,9 @@ import hashlib
 import io
 import json
 import ntpath
+from pathlib import Path
+import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -38,6 +41,21 @@ class AccessFixture:
         if len(raw) > maximum: raise PlatformError("fixture byte bound", 413)
         stream = io.BytesIO(raw); stream.size = len(raw)
         yield stream
+    def create_private_snapshot(self, root, name, raw, maximum=20971520, *, current=lambda: None):
+        current()
+        path = ntpath.join(root, name)
+        if path in self.data or len(raw) > maximum:
+            raise PlatformError("fixture snapshot collision/bound", 409)
+        self.data[path] = raw
+    def compare_and_swap(self, root, name, before, after, current=lambda: None, *, record_intent=lambda _value: None):
+        current()
+        path = ntpath.join(root, name)
+        if self.data.get(path) != before:
+            raise PlatformError("fixture original bytes changed", 409)
+        record_intent({"phase": "dispatch_intent_persisted", "beforeSha256": hashlib.sha256(before).hexdigest()})
+        current()
+        self.data[path] = after
+        return {"status": "completed", "verified": True, "consistency": "fixture_only_no_windows_acl_evidence"}
 
 
 class InstalledEntryContracts(unittest.TestCase):
@@ -118,6 +136,48 @@ class InstalledEntryContracts(unittest.TestCase):
         with patch("device_identity.provision_identity", side_effect=AssertionError("startup provisioning forbidden")):
             with self.assertRaises(KeyError): self.context().launch_config()
         self.assertEqual(set(original) - {self.config}, set(self.backend.data))
+
+    def test_owner_harness_enable_keeps_registered_state_and_other_settings(self):
+        import harness_cli
+        self.settings["environments"] = [{"id": "computer", "kind": "local", "root": "C:\\Workspace", "workers": ["command"], "writeAllowed": False}]
+        self.backend.data[self.config] = json.dumps(self.settings).encode()
+        context = self.context()
+        launch = context.launch_config()
+        with self.assertRaises(ValueError):
+            harness_cli.enable_installed(context, launch, "computer", "acp_opencode")
+        result = harness_cli.enable_installed(context, launch, "computer", "acp_opencode", allow_write=True)
+        self.assertTrue(result["configurationChanged"])
+        actual = json.loads(self.backend.data[self.config])
+        self.assertEqual(self.settings["desktop"], actual["desktop"])
+        self.assertEqual(self.settings["devices"], actual["devices"])
+        self.assertEqual(self.settings["stateDir"], actual["stateDir"])
+        self.assertEqual(self.settings["tokenFile"], actual["tokenFile"])
+        self.assertEqual(["command", "acp_opencode"], actual["environments"][0]["workers"])
+        with self.assertRaises(PlatformError):
+            harness_cli.enable_installed(context, launch, "computer", "muse_msp", allow_write=True)
+
+    def test_packaged_owner_entry_routes_discovery_and_enable_without_starting_manager(self):
+        import desktop_worker
+        self.settings["environments"] = [{"id": "computer", "kind": "local", "root": "C:\\Workspace", "workers": ["command"], "writeAllowed": False}]
+        self.backend.data[self.config] = json.dumps(self.settings).encode()
+        def original_context(config, *, current_executable):
+            return WindowsInstalledContext(config, backend=self.backend, localappdata=self.base, current_executable=current_executable)
+        with tempfile.TemporaryDirectory() as directory, patch.object(desktop_worker, "_state", return_value=Path(directory)), \
+                patch.object(desktop_worker, "_mutex", return_value=None) as mutex, \
+                patch("windows_installation.WindowsInstalledContext", side_effect=original_context), \
+                patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", self.exe), \
+                patch("pocket_companion.JobManager", side_effect=AssertionError("owner setup must not start a runtime")):
+            output = io.StringIO()
+            with patch.object(sys, "argv", [self.exe, "--list-harnesses", "--environment", "computer"]), patch("sys.stdout", output):
+                desktop_worker.main()
+            self.assertEqual(40, len(json.loads(output.getvalue())["harnesses"]))
+            mutex.assert_not_called()
+            output = io.StringIO()
+            with patch.object(sys, "argv", [self.exe, "--enable-harness", "acp_opencode", "--environment", "computer", "--allow-harness-write"]), patch("sys.stdout", output):
+                desktop_worker.main()
+            self.assertTrue(json.loads(output.getvalue())["configurationChanged"])
+            mutex.assert_called_once()
+            self.assertIn("acp_opencode", json.loads(self.backend.data[self.config])["environments"][0]["workers"])
 
 
 if __name__ == "__main__": unittest.main()
