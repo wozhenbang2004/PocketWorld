@@ -99,7 +99,43 @@ public final class AttachmentViewSnapshots {
     }
     /** Native failed preparation only; no URI grant has been handed to an external reader. */
     void discard(String token)throws Exception {synchronized(disk){checkToken(token);Files.deleteIfExists(new File(root,token+".blob").toPath());Files.deleteIfExists(new File(root,token+".json").toPath());}}
-    private void prune(){File[] files=root.listFiles((d,n)->n.endsWith(".json"));for(File file:files==null?new File[0]:files){boolean expired=true;try{expired=new JSONObject(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8)).optLong("expiresAt")<System.currentTimeMillis();}catch(Exception ignored){}if(expired){new File(root,file.getName().replace(".json",".blob")).delete();file.delete();}}}
+    /** The snapshot producers and provider are mounted in the manifest's default app
+     * process. Their prepare/open/discard paths hold this same per-root disk lock,
+     * and prepare cannot return a URI before metadata fsync. Acquiring disk therefore
+     * excludes a native writer between blob and index writes. A missing index alone
+     * is insufficient: only regular owned UUID-v4 copies older than a full TTL qualify.
+     * The timestamp is an extra retention gate, not a cross-process/OS-write proof.
+     * Unknown metadata, names and file types never establish deletion permission. */
+    private void prune()throws Exception {
+        if(!Files.isDirectory(root.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))throw new SecurityException("临时查看目录不是原私有目录");
+        long now=System.currentTimeMillis();
+        try(java.nio.file.DirectoryStream<java.nio.file.Path> indices=Files.newDirectoryStream(root.toPath(),"*.json")){
+            for(java.nio.file.Path meta:indices){
+                String name=meta.getFileName().toString(),token=name.substring(0,name.length()-5);
+                if(!ownedSnapshotToken(token)||!Files.isRegularFile(meta,java.nio.file.LinkOption.NOFOLLOW_LINKS)||Files.size(meta)>4096)continue;
+                long expiresAt,size;
+                try{
+                    JSONObject record=new JSONObject(new String(Files.readAllBytes(meta),StandardCharsets.UTF_8));Object expiry=record.opt("expiresAt"),length=record.opt("size"),display=record.opt("name"),mime=record.opt("mimeType"),sha=record.opt("sha256");
+                    if(!token.equals(record.opt("id"))||!(expiry instanceof Long||expiry instanceof Integer)||!(length instanceof Long||length instanceof Integer)||!(display instanceof String)||!(mime instanceof String)||!(sha instanceof String))continue;
+                    if(!display.equals(AttachmentBook.displayName((String)display))||!mime.equals(AttachmentBook.mimeType((String)mime))||!((String)sha).matches("[a-f0-9]{64}"))continue;
+                    expiresAt=((Number)expiry).longValue();size=((Number)length).longValue();
+                }catch(Exception unknown){continue;}
+                if(expiresAt<=0||expiresAt>=now||size<0||size>AttachmentBook.MAX_FILE_BYTES)continue;
+                java.nio.file.Path blob=root.toPath().resolve(token+".blob");
+                if(!Files.isRegularFile(blob,java.nio.file.LinkOption.NOFOLLOW_LINKS)||Files.size(blob)!=size)continue;
+                Files.deleteIfExists(blob);Files.deleteIfExists(meta);
+            }
+        }
+        try(java.nio.file.DirectoryStream<java.nio.file.Path> blobs=Files.newDirectoryStream(root.toPath(),"*.blob")){
+            for(java.nio.file.Path blob:blobs){
+                String name=blob.getFileName().toString(),token=name.substring(0,name.length()-5);if(!ownedSnapshotToken(token))continue;
+                java.nio.file.attribute.BasicFileAttributes attributes=Files.readAttributes(blob,java.nio.file.attribute.BasicFileAttributes.class,java.nio.file.LinkOption.NOFOLLOW_LINKS);long modified=attributes.lastModifiedTime().toMillis();
+                if(!attributes.isRegularFile()||attributes.size()>AttachmentBook.MAX_FILE_BYTES||modified<=0||modified>=now-TTL_MS)continue;
+                if(Files.notExists(root.toPath().resolve(token+".json"),java.nio.file.LinkOption.NOFOLLOW_LINKS))Files.deleteIfExists(blob);
+            }
+        }
+    }
+    private static boolean ownedSnapshotToken(String token){return token.matches("[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}");}
     private static void checkToken(String value){if(value==null||!value.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("临时查看引用无效");}
     private static String digest(byte[] bytes)throws Exception{StringBuilder result=new StringBuilder();for(byte b:MessageDigest.getInstance("SHA-256").digest(bytes))result.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return result.toString();}
 }
