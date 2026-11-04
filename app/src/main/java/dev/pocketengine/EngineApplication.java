@@ -1589,13 +1589,16 @@ public final class EngineApplication extends Application implements dev.pocketen
             if(phone) {
                 // Match the existing Application -> TaskStore lock order. The original native
                 // control/display binding is rechecked within this one durable input admission.
+                Runnable replan=null;
                 synchronized(this) {synchronized(tasks) {
                     capture.validate(preview);checkOwnerScreenContextTarget(target,original);
                     tasks.openPhoneOwnerInputMailbox(target.taskId,target.runId,target.epoch,original);
                     JSONObject message=json("id",java.util.UUID.randomUUID().toString(),"clientMessageId",client,"content",text,"attachments",refs);
-                    admissionStarted=true;tasks.appendPhoneOwnerInput(target.taskId,target.runId,target.epoch,message,original);
-                    JSONObject receipt=tasks.phoneOwnerInputReceipt(target.taskId,target.runId,target.epoch,client);pushTask(target.taskId);return receipt;
+                    admissionStarted=true;JSONObject accepted=tasks.appendPhoneOwnerInput(target.taskId,target.runId,target.epoch,message,original);
+                    if(!accepted.optBoolean("duplicate"))replan=original.prepareModelReplan(target.taskId,target.runId,target.epoch);
                 }}
+                if(replan!=null)replan.run();
+                JSONObject receipt=tasks.phoneOwnerInputReceipt(target.taskId,target.runId,target.epoch,client);pushTask(target.taskId);return receipt;
             }
             // The conversation admission lock must not be entered under the TaskStore monitor.
             // Its existing native append rechecks the expected run and exact original control.
@@ -1914,7 +1917,14 @@ public final class EngineApplication extends Application implements dev.pocketen
         AssistantInputBinding binding=assistantInputs.get(control);
         if(binding==null||binding.phase.get()==2||!conversation.equals(binding.conversation)||!binding.task.equals(expected.optString("taskId"))||!binding.run.equals(expected.optString("runId"))||binding.epoch!=expected.optInt("epoch")||capabilityControls.get(binding.task)!=control)throw new SecurityException("输入没有原对话当前任务/控制绑定");
         if(hasAttachments(message))attachmentRoutePins.require(binding.task,binding.config,true);
-        JSONObject accepted=tasks.appendOwnerInput(binding.task,binding.run,binding.epoch,conversation,message,mode,control);pushTask(binding.task);return ownerInputBinding(binding,accepted);
+        JSONObject accepted;Runnable replan=null;
+        // Order the revision with the durable mailbox claim; transport cleanup runs after this lock.
+        synchronized(tasks){
+            accepted=tasks.appendOwnerInput(binding.task,binding.run,binding.epoch,conversation,message,mode,control);
+            if("steer".equals(mode)&&!accepted.optBoolean("duplicate"))replan=control.prepareModelReplan(binding.task,binding.run,binding.epoch);
+        }
+        if(replan!=null)replan.run();
+        pushTask(binding.task);return ownerInputBinding(binding,accepted);
     }
     private static JSONObject ownerInputBinding(AssistantInputBinding binding,JSONObject accepted)throws Exception{
         JSONObject result=binding.json();for(String key:new String[]{"queueRevision","queueState","queueRole","ownerMessageRevision"})if(accepted.has(key))result.put(key,accepted.get(key));return result;
@@ -1925,6 +1935,18 @@ public final class EngineApplication extends Application implements dev.pocketen
     public JSONObject mutateQueuedChatInput(String task,String conversation,String message,long queueRevision,long messageRevision,String content,String mode,boolean withdrawn)throws Exception{
         EngineModule module=features.module("assistant");if(!(module instanceof dev.pocketengine.features.assistant.AssistantModule))throw new IllegalStateException("私人消息宿主尚未就绪");
         JSONObject result=((dev.pocketengine.features.assistant.AssistantModule)module).mutateQueuedOwnerInput(task,conversation,message,queueRevision,messageRevision,content,mode,withdrawn);
+        Runnable replan=null;
+        if(!withdrawn&&"steer".equals(result.optString("mode"))&&"pending".equals(result.optString("queueState"))) {
+            synchronized(tasks){
+                for(AssistantInputBinding binding:assistantInputs.values())if(binding.phase.get()!=2&&task.equals(binding.task)&&conversation.equals(binding.conversation)&&capabilityControls.get(binding.task)==binding.control){
+                    JSONObject current=tasks.queuedOwnerInput(task,conversation,message);
+                    if("pending".equals(current.optString("queueState"))&&"steer".equals(current.optString("mode"))&&current.getLong("queueRevision")==result.getLong("queueRevision"))
+                        replan=binding.control.prepareModelReplan(binding.task,binding.run,binding.epoch);
+                    break;
+                }
+            }
+        }
+        if(replan!=null)replan.run();
         pushTask(task);return result;
     }
     private static boolean hasAttachments(JSONObject message){JSONArray refs=message.optJSONArray("attachments");return refs!=null&&refs.length()>0;}

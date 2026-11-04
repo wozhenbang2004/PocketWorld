@@ -94,6 +94,25 @@ public final class AccountModelInferenceTest {
             try{Future<JSONObject> pending=worker.submit(()->ModelGateway.complete(config,messages(),null,control));assertTrue(rig.fake.responseEntered.await(2,TimeUnit.SECONDS));control.cancel();try{pending.get(2,TimeUnit.SECONDS);fail();}catch(java.util.concurrent.ExecutionException expected){assertTrue(expected.getCause() instanceof InterruptedException);}assertEquals(1,rig.fake.responses.get());}finally{worker.shutdownNow();}
         }
     }
+    @Test public void steeringCancelsOnlyTheCurrentAccountRequestAndKeepsItsOriginalReceipt()throws Exception {
+        try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
+            String id=rig.connect();bind(rig);ModelConfig config=config(rig,id);rig.fake.stream=textStream();rig.fake.allowResponse=new CountDownLatch(1);
+            RunControl control=new RunControl();control.bindHostRun("steer-task","steer-run",1);
+            java.util.List<dev.pocketengine.runtime.usage.InferenceReceipt> receipts=new java.util.concurrent.CopyOnWriteArrayList<>();
+            var target=new dev.pocketengine.runtime.usage.InferenceCapture.Target(new dev.pocketengine.runtime.usage.InferenceReceipt.Context("steer-task","steer-run",1,dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN,""),new dev.pocketengine.runtime.usage.InferenceCapture.Sink(){public void started(dev.pocketengine.runtime.usage.InferenceReceipt receipt){}public void finished(dev.pocketengine.runtime.usage.InferenceReceipt receipt){receipts.add(receipt);}});
+            ExecutorService worker=Executors.newSingleThreadExecutor();
+            try{
+                long revision=control.modelReplanRevision();Future<JSONObject> pending=worker.submit(()->ModelGateway.completeStreaming(config,messages(),null,control,event->{},target,null,revision));
+                assertTrue(rig.fake.responseEntered.await(2,TimeUnit.SECONDS));assertTrue(control.requestModelReplan("steer-task","steer-run",1));
+                var stopped=assertThrows(java.util.concurrent.ExecutionException.class,()->pending.get(2,TimeUnit.SECONDS));assertTrue(stopped.getCause() instanceof RunControl.ModelReplanRequested);
+                assertEquals(1,rig.fake.allowResponse.getCount());assertFalse(control.isCancelled());assertEquals(1,rig.fake.responses.get());assertEquals(dev.pocketengine.runtime.usage.InferenceReceipt.Outcome.CANCELLED,receipts.get(0).outcome);
+                rig.fake.allowResponse.countDown();JSONArray updated=messages().put(new JSONObject().put("role","user").put("content","new original owner input"));
+                assertEquals("实际结果",ModelGateway.completeStreaming(config,updated,null,control,event->{},target,null,control.modelReplanRevision()).getString("content"));
+                assertEquals(2,rig.fake.responses.get());assertEquals(2,receipts.size());assertTrue(rig.fake.lastRequest.toString().contains("new original owner input"));
+                assertTrue(control.matchesHostRun("steer-task","steer-run",1));assertEquals(dev.pocketengine.runtime.usage.InferenceReceipt.Outcome.COMPLETED,receipts.get(1).outcome);
+            }finally{rig.fake.allowResponse.countDown();worker.shutdownNow();assertTrue(worker.awaitTermination(3,TimeUnit.SECONDS));}
+        }
+    }
     @Test public void imageUnknownFieldAndDanglingResultFailBeforeNetwork()throws Exception {
         try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
             String id=rig.connect();bind(rig);ModelConfig config=config(rig,id);

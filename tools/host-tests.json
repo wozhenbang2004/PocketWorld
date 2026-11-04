@@ -894,6 +894,9 @@
   "runner-budget-stream": {
     "class": "dev.pocketengine.runtime.context.RunnerBudgetIntegrationTest",
     "additionalClasses": [
+      "dev.pocketengine.core.ModelSteeringControlTest",
+      "dev.pocketengine.runtime.OwnerSteeringRunnerTest",
+      "dev.pocketengine.runtime.SafeModelRecoveryTest",
       "dev.pocketengine.runtime.RecoveryProjectionTest",
       "dev.pocketengine.runtime.RuntimeStreamingProtocolTest",
       "dev.pocketengine.runtime.OwnerIntentRunnerNativeTest",

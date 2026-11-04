@@ -43,6 +43,8 @@ public final class RunControl {
     private volatile ConditionWaitException conditionWait;
     private final CopyOnWriteArrayList<CancelAction> cancellationActions = new CopyOnWriteArrayList<>();
     private final AtomicLong pauseRevision = new AtomicLong();
+    private final AtomicLong modelReplanRevision = new AtomicLong();
+    private final CopyOnWriteArrayList<ModelRequest> modelRequests = new CopyOnWriteArrayList<>();
     private volatile AuthorityCheck authorityCheck;
     private final CopyOnWriteArrayList<AuthorityCheck> retainedAuthorityChecks=new CopyOnWriteArrayList<>();
     private volatile String boundTask;
@@ -124,6 +126,86 @@ public final class RunControl {
         final AtomicBoolean invoked = new AtomicBoolean();
         CancelAction(Runnable action) { this.action = java.util.Objects.requireNonNull(action); }
         void invoke() { if (invoked.compareAndSet(false, true)) try { action.run(); } catch (RuntimeException ignored) { } }
+    }
+    /** Prepare under the original mailbox's monitor, after a pending steer is durably
+     * accepted and before another poll may claim it. Only the revision changes here;
+     * invoke the returned wake-up OUTSIDE store/application locks. Null rejects stale
+     * identities. Queue/duplicate/withdrawal receipts must not prepare a notification. */
+    public Runnable prepareModelReplan(String taskId,String runId,int epoch) {
+        if(recoveryOnly||cancelled.get()||!hasHostRun()||!matchesHostRun(taskId,runId,epoch))return null;
+        long preparedRevision=modelReplanRevision.incrementAndGet();AtomicBoolean delivered=new AtomicBoolean();
+        return ()->{
+            if(!delivered.compareAndSet(false,true))return;
+            for(ModelRequest request:modelRequests)request.signal(preparedRevision);
+            synchronized(monitor){monitor.notifyAll();}
+        };
+    }
+    /** Convenience for native callers with no mailbox/claim race. Store-backed owner
+     * inputs use prepareModelReplan and the original store monitor instead. */
+    public boolean requestModelReplan(String taskId,String runId,int epoch) {
+        Runnable wake=prepareModelReplan(taskId,runId,epoch);if(wake==null)return false;wake.run();return true;
+    }
+    /** Capture before polling the durable mailbox, so acceptance during poll/projection
+     * cannot be missed by a request which has not registered its transport yet. */
+    public long modelReplanRevision(){return modelReplanRevision.get();}
+    public static final class ModelReplanRequested extends InterruptedException {
+        private ModelReplanRequested(){super("Original owner input requires a fresh model request");}
+    }
+    /** A single logical model request, not a child RunControl. Its callbacks must only
+     * stop that request's transport/wait; tool and run cleanup remain on onCancel. */
+    public final class ModelRequest implements AutoCloseable {
+        private final long revision;
+        private final AtomicBoolean closed=new AtomicBoolean();
+        private final CopyOnWriteArrayList<ModelCancellation> actions=new CopyOnWriteArrayList<>();
+        private ModelRequest(long revision){this.revision=revision;}
+        public void check()throws InterruptedException {
+            RunControl.this.check();
+            current();
+        }
+        private void current()throws InterruptedException {
+            if(cancelled.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Run stopped");
+            if(closed.get())throw new IllegalStateException("Model request scope is closed");
+            if(modelReplanRevision.get()!=revision)throw new ModelReplanRequested();
+        }
+        /** One idempotent registration shared by real Stop and this request's steering. */
+        public AutoCloseable onCancel(Runnable action) {
+            if(closed.get())throw new IllegalStateException("Model request scope is closed");
+            ModelCancellation registration=new ModelCancellation(action);
+            actions.add(registration);RunControl.this.onCancel(registration.stop);
+            if(closed.get()){registration.close();throw new IllegalStateException("Model request scope is closed");}
+            if(modelReplanRevision.get()!=revision)registration.action.invoke();
+            return registration;
+        }
+        private final class ModelCancellation implements AutoCloseable {
+            final CancelAction action;
+            final Runnable stop;
+            ModelCancellation(Runnable action){this.action=new CancelAction(action);stop=this.action::invoke;}
+            public void close(){actions.remove(this);RunControl.this.removeCancelAction(stop);}
+        }
+        private void signal(long preparedRevision){if(!closed.get()&&revision<preparedRevision)for(ModelCancellation action:actions)action.action.invoke();}
+        public void checkpoint()throws InterruptedException {
+            check();
+            synchronized(monitor){current();while(paused){monitor.wait(100);current();}}
+            check();
+        }
+        public void sleep(long millis)throws InterruptedException {
+            long until=System.nanoTime()+Math.max(0,millis)*1_000_000L;
+            while(System.nanoTime()<until){
+                checkpoint();
+                synchronized(monitor){
+                    current();
+                    long remaining=(until-System.nanoTime())/1_000_000L;
+                    if(remaining>0)monitor.wait(Math.min(100,remaining));
+                }
+            }
+            checkpoint();
+        }
+        @Override public void close(){if(closed.compareAndSet(false,true)){modelRequests.remove(this);for(ModelCancellation action:actions)action.close();}}
+    }
+    public ModelRequest openModelRequest(long expectedRevision)throws InterruptedException {
+        requireExecution();
+        ModelRequest request=new ModelRequest(expectedRevision);modelRequests.add(request);
+        try{request.check();return request;}catch(InterruptedException|RuntimeException refused){request.close();throw refused;}
     }
     public long pauseRevision() { return pauseRevision.get(); }
     public void pause() { synchronized(monitor) { ownerPaused=true;conditionWait=null;paused = true; pauseRevision.incrementAndGet(); } }
