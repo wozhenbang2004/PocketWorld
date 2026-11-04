@@ -1346,5 +1346,11 @@
     "additionalClasses": [
       "dev.pocketengine.ui.AttachmentExportPickerRegistryTest"
     ]
+  },
+  "private-task-run-control": {
+    "class": "dev.pocketengine.PrivateTaskRunControlNativeTest",
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original private phone/assistant task/run/epoch validation, exact controller matching, native assistant reservation and delayed real worker pickup after a successor run. Actual Engine/SQLite/RunControl with controlled startup/presentation/executor pickup; no model/tool execution, mounted UI or device acceptance. Specialized group/team/channel/approval routes remain separate."
   }
 }
