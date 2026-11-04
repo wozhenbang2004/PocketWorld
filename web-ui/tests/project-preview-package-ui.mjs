@@ -108,7 +108,7 @@ try {
     assert.equal(after.composer.previewRefs[0].sourceKind, 'fixed_workspace_project_artifact'); assert.equal(await count('composer.send'), 0);
     await shot('fixed-package-selected'); await page.getByRole('button', { name: '返回原对话', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('.pw-app').dataset.route === 'chat');
-    await page.getByRole('button', { name: /元素引用 · 1/ }).click(); await page.getByRole('button', { name: '查看片段与来源', exact: true }).click();
+    await page.getByRole('button', { name: /元素引用 · 1/ }).click(); await page.getByRole('region', { name: '元素引用清单', exact: true }).getByRole('button', { name: /^1 · / }).click();
     await page.getByText('原任务固定项目包', { exact: true }).waitFor(); await shot('fixed-reference-original-composer');
     await page.evaluate(() => window.previewFixture.clearText()); assert.equal(await page.getByRole('button', { name: '发送', exact: true }).isDisabled(), true);
     await page.getByRole('textbox', { name: '工作输入', exact: true }).fill('请沿这份原项目任务调整所选按钮。');

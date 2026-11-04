@@ -101,7 +101,7 @@ try {
     assert.equal(after.state.projectPreview.visible, false); assert.equal(after.state.projectPreview.selecting, false);
     assert.equal(await count('composer.send'), 0); assert.equal(await count('conversation.select'), 0);
     await page.getByRole('button', { name: /^元素引用 · 1/ }).click();
-    await page.getByRole('button', { name: '查看片段与来源', exact: true }).click();
+    await page.getByRole('region', { name: '元素引用清单', exact: true }).getByRole('button', { name: /^1 · / }).click();
     assert.equal(await page.locator('.pw-preview-references img').count(), 0); assert.equal(await page.evaluate(() => window.untrustedExecuted), undefined);
     await page.getByText(/定位提示不是源码行号/).waitFor(); await shot('composer-quotes-attachments-preview-coexist');
     await navigate('项目'); await page.getByRole('button', { name: '预览项目', exact: true }).click();
