@@ -32,6 +32,7 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
     private final RunControl runOwner;
     private final Handler main=new Handler(Looper.getMainLooper());
     private final PhoneReadGate reads=new PhoneReadGate();
+    private final java.util.concurrent.atomic.AtomicBoolean previewInFlight=new java.util.concurrent.atomic.AtomicBoolean();
     private volatile Observation current;
     private volatile JSONObject cached;
     private volatile OwnerPermit ownerPermit;
@@ -72,6 +73,23 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
         JSONObject result=new JSONObject().put("sessionId",sessionId).put("displayId",displayId);
         if(runOwner!=null){var identity=runOwner.hostRunIdentity();result.put("taskId",identity.taskId()).put("runId",identity.runId()).put("coordinatorEpoch",identity.epoch());}
         return result;
+    }
+    /** Owner viewer only: independent of model observations, references, pause and input admission. */
+    public JSONObject previewFrameForOwner(PhoneLivePreview.Request selected,RunControl original,NativePhoneEntry.Admission currentOwner)throws Exception {
+        worker();
+        if(currentOwner==null||selected==null||original==null||original!=runOwner
+                ||!original.matchesHostRun(selected.taskId(),selected.runId(),selected.epoch())
+                ||selected.sessionId()!=null&&(!sessionId.equals(selected.sessionId())||displayId!=selected.displayId()))
+            throw new SecurityException("原观看目标已变化");
+        NativePhoneEntry.Admission current=()->{
+            currentOwner.check();
+            if(closed||original.isCancelled()||ownerHandoffActive()
+                    ||!module.hasSession(original)||!module.ownedBy(selected.taskId(),sessionId,displayId))
+                throw new SecurityException("原独立屏已停止、交还或移屏");
+        };
+        if(!previewInFlight.compareAndSet(false,true))throw new IllegalStateException("原独立屏画面正在读取");
+        try{return module.previewFrameForOwner(original,sessionId,displayId,selected.afterFrameGeneration(),current);}
+        finally{previewInFlight.set(false);}
     }
     /** The native supervisor binds the retained original run, never model JSON. */
     public synchronized void bindLifecycle(android.content.Context context,String task,String run,int epoch,RunControl original)throws Exception {

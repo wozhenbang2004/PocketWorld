@@ -540,6 +540,34 @@ public final class DisplayModule implements EngineModule {
         if(!java.util.Set.of("audio.get","audio.set").contains(command)||ownersPinned()||retainedDisplays()||bootstrapBusy()||!isConnected())throw new SecurityException("owner_audio_recovery_unavailable");
         JSONObject answer=call("audio_recovery."+command.substring("audio.".length()),new JSONObject(payload.toString()),null);requireOk(answer);return answer;
     }
+    /** A private owner read cannot mark an execution uncertain, adopt geometry, or recreate a session. */
+    JSONObject previewFrameForOwner(RunControl original,String expectedSession,int expectedDisplay,long after,
+            dev.pocketengine.phone.observation.NativePhoneEntry.Admission currentOwner)throws Exception {
+        if(currentOwner==null||original==null||after< -1||expectedSession==null||expectedSession.isEmpty()||expectedDisplay<=0)
+            throw new SecurityException("原画面读取身份不完整");
+        RunSession retained=requireRun(original);
+        dev.pocketengine.phone.observation.NativePhoneEntry.Admission current=()->{
+            currentOwner.check();
+            if(Thread.currentThread().isInterrupted()||original.isCancelled()||requireRun(original)!=retained
+                    ||!runReady(retained)||!matches(retained.state,expectedSession,expectedDisplay)||helperSessionRouting<2)
+                throw new SecurityException("原独立屏会话已变化，请重新打开观看");
+        };
+        current.check();
+        JSONObject args=wireFor(retained,new JSONObject().put("sessionId",expectedSession).put("displayId",expectedDisplay)
+                .put("afterFrameGeneration",after));
+        // Never use request(): action transport failures deliberately retain a recovery barrier there.
+        JSONObject frame;
+        try{frame=exchange==null?client().previewFrame(args,original,current)
+                :exchange.call("preview_frame",args,original,original.pauseRevision(),original.isPaused(),current);}
+        catch(Exception unavailable){current.check();throw unavailable;}
+        current.check();
+        if(!frame.optBoolean("ok")&&java.util.Set.of("invalid_lease","helper_session_closed","display_lost","exact_session_required",
+                "original_run_mismatch","original_session_ended").contains(frame.optString("error")))
+            throw new SecurityException("原独立屏观看会话已结束："+frame.optString("error"));
+        requireOk(frame);validateRunReply(retained,frame);
+        if(!matches(frame,expectedSession,expectedDisplay))throw new SecurityException("原画面会话回执不匹配");
+        return PhoneLivePreview.present(frame,retained.owner,expectedSession,expectedDisplay,after);
+    }
     /** Native private-owner settings only; deliberately not added to handle/model tools. */
     public synchronized JSONObject setAudioPolicyForOwner(boolean enabled)throws Exception {
         if(enabled&&(ownersPinned()||bootstrapBusy()))throw new SecurityException("stop_phone_task_before_enabling_audio_policy");
