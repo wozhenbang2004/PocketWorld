@@ -762,7 +762,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun returnToPendingComposer(client:String) {
         if(state.chatSubmitting)return
         val model=ownerComposer ?: return
-        try{voiceInputModeChanged();model.selectPending(client);chatViewEpoch++;publishComposer(true);state=state.copy(messages=emptyList(),chatActiveTurn=null,chatBusy=false);refreshCurrentConversationTurn();voiceInputViewChanged();persistOwnerComposer();state.conversationId?.let{feature("assistant","get",JSONObject().put("conversationId",it))}}
+        try{voiceInputModeChanged();model.selectPending(client);chatViewEpoch++;publishComposer(true);state=state.copy(messages=emptyList(),chatActiveTurn=null,foregroundTurn=null,chatBusy=false);refreshCurrentConversationTurn();voiceInputViewChanged();persistOwnerComposer();state.conversationId?.let{feature("assistant","get",JSONObject().put("conversationId",it))}}
         catch(error:Exception){state=state.copy(error=message(error))}
     }
     fun useRecoveredComposerVoice(key:String,revision:Long,text:String) {
@@ -912,6 +912,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun queryChatSubmission(client:String) { if(client.isNotBlank()) feature("assistant","getSubmission",JSONObject().put("clientMessageId",client)) }
     private fun receiveChatAcknowledgement(result:JSONObject,expectedClient:String?,query:Boolean=false) {
         val client=result.optString("clientMessageId");if(client.isBlank()||expectedClient!=null&&client!=expectedClient)return
+        val original=ownerComposer?.pending(client)
+        if(original!=null&&!ChatInputRules.receiptMatchesOriginal(result,original.conversationId,original.originalTarget())){
+            val own=submittingChatClient==client;if(own)submittingChatClient=null
+            state=state.copy(chatSubmitting=if(own)false else state.chatSubmitting,notice="原输入回执的任务或对话不一致；草稿与原身份仍保留，请查询原回执")
+            return
+        }
         val receipt=ChatInputRules.mergeReceipt(state.chatReceipts[client],result) ?: return
         val ownsPending=submittingChatClient==client;if(ownsPending)submittingChatClient=null
         val allReceipts=state.chatReceipts+(client to receipt)
@@ -1218,6 +1224,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         ownerArchives.openProjectMemory(scope.selected, scope.label)
     }
     /** Explicit native owner selection. Old requests/rows are retired before changing the token. */
+    @JvmOverloads
     fun selectMemoryNamespace(choice: JSONObject?, done: ((JSONObject?, String?) -> Unit)? = null) {
         check(!closed && ownerDomain == "memoryReview") { "请先打开原生记忆审核页" }
         check(memoryReviewScope != MemoryReviewScope.Changing) { "正在核对原生范围，请等待真实回执" }
@@ -1683,7 +1690,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     /** Native owner action; the host resolves the existing original control, never payload authority. */
 
-    fun detach() { skillDocuments.close();projectFileImports.detach();synchronized(pendingProjectMemoryStarts) { projectMemoryStartClosed=true;pendingProjectMemoryStarts.values.forEach { it.consent.closeIfUnbound() };pendingProjectMemoryStarts.clear() };projectGitImports.detach();projectStorage.detach();ownerArchives.detach();projectGit.close();closeNativeEvaluation();closeNativeInferenceHistory();closeConversationReader();projectPackages.detach();persistOwnerComposer();closeProjectPreview();closeProjectLivePreview(); voiceForeground=false;quickPanelVoiceSession?.close();quickPanelVoiceSession=null;taskAnnouncements.close();voiceContextEpoch.incrementAndGet();voiceInput.close();attachmentOutcomes.detach();groupTaskPage?.let(::leaveGroupTask); groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null; state = state.copy(modelDrafts = emptyMap()); pluginCatalogPage?.close(); pluginCatalogPage = null; ownerDomain?.let(::leaveOwnerDomain); ownerRequests.values.forEach { cancelOwnerControl(it); it.call.cancel() }; main.removeCallbacks(accountPoll); closed = true; modelSelectionSubscription?.close(); modelSelectionSubscription = null; modelMutations.forEach { it.close() }; modelMutations.clear(); app.removeObserver(observer); io.shutdownNow(); controls.shutdownNow(); realtimeIo.shutdownNow(); phonePreviewIo.shutdownNow(); pending.clear(); webFeatureReceipts.clear(); webOwnerReceipts.clear(); webChatCancelCallbacks.clear(); webChatCancelBindings.clear(); closeTaskReviewReads() }
+    fun detach() { skillDocuments.close();projectFileImports.detach();synchronized(pendingProjectMemoryStarts) { projectMemoryStartClosed=true;pendingProjectMemoryStarts.values.forEach { it.consent.closeIfUnbound() };pendingProjectMemoryStarts.clear() };projectGitImports.detach();projectStorage.detach();ownerArchives.detach();projectGit.close();closeNativeEvaluation();closeNativeInferenceHistory();closeConversationReader();projectPackages.detach();persistOwnerComposer();closeProjectPreview();closeProjectLivePreview(); voiceForeground=false;quickPanelVoiceSession?.close();quickPanelVoiceSession=null;taskAnnouncements.close();voiceContextEpoch.incrementAndGet();voiceInput.close();attachmentOutcomes.detach();groupTaskPage?.let(::leaveGroupTask); groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null; state = state.copy(modelDrafts = emptyMap()); pluginCatalogPage?.close(); pluginCatalogPage = null; ownerDomain?.let(::leaveOwnerDomain); ownerRequests.values.forEach { cancelOwnerControl(it); it.call.cancel() }; main.removeCallbacks(accountPoll); closed = true; modelSelectionSubscription?.close(); modelSelectionSubscription = null; modelMutations.forEach { it.close() }; modelMutations.clear(); app.removeObserver(observer); io.shutdownNow(); controls.shutdownNow(); realtimeIo.shutdownNow(); phonePreviewIo.shutdownNow(); pending.clear(); webFeatureReceipts.clear(); webOwnerReceipts.clear(); webChatCancelCallbacks.clear(); webChatCancelBindings.clear(); ownerWorkInputCallbacks.clear(); closeTaskReviewReads() }
     fun refresh() { authorizationOpening = null; ownerDomain?.let { requestOwnerDomain(it, "snapshot") }; native("getState"); native("getFeatures"); native("rescheduleAutomation"); feature("assistant", "list") }
     fun suggestInput(text: String, phoneTask: Boolean? = null) {
         if (text.isNotBlank()) state = state.copy(suggestedInputRevision = state.suggestedInputRevision + 1, suggestedInput = text, suggestedPhoneTask = phoneTask)
@@ -2180,7 +2187,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         compatibilityChat=null
         if(state.chatSubmitting)return
         val model=ownerComposer ?: return
-        try{voiceInputModeChanged();model.newConversation();chatViewEpoch++;publishComposer(true);state=state.copy(messages=emptyList(),chatActiveTurn=null,chatBusy=false);refreshCurrentConversationTurn();voiceInputViewChanged();persistOwnerComposer()}
+        try{voiceInputModeChanged();model.newConversation();chatViewEpoch++;publishComposer(true);state=state.copy(messages=emptyList(),chatActiveTurn=null,foregroundTurn=null,chatBusy=false);refreshCurrentConversationTurn();voiceInputViewChanged();persistOwnerComposer()}
         catch(error:Exception){state=state.copy(error=message(error))}
     }
     /** Navigation and draft staging only. The ordinary native send/cancel controls remain authoritative. */
@@ -2209,7 +2216,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         try {
             dev.pocketengine.features.assistant.CompatibilityChatHandoff.read(app,review.id)
             voiceInputModeChanged();val draft=if(review.conversationId.isBlank())model.newConversation() else model.selectConversation(review.conversationId)
-            chatViewEpoch++;publishComposer(true);voiceInputViewChanged();closeConversationReader();state=state.copy(messages=emptyList(),chatActiveTurn=null,chatBusy=false);refreshCurrentConversationTurn()
+            chatViewEpoch++;publishComposer(true);voiceInputViewChanged();closeConversationReader();state=state.copy(messages=emptyList(),chatActiveTurn=null,foregroundTurn=null,chatBusy=false);refreshCurrentConversationTurn()
             if(review.conversationId.isNotBlank())feature("assistant","get",JSONObject().put("conversationId",review.conversationId))
             if(review.applied()){compatibilityChat=null;return}
             if(review.text.isEmpty()||review.text==draft.text){saveCompatibilityChat(review,model);return}
@@ -2235,7 +2242,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         compatibilityChat=null
         if(state.chatSubmitting){openConversationReader(id);return}
         val model=ownerComposer ?: return
-        try{voiceInputModeChanged();model.selectConversation(id);chatViewEpoch++;publishComposer(true);state=state.copy(messages=emptyList(),chatActiveTurn=null,chatBusy=false);refreshCurrentConversationTurn();voiceInputViewChanged();persistOwnerComposer();feature("assistant","get",JSONObject().put("conversationId",id))}
+        try{voiceInputModeChanged();model.selectConversation(id);chatViewEpoch++;publishComposer(true);state=state.copy(messages=emptyList(),chatActiveTurn=null,foregroundTurn=null,chatBusy=false);refreshCurrentConversationTurn();voiceInputViewChanged();persistOwnerComposer();feature("assistant","get",JSONObject().put("conversationId",id))}
         catch(error:Exception){state=state.copy(error=message(error))}
     }
     private fun refreshCurrentConversationTurn(snapshot: JSONObject? = null): Boolean {
@@ -2244,11 +2251,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             val turn = dev.pocketengine.features.assistant.ConversationTurnProjection.current(assistant, state.conversationId, state.chatActiveTurn) {
                 try { app.chatInputModel(it).optBoolean("available") } catch (_: Exception) { false }
             }
-            state = state.copy(chatActiveTurn = turn, chatBusy = turn != null,
+            val foreground = turn?.takeUnless { it.optString("executionRole") == "owner_work" || state.tasks.firstOrNull { task -> task.id == it.optString("taskId") }?.raw?.optString("executionRole") == "owner_work" }
+            state = state.copy(chatActiveTurn = foreground, foregroundTurn = foreground, chatBusy = foreground != null,
                 features = JSONObject(state.features.toString()).put("assistant", assistant))
             return true
         } catch (failure: Exception) {
-            state = state.copy(chatActiveTurn = null, chatBusy = false, error = "原对话执行状态暂不可核对，请刷新后再发送：" + message(failure))
+            state = state.copy(chatActiveTurn = null, foregroundTurn = null, chatBusy = false, error = "原对话执行状态暂不可核对，请刷新后再发送：" + message(failure))
             return false
         }
     }
@@ -2264,7 +2272,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val selected=state.selectedChatAttachments.toList();val selectedSources=draft.sourceRefs();val selectedPreviews=draft.previewRefs()
         if(selectedPreviews.length()>0&&!composerPreviewRefsAvailable()){state=state.copy(error="原元素引用已不可用，草稿仍保留；请移除或回原预览重新选择");return}
         val fingerprint=ChatInputRules.fingerprint(text.trim(),state.conversationId,state.chatSendMode,selected,selectedSources,selectedPreviews)
-        val unresolved=model.matchingPending(draft.key,fingerprint)
+        val unresolved=model.matchingPending(draft.key,fingerprint) ?: matchingOriginalOwnerWorkInput(model,draft.key,fingerprint)
         if(unresolved!=null){if(canRetryLocallyUnsent(unresolved.clientId))state=state.copy(notice="本进程确认这条原输入尚未派发；修复保存问题后，请明确点击原输入下的重新保存并发送")else{queryChatSubmission(unresolved.clientId);state=state.copy(notice="正在查询同一输入的原回执，没有用新消息身份重发")};return}
         val client=try{voiceInput.claimMessageId(voiceTarget(false),voiceOwnerAuthority())?:UUID.randomUUID().toString()}catch(error:Exception){state=state.copy(error=message(error));return}
         val input=JSONObject().put("message",text.trim()).put("clientMessageId",client).put("mode",draft.mode).put("attachments",org.json.JSONArray().also{a->selected.forEach{a.put(it.selection())}});if(selectedSources.length()>0)input.put("ownerSourceRefs",selectedSources);if(selectedPreviews.length()>0)input.put("ownerPreviewRefs",selectedPreviews)
@@ -2276,11 +2284,66 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         submittingChatClient=client;composerSaving=true;state=state.copy(chatSubmitting=true,error=null,chatReceipts=state.chatReceipts+(client to JSONObject().put("clientMessageId",client).put("status","unconfirmed")))
         persistPreparedChat(client,input,model,false)
     }
+    private val ownerWorkInputCallbacks = mutableMapOf<String, (JSONObject?, String?) -> Unit>()
+    /** Uses the same durable owner draft and submission receipt as ordinary conversation input. */
+    internal fun sendOwnerWorkInput(expected: JSONObject, client: String, text: String, mode: String, done: (JSONObject?, String?) -> Unit) {
+        check(webPrivateOwnerVisible() && !state.chatSubmitting) { "请等待原输入回执" }
+        require(UUID.fromString(client).toString() == client && mode in setOf("queue", "steer")) { "补充身份或采用方式无效" }
+        val binding = originalOwnerWorkBinding(expected, state.conversationId, state.tasks)
+        val model = ownerComposer ?: error("原草稿尚未读取，未发送")
+        val draft = model.active()
+        require(draft.conversationId == state.conversationId && text == draft.text && text.isNotBlank() && text.trim().length <= 12000 && mode == draft.mode) { "原草稿或补充方式已变化，请核对保留内容" }
+        require(draft.sourceRefs().length() == 0 && draft.previewRefs().length() == 0) { "本次任务补充支持文字和已选附件；原文或预览引用仍保留，请先在管家对话中处理" }
+        val selected = state.selectedChatAttachments.toList()
+        val fingerprint = ownerWorkDraftFingerprint(ChatInputRules.fingerprint(text.trim(), state.conversationId, mode, selected, draft.sourceRefs(), draft.previewRefs()), binding)
+        val unresolved = model.matchingPending(draft.key, fingerprint)
+        if (unresolved != null) {
+            queryChatSubmission(unresolved.clientId)
+            done(JSONObject().put("clientMessageId", unresolved.clientId).put("status", "unconfirmed").put("message", "正在查询这条输入的原回执，没有重复提交"), null)
+            return
+        }
+        require(model.pending(client) == null) { "这条输入身份已登记，请查询原回执" }
+        model.prepare(client, draft.key, draft.revision, fingerprint, binding)
+        val input = JSONObject(binding.toString()).put("message", text.trim()).put("clientMessageId", client).put("mode", mode)
+            .put("attachments", org.json.JSONArray().also { files -> selected.forEach { files.put(it.selection()) } }).put("_ownerWorkTargeted", true)
+        ownerWorkInputCallbacks[client] = done
+        publishComposer(); submittingChatClient = client; composerSaving = true
+        state = state.copy(chatSubmitting = true, error = null, chatReceipts = state.chatReceipts + (client to JSONObject().put("clientMessageId", client).put("status", "unconfirmed")))
+        persistPreparedChat(client, input, model, false)
+    }
+    internal fun controlOwnerWork(expected: JSONObject, action: String, done: (JSONObject?, String?) -> Unit) {
+        check(webPrivateOwnerVisible()) { "请回到原私人工作台" }
+        require(action in setOf("cancel", "continue")) { "任务动作无效" }
+        val input = originalOwnerWorkBinding(expected, state.conversationId, state.tasks).put("action", action)
+        val conversation = state.conversationId ?: error("原对话未读取")
+        io.execute {
+            val result = runCatching { app.ownerWorkControl(conversation, input) }
+            main.post { if (!closed) { result.fold({ done(it, null) }, { done(null, message(it)) }); getTask(input.getString("taskId")); refreshCurrentConversationTurn() } }
+        }
+    }
+    internal fun readMessageOrigin(reply: String, source: String, offset: Int, done: (JSONObject?, String?) -> Unit) {
+        check(webPrivateOwnerVisible()) { "请回到原私人对话" }
+        val conversation = state.conversationId ?: error("原对话未读取")
+        val row = state.messages.firstOrNull { it.id == reply } ?: error("原答复已离开当前窗口")
+        require(row.replyContext?.replyToMessageIds?.contains(source) == true && offset >= 0) { "这条原请求不属于所选答复" }
+        val window = webWindowTicket()
+        io.execute {
+            val result = runCatching {
+                val assistant = app.features.module("assistant") as? dev.pocketengine.features.assistant.AssistantModule ?: error("私人历史宿主尚未准备")
+                assistant.readOriginalReplySource(conversation, reply, source, offset, 8000)
+            }
+            main.post { if (!closed) {
+                if (webWindowTicket() != window || state.conversationId != conversation) done(null, "原答复窗口已变化，请重新打开")
+                else result.fold({ done(it, null) }, { done(null, message(it)) })
+            } }
+        }
+    }
     fun canRetryLocallyUnsent(client:String):Boolean {
         if(closed||state.chatSubmitting)return false
         val local=locallyUnsent[client]?:return false;val model=ownerComposer?:return false;val p=model.pending(client)?:return false;val draft=model.active()
         if(draft.key!=local.key||draft.revision!=local.revision||p.draftKey!=local.key||p.draftRevision!=local.revision||draft.conversationId!=state.conversationId.orEmpty())return false
         val target=p.originalTarget();val actual=state.chatActiveTurn
+        if (JSONObject(local.payload).optBoolean("_ownerWorkTargeted")) return runCatching { originalOwnerWorkBinding(target, state.conversationId, state.tasks) }.isSuccess
         if(target.length()==0)return !state.chatBusy
         return state.chatBusy&&actual!=null&&listOf("taskId","runId","epoch").all{target.opt(it)==actual.opt(it)}
     }
@@ -2298,13 +2361,29 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val saving=if(localRetry)ownerComposerStore.saveAfterLocalUnsentFailure(model)else ownerComposerStore.save(model)
         saving.whenComplete { _,error -> main.post {
             if(closed)return@post
-            if(error!=null){locallyUnsent[client]=LocalUnsent(input.toString(),originalPending.draftKey,originalPending.draftRevision);if(submittingChatClient==client)submittingChatClient=null;state=state.copy(chatSubmitting=false,error="输入定位未能保存，本次未发送；可修复后明确重新保存并发送同一原身份："+composerFailure(error));return@post}
+            if(error!=null){ownerWorkInputCallbacks.remove(client)?.invoke(null, "原输入尚未保存，未发送；草稿与原输入身份仍保留");locallyUnsent[client]=LocalUnsent(input.toString(),originalPending.draftKey,originalPending.draftRevision);if(submittingChatClient==client)submittingChatClient=null;state=state.copy(chatSubmitting=false,error="输入定位未能保存，本次未发送；可修复后明确重新保存并发送同一原身份："+composerFailure(error));return@post}
             if(ownerComposer?.revision()==version)composerSaving=false
             val pendingInput=ownerComposer?.pending(client)
             if(pendingInput==null||pendingInput.fingerprint!=originalPending.fingerprint)return@post
             // Once the real send entry is called, uncertainty is reconciled by query only.
             locallyUnsent.remove(client)
-            feature("assistant","send",input)
+            if (input.optBoolean("_ownerWorkTargeted")) {
+                val nativeInput = JSONObject(input.toString()).also { it.remove("_ownerWorkTargeted") }
+                io.execute {
+                    val result = runCatching { app.ownerWorkInput(originalPending.conversationId, nativeInput) }
+                    main.post { if (!closed) {
+                        result.fold({ receipt ->
+                            receiveChatAcknowledgement(receipt, client)
+                            ownerWorkInputCallbacks.remove(client)?.invoke(receipt, null)
+                        }, { failure ->
+                            if (submittingChatClient == client) submittingChatClient = null
+                            state = state.copy(chatSubmitting = false, notice = "补充回执尚未确认；草稿仍保留，请查询原输入。")
+                            ownerWorkInputCallbacks.remove(client)?.invoke(null, message(failure))
+                        })
+                        getTask(nativeInput.getString("taskId"))
+                    } }
+                }
+            } else feature("assistant","send",input)
         } }
     }
     /** Web stop is bound to the exact rendered conversation/run and rechecked by AssistantModule. */
@@ -3612,11 +3691,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 if (preferences != null && preferences.opt("enabled") is Boolean && preferences.optLong("revision", 0) > 0 && preferences.optLong("revision") >= state.agentPreferences.optLong("revision", 0))
                     state = state.copy(agentPreferences = JSONObject(preferences.toString()))
                 taskListNextCursor = payload.optString("tasksNextCursor")
-                val incoming = payload.optJSONArray("tasks").objects().map(::taskFromJson)
+                val incoming = nativeTaskStateRows(payload)
                 val merged = incoming.map { row -> mergeTaskSummary(row, state.tasks.find { it.id == row.id }) }
-                val retained = state.tasks.filter { old -> old.id !in incoming.map { it.id } && old.id in setOf(state.activeTaskId, state.requestedTaskId, webTaskViewId) }
+                val activePhones = payload.optJSONArray("activePhoneTaskIds")?.let { ids -> (0 until ids.length()).mapNotNull { index -> (ids.opt(index) as? String)?.takeIf(String::isNotBlank) }.distinct() } ?: emptyList()
+                val retained = state.tasks.filter { old -> old.id !in incoming.map { it.id } && (old.id in setOf(state.activeTaskId, state.requestedTaskId, webTaskViewId) || old.id in activePhones || old.raw.optString("executionRole") == "owner_work" && (old.status !in setOf("completed", "failed", "cancelled", "interrupted") || old.raw.optJSONObject("controls")?.optBoolean("canContinue") == true)) }
 
-                state = state.copy(modelName = config.optString("model"), baseUrl = config.optString("baseUrl"), hasApiKey = config.optBoolean("hasApiKey"), screenshots = config.optBoolean("sendScreenshots", true), localCaptureAllowed = config.optBoolean("localCaptureAllowed", false), localOcrAllowed = config.optBoolean("localOcrAllowed", false), supportsImageInput = config.optBoolean("supportsImageInput", false), modelProvider = config.optString("provider", "openai_chat"), modelRoute = config.optString("modelRoute", "api_key"), accountModelAvailable = config.optBoolean("accountModelAvailable", false), modelCatalogEnabled = config.optJSONObject("capabilityBinding") != null, maxOutputTokens = config.optInt("maxOutputTokens", 4096), cleartextConsent = config.optString("cleartextConsent"), accessibilityEnabled = payload.optBoolean("accessibilityEnabled"), notificationsEnabled = payload.optBoolean("notificationsEnabled"), phoneReadiness = PhoneReadinessState.parse(payload.optJSONObject("phoneReadiness")), activeTaskId = payload.optString("activeTaskId").takeUnless { it.isBlank() || it == "null" }, tasks = merged + retained, modelDrafts = ModelStreamDrafts.retain(state.modelDrafts, merged + retained))
+                state = state.copy(modelName = config.optString("model"), baseUrl = config.optString("baseUrl"), hasApiKey = config.optBoolean("hasApiKey"), screenshots = config.optBoolean("sendScreenshots", true), localCaptureAllowed = config.optBoolean("localCaptureAllowed", false), localOcrAllowed = config.optBoolean("localOcrAllowed", false), supportsImageInput = config.optBoolean("supportsImageInput", false), modelProvider = config.optString("provider", "openai_chat"), modelRoute = config.optString("modelRoute", "api_key"), accountModelAvailable = config.optBoolean("accountModelAvailable", false), modelCatalogEnabled = config.optJSONObject("capabilityBinding") != null, maxOutputTokens = config.optInt("maxOutputTokens", 4096), cleartextConsent = config.optString("cleartextConsent"), accessibilityEnabled = payload.optBoolean("accessibilityEnabled"), notificationsEnabled = payload.optBoolean("notificationsEnabled"), phoneReadiness = PhoneReadinessState.parse(payload.optJSONObject("phoneReadiness")), activeTaskId = payload.optString("activeTaskId").takeUnless { it.isBlank() || it == "null" }, activePhoneTaskIds = activePhones, maximumActiveBackgroundPhoneRuns = payload.optInt("maximumActiveBackgroundPhoneRuns").coerceAtLeast(0), foregroundTaskId = payload.optString("foregroundTaskId").takeUnless { it.isBlank() || it == "null" }, tasks = merged + retained, modelDrafts = ModelStreamDrafts.retain(state.modelDrafts, merged + retained))
             }
             "task" -> event.optJSONObject("task")?.let { original -> mergeTask(original); taskAnnouncements.observe(original) }
             "features_state" -> {
@@ -3796,7 +3876,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 "get" -> {
                     if(requestId!=latestChatGet)return
                     val id = result.optString("conversationId")
-                    if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), memoryReference = it.optJSONObject("memoryReference"), ownerOriginalLocator = if (it.optBoolean("importAssignedIdentity")) null else it.optJSONObject("ownerOriginalLocator"), phoneResult = UiPhoneResult.fromNativeMessage(it)) });resolveOriginalMessageAttachments(id)
+                    if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), memoryReference = it.optJSONObject("memoryReference"), ownerOriginalLocator = if (it.optBoolean("importAssignedIdentity")) null else it.optJSONObject("ownerOriginalLocator"), phoneResult = UiPhoneResult.fromNativeMessage(it), replyContext = UiReplyContext.fromNativeMessage(it), taskResult = UiTaskResult.fromNativeMessage(it)) });resolveOriginalMessageAttachments(id)
                 }
                 "send" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"));native("getFeatures") }
                 "getSubmission" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"),true);native("getFeatures") }
@@ -3865,8 +3945,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private fun mergeTask(task: JSONObject) {
         val parsed = taskFromJson(task); val previous = state.tasks.find { it.id == parsed.id }
         val row = mergeTaskSummary(parsed, previous); val candidates = (state.tasks.filterNot { it.id == row.id } + row).sortedByDescending { it.updatedAt }
-        val pinned = setOf(row.id, state.activeTaskId, state.requestedTaskId, webTaskViewId)
-        val tasks = (candidates.filter { it.id in pinned } + candidates.filter { it.id !in pinned }.take(80 - pinned.count { id -> candidates.any { it.id == id } })).sortedByDescending { it.updatedAt }
+        val pinned = setOf(row.id, state.activeTaskId, state.requestedTaskId, webTaskViewId) + state.activePhoneTaskIds + candidates.filter { it.raw.optString("executionRole") == "owner_work" && (it.status !in setOf("completed", "failed", "cancelled", "interrupted") || it.raw.optJSONObject("controls")?.optBoolean("canContinue") == true) }.map { it.id }
+        val tasks = (candidates.filter { it.id in pinned } + candidates.filter { it.id !in pinned }.take((80 - pinned.count { id -> candidates.any { it.id == id } }).coerceAtLeast(0))).sortedByDescending { it.updatedAt }
         state = state.copy(tasks = tasks, modelDrafts = ModelStreamDrafts.retain(state.modelDrafts, tasks), activeTaskId = app.activeId())
         if (ownerDomain == "taskMemory" && memoryTaskIdentity(previous?.raw) != memoryTaskIdentity(row.raw)) invalidateTaskMemoryReadings()
     }
