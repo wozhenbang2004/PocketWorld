@@ -47,6 +47,9 @@ import team_member_scope
 import pi_driver
 import acp_driver
 import gemini_acp_profile
+import harness_registry
+import external_harnesses
+import team_harness
 from codex_driver import CodexAppServerDriver, DriverError
 from claude_driver import ClaudeStreamDriver, command as claude_command, inspect_cli as inspect_claude_cli, session_uuid
 
@@ -69,6 +72,8 @@ def original_job_cancellation_capability():
 
 
 def worker_capabilities(worker):
+    if harness_registry.external(worker):
+        return {**harness_registry.capabilities(worker), "originalJobEvents": job_events.capability(worker)}
     if worker == gemini_acp_profile.WORKER:
         return {"protocol": gemini_acp_profile.PROTOCOL, "backendId": gemini_acp_profile.BACKEND,
                 "backendVersion": gemini_acp_profile.VERSION, "wireProtocolVersion": 1,
@@ -179,6 +184,8 @@ class JobManager:
         self.harness_gateway = harness_gateway.HarnessGateway(self)
         self.harness_endpoint_finished = self.harness_gateway.job_finished
         self.harness_endpoint_job_bound = self.harness_gateway.bind_job
+        self.external_harnesses = external_harnesses.ExternalHarnesses(self)
+        self.team_harness = team_harness.TeamHarnessBroker(self)
         # Retention is a soft bound on settled records, never a reason to lose
         # an original unresolved job or its cold resource fence before reading it.
         for path in self.state.glob("job-*.json"):
@@ -186,6 +193,12 @@ class JobManager:
                 job = json.loads(path.read_text(encoding="utf-8"))
                 identifier(job["id"])
                 ambiguous_approvals = False
+                if job.get("pendingTeamTools"):
+                    for pending in job["pendingTeamTools"]:
+                        job.setdefault("teamToolReceipts", []).append({"requestId": pending["requestId"],
+                            "name": pending["name"], "status": "unknown", "message": "Companion restarted before the original team answer; not replayed"})
+                    job["pendingTeamTools"] = []
+                    ambiguous_approvals = True
                 for receipt in job.get("approvalReceipts", []):
                     if receipt.get("status") == "sending":
                         receipt.update(status="unknown", message="Companion restarted before confirming this reply; not replayed")
@@ -280,8 +293,9 @@ class JobManager:
             else:
                 raise ValueError("Environment kind must be local or ssh")
             allowed = item.get("workers", ["command"])
-            if not isinstance(allowed, list) or any(x not in {"command", *WORKERS} for x in allowed):
+            if not isinstance(allowed, list) or any(not isinstance(x, str) or x not in {"command", *WORKERS} and not harness_registry.external(x) for x in allowed):
                 raise ValueError("Unknown enabled worker")
+            harness_registry.validate_environment(item)
             if "kimi" in allowed and not item.get("allowAutonomousWorkers", False):
                 raise ValueError("Kimi print mode auto-approves tools; allowAutonomousWorkers must be explicitly enabled")
             commands = item.get("commands", {})
@@ -300,6 +314,9 @@ class JobManager:
         for eid, item in self.environments.items():
             workers = []
             for worker in item.get("workers", ["command"]):
+                if harness_registry.external(worker):
+                    workers.append(harness_registry.descriptor(item, worker, self.auth_generation_salt))
+                    continue
                 executable = WORKERS.get(worker)
                 if item.get("kind") == "ssh" or worker == gemini_acp_profile.WORKER:
                     available = None
@@ -309,7 +326,8 @@ class JobManager:
                 else:
                     resolved = shutil.which(executable)
                     available = bool(resolved) and (os.name != "nt" or Path(resolved).suffix.lower() == ".exe")
-                workers.append({"id": worker, "available": available, "availability": "requires_fixed_profile_probe" if worker == gemini_acp_profile.WORKER else "unverified_remote" if available is None else "installed" if available else "missing", "autonomousTools": worker == "kimi", "capabilities": worker_capabilities(worker), **worker_executable_identity.inspect(item, worker)})
+                production = harness_registry.production_available(item) and harness_registry.production_worker(worker)
+                workers.append({"id": worker, "label": {"codex_app_server": "Codex", "claude": "Claude Code", "pi": "Pi", "gemini_acp": "Gemini fixed profile"}.get(worker, worker), "adapter": "native", "available": available, "availability": "requires_fixed_profile_probe" if worker == gemini_acp_profile.WORKER else "unverified_remote" if available is None else "installed" if available else "missing", "autonomousTools": worker == "kimi", "capabilities": {**worker_capabilities(worker), "assignmentWorkspace": production, "projectProduction": production and assignment_projects.capability(item).get("supported", False)}, **worker_executable_identity.inspect(item, worker)})
             entries.append({"id": eid, "label": item.get("label", eid), "kind": item.get("kind", "local"), "workers": workers,
                             "writeAllowed": bool(item.get("writeAllowed", False)), "sandboxed": False,
                             "bindingHash": self.environment_binding(eid), "workspace": item["root"],
@@ -320,7 +338,7 @@ class JobManager:
                             "projectAssignmentCapabilities": assignment_projects.capability(item, str(self.state / "assignment-projects")),
                             "projectHistoryCapabilities": project_history.capability(item),
                             "externalGroupInputCapabilities": group_input_audience.capability(item),
-                            "assignmentWorkspaceCapabilities": {"protocol": "selected_files_v1", "copySupported": item.get("kind", "local") == "local" and os.name != "nt" and hasattr(os, "O_NOFOLLOW") and bool(item.get("writeAllowed")) and "codex_app_server" in item.get("workers", []), "maxFiles": 8, "fullProject": False, "osReadIsolationVerified": False, "commandApprovalEscalationSupported": False, "wallTimeEnforcement": "original_companion_process_group", "detachedDescendantIsolationVerified": False}})
+                            "assignmentWorkspaceCapabilities": {"protocol": "selected_files_v1", "copySupported": harness_registry.production_available(item), "workers": harness_registry.production_workers(item), "maxFiles": 8, "fullProject": False, "osReadIsolationVerified": False, "commandApprovalEscalationSupported": False, "wallTimeEnforcement": "original_companion_process_group", "detachedDescendantIsolationVerified": False}})
         return {"environments": entries}
 
     def environment_binding(self, eid):
@@ -329,16 +347,31 @@ class JobManager:
         # an unsubmitted review; accepted operations still reconcile by their original ID.
         scope = {key: item.get(key) for key in ("kind", "root", "host", "user", "port", "writeAllowed", "workers", "commands", "knownHosts", "identityFile", "sshConfig", "harnesses", "commandOutputEncoding")}
         scope.update({key: item[key] for key in ("codexHome", "codexProviderVariables", "geminiAcp") if key in item})
+        if "harnessWorkers" in item:
+            scope["harnessWorkers"] = hmac.new(self.auth_generation_salt, harness_registry.canonical(item["harnessWorkers"]).encode(), hashlib.sha256).hexdigest()
         if "ccSwitchSources" in item:
             scope["ccSwitchSourceDefinitions"] = cc_switch_import.source_definitions_identity(item)
         scope.update(instance=self.instance_id, environmentId=eid)
         return hashlib.sha256(json.dumps(scope, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
     def probe_worker(self, request):
+        result = self._probe_worker(request)
+        env = self._environment(request.get("environmentId"))
+        production = harness_registry.production_available(env) and harness_registry.production_worker(request.get("worker")) and bool(result.get("available"))
+        result.setdefault("capabilities", {}).update(assignmentWorkspace=production,
+            projectProduction=production and assignment_projects.capability(env).get("supported", False))
+        return result
+
+    def _probe_worker(self, request):
         env = self._environment(identifier(request.get("environmentId"), "environmentId"))
         if "environmentBinding" in request and request["environmentBinding"] != self.environment_binding(request["environmentId"]):
             raise RequestError("Environment configuration or Companion instance changed; probe not started", 409)
         worker = request.get("worker")
+        if harness_registry.external(worker):
+            try:
+                return self.external_harnesses.probe(request, env, RequestError)
+            except ValueError as error:
+                raise RequestError(str(error), 409) from None
         if worker == gemini_acp_profile.WORKER:
             return self._probe_gemini(request, env)
         if "effort" in request and worker != "codex_app_server":
@@ -674,6 +707,11 @@ class JobManager:
                 raise RequestError("Command is not in the configured allowlist", 403)
             return [executable, *args[1:]]
         prompt = text(request.get("prompt"), "prompt")
+        if harness_registry.external(worker):
+            try:
+                return harness_registry.command(env, worker)
+            except ValueError as error:
+                raise RequestError(str(error), 409) from None
         if worker == gemini_acp_profile.WORKER:
             if not isinstance(gemini_source, gemini_acp_profile.FixedProfile):
                 raise RequestError("Fixed ACP launch requires the original native source observation", 409)
@@ -773,6 +811,8 @@ class JobManager:
                       "message": "Execution receipt is no longer retained; the operation remains reserved and must not be replayed"}
             if found[2] and detail.get("protocol") == gemini_acp_profile.PROTOCOL:
                 result.update({key: detail[key] for key in ("protocol", "worker", "environmentId", "environmentBinding", "backendSelection", "model", "readOnly")})
+            elif found[2] and harness_registry.external(detail.get("worker")):
+                result.update({key: detail[key] for key in ("protocol", "worker", "environmentId", "environmentBinding", "harnessSelection", "model", "modeId", "readOnly") if key in detail})
             return result
 
     def submit(self, request, *, native_device_admission=None):
@@ -793,6 +833,22 @@ class JobManager:
         eid = identifier(request.get("environmentId"), "environmentId")
         env = dict(self._environment(eid))
         gemini = None
+        external = None
+        team_context = team_harness.validate_context(request, env, RequestError)
+        if harness_registry.external(request.get("worker")):
+            if native_device_admission is not None:
+                raise RequestError("External harnesses require the original paired owner job admission", 409)
+            try:
+                external = self.external_harnesses.selection(request, env, RequestError)
+            except ValueError as error:
+                raise RequestError(str(error), 409) from None
+        elif "harnessSelection" in request or "externalExecutionRiskAcknowledged" in request and not (
+                request.get("externalExecutionRiskAcknowledged") is True and (
+                    request.get("worker") == "claude" and request.get("assignmentWorkspace")
+                    or request.get("worker") in {"claude", "pi"} and team_context is not None)):
+            raise RequestError("External harness selection cannot be imported into a different worker", 409)
+        if team_context is not None and (native_device_admission is not None or request.get("worker") not in {"codex_app_server", "claude", "pi"} and external is None):
+            raise RequestError("Team tools require a supported original paired owner harness job", 409)
         if request.get("worker") == gemini_acp_profile.WORKER:
             if native_device_admission is not None:
                 raise RequestError("Fixed ACP does not accept native device or specialized task authority", 409)
@@ -824,7 +880,7 @@ class JobManager:
         for field in ("model", "threadId"):
             if field in request and not (gemini is not None and field == "model" and request[field] == ""):
                 text(request[field], field, 200)
-                if request.get("worker") not in {"codex_app_server", "claude", "pi", gemini_acp_profile.WORKER}:
+                if request.get("worker") not in {"codex_app_server", "claude", "pi", gemini_acp_profile.WORKER} and external is None:
                     raise RequestError(field + " is unsupported by this worker", 409)
         if "effort" in request:
             text(request["effort"], "effort", 80)
@@ -835,6 +891,15 @@ class JobManager:
         env = team_member_scope.environment(request, env, RequestError)
         prior = None
         fork_source = None
+        if external is not None:
+            if request.get("threadId"):
+                with self.lock:
+                    prior = self.jobs.get(identifier(request.get("resumeJobId"), "resumeJobId"))
+                    if (prior is None or prior.get("worker") != request["worker"] or prior.get("threadId") != request["threadId"]
+                            or not self._can_resume(prior) or prior.get("resourceId") != self.resource_id(env)):
+                        raise RequestError("Harness resume requires its latest settled original session and verified process cleanup", 409)
+            elif "resumeJobId" in request:
+                raise RequestError("Harness resume requires the original session ID", 409)
         if "forkSource" in request:
             selected = request["forkSource"]
             if request.get("worker") != "codex_app_server" or not isinstance(selected, dict) or set(selected) != {"jobId", "jobOperationId", "threadId", "turnId"} or any(key in request for key in ("threadId", "resumeJobId", "resultSnapshotId", "inputFiles", "assignmentWorkspace", "recoveryProofId")):
@@ -853,6 +918,8 @@ class JobManager:
                 prior = self.jobs.get(identifier(request["resumeJobId"], "resumeJobId")) if "resumeJobId" in request else sources[0] if len(sources) == 1 else None
                 if prior is None or prior not in sources or prior.get("resourceId") != self.resource_id(env):
                     raise RequestError("Codex resume requires the settled original invocation and execution resource; unknown work must be reconciled", 409)
+                if team_context is not None and prior.get("teamTools") is not True:
+                    raise RequestError("This original Codex session has no persisted team tools; select a new explicitly reviewed job", 409)
                 request["resumeJobId"] = prior["id"]
                 if prior.get("status") == "interrupted":
                     if request.get("recoveryProofId") != prior.get("recoveryProof", {}).get("proofId") or request.get("recoveryOwnerAcknowledged") is not True or not isinstance(request.get("timeoutSeconds"), int) or isinstance(request["timeoutSeconds"], bool) or not 10 <= request["timeoutSeconds"] <= 900:
@@ -904,7 +971,7 @@ class JobManager:
                 raise RequestError("Claude requires CLI >=2.1.259 and the verified control/session flags; run a worker probe", 409)
         pi_session = None
         if request.get("worker") == "pi":
-            if native_device_admission is not None or set(request) - {"operationId", "environmentId", "environmentBinding", "worker", "prompt", "model", "readOnly", "timeoutSeconds", "threadId", "resumeJobId", "harnessConfigOperationId", "harnessOwnerBinding"}:
+            if native_device_admission is not None or set(request) - {"operationId", "environmentId", "environmentBinding", "worker", "prompt", "model", "readOnly", "timeoutSeconds", "threadId", "resumeJobId", "harnessConfigOperationId", "harnessOwnerBinding", "teamContext", "externalExecutionRiskAcknowledged"}:
                 raise RequestError("Pi supports only an explicit no-tools private conversation and its original reviewed Harness configuration; attachments/imports/tools are unsupported", 409)
             if ("harnessConfigOperationId" in request) != ("harnessOwnerBinding" in request):
                 raise RequestError("Pi configuration requires both original operation and native owner binding", 409)
@@ -953,7 +1020,7 @@ class JobManager:
                 self._snapshot_environment(fork_source)
                 if not self._can_resume(fork_source):
                     raise RequestError("Original branch source is no longer settled/current", 409)
-            if request.get("worker") in {"claude", "codex_app_server", "pi"} and request.get("threadId"):
+            if (request.get("worker") in {"claude", "codex_app_server", "pi"} or external is not None) and request.get("threadId"):
                 # Recheck atomically with reservation: another submitted invocation
                 # (including an unknown one) must not be bypassed via an older job.
                 source = self.jobs.get(request["resumeJobId"])
@@ -963,6 +1030,8 @@ class JobManager:
                    "worker": request.get("worker", "command"), "resourceId": self.resource_id(env), "status": "queued", "createdAt": self.now(), "updatedAt": self.now(),
                    "output": "", "outputTruncated": False, "exitCode": None, "message": "Queued", "remoteEffectsVerified": False}
             job.update(team_member_scope.receipt(request))
+            if team_context is not None and request.get("externalExecutionRiskAcknowledged") is True:
+                job["externalExecutionRiskAcknowledged"] = True
             job["workspaceIdentity"] = self.workspace_identity(env)
             if job["worker"] == "command":
                 job["outputEncoding"] = env.get("commandOutputEncoding", "utf-8")
@@ -973,6 +1042,9 @@ class JobManager:
                            inferenceUsage={"modelCalls": None, "inputTokens": None, "outputTokens": None, "cost": None, "status": "unknown", "source": "external_cli_no_per_request_accounting"},
                            modelCallHardCapSupported=False, tokenHardCapSupported=False, costHardCapSupported=False, wallTimeHardCapSupported=True, wallTimeEnforcement="original_companion_process_group", detachedDescendantIsolationVerified=False,
                            assignmentWriteSandboxVerified=False, osReadIsolationVerified=False, commandAllowlistEnforced=False)
+                job["assignmentWorkspaceConfirmed"] = True
+                if job["worker"] != "codex_app_server":
+                    job.update(executionPolicy="owner_managed", externalExecutionRiskAcknowledged=True)
             if request.get("worker") == "codex_app_server":
                 job.update(protocol="codex_app_server", readOnly=not bool(env.get("writeAllowed")),
                            model=request.get("model"), effort=request.get("effort"), threadId=request.get("threadId"),
@@ -990,6 +1062,16 @@ class JobManager:
                            protocolVerified=False, pendingApprovals=[], pendingQuestions=[],
                            environmentBinding=request["environmentBinding"],
                            backendSelection=json.loads(json.dumps(request["backendSelection"])))
+            elif external is not None:
+                job.update(protocol=external["config"]["protocol"], readOnly=False, model=request.get("model"),
+                    modeId=request.get("modeId"), protocolVerified=False, pendingApprovals=[], pendingQuestions=[],
+                    environmentBinding=request["environmentBinding"], harnessSelection=external["selection"],
+                    sessionId=request.get("threadId"), threadId=request.get("threadId"), resumeJobId=request.get("resumeJobId"),
+                    executionPolicy="owner_managed", externalExecutionRiskAcknowledged=True,
+                    harness={"workerId": request["worker"], "label": external["config"]["label"], "protocol": external["config"]["protocol"],
+                        "configurationRevision": external["observed"]["configurationRevision"],
+                        "capabilityRevision": external["observed"]["capabilityRevision"], "agentInfo": external["observed"]["hello"].get("agentInfo", {}),
+                        "executionPolicy": "owner_managed"}, _harnessHello=external["observed"]["hello"])
             if request.get("resultSnapshotId"):
                 job.update(resultSnapshotId=request["resultSnapshotId"], resultSnapshotVersion=request["resultSnapshotVersion"], snapshotPrelaunchVerified=False)
             if fork_source is not None:
@@ -1023,6 +1105,9 @@ class JobManager:
                     # if a settled display record is later pruned. This is not a replay.
                     identity = {key: job[key] for key in ("protocol", "worker", "environmentId", "environmentBinding", "backendSelection", "model", "readOnly")}
                     self.ledger.execute("UPDATE operations SET details=? WHERE operation_id=?", (json.dumps(identity), operation))
+                elif external is not None:
+                    identity = {key: job.get(key) for key in ("protocol", "worker", "environmentId", "environmentBinding", "harnessSelection", "model", "modeId", "readOnly")}
+                    self.ledger.execute("UPDATE operations SET details=? WHERE operation_id=?", (json.dumps(identity), operation))
             if assignment_record is not None and request["assignmentWorkspace"].get("mode") == assignment_projects.MODE:
                 assignment_projects.bind_job(self, assignment_record, job)
             self.ledger.commit()
@@ -1030,9 +1115,12 @@ class JobManager:
             if native_device_admission is not None:
                 self.native_device_admissions[job["id"]] = native_device_admission
             self._save(job)
+            team_handle = self.team_harness.create(job, team_context)
             self._prune()
             if input_state is None:
-                context = {"request": request, "environment": env, "sessionId": session_id} if request.get("worker") in {"codex_app_server", "claude", "pi", gemini_acp_profile.WORKER} else None
+                context = {"request": request, "environment": env, "sessionId": session_id, "teamHandle": team_handle} if request.get("worker") in {"codex_app_server", "claude", "pi", gemini_acp_profile.WORKER} or external is not None else None
+                if external is not None:
+                    context["externalHarness"] = external
                 if gemini is not None:
                     gemini["source"].retain()
                     context["gemini"] = gemini
@@ -1058,19 +1146,29 @@ class JobManager:
                 continue
             # Owned copies/private inputs still depend on this original record,
             # including copies waiting for a child or later contribution lookup.
-            if old.get("assignmentWorkspaces") or old.get("inputState"):
+            if old.get("assignmentWorkspaces") or old.get("inputState") or old.get("pendingTeamTools"):
                 continue
             if old.get("steeringUnknown") or any(receipt.get("status") in {"queued", "sending", "unknown"}
-                    for receipt in old.get("approvalReceipts", []) + old.get("questionReceipts", [])):
+                    for receipt in old.get("approvalReceipts", []) + old.get("questionReceipts", []) + old.get("teamToolReceipts", [])):
                 continue
             self.jobs.pop(jobid, None)
             (self.state / ("job-" + jobid + ".json")).unlink(missing_ok=True)
+
+    def _redact_team_value(self, jobid, value, token=None):
+        # The ephemeral launch credential is never part of a job record. A
+        # peer may echo it in output/diagnostics; scrub before publication too.
+        broker = getattr(self, "team_harness", None)
+        handle = broker.handles.get(jobid) if broker is not None else None
+        token = token or (handle.token if handle is not None else None)
+        if not token:
+            return value
+        return json.loads(json.dumps(value).replace(token, "[team credential hidden]"))
 
     def _save(self, job):
         if job.get("nativeDeviceOperation"):
             job["nativeDeviceRevision"] = job.get("nativeDeviceRevision", 0) + 1
         if not job.get("inputState"):
-            atomic_json(self.state / ("job-" + job["id"] + ".json"), job)
+            atomic_json(self.state / ("job-" + job["id"] + ".json"), self._redact_team_value(job["id"], job))
             if job.get("operationId"):
                 self.ledger.execute("UPDATE operations SET last_status=?, updated_at=? WHERE operation_id=?", (job["status"], job["updatedAt"], job["operationId"]))
                 self.ledger.commit()
@@ -1086,7 +1184,7 @@ class JobManager:
             job["_inputPersistenceUnconfirmed"] = True
             path = self.state / ("job-" + job["id"] + ".json")
             def save_original(value):
-                atomic_json(path, value)
+                atomic_json(path, self._redact_team_value(job["id"], value))
                 directory = os.open(self.state, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
                 try:
                     os.fsync(directory)
@@ -1108,7 +1206,7 @@ class JobManager:
                 raise
 
     def _public(self, job):
-        result = {k: v for k, v in job.items() if k not in {"fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding", "projectEnvironmentBinding", "projectEnvironmentConfigHash", "_coldProcess", "_coldOrigin", "_coldConfigHome", "_originalProcessGroup", "_harnessConfigRequest", "_ccSwitchImportRequest", "_nativeProjectManifest", "_nativeInputChunks", "_nativeInputPeer", "_piSession"}}
+        result = {k: v for k, v in job.items() if k not in {"fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding", "projectEnvironmentBinding", "projectEnvironmentConfigHash", "_coldProcess", "_coldOrigin", "_coldConfigHome", "_originalProcessGroup", "_harnessConfigRequest", "_ccSwitchImportRequest", "_nativeProjectManifest", "_nativeInputChunks", "_nativeInputPeer", "_piSession", "_harnessHello"}}
         if job.get("worker") == gemini_acp_profile.WORKER:
             result["backendSelection"] = json.loads(json.dumps(job["backendSelection"]))
         if job.get("worker") == "codex_app_server" and job.get("status") == "interrupted" and any(key in job for key in ("harnessConfigOperationId", "_harnessConfigRequest")):
@@ -1136,6 +1234,14 @@ class JobManager:
         pi = job.get("worker") == "pi"
         live = job.get("id") in self.drivers and job.get("status") not in TERMINAL
         result["capabilities"] = worker_capabilities(job.get("worker"))
+        if harness_registry.external(job.get("worker")):
+            result["capabilities"].update(harness_registry.capabilities(job["worker"], job.get("_harnessHello") if job.get("protocolVerified") else None,
+                team_tools=bool(job.get("teamTools"))))
+        elif job.get("teamContext"):
+            result["capabilities"]["teamTools"] = bool(job.get("teamTools"))
+            if pi and job.get("teamTools"):
+                result["capabilities"].update(noTools=False, teamToolsOnly=True, codingToolsSupported=False,
+                    toolPermissionMode="original_team_messages_only")
         result["capabilities"]["protocolVerified"] = bool(job.get("protocolVerified"))
         steering_unknown = bool(job.get("steeringUnknown")) or any(json.loads(row[0]).get("status") == "unknown"
             for row in self.ledger.execute("SELECT receipt FROM steer_messages WHERE job_id=?", (job["id"],)).fetchall())
@@ -1152,7 +1258,7 @@ class JobManager:
                               "answerQuestion": live and not job.get("assignmentWorkspace") and any(value.get("canAnswer") for value in job.get("pendingQuestions", [])),
                               "threadResume": self._can_resume(job), "threadFork": native and self._can_resume(job) and job.get("status") in {"completed", "failed", "cancelled"},
                               "inputSteering": not job.get("assignmentWorkspace") and live and not steering_unknown and driver is not None and driver.can_steer(job.get("promptRequestId") if pi else job.get("turnId")), "sessionReattach": False}
-        return result
+        return self._redact_team_value(job["id"], result)
 
     def _can_resume(self, job):
         return self._can_resume_without_child(job, None)
@@ -1164,8 +1270,19 @@ class JobManager:
             return False  # This explicit new-job import has no reviewed provider/session continuation contract.
         worker = job.get("worker")
         recovered = cold_session.proof_matches(job, self.environments.get(job.get("environmentId"), {})) if job.get("status") == "interrupted" else False
-        if worker not in {"claude", "codex_app_server", "pi"} or job.get("status") not in {"completed", "failed", "cancelled"} and not recovered or not job.get("threadId"):
+        external = harness_registry.external(worker)
+        if (worker not in {"claude", "codex_app_server", "pi"} and not external) or job.get("status") not in {"completed", "failed", "cancelled"} and not recovered or not job.get("threadId"):
             return False
+        if external:
+            if (not job.get("protocolVerified") or not job.get("promptTerminalConfirmed") or not job.get("sessionResumeSupported")
+                    or job.get("resourcesHeld") or not job.get("processCleanupProof", {}).get("processGroupStoppedVerified")):
+                return False
+            try:
+                env = self._environment(job["environmentId"])
+                if job.get("harnessSelection", {}).get("configurationRevision") != harness_registry.revision(env, worker, self.auth_generation_salt):
+                    return False
+            except (ValueError, RequestError):
+                return False
         if any(value.get("status") in {"queued", "sending", "unknown"} for value in job.get("questionReceipts", [])):
             return False
         if worker == "claude" and not job.get("protocolVerified") or worker == "codex_app_server" and job.get("protocol") != "codex_app_server":
@@ -1430,7 +1547,7 @@ class JobManager:
         if job.get("operationId") != expected:
             raise RequestError("Original cancellation operation does not match this job", 409)
         if (job.get("protocol") == "desktop-v1" or "nativeDeviceOperation" in job
-                or job.get("worker") not in {"command", "codex_app_server", "claude", "pi", gemini_acp_profile.WORKER}):
+                or job.get("worker") not in {"command", "codex_app_server", "claude", "pi", gemini_acp_profile.WORKER} and not harness_registry.external(job.get("worker"))):
             raise RequestError("Original CLI cancellation does not grant native desktop/device control", 409)
         return job
 
@@ -1461,6 +1578,7 @@ class JobManager:
                 return self._public(job)
             if input_files.cancel_before_worker(self, job):
                 self.harness_configs.settle_job(job, job.get("notStartedConfirmed") is True)
+                self.team_harness.finish(jobid, job["status"])
                 return self._public(job)
             retained = self.processes.get(jobid)
             retained = retained is not None and getattr(retained, "_pocket_worker_finished", False) and job.get("resourcesHeld")
@@ -1485,6 +1603,22 @@ class JobManager:
                 return self._public(job)
         return self.get(jobid)
 
+    @staticmethod
+    def _bounded_driver_state(job, value):
+        limit = job.get("externalJobLimits", {}).get("maxOutputBytes")
+        if type(limit) is not int:
+            return value
+        bounded, remaining = dict(value), limit
+        for key, flag in (("output", "outputTruncated"), ("diff", "diffTruncated")):
+            if not isinstance(bounded.get(key), str):
+                continue
+            raw = bounded[key].encode("utf-8")
+            if len(raw) > remaining:
+                bounded[key] = raw[:remaining].decode("utf-8", errors="ignore")
+                bounded[flag] = bounded["outputLimitExceeded"] = True
+            remaining = max(0, remaining - len(bounded[key].encode("utf-8")))
+        return bounded
+
     def _run(self, jobid, argv, cwd, timeout, remote, codex=None):
         process = None
         driver = None
@@ -1496,6 +1630,11 @@ class JobManager:
         assignment = False
         group_input = bool(codex and codex["request"].get("inferenceAudience") == "EXTERNAL_GROUP")
         gemini = codex.get("gemini") if codex else None
+        external = codex.get("externalHarness") if codex else None
+        team_handle = (codex.get("teamHandle") if codex else None) or self.team_harness.handles.get(jobid)
+        team_token = team_handle.token if team_handle is not None else None
+        def redact_team(value):
+            return self._redact_team_value(jobid, value, team_token)
         cleanup = None
         start_failure = None
         native_admission = self.native_device_admissions.get(jobid)
@@ -1544,6 +1683,8 @@ class JobManager:
             # Keep the original resource lease, but never hold its monitor during project IO.
             if gemini is not None:
                 self._gemini_current(gemini, require_unexpired=True, deep=True)
+            if external is not None:
+                self.external_harnesses.current(external["observed"], require_unexpired=True, error=RequestError)
             if job.get("projectHistoryScope"):
                 project_history.before(self, job, RequestError)
             with self.resource_changed:
@@ -1572,6 +1713,19 @@ class JobManager:
                         raise RequestError(str(failure), 409) from failure
                 if job.get("worker") == "claude":
                     child_env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
+                if external is not None:
+                    self.external_harnesses.current(external["observed"], error=RequestError)
+                    child_env = harness_registry.child_environment(self._environment(job["environmentId"]), job["worker"], child_env)
+                if team_handle is not None and job.get("worker") == "claude":
+                    rebuilt = claude_command(job["sessionId"], bool(codex["environment"].get("writeAllowed")),
+                        codex["request"].get("model"), bool(codex["request"].get("threadId")), codex["request"].get("effort"),
+                        team_mcp=team_handle.mcp_descriptor())
+                    argv = [argv[0], *rebuilt[1:]]
+                if team_handle is not None and job.get("worker") == "pi":
+                    native = job["_piSession"]
+                    rebuilt = pi_driver.command(native["id"], native["directory"], native.get("file"), team_mcp=team_handle.mcp_descriptor())
+                    argv = [argv[0], *rebuilt[1:]]
+                    child_env.update(team_handle.environment())
                 if native_admission is not None:
                     child_env = native_admission.child_environment(child_env)
                 try:
@@ -1629,8 +1783,11 @@ class JobManager:
                     with self.lock:
                         if gemini is not None:
                             value = gemini["source"].redact(acp_driver.safe_state(value))
+                        if external is not None:
+                            value = harness_registry.redact(self._environment(job["environmentId"]), job["worker"], value)
                         # Raw protocol diagnostics and account credentials never enter receipts.
                         safe = json.loads(self.harness_configs.redact(json.dumps(self.cc_switch_imports.redact_value(value))).replace(self.token, "[token hidden]"))
+                        safe = self._bounded_driver_state(job, redact_team(safe))
                         provenance = self.cc_switch_imports.model_provenance(self.jobs[jobid], value.get("reportedModel"))
                         if provenance is not None:
                             safe["ccSwitchModelProvenance"] = provenance
@@ -1642,7 +1799,15 @@ class JobManager:
                         if identity != last_saved["identity"] or self.now() - last_saved["at"] >= 500:
                             self._save(self.jobs[jobid])
                             last_saved.update(at=self.now(), identity=identity)
-                if gemini is not None:
+                if external is not None:
+                    driver = self.external_harnesses._driver(job["worker"])(process, cwd, state, stopped, timeout,
+                        lambda: self.lock, expected_hello=external["observed"]["hello"], auth_method=external["config"].get("authMethod"),
+                        expected_options=external["observed"]["options"],
+                        mcp_servers=[team_handle.mcp_descriptor()] if team_handle else [],
+                        mode=codex["request"].get("modeId"), worker=job["worker"],
+                        current=lambda: self.external_harnesses.current(external["observed"]),
+                        redact=lambda value: redact_team(harness_registry.redact(self._environment(job["environmentId"]), job["worker"], value)))
+                elif gemini is not None:
                     driver = acp_driver.GeminiAcpDriver(process, cwd, state, stopped, timeout,
                         lambda: self.lock, current=lambda **kwargs: self._gemini_current(gemini, **kwargs),
                         expected_hello=gemini["hello"],
@@ -1650,16 +1815,18 @@ class JobManager:
                             self.cc_switch_imports.redact_value(gemini["source"].redact(value)))).replace(self.token, "[token hidden]")))
                 elif job.get("worker") == "claude":
                     driver = ClaudeStreamDriver(process, codex["sessionId"], state, stopped, timeout,
-                                                lambda: self.lock, codex["environment"]["root"], bool(codex["environment"].get("writeAllowed")))
+                                                lambda: self.lock, codex["environment"]["root"], bool(codex["environment"].get("writeAllowed")),
+                                                team_tools=bool(team_handle))
                 elif job.get("worker") == "pi":
                     value = job["_piSession"]
                     driver = pi_driver.PiRpcDriver(process, state, stopped, timeout, lambda: self.lock,
-                                                    value["id"], value["directory"], value.get("file"))
+                                                    value["id"], value["directory"], value.get("file"), team_tools=bool(team_handle))
                 else:
                     driver = CodexAppServerDriver(process, codex["environment"]["root"], bool(codex["environment"].get("writeAllowed")), state, stopped, timeout, codex["request"].get("readOnly") is True, lambda: self.lock,
                                                   assignment_write=assignment, output_limit=job.get("externalJobLimits", {}).get("maxOutputBytes", MAX_OUTPUT),
                                                   assignment_paths=[value["path"] for value in assignment_workspaces.record_for_reference(self, job["assignmentWorkspace"], RequestError)["files"]] if assignment else None,
-                                                  assignment_project=assignment and job["assignmentWorkspace"].get("mode") == assignment_projects.MODE)
+                                                  assignment_project=assignment and job["assignmentWorkspace"].get("mode") == assignment_projects.MODE,
+                                                  team_tools=team_handle.call if team_handle else None)
                 with self.lock:
                     self.drivers[jobid] = driver
                 if codex["request"].get("inferenceAudience") == "EXTERNAL_GROUP":
@@ -1703,7 +1870,10 @@ class JobManager:
                 with self.lock:
                     if gemini is not None:
                         result = gemini["source"].redact(acp_driver.safe_state(result))
+                    if external is not None:
+                        result = harness_registry.redact(self._environment(job["environmentId"]), job["worker"], result)
                     safe = json.loads(self.harness_configs.redact(json.dumps(self.cc_switch_imports.redact_value(result))).replace(self.token, "[token hidden]"))
+                    safe = self._bounded_driver_state(job, redact_team(safe))
                     provenance = self.cc_switch_imports.model_provenance(self.jobs[jobid], result.get("reportedModel"))
                     if provenance is not None:
                         safe["ccSwitchModelProvenance"] = provenance
@@ -1789,6 +1959,7 @@ class JobManager:
         finally:
             if wall_timer is not None:
                 wall_timer.cancel()
+            self.team_harness.finish(jobid, self.jobs[jobid].get("status", "unknown"))
             if driver is not None:
                 try:
                     driver.close_steering()
@@ -1961,6 +2132,15 @@ class JobManager:
                 pending = next((value for value in job.get("pendingApprovals", []) if value.get("requestId") == request.get("requestId")), None)
                 if pending is None or pending.get("requestHash") != request.get("requestHash"):
                     raise RequestError("Original ACP permission body changed or is no longer pending", 409)
+            elif harness_registry.external(job.get("worker")):
+                fields = {"requestId", "decision", "jobOperationId", "sessionId", "promptRequestId", "requestHash", "harnessSelection"}
+                if (set(request) != fields or request.get("jobOperationId") != job.get("operationId")
+                        or request.get("harnessSelection") != job.get("harnessSelection")
+                        or request.get("sessionId") != job.get("sessionId") or request.get("promptRequestId") != job.get("promptRequestId")):
+                    raise RequestError("Harness approval does not identify the original job/selection/session/prompt", 409)
+                pending = next((p for p in job.get("pendingApprovals", []) if p.get("requestId") == request.get("requestId")), None)
+                if pending is None or pending.get("requestHash") != request.get("requestHash"):
+                    raise RequestError("Original harness permission changed or is no longer pending", 409)
             if job.get("assignmentWorkspace") and request.get("decision") == "accept":
                 if job["assignmentWorkspace"]["approvalExpiresAt"] <= self.now() or job.get("assignmentEnvironmentBinding") != self.environment_binding(job["environmentId"]):
                     raise RequestError("Original assignment approval/environment generation expired; no decision was sent", 409)
@@ -2301,6 +2481,7 @@ class JobManager:
         for jobid in running:
             self.cancel(jobid)
         self.harness_gateway.close()
+        self.team_harness.close()
         self.pool.shutdown(wait=True, cancel_futures=False)
         # Failed construction can leave an ORIGINAL created process even though
         # _spawn never returned. Keep it reachable until explicit local close;
@@ -2326,6 +2507,7 @@ class JobManager:
                 process.close()  # KILL_ON_JOB_CLOSE is a request, not new proof.
         self.harness_configs.close()
         self.cc_switch_imports.close()
+        self.external_harnesses.close()
         with self.lock:
             for entry in self.backend_observations.values():
                 entry["source"].close()
@@ -2497,6 +2679,8 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 result = manager.approve(parts[2], request)
             elif len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "question-answer" and post:
                 result = manager.answer_question(parts[2], request)
+            elif len(parts) == 5 and parts[:2] == ["v1", "jobs"] and parts[3] == "team-tools" and post:
+                result = manager.team_harness.respond(identifier(parts[2], "jobId"), identifier(parts[4], "requestId"), request, RequestError)
             elif len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "steer" and post:
                 result = manager.steer(parts[2], request)
             elif len(parts) == 5 and parts[:2] == ["v1", "jobs"] and parts[3] == "messages" and not post:
@@ -2621,10 +2805,36 @@ def initialize(path: Path, workspace: str):
 
 def main(*, config_override=None):
     parser = argparse.ArgumentParser(description="PocketEngine owner Companion")
-    parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--config", type=Path)
     parser.add_argument("--init", action="store_true")
     parser.add_argument("--workspace", default=".")
+    parser.add_argument("--list-harnesses", action="store_true", help="List installed harness presets without starting or installing them")
+    parser.add_argument("--enable-harness", help="Enable one installed harness in an owner environment")
+    parser.add_argument("--environment", help="Original local environment ID for discovery or enablement")
+    parser.add_argument("--harness-definition", type=Path, help="Owner JSON object containing command, args and optional env/label/authMethod")
+    parser.add_argument("--allow-harness-write", action="store_true", help="Explicitly enable owner-managed writable external tools for this environment")
     args = parser.parse_args()
+    if args.list_harnesses or args.enable_harness:
+        import harness_cli
+        if config_override is not None and args.enable_harness:
+            raise ValueError("Use the original installed owner configuration workflow for enablement")
+        if args.enable_harness and (not args.config or not args.environment):
+            parser.error("--enable-harness requires --config and --environment")
+        raw = args.config.expanduser().read_bytes() if args.config else None
+        config = json.loads(raw) if raw is not None else None
+        if args.enable_harness:
+            definition = json.loads(args.harness_definition.expanduser().read_text(encoding="utf-8")) if args.harness_definition else None
+            updated = harness_cli.enable(config, args.environment, args.enable_harness, definition, args.allow_harness_write)
+            harness_cli.write_configuration(args.config, raw, updated)
+            print("Harness enabled in the original owner configuration. Restart Companion, then probe it from the phone before creating a job. No package was installed or executed.")
+            config = updated
+        if args.list_harnesses:
+            print(json.dumps(harness_cli.discover(config, args.environment), ensure_ascii=False, indent=2))
+        return
+    if not args.config:
+        parser.error("--config is required except for --list-harnesses")
+    if args.harness_definition or args.allow_harness_write or args.environment:
+        parser.error("Harness configuration options require --enable-harness or --list-harnesses")
     if args.init:
         initialize(args.config.expanduser().resolve(), args.workspace)
         return

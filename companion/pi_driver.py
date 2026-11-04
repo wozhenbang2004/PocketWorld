@@ -4,7 +4,8 @@ Official contract: earendil-works/pi tag v1.4.0, packages/coding-agent/docs/rpc.
 docs/rpc-commands.md, docs/cli.md and src/core/agent-session.ts.
 Steer acknowledges queue admission only; events have no native per-input turn ID.
 This client contains no upstream implementation code.
-Only a no-tools conversation is enabled. Extension UI is NOT tool approval.
+Filesystem and command tools are disabled. Team invocations may load only the
+bundled message extension. Extension UI is NOT tool approval.
 The original Companion owns process lifetime, resource leases and persistence.
 """
 from collections import Counter
@@ -20,6 +21,7 @@ import uuid
 from codex_driver import DriverError
 from driver_dispatch import PipeWriter, DispatchError
 from remote_interactions import Progress
+from team_harness import TOOL_NAMES as TEAM_TOOL_NAMES
 
 VERSION = "1.4.0"
 PROTOCOL = "pi_rpc_v1"
@@ -46,8 +48,12 @@ def session_id(value):
     return value
 
 
-def command(native_session=None, session_dir=None, session_file=None):
+def command(native_session=None, session_dir=None, session_file=None, team_mcp=None):
     args = ["pi", "--mode", "rpc", *SAFE_FLAGS]
+    if team_mcp is not None:
+        args.remove("--no-tools")
+        args += ["--extension", str(Path(__file__).with_name("pi_team_extension.js").resolve()),
+                 "--tools", ",".join(sorted(TEAM_TOOL_NAMES))]
     if native_session is None:
         return [*args, "--no-session"]
     session_id(native_session)
@@ -84,8 +90,10 @@ def _model(value):
 
 class PiRpcDriver:
     def __init__(self, process, on_state, stopped, timeout, dispatch_guard=None,
-                 native_session=None, session_dir=None, expected_file=None):
+                 native_session=None, session_dir=None, expected_file=None, team_tools=False):
         self.process, self.on_state, self.stopped = process, on_state, stopped
+        self.team_tools = bool(team_tools)
+        self.team_calls = {}
         self.deadline = time.monotonic() + timeout
         self.dispatch_guard = dispatch_guard or nullcontext
         self.writer = PipeWriter(process)
@@ -410,7 +418,9 @@ class PiRpcDriver:
                  "promptRequestId": self.prompt_id, "reportedModel": self.reported_model["id"] if self.reported_model else None,
                   "inputSteeringVerified": self.can_steer(), "steeringUnknown": self.steering_unknown,
                   "nativeQueueEmptyConfirmed": self.native_queue_empty_confirmed,
-                 "noTools": True, "osReadIsolationVerified": False, "autoCompactionEnabled": self.auto_compaction,
+                 "noTools": not self.team_tools, "teamToolsOnly": self.team_tools, "codingToolsSupported": False,
+                 "teamTools": self.team_tools and self.protocol_verified,
+                 "osReadIsolationVerified": False, "autoCompactionEnabled": self.auto_compaction,
                  "inferenceUsage": {"modelCalls": None, "inputTokens": None, "outputTokens": None, "cost": None,
                                     "status": "unknown", "source": "native_session_may_retry_or_compact_no_per_request_accounting"},
                  "output": self.output, "outputTruncated": self.truncated, "eventCount": self.event_count,
@@ -461,7 +471,7 @@ class PiRpcDriver:
                         raise DriverError("Pi public text delta is invalid")
                     self.truncated |= len(self.output) + len(text) > MAX_OUTPUT
                     self.output = (self.output + text)[:MAX_OUTPUT]
-                elif str(subtype).startswith("toolcall"):
+                elif str(subtype).startswith("toolcall") and not self.team_tools:
                     raise DriverError("Pi emitted a tool call in no-tools mode; no approval was fabricated")
                 # Thinking/signatures/cumulative partial objects are deliberately never projected.
             elif kind in {"message_start", "message_end"}:
@@ -472,9 +482,14 @@ class PiRpcDriver:
                 if role == "system":
                     # Fixed 1.4.0 emits prompt-section patches as system messages. These
                     # private native metadata are not public text or a tool permission grant.
-                    if (not isinstance(message.get("content"), str) or message.get("toolsAdded", []) != []
+                    added = message.get("toolsAdded", [])
+                    allowed_additions = isinstance(added, list) and all(isinstance(item, dict) and item.get("name") in TEAM_TOOL_NAMES for item in added) if self.team_tools else added == []
+                    if (not isinstance(message.get("content"), str) or not allowed_additions
                             or message.get("sections") is not None and not isinstance(message["sections"], dict)):
                         raise DriverError("Pi system metadata is malformed or adds tools in no-tools mode")
+                elif role == "toolResult" and self.team_tools:
+                    if message.get("toolName") not in TEAM_TOOL_NAMES or message.get("toolCallId") not in self.team_calls:
+                        raise DriverError("Pi reported a tool result outside the original team scope")
                 elif role not in {"user", "assistant"}:
                     raise DriverError("Pi no-tools session emitted an unsupported message role")
                 if role == "assistant":
@@ -486,6 +501,10 @@ class PiRpcDriver:
                             raise DriverError("Pi complete assistant content is malformed")
                         public = []
                         for block in content:
+                            if self.team_tools and isinstance(block, dict) and block.get("type") == "toolCall":
+                                if block.get("name") not in TEAM_TOOL_NAMES or not isinstance(block.get("id"), str) or not isinstance(block.get("arguments"), dict):
+                                    raise DriverError("Pi requested a tool outside the team message scope")
+                                continue
                             if not isinstance(block, dict) or block.get("type") not in {"text", "thinking"}:
                                 raise DriverError("Pi complete message contains tools or unsupported content")
                             if block["type"] == "text":
@@ -495,9 +514,17 @@ class PiRpcDriver:
                         complete = "".join(public)
                         self.output, self.truncated = complete[:MAX_OUTPUT], len(complete) > MAX_OUTPUT
                         final_reason = message.get("stopReason")
-                        if final_reason not in {"stop", "length", "error", "aborted"}:
+                        if final_reason not in ({"stop", "length", "error", "aborted", "toolUse"} if self.team_tools else {"stop", "length", "error", "aborted"}):
                             raise DriverError("Pi assistant stop reason is unsupported")
                         self.progress.add("text", kind, text=self.output, status=final_reason)
+            elif kind in {"tool_execution_start", "tool_execution_update", "tool_execution_end"} and self.team_tools:
+                identity, name = event.get("toolCallId"), event.get("toolName")
+                if name not in TEAM_TOOL_NAMES or not isinstance(identity, str) or not identity or len(identity) > 200 or len(self.team_calls) >= 128 and identity not in self.team_calls:
+                    raise DriverError("Pi executed a tool outside its original team extension")
+                if identity in self.team_calls and self.team_calls[identity] != name:
+                    raise DriverError("Pi changed an original team tool identity")
+                self.team_calls[identity] = name
+                self.progress.add("tool", kind, identity, tool=name, status="completed" if kind == "tool_execution_end" else "running")
             elif kind == "agent_settled":
                 if type(event.get("aborted")) is not bool or self.settled:
                     raise DriverError("Pi native settled receipt is malformed or duplicated")
@@ -521,7 +548,7 @@ class PiRpcDriver:
                 status = "cancelled" if aborted else "completed" if final_reason == "stop" else "failed"
                 return {**value, "status": status, "nativeSettled": True, "interruptAcknowledged": self.abort_ack,
                         "timedOut": self.timed_out, "exitCode": None,
-                        "message": "Pi no-tools conversation reached its native settled barrier; not Pi coding capability"}
+                        "message": "Pi reached its original native settled barrier; filesystem and command tools remain disabled"}
 
     def can_steer(self, expected_prompt_id=None):
         return (self.protocol_verified and self.session_file is not None and self.prompt_accepted

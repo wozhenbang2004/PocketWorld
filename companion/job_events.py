@@ -6,6 +6,7 @@ The retention window is the existing Progress window. Missing rows stay missing.
 import copy
 import json
 import re
+import harness_registry
 
 PROTOCOL = "original_job_events_v1"
 FILTER = "normalized_driver_observations_v1"
@@ -13,7 +14,7 @@ MAX_PAGE = 32
 
 
 def capability(worker):
-    return {"protocol": PROTOCOL, "supported": worker in {"codex_app_server", "claude", "pi"},
+    return {"protocol": PROTOCOL, "supported": worker in {"codex_app_server", "claude", "pi"} or harness_registry.external(worker),
             "filter": FILTER, "maxPageEvents": MAX_PAGE, "retainedEvents": 64,
             "retainedEventBytes": 24576, "cursorPersistedByClient": True,
             "delivery": "bounded_cursor_get_not_sse", "completeProviderHistory": False,

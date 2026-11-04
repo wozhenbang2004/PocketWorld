@@ -1,4 +1,105 @@
-# PocketWorld Companion：固定 Gemini ACP 接入
+# PocketWorld Companion
+
+## 可配置 Harness 与团队成员
+
+团队成员可以绑定电脑上不同的执行器。手机保存成员分工、原团队轮次、消息和批准记录；所选电脑上的原 Companion 启动对应 Harness，并继续使用同一份任务、操作、审批、取消和成果记录。设备、执行环境、Harness 和模型是四个独立选择；安装在电脑上的 CLI 不会变成手机上的另一个执行环境。
+
+当前保留原生 `codex_app_server`、`claude`、`pi`，增加 `acp_<名称>` 的 ACP v1 接入和 `muse_msp` 的独立 MSP 接入。内置目录提供 39 个 ACP 启动预设及 Muse，也可配置自己的 ACP 程序。**目录中的预设不代表已安装、已登录或已完成真实推理；必须以本机协议探测和原任务结果为准。**
+
+### 在执行电脑启用
+
+先通过所选 Harness 自己的官方安装和登录方式准备它。Companion 不安装或升级软件，不自动登录，也不从手机接收 executable、argv 或凭据环境变量。
+
+源码运行方式：
+
+```bash
+# 只检查预设、配置与可执行文件；不启动 Harness。
+python3 companion/pocket_companion.py --list-harnesses
+
+# 查看一个已有环境；路径和环境 ID 替换为实际值。
+python3 companion/pocket_companion.py --config /absolute/owner/companion.json \
+  --list-harnesses --environment computer
+
+# 在 Companion 停止后，由主人明确启用该环境的外部工具执行。
+python3 companion/pocket_companion.py --config /absolute/owner/companion.json \
+  --enable-harness acp_opencode --environment computer --allow-harness-write
+```
+
+`--allow-harness-write` 明确将所选环境设为可写。已经可写的环境不需要重复传此选项。启用只修改原配置，不启动任务；随后重启原 Companion。
+
+Windows 安装包包含相同能力，不需要安装源码 Python。在停止 Companion 后，通过原固定 launcher 操作：
+
+```powershell
+$pwHarnessLauncher = Join-Path $env:LOCALAPPDATA 'PocketWorld\Companion\Launch-Companion.ps1'
+& $pwHarnessLauncher -Action ListHarnesses -Environment computer
+& $pwHarnessLauncher -Action EnableHarness -Environment computer -Harness acp_opencode -AllowHarnessWrite
+```
+
+安装版仍核对当前安装指针、原配置位置和原用户会话锁。它只更新该安装自己的 `companion.json`；配置变化采用原字节比较和原生替换，未知替换结果保留本地核对材料，不自动重试。运行中的原 Companion 会阻止配置修改。
+
+### 自定义命令与 Windows npm CLI
+
+环境对象内的 `harnessWorkers` 保存启动定义，`workers` 决定允许启用哪些 ID。它与原有 `harnesses` 配置文件绑定功能分开。自定义 ACP ID 使用 `acp_` 前缀，例如 `acp_my_agent`；命令只能来自电脑主人配置。
+
+```json
+{
+  "id": "computer",
+  "kind": "local",
+  "root": "/absolute/workspace",
+  "writeAllowed": true,
+  "workers": ["codex_app_server", "acp_my_agent"],
+  "harnessWorkers": {
+    "acp_my_agent": {
+      "label": "我的 ACP 执行器",
+      "command": "/absolute/installed/agent",
+      "args": ["acp"],
+      "ownerManagedExecution": true
+    }
+  }
+}
+```
+
+可选字段是 `env`、`label`、`authMethod`。`authMethod` 必须是该程序实际公布的认证方法 ID；留空时使用主人已准备的认证状态。凭据应在电脑上的受保护配置或服务环境中管理，不能写进任务、仓库或聊天。程序缺失、协议不兼容、模型未确认或会话访问失败都会阻止新任务。
+
+Windows 不执行 `.cmd`、`.bat` 或隐式 shell fallback。对于 npm 发布的 JavaScript CLI，使用主人已安装的 `node.exe` 加该包**实际存在的绝对 JS 入口**。下面的文件内容只是路径格式示例，必须换成所选包的实际入口：
+
+```json
+{
+  "label": "我的 ACP 执行器",
+  "command": "C:\\Program Files\\nodejs\\node.exe",
+  "args": ["C:\\OwnerTools\\my-agent\\dist\\cli.js", "acp"],
+  "ownerManagedExecution": true
+}
+```
+
+将定义另存为本地 JSON 文件后，可以直接使用安装版启用：
+
+```powershell
+& $pwHarnessLauncher -Action EnableHarness -Environment computer -Harness acp_my_agent `
+  -HarnessDefinition 'C:\OwnerTools\my-agent-definition.json' -AllowHarnessWrite
+```
+
+源码入口对应 `--harness-definition /absolute/owner/definition.json`。定义只能替换所选 worker 的主人配置，不能改变安装版的状态目录或设备身份。
+
+### 手机上核对与执行
+
+1. 在原连接页或团队成员绑定中读取实际环境，选择启用的执行器。
+2. 核对模型和模式。ACP 会进行实际 `initialize` 与临时 `session/new`，读取程序返回的选项；Muse 使用 MSP 初始化和模型目录，探测阶段不会创建工作区会话。两者都不发送模型 prompt。
+3. 选择具体模型/模式后再次探测，使观察与最终选择一致。没有公开目录的程序也可填写所需模型，但只有协议实际确认后才能执行。握手成功不表示账号计费、模型推理或全部工具能力已经验证。
+4. 明确接受该电脑的主人管理执行策略，再审阅并提交原工作。ACP/Muse 不宣称操作系统只读沙箱；`readOnly:false` 和风险确认是明确的工作范围。
+5. 在原任务内查看输出、真实权限请求、团队消息和成果。审批绑定同一个 job、operation、session、prompt 和请求内容，只提供该程序真实支持的一次性选择。
+
+通用 Harness 观察有效期为 10 分钟。配置、可执行文件身份、模型/模式目录或 Companion 实例发生变化后，需要重新探测。提交前还会再次核对协议和选择。续接只使用同一个已结束且进程已确认停止的原会话，并要求实际协议支持恢复；未知结果、断线和重启不会自动重发 prompt。ACP/Muse 当前不提供执行中的输入 steering。
+
+团队工具只有 `team_send_message`、`team_read_messages`、`team_list_members`，都回到原成员轮次、消息范围和配额。它们不能授予文件、执行或审批权限。临时桥接凭据只存在于原任务进程中，不进入公开任务或持久化命令。
+
+原生 **`pi`** 保持关闭文件与 shell 工具；加入团队时只启用上述三个团队工具，适合讨论与审阅。**`acp_pi`** 使用主人另行安装的 ACP 编码入口，按主人管理策略运行，能力必须重新探测。两条路径的工具权限不能互相推导。
+
+代码生产继续使用原“选定文件副本”或“完整项目副本”流程。只有环境与 worker 同时报告 `assignmentWorkspace` / `projectProduction` 可用时才可选择；目前复制执行依赖本地 POSIX 工作区能力，Windows 不会被宣称已具备该能力。Codex、Claude、ACP 和 Muse 的结果仍经过原审批范围、时间限制、进程退出证据和成果冻结步骤；副本隔离不等于整个外部程序的 OS 沙箱，成果不会自动覆盖源项目。
+
+固定 `gemini_acp` 继续采用下面的原安装指纹和范围约束；通用 `acp_gemini` 是独立的主人管理 ACP 选择，不会沿用或放宽固定路径的批准。
+
+## 固定 Gemini ACP 接入
 
 当前 Companion 在原有 Codex、Claude、Pi 和明确命令流程上，增加了一个固定后端：**Gemini CLI 0.66.0、ACP 协议版本 1**。它使用现有任务、操作记录、审批、查询与取消流程。
 

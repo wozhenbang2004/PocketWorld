@@ -47,8 +47,9 @@ public final class RemoteManagedSessions {
             if(environment.isEmpty()||workspace.isEmpty())context.put("unknownForTask",id);
             String thread=text(source,"threadId",1024),session=text(source,"sessionId",1024);
             boolean confirmed=!job.isEmpty()&&Boolean.TRUE.equals(source.opt("protocolVerified"))&&!thread.isEmpty();
-            if("pi_rpc_v1".equals(protocol))confirmed&=Boolean.TRUE.equals(source.opt("noTools"))&&!session.isEmpty()&&session.equals(thread);
+            if("pi_rpc_v1".equals(protocol))confirmed&=RemoteHarnessSelection.piScopeConfirmed(source)&&!session.isEmpty()&&session.equals(thread);
             else if("claude_stream_json".equals(protocol))confirmed&=Boolean.TRUE.equals(source.opt("controlProtocolVerified"))&&Boolean.TRUE.equals(source.opt("sessionIdentityConfirmed"))&&!session.isEmpty()&&session.equals(thread);
+            else if(RemoteHarnessSelection.isGenericWorker(worker)){confirmed&=RemoteHarnessSelection.wireProtocol(worker).equals(protocol)&&!session.isEmpty()&&session.equals(thread)&&!text(source,"promptRequestId",200).isEmpty();try{RemoteHarnessSelection.checked(source.optJSONObject("harnessSelection"),worker);}catch(Exception unconfirmed){confirmed=false;}}
             else confirmed&="codex_app_server".equals(protocol);
             JSONObject identity=new JSONObject(context.toString()).put("worker",worker).put("protocol",protocol).put("threadId",thread).put("sessionId",session);
             if(!confirmed)identity.put("unknownForTask",id);

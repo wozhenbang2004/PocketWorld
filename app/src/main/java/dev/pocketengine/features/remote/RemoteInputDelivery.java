@@ -15,12 +15,13 @@ public final class RemoteInputDelivery {
         boolean codex="codex_app_server".equals(worker)&&"codex_app_server".equals(protocol);
         boolean claude="claude".equals(worker)&&"claude_stream_json".equals(protocol);
         boolean pi="pi".equals(worker)&&"pi_rpc_v1".equals(protocol);
+        boolean generic=RemoteHarnessSelection.isGenericWorker(worker)&&RemoteHarnessSelection.wireProtocol(worker).equals(protocol);
         boolean identity=present(source,"jobId")&&present(source,"jobOperationId")&&present(source,"threadId");
-        boolean nativeObserved=(codex||claude||pi)&&yes(source,"protocolVerified")&&identity;
+        boolean nativeObserved=(codex||claude||pi||generic)&&yes(source,"protocolVerified")&&identity;
         if(claude)nativeObserved=nativeObserved&&yes(source,"controlProtocolVerified")&&yes(source,"sessionIdentityConfirmed")&&present(source,"promptRequestId")&&source.getString("threadId").equals(source.opt("sessionId"));
-        // Only this mounted Pi adapter's no-tools session is described. A future
-        // tool-enabled adapter must not inherit this capability or an old draft.
-        if(pi)nativeObserved=nativeObserved&&yes(source,"noTools")&&present(source,"promptRequestId")&&source.getString("threadId").equals(source.opt("sessionId"));
+        // Only the original empty tool set or exact host-bound team-only Pi scope is accepted.
+        if(pi)nativeObserved=nativeObserved&&RemoteHarnessSelection.piScopeConfirmed(source)&&present(source,"promptRequestId")&&source.getString("threadId").equals(source.opt("sessionId"));
+        if(generic){nativeObserved&=present(source,"promptRequestId")&&source.optString("threadId").equals(source.optString("sessionId"));try{RemoteHarnessSelection.checked(source.optJSONObject("harnessSelection"),worker);}catch(Exception unconfirmed){nativeObserved=false;}}
         JSONObject controls=source.optJSONObject("controls");
         String status=source.optString("executorStatus");
         boolean live=Set.of("running","awaiting_approval").contains(status);
@@ -30,14 +31,15 @@ public final class RemoteInputDelivery {
         JSONObject current=mode(codex?"original_turn_steer":piQueue?"original_prompt_queue":"not_mounted",nativeObserved&&codex||piQueue,
                 nativeObserved&&notStopped&&live&&(codex&&present(source,"turnId")||piQueue)&&yes(controls,"inputSteering"))
                 .put("requiresExactTurn",codex).put("requiresExactPrompt",piQueue).put("acceptanceProvesModelUse",false);
-        if(piQueue)current.put("delivery","native_queue").put("consumed","unknown").put("noToolsSessionOnly",true);
+        if(piQueue)current.put("delivery","native_queue").put("consumed","unknown").put("noToolsSessionOnly",yes(source,"noTools")).put("teamToolsOnly",yes(source,"teamToolsOnly"));
         boolean next=nativeObserved&&notStopped&&settled&&yes(controls,"threadResume");
         if(pi){JSONObject cleanup=source.optJSONObject("processCleanupProof");next&=yes(source,"nativeSettled")&&Boolean.FALSE.equals(source.opt("resourcesHeld"))&&yes(cleanup,"processGroupStoppedVerified");if(yes(source,"inputSteeringVerified"))next&=yes(source,"nativeQueueEmptyConfirmed");}
+        if(generic)next&=RemoteHarnessSelection.terminalConfirmed(source,worker)&&yes(source,"resumeSupported");
         JSONObject continuation=mode("settled_original_session",nativeObserved,next)
                 .put("requiresNativeSettlement",true).put("requiresOriginalOwnerDispatch",true)
                 .put("automaticallySent",false).put("addsBudget",false);
-        if(pi)continuation.put("noToolsSessionOnly",true);
-        String stopping=settled?"native_cleanup_only":codex?"turn_interrupt":claude?"prompt_interrupt":pi?piQueue?"agent_clear_queue_abort":"agent_abort":"not_mounted";
+        if(pi)continuation.put("noToolsSessionOnly",yes(source,"noTools")).put("teamToolsOnly",yes(source,"teamToolsOnly"));
+        String stopping=settled?"native_cleanup_only":codex?"turn_interrupt":claude?"prompt_interrupt":pi?piQueue?"agent_clear_queue_abort":"agent_abort":generic?"original_prompt_cancel":"not_mounted";
         JSONObject interrupt=mode(stopping,nativeObserved,nativeObserved&&yes(controls,"cancel"))
                 .put("requestIsStopProof",false).put("requiresNativeAcknowledgement",true)
                 .put("reversesCompletedEffects",false);

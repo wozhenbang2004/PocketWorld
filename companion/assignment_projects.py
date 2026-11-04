@@ -15,6 +15,7 @@ import shutil
 import stat
 import subprocess
 import uuid
+import harness_registry
 import assignment_workspaces as selected
 
 FD_ROOT = "/proc/self/fd" if os.path.isdir("/proc/self/fd") else "/dev/fd" if os.path.isdir("/dev/fd") else None
@@ -27,7 +28,8 @@ MARKER = ".pocket-project.json"
 
 
 def capability(env, storage_root=None):
-    return {"protocol": PROTOCOL, "supported": env.get("kind", "local") == "local" and os.name != "nt" and hasattr(os, "O_NOFOLLOW") and bool(env.get("writeAllowed")) and "codex_app_server" in env.get("workers", []) and shutil.which("git") is not None and FD_ROOT is not None,
+    return {"protocol": PROTOCOL, "supported": harness_registry.production_available(env) and shutil.which("git") is not None and FD_ROOT is not None,
+            "workers": harness_registry.production_workers(env),
             "maxFiles": MAX_FILES, "maxFileBytes": MAX_FILE, "maxTotalBytes": MAX_TOTAL, "maxManifestBytes": MAX_MANIFEST, "maxRetainedCopiesPerEnvironment": 16,
             "packageIdentityEncoding": MANIFEST_ENCODING, "binaryStreaming": True, "freshGitBaseline": True, "stableDirectoryHandleCwd": FD_ROOT is not None, "storageRoot": storage_root, "originalGitHistoryIncluded": False, "workerStartsOnlyAfterReady": True,
             "commandsRequireSeparateOriginalOwnerApproval": True, "osReadIsolationVerified": False, "commandAllowlistEnforced": False, "automaticCleanup": False}
@@ -173,7 +175,9 @@ def _current(manager, record, error, phases):
 
 def _directory(manager, record, error):
     root = _root(manager, record)
-    env = {"id": record["environmentId"], "root": str(root), "kind": "local", "workers": ["codex_app_server"], "writeAllowed": True, "_fullProjectNative": True}
+    owner = manager._environment(record["environmentId"])
+    env = {**owner, "id": record["environmentId"], "root": str(root), "kind": "local",
+           "workers": harness_registry.production_workers(owner), "writeAllowed": True, "_fullProjectNative": True}
     if manager.workspace_identity(env) != record.get("checkoutIdentity"):
         raise error("Original independent project checkout was replaced", 409)
     fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -520,8 +524,11 @@ def bound_environment(manager, request, error):
             raise error("Project dispatch changed its original assignment/work-item scope", 409)
     if request.get("environmentId") != record["environmentId"] or request.get("environmentBinding") != record["environmentBinding"] or record["environmentBinding"] != manager.environment_binding(record["environmentId"]):
         raise error("Original project environment generation changed", 409)
-    if request.get("worker") != "codex_app_server" or request.get("readOnly") is not False or any(request.get(key) for key in ["threadId", "resumeJobId"]) or request.get("timeoutSeconds") != record["limits"]["maxWallTimeSeconds"]:
-        raise error("Full-project dispatch must be a new exact Codex job under the reviewed bounds", 409)
+    worker = request.get("worker")
+    if worker not in harness_registry.production_workers(manager._environment(record["environmentId"])) or request.get("readOnly") is not False or any(request.get(key) for key in ["threadId", "resumeJobId"]) or request.get("timeoutSeconds") != record["limits"]["maxWallTimeSeconds"]:
+        raise error("Full-project dispatch must be a new exact enabled harness job under the reviewed bounds", 409)
+    if worker != "codex_app_server" and request.get("externalExecutionRiskAcknowledged") is not True:
+        raise error("This project harness requires explicit owner-managed execution acknowledgement", 409)
     selected._id(reference["reservationId"], "original external_job reservation", error)
     if isinstance(reference["approvalRevision"], bool) or not isinstance(reference["approvalRevision"], int) or reference["approvalRevision"] < record["approvalRevision"] or isinstance(reference["approvalExpiresAt"], bool) or not isinstance(reference["approvalExpiresAt"], int) or reference["approvalExpiresAt"] <= manager.now():
         raise error("Original full-project owner job approval expired", 409)

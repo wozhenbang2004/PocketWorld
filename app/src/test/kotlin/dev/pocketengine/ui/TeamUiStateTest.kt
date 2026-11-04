@@ -91,6 +91,39 @@ class TeamUiStateTest {
         assertEquals("Claude Code", teamRunnerLabel("claude"))
     }
 
+    @Test fun configuredHarnessRequiresItsOwnVerifiedProtocolAndExactModelModeBinding() {
+        val selected = AgentSlotDraft("member-0", "电脑成员", "Review", "reported-model", "acp_owner_agent", "computer-a", "env-a",
+            externalExecutionRiskAcknowledged = true, modeId = "normal").json()
+        assertEquals("normal", selected.getString("modeId"))
+        val proof = JSONObject().put("slot", selected.toString()).put("receipt", JSONObject().put("available", true).put("protocolVerified", false))
+        val unverified = PocketUiState(teamMemberProbes = mapOf("team-a:member-0" to proof))
+        assertFalse(teamLaunchable(team(selected), unverified))
+        val verified = unverified.copy(teamMemberProbes = mapOf("team-a:member-0" to JSONObject(proof.toString()).put("receipt", JSONObject().put("available", true).put("protocolVerified", true))))
+        assertTrue(teamLaunchable(team(selected), verified))
+        assertFalse(teamLaunchable(team(JSONObject(selected.toString()).put("modeId", "different")), verified))
+        assertFalse(teamLaunchable(team(JSONObject(selected.toString()).put("runner", "muse_msp")), verified))
+        assertFalse(teamLaunchable(team(JSONObject(selected.toString()).put("externalExecutionRiskAcknowledged", false)), verified))
+    }
+
+    @Test fun configuredEditorReadinessRequiresCurrentDirectoryAndNativeSelectionContract() {
+        val worker = JSONObject().put("id", "acp_owner_agent").put("configurationRevision", "a".repeat(64))
+        val probe = JSONObject().put("worker", "acp_owner_agent").put("available", true).put("protocolVerified", true)
+            .put("protocol", "acp_v1").put("executionPolicy", "owner_managed")
+            .put("configurationRevision", "a".repeat(64)).put("capabilityRevision", "b".repeat(64))
+        assertTrue(nativeHarnessProbeReady(probe, worker))
+        assertFalse(nativeHarnessProbeReady(probe, JSONObject(worker.toString()).put("configurationRevision", "c".repeat(64))))
+        assertFalse(nativeHarnessProbeReady(JSONObject(probe.toString()).put("protocolVerified", false), worker))
+        assertFalse(nativeHarnessProbeReady(JSONObject(probe.toString()).put("protocol", "muse_msp_v1"), worker))
+        assertFalse(nativeHarnessProbeReady(JSONObject(probe.toString()).put("worker", "acp_other"), worker))
+        assertFalse(nativeHarnessProbeReady(JSONObject(probe.toString()).put("capabilityRevision", "unknown"), worker))
+        assertTrue(externalTeamHarness("acp_custom_harness"))
+        assertTrue(externalTeamHarness("muse_msp"))
+        assertTrue(externalTeamHarness("pi"))
+        assertFalse(externalTeamHarness("gemini_acp"))
+        assertFalse(externalTeamHarness("acp_9invalid"))
+        assertFalse(dev.pocketengine.features.remote.RemoteHarnessSelection.isProductionWorker("pi"))
+    }
+
     @Test fun usableAccountModelCanLaunchWithoutAnApiUrl() {
         val account = PocketUiState(modelRoute = "account", modelName = "account-model", accountModelAvailable = true)
         assertTrue(account.baseUrl.isEmpty())

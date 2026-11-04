@@ -40,7 +40,7 @@ def session_uuid(value):
     return value
 
 
-def command(session_id, write_allowed=False, model=None, resume=False, effort=None):
+def command(session_id, write_allowed=False, model=None, resume=False, effort=None, team_mcp=None):
     tools = "Read,Glob,Grep,AskUserQuestion,Edit,Write,Bash" if write_allowed else "Read,Glob,Grep,AskUserQuestion"
     args = ["claude", "--safe-mode", "--restricted", "--settings",
             '{"permissions":{"ask":["Edit","Write","Bash","AskUserQuestion"]}}', "-p", "--input-format", "stream-json",
@@ -53,23 +53,37 @@ def command(session_id, write_allowed=False, model=None, resume=False, effort=No
         args += ["--model", model]
     if effort is not None:
         args += ["--effort", effort]
+    if team_mcp is not None:
+        # Safe mode disables even an explicitly supplied MCP server. Restricted
+        # mode and an exact MCP configuration retain the original tool boundary.
+        args.remove("--safe-mode")
+        at = args.index("--disallowedTools")
+        del args[at:at + 2]
+        settings = json.loads(args[args.index("--settings") + 1])
+        settings.update(disableAllHooks=True, enabledPlugins={})
+        args[args.index("--settings") + 1] = json.dumps(settings)
+        from team_harness import TOOL_NAMES
+        args[args.index("--allowedTools") + 1] += "," + ",".join("mcp__pocket_team__" + name for name in sorted(TOOL_NAMES))
+        config = {"mcpServers": {"pocket_team": {"command": team_mcp["command"], "args": team_mcp["args"],
+                  "env": {item["name"]: item["value"] for item in team_mcp.get("env", [])}}}}
+        args += ["--setting-sources", "", "--strict-mcp-config", "--mcp-config", json.dumps(config)]
     return args
 
 
 def inspect_cli(version, help_text):
     match = re.search(r"(?<!\d)(\d+)\.(\d+)\.(\d+)(?!\d)", version)
     missing = [flag for flag in REQUIRED_FLAGS if flag not in help_text]
-    compatible = bool(match) and tuple(map(int, match.groups())) >= (2, 1, 259) and not missing
+    compatible = bool(match) and (2, 1, 259) <= tuple(map(int, match.groups())) < (3, 0, 0)
     return {"cliVersion": match.group(0) if match else None, "cliFlagsVerified": compatible,
-            "missingFlags": missing, "protocolVerified": False, "accountConfigured": None,
+            "missingFlags": missing, "cliFlagEvidence": "documented_version_contract" if compatible else "unsupported_version", "helpListsAllFlags": False, "protocolVerified": False, "accountConfigured": None,
             "modelInferenceVerified": False, "available": compatible,
             "effortFlagVerified": "--effort" in help_text,
-            "message": "Local CLI version/help checked only; account, stream protocol, model/effort catalog and inference remain unverified; no new initialize probe was started"}
+            "message": "CLI version checked against the supported contract; help is not an exhaustive flag list. Account, stream protocol and inference still require the original job handshake."}
 
 
 class ClaudeStreamDriver:
     def __init__(self, process, session_id, on_state, stopped, timeout,
-                 dispatch_guard=None, cwd=None, write_allowed=False):
+                 dispatch_guard=None, cwd=None, write_allowed=False, team_tools=False):
         self.process = process
         self.session_id = session_uuid(session_id)
         self.on_state, self.stopped = on_state, stopped
@@ -77,6 +91,8 @@ class ClaudeStreamDriver:
         self.writer = PipeWriter(process)
         self.cwd = Path(cwd or ".").resolve()
         self.write_allowed = write_allowed
+        from team_harness import TOOL_NAMES
+        self.team_tool_names = {"mcp__pocket_team__" + name for name in TOOL_NAMES} if team_tools else set()
         self.deadline = time.monotonic() + timeout
         self.events = queue.Queue(maxsize=128)
         self.closed = threading.Event()
@@ -138,6 +154,7 @@ class ClaudeStreamDriver:
         questions, answers = self.questions.snapshot()
         self.on_state({"modelOptions": self.model_options, "modelRuntime": self._model_runtime(), "protocol": "claude_stream_json", "sessionId": self.session_id,
                        "threadId": self.session_id, "protocolVerified": self.protocol_verified,
+                       "teamTools": bool(self.team_tool_names) and self.protocol_verified,
                        "sessionIdentityConfirmed": self.protocol_verified,
                        "controlProtocolVerified": self.initialized, "promptRequestId": self.prompt_id,
                        "reportedModel": self.reported_model,
@@ -309,6 +326,9 @@ class ClaudeStreamDriver:
             self.question_tools[use_id] = wire_id
             self.progress.add("question", "claude/AskUserQuestion", use_id, summary="Original agent clarifying question; not execution permission")
             self._state()
+            return
+        if tool in self.team_tool_names:
+            self._answer(wire_id, {"behavior": "allow", "updatedInput": data} if safe else {"behavior": "deny", "message": "Original team turn is no longer live"})
             return
         if tool in {"Read", "Glob", "Grep"}:
             path = data.get("file_path") if tool == "Read" else data.get("path", ".")
@@ -487,7 +507,14 @@ class ClaudeStreamDriver:
                 allowed = {"Read", "Glob", "Grep", "EndConversation", "AskUserQuestion"}
                 if self.write_allowed:
                     allowed.update({"Edit", "Write", "Bash"})
-                if not isinstance(tools, list) or any(not isinstance(tool, str) or tool not in allowed for tool in tools) or event.get("mcp_servers"):
+                allowed.update(self.team_tool_names)
+                servers = event.get("mcp_servers", [])
+                valid_servers = not servers if not self.team_tool_names else (
+                    isinstance(servers, list) and len(servers) == 1 and isinstance(servers[0], dict)
+                    and servers[0].get("name") == "pocket_team" and servers[0].get("status") == "connected"
+                    and isinstance(tools, list) and all(isinstance(tool, str) for tool in tools)
+                    and self.team_tool_names.issubset(set(tools)))
+                if not isinstance(tools, list) or any(not isinstance(tool, str) or tool not in allowed for tool in tools) or not valid_servers:
                     raise DriverError("Claude advertised tools outside the requested tool scope")
                 self.protocol_verified = True
                 self.reported_model = event.get("model") if self._option_text(event.get("model")) else None
@@ -574,6 +601,7 @@ class ClaudeStreamDriver:
                 return {**final, "modelOptions": self.model_options, "modelRuntime": self._model_runtime(), "protocol": "claude_stream_json", "sessionId": self.session_id,
                         "threadId": self.session_id, "sessionIdentityConfirmed": True,
                         "protocolVerified": True, "controlProtocolVerified": True,
+                        "teamTools": bool(self.team_tool_names),
                         "reportedModel": self.reported_model, "promptRequestId": self.prompt_id,
                          "promptResultIdentity": self.prompt_result_identity,
                          "pendingQuestions": [], "questionReceipts": self.questions.snapshot()[1], "progress": self.progress.snapshot(),

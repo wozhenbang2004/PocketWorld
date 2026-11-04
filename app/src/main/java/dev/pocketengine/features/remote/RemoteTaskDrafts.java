@@ -8,14 +8,15 @@ public final class RemoteTaskDrafts {
     public static JSONObject scope(JSONObject source,String profileGeneration,String mode)throws Exception {
         if(!mode.matches("steer|next_turn")||!profileGeneration.matches("[a-f0-9]{64}"))throw new SecurityException("原草稿目标或电脑代次无效");
         String worker=source.optString("worker"),protocol=source.optString("protocol");boolean pi=worker.equals("pi")&&protocol.equals("pi_rpc_v1");
-        if(!source.optBoolean("protocolVerified")||!worker.matches("claude|codex_app_server|pi")||!(worker.equals("claude")?"claude_stream_json":worker.equals("pi")?"pi_rpc_v1":"codex_app_server").equals(protocol))throw new SecurityException("原执行器真实协议尚未确认");
-        if(pi&&(source.opt("protocolVerified")!=Boolean.TRUE||source.opt("noTools")!=Boolean.TRUE||!(source.opt("threadId") instanceof String)||source.getString("threadId").isEmpty()||!source.getString("threadId").equals(source.opt("sessionId"))||!(source.opt("promptRequestId") instanceof String)||source.getString("promptRequestId").isEmpty()))throw new SecurityException("Pi草稿仅属于已确认同session/thread的原无工具会话");
+        if(!source.optBoolean("protocolVerified")||!RemoteHarnessSelection.isTeamWorker(worker)||!RemoteHarnessSelection.wireProtocol(worker).equals(protocol))throw new SecurityException("原执行器真实协议尚未确认");
+        if(pi&&(source.opt("protocolVerified")!=Boolean.TRUE||!RemoteHarnessSelection.piScopeConfirmed(source)||!(source.opt("threadId") instanceof String)||source.getString("threadId").isEmpty()||!source.getString("threadId").equals(source.opt("sessionId"))||!(source.opt("promptRequestId") instanceof String)||source.getString("promptRequestId").isEmpty()))throw new SecurityException("Pi草稿仅属于已确认同session/thread的原无工具会话");
         JSONObject scope=new JSONObject().put("mode",mode).put("profileGeneration",profileGeneration);
         for(String key:new String[]{"taskId","runId","coordinatorEpoch","profileId","serviceBase","jobId","jobOperationId","environmentId","worker","protocol","threadId"}){
             Object value=source.get(key);if(value==JSONObject.NULL||value instanceof String&&((String)value).isEmpty())throw new SecurityException("原草稿会话尚未确认");scope.put(key,value);
         }
         for(String key:new String[]{"sessionId","promptRequestId","workspaceIdentity"})if(source.has(key))scope.put(key,source.get(key));
-        if(pi)scope.put("noTools",true);
+        if(pi){scope.put("noTools",source.getBoolean("noTools"));if(source.optBoolean("teamToolsOnly"))scope.put("teamContextIdentity",dev.pocketengine.store.TaskStore.capabilityFingerprint(source.getJSONObject("teamContext"))).put("teamToolsOnly",true);}
+        if(RemoteHarnessSelection.isGenericWorker(worker)){if(!mode.equals("next_turn"))throw new SecurityException("此Harness未支持原turn追加");JSONObject selection=RemoteHarnessSelection.checked(source.optJSONObject("harnessSelection"),worker);scope.put("configurationRevision",selection.getString("configurationRevision")).put("capabilityRevision",selection.getString("capabilityRevision"));}
         if(mode.equals("steer"))RemoteMessageTarget.copy(RemoteMessageTarget.observed(source),scope);
         return scope;
     }

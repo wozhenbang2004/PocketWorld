@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
+import * as harnessCapabilities from '../src/harness-capabilities.ts';
 
 // Invoke production JSX and handlers with explicit lifecycle/bridge doubles.
 // These are contract checks, not a DOM, browser, native SSH or visual review.
@@ -30,6 +31,8 @@ function fixture(component = 'ConnectionWorkspace', supplied: any = {}) {
   props.run = (action: string, args: any) => {
     calls.push({ action, args });
     if (action === heldAction) return new Promise(resolve => deferred.push(resolve));
+    const response = supplied.respond?.(action, args);
+    if (response !== undefined) return Promise.resolve(response);
     if (action === 'remote.environments') return Promise.resolve({ environments: [{ id: 'environment-a', label: 'Original environment', kind: 'local', workspace: '/home/owner/work', bindingHash: 'e'.repeat(64), workers: [{ id: 'command', available: true }] }] });
     if (action === 'remote.reviewTask') return Promise.resolve({ ...args, operationId: 'remote-original', reviewHandle: 'remote-review' });
     if (action === 'ssh.listFiles') return Promise.resolve({ path: args.path, files: [{ name: 'notes.txt', bytes: 5, directory: false }] });
@@ -38,9 +41,9 @@ function fixture(component = 'ConnectionWorkspace', supplied: any = {}) {
     if (action === 'ssh.confirmOperation') return new Promise(resolve => deferred.push(resolve));
     return Promise.resolve({ status: 'completed' });
   };
-  const names = ['Accordion', 'AccordionItem', 'Button', 'CheckboxField', 'SelectField', 'SettingsDialog', 'TextAreaField', 'TextField', 'TerminalSurface', 'ArrowLeft', 'ArrowUp', 'ChevronRight', 'FileText', 'Folder', 'History', 'Monitor', 'Plus', 'Server', 'ShieldCheck', 'Terminal', 'Wrench'];
-  const components = new Function('h', 'Fragment', 'useState', 'useRef', 'useEffect', 'useLayoutEffect', 'useDataSettingsJourney', 'bridge', 'document', 'window', ...names, code + ';return { ConnectionWorkspace, SshWork, RemoteWork };')(
-    h, 'Fragment', useState, useRef, useEffect, useEffect, useDataSettingsJourney, bridge, document, window, ...names,
+  const names = ['Accordion', 'AccordionItem', 'Button', 'CheckboxField', 'SelectField', 'SettingsDialog', 'TextAreaField', 'TextField', 'TerminalSurface', 'HarnessEvidence', 'ArrowLeft', 'ArrowUp', 'ChevronRight', 'FileText', 'Folder', 'History', 'Monitor', 'Plus', 'Server', 'ShieldCheck', 'Terminal', 'Wrench'];
+  const components = new Function('h', 'Fragment', 'useState', 'useRef', 'useEffect', 'useLayoutEffect', 'useDataSettingsJourney', 'bridge', 'document', 'window', ...Object.keys(harnessCapabilities), ...names, code + ';return { ConnectionWorkspace, SshWork, RemoteWork };')(
+    h, 'Fragment', useState, useRef, useEffect, useEffect, useDataSettingsJourney, bridge, document, window, ...Object.values(harnessCapabilities), ...names,
   );
   const render = () => { do { changed = false; at = 0; tree = components[component](props); pending.splice(0).forEach(effect => effect()); } while (changed); return tree; };
   const find = (predicate: (node: Node) => boolean) => { const matches = nodes(tree, predicate); assert.equal(matches.length, 1, 'Expected one production element'); return matches[0]; };
@@ -151,4 +154,30 @@ test('hidden SSH workspace rejects late review and an old confirm callback', asy
   f.props.visible = false; f.render(); originalConfirm(); await f.flush();
   assert.equal(f.calls.filter(call => call.action === 'ssh.confirmOperation').length, 0);
   assert.equal(f.find(node => node.type === 'SettingsDialog').props.isOpen, false);
+});
+
+test('configured harnesses come from the computer and submit the exact verified selection', async () => {
+  const worker = { id: 'acp_example', label: 'Owner configured agent', available: true, configurationRevision: '1'.repeat(64), protocol: 'acp', executionPolicy: 'owner_managed' };
+  const environment = { id: 'environment-a', label: 'Original environment', workspace: '/home/owner/work', bindingHash: 'e'.repeat(64), writeAllowed: true, workers: [worker] };
+  let protocolVerified = false;
+  const f = fixture('RemoteWork', { respond(action: string) {
+    if (action === 'remote.environments') return { environments: [environment] };
+    if (action === 'remote.probeWorker') return { worker: worker.id, available: true, protocolVerified, configurationRevision: worker.configurationRevision, capabilityRevision: '2'.repeat(64), models: { availableModels: [{ modelId: 'model-a', name: 'Model A' }] } };
+  } });
+  f.button('读取当前工作环境').props.onClick(); await f.flush();
+  f.find(node => node.type === 'SelectField' && node.props.label === '工作环境').props.onChange(environment.id); f.render();
+  const selector = f.find(node => node.type === 'SelectField' && node.props.label === '执行器');
+  assert.ok(selector.props.options.some((option: any) => option.id === worker.id && option.label === worker.label));
+  selector.props.onChange(worker.id); f.render();
+  f.find(node => node.type === 'TextAreaField' && node.props.label === '这次要完成什么').props.onChange('Inspect the workspace'); f.render();
+  f.button('核对执行器与模型能力').props.onClick(); await f.flush();
+  f.find(node => node.type === 'CheckboxField').props.onChange(true); f.render();
+  assert.equal(f.button('审阅这次新工作').props.disabled, true, 'An available boolean without verified protocol is insufficient');
+  protocolVerified = true; f.button('核对执行器与模型能力').props.onClick(); await f.flush();
+  assert.equal(f.button('审阅这次新工作').props.disabled, false);
+  f.button('审阅这次新工作').props.onClick(); await f.flush();
+  const request = f.calls.find(call => call.action === 'remote.reviewTask').args;
+  assert.deepEqual(request.harnessSelection, { protocol: 'pocketworld.harness-selection.v1', workerId: worker.id, configurationRevision: worker.configurationRevision, capabilityRevision: '2'.repeat(64), ownerManagedExecution: true });
+  assert.equal(request.readOnly, false); assert.equal(request.externalExecutionRiskAcknowledged, true);
+  assert.equal(request.environmentBinding, environment.bindingHash);
 });

@@ -190,7 +190,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 require(supplied.objects().size == supplied.length()) { "成员必须是完整的原对象" }
                 val members = JSONArray(); val ids = mutableSetOf<String>()
                 supplied.objects().forEachIndexed { index, member ->
-                    fields(member, "id", "name", "role", "model", "runner", "device", "assignment", "dependsOn")
+                    fields(member, "id", "name", "role", "model", "modeId", "runner", "device", "assignment", "dependsOn", "externalExecutionRiskAcknowledged")
                     val id = text(member, "id", 64); require(ids.add(id)) { "成员身份不能重复" }
                     val previous = old?.optJSONArray("members").objects().singleOrNull { it.optString("id") == id }
                     val captured = previous?.let { JSONObject(it.toString()) } ?: JSONObject().put("id", id).put("runner", "model").put("device", "phone")
@@ -198,11 +198,26 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     val model = text(member, "model", 200, true).trim()
                     if (previous?.has("modelTarget") == true) require(model == previous.optString("model")) { "保留原模型目标，请在原模型设置中修改" }
                     captured.put("model", model)
-                    val runner = if (member.has("runner")) text(member, "runner", 32) else previous?.optString("runner", "model") ?: "model"
-                    require(runner in setOf("model", "phone_agent") || runner == previous?.optString("runner")) { "请从原执行器入口配置电脑成员" }
-                    require(previous == null || previous.optString("runner", "model") in setOf("model", "phone_agent") || runner == previous.optString("runner")) { "请在原电脑成员入口更换执行器" }
+                    val runner = if (member.has("runner")) text(member, "runner", 80) else previous?.optString("runner", "model") ?: "model"
+                    val external = dev.pocketengine.features.remote.RemoteHarnessSelection.isTeamWorker(runner)
+                    require(runner in setOf("model", "phone_agent") || external || runner == previous?.optString("runner")) { "请选择当前已接入的成员执行器" }
+                    if (previous?.has("remoteProduction") == true) require(runner == previous.optString("runner") && model == previous.optString("model")) { "制作成员执行器与模型变更须重新审阅原项目范围" }
                     captured.put("runner", runner)
-                    if (runner == "phone_agent") {
+                    if (external) {
+                        val device = member.optJSONObject("device") ?: previous?.optJSONObject("device") ?: error("请选择实际电脑连接和环境")
+                        fields(device, "profileId", "environmentId")
+                        val selected = JSONObject().put("profileId", text(device, "profileId", 80)).put("environmentId", text(device, "environmentId", 80))
+                        if (previous?.has("remoteProduction") == true) require(listOf("profileId", "environmentId").all { previous.optJSONObject("device")?.optString(it) == selected.optString(it) }) { "制作成员设备变更须重新审阅原项目范围" }
+                        captured.put("device", selected)
+                        if (runner != "codex_app_server") {
+                            require(member.opt("externalExecutionRiskAcknowledged") == true) { "请确认所选电脑 Harness 的实际权限、同用户执行与账号费用边界" }
+                            captured.put("externalExecutionRiskAcknowledged", true)
+                        } else captured.remove("externalExecutionRiskAcknowledged")
+                        val selectedMode = if (member.has("modeId")) text(member, "modeId", 200, true).trim() else if (runner == previous?.optString("runner")) previous.optString("modeId") else ""
+                        if (previous?.has("remoteProduction") == true) require(selectedMode == previous.optString("modeId")) { "制作成员模式变更须重新审阅原项目范围" }
+                        if (selectedMode.isNotEmpty()) captured.put("modeId", selectedMode) else captured.remove("modeId")
+                        captured.remove("phoneScope"); captured.remove("modelTarget"); captured.remove("memberModelSelection")
+                    } else if (runner == "phone_agent") {
                         require(mode == "collaborate") { "手机成员请使用共同工作方式" }
                         val device = member.getJSONObject("device"); fields(device, "kind", "screenMode", "targetDeviceId")
                         val local = device.optString("kind") == "local_phone"
@@ -216,8 +231,8 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                         val dependencies = member.optJSONArray("dependsOn") ?: JSONArray()
                         require((0 until dependencies.length()).all { dependencies.opt(it) is String } && dependencies.length() <= 3) { "前置成员必须来自这次团队" }
                         captured.put("dependsOn", JSONArray(dependencies.toString())); captured.remove("phoneScope")
-                    } else if (previous?.optString("runner") == "phone_agent") {
-                        captured.put("device", "phone"); captured.remove("phoneScope"); captured.remove("assignment"); captured.put("dependsOn", JSONArray())
+                    } else if (previous?.optString("runner") != "model") {
+                        captured.put("device", "phone"); captured.remove("phoneScope"); captured.remove("assignment"); captured.remove("modeId"); captured.remove("externalExecutionRiskAcknowledged"); captured.put("dependsOn", JSONArray())
                     }
                     members.put(AgentSlot.normalize(captured, index))
                 }

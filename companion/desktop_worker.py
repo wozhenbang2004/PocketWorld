@@ -51,6 +51,13 @@ def _mutex(state, *, probe=False):
 
 
 def main():
+    if sys.argv[1:] == ["--team-mcp-stdio"]:
+        # The frozen executable can host its bundled stdio module directly.
+        # This mode has only the original job's loopback token, no host config,
+        # desktop session, account discovery or second execution manager.
+        from team_mcp import main as serve_team_mcp
+        serve_team_mcp()
+        return
     parser = argparse.ArgumentParser(description="PocketWorld lightweight Windows Companion (user-session only)")
     parser.add_argument("--config", type=Path)
     actions = parser.add_mutually_exclusive_group(required=True)
@@ -61,12 +68,23 @@ def main():
     actions.add_argument("--init", action="store_true")
     actions.add_argument("--recover-desktop", action="store_true")
     actions.add_argument("--pairing", action="store_true")
+    actions.add_argument("--list-harnesses", action="store_true", help="List installed/configured external harnesses without starting them")
+    actions.add_argument("--enable-harness", metavar="WORKER_ID", help="Enable an owner-installed harness in the fixed private configuration while Companion is stopped")
     actions.add_argument("--stream-self-test", action="store_true", help="Encode one synthetic VP8 frame; no desktop, network, config or identity access")
     parser.add_argument("--identity-dir", type=Path)
     parser.add_argument("--manual-takeover-after-os-restart", action="store_true")
     parser.add_argument("--workspace", default=".")
+    parser.add_argument("--environment", help="Existing owner environment ID for harness discovery/enablement")
+    parser.add_argument("--harness-definition", type=Path, help="Owner-local JSON command definition; never a package installer")
+    parser.add_argument("--allow-harness-write", action="store_true", help="Explicitly enable owner-managed external tools in the selected environment")
     parser.add_argument("--development-state", action="store_true", help="Source-tree development only; never allowed by a frozen installed executable")
     args = parser.parse_args()
+    if (args.environment or args.harness_definition or args.allow_harness_write) and not (args.list_harnesses or args.enable_harness):
+        parser.error("Harness configuration arguments require --list-harnesses or --enable-harness")
+    if args.list_harnesses and (args.harness_definition or args.allow_harness_write):
+        parser.error("Discovery cannot change a harness definition or write policy")
+    if args.enable_harness and not args.environment:
+        parser.error("--enable-harness requires the existing --environment ID")
     if args.stream_self_test:
         # This branch runs before installation/config/state/identity initialization.
         # Build smoke checks must neither register a host nor open a desktop/peer.
@@ -106,6 +124,43 @@ def main():
     if installed is not None:
         launch = installed.launch_config()
     state = _state(config, launch.json() if launch is not None else None)
+    if args.list_harnesses or args.enable_harness:
+        if args.manual_takeover_after_os_restart or args.identity_dir is not None:
+            raise ValueError("Recovery arguments cannot authorize a harness configuration action")
+        import harness_cli
+        if args.list_harnesses:
+            value = launch.json() if launch is not None else json.loads(config.read_text(encoding="utf-8-sig"))
+            print(json.dumps(harness_cli.discover(value, args.environment), ensure_ascii=False))
+            return
+        definition = None
+        if args.harness_definition is not None:
+            with args.harness_definition.open("rb") as stream:
+                raw_definition = stream.read(65537)
+            if len(raw_definition) > 65536:
+                raise ValueError("Owner harness definition exceeds 64 KiB")
+            definition = json.loads(raw_definition.decode("utf-8-sig"))
+        handle = _mutex(state)
+        try:
+            if installed is not None:
+                receipt = harness_cli.enable_installed(installed, launch, args.environment, args.enable_harness,
+                                                       definition, args.allow_harness_write)
+            else:
+                before = config.read_bytes()
+                value = harness_cli.enable(json.loads(before.decode("utf-8-sig")), args.environment, args.enable_harness,
+                                           definition, args.allow_harness_write)
+                harness_cli.write_configuration(config, before, value)
+                receipt = {"configurationChanged": True, "environmentId": args.environment, "workerId": args.enable_harness,
+                           "packagesInstalled": False, "executablesStarted": False, "restartRequired": True}
+            print(json.dumps(receipt, ensure_ascii=False))
+            if not receipt.get("configurationChanged"):
+                raise SystemExit(2)
+        finally:
+            if handle is not None:
+                from ctypes import wintypes as w
+                kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+                kernel.ReleaseMutex.argtypes, kernel.CloseHandle.argtypes = [w.HANDLE], [w.HANDLE]
+                kernel.ReleaseMutex(handle); kernel.CloseHandle(handle)
+        return
     marker = state / "desktop-local-stop"
     if args.pairing:
         if args.manual_takeover_after_os_restart:
