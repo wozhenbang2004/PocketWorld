@@ -1,7 +1,13 @@
 # Stable per-user entry. Login tasks never target a version directory directly.
 [CmdletBinding()]
-param([ValidateSet('Serve','Initialize','StopDesktop','RecoverDesktop','PairDevices','Health')][string]$Action='Serve', [string]$Workspace)
+param([ValidateSet('Serve','Initialize','StopDesktop','RecoverDesktop','PairDevices','Health','ListHarnesses','EnableHarness')][string]$Action='Serve',
+      [string]$Workspace, [string]$Environment, [string]$Harness, [string]$HarnessDefinition, [switch]$AllowHarnessWrite)
 $ErrorActionPreference='Stop'
+if ($Action -notin @('ListHarnesses','EnableHarness') -and ($Environment -or $Harness -or $HarnessDefinition -or $AllowHarnessWrite)) {
+    throw 'Harness arguments require the explicit ListHarnesses or EnableHarness owner action.'
+}
+if ($Action -eq 'ListHarnesses' -and ($Harness -or $HarnessDefinition -or $AllowHarnessWrite)) { throw 'Discovery cannot change the owner configuration.' }
+if ($Action -eq 'EnableHarness' -and (-not $Environment -or -not $Harness)) { throw 'Choose an existing Environment and a Harness ID explicitly.' }
 $homeRoot=Join-Path $env:LOCALAPPDATA 'PocketWorld\Companion'
 if ([IO.Path]::GetFullPath($PSScriptRoot) -ne [IO.Path]::GetFullPath($homeRoot)) { throw 'Use the installed fixed launcher.' }
 if (Test-Path -LiteralPath (Join-Path $homeRoot 'installation-transaction.json')) { throw 'Installation needs Manage Repair before startup.' }
@@ -22,6 +28,15 @@ if ($Action -eq 'Initialize') {
 else {
     Assert-PWFixedConfig $paths $paths.Config -Required
     if ($Action -eq 'Serve') { & $exe --serve --config $paths.Config }
+    elseif ($Action -in @('ListHarnesses','EnableHarness')) {
+        $harnessArguments = @('--config', $paths.Config)
+        if ($Action -eq 'ListHarnesses') { $harnessArguments += '--list-harnesses' }
+        else { $harnessArguments += @('--enable-harness', $Harness) }
+        if ($Environment) { $harnessArguments += @('--environment', $Environment) }
+        if ($HarnessDefinition) { $harnessArguments += @('--harness-definition', $HarnessDefinition) }
+        if ($AllowHarnessWrite) { $harnessArguments += '--allow-harness-write' }
+        & $exe @harnessArguments
+    }
     elseif ($Action -eq 'PairDevices') { & $exe --pairing --config $paths.Config }
     elseif ($Action -eq 'StopDesktop') { & $exe --local-stop --config $paths.Config }
     else { & $exe --recover-desktop --config $paths.Config --identity-dir (Join-Path $paths.State 'identity-v1') }
