@@ -1410,5 +1410,11 @@
     ],
     "robolectric": true,
     "description": "Actual private assistant App/Runner/loopback Gateway/TaskStore/HostToolSupervisor journey: exact approval consumption, changed arguments, one-use, withdrawn tools, cumulative model/tool budgets, stale/expired queue pickup and unknown receipts. Startup/presentation and executor pickup are controlled; final workspace module only records dispatch and returns a fixture receipt without business effects. No external model, real workspace mutation, clean full-app build, device or visual acceptance."
+  },
+  "media-scratch-recovery": {
+    "class": "dev.pocketengine.features.attachments.NativeMediaScratchRecoveryTest",
+    "helpers": [],
+    "robolectric": true,
+    "description": "Opt-in original media scratch IO with hard-killed JDK17 host children, fresh JVM recovery, default-process live leases, unknown-file quota and durable Book preservation. Codec-only boundaries use extractor/muxer shadows, not real container parsing or encoding. No Android/device process death or cross-process lease guarantee."
   }
 }
