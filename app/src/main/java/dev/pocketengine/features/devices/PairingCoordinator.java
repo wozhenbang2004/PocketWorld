@@ -565,6 +565,7 @@ public final class PairingCoordinator {
     static final String PERSISTED_PRE_VIEWER_GRANT_PROFILE="pwp1_cdf06c78390cb32246ba396f9ab45ca88a7d6964591fa25f69ccd605d0c8b2a6";
     // Original SQL grants from the first released viewer profile retain exactly its 17 methods.
     static final String PERSISTED_DESKTOP_VIEWER_GRANT_PROFILE="pwp1_37a2c7990f46ec2f9ea27ac7223cd2a845eb8b7ff491a7ede3f2d31a626e6675";
+    // The released Android-user resource profile retained the same seventeen methods.
     static final String PERSISTED_ANDROID_USER_GRANT_PROFILE="pwp1_94a3b250d77be4eadd62d184dfa70facfe4e78444f0cd80903d00e339ef25147";
     private static final Set<String> PERSISTED_DESKTOP_VIEWER_GRANT_METHODS=Set.of(
             "device.describe","tool.invoke","operation.get","operation.cancel","task.submitGoal",

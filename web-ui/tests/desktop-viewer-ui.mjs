@@ -132,12 +132,39 @@ try {
     assert.equal(await page.getByRole('button', { name: '我来操作', exact: true }).isDisabled(), true);
     await page.locator('video').click();
     assert.equal(await page.evaluate(() => window.desktopFixture.calls.filter(c => c.action === 'devices.desktop.input' || c.action === 'devices.desktop.control').length), 0);
+    await page.screenshot({ path: path.join(output, 'unverifiable-media-watch-only-live.png'), fullPage: true });
     if (!realRtc) {
       await page.evaluate(() => window.desktopFixture.setFrameIdentity('exact'));
       await page.getByText('正在观看', { exact: true }).waitFor();
       assert.equal(await page.getByRole('button', { name: '我来操作', exact: true }).isEnabled(), true);
     }
   });
+  if (!realRtc) await Promise.all([false, true].map(noPlaybackQuality => check(noPlaybackQuality
+    ? 'playback-without-frame-apis-stays-watch-only' : 'playback-without-frame-callback-stays-watch-only', async page => {
+    await page.evaluate(noPlaybackQuality => {
+      Object.defineProperty(HTMLVideoElement.prototype, 'requestVideoFrameCallback', { configurable: true, value: undefined });
+      if (noPlaybackQuality) Object.defineProperty(HTMLVideoElement.prototype, 'getVideoPlaybackQuality', { configurable: true, value: undefined });
+    }, noPlaybackQuality);
+    await watch(page, false);
+    await page.getByText('仅可观看', { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => typeof document.querySelector('video').getVideoPlaybackQuality === 'function'), !noPlaybackQuality);
+    const start = await page.evaluate(() => {
+      const video = document.querySelector('video');
+      return { at: Date.now(), frames: video.getVideoPlaybackQuality?.().totalVideoFrames ?? null, time: video.currentTime };
+    });
+    // Cross the real startup deadline using actual canvas playback progress.
+    // No mocked video-frame callback participates in this watch-only journey.
+    await page.waitForFunction(start => {
+      const phase = document.querySelector('.pw-desktop-viewer')?.getAttribute('data-phase');
+      if (phase !== 'live') throw new Error('Healthy watch-only playback unexpectedly left the live phase: ' + phase);
+      const video = document.querySelector('video');
+      return Date.now() - start.at >= 46_000 && video.currentTime > start.time
+        && (start.frames === null || video.getVideoPlaybackQuality().totalVideoFrames > start.frames);
+    }, start, { timeout: 52_000, polling: 1000 });
+    assert.equal(await page.getByRole('button', { name: '我来操作', exact: true }).isDisabled(), true);
+    await page.locator('video').click();
+    assert.equal(await page.evaluate(() => window.desktopFixture.calls.filter(c => c.action === 'devices.desktop.input' || c.action === 'devices.desktop.control').length), 0);
+  })));
   await controlCheck('same-size-mismatched-rtp-never-unlocks-input', async page => {
     await watch(page); await take(page);
     await page.evaluate(() => window.desktopFixture.setFrameIdentity('mismatch'));

@@ -17,7 +17,7 @@ import org.json.JSONObject;
 public final class DeviceProtocol {
     private DeviceProtocol(){}
     public static final String VERSION="1.0";
-    public static final String PROFILE="pwp1_42dbf55184ca014a356eac1ac5b33a92659e9c09f278e8b30a818ce7ad4ac1ca";
+    public static final String PROFILE="pwp1_d605876f8926ee6c6d5d1fe9c4e19987e7466c672557d6483723009099b42009";
     public static final int MAX_CONTROL_BYTES=65536,MAX_PAIRING_BYTES=16384,MAX_DEPTH=16,MAX_NODES=4096;
     public static final long MAX_SAFE_INTEGER=9007199254740991L;
     public static final Set<String> TASK_STATES=set("queued_local submitting accepted waiting_approval waiting_dependency waiting_resource running pause_requested paused cancel_requested cancelled succeeded failed interrupted needs_reconcile");

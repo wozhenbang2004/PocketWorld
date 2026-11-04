@@ -226,32 +226,34 @@ test('a healthy viewer cancels the startup deadline instead of closing at 45 sec
 });
 
 for (const identity of ['missing-metadata', 'missing-decoded', 'mismatched'] as const) {
-  test(`continuous watch-only playback survives startup and stall deadlines with ${identity} RTP identity`, async t => {
-    t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
-    const h = fixture();
-    try {
-      await h.owner.open('pc', scope);
-      for (let i = 0; i < 50; i++) {
-        h.advance(1000); const value = h.metadata();
-        if (identity === 'missing-metadata') {
-          h.decode();
-          // Retiring input evidence after a decoded picture must not retire
-          // the separate observation that video is still playing.
-          h.owner.receiveFrame({ ...value, rtpTimestamp: undefined });
-        } else {
-          h.owner.receiveFrame(value);
-          h.owner.decodedFrame(value.width, value.height, value.streamId,
-            identity === 'mismatched' ? value.rtpTimestamp + 1 : undefined);
+  for (const order of ['metadata-first', 'decoded-first'] as const) {
+    test(`continuous watch-only playback survives startup and stall deadlines with ${identity} RTP identity, ${order}`, async t => {
+      t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+      const h = fixture();
+      try {
+        await h.owner.open('pc', scope);
+        for (let i = 0; i < 50; i++) {
+          h.advance(1000); const value = h.metadata();
+          const metadata = () => h.owner.receiveFrame(identity === 'missing-metadata' ? { ...value, rtpTimestamp: undefined } : value);
+          const decoded = () => h.owner.decodedFrame(value.width, value.height, value.streamId,
+            identity === 'missing-decoded' ? undefined : value.rtpTimestamp + (identity === 'mismatched' ? 1 : 0));
+          // Either transport may arrive first. Retiring input evidence after a
+          // decode must preserve the independent observation of live playback.
+          if (order === 'metadata-first') { metadata(); decoded(); }
+          else { decoded(); metadata(); }
+          t.mock.timers.tick(1000); await Promise.resolve();
+          assert.equal(h.owner.state.phase, 'live');
+          assert.equal(h.owner.state.frameReady, false);
+          assert.equal(h.owner.canInput(), false);
         }
-        t.mock.timers.tick(1000); await Promise.resolve();
-        assert.equal(h.owner.state.phase, 'live');
-        assert.equal(h.owner.state.frameReady, false);
-      }
-      assert.equal(h.owner.state.frameIssue, identity === 'mismatched' ? 'unmatched' : 'unavailable');
-      assert.equal(await h.owner.input({ kind: 'press_key', key: 'enter' }), false);
-      assert.equal(h.inputCount(), 0); assert.deepEqual(h.closeIds(), []);
-    } finally { h.owner.dispose(); }
-  });
+        assert.equal(h.owner.state.frameIssue, identity === 'mismatched' ? 'unmatched' : 'unavailable');
+        await h.owner.control('take');
+        assert.equal(h.calls.some(call => call.action === 'devices.desktop.control'), false);
+        assert.equal(await h.owner.input({ kind: 'press_key', key: 'enter' }), false);
+        assert.equal(h.inputCount(), 0); assert.deepEqual(h.closeIds(), []);
+      } finally { h.owner.dispose(); }
+    });
+  }
 }
 
 test('watch-only playback still closes a genuinely stalled video after a bounded interval', async t => {

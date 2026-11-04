@@ -38,9 +38,9 @@ PERSISTED_PHONE_TASK_GRANT_METHODS = frozenset({"device.describe", "tool.invoke"
 PERSISTED_PRE_VIEWER_GRANT_PROFILE = "pwp1_cdf06c78390cb32246ba396f9ab45ca88a7d6964591fa25f69ccd605d0c8b2a6"
 # The first desktop-viewer profile already allowed this exact seventeenth method.
 PERSISTED_DESKTOP_VIEWER_GRANT_PROFILE = "pwp1_37a2c7990f46ec2f9ea27ac7223cd2a845eb8b7ff491a7ede3f2d31a626e6675"
-PERSISTED_DESKTOP_VIEWER_GRANT_METHODS = PERSISTED_PHONE_TASK_GRANT_METHODS | {"desktop.viewer"}
-# Android-user resource support did not add methods or refill the original grant.
+# The released Android-user resource profile kept the same seventeen methods.
 PERSISTED_ANDROID_USER_GRANT_PROFILE = "pwp1_94a3b250d77be4eadd62d184dfa70facfe4e78444f0cd80903d00e339ef25147"
+PERSISTED_DESKTOP_VIEWER_GRANT_METHODS = PERSISTED_PHONE_TASK_GRANT_METHODS | {"desktop.viewer"}
 
 
 def _persisted_grant_epoch_current(known, receipt, grant):

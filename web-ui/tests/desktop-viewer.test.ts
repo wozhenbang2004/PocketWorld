@@ -46,7 +46,9 @@ test('only explicit desktop.viewer grants connect; old and expired grants never 
   const options = desktopScopes(peer, now);
   assert.deepEqual(options.map(item => [item.grantId, item.available]), [['old', false], ['current', true], ['expired', false]]);
   options[1].resourceBinding.windowId = 222;
-  assert.equal(peer.receivedGrantScopes[1].resources[0].windowId, 456);
+  const grantedResource = peer.receivedGrantScopes[1].resources[0];
+  assert.ok('windowId' in grantedResource);
+  assert.equal(grantedResource.windowId, 456);
 });
 
 test('pixel mapping rejects letterbox margins and correctly handles portrait, zoom and fractional device scaling', () => {
@@ -186,7 +188,7 @@ test('late open and input replies cannot attach a retired session or clear succe
     h.delayed.add('devices.desktop.input'); const input = h.owner.input({ kind: 'press_key', key: 'enter' });
     assert.equal(await h.owner.input({ kind: 'press_key', key: 'enter' }), false);
     const reopened = h.owner.open('pc-1', scope());
-    assert.equal(h.owner.state.session, null, 'Closing immediately fences the old frame while its input callback is pending');
+    assert.equal(h.owner.state.session === null, true, 'Closing immediately fences the old frame while its input callback is pending');
     h.settle('devices.desktop.input'); assert.equal(await input, false); await reopened;
     h.fresh(); await h.owner.control('take'); h.fresh();
     const nextInput = h.owner.input({ kind: 'press_key', key: 'tab' });
@@ -523,7 +525,7 @@ test('a delayed control result cannot unlock a successor session', async () => {
     await h.owner.open('pc-1', scope()); h.fresh();
     h.delayed.add('devices.desktop.control'); const oldTake = h.owner.control('take');
     const reopened = h.owner.open('pc-1', scope());
-    assert.equal(h.owner.state.phase, 'opening'); assert.equal(h.owner.state.session, null);
+    assert.equal(h.owner.state.phase, 'opening'); assert.equal(h.owner.state.session === null, true);
     h.settle('devices.desktop.control'); await oldTake; await reopened;
     h.fresh(); const newTake = h.owner.control('take');
     assert.equal(h.owner.state.session?.sessionId, 'view-2'); assert.equal(h.owner.state.controlPending, true);

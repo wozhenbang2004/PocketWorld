@@ -799,9 +799,10 @@ i.load_existing_identity(sys.argv[1]).load_context(CrashBeforeLoad())
         self.assertEqual(old_profile, p.PERSISTED_DESKTOP_VIEWER_GRANT_PROFILE)
         self._assert_persisted_grant_restores_only_original_sql_and_frozen_methods(old_profile, viewer=True)
 
-    def test_released_android_user_profile_restores_its_exact_signed_scope(self):
+    def test_released_android_user_grant_restores_exact_seventeen_methods(self):
         old_profile = "pwp1_94a3b250d77be4eadd62d184dfa70facfe4e78444f0cd80903d00e339ef25147"
         self.assertEqual(old_profile, p.PERSISTED_ANDROID_USER_GRANT_PROFILE)
+        self.binding["androidUserId"] = 0
         self._assert_persisted_grant_restores_only_original_sql_and_frozen_methods(old_profile, viewer=True)
 
     def _assert_persisted_grant_restores_only_original_sql_and_frozen_methods(self, old_profile, viewer=False):
@@ -857,6 +858,13 @@ i.load_existing_identity(sys.argv[1]).load_context(CrashBeforeLoad())
             query.require_target_peer(self.peer_b, late)
             self.assertEqual(wire.PROFILE, query.envelope.get("protocolProfile"))
             self.assertNotIn("budget", query.envelope.json())
+            if "androidUserId" in self.binding:
+                omitted_user = {key: value for key, value in self.binding.items() if key != "androidUserId"}
+                for other_resource in (omitted_user, dict(self.binding, androidUserId=1)):
+                    with self.assertRaises(PermissionError):
+                        route.operation_cancel(self.a, "original-operation", "a" * 64, "wrong-user-stop", other_resource, self.now)
+                    with self.assertRaises(PermissionError):
+                        history.history_query(self.a, "operation.get", "original-operation", other_resource, late)
             with self.assertRaises(PermissionError):
                 caller.restore_outgoing_grant(self.peer_b, "grant-1", late)
             with self.assertRaises(PermissionError):

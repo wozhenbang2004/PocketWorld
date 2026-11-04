@@ -163,15 +163,18 @@ public final class DeviceDesktopViewerNativeTest {
     }
 
     @Test public void mergedViewerProfileRestoresOnlyItsOriginalSignedSqlScopeAndRejectsOldWire() throws Exception {
-        assertOriginalSignedSqlScopeAndRejectsOldWire(
-                "pwp1_37a2c7990f46ec2f9ea27ac7223cd2a845eb8b7ff491a7ede3f2d31a626e6675");
+        String previous = "pwp1_37a2c7990f46ec2f9ea27ac7223cd2a845eb8b7ff491a7ede3f2d31a626e6675";
+        assertEquals(PairingCoordinator.PERSISTED_DESKTOP_VIEWER_GRANT_PROFILE, previous);
+        assertReleasedViewerGrantRestoresOnlyOriginalSqlScope(previous);
     }
 
-    @Test public void mergedAndroidUserProfileRestoresOnlyItsOriginalSignedSqlScopeAndRejectsOldWire() throws Exception {
-        assertOriginalSignedSqlScopeAndRejectsOldWire(PairingCoordinator.PERSISTED_ANDROID_USER_GRANT_PROFILE);
+    @Test public void releasedAndroidUserProfileRestoresOnlyItsOriginalSignedSqlScopeAndRejectsOldWire() throws Exception {
+        String previous = "pwp1_94a3b250d77be4eadd62d184dfa70facfe4e78444f0cd80903d00e339ef25147";
+        assertEquals(PairingCoordinator.PERSISTED_ANDROID_USER_GRANT_PROFILE, previous);
+        assertReleasedViewerGrantRestoresOnlyOriginalSqlScope(previous);
     }
 
-    private void assertOriginalSignedSqlScopeAndRejectsOldWire(String previous) throws Exception {
+    private void assertReleasedViewerGrantRestoresOnlyOriginalSqlScope(String previous) throws Exception {
         long now = System.currentTimeMillis();
         TaskStoreDeviceTrust nativeTrust = new TaskStoreDeviceTrust(sql);
         JSONObject legacy = nativeTrust.outgoingGrant(remote.deviceId(), grant.grantId()).put("protocolProfile", previous);
