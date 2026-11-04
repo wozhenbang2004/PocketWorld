@@ -160,6 +160,10 @@ internal class PocketWebBridge(
     private val profilePages = PocketWebProfiles(controller) { !closed && documentId != null && section == "workProfiles" && controller.webPrivateOwnerVisible() }
     private val localPages = PocketWebLocal(controller)
     private var projectPreview: PocketWebProjectPreview? = null
+    private val phoneViewer = PocketWebPhoneViewer(controller::webPrivateOwnerVisible,
+        { PocketWebWindowTicket(commandFence.ticket(), controller.webPhoneViewerWindowTicket()) },
+        { ticket -> ticket.accepts(commandFence.ticket(), controller.webPhoneViewerWindowTicket()) },
+        { id -> controller.state.tasks.firstOrNull { it.id == id } }, controller::readPhonePreview)
     private val commandReceipts = linkedMapOf<String, Pair<String, JSONObject>>()
     private val pendingCommands = mutableMapOf<String, String>()
     private data class PhoneReview(val goal: String, val mode: String, val tools: Int, val models: Int, val minutes: Int,
@@ -212,7 +216,7 @@ internal class PocketWebBridge(
             "memory.list", "memory.search", "memoryReview.list", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource",
             "memoryReview.candidates", "mcp.snapshot", "mcp.pickConfig", "mcp.cancel", "mcp.discoverImport", "mcp.reviewImport", "mcp.installImport", "mcp.reviewEnabled", "mcp.confirmEnabled", "mcp.read", "mcp.reviewGrant", "mcp.confirmGrant", "learning.snapshot", "groups.snapshot",
             "remote.probe", "remote.environments", "local.termuxProbe", "local.inspectRuntime", "local.readReceipts", "local.prepareCheckout", "local.describeCheckout", "local.terminal.review", "local.terminal.confirm", "local.terminal.query", "local.terminal.stop", "local.terminal.open", "local.terminal.read", "local.terminal.input", "local.terminal.inputReceipt", "local.terminal.close", "automation.receipts", "automation.list", "automation.reviewSchedule", "automation.reviewRule", "automation.confirmReview", "automation.prepareOccurrence", "channels.inspect", "skills.read", "plugins.history", "proxy.status", "proxy.stop"
-        ) + PocketWebData.COMMANDS + PocketWebConnections.COMMANDS + PocketWebMemoryDrafts.COMMANDS + setOf("conversation.drafts") + PocketWebKnowledge.COMMANDS + PocketWebMessageQuotes.COMMANDS + PocketWebChannels.COMMANDS + PocketWebExperience.COMMANDS + PocketWebRouteReferences.COMMANDS + PocketWebSkills.COMMANDS + PocketWebPresentation.COMMANDS + PocketWebTeams.COMMANDS + PocketWebGroups.COMMANDS + PocketWebMedia.COMMANDS + PocketWebComposerModels.COMMANDS + PocketWebDevices.COMMANDS + PocketWebPlugins.COMMANDS + PocketWebRealtime.COMMANDS + PocketWebProxy.COMMANDS + PocketWebPlans.COMMANDS + PocketWebCommitments.COMMANDS + PocketWebTokenBudgets.COMMANDS + PocketWebProfiles.COMMANDS + PocketWebProjectPreview.COMMANDS
+        ) + PocketWebData.COMMANDS + PocketWebConnections.COMMANDS + PocketWebMemoryDrafts.COMMANDS + setOf("conversation.drafts") + PocketWebKnowledge.COMMANDS + PocketWebMessageQuotes.COMMANDS + PocketWebChannels.COMMANDS + PocketWebExperience.COMMANDS + PocketWebRouteReferences.COMMANDS + PocketWebSkills.COMMANDS + PocketWebPresentation.COMMANDS + PocketWebTeams.COMMANDS + PocketWebGroups.COMMANDS + PocketWebMedia.COMMANDS + PocketWebComposerModels.COMMANDS + PocketWebDevices.COMMANDS + PocketWebPlugins.COMMANDS + PocketWebRealtime.COMMANDS + PocketWebProxy.COMMANDS + PocketWebPlans.COMMANDS + PocketWebCommitments.COMMANDS + PocketWebTokenBudgets.COMMANDS + PocketWebProfiles.COMMANDS + PocketWebProjectPreview.COMMANDS + PocketWebPhoneViewer.COMMANDS
     }
 
     /** Equivalent to the former Activity saveable presentation state, never an execution grant. */
@@ -254,7 +258,7 @@ internal class PocketWebBridge(
         check(projectPreview == null && !closed)
         projectPreview = PocketWebProjectPreview(controller, container, ::captureWindow, ::acceptsWindow) { publishState() }
     }
-    fun foreground(value: Boolean) { projectPreview?.foreground(value) }
+    fun foreground(value: Boolean) { projectPreview?.foreground(value); phoneViewer.foreground(value) }
 
     /** Presentation switching must not discard a command or a model selection awaiting a receipt. */
     fun canSwitchPresentation(): Boolean {
@@ -267,7 +271,7 @@ internal class PocketWebBridge(
         closed = true
         started = false
         presentation.close()
-        projectPreview?.close(); projectPreview = null
+        projectPreview?.close(); projectPreview = null; phoneViewer.clear()
         releaseGlobalObserver?.invoke(); releaseGlobalObserver = null
         observer.stop(); observer.clear()
         reviews.clear()
@@ -301,6 +305,7 @@ internal class PocketWebBridge(
     fun invalidatePresentation(documentReplaced: Boolean) {
         check(Looper.myLooper() == Looper.getMainLooper())
         commandFence.invalidate()
+        phoneViewer.clear()
         projectPreview?.invalidatePresentation(documentReplaced)
         taskReviewGeneration++
         domainGeneration++
@@ -378,6 +383,12 @@ internal class PocketWebBridge(
             }
             pendingCommands[id] = identity
             ownsRequest = true
+            if (action in PocketWebPhoneViewer.COMMANDS) {
+                phoneViewer.dispatch(action, args) { result, error, code ->
+                    complete(id, result, error, code.ifEmpty { "preview_unavailable" }, retainValue = action != "phone.viewer.frame")
+                }
+                return
+            }
             if (action in PocketWebProjectPreview.COMMANDS) {
                 (projectPreview ?: error("原项目预览宿主尚未接入")).dispatch(action, args) { result, error -> complete(id, result, error); publishState() }
                 return
@@ -721,12 +732,15 @@ internal class PocketWebBridge(
         }
     }
 
-    private fun complete(id: String, value: JSONObject?, error: String?, errorCode: String = "not_accepted") {
+    private fun complete(id: String, value: JSONObject?, error: String?, errorCode: String = "not_accepted", retainValue: Boolean = true) {
         if (closed) return
         val identity = pendingCommands.remove(id) ?: return
         val response = JSONObject().put("v", 1).put("kind", "result").put("id", id).put("ok", error == null)
         if (error == null) response.put("value", value ?: JSONObject()) else response.put("error", JSONObject().put("code", errorCode).put("message", error))
-        commandReceipts[id] = identity to response
+        // A rolling frame is not a durable command receipt. Keep only a small replay rejection.
+        val replay = if (retainValue || error != null) response else JSONObject().put("v", 1).put("kind", "result").put("id", id).put("ok", false)
+            .put("error", JSONObject().put("code", "preview_expired").put("message", "请读取最新画面"))
+        commandReceipts[id] = identity to replay
         while (commandReceipts.size > 128) commandReceipts.remove(commandReceipts.keys.first())
         emit(response)
     }
@@ -872,7 +886,7 @@ internal class PocketWebBridge(
                 val nextDocument = requiredString(args, "documentId")
                 require(nextDocument.length <= 120)
                 if (nextDocument != documentId) {
-                    documentId = nextDocument; presentationEpoch++; taskHistory.clear(); controller.webChannels.clear(); controller.webSkills.clear(); reviews.clear(); phoneReviews.clear(); voiceReviews.clear(); modelReviews.clear(); reminderReviews.clear(); executionReviews.clear(); mcpImports.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); devicePages.clear(); pluginPages.clear(); localPages.clear(); accountWorkspace.invalidate(); composerModels.clear()
+                    documentId = nextDocument; phoneViewer.clear(); presentationEpoch++; taskHistory.clear(); controller.webChannels.clear(); controller.webSkills.clear(); reviews.clear(); phoneReviews.clear(); voiceReviews.clear(); modelReviews.clear(); reminderReviews.clear(); executionReviews.clear(); mcpImports.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); devicePages.clear(); pluginPages.clear(); localPages.clear(); accountWorkspace.invalidate(); composerModels.clear()
                     controller.voiceInputTypeChanged(phoneIntent)
                 }
                 return JSONObject().put("ready", true).put("source", "library-web")
@@ -1504,8 +1518,8 @@ internal class PocketWebBridge(
     private fun isGroup(task: UiTask) = task.raw.optJSONObject("origin")?.optString("kind") == "group"
     private fun canUseTaskControls(task: UiTask) = task.raw.optJSONObject("origin")?.optString("kind") != "paired_device" && (!isGroup(task) || taskPage != null && controller.groupTaskReady)
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")
-    private fun leaveTask() { tokenBudgets.clear(); profilePages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
-    private fun leaveConnection() { controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); reminderReviews.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); devicePages.clear(); pluginPages.clear(); localPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null }
+    private fun leaveTask() { phoneViewer.clear(); tokenBudgets.clear(); profilePages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
+    private fun leaveConnection() { phoneViewer.clear(); controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); reminderReviews.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); devicePages.clear(); pluginPages.clear(); localPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null }
     private fun requireSection(expected: String) { require(section == expected) { "原能力窗口已关闭，请重新进入" } }
     private fun requireComposer(args: JSONObject, optional: Boolean = false) {
         val draft = controller.composerDraft ?: error("原输入尚未恢复")
