@@ -1,0 +1,301 @@
+/* Task composition over the retained Affect AIAnswer (PW-05) and BoardUI
+ * Accordion/Button sources. Their disclosure, keyboard, focus and press behavior
+ * is unchanged. One result owns the reading surface; supporting records stay flat.
+ * Scoped selectors deliberately outrank app/product/workspace CSS loaded later. */
+.pw-task-outcome.pw-task-reading {
+  gap: 16px;
+  min-width: 0;
+}
+.pw-task-reading .pw-outcome-document {
+  padding: 16px 18px 12px;
+  border: 0;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--pw-inset) 60%, var(--pw-surface));
+  box-shadow: var(--pw-shadow-surface);
+}
+.pw-task-reading .pw-outcome-heading {
+  align-items: center;
+  margin: 0 0 12px;
+}
+.pw-task-reading .pw-outcome-heading h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 21px;
+  color: var(--pw-copy);
+}
+.pw-task-outcome.pw-task-reading .afa-answerbody {
+  min-height: 0;
+  padding: 0;
+}
+.pw-task-outcome.pw-task-reading .afa-answerbody :is(p, li) {
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--pw-ink);
+}
+.pw-task-outcome.pw-task-reading .afa-answer > footer {
+  margin: 10px 0 0;
+  padding: 0;
+  border: 0;
+  min-height: 44px;
+}
+.pw-task-reading .pw-outcome-image {
+  margin: 14px 0 0;
+  border: 0;
+  border-radius: 10px;
+  background: var(--pw-inset);
+}
+.pw-task-reading .pw-outcome-image figcaption {
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 19px;
+  color: var(--pw-copy);
+}
+.pw-task-reading .pw-reading-section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-bottom: 6px;
+}
+.pw-task-reading .pw-reading-section-heading h4 {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 21px;
+  color: var(--pw-ink);
+}
+.pw-task-reading .pw-reading-section-heading > span {
+  font-size: 12px;
+  line-height: 19px;
+  color: var(--pw-muted);
+}
+.pw-task-reading .pw-outcome-files { gap: 6px; margin: 0; }
+.pw-task-reading .pw-outcome-file.button-press-motion {
+  min-height: 56px;
+  height: auto;
+  width: 100%;
+  padding: 9px 12px;
+  gap: 10px;
+  border: 0;
+  border-radius: 11px;
+  background: var(--pw-inset);
+  box-shadow: none;
+  text-align: start;
+  white-space: normal;
+  color: var(--pw-ink);
+}
+.pw-task-reading .pw-outcome-file.button-press-motion > span {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  justify-content: flex-start;
+}
+.pw-task-reading .pw-outcome-file-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+.pw-task-reading .pw-outcome-file-copy > small {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  color: var(--pw-muted);
+}
+.pw-task-reading .pw-outcome-file:active { background: var(--pw-selected); }
+.pw-task-reading .pw-outcome-conversation {
+  padding: 2px 0 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.pw-task-reading .pw-outcome-limit {
+  margin: 8px 0 0;
+  padding: 0;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--pw-copy);
+  overflow-wrap: anywhere;
+}
+.pw-task-reading .pw-outcome-retention { margin: -4px 0 0; }
+.pw-task-reading .pw-reading-disclosures { min-width: 0; border: 0; }
+.pw-task-reading .pw-reading-disclosures > [class~="group/item"] {
+  min-width: 0;
+  border: 0;
+}
+.pw-task-reading .pw-reading-disclosures > [class~="group/item"] > h3,
+.pw-task-reading .pw-reading-disclosures > [class~="group/item"] > h4 { margin: 0; }
+.pw-task-reading .pw-reading-disclosures > [class~="group/item"] > :is(h3, h4) > [slot="trigger"] {
+  min-height: 48px;
+  padding: 9px 0;
+  gap: 8px;
+  border-radius: 8px;
+}
+.pw-task-reading .pw-reading-disclosures [slot="trigger"] .text-body-regular {
+  color: var(--pw-muted);
+  font-size: 12px;
+  line-height: 19px;
+  overflow-wrap: anywhere;
+}
+.pw-task-reading .pw-reading-note,
+.pw-task-reading .pw-reading-eyebrow {
+  margin: 0;
+  color: var(--pw-muted);
+  font-size: 12px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.pw-task-inference.pw-task-reading {
+  min-width: 0;
+  margin-top: 16px;
+  padding: 14px 16px 4px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--pw-inset);
+  color: var(--pw-ink);
+}
+.pw-task-reading .pw-usage-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.pw-task-reading .pw-usage-heading > div { min-width: 0; flex: 1; }
+.pw-task-reading .pw-usage-heading h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 23px;
+  color: var(--pw-ink);
+  overflow-wrap: anywhere;
+}
+.pw-task-reading .pw-usage-heading > .button-press-motion { flex: none; margin-top: -5px; }
+.pw-task-reading .pw-usage-coverage {
+  margin: 8px 0 4px;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--pw-copy);
+  overflow-wrap: anywhere;
+}
+.pw-task-reading .pw-usage-notice {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--pw-surface);
+  font-size: 13px;
+  line-height: 21px;
+  color: var(--pw-ink);
+  overflow-wrap: anywhere;
+}
+.pw-task-reading .pw-usage-sections { margin-top: 6px; }
+.pw-task-reading .pw-usage-records { padding-inline: 8px; }
+.pw-task-reading .pw-usage-call-title {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow-wrap: anywhere;
+}
+.pw-task-reading .pw-usage-call-title > small {
+  font-size: 12px;
+  line-height: 19px;
+  font-weight: 400;
+  color: var(--pw-copy);
+}
+.pw-task-reading .pw-usage-route {
+  margin: 0 0 8px;
+  color: var(--pw-copy);
+  font-size: 12px;
+  line-height: 21px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pw-task-reading .pw-usage-counters {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0;
+  font-size: 13px;
+  line-height: 21px;
+}
+.pw-task-reading .pw-usage-counters > div {
+  display: grid;
+  grid-template-columns: minmax(72px, .7fr) minmax(0, 2fr);
+  gap: 12px;
+  align-items: baseline;
+}
+.pw-task-reading .pw-usage-counters dt { color: var(--pw-copy); overflow-wrap: anywhere; }
+.pw-task-reading .pw-usage-counters dd {
+  margin: 0;
+  color: var(--pw-ink);
+  font-variant-numeric: tabular-nums;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pw-task-reading .pw-usage-counters dd > small {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--pw-muted);
+}
+.pw-task-reading .pw-usage-lines { display: grid; gap: 7px; }
+.pw-task-reading .pw-usage-lines > p,
+.pw-task-reading .pw-usage-unavailable {
+  margin: 0;
+  font-size: 13px;
+  line-height: 22px;
+  color: var(--pw-copy);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pw-task-reading .pw-usage-lines + .pw-reading-note { margin-top: 10px; }
+.pw-task-reading .pw-usage-pricing { margin-top: 16px; }
+.pw-task-reading .pw-usage-pricing h5,
+.pw-task-reading .pw-usage-estimate h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 21px;
+  color: var(--pw-ink);
+}
+.pw-task-reading .pw-usage-estimate-action { margin-top: 10px; }
+.pw-task-reading .pw-usage-estimate {
+  margin-top: 12px;
+  padding: 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--pw-surface);
+}
+.pw-task-reading .pw-usage-unavailable { margin-top: 8px; }
+.pw-task-reading .pw-usage-quote-details { margin-top: 8px; }
+.pw-task-reading .pw-usage-receipt {
+  margin: 4px 0 0;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 12px/20px var(--pw-mono);
+  color: var(--pw-copy);
+}
+.pw-task-reading .pw-usage-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 8px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .pw-task-reading .pw-outcome-file:hover:not(:disabled) { background: var(--pw-selected); }
+}
+@media (max-width: 380px) {
+  .pw-task-reading .pw-outcome-document { padding: 14px 12px 10px; }
+  .pw-task-inference.pw-task-reading { padding-inline: 12px; }
+  .pw-task-reading .pw-usage-records { padding-inline: 2px; }
+  .pw-task-reading .pw-usage-heading { gap: 6px; }
+  .pw-task-reading .pw-usage-counters > div { grid-template-columns: 76px minmax(0, 1fr); gap: 8px; }
+}

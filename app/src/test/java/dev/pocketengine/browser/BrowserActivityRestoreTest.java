@@ -76,7 +76,7 @@ public final class BrowserActivityRestoreTest {
         String other=registry.create("另一个资料",registry.revision(),true).getString("id");registry.select(other,registry.revision(),true);b.destroy();a.foreground();
         assertSame(a.activity,BrowserActivity.current());assertFalse(original.current());assertNull(session(a.activity));assertNull(web(a.activity));assertNull(get(registry,"session"));
         assertEquals(0,a.activity.tabsForOwner().getJSONArray("tabs").length());assertFalse(a.activity.snapshot().getJSONObject("lease").getBoolean("active"));assertFalse(a.activity.snapshot().getString("profileError").isEmpty());
-        assertEquals("",((android.widget.EditText)get(a.activity,"address")).getText().toString());assertEquals("https://www.bing.com",get(a.activity,"recoveryUrl"));
+        assertEquals("",get(a.activity,"chromeAddress"));assertEquals("https://www.bing.com",get(a.activity,"recoveryUrl"));
     }
     @Test public void restoringOldActivityDoesNotInvalidateALiveSuccessorsSessionOrGrant()throws Exception {
         Window a=new Window();a.background();Window b=new Window();BrowserProfileRegistry.Session successor=session(b.activity);JSONObject grant=acquire(b.activity);b.background();a.foreground();

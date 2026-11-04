@@ -57,13 +57,18 @@ internal fun BrowserPageCard(page: JSONObject, selected: Boolean, onSelect: () -
     }
 }
 
+internal class BrowserActivityPresentation {
+    val expanded = mutableStateOf(false)
+    val detail = mutableStateOf<String?>(null)
+}
+
 @Composable
-internal fun BrowserActivityTrail(task: JSONObject) {
+internal fun BrowserActivityTrail(task: JSONObject, presentation: BrowserActivityPresentation) {
     val operations = task.optJSONArray("operations") ?: JSONArray()
     val window = TaskExecutionPresentation.recentOperations(operations)
     val records = window.records
-    var expanded by remember(task.optString("id")) { mutableStateOf(false) }
-    var detail by remember(task.optString("id")) { mutableStateOf<String?>(null) }
+    var expanded by presentation.expanded
+    var detail by presentation.detail
     val events = task.optJSONArray("events") ?: JSONArray()
     val latest = (0 until events.length()).mapNotNull { events.optJSONObject(it) }.lastOrNull { it.optString("message").isNotBlank() }
     Column(Modifier.fillMaxWidth().testTag("browser-execution-activity").animateContentSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {

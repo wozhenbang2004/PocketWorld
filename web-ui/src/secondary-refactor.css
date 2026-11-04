@@ -2,7 +2,7 @@
  * Affect ModelPicker. Their control skins and source motion stay in the
  * library modules; these rules establish reading and management hierarchy. */
 .pw-secondary-refactor {
-  background: var(--pw-surface, #fff);
+  background: var(--pw-canvas, #f5f5f5);
   color: var(--pw-ink, #202020);
   font-family: var(--pw-font, sans-serif);
 }
@@ -11,7 +11,7 @@
   min-height: 56px;
   padding: 4px 16px;
   gap: 8px;
-  background: var(--pw-surface, #fff);
+  background: var(--pw-canvas, #f5f5f5);
   border: 0;
 }
 .pw-secondary-refactor .pw-secondary-header h1 {
@@ -474,3 +474,12 @@
 @media (prefers-reduced-motion: reduce) {
   .pw-secondary-refactor { scroll-behavior: auto; }
 }
+
+/* Management pages share the same quiet canvas as work. Group related settings
+ * once, rather than putting a card or decorative outline around every row. */
+.pw-secondary-refactor .pw-settings-frequent { background: var(--pw-surface); box-shadow: var(--pw-shadow-surface); padding: 4px 12px; }
+.pw-secondary-refactor .pw-settings-group-page > .pw-settings-links { padding: 2px 12px; border-radius: 14px; background: var(--pw-surface); }
+.pw-secondary-refactor .pw-domain-link { gap: 10px; padding-block: 10px; }
+.pw-secondary-refactor .pw-settings-index .pw-reading-lead { margin: 8px 2px 14px; font-size: 13px; line-height: 21px; }
+.pw-secondary-refactor .pw-settings-group > h2 > button { min-height: 58px; }
+.pw-secondary-refactor .pw-settings-group .pw-settings-links { padding-left: 12px; }

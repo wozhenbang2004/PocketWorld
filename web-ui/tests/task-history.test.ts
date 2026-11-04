@@ -1,11 +1,36 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 import { currentTaskHeaders, taskAuditPage, taskHeaderPage, taskHistoryIdentity } from '../src/task-history.ts';
 
 const event = (position: number, extra = {}) => ({ position, eventKey: `event-${position}`, status: 'available', event: { runId: 'run-a', message: `event ${position}` }, ...extra });
 const audit = (extra = {}) => ({ format: 'pocketworld.task-audit-page.v1', taskId: 'task-a', section: 'events', entries: [event(40), event(39)], upperPosition: 40, hasMore: true, nextCursor: 'opaque-next', executionAuthorized: false, ...extra });
 const header = (id: string, updatedAt: number, extra = {}) => ({ id, updatedAt, goal: id, status: 'completed', ...extra });
 const summaries = (extra = {}) => ({ tasks: [header('task-b', 50), header('task-a', 40)], hasMore: true, nextCursor: 'older-header-window', auditBodyIncluded: false, ...extra });
+
+test('App retains the audit component across presentation layers but keys it to the original history identity', () => {
+  // Source-lifetime regression gate, not a browser scroll/focus or React runtime test.
+  const source = ts.createSourceFile('App.tsx', readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const readers: ts.JsxSelfClosingElement[] = [];
+  const visit = (node: ts.Node) => { if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === 'TaskHistory') readers.push(node); ts.forEachChild(node, visit); };
+  visit(source);
+  assert.equal(readers.length, 1);
+  const reader = readers[0], wrapper = reader.parent;
+  assert.ok(ts.isJsxElement(wrapper), 'the reader is always mounted inside a visibility wrapper');
+  const attrs = wrapper.openingElement.attributes.properties;
+  const hidden = attrs.find(node => ts.isJsxAttribute(node) && node.name.getText(source) === 'hidden');
+  assert.ok(hidden && /taskLayer\s*!==\s*'process'/.test(hidden.getText(source)));
+  const key = reader.attributes.properties.find(node => ts.isJsxAttribute(node) && node.name.getText(source) === 'key');
+  assert.ok(key?.getText(source).includes('taskHistoryIdentity(task)'));
+  assert.ok(key?.getText(source).includes('state.conversationId'));
+  const canRead = reader.attributes.properties.find(node => ts.isJsxAttribute(node) && node.name.getText(source) === 'canRead');
+  assert.equal(canRead?.getText(source), "canRead={can('history.read')}", 'changing visible layer is not a permission or data reset');
+  for (let ancestor: ts.Node | undefined = wrapper.parent; ancestor && !ts.isFunctionLike(ancestor); ancestor = ancestor.parent) {
+    if (ts.isConditionalExpression(ancestor) || ts.isBinaryExpression(ancestor))
+      assert.ok(!ancestor.getText(source).includes('taskLayer'), 'a presentation condition must not unmount audit history');
+  }
+});
 
 test('audit pagination keeps the original task, section, order and upper boundary', () => {
   const original = audit(), before = JSON.stringify(original);

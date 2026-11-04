@@ -13,19 +13,21 @@
 .pw-library :is(.afa-answer,.afa-composer,.afa-steering,.afa-handoff,.afa-findings){width:100%;max-width:none}
 .pw-agent-avatar{display:inline-flex;flex:none;align-items:center;justify-content:center;vertical-align:middle}
 .pw-agent-avatar canvas{display:block;max-width:100%;max-height:100%}
-/* PW-37 keeps its source press curve and layers with a flat, borderless fill. */
-.pw-press{--press:0;--strain:0;--travel:3px;position:relative;appearance:none;-webkit-appearance:none;isolation:isolate;max-width:100%;min-height:44px;margin:0;border:0!important;border-radius:13px;padding:4px 3px 3px!important;background:transparent!important;color:#fff!important;font:inherit;text-align:center;outline-offset:4px;filter:none!important;transition:none;touch-action:manipulation;user-select:none;-webkit-tap-highlight-color:transparent;cursor:pointer}
+/* Adapt the retained PW-37 press controller to a flat action surface.
+ * The hit target and label stay fixed; feedback is a subtle tint and surface compression. */
+.pw-press{--press:0;--strain:0;position:relative;appearance:none;-webkit-appearance:none;isolation:isolate;max-width:100%;min-height:44px;margin:0;border:0!important;border-radius:10px;padding:0!important;background:transparent!important;color:#fff!important;font:inherit;text-align:center;outline-offset:4px;filter:none!important;transition:none;touch-action:manipulation;user-select:none;-webkit-tap-highlight-color:transparent;cursor:pointer}
 .pw-press>span{pointer-events:none}
-.pw-press-shadow{display:none}
-.pw-press-base{position:absolute;inset:4px 0 0;border-radius:13px;background:transparent;box-shadow:none}
-.pw-press-edge{position:absolute;inset:4px 3px 3px;border-radius:10px;background:transparent;box-shadow:none}
-.pw-press-front{display:block;position:relative;padding:8px 14px;border-radius:10px;background:transparent;transform:translateY(calc(var(--travel)*-1 + var(--press)*var(--travel)));transition:none;min-height:34px}
-.pw-press-material{position:absolute;inset:0;border-radius:calc(10px + var(--strain)*1.5px);background:var(--pw-strong,#262626);transform-origin:center bottom;transform:scaleX(calc(1 + var(--strain)*.02)) scaleY(calc(1 - var(--strain)*.04));box-shadow:none}
+.pw-press-shadow,.pw-press-base,.pw-press-edge{display:none}
+.pw-press-front{display:flex;align-items:center;justify-content:center;position:relative;box-sizing:border-box;padding:10px 14px;border-radius:inherit;background:transparent;transform:none;transition:none;min-height:44px}
+.pw-press-material{position:absolute;inset:0;border-radius:inherit;background:var(--pw-strong,#262626);transform-origin:center;transform:scale(calc(1 - var(--press)*.015));box-shadow:none;transition:background-color 120ms ease-out}
+@media(hover:hover) and (pointer:fine){.pw-press:not(:disabled):hover .pw-press-material{background:color-mix(in srgb,var(--pw-strong,#262626) 94%,var(--pw-on-strong,#fff))}}
+.pw-press:not(:disabled)[data-state="pressed"] .pw-press-material{background:color-mix(in srgb,var(--pw-strong,#262626) 88%,var(--pw-on-strong,#fff))}
 .pw-press-label{position:relative;display:flex;align-items:center;justify-content:center;gap:7px;font-size:14px;line-height:20px;font-weight:500;white-space:nowrap}
-.pw-press-compact{--travel:2px;min-width:44px}
-.pw-press-compact .pw-press-front{padding:8px 10px}
+.pw-press-compact{min-width:44px}
+.pw-press-compact .pw-press-front{padding:10px}
 .pw-press:disabled{cursor:default;opacity:.45}
 .pw-press:focus-visible{outline:2px solid #777}
+@media(prefers-reduced-motion:reduce){.pw-press .pw-press-material{transform:none;transition:none}}
 /* The source composer uses one surface. Its default editor/tool rows remain compact. */
 .pw-composer-host .afa-composer>.afa-card{border:0;border-radius:16px;background:var(--pw-inset,#f6f6f6);box-shadow:none}
 .pw-composer-host .afa-composer textarea{height:32px;min-height:32px;max-height:120px;padding:4px 2px;border:0!important;border-radius:0;background:transparent!important;font-size:16px;line-height:24px;overflow-y:auto}

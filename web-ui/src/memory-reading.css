@@ -1,0 +1,39 @@
+/* A direct read-first memory collection, composed from retained BoardUI controls.
+ * Editing and multi-selection are explicit; source and approval identities stay native. */
+.pw-memory-workspace { min-width: 0; }
+.pw-memory-workspace .pw-memory-collection[hidden] { display: none; }
+.pw-memory-workspace .pw-memory-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; }
+.pw-memory-workspace .pw-memory-list-heading p { color: var(--pw-copy); font-size: 12px; line-height: 20px; }
+.pw-memory-workspace .pw-memory-list-heading > button { font-size: 12px; padding-inline: 7px; }
+.pw-memory-workspace .pw-memory-list { display: flex; flex-direction: column; padding: 2px 12px; border-radius: 14px; background: var(--pw-surface); }
+.pw-memory-workspace .pw-memory-list:empty { display: none; }
+.pw-memory-workspace .pw-memory-list-item { min-width: 0; }
+.pw-memory-workspace .pw-memory-row.button-press-motion {
+  width: 100%; min-width: 0; min-height: 76px; height: auto; padding: 12px 2px; gap: 10px;
+  border: 0; border-radius: 10px; background: transparent; box-shadow: none;
+  color: var(--pw-ink); white-space: normal; text-align: start; justify-content: flex-start;
+}
+.pw-memory-workspace .pw-memory-row > span { flex: 1; min-width: 0; padding: 0; justify-content: flex-start; }
+.pw-memory-workspace .pw-memory-row > svg { flex: none; width: 18px; height: 18px; color: var(--pw-copy); }
+.pw-memory-workspace .pw-memory-row-copy { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
+.pw-memory-workspace .pw-memory-row-copy > span { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font-size: 14px; line-height: 23px; font-weight: 400; overflow-wrap: anywhere; }
+.pw-memory-workspace .pw-memory-row-copy small { color: var(--pw-muted); font-size: 12px; line-height: 19px; font-weight: 400; }
+.pw-memory-workspace .pw-memory-select { min-height: 44px; margin-bottom: 8px; font-size: 12px; }
+.pw-memory-workspace .pw-memory-reading { padding: 0; border: 0; background: transparent; box-shadow: none; }
+.pw-memory-workspace .pw-memory-detail-header { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-bottom: 14px; }
+.pw-memory-workspace .pw-memory-detail-header > button { padding-inline: 0; font-size: 13px; }
+.pw-memory-workspace .pw-memory-detail-header h2 { font-size: 18px; line-height: 27px; font-weight: 600; }
+.pw-memory-workspace .pw-memory-document { padding: 16px; border-radius: 14px; background: var(--pw-surface); box-shadow: var(--pw-shadow-surface); }
+.pw-memory-workspace .pw-memory-document .pw-reading-copy { margin: 0; font-size: 15px; line-height: 1.75; color: var(--pw-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.pw-memory-workspace .pw-memory-context { margin: 12px 0 0; font-size: 12px; line-height: 21px; color: var(--pw-copy); white-space: pre-wrap; overflow-wrap: anywhere; }
+.pw-memory-workspace .pw-memory-reading > .pw-muted { margin-top: 10px; font-size: 12px; line-height: 20px; }
+.pw-memory-workspace .pw-memory-edit { margin-top: 16px; }
+.pw-memory-workspace .pw-memory-decisions { margin-block: 8px 12px; }
+.pw-memory-workspace .pw-memory-row:focus-visible { outline: 2px solid var(--pw-focus); outline-offset: -2px; }
+.pw-memory-workspace .pw-memory-row:active { background: var(--pw-selected); }
+@media (hover: hover) and (pointer: fine) {
+  .pw-memory-workspace .pw-memory-row:hover:not(:active) { background: var(--pw-inset); }
+}
+@media (max-width: 380px) {
+  .pw-memory-workspace .pw-memory-document { padding: 12px; }
+}

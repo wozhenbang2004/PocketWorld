@@ -29,6 +29,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import androidx.activity.ComponentActivity
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
@@ -39,9 +40,11 @@ import org.json.JSONObject
 
 /** Android hosts capabilities; the selected, bundled Web components own every business control. */
 internal class PocketWebHost private constructor(
-    private val activity: ComposeActivity,
+    private val activity: ComponentActivity,
     endpoint: ((JSONObject) -> Unit) -> PocketWebEndpoint,
-    private val savedPresentation: JSONObject? = null
+    private val savedPresentation: JSONObject? = null,
+    private val readerFailure: (() -> Unit)? = null,
+    private val ownsSystemInsets: Boolean = true
 ) {
     constructor(activity: ComposeActivity, controller: PocketWorldController, savedPresentation: JSONObject? = null) :
         this(activity, { emit -> PocketWebWorkspaceEndpoint(controller, emit) }, savedPresentation)
@@ -53,6 +56,12 @@ internal class PocketWebHost private constructor(
         private const val ENTRY = "https://$HOST${PREFIX}index.html"
         fun bootstrap(activity: ComposeActivity, app: dev.pocketengine.EngineApplication, saved: JSONObject?, ready: () -> Unit) =
             PocketWebHost(activity, { emit -> PocketWebBootstrap(activity, app, emit, ready) }, saved)
+        fun browserSourceReader(activity: dev.pocketengine.BrowserActivity, host: dev.pocketengine.browser.BrowserTaskHost,
+            target: BrowserSourceReaderTarget, focused: () -> Boolean, dismiss: () -> Unit, failed: () -> Unit) =
+            PocketWebHost(activity, { emit -> PocketWebBrowserSources(target, host, focused, emit, dismiss) }, readerFailure = failed)
+        fun browserChrome(activity: dev.pocketengine.BrowserActivity,
+            endpoint: ((JSONObject) -> Unit) -> PocketWebEndpoint, failed: () -> Unit) =
+            PocketWebHost(activity, endpoint, readerFailure = failed, ownsSystemInsets = false)
     }
 
     val view = FrameLayout(activity).apply { setBackgroundColor(Color.rgb(245, 245, 245)) }
@@ -67,6 +76,10 @@ internal class PocketWebHost private constructor(
     private var reopenShown = false
     private var keyboardVisible = false
     private var pendingState: JSONObject? = null
+    private var readerBound = false
+    private var readerBackPending = false
+    private var readerBackTimeout: Runnable? = null
+    private val readerStartupTimeout = Runnable { if (!readerBound && bridge.canInteract()) failReader() }
     private val bridge = endpoint(::send)
     private var bundle: PocketWebBundle? = null
     private val loader = WebViewAssetLoader.Builder().setDomain(HOST)
@@ -77,8 +90,9 @@ internal class PocketWebHost private constructor(
         bundle = try {
             activity.assets.open("pocket-ui/build-identity.json").use { PocketWebBundle.read(it) }
         } catch (_: Exception) {
+            if (failReader()) return
             // No trusted document can show maintenance feedback when the packaged identity is invalid.
-            // Use the existing closed-host exit; never load unverified assets or create another UI.
+            // Workspace/bootstrap keep their existing closed-host exit. Isolated readers close only themselves.
             Log.e(TAG, "bundle-identity-unavailable; install a complete compatible package")
             close()
             activity.finish()
@@ -106,6 +120,8 @@ internal class PocketWebHost private constructor(
         web.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                // The saved reader has no live-navigation authority, including trusted document replacement.
+                if (readerFailure != null) { if (request.isForMainFrame) failReader(); return true }
                 if (trusted(request.url)) return false
                 if (request.isForMainFrame && request.hasGesture() && request.url.scheme in setOf("https", "http")) {
                     try { activity.startActivity(Intent(Intent.ACTION_VIEW, request.url).addCategory(Intent.CATEGORY_BROWSABLE)) }
@@ -113,12 +129,16 @@ internal class PocketWebHost private constructor(
                 }
                 return true
             }
-            override fun shouldOverrideUrlLoading(view: WebView, url: String) = !trusted(Uri.parse(url))
+            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+                if (readerFailure != null) { failReader(); return true }
+                return !trusted(Uri.parse(url))
+            }
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse =
                 response(request.url, request.method)
             override fun shouldInterceptRequest(view: WebView, url: String): WebResourceResponse = response(Uri.parse(url), "GET")
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                 if (closed || documentFence.isRejected()) return
+                if (readerFailure != null && url != ENTRY) { failReader(); return }
                 documentToken = null
                 bridge.invalidatePresentation(documentReplaced = true)
                 documentLoaded = false
@@ -136,13 +156,18 @@ internal class PocketWebHost private constructor(
             }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 Log.e(TAG, "resource-error code=${error.errorCode} path=${request.url.path}")
+                if (readerFailure != null) failReader()
             }
             override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, error: WebResourceResponse) {
-                if (error.statusCode >= 400) Log.e(TAG, "resource-error status=${error.statusCode} path=${request.url.path}")
+                if (error.statusCode >= 400) {
+                    Log.e(TAG, "resource-error status=${error.statusCode} path=${request.url.path}")
+                    if (readerFailure != null) failReader()
+                }
             }
-            override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) { handler.cancel() }
+            override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) { handler.cancel(); if (readerFailure != null) failReader() }
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
                 Log.e(TAG, "renderer-exit crashed=${detail.didCrash()}")
+                if (failReader()) return true
                 close()
                 // Closing the view does not stop, retry or resume any engine task.
                 activity.finish()
@@ -152,8 +177,15 @@ internal class PocketWebHost private constructor(
         web.webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(message: ConsoleMessage): Boolean {
                 val text = message.message().take(1600)
-                if (message.messageLevel() == ConsoleMessage.MessageLevel.ERROR) Log.e(TAG, "console-error $text")
-                else if (text.contains("PocketWebUi")) Log.i(TAG, text)
+                // The trusted address surface can contain private URLs. Never copy its
+                // console text into Android logs, including startup exception messages.
+                if (bridge.surface != "browser_chrome") {
+                    if (message.messageLevel() == ConsoleMessage.MessageLevel.ERROR) Log.e(TAG, "console-error $text")
+                    else if (text.contains("PocketWebUi")) Log.i(TAG, text)
+                } else if (message.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                    Log.e(TAG, "browser-chrome-console-error")
+                }
+                if (readerFailure != null && text.startsWith("PocketWebUi startup-error")) failReader()
                 return true
             }
             override fun onPermissionRequest(request: PermissionRequest) { request.deny() }
@@ -186,22 +218,38 @@ internal class PocketWebHost private constructor(
         }
         listenerRegistered = true
         }
+        if (!listenerRegistered && failReader()) return
         view.addView(web, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         bridge.attachProjectPreview(view)
         view.setOnApplyWindowInsetsListener { target, insets ->
             val bars = insets.getInsets(WindowInsets.Type.systemBars())
             val keyboard = insets.getInsets(WindowInsets.Type.ime())
-            target.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, keyboard.bottom))
+            // An embedded browser toolbar shares the BrowserActivity root's inset owner.
+            // Applying bars or IME padding again would consume its narrow content band.
+            if (ownsSystemInsets) target.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, keyboard.bottom))
             if (keyboardVisible != insets.isVisible(WindowInsets.Type.ime())) sendConfiguration(insets)
             insets
         }
         view.requestApplyInsets()
         bridge.start()
         web.loadUrl(ENTRY)
+        armReaderStartupTimeout()
+    }
+
+    /** Isolated reader/chrome faults never finish or recreate BrowserActivity or invent repair controls. */
+    private fun failReader(): Boolean {
+        val failed = readerFailure ?: return false
+        if (!closed) { close(); failed() }
+        return true
+    }
+    private fun armReaderStartupTimeout() {
+        main.removeCallbacks(readerStartupTimeout)
+        if (readerFailure != null && !closed && !readerBound && bridge.canInteract()) main.postDelayed(readerStartupTimeout, 30_000L)
     }
 
     private fun showReopenPrompt() {
         if (closed || reopenShown) return
+        if (failReader()) return
         // Maintenance never falls through to an invented native repair surface.
         if (bridge.surface == "bootstrap") { close(); activity.finish(); return }
         reopenShown = true
@@ -230,6 +278,11 @@ internal class PocketWebHost private constructor(
     private fun send(message: JSONObject) {
         if (closed) return
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post { send(message) }; return }
+        if (readerFailure != null && message.optString("kind") == "state") {
+            val stateKey = if (bridge.surface == "browser_chrome") "browserChrome" else "browserSources"
+            readerBound = message.optJSONObject("snapshot")?.optJSONObject(stateKey)?.optBoolean("ready") == true
+            if (readerBound) main.removeCallbacks(readerStartupTimeout)
+        }
         if (!documentLoaded) {
             if (message.optString("kind") == "state") pendingState = message
             return
@@ -260,6 +313,22 @@ internal class PocketWebHost private constructor(
 
     fun handleBack(onUnhandled: () -> Unit) {
         if (closed || !documentLoaded) { onUnhandled(); return }
+        if (readerFailure != null) {
+            if (readerBackPending) return
+            val token = documentToken
+            val ticket = documentFence.capture(true, "https", HOST, -1, token, bridge.canInteract())
+            if (ticket == null) { onUnhandled(); return }
+            fun current() = !closed && documentFence.accepts(ticket, token, bridge.canInteract())
+            readerBackPending = true
+            val timeout = Runnable { if (current() && readerBackPending) { readerBackPending = false; onUnhandled() } }
+            readerBackTimeout = timeout; main.postDelayed(timeout, 1500L)
+            web.evaluateJavascript("Boolean(window.PocketWeb&&window.PocketWeb.handleBack())") { result ->
+                if (!current()) return@evaluateJavascript
+                main.removeCallbacks(timeout); readerBackPending = false; readerBackTimeout = null
+                if (result != "true") onUnhandled()
+            }
+            return
+        }
         web.evaluateJavascript("Boolean(window.PocketWeb&&window.PocketWeb.handleBack())") { result ->
             if (!closed && result != "true") onUnhandled()
         }
@@ -269,14 +338,21 @@ internal class PocketWebHost private constructor(
         if (!closed && !documentFence.isRejected()) {
             if (documentLoaded) documentToken = documentFence.loaded()
             sendConfiguration()
+            armReaderStartupTimeout()
         }
     } } }
-    fun pause() { if (!closed) { documentFence.pause(); documentToken = null; bridge.foreground(false); bridge.invalidatePresentation(documentReplaced = false); web.onPause() } }
+    fun pause() { if (!closed) {
+        main.removeCallbacks(readerStartupTimeout)
+        readerBackTimeout?.let(main::removeCallbacks); readerBackTimeout = null; readerBackPending = false
+        documentFence.pause(); documentToken = null; bridge.foreground(false); bridge.invalidatePresentation(documentReplaced = false); web.onPause()
+    } }
     fun canSwitchPresentation(): Boolean = !closed && bridge.canSwitchPresentation()
     fun savePresentationState(): String = bridge.savePresentationState().toString()
     fun close() {
         if (closed) return
         closed = true
+        main.removeCallbacks(readerStartupTimeout)
+        readerBackTimeout?.let(main::removeCallbacks); readerBackTimeout = null; readerBackPending = false
         documentFence.close()
         documentToken = null
         pendingState = null

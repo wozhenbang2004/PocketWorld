@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
-import { Button } from './forms-library';
+import { Accordion, AccordionItem, Button } from './forms-library';
+import { RiRefreshLine } from '@remixicon/react';
 import type { ConversationDraftTarget } from './SkillDraftReview';
 
 type Draft = ConversationDraftTarget & { kind: 'skill' | 'memory'; title: string; apply: { status: string } };
 export function ConversationDrafts({ taskId, open }: { taskId: string; open: (draft: Draft) => void }) {
   const [drafts, setDrafts] = useState<Draft[] | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState(''), [partial, setPartial] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const alive = useRef(true), entered = useRef(false);
-  useEffect(() => () => { alive.current = false; }, []);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const load = async () => {
     if (entered.current) return; entered.current = true; setBusy(true); setError('');
     try {
@@ -18,9 +20,17 @@ export function ConversationDrafts({ taskId, open }: { taskId: string; open: (dr
     finally { entered.current = false; if (alive.current) setBusy(false); }
   };
   const status: Record<string, string> = { pending_owner: '待审阅', saved: '已处理', cancelled: '已放弃', rejected: '未保存', unknown: '结果待核对', applying_unknown: '结果待核对' };
-  return <section aria-label="这次回答的提案"><Button variant="ghost" disabled={busy} onClick={() => { void load(); }}>{busy ? '正在读取提案…' : drafts ? '刷新原提案状态' : '查看这次回答的记忆与技能提案'}</Button>
-    {error && <p role="alert">{error}</p>}{drafts && !drafts.length && <p className="pw-muted">本次读取窗口没有可核对的提案。</p>}
-    {drafts?.map(draft => <div className="pw-action-row" key={draft.runId + ':' + draft.operationId}><Button variant="secondary" onClick={() => open(draft)}>{draft.title} · {status[draft.apply.status] || '状态待核对'}</Button></div>)}
-    {partial && <p className="pw-muted">这里是原记录中最近可核对的提案窗口；较早或暂不可读的项目没有计作已处理。</p>}
+  return <section className="pw-conversation-drafts" aria-label="这次回答的提案">
+    <Accordion variant="divided" expandedKeys={expanded ? ['drafts'] : []} onExpandedChange={keys => {
+      const next = keys.has('drafts'); setExpanded(next);
+      // Disclosure only reads the original proposal window. It never applies a draft.
+      if (next && drafts === null && !busy) void load();
+    }}><AccordionItem id="drafts" title="记忆与技能提案" description={drafts ? `${drafts.length} 项已读取${partial ? ' · 部分记录' : ''}` : undefined}>
+      {busy && <p className="pw-muted" role="status">正在读取原提案…</p>}
+      {error && <p className="pw-error" role="alert">{error}</p>}{drafts && !drafts.length && <p className="pw-muted">本次读取窗口没有可核对的提案。</p>}
+      <div className="pw-conversation-draft-list">{drafts?.map(draft => <Button variant="ghost" key={draft.runId + ':' + draft.operationId} onClick={() => open(draft)}><span className="pw-conversation-draft-copy"><b>{draft.title}</b><small>{status[draft.apply.status] || '状态待核对'}</small></span></Button>)}</div>
+      {partial && <p className="pw-muted">这里是原记录中最近可核对的提案窗口；较早或暂不可读的项目没有计作已处理。</p>}
+      <Button variant="ghost" size="small" leadingIcon={RiRefreshLine} disabled={busy} onClick={() => { void load(); }}>{error ? '重新读取提案' : '刷新原提案状态'}</Button>
+    </AccordionItem></Accordion>
   </section>;
 }

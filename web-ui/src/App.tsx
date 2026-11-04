@@ -467,7 +467,9 @@ export default function App(){
      </Accordion>
     </section>
    </div>
-   {taskLayer==='process'&&<TaskHistory key={`${state.conversationId}:${taskHistoryIdentity(task)}`} task={task} canRead={can('history.read')} renderOperation={renderOperation}/>}
+   {/* Keep settled audit pages and expanded records while returning to the result.
+       The original task/run/epoch key still retires a different history window. */}
+   <div className="pw-task-process-layer" hidden={taskLayer!=='process'}><TaskHistory key={`${state.conversationId}:${taskHistoryIdentity(task)}`} task={task} canRead={can('history.read')} renderOperation={renderOperation}/></div>
    {taskLayer==='scope'&&<section className="pw-task-review" aria-label="本次任务范围">
     {reviewStatus}
     {!readingReview&&<><div className="pw-section-heading pw-task-review-tools"><span className="pw-grow"/>{refreshControl}</div>{review&&!reviewStale&&scopeEditor}</>}

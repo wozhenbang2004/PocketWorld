@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { RiAddLine, RiArrowLeftSLine, RiArrowRightSLine, RiRefreshLine, RiSettings3Line } from '@remixicon/react';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { PressButton } from './library';
+import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import { PlansWorkspace } from './PlansWorkspace';
 import { commitmentDraft, commitmentMutationReceipt, commitmentPolicyReview, commitmentReview, OwnerWorkspaceRequest, type CommitmentDraft } from './commitment-contract';
+import './followup-reading.css';
 
 type Data = Record<string, any>;
 type Props = { state: Data; supported: (action: string) => boolean; run: (action: string, args?: Data) => Promise<any>; registerTransientBack: (handler: (() => boolean) | null) => void };
@@ -15,17 +18,22 @@ const operation = (value: string) => ({ createCommitment: '保存新委托', upd
 export function CommitmentsWorkspace(props: Props) {
   const [tab, setTab] = useState('commitments');
   const [childBusy, setChildBusy] = useState(false);
-  return <><div className="pw-form-actions" role="group" aria-label="委托类型"><Button variant={tab === 'commitments' ? 'secondary' : 'ghost'} disabled={childBusy} onClick={() => setTab('commitments')}>单项委托</Button><Button variant={tab === 'plans' ? 'secondary' : 'ghost'} disabled={childBusy} onClick={() => setTab('plans')}>持续目标</Button></div>
-    {tab === 'plans' ? <PlansWorkspace {...props} onEditingChange={setChildBusy} /> : <CommitmentList {...props} onEditingChange={setChildBusy} />}</>;
+  return <Tabs className="pw-followup-tabs" selectedKey={tab} onSelectionChange={key => { if (!childBusy) setTab(String(key)); }}>
+    <TabList aria-label="委托类型"><Tab id="commitments" isDisabled={childBusy && tab !== 'commitments'}>单项委托</Tab><Tab id="plans" isDisabled={childBusy && tab !== 'plans'}>持续目标</Tab></TabList>
+    {/* Inactive workspaces must unmount: each owns requests and one back handler. */}
+    <TabPanel id={tab}>{tab === 'plans' ? <PlansWorkspace {...props} onEditingChange={setChildBusy} /> : <CommitmentList {...props} onEditingChange={setChildBusy} />}</TabPanel>
+  </Tabs>;
 }
 
 function CommitmentList({ state, supported, run, registerTransientBack, onEditingChange }: Props & { onEditingChange: (value: boolean) => void }) {
   const [snapshot, setSnapshot] = useState<Data>({}), [reading, setReading] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null);
   const [editor, setEditor] = useState<{ draft: CommitmentDraft; original: Data | null } | null>(null), [policy, setPolicy] = useState<Data | null>(null);
-  const [receiptRows, setReceiptRows] = useState<Data[]>([]), [dueOnly, setDueOnly] = useState(false), [busy, setBusy] = useState(false);
+  const [receiptRows, setReceiptRows] = useState<Data[]>([]), [receiptsLoaded, setReceiptsLoaded] = useState(false), [dueOnly, setDueOnly] = useState(false), [busy, setBusy] = useState(false);
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [ack, setAck] = useState(false), [uncertain, setUncertain] = useState(false), [readAfterUnknown, setReadAfterUnknown] = useState(false);
   const mutationPending = useRef(false), taskOpen = useRef(state.webWorkspaceTaskOpen);
   const openedNotification = useRef('');
+  const collectionPanel = useRef<HTMLDivElement>(null), detailHeading = useRef<HTMLHeadingElement>(null);
+  const listPosition = useRef(0), openedId = useRef(''), presentedId = useRef('');
   const alive = useRef(true), scope = useRef(new OwnerWorkspaceRequest()), selected = useRef<Data | null>(null), reviewed = useRef<Data | null>(null), resumed = useRef(state.webWorkspaceResumeRevision);
   selected.current = reading; reviewed.current = review;
   const release = (value: Data | null, key: string) => { if (value?.[key]) void run('commitments.discard', { [key]: value[key] }).catch(() => {}); };
@@ -38,9 +46,10 @@ function CommitmentList({ state, supported, run, registerTransientBack, onEditin
     catch (failure) { if (alive.current && scope.current.owns(ticket)) { setError(failure instanceof Error ? failure.message : String(failure)); if (mutation) { setUncertain(true); setReadAfterUnknown(false); } } }
     finally { if (scope.current.finish(ticket) && alive.current) { mutationPending.current = false; setBusy(false); } }
   };
-  const acceptReading = (value: Data) => { if (!value?.viewHandle || !value.commitment?.id) throw new Error('未取得原承诺读取。'); release(selected.current, 'viewHandle'); setReading(value); setReceiptRows([]); };
+  const acceptReading = (value: Data) => { if (!value?.viewHandle || !value.commitment?.id) throw new Error('未取得原承诺读取。'); release(selected.current, 'viewHandle'); setReading(value); setReceiptRows([]); setReceiptsLoaded(false); };
   const refresh = () => { void invoke('commitments.snapshot', {}, value => { if (!Array.isArray(value?.commitments) || !value.policy) throw new Error('原承诺清单没有完整返回。'); setSnapshot(value); if (uncertain) setReadAfterUnknown(true); }); };
-  const read = (id: string) => { closeReview(); void invoke('commitments.read', { id }, acceptReading); };
+  const read = (id: string) => { if (!selected.current) { listPosition.current = collectionPanel.current?.closest('.pw-secondary-scroll')?.scrollTop || 0; openedId.current = id; } closeReview(); void invoke('commitments.read', { id }, acceptReading); };
+  const returnToList = () => { if (busy) return; openedId.current = selected.current?.commitment?.id || openedId.current; release(selected.current, 'viewHandle'); setReading(null); setReceiptRows([]); setReceiptsLoaded(false); };
   useEffect(() => {
     const id = state.requestedCommitmentId, revision = String(state.requestedCommitmentRevision || 0), key = id + ':' + revision;
     if (!id || !snapshot.commitments || busy || editor || policy || review || openedNotification.current === key) return;
@@ -49,7 +58,7 @@ function CommitmentList({ state, supported, run, registerTransientBack, onEditin
     else setNotice('通知对应的原委托暂不在当前清单，请刷新后核对；未打开其它委托。');
   }, [state.requestedCommitmentId, state.requestedCommitmentRevision, snapshot.commitments, busy, editor, policy, review]);
   const prepare = (action: string, input: Data) => { if (uncertain) return; void invoke(action, input, value => { if (!value?.reviewHandle || !value.command) throw new Error('未取得原操作审阅。'); closeReview(); setReview(value); setAck(false); }); };
-  const hide = (active: boolean) => { if (mutationPending.current) { setUncertain(true); setReadAfterUnknown(false); mutationPending.current = false; } scope.current.invalidate(active); setBusy(false); closeReview(); setReading(old => old ? { ...old, viewHandle: '' } : null); setEditor(old => old?.original ? { ...old, original: { ...old.original, viewHandle: '' } } : old); setReceiptRows([]); void run('commitments.discard').catch(() => {}); };
+  const hide = (active: boolean) => { if (mutationPending.current) { setUncertain(true); setReadAfterUnknown(false); mutationPending.current = false; } scope.current.invalidate(active); setBusy(false); closeReview(); setReading(old => old ? { ...old, viewHandle: '' } : null); setEditor(old => old?.original ? { ...old, original: { ...old.original, viewHandle: '' } } : old); setReceiptRows([]); setReceiptsLoaded(false); void run('commitments.discard').catch(() => {}); };
   useEffect(() => { alive.current = true; scope.current.invalidate(document.visibilityState === 'visible'); refresh(); return () => { alive.current = false; scope.current.invalidate(false); release(selected.current, 'viewHandle'); release(reviewed.current, 'reviewHandle'); onEditingChange(false); }; }, []);
   useEffect(() => { onEditingChange(busy || !!editor || !!policy || !!review); }, [busy, editor, policy, review]);
   useEffect(() => {
@@ -60,7 +69,18 @@ function CommitmentList({ state, supported, run, registerTransientBack, onEditin
   });
   useEffect(() => { if (resumed.current !== state.webWorkspaceResumeRevision) { resumed.current = state.webWorkspaceResumeRevision; hide(document.visibilityState === 'visible'); refresh(); } }, [state.webWorkspaceResumeRevision]);
   useEffect(() => { if (taskOpen.current === state.webWorkspaceTaskOpen) return; taskOpen.current = state.webWorkspaceTaskOpen; hide(!state.webWorkspaceTaskOpen && document.visibilityState === 'visible'); if (!state.webWorkspaceTaskOpen) refresh(); }, [state.webWorkspaceTaskOpen]);
-  useEffect(() => { registerTransientBack(() => { if (busy) return true; if (review) { closeReview(); return true; } if (editor) { setEditor(null); return true; } if (policy) { setPolicy(null); return true; } if (reading) { release(reading, 'viewHandle'); setReading(null); return true; } return false; }); return () => registerTransientBack(null); }, [busy, review, editor, policy, reading, registerTransientBack]);
+  useEffect(() => { registerTransientBack(() => { if (busy) return true; if (review) { closeReview(); return true; } if (editor) { setEditor(null); return true; } if (policy) { setPolicy(null); return true; } if (reading) { returnToList(); return true; } return false; }); return () => registerTransientBack(null); }, [busy, review, editor, policy, reading, registerTransientBack]);
+  useLayoutEffect(() => {
+    const id = reading?.commitment?.id || '', scroller = collectionPanel.current?.closest('.pw-secondary-scroll');
+    if (id) {
+      if (presentedId.current !== id) { if (scroller) scroller.scrollTop = 0; detailHeading.current?.focus({ preventScroll: true }); }
+      presentedId.current = id;
+    } else if (presentedId.current && !busy) {
+      const row = Array.from(collectionPanel.current?.querySelectorAll<HTMLButtonElement>('[data-commitment-id]') || []).find(node => node.dataset.commitmentId === openedId.current);
+      (row || collectionPanel.current)?.focus({ preventScroll: true }); if (scroller) scroller.scrollTop = listPosition.current;
+      presentedId.current = '';
+    }
+  }, [reading?.commitment?.id, busy]);
   const confirm = () => {
     if (!review || !ack || busy || uncertain) return;
     const original = review; setReview(null); setAck(false);
@@ -76,19 +96,45 @@ function CommitmentList({ state, supported, run, registerTransientBack, onEditin
   const openEditor = (original: Data | null) => { if (!busy && !uncertain) setEditor({ draft: commitmentDraft(original?.commitment), original: original ? structuredClone(original) : null }); };
   const openPolicy = () => { const p = snapshot.policy; if (p) setPolicy({ revision: p.revision, enabled: p.enabled === true, zoneId: p.zoneId || 'UTC', quiet: !!p.quietHours, start: p.quietHours?.start || '22:00', end: p.quietHours?.end || '08:00', cooldownMinutes: String((p.cooldownMillis || 0) / 60000), pausedUntil: p.pausedUntil > Date.now() ? p.pausedUntil : null, maxNotificationsPerDay: p.maxNotificationsPerDay == null ? '' : String(p.maxNotificationsPerDay) }); };
   const recheckEditor = () => { const original = editor?.original?.commitment; if (!original) return; void invoke('commitments.read', { id: original.id }, value => { if (value.commitment?.id !== original.id || value.commitment?.revision !== original.revision) { release(value, 'viewHandle'); throw new Error('原委托版本已变化，草稿保留。请返回详情核对新版本。'); } acceptReading(value); setEditor(old => old ? { ...old, original: value } : null); }); };
-  const showReceipts = () => { if (reading?.viewHandle) void invoke('commitments.receipts', { viewHandle: reading.viewHandle }, value => { if (!Array.isArray(value?.receipts)) throw new Error('未取得原跟进通知记录。'); setReceiptRows(value.receipts); }); };
+  const showReceipts = () => { if (reading?.viewHandle) void invoke('commitments.receipts', { viewHandle: reading.viewHandle }, value => { if (!Array.isArray(value?.receipts)) throw new Error('未取得原跟进通知记录。'); setReceiptRows(value.receipts); setReceiptsLoaded(true); }); };
   const unknownControls = uncertain && <div><p>这次写入尚未确认。草稿保留，请核对原清单与回执；不会自动重试。</p><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={refresh}>读取原记录核对结果</Button><Button variant="secondary" disabled={busy || !readAfterUnknown} onClick={() => { setUncertain(false); setNotice('已由你确认核对原记录，可重新编辑。'); }}>原记录已核对，返回编辑</Button></div></div>;
-  return <section className="pw-settings-section" aria-label="单项委托工作区">
-    <header className="pw-section-heading"><div><h2>明确委托，持续跟进</h2><p>保存目标、期限和来源。到期提醒打开原委托，不会自动执行手机任务。</p></div></header>
-    <div className="pw-form-actions"><PressButton compact disabled={busy || uncertain || !snapshot.commitments || !supported('commitments.review')} onClick={() => openEditor(null)}>新增委托</PressButton><Button variant="secondary" disabled={busy} onClick={refresh}>刷新原记录</Button><Button variant="ghost" disabled={busy || uncertain || !snapshot.policy} onClick={openPolicy}>跟进设置{snapshot.policy?.enabled ? ' · 已启用' : ' · 关闭'}</Button></div>
-    {notice && <p role="status">{notice}</p>}{error && <p className="pw-field-error" role="alert">{error}</p>}
-    {uncertain && <div><p>这次写入尚未确认。草稿保留，请核对原清单与回执；不会自动重试。</p><Button variant="secondary" disabled={busy || !readAfterUnknown} onClick={() => { setUncertain(false); setNotice('已由你确认核对原记录，可重新编辑。'); }}>原记录已核对，返回编辑</Button></div>}
-    <CheckboxField isSelected={dueOnly} onChange={setDueOnly}>只看已到跟进时间</CheckboxField>
-    {!snapshot.commitments ? <p role="status">正在读取原委托…</p> : !records.length ? <p className="pw-secondary-empty">{dueOnly ? '目前没有到期候选。' : '还没有明确委托。'}</p> : records.map(row => <article className="pw-source-record" key={row.id}><header><h3>{row.title}</h3><span>{status(row.status)}</span></header><p>{time(row.followUpAt || row.dueAt)}</p><Button variant="ghost" disabled={busy} onClick={() => read(row.id)}>查看目标与跟进</Button></article>)}
-    {current && <section className="pw-settings-section" aria-label="当前委托详情"><header className="pw-section-heading"><div><h2>{current.title}</h2><p>{status(current.status)} · {time(current.dueAt)}</p></div></header><p className="pw-user-text">{current.details}</p>{state.requestedCommitmentId === current.id && state.requestedFollowUpClaimId && <p>从这项委托的跟进通知打开，可在下方核对原通知记录。</p>}{current.followUpDue && <p>已到跟进时间，等待核对。</p>}{current.taskState && <p>原任务状态：{current.taskState}</p>}
-      {!reading?.viewHandle && <Button variant="secondary" disabled={busy} onClick={() => read(current.id)}>重新核对这项委托</Button>}
-      <div className="pw-form-actions">{current.taskId && <Button variant="secondary" disabled={busy || !supported('tasks.open')} onClick={() => { void run('tasks.open', { id: current.taskId }); }}>查看原任务</Button>}{!terminal && <><Button variant="secondary" disabled={busy || uncertain || !reading?.viewHandle} onClick={() => openEditor(reading)}>编辑</Button><Button variant="secondary" disabled={busy || uncertain || !reading?.viewHandle} onClick={() => prepare('commitments.review', { operation: 'snooze', viewHandle: reading?.viewHandle, hours: 1 })}>暂缓一小时</Button><Button variant="secondary" disabled={busy || uncertain || !reading?.viewHandle || !snapshot.completionEvidenceAvailable} onClick={() => prepare('commitments.review', { operation: 'complete', viewHandle: reading?.viewHandle })}>确认已完成</Button><Button variant="ghost" disabled={busy || uncertain || !reading?.viewHandle} onClick={() => prepare('commitments.review', { operation: 'cancel', viewHandle: reading?.viewHandle })}>取消委托</Button></>}</div>
-      <Accordion><AccordionItem id="receipts" title="跟进通知记录"><Button variant="secondary" disabled={busy || !reading?.viewHandle} onClick={showReceipts}>读取原回执</Button>{receiptRows.map(row => <article className="pw-source-record" key={row.claimId}><p>{row.status === 'delivery_unknown' ? '通知结果待核对' : row.status === 'notified' ? '已提交本机通知，尚未证明已阅读' : row.status === 'not_sent' ? '已核对未发送' : row.status}</p><p>{time(row.recordedAt || row.createdAt)}</p>{row.status === 'delivery_unknown' && <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { void invoke('commitments.reconcileReceipt', { claimId: row.claimId }, () => setNotice('已查询本机通知，请重新读取回执。')); }}>查询本机通知</Button><Button variant="secondary" disabled={busy || uncertain} onClick={() => prepare('commitments.reviewReceipt', { claimId: row.claimId, outcome: 'notified' })}>我已看到通知</Button><Button variant="secondary" disabled={busy || uncertain} onClick={() => prepare('commitments.reviewReceipt', { claimId: row.claimId, outcome: 'not_sent' })}>我已核对未发送</Button></div>}</article>)}</AccordionItem></Accordion>
+  return <section className="pw-followup-workspace" data-followup-view={current ? 'detail' : 'list'} aria-label="单项委托工作区">
+    {notice && <p className="pw-followup-feedback" role="status">{notice}</p>}
+    {error && <p className="pw-followup-feedback pw-field-error" role="alert">{error}</p>}
+    {uncertain && <div className="pw-followup-attention">{unknownControls}</div>}
+    <div ref={collectionPanel} tabIndex={-1} className="pw-followup-collection" hidden={!!current}>
+      <header className="pw-followup-heading"><div><h2>单项委托</h2><p>记下要做的事，到期回来核对。</p></div><div className="pw-followup-heading-actions">
+        <Button variant="ghost" iconOnly leadingIcon={RiRefreshLine} aria-label="刷新原记录" disabled={busy} onClick={refresh} />
+        <Button variant="secondary" leadingIcon={RiAddLine} disabled={busy || uncertain || !snapshot.commitments || !supported('commitments.review')} onClick={() => openEditor(null)}>新增委托</Button>
+      </div></header>
+      <div className="pw-followup-list-heading"><CheckboxField isSelected={dueOnly} onChange={setDueOnly}>只看已到跟进时间</CheckboxField>{snapshot.commitments && <span>{records.length} 项</span>}</div>
+      {!snapshot.commitments ? <p className="pw-followup-empty" role="status">正在读取原委托…</p> : !records.length ? <div className="pw-followup-empty"><h3>{dueOnly ? '还没有到期的委托' : '把需要跟进的事记在这里'}</h3><p>{dueOnly ? '其他委托仍保留在完整清单中。' : '设定目标和期限。保存后只跟进，不会自动执行手机任务。'}</p></div> : <div className="pw-followup-list" aria-label="原委托清单">{records.map(row => <Button className="pw-followup-row" variant="ghost" key={row.id} data-commitment-id={row.id} trailingIcon={RiArrowRightSLine} aria-label={'查看目标与跟进：' + row.title} aria-description={[status(row.status), row.followUpDue === true ? '已到跟进时间' : '', '下次跟进 ' + time(row.followUpAt || row.dueAt)].filter(Boolean).join('；')} disabled={busy} onClick={() => read(row.id)}>
+        <span className="pw-followup-row-copy"><span className="pw-followup-row-title">{row.title}</span><span className="pw-followup-row-meta">{status(row.status)}{row.followUpDue === true ? ' · 已到跟进时间' : ''}</span><small>下次跟进 {time(row.followUpAt || row.dueAt)}</small></span>
+      </Button>)}</div>}
+      <Button className="pw-followup-settings-link" variant="ghost" leadingIcon={RiSettings3Line} trailingIcon={RiArrowRightSLine} disabled={busy || uncertain || !snapshot.policy} onClick={openPolicy}><span>跟进设置<small>{snapshot.policy ? snapshot.policy.enabled ? '通知已启用' : '通知关闭' : '等待读取'}</small></span></Button>
+      <p className="pw-followup-footnote">通知打开原委托；任务执行与真实完成需要另行核对。</p>
+    </div>
+    {current && <section className="pw-followup-detail" aria-label="当前委托详情">
+      <Button className="pw-followup-back" variant="ghost" leadingIcon={RiArrowLeftSLine} disabled={busy} onClick={returnToList}>返回委托列表</Button>
+      <header className="pw-followup-heading"><div><p className="pw-followup-eyebrow">{status(current.status)}</p><h2 ref={detailHeading} tabIndex={-1}>{current.title}</h2></div></header>
+      <dl className="pw-followup-facts"><div><dt>期限</dt><dd>{time(current.dueAt)}</dd></div><div><dt>跟进时间</dt><dd>{time(current.followUpAt || current.dueAt)}</dd></div>{current.taskState && <div><dt>原任务状态</dt><dd>{current.taskState}</dd></div>}</dl>
+      {current.details && <p className="pw-user-text pw-followup-goal">{current.details}</p>}
+      {state.requestedCommitmentId === current.id && state.requestedFollowUpClaimId && <p className="pw-followup-context">从这项委托的跟进通知打开，可在下方核对原通知记录。</p>}
+      {current.followUpDue && <p className="pw-followup-context">已到跟进时间，等待核对。</p>}
+      {!reading?.viewHandle && <div className="pw-followup-attention"><p>详情已保留，操作前需要重新读取原版本。</p><Button variant="secondary" disabled={busy} onClick={() => read(current.id)}>重新核对这项委托</Button></div>}
+      <div className="pw-followup-primary-actions">
+        {current.taskId && <Button variant="secondary" disabled={busy || !supported('tasks.open')} onClick={() => { void run('tasks.open', { id: current.taskId }); }}>查看原任务</Button>}
+        {!terminal && <><Button disabled={busy || uncertain || !reading?.viewHandle || !snapshot.completionEvidenceAvailable} onClick={() => prepare('commitments.review', { operation: 'complete', viewHandle: reading?.viewHandle })}>确认已完成</Button><Button variant="secondary" disabled={busy || uncertain || !reading?.viewHandle} onClick={() => prepare('commitments.review', { operation: 'snooze', viewHandle: reading?.viewHandle, hours: 1 })}>暂缓一小时</Button><Button variant="ghost" disabled={busy || uncertain || !reading?.viewHandle} onClick={() => prepare('commitments.review', { operation: 'cancel', viewHandle: reading?.viewHandle })}>取消委托</Button></>}
+      </div>
+      {!terminal && !snapshot.completionEvidenceAvailable && <p className="pw-followup-footnote">当前宿主尚未提供完成核对依据，不能直接确认完成。</p>}
+      <Accordion className="pw-followup-disclosures" key={current.id}>
+        {!terminal && <AccordionItem id="edit" title="调整委托" description="修改目标、期限或关联任务"><Button variant="secondary" disabled={busy || uncertain || !reading?.viewHandle} onClick={() => openEditor(reading)}>编辑当前委托</Button></AccordionItem>}
+        <AccordionItem id="receipts" title="跟进通知记录" description="核对发送回执，不把已提交视为已阅读">
+          <Button variant="secondary" disabled={busy || !reading?.viewHandle} onClick={showReceipts}>读取原回执</Button>
+          {receiptsLoaded && receiptRows.length === 0 && <p role="status">当前原记录中没有跟进通知回执。</p>}
+          {receiptRows.map(row => <article className="pw-followup-receipt" key={row.claimId}><h4>{row.status === 'delivery_unknown' ? '通知结果待核对' : row.status === 'notified' ? '已提交本机通知，尚未证明已阅读' : row.status === 'not_sent' ? '已核对未发送' : row.status}</h4><p>{time(row.recordedAt || row.createdAt)}</p>{row.status === 'delivery_unknown' && <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { void invoke('commitments.reconcileReceipt', { claimId: row.claimId }, () => setNotice('已查询本机通知，请重新读取回执。')); }}>查询本机通知</Button><Button variant="secondary" disabled={busy || uncertain} onClick={() => prepare('commitments.reviewReceipt', { claimId: row.claimId, outcome: 'notified' })}>我已看到通知</Button><Button variant="secondary" disabled={busy || uncertain} onClick={() => prepare('commitments.reviewReceipt', { claimId: row.claimId, outcome: 'not_sent' })}>我已核对未发送</Button></div>}</article>)}
+        </AccordionItem>
+      </Accordion>
     </section>}
     <SettingsDialog isOpen={!!editor && !review} onClose={() => { if (!busy) setEditor(null); }} title={editor?.original ? '编辑当前委托' : '新增明确委托'}><p>保存后不执行任务；修改时间留空会保留原期限。</p>{editor && <div className="pw-form-grid">{unknownControls}<TextAreaField label="承诺目标" value={editor.draft.title} onChange={value => setEditor(old => old && ({ ...old, draft: { ...old.draft, title: value } }))} isDisabled={busy} /><TextAreaField label="具体要求" value={editor.draft.details} onChange={value => setEditor(old => old && ({ ...old, draft: { ...old.draft, details: value } }))} isDisabled={busy} /><TextField label={editor.original ? '改为多少小时后跟进（留空保留）' : '多少小时后跟进'} value={editor.draft.hours} onChange={value => setEditor(old => old && ({ ...old, draft: { ...old.draft, hours: value } }))} isDisabled={busy} /><SelectField label="关联现有任务" value={editor.draft.taskId} options={[{ id: '', label: '暂不关联' }, ...(editor.draft.taskId && !rows(state.tasks).some(task => task.id === editor.draft.taskId) ? [{ id: editor.draft.taskId, label: '原关联任务 · ' + editor.draft.taskId }] : []), ...rows(state.tasks).map(task => ({ id: task.id, label: task.goal || task.id }))]} onChange={value => setEditor(old => old && ({ ...old, draft: { ...old.draft, taskId: value } }))} isDisabled={busy} />{editor.original && !editor.original.viewHandle && <Button variant="secondary" disabled={busy} onClick={recheckEditor}>核对原版本后继续编辑</Button>}{error && <p role="alert">{error}</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setEditor(null)}>取消</Button><PressButton compact disabled={busy || uncertain || !!editor.original && !editor.original.viewHandle} onClick={() => { try { prepare('commitments.review', commitmentReview(editor.draft, editor.original ? editor.original.viewHandle || '' : undefined)); } catch (failure) { setError(String((failure as Error).message)); } }}>核对保存内容</PressButton></div></div>}</SettingsDialog>
     <SettingsDialog isOpen={!!policy && !review} onClose={() => { if (!busy) setPolicy(null); }} title="承诺跟进设置"><p>仅发送本机通知；保留原设置版本和未编辑的运行条件。</p>{policy && <div className="pw-form-grid">{unknownControls}<CheckboxField isSelected={policy.enabled} onChange={enabled => setPolicy(p => ({ ...p, enabled }))}>启用跟进通知</CheckboxField><TextField label="时区" value={policy.zoneId} onChange={zoneId => setPolicy(p => ({ ...p, zoneId }))} /><TextField label="两次跟进至少相隔几分钟" value={policy.cooldownMinutes} onChange={cooldownMinutes => setPolicy(p => ({ ...p, cooldownMinutes }))} /><TextField label="每日最多通知次数（留空不额外限制）" value={policy.maxNotificationsPerDay} onChange={maxNotificationsPerDay => setPolicy(p => ({ ...p, maxNotificationsPerDay }))} /><CheckboxField isSelected={policy.quiet} onChange={quiet => setPolicy(p => ({ ...p, quiet }))}>使用安静时段</CheckboxField>{policy.quiet && <><TextField label="开始 HH:mm" value={policy.start} onChange={start => setPolicy(p => ({ ...p, start }))} /><TextField label="结束 HH:mm" value={policy.end} onChange={end => setPolicy(p => ({ ...p, end }))} /></>}<Button variant="secondary" onClick={() => setPolicy(p => ({ ...p, pausedUntil: p?.pausedUntil ? null : Date.now() + 86400000 }))}>{policy.pausedUntil ? '解除暂停（当前至 ' + time(policy.pausedUntil) + '）' : '暂停跟进一天'}</Button>{error && <p role="alert">{error}</p>}<PressButton compact disabled={busy || uncertain} onClick={() => { try { prepare('commitments.reviewPolicy', commitmentPolicyReview(policy)); } catch (failure) { setError((failure as Error).message); } }}>核对设置</PressButton></div>}</SettingsDialog>

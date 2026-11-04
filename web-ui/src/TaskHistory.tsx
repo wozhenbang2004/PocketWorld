@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { bridge } from './bridge';
+import { Tabs, TabList, Tab, TabPanel } from './shell-library';
+import './task-process.css';
 import { Accordion, AccordionItem, Button, IconButton } from './forms-library';
 import { RiArrowLeftLine, RiArrowRightLine, RiRefreshLine } from '@remixicon/react';
 import { getTaskEventHistory, getTaskOperations } from './task-presentation';
@@ -51,7 +53,7 @@ export function TaskHistory({ task, canRead, renderOperation }: { task: TaskHead
   const history = getTaskEventHistory(eventTask), tools = getTaskOperations(operationTask);
   const navigation = (window: ReturnType<typeof useAuditWindow>, label: string) => <>
     {window.error && <p className="pw-error" role="alert">{window.error}</p>}
-    <div className="pw-action-row" aria-label={label + '翻页'}>
+    <div className="pw-action-row pw-audit-navigation" aria-label={label + '翻页'}>
       {window.page && <span className="pw-muted pw-history-window">{window.earlier ? '较早记录' : '最近记录'}{window.page.hasMore ? ' · 尚有更早记录' : ' · 已到当前读取范围末尾'}</span>}
       <span className="pw-grow"/>
       {window.canGoBack && <IconButton icon={RiArrowLeftLine} aria-label="较近记录" title="较近记录" disabled={window.busy || !canRead} onClick={window.newer}/>}
@@ -62,16 +64,20 @@ export function TaskHistory({ task, canRead, renderOperation }: { task: TaskHead
     {window.page?.readLimited === true && <p className="pw-muted">部分正文超出当前读取范围。</p>}
   </>;
   return <section className="pw-task-process" aria-label="执行过程">
-    <section className="pw-task-events" aria-label="任务记录"><h3 className="pw-task-history-heading">任务记录</h3>
+    <Tabs className="pw-task-history-tabs" defaultSelectedKey="events">
+      <TabList aria-label="执行记录类型"><Tab id="events" count={history.entries.length}>进展记录</Tab><Tab id="operations" count={tools.length}>工具调用</Tab></TabList>
+      <p className="pw-audit-caption">数量仅对应当前已读取的记录。</p>
+      <TabPanel id="events" shouldForceMount><section className="pw-task-events" aria-label="任务记录">
       {history.partial && <p className="pw-muted pw-task-history-limit">当前为部分记录，完整过程尚未载入。</p>}
-      {history.entries.length ? <Accordion variant="divided" className="pw-task-event-list" aria-label="已读取任务记录">{history.entries.map((event, index) => <AccordionItem key={`${event.id}:${index}`} id={`${task.id}:${event.id}:${index}`} className="pw-task-event" data-event-position={event.position} data-read-limited={event.readLimited || undefined} headingLevel={4} title={event.title} description={[event.stateLabel, time(event.at), event.runId && !event.isCurrentRun ? '早先执行记录' : ''].filter(Boolean).join(' · ')}><p className="pw-task-event-copy">{event.detail}</p>{event.partial && event.bodyAvailable && <p className="pw-muted">这条记录仅显示已读取部分。</p>}</AccordionItem>)}</Accordion> : <p className="pw-muted">当前窗口没有可读取的任务记录。</p>}
+      {history.entries.length ? <Accordion variant="divided" className="pw-task-event-list" aria-label="已读取任务记录">{history.entries.map((event, index) => <AccordionItem key={`${event.id}:${index}`} id={`${task.id}:${event.id}:${index}`} className="pw-task-event" data-event-position={event.position} data-read-limited={event.readLimited || undefined} headingLevel={4} title={event.bodyAvailable && event.detail !== event.stateLabel ? event.detail : event.title} description={[event.title, event.stateLabel, time(event.at), event.runId && !event.isCurrentRun ? '早先执行记录' : ''].filter(Boolean).join(' · ')}><p className="pw-task-event-copy">{event.detail}</p>{event.partial && event.bodyAvailable && <p className="pw-muted">这条记录仅显示已读取部分。</p>}</AccordionItem>)}</Accordion> : <p className="pw-muted">当前窗口没有可读取的任务记录。</p>}
       {navigation(events, '任务记录')}
-    </section>
-    <section className="pw-task-operations" aria-label="工具记录"><h3 className="pw-task-history-heading">工具记录</h3>
+    </section></TabPanel>
+      <TabPanel id="operations" shouldForceMount><section className="pw-task-operations" aria-label="工具记录">
       {tools.length ? <div className="pw-task-tools">{tools.map((operation, index) => <div key={`${operation.runId}:${operation.operationId}`}>
         {operation.runId && task.raw?.runId && operation.runId !== task.raw.runId && <small className="pw-muted">早先执行记录</small>}{renderOperation(operation, index, task.id)}
       </div>)}</div> : <p className="pw-muted pw-task-tool-empty">当前窗口没有可读取的工具记录。</p>}
       {navigation(operations, '工具记录')}
-    </section>
+    </section></TabPanel>
+    </Tabs>
   </section>;
 }

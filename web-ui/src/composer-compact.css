@@ -4,12 +4,12 @@
   padding: 6px;
   border: 0;
   border-radius: 20px;
-  background: var(--pw-inset, #f6f6f6);
+  background: var(--pw-surface, #fff);
   box-shadow: var(--pw-shadow-surface, 0 12px 40px rgb(0 0 0 / 4%));
 }
 
 .pw-composer-host.pw-compact-composer .afa-composer > .afa-card.pw-composer-card:focus-within {
-  background: color-mix(in srgb, var(--pw-inset, #f6f6f6) 72%, var(--pw-selected, #ededed));
+  background: var(--pw-surface, #fff);
   box-shadow: var(--pw-shadow-surface, 0 12px 40px rgb(0 0 0 / 4%));
 }
 
@@ -74,17 +74,19 @@
   min-width: 48px;
   height: 48px;
   min-height: 48px;
+  padding: 2px !important;
+  border-radius: 13px;
 }
 
 .pw-composer-host.pw-compact-composer .pw-composer-row .pw-press-front {
   box-sizing: border-box;
-  min-height: 36px;
+  min-height: 44px;
   padding: 9px 7px;
   border-radius: 13px;
 }
 
 .pw-composer-host.pw-compact-composer .pw-composer-row .pw-press-material {
-  border-radius: calc(13px + var(--strain) * 1.5px);
+  border-radius: inherit;
 }
 
 .pw-composer-host.pw-compact-composer .pw-composer-row .afa-recording {

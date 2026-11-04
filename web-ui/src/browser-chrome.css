@@ -1,0 +1,31 @@
+/* Native embeds this surface above its actual page. Nothing here hosts or floats over page content.
+   Default budget: 52px address + 44px tools + 16px status (68px with IME); native owns font-scale/IME sizing. */
+.browser-chrome { position: fixed; inset: 0; display: flex; flex-direction: column; width: 100%; height: 100%; max-height: 100%; overflow: hidden; background: var(--pw-surface); color: var(--pw-ink); font-family: var(--pw-font); }
+.browser-chrome-address-row { display: flex; align-items: center; gap: 4px; flex: 0 0 var(--browser-first-row, 52px); min-width: 0; padding: 4px 6px; margin: 0; box-sizing: border-box; }
+.browser-chrome .browser-chrome-control { min-width: 44px; min-height: 44px; width: 44px; height: 44px; padding: 10px; flex: 0 0 44px; border: 0; border-radius: 10px; background: transparent; color: var(--pw-copy); box-shadow: none; transition: background-color 120ms ease, color 120ms ease, transform 120ms ease; touch-action: manipulation; }
+.browser-chrome .browser-chrome-control > svg { width: 20px; height: 20px; }
+.browser-chrome .browser-chrome-control:hover:not(:disabled) { background: var(--pw-inset); color: var(--pw-ink); }
+.browser-chrome .browser-chrome-control:active:not(:disabled) { transform: scale(.94); background: var(--pw-selected); color: var(--pw-ink); }
+.browser-chrome .browser-chrome-control:focus-visible { outline: 2px solid var(--pw-focus); outline-offset: -3px; }
+.browser-chrome .browser-chrome-control:disabled { color: var(--pw-disabled); opacity: .55; cursor: default; }
+.browser-chrome-address-row .browser-chrome-control { height: calc(var(--browser-first-row, 52px) - 8px); }
+.browser-chrome .browser-chrome-open { width: auto; flex: 0 0 auto; padding-inline: 8px; font-size: 13px; font-weight: 600; color: var(--pw-ink); }
+.browser-chrome-address { flex: 1 1 auto; min-width: 0; }
+.browser-chrome .browser-chrome-address-shell { min-height: 44px; height: calc(var(--browser-first-row, 52px) - 8px); padding-inline: 8px; border: 0; border-radius: 12px; background: var(--pw-inset); box-shadow: none; outline: none; }
+.browser-chrome .browser-chrome-address-shell:focus-within { background: var(--pw-inset); outline: 2px solid var(--pw-focus); outline-offset: -2px; }
+.browser-chrome .browser-chrome-address-input { min-width: 0; font-size: 14px; line-height: 22px; font-weight: 400; color: var(--pw-ink); text-overflow: ellipsis; }
+.browser-chrome .browser-chrome-address-input::placeholder { color: var(--pw-muted); }
+.browser-chrome-actions { display: grid; grid-template-columns: repeat(7, minmax(44px, 1fr)); flex: 0 0 var(--browser-second-row, 44px); min-height: 44px; padding: 0 6px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+.browser-chrome-actions::-webkit-scrollbar { display: none; }
+.browser-chrome-actions > .browser-chrome-control, .browser-chrome-tabs { justify-self: center; }
+.browser-chrome-tabs { position: relative; width: 44px; height: var(--browser-second-row, 44px); }
+.browser-chrome-actions .browser-chrome-control { height: var(--browser-second-row, 44px); }
+.browser-chrome-count { position: absolute; top: 4px; right: 0; min-width: 14px; padding: 0 2px; border-radius: 6px; background: var(--pw-surface); color: var(--pw-copy); font-size: 9px; line-height: 13px; font-weight: 600; text-align: center; pointer-events: none; }
+.browser-chrome-status { flex: 1 1 var(--browser-status-row, 16px); min-height: var(--browser-status-row, 16px); padding: 0 12px; overflow: hidden; color: var(--pw-muted); font-size: 10px; line-height: 16px; }
+.browser-chrome-status > span { display: block; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.browser-chrome-status[data-notice] { color: var(--pw-ink); }
+.browser-chrome .ui-shm-text { --ui-shm-text: var(--pw-muted); --ui-shm-text-glow: var(--pw-ink); }
+.browser-chrome-progress { position: absolute; inset: auto 0 0; height: 2px; overflow: hidden; pointer-events: none; }
+.browser-chrome-progress > span { display: block; height: 100%; background: var(--pw-copy); opacity: .42; transform-origin: left; transition: transform 180ms ease; }
+.browser-chrome-actions[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .browser-chrome .browser-chrome-control, .browser-chrome-progress > span { transition: none; } .browser-chrome .browser-chrome-control:active:not(:disabled) { transform: none; } .browser-chrome .ui-shm-text { animation: none; background-image: none; -webkit-text-fill-color: currentColor; } }

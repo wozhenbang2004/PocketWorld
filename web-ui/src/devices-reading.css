@@ -1,0 +1,171 @@
+/* Device journey composition around retained BoardUI Button, Accordion,
+ * controlled fields and SettingsDialog. No replacement control primitives.
+ * Peer identity, grant and native-receipt state remain owned by the host. */
+.pw-devices-reading.pw-settings-section {
+  min-width: 0;
+  margin-bottom: 0;
+  color: var(--pw-ink, #202020);
+}
+.pw-devices-reading .pw-device-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 4px 0 22px;
+}
+.pw-devices-reading .pw-device-heading-copy { min-width: 0; }
+.pw-devices-reading .pw-device-heading h2 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 32px;
+  letter-spacing: -.035em;
+  overflow-wrap: anywhere;
+}
+.pw-devices-reading .pw-device-heading p {
+  margin: 5px 0 0;
+  color: var(--pw-copy, #626262);
+  font-size: 13px;
+  line-height: 21px;
+}
+.pw-devices-reading .pw-device-heading-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+.pw-devices-reading .pw-device-back {
+  margin: -6px 0 6px -10px;
+  color: var(--pw-copy, #626262);
+}
+.pw-devices-reading .pw-device-section { margin: 0 0 24px; }
+.pw-devices-reading .pw-device-section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 2px 10px;
+}
+.pw-devices-reading .pw-device-section-heading h3 {
+  margin: 0;
+  color: var(--pw-ink, #202020);
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+}
+.pw-devices-reading .pw-device-section-heading p,
+.pw-devices-reading .pw-device-section-heading > span {
+  margin: 2px 0 0;
+  color: var(--pw-copy, #626262);
+  font-size: 12px;
+  line-height: 19px;
+}
+.pw-devices-reading .pw-device-section-heading > span { flex: none; }
+.pw-devices-reading :is(.pw-device-list, .pw-device-task-list, .pw-device-disclosures, .pw-device-empty, .pw-device-connection, .pw-device-attention) {
+  border: 0;
+  border-radius: 18px;
+  background: var(--pw-surface, #fff);
+}
+.pw-devices-reading .pw-device-list { padding: 4px 8px; }
+.pw-devices-reading .pw-device-row {
+  display: flex;
+  width: 100%;
+  min-height: 88px;
+  height: auto;
+  gap: 13px;
+  padding: 14px 10px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  box-shadow: none;
+  text-align: start;
+  white-space: normal;
+}
+.pw-devices-reading .pw-device-row:hover { background: var(--pw-canvas, #f5f5f5); }
+.pw-devices-reading .pw-device-row > svg { flex: none; width: 21px; height: 21px; color: var(--pw-copy, #626262); }
+.pw-devices-reading .pw-device-row > svg:last-child { width: 17px; height: 17px; }
+.pw-devices-reading .pw-device-row > span { min-width: 0; flex: 1; justify-content: flex-start; padding: 0; }
+.pw-devices-reading .pw-device-row-copy { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.pw-devices-reading .pw-device-row-name { color: var(--pw-ink, #202020); font-size: 15px; font-weight: 500; line-height: 23px; overflow-wrap: anywhere; }
+.pw-devices-reading .pw-device-row-status { color: var(--pw-copy, #626262); font-size: 13px; font-weight: 400; line-height: 20px; }
+.pw-devices-reading .pw-device-row-copy small { color: var(--pw-copy, #626262); font-size: 12px; font-weight: 400; line-height: 19px; }
+.pw-devices-reading .pw-device-empty { padding: 26px 22px; }
+.pw-devices-reading .pw-device-empty-icon { display: flex; align-items: baseline; gap: 5px; margin-bottom: 14px; color: var(--pw-copy, #626262); }
+.pw-devices-reading .pw-device-empty h3 { margin: 0; font-size: 17px; line-height: 25px; }
+.pw-devices-reading .pw-device-empty p { max-width: 48ch; margin: 8px 0 18px; color: var(--pw-copy, #626262); font-size: 13px; line-height: 22px; }
+.pw-devices-reading .pw-device-attention,
+.pw-devices-reading .pw-device-connection {
+  padding: 18px;
+  box-shadow: 0 2px 6px -2px rgb(0 0 0 / .025), 0 12px 24px -8px rgb(0 0 0 / .07);
+}
+.pw-devices-reading .pw-device-pairing { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; }
+.pw-devices-reading .pw-device-pairing:first-child { padding-top: 0; }
+.pw-devices-reading .pw-device-pairing:last-child { padding-bottom: 0; }
+.pw-devices-reading .pw-device-pairing > div { min-width: 0; }
+.pw-devices-reading .pw-device-pairing h4 { margin: 0; font-size: 15px; font-weight: 500; line-height: 23px; overflow-wrap: anywhere; }
+.pw-devices-reading .pw-device-pairing p { margin: 3px 0 0; color: var(--pw-copy, #626262); font-size: 13px; line-height: 21px; }
+.pw-devices-reading .pw-device-pairing > button { flex: none; }
+.pw-devices-reading .pw-device-connection { margin-bottom: 16px; }
+.pw-devices-reading .pw-device-connection-heading { display: flex; align-items: center; gap: 9px; }
+.pw-devices-reading .pw-device-connection h3 { font-size: 16px; line-height: 24px; }
+.pw-devices-reading .pw-device-connection > p { margin: 8px 0 0; color: var(--pw-copy, #626262); font-size: 13px; line-height: 22px; }
+.pw-devices-reading .pw-device-connection .pw-device-inline-notice { color: var(--pw-ink, #202020); font-weight: 500; }
+.pw-devices-reading .pw-device-disclosures { margin: 0 0 24px; padding: 0 16px; }
+.pw-devices-reading .pw-device-disclosures > * { border: 0; }
+.pw-devices-reading .pw-device-disclosures > * > h3 > button { min-height: 68px; padding-block: 13px; }
+.pw-devices-reading .pw-device-disclosures p,
+.pw-devices-reading .pw-device-task-history p { font-size: 13px; line-height: 22px; overflow-wrap: anywhere; }
+.pw-devices-reading .pw-device-disclosures h4 { margin: 18px 0 8px; color: var(--pw-ink, #202020); font-size: 14px; font-weight: 500; line-height: 22px; }
+.pw-devices-reading .pw-device-task-list { padding: 0 18px; }
+.pw-devices-reading .pw-device-task { padding: 18px 0 12px; }
+.pw-devices-reading .pw-device-task + .pw-device-task { border-top: 1px solid var(--pw-edge, rgb(0 0 0 / .045)); }
+.pw-devices-reading .pw-device-task > header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.pw-devices-reading .pw-device-task h4 { margin: 0; color: var(--pw-ink, #202020); font-size: 15px; font-weight: 500; line-height: 24px; overflow-wrap: anywhere; }
+.pw-devices-reading .pw-device-task > header > span { flex: none; color: var(--pw-copy, #626262); font-size: 12px; line-height: 20px; }
+.pw-devices-reading .pw-device-task-summary { margin: 6px 0 0; color: var(--pw-copy, #626262); font-size: 13px; line-height: 22px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pw-devices-reading .pw-device-task-history { margin-top: 8px; }
+.pw-devices-reading .pw-device-task-history > * { border: 0; }
+.pw-devices-reading .pw-device-task-history > * > h5 > button { min-height: 44px; padding-block: 8px; }
+.pw-devices-reading .pw-device-task-history > * > h5 > button > span > span { font-size: 12px; font-weight: 400; line-height: 20px; color: var(--pw-copy, #626262); }
+.pw-devices-reading .pw-device-task-history > * > h5 > button > svg { width: 16px; height: 16px; }
+.pw-devices-reading .pw-device-task-request { margin: 14px 0; padding: 12px; border: 0; border-radius: 12px; background: var(--pw-canvas, #f5f5f5); }
+.pw-devices-reading .pw-device-task-request p { margin: 6px 0 10px; font-size: 13px; line-height: 22px; overflow-wrap: anywhere; }
+.pw-devices-reading .pw-device-history-entry { padding: 10px 0; }
+.pw-devices-reading .pw-device-history-entry > p { margin: 5px 0 8px; }
+.pw-devices-reading:not([data-device-view="desktop"]) .pw-form-actions { gap: 6px; margin: 12px 0 0; }
+.pw-devices-reading .pw-device-footnote { margin: 16px 2px 0; color: var(--pw-copy, #626262); font-size: 11px; line-height: 19px; overflow-wrap: anywhere; }
+.pw-devices-reading .pw-device-loading,
+.pw-device-form .pw-device-loading { margin: 0 0 16px; color: var(--pw-copy, #626262); font-size: 13px; line-height: 21px; }
+.pw-devices-reading .pw-device-feedback,
+.pw-device-form .pw-device-feedback { margin: 0 0 16px; padding: 12px 14px; border: 0; border-radius: 12px; background: var(--pw-surface, #fff); color: var(--pw-ink, #202020); font-size: 13px; line-height: 22px; overflow-wrap: anywhere; }
+/* Scoped dialog interiors keep the original modal lifecycle and consent UI.
+ * Exact fingerprints, resources and review consequences are never collapsed. */
+.pw-device-form { min-width: 0; }
+.pw-device-form > .pw-selection-field + button { margin-block: 12px; }
+.pw-device-form .pw-device-form-intro { margin: 0 0 22px; color: var(--pw-copy, #626262); font-size: 13px; line-height: 22px; }
+.pw-device-form .pw-device-form-step { display: flex; flex-direction: column; align-items: stretch; gap: 12px; margin-bottom: 20px; }
+.pw-device-form .pw-device-form-step > button { align-self: flex-start; }
+.pw-device-form h3 { margin: 0; color: var(--pw-ink, #202020); font-size: 15px; font-weight: 500; line-height: 23px; }
+.pw-device-form p { font-size: 13px; line-height: 22px; overflow-wrap: anywhere; }
+.pw-device-form .pw-device-form-alternatives { margin: 0; }
+.pw-device-form .pw-device-form-alternatives > * { border: 0; }
+.pw-device-form .pw-device-form-alternatives button[slot="trigger"] { padding-block: 12px; }
+.pw-device-form .pw-device-form-alternatives .pw-selection-field + button { margin-top: 14px; }
+.pw-device-review { min-width: 0; font-size: 13px; line-height: 22px; }
+.pw-device-review p { margin: 10px 0; overflow-wrap: anywhere; }
+.pw-device-review .pw-source-copy { overflow-wrap: anywhere; }
+.pw-device-review pre { white-space: pre-wrap; word-break: break-word; }
+.pw-device-review .pw-form-actions { gap: 8px; margin-top: 18px; }
+.pw-device-review .pw-facts { margin-block: 14px; padding: 12px; border: 0; border-radius: 12px; background: var(--pw-canvas, #f5f5f5); }
+@media (max-width: 520px) {
+  .pw-devices-reading .pw-device-heading { flex-wrap: wrap; gap: 10px; margin-bottom: 20px; }
+  .pw-devices-reading .pw-device-heading-actions { margin-left: auto; }
+  .pw-devices-reading .pw-device-heading h2 { font-size: 22px; line-height: 30px; }
+  .pw-devices-reading .pw-device-pairing { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .pw-devices-reading .pw-device-pairing + .pw-device-pairing { padding-top: 20px; }
+  .pw-devices-reading .pw-device-task > header { flex-wrap: wrap; gap: 2px 10px; }
+  .pw-devices-reading .pw-device-task > header h4 { flex-basis: 100%; }
+  .pw-devices-reading .pw-device-empty { padding: 22px 18px; }
+}
+
+.pw-devices-reading .pw-device-heading h2:focus { outline: none; }
+.pw-devices-reading:not([data-device-view="desktop"]) .pw-form-actions > button,
+.pw-device-form button,
+.pw-device-review .pw-form-actions > button { max-width: 100%; height: auto; }
+.pw-devices-reading:not([data-device-view="desktop"]) .pw-form-actions > button > span,
+.pw-device-form button > span,
+.pw-device-review .pw-form-actions > button > span { min-width: 0; flex-shrink: 1; white-space: normal; overflow-wrap: anywhere; }

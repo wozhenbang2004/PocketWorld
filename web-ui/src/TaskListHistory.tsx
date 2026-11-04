@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
-import { IconButton } from './forms-library';
+import { Button, IconButton } from './forms-library';
 import { RiArrowLeftLine, RiArrowRightLine, RiSkipBackLine } from '@remixicon/react';
 import { currentTaskHeaders, taskHeaderPage, type TaskHeader, type TaskHeaderPage } from './task-history';
 
@@ -13,7 +13,10 @@ export function useTaskListHistory(tasks: TaskHeader[], initialCursor: string, s
   current.current = { scope, enabled };
   useEffect(() => { alive.current = true; return () => { alive.current = false; request.current++; }; }, []);
   const reset = () => { request.current++; entering.current = false; setLoaded(null); setBusy(false); setError(''); };
-  useEffect(reset, [scope, enabled]);
+  useEffect(reset, [scope]);
+  // Leaving the route retires pending reads, not the last settled history page.
+  // Returning to the same scope requires no new read or business command.
+  useEffect(() => { request.current++; entering.current = false; setBusy(false); setError(''); }, [enabled]);
   const read = async (cursor: string, prior: string[]) => {
     if (!enabled || entering.current) return;
     entering.current = true; const original = ++request.current; setBusy(true); setError('');
@@ -44,8 +47,8 @@ export function TaskListHistoryControls({ history }: { history: ReturnType<typeo
     {(history.earlier || history.hasMore) && <div className="pw-action-row">
       <span className="pw-muted pw-history-window">{history.earlier ? '较早任务' : '最近任务'} · 仅搜索当前页</span>
       <span className="pw-grow"/>
-      {history.canGoBack && <IconButton icon={RiArrowLeftLine} aria-label="较近任务" title="较近任务" disabled={history.busy || !history.enabled} onClick={history.newer}/>}
-      {history.hasMore && <IconButton icon={RiArrowRightLine} aria-label="较早任务" title="较早任务" disabled={history.busy || !history.enabled} onClick={history.older}/>}
+      {history.canGoBack && <Button variant="ghost" leadingIcon={RiArrowLeftLine} disabled={history.busy || !history.enabled} onClick={history.newer}>较近任务</Button>}
+      {history.hasMore && <Button variant="ghost" trailingIcon={RiArrowRightLine} disabled={history.busy || !history.enabled} onClick={history.older}>较早任务</Button>}
       {history.earlier && <IconButton icon={RiSkipBackLine} aria-label="回到最近任务" title="回到最近任务" disabled={history.busy} onClick={history.reset}/>}
     </div>}
   </section>;

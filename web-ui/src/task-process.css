@@ -1,0 +1,26 @@
+/* Retained BoardUI Tabs/Accordion and Affect ToolCallCard compose one audit
+ * reading surface. Tab counts describe the loaded window, never completion. */
+.pw-task-process-layer[hidden] { display: none; }
+.pw-task-process .pw-task-history-tabs { gap: 0; }
+.pw-task-history-tabs [data-inert="true"] { display: none; }
+.pw-task-history-tabs [role="tablist"] { gap: 4px; padding: 4px; border: 0; border-radius: 12px; background: var(--pw-inset); }
+.pw-task-history-tabs [role="tab"] { flex: 1; justify-content: center; min-height: 44px; padding: 8px; z-index: 1; }
+.pw-task-history-tabs [role="tab"] > span:first-child { font-size: 14px; line-height: 20px; }
+.pw-task-history-tabs [role="tab"] > span:last-child:not(:first-child) { background: transparent; color: var(--pw-copy); opacity: 1; font-size: 11px; }
+.pw-task-history-tabs [role="tablist"] + span[aria-hidden] { top: 4px; bottom: 4px; height: auto; border-radius: 9px; background: var(--pw-surface); box-shadow: var(--pw-shadow-surface); }
+.pw-task-history-tabs [role="tab"]:focus-visible { outline: 2px solid var(--pw-focus); outline-offset: -3px; border-radius: 9px; }
+.pw-task-process .pw-audit-caption { margin: 8px 2px 16px; font-size: 12px; line-height: 18px; color: var(--pw-copy); }
+.pw-task-process .pw-task-history-limit { margin: 0 2px 8px; font-size: 12px; line-height: 18px; color: var(--pw-copy); }
+.pw-task-process .pw-task-event-list { gap: 0; }
+.pw-task-process .pw-task-event { border: 0; border-radius: 0; }
+.pw-task-event [slot="trigger"] { min-height: 64px; padding: 12px 2px; gap: 10px; }
+.pw-task-event [slot="trigger"] .text-headline-medium { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 14px; line-height: 22px; font-weight: 500; color: var(--pw-ink); }
+.pw-task-event [slot="trigger"] .text-body-regular { font-size: 12px; line-height: 18px; color: var(--pw-copy); }
+.pw-task-event [role="region"] > div { padding: 2px 12px 12px; border-radius: 10px; background: var(--pw-inset); }
+.pw-task-process .pw-task-event-copy { font-size: 14px; line-height: 23px; }
+.pw-task-process .pw-task-tools { gap: 6px; }
+.pw-task-process .ui-tcc { border: 0; border-radius: 12px; box-shadow: none; background: var(--pw-inset); }
+.pw-task-process .ui-tcc__head { min-height: 60px; padding-inline: 12px; }
+.pw-task-process .pw-audit-navigation { gap: 4px; margin-top: 14px; padding-top: 4px; }
+.pw-task-process .pw-history-window { flex-basis: 100%; padding: 0 2px; }
+.pw-task-process .pw-audit-navigation > button { min-width: 44px; }

@@ -1,0 +1,8 @@
+/* Retained BoardUI rows and Vaul sheet: source directory → one source document.
+ * Source title is presentation only; the native handle remains the read authority. */
+.pw-answer-sources .pw-drawer-header h2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.pw-answer-sources .pw-source-url { margin: 0 0 14px; color: var(--pw-copy); font-size: 12px; line-height: 19px; overflow-wrap: anywhere; }
+.pw-answer-sources .pw-source-read-navigation { margin-top: 20px; padding-top: 10px; }
+.pw-answer-sources .pw-source-read-navigation > p { margin: 0; color: var(--pw-copy); font-size: 12px; line-height: 20px; }
+.pw-answer-sources .pw-source-read-navigation > .pw-action-row { justify-content: space-between; gap: 8px; margin-top: 5px; }
+.pw-answer-sources .pw-source-read-navigation button { min-height: 44px; }

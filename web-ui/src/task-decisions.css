@@ -1,0 +1,128 @@
+/* Task-specific composition of retained BoardUI form/disclosure/button sources.
+ * A single quiet decision surface, open scope facts, and subordinate diagnostics.
+ * Control mechanics, source motion and native authority stay in their owners. */
+.pw-approval-item.pw-task-decision {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  margin-block: 4px 12px;
+  padding: 18px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--pw-inset, #f6f6f6);
+  color: var(--pw-ink, #242424);
+}
+.pw-task-decision.pw-approval-item .pw-decision-heading { display: flex; flex-direction: column; gap: 7px; }
+.pw-task-decision.pw-approval-item .pw-decision-eyebrow { color: var(--pw-copy); font-size: 12px; line-height: 18px; }
+.pw-task-decision.pw-approval-item .pw-decision-heading h4 {
+  margin: 0;
+  color: var(--pw-ink);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 25px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pw-task-decision.pw-approval-item p { margin: 0; color: var(--pw-copy); font-size: 13px; line-height: 21px; overflow-wrap: anywhere; }
+.pw-task-decision.pw-approval-item .pw-decision-context { white-space: pre-wrap; }
+.pw-task-decision.pw-approval-item h5,
+.pw-task-decision.pw-approval-item h6 { margin: 0; color: var(--pw-ink); font-size: 13px; line-height: 21px; font-weight: 600; }
+.pw-task-decision.pw-approval-item .pw-decision-section { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.pw-task-decision.pw-approval-item .pw-decision-goal { color: var(--pw-ink); font-size: 14px; line-height: 23px; }
+.pw-task-decision.pw-approval-item .pw-decision-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--pw-surface, #fff);
+  color: var(--pw-ink);
+  font-size: 13px;
+  line-height: 21px;
+  overflow-wrap: anywhere;
+}
+.pw-task-decision.pw-approval-item .pw-decision-notice p { color: var(--pw-ink); }
+.pw-task-decision.pw-approval-item .pw-decision-facts { display: flex; flex-direction: column; gap: 9px; margin: 0; min-width: 0; }
+.pw-task-decision.pw-approval-item .pw-decision-facts > div { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 12px; align-items: start; }
+.pw-task-decision.pw-approval-item .pw-decision-facts dt { color: var(--pw-copy); font-size: 12px; line-height: 21px; overflow-wrap: anywhere; }
+.pw-task-decision.pw-approval-item .pw-decision-facts dd { margin: 0; color: var(--pw-ink); font-size: 13px; line-height: 21px; min-width: 0; overflow-wrap: anywhere; }
+.pw-task-decision.pw-approval-item .pw-decision-paths { display: flex; flex-direction: column; gap: 6px; list-style: none; padding: 0; margin: 0; }
+.pw-task-decision.pw-approval-item .pw-decision-paths li { min-width: 0; overflow-wrap: anywhere; }
+.pw-task-decision.pw-approval-item .pw-decision-paths small { display: block; color: var(--pw-copy); font-size: 12px; line-height: 18px; }
+.pw-task-decision.pw-approval-item .pw-decision-meta { color: var(--pw-copy); font-size: 12px; line-height: 19px; }
+.pw-task-decision.pw-approval-item .pw-decision-boundary { color: var(--pw-copy); }
+.pw-task-decision.pw-approval-item .pw-decision-worklist { display: flex; flex-direction: column; gap: 18px; list-style: none; margin: 3px 0 0; padding: 0; }
+.pw-task-decision.pw-approval-item .pw-decision-worklist > li { display: flex; flex-direction: column; gap: 9px; }
+.pw-task-decision.pw-approval-item .pw-decision-work-heading { display: flex; flex-direction: column; gap: 2px; }
+.pw-task-decision.pw-approval-item .pw-decision-work-heading span { color: var(--pw-copy); font-size: 12px; line-height: 19px; }
+.pw-task-decision.pw-approval-item .pw-decision-budget { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 0; }
+.pw-task-decision.pw-approval-item .pw-decision-budget dt { color: var(--pw-copy); font-size: 12px; line-height: 19px; }
+.pw-task-decision.pw-approval-item .pw-decision-budget dd { display: flex; flex-wrap: wrap; align-items: baseline; gap: 9px; margin: 4px 0 0; color: var(--pw-copy); font-size: 14px; line-height: 24px; }
+.pw-task-decision.pw-approval-item .pw-decision-budget strong { color: var(--pw-ink); font-size: 18px; font-weight: 600; }
+.pw-task-decision.pw-approval-item .pw-decision-budget-detail { gap: 5px; }
+.pw-task-decision.pw-approval-item .pw-decision-budget-detail > div { grid-template-columns: minmax(0, 1fr) auto; }
+.pw-task-decision.pw-approval-item .pw-decision-budget-detail dd { text-align: right; font-variant-numeric: tabular-nums; }
+.pw-task-decision.pw-approval-item .pw-decision-disclosure { min-width: 0; border: 0; }
+.pw-task-decision.pw-approval-item .pw-decision-disclosure > div > h5 > button { min-height: 44px; padding-block: 8px; }
+.pw-task-decision.pw-approval-item .pw-decision-disclosure > div > h5 > button > span > span { font-size: 12px; line-height: 20px; }
+.pw-task-decision.pw-approval-item .pw-decision-fingerprints { padding-block: 8px; }
+.pw-task-decision.pw-approval-item .pw-decision-fingerprints > div { display: flex; flex-direction: column; gap: 3px; }
+.pw-task-decision.pw-approval-item .pw-decision-fingerprints code { font-size: 11px; user-select: text; }
+.pw-task-decision.pw-approval-item .pw-approval-json {
+  margin: 8px 0 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--pw-surface);
+  color: var(--pw-copy);
+  font-size: 11px;
+  line-height: 19px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 40dvh;
+  overflow: auto;
+  user-select: text;
+}
+.pw-task-decision.pw-approval-item .pw-approval-json:focus-visible { outline: 2px solid var(--pw-focus); outline-offset: 3px; }
+.pw-task-decision.pw-approval-item .pw-decision-footer { display: flex; flex-direction: column; gap: 14px; }
+.pw-task-decision.pw-approval-item .pw-decision-reviewed { min-height: 44px; align-items: flex-start; padding-block: 7px; }
+.pw-task-decision.pw-approval-item .pw-decision-reviewed > span:last-child { font-size: 13px; line-height: 21px; }
+.pw-task-decision.pw-approval-item .pw-decision-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.pw-task-decision.pw-approval-item .pw-decision-actions > button { max-width: 100%; min-height: 44px; height: auto; white-space: normal; }
+.pw-task-decision.pw-approval-item .pw-decision-actions .pw-press { min-width: 0; }
+.pw-task-decision.pw-approval-item .pw-decision-actions .pw-press-label { white-space: normal; overflow-wrap: anywhere; }
+.pw-task-decision.pw-approval-item .pw-decision-caveat { margin-top: -7px; color: var(--pw-copy); font-size: 12px; line-height: 20px; }
+.pw-task-decision.pw-approval-item .pw-question-choices { display: flex; flex-direction: column; gap: 7px; }
+.pw-task-decision.pw-approval-item .pw-question-choice {
+  display: flex;
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 46px;
+  height: auto;
+  padding: 10px 12px;
+  border: 0;
+  background: var(--pw-surface);
+  color: var(--pw-ink);
+  box-shadow: none;
+  text-align: left;
+  white-space: normal;
+}
+.pw-task-decision.pw-approval-item .pw-question-choice > span { justify-content: flex-start; align-items: baseline; gap: 12px; width: 100%; min-width: 0; flex-shrink: 1; padding: 0; }
+.pw-task-decision.pw-approval-item .pw-question-choice-number { flex: 0 0 1.2em; color: var(--pw-copy); font-size: 12px; font-variant-numeric: tabular-nums; }
+.pw-task-decision.pw-approval-item .pw-question-choice-label { min-width: 0; font-size: 14px; line-height: 22px; font-weight: 400; overflow-wrap: anywhere; }
+.pw-task-decision.pw-approval-item .pw-question-choice:hover:not(:disabled),
+.pw-task-decision.pw-approval-item .pw-question-choice:active:not(:disabled) { background: var(--pw-selected); }
+.pw-task-decision.pw-approval-item .pw-question-choice:focus-visible { outline: 2px solid var(--pw-focus); outline-offset: 2px; }
+.pw-task-decision.pw-approval-item .pw-question-compose { display: flex; flex-direction: column; gap: 12px; }
+.pw-task-decision.pw-approval-item .pw-question-compose [role="group"] { background: var(--pw-surface); }
+@media (max-width: 380px) {
+  .pw-approval-item.pw-task-decision { padding: 14px; gap: 14px; }
+  .pw-task-decision.pw-approval-item .pw-decision-facts > div { grid-template-columns: 60px minmax(0, 1fr); gap: 8px; }
+  .pw-task-decision.pw-approval-item .pw-decision-budget { gap: 10px; }
+  .pw-task-decision.pw-approval-item .pw-decision-budget-detail > div { grid-template-columns: minmax(0, 1fr) auto; }
+}
+@media (forced-colors: active) {
+  .pw-task-decision.pw-approval-item .pw-question-choice { border: 1px solid ButtonText; }
+  .pw-task-decision.pw-approval-item .pw-decision-notice { border: 1px solid CanvasText; }
+}

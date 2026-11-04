@@ -3,7 +3,7 @@
 
 import { useState } from "react";
 import { RiArrowRightSLine } from "@remixicon/react";
-import { Button, IconButton } from "../forms-library";
+import { Button } from "../forms-library";
 
 /*
  * Decision Inbox (clean style) – open decisions with two quick answers each, in one white card, in a single self-contained file.
@@ -86,14 +86,15 @@ export function DecisionInbox({ decisions, onDecide, className, heading, compact
             const answered = d.resolved;
             if (compact) return (
               <div key={d.id} className="ui-dic__compact-item" data-task-id={d.id} data-answered={answered ? true : undefined} aria-busy={s.pending || undefined}>
-                <div className="ui-dic__compact-copy">
-                  <p className="ui-dic__title" dir="auto" title={d.title}>{d.title}</p>
-                  {d.detail && <p className="ui-dic__detail" dir="auto">{d.detail}</p>}
-                </div>
+                <Button variant="ghost" className="ui-dic__compact-open" disabled={s.pending || Boolean(answered)} aria-label={`${d.secondary}：${d.title}`} onClick={() => decide(d, "secondary")}>
+                  <span className="ui-dic__compact-copy">
+                    <span className="ui-dic__title" dir="auto" title={d.title}>{d.title}</span>
+                    {d.detail && <span className="ui-dic__detail" dir="auto">{d.detail}</span>}
+                  </span>
+                </Button>
                 <div className="ui-dic__compact-actions">
                   {answered ? <span className="ui-dic__compact-done" role="status"><DoneIcon/><span dir="auto">{answered}</span></span> : <>
-                    <Button variant="ghost" className="ui-dic__next" disabled={s.pending} onClick={() => decide(d, "primary")}>{d.primary}</Button>
-                    <IconButton icon={RiArrowRightSLine} aria-label={d.secondary} title={d.secondary} disabled={s.pending} onClick={() => decide(d, "secondary")}/>
+                    <Button variant="ghost" className="ui-dic__next" trailingIcon={RiArrowRightSLine} disabled={s.pending} onClick={() => decide(d, "primary")}>{d.primary}</Button>
                   </>}
                 </div>
                 {s.error && <p role="alert" className="ui-dic__compact-error">{s.error}</p>}

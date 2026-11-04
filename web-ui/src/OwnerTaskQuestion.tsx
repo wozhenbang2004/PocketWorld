@@ -1,6 +1,7 @@
 import {useRef, useState} from 'react';
 import {Button, TextAreaField} from './forms-library';
 import {PressButton} from './library';
+import './task-decisions.css';
 import {ownerQuestionSavedMessage, submitOwnerQuestion, type OwnerQuestionAnswer, type OwnerQuestionCommand,
   type OwnerQuestionReceipt, type OwnerQuestionView} from './owner-task-question';
 
@@ -38,22 +39,27 @@ export function OwnerTaskQuestion({question, text, onTextChange, disabled, canAn
   };
   const saved = question.answered || receipt !== null;
   const locked = disabled || pending || sent.current || saved;
-  return <section className="pw-approval-item" aria-label="回答原问题" aria-busy={pending}>
-    <h4>回答原问题</h4>
-    <p>{question.question}</p>
-    {saved ? <p className="pw-muted" role="status">{ownerQuestionSavedMessage(question, receipt)}</p> : <>
-      <p className="pw-muted">回答只进入这个原等待项，不代表批准敏感操作。</p>
-      {canChoose && question.options?.length ? <div className="pw-protected-actions" aria-label="原问题选项">
-        {question.options.map(option => <Button key={option.id} variant="secondary" disabled={locked}
-          onClick={() => void send({optionId: option.id})}>{option.label}</Button>)}
+  return <section className="pw-approval-item pw-task-decision pw-task-question" aria-label="回答原问题" aria-busy={pending}>
+    <header className="pw-decision-heading">
+      <span className="pw-decision-eyebrow">{saved ? '已回答' : '需要你的回答'}</span>
+      <h4 className="pw-question-title">{question.question}</h4>
+    </header>
+    {saved ? <p className="pw-decision-notice" role="status">{ownerQuestionSavedMessage(question, receipt)}</p> : <>
+      <p className="pw-decision-caveat">回答只进入这个原等待项，不代表批准敏感操作。</p>
+      {canChoose && question.options?.length ? <div className="pw-question-choices" aria-label="原问题选项">
+        <p className="pw-decision-meta">选择一项即发送回答</p>
+        {question.options.map((option, index) => <Button key={option.id} variant="secondary" className="pw-question-choice" disabled={locked}
+          onClick={() => void send({optionId: option.id})}><span className="pw-question-choice-number" aria-hidden="true">{index + 1}</span><span className="pw-question-choice-label">{option.label}</span></Button>)}
       </div> : null}
-      <TextAreaField label={question.options?.length ? '也可以填写回答' : '你的回答'} value={text}
-        onChange={value => onTextChange(value.slice(0, 4000))} maxLength={4000} rows={2}
-        isDisabled={pending} placeholder="输入回答"/>
-      {canAnswer && <PressButton label={pending ? '正在保存回答' : '发给原任务'}
-        disabled={locked || !text.trim() || text.length > 4000} onClick={() => void send({text})}/>}
+      <div className="pw-question-compose">
+        <TextAreaField label={question.options?.length ? '也可以填写回答' : '你的回答'} value={text}
+          onChange={value => onTextChange(value.slice(0, 4000))} maxLength={4000} rows={2} autoResize maxRows={8}
+          isDisabled={pending} placeholder="输入回答"/>
+        {canAnswer && <div className="pw-decision-actions"><PressButton label={pending ? '正在保存回答' : '发给原任务'}
+          disabled={locked || !text.trim() || text.length > 4000} onClick={() => void send({text})}/></div>}
+      </div>
     </>}
-    {pending && <p className="pw-muted" role="status">正在核对原回答保存回执…</p>}
-    {error && <p className="pw-error" role="alert">{error}</p>}
+    {pending && <p className="pw-decision-caveat" role="status">正在核对原回答保存回执…</p>}
+    {error && <div className="pw-decision-notice" role="alert"><h5>回答尚未确认保存</h5><p>{error}</p></div>}
   </section>;
 }

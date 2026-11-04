@@ -4,6 +4,9 @@ import App from './App';
 import { bridge } from './bridge';
 import { usePocketSnapshot } from './usePocketSnapshot';
 import BootstrapWorkspace from './BootstrapWorkspace';
+import BrowserSourceReader from './BrowserSourceReader';
+import BrowserChrome from './BrowserChrome';
+import { browserReaderSurface } from './reader-contract';
 import { bootstrapSurface } from './bootstrap-contract';
 import './fonts.css';
 import './app.css';
@@ -72,6 +75,9 @@ function MountedApp() {
     });
     return () => { disposed = true; };
   }, []);
+  // Native fixed-origin configuration chooses this read-only surface, never URL parameters.
+  if (browserReaderSurface(snapshot)) return <BrowserSourceReader snapshot={snapshot} />;
+  if (snapshot.surface === 'browser_chrome' || snapshot.host?.surface === 'browser_chrome') return <BrowserChrome snapshot={snapshot} />;
   // A bootstrap command catalogue is not business readiness. Never mount normal
   // page effects until the native business endpoint has supplied its own state.
   return !snapshot.host?.connected || bootstrapSurface(snapshot) ? <BootstrapWorkspace snapshot={snapshot} /> : <App />;

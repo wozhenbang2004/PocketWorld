@@ -15,9 +15,11 @@ import dev.pocketengine.ui.PocketWorldTheme
 import dev.pocketengine.ui.AffectGlyph
 import dev.pocketengine.ui.pocketDepth
 import dev.pocketengine.ui.PocketDepth
+import dev.pocketengine.ui.web.BrowserSourceReaderTarget
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -68,8 +70,14 @@ object BrowserTaskOwnerPanel {
         container.addView(view, LinearLayout.LayoutParams(-1, -2))
         return object : BrowserActivity.OwnerPanel {
             override fun show() { controller.expanded = true; controller.workspaceView = "research"; controller.refresh() }
+            override fun showSources() { controller.expanded = true; controller.workspaceView = "sources"; controller.refresh() }
+            override fun showPages() { controller.pagesRequested++; controller.expanded = true; controller.workspaceView = "research"; controller.refresh() }
+            override fun externalChrome(external: Boolean) { controller.externalChrome = external }
+            override fun chromeUnavailable(notice: String) { controller.externalChrome = false; controller.error = notice; controller.expanded = true; controller.workspaceView = "research"; controller.refresh() }
+            override fun chromeStatus(): String = controller.chromeStatus()
+            override fun chromeNeedsAttention(): Boolean = controller.chromeNeedsAttention()
             override fun backToPage(): Boolean = controller.backToPage()
-            override fun obscuresPage(): Boolean = controller.expanded
+            override fun obscuresPage(): Boolean = controller.obscuresPage()
             override fun close() { controller.close(); view.disposeComposition() }
         }
     }
@@ -81,7 +89,57 @@ private class OwnerController(val host: BrowserTaskHost, private val activity: B
     val stopTicket get() = ownerSnapshot?.stopTicket
     var snapshotError by mutableStateOf(false)
     var expanded by mutableStateOf(initialExpanded)
+    var externalChrome by mutableStateOf(false)
+    var pagesRequested by mutableStateOf(0)
+    var pagesHandled = 0
     var workspaceView by mutableStateOf(if (initialExpanded) "research" else "page")
+    private var sourceReader: BrowserSourceReaderWindow? = null
+    fun obscuresPage(): Boolean = expanded || sourceReader != null
+    // Read-only collapsed presentation. It cannot grant, resume or redirect a task.
+    private fun pendingChromeApproval(): Boolean = snapshot.child("activeResearchTask").array("approvals").rows()
+        .any { it.optString("state") == "pending" && it.optLong("expiresAt") > System.currentTimeMillis() }
+    fun chromeNeedsAttention(): Boolean = snapshotError || error != null || snapshot.child("researchControl").let {
+        it.optBoolean("unresolved") || it.optBoolean("cancelRequested")
+    } || snapshot.child("pageDialog").optString("status") == "pending" || pendingChromeApproval() || snapshot.has("pendingBrowserTask")
+    fun chromeLabel(): String {
+        val state = snapshot; val active = state.child("activeResearchTask"); val control = state.child("researchControl")
+        return when {
+            snapshotError -> "上次已知状态 · 刷新暂不可用"
+            control.optBoolean("unresolved") -> "结果尚未核实 · 请回原任务核对"
+            control.optBoolean("cancelRequested") -> "正在停止 · 等待原任务确认"
+            state.child("pageDialog").optString("status") == "pending" -> "网页正在等你处理提示"
+            pendingChromeApproval() -> "需要确认网页操作"
+            error != null -> error.orEmpty()
+            state.child("pages").child("taskSpace").optString("status") == "owner_control" -> "由你操作 · 自动研究暂停"
+            state.has("pendingBrowserTask") -> "等待原任务接入网页"
+            active.optString("id").isNotEmpty() -> statusLabel(active.optString("status"))
+            else -> "网页与研究分开；不会自动开始"
+        }
+    }
+    fun chromeStatus(): String {
+        val state = snapshot
+        val profile = state.child("profiles").array("profiles").rows().firstOrNull { it.optString("id") == state.optString("profileId") }
+        return profile?.optString("label")?.takeIf { it.isNotBlank() }?.let { "$it · ${chromeLabel()}" } ?: chromeLabel()
+    }
+    fun openSavedSource(taskId: String, sourceId: String) {
+        val target = runCatching { BrowserSourceReaderTarget.source(taskId, sourceId) }.getOrElse { error = "原来源身份不可核对，请返回原结果。"; return }
+        openReader(target)
+    }
+    fun openSavedField(taskId: String, fieldRef: String) {
+        val target = runCatching { BrowserSourceReaderTarget.field(taskId, fieldRef) }.getOrElse { error = "原字段身份不可核对，请返回原结果。"; return }
+        openReader(target)
+    }
+    private fun openReader(target: BrowserSourceReaderTarget) {
+        if (closed || sourceReader != null) return
+        error = null
+        lateinit var reader: BrowserSourceReaderWindow
+        reader = BrowserSourceReaderWindow(activity, host, target, onFailure = { error = it }, onDismissed = {
+            // Keep obstruction through native dismissal, not merely through a JS close request.
+            if (sourceReader === reader) sourceReader = null
+        })
+        sourceReader = reader
+        reader.open()
+    }
     var busy by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
     var goal by mutableStateOf("")
@@ -228,6 +286,7 @@ private class OwnerController(val host: BrowserTaskHost, private val activity: B
             .onFailure { error = it.message ?: "原浏览任务已变化，请刷新后核对。"; refresh() }
     }
     fun backToPage(): Boolean {
+        sourceReader?.let { it.handleBack(); return true }
         if (closed || !expanded || workspaceView == "page") return false
         flushGoal(force = true); cancelFileOpen(); workspaceView = "page"; expanded = false
         return true
@@ -244,7 +303,7 @@ private class OwnerController(val host: BrowserTaskHost, private val activity: B
     }
     fun resetReadConsent() { autoActions = false; actionOrigins = ""; ordinaryInput = false; interactionClicks = false; interactionSelections = false; interactionChecks = false; interactionTargets = ""; selectedInteractionCandidates = emptyList(); advancedInteractionTargets = false; autoRead = false; saveReadSources = false; publicSeeds = ""; extraFrameOrigins = "" }
     override fun close() {
-        flushGoal(force = true); closed = true; cancelFileOpen(); io.shutdown()
+        flushGoal(force = true); closed = true; sourceReader?.close(); cancelFileOpen(); io.shutdown()
         // Drain already prepared unissued tokens; the remaining bounded queue only saves text/cleans up or skips closed actions.
         pendingViewCleanup.toList().forEach { intent -> runCatching { host.discardResearchViewForOwner(intent) }; pendingViewCleanup.remove(intent) }
         // Keep queued main delivery callbacks: closed guard discards late prepared views and never launches.
@@ -290,16 +349,39 @@ private fun statusLabel(status: String) = when (status) {
     "failed", "interrupted" -> "研究未完成"; else -> "研究任务"
 }
 
+/** Reading position only. No approvals, consent, source bodies or host handles
+ * survive dismissal through this presentation state. */
+private class ResearchPresentation {
+    val researchScroll = ScrollState(0)
+    val pageScroll = ScrollState(0)
+    val showPages = mutableStateOf(false)
+    val selectedPageDetails = mutableStateOf<String?>(null)
+    val showReadOptions = mutableStateOf(false)
+    val showExecutionOptions = mutableStateOf(false)
+    val activity = BrowserActivityPresentation()
+}
+
+private class SourcePresentation {
+    val scroll = ScrollState(0)
+    val showRecoveryPages = mutableStateOf(false)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun ResearchPanel(c: OwnerController) {
     val focus = LocalFocusManager.current; val keyboard = LocalSoftwareKeyboardController.current
     val page: () -> Unit = { c.flushGoal(); focus.clearFocus(); keyboard?.hide(); c.workspaceView = "page"; c.expanded = false }
     val state = c.snapshot; val active = state.child("activeResearchTask"); val viewed = state.child("researchTask")
-    val space = state.child("pages").child("taskSpace"); val control = state.child("researchControl"); val pageDialog = state.child("pageDialog"); val dialogPending = pageDialog.optString("status") == "pending"
+    // The panel remains composed while the modal is closed. A changed profile,
+    // browser session or task run gets a fresh view, never another object's place.
+    val presentation = remember(state.optString("profileId"), state.optLong("profileRevision"), state.optString("browserSessionId"), active.optString("id"), active.optString("runId"), active.optInt("coordinatorEpoch")) { ResearchPresentation() }
+    // Retained sources can outlive the active run. Completion must not move a
+    // reader who is still viewing the same original task and source window.
+    val sourcePresentation = remember(state.optString("profileId"), state.optLong("profileRevision"), state.optString("browserSessionId"), viewed.optString("id")) { SourcePresentation() }
+    val control = state.child("researchControl"); val pageDialog = state.child("pageDialog"); val dialogPending = pageDialog.optString("status") == "pending"
     val profile = state.child("profiles").array("profiles").rows().firstOrNull { it.optString("id") == state.optString("profileId") }
     val pending = active.array("approvals").rows().any { it.optString("state") == "pending" && it.optLong("expiresAt") > System.currentTimeMillis() }
-    val label = when { c.snapshotError -> "上次已知状态 · 刷新暂不可用"; control.optBoolean("cancelRequested") -> "正在停止 · 等待原任务确认"; dialogPending -> "网页正在等你处理提示"; control.optBoolean("unresolved") -> "结果尚未核实 · 请回原任务核对"; space.optString("status") == "owner_control" -> "由你操作 · 自动研究暂停"; pending -> "需要确认网页操作"; state.has("pendingBrowserTask") -> "等待原任务接入网页"; active.optString("id").isNotEmpty() -> statusLabel(active.optString("status")); else -> "网页与研究分开；不会自动开始" }
-    Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 3.dp) {
+    val label = c.chromeLabel()
+    if (!c.externalChrome) Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 3.dp) {
         Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).padding(end = 8.dp)) {
                 Text((active.optString("goal").ifBlank { viewed.optString("goal").ifBlank { "网页研究" } }), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
@@ -310,11 +392,11 @@ private fun statusLabel(status: String) = when (status) {
         }
     }
     if (c.expanded && c.workspaceView != "page") ModalBottomSheet(onDismissRequest = page, containerColor = MaterialTheme.colorScheme.surface, modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        ResearchWorkspace(c, c.workspaceView, page)
+        ResearchWorkspace(c, c.workspaceView, page, presentation, sourcePresentation)
     }
 }
 private data class ResearchResultPin(val text: String, val taskId: String, val citations: List<JSONObject>)
-@Composable private fun ResearchWorkspace(c: OwnerController, mode: String, page: () -> Unit) {
+@Composable private fun ResearchWorkspace(c: OwnerController, mode: String, page: () -> Unit, presentation: ResearchPresentation, sourcePresentation: SourcePresentation) {
     val stopTicket = c.stopTicket; val state = c.snapshot
     val profiles = state.child("profiles")
     val profileRows = profiles.array("profiles").rows()
@@ -342,25 +424,25 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
     var history by remember { mutableStateOf<List<JSONObject>?>(null) }
     var uploadReview by remember { mutableStateOf<JSONObject?>(null) }
     var uploadEvidence by remember { mutableStateOf("") }
-    var showRecoveryPages by remember { mutableStateOf(false) }
+    var showRecoveryPages by sourcePresentation.showRecoveryPages
     var recoveryReview by remember { mutableStateOf<JSONObject?>(null) }
     var recoveryConsent by remember { mutableStateOf(false) }
-    var sourceDetails by remember { mutableStateOf<JSONObject?>(null) }
     var recipeSource by remember { mutableStateOf<JSONObject?>(null) }
     var recipeQuery by remember { mutableStateOf("") }
     var recipePreview by remember { mutableStateOf<JSONObject?>(null) }
     var recipeEnabled by remember { mutableStateOf(false) }
-    var fieldDetails by remember { mutableStateOf<JSONObject?>(null) }
     var resultDetails by remember { mutableStateOf<ResearchResultPin?>(null) }
     var existingTasks by remember { mutableStateOf(false) }
     var readScopeOptions by remember { mutableStateOf(false) }
     var readScopeReview by remember { mutableStateOf<ReadScopeReview?>(null) }
-    var showPages by remember { mutableStateOf(false) }
-    var selectedPageDetails by remember(state.optString("profileId"), activeTask.optString("id")) { mutableStateOf<String?>(null) }
-    var showReadOptions by remember { mutableStateOf(false) }
-    var showExecutionOptions by remember(activeTask.optString("id")) { mutableStateOf(false) }
-    val researchScroll = rememberScrollState(); val sourceScroll = rememberScrollState()
-    LaunchedEffect(viewedTask.optString("id")) { sourceScroll.scrollTo(0) }
+    var showPages by presentation.showPages
+    LaunchedEffect(c.pagesRequested) { if (c.pagesRequested > c.pagesHandled) { presentation.showPages.value = true; c.pagesHandled = c.pagesRequested } }
+    var selectedPageDetails by presentation.selectedPageDetails
+    var showReadOptions by presentation.showReadOptions
+    var showExecutionOptions by presentation.showExecutionOptions
+    val researchScroll = presentation.researchScroll; val sourceScroll = sourcePresentation.scroll
+    // A closed tab must not leave an empty details area on the next open.
+    val displayedPageDetails = selectedPageDetails?.takeIf { id -> pages.any { it.optString("tabId") == id } }
     Column(Modifier.fillMaxWidth().fillMaxHeight(0.88f).imePadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -416,13 +498,13 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                     TextButton(onClick = { showPages = !showPages }) { Text(if (showPages) "收起管理" else "管理 ${pages.size} 页") }
                 }
                 Text("选择页面查看详情", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(Modifier.fillMaxWidth().horizontalScroll(presentation.pageScroll), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     pages.forEach { tab ->
-                        val selected = tab.optString("tabId") == selectedPageDetails || selectedPageDetails == null && tab.optBoolean("selected")
+                        val selected = tab.optString("tabId") == displayedPageDetails || displayedPageDetails == null && tab.optBoolean("selected")
                         BrowserPageCard(tab, selected) { selectedPageDetails = tab.optString("tabId") }
                     }
                 }
-                val detailPages = if (showPages || space.optString("status") == "owner_control" && selectedHandoff == null) pages else pages.filter { it.optString("tabId") == selectedPageDetails || selectedPageDetails == null && it.optBoolean("selected") }
+                val detailPages = if (showPages || space.optString("status") == "owner_control" && selectedHandoff == null) pages else pages.filter { it.optString("tabId") == displayedPageDetails || displayedPageDetails == null && it.optBoolean("selected") }
                 detailPages.forEach { tab ->
                     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         if (detailPages.size > 1) Text(tab.optString("title").ifBlank { browserDomain(tab.optString("url")) }, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -443,7 +525,7 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                     else Text("先选择要交还的原页面，再继续同一任务。", style = MaterialTheme.typography.bodySmall)
                     Text("继续后会重新读取网页；登录密码与验证码由你在网页中输入。", style = MaterialTheme.typography.bodySmall)
                 }
-                BrowserActivityTrail(activeTask)
+                BrowserActivityTrail(activeTask, presentation.activity)
                 if (viewedTask.optString("id") == activeTask.optString("id") && (sources.isNotEmpty() || state.array("downloads").length() > 0)) {
                     Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
                         Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -573,9 +655,18 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
                     if (source.optString("kind") == "browser_semantic_observation") Text(sourceScopeNote(source), maxLines = 3, style = MaterialTheme.typography.bodySmall)
                     if (source.optString("kind") == "public_http_observation") Text(if (source.child("http").optBoolean("bodyTruncated") || source.child("http").optBoolean("projectionTruncated")) "匿名 HTTP · 正文片段；回看使用原登录资料" else "匿名 HTTP · 未渲染；回看使用原登录资料", style = MaterialTheme.typography.bodySmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = { var actual: JSONObject? = null; c.command({ actual = c.host.savedSourceForOwner(source.getString("taskId"), source.getString("sourceId")) }, { sourceDetails = actual }) }, enabled = !c.busy) { Text("查看当时原文") }
+                        TextButton(onClick = { c.openSavedSource(source.getString("taskId"), source.getString("sourceId")) }, enabled = !c.busy) { Text("查看当时原文") }
                         TextButton(onClick = { c.command({ c.host.openSourceForOwner(source.getString("taskId"), source.getString("sourceId")) }) }, enabled = !c.busy) { Text(if (source.optString("kind") == "public_http_observation") "用原 WebView 另看" else "另看现网页") }
                     }
+                    if (source.has("readRecipe")) Text("读取配方版本 ${source.child("readRecipe").optInt("revision")} · ${if (source.child("readRecipe").optString("status") == "matched") "结构已匹配" else "本次配方已失配，使用普通读取证据"}", style = MaterialTheme.typography.bodySmall)
+                    if (source.has("structuredProjection") && !source.child("structuredProjection").optBoolean("partial", true)) TextButton(onClick = {
+                        var actual: JSONObject? = null
+                        c.command({ actual = c.host.savedSourceForOwner(source.getString("taskId"), source.getString("sourceId")) }, {
+                            actual?.takeIf { it.has("structuredProjection") && !it.child("structuredProjection").optBoolean("partial", true) }?.let {
+                                recipeSource = JSONObject(it.toString()); recipeQuery = ""; recipePreview = null; recipeEnabled = false
+                            }
+                        })
+                    }, enabled = !c.busy) { Text("制作网站只读配方…") }
                 }
             }
             val downloads = state.array("downloads").rows()
@@ -692,13 +783,13 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
     recoveryReview?.let { selected -> AlertDialog(onDismissRequest = { recoveryReview = null; recoveryConsent = false }, title = { Text("重新继续原研究？") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("保留同一个任务和已保存依据，新建执行并重新读取需要的页面。重开仍使用当前这份登录资料并逐次确认；不恢复旧授权、不自动重发未知操作，也不保证未保存表单可恢复。"); Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(checked = recoveryConsent, onCheckedChange = { recoveryConsent = it }); Text("我同意把重新读取的网页观察发送给当前模型。", Modifier.weight(1f)) } } }, confirmButton = { TextButton(onClick = { val pinned = JSONObject(selected.toString()); c.command({ c.host.recoverResearchForOwner(pinned.getString("taskId"), pinned.getString("manifestFingerprint"), pinned.getJSONObject("profile"), true) }, { recoveryReview = null; recoveryConsent = false; c.workspaceView = "research" }) }, enabled = recoveryConsent && !c.busy) { Text("恢复原任务") } }, dismissButton = { TextButton(onClick = { recoveryReview = null; recoveryConsent = false }) { Text("暂不恢复") } }) }
     uploadReview?.let { original -> AlertDialog(onDismissRequest = { uploadReview = null }, title = { Text("核对这次原上传") }, text = { Column { Text("请根据原网页显示填写证据。选择已接收/已拒绝仅记录你的确认，不会重新上传，也不证明未撤回的内容已删除。"); OutlinedTextField(uploadEvidence, { uploadEvidence = it.take(2000) }, label = { Text("站点提示 / 实际结果") }) } }, confirmButton = { Row { listOf("accepted" to "已接收", "rejected" to "已拒绝", "unknown" to "仍未知").forEach { (value, label) -> TextButton(onClick = { val pin = original.getJSONObject("pin"); c.command({ c.host.confirmUploadForOwner(pin.getString("taskId"), original.getString("attemptId"), original.getString("fingerprint"), value, uploadEvidence) }, { uploadReview = null }) }, enabled = uploadEvidence.isNotBlank() && !c.busy) { Text(label) } } } }, dismissButton = { TextButton(onClick = { uploadReview = null }) { Text("返回") } }) }
     history?.let { rows -> AlertDialog(onDismissRequest = { history = null }, title = { Text("研究记录") }, text = { Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) { if (rows.isEmpty()) Text("还没有研究记录") else rows.forEach { row -> TextButton(onClick = { c.command({ c.host.selectHistoryForOwner(row.getString("taskId")) }, { history = null }) }) { Column { Text(row.optString("goal"), maxLines = 3); Text(statusLabel(row.optString("status")), style = MaterialTheme.typography.bodySmall) } } } } }, confirmButton = { TextButton(onClick = { history = null }) { Text("返回") } }) }
-    sourceDetails?.let { source -> AlertDialog(onDismissRequest = { sourceDetails = null }, title = { Text(source.optString("title").ifBlank { "保留的网页摘录" }) }, text = { Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("已保存的当时内容 · 不会自动换成现网页", fontWeight = FontWeight.SemiBold); if (source.has("structuredProjection")) SavedStructuredSource(source) { ref -> var actual: JSONObject? = null; c.command({ actual = c.host.savedFieldForOwner(source.getString("taskId"), ref) }, { fieldDetails = actual }) } else SelectionContainer { Text(source.optString("excerpt")) }; Text(source.optString("url"), style = MaterialTheme.typography.bodySmall); Text(sourceScopeNote(source), style = MaterialTheme.typography.bodySmall); if (source.has("readRecipe")) Text("读取配方版本 ${source.child("readRecipe").optInt("revision")} · ${if (source.child("readRecipe").optString("status") == "matched") "结构已匹配" else "本次配方已失配，使用普通读取证据"}", style = MaterialTheme.typography.bodySmall); if (source.has("structuredProjection") && !source.child("structuredProjection").optBoolean("partial", true)) TextButton(onClick = { recipeSource = JSONObject(source.toString()); recipeQuery = ""; recipePreview = null; recipeEnabled = false; sourceDetails = null }) { Text("制作网站只读配方…") } } }, confirmButton = { TextButton(onClick = { sourceDetails = null }) { Text("返回结果") } }, dismissButton = { TextButton(onClick = { c.command({ c.host.openSourceForOwner(source.getString("taskId"), source.getString("sourceId")) }, { sourceDetails = null; resultDetails = null }) }, enabled = !c.busy) { Text("另看现网页") } }) }
-    fieldDetails?.let { field -> AlertDialog(onDismissRequest = { fieldDetails = null }, title = { Text("当时保存的字段") }, text = { Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(field.optString("title"), style = MaterialTheme.typography.bodySmall); SelectionContainer { Text(field.optString("text"), style = MaterialTheme.typography.bodyLarge) }; val headers = field.array("headers").rows(); if (headers.isNotEmpty()) { Text("同时保存的表头", fontWeight = FontWeight.SemiBold); Text(headers.joinToString(" | ") { it.optString("text") }, style = MaterialTheme.typography.bodySmall) }; Text("保存位置：第 ${field.child("row").optInt("index") + 1} 项" + if (field.optString("mode") == "table") " · 第 ${field.child("field").optInt("column") + 1} 列" else "", style = MaterialTheme.typography.bodySmall); Text(if (field.optBoolean("partial")) "来自当时保存的内容片段，未自动补读网页。" else "来自当时交付模型并保存的内容，网页文字仍需核实。", style = MaterialTheme.typography.bodySmall) } }, confirmButton = { TextButton(onClick = { fieldDetails = null }) { Text("返回依据") } }) }
     c.draftConflict?.let { actual -> AlertDialog(onDismissRequest = { c.draftConflict = null }, title = { Text("核对这个原研究草稿") }, text = { Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("已保存文字"); SelectionContainer { Text(actual.optString("text").ifEmpty { "（已清空）" }) }; HorizontalDivider(); Text("当前尚未确认保存的输入"); SelectionContainer { Text(c.goal.ifEmpty { "（空白）" }) }; Text("只保存文字，不开始任务或恢复授权。保存时仍核对这个版本。", style = MaterialTheme.typography.bodySmall) } }, confirmButton = { TextButton(onClick = { c.resolveDraftConflict(actual, true) }, enabled = !c.busy) { Text("保留当前输入并保存新版本") } }, dismissButton = { TextButton(onClick = { c.resolveDraftConflict(actual, false) }, enabled = !c.busy) { Text("使用已保存文字") } }) }
     resultDetails?.let { result -> AlertDialog(onDismissRequest = { resultDetails = null }, title = { Text("原任务研究结论") }, text = {
-        ResearchResultView(result.text, result.taskId, result.citations, onField = { ref -> var actual: JSONObject? = null; c.command({ actual = c.host.savedFieldForOwner(result.taskId, ref) }, { fieldDetails = actual }) }) { sourceId ->
-            val taskId = result.taskId; var actual: JSONObject? = null
-            c.command({ actual = c.host.savedSourceForOwner(taskId, sourceId) }, { sourceDetails = actual })
+        Column {
+            ResearchResultView(result.text, result.taskId, result.citations, onField = { ref -> c.openSavedField(result.taskId, ref) }) { sourceId ->
+                c.openSavedSource(result.taskId, sourceId)
+            }
+            c.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         }
     }, confirmButton = { TextButton(onClick = { resultDetails = null }) { Text("返回工作区") } }) }
     if (actionOptions) AlertDialog(onDismissRequest = { actionOptions = false }, title = { Text("当前任务的日常浏览") }, text = { Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) { ActionScopeChoices(c); Text("只调整当前原执行的浏览范围；累计任务预算不增加，旧未知效果不重发。若正在等一次精确审批，本次仍需你单独决定，新增范围只影响之后的新操作。") } }, confirmButton = { TextButton(onClick = { val pin = JSONObject(state.child("readScopeIdentity").toString()); val rev = actionScope?.optLong("revision") ?: 0L; val execution = activeTask.child("executionScope").optLong("revision"); c.reviewReadScopeAndFrames { _, _, actions -> readScopeReview = ReadScopeReview(BrowserReadScope.disabled(), "renewActions", pin, activeTask.getString("id"), activeTask.optString("goal"), profile?.optString("label").orEmpty(), actionConsent = actions, browserRevision = rev, executionRevision = execution) } }, enabled = c.autoActions && !c.busy) { Text("核对实际范围") } }, dismissButton = { TextButton(onClick = { actionOptions = false; c.resetReadConsent() }) { Text("不授权") } })
@@ -782,14 +873,6 @@ private data class ResearchResultPin(val text: String, val taskId: String, val c
     for (index in 0 until ids.length()) TextButton(onClick = { onSource(ids.getString(index)) }, contentPadding = PaddingValues(0.dp)) { Text(if (ids.length() == 1) "查看依据" else "查看依据 ${index + 1}", style = MaterialTheme.typography.bodySmall) }
     val fields = cell.array("fieldRefs")
     for (index in 0 until fields.length()) TextButton(onClick = { onField(fields.getString(index)) }, contentPadding = PaddingValues(0.dp)) { Text(if (fields.length() == 1) "查看当时字段" else "查看当时字段 ${index + 1}", style = MaterialTheme.typography.bodySmall) }
-}
-
-@Composable private fun SavedStructuredSource(source: JSONObject, onField: (String) -> Unit) {
-    val projection = source.child("structuredProjection")
-    val prefix = source.optString("sourceRef") + "#field:" + projection.optString("revision") + ":"
-    if (projection.optBoolean("partial")) Text("当时只保存了部分行或字段，未补成整页。", style = MaterialTheme.typography.bodySmall)
-    if (projection.optString("mode") == "list") projection.array("data").rows().forEach { item -> Column { SelectionContainer { Text(item.optString("text")) }; TextButton(onClick = { onField(prefix + "i" + item.optInt("index")) }) { Text("查看这一项") } } }
-    else Column(Modifier.horizontalScroll(rememberScrollState())) { projection.array("data").rows().forEach { row -> Row { row.array("cells").rows().forEach { cell -> Column(Modifier.width(144.dp).padding(6.dp)) { Text(cell.optString("text"), style = MaterialTheme.typography.bodySmall, fontWeight = if (cell.optString("role") == "columnheader") FontWeight.SemiBold else FontWeight.Normal); TextButton(onClick = { onField(prefix + "r" + row.optInt("index") + "c" + cell.optInt("column")) }, contentPadding = PaddingValues(0.dp)) { Text("查看字段", style = MaterialTheme.typography.bodySmall) } } } }; HorizontalDivider() } }
 }
 
 @Composable private fun ActionScopeChoices(c: OwnerController) {

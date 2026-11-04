@@ -6,15 +6,16 @@
 :root {
   --pw-font: "Inter", "Noto Sans SC", system-ui, sans-serif;
   --pw-mono: "JetBrains Mono", ui-monospace, monospace;
-  --pw-canvas: #fff;
+  --pw-canvas: #f5f5f5;
   --pw-surface: #fff;
-  --pw-inset: #f6f6f6;
-  --pw-selected: #ededed;
+  --pw-inset: #efefef;
+  --pw-selected: #e7e7e7;
+  --pw-hover: var(--pw-selected);
   --pw-edge: transparent;
   --pw-edge-hover: transparent;
   --pw-ink: #242424;
   --pw-copy: #626262;
-  --pw-muted: #737373;
+  --pw-muted: #6b6b6b;
   --pw-disabled: #969696;
   --pw-strong: #262626;
   --pw-on-strong: #fff;
@@ -268,8 +269,8 @@
   color: var(--pw-ink);
   font: 500 14px/22px var(--pw-font);
 }
-/* Josh's source label also has data-label; its ink belongs to the physical
- * button, never the form-label theme. Keep all press layers and motion intact. */
+/* The adapted action label also has data-label; its ink belongs to the
+ * button surface, never the form-label theme. */
 .pw-press > .pw-press-front,
 .pw-press .pw-press-label {
   color: inherit;
