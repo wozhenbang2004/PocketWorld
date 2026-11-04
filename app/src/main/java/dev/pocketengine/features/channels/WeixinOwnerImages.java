@@ -13,7 +13,6 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Objects;
@@ -98,7 +97,7 @@ final class WeixinOwnerImages {
         boolean same=selected.usesAccount()==current.usesAccount()&&selected.sendScreenshots==current.sendScreenshots;
         if(same&&selected.usesAccount())same=selected.accountModel.matches(current.accountModel);
         else if(same)same=selected.provider.equals(current.provider)&&selected.baseUrl.equals(current.baseUrl)&&selected.model.equals(current.model)
-                &&MessageDigest.isEqual(selected.apiKey.getBytes(StandardCharsets.UTF_8),current.apiKey.getBytes(StandardCharsets.UTF_8))&&Objects.equals(selected.capabilityBinding,current.capabilityBinding)
+                &&selected.sameCredentials(current)&&Objects.equals(selected.capabilityBinding,current.capabilityBinding)
                 &&selected.supportsImageInput==current.supportsImageInput&&selected.reasoning.equals(current.reasoning)&&selected.imageTokenReserve==current.imageTokenReserve;
         if(!same)throw new SecurityException("本次图片所选模型连接或能力版本已变化，未改用其他模型");
     }

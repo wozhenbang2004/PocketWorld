@@ -9,9 +9,31 @@ public final class DisplayLandingSafetyTest {
     private static JSONObject resumed(int id,int at,String pkg)throws Exception{return new JSONObject().put("taskId",id).put("displayId",at).put("packageName",pkg);}
     private static JSONObject facts(String owner,int id)throws Exception{return new JSONObject().put("status","observed").put("primary",new JSONArray().put(resumed(id,0,owner))).put("owned",new JSONArray().put(resumed(22,9,"agent.worker")))
         .put("taskTopology",new JSONObject().put("schemaVersion",1).put("status","observed").put("complete",true).put("readOnly",true).put("tasks",new JSONArray().put(task(id,0,owner)).put(task(22,9,"agent.worker"))));}
+    private static JSONObject facts(String owner,int id,int primaryUser,int ownedUser)throws Exception {
+        JSONObject value=facts(owner,id);JSONArray tasks=value.getJSONObject("taskTopology").getJSONArray("tasks");
+        tasks.getJSONObject(0).put("androidUserId",primaryUser);tasks.getJSONObject(1).put("androidUserId",ownedUser);return value;
+    }
     @Test public void unrelatedOwnerChangesKeepOriginalOwnedTask()throws Exception {JSONObject before=facts("owner.reader",11);for(String pkg:new String[]{"owner.browser","owner.launcher"}){JSONObject after=facts(pkg,30);assertNull(DisplayLandingSafety.failure(before,after,9));before=after;}}
     @Test public void nonResumedOriginalMigrationIsNotHiddenByNewPrimaryOrReplacementOwnedTask()throws Exception {JSONObject before=facts("owner.reader",11),after=facts("owner.browser",30);after.getJSONObject("taskTopology").getJSONArray("tasks").getJSONObject(1).put("displayId",0);after.getJSONArray("owned").put(0,resumed(44,9,"agent.other"));after.getJSONObject("taskTopology").getJSONArray("tasks").put(task(44,9,"agent.other"));assertEquals("original_owned_task_migrated",DisplayLandingSafety.failure(before,after,9));}
     @Test public void missingOriginalAndReusedTaskIdentityStayUnknown()throws Exception {JSONObject before=facts("owner.reader",11),after=facts("owner.reader",11);after.getJSONObject("taskTopology").getJSONArray("tasks").getJSONObject(1).put("rootIdentity","replacement");assertEquals("original_owned_task_identity_changed",DisplayLandingSafety.failure(before,after,9));after=facts("owner.reader",11);after.getJSONArray("owned").put(0,resumed(44,9,"agent.other"));after.getJSONObject("taskTopology").put("tasks",new JSONArray().put(task(11,0,"owner.reader")).put(task(44,9,"agent.other")));assertEquals("original_owned_task_missing",DisplayLandingSafety.failure(before,after,9));}
     @Test public void primaryPackageCollisionIsDistinctFromUnrelatedOwnerChange()throws Exception {assertEquals("main_screen_package_conflict",DisplayLandingSafety.failure(facts("owner.reader",11),facts("agent.worker",30),9));}
+    @Test public void samePackageInDifferentAndroidUsersDoesNotConflict()throws Exception {
+        for(int[] users:new int[][]{{0,10},{10,0},{10,11}}){
+            JSONObject before=facts("owner.reader",11,users[0],users[1]),after=facts("agent.worker",30,users[0],users[1]);
+            assertNull("primary user="+users[0]+", owned user="+users[1],DisplayLandingSafety.failure(before,after,9));
+        }
+    }
+    @Test public void samePackageInSameNonDefaultUserStillConflicts()throws Exception {
+        assertEquals("main_screen_package_conflict",DisplayLandingSafety.failure(facts("owner.reader",11,10,10),facts("agent.worker",30,10,10),9));
+    }
+    @Test public void missingAndroidUserIdentityNeverMeansSeparateCopies()throws Exception {
+        for(int index=0;index<2;index++){
+            JSONObject after=facts("agent.worker",30,0,10);after.getJSONObject("taskTopology").getJSONArray("tasks").getJSONObject(index).remove("androidUserId");
+            assertEquals("task index="+index,"task_topology_unavailable",DisplayLandingSafety.failure(null,after,9));
+        }
+    }
+    @Test public void originalOwnedTaskCannotChangeAndroidUser()throws Exception {
+        assertEquals("original_owned_task_identity_changed",DisplayLandingSafety.failure(facts("owner.reader",11,0,10),facts("owner.reader",11,0,11),9));
+    }
     @Test public void oldUnknownIncompleteOrMalformedFactsNeverMeanSafe()throws Exception {for(int mode=0;mode<6;mode++){JSONObject after=facts("owner.reader",11);if(mode==0)after.remove("taskTopology");else if(mode==1)after.getJSONObject("taskTopology").put("schemaVersion",2);else if(mode==2)after.getJSONObject("taskTopology").put("complete",false);else if(mode==3)after.getJSONObject("taskTopology").getJSONArray("tasks").getJSONObject(1).put("taskId",22.5);else if(mode==4)after.getJSONArray("primary").getJSONObject(0).put("taskId",999);else after.getJSONObject("taskTopology").put("status","unknown");assertEquals("mode="+mode,"task_topology_unavailable",DisplayLandingSafety.failure(null,after,9));}}
 }

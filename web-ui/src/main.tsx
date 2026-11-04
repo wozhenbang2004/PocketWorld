@@ -12,6 +12,7 @@ import './secondary.css';
 import './product.css';
 import './workspace-refactor.css';
 import './presentation-theme.css';
+import './composer-compact.css';
 
 const element = document.getElementById('app');
 if (!element) throw new Error('PocketWorld application mount is missing');

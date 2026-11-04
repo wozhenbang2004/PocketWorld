@@ -1,4 +1,21 @@
 {
+  "conversation-phone-handoff": {
+    "class": "dev.pocketengine.ConversationPhoneStartNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.store.ConversationPhoneHandoffTest",
+      "dev.pocketengine.ui.PhoneResultProjectionTest",
+      "dev.pocketengine.ui.web.PocketWebPhoneResultNavigationTest",
+      "dev.pocketengine.features.assistant.ConversationPhoneDeliveryPassTest",
+      "dev.pocketengine.store.ConversationPhoneStorageNativeTest",
+      "dev.pocketengine.features.assistant.ConversationPhoneHandoffNativeTest",
+      "dev.pocketengine.features.assistant.AssistantPhoneHandoffDeliveryNativeTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
+    ],
+    "robolectric": true,
+    "description": "Original native review, fixed model and scope admission, one request/task identity, source currentness, per-run frozen phone outcomes, same-SQL conversation publication and deletion/unknown recovery. Accessibility, foreground service execution and startup are controlled fixture boundaries; no live provider, Android device, APK or visual acceptance."
+  },
   "attachment-legacy-integrity": {
     "class": "dev.pocketengine.features.attachments.LegacyAttachmentIntegrityTest",
     "additionalClasses": [
@@ -899,6 +916,9 @@
   "runner-budget-stream": {
     "class": "dev.pocketengine.runtime.context.RunnerBudgetIntegrationTest",
     "additionalClasses": [
+      "dev.pocketengine.core.ModelSteeringControlTest",
+      "dev.pocketengine.runtime.OwnerSteeringRunnerTest",
+      "dev.pocketengine.runtime.SafeModelRecoveryTest",
       "dev.pocketengine.runtime.RecoveryProjectionTest",
       "dev.pocketengine.runtime.RuntimeStreamingProtocolTest",
       "dev.pocketengine.runtime.OwnerIntentRunnerNativeTest",
@@ -1628,5 +1648,26 @@
     ],
     "robolectric": true,
     "description": "Original connection/editor/draft/native test identities, strict receipt projection, per-profile compatibility and cache settings CAS. Controlled provider/repository fixtures; no live provider, real cache hit or Android visual acceptance."
+  },
+  "bedrock-sts-session": {
+    "class": "dev.pocketengine.runtime.providers.bedrock.BedrockSigV4Test",
+    "additionalClasses": [
+      "dev.pocketengine.runtime.providers.bedrock.BedrockEventStreamTest",
+      "dev.pocketengine.core.AwsSessionCredentialsTest",
+      "dev.pocketengine.runtime.models.BedrockConnectionConfigTest",
+      "dev.pocketengine.runtime.providers.BedrockProviderTest",
+      "dev.pocketengine.runtime.providers.BedrockStreamIntegrationTest",
+      "dev.pocketengine.runtime.usage.BedrockUsageTest",
+      "dev.pocketengine.runtime.usage.BedrockTokenReservationTest",
+      "dev.pocketengine.runtime.usage.BedrockFailureTest",
+      "dev.pocketengine.runtime.BedrockRecoveryProjectionTest",
+      "dev.pocketengine.runtime.BedrockGatewayBoundaryTest",
+      "dev.pocketengine.store.SettingsBedrockProfilesTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.store.SettingsApiProfilesTest"
+    ],
+    "robolectric": true,
+    "description": "Explicit owner STS session on original saved connections: independent AWS SigV4/binary fixtures, actual original Anthropic accumulator and Gateway logical/receipt/presentation boundaries, typed credential projection and original SharedPreferences/vault CAS with controlled test seams. SDK35/full production closure is required for the complete group; separately recorded pure JVM checks do not prove AndroidKeyStore, actual AWS calls, device or whole-task acceptance. No hidden provider retry, metadata/CLI discovery, credential refresh or inferred catalog/pricing."
   }
 }

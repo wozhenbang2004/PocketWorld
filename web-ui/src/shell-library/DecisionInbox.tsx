@@ -1,12 +1,14 @@
 /* PW-26 official MIT source adaptation; original retained upstream. Business settlement is host-controlled, no timed fake answer/fold. */
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
+import { RiArrowRightSLine } from "@remixicon/react";
+import { Button, IconButton } from "../forms-library";
 
 /*
  * Decision Inbox (clean style) – open decisions with two quick answers each, in one white card, in a single self-contained file.
  * A heading row with the count sits at the top of the card; every decision is a row under a hairline.
- * Answering a decision confirms it briefly, then folds it away and the count goes down.
+ * Host-provided resolved state controls completion; the compact task layout keeps the next action visible.
  * The styles are injected below, so no extra files are needed.
  */
 
@@ -28,6 +30,8 @@ export type DecisionInboxProps = {
   decisions: Decision[];
   /** Product section title; omit to retain the source's count heading. */
   heading?: string;
+  /** Continuous task rows with immediately available next actions. */
+  compact?: boolean;
   /** Called with the decision and the chosen answer */
   onDecide?: (decision: Decision, answer: "primary" | "secondary") => void | Promise<void>;
   className?: string;
@@ -35,7 +39,7 @@ export type DecisionInboxProps = {
 
 type State = { open: boolean; pending?: boolean; error?: string };
 
-export function DecisionInbox({ decisions, onDecide, className, heading }: DecisionInboxProps) {
+export function DecisionInbox({ decisions, onDecide, className, heading, compact = false }: DecisionInboxProps) {
   const [state, setState] = useState<Record<string, State>>(() =>
     Object.fromEntries(decisions.map((d) => [d.id, { open: !d.collapsed }])),
   );
@@ -59,13 +63,13 @@ export function DecisionInbox({ decisions, onDecide, className, heading }: Decis
       <style href="ui-decision-inbox-clean" precedence="default">
         {css}
       </style>
-      <section className={["ui-dic", className].filter(Boolean).join(" ")} data-clear={open === 0 || undefined}>
+      <section className={["ui-dic", className].filter(Boolean).join(" ")} data-clear={open === 0 || undefined} data-compact={compact || undefined}>
         <header className="ui-dic__head" aria-live="polite">
           {open > 0 ? (
             <>
               <AlertIcon />
               <span>
-                {heading || `${count} 项待你处理`}
+                {heading || `${count} 项待你处理`}{compact && heading && <span className="ui-dic__count">{count}</span>}
               </span>
             </>
           ) : (
@@ -80,6 +84,21 @@ export function DecisionInbox({ decisions, onDecide, className, heading }: Decis
           {decisions.map((d) => {
             const s = state[d.id] ?? { open: !d.collapsed };
             const answered = d.resolved;
+            if (compact) return (
+              <div key={d.id} className="ui-dic__compact-item" data-task-id={d.id} data-answered={answered ? true : undefined} aria-busy={s.pending || undefined}>
+                <div className="ui-dic__compact-copy">
+                  <p className="ui-dic__title" dir="auto" title={d.title}>{d.title}</p>
+                  {d.detail && <p className="ui-dic__detail" dir="auto">{d.detail}</p>}
+                </div>
+                <div className="ui-dic__compact-actions">
+                  {answered ? <span className="ui-dic__compact-done" role="status"><DoneIcon/><span dir="auto">{answered}</span></span> : <>
+                    <Button variant="ghost" className="ui-dic__next" disabled={s.pending} onClick={() => decide(d, "primary")}>{d.primary}</Button>
+                    <IconButton icon={RiArrowRightSLine} aria-label={d.secondary} title={d.secondary} disabled={s.pending} onClick={() => decide(d, "secondary")}/>
+                  </>}
+                </div>
+                {s.error && <p role="alert" className="ui-dic__compact-error">{s.error}</p>}
+              </div>
+            );
             return (
               <div key={d.id} className="ui-dic__row" data-task-id={d.id} data-gone={undefined}>
                 <div className="ui-dic__row-inner">
@@ -337,6 +356,53 @@ const css = /* css */ `
   color: var(--ui-dic-muted);
 }
 .ui-dic[data-clear] .ui-dic__empty { display: block; animation: ui-dic-in 420ms var(--ui-dic-ease) 300ms both; }
+
+/* PocketWorld keeps the adopted decision behavior in a continuous task list. */
+.ui-dic[data-compact] {
+  max-width: none;
+  overflow: visible;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  --ui-dic-alert: var(--ui-dic-text);
+  --ui-dic-ok: var(--ui-dic-text);
+}
+.ui-dic[data-compact] .ui-dic__head {
+  height: 32px;
+  padding: 0;
+  border: 0;
+  font-size: 12px;
+  color: var(--ui-dic-text);
+}
+.ui-dic[data-compact] .ui-dic__head > .ui-dic__glyph { display: none; }
+.ui-dic__count { margin-left: 8px; color: var(--ui-dic-muted); font-variant-numeric: tabular-nums; }
+.ui-dic__compact-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0 4px;
+  min-height: 64px;
+  padding: 8px 0;
+}
+.ui-dic__compact-copy { min-width: 0; }
+.ui-dic[data-compact] .ui-dic__title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 22px;
+}
+.ui-dic[data-compact] .ui-dic__detail { margin: 2px 0 0; font-size: 12px; line-height: 18px; }
+.ui-dic__compact-actions { display: flex; align-items: center; gap: 0; }
+.ui-dic__compact-actions button { min-width: 48px; min-height: 48px; }
+.ui-dic__compact-actions .ui-dic__next { min-height: 48px; padding: 0 8px; font-size: 13px; white-space: nowrap; }
+.ui-dic__compact-done { display: inline-flex; align-items: center; gap: 6px; color: var(--ui-dic-text); }
+.ui-dic__compact-error { grid-column: 1 / -1; margin: 4px 0; font-size: 13px; color: var(--ui-dic-ink); }
+.ui-dic[data-compact] .ui-dic__empty { padding: 8px 0; }
 
 @keyframes ui-dic-in {
   from { opacity: 0; transform: translateY(3px); }

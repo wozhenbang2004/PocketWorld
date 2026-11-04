@@ -91,7 +91,7 @@ public final class NativeEvaluationHost {
         if(active.get(id)!=own)throw new SecurityException("原评测执行器已变化");
         // Avoid recursion: RunControl.check invokes this authority callback.
         ModelConfig current=exactMain(models.current(own.model));if(!modelFacts(own.model).toString().equals(modelFacts(current).toString()))throw new SecurityException("原评测模型来源或配置修订已变化");
-        if(!java.security.MessageDigest.isEqual(own.model.apiKey.getBytes(java.nio.charset.StandardCharsets.UTF_8),current.apiKey.getBytes(java.nio.charset.StandardCharsets.UTF_8)))throw new SecurityException("原评测凭据已变化");
+        if(!own.model.sameCredentials(current))throw new SecurityException("原评测凭据已变化");
     }
     public CapabilityPort capability(String id,RunControl original)throws Exception{
         Active own=active.get(id);if(own==null||own.original!=original)throw new SecurityException("原合成试验控制器不可恢复或另建");requireCurrent(id,own);

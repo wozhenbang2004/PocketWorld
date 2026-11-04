@@ -19,11 +19,15 @@ public final class DisplayLandingSafety {
                     if(!original.get(field).equals(actual.get(field)))return "original_owned_task_identity_changed";
             }
             // A known unrelated primary A -> B is fine. The original owned task on
-            // any other display is not; neither is a resumed primary app collision.
+            // any other display is not; neither is a resumed primary app-copy collision.
             JSONArray primary=after.getJSONArray("primary");
             for(JSONObject owned:next.values())if(owned.getInt("displayId")==display)
-                for(int i=0;i<primary.length();i++)if(primary.getJSONObject(i).getString("packageName").equals(owned.getString("packageName")))
-                    return "main_screen_package_conflict";
+                for(int i=0;i<primary.length();i++){
+                    // Resumed rows omit the user; resolve it from the validated task topology.
+                    JSONObject foreground=next.get(primary.getJSONObject(i).getInt("taskId"));
+                    if(foreground.getString("packageName").equals(owned.getString("packageName"))
+                            &&foreground.getInt("androidUserId")==owned.getInt("androidUserId"))return "main_screen_package_conflict";
+                }
             return null;
         }catch(Exception unknown){return "task_topology_unavailable";}
     }

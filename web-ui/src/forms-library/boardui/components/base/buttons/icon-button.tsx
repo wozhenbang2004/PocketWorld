@@ -81,6 +81,8 @@ export function IconButton({
     <button
       ref={ref}
       type={type}
+      data-pw-icon-button="true"
+      title={props.title ?? props["aria-label"]}
       className={cx(styles.base, styles.size[size], className)}
       {...props}
     >
@@ -100,6 +102,8 @@ export function IconLinkButton({
   return (
     <a
       ref={ref}
+      data-pw-icon-button="true"
+      title={props.title ?? props["aria-label"]}
       className={cx(styles.base, styles.size[size], className)}
       {...props}
     >

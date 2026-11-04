@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
-import { Button } from './forms-library';
+import { IconButton } from './forms-library';
+import { RiArrowLeftLine, RiArrowRightLine, RiSkipBackLine } from '@remixicon/react';
 import { currentTaskHeaders, taskHeaderPage, type TaskHeader, type TaskHeaderPage } from './task-history';
 
 type Window = { scope: string; cursor: string; prior: string[]; page: TaskHeaderPage };
@@ -39,12 +40,13 @@ export function useTaskListHistory(tasks: TaskHeader[], initialCursor: string, s
 export function TaskListHistoryControls({ history }: { history: ReturnType<typeof useTaskListHistory> }) {
   return <section className="pw-task-history-navigation" aria-label="任务列表翻页">
     {history.error && <p className="pw-error" role="alert">{history.error}</p>}
-    {history.busy && <p className="pw-muted" role="status">正在读取原任务窗口…</p>}
-    {(history.earlier || history.hasMore) && <p className="pw-muted">{history.earlier ? '当前显示较早的任务窗口。' : '这里只显示最近读取的任务。'}搜索和筛选作用于当前窗口。</p>}
-    <div className="pw-action-row">
-      {history.canGoBack && <Button variant="ghost" disabled={history.busy || !history.enabled} onClick={history.newer}>较近任务</Button>}
-      {history.hasMore && <Button variant="secondary" disabled={history.busy || !history.enabled} onClick={history.older}>较早任务</Button>}
-      {history.earlier && <Button variant="ghost" disabled={history.busy} onClick={history.reset}>回到最近任务</Button>}
-    </div>
+    {history.busy && <p className="pw-muted" role="status">正在读取任务…</p>}
+    {(history.earlier || history.hasMore) && <div className="pw-action-row">
+      <span className="pw-muted pw-history-window">{history.earlier ? '较早任务' : '最近任务'} · 仅搜索当前页</span>
+      <span className="pw-grow"/>
+      {history.canGoBack && <IconButton icon={RiArrowLeftLine} aria-label="较近任务" title="较近任务" disabled={history.busy || !history.enabled} onClick={history.newer}/>}
+      {history.hasMore && <IconButton icon={RiArrowRightLine} aria-label="较早任务" title="较早任务" disabled={history.busy || !history.enabled} onClick={history.older}/>}
+      {history.earlier && <IconButton icon={RiSkipBackLine} aria-label="回到最近任务" title="回到最近任务" disabled={history.busy} onClick={history.reset}/>}
+    </div>}
   </section>;
 }

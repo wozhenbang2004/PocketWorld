@@ -16,11 +16,12 @@ public final class InferencePricing {
     /** Called once at the original physical dispatch. Price changes cannot reprice an old receipt. */
     static JSONObject freeze(ModelConfig config,long at)throws Exception{
         if(config.usesAccount())return unavailable("subscription_is_not_api_pricing");
+        if(config.usesBedrock())return unavailable("bedrock_price_not_observed");
         Source current=source;if(current==null)return unavailable("price_host_not_installed");
         try{ModelPrice price=current.resolve(config);if(price==null)return unavailable("price_not_observed");
             if(config.capabilityBinding==null||!price.binding.equals(config.capabilityBinding)||!price.model.equals(config.model))return unavailable("price_route_mismatch");
             if(!price.validAt(at))return unavailable("price_not_effective");
-            JSONObject basis=price.toJson();if(!config.apiKey.isEmpty()&&basis.toString().contains(config.apiKey))return unavailable("price_identity_redacted");
+            JSONObject basis=price.toJson();if(config.containsSensitive(basis.toString()))return unavailable("price_identity_redacted");
             return new JSONObject().put("known",true).put("capturedAt",at).put("basis",basis).put("historicalRepricing",false);
         }catch(InterruptedException stopped){throw stopped;}catch(Exception unavailable){return unavailable("price_unavailable");}
     }
@@ -38,7 +39,7 @@ public final class InferencePricing {
     private static JSONObject unknown(String reason)throws Exception{return new JSONObject().put("currency",JSONObject.NULL).put("estimatedTokenCost",JSONObject.NULL).put("knownTokenSubtotal",JSONObject.NULL).put("allTokenComponentsPriced",false).put("finalCounters",false).put("lines",new JSONArray()).put("reason",reason).put("actualCost",JSONObject.NULL);}
     public static JSONObject estimate(JSONObject usage,ModelPrice price)throws Exception{
         Calc c=new Calc(usage,price);String protocol=usage.optString("protocol");
-        String expected=switch(price.binding.protocol()){case OPENAI_CHAT->"openai_chat";case OPENAI_RESPONSES->"openai_responses";case ANTHROPIC->"anthropic";case GEMINI->"gemini";};
+        String expected=switch(price.binding.protocol()){case OPENAI_CHAT->"openai_chat";case OPENAI_RESPONSES->"openai_responses";case ANTHROPIC->"anthropic";case GEMINI->"gemini";case BEDROCK_ANTHROPIC->"bedrock_anthropic";};
         if(!expected.equals(protocol))return unknown("price_protocol_mismatch");
         switch(protocol){
             case "openai_chat":case "openai_responses":

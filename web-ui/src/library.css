@@ -13,21 +13,21 @@
 .pw-library :is(.afa-answer,.afa-composer,.afa-steering,.afa-handoff,.afa-findings){width:100%;max-width:none}
 .pw-agent-avatar{display:inline-flex;flex:none;align-items:center;justify-content:center;vertical-align:middle}
 .pw-agent-avatar canvas{display:block;max-width:100%;max-height:100%}
-/* PW-37 retains the approved shadow/base/edge/front/material stack and its JS press curve. */
+/* PW-37 keeps its source press curve and layers with a flat, borderless fill. */
 .pw-press{--press:0;--strain:0;--travel:3px;position:relative;appearance:none;-webkit-appearance:none;isolation:isolate;max-width:100%;min-height:44px;margin:0;border:0!important;border-radius:13px;padding:4px 3px 3px!important;background:transparent!important;color:#fff!important;font:inherit;text-align:center;outline-offset:4px;filter:none!important;transition:none;touch-action:manipulation;user-select:none;-webkit-tap-highlight-color:transparent;cursor:pointer}
 .pw-press>span{pointer-events:none}
-.pw-press-shadow{position:absolute;inset:5px 0 0;border-radius:12px;background:rgb(0 0 0/.2);filter:blur(3px);transform-origin:center bottom;transform:translateY(calc(3px - var(--press)*2px)) scaleY(calc(1 - var(--press)*.11));opacity:calc(.82 + var(--press)*.16)}
-.pw-press-base{position:absolute;inset:4px 0 0;border-radius:13px;background:#202020;box-shadow:inset 0 1px 0 #ffffff21,inset 0 -1px 0 #00000052}
-.pw-press-edge{position:absolute;inset:4px 3px 3px;border-radius:10px;background:#353535;box-shadow:inset 0 -2px 0 #00000045;filter:brightness(calc(1 - var(--press)*.14))}
+.pw-press-shadow{display:none}
+.pw-press-base{position:absolute;inset:4px 0 0;border-radius:13px;background:transparent;box-shadow:none}
+.pw-press-edge{position:absolute;inset:4px 3px 3px;border-radius:10px;background:transparent;box-shadow:none}
 .pw-press-front{display:block;position:relative;padding:8px 14px;border-radius:10px;background:transparent;transform:translateY(calc(var(--travel)*-1 + var(--press)*var(--travel)));transition:none;min-height:34px}
-.pw-press-material{position:absolute;inset:0;border-radius:calc(10px + var(--strain)*1.5px);background:#404040;transform-origin:center bottom;transform:scaleX(calc(1 + var(--strain)*.02)) scaleY(calc(1 - var(--strain)*.04));box-shadow:inset 0 1px 0 #ffffff47,inset 1px 0 0 #ffffff17,inset 0 -1px 0 #0000002e,0 calc(2px - var(--press)*1px) calc(2px - var(--press)*1px) #00000024}
+.pw-press-material{position:absolute;inset:0;border-radius:calc(10px + var(--strain)*1.5px);background:var(--pw-strong,#262626);transform-origin:center bottom;transform:scaleX(calc(1 + var(--strain)*.02)) scaleY(calc(1 - var(--strain)*.04));box-shadow:none}
 .pw-press-label{position:relative;display:flex;align-items:center;justify-content:center;gap:7px;font-size:14px;line-height:20px;font-weight:500;white-space:nowrap}
 .pw-press-compact{--travel:2px;min-width:44px}
 .pw-press-compact .pw-press-front{padding:8px 10px}
 .pw-press:disabled{cursor:default;opacity:.45}
 .pw-press:focus-visible{outline:2px solid #777}
 /* The source composer uses one surface. Its default editor/tool rows remain compact. */
-.pw-composer-host .afa-composer>.afa-card{border:1px solid #dedede;border-radius:16px;box-shadow:0 1px 2px #0000000a,0 6px 18px #0000000f}
+.pw-composer-host .afa-composer>.afa-card{border:0;border-radius:16px;background:var(--pw-inset,#f6f6f6);box-shadow:none}
 .pw-composer-host .afa-composer textarea{height:32px;min-height:32px;max-height:120px;padding:4px 2px;border:0!important;border-radius:0;background:transparent!important;font-size:16px;line-height:24px;overflow-y:auto}
 .pw-composer-host .afa-composer>.afa-card{padding:10px 10px 6px}
 .pw-composer-host .afa-toolbar{gap:3px;padding:0;min-height:44px}
@@ -37,7 +37,7 @@
 .pw-composer-host .afa-filechips{max-height:88px;overflow:auto;flex-wrap:wrap;margin-bottom:6px}
 .pw-composer-host .afa-filechips>span{max-width:100%;overflow-wrap:anywhere;white-space:normal}
 .pw-composer-host .afa-filechips button{min-width:32px;min-height:32px}
-.pw-composer-host .afa-stop{min-width:44px;min-height:44px;border:1px solid #dedede!important;border-radius:10px;background:#f4f4f4!important;color:#333}
+.pw-composer-host .afa-stop{min-width:44px;min-height:44px;border:0!important;border-radius:10px;background:var(--pw-selected,#ededed)!important;color:var(--pw-ink,#333)}
 .pw-composer-host .afa-composerbottom{margin-top:4px;display:flex;flex-wrap:wrap;gap:4px}
 .pw-composer-status{padding:4px 6px;font-size:12px}
 .pw-answer-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:25px}

@@ -51,7 +51,7 @@ public final class OwnerSourceRequestProjection implements AgentRunner.RequestPr
                         JSONObject ref=refs.getJSONObject(j);chars=Math.addExact(chars,ref.getInt("chars"));
                         if(provided.size()>=MAX_REQUEST_REFERENCES||chars>MAX_REQUEST_CHARS)throw new IllegalStateException("本轮原文引用超过32项/16000 UTF-16字符，请明确缩小原任务上下文");
                         originals.requireOwnerSourceNotForgotten(SourceRef.fromJson(ref.getJSONObject("sourceRef")));JSONObject page=inspection.readRange(ref,control);String body=page.getString("body");
-                        if(config!=null&&!config.apiKey.isEmpty())body=body.replace(config.apiKey,"[密钥已隐藏]");
+                        if(config!=null)body=config.redactSensitive(body);
                         extra.put(text("原文来源（数据）:"+ref.toString()));extra.put(text(body));provided.add(ref);
                     }
                 }

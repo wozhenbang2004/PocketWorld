@@ -8,27 +8,30 @@
   --pw-mono: "JetBrains Mono", ui-monospace, monospace;
   --pw-canvas: #fff;
   --pw-surface: #fff;
-  --pw-inset: #f7f7f7;
+  --pw-inset: #f6f6f6;
   --pw-selected: #ededed;
-  --pw-edge: #e5e5e5;
-  --pw-edge-hover: #c9c9c9;
-  --pw-ink: #262626;
-  --pw-copy: #555;
+  --pw-edge: transparent;
+  --pw-edge-hover: transparent;
+  --pw-ink: #242424;
+  --pw-copy: #626262;
   --pw-muted: #737373;
   --pw-disabled: #969696;
   --pw-strong: #262626;
+  --pw-on-strong: #fff;
   --pw-focus: #626262;
   --pw-radius-control: 10px;
   --pw-radius-popover: 14px;
-  --pw-shadow-input: 0 1px 2px rgb(0 0 0 / .04);
-  --pw-shadow-floating: 0 2px 6px rgb(0 0 0 / .05), 0 12px 32px rgb(0 0 0 / .12);
-  --pw-shadow-sheet: 0 -2px 8px rgb(0 0 0 / .04), 0 -12px 40px rgb(0 0 0 / .1);
+  --pw-shadow-input: none;
+  --pw-shadow-surface: 0 10px 36px -14px rgb(0 0 0 / 9%);
+  --pw-shadow-floating: 0 14px 48px -12px rgb(0 0 0 / 12%);
+  --pw-shadow-sheet: 0 16px 64px -16px rgb(0 0 0 / 14%);
 
   /* BoardUI semantic aliases also reach its portaled menus. */
   --font-inter: var(--pw-font);
   --font-sans: var(--pw-font);
   --font-mono-source: var(--pw-mono);
   --color-text-primary: var(--pw-ink);
+  --color-accent-600: var(--pw-strong);
   --color-text-secondary: var(--pw-copy);
   --color-text-tertiary: var(--pw-muted);
   --color-text-placeholder: var(--pw-muted);
@@ -48,10 +51,10 @@
   --color-input-disabled-background: var(--pw-inset);
   --color-border-button-default: var(--pw-edge);
   --color-border-button-hover: var(--pw-edge-hover);
-  --color-border-button-active: var(--pw-focus);
+  --color-border-button-active: transparent;
   --color-border-focus-ring: var(--pw-focus);
   --color-separator-border: var(--pw-edge);
-  --color-dropdown-item-hover-background: var(--pw-inset);
+  --color-dropdown-item-hover-background: var(--pw-selected);
   --color-button-ghost-background: transparent;
   --color-button-ghost-hover: var(--pw-inset);
   --color-button-ghost-active: var(--pw-selected);
@@ -83,12 +86,14 @@
   --text-caption-1-regular: 12px;
   --text-caption-1-regular--line-height: 18px;
   --ovio-accent: var(--pw-strong);
+  --ovio-on-accent: #fff;
+  --ovio-off-ink: var(--pw-copy);
   --ovio-track: var(--pw-inset);
   --ovio-ink: var(--pw-ink);
   --ovio-font: var(--pw-font);
 }
 
-/* Source frame tokens: ordinary content has an edge, never floating elevation. */
+/* Retained source tokens. Ordinary reading content is an open surface. */
 .afa.pw-library,
 :is(.pw-app, .pw-drawer) .pw-command {
   --afa-bg: var(--pw-surface);
@@ -128,7 +133,7 @@
   --acc-edge: var(--pw-edge);
   --acc-blue: var(--pw-copy);
   --acc-blue-wash: var(--pw-inset);
-  --acc-shadow: 0 0 0 1px var(--pw-edge);
+  --acc-shadow: none;
   font: 14px/22px var(--pw-font);
 }
 .pw-files {
@@ -148,8 +153,8 @@
   line-height: 18px;
 }
 .pw-library :is(.afa-popover, .afa-tooltip, .acc-popover) {
-  border-color: var(--pw-edge);
-  background: var(--pw-surface);
+  border: 0;
+  background: var(--pw-inset);
   box-shadow: var(--pw-shadow-floating);
 }
 
@@ -162,6 +167,7 @@
   font-size: 14px;
   line-height: 22px;
   font-weight: 500;
+  border: 0;
   box-shadow: none;
 }
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) .button-press-motion.bg-button-primary,
@@ -200,22 +206,46 @@
   border-radius: var(--pw-radius-control);
 }
 
+/* Source BoardUI icon buttons keep their focus/press behavior and 48px target;
+ * the icon itself carries the action, without a repeated decorative box. */
+:is(.pw-app, .pw-drawer, .pw-secondary, .pw-settings-dialog, .shadow-dropdown) [data-pw-icon-button] {
+  width: 48px;
+  min-width: 48px;
+  height: 48px;
+  min-height: 48px;
+  padding: 12px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--pw-copy);
+}
+:is(.pw-app, .pw-drawer, .pw-secondary, .pw-settings-dialog, .shadow-dropdown) [data-pw-icon-button]:hover {
+  background: var(--pw-inset);
+}
+:is(.pw-app, .pw-drawer, .pw-secondary, .pw-settings-dialog, .shadow-dropdown) [data-pw-icon-button]:focus-visible {
+  outline: 2px solid var(--pw-focus);
+  outline-offset: -3px;
+}
+
 /* BoardUI InputBase / TextareaBase: same field shell in forms and popups.
  * No native field reset: the React Aria associations and source adornments stay.
  */
-:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) > [role="group"] {
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) > :is([role="group"], [role="presentation"]) {
   min-height: 44px;
-  border: 1px solid var(--pw-edge);
+  border: 0;
   border-radius: var(--pw-radius-control);
   padding: 10px 12px;
   background: var(--pw-inset);
   color: var(--pw-copy);
   box-shadow: var(--pw-shadow-input);
 }
-:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) > [role="group"]:focus-within {
-  border-color: var(--pw-focus);
-  background: var(--pw-surface);
-  box-shadow: 0 0 0 2px var(--pw-selected), var(--pw-shadow-input);
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) > :is([role="group"], [role="presentation"]):focus-within {
+  background: var(--pw-selected);
+  box-shadow: none;
+}
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) > :is([role="group"], [role="presentation"]):has(:focus-visible) {
+  outline: 2px solid var(--pw-focus);
+  outline-offset: 2px;
 }
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) :is(input, textarea) {
   font-family: var(--pw-font);
@@ -225,11 +255,10 @@
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) :is(input, textarea):focus-visible {
   outline: none;
 }
-:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) [role="group"][data-invalid] {
-  border-color: var(--pw-copy);
-  border-inline-start-width: 3px;
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) :is([role="group"], [role="presentation"])[data-invalid] {
+  background: var(--pw-selected);
 }
-:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) [role="group"][data-disabled] {
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([data-input-size], .pw-combobox-field) :is([role="group"], [role="presentation"])[data-disabled] {
   border-color: var(--pw-edge);
   background: var(--pw-inset);
   box-shadow: none;
@@ -252,7 +281,7 @@
 }
 .pw-select-trigger {
   min-height: 44px;
-  border-color: var(--pw-edge);
+  border: 0;
   border-radius: var(--pw-radius-control);
   background: var(--pw-inset);
   box-shadow: var(--pw-shadow-input);
@@ -276,16 +305,23 @@
   font: 400 14px/22px var(--pw-font);
 }
 /* Selected radio/checkbox layers keep source cross-fade/scale and check glyphs. */
-:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is([role="radio"], label:has(input[type="checkbox"])) .bg-gradient-to-b {
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) :is(.pw-radio-option, label:has(input[type="checkbox"])) .bg-gradient-to-b {
   background-image: none;
   background-color: var(--pw-strong);
+  box-shadow: none;
+}
+:is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown)
+  :is(.pw-radio-option, label:has(input[type="checkbox"])) .border-border-checkbox-default {
+  border: 0;
+  background-color: var(--pw-selected);
+  box-shadow: none;
 }
 
 /* Source popup surface is a stable BoardUI shared recipe, including portals. */
 .shadow-dropdown {
-  border-color: var(--pw-edge);
+  border: 0;
   border-radius: var(--pw-radius-popover);
-  background-color: var(--pw-surface);
+  background-color: var(--pw-inset);
   box-shadow: var(--pw-shadow-floating);
   font-family: var(--pw-font);
   font-size: 14px;
@@ -308,6 +344,7 @@
 
 /* BoardUI disclosure and tabs keep their measured panel/indicator transitions. */
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) [class~="group/item"] {
+  border: 0;
   box-shadow: none;
 }
 :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown) [class~="group/item"] [slot="trigger"] {
@@ -327,15 +364,15 @@
   line-height: 22px;
 }
 
-/* Retained composer: low elevation belongs to the editor, focus to its shell. */
+/* The retained composer is a quiet filled surface; focus stays perceptible. */
 :is(.pw-app, .pw-drawer) .pw-composer-region .pw-composer-host .afa-composer > .afa-card {
-  border-color: var(--pw-edge);
-  background: var(--pw-surface);
-  box-shadow: 0 1px 3px rgb(0 0 0 / .04), 0 5px 14px rgb(0 0 0 / .07);
+  border: 0;
+  background: var(--pw-inset);
+  box-shadow: none;
 }
 :is(.pw-app, .pw-drawer) .pw-composer-region .pw-composer-host .afa-composer > .afa-card:focus-within {
-  border-color: var(--pw-focus);
-  box-shadow: 0 0 0 2px var(--pw-selected), 0 5px 14px rgb(0 0 0 / .07);
+  background: var(--pw-selected);
+  box-shadow: none;
 }
 .pw-composer-host .afa-composer textarea {
   color: var(--pw-ink);
@@ -349,7 +386,7 @@
 }
 
 /* Affect official components use their own CSS variables, not a grayscale filter.
- * The hairline shadows here are edges only; state motion remains source-owned.
+ * Surface fills carry grouping; state motion remains source-owned.
  */
 :is(.pw-app, .pw-drawer) :is(.ui-tcc, .ui-tcc-group) {
   --ui-tcc-card: var(--pw-surface);
@@ -365,7 +402,7 @@
   --ui-tcc-red: var(--pw-ink);
   --ui-tcc-red-bg: var(--pw-inset);
   --ui-tcc-red-line: var(--pw-edge);
-  --ui-tcc-shadow: 0 0 0 1px var(--pw-edge);
+  --ui-tcc-shadow: none;
   --ui-tcc-focus: var(--pw-focus);
   --ui-tcc-mono: var(--pw-mono);
   font-family: var(--pw-font);
@@ -386,8 +423,8 @@
   --ui-dic-solid: var(--pw-strong);
   --ui-dic-solid-hover: #404040;
   --ui-dic-on-solid: #fff;
-  --ui-dic-shadow: 0 0 0 1px var(--pw-edge);
-  --ui-dic-shadow-hover: 0 0 0 1px var(--pw-edge-hover);
+  --ui-dic-shadow: none;
+  --ui-dic-shadow-hover: none;
   --ui-dic-focus: var(--pw-focus);
   font-family: var(--pw-font);
   font-size: 14px;
@@ -428,6 +465,7 @@
   background: #bdbdbd;
 }
 .pw-files .au-sc-art-paper > b {
+  border: 0;
   background: var(--file-color);
   color: #fff;
   box-shadow: none;
@@ -441,7 +479,7 @@
 
 /* Continuous work: an answer leads to its evidence and decision in one movement.
  * PW-05 Answer, PW-15 Vaul, PW-16 Sidebar, PW-22 Files and PW-37 press retain
- * their source implementations. Elevation identifies an input or active object;
+ * their source implementations. A quiet fill identifies an input or active object;
  * ordinary settings/file rows do not become competing floating cards.
  */
 .pw-app { background: var(--pw-surface); }
@@ -460,9 +498,9 @@
 .pw-composer-region .pw-composer-host .afa-composer > .afa-card {
   padding: 12px 10px 8px;
   border-radius: 22px;
-  border: 1px solid #dedede;
-  background: var(--pw-surface);
-  box-shadow: 0 1px 2px rgb(0 0 0 / .04), 0 8px 28px rgb(0 0 0 / .09);
+  border: 0;
+  background: var(--pw-inset);
+  box-shadow: none;
 }
 .pw-composer-host .afa-composer textarea { font-size: 16px; line-height: 26px; padding: 4px 6px 8px; }
 .pw-composer-region .pw-composer-host .afa-toolbar { gap: 2px; flex-wrap: wrap; }
@@ -481,14 +519,14 @@
 .pw-linked-task.button-press-motion {
   display: flex; justify-content: space-between; align-items: center; gap: 16px;
   width: 100%; min-height: 76px; margin-top: 16px; padding: 14px 16px;
-  border: 1px solid #dedede; border-radius: 14px; background: #fafafa;
-  box-shadow: 0 1px 2px rgb(0 0 0 / .04); text-align: start; white-space: normal;
+  border: 0; border-radius: 14px; background: var(--pw-inset);
+  box-shadow: none; text-align: start; white-space: normal;
 }
 .pw-linked-task-copy { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 3px; }
 .pw-linked-task-copy small { color: var(--pw-muted); font-size: 12px; line-height: 18px; }
 .pw-linked-task-copy b { font-size: 14px; line-height: 22px; font-weight: 600; white-space: normal; }
 .pw-linked-task-action { display: flex; align-items: center; gap: 3px; flex-shrink: 0; font-size: 13px; color: var(--pw-ink); }
-.pw-work-primary { padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--pw-edge); }
+.pw-work-primary { padding-bottom: 12px; margin-bottom: 12px; border: 0; }
 .pw-work-primary .pw-nav-item a { min-height: 52px; }
 .pw-work-primary .pw-nav-item > small { margin-top: -4px; padding-bottom: 6px; }
 .pw-work-recent .pw-section-heading { margin-top: 8px; }
@@ -503,8 +541,8 @@
 .pw-task-identity .pw-task-state-dot { margin-top: 0; }
 .pw-task-outcome { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .pw-outcome-document, .pw-outcome-conversation {
-  min-width: 0; padding: 18px; border: 1px solid #e1e1e1; border-radius: 16px;
-  background: var(--pw-surface); box-shadow: 0 2px 5px rgb(0 0 0 / .035);
+  min-width: 0; padding: 0; border: 0; border-radius: 0;
+  background: transparent; box-shadow: none;
 }
 .pw-outcome-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .pw-outcome-heading h3 { font-size: 14px; line-height: 22px; font-weight: 600; color: var(--pw-ink); }
@@ -515,10 +553,10 @@
 .pw-task-outcome .afa-answer > footer { padding: 10px 0 0; border: 0; }
 .pw-outcome-files { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .pw-outcome-files button { justify-content: flex-start; white-space: normal; overflow-wrap: anywhere; }
-.pw-outcome-image { margin: 0; border-radius: 14px; overflow: hidden; background: var(--pw-surface); border: 1px solid var(--pw-edge); }
+.pw-outcome-image { margin: 0; border-radius: 14px; overflow: hidden; background: var(--pw-inset); border: 0; }
 .pw-outcome-image img { display: block; width: 100%; max-height: 480px; object-fit: contain; }
 .pw-outcome-image figcaption, .pw-outcome-limit { padding: 10px 14px; font-size: 12px; line-height: 20px; color: var(--pw-muted); }
-.pw-outcome-empty { padding: 22px 18px; border: 1px dashed #c9c9c9; border-radius: 14px; }
+.pw-outcome-empty { padding: 12px 0; border: 0; border-radius: 0; }
 .pw-outcome-empty h3 { font-size: 15px; font-weight: 500; line-height: 24px; }
 .pw-outcome-empty p { margin-top: 6px; font-size: 14px; line-height: 23px; color: var(--pw-copy); }
 .pw-task-progress { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; padding: 12px 4px; border-top: 0; }
@@ -530,7 +568,7 @@
 .pw-task-review { border: 0; padding-top: 0; }
 .pw-task-review > .pw-section-heading { margin-block: 16px 12px; align-items: center; }
 .pw-task-review > .pw-section-heading p { font-size: 13px; line-height: 21px; }
-.pw-task-review .pw-permission .cb-permission2-request { padding: 18px; border: 1px solid #dedede; border-radius: 16px; background: #fff; }
+.pw-task-review .pw-permission .cb-permission2-request { padding: 18px; border: 0; border-radius: 16px; background: var(--pw-inset); }
 .pw-task-review .pw-permission .cb-permission2-heading { align-items: flex-start; }
 .pw-task-review .pw-permission .cb-permission2-heading strong { font-size: 16px; line-height: 25px; font-weight: 600; }
 .pw-task-review .pw-permission .cb-permission2-heading small { font-size: 13px; line-height: 21px; margin-top: 4px; }
@@ -552,7 +590,7 @@
   .pw-composer-region .pw-composer-host .pw-model-trigger { max-width: 112px; }
   .pw-linked-task.button-press-motion { padding-inline: 12px; gap: 8px; }
   .pw-linked-task-action { font-size: 12px; }
-  .pw-outcome-document, .pw-outcome-conversation { padding: 16px; }
+  .pw-outcome-document, .pw-outcome-conversation { padding: 0; }
   .pw-task-footer { padding-inline: 12px; }
 }
 @media(min-width:720px) {
@@ -561,4 +599,74 @@
 }
 @media(prefers-reduced-motion:reduce) {
   .pw-linked-task { transition: none; }
+}
+
+/* Text transitions keep content on its existing surface in both themes. */
+.pw-crossfade > .bmx-crossfade-content { background: transparent; border-radius: 0; }
+.pw-permission .cb-permission2-heading { color: var(--pw-ink); }
+
+/* A shared fill groups related content. Resting surfaces have no decorative
+ * outline, separator or inset shadow. Focus and actual progress/graph marks
+ * keep their own semantics; portaled menus use the same recipe as pages. */
+:is(.pw-secondary-header,
+  .pw-drawer-header, .pw-settings-dialog > header, .pw-file-actions,
+  .pw-model-save-actions, .pw-task-footer, .pw-work-primary,
+  .pw-settings-divided, .pw-selected-object, .pw-selection-object,
+  .pw-background-endpoints, .pw-plugin-runtime, .pw-pending-inputs,
+  .pw-pending-input, .pw-markdown-code, .pw-markdown-codebar,
+  .pw-markdown-table, .pw-markdown-table :is(th, td), .pw-markdown-image) {
+  border: 0;
+  box-shadow: none;
+}
+.pw-drawer, .pw-settings-dialog { border: 0; background: var(--pw-surface); box-shadow: var(--pw-shadow-sheet); }
+:is(.pw-error, .pw-banner, .pw-banner-error, .pw-field-error, .pw-background-attention) {
+  border: 0;
+  border-radius: 10px;
+  background: var(--pw-inset);
+  color: var(--pw-ink);
+  box-shadow: none;
+}
+.pw-stretch-thumb,
+.pw-background-step-marker,
+.pw-background-steps > li[data-complete="true"] .pw-background-step-marker {
+  box-shadow: none;
+}
+.pw-markdown blockquote { border: 0; border-radius: 8px; background: var(--pw-inset); padding: 8px 12px; }
+.pw-markdown-table th, .pw-markdown-table tbody tr:nth-child(even) { background: var(--pw-inset); }
+.pw-markdown hr { border: 0; margin-block: 24px; }
+.pw-press { color: var(--pw-on-strong) !important; }
+
+/* Message actions inject their own source tokens; override on that component
+ * itself so opening a menu cannot bring back a framed surface. */
+:is(.pw-app, .pw-drawer, .shadow-dropdown) .ui-mac {
+  --ui-mac-line: transparent;
+  --ui-mac-shadow: none;
+  --ui-mac-shadow-pop: none;
+}
+:is(.pw-app, .pw-drawer, .shadow-dropdown) .ui-mac :is(.ui-mac__chip, .ui-mac__tip, .ui-mac__input) {
+  border: 0;
+  box-shadow: none;
+  background: var(--pw-inset);
+}
+:is(.pw-app, .pw-drawer, .shadow-dropdown) .ui-mac button[aria-pressed="true"]:hover { box-shadow: none; }
+:is(.pw-app, .pw-drawer) :is(.ui-tcc__sections, .ui-tcc__code, .ui-tcc__error),
+.pw-permission .cb-permission2-request { border: 0; box-shadow: none; }
+.shadow-dropdown svg.stroke-border-button-default {
+  stroke: none;
+  filter: none !important;
+}
+
+/* Adapt the retained measured tab indicator into a quiet selection surface. */
+:is(.pw-task-tabs, .pw-secondary-refactor, .pw-model-drawer) [role="tablist"] {
+  position: relative;
+  z-index: 1;
+  border: 0;
+  padding-block: 4px;
+}
+:is(.pw-task-tabs, .pw-secondary-refactor, .pw-model-drawer) [role="tablist"] + span[aria-hidden] {
+  top: 4px;
+  bottom: 4px;
+  height: auto;
+  border-radius: 9px;
+  background: var(--pw-inset);
 }

@@ -14,6 +14,12 @@ public final class ModelRequestPolicy {
     public static void installHostSource(Source nativeSource) { source = Objects.requireNonNull(nativeSource); }
 
     public static ModelCatalog.View resolve(ModelConfig config) throws Exception {
+        if (config.usesBedrock()) {
+            if (config.capabilityBinding == null || config.catalogEnforced || config.awsSession == null)
+                throw new Rejected("bedrock_saved_session_required", "请先保存原 Bedrock 连接与临时凭据，再从该连接发起请求。");
+            try { config.awsSession.requireValidAt(System.currentTimeMillis()); }
+            catch (IllegalArgumentException expired) { throw new Rejected("bedrock_session_expired", "原 Bedrock 临时凭据已过期或不可用，请在原连接更换整组凭据后重新审阅任务。"); }
+        }
         if (config.capabilityBinding == null) return null;
         Source current = source;
         if (current == null) throw new Rejected("catalog_host_unavailable", "模型能力目录尚未连接，请重新打开应用。");
@@ -22,6 +28,7 @@ public final class ModelRequestPolicy {
         catch (Rejected known) { throw known; }
         catch (InterruptedException stopped) { throw stopped; }
         catch (Exception unavailable) { throw new Rejected("catalog_state_unavailable", "当前精确模型能力状态无法读取，请回模型页核对；没有改用旧能力。"); }
+        if (config.usesBedrock() && current != source) throw new Rejected("catalog_host_changed", "原模型宿主已变化，请回模型页核对当前连接。");
         if (view == null && !config.catalogEnforced) return null; // Native host still checked this exact enabled connection.
         if (view == null || !view.key().binding().equals(config.capabilityBinding) || !view.key().modelId().equals(config.model))
             throw new Rejected("stale_model_binding", "模型连接、密钥或安装版本已变化，请回模型页核对；没有换号或换模型。");

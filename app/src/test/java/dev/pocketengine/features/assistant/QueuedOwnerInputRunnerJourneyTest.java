@@ -48,7 +48,7 @@ public final class QueuedOwnerInputRunnerJourneyTest {
         final Application android=RuntimeEnvironment.getApplication();final TaskStore tasks;final AssistantModule assistant;final SQLiteDatabase db;
         final AtomicInteger abandoned=new AtomicInteger();final CountDownLatch claimed=new CountDownLatch(1),releaseClaim=new CountDownLatch(1);
         final CountDownLatch appendedBeforeAck=new CountDownLatch(1),releaseAck=new CountDownLatch(1);final ExecutorService ownerCalls=Executors.newSingleThreadExecutor();
-        volatile boolean holdAck;volatile JSONObject appendedRow;
+        volatile boolean holdAck,wakeSteering;volatile JSONObject appendedRow;
         volatile JSONObject binding;volatile RunControl control;volatile RunOutcome outcome;volatile boolean holdClaim;volatile ModelConfig captured;
         final List<AgentRunner.OwnerReply> replies=new CopyOnWriteArrayList<>();
         Fixture(Server server)throws Exception{
@@ -67,7 +67,12 @@ public final class QueuedOwnerInputRunnerJourneyTest {
         private JSONObject acknowledgement(JSONObject row)throws Exception{JSONObject answer=new JSONObject(binding.toString());for(String key:new String[]{"queueRevision","queueState","queueRole","ownerMessageRevision"})if(row.has(key))answer.put(key,row.get(key));return answer;}
         public JSONObject append(String conversation,JSONObject message,String mode,JSONObject expected,RunControl original)throws Exception{
             assertSame(control,original);assertEquals(binding.getString("taskId"),expected.getString("taskId"));assertEquals(binding.getString("runId"),expected.getString("runId"));
-            JSONObject row=tasks.appendOwnerInput(binding.getString("taskId"),binding.getString("runId"),binding.getInt("epoch"),conversation,message,mode,original);
+            JSONObject row;Runnable wake;
+            synchronized(tasks){
+                row=tasks.appendOwnerInput(binding.getString("taskId"),binding.getString("runId"),binding.getInt("epoch"),conversation,message,mode,original);
+                wake=wakeSteering&&"steer".equals(mode)&&!row.optBoolean("duplicate")?original.prepareModelReplan(binding.getString("taskId"),binding.getString("runId"),binding.getInt("epoch")):null;
+            }
+            if(wake!=null)wake.run();
             if(holdAck){appendedRow=new JSONObject(row.toString());appendedBeforeAck.countDown();if(!releaseAck.await(15,TimeUnit.SECONDS))throw new AssertionError("native append/ACK gate timed out");}
             return acknowledgement(row);
         }
@@ -91,7 +96,11 @@ public final class QueuedOwnerInputRunnerJourneyTest {
         JSONObject append(String text)throws Exception{return append(text,"queue");}
         JSONObject append(String text,String mode)throws Exception{return assistant.handle("send",new JSONObject(binding.toString()).put("message",text).put("clientMessageId",id()).put("mode",mode));}
         JSONObject detail(JSONObject ack)throws Exception{return tasks.queuedOwnerInput(binding.getString("taskId"),binding.getString("conversationId"),ack.getString("messageId"));}
-        JSONObject mutate(JSONObject ack,String text,String mode,boolean withdrawn)throws Exception{JSONObject current=detail(ack);return assistant.mutateQueuedOwnerInput(binding.getString("taskId"),binding.getString("conversationId"),ack.getString("messageId"),current.getLong("queueRevision"),current.getLong("ownerMessageRevision"),text,mode,withdrawn);}
+        JSONObject mutate(JSONObject ack,String text,String mode,boolean withdrawn)throws Exception{
+            JSONObject current=detail(ack),saved=assistant.mutateQueuedOwnerInput(binding.getString("taskId"),binding.getString("conversationId"),ack.getString("messageId"),current.getLong("queueRevision"),current.getLong("ownerMessageRevision"),text,mode,withdrawn);Runnable wake=null;
+            if(wakeSteering&&!withdrawn&&"steer".equals(mode))synchronized(tasks){JSONObject latest=detail(ack);if("pending".equals(latest.optString("queueState"))&&latest.getLong("queueRevision")==saved.getLong("queueRevision"))wake=control.prepareModelReplan(binding.getString("taskId"),binding.getString("runId"),binding.getInt("epoch"));}
+            if(wake!=null)wake.run();return saved;
+        }
         void idle()throws Exception{long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(12);while(assistant.snapshot().getBoolean("running")&&System.nanoTime()<end)Thread.sleep(10);assertFalse("original Runner did not settle",assistant.snapshot().getBoolean("running"));}
         public void close()throws Exception{releaseClaim.countDown();releaseAck.countDown();assistant.close();ownerCalls.shutdownNow();idle();assertTrue("owner send worker terminated",ownerCalls.awaitTermination(5,TimeUnit.SECONDS));db.close();}
     }
@@ -142,6 +151,25 @@ public final class QueuedOwnerInputRunnerJourneyTest {
             JSONObject conversation=f.assistant.handle("get",new JSONObject().put("conversationId",f.binding.getString("conversationId")));
             assertFalse("discarded response cannot be published",conversation.toString().contains("FIRST-ANSWER"));assertEquals("materialized",f.detail(edit).getString("queueState"));
             assertEquals(0,f.tasks.get(f.binding.getString("taskId"),false).getJSONArray("operations").length());assertFalse(f.control.isCancelled());
+        }
+    }
+    @Test public void durableSteerWakesTheHeldModelBeforeItsOldResponseAndMaterializesTheSameRow()throws Exception{
+        try(Server server=new Server();Fixture f=new Fixture(server)){
+            f.wakeSteering=true;JSONObject first=f.first();assertTrue(server.first.await(5,TimeUnit.SECONDS));JSONObject added=f.append(AFTER,"steer");
+            assertTrue("Next request must not await old model response",server.second.await(3,TimeUnit.SECONDS));f.idle();assertEquals(1,server.release.getCount());
+            assertEquals(2,server.bodies.size());assertTrue(server.bodies.get(1).toString().contains(AFTER));assertEquals("materialized",f.detail(added).getString("queueState"));
+            assertEquals("consumed",f.assistant.handle("getSubmission",new JSONObject().put("clientMessageId",added.getString("clientMessageId"))).getString("status"));
+            assertEquals(first.getString("taskId"),f.binding.getString("taskId"));assertEquals(first.getString("runId"),f.binding.getString("runId"));assertEquals(first.getInt("epoch"),f.binding.getInt("epoch"));
+            assertFalse(f.control.isCancelled());assertEquals(1,f.tasks.list().length());assertEquals(0,f.tasks.get(first.getString("taskId"),false).getJSONArray("operations").length());
+        }
+    }
+    @Test public void durableQueuePromotionWakesModelButOrdinaryQueueAndWithdrawalDoNot()throws Exception{
+        try(Server server=new Server();Fixture f=new Fixture(server)){
+            f.wakeSteering=true;f.first();assertTrue(server.first.await(5,TimeUnit.SECONDS));JSONObject edit=f.append(BEFORE),withdrawn=f.append(WITHDRAWN);
+            f.mutate(withdrawn,WITHDRAWN,"queue",true);assertEquals(0,f.control.modelReplanRevision());assertEquals(1,server.bodies.size());
+            f.mutate(edit,AFTER,"steer",false);assertTrue(server.second.await(3,TimeUnit.SECONDS));f.idle();assertEquals(1,server.release.getCount());assertEquals(2,server.bodies.size());
+            assertTrue(server.bodies.get(1).toString().contains(AFTER));assertFalse(server.bodies.get(1).toString().contains(BEFORE));assertFalse(server.bodies.get(1).toString().contains(WITHDRAWN));
+            assertEquals("materialized",f.detail(edit).getString("queueState"));assertEquals("withdrawn",f.detail(withdrawn).getString("queueState"));assertFalse(f.control.isCancelled());
         }
     }
     @Test public void claimBeforeCheckpointCannotBeWithdrawnAndExplicitRestartRecoversExactInput()throws Exception{

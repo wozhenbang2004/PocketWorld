@@ -31,6 +31,7 @@ public final class OwnerSettingsBackup {
                 .put("catalogFormat",binding==null?ModelCatalogRoutes.defaultFormat(configuration.provider).name():binding.format().name())
                 .put("modelsEndpoint",binding==null?ModelCatalogRoutes.modelsEndpoint(configuration).toASCIIString():binding.modelsEndpoint().toASCIIString())
                 .put("reasoning",configuration.reasoning.toJson()).put("imageTokenReserve",configuration.imageTokenReserve);
+        if(configuration.usesBedrock())config.put("bedrockRegion",configuration.bedrockRegion);
         if(configuration.compatibility!=null)config.put("compatibility",configuration.compatibility.toJson());
         return checkedApi(new JSONObject().put("sourceId",sourceId).put("name",name).put("configuration",config));
     }
@@ -53,17 +54,23 @@ public final class OwnerSettingsBackup {
         OwnerConfigurationBackupSections.fields(row,"sourceId","name","configuration");
         String source=OwnerConfigurationBackupSections.text(row,"sourceId",200);if(!source.matches("[A-Za-z0-9_.:-]+"))throw new SecurityException("归档API来源身份无效");
         ApiConnectionProfile.checkedName(OwnerConfigurationBackupSections.text(row,"name",80));JSONObject c=row.getJSONObject("configuration");
-        OwnerConfigurationBackupSections.fields(c,"provider","baseUrl","model","maxSteps","requestTimeoutSeconds","maxOutputTokens","catalogEnabled","catalogFormat","modelsEndpoint","reasoning","imageTokenReserve","compatibility");
+        OwnerConfigurationBackupSections.fields(c,"provider","baseUrl","model","maxSteps","requestTimeoutSeconds","maxOutputTokens","catalogEnabled","catalogFormat","modelsEndpoint","reasoning","imageTokenReserve","compatibility","bedrockRegion");
         if(!(c.get("catalogEnabled") instanceof Boolean))throw new SecurityException("归档目录开关必须明确");
         String provider=OwnerConfigurationBackupSections.text(c,"provider",80);if(!ModelConfig.PROVIDERS.contains(provider))throw new SecurityException("归档API协议不支持");
-        URI base=endpoint(OwnerConfigurationBackupSections.text(c,"baseUrl",4096)),models=endpoint(OwnerConfigurationBackupSections.text(c,"modelsEndpoint",4096));
-        if(!base.getScheme().equalsIgnoreCase(models.getScheme())||!base.getHost().equalsIgnoreCase(models.getHost())||port(base)!=port(models)||models.getPath()==null||models.getPath().isEmpty())throw new SecurityException("归档目录必须保持原接口同源");
         String model=OwnerConfigurationBackupSections.text(c,"model",200);if(!model.equals(model.trim())||model.chars().anyMatch(Character::isISOControl))throw new SecurityException("归档模型名无效");
         integer(c,"maxSteps",1,40);integer(c,"requestTimeoutSeconds",10,120);integer(c,"maxOutputTokens",128,32768);integer(c,"imageTokenReserve",0,2000000);
         ModelBinding.Format format=ModelBinding.Format.valueOf(c.getString("catalogFormat"));ModelBinding.Protocol protocol=ModelCatalogRoutes.protocol(provider);
-        if(!(switch(format){case OPENAI->protocol==ModelBinding.Protocol.OPENAI_CHAT||protocol==ModelBinding.Protocol.OPENAI_RESPONSES;case ANTHROPIC->protocol==ModelBinding.Protocol.ANTHROPIC;case GEMINI->protocol==ModelBinding.Protocol.GEMINI;case OPENROUTER->protocol==ModelBinding.Protocol.OPENAI_CHAT;}))throw new SecurityException("归档目录与推理协议不符");
+        if(ModelConfig.BEDROCK_PROVIDER.equals(provider)){
+            String region=c.getString("bedrockRegion");dev.pocketengine.runtime.providers.bedrock.BedrockEndpoint.validate(region,model);
+            if(c.getBoolean("catalogEnabled")||format!=ModelBinding.Format.NONE||!c.getString("modelsEndpoint").isEmpty()||!c.getString("baseUrl").equals(dev.pocketengine.runtime.providers.bedrock.BedrockEndpoint.baseUrl(region)))throw new SecurityException("归档 Bedrock 区域/目标或无目录身份不一致");
+        }else{
+            if(c.has("bedrockRegion"))throw new SecurityException("非 Bedrock 归档不能包含 AWS 区域");
+            URI base=endpoint(OwnerConfigurationBackupSections.text(c,"baseUrl",4096)),models=endpoint(OwnerConfigurationBackupSections.text(c,"modelsEndpoint",4096));
+            if(!base.getScheme().equalsIgnoreCase(models.getScheme())||!base.getHost().equalsIgnoreCase(models.getHost())||port(base)!=port(models)||models.getPath()==null||models.getPath().isEmpty())throw new SecurityException("归档目录必须保持原接口同源");
+            if(!(switch(format){case OPENAI->protocol==ModelBinding.Protocol.OPENAI_CHAT||protocol==ModelBinding.Protocol.OPENAI_RESPONSES;case ANTHROPIC->protocol==ModelBinding.Protocol.ANTHROPIC;case GEMINI->protocol==ModelBinding.Protocol.GEMINI;case OPENROUTER->protocol==ModelBinding.Protocol.OPENAI_CHAT;case NONE->false;}))throw new SecurityException("归档目录与推理协议不符");
+        }
         ReasoningOptions.fromJson(c.getJSONObject("reasoning"));
-        if(c.has("compatibility")){ProviderCompatProfile compatibility=ProviderCompatProfile.fromJson(c.getJSONObject("compatibility"));new ModelConfig(c.getString("baseUrl"),"",model,false,20,60,provider,4096).withProviderCompatibility(compatibility);}
+        if(c.has("compatibility")){ProviderCompatProfile compatibility=ProviderCompatProfile.fromJson(c.getJSONObject("compatibility"));ModelConfig selected=new ModelConfig(c.getString("baseUrl"),"",model,false,20,60,provider,4096);if(selected.usesBedrock())selected=selected.withBedrockSession(c.getString("bedrockRegion"),null);selected.withProviderCompatibility(compatibility);}
         return new JSONObject(row.toString());
     }
     private static URI endpoint(String value)throws Exception {
@@ -92,6 +99,7 @@ public final class OwnerSettingsBackup {
             }
             apiMap.put(source,newId);ModelBinding binding=new ModelBinding(newId,c.getString("provider"),ModelCatalogRoutes.protocol(c.getString("provider")),ModelBinding.Format.valueOf(c.getString("catalogFormat")),new URI(c.getString("modelsEndpoint")),"key-"+id(action,"credential",source),1,"connection-"+id(action,"installation",source),1,false);
             ModelConfig config=new ModelConfig(c.getString("baseUrl"),"",c.getString("model"),false,c.getInt("maxSteps"),c.getInt("requestTimeoutSeconds"),c.getString("provider"),c.getInt("maxOutputTokens"));
+            if(config.usesBedrock())config=config.withBedrockSession(c.getString("bedrockRegion"),null);
             config=c.getBoolean("catalogEnabled")?config.withNativeCatalog(binding,ReasoningOptions.fromJson(c.getJSONObject("reasoning")),c.getInt("imageTokenReserve")):config.withApiConnection(binding);
             if(c.has("compatibility"))config=config.withProviderCompatibility(ProviderCompatProfile.fromJson(c.getJSONObject("compatibility")));
             ApiConnectionProfile restored=new ApiConnectionProfile(row.getString("name"),1,false,"",config);restoredApi.put(restored.toJson());rows.put(identity("api",source,newId));

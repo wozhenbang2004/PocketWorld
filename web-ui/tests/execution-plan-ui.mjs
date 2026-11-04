@@ -20,14 +20,36 @@ const drawer = () => page.locator('.pw-task-drawer');
 const count = action => page.evaluate(action => window.executionPlanFixture.calls.filter(row => row.action === action).length, action);
 const approve = () => drawer().getByRole('button', { name: '确认这版计划，在原范围内继续', exact: true });
 async function stable() {
-  await page.evaluate(async () => { await document.fonts.ready; await Promise.allSettled(document.getAnimations().filter(animation => animation instanceof CSSTransition).map(animation => animation.finished)); });
+  const wait = await page.evaluate(async () => {
+    const value = number => typeof number === 'number' && !Number.isFinite(number) ? String(number) : number;
+    const describe = animation => {
+      const timing = animation.effect?.getComputedTiming(), target = animation.effect?.target;
+      return { type: animation.constructor.name, property: animation instanceof CSSTransition ? animation.transitionProperty : null,
+        playState: animation.playState, pending: animation.pending, currentTime: value(animation.currentTime),
+        duration: value(timing?.duration), endTime: value(timing?.endTime), progress: timing?.progress,
+        target: target instanceof Element ? `${target.tagName.toLowerCase()}${target.id ? '#' + target.id : ''}.${String(target.className).slice(0, 160)}` : null };
+    };
+    const animations = document.getAnimations(), before = { fonts: document.fonts.status, animations: animations.map(describe) };
+    const finite = animations.filter(animation => animation instanceof CSSTransition && animation.playState !== 'paused' && Number.isFinite(animation.effect?.getComputedTiming().endTime));
+    const started = performance.now(); let timer;
+    // A paused or detached transition elsewhere in the mounted document must not hold a screenshot forever.
+    const result = await Promise.race([
+      Promise.allSettled([document.fonts.ready, ...finite.map(animation => animation.finished)]).then(() => 'settled'),
+      new Promise(resolve => { timer = setTimeout(() => resolve('timed_out'), 2500); })
+    ]);
+    clearTimeout(timer);
+    return { result, elapsedMs: Math.round(performance.now() - started), before,
+      after: { fonts: document.fonts.status, animations: document.getAnimations().map(describe) } };
+  });
+  (record.layoutWaits ||= []).push(wait);
   await page.waitForFunction(() => {
     const value = JSON.stringify([...document.querySelectorAll('.pw-task-drawer,.pw-task-body,.pw-approval-item')].map(node => { const box = node.getBoundingClientRect(); return [box.x, box.y, box.width, box.height, node.scrollTop]; }));
     const old = window.__executionPlanLayout; window.__executionPlanLayout = { value, stable: old?.value === value ? old.stable + 1 : 0 }; return window.__executionPlanLayout.stable >= 3;
   }, null, { polling: 'raf' });
 }
 async function shot(name) { await stable(); await page.screenshot({ path: path.join(output, name + '.png') }); record.screenshots.push(name + '.png'); }
-async function openReview() { await drawer().getByTestId('task-primary-action').click(); await drawer().getByRole('region', { name: '本次操作授权', exact: true }).waitFor(); }
+// Opening an attention task now reads its original review and presents the pending decision directly.
+async function openReview() { await drawer().getByRole('region', { name: '本次操作授权', exact: true }).waitFor(); }
 async function checkScope(number) { const label = `我已核对计划版本 ${number} 的完整步骤和原任务范围`; await drawer().getByText(label, { exact: true }).click(); assert.equal(await drawer().getByRole('checkbox', { name: label, exact: true }).isChecked(), true); }
 
 try {
@@ -49,7 +71,8 @@ try {
   await page.waitForFunction(() => window.executionPlanFixture.calls.some(row => row.action === 'tasks.open'));
   const opened = await page.evaluate(() => window.executionPlanFixture.calls.filter(row => row.action === 'tasks.open'));
   assert.equal(opened.length, 1); assert.equal(opened[0].args.requestNavigation, false);
-  await drawer().waitFor(); await drawer().getByRole('button', { name: '本次范围', exact: true }).click();
+  await drawer().waitFor(); await drawer().getByRole('button', { name: '过程与范围', exact: true }).click();
+  await drawer().getByRole('button', { name: /^(本次范围|修订本次范围)$/ }).click();
   await drawer().getByRole('button', { name: '进入只读规划', exact: true }).click();
   await drawer().getByText('只读规划已保存在原任务中，尚未启动执行。原预算与截止时间保持不变。', { exact: true }).waitFor();
   const entered = await page.evaluate(() => ({ task: window.executionPlanFixture.state(), calls: window.executionPlanFixture.calls }));

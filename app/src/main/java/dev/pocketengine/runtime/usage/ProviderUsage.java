@@ -38,7 +38,7 @@ public final class ProviderUsage {
         private boolean observed;
         private String reportedModel,finishReason;private JSONObject providerMeasures=new JSONObject();
         public Collector(String protocol){
-            if(!Set.of("openai_chat","openai_responses","anthropic","gemini","openai_realtime","openai_realtime_transcription").contains(protocol))throw new IllegalArgumentException("unsupported_usage_protocol");
+            if(!Set.of("openai_chat","openai_responses","anthropic","bedrock_anthropic","gemini","openai_realtime","openai_realtime_transcription").contains(protocol))throw new IllegalArgumentException("unsupported_usage_protocol");
             this.protocol=protocol;
         }
         @Override public synchronized void observe(JSONObject wire,Stage stage){
@@ -80,7 +80,7 @@ public final class ProviderUsage {
                     media(usage,"output_token_details","text_tokens","OUTPUT_TEXT",stage);
                     media(usage,"output_token_details","audio_tokens","OUTPUT_AUDIO",stage);
                     break;
-                case "anthropic":
+                case "anthropic":case "bedrock_anthropic":
                     count(usage,"input_tokens",Counter.INPUT,"usage.input_tokens",stage);
                     count(usage,"output_tokens",Counter.OUTPUT,"usage.output_tokens",stage);
                     count(usage,"cache_read_input_tokens",Counter.CACHE_READ,"usage.cache_read_input_tokens",stage);
@@ -135,6 +135,7 @@ public final class ProviderUsage {
         }
         public synchronized Map<Counter,Count> counts(){return Collections.unmodifiableMap(new LinkedHashMap<>(counts));}
         public synchronized JSONObject toJson()throws Exception{
+            boolean exclusiveCacheInput=protocol.equals("anthropic")||protocol.equals("bedrock_anthropic");
             JSONObject values=new JSONObject();
             for(Counter counter:Counter.values()){
                 Count value=counts.get(counter);
@@ -145,8 +146,8 @@ public final class ProviderUsage {
             JSONObject mediaValues=new JSONObject();if(protocol.startsWith("openai_realtime"))for(String key:new String[]{"INPUT_TEXT","INPUT_AUDIO","OUTPUT_TEXT","OUTPUT_AUDIO"}){Count count=media.get(key);mediaValues.put(key,count==null?new JSONObject().put("value",JSONObject.NULL).put("source","unknown"):count.json());}
             return new JSONObject().put("providerMeasures",new JSONObject(providerMeasures.toString())).put("mediaCounters",mediaValues).put("protocol",protocol).put("reported",observed).put("counters",values).put("invalidFields",bad)
                     .put("finishReason",finishReason==null?JSONObject.NULL:finishReason)
-                    .put("inputIncludesCacheRead",!protocol.equals("anthropic"))
-                    .put("inputIncludesCacheWrite",!protocol.equals("anthropic"))
+                    .put("inputIncludesCacheRead",!exclusiveCacheInput)
+                    .put("inputIncludesCacheWrite",!exclusiveCacheInput)
                     .put("outputIncludesReasoning",protocol.startsWith("openai_realtime")?JSONObject.NULL:!protocol.equals("gemini"))
                     .put("outputMeaning",protocol.equals("openai_realtime_transcription")?"separate_asr_report_do_not_add_to_realtime_response":protocol.equals("openai_realtime")?"reported_text_and_audio_total_do_not_add_media_details":protocol.equals("gemini")?"response_candidates":"generated_output_including_reasoning")
                     .put("actualCost",JSONObject.NULL).put("actualCostSource","unknown")

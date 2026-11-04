@@ -39,10 +39,10 @@ public final class TeamProjectRoundHost {
             else{JSONObject pin=shown.getJSONObject("sourceReference");now=issuer.local.captureTeamProjectPackageForHost(pin.getString("id"),pin.getString("sha256")).view();}
             if(!shown.getString("sourceSnapshotIdentity").equals(now.getString("snapshotIdentity"))||!shown.getString("expectedSourceDigest").equals(now.getString("sourceDigest")))throw new SecurityException("原固定完整源版本不符");
             JSONArray formal=shown.getJSONArray("originalFormalFiles"),paths=new JSONArray();for(int i=0;i<formal.length();i++)paths.put(formal.getJSONObject(i).getString("path"));if(!TeamWorkFiles.canonical(formal).equals(TeamWorkFiles.canonical(TeamWorkFiles.captureFiles(issuer.workspace,shown.getString("projectId"),paths))))throw new SecurityException("目标原项目当前文件已改变，不能沿旧审阅暗盖新文件");
-            ModelConfig current=issuer.models.get();if(!TeamWorkFiles.canonical(model.publicJson()).equals(TeamWorkFiles.canonical(current.publicJson()))||!java.security.MessageDigest.isEqual(model.apiKey.getBytes(java.nio.charset.StandardCharsets.UTF_8),current.apiKey.getBytes(java.nio.charset.StandardCharsets.UTF_8)))throw new SecurityException("新一轮模型配置已变化，请重新审阅");
+            ModelConfig current=issuer.models.get();if(!TeamWorkFiles.canonical(model.publicJson()).equals(TeamWorkFiles.canonical(current.publicJson()))||!model.sameCredentials(current))throw new SecurityException("新一轮模型配置已变化，请重新审阅");
             if(!shown.getString("runtimeIdentity").equals(issuer.local.projectRuntimeForHost(shown.getString("runtimeId")).getString("identity")))throw new SecurityException("本机原运行环境身份已变，请重新选择");
         }
-        private void requireModel(ModelConfig actual)throws Exception{if(actual==null||!TeamWorkFiles.canonical(model.publicJson()).equals(TeamWorkFiles.canonical(actual.publicJson()))||!java.security.MessageDigest.isEqual(model.apiKey.getBytes(java.nio.charset.StandardCharsets.UTF_8),actual.apiKey.getBytes(java.nio.charset.StandardCharsets.UTF_8)))throw new SecurityException("原新attempt实际模型不是本次明确选择，请重新审阅");}
+        private void requireModel(ModelConfig actual)throws Exception{if(actual==null||!TeamWorkFiles.canonical(model.publicJson()).equals(TeamWorkFiles.canonical(actual.publicJson()))||!model.sameCredentials(actual))throw new SecurityException("原新attempt实际模型不是本次明确选择，请重新审阅");}
         public void checkCurrent()throws Exception{source.checkCurrent();filesCurrent();issuer.requireHeads(source);source.checkCurrent();}
     }
     public final class Page implements AutoCloseable {
@@ -86,7 +86,7 @@ public final class TeamProjectRoundHost {
     private LocalModule.TeamProjectSource continuationSource(String taskId)throws Exception {
         JSONObject task=tasks.get(taskId,false),context=task.getJSONObject("developmentContext");JSONObject observed=dev.pocketengine.features.local.project.ProjectSources.describe(local.handle("export",new JSONObject().put("checkoutId",context.getString("checkoutId"))));if(!context.getString("projectId").equals(observed.getString("projectId")))throw new SecurityException("原round副本项目已变");return local.captureTeamProjectSourceForHost(context.getString("checkoutId"),observed.getString("sourceDigest"));
     }
-    private static boolean sameModel(ModelConfig a,ModelConfig b)throws Exception{return a!=null&&b!=null&&TeamWorkFiles.canonical(a.publicJson()).equals(TeamWorkFiles.canonical(b.publicJson()))&&java.security.MessageDigest.isEqual(a.apiKey.getBytes(java.nio.charset.StandardCharsets.UTF_8),b.apiKey.getBytes(java.nio.charset.StandardCharsets.UTF_8));}
+    private static boolean sameModel(ModelConfig a,ModelConfig b)throws Exception{return a!=null&&b!=null&&TeamWorkFiles.canonical(a.publicJson()).equals(TeamWorkFiles.canonical(b.publicJson()))&&a.sameCredentials(b);}
     /** Private native foreground review of the existing pool, NOT another budget or task authority. */
     public final class ContinuationPage implements AutoCloseable {
         private final String taskId;private final TaskStore.TeamRoundContinuationWindow window;private boolean closed;private ContinuationReview pending;private Continuation submitted;

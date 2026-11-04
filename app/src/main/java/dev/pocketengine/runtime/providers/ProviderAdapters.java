@@ -2,6 +2,8 @@ package dev.pocketengine.runtime.providers;
 
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.runtime.ModelGateway.GatewayException;
+import dev.pocketengine.runtime.providers.bedrock.BedrockEndpoint;
+import dev.pocketengine.runtime.providers.bedrock.BedrockSigV4;
 import java.net.URI;
 import java.net.URL;
 import java.util.HashMap;
@@ -14,7 +16,7 @@ import org.json.JSONObject;
 public final class ProviderAdapters {
     private ProviderAdapters(){}
     public static ProviderAdapter selected(String provider)throws GatewayException {
-        switch(provider){case "openai_chat":return new Chat();case "openai_responses":return new Responses();case "anthropic":return new Anthropic();case "gemini":return new Gemini();default:throw error("不支持的模型协议");}
+        switch(provider){case "openai_chat":return new Chat();case "openai_responses":return new Responses();case "anthropic":return new Anthropic();case "bedrock_anthropic":return new BedrockAnthropic();case "gemini":return new Gemini();default:throw error("不支持的模型协议");}
     }
     private abstract static class Base implements ProviderAdapter {
         final String id;Base(String id){this.id=id;}
@@ -52,8 +54,9 @@ public final class ProviderAdapters {
             return normalized(text.toString(),calls,output);
         }
     }
-    private static final class Anthropic extends Base {
-        Anthropic(){super("anthropic");}
+    private static class Anthropic extends Base {
+        Anthropic(){this("anthropic");}
+        Anthropic(String provider){super(provider);}
         public URL endpoint(ModelConfig config)throws Exception{return route(config.baseUrl,"/messages");}
         @Override public Map<String,String> headers(ModelConfig config){Map<String,String> headers=super.headers(config);headers.put("anthropic-version","2026-10-21");return headers;}
         public JSONObject request(ModelConfig config,JSONArray messages,JSONArray tools)throws Exception {
@@ -67,6 +70,27 @@ public final class ProviderAdapters {
         public JSONObject response(JSONObject wire)throws Exception {
             if("error".equals(wire.optString("type")))throw error("Claude服务返回错误，请检查认证或模型设置");String stop=wire.optString("stop_reason");if(!stop.isEmpty()&&!java.util.Set.of("end_turn","tool_use","stop_sequence").contains(stop))throw error("Claude回复未完成、拒绝或需要后续处理，未派发其中动作");JSONArray content=wire.optJSONArray("content");if(content==null)throw error("接口没有返回Claude Messages内容");StringBuilder text=new StringBuilder();JSONArray calls=new JSONArray();
             for(int i=0;i<content.length();i++){JSONObject block=content.getJSONObject(i);switch(block.getString("type")){case "text":text.append(block.getString("text"));break;case "tool_use":calls.put(call(block.getString("id"),block.getString("name"),block.getJSONObject("input").toString()));break;case "thinking":case "redacted_thinking":break;default:throw error("Claude返回了尚未接入的内容或服务端工具，未派发动作");}}return normalized(text.toString(),calls,content);
+        }
+    }
+    private static final class BedrockAnthropic extends Anthropic {
+        BedrockAnthropic(){super("bedrock_anthropic");}
+        @Override public URL endpoint(ModelConfig config)throws Exception {
+            if(!config.usesBedrock())throw error("Bedrock请求必须使用原生Bedrock连接");
+            return BedrockEndpoint.endpoint(config.bedrockRegion,config.model,false);
+        }
+        @Override public JSONObject request(ModelConfig config,JSONArray messages,JSONArray tools)throws Exception {
+            if(!config.usesBedrock())throw error("Bedrock请求必须使用原生Bedrock连接");
+            BedrockEndpoint.validate(config.bedrockRegion,config.model);
+            JSONObject body=super.request(config,messages,tools);
+            body.remove("model");body.remove("stream");
+            return body.put("anthropic_version","bedrock-2023-05-31");
+        }
+        @Override public Map<String,String> headers(ModelConfig config){
+            throw new SecurityException("bedrock_requires_exact_final_request_bytes");
+        }
+        @Override public Map<String,String> headers(ModelConfig config,URL endpoint,byte[] payload)throws Exception {
+            if(!config.usesBedrock())throw error("Bedrock签名必须使用原生Bedrock连接");
+            return BedrockSigV4.headers(config.bedrockRegion,config.model,config.awsSession,endpoint,payload,System.currentTimeMillis());
         }
     }
     private static final class Gemini extends Base {

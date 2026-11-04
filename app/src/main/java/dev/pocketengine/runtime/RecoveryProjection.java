@@ -18,20 +18,25 @@ public final class RecoveryProjection {
     String referenceData(){return reference;}
 
     static RecoveryProjection fromJournal(String taskId,JSONArray source,String secret)throws Exception {
+        return fromJournalWithRedaction(taskId,source,value->secret!=null&&!secret.isEmpty()&&value.contains(secret));
+    }
+    /** Uses the original captured credential detector without exposing secret values. */
+    static RecoveryProjection fromJournalWithRedaction(String taskId,JSONArray source,java.util.function.Predicate<String> sensitive)throws Exception {
+        java.util.Objects.requireNonNull(sensitive);
         if(source==null||source.length()==0)return EMPTY;
         JSONArray rows=new JSONArray();Set<String> seen=new HashSet<>();int scanned=0,skipped=0,redacted=0;
         JSONObject metadata=new JSONObject().put("format","pocketworld.native-recovery-facts.v1")
                 .put("executionAuthorized",false).put("automaticReplay",false).put("argumentsIncluded",false).put("receiptBodyIncluded",false)
                 .put("fullSqlAuditRetained",true).put("queryFirstForCitation",true).put("records",rows);
-        if(identifier(taskId,200)&&!secret(taskId,secret))metadata.put("taskId",taskId);else metadata.put("taskId",JSONObject.NULL);
+        if(identifier(taskId,200)&&!sensitive.test(taskId))metadata.put("taskId",taskId);else metadata.put("taskId",JSONObject.NULL);
         for(int index=source.length()-1;index>=0&&scanned<MAX_SCANNED_ROWS&&rows.length()<MAX_ROWS;index--){
             scanned++;JSONObject original=source.optJSONObject(index);if(original==null){skipped++;continue;}
             Object identity=original.opt("operationId");if(!(identity instanceof String)||!identifier((String)identity,200)){skipped++;continue;}
-            String id=(String)identity;if(secret(id,secret)){redacted++;continue;}if(!seen.add(id)){skipped++;continue;}
+            String id=(String)identity;if(sensitive.test(id)){redacted++;continue;}if(!seen.add(id)){skipped++;continue;}
             JSONObject fact=new JSONObject().put("operationId",id);
             for(String key:new String[]{"runId","tool","state"}){
                 Object value=original.opt(key);if(value instanceof String&&identifier((String)value,key.equals("tool")?120:200)){
-                    if(secret((String)value,secret)){fact.put(key,JSONObject.NULL);redacted++;}else fact.put(key,value);
+                    if(sensitive.test((String)value)){fact.put(key,JSONObject.NULL);redacted++;}else fact.put(key,value);
                 }
             }
             JSONObject receipt=original.optJSONObject("receipt");
@@ -40,7 +45,7 @@ public final class RecoveryProjection {
                     Object value=receipt.opt(key);if(value instanceof Boolean||receipt.has(key)&&value==JSONObject.NULL)returned.put(key,value);
                 }
                 for(String key:new String[]{"status","code"}){Object value=receipt.opt(key);if(value instanceof String&&identifier((String)value,80)){
-                    if(secret((String)value,secret)){returned.put(key,JSONObject.NULL);redacted++;}else returned.put(key,value);
+                    if(sensitive.test((String)value)){returned.put(key,JSONObject.NULL);redacted++;}else returned.put(key,value);
                 }}
                 Object exit=receipt.opt("exitCode");if(exit instanceof Integer||exit instanceof Long)returned.put("exitCode",exit);
                 if("resolved".equals(original.optString("state"))&&"owner_reconciliation".equals(receipt.optString("source"))&&Set.of("occurred","not_occurred").contains(receipt.optString("outcome")))returned.put("ownerReconciliation",receipt.getString("outcome")).put("independentlyVerified",false);
@@ -72,5 +77,4 @@ public final class RecoveryProjection {
         int end=prefix.length()+exactSelectedContext.length();return end<body.length()&&body.charAt(end)=='\n';
     }
     private static boolean identifier(String value,int max){return value!=null&&!value.isEmpty()&&value.length()<=max&&value.matches("[A-Za-z0-9_.:-]+");}
-    private static boolean secret(String value,String secret){return secret!=null&&!secret.isEmpty()&&value.contains(secret);}
 }

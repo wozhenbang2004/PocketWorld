@@ -67,7 +67,20 @@ public final class AssistantModule implements EngineModule {
     private record DevelopmentTurn(JSONObject binding,ModelConfig config,RunControl control) { }
     // Only live original host references. No persistence, replay or independent task status.
     private final java.util.Map<String,DevelopmentTurn> developmentTurns=new java.util.concurrent.ConcurrentHashMap<>();
-    public void releaseDevelopmentTurn(RunControl original){synchronized(admission){developmentTurns.entrySet().removeIf(entry->entry.getValue().control()==original);}}
+    public void releaseDevelopmentTurn(RunControl original){
+        final Set<String> released;
+        synchronized(admission){released=removeDevelopmentTurn(original);released.removeIf(this::conversationLive);}
+        emitReleasedConversations(released);
+    }
+    /** Caller holds admission; never notify while the original conversation is locked. */
+    private Set<String> removeDevelopmentTurn(RunControl original){
+        Set<String> released=new HashSet<>();
+        developmentTurns.entrySet().removeIf(entry->{if(entry.getValue().control()!=original)return false;released.add(entry.getKey());return true;});
+        return released;
+    }
+    private void emitReleasedConversations(Set<String> released){
+        for(String conversation:released)context.emit(id(),new JSONObject(java.util.Map.of("phase","idle","conversationId",conversation)));
+    }
 
     private final java.util.concurrent.ThreadPoolExecutor turns=new java.util.concurrent.ThreadPoolExecutor(2,2,0,java.util.concurrent.TimeUnit.SECONDS,new java.util.concurrent.ArrayBlockingQueue<>(10));
     private final ConversationTurnSlots<LiveTurn> liveTurns=new ConversationTurnSlots<>(2,8,turns);
@@ -248,11 +261,20 @@ public final class AssistantModule implements EngineModule {
                     }
                 }
                 if(selected!=null){
-                    try{cancelOriginal(selected.control(),selected.conversation());synchronized(admission){pendingCancellations.remove(selected.control());}}
-                    finally{if(selected.control().isCancelled())synchronized(admission){
-                        var lease=liveTurns.get(selected.conversation());if(lease!=null&&lease.original().control==selected.control())liveTurns.discardQueued(lease);
-                        releaseDevelopmentTurn(selected.control());
-                    }}
+                    boolean clearedPending=false;
+                    try{cancelOriginal(selected.control(),selected.conversation());synchronized(admission){clearedPending=pendingCancellations.remove(selected.control())!=null;}}
+                    finally{
+                        Set<String> released=new HashSet<>();
+                        synchronized(admission){
+                            if(clearedPending)released.add(selected.conversation());
+                            if(selected.control().isCancelled()){
+                                var lease=liveTurns.get(selected.conversation());if(lease!=null&&lease.original().control==selected.control()&&liveTurns.discardQueued(lease))released.add(selected.conversation());
+                                released.addAll(removeDevelopmentTurn(selected.control()));
+                            }
+                            released.removeIf(this::conversationLive);
+                        }
+                        emitReleasedConversations(released);
+                    }
                 }
                 return new JSONObject().put("cancellationRequested",selected!=null);
             }
@@ -822,6 +844,46 @@ public final class AssistantModule implements EngineModule {
         commit(()->{JSONObject conversation=find(conversationId),message=newMessage(conversationId,"assistant",text,config).put("taskId",taskId);copyMemoryReference(response,message);conversation.getJSONArray("messages").put(message);trimMessages(conversation);conversation.put("updatedAt",System.currentTimeMillis());return null;});
         synchronizeSources();context.emit(id(),new JSONObject().put("phase","idle").put("conversationId",conversationId).put("taskId",taskId));
     }
+    /** Native owner review only; deliberately absent from handle/model tool commands.
+     * The original private conversation may be fully idle with no assistant Run. */
+    public JSONObject preparePhoneHandoffSource(String conversationId)throws Exception{
+        synchronized(admission){
+            if(migrationInProgress||historyTasks==null||!durable())throw new IllegalStateException("请先核对原私人会话留存，尚未创建手机任务");
+            idle(conversationId);
+            return historyRepository.transaction(()->historyRepository.preparePhoneHandoffSource(conversationId));
+        }
+    }
+    /** Native TaskStore outbox only. It can publish a frozen phone result after restart;
+     * it never starts/resumes a phone task or an assistant conversation Run. */
+    public JSONObject appendPhoneHandoffResult(String taskId,String runId,int epoch)throws Exception{
+        final JSONObject saved;final boolean added;
+        synchronized(admission){
+            if(migrationInProgress||historyTasks==null||!durable())throw new IllegalStateException("原手机结果与私人对话存储尚不可核对");
+            // Capture liveness before entering TaskStore. The SQL writer never acquires
+            // admission/slot locks. New admissions cannot race this snapshot; an ending
+            // turn may conservatively defer once and its existing idle event wakes delivery.
+            Set<String> busy=new HashSet<>();for(var lease:liveTurns.snapshot())busy.add(lease.conversationId());busy.addAll(developmentTurns.keySet());
+            for(Cancellation pending:pendingCancellations.values())busy.add(pending.conversation());
+            saved=historyTasks.withConversationPhoneDelivery(taskId,runId,epoch,delivery->{
+                String conversation=delivery.snapshot().getString("conversationId");
+                return historyRepository.appendPhoneHandoffResult(historyTasks,delivery,busy.contains(conversation));
+            });
+            added=saved.optBoolean("accepted")&&!saved.optBoolean("duplicate");
+            if(added){sourceGeneration++;synchronizationPending=true;}
+        }
+        // The source/message and original outbox have already committed together. A
+        // later sync failure is recoverable through the unique delivery index, not replay.
+        if(added){
+            try{synchronizeSources();}
+            finally{context.emit(id(),new JSONObject(saved.toString()).put("phase","phone_handoff_result"));}
+        }
+        return copy(saved);
+    }
+    /** Read the original unique source index only; no body projection, retry or idle event. */
+    public JSONObject queryPhoneHandoffResult(String conversationId,String taskId,String runId,int epoch)throws Exception{
+        if(historyTasks==null||!durable()||conversationId==null||conversationId.isBlank())throw new SecurityException("原手机结果索引尚不可核对");
+        return sourceRead(()->historyRepository.queryPhoneHandoffResult(conversationId,taskId,runId,epoch));
+    }
     @FunctionalInterface public interface NativeTaskDeliverySource {JSONObject use(JSONObject original,java.util.concurrent.Callable<JSONObject> action)throws Exception;}
     private volatile NativeTaskDeliverySource nativeTaskDeliverySource;
     /** Bind the existing canonical source bridge once; not a model/feature command. */
@@ -968,7 +1030,7 @@ public final class AssistantModule implements EngineModule {
     private static JSONObject sourceMetadata(JSONObject row)throws Exception{return new JSONObject().put("kind","message").put("sourceId",row.getString("sourceId")).put("revision",row.getLong("revision")).put("ownerId","owner").put("spaceId","private").put("deleted",row.getBoolean("deleted")).put("conversationId",row.getString("conversationId")).put("role",row.optString("role")).put("updatedAt",row.optLong("updatedAt"));}
     private static long revision(JSONObject input,String key){Object value=input.opt(key);if(!(value instanceof Byte||value instanceof Short||value instanceof Integer||value instanceof Long)||((Number)value).longValue()<1||((Number)value).longValue()==Long.MAX_VALUE)throw new IllegalArgumentException("消息revision必须为正整数");return ((Number)value).longValue();}
     private static JSONObject copy(JSONObject value)throws Exception{return new JSONObject(value.toString());}
-    private static String redact(String text,ModelConfig config){return config.apiKey.isEmpty()?text:text.replace(config.apiKey,"[密钥已隐藏]");}
+    private static String redact(String text,ModelConfig config){return config.redactSensitive(text);}
     private static String answer(JSONObject response){Object content=response.opt("content");if(content instanceof String)return (String)content;if(content instanceof JSONArray){StringBuilder result=new StringBuilder();JSONArray parts=(JSONArray)content;for(int i=0;i<parts.length();i++){JSONObject p=parts.optJSONObject(i);if(p!=null&&"text".equals(p.optString("type")))result.append(p.optString("text"));}return result.toString();}return "";}
     @Override public void close(){
         java.util.Map<RunControl,String> originals=new java.util.LinkedHashMap<>();
