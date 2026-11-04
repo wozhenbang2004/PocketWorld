@@ -11,7 +11,7 @@ import static org.junit.Assert.*;
 public final class DeviceProtocolTest {
     private JSONObject fixtures()throws Exception{
         String explicit=System.getProperty("pocketworld.protocol.fixtures");if(explicit!=null)return new JSONObject(new String(Files.readAllBytes(Path.of(explicit)),StandardCharsets.UTF_8));
-        Path at=Path.of("").toAbsolutePath();for(int depth=0;at!=null&&depth<5;depth++,at=at.getParent()){Path file=at.resolve("protocol/device-v1/fixtures.json");if(Files.isRegularFile(file))return new JSONObject(new String(Files.readAllBytes(file),StandardCharsets.UTF_8));}throw new IllegalStateException("Shared protocol fixture asset not found");
+        String root=System.getProperty("pocket.gateway.source");assertNotNull("Host runner must provide the repository root",root);Path file=Path.of(root,"protocol/device-v1/fixtures.json");assertTrue("Shared protocol fixture asset not found",Files.isRegularFile(file));return new JSONObject(new String(Files.readAllBytes(file),StandardCharsets.UTF_8));
     }
     @Test public void javaAndPythonUseTheSameSharedFixtures()throws Exception{
         JSONArray rows=fixtures().getJSONArray("fixtures");assertEquals(63,rows.length());for(int i=0;i<rows.length();i++){

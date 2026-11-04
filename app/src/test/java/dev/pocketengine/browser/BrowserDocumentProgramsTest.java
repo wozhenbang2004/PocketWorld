@@ -23,9 +23,9 @@ public final class BrowserDocumentProgramsTest {
         Process process=null;
         try {
             Files.write(input,scripts.toString().getBytes(StandardCharsets.UTF_8));
-            String node=System.getenv("NODE_BIN");if(node==null||node.isBlank())node="node";
-            Path runner=Path.of(System.getProperty("user.dir"),"tools","browser-document-programs.cjs");
-            if(!Files.isRegularFile(runner))runner=Path.of(System.getProperty("user.dir"),"..","tools","browser-document-programs.cjs");
+            String node=System.getProperty("a25.node",System.getenv("NODE_BIN"));if(node==null||node.isBlank())node="node";
+            String root=System.getProperty("pocket.gateway.source");assertNotNull("Host runner must provide the repository root",root);
+            Path runner=Path.of(root,"tools","browser-document-programs.cjs");
             assertTrue("Original repository Node fixture must be available",Files.isRegularFile(runner));
             process=new ProcessBuilder(node,runner.toAbsolutePath().toString(),input.toString()).redirectErrorStream(true).redirectOutput(output.toFile()).start();
             assertTrue("Document program checks exceeded 20 seconds",process.waitFor(20,TimeUnit.SECONDS));

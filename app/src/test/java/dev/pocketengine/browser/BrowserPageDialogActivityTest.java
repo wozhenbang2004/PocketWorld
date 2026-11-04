@@ -59,7 +59,8 @@ public final class BrowserPageDialogActivityTest {
         final BrowserModule module;final BrowserTaskHost host;final Set<Object> observedCallbacks=Collections.newSetFromMap(new IdentityHashMap<>());
         final Set<String> decisions=new HashSet<>();String taskId="";RunControl control;ModelCapabilityAdapters.Binding binding;RunJournal journal;BrowserTaskCapabilityPort port;
         F()throws Exception {
-            BrowserActivity.setOwnerPanelInstaller(null);activity=Robolectric.buildActivity(BrowserActivity.class).create().start().resume();browser=activity.get();browser.openForOwner("https://owner.example/original");tasks=new TaskStore(RuntimeEnvironment.getApplication());if(RuntimeEnvironment.getApplication() instanceof dev.pocketengine.EngineApplication)((dev.pocketengine.EngineApplication)RuntimeEnvironment.getApplication()).tasks=tasks;
+            dev.pocketengine.EngineApplication app=(dev.pocketengine.EngineApplication)RuntimeEnvironment.getApplication();tasks=new TaskStore(app);app.tasks=tasks;dev.pocketengine.testutil.ReadyApplicationFixture.complete(app);
+            BrowserActivity.setOwnerPanelInstaller(null);activity=Robolectric.buildActivity(BrowserActivity.class).create().start().resume();browser=activity.get();browser.openForOwner("https://owner.example/original");
             module=new BrowserModule(new FeatureContext(RuntimeEnvironment.getApplication(),null,null,events::add));
             host=new BrowserTaskHost(module,tasks,resources,new BrowserTaskHost.OriginalTasks(){public void checkModelConfigured(){}public void launch(String id){taskId=id;}public RunControl currentControl(String id){return taskId.equals(id)?control:null;}},events::add);
             JSONObject selected=browser.snapshot();pump(worker.submit(()->host.startForOwner("处理网页提示后继续同一研究",selected,true,BrowserReadScope.forOwner(true,false,""))),true);

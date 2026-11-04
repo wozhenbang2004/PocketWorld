@@ -16,23 +16,26 @@ import org.junit.Test;
 public final class RepeatToolRunnerTest {
     private static final String TAG="<native_repeat_tool_notice>";
     private static final class Journal implements RunJournal {
-        JSONObject saved=new JSONObject();int begins,finishes;
+        JSONObject saved=new JSONObject();int begins,finishes;int refuseCheckpointAt=-1;
         public JSONObject restore()throws Exception{return new JSONObject(saved.toString());}
         public void checkpoint(JSONArray messages,int steps,JSONObject observation)throws Exception{saved.put("messages",new JSONArray(messages.toString())).put("steps",steps).put("observation",observation);}
+        public boolean progressGuardSupported(){return true;}
+        public void checkpoint(JSONArray messages,int steps,JSONObject observation,JSONObject guard)throws Exception{if(steps==refuseCheckpointAt)throw new IllegalStateException("fixture original checkpoint unavailable");JSONObject next=RepeatToolNotice.checkpointValue(saved,guard);checkpoint(messages,steps,observation);saved.put("progressGuard",next);}
         public String beginOperation(String tool,JSONObject arguments){return "original-operation-"+(++begins);}
         public void finishOperation(String operation,JSONObject receipt){finishes++;}
     }
     private static final class Journey implements AutoCloseable {
         final List<JSONObject> requests=new CopyOnWriteArrayList<>();final AtomicInteger calls=new AtomicInteger();final Journal journal=new Journal();final RunControl control=new RunControl();final HttpServer server;
-        final List<JSONObject> events=new ArrayList<>();final String tool;final boolean varying,sideEffecting;final int unknownAt,ownerAfter;final ModelConfig config;
-        Journey(String tool,boolean varying,boolean sideEffecting,int unknownAt,int ownerAfter,int maxSteps)throws Exception{
-            this.tool=tool;this.varying=varying;this.sideEffecting=sideEffecting;this.unknownAt=unknownAt;this.ownerAfter=ownerAfter;
+        final List<JSONObject> events=new ArrayList<>();final String tool;final boolean varying,sideEffecting;final int unknownAt,ownerAfter,toolRounds;final String refusalPhase;final ModelConfig config;
+        Journey(String tool,boolean varying,boolean sideEffecting,int unknownAt,int ownerAfter,int maxSteps)throws Exception{this(tool,varying,sideEffecting,unknownAt,ownerAfter,maxSteps,5,"execute");}
+        Journey(String tool,boolean varying,boolean sideEffecting,int unknownAt,int ownerAfter,int maxSteps,int toolRounds,String refusalPhase)throws Exception{
+            this.tool=tool;this.varying=varying;this.sideEffecting=sideEffecting;this.unknownAt=unknownAt;this.ownerAfter=ownerAfter;this.toolRounds=toolRounds;this.refusalPhase=refusalPhase;
             server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
             server.createContext("/",exchange->{try {
                 JSONObject request=new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));requests.add(request);int index=requests.size();
                 JSONObject message=new JSONObject().put("role","assistant");
-                if(index<=5)message.put("tool_calls",new JSONArray().put(new JSONObject().put("id","original-call-"+index).put("type","function").put("function",new JSONObject().put("name",tool).put("arguments",new JSONObject().put("query",varying?"query-"+index:"PRIVATE QUERY").toString()))));else message.put("content","已核对原失败回执，等待主人选择，不重放动作。");
-                JSONObject response=new JSONObject().put("id","response-"+index).put("object","chat.completion").put("model","repeat-fixture").put("choices",new JSONArray().put(new JSONObject().put("index",0).put("message",message).put("finish_reason",index<=5?"tool_calls":"stop"))).put("usage",new JSONObject().put("prompt_tokens",10).put("completion_tokens",5).put("total_tokens",15));
+                if(index<=toolRounds)message.put("tool_calls",new JSONArray().put(new JSONObject().put("id","original-call-"+index).put("type","function").put("function",new JSONObject().put("name",tool).put("arguments",new JSONObject().put("query",varying?"query-"+index:"PRIVATE QUERY").toString()))));else message.put("content","已核对原失败回执，等待主人选择，不重放动作。");
+                JSONObject response=new JSONObject().put("id","response-"+index).put("object","chat.completion").put("model","repeat-fixture").put("choices",new JSONArray().put(new JSONObject().put("index",0).put("message",message).put("finish_reason",index<=toolRounds?"tool_calls":"stop"))).put("usage",new JSONObject().put("prompt_tokens",10).put("completion_tokens",5).put("total_tokens",15));
                 byte[] bytes=response.toString().getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
             }catch(Exception invalid){try{exchange.sendResponseHeaders(500,0);}catch(Exception ignored){}}finally{exchange.close();}});server.start();
             config=new ModelConfig("http://127.0.0.1:"+server.getAddress().getPort()+"/v1","own-repeat-credential","repeat-fixture",false,maxSteps,10,"openai_chat",1000);
@@ -41,6 +44,8 @@ public final class RepeatToolRunnerTest {
             CapabilityPort port=new CapabilityPort(){
                 public JSONArray tools()throws Exception{return new JSONArray().put(new JSONObject().put("type","function").put("function",new JSONObject().put("name",tool).put("description","Original read-only search fixture").put("parameters",new JSONObject().put("type","object").put("properties",new JSONObject().put("query",new JSONObject().put("type","string"))).put("required",new JSONArray().put("query")))));}
                 public boolean supports(String name){return tool.equals(name);}public boolean sideEffecting(String name){return sideEffecting;}
+                public void validate(String name,JSONObject args){if("validation".equals(refusalPhase))throw new SecurityException("original authority denied");}
+                public JSONObject beforeTool(String name,JSONObject args,RunControl original)throws Exception{return "beforeTool".equals(refusalPhase)?new JSONObject().put("ok",false).put("accepted",false).put("code","permission_denied"):null;}
                 public JSONObject execute(String name,JSONObject arguments,RunControl original)throws Exception{assertSame(control,original);int index=calls.incrementAndGet();return new JSONObject().put("ok",false).put("code",index==unknownAt?"effect_unknown":"not_found").put("message","PRIVATE ORIGINAL RECEIPT");}
             };
             ContextBudgetPolicy.Source budget=selected->ContextBudgetPolicy.RouteBudget.forRoute(selected,new ContextWindow.Budget(128000,1000,1000,2L*1024*1024,64,0),ContextBudgetPolicy.SourceKind.OWNER_OVERRIDE,1,1);
@@ -66,7 +71,7 @@ public final class RepeatToolRunnerTest {
             assertEquals("needs_confirmation",j.run().status);assertEquals(5,j.calls.get());assertEquals(6,j.requests.size());assertEquals(0,j.notices());
         }
     }
-    @Test public void acceptedOwnerSteeringRestartsOnlySoftChainAndKeepsCumulativeHardCeiling()throws Exception {
+    @Test public void acceptedOwnerSteeringRestartsFailureChainAndKeepsCumulativeHardCeiling()throws Exception {
         try(Journey j=new Journey("project_search",false,false,-1,2,4)){
             RunOutcome outcome=j.run();assertEquals(outcome.summary,"needs_confirmation",outcome.status);assertEquals(4,j.calls.get());assertEquals(4,j.journal.saved.getInt("steps"));assertEquals(0,j.notices());
             assertTrue(j.journal.saved.toString().contains("00000000-0000-4000-8000-000000000002"));assertFalse(j.control.isCancelled());assertEquals(5,j.requests.size());
@@ -77,4 +82,25 @@ public final class RepeatToolRunnerTest {
             RunOutcome outcome=j.run();assertEquals(outcome.summary,"awaiting_user",outcome.status);assertTrue(outcome.evidence.getBoolean("requiresReconciliation"));assertEquals(3,j.calls.get());assertEquals(3,j.requests.size());assertEquals(0,j.notices());assertEquals(effect?3:0,j.journal.begins);assertEquals(effect?3:0,j.journal.finishes);
         }
     }
+    @Test public void sixFailedRoundsStopBeforeSeventhRequestAndColdRestoreCannotRestartThem()throws Exception {
+        try(Journey j=new Journey("project_search",false,false,-1,-1,12,20,"execute")){
+            RunOutcome stopped=j.run();assertEquals(stopped.summary,"awaiting_user",stopped.status);assertEquals(6,j.calls.get());assertEquals(6,j.requests.size());assertEquals(1,j.notices());
+            assertTrue(stopped.evidence.getJSONObject("progressGuard").getBoolean("stopped"));assertTrue(stopped.evidence.getJSONObject("progressGuard").getBoolean("durableCheckpoint"));
+            assertEquals(6,j.journal.saved.getInt("steps"));assertTrue(j.journal.saved.getJSONObject("progressGuard").getBoolean("stopped"));
+            assertEquals("awaiting_user",j.run().status);assertEquals(6,j.calls.get());assertEquals(6,j.requests.size());assertFalse(j.control.isCancelled());
+        }
+    }
+    @Test public void nativeArgumentAndBeforeToolRefusalsAreIncludedWithoutPreparingAnOperation()throws Exception {
+        for(String phase:List.of("validation","beforeTool"))try(Journey j=new Journey("plugin_action",false,true,-1,-1,12,20,phase)){
+            RunOutcome stopped=j.run();assertEquals(phase+": "+stopped.summary,"awaiting_user",stopped.status);assertEquals(0,j.calls.get());assertEquals(0,j.journal.begins);assertEquals(0,j.journal.finishes);
+            assertEquals(6,j.requests.size());assertEquals(1,j.notices());assertTrue(j.journal.saved.getJSONObject("progressGuard").getBoolean("stopped"));
+        }
+    }
+    @Test public void failedOriginalGuardCheckpointPreventsFurtherModelAndToolDispatch()throws Exception {
+        try(Journey j=new Journey("project_search",false,false,-1,-1,12,20,"execute")){
+            j.journal.refuseCheckpointAt=4;RunOutcome stopped=j.run();assertEquals("failed",stopped.status);assertEquals(4,j.calls.get());assertEquals(4,j.requests.size());
+            assertEquals(3,j.journal.saved.getInt("steps"));assertEquals(3,j.journal.saved.getJSONObject("progressGuard").getInt("consecutiveAllFailed"));
+        }
+    }
+
 }

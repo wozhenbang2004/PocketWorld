@@ -2939,17 +2939,53 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             completed(result)
         } } catch (error: Exception) { state = state.copy(modelSaving = false, error = message(error)); throw error }
     }
-    internal fun testApiConnection(id: String, revision: Long, input: JSONObject, completed: (Result<JSONObject>) -> Unit) {
+    internal fun testApiConnection(id: String, revision: Long, input: JSONObject, editorId: String, draftRevision: Long,
+                                   originalOwnerCurrent: () -> Boolean, completed: (Result<JSONObject>) -> Unit) {
         check(!state.modelSaving && !state.modelTesting && !modelSelectionPending()) { "请先等待原模型设置回执" }
         val captured = JSONObject(input.toString())
-        state = state.copy(modelTesting = true, modelTest = "正在测试这项原连接…", modelTestTaskId = null)
+        val identity = ModelConnectionTestIdentity.capture(id, revision, editorId, draftRevision, captured)
+        val window = webWindowTicket()
+        fun currentOriginal(): Boolean = runCatching {
+            !closed && originalOwnerCurrent() && webPrivateOwnerVisible() && window == webWindowTicket() &&
+                identity.matchesStoredRevision(app.settings.apiConnectionsSnapshot())
+        }.getOrDefault(false)
+        check(currentOriginal()) { "原连接或测试窗口已变化，请重新打开连接" }
+        state = state.copy(modelTesting = true, modelTest = null, modelTestTaskId = null)
         try { io.execute {
-            val result = runCatching { app.testModelConnection(app.settings.previewApiConnection(id, revision, captured)) }
+            var enteredOriginalCall = false
+            var secret = captured.optString("apiKey")
+            val result = runCatching {
+                try {
+                    check(currentOriginal()) { "原测试窗口已关闭；没有发出连接测试" }
+                    val preview = app.settings.previewApiConnection(id, revision, captured)
+                    secret = preview.apiKey
+                    check(currentOriginal()) { "原连接修订或窗口已变化；没有发出连接测试" }
+                    enteredOriginalCall = true
+                    val actual = app.testModelConnection(preview)
+                    val reference = actual.optJSONObject("inferenceReference")
+                    val feedback = if (reference == null) ModelConnectionTestIdentity.unavailableFeedback() else runCatching {
+                        ModelConnectionTestIdentity.feedback(reference, app.tasks.inferenceUsage(reference.getString("taskId")))
+                    }.getOrElse { ModelConnectionTestIdentity.unavailableFeedback() }
+                    val outcome = if (reference == null || !feedback.optBoolean("available") || feedback.optBoolean("outcomeUnknown")) "unknown"
+                        else if (actual.optBoolean("ok")) "completed" else "failed"
+                    val safeMessage = actual.optString("message").let { if (secret.isEmpty()) it else it.replace(secret, "[已隐藏凭据]") }
+                    JSONObject().put("ok", actual.optBoolean("ok") && outcome == "completed").put("message", safeMessage)
+                        .put("visionVerified", false).put("toolsVerified", false)
+                        .put("inferenceReference", reference ?: JSONObject.NULL).put("inferenceFeedback", feedback)
+                        .put("connectionTest", identity.receipt(currentOriginal(), outcome, reference))
+                } catch (failure: Exception) {
+                    val safeMessage = message(failure).let { if (secret.isEmpty()) it else it.replace(secret, "[已隐藏凭据]") }
+                    JSONObject().put("ok", false).put("message", safeMessage).put("visionVerified", false).put("toolsVerified", false)
+                        .put("inferenceFeedback", ModelConnectionTestIdentity.unavailableFeedback())
+                        .put("connectionTest", identity.receipt(currentOriginal(), if (enteredOriginalCall) "unknown" else "not_dispatched", null))
+                }
+            }
             main.post {
-                if (!closed) result.fold({ value -> state = state.copy(modelTesting = false, modelTest = value.optString("message"), modelTestTaskId = value.optJSONObject("inferenceReference")?.optString("taskId")?.takeIf { it.isNotBlank() }) }, { state = state.copy(modelTesting = false, modelTest = message(it)) })
+                result.getOrNull()?.optJSONObject("connectionTest")?.let { it.put("presentationCurrent", it.optBoolean("presentationCurrent") && currentOriginal()) }
+                if (!closed) state = state.copy(modelTesting = false, modelTest = null, modelTestTaskId = null)
                 completed(result)
             }
-        } } catch (error: Exception) { state = state.copy(modelTesting = false, modelTest = message(error)); throw error }
+        } } catch (error: Exception) { state = state.copy(modelTesting = false, modelTest = null, modelTestTaskId = null); throw error }
     }
     private fun feature(feature: String, command: String, payload: JSONObject = JSONObject(), originalOwnerCurrent: (() -> Boolean)? = null): String {
         val id = UUID.randomUUID().toString()

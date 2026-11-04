@@ -33,6 +33,8 @@ import {
 import './secondary.css';
 import './secondary-refactor.css';
 import { backgroundConnection, modelConnectionCommand, wirelessEndpoints, wirelessPort } from './forms-library/host-contracts';
+import { ModelConnectionOptions, ModelConnectionTestFeedback } from './ModelConnectionOptions';
+import { compatibilityDraft, compatibilityNeedsSave, compatibilityOptions, connectionTestResult, type CompatibilityDraft, type ConnectionTestDraft } from './model-connection-policy';
 
 /**
  * Product composition of the selected BoardUI SettingsModal/settings rows,
@@ -116,12 +118,17 @@ function CapabilityAction({ action, supported, run, args = {}, children, primary
     : <Button variant="secondary" disabled={inactive} onClick={click} title={!supported(action) ? '当前页面尚未开放此操作' : undefined}>{waiting ? '处理中…' : children}</Button>;
 }
 
-type ModelDraft = { url: string; model: string; provider: string; screenshots: boolean; supportsImageInput: boolean; maxOutputTokens: string };
+type ModelDraft = { url: string; model: string; provider: string; screenshots: boolean; supportsImageInput: boolean; maxOutputTokens: string; compatibility: CompatibilityDraft };
 // This explicit allowlist is the only model-edit state retained by Secondary.
 // The API key, transport consent and review objects never enter this cache.
 const ordinaryModelDraft = (value: ModelDraft): ModelDraft => ({
   url: value.url, model: value.model, provider: value.provider, screenshots: value.screenshots,
   supportsImageInput: value.supportsImageInput, maxOutputTokens: value.maxOutputTokens,
+  compatibility: {
+    enabled: value.compatibility.enabled, tokenField: value.compatibility.tokenField, streamUsage: value.compatibility.streamUsage,
+    toolWireShape: value.compatibility.toolWireShape, schemaSubset: value.compatibility.schemaSubset, maxTools: value.compatibility.maxTools,
+    maxRequestBytes: value.compatibility.maxRequestBytes, cacheMode: value.compatibility.cacheMode, cacheSupport: value.compatibility.cacheSupport,
+  },
 });
 function ModelSettings({ state, connection, supported, run, adding = false, draft, onDraftChange, onSaved, onInspect, registerTransientBack }: {
   state: Data; supported: (action: string) => boolean; run: Run; adding?: boolean;
@@ -135,7 +142,7 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
       url: adding ? '' : text(connection?.baseUrl), model: adding ? '' : text(connection?.model),
       provider: adding ? 'openai_chat' : text(connection?.provider, 'openai_chat'),
       screenshots: adding ? state.screenshots !== false : config.sendScreenshots !== false, supportsImageInput: adding ? false : Boolean(config.supportsImageInput),
-      maxOutputTokens: text(config.maxOutputTokens, '4096'),
+      maxOutputTokens: text(config.maxOutputTokens, '4096'), compatibility: compatibilityDraft(config.compatibility),
     }), apiKey: '',
   }));
   const editRevision = useRef(0);
@@ -144,10 +151,34 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
   const [formError, setFormError] = useState('');
   const [requesting, setRequesting] = useState(false);
   const [unknownAdd, setUnknownAdd] = useState(false);
+  const [editorId] = useState(() => crypto.randomUUID());
+  const [testResult, setTestResult] = useState<Data | null>(null);
+  const testResultView = useRef<HTMLDivElement>(null);
+  const [unknownTest, setUnknownTest] = useState(false);
+  const [policyReset, setPolicyReset] = useState(false);
   const stale = !adding && (!connection || connection.id !== original.current?.id || connection.revision !== original.current?.revision);
+  const currentStale = useRef(stale); currentStale.current = stale;
+  useEffect(() => {
+    if (!testResult || stale) return;
+    let cancelled = false;
+    const frame = requestAnimationFrame(() => {
+      const view = testResultView.current;
+      const transitions = view?.closest('.pw-model-editor')?.getAnimations({ subtree: true })
+        .filter(animation => (animation as CSSTransition).transitionProperty === 'height') || [];
+      void Promise.allSettled(transitions.map(animation => animation.finished)).then(() => {
+        if (!cancelled && view?.isConnected) view.scrollIntoView({ block: 'start' });
+      });
+    });
+    return () => { cancelled = true; cancelAnimationFrame(frame); };
+  }, [testResult, stale]);
+  const testDraft = (): ConnectionTestDraft => ({ editorId, draftRevision: editRevision.current,
+    connectionId: adding ? '' : text(original.current?.id), connectionRevision: adding ? 0 : Number(original.current?.revision) });
+  let policyNeedsSave = false, policyError = '';
+  try { policyNeedsSave = compatibilityNeedsSave(form.compatibility, original.current, form); }
+  catch (error) { policyError = error instanceof Error ? error.message : String(error); }
   const [consentTarget, setConsentTarget] = useState(adding ? '' : text(config.cleartextConsent));
   const alive = useRef(true);
-  const clearSecret = () => { editRevision.current++; submitted.current = null; setTransport(null); setForm(current => ({ ...current, apiKey: '' })); };
+  const clearSecret = () => { editRevision.current++; submitted.current = null; setTransport(null); setTestResult(null); setForm(current => ({ ...current, apiKey: '' })); };
   useEffect(() => {
     registerTransientBack(transport ? () => { clearSecret(); return true; } : null);
     return () => registerTransientBack(null);
@@ -159,12 +190,21 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
     window.addEventListener('pagehide', clearSecret);
     return () => { alive.current = false; submitted.current = null; document.removeEventListener('visibilitychange', hide); window.removeEventListener('pagehide', clearSecret); };
   }, []);
-  const change = (key: keyof typeof form, value: string | boolean) => {
+  const change = (key: keyof Omit<typeof form, 'compatibility'>, value: string | boolean) => {
     editRevision.current++;
+    setTestResult(null); setFormError('');
     const next = { ...form, [key]: value };
     if (key === 'provider' || key === 'url') { setConsentTarget(''); setTransport(null); next.apiKey = ''; }
     if (key === 'provider' || key === 'url' || key === 'model') next.supportsImageInput = false;
+    if (key === 'provider' || key === 'url' || key === 'model' || key === 'apiKey' && Boolean(value)) {
+      if (form.compatibility.enabled) setPolicyReset(true);
+      next.compatibility = compatibilityDraft();
+    }
     setForm(next); onDraftChange(ordinaryModelDraft(next));
+  };
+  const changeCompatibility = (compatibility: CompatibilityDraft) => {
+    editRevision.current++; setTestResult(null); setFormError(''); setPolicyReset(false);
+    const next = { ...form, compatibility }; setForm(next); onDraftChange(ordinaryModelDraft(next));
   };
   const providers = [
     { id: 'openai_chat', label: 'OpenAI Chat Completions' }, { id: 'openai_responses', label: 'OpenAI Responses' },
@@ -172,14 +212,33 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
   ];
   const perform = async (action: string, consent: string) => {
     if (stale || unknownAdd) throw new Error('请先返回连接列表核对原保存结果，再明确打开要编辑的连接。');
+    const testing = action === 'models.connection.test';
+    if (testing && unknownTest) throw new Error('原测试结果待核对；本表单不会重复发起测试。');
+    if (policyError) throw new Error(policyError);
+    if (testing && policyNeedsSave) throw new Error('先保存兼容与缓存设置，再测试原连接。');
     const output = Number(form.maxOutputTokens);
     if (!form.url.trim() || !form.model.trim() || !Number.isInteger(output) || output < 128 || output > 32768) {
       setFormError('请填写接口地址、模型名称，以及 128–32768 的输出上限。'); return;
     }
-    const command = modelConnectionCommand(adding, action === 'models.connection.test', original.current);
+    const command = modelConnectionCommand(adding, testing, original.current);
+    const testedDraft = testing ? testDraft() : null;
     if (action === saveAction) submitted.current = { editRevision: editRevision.current, apiKey: form.apiKey };
+    if (testing) setTestResult(null);
     try {
-      const result = await run(command.action, { ...form, ...command.identity, name: text(original.current?.name, form.model.trim()), url: form.url.trim(), model: form.model.trim(), maxOutputTokens: output, cleartextConsent: consent });
+      const { compatibility, ...connectionFields } = form;
+      const payload: Data = { ...connectionFields, ...command.identity, name: text(original.current?.name, form.model.trim()), url: form.url.trim(), model: form.model.trim(), maxOutputTokens: output, cleartextConsent: consent };
+      if (!adding) payload.compatibility = compatibilityOptions(compatibility, form.provider);
+      if (testedDraft) { payload.editorId = testedDraft.editorId; payload.draftRevision = testedDraft.draftRevision; }
+      const result = await run(command.action, payload);
+      if (testedDraft && alive.current) {
+        const originalResult = connectionTestResult(result, testedDraft, testedDraft);
+        if (originalResult?.connectionTest.outcome === 'unknown') setUnknownTest(true);
+        if (!currentStale.current && testedDraft.draftRevision === editRevision.current) {
+          const current = connectionTestResult(result, testedDraft, testDraft());
+          setTestResult(current);
+          if (!current) setFormError('原连接或窗口已变化，旧测试结果没有套用到当前草稿。请返回核对连接。');
+        }
+      }
       if (action === saveAction) {
         if (result?.status !== 'saved') throw new Error('保存回执待核对，请刷新原连接后再决定。');
         const submission = submitted.current; submitted.current = null;
@@ -190,6 +249,7 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
         }
       }
     } catch (failure) {
+      if (testedDraft && alive.current && !['not_sent', 'not_accepted', 'invalid_request'].includes(text(object(failure).code))) setUnknownTest(true);
       if (action === saveAction) {
         submitted.current = null;
         if (adding && !['not_sent', 'not_accepted', 'invalid_request'].includes(text(object(failure).code))) {
@@ -201,6 +261,7 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
   };
   const request = async (action: string) => {
     if (!supported(action) || requesting) return;
+    const requestedDraftRevision = editRevision.current;
     setFormError(''); setRequesting(true);
     try {
       if (supported('settings.reviewModelTransport')) {
@@ -217,7 +278,7 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
         }
         await perform(action, '');
       }
-    } catch (error) { if (alive.current) setFormError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { if (alive.current && requestedDraftRevision === editRevision.current) setFormError(error instanceof Error ? error.message : String(error)); }
     finally { if (alive.current) setRequesting(false); }
   };
   return <div data-model-layer="edit" className="pw-model-edit-layer">
@@ -241,18 +302,31 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
             <StretchSwitch label="允许按需发送截图" description="优先读取结构树；仅在已配置图像能力且确有需要时发送像素。" checked={form.screenshots} onChange={value => change('screenshots', value)} />
           </div>
         </AccordionItem>
+        <AccordionItem id="compatibility" title="请求兼容" description="输出字段、工具格式与发送限制">
+          <ModelConnectionOptions section="wire" value={form.compatibility} onChange={changeCompatibility} provider={form.provider} adding={adding} revision={object(config.compatibility).revision} />
+          {policyError && <p role="alert" className="pw-field-error">{policyError}</p>}
+          {policyReset && <p className="pw-field-hint">地址、协议、模型或替换密钥已变化；旧兼容与缓存档案没有沿用到这份草稿。需要时重新核对并保存。</p>}
+        </AccordionItem>
+        <AccordionItem id="cache" title="前缀缓存" description="服务商支持与实际缓存用量">
+          <ModelConnectionOptions section="cache" value={form.compatibility} onChange={changeCompatibility} provider={form.provider} adding={adding} revision={object(config.compatibility).revision} />
+        </AccordionItem>
       </Accordion>
       {formError && <p role="alert" className="pw-field-error">{formError}</p>}
       {(unknownAdd || stale) && <div className="pw-request-notice" role="status"><p>{unknownAdd ? '原新增连接的保存结果待核对；本表单不会再次新增。请读取连接列表，核对是否已保存。' : '这项原连接已被更新；旧草稿没有套用新修订。请返回详情核对后重新编辑。'}</p><Button variant="secondary" onClick={onInspect}>返回核对连接</Button></div>}
-      {state.modelTest && <p className="pw-receipt-copy" aria-live="polite">{text(state.modelTest)}</p>}
-      {state.modelTestTaskId && <CapabilityAction action="tasks.open" supported={supported} run={run} args={{ id: state.modelTestTaskId }}>查看本次实际调用与用量</CapabilityAction>}
+      {policyNeedsSave && <p className="pw-field-hint" role="status">先保存兼容与缓存设置，再测试原连接。</p>}
+      {testResult && !stale && <div ref={testResultView} onTransitionEnd={event => {
+        if (event.propertyName === 'height') testResultView.current?.scrollIntoView({ block: 'start' });
+      }}><ModelConnectionTestFeedback value={testResult} />
+        {testResult.inferenceReference?.taskId && <CapabilityAction action="tasks.open" supported={supported} run={run} args={{ id: testResult.inferenceReference.taskId }}>查看本次实际调用与用量</CapabilityAction>}
+      </div>}
+      {unknownTest && <div className="pw-request-notice" role="status"><p>原测试结果待核对；本表单不会自动重试或再次发送。请先核对原调用与连接，再明确开始新的测试。</p><Button variant="secondary" onClick={onInspect}>返回核对连接</Button></div>}
       {state.error && <p className="pw-field-error" role="alert">{text(state.error)}</p>}
-      <div className="pw-form-actions pw-model-save-actions"><Button variant="secondary" disabled={stale || unknownAdd || requesting || state.modelTesting || state.modelSelectionBusy || !supported('models.connection.test')} onClick={() => request('models.connection.test')}>{state.modelTesting ? '测试中…' : '测试连接'}</Button><PressButton compact disabled={stale || unknownAdd || requesting || state.modelSaving || state.modelSelectionBusy || !supported(saveAction)} onClick={() => request(saveAction)}>{state.modelSaving ? '保存中…' : adding ? '添加并用于后续任务' : '保存原连接'}</PressButton></div>
+      <div className="pw-form-actions pw-model-save-actions"><Button variant="secondary" disabled={stale || unknownAdd || unknownTest || policyNeedsSave || Boolean(policyError) || requesting || state.modelTesting || state.modelSelectionBusy || !supported('models.connection.test')} onClick={() => request('models.connection.test')}>{state.modelTesting ? '测试中…' : '测试连接'}</Button><PressButton compact disabled={stale || unknownAdd || Boolean(policyError) || requesting || state.modelSaving || state.modelTesting || state.modelSelectionBusy || !supported(saveAction)} onClick={() => request(saveAction)}>{state.modelSaving ? '保存中…' : adding ? '添加并用于后续任务' : '保存原连接'}</PressButton></div>
     </section>
     <SettingsDialog isOpen={Boolean(transport)} title="允许这个明文模型连接？" onClose={clearSecret}>
       {transport && <><Facts items={[[ '协议', providers.find(x => x.id === transport.provider)?.label ], ['地址', transport.displayTarget || transport.url]]} />
         <p>凭据、文本和按需截图将通过 HTTP 明文传输。更换协议或地址后需要重新核对。</p>
-        <div className="pw-form-actions"><Button variant="secondary" onClick={clearSecret}>取消</Button><PressButton compact disabled={requesting} onClick={async () => { if (requesting) return; const reviewed = transport; setTransport(null); if (reviewed.provider !== form.provider || reviewed.url !== form.url) return; setConsentTarget(text(reviewed.consentTarget)); setRequesting(true); try { await perform(reviewed.action, text(reviewed.consentTarget)); } catch (error) { if (alive.current) setFormError(error instanceof Error ? error.message : String(error)); } finally { if (alive.current) setRequesting(false); } }}>允许此协议与地址</PressButton></div>
+        <div className="pw-form-actions"><Button variant="secondary" onClick={clearSecret}>取消</Button><PressButton compact disabled={requesting} onClick={async () => { if (requesting) return; const reviewed = transport; const originalEdit = editRevision.current; setTransport(null); if (reviewed.provider !== form.provider || reviewed.url !== form.url) return; setConsentTarget(text(reviewed.consentTarget)); setRequesting(true); try { await perform(reviewed.action, text(reviewed.consentTarget)); } catch (error) { if (alive.current && originalEdit === editRevision.current) setFormError(error instanceof Error ? error.message : String(error)); } finally { if (alive.current) setRequesting(false); } }}>允许此协议与地址</PressButton></div>
       </>}
     </SettingsDialog>
   </div>;

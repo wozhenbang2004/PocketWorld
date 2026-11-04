@@ -119,6 +119,7 @@ class ProjectLivePreviewLifecycleTest {
         init {
             probes.set(0); pageAttempts.set(0)
             app.tasks = TaskStore(app)
+            dev.pocketengine.testutil.ReadyApplicationFixture.complete(app)
             app.features = FeatureHost { }
             val runtime = Proxy.newProxyInstance(ProjectRuntime::class.java.classLoader, arrayOf(ProjectRuntime::class.java)) { _, method, _ ->
                 if (method.name == "describe") JSONObject().put("runtimeId", "fixture-runtime") else null

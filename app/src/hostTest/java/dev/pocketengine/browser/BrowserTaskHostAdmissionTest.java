@@ -62,6 +62,7 @@ public final class BrowserTaskHostAdmissionTest {
         volatile boolean requireUnlockedControlRead;
         F()throws Exception {
             app.tasks=tasks;
+            dev.pocketengine.testutil.ReadyApplicationFixture.complete(app);
             JSONObject created=tasks.create("原手机任务接入浏览","main_screen");task=created.getString("id");
             JSONObject attempt=tasks.startAttempt(task,"main_screen",40);run=attempt.getString("runId");epoch=attempt.getInt("coordinatorEpoch");
             control.bindHostRun(task,run,epoch);tasks.status(task,"running","original fixture run");

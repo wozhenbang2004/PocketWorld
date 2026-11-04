@@ -145,7 +145,7 @@ public final class PhoneTaskApplicationFlowTest {
     private record Scenario(String taskId,String sourceDeviceId,String targetDeviceId){}
     private record Started(String runId,int epoch,String allocationId,RunControl original){}
     private Scenario startScenario(String scenario)throws Exception{
-        app=(EngineApplication)RuntimeEnvironment.getApplication();app.deleteDatabase("pocket-world.db");app.tasks=new TaskStore(app);
+        app=(EngineApplication)RuntimeEnvironment.getApplication();app.deleteDatabase("pocket-world.db");app.tasks=new TaskStore(app);dev.pocketengine.testutil.ReadyApplicationFixture.complete(app);
         sql=(SQLiteDatabase)get(app.tasks,"db");databaseWalAtStart=sql.isWriteAheadLoggingEnabled();app.features=new FeatureHost(event->{});app.settings=new SettingsStore(app);
         // Mirror the original onCreate selector's volatile reads. The public
         // convenience getters take App's monitor, which is forbidden while the
@@ -477,7 +477,7 @@ public final class PhoneTaskApplicationFlowTest {
         Path path=temporary.resolve(filename);Files.write(path,("-----BEGIN "+kind+"-----\n"+Base64.getMimeEncoder(64,new byte[]{'\n'}).encodeToString(bytes)+"\n-----END "+kind+"-----\n").getBytes(StandardCharsets.UTF_8));Files.setPosixFilePermissions(path,PosixFilePermissions.fromString("rw-------"));return path;
     }
     private static Path checkout(){
-        Path current=Path.of(System.getProperty("user.dir")).toAbsolutePath();while(current!=null){if(Files.isRegularFile(current.resolve("companion/phone_task_native_fixture.py")))return current;current=current.getParent();}throw new AssertionError("Original companion fixture entrypoint missing from checkout");
+        String root=System.getProperty("pocket.gateway.source");assertNotNull("Host runner must provide the repository root",root);Path checkout=Path.of(root);assertTrue("Host runner repository root must be absolute",checkout.isAbsolute());assertTrue("Original companion fixture entrypoint missing from checkout",Files.isRegularFile(checkout.resolve("companion/phone_task_native_fixture.py")));return checkout;
     }
     private long count(String table){try(Cursor rows=sql.rawQuery("SELECT COUNT(*) FROM "+table,null)){assertTrue(rows.moveToFirst());return rows.getLong(0);}}
     private static Object get(Object object,String name)throws Exception{Field field=object.getClass().getDeclaredField(name);field.setAccessible(true);return field.get(object);}

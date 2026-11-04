@@ -33,7 +33,17 @@ import org.json.JSONObject;
 
 /** The host's transactional Task/Run/Operation authority. Executors keep receipts, never a second task truth. */
 public final class TaskStore {
+    public static final String DATABASE_NAME="pocket-world.db";
+    public static final int DATABASE_SCHEMA=10;
+    public interface OpenObserver {
+        void stage(String stage,int observedSchema);
+        default void corruption(String reason) { }
+    }
+    private static final OpenObserver NO_OPEN_OBSERVER=(stage,version)->{};
+    private final Database database;
     private final SQLiteDatabase db;
+    private final java.util.function.BooleanSupplier hostReady;
+    private volatile boolean closed;
     private static final String EXECUTION_POLICY_KEY="owner_execution_policy";
     private record ExecutionPolicySnapshot(long revision,boolean enabled) { }
     private volatile ExecutionPolicySnapshot executionPolicySnapshot=new ExecutionPolicySnapshot(0,false);
@@ -48,14 +58,29 @@ public final class TaskStore {
     private final TaskScreenshotStorage screenshots;
     private volatile Runnable screenshotChanged=()->{};
     private final dev.pocketengine.features.assistant.ConversationRepository conversationRepository;
-    public TaskStore(Context context) {this(context,null);}
+    public TaskStore(Context context) {this(context,null,()->true,NO_OPEN_OBSERVER,null);}
     TaskStore(Context context,TaskScreenshotStorage.Crypto screenshotCrypto) {
+        this(context,screenshotCrypto,()->true,NO_OPEN_OBSERVER,null);
+    }
+    /** The Application supplies its original bootstrap gate; fixture stores keep their original constructor. */
+    public TaskStore(Context context,java.util.function.BooleanSupplier hostReady,OpenObserver observer) {
+        this(context,null,hostReady,observer,null);
+    }
+    /** A reviewed original-file retry uses one native permit; ordinary and cold opens supply none. */
+    public TaskStore(Context context,java.util.function.BooleanSupplier hostReady,OpenObserver observer,TaskDatabaseMaintenance.OriginalReadPermit permit) {
+        this(context,null,hostReady,observer,permit);
+    }
+    private TaskStore(Context context,TaskScreenshotStorage.Crypto screenshotCrypto,java.util.function.BooleanSupplier hostReady,OpenObserver observer,TaskDatabaseMaintenance.OriginalReadPermit permit) {
+        this.hostReady=Objects.requireNonNull(hostReady);
+        TaskDatabaseMaintenance.requireBusinessOpen(context,permit);
         artifacts=new File(context.getFilesDir(),"artifacts");if(!artifacts.exists())artifacts.mkdirs();
         SecretVault screenshotKeys=new SecretVault(context);screenshots=new TaskScreenshotStorage(artifacts.toPath(),screenshotCrypto!=null?screenshotCrypto:new TaskScreenshotStorage.Crypto(){
             public byte[] seal(byte[] plain,byte[] aad)throws Exception{return screenshotKeys.sealTaskScreenshot(plain,aad);}
             public byte[] open(byte[] encrypted,byte[] aad)throws Exception{return screenshotKeys.openTaskScreenshot(encrypted,aad);}
         });
-        Database database=new Database(context);db=database.getWritableDatabase();
+        database=new Database(context,DATABASE_NAME,Objects.requireNonNull(observer));
+        try {
+        db=database.getWritableDatabase();
         try{JSONObject policy=ownerExecutionState();executionPolicySnapshot=new ExecutionPolicySnapshot(policy.getLong("revision"),policy.getBoolean("enabled"));}catch(Exception unavailable){throw new IllegalStateException("总运行开关无法读取；未启用执行",unavailable);}
         deviceTrust=new TaskStoreDeviceTrust(db);
         deviceTasks=new TaskStoreDeviceTasks(db,this,new TaskStoreDeviceTasks.Access(){
@@ -69,7 +94,28 @@ public final class TaskStore {
         catch(Exception failure){throw new IllegalStateException("任务数据库恢复失败，原始数据未删除",failure);}
         conversationRepository=new dev.pocketengine.features.assistant.ConversationRepository(db,this);
         bindToolOutputSourceBook(dev.pocketengine.features.attachments.AttachmentRepository.get(context).book);
+        verifyBootstrapReadback();
+        } catch(RuntimeException|Error failure) {
+            closed=true;try{database.close();}catch(RuntimeException cleanup){failure.addSuppressed(cleanup);throw new DatabaseOpenFailure("database_close_unconfirmed","原数据库关闭未确认；仅可重新打开进程后核对",failure);}throw failure;
+        } catch(Exception failure) {
+            closed=true;try{database.close();}catch(RuntimeException cleanup){failure.addSuppressed(cleanup);throw new DatabaseOpenFailure("database_close_unconfirmed","原数据库关闭未确认；仅可重新打开进程后核对",failure);}throw new IllegalStateException("任务数据库恢复未完成，原数据库未删除",failure);
+        }
     }
+    /** Actual original-handle readback after recovery, before the Application publishes ready. */
+    public synchronized void verifyBootstrapReadback()throws Exception {
+        if(closed||!db.isOpen()||db.getVersion()!=DATABASE_SCHEMA)throw new IllegalStateException("原任务库版本或连接未就绪");
+        try(Cursor rows=db.rawQuery("SELECT (SELECT count(*) FROM tasks),(SELECT count(*) FROM runs),(SELECT count(*) FROM operations),(SELECT count(*) FROM leases)",null)) {
+            if(!rows.moveToFirst()||rows.getLong(3)!=0)throw new IllegalStateException("原恢复后的租约状态不可核对");
+        }
+        ownerExecutionState();
+    }
+    /** Failed bootstrap has never admitted work. Running maintenance must first prove its workers stopped. */
+    public synchronized void closeForMaintenance() {
+        if(hostReady.getAsBoolean())throw new SecurityException("请先关闭原启动准入再维护数据库");
+        for(RunControl original:executionControls.keySet())if(original!=null&&!original.isCancelled())throw new SecurityException("原执行控制器尚未停止，数据库不能关闭");
+        if(!closed){database.close();closed=true;}
+    }
+    public boolean closedForMaintenance(){return closed;}
     public TaskStoreDeviceTasks deviceTasks(){return deviceTasks;}
     /** Native device owner and ingress share this original database; no raw handle leaves Tasks. */
     public TaskStoreDeviceTrust deviceTrust(){return deviceTrust;}
@@ -78,7 +124,7 @@ public final class TaskStore {
     public synchronized JSONObject withDeviceScheduleAdmission(dev.pocketengine.features.devices.DeviceScheduleDrafts.Admission original,java.util.concurrent.Callable<JSONObject> action)throws Exception{
         if(original==null)throw new SecurityException("计划草稿缺少原认证设备准入");
         db.beginTransaction();try{
-            original.checkCurrent();if(!original.queryOnly())OwnerExecutionPolicy.requireEnabled(ownerExecutionState());
+            original.checkCurrent();if(!original.queryOnly())requireExecutionEnabled();
             requireDeviceScheduleOriginCurrent(original.origin());JSONObject result=action.call();db.setTransactionSuccessful();return result;
         }finally{db.endTransaction();}
     }
@@ -154,8 +200,8 @@ public final class TaskStore {
         if(context.taskId.isEmpty()&&TaskTokenBudgets.dailyEnabled(db,key))throw new dev.pocketengine.runtime.models.ModelRequestPolicy.Rejected("token_budget_attribution_required","此原连接已启用每日token预算；请求必须使用原生调用账本，未走未归因通路。");
     }
     /** Immutable-effect projection for alarm/service gates; it never calls back under a Book lock. */
-    public boolean executionEnabled(){return executionPolicySnapshot.enabled;}
-    public synchronized void requireExecutionEnabled()throws Exception{if(!executionPolicySnapshot.enabled)throw new SecurityException("本机执行准入已停用或保存结果待核对");OwnerExecutionPolicy.requireEnabled(ownerExecutionState());}
+    public boolean executionEnabled(){return !closed&&hostReady.getAsBoolean()&&executionPolicySnapshot.enabled;}
+    public synchronized void requireExecutionEnabled()throws Exception{if(closed||!hostReady.getAsBoolean())throw new SecurityException("本机启动恢复或维护未完成，执行准入关闭");OwnerExecutionPolicy.requireEnabled(ownerExecutionState());}
     /** Only the native owner settings method calls this. No generic feature/model/remote command. */
     public synchronized JSONObject setExecutionEnabledForOwner(long expectedRevision,boolean enabled)throws Exception{
         if(executionPolicySnapshot.revision==0&&enabled)throw new SecurityException("上次保存结果未确认；请先明确停用，再恢复新工作");
@@ -182,7 +228,7 @@ public final class TaskStore {
         }
         executionControls.put(original,new ExecutionRegistration(task,revision));
         // Checks run under existing Book/resource locks too. Never add a Book -> Tasks lock edge.
-        return ()->{ExecutionPolicySnapshot current=executionPolicySnapshot;if(!current.enabled||current.revision!=revision)throw new SecurityException("总停用已撤销原执行准入");};
+        return ()->{ExecutionPolicySnapshot current=executionPolicySnapshot;if(!executionEnabled()||current.revision!=revision)throw new SecurityException("总停用或启动维护已撤销原执行准入");};
     }
     /** Cancel these original objects outside the SQLite monitor; their receipt/cleanup callbacks stay live. */
     public synchronized java.util.List<RunControl> executionControlsForOwnerStop(){return new java.util.ArrayList<>(executionControls.keySet());}
@@ -2478,7 +2524,9 @@ public final class TaskStore {
             });
         }
         public JSONObject restore()throws Exception {synchronized(TaskStore.this){control.check();authority.checkRead();checkGroupRun(request,runId,epoch,false);if(hasUnresolved(request.taskId))throw new SecurityException("原群动作结果未知，只能查询原编号");return TaskStore.this.checkpoint(runId).put("feedback",required(request.taskId).optString("feedback")).put("operationResults",get(request.taskId,false).getJSONArray("operations"));}}
-        public void checkpoint(JSONArray messages,int steps,JSONObject observation)throws Exception {synchronized(TaskStore.this){control.check();authority.checkRead();checkGroupRun(request,runId,epoch,false);JSONObject value=new JSONObject().put("messages",messages).put("steps",steps).put("observation",sanitize(observation==null?new JSONObject():observation));String encoded=value.toString();if(encoded.length()>4_000_000)throw new IllegalStateException("原群上下文超过上限");ContentValues row=new ContentValues();row.put("checkpoint",encoded);row.put("updated_at",System.currentTimeMillis());if(db.update("runs",row,"run_id=? AND task_id=? AND epoch=?",new String[]{runId,request.taskId,String.valueOf(epoch)})!=1)throw new SecurityException("原群执行不存在");}}
+        public boolean progressGuardSupported(){return true;}
+        public void checkpoint(JSONArray messages,int steps,JSONObject observation)throws Exception{checkpoint(messages,steps,observation,null);}
+        public void checkpoint(JSONArray messages,int steps,JSONObject observation,JSONObject progressGuard)throws Exception {synchronized(TaskStore.this){control.check();authority.checkRead();checkGroupRun(request,runId,epoch,false);JSONObject value=new JSONObject().put("messages",messages).put("steps",steps).put("observation",sanitize(observation==null?new JSONObject():observation));keepProgressGuard(TaskStore.this.checkpoint(runId),value,progressGuard);String encoded=value.toString();if(encoded.length()>4_000_000)throw new IllegalStateException("原群上下文超过上限");ContentValues row=new ContentValues();row.put("checkpoint",encoded);row.put("updated_at",System.currentTimeMillis());if(db.update("runs",row,"run_id=? AND task_id=? AND epoch=?",new String[]{runId,request.taskId,String.valueOf(epoch)})!=1)throw new SecurityException("原群执行不存在");}}
         public String beginOperation(String tool,JSONObject args)throws Exception {synchronized(TaskStore.this){control.check();authority.check();db.beginTransaction();try {
             checkGroupRun(request,runId,epoch,true);if(control.isPaused()||hasUnresolved(request.taskId)||!toolGranted(runId,tool))throw new SecurityException("原群动作未获授权、已暂停或仍有未知效果");
             if(tool.startsWith("group_media_"))try(Cursor rows=db.rawQuery("SELECT receipt FROM operations WHERE task_id=? AND tool LIKE 'group_media_%'",new String[]{request.taskId})){int count=0;while(rows.moveToNext()){if(rows.isNull(0)||!new JSONObject(rows.getString(0)).optString("code").equals("approval_required"))count++;}if(count>=request.maxMediaItems)throw new SecurityException("原群媒体额度已使用，不能再次生成");}
@@ -8576,7 +8624,9 @@ public final class TaskStore {
                 return new JSONObject().put("format","pocketworld.project-service-exits.v1").put("taskId",id).put("runId",runId).put("coordinatorEpoch",epoch).put("executions",executions).put("allReleased",true);
             }
         }
-        public void checkpoint(JSONArray messages,int steps,JSONObject observation)throws Exception{synchronized(TaskStore.this){journalFence(reviewedClaim,id,runId,epoch,control,false);JSONObject value=new JSONObject().put("messages",messages).put("steps",steps).put("observation",sanitize(observation==null?new JSONObject():observation));String encoded=value.toString();if(encoded.length()>4_000_000)throw new IllegalStateException("任务上下文过大，请先压缩后继续");writeOwnerInputCheckpoint(id,runId,epoch,value,encoded);recordNativeAppObservation(id,runId,epoch,observation);}}
+        public boolean progressGuardSupported(){return true;}
+        public void checkpoint(JSONArray messages,int steps,JSONObject observation)throws Exception{checkpoint(messages,steps,observation,null);}
+        public void checkpoint(JSONArray messages,int steps,JSONObject observation,JSONObject progressGuard)throws Exception{synchronized(TaskStore.this){journalFence(reviewedClaim,id,runId,epoch,control,false);JSONObject value=new JSONObject().put("messages",messages).put("steps",steps).put("observation",sanitize(observation==null?new JSONObject():observation));keepProgressGuard(TaskStore.this.checkpoint(runId),value,progressGuard);String encoded=value.toString();if(encoded.length()>4_000_000)throw new IllegalStateException("任务上下文过大，请先压缩后继续");writeOwnerInputCheckpoint(id,runId,epoch,value,encoded);recordNativeAppObservation(id,runId,epoch,observation);}}
         public String beginOperation(String tool,JSONObject args)throws Exception{synchronized(TaskStore.this){
             if(grant(runId).optBoolean("gatewayOnly"))throw new SecurityException("本轮仅模型RELAY，不执行工具或创建Agent能力");
             if(required(id).has("ownerLocalTerminal")&&!java.util.Set.of("project_process_input","project_stop").contains(tool))throw new SecurityException("原手动终端只能继续有限输入或停止，不能增加命令或模型动作");
@@ -8831,10 +8881,12 @@ public final class TaskStore {
             @Override public boolean scopeCurrent(RunControl control)throws Exception{
                 if(control!=original)return false;binding.admit(()->{synchronized(TaskStore.this){privateTask();return new JSONObject();}});return true;
             }
-            @Override public void checkpoint(RunJournal delegate,JSONArray messages,int steps,JSONObject observation)throws Exception{
+            @Override public void checkpoint(RunJournal delegate,JSONArray messages,int steps,JSONObject observation)throws Exception{checkpoint(delegate,messages,steps,observation,null);}
+            @Override public void checkpoint(RunJournal delegate,JSONArray messages,int steps,JSONObject observation,JSONObject progressGuard)throws Exception{
                 try{binding.admit(()->{synchronized(TaskStore.this){privateTask(false);JSONObject previous=TaskStore.this.checkpoint(runId),projection=previous.optJSONObject("contextCompaction");
                     boolean current=false;try{current=projection!=null&&currentProjection(projection,previous);}catch(CompactionPlan.Unavailable|IllegalStateException invalidated){/* Keep the raw receipt, never a stale projection. */}
                     JSONObject next=new JSONObject().put("messages",messages).put("steps",steps).put("observation",sanitize(observation==null?new JSONObject():observation));
+                    keepProgressGuard(previous,next,progressGuard);
                     next=CompactionCheckpoint.append(previous,next,current);String encoded=next.toString();
                     if(encoded.getBytes(StandardCharsets.UTF_8).length>dev.pocketengine.runtime.context.ContextBudgetPolicy.CHECKPOINT_BYTES)throw new CompactionPlan.Unavailable("raw_checkpoint_read_limited");
                     // A source larger than the reader's inline cap remains raw, but may not carry a recoverability claim.
@@ -8847,8 +8899,9 @@ public final class TaskStore {
                     synchronized(TaskStore.this){
                         JSONArray audit=new JSONArray(messages.toString());if(!binding.sourceBarrierCurrent())dev.pocketengine.features.memory.TaskMemoryHistory.retire(audit,null,true);
                         JSONObject value=new JSONObject().put("messages",audit).put("steps",steps).put("observation",sanitize(observation==null?new JSONObject():observation));
+                        keepProgressGuard(TaskStore.this.checkpoint(runId),value,progressGuard);
                         if(value.toString().getBytes(StandardCharsets.UTF_8).length>dev.pocketengine.runtime.context.ContextBudgetPolicy.CHECKPOINT_BYTES)throw new CompactionPlan.Unavailable("raw_checkpoint_read_limited");
-                        delegate.checkpoint(audit,steps,observation); // Rebuilds the original envelope; no old summary field is retained.
+                        delegate.checkpoint(audit,steps,observation,progressGuard); // Keep native guard, never the retired derived summary.
                     }
                 }
             }
@@ -10750,6 +10803,11 @@ public final class TaskStore {
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
     }
+    /** All original checkpoint writers preserve the native guard; no separate progress ledger. */
+    private static void keepProgressGuard(JSONObject previous,JSONObject next,JSONObject supplied)throws Exception {
+        JSONObject guard=dev.pocketengine.runtime.RepeatToolNotice.checkpointValue(previous,supplied);
+        if(guard!=null)next.put("progressGuard",guard);
+    }
     private JSONObject checkpoint(String runId)throws Exception{try(Cursor c=db.rawQuery("SELECT checkpoint FROM runs WHERE run_id=?",new String[]{runId})){return c.moveToFirst()?new JSONObject(c.getString(0)):new JSONObject();}}
     private JSONObject checkpointForTask(String id)throws Exception{try(Cursor c=db.rawQuery("SELECT checkpoint FROM runs WHERE task_id=? ORDER BY epoch DESC LIMIT 1",new String[]{id})){return c.moveToFirst()?new JSONObject(c.getString(0)):new JSONObject();}}
     private JSONObject grant(String runId)throws Exception{try(Cursor c=db.rawQuery("SELECT grant_json FROM runs WHERE run_id=?",new String[]{runId})){if(!c.moveToFirst())throw new SecurityException("没有执行授权");return new JSONObject(c.getString(0));}}
@@ -10822,9 +10880,48 @@ public final class TaskStore {
     }
     private static JSONObject sanitize(JSONObject in)throws Exception{JSONObject out=new JSONObject();java.util.Iterator<String> keys=in.keys();while(keys.hasNext()){String key=keys.next();if(key.equalsIgnoreCase("apiKey")||key.equalsIgnoreCase("authorization")||key.equalsIgnoreCase("token")||key.equalsIgnoreCase("secret")||key.equals("imageBase64")||key.equals("imageDataUrl"))continue;Object value=in.get(key);if(value instanceof JSONObject)value=sanitize((JSONObject)value);else if(value instanceof JSONArray){JSONArray arr=(JSONArray)value,small=new JSONArray();for(int i=0;i<Math.min(200,arr.length());i++){Object v=arr.get(i);small.put(v instanceof JSONObject?sanitize((JSONObject)v):v);}value=small;}else if(value instanceof String&&((String)value).length()>12000)value=((String)value).substring(0,12000)+"…";out.put(key,value);}return out;}
 
+    public static final class DatabaseOpenFailure extends IllegalStateException {
+        public final String reasonCode;
+        DatabaseOpenFailure(String reason,String explanation,Throwable cause){super(explanation,cause);reasonCode=reason;}
+    }
+    /** Isolated schema-only staging. It never constructs a second TaskStore, Runner, grant or lease. */
+    static void createMaintenanceStaging(Context context,File target,String repairId)throws Exception {
+        if(!repairId.matches("[a-f0-9-]{36}")||target.exists())throw new SecurityException("修复暂存身份已存在或不可核对");
+        Database staging=new Database(context,target.getAbsolutePath(),NO_OPEN_OBSERVER);
+        try {
+            SQLiteDatabase d=staging.getWritableDatabase();d.beginTransaction();try{
+                d.execSQL("INSERT INTO meta(key,value) VALUES('legacyImported','1')");
+                d.execSQL("INSERT INTO meta(key,value) VALUES('database_maintenance_repair',?)",new Object[]{repairId});
+                d.execSQL("INSERT INTO meta(key,value) VALUES(?,?)",new Object[]{EXECUTION_POLICY_KEY,OwnerExecutionPolicy.change(OwnerExecutionPolicy.initial(),1,false,System.currentTimeMillis()).toString()});
+                d.setTransactionSuccessful();
+            }finally{d.endTransaction();}
+            new dev.pocketengine.features.assistant.ConversationRepository(d,new Object()).initializeEmpty();
+        }finally{staging.close();}
+        verifyMaintenanceStaging(target,repairId);
+    }
+    /** Check the original schema, fences and absence of all execution-bearing rows. */
+    static void verifyMaintenanceStaging(File target,String repairId)throws Exception {
+        try(SQLiteDatabase d=SQLiteDatabase.openDatabase(target.getAbsolutePath(),null,SQLiteDatabase.OPEN_READONLY,new TaskDatabaseCorruptionHandler(null))) {
+            if(d.getVersion()!=DATABASE_SCHEMA)throw new SecurityException("修复暂存版本与本包原schema不同");
+            try(Cursor check=d.rawQuery("PRAGMA integrity_check(1)",null)){if(!check.moveToFirst()||!"ok".equals(check.getString(0)))throw new SecurityException("修复暂存完整性未核实");}
+            try(Cursor meta=d.rawQuery("SELECT (SELECT value FROM meta WHERE key='legacyImported'),(SELECT value FROM meta WHERE key='database_maintenance_repair'),(SELECT value FROM meta WHERE key=?)",new String[]{EXECUTION_POLICY_KEY})) {
+                if(!meta.moveToFirst()||!"1".equals(meta.getString(0))||!repairId.equals(meta.getString(1))||OwnerExecutionPolicy.validate(new JSONObject(meta.getString(2))).getBoolean("enabled"))throw new SecurityException("修复暂存缺少停用执行或旧导入隔离门");
+            }
+            try(Cursor tables=d.rawQuery("SELECT name FROM sqlite_master WHERE type='table'",null)) {
+                while(tables.moveToNext()) {String name=tables.getString(0);if(name.equals("meta")||name.startsWith("sqlite_")||java.util.Set.of("assistant_conversations","assistant_import_documents","assistant_import_fragments","assistant_import_records").contains(name))continue;
+                    if(!name.matches("[A-Za-z0-9_]+"))throw new SecurityException("原schema表名无效");
+                    try(Cursor rows=d.rawQuery("SELECT count(*) FROM \""+name+"\"",null)){if(!rows.moveToFirst()||rows.getLong(0)!=0)throw new SecurityException("修复暂存不得继承原运行、授权、配对或未决操作");}
+                }
+            }
+        }
+    }
     private static final class Database extends SQLiteOpenHelper{
-        Database(Context context){super(context,"pocket-world.db",null,10);}
+        private final OpenObserver observer;
+        Database(Context context,String name,OpenObserver observer){super(context,name,null,DATABASE_SCHEMA,new TaskDatabaseCorruptionHandler(observer::corruption));this.observer=observer;}
+        @Override public void onConfigure(SQLiteDatabase d){observer.stage("data_opened",d.getVersion());}
+        @Override public void onOpen(SQLiteDatabase d){observer.stage("migrated",d.getVersion());}
+        @Override public void onDowngrade(SQLiteDatabase d,int oldVersion,int newVersion){throw new DatabaseOpenFailure("newer_schema","此数据来自较新版本；请安装兼容版本，未清空数据库",null);}
         @Override public void onCreate(SQLiteDatabase d){d.execSQL("CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)");d.execSQL("INSERT INTO meta(key,value) VALUES('assistant_history_new_install','1')");d.execSQL("CREATE TABLE tasks(task_id TEXT PRIMARY KEY,document TEXT NOT NULL,updated_at INTEGER NOT NULL)");d.execSQL("CREATE TABLE runs(run_id TEXT PRIMARY KEY,task_id TEXT NOT NULL,epoch INTEGER NOT NULL,status TEXT NOT NULL,checkpoint TEXT NOT NULL,grant_json TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,UNIQUE(task_id,epoch))");d.execSQL("CREATE TABLE operations(operation_id TEXT PRIMARY KEY,task_id TEXT NOT NULL,run_id TEXT NOT NULL,tool TEXT NOT NULL,arguments TEXT NOT NULL,state TEXT NOT NULL,receipt TEXT,created_at INTEGER NOT NULL)");d.execSQL("CREATE INDEX operations_task ON operations(task_id,state)");d.execSQL("CREATE TABLE leases(resource_id TEXT PRIMARY KEY,run_id TEXT NOT NULL,epoch INTEGER NOT NULL,expires_at INTEGER NOT NULL)");dev.pocketengine.features.assistant.ConversationRepository.createSchema(d);TaskAuditStore.createSchema(d);dev.pocketengine.features.local.project.ProjectPlanRecords.createSchema(d);createTeamParentSchema(d);dev.pocketengine.features.memory.ToolOutputStore.createSchema(d);InferenceRequestStore.createSchema(d);TaskStoreGatewayClaims.createSchema(d);TaskStoreDeviceTrust.createSchema(d);TaskStoreDeviceTasks.createSchema(d);createPhoneStopBatchSchema(d);}
-        @Override public void onUpgrade(SQLiteDatabase d,int oldVersion,int newVersion){if(oldVersion<1||oldVersion>9||newVersion!=10)throw new IllegalStateException("缺少明确数据库迁移，保留旧库并停止升级");if(oldVersion<2)dev.pocketengine.features.assistant.ConversationRepository.createSchema(d);if(oldVersion<3){TaskAuditStore.createSchema(d);try{TaskAuditStore.migrateLegacy(d);}catch(Exception failed){throw new IllegalStateException("原任务事件迁移失败，原始数据库未删除",failed);}}if(oldVersion<4){dev.pocketengine.features.local.project.ProjectPlanRecords.createSchema(d);createTeamParentSchema(d);}if(oldVersion<5)dev.pocketengine.features.memory.ToolOutputStore.createSchema(d);if(oldVersion<6)InferenceRequestStore.createSchema(d);if(oldVersion<7)TaskStoreGatewayClaims.createSchema(d);if(oldVersion<8){TaskStoreDeviceTrust.createSchema(d);TaskStoreDeviceTasks.createSchema(d);}if(oldVersion<9){dev.pocketengine.features.assistant.ConversationRepository.createOrganizationSchema(d);TaskStoreDeviceTrust.createSchema(d);}if(oldVersion<10)createPhoneStopBatchSchema(d);}
+        @Override public void onUpgrade(SQLiteDatabase d,int oldVersion,int newVersion){try{if(oldVersion<1||oldVersion>9||newVersion!=10)throw new IllegalStateException("缺少明确数据库迁移，保留旧库并停止升级");if(oldVersion<2)dev.pocketengine.features.assistant.ConversationRepository.createSchema(d);if(oldVersion<3){TaskAuditStore.createSchema(d);try{TaskAuditStore.migrateLegacy(d);}catch(Exception failed){throw new IllegalStateException("原任务事件迁移失败，原始数据库未删除",failed);}}if(oldVersion<4){dev.pocketengine.features.local.project.ProjectPlanRecords.createSchema(d);createTeamParentSchema(d);}if(oldVersion<5)dev.pocketengine.features.memory.ToolOutputStore.createSchema(d);if(oldVersion<6)InferenceRequestStore.createSchema(d);if(oldVersion<7)TaskStoreGatewayClaims.createSchema(d);if(oldVersion<8){TaskStoreDeviceTrust.createSchema(d);TaskStoreDeviceTasks.createSchema(d);}if(oldVersion<9){dev.pocketengine.features.assistant.ConversationRepository.createOrganizationSchema(d);TaskStoreDeviceTrust.createSchema(d);}if(oldVersion<10)createPhoneStopBatchSchema(d);}catch(RuntimeException failure){if(failure instanceof android.database.sqlite.SQLiteDatabaseCorruptException)throw failure;throw new DatabaseOpenFailure("migration_failed","原数据库迁移未完成；请保留原件并核对兼容版本",failure);}}
     }
 }

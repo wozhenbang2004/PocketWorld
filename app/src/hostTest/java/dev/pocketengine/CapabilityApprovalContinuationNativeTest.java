@@ -50,7 +50,7 @@ public final class CapabilityApprovalContinuationNativeTest {
     private static Object get(EngineApplication app,String name)throws Exception{Field field=EngineApplication.class.getDeclaredField(name);field.setAccessible(true);return field.get(app);}
     @Before public void prepare()throws Exception{
         PresentationBoundary.afterPush=null;app=(EngineApplication)RuntimeEnvironment.getApplication();
-        app.tasks=new TaskStore(app);app.settings=new SettingsStore(app);app.features=new FeatureHost(event->{},app.tasks,()->false);
+        app.tasks=new TaskStore(app);dev.pocketengine.testutil.ReadyApplicationFixture.complete(app);app.settings=new SettingsStore(app);app.features=new FeatureHost(event->{},app.tasks,()->false);
         app.addObserver(events::add);
         ((ExecutorService)get(app,"capabilityWorkers")).shutdownNow();queue=new Queue();set(app,"capabilityWorkers",queue);
     }

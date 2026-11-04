@@ -65,7 +65,9 @@
     "additionalClasses": [
       "dev.pocketengine.CapabilityApprovalContinuationNativeTest"
     ],
-    "helpers": [],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
+    ],
     "robolectric": true,
     "description": "Original SQL and Engine approval decisions: old or missing runs are rejected, current exact decisions remain single use, late phone replacement and queued assistant pickup cannot continue a successor, and unresolved effects remain fenced. Current assistant pickup reaches its real same-task attempt and tool grant before an explicit pre-Runner fixture stop; current phone resumes only its original control. Only startup/presentation and service/executor boundaries are controlled, with a real empty native plugin host. No normal fresh-run full approval-loop, external model/tool, device or visual acceptance."
   },
@@ -199,7 +201,9 @@
   },
   "browser-owner-admission": {
     "class": "dev.pocketengine.browser.BrowserTaskHostAdmissionTest",
-    "helpers": [],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
+    ],
     "robolectric": true,
     "description": "Targeted original App/TaskStore monitor-order and same-run private-owner browser admission races; no model, device or renderer acceptance. Read-only profile-change preflight, exact original research cancellation and honest post-stop CAS/persistence failures; metadata provider fixtures do not prove WebView support. Original native stop tickets pin displayed task/run/epoch and control/plan/space objects; delayed A cleanup cannot stop B. Controlled cross-caller scheduling, not a single-panel or device reproduction.",
     "additionalClasses": [
@@ -219,7 +223,8 @@
     "class": "dev.pocketengine.features.devices.DeviceReceiverLifecycleTest",
     "helpers": [
       "dev.pocketengine.features.devices.DeviceIngressNativeTest",
-      "dev.pocketengine.testutil.HttpServer"
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
     ],
     "robolectric": true,
     "description": "Original Android Service/SQLite lifecycle on Robolectric, synthetic loopback TLS; not a device test."
@@ -363,7 +368,9 @@
       "dev.pocketengine.displayhelper.DisplayOwnershipSnapshotTest",
       "dev.pocketengine.displayhelper.OwnerTaskTransferTest"
     ],
-    "helpers": [],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
+    ],
     "robolectric": true,
     "description": "Original foreground/background phone ports with bounded real-thread Binder-block fixtures, exact target/occlusion, owned-task continuity and original PH020/native-entry regressions; explicit Android windows/helper transport, not physical Android/OEM acceptance."
   },
@@ -456,7 +463,8 @@
       "dev.pocketengine.phone.display.PhoneParallelCapabilitiesTest"
     ],
     "helpers": [
-      "dev.pocketengine.testutil.HttpServer"
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
     ],
     "robolectric": true,
     "description": "Original TaskStore/Runner historical-frame IDs versus current observation/attachments, live per-app owner policy, original resource exclusivity and exact policy CAS. Explicit phone/model/transport fixtures; no current-screen claim from history or unproved device parallel isolation. Self-owned practice before/action/after evidence and truthful display capability negotiation preserve unsupported when isolation proof is absent. Private owner practice also exercises the actual TaskStore flag, non-exported Activity, one native session/nonce/display claim and original-run cancellation cleanup; no physical-device input or rehearsal pass is claimed."
@@ -874,12 +882,14 @@
   "runner-repeat-notice": {
     "class": "dev.pocketengine.runtime.RepeatToolNoticeTest",
     "additionalClasses": [
-      "dev.pocketengine.runtime.RepeatToolRunnerTest"
+      "dev.pocketengine.runtime.RepeatToolRunnerTest",
+      "dev.pocketengine.runtime.RunProgressCheckpointNativeTest"
     ],
     "helpers": [
       "dev.pocketengine.testutil.HttpServer"
     ],
-    "description": "Conservative original Runner same-argument identical failed read/non-dispatch receipt advisory; actual loopback once-only notice, native owner reset, unchanged hard ceiling and unknown-effect stop. No extra model calls, grants, replay, persisted body mirror or Android device acceptance."
+    "description": "Original Runner persisted, bounded failed-round and short-cycle guard: real pre-dispatch refusal coverage, one warning, terminal handoff, original SQLite/compaction checkpoint retention and cold continuation without new allowance. Unknown effects retain original reconciliation; pagination, source changes and legitimate polling do not become repeated failures. No extra inference, replay, grant or second execution ledger. Android/device acceptance remains separately evidenced.",
+    "robolectric": true
   },
   "runner-budget-stream": {
     "class": "dev.pocketengine.runtime.context.RunnerBudgetIntegrationTest",
@@ -1247,7 +1257,8 @@
       "dev.pocketengine.features.devices.DeviceProtocolTest"
     ],
     "helpers": [
-      "dev.pocketengine.testutil.HttpServer"
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
     ],
     "robolectric": true,
     "python": true,
@@ -1396,7 +1407,9 @@
     "additionalClasses": [
       "dev.pocketengine.RelatedTaskCancellationNativeTest"
     ],
-    "helpers": [],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
+    ],
     "robolectric": true,
     "description": "Original TaskStore/FeatureHost snapshot and queued child-stop fences, including controlled SQL successors in the actual cancelCapabilityAttempt native entry (invoked reflectively) and its finally chain and a reentrant original-control callback. Same-parent later links, parent/child run or epoch changes and captured descendants cannot select new work. Startup/presentation, team transport and successor admission are controlled fixtures; no model, physical team/remote/MCP settlement or device acceptance."
   },
@@ -1454,14 +1467,17 @@
   },
   "private-task-run-control": {
     "class": "dev.pocketengine.PrivateTaskRunControlNativeTest",
-    "helpers": [],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
+    ],
     "robolectric": true,
     "description": "Original private phone/assistant task/run/epoch validation, exact controller matching, native assistant reservation and delayed real worker pickup after a successor run. Actual Engine/SQLite/RunControl with controlled startup/presentation/executor pickup; no model/tool execution, mounted UI or device acceptance. Specialized group/team/channel/approval routes remain separate."
   },
   "capability-approval-consumption": {
     "class": "dev.pocketengine.CapabilityApprovalConsumptionNativeTest",
     "helpers": [
-      "dev.pocketengine.testutil.HttpServer"
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
     ],
     "robolectric": true,
     "description": "Actual private assistant App/Runner/loopback Gateway/TaskStore/HostToolSupervisor journey: exact approval consumption, changed arguments, one-use, withdrawn tools, cumulative model/tool budgets, stale/expired queue pickup and unknown receipts. Startup/presentation and executor pickup are controlled; final workspace module only records dispatch and returns a fixture receipt without business effects. No external model, real workspace mutation, clean full-app build, device or visual acceptance."
@@ -1471,5 +1487,29 @@
     "helpers": [],
     "robolectric": true,
     "description": "Opt-in original media scratch IO with hard-killed JDK17 host children, fresh JVM recovery, default-process live leases, unknown-file quota and durable Book preservation. Codec-only boundaries use extractor/muxer shadows, not real container parsing or encoding. No Android/device process death or cross-process lease guarantee."
+  },
+  "bootstrap-database-maintenance": {
+    "class": "dev.pocketengine.bootstrap.BootstrapAdmissionNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.bootstrap.BootstrapStatusTest",
+      "dev.pocketengine.store.DatabaseFilePreservationTest",
+      "dev.pocketengine.store.TaskDatabaseMaintenanceNativeTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
+    ],
+    "robolectric": true,
+    "description": "Exact original bootstrap admission, staged status, real-file preservation, verified-copy cutover and one-use original-store retry. Android/SQLite/service cases require SDK35 host runtime; pure file checks are not database cutover or device acceptance."
+  },
+  "model-connection-owner-policy": {
+    "class": "dev.pocketengine.store.ProviderCompatibilityNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.ui.ModelConnectionTestIdentityTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Saved original provider compatibility/cache policy, real loopback SettingsStore/Gateway projection and native test identity matching. No external-provider or Android UI acceptance."
   }
 }
