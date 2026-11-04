@@ -17,6 +17,7 @@
   --pw-focus: #ededed;
   --pw-on-strong: #181818;
   --ovio-on-accent: var(--pw-on-strong);
+  --pw-shadow-input: 0 8px 32px rgb(0 0 0 / .18);
   --pw-shadow-surface: 0 8px 32px rgb(0 0 0 / .16);
   --pw-shadow-floating: 0 16px 48px rgb(0 0 0 / .30);
   --pw-shadow-sheet: 0 -12px 56px rgb(0 0 0 / .24);

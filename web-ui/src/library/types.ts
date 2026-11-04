@@ -13,6 +13,6 @@ export type ChatComposerProps = {
  attachments?:Attachment[]; onRemoveAttachment?:(id:string)=>void; onAttach?:()=>void;
  onVoice?:()=>void; listening?:boolean; voiceStatus?:string; onDiscardVoice?:()=>void;
  modelName?:string; onSelectModel?:()=>void; toolbar?:ReactNode; children?:ReactNode;
- status?:ReactNode; label?:string; composerKey?:string; className?:string;
+ status?:ReactNode; label?:string; composerKey?:string; className?:string; compact?:boolean;
 };
 export type DataPanelProps = {data?:any; title?:string; onAction?:(action:string,item?:any)=>void; className?:string};

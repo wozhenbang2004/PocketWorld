@@ -22,7 +22,7 @@
   --pw-focus: #626262;
   --pw-radius-control: 10px;
   --pw-radius-popover: 14px;
-  --pw-shadow-input: none;
+  --pw-shadow-input: 0 8px 32px rgb(20 20 20 / .06);
   --pw-shadow-surface: 0 8px 32px rgb(20 20 20 / .055);
   --pw-shadow-floating: 0 16px 48px rgb(20 20 20 / .10);
   --pw-shadow-sheet: 0 -12px 56px rgb(20 20 20 / .09);

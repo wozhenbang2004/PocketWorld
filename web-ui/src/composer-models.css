@@ -12,3 +12,89 @@
 .pw-model-drawer .cb-model2-name strong { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 15px; line-height: 22px; }
 .pw-model-drawer .cb-model2-name strong > svg { flex: none; }
 .pw-model-drawer .cb-model2-name small { display: block; margin: 0; font-size: 12px; line-height: 20px; white-space: normal; }
+
+/* Compact consumer of the retained Affect composer. The source controls,
+ * model entry, recording state and Josh press behavior remain intact. */
+.pw-composer-host.pw-composer-compact .afa-composer > .afa-card,
+:is(.pw-app, .pw-drawer) .pw-composer-region .pw-composer-host.pw-composer-compact .afa-composer > .afa-card,
+:is(.pw-app, .pw-drawer) .pw-composer-region .pw-composer-host.pw-composer-compact .afa-composer > .afa-card:focus-within {
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 18px;
+  background: var(--pw-inset, #f6f6f6);
+  box-shadow: var(--pw-shadow-input, none);
+}
+.pw-composer-host.pw-composer-compact .pw-composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+}
+.pw-composer-host.pw-composer-compact :is(.pw-composer-leading, .pw-composer-actions) {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  min-height: 44px;
+}
+.pw-composer-host.pw-composer-compact .afa-composer .pw-composer-row textarea {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  min-height: 44px;
+  max-height: 120px;
+  margin: 0;
+  padding: 10px 4px;
+  font-size: 16px;
+  line-height: 24px;
+  resize: none;
+  overflow-y: auto;
+}
+.pw-composer-host.pw-composer-compact :is(.afa-iconbtn, .afa-stop, .pw-press) {
+  flex: none;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+}
+.pw-composer-host.pw-composer-compact .pw-composer-leading button {
+  min-width: 44px;
+  min-height: 44px;
+}
+.pw-composer-host.pw-composer-compact .pw-press .pw-press-front {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 7px 10px;
+}
+.pw-composer-host.pw-composer-compact .afa-composer .afa-recording {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  gap: 6px;
+  padding-inline: 4px;
+}
+.pw-composer-host.pw-composer-compact .afa-recording > i { flex: none; }
+.pw-composer-host.pw-composer-compact .afa-recording > span {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+}
+.pw-composer-host.pw-composer-compact .afa-filechips { margin: 4px 2px 6px; }
+.pw-composer-host.pw-composer-compact .afa-filechips button { min-width: 44px; min-height: 44px; }
+.pw-composer-host.pw-composer-compact .pw-composer-model {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+.pw-composer-host.pw-composer-compact .pw-composer-model .pw-model-trigger {
+  min-height: 44px;
+  max-width: 100%;
+  border: 0;
+  padding-inline: 8px;
+  background: transparent;
+  box-shadow: none;
+}
