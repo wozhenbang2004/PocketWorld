@@ -3178,6 +3178,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             case "takeoverTask":return takeoverTask(input.getString("taskId"));
             case "ownerPhoneHandoff":return ownerPhoneHandoff(input.getString("taskId"),input.getString("handoffAction"),input.optString("handoffId"));
             case "observeTask":return observeTask(input.getString("taskId"),input);
+            case "readPhonePreview":return readPhonePreview(input,originalOwnerCurrent);
             case "manualTaskAction":return manualTaskAction(input.getString("taskId"),input.getString("tool"),input.optJSONObject("args"),input.optString("observationId"));
             case "ownerSecretInput":return manualTaskAction(input.getString("taskId"),"phone_type",json("nodeId",input.getString("nodeId")),input.getString("observationId"),input.getString("text"));
             case "resolveOperation":{String id=input.getString("taskId");JSONObject reviewed=tasks.get(id,false);if(teamWriteOrigin(reviewed))tasks.requireTeamOwnerAttempt(input);if(groupOrigin(reviewed)){groupOwnerWorkflows.check();reviewedGroupAttempt(reviewed,input);}RunControl control=control(id);if(ownerActionActive||control!=null&&!control.isPaused()||capabilityControls.containsKey(id)||features.mediaControl(id)!=null||features.teamControl(id)!=null)throw new IllegalStateException("请等待动作回执并暂停执行，再核对动作结果");JSONObject result=tasks.resolveOperation(id,input.getString("operationId"),input.getString("outcome"));if(!tasks.hasUnresolved(id)){EngineModule semantic=features.module("semantic");if(semantic instanceof dev.pocketengine.features.semantic.SemanticModule)((dev.pocketengine.features.semantic.SemanticModule)semantic).releaseRun(control);}pushTask(id);if(channelTaskHost!=null)channelTaskHost.publishTaskState(id);return result;}
@@ -3273,6 +3274,41 @@ public final class EngineApplication extends Application implements dev.pocketen
                 return json("taskId",id,"receipt",receipt,"observation",observation,"manualAllowed",!port.ownerHandoffActive()&&!tasks.hasUnresolved(id)&&observation.optBoolean("ok"),"message",port.ownerHandoffActive()?"原应用由主人接管或位置待核对；请先核对，再明确交还原副屏。":observation.optBoolean("ok")?"原副屏已重新观察，尚未自动继续助手。":"尚未取得可用的新副屏观察；保持暂停，请恢复观察条件。");
             }finally{ownerActionActive=false;}
         }
+    }
+    /** The owner viewer retains one exact run/port. No Application or owner-action monitor spans helper IO. */
+    private JSONObject readPhonePreview(JSONObject input,java.util.function.BooleanSupplier ownerCurrent)throws Exception {
+        if(ownerCurrent==null||!ownerCurrent.getAsBoolean())throw new SecurityException("原观看窗口已关闭");
+        var selected=dev.pocketengine.phone.display.PhoneLivePreview.request(input);
+        BackgroundRun retained;
+        TaskStore store=tasks;
+        synchronized(this){
+            retained=backgroundRuns.get(selected.taskId());
+            if(retained==null||!retained.control.matchesHostRun(selected.taskId(),selected.runId(),selected.epoch()))
+                throw new SecurityException("原独立屏执行已变化");
+        }
+        RunControl original=retained.control;
+        // Browser handoff releases phone input while retaining this display and its SQL lease.
+        dev.pocketengine.phone.observation.NativePhoneEntry.Admission currentRun=()->{
+            if(!ownerCurrent.getAsBoolean()||!businessReady()||store!=tasks||!executionAllowed()
+                    ||backgroundRuns.get(selected.taskId())!=retained||original.isCancelled()
+                    ||!original.matchesHostRun(selected.taskId(),selected.runId(),selected.epoch())
+                    ||original.phoneSurfaceActive()&&!resources.ownsBackgroundPhone(retained.resourceToken))
+                throw new SecurityException("原观看窗口、任务执行或独立屏已变化");
+        };
+        currentRun.check();store.requireOwnerPhonePreviewTarget(selected.taskId(),selected.runId(),selected.epoch(),original);
+        PhonePort physical=retained.port;
+        if(physical==null){
+            currentRun.check();
+            if(selected.sessionId()!=null)throw new SecurityException("原已绑定独立屏端口不再存在");
+            throw new dev.pocketengine.phone.display.PhoneLivePreview.NotReady();
+        }
+        if(!(physical instanceof dev.pocketengine.phone.display.BackgroundPhonePort port))throw new SecurityException("原执行没有独立屏端口");
+        dev.pocketengine.phone.observation.NativePhoneEntry.Admission current=()->{
+            currentRun.check();if(retained.port!=port)throw new SecurityException("原独立屏端口已变化");
+        };
+        JSONObject frame=port.previewFrameForOwner(selected,original,current);
+        store.requireOwnerPhonePreviewTarget(selected.taskId(),selected.runId(),selected.epoch(),original);current.check();
+        return frame;
     }
     private JSONObject observeTask(String id,JSONObject input)throws Exception {
         dev.pocketengine.phone.observation.PhoneObservationPreview.Identity expected=dev.pocketengine.phone.observation.PhoneObservationPreview.expected(input);
