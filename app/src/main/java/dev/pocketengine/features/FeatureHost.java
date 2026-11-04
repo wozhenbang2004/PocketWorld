@@ -197,7 +197,11 @@ public final class FeatureHost implements AutoCloseable {
     }
     /** Same original bound refs only, including cold cancellation/late cleanup; no handle/launch. */
     public JSONObject observeLocalMcpInvocationsForOwner(String task,boolean cancel)throws Exception {
-        if(tasks==null||!(module("local") instanceof dev.pocketengine.features.local.LocalModule local)||local.managedRuntimeForOwner()==null)return new JSONObject().put("taskId",task).put("observationAvailable",false);var runtime=local.managedRuntimeForOwner();JSONArray observed=new JSONArray();for(var record:tasks.localMcpInvocationsForOwner(task)){JSONObject prior=record.publicReceiptForHost();try{boolean pending=prior==null||prior.optJSONObject("nativeMcp")==null||!prior.getJSONObject("nativeMcp").optBoolean("processSettled");if(cancel&&pending)tasks.requestCancel(task,record.runId());var actual=cancel&&pending?runtime.requestCancel(record.referenceForHost()):runtime.query(record.referenceForHost());tasks.recordLocalMcpInvocationForHost(record,dev.pocketengine.features.plugins.McpLocalInvocation.observeForHost(record.scopeForHost(),actual));observed.put(record.publicReceiptForHost());}catch(Exception unknown){observed.put(new JSONObject().put("operationId",record.operationId()).put("status","unknown").put("originalProcessReceiptUnavailable",true).put("replayAllowed",false));}}
+        if(tasks==null||!(module("local") instanceof dev.pocketengine.features.local.LocalModule local)||local.managedRuntimeForOwner()==null)return new JSONObject().put("taskId",task).put("observationAvailable",false);
+        return observeLocalMcpInvocationsForOwner(task,cancel,tasks.localMcpInvocationsForOwner(task));
+    }
+    private JSONObject observeLocalMcpInvocationsForOwner(String task,boolean cancel,java.util.List<TaskStore.LocalMcpInvocationRecord> originals)throws Exception {
+        if(!(module("local") instanceof dev.pocketengine.features.local.LocalModule local)||local.managedRuntimeForOwner()==null)return new JSONObject().put("taskId",task).put("observationAvailable",false);var runtime=local.managedRuntimeForOwner();JSONArray observed=new JSONArray();for(var record:originals){JSONObject prior=record.publicReceiptForHost();try{boolean pending=prior==null||prior.optJSONObject("nativeMcp")==null||!prior.getJSONObject("nativeMcp").optBoolean("processSettled");if(cancel&&pending)tasks.requestCancel(task,record.runId());var actual=cancel&&pending?runtime.requestCancel(record.referenceForHost()):runtime.query(record.referenceForHost());tasks.recordLocalMcpInvocationForHost(record,dev.pocketengine.features.plugins.McpLocalInvocation.observeForHost(record.scopeForHost(),actual));observed.put(record.publicReceiptForHost());}catch(Exception unknown){observed.put(new JSONObject().put("operationId",record.operationId()).put("status","unknown").put("originalProcessReceiptUnavailable",true).put("replayAllowed",false));}}
         return new JSONObject().put("taskId",task).put("operations",observed).put("replayAllowed",false).put("queryOnly",true);
     }
 
@@ -379,19 +383,62 @@ public final class FeatureHost implements AutoCloseable {
         tasks.updateExternal(child,result);emitTask(child);control.check();tasks.checkCapability(parent,parentRun,epoch,dev.pocketengine.features.remote.RemoteTaskCapabilities.READ,control);
         return result.put("hostTaskId",child).put("parentTaskId",parent).put("queryOnly",true);
     }
-    public void cancelRelatedTasks(String parent){
-        try{if(tasks!=null&&tasks.hasLocalMcpInvocationsForHost(parent))observeLocalMcpInvocationsForOwner(parent,true);}catch(Exception unknown){events.emit(json("type","error","message","原本机MCP进程清场尚未确认；保留原操作，不重新启动"));}
-        if(tasks==null)return;try{JSONObject task=tasks.get(parent,false);for(int i=0;task!=null&&task.optJSONArray("relatedTasks")!=null&&i<task.getJSONArray("relatedTasks").length();i++){
-            String id=task.getJSONArray("relatedTasks").getJSONObject(i).getString("taskId");JSONObject child=tasks.get(id,false);if(child==null||!child.optString("status").matches("preparing|queued|running|paused|awaiting_user|stopping"))continue;
-            String feature=child.optString("feature");JSONObject input=new JSONObject();String command;
-            if(feature.equals("teams")){command="cancel";input.put("runId",child.getString("runId"));}
-            else if(feature.equals("remote")&&!child.optString("externalId").isEmpty()){
-                String originalRun=child.getString("runId");int originalEpoch=child.getInt("coordinatorEpoch");
-                workers.execute(()->{try{cancelOriginalRemoteTask(id,originalRun,originalEpoch,null);}catch(Exception unknown){events.emit(json("type","error","message","原电脑子任务停止结果尚未确认；没有停止新执行，请查询原任务"));}});cancelRelatedTasks(id);continue;
+    /** Native cancellation ticket. JSON commands cannot select a parent or add later children. */
+    public static final class RelatedTaskCancellation {
+        private final FeatureHost issuer;private final String task,run,feature;private final int epoch;
+        private final java.util.List<RelatedTaskCancellation> children;
+        private final java.util.List<TaskStore.LocalMcpInvocationRecord> mcp;
+        private RelatedTaskCancellation(FeatureHost issuer,JSONObject original,java.util.List<RelatedTaskCancellation> children,java.util.List<TaskStore.LocalMcpInvocationRecord> mcp)throws Exception{
+            this.issuer=issuer;task=original.getString("id");run=original.optString("runId");epoch=original.optInt("coordinatorEpoch");feature=original.optString("feature");this.children=java.util.List.copyOf(children);this.mcp=java.util.List.copyOf(mcp);
+        }
+    }
+    /** Capture before cancelling the original control, under the same monitor as attempt admission. */
+    public RelatedTaskCancellation captureRelatedTaskCancellation(String parent,String run,int epoch){
+        if(tasks==null)return null;
+        try{synchronized(tasks){JSONObject original=tasks.get(parent,false);if(original==null||!run.equals(original.optString("runId"))||epoch!=original.optInt("coordinatorEpoch"))throw new SecurityException("原父执行已变化");return captureRelatedTaskCancellation(original,new java.util.HashSet<>());}}
+        catch(Exception unknown){events.emit(json("type","error","message","原父执行或子任务清场范围未确认；未选择当前新执行，请查看原任务"));return null;}
+    }
+    private RelatedTaskCancellation captureRelatedTaskCancellation(JSONObject original,java.util.Set<String> seen)throws Exception{
+        String parent=original.getString("id"),run=original.optString("runId");if(!seen.add(parent))throw new SecurityException("原子任务关联存在重复或循环");
+        java.util.List<RelatedTaskCancellation> children=new java.util.ArrayList<>();JSONArray links=original.optJSONArray("relatedTasks");
+        for(int i=0;links!=null&&i<links.length();i++){
+            JSONObject link=links.getJSONObject(i),child=tasks.get(link.getString("taskId"),false);
+            if(child==null||!child.optString("status").matches("preparing|queued|running|paused|awaiting_user|stopping"))continue;
+            if(!parent.equals(child.optString("parentTaskId"))||child.has("parentRunId")&&!run.equals(child.getString("parentRunId"))||link.has("runId")&&!link.getString("runId").equals(child.optString("runId")))continue;
+            String feature=child.optString("feature");if(!feature.equals("teams")&&!(feature.equals("remote")&&!child.optString("externalId").isEmpty()))continue;
+            children.add(captureRelatedTaskCancellation(child,seen));
+        }
+        java.util.List<TaskStore.LocalMcpInvocationRecord> mcp=new java.util.ArrayList<>();
+        try{if(tasks.hasLocalMcpInvocationsForHost(parent))for(var record:tasks.localMcpInvocationsForOwner(parent))if(run.equals(record.runId()))mcp.add(record);}
+        catch(Exception unknown){events.emit(json("type","error","message","原本机MCP进程清场范围尚未确认；保留原操作，不重新启动"));}
+        return new RelatedTaskCancellation(this,original,children,mcp);
+    }
+    public void cancelRelatedTasks(RelatedTaskCancellation original){
+        if(original==null)return;
+        if(original.issuer!=this)throw new SecurityException("不是原宿主的子任务清场票");
+        cancelRelatedTasks(original,original);
+    }
+    private boolean originalRelatedTaskCurrent(RelatedTaskCancellation original)throws Exception{
+        JSONObject current=tasks.get(original.task,false);return current!=null&&original.run.equals(current.optString("runId"))&&original.epoch==current.optInt("coordinatorEpoch")&&original.feature.equals(current.optString("feature"));
+    }
+    private void cancelRelatedTasks(RelatedTaskCancellation root,RelatedTaskCancellation original){
+        try{
+            synchronized(tasks){if(!originalRelatedTaskCurrent(root)||!originalRelatedTaskCurrent(original))return;}
+            if(!original.mcp.isEmpty())observeLocalMcpInvocationsForOwner(original.task,true,original.mcp);
+            for(var child:original.children){
+                Runnable stop=()->{try{
+                    synchronized(tasks){if(!originalRelatedTaskCurrent(root)||!originalRelatedTaskCurrent(original)||!originalRelatedTaskCurrent(child))return;}
+                    if(child.feature.equals("remote"))cancelOriginalRemoteTask(child.task,child.run,child.epoch,null);
+                    else {
+                        synchronized(tasks){if(!originalRelatedTaskCurrent(root)||!originalRelatedTaskCurrent(original)||!originalRelatedTaskCurrent(child))return;tasks.requestCancel(child.task,child.run);}
+                        EngineModule selected=module(child.feature);if(selected==null)throw new IllegalStateException("原子任务宿主不可用");JSONObject receipt=selected.handle("cancel",json("runId",child.run));
+                        synchronized(tasks){if(originalRelatedTaskCurrent(child))tasks.updateExternal(child.task,receipt==null?new JSONObject():receipt);}emitTask(child.task);
+                    }
+                }catch(Exception unknown){events.emit(json("type","error","message","原子任务停止结果尚未确认；没有选择新执行，请查询原任务"));}};
+                (child.feature.equals("remote")?workers:controls).execute(stop);
+                cancelRelatedTasks(root,child);
             }
-            else continue;
-            tasks.requestCancel(id,child.optString("runId"));request(json("feature",feature,"command",command,"payload",input));cancelRelatedTasks(id);
-        }}catch(Exception error){events.emit(json("type","error","message","子任务停止状态尚未确认，请查看原任务"));}
+        }catch(Exception unknown){events.emit(json("type","error","message","原子任务停止状态尚未确认，请查看原任务"));}
     }
     private JSONObject cancelOriginalRemoteTask(String id,String run,int epoch,String generation)throws Exception {
         EngineModule selected=module("remote");if(tasks==null||!(selected instanceof dev.pocketengine.features.remote.RemoteModule remote))throw new SecurityException("没有原电脑任务的原生停止宿主");
