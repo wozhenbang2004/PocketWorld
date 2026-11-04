@@ -2165,7 +2165,54 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val request = channelPhoneRequest; channelPhoneBlocked = true
         if (request != null) io.execute { try { app.cancelChannelPhone(request.getString("requestId")) } catch (error: Exception) { main.post { if (!closed) state = state.copy(error = message(error)) } } }
     }
-    fun startPhone(goal: String, mode: String, completed: ((JSONObject?, String?) -> Unit)? = null): Boolean {
+    internal fun prepareConversationPhoneStart(conversation: String, goal: String, mode: String): EngineApplication.ConversationPhoneStartReview {
+        check(webPrivateOwnerVisible() && conversation.isNotBlank() && state.conversationId == conversation && composerDraft?.conversationId == conversation) { "请回到原私人对话核对这次手机任务" }
+        check(!hasChannelPhoneOrigin) { "渠道请求保留原渠道归属，不能改为私人对话任务" }
+        return app.prepareConversationPhoneStart(conversation, goal, mode, JSONObject()
+            .put("scopeMinutes", newTaskScopeMinutes).put("toolLimit", newTaskToolBudget).put("modelCallLimit", newTaskModelBudget))
+    }
+    internal fun startConversationPhone(review: EngineApplication.ConversationPhoneStartReview, ownerCurrent: () -> Boolean, completed: (JSONObject?, String?) -> Unit): Boolean {
+        val shown = review.view()
+        if (!webPrivateOwnerVisible() || !ownerCurrent() || hasChannelPhoneOrigin) { state = state.copy(error = "原私人手机任务审阅已变化，请重新核对"); return false }
+        if (!preparePhoneSubmission(shown.getString("goal"), shown.getString("mode"))) return false
+        state = state.copy(phoneSubmitting = true)
+        return try {
+            io.execute {
+                var allocated: String? = null
+                val result = runCatching { app.startConversationPhone(review, true,
+                    java.util.function.BooleanSupplier { webPrivateOwnerVisible() && ownerCurrent() },
+                    java.util.function.Consumer { allocated = it }) }
+                main.post {
+                    if (!closed) {
+                        state = state.copy(phoneSubmitting = false)
+                        result.exceptionOrNull()?.let { state = state.copy(error = message(it)) }
+                        val receipt = result.getOrNull()
+                        if (receipt?.optBoolean("admitted") == true && shown.getString("mode") == "main_screen") {
+                            val task = receipt.optString("taskId")
+                            main.postDelayed({ if (!closed && !activity.isFinishing && !activity.isDestroyed && app.activeId() == task) activity.moveTaskToBack(true) }, 350)
+                        }
+                    }
+                    // The newly admitted phone identity changes the window ticket itself. Preserve
+                    // the original receipt even after navigation; never repeat a start to recover it.
+                    completed(result.getOrNull() ?: JSONObject().put("requestId", shown.getString("requestId"))
+                        .put("conversationId", shown.getString("conversationId")).also { value ->
+                            allocated?.let { value.put("taskId", it) }
+                            if (allocated == null && result.exceptionOrNull() is EngineApplication.ConversationPhoneStartRejected) value.put("status", "rejected")
+                        },
+                        result.exceptionOrNull()?.let(::message))
+                }
+            }
+            true
+        } catch (error: Exception) { state = state.copy(phoneSubmitting = false, error = message(error)); false }
+    }
+    internal fun queryConversationPhoneStart(request: String, conversation: String, completed: (JSONObject?, String?) -> Unit) {
+        check(webPrivateOwnerVisible()) { "请在私人工作区查询原手机任务" }
+        io.execute {
+            val result = runCatching { check(webPrivateOwnerVisible()); app.queryConversationPhoneStart(request, conversation) }
+            main.post { completed(result.getOrNull(), result.exceptionOrNull()?.let(::message)) }
+        }
+    }
+    private fun preparePhoneSubmission(goal: String, mode: String): Boolean {
         if (modelSelectionPending()) { state = state.copy(error = "模型设置正在保存，请等待回执后再开始手机任务"); return false }
         if (state.phoneSubmitting) { state = state.copy(error = "请先核对上一次手机任务的启动回执"); return false }
         if (channelPhoneBlocked) { state = state.copy(error = "原渠道请求待核对或已取消；请清空草稿后另写本机新目标") ; return false }
@@ -2180,6 +2227,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         }
         try{voiceInput.claimMessageId(voiceTarget(true),voiceOwnerAuthority())}catch(error:Exception){state=state.copy(error=message(error));return false}
+        return true
+    }
+    fun startPhone(goal: String, mode: String, completed: ((JSONObject?, String?) -> Unit)? = null): Boolean {
+        if (!preparePhoneSubmission(goal, mode)) return false
+        val channel = channelPhoneRequest
         state = state.copy(phoneSubmitting = true)
         return try {
             native("startRun", JSONObject().put("goal", goal.trim()).put("executionMode", mode).put("screenConsent", true).put("executionScope",newTaskExecutionScope()).also { if (channel != null) it.put("channelRequestId", channel.getString("requestId")) }, completed = completed)
@@ -3498,7 +3550,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 "get" -> {
                     if(requestId!=latestChatGet)return
                     val id = result.optString("conversationId")
-                    if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), memoryReference = it.optJSONObject("memoryReference"), ownerOriginalLocator = if (it.optBoolean("importAssignedIdentity")) null else it.optJSONObject("ownerOriginalLocator")) });resolveOriginalMessageAttachments(id)
+                    if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), memoryReference = it.optJSONObject("memoryReference"), ownerOriginalLocator = if (it.optBoolean("importAssignedIdentity")) null else it.optJSONObject("ownerOriginalLocator"), phoneResult = UiPhoneResult.fromNativeMessage(it)) });resolveOriginalMessageAttachments(id)
                 }
                 "send" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"));native("getFeatures") }
                 "getSubmission" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"),true);native("getFeatures") }

@@ -1,4 +1,21 @@
 {
+  "conversation-phone-handoff": {
+    "class": "dev.pocketengine.ConversationPhoneStartNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.store.ConversationPhoneHandoffTest",
+      "dev.pocketengine.ui.PhoneResultProjectionTest",
+      "dev.pocketengine.ui.web.PocketWebPhoneResultNavigationTest",
+      "dev.pocketengine.features.assistant.ConversationPhoneDeliveryPassTest",
+      "dev.pocketengine.store.ConversationPhoneStorageNativeTest",
+      "dev.pocketengine.features.assistant.ConversationPhoneHandoffNativeTest",
+      "dev.pocketengine.features.assistant.AssistantPhoneHandoffDeliveryNativeTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
+    ],
+    "robolectric": true,
+    "description": "Original native review, fixed model and scope admission, one request/task identity, source currentness, per-run frozen phone outcomes, same-SQL conversation publication and deletion/unknown recovery. Accessibility, foreground service execution and startup are controlled fixture boundaries; no live provider, Android device, APK or visual acceptance."
+  },
   "attachment-legacy-integrity": {
     "class": "dev.pocketengine.features.attachments.LegacyAttachmentIntegrityTest",
     "additionalClasses": [
