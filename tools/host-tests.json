@@ -19,6 +19,17 @@
     "robolectric": true,
     "description": "Bounded read-only owner inventory with explicit incomplete diagnostics, unchanged original bytes and unknown native publications, strict archive/replay scans, physical slot/byte quotas and fail-closed enumeration/read budgets. No mounted UI, Android process-death or device acceptance."
   },
+  "attachment-pdf-scratch-recovery": {
+    "class": "dev.pocketengine.features.attachments.NativePdfScratchRecoveryTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.attachments.documents.DocumentReaderTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.attachments.documents.DocumentFixtures"
+    ],
+    "robolectric": true,
+    "description": "Actual PDF text/OCR private-copy paths with hard-killed host JVMs and fresh-process cold recovery; exact factory namespace, no-follow cleanup and live ownership through renderer release. Renderer-only zero-page shadows, not PDF correctness, Android device/process-death, or cross-process-lock acceptance."
+  },
   "attachment-view-recovery": {
     "class": "dev.pocketengine.features.attachments.AttachmentViewSnapshotsRecoveryTest",
     "helpers": [
