@@ -7631,6 +7631,23 @@ public final class TaskStore {
             t.remove("automationConditionWaitId");t.remove("nativeExecutionMode");t.put("runId",runId).put("coordinatorEpoch",epoch).put("executionMode",mode).put("status","preparing").put("cancelRequested",false).put("stepCeiling",ceiling).put("approvalState","granted").put("summary","正在恢复任务并重新观察当前现场");write(t);db.setTransactionSuccessful();return copy(t,false);
         }finally{db.endTransaction();}
     }
+    /** Native owner viewer only. Read canonical task/run/lease facts without audit history,
+     * action/model admission, RunControl.check(), or any write to pause/budget/reference state. */
+    public synchronized void requireOwnerPhonePreviewTarget(String id,String run,int epoch,RunControl original)throws Exception {
+        requireExecutionEnabled();JSONObject task=required(id);requirePrivateOwner(task);
+        JSONObject origin=task.optJSONObject("origin");
+        if(original==null||original.isCancelled()||!original.hasHostRun()||!original.matchesHostRun(id,run,epoch)
+                ||!id.equals(task.optString("id"))||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")
+                ||!"phone".equals(task.optString("kind"))||!"background".equals(task.optString("executionMode"))
+                ||TaskStoreDeviceTasks.deviceTask(task)||task.has("origin")&&!task.isNull("origin")&&origin==null
+                ||origin!=null&&!"team_phone".equals(origin.optString("kind"))
+                ||task.optBoolean("cancelRequested")||!task.optString("status").matches("preparing|running|pausing|paused|awaiting_user|reconciling"))
+            throw new SecurityException("观看只属于当前主人私人独立屏执行");
+        try(Cursor row=db.rawQuery("SELECT status FROM runs WHERE run_id=? AND task_id=? AND epoch=?",new String[]{run,id,String.valueOf(epoch)})){
+            if(!row.moveToFirst()||!"running".equals(row.getString(0)))throw new SecurityException("原独立屏执行已结束");
+        }
+        requirePhoneLeaseCurrent(id,run,epoch);
+    }
     /** Read-only current native destination; paused state confers no dispatch or resume authority. */
     public synchronized JSONObject ownerScreenContextTarget(String id,String run,int epoch,RunControl original)throws Exception {
         JSONObject task=required(id);requirePrivateOwner(task);
