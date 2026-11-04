@@ -1,0 +1,159 @@
+.pw-team-workspace .pw-team-loading {
+  height: 4px;
+}
+
+.pw-team-workspace .pw-team-loading [role="progressbar"] > div {
+  color: var(--pw-ink, #202020);
+}
+
+.pw-team-workspace .pw-team-summary {
+  margin: 16px 0 20px;
+}
+
+.pw-team-workspace .afa-answerbody {
+  min-height: 0;
+}
+
+.pw-team-workspace .pw-team-overview {
+  margin: 20px 0;
+}
+
+.pw-team-workspace .pw-team-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 6px;
+  color: var(--pw-copy, #555);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.pw-team-workspace .pw-team-section-title > span {
+  color: var(--pw-muted, #737373);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.pw-team-workspace .pw-team-disclosures {
+  gap: 2px;
+}
+
+.pw-team-workspace .pw-team-disclosures > * {
+  min-width: 0;
+  border: 0;
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+.pw-team-workspace .pw-team-disclosures > [data-expanded] {
+  background: var(--pw-inset, #f6f6f6);
+}
+
+.pw-team-workspace .pw-team-disclosures > * > h3 > button {
+  min-height: 56px;
+  padding: 9px 10px;
+  gap: 8px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+}
+
+.pw-team-workspace .pw-team-disclosures > * > h3 > button:hover {
+  background: var(--pw-hover, #f4f4f4);
+}
+
+.pw-team-workspace .pw-team-member-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  color: var(--pw-ink, #202020);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 21px;
+  overflow-wrap: anywhere;
+}
+
+.pw-team-workspace .pw-team-member-name > small,
+.pw-team-workspace .pw-team-item-heading > small {
+  color: var(--pw-muted, #737373);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 19px;
+}
+
+.pw-team-workspace .pw-team-member-meta {
+  display: block;
+  overflow: hidden;
+  color: var(--pw-muted, #737373);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 19px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pw-team-workspace .pw-team-member-task {
+  display: block;
+  overflow: hidden;
+  color: var(--pw-copy, #555);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 21px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pw-team-workspace .pw-team-item-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  color: var(--pw-ink, #202020);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 21px;
+}
+
+.pw-team-workspace .pw-team-item-heading > span {
+  flex: 1 1 140px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pw-team-workspace .pw-team-item-heading > small {
+  flex: 0 1 auto;
+}
+
+.pw-team-workspace .pw-team-expanded-copy {
+  padding: 0 10px;
+  color: var(--pw-copy, #555);
+  font-size: 13px;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+}
+
+.pw-team-workspace .pw-team-expanded-copy > p {
+  margin: 6px 0;
+  white-space: pre-wrap;
+}
+
+.pw-team-workspace .pw-team-expanded-copy .pw-form-actions {
+  margin-top: 8px;
+  gap: 4px 8px;
+}
+
+.pw-team-workspace .pw-team-expanded-copy .pw-form-actions > button {
+  height: auto;
+  min-height: 48px;
+  max-width: 100%;
+  white-space: normal;
+  text-align: start;
+}
+
+.pw-team-workspace .pw-team-expanded-copy .pw-form-actions > button > span {
+  min-width: 0;
+  flex-shrink: 1;
+}
