@@ -329,7 +329,7 @@ The collector uses a supplement only for its exact installed package, version an
 
 Source: https://github.com/CopilotKit/openmuse/tree/a4944f4c471d3dc93b8bfc060b5da309b5216ab2
 
-The phone viewer adapts ComputerEntry, DesktopToolCard, ComputerSheet and their shared UI styles. Original files, exact file identities, source-to-adaptation mapping and evidence boundaries are retained in `src/library/upstream/openmuse-a4944f4/`. The official computer image there is research evidence only, not bundled product or device imagery.
+Selected phone-viewer presentation and styles were adapted with reference to ComputerEntry, DesktopToolCard, ComputerSheet and shared UI styles. The original source and reference image are no longer retained in this repository. This notice remains for the existing adaptation; it does not describe the PocketWorld-specific Android preview transport as OpenMuse code.
 
 ```text
 MIT License

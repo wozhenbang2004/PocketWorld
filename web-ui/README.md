@@ -69,15 +69,10 @@ group; full Android compilation and a source-matched APK are separate checks.
 ## Continuous phone viewing
 
 The conversation and original task detail can show one selected background phone
-run continuously. The compact entry, grey inline card, mobile bottom sheet and
-centered desktop workspace are adapted from OpenMuse's actual computer UI at
-`a4944f4c471d3dc93b8bfc060b5da309b5216ab2`. Retained originals, MIT license,
-file identities, exact adaptations and visual-reference limits are in
-[`PROVENANCE.md`](src/library/upstream/openmuse-a4944f4/PROVENANCE.md).
-The sheet uses the original 600px breakpoint, 26px radius and 790px desktop
-maximum width. Card and expanded workspace share one feed. The owner can select
-another eligible task, pause or resume the selected original run, and close
-viewing without stopping execution or losing the conversation draft.
+run continuously, in an inline preview or expanded workspace. Card and expanded
+workspace share one feed. The owner can select another eligible task, pause or
+resume the selected original run, and close viewing without stopping execution
+or losing the conversation draft.
 
 This is a bounded JPEG preview of an already attached Android independent
 display, not E2B/VNC or video sent to the model. Reads are sequential, scheduled

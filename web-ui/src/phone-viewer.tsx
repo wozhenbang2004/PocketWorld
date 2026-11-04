@@ -1,7 +1,7 @@
 /**
  * Adapted from CopilotKit/openmuse ComputerEntry, DesktopToolCard and ComputerSheet.
- * Copyright (c) 2026 OpenMuse contributors. MIT; original source and notice:
- * ./library/upstream/openmuse-a4944f4/PROVENANCE.md
+ * Copyright (c) 2026 OpenMuse contributors. MIT.
+ * License notice: ../THIRD-PARTY-NOTICES.md
  */
 import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { ChevronDown, Expand, LoaderCircle, Monitor, Pause, Play, RefreshCw, X } from 'lucide-react';

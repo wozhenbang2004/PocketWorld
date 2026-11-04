@@ -1,6 +1,6 @@
 /* OpenMuse a4944f4 ComputerEntry / DesktopToolCard / Sheet, MIT.
    React Native styles ported to scoped CSS; phone geometry and neutral palette adapted.
-   See library/upstream/openmuse-a4944f4/PROVENANCE.md and LICENSE. */
+   MIT notice: ../THIRD-PARTY-NOTICES.md. */
 .pw-phone-viewer {
   --phone-text: #11191c;
   --phone-muted: #697176;
