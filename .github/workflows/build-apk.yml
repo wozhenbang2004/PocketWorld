@@ -41,6 +41,7 @@ on:
       - 'tools/build.sh'
       - 'tools/build-display-helper.sh'
       - 'tools/build-android-runtime.py'
+      - 'tools/build-android-runtime-wsl.ps1'
       - 'tools/app-version.py'
       - 'tools/tests/test_app_version.py'
       - 'tools/tests/test_apk_workflow_paths.py'

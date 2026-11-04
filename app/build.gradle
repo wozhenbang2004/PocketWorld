@@ -4,7 +4,8 @@ plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android'; id 'o
 // chains must assign BOTH properties; an explicit release code must exceed every
 // already distributed code. A workflow-local run number cannot order those releases.
 def pocketworldVersionScript = rootProject.layout.projectDirectory.file('tools/app-version.py')
-def pocketworldVersionCommand = ['python3', pocketworldVersionScript.asFile.absolutePath]
+def pocketworldPython = providers.gradleProperty('pocketworldPython').getOrElse('python3')
+def pocketworldVersionCommand = [pocketworldPython, pocketworldVersionScript.asFile.absolutePath]
 ['pocketworldVersionCode': '--version-code', 'pocketworldVersionName': '--version-name'].each { key, flag ->
     def value = providers.gradleProperty(key)
     if (value.isPresent()) pocketworldVersionCommand += [flag, value.get()]
@@ -44,6 +45,7 @@ android {
     compileSdk 35
     buildToolsVersion '35.0.0'
     ndkVersion '28.2.13676358'
+    if (providers.gradleProperty('pocketworldNdkPath').isPresent()) ndkPath providers.gradleProperty('pocketworldNdkPath').get()
     defaultConfig {
         applicationId 'dev.pocketengine'
         minSdk 30
@@ -87,7 +89,9 @@ def helperTask = tasks.register('buildDisplayHelper', Exec) {
     inputs.file('src/main/java/dev/pocketengine/phone/display/PhoneParallelCapabilities.java')
     inputs.file(rootProject.file('tools/build-display-helper.sh'))
     outputs.file(layout.buildDirectory.file('generated/display-helper-assets/pocketengine-display-helper.jar'))
-    commandLine 'bash', rootProject.file('tools/build-display-helper.sh').absolutePath, layout.buildDirectory.file('generated/display-helper-assets/pocketengine-display-helper.jar').get().asFile.absolutePath
+    commandLine providers.gradleProperty('pocketworldBash').getOrElse('bash'),
+            rootProject.file('tools/build-display-helper.sh').absolutePath.replace('\\', '/'),
+            layout.buildDirectory.file('generated/display-helper-assets/pocketengine-display-helper.jar').get().asFile.absolutePath.replace('\\', '/')
 }
 android.sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/display-helper-assets'))
 // Official, fixed Apache-2.0 streaming applier only. Generator remains an offline release tool.
@@ -154,19 +158,33 @@ configurations.matching { it.name.endsWith('UnitTestCompileClasspath') || it.nam
 def runtimeNativeOutput = layout.buildDirectory.dir('generated/android-runtime')
 def runtimeNativeTask = tasks.register('buildAndroidRuntime', Exec) {
     inputs.file(rootProject.file('tools/build-android-runtime.py'))
+    inputs.file(rootProject.file('tools/build-android-runtime-wsl.ps1'))
     inputs.dir('src/main/java/dev/pocketengine/features/local/runtime/native')
     inputs.file('src/main/assets/runtime/catalog.json')
     outputs.dir(runtimeNativeOutput.map { it.dir('jniLibs') })
+    outputs.file(runtimeNativeOutput.map { it.file('native-build-receipt.json') })
     doFirst {
         // AGP 8.7's SDK-component provider queries an absent optional ndkPath.
         // The pinned plugin's Android extension resolves the same configured NDK directly.
-        def nativeArgs = ['python3', rootProject.file('tools/build-android-runtime.py').absolutePath,
+        def nativeArgs = [pocketworldPython, rootProject.file('tools/build-android-runtime.py').absolutePath,
                 '--ndk', android.ndkDirectory.absolutePath,
                 '--output', runtimeNativeOutput.get().asFile.absolutePath]
         if (gradle.startParameter.offline) nativeArgs += '--offline'
         def sourceCache = providers.gradleProperty('pocketworldRuntimeSourceCache').orNull
         if (sourceCache != null) nativeArgs += ['--cache', rootProject.file(sourceCache).absolutePath]
-        commandLine nativeArgs
+        if (System.getProperty('os.name').toLowerCase(java.util.Locale.ROOT).contains('windows')) {
+            def distro = providers.gradleProperty('pocketworldWslDistribution').orNull
+            def linuxNdk = providers.gradleProperty('pocketworldWslNdk').orNull
+            if (!distro || !linuxNdk) throw new GradleException('Windows PRoot build requires pocketworldWslDistribution and pocketworldWslNdk; Java/Kotlin and normal JNI remain on Windows')
+            def bridge = ['powershell.exe', '-NoProfile', '-File', rootProject.file('tools/build-android-runtime-wsl.ps1').absolutePath,
+                          '-SourceRoot', rootProject.projectDir.absolutePath, '-Output', runtimeNativeOutput.get().asFile.absolutePath,
+                          '-Distribution', distro, '-Ndk', linuxNdk]
+            if (sourceCache != null) bridge += ['-SourceCache', rootProject.file(sourceCache).absolutePath]
+            if (gradle.startParameter.offline) bridge += ['-Offline']
+            commandLine bridge
+        } else {
+            commandLine nativeArgs
+        }
     }
 }
 android.sourceSets.main.jniLibs.srcDir(runtimeNativeOutput.map { it.dir('jniLibs') })

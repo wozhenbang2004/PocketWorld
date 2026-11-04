@@ -75,9 +75,16 @@ tasks.withType(Test).configureEach {
     testLogging { events 'passed', 'skipped', 'failed'; exceptionFormat 'full'; showStandardStreams = true }
     doFirst {
         // Explicit JNI subprocess fixtures use this same locked test closure, never a guessed JDK/App path.
-        systemProperty 'pocketworldHostClasspath', classpath.asPath
         def report = file(providers.gradleProperty('pocketworldHostReport').get())
         report.mkdirs()
+        if (System.getProperty('os.name').toLowerCase(java.util.Locale.ROOT).contains('windows')) {
+            // A -D argument containing this closure exceeds Windows' process command limit.
+            def arguments = new File(report, 'host-classpath.args')
+            arguments.setText('"-DpocketworldHostClasspath=' + classpath.asPath.replace('\\', '\\\\').replace('"', '\\"') + '"\n', 'UTF-8')
+            jvmArgs '@' + arguments.absolutePath
+        } else {
+            systemProperty 'pocketworldHostClasspath', classpath.asPath
+        }
         new File(report, 'classpath.txt').text = classpath.files.collect { it.absolutePath }.join(System.lineSeparator()) + System.lineSeparator()
         new File(report, 'gradle-selection.json').text = JsonOutput.prettyPrint(JsonOutput.toJson([
             groups: selected, classes: classes, sources: sources, sourceRoots: sourceRoots,

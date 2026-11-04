@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 import zipfile
 
@@ -19,10 +20,12 @@ ROOT = Path(__file__).resolve().parents[2]
 JAVA_HOME = Path(os.environ.get("JAVA_HOME", "/usr/lib/jvm/java-17-openjdk-amd64"))
 ANDROID_HOME = Path(os.environ.get("ANDROID_HOME", os.environ.get("ANDROID_SDK_ROOT", str(Path.home() / "Android/Sdk"))))
 GRADLE_BIN = os.environ.get("GRADLE_BIN") or shutil.which("gradle")
-TOOLCHAIN_AVAILABLE = all(path.is_file() for path in (
-    JAVA_HOME / "bin/javac", JAVA_HOME / "bin/jar",
+BASH_BIN = os.environ.get("BASH_BIN") or shutil.which("bash")
+EXE = ".exe" if os.name == "nt" else ""
+TOOLCHAIN_AVAILABLE = bool(BASH_BIN) and all(path.is_file() for path in (
+    JAVA_HOME / ("bin/javac" + EXE), JAVA_HOME / ("bin/jar" + EXE),
     ANDROID_HOME / "platforms/android-35/android.jar",
-    ANDROID_HOME / "build-tools/35.0.0/d8",
+    ANDROID_HOME / "build-tools/35.0.0/lib/d8.jar",
 ))
 
 
@@ -30,7 +33,7 @@ TOOLCHAIN_AVAILABLE = all(path.is_file() for path in (
 class DisplayHelperBuildTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="pocketworld-display-helper-")
-        self.addCleanup(self.temp.cleanup)
+        self.addCleanup(self.cleanup_fixture)
         self.root = Path(self.temp.name)
         self.helper = self.root / "display-helper/src/dev/pocketengine/displayhelper"
         self.shared = self.root / "app/src/main/java/dev/pocketengine/phone/display"
@@ -48,7 +51,18 @@ class DisplayHelperBuildTest(unittest.TestCase):
             'public final class RemovedHelper {}\n')
         self.build = self.root / "display-helper/build"
         self.output = self.root / "app/build/generated/display-helper-assets/pocketengine-display-helper.jar"
-        self.env = dict(os.environ, JAVA_HOME=str(JAVA_HOME), ANDROID_HOME=str(ANDROID_HOME))
+        self.env = dict(os.environ, JAVA_HOME=JAVA_HOME.as_posix(), ANDROID_HOME=ANDROID_HOME.as_posix())
+
+    def cleanup_fixture(self):
+        # A single-use Windows Gradle daemon can release its loaded DLL just after the client exits.
+        for attempt in range(50):
+            try:
+                self.temp.cleanup()
+                return
+            except PermissionError:
+                if os.name != "nt" or attempt == 49:
+                    raise
+                time.sleep(0.1)
 
     def write_capabilities(self, value):
         (self.shared / "PhoneParallelCapabilities.java").write_text(
@@ -73,7 +87,7 @@ class DisplayHelperBuildTest(unittest.TestCase):
         return result.stdout
 
     def run_script(self):
-        return self.run_command(["bash", "tools/build-display-helper.sh", str(self.output)])
+        return self.run_command([BASH_BIN, "tools/build-display-helper.sh", self.output.as_posix()])
 
     def test_rebuild_removes_deleted_sources_inner_classes_and_stale_dex(self):
         self.run_script()
@@ -119,7 +133,7 @@ class DisplayHelperBuildTest(unittest.TestCase):
         command = [str(GRADLE_BIN), "--offline", "--no-daemon", "--console=plain", "--max-workers=1",
                    "--gradle-user-home", str(self.root / "gradle-user-home"),
                    "-Dorg.gradle.vfs.watch=false", "-Dorg.gradle.jvmargs=-Xmx256m -XX:MaxMetaspaceSize=256m",
-                   ":app:buildDisplayHelper"]
+                   "-PpocketworldBash=" + BASH_BIN, ":app:buildDisplayHelper"]
         self.run_command(command)
         original = hashlib.sha256(self.output.read_bytes()).hexdigest()
         self.assertIn(":app:buildDisplayHelper UP-TO-DATE", self.run_command(command))
