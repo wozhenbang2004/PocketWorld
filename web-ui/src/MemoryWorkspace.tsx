@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { RiArrowLeftLine, RiRefreshLine } from '@remixicon/react';
+import { RiRefreshLine } from '@remixicon/react';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import { Accordion, AccordionItem, Button, CheckboxField, IconButton, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { MemoryAssertionFields } from './MemoryAssertionFields';
@@ -13,7 +13,7 @@ const layer = (name: string) => layers[name] || name || '其他内容';
 const eligible = (row: Data) => row.active === true && row.consolidationBlocked === false && row.ownerId === 'owner' && row.spaceId === 'private';
 
 /** Existing BoardUI reading rows, native namespace selection, and exact record review. */
-export function MemoryWorkspace({ domain, run, registerTransientBack, initialCandidate = null }: { domain: string; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; initialCandidate?: LearningCandidateTarget | null }) {
+export function MemoryWorkspace({ domain, run, registerTransientBack, initialCandidate = null, alreadyShownError = '' }: { domain: string; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; initialCandidate?: LearningCandidateTarget | null; alreadyShownError?: string }) {
   const [snapshot, setSnapshot] = useState<Data | null>(null), [selection, setSelection] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null), [source, setSource] = useState<Data | null>(null);
   const [assertionOpen, setAssertionOpen] = useState(false);
   const [tab, setTab] = useState(domain === 'memoryReview' ? 'candidates' : 'records'), [query, setQuery] = useState(''), [draft, setDraft] = useState(''), [reason, setReason] = useState('');
@@ -79,7 +79,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
   const operationLabel: Record<string, string> = { correct: '保存纠正', forget: '遗忘这条记忆', core: review?.core ? '加入核心记忆' : '移出核心记忆', accept: '采用这条候选', reject: '拒绝这条候选', edit: '保存候选修改', archive: '清理终态候选正文', reconsider: '重新考虑被拒绝候选', assertion: '核对主体与关系', consolidation: '从所选记忆归纳候选' };
   const running = !!operation && !operation.settled;
   return <>
-    {error && <p className="pw-secondary-error" role="alert">{error}</p>}{notice && <p className="pw-field-hint" role="status">{notice}</p>}{busy && <p className="pw-muted">正在核对原回执…</p>}
+    {error && error !== alreadyShownError && <p className="pw-secondary-error" role="alert">{error}</p>}{notice && <p className="pw-field-hint" role="status">{notice}</p>}{busy && <p className="pw-muted">正在核对原回执…</p>}
     <section ref={collectionPanel} className="pw-memory-collection" aria-label="记忆管理" hidden={!!selection}>
       <Tabs selectedKey={tab} onSelectionChange={value => { setTab(String(value)); closeRecord(); }} className="pw-team-tabs">
         <div className="pw-object-toolbar"><TabList aria-label="记忆视图"><Tab id="records" isDisabled={busy}>已保存</Tab><Tab id="candidates" isDisabled={busy}>待审候选</Tab></TabList><IconButton className="pw-utility-icon" icon={RiRefreshLine} aria-label="重新读取记忆" title="重新读取记忆" disabled={busy} onClick={() => load()} /></div>
@@ -102,7 +102,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
         </TabPanel>
       </Tabs>
     </section>
-    {selection && <section ref={selectionPanel} tabIndex={-1} className="pw-source-record pw-memory-reading"><header className="pw-object-toolbar"><h2>{candidate ? '候选审阅' : '核对这条记忆'}</h2><IconButton className="pw-utility-icon" icon={RiArrowLeftLine} aria-label="返回记忆列表" title="返回记忆列表" disabled={busy} onClick={closeRecord} /></header>
+    {selection && <section ref={selectionPanel} tabIndex={-1} className="pw-source-record pw-memory-reading"><header className="pw-object-toolbar"><h2>{candidate ? '候选审阅' : '核对这条记忆'}</h2></header>
       <p className="pw-reading-copy">{record?.text}</p><p className="pw-muted">{layer(record?.layer)} · 原修订 {record?.revision} · {record?.status || (record?.active ? '当前可用' : '已停用')}</p>
       {record?.assertion && <p>主体：{record.assertion.subjectLabel || '未知'} · 陈述类型：{record.assertion.kind} · 关系：{record.assertion.predicate} · {record.assertion.object}。保存不证明陈述为真。</p>}
       <div className="pw-form-actions">{rows(record?.sourceRefs).map((ref, index) => <Button key={ref.sourceId + ':' + ref.revision} variant="ghost" disabled={busy || attempted} onClick={() => { void invoke('knowledge.source', { readHandle: readHandle.current, index, offset: 0 }, setSource); }}>查看来源 {index + 1}</Button>)}{candidate && rows(record?.recordRefs).map((ref, index) => <Button key={ref.id + ':' + ref.revision} variant="ghost" disabled={busy || attempted} onClick={() => { void invoke('knowledge.parent', { readHandle: readHandle.current, index }, value => setSource({ title: '父记忆的精确版本', text: value.record?.text })); }}>查看父记忆 {index + 1}</Button>)}</div>

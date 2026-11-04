@@ -900,12 +900,12 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack }: { 
   </>;
 }
 
-function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate, onOpenModels, onNavigate }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void; onOpenModels: () => void; onNavigate: (domain: 'plugins' | 'pluginCatalog' | 'mcp') => void }) {
+function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate, onOpenModels, onNavigate, alreadyShownError }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void; onOpenModels: () => void; onNavigate: (domain: 'plugins' | 'pluginCatalog' | 'mcp') => void; alreadyShownError?: string }) {
   const title = SECONDARY_DOMAINS.find(x => x.id === domain)?.title || '连接与能力';
   if (domain === 'accounts') return <AccountsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'devices') return <DevicesWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} openModels={onOpenModels} />;
   if (domain === 'remote' || domain === 'ssh') return <ConnectionWorkspace domain={domain} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
-  if (domain === 'memory' || domain === 'memoryReview') return <MemoryWorkspace domain={domain} run={run} registerTransientBack={registerTransientBack} initialCandidate={candidateTarget} />;
+  if (domain === 'memory' || domain === 'memoryReview') return <MemoryWorkspace domain={domain} run={run} registerTransientBack={registerTransientBack} initialCandidate={candidateTarget} alreadyShownError={alreadyShownError} />;
   if (domain === 'learning') return <LearningWorkspace state={state} data={data} run={run} registerTransientBack={registerTransientBack} onReviewCandidate={onReviewCandidate} />;
   if (domain === 'automation') return <ReminderWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'workProfiles') return <WorkProfilesWorkspace state={state} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
@@ -914,7 +914,7 @@ function DomainPage({ domain, state, data, supported, run, registerTransientBack
   if (domain === 'mcp') return <McpWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'skills') return <SkillsWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'plugins' || domain === 'pluginCatalog') return <PluginsWorkspace mode={domain} state={state} supported={supported} run={run} registerTransientBack={registerTransientBack} onNavigate={onNavigate} />;
-  if (domain === 'teams') return <TeamsWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
+  if (domain === 'teams') return <TeamsWorkspace state={state} run={run} registerTransientBack={registerTransientBack} alreadyShownError={alreadyShownError} />;
   if (domain === 'groups') return <GroupsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'media') return <MediaWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'realtime') return <RealtimeWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
@@ -1194,7 +1194,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof RiKey2Line }>, showCurrentModel = false) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate(item.id)}><span><span>{item.title}</span>{showCurrentModel && item.id === 'model-settings' && <small>{text(state.modelName) || '尚未连接'}</small>}</span></Button>)}</div>;
   const refreshAction = page === 'background' ? 'background.refresh' : isModelPage ? 'models.snapshot' : page === 'memory' ? 'memory.list' : 'app.refresh';
   return <section className="pw-secondary pw-secondary-refactor" data-secondary-page={page} aria-label={pageTitle}>
-    <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label={isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} onClick={back} /><div><h1>{pageTitle}</h1></div><IconButton icon={RiRefreshLine} aria-label="刷新当前状态" title="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} /></header>
+    <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label={isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} onClick={back} /><div><h1>{pageTitle}</h1></div>{!['memory', 'memoryReview', 'teams'].includes(page) && <IconButton icon={RiRefreshLine} aria-label="刷新当前状态" title="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} />}</header>
     <div className="pw-secondary-scroll" ref={scroll}>
       {notice && <p className="pw-request-notice" role="status">{notice}</p>}
       {(error || domainError) && <p className="pw-field-error" role="alert">{error || domainError}</p>}
@@ -1219,7 +1219,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
           : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} navigate={navigate} />
           : page === 'history' || page === 'usage' ? <HistoryPage key={page} usage={page === 'usage'} supported={supported} run={run} />
           : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} registerTransientBack={registerTransientBack} navigate={navigate} />
-          : domain ? <DomainPage key={page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} />
+          : domain ? <DomainPage key={page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} alreadyShownError={error || domainError} />
           : <Empty>此入口未找到，可返回设置。</Empty>}
       </div>
     </div>
