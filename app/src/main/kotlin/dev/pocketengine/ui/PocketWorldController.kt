@@ -27,6 +27,7 @@ import org.json.JSONObject
 /** One native owner UI for the existing engine; backend events remain the source of truth. */
 internal class PocketWorldController(private val activity: ComposeActivity, private val app: EngineApplication) {
     private var webWindowEpoch = 0L
+    @Volatile private var phoneViewerWindowEpoch = 0L
     private var phoneWindowIdentity: Triple<String, String?, Int?>? = null
     private fun syncPhoneWindowIdentity(value: PocketUiState) {
         val task = value.activeTaskId?.let { id -> value.tasks.find { it.id == id } }
@@ -48,7 +49,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 previous.workspaceArtifactView?.fromTaskId != value.workspaceArtifactView?.fromTaskId ||
                 previous.requestedTaskRevision != value.requestedTaskRevision ||
                 previous.requestedProjectRevision != value.requestedProjectRevision ||
-                previous.requestedConnectionRevision != value.requestedConnectionRevision) webWindowEpoch++
+                previous.requestedConnectionRevision != value.requestedConnectionRevision) { webWindowEpoch++; phoneViewerWindowEpoch++ }
             stateBacking = value
         }
     var deviceWorkspaceRevision by mutableStateOf(0L)
@@ -76,6 +77,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     private val controls = Executors.newSingleThreadExecutor()
     private val realtimeIo = java.util.concurrent.ThreadPoolExecutor(1, 1, 0, java.util.concurrent.TimeUnit.SECONDS, java.util.concurrent.ArrayBlockingQueue(8))
+    private val phonePreviewIo = java.util.concurrent.ThreadPoolExecutor(1, 1, 0, java.util.concurrent.TimeUnit.SECONDS, java.util.concurrent.ArrayBlockingQueue(1))
     private val main = Handler(Looper.getMainLooper())
     private val voiceContextEpoch = java.util.concurrent.atomic.AtomicLong()
     @Volatile private var voiceForeground = false
@@ -307,6 +309,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         syncPhoneWindowIdentity(state)
         return Pair(Triple(webWindowEpoch, chatViewEpoch, projectWorkbench.navigationRevision()), artifactContinuationGeneration)
     }
+    /** Viewing a selected phone follows owner navigation, not the fallback active task of a sibling run. */
+    internal fun webPhoneViewerWindowTicket(): Pair<Triple<Long, Int, Long>, Long> =
+        Pair(Triple(phoneViewerWindowEpoch, chatViewEpoch, projectWorkbench.navigationRevision()), artifactContinuationGeneration)
     internal fun webPresentationActivity(): ComposeActivity = activity
     internal fun webPluginFeatureHost() = app.features
     internal fun readOriginalDeviceTask(id: String): JSONObject = app.tasks.get(id, false)
@@ -317,6 +322,32 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         app.confirmPendingDeviceGoalCancellation(review)
     internal fun webUiCanInteract(): Boolean = !closed && voiceForeground && !activity.isFinishing && !activity.isDestroyed
     internal fun webPrivateOwnerVisible(): Boolean = webUiCanInteract() && privateWorkspaceView()
+    /** Preview reads never enter the model/action queue or hold the application monitor during helper I/O. */
+    internal fun readPhonePreview(input: JSONObject, current: () -> Boolean, done: (JSONObject?, String?, String) -> Unit) {
+        check(webPrivateOwnerVisible() && current()) { "请在原私人窗口查看手机画面" }
+        val owner = webPhoneViewerWindowTicket()
+        val request = JSONObject(input.toString())
+        fun valid() = webPrivateOwnerVisible() && webPhoneViewerWindowTicket() == owner && current()
+        try {
+            phonePreviewIo.execute {
+                val result = runCatching {
+                    check(valid()) { "原手机画面窗口已关闭" }
+                    app.dispatchReviewedOwnerAction("readPhonePreview", request, java.util.function.BooleanSupplier { valid() })
+                }
+                main.post {
+                    if (!valid()) done(null, "原手机画面窗口已变化", "phone_viewer_stale")
+                    else result.fold({ done(it, null, "") }, { failure ->
+                        val code = when (failure) {
+                            is dev.pocketengine.phone.display.PhoneLivePreview.NotReady -> "phone_viewer_starting"
+                            is SecurityException -> "phone_viewer_stale"
+                            else -> "preview_unavailable"
+                        }
+                        done(null, message(failure), code)
+                    })
+                }
+            }
+        } catch (failure: Exception) { done(null, message(failure), "preview_unavailable") }
+    }
     internal fun phoneRouteReferenceHost() = app.nativeOwnerWorkflows.phoneRouteReferencesForOwner()
     internal fun routeReferenceActivity(): androidx.activity.ComponentActivity { check(webPrivateOwnerVisible()); return activity }
     internal fun conversationSkillDraftHost() = app.features.conversationSkillDraftsForOwner()
@@ -808,7 +839,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             fun identity(page: QueuedOwnerInputsPage?) = page?.editor?.let {
                 Pair(Triple(it.message, it.queueRevision, it.messageRevision), it.withdrawn)
             }
-            if (queuedInputsBacking?.window != value?.window || identity(queuedInputsBacking) != identity(value)) webWindowEpoch++
+            if (queuedInputsBacking?.window != value?.window || identity(queuedInputsBacking) != identity(value)) { webWindowEpoch++; phoneViewerWindowEpoch++ }
             queuedInputsBacking = value
         }
     private var queuedInputWindow = 0L
@@ -1008,7 +1039,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private val ownerRequests = mutableMapOf<String, OwnerRequest>()
     private val ownerEpochs = java.util.concurrent.ConcurrentHashMap<String, Int>()
     private var ownerDomain: String? = null
-        set(value) { webWindowEpoch++; field = value; taskAnnouncements.setForeground(voiceForeground && privateWorkspaceView()) }
+        set(value) { webWindowEpoch++; phoneViewerWindowEpoch++; field = value; taskAnnouncements.setForeground(voiceForeground && privateWorkspaceView()) }
     /** In-process owner choice only. Metadata in snapshots is never deserialized into this token. */
     private sealed class MemoryReviewScope {
         data object Private : MemoryReviewScope()
@@ -1021,7 +1052,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private var groupOwnerWindow: String? = null
     private var groupTaskWindow: String? = null
     private var groupTaskPage: String? = null
-        set(value) { webWindowEpoch++; field = value; taskAnnouncements.setForeground(voiceForeground && privateWorkspaceView()) }
+        set(value) { webWindowEpoch++; phoneViewerWindowEpoch++; field = value; taskAnnouncements.setForeground(voiceForeground && privateWorkspaceView()) }
     private var groupTaskId: String? = null
     var groupTaskReady by mutableStateOf(false)
         private set
@@ -1652,7 +1683,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     /** Native owner action; the host resolves the existing original control, never payload authority. */
 
-    fun detach() { skillDocuments.close();projectFileImports.detach();synchronized(pendingProjectMemoryStarts) { projectMemoryStartClosed=true;pendingProjectMemoryStarts.values.forEach { it.consent.closeIfUnbound() };pendingProjectMemoryStarts.clear() };projectGitImports.detach();projectStorage.detach();ownerArchives.detach();projectGit.close();closeNativeEvaluation();closeNativeInferenceHistory();closeConversationReader();projectPackages.detach();persistOwnerComposer();closeProjectPreview();closeProjectLivePreview(); voiceForeground=false;quickPanelVoiceSession?.close();quickPanelVoiceSession=null;taskAnnouncements.close();voiceContextEpoch.incrementAndGet();voiceInput.close();attachmentOutcomes.detach();groupTaskPage?.let(::leaveGroupTask); groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null; state = state.copy(modelDrafts = emptyMap()); pluginCatalogPage?.close(); pluginCatalogPage = null; ownerDomain?.let(::leaveOwnerDomain); ownerRequests.values.forEach { cancelOwnerControl(it); it.call.cancel() }; main.removeCallbacks(accountPoll); closed = true; modelSelectionSubscription?.close(); modelSelectionSubscription = null; modelMutations.forEach { it.close() }; modelMutations.clear(); app.removeObserver(observer); io.shutdownNow(); controls.shutdownNow(); realtimeIo.shutdownNow(); pending.clear(); webFeatureReceipts.clear(); webOwnerReceipts.clear(); webChatCancelCallbacks.clear(); webChatCancelBindings.clear(); closeTaskReviewReads() }
+    fun detach() { skillDocuments.close();projectFileImports.detach();synchronized(pendingProjectMemoryStarts) { projectMemoryStartClosed=true;pendingProjectMemoryStarts.values.forEach { it.consent.closeIfUnbound() };pendingProjectMemoryStarts.clear() };projectGitImports.detach();projectStorage.detach();ownerArchives.detach();projectGit.close();closeNativeEvaluation();closeNativeInferenceHistory();closeConversationReader();projectPackages.detach();persistOwnerComposer();closeProjectPreview();closeProjectLivePreview(); voiceForeground=false;quickPanelVoiceSession?.close();quickPanelVoiceSession=null;taskAnnouncements.close();voiceContextEpoch.incrementAndGet();voiceInput.close();attachmentOutcomes.detach();groupTaskPage?.let(::leaveGroupTask); groupOwnerWindow?.let { app.groupOwnerWorkflows?.close(it) }; groupOwnerWindow = null; state = state.copy(modelDrafts = emptyMap()); pluginCatalogPage?.close(); pluginCatalogPage = null; ownerDomain?.let(::leaveOwnerDomain); ownerRequests.values.forEach { cancelOwnerControl(it); it.call.cancel() }; main.removeCallbacks(accountPoll); closed = true; modelSelectionSubscription?.close(); modelSelectionSubscription = null; modelMutations.forEach { it.close() }; modelMutations.clear(); app.removeObserver(observer); io.shutdownNow(); controls.shutdownNow(); realtimeIo.shutdownNow(); phonePreviewIo.shutdownNow(); pending.clear(); webFeatureReceipts.clear(); webOwnerReceipts.clear(); webChatCancelCallbacks.clear(); webChatCancelBindings.clear(); closeTaskReviewReads() }
     fun refresh() { authorizationOpening = null; ownerDomain?.let { requestOwnerDomain(it, "snapshot") }; native("getState"); native("getFeatures"); native("rescheduleAutomation"); feature("assistant", "list") }
     fun suggestInput(text: String, phoneTask: Boolean? = null) {
         if (text.isNotBlank()) state = state.copy(suggestedInputRevision = state.suggestedInputRevision + 1, suggestedInput = text, suggestedPhoneTask = phoneTask)

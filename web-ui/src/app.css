@@ -156,3 +156,5 @@
 .pw-task-tool-empty{margin-top:20px}
 
 .pw-approval-copy{white-space:pre-wrap;overflow-wrap:anywhere}.pw-approval-json{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.7;margin:8px 0;max-height:45dvh;overflow:auto}
+
+.pw-conversation-phone-viewer{width:min(100%,672px);margin:4px auto 16px;padding:0 16px;min-width:0}

@@ -122,6 +122,7 @@ final class DisplayEngine {
         else if("release".equals(cmd)){current.release();onMain(()->{if(lease==current)release();return null;});result=ok().put("released",true);}
         else if("heartbeat".equals(cmd)){long lifetime=integer(request,"lifetimeMs",1,30_000,30_000);if(!current.renew(request.optString("sessionId"),request.optInt("displayId",-1),SystemClock.uptimeMillis(),lifetime))throw new Failure("invalid_lease","原后台显示不能续期。",false);result=ok().put("renewed",true).put("leaseExpiresAtUptimeMs",current.expiresAt());}
         else if("frame".equals(cmd))result=frame(current,request);
+        else if("preview_frame".equals(cmd))result=previewFrame(current,request);
         else if("launch".equals(cmd))result=launch(current,request);
         else if("intent".equals(cmd)||"launch_copy".equals(cmd))result=onMain(()->{
             valid(current);if(activeTouch!=null||gesturePaths.active())throw new Failure("gesture_in_flight","原触摸尚未结束，未打开应用。",false);
@@ -369,6 +370,62 @@ final class DisplayEngine {
                     .put("frameGeneration",frame).put("capturedAt",captured).put("framePending",false).put("empty",false)
                     .put("imageIncluded",true).put("requestedPackageName",packageName),true);
         }finally{bitmap.recycle();}
+    }
+    /** Latest compositor pixels only. Unlike observation, this read never waits for a new frame
+     * or synchronizes/recreates geometry, cancels a gesture, changes a lease, or visits display zero. */
+    private JSONObject previewFrame(LeasePolicy expected,JSONObject request)throws Exception {
+        Object raw=request.opt("afterFrameGeneration");long after=-1;
+        if(request.has("afterFrameGeneration"))try{
+            if(!(raw instanceof Number))throw new ArithmeticException();
+            after=new java.math.BigDecimal(raw.toString()).longValueExact();
+            if(after< -1||after>9_007_199_254_740_991L)throw new ArithmeticException();
+        }catch(NumberFormatException|ArithmeticException invalid){throw new Failure("invalid_arguments","原画面代次必须为整数。",false);}
+        DisplayGeometry original=onMain(()->{
+            valid(expected);DisplayGeometry value=geometry;
+            return value!=null&&geometryReady&&value.sameConfiguration(readOwnedGeometry(value.generation))?value:null;
+        });
+        byte[] pixels;long generation,captured;DisplayGeometry metadata;
+        synchronized(frameLock){
+            generation=frameGeneration.get();captured=frameAt;metadata=geometry;
+            pixels=original!=null&&geometryReady&&original.sameObservation(metadata)?latestPixels:null;
+        }
+        if(pixels==null)return previewMetadata(metadata,generation,captured,"pending");
+        if(generation==after){
+            if(!previewGeometryCurrent(expected,original))return previewPending(expected);
+            return previewMetadata(original,generation,captured,"unchanged");
+        }
+        int[] size=previewSize(original);
+        Bitmap source=Bitmap.createBitmap(original.width,original.height,Bitmap.Config.ARGB_8888),preview=null;
+        try{
+            source.copyPixelsFromBuffer(ByteBuffer.wrap(pixels));
+            preview=Bitmap.createScaledBitmap(source,size[0],size[1],true);
+            ByteArrayOutputStream jpeg=new ByteArrayOutputStream();
+            if(!preview.compress(Bitmap.CompressFormat.JPEG,65,jpeg))throw new Failure("frame_encoding","后台屏预览编码失败。",false);
+            if(!previewGeometryCurrent(expected,original))return previewPending(expected);
+            return previewMetadata(original,generation,captured,"ready").put("imageBase64",Base64.encodeToString(jpeg.toByteArray(),Base64.NO_WRAP));
+        }finally{if(preview!=null&&preview!=source)preview.recycle();source.recycle();}
+    }
+    private boolean previewGeometryCurrent(LeasePolicy expected,DisplayGeometry original)throws Exception {
+        return onMain(()->{
+            valid(expected);
+            if(!geometryReady||!original.sameObservation(geometry)||!original.sameConfiguration(readOwnedGeometry(original.generation)))return false;
+            return true;
+        });
+    }
+    private JSONObject previewPending(LeasePolicy expected)throws Exception {
+        valid(expected);
+        synchronized(frameLock){return previewMetadata(geometry,frameGeneration.get(),frameAt,"pending");}
+    }
+    private static int[] previewSize(DisplayGeometry value){
+        if(value==null)return new int[]{0,0};
+        double scale=Math.min(1d,960d/Math.max(value.width,value.height));
+        return new int[]{Math.max(1,(int)Math.round(value.width*scale)),Math.max(1,(int)Math.round(value.height*scale))};
+    }
+    private static JSONObject previewMetadata(DisplayGeometry value,long generation,long captured,String state)throws Exception {
+        int[] size=previewSize(value);
+        return ok().put("state",state).put("frameGeneration",generation).put("capturedAt",captured)
+                .put("sourceWidth",value==null?0:value.width).put("sourceHeight",value==null?0:value.height)
+                .put("previewWidth",size[0]).put("previewHeight",size[1]).put("mime","image/jpeg");
     }
     private JSONObject launch(LeasePolicy expected,JSONObject request)throws Exception {
         String pkg=request.optString("packageName");
