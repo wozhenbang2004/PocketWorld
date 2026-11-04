@@ -11,13 +11,21 @@ import {MarkdownBody} from './MarkdownBody';
 import '../composer-models.css';
 export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disabled,placeholder='输入目标，或补充上下文…',attachments=[],onRemoveAttachment,onAttach,onVoice,listening,voiceStatus,onDiscardVoice,modelName,onSelectModel,toolbar,children,status,label='工作输入',composerKey,className='',compact=false,sendDisabled=false,sendLabel}:ChatComposerProps&{sendDisabled?:boolean;sendLabel?:string}){
  const editor=useRef<HTMLTextAreaElement>(null);
- useLayoutEffect(()=>{const el=editor.current;if(!el)return;el.style.height='0px';el.style.height=`${Math.min(120,Math.max(compact?44:32,el.scrollHeight))}px`},[value,listening,composerKey,compact]);
+ useLayoutEffect(()=>{
+  const el=editor.current;if(!el)return;
+  const resize=()=>{el.style.height='0px';el.style.height=`${Math.min(120,Math.max(compact?48:32,el.scrollHeight))}px`};
+  resize();
+  if(!compact||typeof ResizeObserver==='undefined')return;
+  let width=el.getBoundingClientRect().width;
+  const observer=new ResizeObserver(()=>{const next=el.getBoundingClientRect().width;if(next!==width){width=next;resize()}});
+  observer.observe(el);return()=>observer.disconnect();
+ },[value,listening,composerKey,compact]);
  const canSend=!disabled&&!submitting&&!sendDisabled&&!!value.trim();
- const input=listening?<div className="afa-recording"><i/><span>{voiceStatus||'正在听写…'}</span>{onDiscardVoice&&<ToolButton label="取消本次听写" icon="close" onClick={onDiscardVoice}/>}</div>:<textarea ref={editor} aria-label={label} placeholder={placeholder} value={value} disabled={disabled} onChange={e=>onChange(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();if(canSend)onSend()}}}/>;
+ const input=listening?<div className="afa-recording"><i/><span>{voiceStatus||'正在听写…'}</span>{onDiscardVoice&&<ToolButton label="取消本次听写" icon="close" onClick={onDiscardVoice}/>}</div>:<textarea ref={editor} rows={compact?1:undefined} aria-label={label} placeholder={placeholder} value={value} disabled={disabled} onChange={e=>onChange(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();if(canSend)onSend()}}}/>;
  const model=onSelectModel&&<button type="button" className="afa-btn pw-model-trigger" onClick={onSelectModel}><Icon name="spark"/><span>{modelName||'选择模型'}</span><Icon name="chevron" size={12}/></button>;
  const attach=onAttach&&<ToolButton label="添加附件" icon="plus" onClick={onAttach} disabled={submitting}/>;
  const voice=onVoice&&<ToolButton label={listening?'正在听写':'语音输入'} icon="mic" onClick={onVoice} disabled={submitting}/>;
- const send=<PressButton compact aria-label={submitting?'正在登记':sendLabel||(busy?'补充给当前工作':'发送')} disabled={!canSend} onClick={onSend}><Icon name="arrow" size={18}/></PressButton>;
+ const send=(!compact||!busy||!onStop||!!value.trim())&&<PressButton compact aria-label={submitting?'正在登记':sendLabel||(busy?'补充给当前工作':'发送')} disabled={!canSend} onClick={onSend}><Icon name="arrow" size={18}/></PressButton>;
  const stop=busy&&onStop&&<button type="button" className="afa-stop" onClick={onStop} aria-label="停止当前回复"><span aria-hidden="true">■</span></button>;
  return <FrameA className={`pw-composer-host ${compact?'pw-composer-compact ':''}${className}`}><section className="afa-composer" aria-label={label} data-composer-key={composerKey}>
  <div className="afa-card">{(!compact||attachments.length>0)&&<div className="afa-filechips">{attachments.map(f=><span key={f.id}><Icon name="file"/>{f.name}{f.status&&<small>{f.status}</small>}{onRemoveAttachment&&<button type="button" aria-label={`移除 ${f.name}`} onClick={()=>onRemoveAttachment(f.id)}>×</button>}</span>)}</div>}
