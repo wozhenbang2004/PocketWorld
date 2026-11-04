@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import stat
 import uuid
+import harness_registry
 
 
 def digest(value):
@@ -89,7 +90,9 @@ def lookup(manager, source_job, checkout_id):
 
 def environment(manager, record, error):
     root = _root(manager, record["checkoutId"])
-    env = {"id": record["environmentId"], "kind": "local", "root": str(root), "workers": ["codex_app_server"], "writeAllowed": True}
+    owner = manager._environment(record["environmentId"])
+    env = {**owner, "id": record["environmentId"], "kind": "local", "root": str(root),
+           "workers": harness_registry.production_workers(owner), "writeAllowed": True, "_fullProjectNative": True}
     if record.get("checkoutIdentity") != manager.workspace_identity(env):
         raise error("Original assignment physical checkout changed; no job or write is authorized", 409)
     descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -269,8 +272,11 @@ def bound_environment(manager, request, original_env, error):
             raise error("A resumed dispatch cannot change the original assignment/member/parent/base scope", 409)
     if request.get("environmentId") != record["environmentId"] or request.get("environmentBinding") != manager.environment_binding(record["environmentId"]):
         raise error("Original selected environment generation changed", 409)
-    if request.get("worker") != "codex_app_server" or request.get("readOnly") is not False or request.get("threadId") or request.get("resumeJobId"):
-        raise error("This slice starts a new verified Codex assignment turn; it cannot import another session or substitute Claude/command", 409)
+    worker = request.get("worker")
+    if worker not in harness_registry.production_workers(original_env) or request.get("readOnly") is not False or request.get("threadId") or request.get("resumeJobId"):
+        raise error("Assignment execution requires a new enabled coding-harness job in this exact isolated copy", 409)
+    if worker != "codex_app_server" and request.get("externalExecutionRiskAcknowledged") is not True:
+        raise error("This assignment harness requires explicit owner-managed execution acknowledgement", 409)
     _id(reference["reservationId"], "external_job reservation", error)
     if isinstance(reference["approvalRevision"], bool) or not isinstance(reference["approvalRevision"], int) or reference["approvalRevision"] < record["approvalRevision"] or isinstance(reference["approvalExpiresAt"], bool) or not isinstance(reference["approvalExpiresAt"], int) or reference["approvalExpiresAt"] <= manager.now():
         raise error("Original native external_job approval expired or changed", 409)
