@@ -2,6 +2,7 @@ package dev.pocketengine.features;
 
 import dev.pocketengine.core.CapabilityPort;
 import dev.pocketengine.core.RunControl;
+import dev.pocketengine.core.ScopedToolCatalog;
 import dev.pocketengine.features.plugins.PluginRules;
 import dev.pocketengine.features.plugins.PluginsModule;
 import dev.pocketengine.features.skills.SkillsModule;
@@ -154,11 +155,36 @@ public final class HostToolSupervisor implements CapabilityPort {
         host.retainWorkingMemory(working,privateScope().put("taskId",taskId).put("runId",runId).put("epoch",epoch),original,workingPause);var retained=working;workingCancellation=()->host.releaseWorkingMemory(retained);original.onCancel(workingCancellation);String text=noteText(goal);if(!text.isEmpty())working.replace(1,new JSONArray().put(new JSONObject().put("kind","plan").put("text",text)));
     }
     @Override public void admitCapabilities(dev.pocketengine.core.CapabilitySnapshot snapshot,RunControl original)throws Exception{
-        tasks.checkExtensionRun(taskId,runId,epoch,original);snapshot.current(taskId,runId,epoch,original);
+        tasks.checkExtensionRun(taskId,runId,epoch,original);Set<String> candidates=snapshot.current(taskId,runId,epoch,original);
         // tools() may later refresh this mutable route map. Retain the originally admitted
         // immutable presets so a same-name replacement cannot refresh a waiting Skill review.
         Map<String,Tool> pinned=Map.copyOf(routes);
-        snapshot.retainRouteCheck(()->{for(var route:pinned.entrySet())if(route.getValue().preset!=null&&!pluginCurrent(route.getKey(),route.getValue()))throw new SecurityException("原请求的插件安装、端点、版本或授权已变化，请重新审阅");});
+        Map<String,ScopedToolCatalog.SourcePin> sources=new LinkedHashMap<>();
+        Map<String,EngineModule> modules=new LinkedHashMap<>();Map<String,String> definitions=new LinkedHashMap<>();
+        for(var route:pinned.entrySet()){
+            String name=route.getKey();Tool tool=route.getValue();if(!candidates.contains(name))continue;
+            EngineModule module=host.module(tool.feature);if(module==null)throw new SecurityException("原工具模块已不可用");modules.put(tool.feature,module);
+            if(tool.preset!=null){
+                sources.put(name,new ScopedToolCatalog.SourcePin(ScopedToolCatalog.SourceKind.PLUGIN,
+                        tool.preset.getString("expectedInstallationId"),tool.preset.getString("expectedVersion"),tool.preset.getString("expectedExecutionIdentity")));
+            }else if(nativeRoutes.get(name)==tool){
+                String definition=ScopedToolCatalog.fingerprint(tool.definition);definitions.put(name,definition);
+                JSONObject identity=new JSONObject().put("owner",HostToolSupervisor.class.getName()).put("module",module.getClass().getName())
+                        .put("feature",tool.feature).put("command",tool.command).put("toolName",name).put("write",tool.write).put("definitionHash",definition);
+                // This is the fixed native route contract version, not an invented APK installation.
+                sources.put(name,new ScopedToolCatalog.SourcePin(ScopedToolCatalog.SourceKind.NATIVE,
+                        "native:host:"+tool.feature+":"+name,"host-route-v1",ScopedToolCatalog.fingerprint(identity)));
+            }
+        }
+        snapshot.retainSources(sources);
+        snapshot.retainRouteCheck(()->{
+            for(var module:modules.entrySet())if(host.module(module.getKey())!=module.getValue())throw new SecurityException("原工具模块身份已变化");
+            for(var definition:definitions.entrySet()){
+                Tool tool=pinned.get(definition.getKey());
+                if(nativeRoutes.get(definition.getKey())!=tool||!definition.getValue().equals(ScopedToolCatalog.fingerprint(tool.definition)))throw new SecurityException("原生工具定义已变化");
+            }
+            for(var route:pinned.entrySet())if(route.getValue().preset!=null&&!pluginCurrent(route.getKey(),route.getValue()))throw new SecurityException("原请求的插件安装、端点、版本或授权已变化，请重新审阅");
+        });
         if(workProfile!=null)snapshot.retainRouteCheck(workProfile::checkBindingCurrent);finalCapabilities=snapshot;
     }
     @Override public void afterTool(String name,JSONObject arguments,JSONObject receipt,RunControl original)throws Exception{

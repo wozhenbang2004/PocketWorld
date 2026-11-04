@@ -1359,6 +1359,7 @@
       "dev.pocketengine.features.ProxyReviewedOwnerTest",
       "dev.pocketengine.media.RealtimeReviewedOwnerTest",
       "dev.pocketengine.store.TaskExecutionPlanningNativeTest",
+      "dev.pocketengine.store.TaskStoreToolCatalogTest",
       "dev.pocketengine.CapabilityApprovalContinuationNativeTest",
       "dev.pocketengine.ui.web.PocketWebApprovalsTest",
       "dev.pocketengine.ui.web.PocketWebTaskReviewsTest"
@@ -1367,7 +1368,7 @@
       "dev.pocketengine.testutil.ReadyApplicationFixture"
     ],
     "robolectric": true,
-    "description": "Original compatibility bridge and FeatureHost queue fences for old task/run/epoch, shared model selection, closed owner pages, and realtime/proxy reviewed owner CAS. Original TaskStore planning reads, exact immutable proposal approvals, legacy new-task initialization, stale scope/window rejection, cold retention and queued continuation boundaries; existing Web review handles require the full original plan. Controlled native fixtures and pure review contracts; no actual device, platform service or network-provider acceptance."
+    "description": "Original compatibility bridge and FeatureHost queue fences for old task/run/epoch, shared model selection, closed owner pages, and realtime/proxy reviewed owner CAS. Original TaskStore planning and catalogue reads, unchanged 100-tool SQL grants, one original expense, prepared-effect currentness, exact immutable proposal approvals, legacy new-task initialization, stale scope/window rejection, cold retention and queued continuation boundaries; existing Web review handles require the full original plan. Controlled native fixtures and pure review contracts; no actual device, platform service or network-provider acceptance."
   },
   "native-token-budgets": {
     "class": "dev.pocketengine.store.NativeTokenBudgetJourneyTest",

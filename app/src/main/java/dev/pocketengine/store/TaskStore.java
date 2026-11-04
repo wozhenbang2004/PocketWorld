@@ -11,6 +11,8 @@ import dev.pocketengine.core.RunControl;
 import dev.pocketengine.core.RunJournal;
 import dev.pocketengine.core.ExecutionPlan;
 import dev.pocketengine.core.ExecutionPlanning;
+import dev.pocketengine.core.CapabilitySnapshot;
+import dev.pocketengine.core.ScopedToolCatalog;
 import dev.pocketengine.features.teams.TeamWakeQueue;
 import dev.pocketengine.runtime.usage.InferenceCapture;
 import dev.pocketengine.runtime.usage.InferenceReceipt;
@@ -994,31 +996,130 @@ public final class TaskStore {
         if(current!=null){if(!current.id.equals(id)||!current.run.equals(run)||current.epoch!=epoch)throw new SecurityException("规划控制器不可换绑");return current;}
         current=new TaskPlanning(id,run,epoch,original);executionPlanners.put(original,current);return current;
     }
+    @FunctionalInterface public interface CatalogReadAction {JSONObject read()throws Exception;}
+    /** Native metadata over the existing SQL grant. It grants no business tool and has no JSON restore path. */
+    public final class ToolCatalogAccess implements AutoCloseable {
+        private final TaskPlanning planner;
+        private final ExecutionPlanning.Snapshot phase;
+        private final CapabilitySnapshot snapshot;
+        private final Set<String> granted,admitted;
+        private CapabilitySnapshot.CurrentCheck publication;
+        private boolean released;
+        private ToolCatalogAccess(TaskPlanning planner,ExecutionPlanning.Snapshot phase,CapabilitySnapshot snapshot,Set<String> granted,Set<String> admitted){
+            this.planner=planner;this.phase=phase;this.snapshot=snapshot;this.granted=Set.copyOf(granted);this.admitted=Set.copyOf(admitted);
+        }
+        public Set<String> admittedTools(){return admitted;}
+        public boolean planning(){return phase.planning();}
+        /** Called by snapshot.check; never calls snapshot/source/publication checks recursively. */
+        private void checkScope()throws Exception{synchronized(TaskStore.this){
+            if(released||planner.catalog!=this)throw new SecurityException("原工具目录已关闭或替换");
+            planner.requireCurrent(phase);
+            if(!granted.equals(catalogGrantNames(planner.run)))throw new SecurityException("原工具目录授权集合已变化");
+        }}
+        public void check(RunControl original)throws Exception{
+            if(original!=planner.originalControl())throw new SecurityException("工具目录不能换用控制器");
+            checkScope();snapshot.check();checkScope();
+        }
+        /** The original session supplies this gate only after it has captured the current request. */
+        public void bindRequest(CapabilitySnapshot.CurrentCheck currentPublication)throws Exception{
+            check(planner.originalControl());synchronized(TaskStore.this){
+                checkScope();if(publication!=null)throw new SecurityException("工具目录发布检查不可换绑");publication=Objects.requireNonNull(currentPublication);
+            }
+        }
+        private void requirePublished(RunControl original)throws Exception{
+            check(original);CapabilitySnapshot.CurrentCheck current;
+            synchronized(TaskStore.this){checkScope();current=publication;}
+            if(current==null)throw new SecurityException("原工具目录尚未发布");
+            // May enter the original route/plugin owner. Keep it outside the TaskStore monitor.
+            current.check();check(original);
+        }
+        /** Executes only the native catalogue reader. Planning reuses the Runner's one live claim. */
+        public JSONObject executeRead(JSONObject arguments,RunControl original,CatalogReadAction action)throws Exception{
+            Objects.requireNonNull(action);JSONObject clean=new JSONObject(arguments.toString());ScopedToolCatalog.SearchRequest.fromJson(clean);
+            requirePublished(original);
+            if(phase.planning()){
+                planner.requireReadDispatch(ScopedToolCatalog.SEARCH_TOOL,clean,original);requirePublished(original);
+                JSONObject receipt=action.read();requirePublished(original);return receipt;
+            }
+            ExecutionPlanning.ReadClaim read=planner.beginCatalogRead(this,clean);
+            try{
+                requirePublished(original);JSONObject receipt=action.read();
+                if(receipt==null)throw new IllegalStateException("原工具目录没有返回可核对的回执");
+                // Preserve a real late receipt in the same original row before refusing a stale view.
+                planner.finishRead(read,receipt,ExecutionPlanning.ReadOutcome.RECEIPT);read=null;
+                requirePublished(original);return receipt;
+            }finally{
+                if(read!=null)planner.finishRead(read,new JSONObject().put("ok",false).put("code","tool_catalog_read_unconfirmed").put("replayed",false),ExecutionPlanning.ReadOutcome.UNCONFIRMED);
+            }
+        }
+        @Override public void close(){synchronized(TaskStore.this){released=true;if(planner.catalog==this)planner.catalog=null;}snapshot.invalidate();}
+    }
+    /** Full business authorization must happen first. Special native scopes keep their original surface. */
+    public ToolCatalogAccess openToolCatalog(String id,String run,int epoch,RunControl original,CapabilitySnapshot snapshot)throws Exception{
+        Objects.requireNonNull(snapshot);Set<String> candidates=snapshot.current(id,run,epoch,original);
+        ToolCatalogAccess access,previous;String identity;
+        synchronized(this){
+            JSONObject task=required(id);if(!ordinaryPlanningSource(task)||task.optJSONObject("executionScope")==null||candidates.contains(ScopedToolCatalog.SEARCH_TOOL))return null;
+            TaskPlanning planner=(TaskPlanning)executionPlanningForRun(id,run,epoch,original);ExecutionPlanning.Snapshot phase=planner.capture();planner.requireCurrent(phase);
+            if(!planner.reads.isEmpty())throw new SecurityException("原读取未结算，不能替换工具目录");
+            Set<String> granted=catalogGrantNames(run);java.util.Set<String> admitted=new java.util.TreeSet<>(granted);admitted.retainAll(candidates);admitted.remove(ScopedToolCatalog.SEARCH_TOOL);
+            JSONObject pin=phase.view().put("pauseRevision",phase.pauseRevision).put("grantedTools",new JSONArray(new java.util.TreeSet<>(granted))).put("catalogTools",new JSONArray(admitted));
+            identity=capabilityFingerprint(pin);access=new ToolCatalogAccess(planner,phase,snapshot,granted,admitted);previous=planner.catalog;planner.catalog=access;
+        }
+        if(previous!=null)previous.close();
+        try{snapshot.admitToolCatalog(access.admittedTools(),identity,access::checkScope);access.check(original);return access;}
+        catch(Exception unavailable){access.close();throw unavailable;}
+    }
+    private Set<String> catalogGrantNames(String run)throws Exception{
+        JSONArray names=grant(run).optJSONArray("tools");if(names==null||names.length()>100)throw new SecurityException("原工具目录缺少已冻结的执行工具集合");
+        java.util.Set<String> result=new java.util.TreeSet<>();for(int i=0;i<names.length();i++){String name=names.getString(i);if(!name.matches("[A-Za-z][A-Za-z0-9_]{0,63}")||!result.add(name))throw new SecurityException("原工具目录授权名称无效或重复");}return Set.copyOf(result);
+    }
     private final class TaskPlanning extends ExecutionPlanning {
         final String id,run;final int epoch;boolean released;
         final java.util.Map<String,ReadClaim> reads=new java.util.LinkedHashMap<>();
+        ToolCatalogAccess catalog;
         TaskPlanning(String id,String run,int epoch,RunControl original){super(original);this.id=id;this.run=run;this.epoch=epoch;}
+        RunControl originalControl(){return original();}
         @Override public Snapshot capture()throws Exception{synchronized(TaskStore.this){
             if(released)throw new SecurityException("原规划执行已关闭");fence(id,run,epoch,original(),false);JSONObject task=planningTask(id),scope=task.getJSONObject("executionScope");executionScopeCurrent(task,run,grant(run));
             return snapshot(scope.getLong("revision"),TaskExecutionScope.planning(scope)?"planning":"executing",scope.optLong("planRevision",0),scope.optString("planArtifactRef"),scope.optString("planHash"));
         }}
         @Override public void requireCurrent(Snapshot expected)throws Exception{synchronized(TaskStore.this){
             requireOwned(expected);if(released||original().isCancelled()||original().isPaused()||original().pauseRevision()!=expected.pauseRevision)throw new SecurityException("原规划暂停或控制身份已变化");
-            fence(id,run,epoch,original(),true);JSONObject task=planningTask(id),scope=task.getJSONObject("executionScope");
+            // A phase/source check also runs after the original journal prepared a real effect.
+            // It is not dispatch admission: the original consumer still verifies that exact row.
+            fence(id,run,epoch,original(),false);requireExecutionEnabled();JSONObject task=planningTask(id),scope=task.getJSONObject("executionScope");
+            if(task.optBoolean("cancelRequested"))throw new SecurityException("原任务已取消");requireExecutionGrantCurrent(task,run,epoch);
+            try(Cursor row=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{id,run,Integer.toString(epoch)})){if(!row.moveToFirst()||!"running".equals(row.getString(0)))throw new SecurityException("原规划执行尝试已结束");}
             if(!task.optString("status").matches("preparing|running")||scope.getLong("revision")!=expected.scopeRevision||TaskExecutionScope.planning(scope)!=expected.planning()||scope.optLong("planRevision",0)!=expected.planRevision||!scope.optString("planArtifactRef").equals(expected.planArtifactRef)||!scope.optString("planHash").equals(expected.planHash))throw new SecurityException("原计划或范围已换版，旧模型决定未派发");
         }}
-        @Override public ReadClaim beginRead(Snapshot expected,String tool,JSONObject args,String call,Access access)throws Exception{synchronized(TaskStore.this){
-            requireCurrent(expected);if(!expected.planning()||access!=Access.READ||!toolGranted(run,tool)&&ExecutionPlanning.runnerAccess(tool)!=Access.READ)throw new SecurityException("只读规划没有该原生读取能力");
+        @Override public ReadClaim beginRead(Snapshot expected,String tool,JSONObject args,String call,Access access)throws Exception{
+            ToolCatalogAccess metadata=null;
+            if(ScopedToolCatalog.SEARCH_TOOL.equals(tool)){
+                synchronized(TaskStore.this){metadata=catalog;if(metadata==null)throw new SecurityException("没有本次原生工具目录");metadata.checkScope();}
+                metadata.requirePublished(original());
+            }
+            synchronized(TaskStore.this){
+            requireCurrent(expected);if(!expected.planning()||access!=Access.READ||metadata==null&&!toolGranted(run,tool)&&ExecutionPlanning.runnerAccess(tool)!=Access.READ)throw new SecurityException("只读规划没有该原生读取能力");
+            if(metadata!=null)metadata.checkScope();
+            return beginReadRecord(expected,tool,args,call);
+        }}
+        private ReadClaim beginCatalogRead(ToolCatalogAccess metadata,JSONObject args)throws Exception{synchronized(TaskStore.this){
+            metadata.checkScope();if(metadata.planning()||catalog!=metadata)throw new SecurityException("目录读取必须使用当前原规划读取通道");
+            return beginReadRecord(metadata.phase,ScopedToolCatalog.SEARCH_TOOL,args,"native_tool_catalog");
+        }}
+        private ReadClaim beginReadRecord(Snapshot expected,String tool,JSONObject args,String call)throws Exception{
             if(!reads.isEmpty())throw new SecurityException("原规划读取尚未结算，不能重叠登记或重复借用计量");
             requirePlanningArguments(args,call);db.beginTransaction();String operation;ReadClaim claim;try{
-                requireCurrent(expected);operation=recordPlanningOperation(id,run,tool,args,"read_pending",null);claim=readClaim(expected,operation,tool,capabilityFingerprint(args));db.setTransactionSuccessful();
+                requireCurrent(expected);fence(id,run,epoch,original(),true);operation=recordPlanningOperation(id,run,tool,args,"read_pending",null);claim=readClaim(expected,operation,tool,capabilityFingerprint(args));db.setTransactionSuccessful();
             }finally{db.endTransaction();}
             reads.put(operation,claim);planningReadOwners.put(operation,this);return claim;
-        }}
+        }
         @Override public void finishRead(ReadClaim claim,JSONObject receipt,ReadOutcome outcome)throws Exception{synchronized(TaskStore.this){
             requireOwned(claim);if(reads.get(claim.operationId)!=claim)throw new SecurityException("读取凭证已用或不属于本次原操作");
             JSONObject actual=receipt==null?new JSONObject():sanitize(receipt);String state=switch(outcome){case RECEIPT->"read_receipt";case FAILED->"read_failed";case UNCONFIRMED->"read_unconfirmed";};
-            actual.put("planningRead",true).put("operationId",claim.operationId).put("readOutcome",state).put("replayed",false);
+            actual.put("planningRead",claim.snapshot.planning()).put("operationId",claim.operationId).put("readOutcome",state).put("replayed",false);
+            if(ScopedToolCatalog.SEARCH_TOOL.equals(claim.tool))actual.put("catalogRead",true);
             ContentValues row=new ContentValues();row.put("state",state);row.put("receipt",actual.toString());
             if(db.update("operations",row,"operation_id=? AND task_id=? AND run_id=? AND tool=? AND state IN ('read_pending','read_unconfirmed')",new String[]{claim.operationId,id,run,claim.tool})!=1)throw new SecurityException("原读取回执记录已变化");
             reads.remove(claim.operationId);planningReadOwners.remove(claim.operationId,this);
@@ -1036,7 +1137,8 @@ public final class TaskStore {
         }}
         void requireRead(String operation,String tool,JSONObject args,RunControl control)throws Exception{
             ReadClaim claim=reads.get(operation);if(claim==null||planningReadOwners.get(operation)!=this||control!=null&&control!=original()||!tool.equals(claim.tool)||!capabilityFingerprint(args).equals(claim.argumentsHash))throw new SecurityException("需要本次原生只读凭证，操作JSON不是权限");
-            requireCurrent(claim.snapshot);
+            requireCurrent(claim.snapshot);fence(id,run,epoch,original(),true);
+            if(ScopedToolCatalog.SEARCH_TOOL.equals(tool)){if(catalog==null)throw new SecurityException("原工具目录已关闭");catalog.checkScope();}
             try(Cursor row=db.rawQuery("SELECT state,arguments FROM operations WHERE task_id=? AND run_id=? AND operation_id=? AND tool=?",new String[]{id,run,operation,tool})){
                 if(!row.moveToFirst()||!"read_pending".equals(row.getString(0))||!claim.argumentsHash.equals(capabilityFingerprint(new JSONObject(row.getString(1)))))throw new SecurityException("原读取已结算或参数变化");
             }
@@ -1044,7 +1146,7 @@ public final class TaskStore {
         @Override public JSONObject submitPlan(Snapshot expected,JSONObject proposal,String call)throws Exception{synchronized(TaskStore.this){
             requireCurrent(expected);if(!expected.planning())throw new SecurityException("只有原只读规划阶段可以提交计划草稿");JSONObject plan=ExecutionPlan.checked(proposal);String hash=ExecutionPlan.hash(plan);requirePlanningArguments(new JSONObject().put("plan",plan),call);
             db.beginTransaction();try{
-                requireCurrent(expected);JSONObject task=planningTask(id),scope=task.getJSONObject("executionScope");long revision=TaskExecutionScope.nextRevision(scope.getLong("planRevision"));
+                requireCurrent(expected);fence(id,run,epoch,original(),true);JSONObject task=planningTask(id),scope=task.getJSONObject("executionScope");long revision=TaskExecutionScope.nextRevision(scope.getLong("planRevision"));
                 JSONObject arguments=new JSONObject().put("plan",plan).put("planRevision",revision).put("planHash",hash).put("sourceTaskId",id).put("sourceRunId",run).put("sourceEpoch",epoch);
                 String operation=recordPlanningOperation(id,run,SUBMIT,arguments,"plan_receipt",new JSONObject().put("draftSaved",true).put("effectsDispatched",false));
                 task=planningTask(id);scope=task.getJSONObject("executionScope");scope.put("revision",TaskExecutionScope.nextRevision(scope.getLong("revision"))).put("planRevision",revision).put("planArtifactRef",operation).put("planHash",hash);scope.remove("planApproval");
@@ -1056,7 +1158,7 @@ public final class TaskStore {
         @Override public JSONObject requestPhase(Snapshot expected,String phase,String reason,String call)throws Exception{synchronized(TaskStore.this){
             requireCurrent(expected);if(!phase.matches("planning|executing")||reason==null||reason.isBlank()||reason.length()>2000)throw new IllegalArgumentException("规划转换请求格式无效");
             JSONObject args=new JSONObject().put("phase",phase).put("reason",reason);requirePlanningArguments(args,call);db.beginTransaction();try{
-                requireCurrent(expected);String operation=recordPlanningOperation(id,run,REQUEST,args,"phase_request_receipt",null);JSONObject task=planningTask(id);
+                requireCurrent(expected);fence(id,run,epoch,original(),true);String operation=recordPlanningOperation(id,run,REQUEST,args,"phase_request_receipt",null);JSONObject task=planningTask(id);
                 JSONObject result=new JSONObject().put("ok",true).put("code","execution_phase_requested").put("requestedPhase",phase).put("operationId",operation).put("executionPhase",expected.phase).put("requestOnly",true).put("executionStarted",false).put("newGrant",false);
                 if(expected.planning()&&"executing".equals(phase)&&task.getJSONObject("executionScope").getLong("planRevision")>0)result.put("approvalId",ensureExecutionPlanApproval(task).getString("id"));
                 ContentValues receipt=new ContentValues();receipt.put("receipt",result.toString());db.update("operations",receipt,"task_id=? AND operation_id=?",new String[]{id,operation});db.setTransactionSuccessful();return result;
@@ -1064,6 +1166,7 @@ public final class TaskStore {
         }}
         @Override public void close(){synchronized(TaskStore.this){
             if(released)return;released=true;executionPlanners.remove(original(),this);
+            if(catalog!=null)catalog.close();
             for(ReadClaim claim:reads.values()){planningReadOwners.remove(claim.operationId,this);try{ContentValues row=new ContentValues();row.put("state","read_unconfirmed");db.update("operations",row,"task_id=? AND run_id=? AND operation_id=? AND state='read_pending'",new String[]{id,run,claim.operationId});}catch(RuntimeException ignored){/* Cold recovery keeps the same spent read pending; it is never replayed. */}}
         }}
     }
@@ -10168,9 +10271,12 @@ public final class TaskStore {
         if(dispatch)requireExecutionEnabled();
         if(control!=null)control.check();JSONObject t=required(id);if(!runId.equals(t.optString("runId"))||epoch!=t.optInt("coordinatorEpoch"))throw new SecurityException("旧执行代次已失效");
         if(TaskStoreDeviceTasks.deviceTask(t)){deviceTasks.fence(id,runId,epoch,control,dispatch);if(dispatch&&hasUnresolved(id)&&(!ownedInference||!onlyOwnedProjectPending(id,runId,epoch,preparedStop)))throw new IllegalStateException("原设备动作结果尚未核对，不派发新效果");return;}
-        if(dispatch){if(control==null||control.isPaused()||t.optBoolean("cancelRequested"))throw new IllegalStateException("任务已暂停或取消");if(hasUnresolved(id)&&!onlyTeamRoundReadPending(id,runId,epoch,control)&&(!ownedInference||!onlyOwnedProjectPending(id,runId,epoch,preparedStop)))throw new IllegalStateException("有动作结果待核对，禁止继续派发");JSONObject grant=grant(runId);executionScopeCurrent(t,runId,grant);if(grant.optLong("expiresAt")<=System.currentTimeMillis()||!"owner".equals(grant.optString("principalId"))||!"private".equals(grant.optString("spaceId"))||!t.optString("executionMode").equals(grant.optString("mode")))throw new SecurityException("执行授权已失效");
-            if(!t.optString("executionMode").equals("capabilities"))try(Cursor lease=db.rawQuery("SELECT run_id,epoch,expires_at FROM leases WHERE resource_id=?",new String[]{"phone.local"})){if(!lease.moveToFirst()||!runId.equals(lease.getString(0))||epoch!=lease.getInt(1)||lease.getLong(2)<=System.currentTimeMillis())throw new SecurityException("手机资源租约已失效");}
-        }
+        if(dispatch){if(control==null||control.isPaused()||t.optBoolean("cancelRequested"))throw new IllegalStateException("任务已暂停或取消");if(hasUnresolved(id)&&!onlyTeamRoundReadPending(id,runId,epoch,control)&&(!ownedInference||!onlyOwnedProjectPending(id,runId,epoch,preparedStop)))throw new IllegalStateException("有动作结果待核对，禁止继续派发");requireExecutionGrantCurrent(t,runId,epoch);}
+    }
+    /** Identity/expiry check shared with phase metadata; it creates no dispatch admission. */
+    private void requireExecutionGrantCurrent(JSONObject task,String run,int epoch)throws Exception{
+        JSONObject permission=grant(run);executionScopeCurrent(task,run,permission);if(permission.optLong("expiresAt")<=System.currentTimeMillis()||!"owner".equals(permission.optString("principalId"))||!"private".equals(permission.optString("spaceId"))||!task.optString("executionMode").equals(permission.optString("mode")))throw new SecurityException("执行授权已失效");
+        if(!task.optString("executionMode").equals("capabilities"))try(Cursor lease=db.rawQuery("SELECT run_id,epoch,expires_at FROM leases WHERE resource_id=?",new String[]{"phone.local"})){if(!lease.moveToFirst()||!run.equals(lease.getString(0))||epoch!=lease.getInt(1)||lease.getLong(2)<=System.currentTimeMillis())throw new SecurityException("手机资源租约已失效");}
     }
     /** Native owner inspector only; never advertised or accepted by the model capability journal. */
     public synchronized String beginOwnerPhoneHandoff(String id,RunControl original,JSONObject args)throws Exception {
