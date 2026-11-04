@@ -6,6 +6,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
@@ -24,7 +25,11 @@ public final class ScopedToolCatalogTest {
         Map<String,ScopedToolCatalog.SourcePin> out=new HashMap<>();for(int i=0;i<definitions.length();i++){String name=definitions.getJSONObject(i).getJSONObject("function").getString("name");out.put(name,new ScopedToolCatalog.SourcePin(ScopedToolCatalog.SourceKind.PLUGIN,"installation-1","1",ScopedToolCatalog.fingerprint("native-route:"+name)));}return out;
     }
     private CapabilitySnapshot scope(JSONArray definitions)throws Exception {
-        Set<String> names=new HashSet<>();names.add(ScopedToolCatalog.SEARCH_TOOL);for(int i=0;i<definitions.length();i++)names.add(definitions.getJSONObject(i).getJSONObject("function").getString("name"));return new CapabilitySnapshot("task","run",1,control,names,()->{if(!live.get())throw new SecurityException("original source withdrawn");});
+        return scope(definitions,sources(definitions),"a".repeat(64));
+    }
+    private CapabilitySnapshot scope(JSONArray definitions,Map<String,ScopedToolCatalog.SourcePin> pins,String digest)throws Exception {
+        Set<String> names=names(definitions);CapabilitySnapshot result=new CapabilitySnapshot("task","run",1,control,names,()->{if(!live.get())throw new SecurityException("original source withdrawn");});
+        result.retainSources(pins);result.admitToolCatalog(names,digest,()->{if(!live.get())throw new SecurityException("original SQL scope withdrawn");});return result;
     }
     private ScopedToolCatalog catalog(JSONArray definitions,Set<String> resident)throws Exception{return ScopedToolCatalog.capture(scope(definitions),"task","run",1,control,definitions,sources(definitions),resident);}
     private Set<String> names(JSONArray tools)throws Exception{Set<String> out=new HashSet<>();for(int i=0;i<tools.length();i++)out.add(tools.getJSONObject(i).getJSONObject("function").getString("name"));return out;}
@@ -45,7 +50,7 @@ public final class ScopedToolCatalogTest {
     }
     @Test public void sourceReplacementChangesIdentityAndInvalidatesOldCursorsEvenWithSameSchema()throws Exception {
         JSONArray definitions=definitions(10);Map<String,ScopedToolCatalog.SourcePin> pins=sources(definitions);ScopedToolCatalog first=ScopedToolCatalog.capture(scope(definitions),"task","run",1,control,definitions,pins,Set.of());String cursor=first.search(new ScopedToolCatalog.SearchRequest("tool_",2,"")).view().getString("nextCursor");
-        pins.put("tool_0",new ScopedToolCatalog.SourcePin(ScopedToolCatalog.SourceKind.PLUGIN,"installation-2","1",ScopedToolCatalog.fingerprint("new-native-route")));ScopedToolCatalog replaced=ScopedToolCatalog.capture(scope(definitions),"task","run",1,control,definitions,pins,Set.of());
+        pins.put("tool_0",new ScopedToolCatalog.SourcePin(ScopedToolCatalog.SourceKind.PLUGIN,"installation-2","1",ScopedToolCatalog.fingerprint("new-native-route")));ScopedToolCatalog replaced=ScopedToolCatalog.capture(scope(definitions,pins,"a".repeat(64)),"task","run",1,control,definitions,pins,Set.of());
         assertNotEquals(first.revision(),replaced.revision());assertThrows(SecurityException.class,()->replaced.search(new ScopedToolCatalog.SearchRequest("tool_",2,cursor)));assertThrows(SecurityException.class,()->first.search(new ScopedToolCatalog.SearchRequest("other",2,cursor)));assertThrows(SecurityException.class,()->first.search(new ScopedToolCatalog.SearchRequest("tool_",3,cursor)));
     }
     @Test public void duplicateNamesMissingPinsAndOutOfScopeDefinitionsCannotBecomeDiscovery()throws Exception {
@@ -70,8 +75,85 @@ public final class ScopedToolCatalogTest {
         ScopedToolCatalog catalog=catalog(definitions(2),Set.of());assertThrows(SecurityException.class,()->catalog.search(new ScopedToolCatalog.SearchRequest("tool_",1,"not-a-native-cursor")));
     }
     @Test public void unobservedSourceIdentityKeepsOriginalSchemaResidentInsteadOfInventingAnInstallation()throws Exception {
-        JSONArray definitions=definitions(1);Map<String,ScopedToolCatalog.SourcePin> pins=Map.of("tool_0",ScopedToolCatalog.SourcePin.unknown());ScopedToolCatalog catalog=ScopedToolCatalog.capture(scope(definitions),"task","run",1,control,definitions,pins,Set.of());
+        JSONArray definitions=definitions(1);Map<String,ScopedToolCatalog.SourcePin> pins=Map.of("tool_0",ScopedToolCatalog.SourcePin.unknown());ScopedToolCatalog catalog=ScopedToolCatalog.capture(scope(definitions,pins,"a".repeat(64)),"task","run",1,control,definitions,pins,Set.of());
         assertTrue(names(catalog.requestTools(Set.of())).contains("tool_0"));assertEquals(0,catalog.summary(Set.of()).getInt("hiddenCount"));assertEquals("no_match",catalog.search(new ScopedToolCatalog.SearchRequest("tool_0",1,"")).view().getString("status"));
         assertThrows(IllegalArgumentException.class,()->new ScopedToolCatalog.SourcePin(ScopedToolCatalog.SourceKind.UNKNOWN,"claimed-installation","1","a".repeat(64)));
+    }
+    @Test public void nativeCatalogAdmissionIsRequiredOnceAndNeverExpandsTheCandidateSet()throws Exception {
+        JSONArray definitions=definitions(100);Set<String> candidates=names(definitions);candidates.add("semantic.alias");
+        CapabilitySnapshot snapshot=new CapabilitySnapshot("task","run",1,control,candidates,()->{});
+        assertThrows(SecurityException.class,()->snapshot.catalogTools("task","run",1,control));
+        assertThrows(SecurityException.class,snapshot::catalogScopeDigest);
+        assertThrows(SecurityException.class,()->snapshot.admitToolCatalog(Set.of("outside"),"a".repeat(64),()->{}));
+        assertThrows(SecurityException.class,()->snapshot.admitToolCatalog(Set.of("tool_0"),"not-a-digest",()->{}));
+        assertThrows(SecurityException.class,()->snapshot.admitToolCatalog(candidates,"a".repeat(64),()->{}));
+        Set<String> admitted=names(definitions);snapshot.admitToolCatalog(admitted,"a".repeat(64),()->{});admitted.clear();
+        assertEquals(100,snapshot.catalogTools("task","run",1,control).size());assertEquals("a".repeat(64),snapshot.catalogScopeDigest());
+        assertEquals(candidates,snapshot.current("task","run",1,control));assertFalse(snapshot.current("task","run",1,control).contains(ScopedToolCatalog.SEARCH_TOOL));
+        assertThrows(UnsupportedOperationException.class,()->snapshot.catalogTools("task","run",1,control).add("outside"));
+        assertThrows(SecurityException.class,()->snapshot.admitToolCatalog(Set.of("tool_0"),"b".repeat(64),()->{}));
+        RunControl foreign=new RunControl();foreign.bindHostRun("task","run",1);assertThrows(SecurityException.class,()->snapshot.catalogTools("task","run",1,foreign));
+        CapabilitySnapshot reserved=new CapabilitySnapshot("task","run",1,control,Set.of(ScopedToolCatalog.SEARCH_TOOL),()->{});
+        assertThrows(SecurityException.class,()->reserved.admitToolCatalog(Set.of(ScopedToolCatalog.SEARCH_TOOL),"a".repeat(64),()->{}));
+    }
+    @Test public void nativeSourcesAreCopiedSealedAndCannotBeUpgradedByCaptureArguments()throws Exception {
+        JSONArray definitions=definitions(2);Map<String,ScopedToolCatalog.SourcePin> actual=sources(definitions),supplied=new HashMap<>();supplied.put("tool_0",actual.get("tool_0"));
+        CapabilitySnapshot snapshot=new CapabilitySnapshot("task","run",1,control,names(definitions),()->{});snapshot.retainSources(supplied);supplied.clear();
+        assertThrows(SecurityException.class,()->snapshot.retainSources(actual)); // Duplicate registration is atomic: tool_1 stays unknown.
+        snapshot.admitToolCatalog(names(definitions),"a".repeat(64),()->{});
+        Map<String,ScopedToolCatalog.SourcePin> frozen=snapshot.sourcePinsFor("task","run",1,control,names(definitions));
+        assertEquals(actual.get("tool_0"),frozen.get("tool_0"));assertEquals(ScopedToolCatalog.SourcePin.unknown(),frozen.get("tool_1"));
+        assertThrows(UnsupportedOperationException.class,()->frozen.put("tool_1",actual.get("tool_1")));
+        assertEquals(frozen,snapshot.sourcePinsFor("task","run",1,control,names(definitions)));
+        assertThrows(SecurityException.class,()->snapshot.retainSources(Map.of("tool_1",actual.get("tool_1"))));
+        assertThrows(SecurityException.class,()->ScopedToolCatalog.capture(snapshot,"task","run",1,control,definitions,actual,Set.of()));
+        ScopedToolCatalog catalog=ScopedToolCatalog.capture(snapshot,"task","run",1,control,definitions,frozen,Set.of());assertTrue(names(catalog.requestTools(Set.of())).contains("tool_1"));
+        assertThrows(SecurityException.class,()->snapshot.sourcePinsFor("task","run",1,control,Set.of("outside")));
+    }
+    @Test public void sourceAndSqlChecksNeverRunUnderTheSnapshotMonitor()throws Exception {
+        AtomicInteger sourceChecks=new AtomicInteger(),sqlChecks=new AtomicInteger();CapabilitySnapshot[] holder=new CapabilitySnapshot[1];
+        holder[0]=new CapabilitySnapshot("task","run",1,control,Set.of("tool_0"),()->{assertFalse(Thread.holdsLock(holder[0]));sourceChecks.incrementAndGet();});
+        CapabilitySnapshot snapshot=holder[0];snapshot.retainRouteCheck(()->assertFalse(Thread.holdsLock(snapshot)));
+        snapshot.admitToolCatalog(Set.of("tool_0"),"a".repeat(64),()->{assertFalse(Thread.holdsLock(snapshot));sqlChecks.incrementAndGet();});
+        assertEquals(0,sourceChecks.get());assertEquals(0,sqlChecks.get()); // Registration is not an external callback.
+        synchronized(snapshot){assertThrows(SecurityException.class,snapshot::check);assertThrows(SecurityException.class,()->snapshot.sourcePinsFor("task","run",1,control,Set.of("tool_0")));}
+        assertEquals(0,sourceChecks.get());assertEquals(0,sqlChecks.get());
+        snapshot.retainSources(Map.of("tool_0",sources(definitions(1)).get("tool_0")));
+        int before=sourceChecks.get();Map<String,ScopedToolCatalog.SourcePin> frozen=snapshot.sourcePinsFor("task","run",1,control,Set.of("tool_0"));
+        assertEquals(1,frozen.size());assertEquals(before+2,sourceChecks.get());assertTrue(sqlChecks.get()>=2);
+        snapshot.catalogTools("task","run",1,control);snapshot.catalogScopeDigest();snapshot.invalidate();assertThrows(SecurityException.class,snapshot::check);
+    }
+    @Test public void sourceReadRechecksCurrentnessAfterItSealsItsFrozenCopy()throws Exception {
+        AtomicInteger checks=new AtomicInteger();CapabilitySnapshot snapshot=new CapabilitySnapshot("task","run",1,control,Set.of("tool_0"),()->{if(checks.incrementAndGet()==2)throw new SecurityException("revoked after frozen copy");});
+        assertThrows(SecurityException.class,()->snapshot.sourcePinsFor("task","run",1,control,Set.of("tool_0")));
+        assertEquals(2,checks.get());assertThrows(SecurityException.class,()->snapshot.retainSources(Map.of("tool_0",ScopedToolCatalog.SourcePin.unknown())));
+    }
+    @Test public void allHundredPublishedSchemasRemoveSearchInsteadOfCreatingA101stTool()throws Exception {
+        JSONArray definitions=definitions(100);CapabilitySnapshot snapshot=scope(definitions);ScopedToolCatalog catalog=ScopedToolCatalog.capture(snapshot,"task","run",1,control,definitions,sources(definitions),Set.of());
+        Set<String> activated=new HashSet<>();String cursor="";
+        do{ScopedToolCatalog.Page page=catalog.search(new ScopedToolCatalog.SearchRequest("tool_",12,cursor));activated.addAll(page.identities());JSONObject view=page.view();cursor=view.isNull("nextCursor")?"":view.getString("nextCursor");}while(!cursor.isEmpty());
+        assertEquals(100,activated.size());JSONArray all=catalog.requestTools(activated);assertEquals(100,all.length());assertFalse(names(all).contains(ScopedToolCatalog.SEARCH_TOOL));assertFalse(catalog.exposes(ScopedToolCatalog.SEARCH_TOOL,activated));
+        activated.remove(activated.iterator().next());JSONArray oneHidden=catalog.requestTools(activated);assertEquals(100,oneHidden.length());assertTrue(names(oneHidden).contains(ScopedToolCatalog.SEARCH_TOOL));
+        assertEquals(100,snapshot.catalogTools("task","run",1,control).size());assertFalse(snapshot.current("task","run",1,control).contains(ScopedToolCatalog.SEARCH_TOOL));
+    }
+    @Test public void sanitizerProtectedAndOversizeSchemasRemainCompleteOnOriginalTransport()throws Exception {
+        JSONArray definitions=definitions(7);String[] protectedKeys={"token","secret","imageDataUrl","AUTHORIZATION"};
+        for(int i=0;i<protectedKeys.length;i++)definitions.getJSONObject(i).getJSONObject("function").getJSONObject("parameters").getJSONObject("properties").put(protectedKeys[i],new JSONObject().put("type","string"));
+        JSONArray largeEnum=new JSONArray();for(int i=0;i<201;i++)largeEnum.put("choice_"+i);
+        definitions.getJSONObject(4).getJSONObject("function").getJSONObject("parameters").getJSONObject("properties").put("choice",new JSONObject().put("enum",largeEnum));
+        definitions.getJSONObject(5).getJSONObject("function").put("description","x".repeat(12001));
+        ScopedToolCatalog catalog=catalog(definitions,Set.of());JSONArray initial=catalog.requestTools(Set.of());assertEquals(7,initial.length());
+        for(int i=0;i<6;i++){assertEquals(definitions.getJSONObject(i).toString(),initial.getJSONObject(i).toString());assertEquals("no_match",catalog.search(new ScopedToolCatalog.SearchRequest("tool_"+i,12,"")).view().getString("status"));}
+        assertFalse(names(initial).contains("tool_6"));assertTrue(names(initial).contains(ScopedToolCatalog.SEARCH_TOOL));
+        JSONArray boundary=definitions(1);JSONArray exactEnum=new JSONArray();for(int i=0;i<200;i++)exactEnum.put("choice_"+i);
+        boundary.getJSONObject(0).getJSONObject("function").put("description","x".repeat(12000)).getJSONObject("parameters").getJSONObject("properties").put("choice",new JSONObject().put("enum",exactEnum));
+        ScopedToolCatalog exact=catalog(boundary,Set.of());assertEquals(Set.of(ScopedToolCatalog.SEARCH_TOOL),names(exact.requestTools(Set.of())));assertEquals(1,exact.search(new ScopedToolCatalog.SearchRequest("tool_0",1,"")).view().getInt("returnedCount"));
+    }
+    @Test public void nativeScopeDigestChangesCatalogRevisionAndRejectsOldCursors()throws Exception {
+        JSONArray definitions=definitions(3);Map<String,ScopedToolCatalog.SourcePin> pins=sources(definitions);
+        ScopedToolCatalog before=ScopedToolCatalog.capture(scope(definitions,pins,"a".repeat(64)),"task","run",1,control,definitions,pins,Set.of());
+        String cursor=before.search(new ScopedToolCatalog.SearchRequest("tool_",1,"")).view().getString("nextCursor");
+        ScopedToolCatalog after=ScopedToolCatalog.capture(scope(definitions,pins,"b".repeat(64)),"task","run",1,control,definitions,pins,Set.of());
+        assertNotEquals(before.revision(),after.revision());assertThrows(SecurityException.class,()->after.search(new ScopedToolCatalog.SearchRequest("tool_",1,cursor)));
     }
 }

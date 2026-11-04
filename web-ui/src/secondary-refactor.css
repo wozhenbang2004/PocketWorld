@@ -29,6 +29,10 @@
   padding: 8px 16px max(24px, env(safe-area-inset-bottom));
   scroll-padding-block: 12px 40px;
 }
+.pw-secondary-refactor .pw-secondary-scroll:has(.pw-model-save-actions) {
+  /* Keep keyboard-focused fields above the 72px actions and bottom inset. */
+  scroll-padding-block-end: calc(84px + max(24px, env(safe-area-inset-bottom)));
+}
 .pw-secondary-refactor .pw-secondary-page { max-width: 760px; }
 .pw-secondary.pw-secondary-refactor button,
 .pw-secondary.pw-secondary-refactor [role="tab"] {

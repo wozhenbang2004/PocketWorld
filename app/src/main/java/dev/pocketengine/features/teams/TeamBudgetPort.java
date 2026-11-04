@@ -37,12 +37,18 @@ public final class TeamBudgetPort implements CapabilityPort {
     @Override public JSONArray tools()throws Exception{JSONArray tools=original.tools();if(allowedRoundTools==null)return tools;JSONArray selected=new JSONArray();for(int i=0;i<tools.length();i++)if(allowed(tools.getJSONObject(i).getJSONObject("function").getString("name")))selected.put(tools.getJSONObject(i));return selected;}
     @Override public boolean supports(String name){return allowed(name)&&original.supports(name);}
     @Override public boolean sideEffecting(String name){return original.sideEffecting(name);}
+    @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{return allowed(name)?original.planningAccess(name,arguments):dev.pocketengine.core.ExecutionPlanning.Access.DENY;}
     @Override public void validate(String name,JSONObject arguments)throws Exception{if(!allowed(name))throw new SecurityException("预算续审不新增工具范围，请在原工具授权另审");original.validate(name,arguments);}
     @Override public JSONObject execute(String name,JSONObject arguments,RunControl control)throws Exception{
         if(!allowed(name))throw new SecurityException("预算续审不新增工具范围，请在原工具授权另审");if(roundParent&&control!=roundControl)throw new SecurityException("不是本次原round父控制器");
         if(original.sideEffecting(name))return original.execute(name,arguments,control); // Original prepared journal already reserves effects.
-        original.validate(name,arguments);if(roundParent){if(name.equals("teams_get")||name.equals("teams_wait"))return original.execute(name,arguments,control);TaskStore.TeamRoundRead read=tasks.beginTeamRoundRead(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"),name,arguments,control);try{JSONObject value=tasks.admitTeamRoundRead(read,()->original.execute(name,arguments,control));tasks.finishTeamRoundRead(read,value,false);return value;}catch(Exception uncertain){tasks.finishTeamRoundRead(read,new JSONObject().put("status","unknown").put("message","本次原native读取没有完整回执；保留原read/预算，不自动重放"),true);throw uncertain;}}
-        JSONObject nativeRead=tasks.beginTeamAssignmentRead(binding,name,arguments,control);
+        // Runner validates the model arguments before injecting its native visual call ID.
+        // Keep that ID only on the same dispatch input; it is not a model/source parameter
+        // and must not change the original read's argument hash or budget identity.
+        JSONObject readArguments=arguments;
+        if("project_view_image".equals(name)&&arguments!=null&&arguments.has("_hostOperationId")){readArguments=new JSONObject(arguments.toString());readArguments.remove("_hostOperationId");}
+        original.validate(name,readArguments);if(roundParent){if(name.equals("teams_get")||name.equals("teams_wait"))return original.execute(name,arguments,control);TaskStore.TeamRoundRead read=tasks.beginTeamRoundRead(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"),name,readArguments,control);try{JSONObject value=tasks.admitTeamRoundRead(read,()->original.execute(name,arguments,control));tasks.finishTeamRoundRead(read,value,false);return value;}catch(Exception uncertain){tasks.finishTeamRoundRead(read,new JSONObject().put("status","unknown").put("message","本次原native读取没有完整回执；保留原read/预算，不自动重放"),true);throw uncertain;}}
+        JSONObject nativeRead=tasks.beginTeamAssignmentRead(binding,name,readArguments,control);
         try{JSONObject result=original.execute(name,arguments,control);tasks.finishTeamNativeRead(nativeRead,result,false);return result;}
         catch(Exception failure){tasks.finishTeamNativeRead(nativeRead,new JSONObject().put("status","unknown").put("message","原工具没有确定完成回执；预算与操作保留，不重放"),true);throw failure;}
     }

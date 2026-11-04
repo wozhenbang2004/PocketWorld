@@ -40,7 +40,7 @@ function installFixture(scenario) {
     if (request.hostDocumentToken !== token) throw new Error('Fixture stale native document');
     if (action === 'app.ready') { publish(); return { accepted: true, surface: 'bootstrap' }; }
     if (isMutation(action)) {
-      if (operation && ['pending', 'unknown'].includes(operation.status)) throw new Error('Fixture unresolved original operation');
+      if (operation !== null) throw new Error('Fixture unresolved original operation');
       operation = { requestId: args.requestId, command: action, generation: args.expectedGeneration, repairId: args.repairId || '', status: 'pending' }; queryId = null; publish();
     }
     switch (action) {
@@ -71,7 +71,7 @@ function installFixture(scenario) {
         if (args.mode === 'verified_copy') state.maintenance.review.restoration = { section: 'conversations', sourceConversationCount: 4, conversationCount: 3, messageCount: 18, omittedCount: 2, unreadableConversationCount: 1, partial: true, contentUtf8Bytes: 2400,
           sourceGeneration: 'fixture-original-history-generation', manifestSha256: 'c'.repeat(64), manifestBytes: 1500,
           conversations: [1, 2, 3].map(index => ({ sourceConversationId: 'source-' + index, restoredConversationId: 'restored-' + index, messageCount: 6, omittedCount: index < 3 ? 1 : 0, exportSha256: String(index).repeat(64), exportBytes: 800 })),
-          gaps: [{ sourceConversationId: 'source-1', reason: 'message_deleted', recordCount: 1 }, { sourceConversationId: 'source-2', reason: 'role_not_exportable', recordCount: 1 }, { sourceConversationId: 'source-4', reason: 'source_conversation_unreadable', recordCount: null }], sourceFingerprint: state.maintenance.backupFingerprint, sourceReadOnly: true, preservedSourceOpenedInSQLite: false, restoresExistingIds: false, restoresActiveGrants: false, restoresTaskHistory: false, restoresAttachmentBytes: false, restoresCredentialsOrPairings: false, omissionMeaning: '已删除、撤回或非对话文字记录不会恢复；无法读取的对话单独列出。原件保留，未自动改为空库。' };
+          gaps: [{ sourceConversationId: 'source-1', reason: 'deleted_or_unavailable', recordCount: 1 }, { sourceConversationId: 'source-2', reason: 'unsupported_historical_record_role', recordCount: 1 }, { sourceConversationId: 'source-4', reason: 'source_conversation_unreadable', recordCount: null }], sourceFingerprint: state.maintenance.backupFingerprint, sourceReadOnly: true, preservedSourceOpenedInSQLite: false, restoresExistingIds: false, restoresActiveGrants: false, restoresTaskHistory: false, restoresAttachmentBytes: false, restoresCredentialsOrPairings: false, omissionMeaning: '已删除、撤回或非对话文字记录不会恢复；无法读取的对话单独列出。原件保留，未自动改为空库。' };
         state.maintenance.phase = 'staged'; state.maintenance.allowedCommands = ['repair.read', 'repair.review', 'repair.confirm', 'repair.discard']; break;
       case 'repair.confirm': {
         exact(args); if (!args.confirmed || args.reviewId !== state.maintenance.review?.reviewId || !state.maintenance.allowedCommands.includes(action)) throw new Error('Fixture review is not current');

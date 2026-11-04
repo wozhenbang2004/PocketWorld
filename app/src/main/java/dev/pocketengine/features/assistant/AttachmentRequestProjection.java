@@ -115,7 +115,7 @@ public final class AttachmentRequestProjection implements AgentRunner.RequestPro
             if(text.isBlank())throw rejected("文档没有可发送的真实文字");
             // Recheck after parsing; never publish a snapshot after its owner removed it.
             verified(ref,control);
-            text=config.apiKey.isEmpty()?text:text.replace(config.apiKey,"[密钥已隐藏]");
+            text=config.redactSensitive(text);
             parts.put(new JSONObject().put("type","text").put("text","<owner_attachment id=\""+id+"\" sha256=\""+digest+"\" mime=\""+mime+"\" coverage=\""+coverage+"\">\n"+text+"\n</owner_attachment>\n提取边界（数据）:"+warnings));
         }
         control.checkpoint();return parts;

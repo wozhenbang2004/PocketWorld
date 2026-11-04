@@ -87,7 +87,7 @@ public final class ProviderUsageAnchor {
         List<String> rows=new ArrayList<>();for(int i=0;i<messages.length();i++)rows.add(messages.getJSONObject(i).toString());return rows;
     }
     private static String route(ModelConfig config)throws Exception{
-        String credentialDigest=java.util.Base64.getEncoder().encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(config.apiKey.getBytes(StandardCharsets.UTF_8)));
+        String credentialDigest=config.usesBedrock()?config.credentialIdentityDigest():java.util.Base64.getEncoder().encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(config.apiKey.getBytes(StandardCharsets.UTF_8)));
         JSONObject identity=new JSONObject().put("provider",config.provider).put("model",config.model).put("endpoint",config.baseUrl)
                 .put("reasoning",config.reasoning.toJson()).put("maxOutputTokens",config.maxOutputTokens).put("credentialDigest",credentialDigest);
         JSONObject compatibility=config.publicJson().optJSONObject("compatibility");

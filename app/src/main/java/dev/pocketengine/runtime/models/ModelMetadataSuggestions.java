@@ -53,7 +53,10 @@ public final class ModelMetadataSuggestions {
         for(String field:java.util.List.of("input","output","reasoning","cache_read","cache_write")){Object value=cost==null?null:cost.opt(field);if(value instanceof Number)try{java.math.BigDecimal number=new java.math.BigDecimal(value.toString());if(number.signum()>=0&&number.compareTo(new java.math.BigDecimal("1000000"))<=0&&number.precision()<=24)hints.put("cost."+field,number.stripTrailingZeros().toPlainString());}catch(NumberFormatException ignored){/* Unknown stays absent. */}}
         String api="";Object declared=origin.opt("api");if(declared instanceof String value)try{URI uri=URI.create(value);if(value.length()<=2048&&"https".equals(uri.getScheme())&&uri.getHost()!=null&&uri.getUserInfo()==null&&uri.getRawQuery()==null&&uri.getFragment()==null)api=value;}catch(IllegalArgumentException ignored){/* Never follow a metadata URL. */}
         String match="provider_origin_unverified";
-        if(!api.isEmpty()){URI declaredUri=URI.create(api),local=binding.modelsEndpoint();match=local.getScheme().equals(declaredUri.getScheme())&&local.getHost().equalsIgnoreCase(declaredUri.getHost())&&effectivePort(local)==effectivePort(declaredUri)?"same_origin_only_not_model_verification":"different_origin";}
+        if(!api.isEmpty()){
+            URI declaredUri=URI.create(api),local=binding.modelsEndpoint();
+            if(local.getScheme()!=null&&local.getHost()!=null)match=local.getScheme().equals(declaredUri.getScheme())&&local.getHost().equalsIgnoreCase(declaredUri.getHost())&&effectivePort(local)==effectivePort(declaredUri)?"same_origin_only_not_model_verification":"different_origin";
+        }
         return new JSONObject().put("format","pocketworld.model-metadata-suggestion.v1").put("binding",binding.toJson()).put("modelId",model)
                 .put("providerId",provider).put("source",SOURCE).put("sourceVersion","sha256:"+hex(MessageDigest.getInstance("SHA-256").digest(bytes)))
                 .put("observedAtMillis",observedAt).put("providerApi",api).put("originMatch",match).put("hints",hints).put("currency","USD")

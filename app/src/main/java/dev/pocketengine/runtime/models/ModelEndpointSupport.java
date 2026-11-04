@@ -23,7 +23,8 @@ public record ModelEndpointSupport(Set<String> endpointTokens, String sourceRef,
         return new ModelEndpointSupport(tokens,sourceRef,at);
     }
     public boolean supports(ModelBinding.Protocol protocol) {
-        return endpointTokens.contains(switch(protocol){case OPENAI_CHAT->"/chat/completions";case OPENAI_RESPONSES->"/responses";case ANTHROPIC->"/messages";case GEMINI->"/generateContent";});
+        if(protocol==ModelBinding.Protocol.BEDROCK_ANTHROPIC)return false;
+        return endpointTokens.contains(switch(protocol){case OPENAI_CHAT->"/chat/completions";case OPENAI_RESPONSES->"/responses";case ANTHROPIC->"/messages";case GEMINI->"/generateContent";case BEDROCK_ANTHROPIC->throw new IllegalArgumentException("Bedrock 未提供目录能力");});
     }
     public JSONObject toJson()throws org.json.JSONException{return new JSONObject().put("endpointTokens",new JSONArray(new java.util.TreeSet<>(endpointTokens))).put("source","PROVIDER_CATALOG").put("sourceRef",sourceRef).put("observedAtMillis",observedAtMillis);}
     public static ModelEndpointSupport fromJson(JSONObject row)throws org.json.JSONException{

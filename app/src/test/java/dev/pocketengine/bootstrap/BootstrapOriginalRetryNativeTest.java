@@ -89,7 +89,7 @@ public final class BootstrapOriginalRetryNativeTest {
         status=new BootstrapStatus(TaskStore.DATABASE_SCHEMA);set("bootstrap",status);set("databaseMaintenance",null);
         ((ExecutorService)get("bootstrapWorker")).shutdownNow();queue=new Queue();set("bootstrapWorker",queue);
         String bytes=DatabaseFilePreservation.inspect(app.getDatabasePath(TaskStore.DATABASE_NAME)).fingerprint();
-        long cold=status.beginInitial();invoke("initializeOriginalBusiness",new Class<?>[]{long.class},cold);
+        long cold=status.beginInitial();invoke("initializeOriginalBusiness",new Class<?>[]{long.class,TaskDatabaseMaintenance.OriginalReadPermit.class},cold,null);
         maintenance=(TaskDatabaseMaintenance)get("databaseMaintenance");assertNotNull(maintenance);assertNotSame(prior,maintenance);
         assertEquals("preserved",maintenance.snapshot().getString("phase"));assertTrue(maintenance.snapshot().getBoolean("originalRetryAvailable"));
         assertEquals(bytes,DatabaseFilePreservation.inspect(app.getDatabasePath(TaskStore.DATABASE_NAME)).fingerprint());
@@ -107,7 +107,7 @@ public final class BootstrapOriginalRetryNativeTest {
         assertTrue(app.bootstrapState().getBoolean("retryAvailable"));long cold=status.generation();JSONObject request=retry("cold-original-retry-1");
         app.bootstrapOwnerCommand("bootstrap.retry",request,owner);
         assertEquals(cold+1,status.generation());assertEquals(1,queue.pending.size());
-        assertEquals("original_retry_prepared",maintenance.snapshot().getString("phase"));assertTrue(maintenance.originalRetryRecorded(request));
+        assertEquals("original_retry_prepared",maintenance.snapshot().getString("phase"));assertTrue(maintenance.observesOriginalRetry(request));
         assertNull(app.tasks);assertFalse(app.businessReady());
         app.bootstrapOwnerCommand("bootstrap.retry",new JSONObject(request.toString()),owner);
         assertEquals(1,queue.pending.size());assertEquals(cold+1,status.generation());
@@ -119,6 +119,6 @@ public final class BootstrapOriginalRetryNativeTest {
         assertFalse(app.bootstrapState().getBoolean("retryAvailable"));
         assertThrows(SecurityException.class,()->app.bootstrapOwnerCommand("bootstrap.retry",request,owner));
         assertArrayEquals(before,Files.readAllBytes(recordFile.toPath()));assertEquals("preserved",maintenance.snapshot().getString("phase"));
-        assertFalse(maintenance.originalRetryRecorded(request));assertEquals(generation,status.generation());assertTrue(queue.pending.isEmpty());
+        assertFalse(maintenance.observesOriginalRetry(request));assertEquals(generation,status.generation());assertTrue(queue.pending.isEmpty());
     }
 }

@@ -22,6 +22,8 @@ public final class InferenceFailure {
     private static final Set<String> NATIVE_CODES=Set.of("CANCELLED","DEADLINE_EXCEEDED","STALE_ACCOUNT_VERSION","STALE_MODEL_CATALOG","ACCOUNT_SELECTION_STORE_UNAVAILABLE","ACCOUNT_REFRESH_REQUIRED","ACCOUNT_DISABLED","ACCOUNT_NOT_FOUND","ACCOUNT_SELECTION_REQUIRED","REAUTHORIZATION_REQUIRED","PLAN_USAGE_PERMISSION_REQUIRED","PROVIDER_PERMISSION_DENIED","ACCOUNT_COOLDOWN","RATE_LIMITED","QUOTA_EXCEEDED","PROVIDER_RATE_LIMITED","GATEWAY_BUSY","REFRESH_QUEUE_FULL","GATEWAY_CLOSED","PROVIDER_UNAVAILABLE","PROVIDER_NETWORK_ERROR","PROVIDER_STREAM_INTERRUPTED","INVALID_PROVIDER_STREAM","INFERENCE_RECEIPT_STORE_UNAVAILABLE","ACCOUNT_MODEL_OPTION_UNAVAILABLE","ACCOUNT_CONTEXT_BUDGET_EXCEEDED","ACCOUNT_IMAGE_BUDGET_REQUIRED","ACCOUNT_TEXT_CAPABILITY_UNSUPPORTED","ACCOUNT_TOOL_CAPABILITY_UNSUPPORTED");
     private static final Set<String> KEYS=Set.of("format","kind","httpStatus","nativeCode","observedAt","partialTextReceived","retry","automaticRetry","healthVerified","providerProcessingKnown","chargeKnown");
     private static final Set<String> RETRY_KEYS=Set.of("status","basis","delaySeconds","reportedDateAt","responseDateAt","estimatedNotBefore","healthVerified","quotaResetKnown");
+    private static final Set<String> BEDROCK_CODES=Set.of("BEDROCK_ACCESS_DENIED","BEDROCK_INVALID_IDENTITY","BEDROCK_SIGNATURE_INVALID","BEDROCK_NOT_AUTHORIZED","BEDROCK_REQUEST_EXPIRED","BEDROCK_MODEL_ACCESS_REQUIRED","BEDROCK_RESOURCE_NOT_FOUND","BEDROCK_THROTTLING","BEDROCK_QUOTA_EXCEEDED","BEDROCK_MODEL_NOT_READY","BEDROCK_MODEL_TIMEOUT","BEDROCK_MODEL_STREAM_ERROR","BEDROCK_MODEL_ERROR","BEDROCK_INTERNAL_ERROR","BEDROCK_UNAVAILABLE","BEDROCK_VALIDATION","BEDROCK_INVALID_ACTION","BEDROCK_AGREEMENT_PENDING","BEDROCK_OVERLOADED");
+    private static final Set<String> BEDROCK_STREAM_CODES=Set.of("BEDROCK_INTERNAL_ERROR","BEDROCK_MODEL_STREAM_ERROR","BEDROCK_VALIDATION","BEDROCK_THROTTLING","BEDROCK_MODEL_TIMEOUT","BEDROCK_UNAVAILABLE");
     public final Kind kind;
     public final int httpStatus;
     public final String nativeCode;
@@ -46,6 +48,65 @@ public final class InferenceFailure {
             else if(status==429&&(Set.of("rate_limit_exceeded","rate_limit_error").contains(code)||Set.of("rate_limit_exceeded","rate_limit_error").contains(type)))kind=Kind.RATE_LIMIT;
         }}catch(Exception malformed){/* Unclassified is not transient-rate-limit evidence. */}
         return new InferenceFailure(kind,status,"",receivedAt,false,base.retry());
+    }
+    /** AWS restJson1 machine identifiers only; response prose and signed headers are never retained.
+     * See Smithy restJson1 Operation error serialization and the Bedrock API error reference. */
+    public static InferenceFailure bedrockHttp(int status,List<String> retryAfter,List<String> date,List<String> errorTypes,long receivedAt,String body)throws Exception {
+        InferenceFailure base=http(status,retryAfter,date,receivedAt);
+        String code=bedrockErrorCode(errorTypes,body);
+        // Bedrock throttling can describe an account quota. It is not proof of a transient
+        // frequency limit, and never authorizes replay of this selected provider's request.
+        Kind kind="BEDROCK_QUOTA_EXCEEDED".equals(code)?Kind.QUOTA_EXHAUSTED:Kind.HTTP;
+        return new InferenceFailure(kind,status,code,receivedAt,false,base.retry());
+    }
+    /** A service error inside a successfully opened HTTP stream keeps the observed HTTP 200. */
+    public static InferenceFailure bedrockStream(String event,int observedHttpStatus,long at)throws Exception {
+        String code=bedrockCode(event);
+        if(observedHttpStatus!=200||!BEDROCK_STREAM_CODES.contains(code))throw new IllegalArgumentException("invalid_bedrock_stream_error");
+        return new InferenceFailure(Kind.PROTOCOL,observedHttpStatus,code,at,false,emptyRetry(RetryStatus.MISSING,RetryBasis.NONE));
+    }
+    private static String bedrockErrorCode(List<String> headers,String body){
+        if(headers!=null&&headers.size()>1)return "";
+        String found="";
+        if(headers!=null&&!headers.isEmpty()){
+            found=bedrockCode(headers.get(0));if(found.isEmpty())return "";
+        }
+        if(body!=null&&!body.isBlank()&&body.length()<=16384)try{
+            JSONObject value=dev.pocketengine.runtime.providers.ProtocolJson.parse(body);
+            for(String key:new String[]{"__type","code"})if(value.has(key)){
+                Object raw=value.opt(key);String candidate=raw instanceof String?bedrockCode((String)raw):"";
+                if(candidate.isEmpty()||!found.isEmpty()&&!found.equals(candidate))return "";
+                found=candidate;
+            }
+        }catch(Exception malformed){return "";}
+        return found;
+    }
+    private static String bedrockCode(String value){
+        if(value==null||value.isEmpty()||value.length()>512||value.chars().anyMatch(c->c<33||c>126))return "";
+        int colon=value.indexOf(':');if(colon>=0)value=value.substring(0,colon);
+        int hash=value.indexOf('#');if(hash>=0)value=value.substring(hash+1);
+        return switch(value){
+            case "AccessDeniedException" -> "BEDROCK_ACCESS_DENIED";
+            case "InvalidClientTokenId" -> "BEDROCK_INVALID_IDENTITY";
+            case "IncompleteSignature" -> "BEDROCK_SIGNATURE_INVALID";
+            case "NotAuthorized" -> "BEDROCK_NOT_AUTHORIZED";
+            case "RequestExpired" -> "BEDROCK_REQUEST_EXPIRED";
+            case "FTUFormNotFilled" -> "BEDROCK_MODEL_ACCESS_REQUIRED";
+            case "ResourceNotFound","ResourceNotFoundException" -> "BEDROCK_RESOURCE_NOT_FOUND";
+            case "ThrottlingException","throttlingException" -> "BEDROCK_THROTTLING";
+            case "ServiceQuotaExceededException" -> "BEDROCK_QUOTA_EXCEEDED";
+            case "ModelNotReadyException" -> "BEDROCK_MODEL_NOT_READY";
+            case "ModelTimeoutException","modelTimeoutException" -> "BEDROCK_MODEL_TIMEOUT";
+            case "ModelStreamErrorException","modelStreamErrorException" -> "BEDROCK_MODEL_STREAM_ERROR";
+            case "ModelErrorException" -> "BEDROCK_MODEL_ERROR";
+            case "InternalFailure","InternalServerException","internalServerException" -> "BEDROCK_INTERNAL_ERROR";
+            case "ServiceUnavailable","ServiceUnavailableException","serviceUnavailableException" -> "BEDROCK_UNAVAILABLE";
+            case "ValidationError","ValidationException","validationException" -> "BEDROCK_VALIDATION";
+            case "InvalidAction" -> "BEDROCK_INVALID_ACTION";
+            case "MPAgreementBeingCreated" -> "BEDROCK_AGREEMENT_PENDING";
+            case "overloaded_error" -> "BEDROCK_OVERLOADED";
+            default -> "";
+        };
     }
     private static boolean httpKind(Kind kind){return kind==Kind.HTTP||kind==Kind.RATE_LIMIT||kind==Kind.QUOTA_EXHAUSTED||kind==Kind.POLICY_REFUSAL;}
     public static InferenceFailure local(Kind kind,long at)throws Exception { return local(kind,0,at); }
@@ -78,7 +139,11 @@ public final class InferenceFailure {
         Kind kind=Kind.valueOf(value.getString("kind"));long at=integer(value.get("observedAt"),1,Long.MAX_VALUE);int status=value.isNull("httpStatus")?0:(int)integer(value.get("httpStatus"),100,599);
         if(httpKind(kind)&&(status<100||status>=200&&status<300)||!httpKind(kind)&&kind!=Kind.ACCOUNT_GATE&&kind!=Kind.PROTOCOL&&kind!=Kind.NETWORK&&kind!=Kind.TIMEOUT&&kind!=Kind.INCOMPLETE_STREAM&&kind!=Kind.CONTEXT_LIMIT&&status!=0)throw new IllegalArgumentException("invalid_failure_http_status");
         Object partial=value.get("partialTextReceived");if(!(partial instanceof Boolean))throw new IllegalArgumentException("invalid_failure_partial_flag");
-        String code=value.isNull("nativeCode")?"":value.getString("nativeCode");if(!code.isEmpty()&&(kind!=Kind.ACCOUNT_GATE||!NATIVE_CODES.contains(code)))throw new IllegalArgumentException("invalid_native_failure_code");
+        String code=value.isNull("nativeCode")?"":value.getString("nativeCode");
+        if(!code.isEmpty()&&!(kind==Kind.ACCOUNT_GATE&&NATIVE_CODES.contains(code)
+                ||kind==Kind.HTTP&&BEDROCK_CODES.contains(code)&&!"BEDROCK_QUOTA_EXCEEDED".equals(code)
+                ||kind==Kind.QUOTA_EXHAUSTED&&"BEDROCK_QUOTA_EXCEEDED".equals(code)
+                ||kind==Kind.PROTOCOL&&status==200&&BEDROCK_STREAM_CODES.contains(code)))throw new IllegalArgumentException("invalid_native_failure_code");
         if(kind==Kind.RATE_LIMIT&&status!=429)throw new IllegalArgumentException("rate_limit_requires_observed_429");
         JSONObject retry=checkedRetry(value.getJSONObject("retry"),at,kind);
         return new InferenceFailure(kind,status,code,at,(Boolean)partial,retry);

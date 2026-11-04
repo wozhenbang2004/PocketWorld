@@ -7,6 +7,8 @@ import dev.pocketengine.runtime.usage.InferenceReceipt;
 
 /** Host-owned durable boundary. Implementations fence by task/run/epoch before all writes. */
 public interface RunJournal {
+    /** Original native phase/read authority. A controlled restore must never lose this handle. */
+    default ExecutionPlanning planning()throws Exception{return null;}
     /** Native pre-request admission stopped for an exhausted existing allowance. This is
      * diagnostic data, never a grant or evidence that earlier effects did not happen. */
     final class NativeBudgetPaused extends Exception {
@@ -24,6 +26,7 @@ public interface RunJournal {
     /** Native decoration only; every operation and inference receipt still belongs to this journal. */
     default RunJournal withCompaction(dev.pocketengine.runtime.context.CompactionJournal host){
         RunJournal original=this;java.util.Objects.requireNonNull(host);return new RunJournal(){
+            public ExecutionPlanning planning()throws Exception{return original.planning();}
             public dev.pocketengine.runtime.context.CompactionJournal compaction(){return host;}
             public JSONObject restore()throws Exception{return host.restore(original);}
             public void checkpoint(JSONArray messages,int steps,JSONObject observation)throws Exception{host.checkpoint(original,messages,steps,observation);}

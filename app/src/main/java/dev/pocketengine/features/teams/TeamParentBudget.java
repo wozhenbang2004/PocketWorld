@@ -133,6 +133,62 @@ public final class TeamParentBudget {
     }
 
     private static JSONObject external(JSONObject pool,String reservation,String operation)throws Exception {JSONArray rows=pool.getJSONArray("reservations");for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(reservation.equals(row.optString("reservationId"))&&operation.equals(row.optString("jobOperationId"))&&row.optInt("externalJobs")==1)return row;}throw new SecurityException("没有这次原父external job预留");}
+    /** Bind an original research reservation before dispatch. This is a value check,
+     * not a grant; TaskStore supplies the native identity inside its transaction. */
+    public static JSONObject bindLogicalAttempt(JSONObject pool,String reservationId,JSONObject originalBinding,String logicalRequestId,int attemptNo,String candidateId,String callId)throws Exception {
+        attemptIdentity(logicalRequestId,attemptNo,candidateId,callId);
+        JSONObject row=inferenceReservation(pool,reservationId);
+        for(String key:new String[]{"teamRunId","childTaskId","childRunId","childEpoch","memberId","assignmentId","runGeneration","memberGeneration","round","sourceExecution"})
+            if(!originalBinding.has(key)||originalBinding.isNull(key)||!row.has(key)||!TeamWorkFiles.canonical(originalBinding.get(key)).equals(TeamWorkFiles.canonical(row.get(key))))throw new SecurityException("原模型预留属于另一研究身份");
+        if(!"reserved".equals(row.getString("state"))||row.getJSONArray("inferenceCallIds").length()!=0||row.getJSONArray("operationIds").length()!=0)throw new SecurityException("原模型预留已进入派发或释放");
+        fixed(row,"logicalRequestId",logicalRequestId);fixed(row,"attemptNo",attemptNo);fixed(row,"candidateId",candidateId);fixed(row,"plannedCallId",callId);
+        JSONArray rows=pool.getJSONArray("reservations");
+        for(int i=0;i<rows.length();i++){JSONObject other=rows.getJSONObject(i);if(other==row)continue;
+            if(callId.equals(other.optString("plannedCallId"))||has(other.getJSONArray("inferenceCallIds"),callId)
+                    ||logicalRequestId.equals(other.optString("logicalRequestId"))&&attemptNo==other.optInt("attemptNo"))throw new SecurityException("原逻辑attempt或callId已绑定另一父预留");
+        }
+        row.put("logicalRequestId",logicalRequestId).put("attemptNo",attemptNo).put("candidateId",candidateId).put("plannedCallId",callId);return row;
+    }
+    /** STARTED alone consumes the exact planned call. Repeated delivery of that same
+     * native receipt cannot borrow another pending row or undo terminal accounting. */
+    public static JSONObject startInferenceAttempt(JSONObject pool,String reservationId,JSONObject nativeContext,JSONObject nativeRoute,String callId)throws Exception {
+        JSONObject row=inferenceReservation(pool,reservationId);
+        attemptIdentity(nativeRoute.getString("logicalRequestId"),nativeRoute.getInt("attemptNo"),nativeRoute.getString("candidateId"),callId);
+        for(String key:new String[]{"logicalRequestId","attemptNo","candidateId"})
+            if(!row.has(key)||!TeamWorkFiles.canonical(row.get(key)).equals(TeamWorkFiles.canonical(nativeRoute.get(key))))throw new SecurityException("原STARTED不属于已预留逻辑attempt");
+        if(!callId.equals(row.optString("plannedCallId"))||!"HOST_RUN".equals(nativeContext.optString("bindingKind"))
+                ||!row.getString("childTaskId").equals(nativeContext.optString("taskId"))||!row.getString("childRunId").equals(nativeContext.optString("runId"))
+                ||row.getInt("childEpoch")!=nativeContext.optInt("epoch",-1)||!row.getString("memberId").equals(nativeContext.optString("memberId"))
+                ||!("summary".equals(row.getString("phase"))?"SUMMARY":"MEMBER").equals(nativeContext.optString("purpose")))throw new SecurityException("原STARTED的task/run/epoch/member/purpose或callId不符");
+        JSONArray calls=row.getJSONArray("inferenceCallIds");String state=row.getString("state");
+        if(calls.length()==1&&callId.equals(calls.getString(0))&&state.matches("started|settled|unknown"))return row;
+        if(!"reserved".equals(state)||calls.length()!=0||row.getJSONArray("operationIds").length()!=0)throw new SecurityException("原模型attempt已消费或未获精确预留");
+        calls.put(callId);row.put("state","started").put("startedAt",System.currentTimeMillis());return row;
+    }
+    /** TaskStore calls this only after the original SQL audit proves no STARTED.
+     * Empty callId covers a reserved next candidate withdrawn before capture exists. */
+    public static void releaseInferenceAttemptUnstarted(JSONObject pool,String reservationId,String logicalRequestId,String callId)throws Exception {
+        JSONObject row=inferenceReservation(pool,reservationId);
+        if(logicalRequestId==null||logicalRequestId.isEmpty()||callId==null||!logicalRequestId.equals(row.optString("logicalRequestId"))
+                ||(callId.isEmpty()?row.has("plannedCallId"):!callId.equals(row.optString("plannedCallId")))||!"reserved".equals(row.getString("state"))
+                ||row.getJSONArray("inferenceCallIds").length()!=0||row.getJSONArray("operationIds").length()!=0)throw new SecurityException("原模型预留没有同逻辑/同call的确定未启动证明");
+        row.put("state","released_unstarted");
+    }
+    private static JSONObject inferenceReservation(JSONObject pool,String reservationId)throws Exception {
+        if(reservationId==null||reservationId.isEmpty())throw new SecurityException("缺少原模型父预留编号");
+        JSONObject selected=null;JSONArray rows=pool.getJSONArray("reservations");
+        for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!reservationId.equals(row.optString("reservationId")))continue;if(selected!=null)throw new SecurityException("原模型父预留编号重复");selected=row;}
+        if(selected==null||selected.optInt("modelRequests")!=1||selected.optInt("toolOperations")!=0||selected.optInt("externalJobs")!=0
+                ||!selected.optString("phase").matches("member|summary")||!pool.getString("parentTaskId").equals(selected.optString("parentTaskId"))
+                ||!pool.getString("parentRunId").equals(selected.optString("parentRunId")))throw new SecurityException("没有这次原研究模型父预留");return selected;
+    }
+    private static void attemptIdentity(String logicalRequestId,int attemptNo,String candidateId,String callId){
+        if(logicalRequestId==null||logicalRequestId.isEmpty()||logicalRequestId.length()>200||candidateId==null||candidateId.isEmpty()||candidateId.length()>200
+                ||callId==null||callId.isEmpty()||callId.length()>200||attemptNo<1||attemptNo>2)throw new SecurityException("原研究模型attempt身份无效");
+    }
+    private static void fixed(JSONObject row,String key,Object value)throws Exception {
+        if(row.has(key)&&!TeamWorkFiles.canonical(row.get(key)).equals(TeamWorkFiles.canonical(value)))throw new SecurityException("已预留的原逻辑attempt身份不可替换");
+    }
     public static JSONObject startInference(JSONObject pool,String task,String run,String callId)throws Exception {
         JSONArray rows=pool.getJSONArray("reservations");JSONObject pending=null;
         for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(has(row.getJSONArray("inferenceCallIds"),callId))return row;

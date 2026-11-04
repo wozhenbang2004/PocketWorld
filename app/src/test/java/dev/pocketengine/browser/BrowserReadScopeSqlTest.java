@@ -53,6 +53,14 @@ public final class BrowserReadScopeSqlTest {
     @Test public void scopeHasNoDefaultAndCannotGrantWithoutAnOriginalPreparedOperation()throws Exception {try(F x=new F()){
         assertEquals("not_granted",x.state().getString("state"));assertThrows(SecurityException.class,()->x.f.tasks.grantBrowserReadScope(x.f.binding.taskId,x.f.binding.runId,x.f.binding.epoch,x.f.control,x.identity(),BrowserReadScope.disabled()));x.grant(false,"");JSONObject args=j("tabId",x.tab);assertThrows(SecurityException.class,()->x.admit(UUID.randomUUID().toString(),"browser_task_observe",args));assertEquals(32,x.state().getInt("remainingReads"));
     }}
+    @Test public void planningClassificationUsesActualReadScopeAndDoesNotConsumeIt()throws Exception{try(F x=new F()){
+        JSONObject args=j("tabId",x.tab);assertEquals(dev.pocketengine.core.ExecutionPlanning.Access.READ,x.port.planningAccess("browser_task_observe",null));
+        assertEquals(dev.pocketengine.core.ExecutionPlanning.Access.DENY,x.port.planningAccess("browser_task_observe",args));
+        JSONObject granted=x.grant(false,"");assertEquals(dev.pocketengine.core.ExecutionPlanning.Access.READ,x.port.planningAccess("browser_task_observe",args));
+        assertEquals(dev.pocketengine.core.ExecutionPlanning.Access.DENY,x.port.planningAccess("browser_task_evaluate",j("tabId",x.tab,"expression","document.title")));
+        assertEquals(dev.pocketengine.core.ExecutionPlanning.Access.DENY,x.port.planningAccess("browser_task_navigate",null));assertEquals(32,x.state().getInt("remainingReads"));assertEquals(0,x.f.tasks.get(x.f.binding.taskId,false).getJSONArray("operations").length());
+        x.f.tasks.revokeBrowserReadScope(x.f.binding.taskId,x.f.binding.runId,x.f.binding.epoch,granted.getString("scopeId"),"owner_revoked");assertEquals(dev.pocketengine.core.ExecutionPlanning.Access.DENY,x.port.planningAccess("browser_task_observe",args));
+    }}
     @Test public void onePreparedOperationCanConsumeTheScopeOnlyOnceAndNoLockCallsBackIntoAuthority()throws Exception {try(F x=new F()){
         x.guard();x.grant(false,"");assertEquals(0,x.callbacks.get());JSONObject args=j("tabId",x.tab);String op=x.prepare("browser_task_observe",args);x.guard();JSONObject permit=x.admit(op,"browser_task_observe",args);assertNotNull(permit);assertThrows(SecurityException.class,()->x.admit(op,"browser_task_observe",args));assertEquals(31,x.state().getInt("remainingReads"));x.f.tasks.checkBrowserReadScopePermit(x.f.binding.taskId,x.f.binding.runId,x.f.binding.epoch,x.f.control,permit);x.finish(op);
     }}

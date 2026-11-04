@@ -79,7 +79,7 @@ public final class ConnectionInferenceObservations {
                 .put("credentialId",binding.credentialId()).put("credentialRevision",binding.credentialRevision()).put("installationId",binding.installationId()).put("installationRevision",binding.installationRevision()).put("requestedModel",model));
         Row row=rows.get(key);return row==null?out:out.put("observed",true).put("reason","native_terminal_call_observed_not_a_health_test").put("lastCall",new JSONObject(row.last)).put("lastFailure",row.failure==null?JSONObject.NULL:new JSONObject(row.failure));
     }
-    private static String protocol(ModelBinding.Protocol value){return switch(value){case OPENAI_CHAT->"openai_chat";case OPENAI_RESPONSES->"openai_responses";case ANTHROPIC->"anthropic";case GEMINI->"gemini";};}
+    private static String protocol(ModelBinding.Protocol value){return switch(value){case OPENAI_CHAT->"openai_chat";case OPENAI_RESPONSES->"openai_responses";case ANTHROPIC->"anthropic";case GEMINI->"gemini";case BEDROCK_ANTHROPIC->"bedrock_anthropic";};}
     private static String key(JSONObject route) {
         if(!"api_key".equals(route.optString("kind"))||!Boolean.FALSE.equals(route.opt("identityRedacted")))return null;
         StringBuilder key=new StringBuilder();

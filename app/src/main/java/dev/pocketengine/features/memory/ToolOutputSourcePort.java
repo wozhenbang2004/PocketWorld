@@ -18,6 +18,7 @@ public final class ToolOutputSourcePort implements CapabilityPort {
     public JSONArray tools()throws Exception{return original.tools();}
     public boolean supports(String name){return original.supports(name);}
     public boolean sideEffecting(String name){return original.sideEffecting(name);}
+    @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{return original.planningAccess(name,arguments);}
     public JSONObject contextSnapshot(String query)throws Exception{return original.contextSnapshot(query);}
     public void validate(String name,JSONObject arguments)throws Exception{original.validate(name,arguments);}
     public void beginRun(String goal,RunControl live)throws Exception{current(live);original.beginRun(goal,live);}

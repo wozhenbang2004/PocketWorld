@@ -14,4 +14,9 @@ public interface ProviderAdapter {
      * terminal/role/tool validation, with the actual request's declared tools. */
     JSONObject response(JSONObject wireResponse)throws Exception;
     Map<String,String> headers(ModelConfig config);
+    /** Authentication over the exact final body and physical target, after native projection.
+     * Ordinary API adapters retain their original header contract. */
+    default Map<String,String> headers(ModelConfig config,URL endpoint,byte[] payload)throws Exception {
+        return headers(config);
+    }
 }

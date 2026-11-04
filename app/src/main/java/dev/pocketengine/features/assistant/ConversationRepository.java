@@ -115,6 +115,7 @@ public final class ConversationRepository {
                     if(actualInteger(message.opt("at"))&&message.getLong("at")>=0)messages.getJSONObject(messages.length()-1).put("at",message.getLong("at"));
                     if(message.optJSONArray("attachments")!=null&&message.getJSONArray("attachments").length()>0){omitted.put(new JSONObject().put("sourceRecordId",id).put("reason","attachment_bytes_and_grants_not_exported"));JSONArray refs=message.getJSONArray("attachments");for(int i=0;i<refs.length();i++){JSONObject ref=refs.getJSONObject(i);if(ref.optString("id").isEmpty()||!ref.optString("sha256").matches("[a-f0-9]{64}"))continue;attachments.put(new JSONObject().put("messageId",id).put("attachmentId",ref.getString("id")).put("sha256",ref.getString("sha256")).put("availability","reference_only_unverified_not_restored"));}}
                     if(message.optJSONArray("ownerSourceRefs")!=null&&message.getJSONArray("ownerSourceRefs").length()>0)omitted.put(new JSONObject().put("sourceRecordId",id).put("reason","external_source_grants_not_exported"));
+                    if(message.optJSONArray("ownerPreviewRefs")!=null&&message.getJSONArray("ownerPreviewRefs").length()>0)omitted.put(new JSONObject().put("sourceRecordId",id).put("reason","native_preview_selections_not_exported"));
                 }
             }
             return new JSONObject().put("schema","pocketworld_conversation_export").put("schemaVersion",1).put("exportId",UUID.randomUUID().toString()).put("sourceConversationId",conversation).put("sourceGeneration",gen).put("historyWatermark",upper).put("exportedAt",System.currentTimeMillis()).put("title",header.optString("title")).put("messages",messages).put("omitted",omitted).put("attachmentReferences",attachments);
@@ -142,7 +143,7 @@ public final class ConversationRepository {
             for(int i=0;i<original.length();i++){
                 JSONObject row=original.getJSONObject(i),origin=new JSONObject(row.toString());origin.remove("content");String id=row.getString("sourceRecordId");
                 // These are passive claims from the selected, checked export. They never use
-                // attachments/ownerSourceRefs keys and cannot restore bytes or source grants.
+                // attachments/ownerSourceRefs/ownerPreviewRefs keys and cannot restore bytes or source grants.
                 JSONObject evidence=new JSONObject().put("exportId",payload.getString("exportId")).put("exportSha256",sha).put("attachmentReferences",passiveAttachments.getOrDefault(id,new JSONArray())).put("omitted",passiveOmissions.getOrDefault(id,new JSONArray())).put("unmatchedAttachmentReferences",unmatchedAttachments).put("unmatchedOmissions",unmatchedOmissions);
                 JSONObject content=new JSONObject().put("role",row.getString("role")).put("content",row.getString("content")).put("originExportRecord",origin).put("originExportEvidence",evidence);if(row.has("at"))content.put("at",row.getLong("at"));imported.put(content);
             }
@@ -524,7 +525,7 @@ public final class ConversationRepository {
         if(!pendingAck&&(!row.getString("acceptedRunId").equals(ack.optString("runId"))||integer(row,"acceptedEpoch",1)!=integer(ack,"epoch",1)
                 ||row.has("acceptedTaskId")&&!row.getString("acceptedTaskId").equals(ack.optString("taskId"))))
             throw new SecurityException("原接收代次与消息回执不一致，未接手副本");
-        for(String key:List.of("attachments","ownerSourceRefs")){
+        for(String key:List.of("attachments","ownerSourceRefs","ownerPreviewRefs")){
             JSONArray expected=row.optJSONArray(key),actual=message.optJSONArray(key);
             if(row.has(key)&&expected==null||message.has(key)&&actual==null
                     ||!TaskMemoryTrace.rawFingerprint(new JSONObject().put("refs",expected==null?new JSONArray():expected))
@@ -540,7 +541,7 @@ public final class ConversationRepository {
                 .put("ownerMessageRevision",selected.currentMessageRevision).put("acceptedRunId",selected.acceptedRunId).put("acceptedEpoch",selected.acceptedEpoch)
                 .put("ownerRequestFingerprint",selected.requestFingerprint).put("acceptedTaskId",selected.taskId)
                 .put("content",selected.content)
-                .put("mode",selected.mode).put("attachments",selected.attachments()).put("ownerSourceRefs",selected.sourceRefs());
+                .put("mode",selected.mode).put("attachments",selected.attachments()).put("ownerSourceRefs",selected.sourceRefs()).put("ownerPreviewRefs",selected.previewRefs());
         requireQueuedOwnerMessageCurrent(selected.conversationId,expected);
         JSONObject state=source(selected.messageId),message=message(selected.conversationId,selected.messageId),ack=new JSONObject(state.getJSONObject("submission").toString());
         boolean missingAck="unconfirmed".equals(ack.optString("status"))&&!ack.has("taskId")&&!ack.has("runId")&&!ack.has("epoch");
@@ -774,16 +775,22 @@ public final class ConversationRepository {
             current();String key=TaskMemoryTrace.rawFingerprint(part);if(!checkedNativeUsers.containsKey(key)&&checkedNativeUsers.size()>=100)throw limited("native_user_part_budget");checkedNativeUsers.put(key,new JSONObject(part.toString()));
         }
         /** A model/checkpoint cannot invent a selected source on an arbitrary user row. */
-        public void requireCarrier(JSONObject row,String conversation)throws Exception {
+        public void requireCarrier(JSONObject row,String conversation)throws Exception {requireReferenceCarrier(row,conversation,"ownerSourceRefs");}
+        /** The DOM observation must be the exact selection saved on this native message, not checkpoint JSON. */
+        public void requirePreviewCarrier(JSONObject row,String conversation)throws Exception {requireReferenceCarrier(row,conversation,"ownerPreviewRefs");}
+        private static JSONArray selectedReferences(JSONObject row,String field)throws Exception {
+            return "ownerPreviewRefs".equals(field)?dev.pocketengine.features.local.preview.PreviewElementRef.checked(row.getJSONArray(field)):OwnerSourceReferences.checked(row.getJSONArray(field));
+        }
+        private void requireReferenceCarrier(JSONObject row,String conversation,String field)throws Exception {
             current();if(!nativeOwnerInput(row,conversation))throw new SecurityException("原文引用缺少属于当前原会话的原生主人消息");
             String id=row.getString("ownerMessageId");Object revision=row.opt("ownerMessageRevision");if(!(revision instanceof Integer||revision instanceof Long)||((Number)revision).longValue()<1)throw new SecurityException("原文引用缺少真实主人消息修订");
-            JSONArray expected=OwnerSourceReferences.checked(row.getJSONArray("ownerSourceRefs"));String where=" FROM meta a JOIN assistant_messages m ON m.generation=a.value JOIN assistant_sources s ON s.generation=m.generation AND s.source_id=m.source_id JOIN assistant_conversations c ON c.generation=s.generation AND c.conversation_id=s.conversation_id WHERE a.key='assistant_history_generation' AND m.source_id=? AND m.revision=? AND s.revision=m.revision AND s.role='user' AND s.deleted=0 AND s.retired_through<s.revision AND s.context_retired=0 AND m.body IS NOT NULL AND c.deleted=0 LIMIT 1";
+            JSONArray expected=selectedReferences(row,field);String where=" FROM meta a JOIN assistant_messages m ON m.generation=a.value JOIN assistant_sources s ON s.generation=m.generation AND s.source_id=m.source_id JOIN assistant_conversations c ON c.generation=s.generation AND c.conversation_id=s.conversation_id WHERE a.key='assistant_history_generation' AND m.source_id=? AND m.revision=? AND s.revision=m.revision AND s.role='user' AND s.deleted=0 AND s.retired_through<s.revision AND s.context_retired=0 AND m.body IS NOT NULL AND c.deleted=0 LIMIT 1";
             String[] args={id,Long.toString(((Number)revision).longValue())};long bytes;statement();
             try(Cursor size=db.rawQuery("SELECT length(CAST(m.meta_json AS BLOB))"+where,args,signal)){if(!size.moveToFirst()||size.isNull(0))throw new SourceUnavailable("原主人消息不可核对");bytes=size.getLong(0);if(bytes>remainingBytes())throw limited("owner_source_carrier_metadata_exceeds_batch_bytes");}
             statement();JSONObject nativeMessage;String bounded=where.replace(" LIMIT 1"," AND length(CAST(m.meta_json AS BLOB))<=? LIMIT 1");
             try(Cursor actual=db.rawQuery("SELECT m.meta_json"+bounded,new String[]{args[0],args[1],Long.toString(remainingBytes())},signal)){if(!actual.moveToFirst())throw limited("owner_source_carrier_changed_or_byte_budget");String text=actual.getString(0);materialized(text.getBytes(StandardCharsets.UTF_8).length);nativeMessage=new JSONObject(text);}
-            JSONArray actual=nativeMessage.optJSONArray("ownerSourceRefs");if(actual==null||!TaskMemoryTrace.rawFingerprint(new JSONObject().put("refs",OwnerSourceReferences.checked(actual))).equals(TaskMemoryTrace.rawFingerprint(new JSONObject().put("refs",expected))))throw new SecurityException("原文引用不等于这条原生主人消息的实际选择");
-            current();if(!checkedCarriers.containsKey(id)&&checkedCarriers.size()>=100)throw limited("owner_source_carrier_row_budget");checkedCarriers.put(id,new JSONObject().put("role","user").put("ownerMessageId",id).put("ownerMessageRevision",revision).put("ownerSourceRefs",expected).put("_nativeConversationId",conversation));
+            JSONArray actual=nativeMessage.optJSONArray(field);if(actual==null||!TaskMemoryTrace.rawFingerprint(new JSONObject().put("refs",selectedReferences(nativeMessage,field))).equals(TaskMemoryTrace.rawFingerprint(new JSONObject().put("refs",expected))))throw new SecurityException("引用不等于这条原生主人消息的实际选择");
+            current();String key=id+"/"+field;if(!checkedCarriers.containsKey(key)&&checkedCarriers.size()>=100)throw limited("owner_source_carrier_row_budget");checkedCarriers.put(key,new JSONObject().put("role","user").put("ownerMessageId",id).put("ownerMessageRevision",revision).put(field,expected).put("_nativeConversationId",conversation));
         }
         public JSONObject readRange(JSONObject reference,RunControl original)throws Exception {
             requireSource(reference);long remaining=remainingBytes();if(remaining<1)throw limited("owner_source_batch_bytes");
@@ -795,7 +802,7 @@ public final class ConversationRepository {
             if(closed)return;
             try{
                 current();for(JSONObject ref:new ArrayList<>(checkedSources.values()))requireSource(ref);
-                for(JSONObject row:new ArrayList<>(checkedCarriers.values()))requireCarrier(row,row.getString("_nativeConversationId"));
+                for(JSONObject row:new ArrayList<>(checkedCarriers.values()))requireReferenceCarrier(row,row.getString("_nativeConversationId"),row.has("ownerPreviewRefs")?"ownerPreviewRefs":"ownerSourceRefs");
                 for(JSONObject row:new ArrayList<>(checkedNativeUsers.values()))requireNativeUserPart(row,row.getString("sourceConversationId"));
             }finally{closed=true;deadline.cancel(false);}
         }

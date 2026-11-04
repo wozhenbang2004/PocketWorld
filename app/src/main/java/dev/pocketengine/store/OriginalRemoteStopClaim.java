@@ -27,6 +27,7 @@ public final class OriginalRemoteStopClaim {
             if(profileBinding==null||!profileBinding.matches("[a-f0-9]{64}"))throw new SecurityException("没有原电脑配置代次");
             JSONObject original=target(db,current.read());
             if(!task.equals(original.getString("taskId"))||!run.equals(original.getString("runId"))||epoch!=original.getInt("coordinatorEpoch"))throw new SecurityException("原停止任务或执行代次已变化");
+            if(original.has("backendSelection")&&!profileBinding.equals(original.getString("profileBinding")))throw new SecurityException("后端停止不能换绑原电脑配置代次");
             original.put("_profileBinding",profileBinding);
             String operation=UUID.nameUUIDFromBytes(("pocketworld/original-remote-stop/v1/"+task+"/"+run+"/"+epoch+"/"+original.getString("jobId")+"/"+original.getString("jobOperationId")).getBytes(StandardCharsets.UTF_8)).toString();
             boolean dispatch;
@@ -62,6 +63,7 @@ public final class OriginalRemoteStopClaim {
             checkCurrent();JSONObject original=target();
             for(String key:new String[]{"profileId","serviceBase"})if(!original.getString(key).equals(actual.optString(key)))throw new SecurityException("停止回执改变原电脑连接");
             if(!original.getString("jobId").equals(actual.optString("id"))||!original.getString("jobOperationId").equals(actual.optString("operationId")))throw new SecurityException("停止回执不是原job/operation");
+            requireBackendReceipt(original,actual);
             boolean settled=actual.optString("status").matches("completed|failed|cancelled")&&Boolean.TRUE.equals(actual.opt("dispatchFenceFinal"))&&Boolean.FALSE.equals(actual.opt("resourcesHeld"));
             ContentValues value=new ContentValues();value.put("receipt",metadata(actual).toString());if(settled)value.put("state","receipt");db.update("operations",value,"operation_id=? AND tool='remote_original_stop' AND state IN ('prepared','unknown')",new String[]{operation});
             recorder.record(new JSONObject(actual.toString()));db.setTransactionSuccessful();
@@ -74,11 +76,17 @@ public final class OriginalRemoteStopClaim {
             while(rows.moveToNext()){
                 JSONObject original=new JSONObject(rows.getString(1)),current;try{current=target(db,task);}catch(SecurityException unavailable){continue;}current.put("_profileBinding",original.getString("_profileBinding"));
                 if(!same(original,current)||!original.getString("jobId").equals(actual.optString("id"))||!original.getString("jobOperationId").equals(actual.optString("operationId"))||!original.getString("profileId").equals(actual.optString("profileId"))||!original.getString("serviceBase").equals(actual.optString("serviceBase")))continue;
+                requireBackendReceipt(original,actual);
                 ContentValues value=new ContentValues();value.put("state","receipt");value.put("receipt",metadata(actual).toString());db.update("operations",value,"operation_id=? AND tool='remote_original_stop' AND state IN ('prepared','unknown')",new String[]{rows.getString(0)});
             }
         }
     }
-    private static JSONObject metadata(JSONObject actual)throws Exception {JSONObject result=new JSONObject();for(String key:new String[]{"id","operationId","profileId","serviceBase","status","message","originalCancellation","dispatchFenceFinal","resourcesHeld","processCleanupProof","updatedAt","cancellationDispatched","queryOnly","effectsReversed"})if(actual.has(key))result.put(key,actual.get(key));return result;}
+    private static JSONObject metadata(JSONObject actual)throws Exception {JSONObject result=new JSONObject();for(String key:new String[]{"id","operationId","profileId","serviceBase","status","message","originalCancellation","dispatchFenceFinal","resourcesHeld","processCleanupProof","updatedAt","cancellationDispatched","queryOnly","effectsReversed","backendSelection","environmentId","environmentBinding","worker"})if(actual.has(key))result.put(key,actual.get(key));return result;}
+    private static void requireBackendReceipt(JSONObject original,JSONObject actual)throws Exception {
+        if(!original.has("backendSelection"))return;
+        dev.pocketengine.features.remote.HarnessCapabilityObservation.requireSameBackendSelection(original.getJSONObject("backendSelection"),actual.optJSONObject("backendSelection"));
+        for(String key:new String[]{"environmentId","environmentBinding","worker"})if(!original.get(key).equals(actual.opt(key)))throw new SecurityException("停止回执改变原后端来源");
+    }
     private void checkCurrent()throws Exception {
         JSONObject original=target(),task=current.read(),actual=target(db,task);actual.put("_profileBinding",original.getString("_profileBinding"));
         if(!same(original,actual)||!task.optBoolean("cancelRequested"))throw new SecurityException("原停止任务、代次或目标已变化");
@@ -92,12 +100,20 @@ public final class OriginalRemoteStopClaim {
         if(!"remote".equals(task.optString("feature"))||!run.equals(operation)||!operation.equals(evidence.optString("operationId"))||!profile.equals(evidence.optString("profileId"))||service.isEmpty())throw new SecurityException("原电脑执行身份不完整");
         if(task.has("remoteInputJobId")&&!job.equals(task.getString("remoteInputJobId")))throw new SecurityException("原输入job关联已变化");
         try(Cursor row=db.rawQuery("SELECT epoch FROM runs WHERE task_id=? AND run_id=?",new String[]{id,run})){if(!row.moveToFirst()||epoch!=row.getInt(0))throw new SecurityException("原SQL执行代次已变化");}
+        JSONObject backendTarget=null,backendSelection=null;
         try(Cursor row=db.rawQuery("SELECT run_id,arguments,receipt FROM operations WHERE operation_id=? AND task_id=? AND tool='remote_job'",new String[]{operation,id})){
             if(!row.moveToFirst()||!run.equals(row.getString(0))||row.isNull(2))throw new SecurityException("缺少原SQL电脑job回执");JSONObject args=new JSONObject(row.getString(1)),receipt=new JSONObject(row.getString(2));
             if(!run.equals(args.optString("runId"))||epoch!=args.optInt("coordinatorEpoch",-1)||!job.equals(receipt.optString("id"))||!operation.equals(receipt.optString("operationId"))||!profile.equals(receipt.optString("profileId"))||!service.equals(receipt.optString("serviceBase")))throw new SecurityException("原SQL job/operation/连接不匹配");
+            if(args.has("backendSelection")||"gemini_acp".equals(refs.optString("worker"))){
+                backendTarget=args.getJSONObject("target");backendSelection=dev.pocketengine.features.remote.HarnessCapabilityObservation.checkedBackendSelection(args.getJSONObject("backendSelection"));
+                for(JSONObject value:new JSONObject[]{refs,receipt,evidence})dev.pocketengine.features.remote.HarnessCapabilityObservation.requireSameBackendSelection(backendSelection,value.getJSONObject("backendSelection"));
+                for(String key:new String[]{"profileId","profileBinding","serviceBase","environmentId","environmentBinding","worker"})if(!backendTarget.get(key).equals(refs.opt(key)))throw new SecurityException("原停止后端绑定与首创记录不同");
+                for(String key:new String[]{"profileId","serviceBase","environmentId","environmentBinding","worker"})if(!backendTarget.get(key).equals(receipt.opt(key))||!backendTarget.get(key).equals(evidence.opt(key)))throw new SecurityException("原停止回执与后端首创来源不同");
+            }
         }
         JSONObject result=new JSONObject().put("taskId",id).put("runId",run).put("coordinatorEpoch",epoch).put("profileId",profile).put("serviceBase",service).put("jobId",job).put("jobOperationId",operation)
                 .put("actorId",task.getString("actorId")).put("spaceId",task.getString("spaceId")).put("origin",task.optJSONObject("origin")==null?new JSONObject():new JSONObject(task.getJSONObject("origin").toString()));
+        if(backendSelection!=null){result.put("backendSelection",new JSONObject(backendSelection.toString()));for(String key:new String[]{"profileBinding","environmentId","environmentBinding","worker"})result.put(key,backendTarget.get(key));}
         if(task.has("parentTaskId")){
             String parent=identifier(task,"parentTaskId"),parentRun=identifier(task,"parentRunId");JSONObject originalParent;
             try(Cursor row=db.rawQuery("SELECT document FROM tasks WHERE task_id=?",new String[]{parent})){if(!row.moveToFirst())throw new SecurityException("原父任务已缺失");originalParent=new JSONObject(row.getString(0));}

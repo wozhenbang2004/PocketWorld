@@ -13,13 +13,13 @@ import org.json.JSONObject;
 
 /** Metadata state inside the existing original run; no execution, task store or JSON restore API. */
 public final class ToolDiscoverySession implements AutoCloseable {
-    /** Preserve the original DB's100 real-tool limit and snapshot's512-name limit without adding a grant. */
+    /** Metadata occupies a schema slot only while at least one real definition is hidden. */
     public static boolean shouldDefer(int realToolCount,int capabilityNameCount){
         if(realToolCount<0||capabilityNameCount<0)throw new IllegalArgumentException("negative_native_tool_count");
-        return realToolCount<100&&capabilityNameCount<512;
+        return realToolCount>0&&realToolCount<=100&&capabilityNameCount>=realToolCount&&capabilityNameCount<=512;
     }
     public static final Set<String> DEFAULT_RESIDENT=Set.of("memory_search","memory_recall","memory_raw_query","memory_raw_read","memory_history_search","memory_history_read",
-            "workspace_projects","workspace_list","workspace_read","skills_list","skills_read","attachments_list","attachments_read_text","project_inspect","project_read","project_search","browser_task_observe","browser_task_read");
+            "workspace_projects","workspace_list","workspace_read","skills_list","skills_read","skills_execute","attachments_list","attachments_read_text","project_inspect","project_read_file","project_search","browser_task_observe","browser_task_read");
     private record Pending(String digest,Set<String> identities) { }
     private final String taskId,runId;
     private final int epoch;
@@ -37,13 +37,14 @@ public final class ToolDiscoverySession implements AutoCloseable {
     /** The original host calls this after its full-scope authorization; hiding definitions does not change that set. */
     public synchronized void beginRequest(CapabilitySnapshot scope,JSONArray definitions,Map<String,ScopedToolCatalog.SourcePin> sources,Set<String> resident,RunControl control)throws Exception {
         original(control);ScopedToolCatalog next=ScopedToolCatalog.capture(scope,taskId,runId,epoch,original,definitions,sources,resident);
+        if(catalog==null||!catalog.revision().equals(next.revision()))activated.clear();
         activated.removeIf(identity->!next.containsIdentity(identity));pending.clear();published=Set.copyOf(activated);catalog=next;stale=false;
     }
     public synchronized JSONArray requestTools(RunControl control)throws Exception{check(control);return catalog.requestTools(published);}
     public synchronized JSONObject summary(RunControl control)throws Exception{check(control);return catalog.summary(published);}
-    public synchronized void validateSearch(JSONObject arguments,RunControl control)throws Exception{check(control);ScopedToolCatalog.SearchRequest.fromJson(arguments);}
+    public synchronized void validateSearch(JSONObject arguments,RunControl control)throws Exception{requirePublished(ScopedToolCatalog.SEARCH_TOOL,control);ScopedToolCatalog.SearchRequest.fromJson(arguments);}
     public synchronized JSONObject search(JSONObject arguments,RunControl control)throws Exception {
-        check(control);if(pending.size()>=16)throw new IllegalStateException("tool_discovery_uncommitted_receipt_bound");
+        requirePublished(ScopedToolCatalog.SEARCH_TOOL,control);if(pending.size()>=16)throw new IllegalStateException("tool_discovery_uncommitted_receipt_bound");
         ScopedToolCatalog.Page page=catalog.search(ScopedToolCatalog.SearchRequest.fromJson(arguments));String id=UUID.randomUUID().toString();
         JSONObject receipt=page.view().put("discoveryId",id).put("taskId",taskId).put("runId",runId).put("epoch",epoch).put("activation","after_original_checkpoint").put("ok",true);
         check(control);pending.put(id,new Pending(ScopedToolCatalog.fingerprint(receipt),page.identities()));return receipt;
@@ -58,7 +59,7 @@ public final class ToolDiscoverySession implements AutoCloseable {
         // Keep this request's published definitions unchanged. Only the next original beginRequest exposes them.
     }
     public synchronized void requirePublished(String name,RunControl control)throws Exception {
-        check(control);if(!ScopedToolCatalog.SEARCH_TOOL.equals(name)&&!catalog.exposes(name,published))throw new SecurityException("tool_schema_not_published_for_this_request");
+        check(control);if(!catalog.exposes(name,published))throw new SecurityException("tool_schema_not_published_for_this_request");
     }
     public synchronized boolean current(RunControl control){try{check(control);return true;}catch(Exception unavailable){return false;}}
     private void original(RunControl control)throws InterruptedException{if(closed||control!=original||!original.matchesHostRun(taskId,runId,epoch))throw new SecurityException("tool_discovery_foreign_or_closed_run");original.check();}

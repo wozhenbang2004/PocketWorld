@@ -74,7 +74,7 @@ public final class InferenceTokenReservation {
         JSONObject counters = usage.optJSONObject("counters"); if (counters == null) return null;
         Long total = count(counters.optJSONObject("TOTAL"));
         if (total != null) return total;
-        if (!"anthropic".equals(usage.optString("protocol"))) return null;
+        if (!"anthropic".equals(usage.optString("protocol")) && !"bedrock_anthropic".equals(usage.optString("protocol"))) return null;
         long sum = 0;
         for (String name : new String[]{"INPUT", "OUTPUT", "CACHE_READ", "CACHE_WRITE"}) {
             Long value = count(counters.optJSONObject(name)); if (value == null) return null;

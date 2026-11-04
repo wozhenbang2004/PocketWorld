@@ -2,17 +2,40 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import http from 'node:http';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
+import { installModelAccountHost } from './model-account-host-fixture.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const output = process.env.MODEL_ACCOUNT_EVIDENCE || path.resolve(root, '../build-artifacts/model-account-ui');
 await fs.mkdir(output, { recursive: true });
-const server = await createServer({ root, server: { host: '127.0.0.1', port: 0 }, logLevel: 'error' });
-await server.listen();
-const origin = server.resolvedUrls.local[0];
-const browser = await chromium.launch({ headless: true });
+const bundle = process.env.MODEL_ACCOUNT_BUNDLE && path.resolve(process.env.MODEL_ACCOUNT_BUNDLE);
+let server, origin, bundleIdentity;
+if (bundle) {
+  const index = await fs.readFile(path.join(bundle, 'index.html'), 'utf8');
+  const entry = index.match(/assets\/(index-[^" ]+\.js)/)?.[1];
+  assert.ok(entry, 'The production entry must be identifiable');
+  bundleIdentity = { bundle, entry, sha256: createHash('sha256').update(await fs.readFile(path.join(bundle, 'assets', entry))).digest('hex') };
+  server = http.createServer(async (request, response) => {
+    try {
+      const name = new URL(request.url, 'http://fixture').pathname;
+      const file = path.resolve(bundle, '.' + (name === '/' ? '/index.html' : name));
+      if (!file.startsWith(bundle + path.sep)) throw new Error('Invalid fixture asset');
+      const content = await fs.readFile(file);
+      response.writeHead(200, { 'content-type': ({ '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.json': 'application/json', '.svg': 'image/svg+xml' })[path.extname(file)] || 'application/octet-stream' });
+      response.end(content);
+    } catch { response.writeHead(404); response.end(); }
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  origin = 'http://127.0.0.1:' + server.address().port + '/';
+} else {
+  server = await createServer({ root, server: { host: '127.0.0.1', port: 0 }, logLevel: 'error' });
+  await server.listen(); origin = server.resolvedUrls.local[0];
+}
+const browser = await chromium.launch({ headless: true, args: ['--disable-background-networking'] });
 const results = [];
 const baseline = process.argv.includes('--baseline');
 async function navigate(page, name) {
@@ -25,9 +48,15 @@ async function check(name, work, view = '') {
   const page = await browser.newPage({ viewport: { width: 430, height: 900 }, deviceScaleFactor: 1, reducedMotion: 'reduce' });
   page.setDefaultTimeout(8000);
   try {
-    await page.goto(origin + 'tests/model-account-fixture.html' + (view ? '?view=' + view : ''));
+    if (bundle) {
+      await page.route('**/*', route => new URL(route.request().url()).origin === new URL(origin).origin ? route.continue() : route.abort());
+      await page.addInitScript(installModelAccountHost, view);
+    }
+    await page.goto(bundle ? origin : origin + 'tests/model-account-fixture.html' + (view ? '?view=' + view : ''));
     await page.waitForFunction(() => !!window.modelFixture, null, { timeout: 15000 });
+    if (bundle) await page.waitForFunction(() => document.documentElement.dataset.pocketUi === 'ready');
     await work(page);
+    if (bundle) assert.deepEqual(await page.evaluate(() => window.modelFixture.errors), []);
     results.push({ name, passed: true });
   } catch (error) { results.push({ name, passed: false, error: String(error.message) }); }
   finally { await page.screenshot({ path: path.join(output, name + '.png'), fullPage: true }); await page.close(); }
@@ -160,7 +189,7 @@ try {
       assert.deepEqual(args, { id: 'readable-a', sha256: 'sha-a' });
     });
   }
-} finally { await browser.close(); await server.close(); }
-await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ mode: baseline ? 'before' : 'after', identity: 'Mounted React production components with isolated host fixture; not Android or OAuth', results }, null, 2));
+} finally { await browser.close(); if (bundle) await new Promise(resolve => server.close(resolve)); else await server.close(); }
+await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ mode: baseline ? 'before' : 'after', identity: bundle ? 'Actual Vite production bundle and real Web bridge with synthetic native transport; not Android or OAuth' : 'Mounted React production components with isolated host fixture; not Android or OAuth', bundleIdentity, results }, null, 2));
 for (const result of results) process.stdout.write(`${result.passed ? 'PASS' : 'FAIL'} ${result.name}${result.error ? ': ' + result.error : ''}\n`);
 if (results.some(result => !result.passed)) process.exitCode = 1;

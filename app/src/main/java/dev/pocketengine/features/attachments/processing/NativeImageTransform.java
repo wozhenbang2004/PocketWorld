@@ -18,6 +18,12 @@ public final class NativeImageTransform {
         public JSONObject metadata()throws Exception{return plan.json();}
     }
     private NativeImageTransform(){}
+    /** Actual codec facts only; supplied bytes grant neither source access nor model delivery. */
+    public record EncodedImage(String mimeType,int width,int height) {}
+    public static EncodedImage inspectEncodedForHost(byte[] bytes,RunControl original)throws Exception{
+        if(bytes==null||bytes.length<1||bytes.length>2*1024*1024)throw new IllegalArgumentException("工程图片须为2MiB以内完整原件");
+        try(var budget=OriginalFileProcessingBudget.acquire(original)){original.check();String magic=dev.pocketengine.media.MediaTransport.imagePayload(bytes).mimeType;EncodedImage actual=encodedImage(bytes);original.check();if(!magic.equals(actual.mimeType()))throw new SecurityException("图片magic与真实解码格式不同");return actual;}
+    }
     public static JSONObject inspect(OwnerFilePreviewSource source,RunControl control)throws Exception{try(var budget=OriginalFileProcessingBudget.acquire(control)){byte[] bytes=source.bytes(control);try{int[] size=dimensions(bytes);source.requireCurrent(control);return new JSONObject().put("sourceIdentity",source.identity).put("sha256",source.sha256).put("width",size[0]).put("height",size[1]).put("editable",(long)size[0]*size[1]<=8_000_000L).put("coordinateSpace","oriented_original_pixels");}finally{java.util.Arrays.fill(bytes,(byte)0);}}}
     public static Review review(OwnerFilePreviewSource source,JSONObject options,RunControl control)throws Exception{
         try(var budget=OriginalFileProcessingBudget.acquire(control)){byte[] bytes=source.bytes(control);try{int[] actual=dimensions(bytes);source.requireCurrent(control);return new Review(source,new ImageTransformPlan(source.identity,source.sha256,actual[0],actual[1],options));}finally{java.util.Arrays.fill(bytes,(byte)0);}}
@@ -38,6 +44,9 @@ public final class NativeImageTransform {
         }finally{if(bytes!=null)java.util.Arrays.fill(bytes,(byte)0);if(crop!=null&&crop!=bitmap)crop.recycle();if(bitmap!=null)bitmap.recycle();if(output!=null)output.recycle();}
     }
     private static int[] dimensions(byte[] bytes)throws Exception{
-        AtomicReference<int[]> size=new AtomicReference<>();Bitmap thumbnail=ImageDecoder.decodeBitmap(ImageDecoder.createSource(ByteBuffer.wrap(bytes)),(decoder,info,input)->{if(info.isAnimated()||!java.util.Set.of("image/png","image/jpeg","image/webp").contains(info.getMimeType()))throw new IllegalArgumentException("此入口支持静态PNG/JPEG/WebP，动画和其他编码保留原件，不丢帧转换");int w=info.getSize().getWidth(),h=info.getSize().getHeight();if(w<1||h<1||w>65536||h>65536)throw new IllegalArgumentException("原图尺寸无效");size.set(new int[]{w,h});decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);decoder.setTargetSize(1,1);});try{return java.util.Objects.requireNonNull(size.get());}finally{thumbnail.recycle();}
+        EncodedImage image=encodedImage(bytes);return new int[]{image.width(),image.height()};
+    }
+    private static EncodedImage encodedImage(byte[] bytes)throws Exception{
+        AtomicReference<EncodedImage> size=new AtomicReference<>();Bitmap thumbnail=ImageDecoder.decodeBitmap(ImageDecoder.createSource(ByteBuffer.wrap(bytes)),(decoder,info,input)->{if(info.isAnimated()||!java.util.Set.of("image/png","image/jpeg","image/webp").contains(info.getMimeType()))throw new IllegalArgumentException("此入口支持静态PNG/JPEG/WebP，动画和其他编码保留原件，不丢帧转换");int w=info.getSize().getWidth(),h=info.getSize().getHeight();if(w<1||h<1||w>65536||h>65536)throw new IllegalArgumentException("原图尺寸无效");size.set(new EncodedImage(info.getMimeType(),w,h));decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);decoder.setTargetSize(1,1);});try{return java.util.Objects.requireNonNull(size.get());}finally{thumbnail.recycle();}
     }
 }

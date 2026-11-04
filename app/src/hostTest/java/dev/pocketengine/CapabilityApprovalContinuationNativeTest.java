@@ -2,6 +2,7 @@ package dev.pocketengine;
 
 import android.content.Intent;
 import android.os.Looper;
+import dev.pocketengine.core.ExecutionPlanning;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.FeatureHost;
 import dev.pocketengine.store.SettingsStore;
@@ -12,6 +13,8 @@ import java.util.List;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.After;
 import org.junit.Before;
@@ -64,6 +67,46 @@ public final class CapabilityApprovalContinuationNativeTest {
     }
     private JSONObject decide(JSONObject run,String approval)throws Exception{return app.dispatchOwnerAction("approveCapability",new JSONObject().put("taskId",run.getString("id")).put("approvalId",approval).put("approved",true));}
     private void waitForDecision(JSONObject run)throws Exception{app.tasks.endAttempt(run.getString("id"),run.getString("runId"),"awaiting_user","original decision pending",new JSONObject());}
+
+    private JSONObject pendingPlan()throws Exception{
+        String id=app.tasks.createCapabilityTask("Read the original project and review its plan","").getString("id");
+        app.tasks.initializeExecutionScope(id,8);
+        JSONObject entered=app.dispatchReviewedOwnerAction("enterTaskPlanning",new JSONObject().put("taskId",id).put("runId","").put("epoch",0).put("expectedScopeRevision",1),()->true);
+        assertFalse(entered.getBoolean("executionStarted"));assertTrue(queue.pending.isEmpty());
+        JSONObject attempt=app.tasks.startAttempt(id,"capabilities",8);RunControl original=new RunControl();original.bindHostRun(id,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"));
+        app.tasks.authorizeTools(id,attempt.getString("runId"),new JSONArray().put("memory_search"));app.tasks.status(id,"running","Original planning fixture");
+        ExecutionPlanning planning=app.tasks.journal(id,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"),original).planning();
+        JSONObject draft=new JSONObject().put("format","pocketworld.execution-plan.v1").put("goal","Review before modifying the original project").put("steps",new JSONArray().put(new JSONObject().put("id","inspect").put("title","Inspect original files").put("detail","Read only within the original task scope.")));
+        JSONObject pending=planning.submitPlan(planning.capture(),draft,"planning-continuation-fixture");planning.close();waitForDecision(attempt);return pending;
+    }
+    private JSONObject decidePlan(JSONObject pending,AtomicBoolean window)throws Exception{
+        return app.dispatchReviewedOwnerAction("approveCapability",new JSONObject().put("taskId",pending.getString("taskId")).put("approvalId",pending.getString("approvalId")).put("approved",true)
+            .put("runId",pending.getString("runId")).put("epoch",pending.getInt("epoch")).put("expectedScopeRevision",pending.getLong("scopeRevision"))
+            .put("planRevision",pending.getLong("planRevision")).put("planArtifactRef",pending.getString("planArtifactRef")).put("planHash",pending.getString("planHash")),window::get);
+    }
+
+    @Test public void closingThePlanWindowAfterSavingKeepsTheDecisionWithoutSchedulingExecution()throws Exception{
+        JSONObject pending=pendingPlan();String id=pending.getString("taskId");AtomicBoolean window=new AtomicBoolean(true);
+        PresentationBoundary.afterPush=()->window.set(false);
+        JSONObject receipt=decidePlan(pending,window);
+        assertTrue(receipt.getBoolean("approvalDecisionSaved"));assertFalse(receipt.getBoolean("continuedOriginalRun"));assertFalse(receipt.getBoolean("continuationScheduled"));
+        assertEquals("not_continued",receipt.getString("continuationState"));assertTrue(queue.pending.isEmpty());
+        JSONObject saved=app.tasks.get(id,false);assertEquals(pending.getString("runId"),saved.getString("runId"));assertEquals("executing",saved.getJSONObject("executionScope").getString("executionPhase"));
+        assertEquals(1,saved.getJSONObject("executionScope").getInt("toolsUsed"));assertEquals("approved",saved.getJSONArray("approvals").getJSONObject(0).getString("state"));
+        assertEquals(0,app.tasks.inferenceUsage(id).getJSONArray("receipts").length());assertFalse(app.tasks.hasUnresolved(id));
+        assertThrows(SecurityException.class,()->decidePlan(pending,window));assertTrue(queue.pending.isEmpty());
+    }
+
+    @Test public void aQueuedPlanDecisionCannotContinueAfterItsOriginalScopeChanges()throws Exception{
+        JSONObject pending=pendingPlan();String id=pending.getString("taskId");JSONObject receipt=decidePlan(pending,new AtomicBoolean(true));
+        assertTrue(receipt.getBoolean("approvalDecisionSaved"));assertTrue(receipt.getBoolean("continuationScheduled"));assertEquals(1,queue.pending.size());
+        JSONObject scope=app.tasks.get(id,false).getJSONObject("executionScope");app.tasks.configureExecutionScope(id,scope.getLong("revision"),0,scope.getInt("toolLimit"),scope.getInt("modelCallLimit"));
+        JSONObject before=app.tasks.get(id,false);queue.pickUp();shadowOf(Looper.getMainLooper()).idle();JSONObject after=app.tasks.get(id,false);
+        assertEquals(before.getString("runId"),after.getString("runId"));assertEquals(before.getInt("coordinatorEpoch"),after.getInt("coordinatorEpoch"));
+        assertEquals("planning",after.getJSONObject("executionScope").getString("executionPhase"));assertFalse(after.getJSONObject("executionScope").has("planApproval"));
+        assertEquals(1,after.getJSONObject("executionScope").getInt("toolsUsed"));assertEquals(1,after.getJSONArray("operations").length());assertEquals("plan_receipt",after.getJSONArray("operations").getJSONObject(0).getString("state"));
+        assertEquals(0,app.tasks.inferenceUsage(id).getJSONArray("receipts").length());assertTrue(queue.pending.isEmpty());assertFalse(app.tasks.hasUnresolved(id));
+    }
 
     @Test public void reviewedDecisionKeepsTheEpochFenceThroughQueuedContinuation()throws Exception{
         JSONObject original=start(false);String id=original.getString("id"),approval=pending(original);waitForDecision(original);

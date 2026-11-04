@@ -138,7 +138,20 @@ test('verified-copy completion reports only new-identity conversation text and n
   view.maintenance!.result = { mode: 'verified_copy', executionEnabled: false, restoration: view.maintenance!.review!.restoration };
   assert.match(repairOutcome(view)!, /3 段对话、18 条文字消息/);
   assert.match(repairOutcome(view)!, /原任务历史、附件原件和执行授权未恢复/);
+  view.maintenance!.result!.restoration!.messageCount = 0;
+  assert.match(repairOutcome(view)!, /未恢复文字消息/);
   view.maintenance!.result!.restoration = undefined;
   assert.match(repairOutcome(view)!, /恢复范围尚无法完整核对/);
   assert.doesNotMatch(repairOutcome(view)!, /空库/);
+});
+
+test('retry of a preserved original database needs both native gates and its exact file-set identity', () => {
+  const view = original(); view.maintenance!.phase = 'preserved'; view.retryAvailable = true; view.maintenance!.originalRetryAvailable = true;
+  assert.deepEqual(bootstrapRetryPayload(view, 'original-request'), { expectedGeneration: 3, requestId: 'original-request', repairId: 'original-repair', sourceFingerprint: 'original-db', backupFingerprint: 'verified-backup' });
+  view.maintenance!.originalRetryAvailable = false;
+  assert.throws(() => bootstrapRetryPayload(view, 'request'));
+  view.maintenance!.originalRetryAvailable = true; view.retryAvailable = false;
+  assert.throws(() => bootstrapRetryPayload(view, 'request'));
+  view.retryAvailable = true; view.maintenance!.originalRetryAvailable = false; view.maintenance!.phase = 'completed';
+  assert.deepEqual(bootstrapRetryPayload(view, 'new-request'), { expectedGeneration: 3, requestId: 'new-request' }, 'completed empty/copy cutover retains its normal explicit startup route');
 });

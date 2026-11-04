@@ -85,7 +85,13 @@ public final class ProjectManagedRunnerJourneyTest {
     private void file(String path,String content)throws Exception {workspace.handle("write",new JSONObject().put("projectId",project).put("path",path).put("expectedVersion",0).put("content",content));}
     private void selectedProject(String title)throws Exception {project=workspace.handle("create",new JSONObject().put("name",title)).getString("id");}
     private Path active(){return android.getFilesDir().toPath().resolve("local-development/checkouts/"+checkout+"/files");}
-    private void startTask(String goal)throws Exception {checkout=local.handle("prepare",new JSONObject().put("projectId",project)).getString("id");taskId=tasks.createCapabilityTask(goal,"").getString("id");}
+    private void startTask(String goal)throws Exception {startTask(goal,"");}
+    /** A real private conversation for package/source fixtures; legacy no-conversation journeys stay unchanged. */
+    private void startTask(String goal,String conversation)throws Exception {
+        checkout=local.handle("prepare",new JSONObject().put("projectId",project)).getString("id");
+        if(!conversation.isEmpty())tasks.conversationRepository().transaction(()->{tasks.conversationRepository().saveConversation(new JSONObject().put("conversationId",conversation).put("title","Original package source fixture").put("messages",new JSONArray()));return null;});
+        taskId=tasks.createCapabilityTask(goal,conversation).getString("id");if(!conversation.isEmpty())tasks.initializeExecutionScope(taskId,120);
+    }
     private void runWithOwnerApprovals(FixtureModel model)throws Exception {
         for(int attempt=0;attempt<16;attempt++){
             JSONObject task=tasks.startAttempt(taskId,"capabilities",120);String run=task.getString("runId");int epoch=task.getInt("coordinatorEpoch");runs.add(run);RunControl original=new RunControl();original.bindHostRun(taskId,run,epoch);live.set(original);

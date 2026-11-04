@@ -28,6 +28,35 @@ public final class TeamMemberModelsTest {
         var member=new JSONObject().put("id","a").put("model","misleading-legacy-name").put("modelTarget",ref.toJson());var selected=TeamMemberModels.capture(member,captured(),nativeCapture);
         assertEquals(1,calls.get());assertEquals("native-A",selected.config.forPurpose("MEMBER").model);assertEquals(1,selected.config.forPurpose("MEMBER").routePlan.maxAttempts);assertEquals(0,selected.config.forPurpose("MEMBER").routePlan.maxRouteSwitches);assertEquals("independent-summary",selected.config.forPurpose("SUMMARY").model);
     }
+    private static ModelConfig group(int attempts,int switches,String exclusion){
+        return api("native-A").withRoutePlan(new ModelRoutePlan("reviewed-group",7,"MEMBER","APP_OWNER",List.of(new ModelRoutePlan.Candidate("A",api("native-A"),""),new ModelRoutePlan.Candidate("B",api("native-B"),exclusion)),attempts,switches));
+    }
+    private static ModelConfig api(String name){return config(name).withApiConnection(new ModelBinding("connection-"+name,"openai",ModelBinding.Protocol.OPENAI_CHAT,ModelBinding.Format.OPENAI,java.net.URI.create("http://127.0.0.1/v1/models"),"credential-"+name,1,"installation",1,false));}
+    private static JSONObject groupMember()throws Exception{return new JSONObject().put("id","a").put("identityRevision",1).put("modelTarget",ModelTargetRef.group("reviewed-group",7).toJson());}
+    @Test public void newNativeGroupPermitsOnlyOneSwitchAndKeepsSummarySingle()throws Exception {
+        var member=groupMember();var selected=TeamMemberModels.capture(member,captured(),(target,purpose,global)->group(3,1,""));
+        assertEquals(2,selected.config.routePlan.maxAttempts);assertEquals(1,selected.config.routePlan.maxRouteSwitches);assertEquals(2,selected.config.routePlan.candidates.size());
+        assertEquals(1,selected.config.forPurpose("SUMMARY").routePlan.maxAttempts);assertEquals(0,selected.config.forPurpose("SUMMARY").routePlan.maxRouteSwitches);
+        member.put("memberModelSelection",selected.publicIdentity());TeamMemberModels.requireSame(TeamMemberModels.capture(new JSONObject(member.toString()),captured(),(target,purpose,global)->group(3,1,"")),selected.publicIdentity());
+        assertFalse(selected.publicIdentity().toString().contains("never-persist"));
+    }
+    @Test public void lowerOriginalPolicyOrExcludedSecondCandidateCannotGainFallback()throws Exception {
+        for(ModelConfig source:List.of(group(1,1,""),group(3,0,""),group(3,1,"purpose_not_allowed"))){
+            var selected=TeamMemberModels.capture(groupMember(),captured(),(target,purpose,global)->source);
+            assertEquals(1,selected.config.routePlan.maxAttempts);assertEquals(0,selected.config.routePlan.maxRouteSwitches);
+        }
+        var unbound=config("unbound").withRoutePlan(new ModelRoutePlan("unbound-group",1,"MEMBER","APP_OWNER",List.of(new ModelRoutePlan.Candidate("A",api("native-A"),""),new ModelRoutePlan.Candidate("B",config("no-native-binding"),"")),3,1));
+        assertEquals(1,TeamMemberModels.capture(groupMember(),captured(),(target,purpose,global)->unbound).config.routePlan.maxAttempts);
+    }
+    @Test public void oldSingleAttemptPinIsNotUpgradedEvenWhenItsOriginalGroupAllowedThree()throws Exception {
+        var member=groupMember();var current=TeamMemberModels.capture(member,captured(),(target,purpose,global)->group(3,1,""));
+        // This is the persisted v1 pin produced before research fallback existed:
+        // identical native candidate/options identity, but the former cap1 policy.
+        JSONObject old=current.publicIdentity();old.getJSONObject("memberRoute").put("maxAttempts",1).put("maxRouteSwitches",0);member.put("memberModelSelection",old);
+        var cold=TeamMemberModels.capture(new JSONObject(member.toString()),captured(),(target,purpose,global)->group(3,1,""));
+        assertEquals(1,cold.config.routePlan.maxAttempts);assertEquals(0,cold.config.routePlan.maxRouteSwitches);TeamMemberModels.requireSame(cold,old);
+        assertThrows(SecurityException.class,()->TeamMemberModels.capture(member,captured(),(target,purpose,global)->group(3,1,"revoked")));
+    }
     @Test public void coldSnapshotIgnoresRandomSnapshotIdButRejectsChangedOriginalOptions()throws Exception {
         var member=new JSONObject().put("id","a").put("identityRevision",2).put("model","member-A");var first=TeamMemberModels.capture(member,captured(),null);member.put("memberModelSelection",first.publicIdentity());var cold=TeamMemberModels.capture(member,captured(),null);TeamMemberModels.requireSame(cold,first.publicIdentity());
         member.put("model","other-A");assertThrows(SecurityException.class,()->TeamMemberModels.capture(member,captured(),null));

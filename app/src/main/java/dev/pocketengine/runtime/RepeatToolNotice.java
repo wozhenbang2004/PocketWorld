@@ -67,7 +67,7 @@ public final class RepeatToolNotice {
         round.put("processed",round.getInt("processed")+1);changed();
         String code=failureCode(receipt),status=receipt.optString("status").toLowerCase(Locale.ROOT);
         if(code.contains("unknown")||code.contains("timeout")||code.contains("running")
-                ||status.equals("unknown")||status.equals("running")||receipt.optBoolean("requiresReconciliation")||receipt.optBoolean("requiresPause")
+                ||Set.of("unknown","running","pending","queued").contains(status)||receipt.optBoolean("requiresReconciliation")||receipt.optBoolean("requiresPause")
                 ||"reconcile".equals(receipt.optString("nextObservationAction"))||receipt.has("accepted")&&receipt.isNull("accepted")){
             round.put("allFailed",false);return;
         }
@@ -82,12 +82,20 @@ public final class RepeatToolNotice {
             String result=readEvidence(receipt,source);
             if(result.isEmpty())return;
             String fingerprint=ScopedToolCatalog.fingerprint(new JSONObject().put("call",call).put("result",result));
-            boolean seen=false;for(int i=recentFingerprints.length()-1;i>=0;i--){JSONObject prior=recentFingerprints.getJSONObject(i);
-                if("read_result".equals(prior.getString("category"))&&fingerprint.equals(prior.getString("fingerprint"))){seen=true;break;}}
+            boolean seen=false,modernBaseline=false,legacyObserved=false;
+            for(int i=recentFingerprints.length()-1;i>=0;i--){JSONObject prior=recentFingerprints.getJSONObject(i);
+                if("read_result".equals(prior.getString("category"))){
+                    if(call.equals(prior.getString("call"))&&source.equals(prior.getString("source")))modernBaseline=true;
+                    if(fingerprint.equals(prior.getString("fingerprint"))){seen=true;break;}
+                }else if("observed_result".equals(prior.getString("category"))&&call.equals(prior.getString("call"))&&source.equals(prior.getString("source")))legacyObserved=true;
+            }
+            // Published wait checkpoints did not retain a content digest. The first modern
+            // observation establishes that baseline without renewing the old failure allowance.
+            if(legacyObserved&&!modernBaseline)seen=true;
             if(!seen)clearChain();
             remember(tool,call,source,fingerprint,"read_result");return;
         }
-        if(observationWait(tool)||!Boolean.FALSE.equals(receipt.opt("ok"))||(!nativeReadOnly&&!nativeNotDispatched)||code.isEmpty()){
+        if(observationWait(tool)&&!nativeNotDispatched||!Boolean.FALSE.equals(receipt.opt("ok"))||(!nativeReadOnly&&!nativeNotDispatched)||code.isEmpty()){
             round.put("allFailed",false);return;
         }
         // A previously unseen source version is new evidence. Returning to an already

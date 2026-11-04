@@ -57,6 +57,12 @@ public final class SemanticCapabilityPort implements CapabilityPort {
     private boolean own(String name) { return DISCOVER.equals(name)||DISPATCH.equals(name)&&dispatchEnabled; }
     @Override public boolean supports(String name) { return own(name)||existing!=null&&existing.supports(name); }
     @Override public boolean sideEffecting(String name) { return own(name)?DISPATCH.equals(name):existing==null||existing.sideEffecting(name); }
+    @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception {
+        if(!own(name))return existing==null?dev.pocketengine.core.ExecutionPlanning.Access.DENY:existing.planningAccess(name,arguments);
+        if(!DISCOVER.equals(name))return dev.pocketengine.core.ExecutionPlanning.Access.DENY;
+        if(arguments!=null){JSONObject checked=new JSONObject(arguments.toString());checked.remove("_hostOperationId");validate(name,checked);}
+        return dev.pocketengine.core.ExecutionPlanning.Access.READ;
+    }
     private JSONArray ownTools() throws Exception {
         JSONArray out=new JSONArray().put(definition(DISCOVER,"发现真实可处理入口的App。web需要url；app_link需要准确packageName和HTTPS url，仍核OS App Links或浏览器处理资格，不接受自定义scheme；share_text需要packageName/text，仅传有界纯文本给选定App，接收方可能立即处理，启动不是已发送。两者都需原逐次审批并在一次启动后交主人核验。show_alarms打开闹钟列表；map_search需要query；dial需要number；email_draft需要to；calendar_draft需要title/start/end/timeZone，start/end为UTC毫秒，可含location/description；alarm需要24小时hour和minutes；timer需要seconds（1–86400），可含单行message。闹钟使用实际设备时区，不接受任意Intent/extra。发现不执行；空候选不代表App未安装。",SemanticRequest.discoverySchema()));
         if(dispatchEnabled)out.put(definition(DISPATCH,"请求打开本执行刚发现的固定App入口；需要原TaskStore具体参数审批与原operation。回执仅代表Android接受启动，随后需核验。拨号、邮件和日历交给用户完成；日历不代点保存。闹钟/计时请求可能立即生效，SKIP_UI=false不保证另有确认；仅在同意固定参数后派发一次，主人须核对实际结果，未知不重发。",dispatchSchema()));

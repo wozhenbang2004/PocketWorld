@@ -43,6 +43,8 @@ public final class ModelCapabilityAdapters implements CapabilityPort {
             this.projectId=projectId==null?"":projectId;if(!this.projectId.isEmpty())CapabilityDescriptor.uuid(this.projectId);
             if(!control.hasHostRun()||!control.matchesHostRun(taskId,runId,epoch))throw new SecurityException("必须提供原任务的live RunControl");
         }
+        /** Original native identity only; obtaining it does not grant a tool or operation. */
+        public RunControl originalControl(){return control;}
         void check(RunControl supplied)throws Exception {
             if(supplied!=control||!control.matchesHostRun(taskId,runId,epoch))throw new SecurityException("不能替换宿主执行控制");
             control.check();if(control.isPaused())throw new SecurityException("任务已暂停，不能派发新能力调用");
@@ -129,6 +131,15 @@ public final class ModelCapabilityAdapters implements CapabilityPort {
     @Override public JSONObject contextSnapshot(String query)throws Exception {return existing==null?new JSONObject():existing.contextSnapshot(query);}
     @Override public boolean supports(String name){return routes.containsKey(name)||existing!=null&&existing.supports(name);}
     @Override public boolean sideEffecting(String name){CapabilityDescriptor route=routes.get(name);return route==null?existing==null||existing.sideEffecting(name):route.journalRequired;}
+    @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception {
+        CapabilityDescriptor route=routes.get(name);if(route==null)return existing==null?dev.pocketengine.core.ExecutionPlanning.Access.DENY:existing.planningAccess(name,arguments);
+        boolean read=route.feature.equals("ssh")&&Set.of("listFiles","readFile").contains(route.command)
+                ||route.feature.equals("browser")&&route.command.equals("observe")
+                ||route.name.equals("attachments_read_document");
+        if(!read)return dev.pocketengine.core.ExecutionPlanning.Access.DENY;
+        if(arguments!=null){JSONObject checked=new JSONObject(arguments.toString());checked.remove("_hostOperationId");route.normalize(checked);checkResource(route);}
+        return dev.pocketengine.core.ExecutionPlanning.Access.READ;
+    }
     @Override public void validate(String name,JSONObject args)throws Exception {CapabilityDescriptor route=routes.get(name);if(route==null){if(existing==null)throw new SecurityException("工具未挂载");existing.validate(name,args);}else route.normalize(args);}
 
     @Override public JSONObject execute(String name,JSONObject input,RunControl control)throws Exception {

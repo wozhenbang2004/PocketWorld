@@ -95,6 +95,60 @@ public final class LocalModule implements EngineModule {
         return dev.pocketengine.store.TaskStore.capabilityFingerprint(captured.getJSONObject("target")).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(projectRuntimeForHost(id)));
     }
     public synchronized JSONObject projectCheckoutForHost(String checkoutId)throws Exception {if(closed)throw new IllegalStateException("项目执行器已关闭");return new JSONObject(checkout(checkoutId).toString());}
+    @FunctionalInterface private interface ProjectImageBytes {byte[] read()throws Exception;}
+    /** The original capability host checks its SQL grant against these actual catalog facts.
+     * This callback is never invoked under the Local, Workspace or AttachmentBook monitor. */
+    @FunctionalInterface public interface ProjectImageAdmission {void check(String kind,JSONObject nativeSource)throws Exception;}
+    public static final class ProjectImageSource implements AutoCloseable {
+        private final LocalModule issuer;private final RunControl original;private final ProjectImageBytes reader;private byte[] pixels;
+        public final String projectId,checkoutId,path,artifactId,sourceKind,sourceIdentity,sha256,mimeType;
+        public final long sizeBytes,capturedAt;public final int width,height;
+        private ProjectImageSource(LocalModule issuer,RunControl original,ProjectImageBytes reader,JSONObject source,byte[] bytes,String expectedSha,String declaredMime)throws Exception{
+            this.issuer=issuer;this.original=original;this.reader=reader;projectId=source.getString("projectId");checkoutId=source.getString("checkoutId");path=source.getString("path");artifactId=source.optString("artifactId");sourceKind=source.getString("sourceKind");sourceIdentity=ProjectSources.digest(source);sha256=expectedSha;sizeBytes=bytes.length;capturedAt=System.currentTimeMillis();
+            if(sizeBytes<1||sizeBytes>ProjectSources.MAX_FILE_BYTES||!sha256.equals(ProjectSources.sha256(bytes)))throw new SecurityException("工程图片实际字节与所选SHA不同");
+            var actual=dev.pocketengine.features.attachments.processing.NativeImageTransform.inspectEncodedForHost(bytes,original);mimeType=actual.mimeType();width=actual.width();height=actual.height();
+            String lower=path.toLowerCase(java.util.Locale.ROOT),extension=lower.endsWith(".png")?"image/png":lower.endsWith(".jpg")||lower.endsWith(".jpeg")?"image/jpeg":lower.endsWith(".webp")?"image/webp":"";
+            if(!mimeType.equals(extension)||declaredMime!=null&&!mimeType.equals(declaredMime))throw new SecurityException("工程图片扩展、原MIME与实际编码不一致");pixels=bytes;requireCurrent(original);
+        }
+        public void requireCurrent(RunControl actual)throws Exception{
+            if(actual!=original||issuer.closed||actual.isPaused())throw new SecurityException("原工程图片来源或控制已失效");actual.check();byte[] now=reader.read();try{if(now.length!=sizeBytes||!sha256.equals(ProjectSources.sha256(now)))throw new SecurityException("原工程图片SHA已变化，未发送旧图");}finally{Arrays.fill(now,(byte)0);}actual.check();if(issuer.closed||actual.isPaused())throw new SecurityException("原工程图片来源已关闭或暂停");
+        }
+        public byte[] bytes(RunControl actual)throws Exception{requireCurrent(actual);synchronized(this){if(pixels==null)throw new IllegalStateException("原工程图片字节已释放");return pixels.clone();}}
+        /** Erases this read buffer; the live source predicate remains usable by its native request pin. */
+        @Override public synchronized void close(){if(pixels!=null){Arrays.fill(pixels,(byte)0);pixels=null;}}
+    }
+    private static void imageSha(String sha){if(sha==null||!sha.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("工程图片需要准确SHA-256");}
+    private static JSONObject imageCheckoutIdentity(JSONObject row)throws Exception{JSONObject identity=new JSONObject();for(String key:new String[]{"id","projectId","createdAt","isolatedGit"})if(row.has(key))identity.put(key,row.get(key));return identity;}
+    /** Actual original checkout bytes only. No model path, URI, output body or replacement checkout is installed. */
+    public ProjectImageSource projectFileImageForHost(String checkoutId,String projectId,String relative,String expectedSha,RunControl original)throws Exception{
+        imageSha(expectedSha);original.requireExecution();String path=VersionedWorkspace.path(relative);JSONObject row=projectCheckoutForHost(checkoutId);if(!projectId.equals(row.getString("projectId")))throw new SecurityException("图片不是原选定项目");String identity=ProjectSources.digest(imageCheckoutIdentity(row));
+        ProjectImageBytes read=()->{
+            original.check();if(closed||original.isPaused()||!identity.equals(ProjectSources.digest(imageCheckoutIdentity(projectCheckoutForHost(checkoutId)))))throw new SecurityException("原图片工作副本已变化");File directory; synchronized(this){directory=content(checkoutId);}
+            var target=NativeCommandExecutor.within(directory,path).toPath();var attrs=Files.readAttributes(target,java.nio.file.attribute.BasicFileAttributes.class,java.nio.file.LinkOption.NOFOLLOW_LINKS);Object links=Files.getAttribute(target,"unix:nlink",java.nio.file.LinkOption.NOFOLLOW_LINKS);if(!(links instanceof Number)||((Number)links).longValue()!=1)throw new SecurityException("图片文件不是原副本的独立普通文件");byte[] bytes=ProjectFileBytes.read(target,attrs,ProjectSources.MAX_FILE_BYTES);
+            try{NativeCommandExecutor.within(directory,path);Object afterLinks=Files.getAttribute(target,"unix:nlink",java.nio.file.LinkOption.NOFOLLOW_LINKS);original.check();if(!(afterLinks instanceof Number)||((Number)afterLinks).longValue()!=1||closed||original.isPaused()||!identity.equals(ProjectSources.digest(imageCheckoutIdentity(projectCheckoutForHost(checkoutId))))||!expectedSha.equals(ProjectSources.sha256(bytes)))throw new SecurityException("读取期间原工程图片版本改变");return bytes;}catch(Exception invalid){Arrays.fill(bytes,(byte)0);throw invalid;}
+        };
+        JSONObject source=new JSONObject().put("sourceKind","checkout_file").put("projectId",projectId).put("checkoutId",checkoutId).put("path",path).put("checkoutIdentity",identity).put("sha256",expectedSha);byte[] bytes=read.read();
+        try{return new ProjectImageSource(this,original,read,source,bytes,expectedSha,null);}catch(Exception invalid){Arrays.fill(bytes,(byte)0);throw invalid;}
+    }
+    /** Resolve one exact original catalog. A bad/stale entry never falls through to another source. */
+    public ProjectImageSource projectArtifactImageForHost(String checkoutId,String projectId,String artifactId,String expectedSha,RunControl original,ProjectImageAdmission admission)throws Exception{
+        imageSha(expectedSha);dev.pocketengine.features.local.project.ProjectBuildPlan.identity(artifactId);original.requireExecution();original.check();java.util.Objects.requireNonNull(admission);if(closed)throw new SecurityException("原项目模块已关闭");var workspace=packageWorkspace();
+        JSONArray catalog=workspace.handle("listArtifacts",new JSONObject()).getJSONArray("artifacts");boolean workspaceEntry=false;for(int i=0;i<catalog.length();i++)if(artifactId.equals(catalog.getJSONObject(i).optString("id")))workspaceEntry=true;
+        final ProjectImageBytes read;final JSONObject source;final String declaredMime;
+        if(workspaceEntry){
+            var selected=workspace.fileArtifactForHost(artifactId,expectedSha);if(selected.tombstone||!projectId.equals(selected.projectId))throw new SecurityException("图片成果不属于原选定项目");JSONObject actual=selected.json();String identity=ProjectSources.digest(actual);declaredMime=selected.mimeType;
+            source=new JSONObject().put("sourceKind","workspace_artifact").put("projectId",projectId).put("checkoutId",checkoutId).put("path",selected.path).put("artifactId",artifactId).put("catalog",actual);
+            read=()->{original.check();workspace.projectIdentityForHost(projectId);JSONObject current=workspace.fileArtifactForHost(artifactId,expectedSha).json();if(closed||!identity.equals(ProjectSources.digest(current)))throw new SecurityException("原固定图片成果身份已变化");admission.check("workspace_artifact",current);byte[] bytes=workspace.fileArtifactBytesForHost(selected);try{JSONObject after=workspace.fileArtifactForHost(artifactId,expectedSha).json();if(closed||!identity.equals(ProjectSources.digest(after)))throw new SecurityException("原固定图片读取期间身份改变");admission.check("workspace_artifact",after);original.check();return bytes;}catch(Exception invalid){Arrays.fill(bytes,(byte)0);throw invalid;}};
+        }else{
+            var book=dev.pocketengine.features.attachments.AttachmentRepository.get(context.android).book;JSONObject actual=book.get(artifactId),origin=actual.getJSONObject("source");requireManagedImage(actual,projectId,checkoutId,expectedSha);String identity=ProjectSources.digest(actual);declaredMime=actual.getString("mimeType");
+            source=new JSONObject().put("sourceKind","managed_build_output").put("projectId",projectId).put("checkoutId",checkoutId).put("path",origin.getString("path")).put("artifactId",artifactId).put("catalog",actual);
+            read=()->{original.check();JSONObject current=book.get(artifactId);requireManagedImage(current,projectId,checkoutId,expectedSha);if(closed||!identity.equals(ProjectSources.digest(current)))throw new SecurityException("原生成图片成果已变化");admission.check("managed_build_output",current);JSONObject nativeSource=current.getJSONObject("source");JSONObject published=book.findNativeResult(nativeSource.getString("operationId"),dev.pocketengine.features.local.project.ProjectManagedOutput.ROLE,nativeSource.getString("taskId"),nativeSource.getString("runId"),nativeSource.getString("artifactPlanDigest"),original);if(!published.optBoolean("found")||!artifactId.equals(published.optString("id"))||!expectedSha.equals(published.optString("sha256")))throw new SecurityException("图片不属于原固定发布动作");byte[] bytes=book.readVerifiedSnapshot(artifactId,expectedSha,original);try{JSONObject after=book.get(artifactId);requireManagedImage(after,projectId,checkoutId,expectedSha);if(!identity.equals(ProjectSources.digest(after)))throw new SecurityException("原生成图片读取期间身份改变");admission.check("managed_build_output",after);original.check();return bytes;}catch(Exception invalid){Arrays.fill(bytes,(byte)0);throw invalid;}};
+        }
+        byte[] bytes=read.read();try{return new ProjectImageSource(this,original,read,source,bytes,expectedSha,declaredMime);}catch(Exception invalid){Arrays.fill(bytes,(byte)0);throw invalid;}
+    }
+    private static void requireManagedImage(JSONObject actual,String project,String checkout,String sha)throws Exception{
+        JSONObject source=actual.getJSONObject("source");if(!"owner".equals(actual.optString("principalId"))||!"private".equals(actual.optString("spaceId"))||actual.optBoolean("outputSourceRetired")||!sha.equals(actual.optString("sha256"))||actual.getLong("size")<1||actual.getLong("size")>ProjectSources.MAX_FILE_BYTES||!dev.pocketengine.features.local.project.ProjectManagedOutput.ROLE.equals(source.optString("kind"))||!project.equals(source.optString("projectId"))||!checkout.equals(source.optString("checkoutId")))throw new SecurityException("此成果不是原项目未撤回的私人生成图片");
+    }
     /** Native complete-copy values. A checkout is version isolation, never an OS command sandbox. */
     public static final class TeamProjectSource {
         private final LocalModule issuer;private final dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen;private final String value,checkout;
@@ -172,6 +226,71 @@ public final class LocalModule implements EngineModule {
         for(ProjectRuntime selected:runtimes.values())if(selected instanceof ManagedProjectRuntime)((ManagedProjectRuntime)selected).requireCheckoutWritable(checkout);
     }
     public synchronized dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified projectPreviewForOwner(String previewId,String checkoutId){var preview=previews.get(previewId);if(closed||preview==null||!checkoutId.equals(preview.checkoutId))throw new IllegalStateException("此预览资源已释放，请重新核对当前项目");return preview;}
+    /** The original active checkout is re-read; a cached bundle alone is not current source proof. */
+    public synchronized void requireProjectPreviewCurrent(dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified preview)throws Exception {
+        if(preview==null||closed||previews.get(preview.identity)!=preview||preview.artifactId!=null)throw new SecurityException("原活动项目预览已释放或不是当前工作副本");
+        JSONObject source=ProjectSources.describe(export(preview.checkoutId));
+        if(!preview.checkoutId.equals(source.getString("checkoutId"))||!preview.projectId.equals(source.getString("projectId"))||!preview.sourceDigest.equals(source.getString("sourceDigest")))throw new SecurityException("原预览源码已变化，请重新生成并明确选择");
+        if(closed||previews.get(preview.identity)!=preview)throw new SecurityException("原项目预览已释放");
+    }
+    /** Native owner inspection of an original SQL package receipt. Never creates a project or checkout. */
+    public synchronized JSONObject inspectProjectPackagePreviewForOwner(JSONObject nativeEvidence)throws Exception {
+        requirePackagePreviewOwner(nativeEvidence);
+        JSONObject actual=packageWorkspace().projectPackageMetadata(nativeEvidence.getString("artifactId"),nativeEvidence.getString("artifactSha256"));
+        dev.pocketengine.features.local.project.ProjectPackageDelivery.requireArtifact(nativeEvidence,actual);
+        JSONObject manifest=actual.getJSONObject("manifest");JSONArray files=manifest.getJSONArray("files"),choices=new JSONArray();String mode=manifest.getString("mode");
+        for(int i=0;i<files.length();i++){
+            JSONObject file=files.getJSONObject(i);String path=file.getString("path");
+            if("text".equals(file.getString("kind"))&&"text/html".equals(file.getString("mimeType"))&&(!"web_output".equals(mode)||path.equals(manifest.getString("entryPath"))))choices.put(path);
+        }
+        if("web_output".equals(mode)&&choices.length()!=1)throw new SecurityException("原网页成果声明的HTML入口不可核对");
+        requirePackagePreviewOwner(nativeEvidence);
+        return new JSONObject().put("kind","package_preview_choices").put("taskId",nativeEvidence.getString("taskId"))
+            .put("operationId",nativeEvidence.getString("packageOperationId")).put("conversationId",nativeEvidence.getString("conversationId"))
+            .put("projectId",nativeEvidence.getString("projectId")).put("checkoutId",nativeEvidence.getString("checkoutId"))
+            .put("sourceDigest",nativeEvidence.getString("sourceDigest")).put("artifactId",nativeEvidence.getString("artifactId"))
+            .put("artifactSha256",nativeEvidence.getString("artifactSha256")).put("mode",mode)
+            .put("entryPath","web_output".equals(mode)?manifest.getString("entryPath"):"").put("entryChoices",choices);
+    }
+    /** Opens only the explicitly selected member of the same verified immutable package. */
+    public synchronized dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified openProjectPackagePreviewForOwner(JSONObject nativeEvidence,String entryPath)throws Exception {
+        dev.pocketengine.features.workspace.VersionedWorkspace.path(entryPath);
+        JSONArray choices=inspectProjectPackagePreviewForOwner(nativeEvidence).getJSONArray("entryChoices");boolean found=false;
+        for(int i=0;i<choices.length();i++)if(entryPath.equals(choices.getString(i)))found=true;
+        if(!found)throw new SecurityException("请选择这份原固定项目包的实际HTML入口，未猜测或替换文件");
+        JSONObject metadata=previewProjectPackage(new JSONObject().put("artifactId",nativeEvidence.getString("artifactId")).put("sha256",nativeEvidence.getString("artifactSha256")).put("entryPath",entryPath));
+        requirePackagePreviewOwner(nativeEvidence);
+        return projectPreviewForOwner(metadata.getString("previewId"),nativeEvidence.getString("checkoutId"));
+    }
+    /** Source-edit references require both the original archive and the actual original checkout. */
+    public synchronized void requireProjectPackagePreviewCurrent(dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified preview,JSONObject nativeEvidence)throws Exception {
+        if(preview==null||closed||previews.get(preview.identity)!=preview||preview.artifactId==null)throw new SecurityException("原固定项目包预览已释放");
+        requirePackagePreviewOwner(nativeEvidence);
+        if(!preview.artifactId.equals(nativeEvidence.getString("artifactId"))||!preview.artifactSha256.equals(nativeEvidence.getString("artifactSha256"))
+            ||!preview.projectId.equals(nativeEvidence.getString("projectId"))||!preview.checkoutId.equals(nativeEvidence.getString("checkoutId"))||!preview.sourceDigest.equals(nativeEvidence.getString("sourceDigest")))throw new SecurityException("预览不是这次原操作保存的固定项目包");
+        JSONObject before=ProjectSources.describe(export(preview.checkoutId));requirePackagePreviewSource(preview,before);
+        JSONObject actual=packageWorkspace().projectPackageMetadata(preview.artifactId,preview.artifactSha256);
+        dev.pocketengine.features.local.project.ProjectPackageDelivery.requireArtifact(nativeEvidence,actual);
+        var frozen=packageWorkspace().projectPackage(preview.artifactId,preview.artifactSha256);
+        var rebuilt=dev.pocketengine.features.local.preview.ProjectPreviewBundle.fromProjectPackage(frozen,preview.artifactId,preview.artifactSha256,preview.entryPath);
+        if(!preview.identity.equals(rebuilt.identity))throw new SecurityException("原固定项目包的预览资源已变化，未替换为其他字节");
+        requirePackagePreviewSource(preview,ProjectSources.describe(export(preview.checkoutId)));requirePackagePreviewOwner(nativeEvidence);
+        if(closed||previews.get(preview.identity)!=preview)throw new SecurityException("原固定项目包预览已释放");
+    }
+    private void requirePackagePreviewOwner(JSONObject nativeEvidence)throws Exception {
+        if(closed||nativeEvidence==null||!"fixed_workspace_project_artifact".equals(nativeEvidence.optString("sourceKind"))
+            ||!nativeEvidence.getString("packageOperationId").equals(nativeEvidence.getString("operationId"))
+            ||!nativeEvidence.getString("artifactId").equals(nativeEvidence.getJSONObject("packageArtifact").getString("id"))
+            ||!nativeEvidence.getString("artifactSha256").equals(nativeEvidence.getString("archiveSha256")))throw new SecurityException("缺少原任务的固定项目包来源");
+        JSONObject selected=checkout(nativeEvidence.getString("checkoutId"));
+        if(!nativeEvidence.getString("projectId").equals(selected.getString("projectId"))||selected.has("teamProjectCopy"))throw new SecurityException("原固定包的私人项目副本已不可用");
+        JSONArray existing=projects.snapshot().getJSONArray("projects");boolean found=false;
+        for(int i=0;i<existing.length();i++)if(nativeEvidence.getString("projectId").equals(existing.getJSONObject(i).getString("id")))found=true;
+        if(!found)throw new SecurityException("原私人项目已不存在，没有自动创建项目或副本");
+    }
+    private static void requirePackagePreviewSource(dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified preview,JSONObject source)throws Exception {
+        if(!preview.checkoutId.equals(source.getString("checkoutId"))||!preview.projectId.equals(source.getString("projectId"))||!preview.sourceDigest.equals(source.getString("sourceDigest")))throw new SecurityException("当前源码与原固定包不同；仍可查看历史页面，不能把旧元素作为当前源码引用");
+    }
     private JSONObject preview(JSONObject input)throws Exception {
         String checkoutId=JsonFiles.text(input,"checkoutId",80);JSONObject source=ProjectSources.describe(export(checkoutId));if(!source.getString("sourceDigest").equals(input.getString("expectedSourceDigest")))throw new SecurityException("预览所选源码已变化，请重新核对");
         var bundle=dev.pocketengine.features.local.preview.ProjectPreviewBundle.capture(content(checkoutId),checkoutId,source.getString("projectId"),source.getString("sourceDigest"),input.getString("entryPath"));
@@ -208,6 +327,8 @@ public final class LocalModule implements EngineModule {
     private JSONObject previewProjectPackage(JSONObject input)throws Exception {
         String id=input.getString("artifactId"),sha=input.getString("sha256");var frozen=packageWorkspace().projectPackage(id,sha);
         var bundle=dev.pocketengine.features.local.preview.ProjectPreviewBundle.fromProjectPackage(frozen,id,sha,input.getString("entryPath"));
+        // Re-reading the same verified bytes does not revoke an already open native document.
+        var retained=previews.get(bundle.identity);if(retained!=null)return retained.metadata();
         previews.put(bundle.identity,bundle);int bytes=0;for(var value:previews.values())bytes+=value.totalBytes;while(previews.size()>3||bytes>48*1024*1024){var key=previews.keySet().iterator().next();bytes-=previews.remove(key).totalBytes;}
         return bundle.metadata();
     }

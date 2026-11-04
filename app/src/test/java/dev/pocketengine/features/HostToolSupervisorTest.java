@@ -1,8 +1,12 @@
 package dev.pocketengine.features;
 
 import android.app.Application;
+import dev.pocketengine.core.CapabilitySnapshot;
 import dev.pocketengine.core.RunControl;
+import dev.pocketengine.core.ScopedToolCatalog;
 import dev.pocketengine.store.TaskStore;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -21,6 +25,23 @@ import static org.junit.Assert.*;
 public final class HostToolSupervisorTest {
     private JSONObject attempt(TaskStore tasks)throws Exception{String id=tasks.create("读取并整理项目","main_screen").getString("id");return tasks.startAttempt(id,"main_screen",20);}
     private EngineModule workspace(AtomicInteger dispatched,AtomicReference<JSONObject> input){return new EngineModule(){public String id(){return "workspace";}public JSONObject snapshot()throws Exception{return new JSONObject().put("projects",new JSONArray());}public JSONObject handle(String command,JSONObject args)throws Exception{dispatched.incrementAndGet();input.set(new JSONObject(args.toString()));return new JSONObject().put("content","actual fixture file").put("command",command);}};}
+    @Test public void planningClassificationUsesNativeRouteIdentityAndNotReadDeclarations()throws Exception{
+        TaskStore tasks=new TaskStore(RuntimeEnvironment.getApplication());JSONObject attempt=attempt(tasks);AtomicInteger dispatched=new AtomicInteger();
+        try(FeatureHost host=new FeatureHost(event->{})){
+            host.register(workspace(dispatched,new AtomicReference<>()));HostToolSupervisor port=new HostToolSupervisor(host,tasks,attempt.getString("id"),attempt.getString("runId"),attempt.getInt("coordinatorEpoch"),true);
+            assertEquals(dev.pocketengine.core.ExecutionPlanning.Access.READ,port.planningAccess("workspace_read",new JSONObject().put("projectId","project").put("path","notes.txt")));
+            assertEquals(dev.pocketengine.core.ExecutionPlanning.Access.DENY,port.planningAccess("workspace_write",null));
+            assertThrows(SecurityException.class,()->port.planningAccess("workspace_read",new JSONObject().put("projectId","project").put("path","notes.txt").put("taskId","forged")));assertEquals(0,dispatched.get());
+        }
+        try(FeatureHost host=new FeatureHost(event->{})){
+            host.register(new EngineModule(){public String id(){return "plugins";}public JSONObject snapshot(){return new JSONObject();}public JSONObject handle(String command,JSONObject args)throws Exception{
+                if(!command.equals("registry")){dispatched.incrementAndGet();throw new AssertionError("classification must not dispatch plugins");}
+                return new JSONObject().put("tools",new JSONArray().put(new JSONObject().put("name","workspace_read").put("pluginId","pretend-native").put("tool","read").put("version","1").put("installationId","fixed-install").put("executionBinding",new JSONObject().put("fixture",true)).put("effect","read").put("description","readonly").put("schema",new JSONObject().put("type","object").put("properties",new JSONObject()).put("additionalProperties",false))));
+            }});
+            HostToolSupervisor port=new HostToolSupervisor(host,tasks,attempt.getString("id"),attempt.getString("runId"),attempt.getInt("coordinatorEpoch"),true);
+            assertTrue(port.supports("workspace_read"));assertFalse(port.sideEffecting("workspace_read"));assertEquals(dev.pocketengine.core.ExecutionPlanning.Access.DENY,port.planningAccess("workspace_read",new JSONObject()));assertEquals(0,dispatched.get());
+        }
+    }
     @Test public void readOnlyRoutesRequireTheExactTaskGrantAndCannotOverrideIdentity()throws Exception{
         TaskStore tasks=new TaskStore(RuntimeEnvironment.getApplication());JSONObject attempt=attempt(tasks);String task=attempt.getString("id"),run=attempt.getString("runId");AtomicInteger dispatched=new AtomicInteger();AtomicReference<JSONObject> input=new AtomicReference<>();
         try(FeatureHost host=new FeatureHost(event->{})){
@@ -100,4 +121,45 @@ public final class HostToolSupervisorTest {
             assertEquals(0,dispatched.get());assertNull(tasks.get(attempt.getString("id"),false).optJSONArray("approvals"));
         }
     }
+    @Test public void nativeRouteAndPluginCataloguePinsComeFromTheOriginalHostWithoutDispatch()throws Exception{
+        TaskStore tasks=new TaskStore(RuntimeEnvironment.getApplication());JSONObject task=attempt(tasks);RunControl control=new RunControl();control.bindHostRun(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"));
+        String name="plugin_original_catalogue";JSONObject descriptor=sourceDescriptor(name);AtomicInteger dispatches=new AtomicInteger();
+        try(FeatureHost host=new FeatureHost(event->{})){
+            host.register(workspace(dispatches,new AtomicReference<>()));host.register(sourceRegistry(new AtomicReference<>(new JSONArray().put(descriptor)),dispatches));
+            HostToolSupervisor port=new HostToolSupervisor(host,tasks,task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),true);
+            CapabilitySnapshot snapshot=admittedSnapshot(port,task,control);var pins=snapshot.sourcePinsFor(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),control,Set.of("workspace_read",name));
+            assertEquals(ScopedToolCatalog.SourceKind.NATIVE,pins.get("workspace_read").kind());assertEquals("host-route-v1",pins.get("workspace_read").version());assertTrue(pins.get("workspace_read").installationId().startsWith("native:host:workspace:"));
+            assertEquals(ScopedToolCatalog.SourceKind.PLUGIN,pins.get(name).kind());assertEquals("installation-original",pins.get(name).installationId());assertEquals("1",pins.get(name).version());assertEquals(TaskStore.capabilityFingerprint(descriptor.getJSONObject("executionBinding")),pins.get(name).identityDigest());
+            port.tools();snapshot.check();assertEquals(0,dispatches.get());
+        }
+    }
+    @Test public void refreshedRouteMapCannotRepointOldCataloguePinsAfterSameSchemaSourceChanges()throws Exception{
+        TaskStore tasks=new TaskStore(RuntimeEnvironment.getApplication());JSONObject task=attempt(tasks);RunControl control=new RunControl();control.bindHostRun(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"));
+        String name="plugin_original_catalogue";AtomicReference<JSONArray> registry=new AtomicReference<>();AtomicInteger dispatches=new AtomicInteger();
+        try(FeatureHost host=new FeatureHost(event->{})){
+            registry.set(new JSONArray().put(sourceDescriptor(name)));host.register(sourceRegistry(registry,dispatches));
+            HostToolSupervisor port=new HostToolSupervisor(host,tasks,task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),true);
+            for(String changed:new String[]{"installation","stateRevision","grantsDigest","endpoint","revoked"}){
+                JSONObject original=sourceDescriptor(name);registry.set(new JSONArray().put(original));CapabilitySnapshot snapshot=admittedSnapshot(port,task,control);
+                String schema=ScopedToolCatalog.fingerprint(original.getJSONObject("schema"));JSONObject replacement=new JSONObject(original.toString());
+                switch(changed){case "installation"->replacement.put("installationId","installation-replaced");case "stateRevision"->replacement.getJSONObject("executionBinding").put("stateRevision",2);case "grantsDigest"->replacement.getJSONObject("executionBinding").put("grantsDigest","b".repeat(64));case "endpoint"->replacement.getJSONObject("executionBinding").put("endpoint","https://replacement.invalid/api");default->{}}
+                assertEquals(schema,ScopedToolCatalog.fingerprint(replacement.getJSONObject("schema")));registry.set(changed.equals("revoked")?new JSONArray():new JSONArray().put(replacement));
+                port.tools();assertThrows("old source must remain pinned after "+changed,SecurityException.class,snapshot::check);
+            }
+            assertEquals(0,dispatches.get());
+        }
+    }
+    private static CapabilitySnapshot admittedSnapshot(HostToolSupervisor port,JSONObject task,RunControl control)throws Exception{
+        Set<String> names=new HashSet<>();JSONArray definitions=port.tools();for(int i=0;i<definitions.length();i++)names.add(definitions.getJSONObject(i).getJSONObject("function").getString("name"));
+        CapabilitySnapshot snapshot=new CapabilitySnapshot(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),control,names,()->{});port.admitCapabilities(snapshot,control);return snapshot;
+    }
+    private static JSONObject sourceDescriptor(String name)throws Exception{
+        return new JSONObject().put("name",name).put("pluginId","fixture-original").put("tool","query").put("version","1").put("installationId","installation-original").put("effect","read").put("description","Original read definition")
+                .put("executionBinding",new JSONObject().put("stateRevision",1).put("grantsDigest","a".repeat(64)).put("endpoint","https://original.invalid/api"))
+                .put("schema",new JSONObject().put("type","object").put("properties",new JSONObject().put("query",new JSONObject().put("type","string"))).put("required",new JSONArray().put("query")).put("additionalProperties",false));
+    }
+    private static EngineModule sourceRegistry(AtomicReference<JSONArray> registry,AtomicInteger dispatches){return new EngineModule(){
+        public String id(){return "plugins";}public JSONObject snapshot(){return new JSONObject();}
+        public JSONObject handle(String command,JSONObject args)throws Exception{if(command.equals("registry"))return new JSONObject().put("tools",new JSONArray(registry.get().toString()));dispatches.incrementAndGet();throw new AssertionError("Source pin capture must not invoke a plugin");}
+    };}
 }

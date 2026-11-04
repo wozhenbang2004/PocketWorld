@@ -78,11 +78,11 @@ export function repairPin(view: BootstrapView): Pick<RepairReview, 'generation' 
   return { generation: view.generation, repairId: item.repairId, sourceFingerprint: item.sourceFingerprint, backupFingerprint: item.backupFingerprint };
 }
 export function bootstrapRetryPayload(view: BootstrapView, requestId: string) {
-  if (!view.retryAvailable || view.state === 'initializing') throw new Error('原启动尚未允许重试，请先读取当前状态。');
-  const base = { expectedGeneration: view.generation, requestId };
-  if (!view.maintenance?.originalRetryAvailable) return base;
-  const pin = repairPin(view);
-  return { ...base, repairId: pin.repairId, sourceFingerprint: pin.sourceFingerprint, backupFingerprint: pin.backupFingerprint };
+  if (!view.retryAvailable || view.state === 'initializing') throw new Error('当前启动代次仍不可重试，请先只读核对。');
+  if (view.maintenance?.phase === 'preserved' && view.maintenance.originalRetryAvailable !== true) throw new Error('原生尚未开放对同一原数据库的重试。');
+  const original = view.maintenance?.originalRetryAvailable === true ? repairPin(view) : null;
+  return { expectedGeneration: view.generation, requestId, ...(original ? { repairId: original.repairId,
+    sourceFingerprint: original.sourceFingerprint, backupFingerprint: original.backupFingerprint } : {}) };
 }
 export function repairRestoration(value: unknown, sourceFingerprint: string): RepairRestoration | null {
   const item = record(value);
@@ -141,7 +141,8 @@ export function repairOutcome(view: BootstrapView | null): string | null {
   if (view.maintenance.result?.mode === 'empty_database') return '已保全原件并建立空库；原历史未恢复。新库不会继续旧任务或继承旧执行授权。';
   if (view.maintenance.result?.mode === 'verified_copy') {
     const restored = repairRestoration(view.maintenance.result.restoration, view.maintenance.backupFingerprint);
-    return restored ? `已保全原件，并以新身份恢复 ${restored.conversationCount} 段对话、${restored.messageCount} 条文字消息。原任务历史、附件原件和执行授权未恢复。` : '本次维修结果已登记，但恢复范围尚无法完整核对。请读取同一维修记录。';
+    if (!restored) return '本次维修结果已登记，但恢复范围尚无法完整核对。请读取同一维修记录。';
+    return restored.messageCount > 0 ? `已保全原件，并以新身份恢复 ${restored.conversationCount} 段对话、${restored.messageCount} 条文字消息。原任务历史、附件原件和执行授权未恢复。` : `已保全原件，本次以新身份导入 ${restored.conversationCount} 段对话，未恢复文字消息。原任务历史、附件原件和执行授权未恢复。`;
   }
   return view.maintenance.result?.summary || null;
 }

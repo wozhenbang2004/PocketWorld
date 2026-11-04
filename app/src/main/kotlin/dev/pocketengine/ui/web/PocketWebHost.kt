@@ -77,9 +77,11 @@ internal class PocketWebHost private constructor(
         bundle = try {
             activity.assets.open("pocket-ui/build-identity.json").use { PocketWebBundle.read(it) }
         } catch (_: Exception) {
-            view.addView(android.widget.TextView(activity).apply {
-                text = "工作台资源不完整，请安装完整版本后重新打开。"
-            })
+            // No trusted document can show maintenance feedback when the packaged identity is invalid.
+            // Use the existing closed-host exit; never load unverified assets or create another UI.
+            Log.e(TAG, "bundle-identity-unavailable; install a complete compatible package")
+            close()
+            activity.finish()
             return
         }
         with(web.settings) {
@@ -185,6 +187,7 @@ internal class PocketWebHost private constructor(
         listenerRegistered = true
         }
         view.addView(web, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        bridge.attachProjectPreview(view)
         view.setOnApplyWindowInsetsListener { target, insets ->
             val bars = insets.getInsets(WindowInsets.Type.systemBars())
             val keyboard = insets.getInsets(WindowInsets.Type.ime())

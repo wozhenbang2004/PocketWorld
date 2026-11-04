@@ -142,7 +142,21 @@ const check = name => record.checks.push({ name, passed: true });
 const count = action => page.evaluate(action => window.__PW_CONNECTION_TEST__.requests.filter(request => request.action === action).length, action);
 const editor = () => page.getByRole('region', { name: '当前连接配置', exact: true });
 const apiKeyInput = () => editor().getByLabel('API 密钥', { exact: true });
-async function shot(name) { await page.evaluate(() => document.fonts.ready); await page.waitForTimeout(200); await page.screenshot({ path: path.join(output, name + '.png') }); record.screenshots.push(name + '.png'); }
+async function layoutReady() {
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    const transitions = document.getAnimations().filter(animation => animation instanceof CSSTransition && animation.transitionProperty === 'height');
+    await Promise.allSettled(transitions.map(animation => animation.finished));
+  });
+  await page.waitForFunction(() => {
+    const nodes = [...document.querySelectorAll('.pw-secondary-scroll,.pw-model-editor,[aria-label="本次连接测试结果"]')];
+    const current = JSON.stringify(nodes.map(node => { const rect = node.getBoundingClientRect(); return [rect.x, rect.y, rect.width, rect.height, node.scrollTop]; }));
+    const previous = window.__modelFixtureLayout;
+    window.__modelFixtureLayout = { current, stable: previous?.current === current ? previous.stable + 1 : 0 };
+    return window.__modelFixtureLayout.stable >= 3;
+  }, null, { polling: 'raf' });
+}
+async function shot(name) { await layoutReady(); await page.screenshot({ path: path.join(output, name + '.png') }); record.screenshots.push(name + '.png'); }
 async function select(label, option) {
   const trigger = editor().locator('.pw-selection-field').filter({ has: page.getByText(label, { exact: true }) }).getByRole('button');
   const formScroll = () => page.locator('.pw-model-editor').evaluate(node => node.closest('.pw-secondary-scroll').scrollTop);
@@ -160,15 +174,16 @@ async function select(label, option) {
     return atPointer;
   };
   let before = await open();
-  if (label === '缓存支持状态') {
-    await page.mouse.move(4, 100); await page.mouse.wheel(0, -80); await page.waitForTimeout(100);
+  if (label === '流式用量请求') {
+    await page.mouse.move(4, 100); await page.mouse.wheel(0, -80); await layoutReady();
     assert.equal(await menu.isVisible(), true, 'The modal select must remain available during a background wheel gesture');
     assert.equal(await formScroll(), before, 'The background form must remain fixed while the modal select is open');
   }
   await page.getByRole('option', { name: option, exact: true }).click();
   record.selectChecks ||= []; record.selectChecks.push({ label, option, formScroll: before, passed: true });
 }
-async function expandPolicy() { await editor().getByRole('button', { name: /兼容与缓存 请求格式/ }).click(); }
+async function expandPolicy() { await editor().getByRole('button', { name: /请求兼容 输出字段/ }).click(); await layoutReady(); }
+async function expandCache() { await editor().getByRole('button', { name: /前缀缓存 服务商支持/ }).click(); await layoutReady(); }
 async function reopen() { await page.getByRole('region', { name: '连接详情', exact: true }).getByRole('button', { name: '编辑这项连接', exact: true }).click(); await editor().waitFor(); }
 try {
   await fs.mkdir(output, { recursive: true });
@@ -243,11 +258,14 @@ try {
   await select('接口协议', 'Anthropic Messages');
   assert.equal(await count('models.connection.test'), 0); check('the original protocol picker remains usable by pointer without changing scroll position or issuing a test');
   await expandPolicy(); await editor().getByText('使用连接兼容档案', { exact: true }).click();
+  await editor().getByLabel('每次最多携带的工具数', { exact: true }).fill('24');
+  await expandCache();
   assert.equal(await editor().getByRole('switch', { name: '请求临时前缀缓存', exact: true }).isEnabled(), false);
   assert.equal(await editor().getByRole('switch', { name: '请求临时前缀缓存', exact: true }).getAttribute('aria-checked'), 'false');
   assert.equal(await editor().getByRole('button', { name: '测试连接', exact: true }).isEnabled(), false);
-  await select('缓存支持状态', '已核对服务商支持'); await editor().getByRole('switch', { name: '请求临时前缀缓存', exact: true }).click();
-  await editor().getByLabel('每次最多携带的工具数', { exact: true }).fill('24');
+  await editor().getByText('已核对服务商支持', { exact: true }).click();
+  assert.equal(await editor().getByRole('radio', { name: '已核对服务商支持', exact: true }).isChecked(), true);
+  await editor().getByRole('switch', { name: '请求临时前缀缓存', exact: true }).click();
   assert.equal(await count('models.connection.test'), 0); await shot('cache-review-before-save');
   check('cache starts unknown and off, only owner changes enable it, and unsaved policy changes never trigger HTTP tests');
   await editor().getByRole('button', { name: '保存原连接', exact: true }).click(); await page.getByRole('region', { name: '连接详情', exact: true }).waitFor();
@@ -257,9 +275,20 @@ try {
   assert.equal(Object.hasOwn(save.args, 'clearApiKey'), false); assert.equal(Object.hasOwn(save.args, 'hasApiKey'), false);
   assert.equal(save.args.compatibility.cacheSupport, 'SUPPORTED'); assert.equal(save.args.compatibility.maxTools, 24);
   assert.deepEqual(Object.keys(save.args.compatibility).sort(), ['cacheMode', 'cacheSupport', 'maxRequestBytes', 'maxTools', 'schemaSubset', 'streamUsage', 'tokenField', 'toolWireShape'].sort());
-  await reopen(); await expandPolicy(); assert.equal(await editor().getByRole('switch', { name: '请求临时前缀缓存', exact: true }).getAttribute('aria-checked'), 'true');
+  await reopen(); await expandCache(); assert.equal(await editor().getByRole('switch', { name: '请求临时前缀缓存', exact: true }).getAttribute('aria-checked'), 'true');
   assert.equal(await editor().getByRole('button', { name: '测试连接', exact: true }).isEnabled(), true); check('saved CAS definition reopens on the same connection with native profile revision and no secret fields');
   await editor().getByRole('button', { name: '测试连接', exact: true }).click(); await editor().getByRole('region', { name: '本次连接测试结果', exact: true }).waitFor();
+  await layoutReady();
+  const feedback = editor().getByRole('region', { name: '本次连接测试结果', exact: true });
+  const details = feedback.getByRole('button', { name: /实际调用详情/ });
+  assert.equal(await details.getAttribute('aria-expanded'), 'false');
+  assert.equal(await feedback.getByText('文字连接正常；图片理解和手机工具能力尚未验证。', { exact: true }).isVisible(), true);
+  await shot('actual-test-summary-collapsed');
+  await details.click(); await layoutReady();
+  const cost = feedback.getByText('未知；用量不是账单', { exact: true });
+  await cost.scrollIntoViewIfNeeded(); await layoutReady();
+  const costBounds = await cost.boundingBox(), fixedActions = await page.locator('.pw-model-save-actions').boundingBox();
+  assert.ok(costBounds && costBounds.y >= 0 && costBounds.y + costBounds.height <= (fixedActions?.y ?? record.viewport.height), 'Actual cost remains readable above the original actions');
   assert.equal(await count('models.connection.test'), 1); assert.equal(await editor().getByText('未知（未报告，不按 0 计算）', { exact: true }).count(), 2);
   await editor().getByText('本次没有稳定系统或工具前缀，未添加提示', { exact: true }).waitFor(); await shot('actual-test-unknown-cache');
   check('one explicit text test shows only its original receipt, absent cache usage and money remain unknown, and no prefix means no cache hint');
@@ -279,7 +308,9 @@ try {
   await page.evaluate(() => window.__PW_CONNECTION_TEST__.release()); await page.waitForTimeout(150);
   assert.equal(await editor().getByRole('region', { name: '本次连接测试结果', exact: true }).count(), 0); assert.equal(await editor().getByLabel('模型名称', { exact: true }).inputValue(), 'fixture-model-b');
   await expandPolicy(); await editor().getByText('使用连接兼容档案', { exact: true }).click();
+  await expandCache();
   await editor().getByText('当前协议尚未接入显式缓存提示，保持关闭。服务商若返回缓存用量，仍按原调用回执显示。', { exact: true }).waitFor();
+  await expandPolicy();
   await select('输出上限字段', 'max_completion_tokens'); await select('流式用量请求', '省略 stream_options');
   assert.equal(await count('models.connection.test'), 3); assert.equal(await editor().getByRole('button', { name: '测试连接', exact: true }).isEnabled(), false);
   check('switching to a different editor cannot inherit the pending result and unsupported protocols keep explicit cache hints off');

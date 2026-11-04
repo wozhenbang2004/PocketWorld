@@ -1,19 +1,19 @@
-import { CheckboxField, SelectField, StretchSwitch, TextField } from './forms-library';
+import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SelectField, StretchSwitch, TextField } from './forms-library';
 import { cacheCounterText, cacheHintText, type CompatibilityDraft } from './model-connection-policy';
 
 type Row = Record<string, any>;
 const native = { id: 'NATIVE', label: '沿用当前协议' };
 
 /** Uses the existing BoardUI fields inside the original connection editor. */
-export function ModelConnectionOptions({ value, onChange, provider, adding, revision }: {
-  value: CompatibilityDraft; onChange: (next: CompatibilityDraft) => void; provider: string; adding: boolean; revision?: number;
+export function ModelConnectionOptions({ value, onChange, provider, adding, revision, section }: {
+  value: CompatibilityDraft; onChange: (next: CompatibilityDraft) => void; provider: string; adding: boolean; revision?: number; section: 'wire' | 'cache';
 }) {
   const change = (key: keyof CompatibilityDraft, next: string | boolean) => onChange({ ...value, [key]: next });
   const chat = provider === 'openai_chat', anthropic = provider === 'anthropic';
   return <div className="pw-form-grid" data-connection-policy>
     <p className="pw-field-hint">{adding ? '先保存这项连接，再设置兼容与缓存策略。' : revision ? `已保存兼容档案 · 修订 ${revision}。变更后先保存，再进行连接测试。` : '按这项连接保存请求策略；不会改变模型能力、工具权限或历史消息。'}</p>
-    <CheckboxField isSelected={value.enabled} isDisabled={adding} onChange={next => change('enabled', next)}>使用连接兼容档案</CheckboxField>
-    {value.enabled && <>
+    {section === 'wire' && <CheckboxField isSelected={value.enabled} isDisabled={adding} onChange={next => change('enabled', next)}>使用连接兼容档案</CheckboxField>}
+    {section === 'wire' && value.enabled && <>
       <SelectField label="输出上限字段" value={value.tokenField} isDisabled={!chat} onChange={next => change('tokenField', next)}
         options={chat ? [native, { id: 'MAX_TOKENS', label: 'max_tokens' }, { id: 'MAX_COMPLETION_TOKENS', label: 'max_completion_tokens' }] : [native]}
         hint={chat ? '只调整当前 Chat 请求的字段；与模型目录精确要求冲突时会在发送前拒绝。' : '当前协议使用原有输出字段，不支持这项改写。'} />
@@ -28,14 +28,19 @@ export function ModelConnectionOptions({ value, onChange, provider, adding, revi
         hint="不支持的关键字会在发送前拒绝，历史消息和工具结果保持原样。" />
       <TextField label="每次最多携带的工具数" inputMode="numeric" value={value.maxTools} onChange={next => change('maxTools', next.replace(/\D/g, '').slice(0, 3))} hint="1–512；超过时拒绝发送，不截断工具。" />
       <TextField label="请求大小上限（字节）" inputMode="numeric" value={value.maxRequestBytes} onChange={next => change('maxRequestBytes', next.replace(/\D/g, '').slice(0, 8))} hint="256–25165824；在发送前检查实际请求。" />
-      {anthropic ? <>
-        <SelectField label="缓存支持状态" value={value.cacheSupport} onChange={next => onChange({ ...value, cacheSupport: next, cacheMode: next === 'SUPPORTED' ? value.cacheMode : 'OFF' })}
+    </>}
+    {section === 'cache' && <>
+      {!anthropic ? <p className="pw-field-hint">当前协议尚未接入显式缓存提示，保持关闭。服务商若返回缓存用量，仍按原调用回执显示。</p>
+        : !value.enabled ? <><p className="pw-field-hint">缓存与请求兼容选项保存到同一份连接档案；启用后仍先核对支持状态。</p><Button variant="secondary" disabled={adding} onClick={() => change('enabled', true)}>启用连接档案</Button></>
+        : <>
+        <RadioOptions label="缓存支持状态" value={value.cacheSupport} onChange={next => onChange({ ...value, cacheSupport: next, cacheMode: next === 'SUPPORTED' ? value.cacheMode : 'OFF' })}
           options={[{ id: 'UNKNOWN', label: '未确认' }, { id: 'SUPPORTED', label: '已核对服务商支持' }, { id: 'UNSUPPORTED', label: '不支持' }]}
-          hint="这是你对当前连接与模型的核对记录；文字测试不会自动把它改成支持。" />
+        />
+        <p className="pw-field-hint">这是你对当前连接与模型的核对记录；文字测试不会自动把它改成支持。</p>
         <StretchSwitch label="请求临时前缀缓存" checked={value.cacheMode === 'EPHEMERAL'} disabled={value.cacheSupport !== 'SUPPORTED'}
           onChange={next => change('cacheMode', next ? 'EPHEMERAL' : 'OFF')}
           description={value.cacheSupport === 'SUPPORTED' ? '只为当前稳定系统与工具前缀添加提示；是否命中以服务商实际用量为准。' : '未确认或不支持时保持关闭，不添加提示，也不自动换线路重试。'} />
-      </> : <p className="pw-field-hint">当前协议尚未接入显式缓存提示，保持关闭。服务商若返回缓存用量，仍按原调用回执显示。</p>}
+      </>}
       <p className="pw-field-hint">这项文字连接测试没有系统或工具前缀，因此不能验证缓存命中。缓存读取、写入和费用缺失时显示未知，不算免费。</p>
     </>}
   </div>;
@@ -48,6 +53,7 @@ export function ModelConnectionTestFeedback({ value }: { value: Row }) {
   return <section className="pw-request-notice" aria-label="本次连接测试结果" aria-live="polite">
     <p>{unknown ? '原测试结果待核对。请先查看实际调用记录，再决定是否发起新的测试。' : String(value.message || '原测试未返回说明。')}</p>
     <p className="pw-field-hint">{proof.outcome === 'not_dispatched' ? '本次没有进入模型调用。' : '仅对应本次草稿的文字测试；图片、流式用量和工具能力尚未验证。'}</p>
+    <Accordion><AccordionItem id="actual-call" title="实际调用详情" description="协议、缓存用量与费用">
     {feedback.available === true ? calls.map(call => <div key={String(call.callId)}>
       <dl className="pw-facts">
         <div><dt>实际协议</dt><dd>{String(call.protocol || '原回执未提供')}</dd></div>
@@ -60,5 +66,6 @@ export function ModelConnectionTestFeedback({ value }: { value: Row }) {
         <div><dt>实际费用</dt><dd>未知；用量不是账单</dd></div>
       </dl>
     </div>) : <p className="pw-field-hint">尚无可核对的原始用量，缓存与费用保持未知。</p>}
+    </AccordionItem></Accordion>
   </section>;
 }

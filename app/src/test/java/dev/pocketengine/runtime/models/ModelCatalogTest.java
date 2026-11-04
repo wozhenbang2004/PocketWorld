@@ -46,6 +46,7 @@ public class ModelCatalogTest {
             case OPENAI, OPENROUTER -> ModelBinding.Protocol.OPENAI_CHAT;
             case ANTHROPIC -> ModelBinding.Protocol.ANTHROPIC;
             case GEMINI -> ModelBinding.Protocol.GEMINI;
+            case NONE -> throw new IllegalArgumentException("catalog_fixture_requires_catalog_format");
         };
         return new ModelBinding("native-connection", "provider-a", protocol, format, endpoint, "credential-a", 1, "installation-a", 1, false);
     }

@@ -26,6 +26,7 @@ public final class CatalogParser {
     }
 
     public static Page parse(ModelBinding binding, String body, long observedAtMillis, int pageNumber) throws CatalogException {
+        if (binding.format() == ModelBinding.Format.NONE || binding.protocol() == ModelBinding.Protocol.BEDROCK_ANTHROPIC) throw new IllegalArgumentException("bedrock_catalog_unavailable");
         if (observedAtMillis < 1 || pageNumber < 1) throw new IllegalArgumentException("invalid_observation_time");
         try {
             JSONTokener tokener = new JSONTokener(body);

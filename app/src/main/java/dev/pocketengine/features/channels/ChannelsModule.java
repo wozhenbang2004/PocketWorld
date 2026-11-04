@@ -499,8 +499,8 @@ public final class ChannelsModule implements EngineModule {
         checkHostTaskAuthority(requestId);HostTaskPort.Request request=core.hostTaskRequest(requestId);
         // A very fast existing host worker may publish before admit() returns its receipt.
         core.hostTaskAdmitted(requestId,receipt);
-        String text=receipt.summary,modelKey=context.model().apiKey,credential=context.secrets.get(slot(request.origin().getString("profileId")));
-        if(!modelKey.isEmpty())text=text.replace(modelKey,"[密钥已隐藏]");if(!credential.isEmpty())text=text.replace(credential,"[凭据已隐藏]");
+        String text=context.model().redactSensitive(receipt.summary),credential=context.secrets.get(slot(request.origin().getString("profileId")));
+        if(!credential.isEmpty())text=text.replace(credential,"[凭据已隐藏]");
         JSONObject row=core.queueHostTaskUpdate(requestId,new HostTaskPort.TaskState(receipt.taskId,receipt.runId,receipt.coordinatorEpoch,receipt.revision,receipt.status,text));changed("owner_task_reply_queued",row.getString("id"));
         if(sendAfter&&row.optString("status").equals("queued"))send(row.getString("id"));return row;
     }
@@ -571,7 +571,7 @@ public final class ChannelsModule implements EngineModule {
                     boolean remaining=ChannelMessageParts.hasUnprocessed(event.optJSONObject("messageParts"),imageProjection==null?0:imageProjection.count);
                     String inputNotice=imageProjection!=null?"处理范围：本次模型请求包含"+imageProjection.count+"张原消息的实际冻结图片；"+(remaining?"其他未支持项尚未处理。":"冻结/提供输入不代表已理解全部内容。")+"\n\n":event.optBoolean("partialInput")?"处理范围：本条文字已处理，引用仅按可用原文保留；图片、语音或其他未支持项尚未下载/解密，以下不代表已读取这些媒体。\n\n":"";
                     if(nativeStream!=null&&text.length()>4000-inputNotice.length())throw new IllegalStateException("完整QQ回答超过范围；已展示片段不冒完成，未截断发送最终帧");text=inputNotice+text;
-                    if(!model.apiKey.isEmpty())text=text.replace(model.apiKey,"[密钥已隐藏]");
+                    text=model.redactSensitive(text);
                     String credential=secret(event.getString("profileId"));if(!credential.isEmpty())text=text.replace(credential,"[凭据已隐藏]");
                     JSONObject current=core.route(event);
                     if(!current.getString("spaceId").equals(route.getString("spaceId")))throw new SecurityException("账号绑定发生变化，回答未投递");

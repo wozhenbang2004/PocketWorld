@@ -123,7 +123,7 @@ public final class LoopbackRelay implements AutoCloseable {
                 if(headers.containsKey("transfer-encoding")||!headers.getOrDefault("content-length","0").equals("0"))throw new RequestFailure(400,"模型目录请求不能包含请求体");
                 parsed.set(true);deadline.interrupt();ModelConfig config=currentConfiguration();
                 if(config.usesAccount()){accountModels(socket,response,config);return;}
-                JSONObject model=new JSONObject().put("id",config.routePlan==null?config.model:config.routePlan.requestedAlias).put("object","model").put("owned_by","configured-upstream");response.json(200,ChatCompletionStream.scrub(new JSONObject().put("object","list").put("data",new JSONArray().put(model)),config.apiKey).toString().getBytes(StandardCharsets.UTF_8));return;
+                JSONObject model=new JSONObject().put("id",config.redactSensitive(config.routePlan==null?config.model:config.routePlan.requestedAlias)).put("object","model").put("owned_by","configured-upstream");response.json(200,ChatCompletionStream.scrub(new JSONObject().put("object","list").put("data",new JSONArray().put(model)),config.apiKey).toString().getBytes(StandardCharsets.UTF_8));return;
             }
             if(!request[0].equals("POST")||!NativeRelayPolicy.acceptsPath(request[1]))throw new RequestFailure(404,"请使用本机已选模型协议的明确路径，可在本机服务页查看");
             if(headers.containsKey("transfer-encoding"))throw new RequestFailure(400,"当前不支持分块请求");

@@ -187,6 +187,6 @@ public final class CompactionPlan {
         if(value instanceof JSONArray){JSONArray array=(JSONArray)value;StringBuilder out=new StringBuilder("[");for(int i=0;i<array.length();i++){if(i>0)out.append(',');out.append(canonical(array.get(i)));}return out.append(']').toString();}
         if(value==null||value==JSONObject.NULL)return "null";if(value instanceof String)return JSONObject.quote((String)value);if(value instanceof Number||value instanceof Boolean)return value.toString();throw new IllegalArgumentException("Unsupported fingerprint value");
     }
-    public static String routeFingerprint(ModelConfig selected)throws Exception{JSONObject route=selected.publicJson();route.remove("maxSteps");return fingerprint(new JSONObject().put("route",route).put("credentialFingerprint",fingerprint(selected.apiKey)));}
+    public static String routeFingerprint(ModelConfig selected)throws Exception{JSONObject route=selected.publicJson();route.remove("maxSteps");return fingerprint(new JSONObject().put("route",route).put("credentialFingerprint",selected.usesBedrock()?selected.credentialIdentityDigest():fingerprint(selected.apiKey)));}
     public static final class Unavailable extends Exception {public final String code;public Unavailable(String code){super(code);this.code=code;}}
 }

@@ -39,4 +39,21 @@ public final class RemoteTaskRequestTest {
         assertThrows(SecurityException.class,()->RemoteTaskRequest.environment(new JSONObject().put("environments",new JSONArray().put(env).put(env)),"project","codex_app_server"));
         assertThrows(SecurityException.class,()->RemoteTaskRequest.environment(new JSONObject().put("environments",new JSONArray().put(env)),"missing","codex_app_server"));
     }
+    private static JSONObject gemini()throws Exception{return coding().put("worker","gemini_acp").put("backendId","gemini_cli_acp_v1").put("capabilityRevision","c".repeat(64)).put("modeId","default").put("readOnly",false);}
+    @Test public void geminiFirstCreateRequiresTheExactObservedBackendAndExplicitWriteChoice()throws Exception {
+        assertThrows(SecurityException.class,()->RemoteTaskRequest.first(gemini()));
+        JSONObject actual=RemoteTaskRequest.firstForPrivateConnection(gemini());assertEquals("gemini_acp",actual.getString("worker"));assertEquals("gemini_cli_acp_v1",actual.getString("backendId"));assertEquals("default",actual.getString("modeId"));assertEquals("c".repeat(64),actual.getString("capabilityRevision"));assertFalse(actual.getBoolean("readOnly"));assertFalse(actual.has("backendSelection"));
+        for(String key:new String[]{"backendId","capabilityRevision","modeId","readOnly"}){JSONObject missing=gemini();missing.remove(key);assertThrows(SecurityException.class,()->RemoteTaskRequest.firstForPrivateConnection(missing));}
+        assertThrows(SecurityException.class,()->RemoteTaskRequest.firstForPrivateConnection(gemini().put("readOnly",true)));
+        assertThrows(IllegalArgumentException.class,()->RemoteTaskRequest.firstForPrivateConnection(gemini().put("readOnly","false")));
+        assertThrows(SecurityException.class,()->RemoteTaskRequest.firstForPrivateConnection(gemini().put("modeId","plan")));
+        assertThrows(SecurityException.class,()->RemoteTaskRequest.firstForPrivateConnection(gemini().put("backendId","another_acp")));
+        assertThrows(SecurityException.class,()->RemoteTaskRequest.firstForPrivateConnection(gemini().put("capabilityRevision","not-native-revision")));
+    }
+    @Test public void geminiProbeReferenceCannotMintASelectionOrImportAnotherExecutionScope()throws Exception {
+        for(String key:new String[]{"backendSelection","sessionId","parentTaskId","teamRunId","origin","environment","credential","executable","env"})assertThrows(SecurityException.class,()->RemoteTaskRequest.firstForPrivateConnection(gemini().put(key,new JSONObject().put("authorized",true))));
+        assertThrows(IllegalArgumentException.class,()->RemoteTaskRequest.firstForPrivateConnection(gemini().put("argv",new JSONArray().put("arbitrary-cli"))));
+        assertThrows(SecurityException.class,()->RemoteTaskRequest.firstForPrivateConnection(gemini().put("effort","high")));
+        for(String worker:new String[]{"codex_app_server","claude","pi","command"})assertThrows(SecurityException.class,()->RemoteTaskRequest.firstForPrivateConnection(gemini().put("worker",worker)));
+    }
 }

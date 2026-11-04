@@ -36,7 +36,7 @@ public final class ChannelTaskCoordinator implements HostTaskPort {
     @Override public TaskState admit(Request request,Authority authority)throws Exception{
         if("phone".equals(request.origin().optString("taskKind")))throw new SecurityException("手机任务只从本机屏幕确认入口启动");
         authority.check();channels.checkHostTaskAuthority(request.requestId);ModelConfig config=configs.get();SettingsStore.validate(config);
-        String goal=config.apiKey.isEmpty()?request.goal:request.goal.replace(config.apiKey,"[密钥已隐藏]");
+        String goal=config.redactSensitive(request.goal);
         JSONObject task=tasks.registerChannelTask(request.taskId,goal,request.origin());
         if(task.getBoolean("created"))schedule(task,initialMessages(goal),config,false);
         return state(required(request));

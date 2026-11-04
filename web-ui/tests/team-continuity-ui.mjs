@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import { chromium, expect } from '@playwright/test';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const bundle = path.join(repo, 'app/src/main/assets/pocket-ui');
+const bundle = path.resolve(process.env.TEAM_UI_BUNDLE || path.join(repo, 'app/src/main/assets/pocket-ui'));
 const output = path.resolve(process.argv[2] || path.join(repo, '../qa-team'));
 const mainId = 'fixture-run-18', discussionId = 'fixture-discussion';
 const longName = '跨设备资料与引用真实性复核伙伴';

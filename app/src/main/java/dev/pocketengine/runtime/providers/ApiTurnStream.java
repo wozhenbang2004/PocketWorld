@@ -2,6 +2,7 @@ package dev.pocketengine.runtime.providers;
 
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.runtime.ModelGateway.GatewayException;
+import dev.pocketengine.runtime.providers.bedrock.BedrockEventStream;
 import dev.pocketengine.runtime.usage.ProviderUsage;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
@@ -32,6 +33,7 @@ public final class ApiTurnStream {
     private static final int MAX_TOOLS = 64;
     private static final int MAX_ARGUMENT_CHARS = 64 * 1024;
     private static final int MAX_TEXT_CHARS = 1024 * 1024;
+    private static final String BEDROCK_METRICS = "amazon-bedrock-invocationMetrics";
 
     private ApiTurnStream() { }
 
@@ -52,7 +54,7 @@ public final class ApiTurnStream {
     /** Reuse the native serializer; only enable streaming and the Chat output ceiling. */
     public static JSONObject request(String protocol, JSONObject ordinary, int outputTokens) throws Exception {
         JSONObject body = copy(ordinary);
-        if (!"gemini".equals(protocol)) body.put("stream", true);
+        if (!"gemini".equals(protocol) && !"bedrock_anthropic".equals(protocol)) body.put("stream", true);
         if ("openai_chat".equals(protocol)) body.put("max_tokens", outputTokens)
                 .put("stream_options",new JSONObject().put("include_usage",true));
         return body;
@@ -74,6 +76,46 @@ public final class ApiTurnStream {
     public static JSONObject read(InputStream input, String protocol, ProviderAdapter adapter,
                                   JSONArray tools, RunControl control, TextSink sink,ProviderUsage.Observer usage) throws Exception {
         return readFrames(input,protocol,adapter,tools,control,sink,usage,null);
+    }
+    /** The original Anthropic decision waits for the complete binary transport, including trailers.
+     * A message_stop is only a candidate terminal; no tool or completion escapes before clean EOF. */
+    public static JSONObject readBedrock(InputStream input,ProviderAdapter provider,JSONArray offeredTools,
+            RunControl control,TextSink sink,ProviderUsage.Collector usage)throws Exception {
+        Anthropic state=new Anthropic(sink,usage);
+        BedrockEventStream parser=new BedrockEventStream(input);
+        boolean terminal=false;
+        int events=0;long total=0;
+        while(true){
+            control.check();byte[] payload=parser.nextPayload();control.check();
+            if(payload==null){
+                if(!terminal)throw GatewayException.incompleteStream();
+                JSONObject result=normalize("bedrock_anthropic",provider,state.result(),offeredTools);
+                control.check();usage.completed();return result;
+            }
+            total+=payload.length;
+            if(++events>MAX_EVENTS||payload.length>MAX_EVENT_BYTES||total>MAX_BYTES)throw tooLarge();
+            String decoded;
+            try{decoded=StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(payload)).toString();}
+            catch(java.nio.charset.CharacterCodingException invalidUtf8){throw invalid();}
+            JSONObject event=eventObject(decoded);
+            if(!event.has("type")){
+                if(!terminal||event.length()!=1)throw invalid();
+                bedrockMetrics(event);continue;
+            }
+            if(terminal)throw invalid();
+            if(event.has(BEDROCK_METRICS)){
+                if(!"message_stop".equals(event.optString("type")))throw invalid();
+                bedrockMetrics(event);
+            }
+            terminal=state.accept(event);
+        }
+    }
+    /** The undocumented measure fields are not token totals, prices or tool authority. */
+    private static void bedrockMetrics(JSONObject event)throws Exception {
+        JSONObject metrics=event.optJSONObject(BEDROCK_METRICS);
+        if(metrics==null)throw invalid();
+        unicodeTree(metrics,0);
     }
     public static JSONObject relayNative(InputStream input,String protocol,ProviderAdapter adapter,JSONArray tools,
             RunControl control,NativeFrameSink frames)throws Exception{
@@ -152,7 +194,7 @@ public final class ApiTurnStream {
                             && !item.isNull("namespace") && !text(item, "namespace", 256).isEmpty()) throw invalid();
                 }
                 break;
-            case "anthropic":
+            case "anthropic": case "bedrock_anthropic":
                 terminalAnthropic(text(wire, "stop_reason", 64));
                 if(wire.has("role")&&!"assistant".equals(wire.optString("role")))throw invalid();
                 break;
@@ -193,7 +235,7 @@ public final class ApiTurnStream {
         int callCount = calls == null ? 0 : calls.length();
         if ("openai_chat".equals(protocol)
                 && "tool_calls".equals(wire.getJSONArray("choices").getJSONObject(0).getString("finish_reason")) != (callCount > 0)) throw invalid();
-        if ("anthropic".equals(protocol) && "tool_use".equals(wire.getString("stop_reason")) != (callCount > 0)) throw invalid();
+        if (("anthropic".equals(protocol)||"bedrock_anthropic".equals(protocol)) && "tool_use".equals(wire.getString("stop_reason")) != (callCount > 0)) throw invalid();
         Object content = assistant.opt("content");
         if (content != null && content != JSONObject.NULL && !(content instanceof String)) throw invalid();
         if ((content == null || content == JSONObject.NULL || ((String) content).isEmpty())
@@ -212,7 +254,7 @@ public final class ApiTurnStream {
                 if(first!=null)usage.terminal(first.optString("finish_reason"));break;
             }
             case "openai_responses":usage.terminal(wire.optString("status"));break;
-            case "anthropic":usage.terminal(wire.optString("stop_reason"));break;
+            case "anthropic":case "bedrock_anthropic":usage.terminal(wire.optString("stop_reason"));break;
             case "gemini":{
                 JSONArray candidates=wire.optJSONArray("candidates");JSONObject first=candidates==null?null:candidates.optJSONObject(0);
                 if(first!=null)usage.terminal(first.optString("finishReason"));break;
@@ -498,6 +540,10 @@ public final class ApiTurnStream {
         Anthropic(TextSink sink,ProviderUsage.Observer usage) { this.sink = sink;this.usage=usage; }
         public boolean accept(Frame frame) throws Exception {
             JSONObject event = eventObject(frame.data); String type = identity(event, "type"); named(frame, type);
+            return accept(event,type);
+        }
+        boolean accept(JSONObject event)throws Exception {return accept(event,identity(event,"type"));}
+        private boolean accept(JSONObject event,String type)throws Exception {
             if ("error".equals(type)) throw interrupted();
             if ("ping".equals(type)) return false;
             if ("message_start".equals(type)) {

@@ -29,7 +29,7 @@ import org.robolectric.annotation.ConscryptMode;
 @ConscryptMode(ConscryptMode.Mode.OFF)
 public final class ProjectPackageNativeDeliveryJourneyTest {
     private ProjectManagedRunnerJourneyTest original;private LocalModule local;private WorkspaceModule workspace;private TaskStore tasks;private TaskStoreProjectHost host;private RunControl control;private String taskId,project,checkout,run;private int epoch;private ProjectCapabilityPort port;
-    @Before public void create()throws Exception {original=new ProjectManagedRunnerJourneyTest();original.create();call("selectedProject",new Class<?>[]{String.class},"新F010真实项目");call("file",new Class<?>[]{String.class,String.class},"index.html","<h1>40.00</h1><link rel=stylesheet href=site.css><script type=module src=app.mjs></script><img src=pixel.png>");call("file",new Class<?>[]{String.class,String.class},"site.css","h1{color:#124}");call("file",new Class<?>[]{String.class,String.class},"app.mjs","globalThis.amount=40.00;\n");call("startTask",new Class<?>[]{String.class},"Read real project, obtain an approved native immutable package then reopen original version");local=field("local");workspace=field("workspace");tasks=field("tasks");host=field("host");taskId=field("taskId");project=field("project");checkout=field("checkout");Path active=active();Files.write(active.resolve("pixel.png"),new byte[]{(byte)137,80,78,71,0,1,-1});Files.createDirectories(active.resolve("empty/sub"));Files.writeString(active.resolve(".env"),"not exported");Files.createDirectories(active.resolve("dist"));Files.writeString(active.resolve("dist/generated.txt"),"generated-40");
+    @Before public void create()throws Exception {original=new ProjectManagedRunnerJourneyTest();original.createTerminalFixture();call("selectedProject",new Class<?>[]{String.class},"新F010真实项目");call("file",new Class<?>[]{String.class,String.class},"index.html","<h1>40.00</h1><link rel=stylesheet href=site.css><script type=module src=app.mjs></script><img src=pixel.png>");call("file",new Class<?>[]{String.class,String.class},"site.css","h1{color:#124}");call("file",new Class<?>[]{String.class,String.class},"app.mjs","globalThis.amount=40.00;\n");call("startTask",new Class<?>[]{String.class,String.class},"Read real project, obtain an approved native immutable package then reopen original version",UUID.randomUUID().toString());local=field("local");workspace=field("workspace");tasks=field("tasks");host=field("host");taskId=field("taskId");project=field("project");checkout=field("checkout");Path active=active();Files.write(active.resolve("pixel.png"),new byte[]{(byte)137,80,78,71,0,1,-1});Files.createDirectories(active.resolve("empty/sub"));Files.writeString(active.resolve(".env"),"not exported");Files.createDirectories(active.resolve("dist"));Files.writeString(active.resolve("dist/generated.txt"),"generated-40");
         JSONObject attempt=(JSONObject)call("startFixtureAttempt",new Class<?>[0]);run=attempt.getString("runId");epoch=attempt.getInt("coordinatorEpoch");java.util.concurrent.atomic.AtomicReference<RunControl> live=field("live");control=live.get();var binding=new ModelCapabilityAdapters.Binding(taskId,run,epoch,control,true,project);port=new ProjectCapabilityPort(binding,new TaskStoreCapabilityAuthority(tasks,binding,event->{}),control,null,local,tasks,checkout,"managed_process_v1");JSONArray tools=new JSONArray();for(int i=0;i<port.tools().length();i++)tools.put(port.tools().getJSONObject(i).getJSONObject("function").getString("name"));tasks.authorizeTools(taskId,run,tools);
     }
     @After public void close()throws Exception {try{if(port!=null)port.close();}finally{if(original!=null)original.close();}}
@@ -40,6 +40,64 @@ public final class ProjectPackageNativeDeliveryJourneyTest {
     /** Exact production claim, stopping immediately before Host would record Local's receipt. */
     private JSONObject claim(JSONObject ref)throws Exception {JSONObject args=new JSONObject().put("planRef",ref.getString("planRef")).put("planDigest",ref.getString("planDigest")).put("stepId","freeze_package"),full=tasks.projectArguments(taskId,run,epoch,args).getJSONObject("plan"),exact=ProjectDevelopment.exact(full,ProjectBuildPlan.step(full,"freeze_package"));String op=tasks.journal(taskId,run,epoch,control).beginOperation("project_execute",args);JSONObject binding=new JSONObject().put("taskId",taskId).put("runId",run).put("coordinatorEpoch",epoch).put("operationId",op),capability=local.projectCapabilityForHost(exact).put("nativeProjectPlan",new JSONObject().put("fullPlanStoredInOriginalTaskStore",true).put("planDigest",full.getString("planDigest")).put("step",ProjectPlanRecords.reviewStep(ProjectBuildPlan.step(full,"freeze_package"))).put("executionAuthorized",false));JSONObject approval=tasks.requireCapabilityApproval(taskId,run,"project_execute",args,capability);assertFalse(approval.optBoolean("approved"));tasks.decideCapabilityApproval(taskId,approval.getString("approvalId"),true);JSONObject claimed=tasks.claimProjectOperation(binding,exact,capability,control);assertTrue(claimed.getBoolean("fresh"));return new JSONObject().put("binding",binding).put("route",claimed.getJSONObject("projectExecution")).put("exact",exact).put("plan",full);}
     private JSONObject nativeEffect(JSONObject claimed)throws Exception {return local.executeProjectForHost(claimed.getJSONObject("exact"),claimed.getJSONObject("route"),control,()->{control.check();tasks.checkCapabilityCurrent(taskId,run,epoch,"project_execute");tasks.projectOperation(claimed.getJSONObject("binding"),claimed.getJSONObject("exact"));});}
+    /** SQL metadata fixture only: these descriptors deliberately create no native Selection authority. */
+    private JSONObject previewReferenceMetadata(JSONObject source)throws Exception {
+        JSONObject ref=new JSONObject().put("referenceId",UUID.randomUUID().toString()).put("documentId",UUID.randomUUID().toString())
+            .put("documentGeneration",2L).put("previewId","a".repeat(64)).put("path","index.html").put("resourceSha256","b".repeat(64))
+            .put("selectorHint","h1").put("text","40.00").put("htmlSnippet","<h1>40.00</h1>")
+            .put("bounds",new JSONObject().put("x",1).put("y",2).put("width",80).put("height",24))
+            .put("truncated",new JSONObject().put("selectorHint",false).put("text",false).put("htmlSnippet",false))
+            .put("untrusted",true).put("selectorIsSourceLocation",false);
+        for(String key:new String[]{"taskId","runId","epoch","conversationId","projectId","checkoutId","sourceDigest","sourceKind","artifactId","artifactSha256","packageOperationId"})ref.put(key,source.get(key));
+        return dev.pocketengine.features.local.preview.PreviewElementRef.checked(ref);
+    }
+    private JSONObject settledPreviewSource()throws Exception {
+        JSONObject claimed=claim(proposal()),receipt=nativeEffect(claimed);assertEquals("completed",receipt.getString("status"));
+        tasks.recordProjectOperation(claimed.getJSONObject("binding"),claimed.getJSONObject("exact"),receipt);
+        return tasks.ownerPackagePreviewSource(taskId,claimed.getJSONObject("binding").getString("operationId"));
+    }
+    @Test public void packagePreviewSourceRequiresSettledSqlReceiptEvenWhenCatalogAlreadyContainsBytes()throws Exception {
+        JSONObject claimed=claim(proposal()),receipt=nativeEffect(claimed);String operation=claimed.getJSONObject("binding").getString("operationId");
+        assertEquals("completed",receipt.getString("status"));assertEquals(1,workspace.handle("listArtifacts",new JSONObject().put("projectId",project)).getJSONArray("artifacts").length());
+        assertThrows(SecurityException.class,()->tasks.ownerPackagePreviewSource(taskId,operation));
+        tasks.recordProjectOperation(claimed.getJSONObject("binding"),claimed.getJSONObject("exact"),receipt);
+        JSONObject source=tasks.ownerPackagePreviewSource(taskId,operation);
+        assertEquals(receipt.getJSONObject("packageArtifact").getString("id"),source.getString("artifactId"));
+        assertEquals("fixed_workspace_project_artifact",source.getString("sourceKind"));assertFalse(source.has("previewId"));
+        assertEquals(operation,source.getString("packageOperationId"));assertFalse(source.getBoolean("authorityAdded"));
+    }
+    @Test public void packagePreviewSourceKeepsProducingRunAfterOriginalTaskStartsNextRun()throws Exception {
+        JSONObject source=settledPreviewSource();String producingRun=source.getString("runId");int producingEpoch=source.getInt("epoch");
+        tasks.endAttempt(taskId,run,"awaiting_user","Original file operation settled; later run is a separate receiver",new JSONObject());
+        RunControl nextControl=new RunControl();JSONObject next=tasks.startOriginalCapabilityAttempt(taskId,run,epoch,120,nextControl,"Explicit owner fixture continuation of the same scoped task");assertNotEquals(producingRun,next.getString("runId"));
+        JSONObject reread=tasks.ownerPackagePreviewSource(taskId,source.getString("packageOperationId"));
+        assertEquals(producingRun,reread.getString("runId"));assertEquals(producingEpoch,reread.getInt("epoch"));
+        tasks.requireOwnerPreviewReference(previewReferenceMetadata(reread));
+        JSONObject wrong=previewReferenceMetadata(reread).put("runId",next.getString("runId")).put("epoch",next.getInt("coordinatorEpoch"));
+        assertThrows(SecurityException.class,()->tasks.requireOwnerPreviewReference(wrong));
+        assertEquals(next.getString("runId"),tasks.get(taskId,false).getString("runId"));
+    }
+    @Test public void equalArchiveBytesCannotExchangeOriginalPackageOperationOrArtifact()throws Exception {
+        JSONObject first=settledPreviewSource(),second=settledPreviewSource();
+        assertEquals(first.getString("artifactSha256"),second.getString("artifactSha256"));
+        assertNotEquals(first.getString("artifactId"),second.getString("artifactId"));
+        JSONObject reference=previewReferenceMetadata(first);tasks.requireOwnerPreviewReference(reference);
+        for(String key:new String[]{"artifactId","packageOperationId"}){
+            JSONObject wrong=new JSONObject(reference.toString()).put(key,second.get(key));
+            assertThrows(SecurityException.class,()->tasks.requireOwnerPreviewReference(wrong));
+        }
+        assertThrows(IllegalArgumentException.class,()->tasks.ownerPackagePreviewSource(UUID.randomUUID().toString(),first.getString("packageOperationId")));
+        assertEquals(2,workspace.handle("listArtifacts",new JSONObject().put("projectId",project)).getJSONArray("artifacts").length());
+    }
+    @Test public void packagePreviewSourceRequiresActualProducingRunEpochRow()throws Exception {
+        JSONObject source=settledPreviewSource();var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);
+        var db=(android.database.sqlite.SQLiteDatabase)field.get(tasks);String[] identity={taskId,source.getString("runId")};
+        synchronized(tasks){try{
+            var changed=new android.content.ContentValues();changed.put("epoch",source.getInt("epoch")+1);assertEquals(1,db.update("runs",changed,"task_id=? AND run_id=?",identity));
+            assertThrows(SecurityException.class,()->tasks.ownerPackagePreviewSource(taskId,source.getString("packageOperationId")));
+        }finally{var originalEpoch=new android.content.ContentValues();originalEpoch.put("epoch",source.getInt("epoch"));assertEquals(1,db.update("runs",originalEpoch,"task_id=? AND run_id=?",identity));}}
+        assertEquals(source.getInt("epoch"),tasks.ownerPackagePreviewSource(taskId,source.getString("packageOperationId")).getInt("epoch"));
+    }
     @Test public void changedGeneratedAssetFailsBeforePublicationThenFreshExactReviewCanSaveBinaryPackage()throws Exception {
         JSONObject first=claim(proposal());String source=first.getJSONObject("exact").getString("sourceDigest");Files.writeString(active().resolve("dist/generated.txt"),"generated-45");assertEquals(source,ProjectSources.describe(local.handle("export",new JSONObject().put("checkoutId",checkout))).getString("sourceDigest"));JSONObject failed=nativeEffect(first);assertEquals("failed",failed.getString("status"));assertFalse(failed.getBoolean("nativePublicationEntered"));assertTrue(failed.getBoolean("receiptReceived"));assertFalse(failed.has("packageArtifact"));tasks.recordProjectOperation(first.getJSONObject("binding"),first.getJSONObject("exact"),failed);assertFalse(tasks.hasUnresolved(taskId));assertEquals(0,workspace.handle("listArtifacts",new JSONObject().put("projectId",project)).getJSONArray("artifacts").length());
         JSONObject second=claim(proposal()),saved=nativeEffect(second);
