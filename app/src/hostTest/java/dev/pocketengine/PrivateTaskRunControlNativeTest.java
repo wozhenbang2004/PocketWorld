@@ -48,7 +48,7 @@ public final class PrivateTaskRunControlNativeTest {
     private static void set(EngineApplication app,String name,Object value)throws Exception{Field field=EngineApplication.class.getDeclaredField(name);field.setAccessible(true);field.set(app,value);}
     private static Object get(EngineApplication app,String name)throws Exception{Field field=EngineApplication.class.getDeclaredField(name);field.setAccessible(true);return field.get(app);}
     @Before public void prepare()throws Exception{
-        app=(EngineApplication)RuntimeEnvironment.getApplication();app.tasks=new TaskStore(app);app.settings=new SettingsStore(app);app.features=new FeatureHost(ignored->{},app.tasks,()->false);
+        app=(EngineApplication)RuntimeEnvironment.getApplication();app.tasks=new TaskStore(app);dev.pocketengine.testutil.ReadyApplicationFixture.complete(app);app.settings=new SettingsStore(app);app.features=new FeatureHost(ignored->{},app.tasks,()->false);
         app.getSharedPreferences("private_settings",0).edit().putString("baseUrl","https://example.invalid").putString("model","fixture-no-network").putString("provider","openai_chat").commit();
         app.setOriginalDeviceChildStops((id,original)->{assertTrue(original.isCancelled());assertTrue(original.hasHostRun());assertEquals(id,original.hostRunIdentity().taskId());childStops.add(original);});
         app.addObserver(events::add);((ExecutorService)get(app,"capabilityWorkers")).shutdownNow();workers=new Queue();set(app,"capabilityWorkers",workers);

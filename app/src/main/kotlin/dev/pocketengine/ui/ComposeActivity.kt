@@ -23,6 +23,25 @@ import dev.pocketengine.features.attachments.OwnerAttachmentImport
 class ComposeActivity : ComponentActivity() {
     private lateinit var controller: PocketWorldController
     private lateinit var webHost: dev.pocketengine.ui.web.PocketWebHost
+    private var webHostIsBusiness = false
+    private var businessMounted = false
+    private var businessGeneration = -1L
+    private var crossedBootstrap = false
+    private var ignoredBusinessResult = false
+    private var startupSaved: Bundle? = null
+    // Only a new content selection received by this live Activity may wait for startup.
+    // Saved picker, voice and continue operations never enter this slot.
+    private var freshBootstrapContent: Intent? = null
+    private var bootstrapPresentation: org.json.JSONObject? = null
+    private val pickerOwners = mutableMapOf<String, Long>()
+    private fun businessCurrent(): Boolean = businessMounted && ::controller.isInitialized &&
+        !isFinishing && !isDestroyed && (application as EngineApplication).businessReady() &&
+        runCatching { (application as EngineApplication).bootstrapState().optLong("generation", -2L) == businessGeneration }.getOrDefault(false)
+    private fun armBusinessPicker(key: String) { check(businessCurrent()); pickerOwners[key] = businessGeneration }
+    private fun acceptBusinessResult(key: String? = null): Boolean {
+        val owner = key?.let { pickerOwners.remove(it) }
+        return (businessCurrent() && (key == null || !crossedBootstrap || owner == businessGeneration)).also { if (!it) ignoredBusinessResult = true }
+    }
     private var nativeWorkspace = false
     private var nativeWorkspaceView: ComposeView? = null
     private var savedWebPresentation: org.json.JSONObject? = null
@@ -32,74 +51,89 @@ class ComposeActivity : ComponentActivity() {
     private var exportPath: String? = null
     private var mcpPickRequestId: String? = null
     private val mcpPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        controller.completeMcpConfig(mcpPickRequestId, uri); mcpPickRequestId = null
+        if (acceptBusinessResult("mcp")) controller.completeMcpConfig(mcpPickRequestId, uri)
+        mcpPickRequestId = null
     }
     // Preserve the old static registration slot. An old result cannot consume a new nonce's target.
     @Suppress("unused")
     private val legacyAttachmentPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val original = legacyImportTarget; legacyImportTarget = null
+        if (!acceptBusinessResult("legacyAttachment")) return@registerForActivityResult
         if (result.resultCode == Activity.RESULT_OK && result.data != null) controller.importAttachments(Intent(result.data!!), original)
         else controller.attachmentImportSelectionEnded(result.resultCode == Activity.RESULT_CANCELED)
     }
-    private val attachmentPicker = AttachmentImportPicker(activityResultRegistry, { files, original -> controller.importAttachments(files, original) }, { cancelled -> controller.attachmentImportSelectionEnded(cancelled) })
+    private val attachmentPicker = AttachmentImportPicker(activityResultRegistry, { files, original -> if (acceptBusinessResult("attachment")) controller.importAttachments(files, original) }, { cancelled -> if (acceptBusinessResult("attachment")) controller.attachmentImportSelectionEnded(cancelled) })
     // Reserve the former static registration position so other saved picker keys do not shift.
     // A legacy result has no request nonce and cannot authorize any current export.
     @Suppress("unused")
     private val legacyOutcomeExportPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
-    private val outcomeExportPicker = AttachmentExportPicker(activityResultRegistry){requestId,uri->controller.attachmentOutcomes.exportResult(requestId,uri)}
+    private val outcomeExportPicker = AttachmentExportPicker(activityResultRegistry){requestId,uri->if (acceptBusinessResult("outcome:$requestId")) controller.attachmentOutcomes.exportResult(requestId,uri)}
     private fun restoreOutcomeDocument(requestId:String){
+        if (!businessCurrent()) return
         val flow=controller.attachmentOutcomes
         try{outcomeExportPicker.restore(requestId)}catch(_:RuntimeException){flow.exportLaunchResult(requestId,OutcomeExportLaunch.UNKNOWN)}
     }
     internal fun createOutcomeDocument(mime:String,name:String){
+        check(businessCurrent()) { "原业务窗口尚未就绪，请核对原导出。" }
         val flow=controller.attachmentOutcomes;val requestId=flow.exportRequestId?:return
+        armBusinessPicker("outcome:$requestId")
         flow.exportLaunchResult(requestId,outcomeExportPicker.launch(requestId,mime,name))
     }
-    private val ownerArchiveImportPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> controller.ownerArchives.importResult(uri) }
-    private val ownerArchiveExportPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri -> controller.ownerArchives.exportResult(uri) }
-    internal fun pickOwnerDataArchive() { try { ownerArchiveImportPicker.launch(arrayOf("application/zip", "application/octet-stream")) } catch (_: RuntimeException) { controller.ownerArchives.importResult(null) } }
-    internal fun createOwnerDataArchive(name: String) { try { ownerArchiveExportPicker.launch(name) } catch (_: RuntimeException) { controller.ownerArchives.exportResult(null) } }
+    private val ownerArchiveImportPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (acceptBusinessResult("archiveImport")) controller.ownerArchives.importResult(uri) }
+    private val ownerArchiveExportPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri -> if (acceptBusinessResult("archiveExport")) controller.ownerArchives.exportResult(uri) }
+    internal fun pickOwnerDataArchive() { armBusinessPicker("archiveImport"); try { ownerArchiveImportPicker.launch(arrayOf("application/zip", "application/octet-stream")) } catch (_: RuntimeException) { pickerOwners.remove("archiveImport"); controller.ownerArchives.importResult(null) } }
+    internal fun createOwnerDataArchive(name: String) { armBusinessPicker("archiveExport"); try { ownerArchiveExportPicker.launch(name) } catch (_: RuntimeException) { pickerOwners.remove("archiveExport"); controller.ownerArchives.exportResult(null) } }
     private var storageDiagnosticTicket: dev.pocketengine.features.local.runtime.NativeDiagnosticWindow.Ticket? = null
     private val storageDiagnosticPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         val original = storageDiagnosticTicket; storageDiagnosticTicket = null
-        controller.projectStorage.diagnosticExportResult(original, uri)
+        if (acceptBusinessResult("storageDiagnostic")) controller.projectStorage.diagnosticExportResult(original, uri)
     }
     internal fun createStorageDiagnostic(ticket: dev.pocketengine.features.local.runtime.NativeDiagnosticWindow.Ticket) {
+        check(businessCurrent())
         check(storageDiagnosticTicket == null) { "原诊断文件选择尚未结束" }
         storageDiagnosticTicket = ticket
+        armBusinessPicker("storageDiagnostic")
         try { storageDiagnosticPicker.launch("pocketworld-diagnostic-metadata.json") }
         catch (_: RuntimeException) { storageDiagnosticTicket = null; controller.projectStorage.diagnosticPickerUnavailable(ticket) }
     }
-    private val projectPackageImportPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> controller.projectPackages.importResult(uri) }
-    private val projectPackageExportPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri -> controller.projectPackages.exportResult(uri) }
+    private val projectPackageImportPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (acceptBusinessResult("packageImport")) controller.projectPackages.importResult(uri) }
+    private val projectPackageExportPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri -> if (acceptBusinessResult("packageExport")) controller.projectPackages.exportResult(uri) }
     internal fun pickProjectPackageDocument() {
+        check(businessCurrent())
+        armBusinessPicker("packageImport")
         try { projectPackageImportPicker.launch(arrayOf("application/zip", "application/octet-stream")) }
         catch (_: RuntimeException) { controller.projectPackages.importResult(null) }
     }
     internal fun createProjectPackageDocument(name: String) {
+        check(businessCurrent())
+        armBusinessPicker("packageExport")
         try { projectPackageExportPicker.launch(name) }
         catch (_: RuntimeException) { controller.projectPackages.exportResult(null) }
     }
     private val exportPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        controller.completeExport(if (result.resultCode == Activity.RESULT_OK) result.data?.data else null, exportPath)
+        if (acceptBusinessResult("export")) controller.completeExport(if (result.resultCode == Activity.RESULT_OK) result.data?.data else null, exportPath)
         exportPath = null
     }
     private val workingFilePickers = linkedMapOf<String, androidx.activity.result.ActivityResultLauncher<Array<String>>>()
     internal fun cancelProjectWorkingFile(nonce: String) { workingFilePickers.remove(nonce)?.unregister() }
     internal fun pickProjectWorkingFile(nonce: String) {
+        check(businessCurrent())
         require(nonce.matches(Regex("[a-f0-9-]{36}")))
+        armBusinessPicker("working:$nonce")
         var delivered = false
         val launcher = activityResultRegistry.register("owner_working_file_$nonce", ActivityResultContracts.OpenDocument()) { uri ->
             delivered = true
             workingFilePickers.remove(nonce)?.unregister()
-            controller.projectFileImports.result(nonce, uri)
+            if (acceptBusinessResult("working:$nonce")) controller.projectFileImports.result(nonce, uri)
         }
         if (delivered) { launcher.unregister(); return }
         workingFilePickers[nonce] = launcher
         try { launcher.launch(arrayOf("*/*")) } catch (failed: RuntimeException) { workingFilePickers.remove(nonce)?.unregister(); throw failed }
     }
-    private val projectSourceTreePicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> controller.projectPackages.importResult(uri) }
+    private val projectSourceTreePicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> if (acceptBusinessResult("sourceTree")) controller.projectPackages.importResult(uri) }
     internal fun pickProjectSourceDirectory() {
+        check(businessCurrent())
+        armBusinessPicker("sourceTree")
         try { projectSourceTreePicker.launch(null) }
         catch (_: RuntimeException) { controller.projectPackages.importResult(null) }
     }
@@ -108,8 +142,41 @@ class ComposeActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val engine = application as EngineApplication
+        startupSaved = savedInstanceState?.let { Bundle(it) }
+        crossedBootstrap = savedInstanceState?.getBoolean("bootstrapWasShown") == true || !engine.businessReady()
+        if (savedInstanceState == null && crossedBootstrap) retainFreshBootstrapContent(intent)
+        bootstrapPresentation = savedInstanceState?.getString("bootstrapPresentation")?.let { runCatching { org.json.JSONObject(it) }.getOrNull() }
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (!nativeWorkspace && ::webHost.isInitialized) webHost.handleBack { moveTaskToBack(true) }
+                else if (!businessMounted) moveTaskToBack(true)
+            }
+        })
+        if (engine.businessReady() && !crossedBootstrap) mountBusiness(savedInstanceState)
+        else showBootstrap()
+    }
+    private fun showBootstrap() {
+        crossedBootstrap = true
+        nativeWorkspace = false
+        webHostIsBusiness = false
+        webHost = dev.pocketengine.ui.web.PocketWebHost.bootstrap(this, application as EngineApplication, bootstrapPresentation) {
+            if (!isFinishing && !isDestroyed && !businessMounted) mountBusiness(null)
+        }
+        setContentView(webHost.view)
+        webHost.start()
+        if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) webHost.resume()
+    }
+    private fun mountBusiness(savedInstanceState: Bundle?) {
+        val engine = application as EngineApplication
+        if (businessMounted || ::controller.isInitialized || !engine.businessReady() || isFinishing || isDestroyed) return
+        val startup = runCatching { engine.bootstrapState() }.getOrNull()
+        if (startup == null) { if (!::webHost.isInitialized) showBootstrap(); return }
+        if (::webHost.isInitialized) webHost.close()
+        bootstrapPresentation = null
+        businessGeneration = startup.optLong("generation", -1L)
         media = MediaController(this, engine::publish)
         controller = PocketWorldController(this, engine)
+        businessMounted = true
         controller.attachmentOutcomes.restore(savedInstanceState)
         controller.attachmentOutcomes.exportRequestId?.let(::restoreOutcomeDocument)
         controller.projectPackages.restore(savedInstanceState)
@@ -126,13 +193,33 @@ class ComposeActivity : ComponentActivity() {
         savedWebPresentation = savedInstanceState?.getString("libraryWebPresentation")?.let { runCatching { org.json.JSONObject(it) }.getOrNull() }
         if (savedInstanceState?.getBoolean("nativeWorkspace") == true) showNativeWorkspace()
         else showWebWorkspace()
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                if (!nativeWorkspace) webHost.handleBack { moveTaskToBack(true) }
-            }
-        })
         controller.attach()
         engine.publish(media.state())
+        if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) resumeBusiness()
+        if (crossedBootstrap) {
+            // Navigation can be revalidated. Old picker/voice/import/continue mutations cannot be replayed into a fresh Controller.
+            val pending = intent
+            val freshContent = freshBootstrapContent
+            freshBootstrapContent = null
+            val contentSelection = pending?.action in setOf(Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE, Intent.ACTION_VIEW)
+            val needsNewRequest = (contentSelection && freshContent == null) || pending?.action == dev.pocketengine.phone.QuickPanelVoiceHandoff.ACTION ||
+                pending?.hasExtra(dev.pocketengine.features.assistant.CompatibilityChatHandoff.EXTRA) == true || ignoredBusinessResult
+            if (contentSelection || needsNewRequest) {
+                pending?.action = null
+                if (pending?.data?.host !in setOf("owner-request", "automation")) pending?.data = null
+                pending?.clipData = null
+                pending?.removeExtra(Intent.EXTRA_STREAM)
+                pending?.removeExtra(dev.pocketengine.phone.QuickPanelVoiceHandoff.TOKEN_EXTRA)
+                pending?.removeExtra(dev.pocketengine.features.assistant.CompatibilityChatHandoff.EXTRA)
+            }
+            if (needsNewRequest) engine.error("此前文件选择、听写或继续请求没有重放。请回原入口核对后重新选择；原操作结果仍需查询。")
+            deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverAccountEntry(intent)
+            // Original content-only import/inspection paths; no old task target, grant or continue token.
+            deliverSharedFiles(freshContent); deliverSkillDocument(freshContent)
+            startupSaved?.getString("channelPhoneEventId")?.let { controller.prepareChannelPhone(it) }
+            startupSaved = null
+            return
+        }
         deliverPhoneTask(intent)
         deliverRemoteAttention(intent)
         deliverGoal(intent)
@@ -142,7 +229,7 @@ class ComposeActivity : ComponentActivity() {
         deliverCompatibilityChat(intent)
     }
     private fun confirmWorkspaceSwitch(toNative: Boolean, stillSafe: () -> Boolean = { true }) {
-        if (isFinishing || isDestroyed || toNative == nativeWorkspace) return
+        if (!businessCurrent() || toNative == nativeWorkspace) return
         if (!stillSafe()) {
             android.widget.Toast.makeText(this, "当前工作正在处理，请结束当前页面后重试。", android.widget.Toast.LENGTH_SHORT).show()
             return
@@ -178,6 +265,7 @@ class ComposeActivity : ComponentActivity() {
         }
 
     private fun webWorkspaceCanSwitch(): Boolean {
+        if (!businessCurrent() || !webHostIsBusiness) return false
         val state = controller.state
         return ::webHost.isInitialized && webHost.canSwitchPresentation() && state.ownerPending.isEmpty() && state.moduleBusy.isEmpty() && !state.chatSubmitting &&
             !state.phoneSubmitting && !state.fileSaving && !state.modelSaving && !state.modelTesting && !controller.modelSelectionPending() &&
@@ -186,6 +274,7 @@ class ComposeActivity : ComponentActivity() {
     }
 
     private fun showNativeWorkspace() {
+        if (!businessCurrent()) return
         if (nativeWorkspace && nativeWorkspaceView != null) return
         if (::webHost.isInitialized) {
             savedWebPresentation = org.json.JSONObject(webHost.savePresentationState())
@@ -201,7 +290,8 @@ class ComposeActivity : ComponentActivity() {
     }
 
     private fun showWebWorkspace() {
-        if (!nativeWorkspace && ::webHost.isInitialized) return
+        if (!businessCurrent()) return
+        if (!nativeWorkspace && ::webHost.isInitialized && webHostIsBusiness) return
         nativeWorkspaceView?.disposeComposition()
         nativeWorkspaceView = null
         if (nativeWorkspace) {
@@ -209,15 +299,62 @@ class ComposeActivity : ComponentActivity() {
         }
         nativeWorkspace = false
         webHost = dev.pocketengine.ui.web.PocketWebHost(this, controller, savedWebPresentation)
+        webHostIsBusiness = true
         setContentView(workspaceLayout("打开原生工作台", { confirmWorkspaceSwitch(true, ::webWorkspaceCanSwitch) }, webHost.view))
         webHost.start()
         if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) webHost.resume()
     }
 
-    override fun onResume() { super.onResume(); if (!nativeWorkspace && ::webHost.isInitialized) webHost.resume(); if (::controller.isInitialized) { controller.projectLivePreviewForeground(true); controller.notificationPreviewsForeground(true) }; (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, true); (application as EngineApplication).refreshRemoteAttention(); if (::controller.isInitialized) { controller.realtimeForeground(true); controller.refresh(); controller.backgroundSetupResumed(); controller.attachmentOutcomes.exportRequestId?.let(::restoreOutcomeDocument); attachmentPicker.resume(); controller.attachmentOutcomes.foreground(true); controller.projectFileImports.foreground(true);controller.projectPackages.foreground(true); controller.ownerArchives.foreground(true); controller.projectStorage.foreground(true); controller.projectGitImports.foreground(true) } }
-    override fun onPause() { if (!nativeWorkspace && ::webHost.isInitialized) webHost.pause(); if (::controller.isInitialized) { controller.projectLivePreviewForeground(false); controller.notificationPreviewsForeground(false) }; (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, false); if (::controller.isInitialized) { controller.persistOwnerComposer(); controller.projectFileImports.foreground(false);controller.projectPackages.foreground(false); controller.ownerArchives.foreground(false); controller.projectStorage.foreground(false); controller.projectGitImports.foreground(false); controller.attachmentOutcomes.foreground(false); controller.realtimeForeground(false) }; if (::media.isInitialized) media.stopListening(); super.onPause() }
-    override fun onWindowFocusChanged(hasFocus: Boolean) { super.onWindowFocusChanged(hasFocus); if (::controller.isInitialized) controller.notificationPreviewsFocus(hasFocus) }
-    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverSharedFiles(intent); deliverSkillDocument(intent); deliverAccountEntry(intent); deliverCompatibilityChat(intent) }
+    private fun resumeBusiness() {
+        if (!businessCurrent()) return
+        controller.projectLivePreviewForeground(true); controller.notificationPreviewsForeground(true)
+        val engine = application as EngineApplication
+        engine.remoteOwnerWorkflows?.setForeground(this, true); engine.refreshRemoteAttention()
+        controller.realtimeForeground(true); controller.refresh(); controller.backgroundSetupResumed()
+        controller.attachmentOutcomes.exportRequestId?.let(::restoreOutcomeDocument); attachmentPicker.resume()
+        controller.attachmentOutcomes.foreground(true); controller.projectFileImports.foreground(true)
+        controller.projectPackages.foreground(true); controller.ownerArchives.foreground(true)
+        controller.projectStorage.foreground(true); controller.projectGitImports.foreground(true)
+    }
+    override fun onResume() {
+        super.onResume()
+        if (businessMounted && !businessCurrent()) {
+            crossedBootstrap = true
+            if (::webHost.isInitialized) webHost.close()
+            // A retired business Controller is never rebound to another database generation.
+            recreate(); return
+        }
+        if (!nativeWorkspace && ::webHost.isInitialized) webHost.resume()
+        resumeBusiness()
+    }
+    override fun onPause() {
+        if (!nativeWorkspace && ::webHost.isInitialized) webHost.pause()
+        if (::controller.isInitialized) {
+            // Revoke every owner window even when persistence is no longer available.
+            listOf<() -> Unit>(
+                { controller.projectLivePreviewForeground(false) }, { controller.notificationPreviewsForeground(false) },
+                { (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, false) },
+                { if (businessCurrent()) controller.persistOwnerComposer() }, { controller.projectFileImports.foreground(false) },
+                { controller.projectPackages.foreground(false) }, { controller.ownerArchives.foreground(false) },
+                { controller.projectStorage.foreground(false) }, { controller.projectGitImports.foreground(false) },
+                { controller.attachmentOutcomes.foreground(false) }, { controller.realtimeForeground(false) }
+            ).forEach { runCatching(it) }
+        }
+        if (::media.isInitialized) media.stopListening()
+        super.onPause()
+    }
+    override fun onWindowFocusChanged(hasFocus: Boolean) { super.onWindowFocusChanged(hasFocus); if (::controller.isInitialized) controller.notificationPreviewsFocus(hasFocus && businessCurrent()) }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent); setIntent(intent)
+        if (!businessCurrent()) { retainFreshBootstrapContent(intent); return }
+        deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverSharedFiles(intent)
+        deliverSkillDocument(intent); deliverAccountEntry(intent); deliverCompatibilityChat(intent)
+    }
+    private fun retainFreshBootstrapContent(incoming: Intent?) {
+        val content = incoming?.action in setOf(Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE) ||
+            incoming?.action == Intent.ACTION_VIEW && incoming.data?.scheme == "content"
+        freshBootstrapContent = if (incoming != null && content && (incoming.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0) Intent(incoming) else null
+    }
     private fun deliverCompatibilityChat(intent: Intent?) {
         val id = intent?.getStringExtra(dev.pocketengine.features.assistant.CompatibilityChatHandoff.EXTRA) ?: return
         intent.removeExtra(dev.pocketengine.features.assistant.CompatibilityChatHandoff.EXTRA)
@@ -249,6 +386,7 @@ class ComposeActivity : ComponentActivity() {
     }
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (!acceptBusinessResult()) return
         media.onRequestPermissionsResult(requestCode, permissions, grantResults)
         controller.realtimePermissionsChanged()
         controller.refresh()
@@ -282,18 +420,24 @@ class ComposeActivity : ComponentActivity() {
         intent?.removeExtra("automationGoal")
     }
     internal fun pickMcpConfig(requestId: String) {
+        check(businessCurrent())
         if (mcpPickRequestId != null) { controller.completeMcpConfig(requestId, null); return }
         mcpPickRequestId = requestId
+        armBusinessPicker("mcp")
         try { mcpPicker.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }
         catch (_: RuntimeException) { mcpPickRequestId = null; controller.completeMcpConfig(requestId, null) }
     }
     internal fun pickAttachments(taskId: String?, projectId: String?) {
+        check(businessCurrent())
         if (controller.state.attachmentImporting) { controller.attachmentImportPickerStatus(AttachmentImportPicker.Launch.BUSY); return }
+        armBusinessPicker("attachment")
         controller.attachmentImportPickerStatus(attachmentPicker.launch(taskId, projectId))
     }
     internal fun offerExport(name: String, mimeType: String, path: String) {
+        check(businessCurrent())
         if (exportPath != null) { controller.completeExport(null, path); return }
         exportPath = path
+        armBusinessPicker("export")
         try { exportPicker.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mimeType).putExtra(Intent.EXTRA_TITLE, name)) }
         catch (_: RuntimeException) { exportPath = null; controller.completeExport(null, path) }
     }
@@ -312,6 +456,13 @@ class ComposeActivity : ComponentActivity() {
         }
     }
     override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("bootstrapWasShown", crossedBootstrap && !businessCurrent())
+        if (!businessCurrent()) {
+            if (::webHost.isInitialized && !webHostIsBusiness) outState.putString("bootstrapPresentation", webHost.savePresentationState())
+            startupSaved?.getString("channelPhoneEventId")?.let { outState.putString("channelPhoneEventId", it) }
+            super.onSaveInstanceState(outState)
+            return
+        }
         controller.persistOwnerComposer()
         outState.putString("channelPhoneEventId", controller.channelPhoneEventId)
         outState.putBoolean("nativeWorkspace", nativeWorkspace)
@@ -326,5 +477,5 @@ class ComposeActivity : ComponentActivity() {
         controller.projectGitImports.save(outState)
         super.onSaveInstanceState(outState)
     }
-    override fun onDestroy() { nativeWorkspaceView?.disposeComposition(); nativeWorkspaceView = null; if (::webHost.isInitialized) webHost.close(); attachmentPicker.close(); outcomeExportPicker.close();workingFilePickers.values.toList().forEach { it.unregister() };workingFilePickers.clear();if (::controller.isInitialized) controller.detach(); if (::media.isInitialized) media.close(); super.onDestroy() }
+    override fun onDestroy() { nativeWorkspaceView?.disposeComposition(); nativeWorkspaceView = null; if (::webHost.isInitialized) webHost.close(); attachmentPicker.close(); outcomeExportPicker.close();workingFilePickers.values.toList().forEach { it.unregister() };workingFilePickers.clear();if (::controller.isInitialized) runCatching { controller.detach() }; businessMounted=false; if (::media.isInitialized) media.close(); super.onDestroy() }
 }

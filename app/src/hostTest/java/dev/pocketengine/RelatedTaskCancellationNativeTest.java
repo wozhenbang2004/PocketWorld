@@ -37,7 +37,7 @@ public final class RelatedTaskCancellationNativeTest {
     private EngineApplication app;private JSONObject parent,successor;private RunControl original;
     private final List<String> stopped=new CopyOnWriteArrayList<>();private String successorChild;
     @Before @SuppressWarnings("unchecked") public void prepare()throws Exception{
-        app=(EngineApplication)RuntimeEnvironment.getApplication();app.deleteDatabase("pocket-world.db");app.tasks=new TaskStore(app);app.features=new FeatureHost(ignored->{},app.tasks,()->false);
+        app=(EngineApplication)RuntimeEnvironment.getApplication();app.deleteDatabase("pocket-world.db");app.tasks=new TaskStore(app);dev.pocketengine.testutil.ReadyApplicationFixture.complete(app);app.features=new FeatureHost(ignored->{},app.tasks,()->false);
         app.features.register(new EngineModule(){public String id(){return "teams";}public JSONObject snapshot(){return new JSONObject();}public JSONObject handle(String command,JSONObject input)throws Exception{assertEquals("cancel",command);String run=input.getString("runId");stopped.add(run);return new JSONObject().put("id",run).put("status","cancelled");}});
         parent=app.tasks.startAttempt(app.tasks.createCapabilityTask("original owner parent","").getString("id"),"capabilities",8);
         original=new RunControl();original.bindHostRun(parent.getString("id"),parent.getString("runId"),parent.getInt("coordinatorEpoch"));

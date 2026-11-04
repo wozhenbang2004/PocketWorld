@@ -15,6 +15,7 @@ public interface CompactionJournal {
     default boolean scopeCurrent(RunControl original)throws Exception{return false;}
     /** Same checkpoint owner, preserving only a currently valid derived field while raw rows append. */
     default void checkpoint(dev.pocketengine.core.RunJournal original,JSONArray messages,int steps,JSONObject observation)throws Exception{original.checkpoint(messages,steps,observation);}
+    default void checkpoint(dev.pocketengine.core.RunJournal original,JSONArray messages,int steps,JSONObject observation,JSONObject progressGuard)throws Exception{original.checkpoint(messages,steps,observation,progressGuard);}
     default JSONObject restore(dev.pocketengine.core.RunJournal original)throws Exception{return original.restore();}
 
     final class FrozenPrefix {

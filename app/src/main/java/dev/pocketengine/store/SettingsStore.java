@@ -19,6 +19,7 @@ import dev.pocketengine.runtime.models.ModelSelectionCoordinator;
 import org.json.JSONArray;
 import dev.pocketengine.runtime.models.ModelCatalogRoutes;
 import dev.pocketengine.runtime.models.ReasoningOptions;
+import dev.pocketengine.runtime.providers.ProviderCompatProfile;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
@@ -350,6 +351,12 @@ public final class SettingsStore {
             }
         }
         ModelConfig next=mergeApi(old,input);validate(next);
+        if(input.has("compatibility")){
+            if(adding)throw new IllegalStateException("请先保存原连接，再设置兼容与缓存选项");
+            ProviderCompatProfile reviewed=input.isNull("compatibility")?null:ProviderCompatProfile.reviewed(input.getJSONObject("compatibility"),next.provider,next.model,old.compatibility);
+            // An unsaved profile is not catalog authority. Keep the saved binding and its daily budget.
+            if(!sameCompatibility(reviewed,next.compatibility))throw new IllegalStateException("兼容或缓存设置尚未保存；请先保存原连接，再测试");
+        }
         if(old.capabilityBinding!=null&&old.provider.equals(next.provider)&&old.baseUrl.equals(next.baseUrl)&&old.apiKey.equals(next.apiKey))
             return old.catalogEnforced?next.withNativeCatalog(old.capabilityBinding,old.model.equals(next.model)?old.reasoning:ReasoningOptions.DEFAULT,old.model.equals(next.model)?old.imageTokenReserve:0):next.withApiConnection(old.capabilityBinding);
         return next;

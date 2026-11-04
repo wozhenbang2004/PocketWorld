@@ -1050,7 +1050,9 @@ internal class PocketWebBridge(
     private fun modelConnection(requestId: String, action: String, args: JSONObject) {
         requireSection("models")
         requireModelSelectionIdle()
-        checkedPayload(args, setOf("id", "expectedRevision", "name", "url", "model", "apiKey", "screenshots", "supportsImageInput", "provider", "maxOutputTokens", "cleartextConsent"))
+        val testing = action == "models.connection.test"
+        checkedPayload(args, setOf("id", "expectedRevision", "name", "url", "model", "apiKey", "screenshots", "supportsImageInput", "provider", "maxOutputTokens", "cleartextConsent", "compatibility") +
+            if (testing) setOf("editorId", "draftRevision") else emptySet())
         val adding = action == "models.connection.add" || action == "models.connection.test" && args.optString("id").isEmpty()
         val id = if (adding) "" else requiredString(args, "id")
         val expected = if (adding) 0L else requiredInt(args, "expectedRevision").also { require(it > 0) { "请重新读取原连接修订" } }.toLong()
@@ -1074,8 +1076,29 @@ internal class PocketWebBridge(
             .put("apiKey", args.optString("apiKey")).put("sendScreenshots", requiredBoolean(args, "screenshots"))
             .put("supportsImageInput", requiredBoolean(args, "supportsImageInput")).put("provider", requiredString(args, "provider"))
             .put("maxOutputTokens", requiredInt(args, "maxOutputTokens")).put("cleartextConsent", args.optString("cleartextConsent"))
-        if (action == "models.connection.test") controller.testApiConnection(id, expected, input, completed)
-        else controller.saveApiConnection(adding, id, expected, args.optString("name", input.getString("model")), input, completed)
+        if (args.has("compatibility")) input.put("compatibility", if (args.isNull("compatibility")) JSONObject.NULL else checkedProviderCompatibility(args.getJSONObject("compatibility")))
+        if (testing) {
+            val editorId = requiredString(args, "editorId")
+            val draftRevision = requiredInt(args, "draftRevision").also { require(it >= 0) { "草稿修订无效，请重新打开连接" } }.toLong()
+            val generation = domainGeneration; val document = documentId; val window = captureWindow()
+            controller.testApiConnection(id, expected, input, editorId, draftRevision, {
+                !closed && section == "models" && document != null && document == documentId && generation == domainGeneration &&
+                    acceptsWindow(window) && controller.webPrivateOwnerVisible()
+            }, completed)
+        } else controller.saveApiConnection(adding, id, expected, args.optString("name", input.getString("model")), input, completed)
+    }
+
+    private fun checkedProviderCompatibility(options: JSONObject): JSONObject {
+        val values = mapOf(
+            "tokenField" to setOf("NATIVE", "MAX_TOKENS", "MAX_COMPLETION_TOKENS"),
+            "streamUsage" to setOf("NATIVE", "OMIT"), "toolWireShape" to setOf("NATIVE", "OPENAI_FUNCTION", "ANTHROPIC_INPUT_SCHEMA"),
+            "schemaSubset" to setOf("NATIVE", "CORE_JSON"), "cacheMode" to setOf("OFF", "EPHEMERAL"),
+            "cacheSupport" to setOf("UNKNOWN", "SUPPORTED", "UNSUPPORTED"))
+        val checked = checkedPayload(options, values.keys + setOf("maxTools", "maxRequestBytes"))
+        for ((key, allowed) in values) if (checked.has(key)) require(requiredString(checked, key) in allowed) { "兼容或缓存选项不在当前支持范围" }
+        if (checked.has("maxTools")) require(requiredInt(checked, "maxTools") in 1..512) { "工具数量上限应为 1–512" }
+        if (checked.has("maxRequestBytes")) require(requiredInt(checked, "maxRequestBytes") in 256..25_165_824) { "请求大小上限应为 256–25165824 字节" }
+        return checked
     }
 
     private fun requireModelSelectionIdle(ownMutation: Boolean = false) {

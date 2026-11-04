@@ -55,11 +55,11 @@ public final class PhoneOwnedPracticeNativeTest {
     private final List<RunControl> controls=new ArrayList<>();
     private final List<PhonePracticeTarget> targets=new ArrayList<>();
     private final List<ActivityController<PhonePracticeActivity>> activities=new ArrayList<>();
-    @Before public void setup(){
+    @Before public void setup()throws Exception{
         // Robolectric 4.16.1 otherwise reuses the Application Context on display 0. The actual
         // Activity needs its own UI/display Context, exactly as Android supplies before onCreate.
         previousActivityContexts=System.getProperty("robolectric.createActivityContexts");System.setProperty("robolectric.createActivityContexts","true");
-        app=(EngineApplication)RuntimeEnvironment.getApplication();app.tasks=new TaskStore(app);
+        app=(EngineApplication)RuntimeEnvironment.getApplication();app.tasks=new TaskStore(app);dev.pocketengine.testutil.ReadyApplicationFixture.complete(app);
     }
     @After public void close()throws Exception {
         try{

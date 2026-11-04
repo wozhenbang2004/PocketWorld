@@ -31,6 +31,8 @@ public final class TeamParentResearchHistory {
             public dev.pocketengine.runtime.context.CompactionJournal compaction(){return original.compaction();}
             public JSONObject restore()throws Exception{return original.restore();}
             public void checkpoint(JSONArray history,int steps,JSONObject observation)throws Exception{original.checkpoint(history,steps,observation);}
+            public boolean progressGuardSupported(){return original.progressGuardSupported();}
+            public void checkpoint(JSONArray messages,int steps,JSONObject observation,JSONObject progressGuard)throws Exception{original.checkpoint(messages,steps,observation,progressGuard);}
             public String beginOperation(String tool,JSONObject args)throws Exception{return original.beginOperation(tool,args);}
             public void finishOperation(String op,JSONObject receipt)throws Exception{original.finishOperation(op,receipt);}
             public boolean hasNativeProjectRunningAck(String op,JSONObject receipt)throws Exception{return original.hasNativeProjectRunningAck(op,receipt);}

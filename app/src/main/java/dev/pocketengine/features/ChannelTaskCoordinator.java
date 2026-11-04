@@ -71,7 +71,17 @@ public final class ChannelTaskCoordinator implements HostTaskPort {
     /** Startup reconciles receipts only. Never re-admit a request or restart a model/unknown effect. */
     public void recover()throws Exception{
         JSONArray existing=tasks.channelTasks();
-        for(int i=0;i<existing.length();i++)publishCurrent(existing.getJSONObject(i).getString("id"),false);
+        for(int i=0;i<existing.length();i++){
+            JSONObject task=tasks.get(existing.getJSONObject(i).getString("id"),false),origin=origin(task);
+            try{channels.checkHostTaskAuthority(origin.getString("requestId"));}
+            catch(SecurityException source){
+                // Only these three original ChannelCore admission denials prove a revoked source.
+                // Closed modules, malformed records, and arbitrary security failures still fail bootstrap.
+                if(!java.util.Set.of("原生反馈的认证来源或连接代次已失效","此消息没有当前主人私聊的独立任务授权","此渠道任务的主人绑定或授权代次已失效").contains(source.getMessage()))throw source;
+                deliveryFailure.accept("原渠道来源已失效，原任务仍保留待本机核对；未恢复投递或重新授权");continue;
+            }
+            channels.recordHostTaskUpdate(origin.getString("requestId"),state(task),false);
+        }
     }
     /** Called after a native owner confirmation/reconciliation; not on every runner step. */
     public void publishTaskState(String id)throws Exception{if(isChannelTask(id))workers.execute(()->publishCurrent(id));}

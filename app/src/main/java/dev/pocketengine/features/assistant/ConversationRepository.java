@@ -91,9 +91,15 @@ public final class ConversationRepository {
         }
     }
     /** Freeze one bounded content snapshot under the original TaskStore/SQLite transaction. */
-    public JSONObject exportConversation(JSONObject input)throws Exception{
+    public JSONObject exportConversation(JSONObject input)throws Exception{return exportConversation(input,false);}
+    /** Native maintenance uses only its verified, private read-only mirror. Never starts a write transaction. */
+    public JSONObject exportVerifiedReadOnlyCopy(JSONObject input)throws Exception{
+        if(!db.isReadOnly())throw new SecurityException("维护导出必须来自只读副本，不能在原可写数据库上运行");
+        return exportConversation(input,true);
+    }
+    private JSONObject exportConversation(JSONObject input,boolean readOnlyCopy)throws Exception{
         ConversationOrganization.fields(input,"conversationId","format");String conversation=input.getString("conversationId"),format=input.optString("format","json");
-        JSONObject payload=transaction(()->{
+        java.util.concurrent.Callable<JSONObject> capture=()->{
             JSONObject header=header(conversation);String gen=activeGeneration();long started=System.nanoTime(),upper;
             try(Cursor max=db.rawQuery("SELECT coalesce(max(n),0) FROM (SELECT sequence n FROM assistant_messages WHERE generation=? AND conversation_id=? UNION ALL SELECT sequence n FROM assistant_import_records WHERE generation=? AND conversation_id=?)",new String[]{gen,conversation,gen,conversation})){max.moveToFirst();upper=max.getLong(0);}
             JSONArray messages=new JSONArray(),omitted=new JSONArray(),attachments=new JSONArray();long bytes=0;int scanned=0;
@@ -112,8 +118,11 @@ public final class ConversationRepository {
                 }
             }
             return new JSONObject().put("schema","pocketworld_conversation_export").put("schemaVersion",1).put("exportId",UUID.randomUUID().toString()).put("sourceConversationId",conversation).put("sourceGeneration",gen).put("historyWatermark",upper).put("exportedAt",System.currentTimeMillis()).put("title",header.optString("title")).put("messages",messages).put("omitted",omitted).put("attachmentReferences",attachments);
-        });
-        return ConversationTransfer.render(payload,format);
+        };
+        JSONObject payload=readOnlyCopy?read(capture):transaction(capture);
+        JSONObject rendered=ConversationTransfer.render(payload,format);
+        if(readOnlyCopy)rendered.put("snapshotSemantics","verified_private_read_only_database_copy_no_new_tail");
+        return rendered;
     }
     /** Import only display/reference content with new IDs. Old ACKs and source grants are not accepted. */
     public JSONObject importConversation(JSONObject input)throws Exception{

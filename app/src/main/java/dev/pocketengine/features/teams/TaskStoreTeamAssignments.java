@@ -35,6 +35,8 @@ public final class TaskStoreTeamAssignments implements TeamAssignmentHost.Tasks 
             public dev.pocketengine.runtime.context.CompactionJournal compaction(){return journal.compaction();}
             public JSONObject restore()throws Exception{return journal.restore();}
             public void checkpoint(JSONArray messages,int steps,JSONObject observation)throws Exception{journal.checkpoint(messages,steps,observation);}
+            public boolean progressGuardSupported(){return journal.progressGuardSupported();}
+            public void checkpoint(JSONArray messages,int steps,JSONObject observation,JSONObject progressGuard)throws Exception{journal.checkpoint(messages,steps,observation,progressGuard);}
             public String beginOperation(String tool,JSONObject args)throws Exception{return journal.beginOperation(tool,args);}
             public void finishOperation(String operation,JSONObject receipt)throws Exception{journal.finishOperation(operation,receipt);}
             public boolean hasNativeProjectRunningAck(String operation,JSONObject receipt)throws Exception{return journal.hasNativeProjectRunningAck(operation,receipt);}

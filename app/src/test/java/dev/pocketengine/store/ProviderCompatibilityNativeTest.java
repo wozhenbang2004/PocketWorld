@@ -83,4 +83,28 @@ public final class ProviderCompatibilityNativeTest {
         service.saveConnection(current.getString("id"),current.getLong("revision"),"original API",new JSONObject().put("compatibility",options("MAX_TOKENS")));assertEquals(exact,settings.apiCatalogBinding().modelsEndpoint());assertEquals(ModelBinding.Format.OPENAI,settings.apiCatalogBinding().format());assertTrue(settings.get().catalogEnforced);
         JSONObject latest=settings.apiConnectionsSnapshot().getJSONArray("connections").getJSONObject(0);String before=prefs.getString("apiConnections","");assertThrows(Exception.class,()->service.saveConnection(latest.getString("id"),latest.getLong("revision"),"invalid",new JSONObject().put("compatibility",new JSONObject().put("stripMessages",true))));assertEquals(before,prefs.getString("apiConnections",""));assertEquals(0,posts.get());assertEquals(0,gets.get());
     }
+    @Test public void unsavedCompatibilityPreviewFailsBeforeHttpWithoutDroppingTheOriginalBinding()throws Exception {
+        JSONObject row=add();String before=prefs.getString("apiConnections","");
+        IllegalStateException rejected=assertThrows(IllegalStateException.class,()->settings.previewApiConnection(row.getString("id"),row.getLong("revision"),new JSONObject().put("compatibility",options("MAX_TOKENS"))));
+        assertTrue(rejected.getMessage().contains("先保存"));assertEquals(before,prefs.getString("apiConnections",""));assertEquals(0,posts.get());
+        ModelConfig original=settings.previewApiConnection(row.getString("id"),row.getLong("revision"),new JSONObject().put("compatibility",options("MAX_COMPLETION_TOKENS")));
+        assertEquals(row.getString("id"),original.capabilityBinding.connectionId());assertTrue(settings.matchesApiCatalogRoute(original));
+        assertTrue(ModelGateway.testConnection(original).getBoolean("ok"));assertEquals(1,posts.get());assertEquals(512,body.getInt("max_completion_tokens"));
+    }
+    @Test public void savedCompatibilityCasIsTheExactPolicyTestedAndAnOldRevisionCannotPreviewIt()throws Exception {
+        JSONObject row=add();service.saveConnection(row.getString("id"),row.getLong("revision"),"original API",new JSONObject().put("compatibility",options("MAX_TOKENS")));
+        assertThrows(IllegalStateException.class,()->settings.previewApiConnection(row.getString("id"),row.getLong("revision"),new JSONObject().put("compatibility",options("MAX_TOKENS"))));
+        JSONObject current=settings.apiConnectionsSnapshot().getJSONArray("connections").getJSONObject(0);
+        ModelConfig preview=settings.previewApiConnection(current.getString("id"),current.getLong("revision"),new JSONObject().put("compatibility",options("MAX_TOKENS")));
+        assertEquals(settings.get().capabilityBinding,preview.capabilityBinding);assertTrue(settings.get().compatibility.matches(preview.compatibility));
+        assertTrue(ModelGateway.testConnection(preview).getBoolean("ok"));assertEquals(1,posts.get());assertTrue(body.has("max_tokens"));assertFalse(body.has("max_completion_tokens"));
+    }
+    @Test public void removingPolicyRequiresSaveWhileLegacyOrdinaryModelDraftKeepsItsExistingPreviewBehavior()throws Exception {
+        JSONObject row=add();String id=row.getString("id");long revision=row.getLong("revision");
+        assertThrows(IllegalStateException.class,()->settings.previewApiConnection(id,revision,new JSONObject().put("compatibility",JSONObject.NULL)));
+        ModelConfig legacy=settings.previewApiConnection(id,revision,new JSONObject().put("model","another-model"));
+        assertNull(legacy.compatibility);assertEquals(id,legacy.capabilityBinding.connectionId());assertTrue(settings.matchesApiCatalogRoute(legacy));
+        ModelConfig explicit=settings.previewApiConnection(id,revision,new JSONObject().put("model","another-model").put("compatibility",JSONObject.NULL));
+        assertEquals(legacy.capabilityBinding,explicit.capabilityBinding);assertNull(explicit.compatibility);assertEquals(0,posts.get());
+    }
 }

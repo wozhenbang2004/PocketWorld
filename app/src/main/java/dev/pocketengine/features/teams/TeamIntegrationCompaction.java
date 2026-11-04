@@ -100,6 +100,8 @@ final class TeamIntegrationCompaction {
         RunJournal metered=new RunJournal(){
             public JSONObject restore()throws Exception{return originalJournal.restore();}
             public void checkpoint(JSONArray messages,int steps,JSONObject observation)throws Exception{originalJournal.checkpoint(messages,steps,observation);}
+            public boolean progressGuardSupported(){return originalJournal.progressGuardSupported();}
+            public void checkpoint(JSONArray messages,int steps,JSONObject observation,JSONObject progressGuard)throws Exception{originalJournal.checkpoint(messages,steps,observation,progressGuard);}
             public String beginOperation(String tool,JSONObject arguments)throws Exception{return originalJournal.beginOperation(tool,arguments);}
             public void finishOperation(String op,JSONObject receipt)throws Exception{originalJournal.finishOperation(op,receipt);}
             public boolean hasNativeProjectRunningAck(String op,JSONObject receipt)throws Exception{return originalJournal.hasNativeProjectRunningAck(op,receipt);}
@@ -136,6 +138,7 @@ final class TeamIntegrationCompaction {
         public boolean current(FrozenPrefix published,RunControl control)throws Exception{return original.current(published,control);}
         public boolean scopeCurrent(RunControl control)throws Exception{return original.scopeCurrent(control);}
         public void checkpoint(RunJournal delegate,JSONArray messages,int steps,JSONObject observation)throws Exception{original.checkpoint(delegate,messages,steps,observation);}
+        public void checkpoint(RunJournal delegate,JSONArray messages,int steps,JSONObject observation,JSONObject progressGuard)throws Exception{original.checkpoint(delegate,messages,steps,observation,progressGuard);}
         public JSONObject restore(RunJournal delegate)throws Exception {
             try{return fence.admit(()->original.restore(delegate));}
             catch(SecurityException scopeUnavailable){
