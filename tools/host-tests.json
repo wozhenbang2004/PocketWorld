@@ -303,7 +303,8 @@
     "helpers": [
       "dev.pocketengine.testutil.HttpServer",
       "dev.pocketengine.features.channels.ChannelTaskHostTest",
-      "dev.pocketengine.features.channels.ChannelSecurityTest"
+      "dev.pocketengine.features.channels.ChannelSecurityTest",
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
     ],
     "robolectric": true,
     "description": "Original SQLite/USER-source/opt-in/draft and actual Application/Runner loopback paths. Native extraction contract pins the real prompt/schema/policy and actual model receipt; v1 draft recovery remains zero-call with explicit unknown provenance, v2 must match. Single-batch physical-attempt budget, no_candidate/unknown/skip, cancellation and source retirement. No live provider, visual or device acceptance."
@@ -609,6 +610,7 @@
       "dev.pocketengine.features.assistant.ConversationInterruptedNativeJourneyTest"
     ],
     "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture",
       "dev.pocketengine.testutil.HttpServer",
       "dev.pocketengine.features.channels.ChannelTaskHostTest",
       "dev.pocketengine.features.channels.ChannelSecurityTest"
@@ -1361,6 +1363,7 @@
   "memory-lifecycle": {
     "class": "dev.pocketengine.features.memory.EngineMemorySendAdmissionTest",
     "additionalClasses": [
+      "dev.pocketengine.runtime.models.InferenceRouteContinuityTest",
       "dev.pocketengine.features.memory.MemorySendAdmissionTest",
       "dev.pocketengine.features.channels.ChannelInferenceAudienceJourneyTest",
       "dev.pocketengine.features.channels.QqC2CStreamJourneyTest",
@@ -1370,6 +1373,7 @@
       "dev.pocketengine.features.OrdinaryScheduleNativeJourneyTest"
     ],
     "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture",
       "dev.pocketengine.features.channels.QqOwnerImageJourneyTest",
       "dev.pocketengine.features.channels.GroupTaskFlowsTest",
       "dev.pocketengine.features.channels.ChannelTaskHostTest",
@@ -1791,6 +1795,95 @@
     "helpers": [],
     "robolectric": true,
     "description": "Mounted original Compose draft controls and native team state for observed generic harnesses, plus original Pi/Codex/Claude delivery/draft/session projection regressions. Synthetic protocol receipts are boundaries; no device screenshots, visual acceptance or live vendor accounts."
+  },
+  "private-butler-journey": {
+    "class": "dev.pocketengine.PrivateButlerNativeJourneyTest",
+    "additionalClasses": [
+      "dev.pocketengine.OwnerWorkServiceLifecycleTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture",
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest"
+    ],
+    "robolectric": true,
+    "description": "Actual original Application, Assistant, Runner, loopback model HTTP, native durable work admission, independent foreground conversation and same-SQL frozen result delivery/consumption. Model replies are explicit fixtures; no live provider, physical device or visual acceptance."
+  },
+  "memory-private-butler": {
+    "class": "dev.pocketengine.features.memory.PrivateButlerMemoryTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.memory.NativeConversationMemoryDraftHostTest",
+      "dev.pocketengine.features.memory.LearningAssertionDraftTest",
+      "dev.pocketengine.features.memory.MemoryRecallDiagnosticsTest",
+      "dev.pocketengine.features.memory.MemoryTaskUseTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Real structured conversational owner assertions, reviewed corrections and source retirement, budgeted owner context with projection revision proof and exact ReadAudience boundaries."
+  },
+  "owner-work-native": {
+    "class": "dev.pocketengine.features.assistant.OwnerWorkNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.runtime.NativeInstructionProfileRunnerTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Original SQLite work admission, separate F/W lifetimes, real budget allocation, native source routing, restart/cancel and delivery transaction identity; actual Runner role selection on initial/checkpoint/restored inference uses explicit loopback model fixtures."
+  },
+  "private-butler-ui": {
+    "class": "dev.pocketengine.ui.MessageIdentityProjectionTest",
+    "additionalClasses": [
+      "dev.pocketengine.ui.OwnerWorkUiTest",
+      "dev.pocketengine.ui.ChatInputRulesTest",
+      "dev.pocketengine.ui.web.PocketWebTaskReviewsTest",
+      "dev.pocketengine.ui.web.PocketWebDocumentFenceTest",
+      "dev.pocketengine.ui.memory.TaskMemoryEvidenceGuardTest"
+    ],
+    "helpers": [],
+    "robolectric": false,
+    "description": "Native message identity projection, frozen original results, foreground/work separation, precise owner input/control targets and owner context evidence schema."
+  },
+  "conversation-organization-ui": {
+    "class": "dev.pocketengine.ui.ConversationOrganizationUiNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.ui.web.PocketWebBridgeObservationTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture",
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest"
+    ],
+    "robolectric": true,
+    "description": "Focused existing conversation history/menu/name-dialog integration through the real Controller and original SQLite, with an explicit ready business host; no packaged App bootstrap or physical-device claim."
+  },
+  "aion-conversations-native": {
+    "class": "dev.pocketengine.features.assistant.ConversationWorkbenchNativeJourneyTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.assistant.ConversationOrganizationTest",
+      "dev.pocketengine.features.assistant.ConversationTransferTest",
+      "dev.pocketengine.store.ConversationV9MigrationNativeTest",
+      "dev.pocketengine.store.DeviceV8MigrationNativeTest",
+      "dev.pocketengine.features.assistant.ConversationOwnerTitleNativeTest",
+      "dev.pocketengine.features.conversation.ConversationPinnedHistoryTest",
+      "dev.pocketengine.features.conversation.InterruptedAttemptsTest",
+      "dev.pocketengine.features.assistant.notifications.OwnerQuestionReferenceTest",
+      "dev.pocketengine.features.assistant.OwnerQuestionInputsNativeTest",
+      "dev.pocketengine.features.assistant.OwnerPhoneQuestionsNativeTest",
+      "dev.pocketengine.features.assistant.OwnerPhoneQuestionContinuationJourneyTest",
+      "dev.pocketengine.features.assistant.OwnerQuestionRunnerNativeTest",
+      "dev.pocketengine.features.assistant.ConversationInterruptedNativeJourneyTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture",
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest"
+    ],
+    "robolectric": true,
+    "description": "Focused native conversation, durable history, original owner-question continuation and migration regression. The original aion-conversations group still includes its UI tests; its focused UI companion is conversation-organization-ui."
   },
   "bootstrap-first-launch-diagnostics": {
     "class": "dev.pocketengine.bootstrap.BootstrapInitializationNativeTest",

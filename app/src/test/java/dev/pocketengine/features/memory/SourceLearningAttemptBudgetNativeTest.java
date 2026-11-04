@@ -8,6 +8,7 @@ import dev.pocketengine.runtime.usage.InferenceCapture;
 import dev.pocketengine.runtime.usage.InferenceReceipt;
 import dev.pocketengine.store.TaskStore;
 import dev.pocketengine.testutil.HttpServer;
+import dev.pocketengine.testutil.ReadyApplicationFixture;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -26,17 +27,23 @@ import org.robolectric.annotation.ConscryptMode;
 import org.robolectric.annotation.SQLiteMode;
 import static org.junit.Assert.*;
 
-/** Original Application -> Gateway -> real loopback HTTP -> original SQL operation recovery.
+/** Explicit original Application host -> Gateway -> real loopback HTTP -> original SQL operation recovery.
  * The server is a transport fixture; no live-provider charge or device behavior is claimed. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class)
+@Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class,shadows=ReadyApplicationFixture.NoUnrelatedStartup.class)
 @ConscryptMode(ConscryptMode.Mode.OFF)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 public final class SourceLearningAttemptBudgetNativeTest {
     private static final String SOURCE="SINGLE_BATCH_ORIGINAL_SOURCE_71: only this selected result may be sent.";
     private static final String MODEL="single-attempt-memory-fixture";
-    @Before public void keys(){java.security.Security.addProvider(new java.security.Provider("SourceLearningAttemptKeyStore",1.0,"Explicit test-only AndroidKeyStore"){{put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
-    @After public void reset(){java.security.Security.removeProvider("SourceLearningAttemptKeyStore");InferenceCapture.installPresentationObserver(new InferenceCapture.Sink(){public void started(InferenceReceipt receipt){}public void finished(InferenceReceipt receipt){}});}
+    @Before public void keys()throws Exception{
+        java.security.Security.addProvider(new java.security.Provider("SourceLearningAttemptKeyStore",1.0,"Explicit test-only AndroidKeyStore"){{put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());}});
+        ReadyApplicationFixture.initializeHost((EngineApplication)RuntimeEnvironment.getApplication());
+    }
+    @After public void reset()throws Exception{
+        try{ReadyApplicationFixture.closeHost((EngineApplication)RuntimeEnvironment.getApplication());}
+        finally{java.security.Security.removeProvider("SourceLearningAttemptKeyStore");}
+    }
     private static JSONObject scope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
 
     private static final class Fixture implements AutoCloseable {

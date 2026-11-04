@@ -40,6 +40,16 @@ internal object ChatInputRules {
   }
   return JSONObject(incoming.toString())
  }
+ /** Compare to the durable pending locator before any acknowledgement clears its draft. */
+ fun receiptMatchesOriginal(incoming:JSONObject,conversation:String,target:JSONObject):Boolean {
+  if(conversation.isNotBlank()&&incoming.has("conversationId")&&incoming.opt("conversationId")!=conversation)return false
+  if(target.length()==0)return true
+  val fields=listOf("taskId","runId","epoch")
+  if(incoming.optString("status")=="unconfirmed"&&fields.none(incoming::has))return true
+  val epoch=incoming.opt("epoch");val expected=target.opt("epoch")
+  return incoming.opt("taskId")==target.opt("taskId")&&incoming.opt("runId")==target.opt("runId")&&
+   (epoch is Int||epoch is Long)&&(expected is Int||expected is Long)&&(epoch as Number).toLong()==(expected as Number).toLong()
+ }
  fun canSend(state:PocketUiState,phone:Boolean,text:String):Boolean=text.isNotBlank()&&text.trim().length<=12000&&!state.chatSubmitting&&(if(phone)!state.chatBusy&&state.activeTaskId==null&&!state.phoneSubmitting else !state.chatBusy||state.feature("assistant").optBoolean("sendAcknowledgements")&&state.chatActiveTurn!=null)
 }
 @Composable internal fun ChatAttachmentChooser(state:PocketUiState,controller:PocketWorldController){

@@ -60,9 +60,17 @@ public final class ExtensionLoopIntegrationTest {
     private static ExtensionProgram program()throws Exception {byte[] source=SOURCE.getBytes(StandardCharsets.UTF_8);return new ExtensionProgram("fixture.extension","1",INSTALL,1,source,ExtensionProgram.sha256(source),2000);}
     private static JSONObject attempt(TaskStore tasks)throws Exception {String id=tasks.createCapabilityTask("calculate with a reviewed extension","").getString("id");return tasks.startAttempt(id,"capabilities",10);}
     private static JSONObject catalogAttempt(TaskStore tasks,boolean planning)throws Exception {
-        String id=tasks.createCapabilityTask("inspect the original authorized tool catalogue","").getString("id");JSONObject created=tasks.initializeExecutionScope(id,20);
-        if(planning)tasks.enterExecutionPlanning(id,"",0,created.getJSONObject("executionScope").getLong("revision"),()->true);
-        return tasks.startAttempt(id,"capabilities",20);
+        String id=tasks.createCapabilityTask("inspect the original authorized tool catalogue","").getString("id");tasks.initializeExecutionScope(id,20);
+        JSONObject attempt=tasks.startAttempt(id,"capabilities",20);if(!planning)return attempt;
+        String run=attempt.getString("runId");int epoch=attempt.getInt("coordinatorEpoch");long revision=attempt.getJSONObject("executionScope").getLong("revision");
+        assertThrows(SecurityException.class,()->tasks.enterExecutionPlanning(id,run,epoch,revision,()->true));
+        // This controlled native fixture has dispatched no work. Pause the existing run
+        // before owner planning admission, then prepare its first native tool surface.
+        tasks.status(id,"paused","Native catalogue fixture paused before owner planning review");
+        JSONObject entered=tasks.enterExecutionPlanning(id,run,epoch,revision,()->true);
+        assertFalse(entered.getBoolean("executionStarted"));assertEquals(run,entered.getString("runId"));assertEquals(epoch,entered.getInt("coordinatorEpoch"));
+        assertEquals("planning",entered.getJSONObject("executionScope").getString("executionPhase"));
+        tasks.status(id,"preparing","Preparing the original native catalogue after planning review");return tasks.get(id,false);
     }
     private static RunControl control(JSONObject task){RunControl control=new RunControl();control.bindHostRun(task.optString("id"),task.optString("runId"),task.optInt("coordinatorEpoch"));return control;}
     private static ExtensionRuntime.Binding binding(JSONObject task){return new ExtensionRuntime.Binding(task.optString("id"),task.optString("runId"),task.optInt("coordinatorEpoch"));}
@@ -75,6 +83,26 @@ public final class ExtensionLoopIntegrationTest {
         return new ModelCapabilityAdapters(scope,new TaskStoreCapabilityAuthority(tasks,scope,event->{}),new HostToolSupervisor(features,tasks,scope.taskId,scope.runId,scope.epoch,true),null,null,attachments,null);
     }
     private static EngineModule workspace(AtomicInteger writes){return new EngineModule(){public String id(){return "workspace";}public JSONObject snapshot()throws Exception{return new JSONObject().put("projects",new JSONArray());}public JSONObject handle(String command,JSONObject input)throws Exception{writes.incrementAndGet();return new JSONObject().put("ok",true);}};}
+
+    /** A native scope mutation under the real Runner journal, not a model-supplied grant. */
+    private static final class ScopeAllocationPort implements CapabilityPort {
+        static final String TOOL="native_scope_allocate";
+        final TaskStore tasks;final JSONObject task;
+        final AtomicInteger executions=new AtomicInteger(),callbacks=new AtomicInteger();
+        final AtomicReference<Exception> sourceFailure=new AtomicReference<>();
+        ScopeAllocationPort(TaskStore tasks,JSONObject task){this.tasks=tasks;this.task=task;}
+        public JSONArray tools()throws Exception{return new JSONArray().put(new JSONObject().put("type","function").put("function",new JSONObject().put("name",TOOL).put("description","Allocate part of the current native scope").put("parameters",new JSONObject().put("type","object").put("properties",new JSONObject()).put("additionalProperties",false))));}
+        public boolean supports(String name){return TOOL.equals(name);}
+        public boolean sideEffecting(String name){return TOOL.equals(name);}
+        public void admitCapabilities(dev.pocketengine.core.CapabilitySnapshot snapshot,RunControl control){snapshot.retainRouteCheck(()->{Exception failure=sourceFailure.get();if(failure!=null)throw failure;});}
+        public JSONObject execute(String name,JSONObject arguments,RunControl control)throws Exception{
+            assertEquals(TOOL,name);executions.incrementAndGet();
+            JSONObject scope=tasks.get(task.getString("id"),false).getJSONObject("executionScope");
+            tasks.configureExecutionScope(task.getString("id"),scope.getLong("revision"),scope.getLong("deadlineAt"),scope.getInt("toolLimit")-4,scope.getInt("modelCallLimit")-4);
+            return new JSONObject().put("ok",true).put("allocationApplied",true).put("operationId",arguments.getString("_hostOperationId"));
+        }
+        public void afterTool(String name,JSONObject arguments,JSONObject receipt,RunControl control){callbacks.incrementAndGet();}
+    }
 
     @Test public void realLoopExecutesJsToolContextAndGateBeforeAnySqliteIntentOrApproval()throws Exception {
         TaskStore tasks=store();JSONObject task=attempt(tasks);RunControl control=control(task);AtomicInteger writes=new AtomicInteger();AtomicReference<List<ExtensionProgram>> selected=new AtomicReference<>(List.of(program()));
@@ -306,7 +334,10 @@ public final class ExtensionLoopIntegrationTest {
         try(FeatureHost features=new FeatureHost(event->{},tasks,()->false);ExtensionHost extensions=new ExtensionHost(catalogue(new AtomicReference<>(List.of())),tasks,()->{jsCreated.incrementAndGet();throw new AssertionError("Planning metadata must not start JS");})){
             features.register(workspace(dispatches));features.register(catalogPlugins(registry,dispatches));CapabilityPort port=PlanningCapabilityPort.wrap(extensions.bind(combined(tasks,features,task,control,null),binding(task),control),planning);
             try{
-                port.beginRun("read-only planning",control);JSONObject prepared=port.prepareTurn("inspect",1,0,control);assertTrue(hasTool(prepared,"workspace_read"));assertFalse(hasTool(prepared,"workspace_write"));assertFalse(hasTool(prepared,"plugin_catalog_0"));assertFalse(prepared.getJSONObject("reference").toString().contains("Catalog operation"));
+                port.beginRun("read-only planning",control);JSONObject prepared=port.prepareTurn("inspect",1,0,control);
+                JSONArray granted=tasks.get(task.getString("id"),false).getJSONObject("executionScope").getJSONArray("tools");java.util.Set<String> originalTools=new java.util.HashSet<>();for(int i=0;i<granted.length();i++)originalTools.add(granted.getString(i));
+                assertTrue("Planning must filter the original native and plugin grants, not an empty fixture scope",originalTools.containsAll(java.util.Set.of("workspace_read","workspace_write","plugin_catalog_0")));
+                assertTrue(hasTool(prepared,"workspace_read"));assertFalse(hasTool(prepared,"workspace_write"));assertFalse(hasTool(prepared,"plugin_catalog_0"));assertFalse(prepared.getJSONObject("reference").toString().contains("Catalog operation"));
                 assertEquals(ExecutionPlanning.Access.DENY,port.planningAccess("plugin_catalog_0",new JSONObject().put("query","declared read")));assertThrows(SecurityException.class,()->port.execute("plugin_catalog_0",new JSONObject().put("query","declared read"),control));
                 JSONObject args=new JSONObject().put("projectId","fixture").put("path","x.txt");ExecutionPlanning.Snapshot phase=planning.capture();ExecutionPlanning.ReadClaim claim=planning.beginRead(phase,"workspace_read",args,"planning-read",ExecutionPlanning.Access.READ);
                 JSONObject receipt=port.execute("workspace_read",new JSONObject(args.toString()).put("_hostOperationId",claim.operationId),control);planning.finishRead(claim,receipt,ExecutionPlanning.ReadOutcome.RECEIPT);assertEquals(1,dispatches.get());assertEquals(0,jsCreated.get());
@@ -321,6 +352,78 @@ public final class ExtensionLoopIntegrationTest {
             features.register(workspace(dispatches));CapabilityPort port=extensions.bind(combined(tasks,features,task,control,null),binding(task),control);
             try{port.beginRun("small native surface",control);JSONArray full=port.tools();JSONObject prepared=port.prepareTurn("inspect",1,0,control);assertFalse(hasTool(prepared,"tools_search"));assertEquals(ScopedToolCatalog.fingerprint(full),ScopedToolCatalog.fingerprint(prepared.getJSONArray("tools")));assertTrue(hasTool(prepared,"workspace_write"));assertEquals(0,dispatches.get());assertEquals(0,tasks.get(task.getString("id"),false).getJSONArray("operations").length());}
             finally{port.close();}
+        }
+    }
+
+    @Test public void completedNativeAllocationKeepsItsReceiptAndAllowsANewTurnWithoutReplayingTheEffect()throws Exception {
+        TaskStore tasks=store();JSONObject task=catalogAttempt(tasks,false);RunControl control=control(task);ScopeAllocationPort nativePort=new ScopeAllocationPort(tasks,task);
+        JSONObject originalScope=task.getJSONObject("executionScope");
+        try(ExtensionHost extensions=ExtensionHost.disabled(tasks);Server server=new Server((request,index)->{
+            if(index==0){assertTrue(hasTool(request,ScopeAllocationPort.TOOL));return call("allocate",ScopeAllocationPort.TOOL,new JSONObject());}
+            assertEquals("only the next normal model request may answer",1,index);
+            assertTrue(request.getJSONArray("messages").toString().contains("allocationApplied"));
+            return new JSONObject().put("content","The native allocation is recorded; the foreground answer is complete.");
+        })){
+            CapabilityPort port=PlanningCapabilityPort.wrap(extensions.bind(nativePort,binding(task),control),tasks.executionPlanningForRun(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),control));
+            RunOutcome outcome=new AgentRunner(null,port).run(task.getString("id"),task.getString("goal"),server.config(),control,event->{},tasks.journal(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),control));
+            assertEquals(outcome.summary,"needs_confirmation",outcome.status);assertEquals(2,server.requests.size());assertEquals(1,nativePort.executions.get());
+            assertEquals("old callbacks cannot inherit the revised scope",0,nativePort.callbacks.get());
+            JSONObject stored=tasks.get(task.getString("id"),false),scope=stored.getJSONObject("executionScope");JSONArray operations=stored.getJSONArray("operations");
+            assertEquals(1,operations.length());assertEquals("receipt",operations.getJSONObject(0).getString("state"));assertTrue(operations.getJSONObject(0).getJSONObject("receipt").getBoolean("allocationApplied"));assertFalse(tasks.hasUnresolved(task.getString("id")));
+            assertEquals(task.getString("runId"),stored.getString("runId"));assertEquals(task.getInt("coordinatorEpoch"),stored.getInt("coordinatorEpoch"));
+            assertEquals(originalScope.getLong("revision")+1,scope.getLong("revision"));assertEquals(originalScope.getInt("toolLimit")-4,scope.getInt("toolLimit"));assertEquals(originalScope.getInt("modelCallLimit")-4,scope.getInt("modelCallLimit"));
+            assertEquals(1,scope.getInt("toolsUsed"));assertEquals(2,scope.getInt("modelCallsUsed"));
+        }
+    }
+
+    @Test public void scopeRevisionChangeStillRejectsTheOldDecisionAndCannotBeRefreshedByAnAfterToolReceipt()throws Exception {
+        TaskStore tasks=store();JSONObject task=catalogAttempt(tasks,false);RunControl control=control(task);ScopeAllocationPort nativePort=new ScopeAllocationPort(tasks,task);
+        try(ExtensionHost extensions=ExtensionHost.disabled(tasks)){
+            CapabilityPort port=extensions.bind(nativePort,binding(task),control);
+            try{
+                port.beginRun("original scope",control);port.prepareTurn("allocate",1,0,control);
+                ExecutionPlanning planning=tasks.executionPlanningForRun(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),control);ExecutionPlanning.Snapshot old=planning.capture();
+                JSONObject scope=tasks.get(task.getString("id"),false).getJSONObject("executionScope");tasks.configureExecutionScope(task.getString("id"),scope.getLong("revision"),scope.getLong("deadlineAt"),scope.getInt("toolLimit")-4,scope.getInt("modelCallLimit")-4);
+                assertThrows(ExecutionPlanning.ScopeRevisionChanged.class,()->planning.requireCurrent(old));
+                assertThrows(ExecutionPlanning.ScopeRevisionChanged.class,()->port.execute(ScopeAllocationPort.TOOL,new JSONObject(),control));assertEquals(0,nativePort.executions.get());
+                assertEquals("stale_extension_context",port.beforeTool(ScopeAllocationPort.TOOL,new JSONObject(),control).getString("code"));
+                assertThrows(SecurityException.class,()->port.afterTool(ScopeAllocationPort.TOOL,new JSONObject(),new JSONObject().put("ok",true),control));
+                port.prepareTurn("new scope",2,0,control);port.beforeModelRequest("fresh-request",new JSONArray(),control);
+                assertNull(port.beforeTool(ScopeAllocationPort.TOOL,new JSONObject(),control));assertEquals(0,nativePort.executions.get());assertEquals(0,nativePort.callbacks.get());
+            }finally{port.close();}
+        }
+    }
+
+    @Test public void planAndPhaseChangesRemainErrorsAtThePostReceiptBoundary()throws Exception {
+        TaskStore tasks=store();JSONObject task=catalogAttempt(tasks,true);RunControl control=control(task);AtomicInteger dispatches=new AtomicInteger();
+        try(FeatureHost features=new FeatureHost(event->{},tasks,()->false);ExtensionHost extensions=ExtensionHost.disabled(tasks)){
+            features.register(workspace(dispatches));CapabilityPort port=extensions.bind(combined(tasks,features,task,control,null),binding(task),control);
+            try{
+                port.beginRun("original planning scope",control);port.prepareTurn("inspect",1,0,control);
+                ExecutionPlanning planning=tasks.executionPlanningForRun(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),control);
+                JSONObject proposal=new JSONObject().put("format","pocketworld.execution-plan.v1").put("goal","Inspect the original evidence before execution").put("steps",new JSONArray().put(new JSONObject().put("id","inspect").put("title","Inspect the source").put("detail","Read the original source and review the exact plan.")));
+                JSONObject submitted=planning.submitPlan(planning.capture(),proposal,"native-plan-fixture");
+                SecurityException planChanged=assertThrows(SecurityException.class,()->port.afterTool("workspace_read",new JSONObject(),new JSONObject().put("ok",true),control));assertFalse(planChanged instanceof ExecutionPlanning.ScopeRevisionChanged);
+                port.prepareTurn("reviewed plan",2,1,control);
+                tasks.decideExecutionPlanApproval(task.getString("id"),submitted.getString("approvalId"),true,task.getString("runId"),task.getInt("coordinatorEpoch"),submitted.getLong("scopeRevision"),submitted.getLong("planRevision"),submitted.getString("planArtifactRef"),submitted.getString("planHash"),()->true);
+                SecurityException phaseChanged=assertThrows(SecurityException.class,()->port.afterTool("workspace_read",new JSONObject(),new JSONObject().put("ok",true),control));assertFalse(phaseChanged instanceof ExecutionPlanning.ScopeRevisionChanged);assertEquals(0,dispatches.get());
+            }finally{port.close();}
+        }
+    }
+
+    @Test public void sourceRevocationAndStorageErrorsAreNotSwallowedWhenTheScopeAlsoChanged()throws Exception {
+        TaskStore tasks=store();JSONObject task=catalogAttempt(tasks,false);RunControl control=control(task);ScopeAllocationPort nativePort=new ScopeAllocationPort(tasks,task);
+        try(ExtensionHost extensions=ExtensionHost.disabled(tasks)){
+            CapabilityPort port=extensions.bind(nativePort,binding(task),control);
+            try{
+                port.beginRun("original source",control);port.prepareTurn("allocate",1,0,control);
+                JSONObject scope=tasks.get(task.getString("id"),false).getJSONObject("executionScope");tasks.configureExecutionScope(task.getString("id"),scope.getLong("revision"),scope.getLong("deadlineAt"),scope.getInt("toolLimit")-4,scope.getInt("modelCallLimit")-4);
+                SecurityException revoked=new SecurityException("fixture native source revoked");nativePort.sourceFailure.set(revoked);
+                assertSame(revoked,assertThrows(SecurityException.class,()->port.afterTool(ScopeAllocationPort.TOOL,new JSONObject(),new JSONObject().put("ok",true),control)));
+                android.database.sqlite.SQLiteException unavailable=new android.database.sqlite.SQLiteException("fixture native source database unavailable");nativePort.sourceFailure.set(unavailable);
+                assertSame(unavailable,assertThrows(android.database.sqlite.SQLiteException.class,()->port.afterTool(ScopeAllocationPort.TOOL,new JSONObject(),new JSONObject().put("ok",true),control)));
+                assertEquals(0,nativePort.executions.get());assertEquals(0,nativePort.callbacks.get());
+            }finally{port.close();}
         }
     }
 

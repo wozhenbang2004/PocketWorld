@@ -20,5 +20,26 @@ public final class InferenceRouteContinuityTest {
     @Test public void cancelledControlCannotUseContinuityAsANewGrant()throws Exception {
         ModelConfig selected=api("https://fixture.invalid/v1","key","model",false);RunControl original=new RunControl();original.cancel();
         assertThrows(InterruptedException.class,()->InferenceRouteContinuity.requireCurrent(selected,selected,original));
+        assertThrows(InterruptedException.class,()->InferenceRouteContinuity.requireCurrentFromAuthorityCheck(selected,selected,original));
+    }
+    @Test public void originalAuthorityCallbackChecksLiveRouteWithoutRecursing()throws Exception {
+        ModelConfig captured=api("https://fixture.invalid/v1","key","model",false);
+        var selected=new java.util.concurrent.atomic.AtomicReference<>(captured);RunControl original=new RunControl();
+        original.setAuthorityCheck(()->InferenceRouteContinuity.requireCurrentFromAuthorityCheck(captured,selected.get(),original));
+        original.check();
+        InferenceRouteContinuity.requireCurrent(captured,selected.get(),original);
+        assertFalse(original.isCancelled());
+        selected.set(api("https://other.invalid/v1","key","model",false));
+        InterruptedException stopped=assertThrows(InterruptedException.class,original::check);
+        assertTrue(stopped.getCause() instanceof SecurityException);
+        assertTrue(original.isCancelled());
+    }
+    @Test public void authorityRouteCheckPreservesThreadInterruption()throws Exception {
+        ModelConfig selected=api("https://fixture.invalid/v1","key","model",false);RunControl original=new RunControl();
+        Thread.currentThread().interrupt();
+        try{
+            assertThrows(InterruptedException.class,()->InferenceRouteContinuity.requireCurrentFromAuthorityCheck(selected,selected,original));
+            assertTrue(Thread.currentThread().isInterrupted());
+        }finally{Thread.interrupted();}
     }
 }

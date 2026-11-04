@@ -138,6 +138,10 @@ public final class MemoryModule implements EngineModule {
         JSONObject result=book.correctReviewed(authenticatedScope,id,expectedRevision,text,receipt,System.currentTimeMillis());
         context.emit(id(),new JSONObject().put("event","memory_changed").put("snapshot",snapshot()));return result;
     }
+    public JSONObject correctAssertionReviewed(JSONObject authenticatedScope,String id,long expectedRevision,String text,JSONObject assertion,JSONArray sources,MemoryBook.BeforeForget receipt)throws Exception {
+        JSONObject result=book.correctAssertionReviewed(authenticatedScope,id,expectedRevision,text,assertion,sources,receipt,System.currentTimeMillis());
+        context.emit(id(),new JSONObject().put("event","memory_changed").put("snapshot",snapshot()));return result;
+    }
     /** Native owner review only. Never expose replacement consent through handle/model/plugin payloads. */
     public JSONObject supersedeReviewed(JSONObject authenticatedScope,String keptId,long keptRevision,String replacedId,long replacedRevision,MemoryBook.BeforeForget receipt)throws Exception {
         JSONObject result=book.supersedeReviewed(authenticatedScope,keptId,keptRevision,replacedId,replacedRevision,receipt,System.currentTimeMillis());
@@ -149,6 +153,12 @@ public final class MemoryModule implements EngineModule {
     public void requireContextDependency(JSONObject dependency)throws Exception{book.requireContextDependency(dependency);}
     public JSONObject contextSnapshot(JSONObject scope,String query,int limit,int maxChars)throws Exception {
         return book.contextSnapshot(scope,query,limit,maxChars);
+    }
+    public JSONObject ownerContextSnapshot(JSONObject scope,String query,int limit,int maxChars)throws Exception {
+        return book.ownerContextSnapshot(scope,query,limit,maxChars);
+    }
+    public JSONObject ownerContextSnapshot(JSONObject scope,String query,int limit,int maxChars,ReadAudience audience)throws Exception {
+        return book.ownerContextSnapshot(scope,query,limit,maxChars,audience);
     }
     /** Native member audience only; never exposed as a caller supplied EngineModule JSON scope. */
     public JSONObject contextSnapshot(JSONObject scope,String query,int limit,int maxChars,ReadAudience audience)throws Exception {

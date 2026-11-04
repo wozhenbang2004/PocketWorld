@@ -1,6 +1,7 @@
 package dev.pocketengine.features.assistant;
 
 import dev.pocketengine.testutil.HttpServer;
+import dev.pocketengine.testutil.ReadyApplicationFixture;
 import dev.pocketengine.EngineApplication;
 import dev.pocketengine.features.memory.SourceRef;
 import java.net.InetSocketAddress;
@@ -16,19 +17,25 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 import static org.junit.Assert.*;
 
-/** Original Application/TaskStore/Runner and local model bytes; never a paid endpoint. */
+/** Explicit original Application/TaskStore/Runner host and local model bytes; not App bootstrap coverage. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class)
+@Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class,shadows=ReadyApplicationFixture.NoUnrelatedStartup.class)
 public final class AutomaticOwnerUtteranceNativeTest {
-    @org.junit.Before public void nativeKeyFixture(){java.security.Security.addProvider(new java.security.Provider("AutomaticLearningFixtureKeys",1.0d,"Test-only AndroidKeyStore provider"){{put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
-    @org.junit.After public void removeNativeKeyFixture(){java.security.Security.removeProvider("AutomaticLearningFixtureKeys");}
+    @org.junit.Before public void nativeKeyFixture()throws Exception{
+        java.security.Security.addProvider(new java.security.Provider("AutomaticLearningFixtureKeys",1.0d,"Test-only AndroidKeyStore provider"){{put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());}});
+        ReadyApplicationFixture.initializeHost((EngineApplication)RuntimeEnvironment.getApplication());
+    }
+    @org.junit.After public void removeNativeKeyFixture()throws Exception{
+        try{ReadyApplicationFixture.closeHost((EngineApplication)RuntimeEnvironment.getApplication());}
+        finally{java.security.Security.removeProvider("AutomaticLearningFixtureKeys");}
+    }
     @Test public void nativeOwnerCapabilityReportsInstalledHostSeparatelyFromEnabledPolicyAndAcceptance()throws Exception {
-        EngineApplication app=(EngineApplication)RuntimeEnvironment.getApplication();var memory=(dev.pocketengine.features.memory.MemoryModule)app.features.module("memory");
+        EngineApplication app=(EngineApplication)RuntimeEnvironment.getApplication();
         try{
             JSONObject off=app.memoryOwnerSnapshot();assertTrue(off.getJSONObject("nativeCapabilities").getBoolean("automaticLearning"));assertFalse(off.getBoolean("automaticLearning"));assertFalse(off.getJSONObject("nativeCapabilities").getBoolean("automaticAcceptance"));
             JSONObject policy=app.automaticUserLearningPolicy();app.setAutomaticUserLearningPolicy(policy.getLong("revision"),true,1,true);JSONObject enabled=app.memoryOwnerSnapshot();assertTrue(enabled.getJSONObject("nativeCapabilities").getBoolean("automaticLearning"));assertTrue(enabled.getBoolean("automaticLearning"));assertEquals("trusted_host_native_only",enabled.getString("candidateAcceptance"));
             policy=app.automaticUserLearningPolicy();app.setAutomaticUserLearningPolicy(policy.getLong("revision"),false,1,false);assertFalse(app.memoryOwnerSnapshot().getBoolean("automaticLearning"));
-        }finally{JSONObject policy=app.automaticUserLearningPolicy();app.setAutomaticUserLearningPolicy(policy.getLong("revision"),false,1,false);((AssistantModule)app.features.module("assistant")).close();memory.close();app.onTerminate();var database=dev.pocketengine.store.TaskStore.class.getDeclaredField("db");database.setAccessible(true);((android.database.sqlite.SQLiteDatabase)database.get(app.tasks)).close();}
+        }finally{JSONObject policy=app.automaticUserLearningPolicy();app.setAutomaticUserLearningPolicy(policy.getLong("revision"),false,1,false);}
     }
     @Test public void ownerOptOutAfterPhysicalLearningSendBlocksLateCandidateAndAutomaticReplay()throws Exception {withdrawDuringPhysicalLearning(false);}
     @Test public void deletingActualUserSourceAfterPhysicalLearningSendBlocksLateCandidateAndAutomaticReplay()throws Exception {withdrawDuringPhysicalLearning(true);}
@@ -76,7 +83,7 @@ public final class AutomaticOwnerUtteranceNativeTest {
             assertEquals(1,mainCalls.get());assertEquals(1,learningCalls.get());assertNull(fixtureFailure.get());assertEquals(1,app.tasks.listSourceLearningJobs("",20).getJSONArray("jobs").length());
             assertEquals(0,memory.handle("listCandidates",new JSONObject().put("scope",scope)).getJSONArray("candidates").length());assertEquals(0,memory.handle("list",new JSONObject().put("scope",scope)).getJSONArray("records").length());
             JSONObject source=app.tasks.conversationRepository().source(ack.getString("messageId"));assertEquals(deleteSource,source.getBoolean("deleted"));assertEquals("completed",app.tasks.get(ack.getString("taskId"),false).getString("status"));
-        }finally{respond.countDown();JSONObject policy=app.automaticUserLearningPolicy();app.setAutomaticUserLearningPolicy(policy.getLong("revision"),false,1,false);assistant.handle("cancel",new JSONObject());assistant.close();http.stop(0);}
+        }finally{respond.countDown();try{JSONObject policy=app.automaticUserLearningPolicy();app.setAutomaticUserLearningPolicy(policy.getLong("revision"),false,1,false);assistant.handle("cancel",new JSONObject());}finally{http.stop(0);}}
     }
     @Test public void automaticReaderRequiresActuallyAdoptedCurrentUserRevision()throws Exception{
         EngineApplication app=(EngineApplication)RuntimeEnvironment.getApplication();
@@ -109,7 +116,7 @@ public final class AutomaticOwnerUtteranceNativeTest {
             assertThrows(SecurityException.class,()->assistant.readAutomaticOwnerUtterance(notUser,taskId,run,epoch));
             assistant.handle("editMessage",new JSONObject().put("conversationId",ack.getString("conversationId")).put("messageId",ref.sourceId).put("revision",1).put("content","changed owner revision"));
             assertThrows(Exception.class,()->assistant.readAutomaticOwnerUtterance(ref,taskId,run,epoch));
-        }finally{assistant.handle("cancel",new JSONObject());assistant.close();http.stop(0);}
+        }finally{try{assistant.handle("cancel",new JSONObject());}finally{http.stop(0);}}
     }
     @Test public void successfulOriginalOwnerTurnAutomaticallyStagesOneBoundedQuotedCandidate()throws Exception {
         EngineApplication app=(EngineApplication)RuntimeEnvironment.getApplication();AssistantModule assistant=(AssistantModule)app.features.module("assistant");
@@ -135,6 +142,6 @@ public final class AutomaticOwnerUtteranceNativeTest {
             assertNotNull("original event did not register its original learning job",job);assertEquals(job.toString(),"completed",job.getString("taskStatus"));assertEquals(1,mainCalls.get());assertEquals(1,learningCalls.get());assertEquals(1,candidates.length());assertEquals(0,memory.handle("list",new JSONObject().put("scope",scope)).getJSONArray("records").length());
             JSONObject candidate=candidates.getJSONObject(0);assertEquals(words,candidate.getString("text"));assertEquals("pending",candidate.getString("status"));assertEquals(new SourceRef("message",ack.getString("messageId"),1,"owner","private"),SourceRef.fromJson(candidate.getJSONArray("sourceRefs").getJSONObject(0)));
             assertEquals(1,job.getJSONObject("job").getInt("nextIndex"));assertEquals("awaiting_review",job.getJSONObject("job").getJSONArray("results").getJSONObject(0).getString("outcome"));assertEquals("completed",app.tasks.get(ack.getString("taskId"),false).getString("status"));
-        }finally{JSONObject policy=app.automaticUserLearningPolicy();app.setAutomaticUserLearningPolicy(policy.getLong("revision"),false,1,false);assistant.handle("cancel",new JSONObject());assistant.close();http.stop(0);}
+        }finally{try{JSONObject policy=app.automaticUserLearningPolicy();app.setAutomaticUserLearningPolicy(policy.getLong("revision"),false,1,false);assistant.handle("cancel",new JSONObject());}finally{http.stop(0);}}
     }
 }

@@ -50,7 +50,11 @@ internal object PocketWebState {
         .put("attachments", JSONArray().also { out -> row.attachments.forEach { out.put(attachment(it)) } })
         .put("attachmentFiles", JSONArray().also { out -> row.attachmentFiles.forEach { out.put(publicValue(it)) } })
         .put("submission", publicValue(row.submission)).put("memoryReference", publicValue(row.memoryReference))
-        .also { value -> row.phoneResult?.let { value.put("phoneResult", it.toJson()) } }
+        .also { value ->
+            row.phoneResult?.let { value.put("phoneResult", it.toJson()) }
+            row.replyContext?.let { value.put("replyContext", it.toJson()) }
+            row.taskResult?.let { value.put("taskResult", it.toJson()) }
+        }
 
     fun task(row: UiTask, images: Boolean = false): JSONObject = JSONObject()
         .put("id", row.id).put("goal", row.goal).put("status", row.status)
@@ -76,7 +80,13 @@ internal object PocketWebState {
             .put("modelCatalogEnabled", state.modelCatalogEnabled).put("maxOutputTokens", state.maxOutputTokens)
             .put("cleartextConsent", state.cleartextConsent).put("accessibilityEnabled", state.accessibilityEnabled)
             .put("notificationsEnabled", state.notificationsEnabled).put("activeTaskId", state.activeTaskId ?: JSONObject.NULL)
+            .put("activePhoneTaskIds", JSONArray(state.activePhoneTaskIds))
+            .put("maximumActiveBackgroundPhoneRuns", state.maximumActiveBackgroundPhoneRuns)
+            .put("foregroundTaskId", state.foregroundTaskId ?: JSONObject.NULL)
             .put("tasks", JSONArray().also { out -> state.tasks.forEach { out.put(task(it)) } })
+            .put("ownerWork", JSONArray().also { out -> state.tasks.filter {
+                it.raw.optString("executionRole") == "owner_work" && it.raw.optString("actorId") == "owner" && it.raw.optString("spaceId") == "private"
+            }.forEach { out.put(task(it)) } })
             .put("taskListNextCursor", controller.taskListNextCursor)
             .put("conversations", JSONArray().also { out -> state.conversations.forEach { out.put(JSONObject()
                 .put("id", it.id).put("title", it.title).put("updatedAt", it.updatedAt)) } })
@@ -84,6 +94,7 @@ internal object PocketWebState {
             .put("messages", JSONArray().also { out -> state.messages.forEach { out.put(message(it)) } })
             .put("chatBusy", state.chatBusy).put("chatSubmitting", state.chatSubmitting)
             .put("chatActiveTurn", publicValue(state.chatActiveTurn)).put("chatSendMode", state.chatSendMode)
+            .put("foregroundTurn", publicValue(state.foregroundTurn))
             .put("originalTaskNotice", publicValue(controller.originalTaskNotice))
             .put("chatReceipts", JSONObject().also { out -> state.chatReceipts.forEach { (key, value) -> out.put(key, publicValue(value)) } })
             .put("selectedChatAttachments", JSONArray().also { out -> state.selectedChatAttachments.forEach { out.put(attachment(it)) } })

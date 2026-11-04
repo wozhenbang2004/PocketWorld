@@ -431,6 +431,16 @@ public final class FeatureHost implements AutoCloseable {
         for(int i=0;i<definitions.length();i++)if(id.equals(definitions.getJSONObject(i).optString("id")))return new JSONObject(definitions.getJSONObject(i).toString());throw new IllegalArgumentException("团队配置不存在");
     }
     public JSONObject readTeamForTask(String task,String run,int epoch,JSONObject args,dev.pocketengine.core.RunControl original)throws Exception{var source=tasks.teamParentOrigin(task,run,epoch,"teams_get","",args,original);tasks.teamParentAccess(source,args.getString("teamRunId"),false);return module("teams").handle("get",json("runId",args.getString("teamRunId")));}
+    /** Native application dispatch into the original TaskStore/worker pool; no feature scheduler. */
+    @FunctionalInterface public interface OwnerWorkHost {
+        JSONObject call(String task,String run,int epoch,String tool,String operation,JSONObject args,dev.pocketengine.core.RunControl original)throws Exception;
+    }
+    private volatile OwnerWorkHost ownerWorkHost;
+    public synchronized void setOwnerWorkHost(OwnerWorkHost host){if(ownerWorkHost!=null)throw new IllegalStateException("私人工作宿主已安装");ownerWorkHost=java.util.Objects.requireNonNull(host);}
+    public boolean hasOwnerWorkHost(){return ownerWorkHost!=null;}
+    public JSONObject ownerWorkCall(String task,String run,int epoch,String tool,String operation,JSONObject args,dev.pocketengine.core.RunControl original)throws Exception{
+        OwnerWorkHost selected=ownerWorkHost;if(selected==null)throw new IllegalStateException("私人工作执行器尚未就绪");return selected.call(task,run,epoch,tool,operation,args,original);
+    }
     public boolean hasParentTeamOrchestration(){EngineModule module=module("teams");return module instanceof dev.pocketengine.features.teams.TeamsModule&&((dev.pocketengine.features.teams.TeamsModule)module).parentOrchestrationConfigured();}
     public JSONObject teamParentCall(String task,String run,int epoch,String tool,String operation,JSONObject args,dev.pocketengine.core.RunControl original)throws Exception{EngineModule module=module("teams");if(!(module instanceof dev.pocketengine.features.teams.TeamsModule))throw new SecurityException("原团队模块未接入");return ((dev.pocketengine.features.teams.TeamsModule)module).parentCall(task,run,epoch,tool,operation,args,original);}
     /** Original parent native read receipts are source metadata, never a second permission store. */

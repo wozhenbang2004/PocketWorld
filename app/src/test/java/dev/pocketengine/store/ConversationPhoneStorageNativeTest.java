@@ -151,7 +151,8 @@ public final class ConversationPhoneStorageNativeTest {
         String task=f.create();JSONObject first=f.start(task);String oldRun=first.getString("runId");int oldEpoch=first.getInt("coordinatorEpoch");
         f.tasks.endAttempt(task,oldRun,"needs_confirmation","第一轮真实结果",new JSONObject().put("observed","first"));
         AtomicReference<JSONObject> captured=new AtomicReference<>();f.tasks.withConversationPhoneDelivery(task,oldRun,oldEpoch,selected->{captured.set(selected.snapshot());return new JSONObject().put("waitingForOriginalConversation",true);});
-        JSONObject next=f.tasks.startOriginalPhoneAttempt(task,oldRun,oldEpoch,"main_screen",4);
+        assertThrows(SecurityException.class,()->f.tasks.startOriginalPhoneAttempt(task,oldRun,oldEpoch,"main_screen",4));
+        JSONObject next=f.tasks.startOriginalPhoneAttempt(task,oldRun,oldEpoch,"background",4);
         f.tasks.endAttempt(task,next.getString("runId"),"failed","第二轮失败",new JSONObject().put("observed","second"));
         assertEquals(2,f.tasks.conversationPhoneDeliveryPage("",20).getJSONArray("entries").length());
         JSONObject firstPage=f.tasks.conversationPhoneDeliveryPage("",1);assertTrue(firstPage.getBoolean("hasMore"));

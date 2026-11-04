@@ -68,14 +68,18 @@ object TaskMemoryEvidenceGuard {
         if (supplied == null) { require(receipt.opt("selectionDiagnosticsAvailable") != true) { "原始选择说明缺失" }; return null }
         require(receipt.optString("phase") == "prepared" || receipt.opt("selectionDiagnosticsAvailable") == true) { "选择说明未绑定原生回执" }
         val d = JSONObject(supplied.toString())
-        require(d.optInt("format") == 1 && d.optString("policy") == "balanced_core_task_v1") { "选择说明版本暂不受支持" }
+        val ownerContext = d.optString("policy") == "balanced_core_owner_task_v1"
+        require(d.optInt("format") == 1 && (ownerContext || d.optString("policy") == "balanced_core_task_v1")) { "选择说明版本暂不受支持" }
         val rows = receipt.getJSONArray("records"); val selected = d.getJSONArray("selected")
         require(selected.length() == rows.length() && d.getInt("coreSelected") + d.getInt("retrievedSelected") == rows.length() &&
             d.getInt("charsUsed") in 0..d.getInt("maxChars") && d.getInt("maxChars") <= 12000 && d.getInt("limit") in 0..16) { "选择说明与本次条目不一致" }
         for (i in 0 until selected.length()) {
             val s = selected.getJSONObject(i); val row = rows.getJSONObject(i)
+            val reason = s.optString("reason")
+            val allowedReasons = if (row.optString("selection") == "core") setOf("owner_core")
+                else if (ownerContext) setOf("task_query_match", "owner_current") else setOf("task_query_match")
             require(s.opt("id") == row.opt("id") && revision(s) == revision(row) && s.opt("selection") == row.opt("selection") &&
-                s.optString("reason") == if (row.optString("selection") == "core") "owner_core" else "task_query_match") { "选入原因与原始版本不一致" }
+                reason in allowedReasons && (!row.has("selectionReason") || row.opt("selectionReason") == reason)) { "选入原因与原始版本不一致" }
         }
         val omitted = d.getJSONArray("omitted"); val reasons = d.getJSONObject("omissionCounts")
         val allowed = setOf("record_limit", "character_limit", "record_too_large", "source_or_record_changed")
