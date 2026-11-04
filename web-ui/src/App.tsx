@@ -82,8 +82,8 @@ export default function App(){
  const [route,setRoute]=useState('chat'),[workOpen,setWorkOpen]=useState(false),[commandOpen,setCommandOpen]=useState(false),[taskId,setTaskId]=useState<string|null>(null),[taskOpen,setTaskOpen]=useState(false),[filter,setFilter]=useState('all'),[taskQuery,setTaskQuery]=useState('');
  const [navigationRevision,setNavigationRevision]=useState(0),[secondaryPage,setSecondaryPage]=useState('');
  const [commandScope,setCommandScope]=useState<'all'|'conversations'>('all');
- const workSearch=useRef<HTMLButtonElement>(null),previousCommandOpen=useRef(false);
- useEffect(()=>{if(workOpen&&previousCommandOpen.current&&!commandOpen)workSearch.current?.focus({preventScroll:true});previousCommandOpen.current=commandOpen;},[workOpen,commandOpen]);
+ const workSearch=useRef<HTMLButtonElement>(null),conversationSearch=useRef<HTMLButtonElement>(null),previousCommandOpen=useRef(false);
+ useEffect(()=>{if(workOpen&&previousCommandOpen.current&&!commandOpen)(commandScope==='conversations'?conversationSearch:workSearch).current?.focus();previousCommandOpen.current=commandOpen;},[workOpen,commandOpen,commandScope]);
  const [taskLayer,setTaskLayer]=useState<TaskLayer>('overview'),[projectPickerOpen,setProjectPickerOpen]=useState(false),[fileDisplayOpen,setFileDisplayOpen]=useState(false),[fileQuery,setFileQuery]=useState('');
  const [taskFiltersOpen,setTaskFiltersOpen]=useState(false),[endedExpanded,setEndedExpanded]=useState(false),[taskContextExpanded,setTaskContextExpanded]=useState(false);
  const projectScroll=useRef<HTMLElement>(null),projectListTop=useRef(0);
@@ -237,9 +237,9 @@ export default function App(){
   {key:'settings',label:'设置',icon:RiSettings4Line,group:'工作空间'}
  ],[attentionTasks.length]);
  const workCommands:WorkCommand[]=useMemo(()=>[
-  ...workNav.map(item=>({id:item.key,group:item.group||'功能',title:item.label,onSelect:()=>navigate(item.key)})),
-  ...conversations.map(c=>({id:`conversation:${c.id}`,group:'已加载的会话',title:c.title||'未命名工作',description:timeLabel(c.updatedAt),onSelect:()=>selectConversation(c.id)})),
-  ...projects.map(p=>({id:`project:${p.id}`,group:'已加载的项目',title:p.name,onSelect:()=>{navigate('projects');if(can('projects.select'))run('projects.select',{id:p.id})}}))
+  ...workNav.map(item=>({id:item.key,group:item.group||'功能',title:item.label,icon:item.icon,onSelect:()=>navigate(item.key)})),
+  ...conversations.map(c=>({id:`conversation:${c.id}`,group:'已加载的对话',title:c.title||'未命名对话',description:timeLabel(c.updatedAt),icon:RiChatAiLine,onSelect:()=>selectConversation(c.id)})),
+  ...projects.map(p=>({id:`project:${p.id}`,group:'已加载的项目',title:p.name,icon:RiFolderLine,onSelect:()=>{navigate('projects');if(can('projects.select'))run('projects.select',{id:p.id})}}))
  ],[workNav,conversations,projects,navigate,selectConversation,can,run]);
  useEffect(()=>{if(!currentFileKey||!state.fileReady)return;setFileDrafts(previous=>{const old=previous[currentFileKey];const version=Number(state.fileVersion||0),content=String(state.fileContent||''),baseline=String(state.fileBaseline||'');if(!old)return {...previous,[currentFileKey]:{text:content,baseline,version,dirty:content!==baseline}};if(old.submitted!==undefined&&content===old.submitted&&version!==old.version)return {...previous,[currentFileKey]:{text:content,baseline:content,version,dirty:false}};if(!old.dirty&&(old.text!==content||old.version!==version))return {...previous,[currentFileKey]:{text:content,baseline,version,dirty:content!==baseline}};return previous;});},[currentFileKey,state.fileContent,state.fileBaseline,state.fileVersion,state.fileReady]);
  useEffect(()=>{if(route==='projects'&&!state.filePath){const frame=requestAnimationFrame(()=>{if(projectScroll.current)projectScroll.current.scrollTop=projectListTop.current});return()=>cancelAnimationFrame(frame)}},[route,state.filePath]);
@@ -336,23 +336,24 @@ export default function App(){
 
  const allWork=<Drawer.Portal>
   <Drawer.Overlay className="pw-overlay pw-navigation-overlay"/>
-  <Drawer.Content className="pw-drawer pw-work-drawer pw-navigation-drawer" aria-describedby="pw-work-description" onEscapeKeyDown={event=>{if(commandOpen){event.preventDefault();setCommandOpen(false)}}} onCloseAutoFocus={event=>{if(taskOpen)event.preventDefault()}}>
-   <header className="pw-drawer-header">
-    <Drawer.Title>PocketWorld</Drawer.Title>
+  <Drawer.Content className="pw-drawer pw-work-drawer pw-navigation-drawer" aria-describedby="pw-work-description" onEscapeKeyDown={event=>{if(commandOpen){event.preventDefault();if(!event.isComposing&&event.keyCode!==229)setCommandOpen(false)}}} onCloseAutoFocus={event=>{if(taskOpen)event.preventDefault()}}>
+   <header className={`pw-drawer-header${commandOpen?' pw-search-header':''}`}>
+    {commandOpen&&<IconButton icon={RiArrowLeftLine} aria-label="返回导航" onClick={()=>setCommandOpen(false)}/>}
+    <Drawer.Title>{commandOpen?(commandScope==='conversations'?'查找对话':'搜索工作'):'PocketWorld'}</Drawer.Title>
     <Drawer.Description id="pw-work-description" className="pw-sr-only">切换对话、任务和项目，继续最近工作</Drawer.Description>
     <Drawer.Close asChild><IconButton icon={RiCloseLine} aria-label="关闭导航"/></Drawer.Close>
    </header>
-   <div className="pw-navigation-actions">
+   {!commandOpen&&<div className="pw-navigation-actions">
     {can('conversation.new')&&<Button variant="secondary" leadingIcon={RiAddLine} disabled={!!state.chatSubmitting} onClick={()=>{navigate('chat');run('conversation.new')}}>新对话</Button>}
     <IconButton ref={workSearch} icon={RiSearchLine} aria-label="搜索工作" data-testid="work_search" onClick={()=>{setCommandScope('all');setCommandOpen(true)}}/>
-   </div>
+   </div>}
    <div className={`pw-drawer-body ${commandOpen?'pw-navigation-search':''}`}>
     {commandOpen?<CommandMenu key={commandScope} commands={commandScope==='conversations'?workCommands.filter(item=>item.id.startsWith('conversation:')):workCommands} conversationOnly={commandScope==='conversations'} onClose={()=>setCommandOpen(false)}/>:<>
      <WorkSidebar items={workNav.filter(item=>item.key!=='settings')} selected={navigationSelection} onNavigate={navigate}/>
      <section className="pw-work-recent" aria-label="最近对话">
       <div className="pw-section-heading"><h3>最近对话</h3></div>
       <div className="pw-recent-work">{recentWork.map(c=><Button variant="ghost" key={c.id} aria-current={c.id===state.conversationId&&route==='chat'?'page':undefined} className={c.id===state.conversationId&&route==='chat'?'is-current':''} onClick={()=>selectConversation(c.id)}><span>{c.title||'未命名对话'}</span></Button>)}</div>
-      <Button variant="ghost" className="pw-all-conversations" leadingIcon={RiSearchLine} trailingIcon={RiArrowRightSLine} onClick={()=>{setCommandScope('conversations');setCommandOpen(true)}}>查找对话</Button>
+      <Button ref={conversationSearch} variant="ghost" className="pw-all-conversations" leadingIcon={RiSearchLine} trailingIcon={RiArrowRightSLine} onClick={()=>{setCommandScope('conversations');setCommandOpen(true)}}>查找对话</Button>
      </section>
     </>}
    </div>
@@ -396,17 +397,18 @@ export default function App(){
    <ChatComposer sendDisabled={!state.modelName} sendLabel={!state.modelName?'请先连接模型':undefined} toolbar={<div className="pw-composer-intent"><PopoverTrigger isOpen={voiceOptionsOpen} onOpenChange={setVoiceOptionsOpen}><IconButton icon={intent==='chat'?RiAddLine:RiToolsLine} size="medium" aria-label="输入方式与选项"/><Popover aria-label="输入方式"><PopoverHeader title="输入选项"/>{intent==='chat'&&can('attachments.openPicker')&&<Button variant="ghost" leadingIcon={RiFileLine} disabled={!!state.chatSubmitting} onClick={()=>{setVoiceOptionsOpen(false);run('attachments.openPicker')}}>添加附件</Button>}<RadioOptions label="输入方式" value={intent} options={[{id:'chat',label:'与主 Agent 对话'},{id:'background',label:'手机后台独立屏',disabled:!can('phone.prepare')},{id:'main_screen',label:'手机主屏操作',disabled:!can('phone.prepare')}]} onChange={value=>{changeIntent(value as any);setVoiceOptionsOpen(false)}}/>{intent==='chat'&&state.chatBusy&&can('composer.mode')&&<section className="pw-input-delivery"><RadioOptions label="补充采用方式" value={state.chatSendMode||'queue'} options={[{id:'queue',label:'本轮结束后处理'},{id:'steer',label:'下个安全步骤加入'}]} onChange={mode=>run('composer.mode',{key:draftKey,epoch:draftEpoch,mode})}/><p className="pw-muted">不撤销已派发动作，也不扩大原预算与授权。</p></section>}</Popover></PopoverTrigger></div>} composerKey={intent==='chat'?chatOwner:phoneOwner} value={text} onChange={editText} onSend={send} onStop={currentCancelIdentity&&can('chat.cancel')?stopOriginalChat:undefined} busy={intent==='chat'&&!!state.chatBusy} submitting={intent==='chat'?!!state.chatSubmitting:phoneReviewPending||!!state.phoneSubmitting} disabled={!ready||(intent==='chat'?!draftKey:!can('phone.prepare'))} placeholder={intent==='chat'?'发消息，安排任务':'想在手机上做什么？'} attachments={(intent==='chat'?asArray<Json>(state.selectedChatAttachments):[]).map(f=>({...f,id:String(f.id),name:f.name||'附件'}))} onRemoveAttachment={can('attachments.remove')?id=>run('attachments.remove',{id,key:draftKey,epoch:draftEpoch}):undefined} onVoice={can('voice.start')?()=>run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'}):undefined} listening={isListening} voiceStatus={state.voiceInput?.message} onDiscardVoice={can('voice.stop')||can('voice.discard')?discardVoice:undefined} status={composer.saving?'正在保存草稿…':undefined}/>{(state.voiceInput?.reviewAvailable||composer.voiceText)&&<div className="pw-voice-review"><p>有听写文字待核对。</p>{can('voice.review')&&<Button variant="secondary" disabled={voicePending} onClick={openVoiceReview}>核对原听写</Button>}{can('voice.discard')&&<Button variant="ghost" disabled={voicePending} onClick={discardVoice}>丢弃本次听写</Button>}</div>}{pendingInputs.length>0&&<section className="pw-pending-inputs" aria-label="原输入回执">{pendingInputs.map(p=><div className="pw-pending-input" key={p.clientMessageId}><Receipt receipt={{...p.receipt,status:p.receipt.status||p.status}}/><small>{p.draftKey===draftKey?'当前输入':'另一份工作中的输入'}</small><div className="pw-action-row">{can('composer.query')&&<Button variant="ghost" size="small" onClick={()=>run('composer.query',{clientMessageId:p.clientMessageId})}>查询原回执</Button>}{p.draftKey!==draftKey&&can('composer.returnPending')&&<Button variant="ghost" size="small" disabled={!!state.chatSubmitting} onClick={()=>run('composer.returnPending',{clientMessageId:p.clientMessageId})}>回原输入</Button>}{p.canRetryLocallyUnsent===true&&can('composer.retry')&&<Button variant="secondary" size="small" onClick={()=>run('composer.retry',{clientMessageId:p.clientMessageId})}>重新保存并发送原输入</Button>}</div></div>)}</section>}</div></main>;
  const endedTasks=filteredTasks.filter(t=>terminal(t)&&!attention(t));
  const visibleEnded=filter==='ended'||endedExpanded?endedTasks:endedTasks.slice(0,3);
+ const activeTaskStatus=({attention:'待处理',running:'进行中',ended:'已结束'} as Record<string,string>)[filter];
  const tasksPage=<main className="pw-page pw-tasks-page">
     {taskFiltersOpen&&<section id="pw-task-filters" className="pw-task-filters" aria-label="搜索与筛选任务">
       <div className="pw-task-list-tools"><SearchField value={taskQuery} onChange={setTaskQuery} aria-label="搜索已加载任务" placeholder="搜索任务"/>{can('tasks.refresh')&&<IconButton icon={RiRefreshLine} aria-label="刷新任务" title="刷新任务" onClick={()=>{taskHistory.reset();run('tasks.refresh')}}/>}<IconButton icon={RiHistoryLine} aria-label="查看历史记录" title="历史记录" onClick={()=>navigate('history')}/></div>
       <div className="pw-task-filter-options"><RadioOptions label="任务筛选" value={filter} onChange={setFilter} options={[{id:"all",label:"全部"},{id:"attention",label:"待处理"},{id:"running",label:"进行中"},{id:"ended",label:"已结束"}]}/></div>
     </section>}
-    {!taskFiltersOpen&&(filter!=='all'||taskQuery)&&<div className="pw-active-filter"><Button variant="ghost" onClick={()=>setTaskFiltersOpen(true)}>{taskQuery||({attention:'待处理',running:'进行中',ended:'已结束'} as Record<string,string>)[filter]}<RiArrowDownSLine size={16}/></Button><IconButton icon={RiCloseLine} aria-label="清除任务筛选" onClick={()=>{setFilter('all');setTaskQuery('')}}/></div>}
+    {!taskFiltersOpen&&(filter!=='all'||taskQuery)&&<div className="pw-active-filter"><Button variant="ghost" aria-label={`修改任务筛选：${[activeTaskStatus,taskQuery&&`关键词：${taskQuery}`].filter(Boolean).join('，')}`} onClick={()=>setTaskFiltersOpen(true)}><span className="pw-filter-summary">{activeTaskStatus&&<span className="pw-filter-status">{activeTaskStatus}{taskQuery?' ·':''}</span>}{taskQuery&&<span className="pw-filter-query">{taskQuery}</span>}</span><RiArrowDownSLine size={16} aria-hidden="true"/></Button><IconButton icon={RiCloseLine} aria-label="清除任务筛选" onClick={()=>{setFilter('all');setTaskQuery('')}}/></div>}
     <section className="pw-task-results" aria-label="任务列表">
       {filteredTasks.some(attention)&&<DecisionInbox compact heading="待你处理" className="pw-priority-decisions" decisions={filteredTasks.filter(attention).map(t=>({id:t.id,title:t.goal,detail:labelStatus(t.status),primary:taskActionLabel(t),secondary:'查看任务'}))} onDecide={async(d,answer)=>{openTask(d.id,answer==='primary'&&can('tasks.review')?'review':'overview')}}/>}
       {filteredTasks.some(t=>!attention(t)&&!terminal(t))&&<section className="pw-task-collection" aria-label="正在进行"><h3>正在进行</h3><div className="pw-task-list">{filteredTasks.filter(t=>!attention(t)&&!terminal(t)).map(renderTaskRow)}</div></section>}
       {endedTasks.length>0&&<section className="pw-task-collection pw-ended-tasks" aria-label="最近结束"><h3>最近结束</h3><div className="pw-task-list">{visibleEnded.map(renderTaskRow)}</div>{filter!=='ended'&&endedTasks.length>3&&<Button variant="ghost" className="pw-show-all-tasks" onClick={()=>setEndedExpanded(value=>!value)}>{endedExpanded?'收起':'查看全部 '+endedTasks.length+' 项'}<RiArrowDownSLine size={16}/></Button>}</section>}
-      {!filteredTasks.length&&<div className="pw-empty"><RiLayoutGridLine size={24} aria-hidden="true"/><h3>{taskQuery?'没有匹配的任务':filter==='all'?'暂无任务':'暂无这类任务'}</h3>{(taskHistory.hasMore||taskQuery)&&<p>{taskHistory.hasMore?'可继续读取较早任务。':'试试其他关键词。'}</p>}</div>}
+      {!filteredTasks.length&&<div className="pw-empty"><RiLayoutGridLine size={24} aria-hidden="true"/><h3>{taskQuery?'没有匹配的任务':filter==='all'?'暂无任务':'暂无这类任务'}</h3>{(taskHistory.hasMore||taskQuery)&&<p>{taskHistory.hasMore?'可继续读取较早任务。':activeTaskStatus?'试试其他关键词或筛选条件。':'试试其他关键词。'}</p>}</div>}
     </section>
     <TaskListHistoryControls history={taskHistory}/>
   </main>;

@@ -386,9 +386,12 @@ const css = /* css */ `
 }
 .ui-dic__compact-copy { min-width: 0; }
 .ui-dic[data-compact] .ui-dic__title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
   font-size: 15px;
   font-weight: 500;
   line-height: 22px;
