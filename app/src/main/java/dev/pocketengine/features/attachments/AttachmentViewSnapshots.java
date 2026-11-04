@@ -4,9 +4,14 @@ import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
+import android.os.ParcelFileDescriptor;
+import android.system.Os;
+import android.system.OsConstants;
 import dev.pocketengine.core.RunControl;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.security.MessageDigest;
@@ -42,9 +47,46 @@ public final class AttachmentViewSnapshots {
         if(!token.equals(record.getString("id"))||record.getLong("expiresAt")<System.currentTimeMillis()||record.getLong("size")!=blob.length()||blob.length()>AttachmentBook.MAX_FILE_BYTES)throw new IllegalArgumentException("临时查看文件已过期或变化，请重新打开原成果");return record;
     }}
     File file(String token)throws Exception {synchronized(disk){
-        JSONObject meta=metadata(token);File blob=new File(root,token+".blob");byte[] bytes=Files.readAllBytes(blob.toPath());
-        try{if(!digest(bytes).equals(meta.getString("sha256")))throw new SecurityException("临时查看文件字节已变化");return blob;}finally{Arrays.fill(bytes,(byte)0);}
+        byte[] bytes=verifiedBytes(token);try{return new File(root,token+".blob");}finally{Arrays.fill(bytes,(byte)0);}
     }}
+    private byte[] verifiedBytes(String token)throws Exception {
+        JSONObject meta=metadata(token);ByteArrayOutputStream bytes=new ByteArrayOutputStream((int)meta.getLong("size"));long count=0;
+        try(InputStream input=Files.newInputStream(new File(root,token+".blob").toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)){
+            byte[] buffer=new byte[32768];for(int n;(n=input.read(buffer))!=-1;){if(n==0)continue;count+=n;if(count>meta.getLong("size")||count>AttachmentBook.MAX_FILE_BYTES)throw new SecurityException("临时查看文件超过原长度");bytes.write(buffer,0,n);}
+        }
+        byte[] snapshot=bytes.toByteArray();if(count!=meta.getLong("size")||!digest(snapshot).equals(meta.getString("sha256"))){Arrays.fill(snapshot,(byte)0);throw new SecurityException("临时查看文件字节已变化");}return snapshot;
+    }
+    /** A seekable read-only FD for these exact verified bytes. The private reader copy is
+     * unlinked before delivery, so later canonical/cache-path writes cannot change it.
+     * This does not issue a URI grant or retire an existing reader's expiring snapshot. */
+    ParcelFileDescriptor openReadOnly(String token)throws Exception {synchronized(disk){
+        clearAbandonedReaderCopies();byte[] bytes=verifiedBytes(token);File copy=new File(root,"reader-"+UUID.randomUUID()+".part");boolean created=false;ParcelFileDescriptor opened=null;
+        try{
+            try(java.io.OutputStream output=Files.newOutputStream(copy.toPath(),java.nio.file.StandardOpenOption.CREATE_NEW,java.nio.file.StandardOpenOption.WRITE,java.nio.file.LinkOption.NOFOLLOW_LINKS)){created=true;output.write(bytes);output.flush();}
+            java.io.FileDescriptor descriptor=Os.open(copy.getAbsolutePath(),OsConstants.O_RDONLY|OsConstants.O_NOFOLLOW|OsConstants.O_CLOEXEC,0);
+            try{opened=ParcelFileDescriptor.dup(descriptor);}finally{Os.close(descriptor);}
+            Files.delete(copy.toPath());created=false;
+            // Validate the actual detached descriptor, not a path that will be reopened later.
+            MessageDigest checksum=MessageDigest.getInstance("SHA-256");long count=0;
+            try(InputStream input=new ParcelFileDescriptor.AutoCloseInputStream(ParcelFileDescriptor.dup(opened.getFileDescriptor()))){byte[] buffer=new byte[32768];for(int n;(n=input.read(buffer))!=-1;){if(n==0)continue;count+=n;if(count>bytes.length)throw new SecurityException("查看reader副本超过原长度");checksum.update(buffer,0,n);}}
+            if(count!=bytes.length||!Arrays.equals(checksum.digest(),MessageDigest.getInstance("SHA-256").digest(bytes)))throw new SecurityException("查看reader副本与原快照不同");
+            Os.lseek(opened.getFileDescriptor(),0,OsConstants.SEEK_SET);ParcelFileDescriptor result=opened;opened=null;return result;
+        }catch(Exception failure){
+            if(opened!=null)try{opened.close();}catch(Exception cleanup){failure.addSuppressed(cleanup);}
+            if(created)try{Files.deleteIfExists(copy.toPath());}catch(Exception cleanup){failure.addSuppressed(cleanup);}
+            throw failure;
+        }finally{Arrays.fill(bytes,(byte)0);}
+    }}
+    /** The manifest mounts this provider in the one default app process. Every reader
+     * copy creation/open/unlink holds this same disk lock; these names never carry a
+     * URI grant. A cold leftover can be unlinked without touching a live detached FD.
+     * Inspect at most 32 names and unlink at most 16 per read; failure admits no new copy. */
+    private void clearAbandonedReaderCopies()throws Exception {
+        if(!root.isDirectory())return;int inspected=0,removed=0;
+        try(java.nio.file.DirectoryStream<java.nio.file.Path> parts=Files.newDirectoryStream(root.toPath(),"reader-*.part")){
+            for(java.nio.file.Path part:parts){if(++inspected>32)break;if(!part.getFileName().toString().matches("reader-[a-f0-9-]{36}\\.part"))continue;if(++removed>16)break;if(!Files.isRegularFile(part,java.nio.file.LinkOption.NOFOLLOW_LINKS)&&!Files.isSymbolicLink(part))throw new SecurityException("临时reader副本不是普通文件");Files.deleteIfExists(part);}
+        }
+    }
     /** Native view-copy cleanup, including group preparations. It grants no read/delete authority over an original store. */
     public void discardUnissuedView(Intent prepared)throws Exception {
         if(prepared==null||prepared.getBooleanExtra(AttachmentOutcomeHost.NATIVE_VIEW_ISSUED,false))throw new SecurityException("已进入外部reader交付的查看副本不能作为未交付请求清理");

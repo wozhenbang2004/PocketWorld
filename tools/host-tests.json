@@ -1,4 +1,15 @@
 {
+  "attachment-legacy-integrity": {
+    "class": "dev.pocketengine.features.attachments.LegacyAttachmentIntegrityTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.attachments.AttachmentBookTest",
+      "dev.pocketengine.features.attachments.AttachmentRepositoryTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "linuxPosixFd": true,
+    "description": "Exact legacy module/export/provider bytes, pinned SHA, owner/group/retirement and quota tests. Requires Linux JDK17 with readable /proc/self/fd; the selected host-test JVM alone opens java.io and sun.nio.fs for the real POSIX dup fixture. No device, mounted UI or external-reader acceptance."
+  },
   "mika-skill-lifecycle": {
     "class": "dev.pocketengine.features.skills.NativeSkillExecutionHostTest",
     "additionalClasses": [
