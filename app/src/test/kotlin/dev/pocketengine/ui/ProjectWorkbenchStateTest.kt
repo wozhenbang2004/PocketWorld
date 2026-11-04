@@ -6,6 +6,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ProjectWorkbenchStateTest {
+    @Test fun legacyContinuationPresentationNeverRevivesStoppedOrCancelledTasks() {
+        for (status in listOf("cancelled", "canceled", "stopped", "waiting_permission", "awaiting_permission"))
+            assertFalse(status, ProjectWorkbenchGuard.canContinue(task().copy(status = status)))
+        for (status in listOf("completed", "failed", "paused", "interrupted", "needs_confirmation", "awaiting_user"))
+            assertTrue(status, ProjectWorkbenchGuard.canContinue(task().copy(status = status)))
+        assertFalse(ProjectWorkbenchGuard.canContinue(task().also { it.raw.put("cancelRequested", true) }))
+    }
     private fun task(id: String = "original-task", at: Long = 1): UiTask = taskFromJson(JSONObject()
         .put("id", id).put("kind", "assistant").put("actorId", "owner").put("spaceId", "private")
         .put("status", "failed").put("goal", "修复这个网页").put("updatedAt", at).put("runId", "run-one")

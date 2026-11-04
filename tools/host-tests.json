@@ -1,4 +1,30 @@
 {
+  "phone-team-sessions": {
+    "class": "dev.pocketengine.BackgroundPhoneRunTest",
+    "additionalClasses": [
+      "dev.pocketengine.core.ExecutionResourcesTest",
+      "dev.pocketengine.store.LocalPhoneLeaseIsolationNativeTest",
+      "dev.pocketengine.PhoneNotificationControlsTest",
+      "dev.pocketengine.PhoneRunServiceTest",
+      "dev.pocketengine.phone.PhoneOwnerControlsTest",
+      "dev.pocketengine.displayhelper.DisplaySessionRegistryTest",
+      "dev.pocketengine.phone.display.DisplayModuleParallelTest",
+      "dev.pocketengine.phone.display.PhoneParallelCapabilitiesTest",
+      "dev.pocketengine.phone.display.DisplayModuleTest",
+      "dev.pocketengine.features.devices.DeviceGoalPhonePortTest",
+      "dev.pocketengine.features.teams.TeamPhoneBudgetTest",
+      "dev.pocketengine.features.devices.DevicePhoneGoalReadinessTest",
+      "dev.pocketengine.features.teams.TeamPhoneOriginalHostJourneyTest",
+      "dev.pocketengine.features.devices.DeviceControlDispatchIsolationTest",
+      "dev.pocketengine.features.devices.DeviceProtocolTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest"
+    ],
+    "robolectric": true,
+    "description": "Bounded original App/Service/TaskStore multi-run lifecycle, per-display routing, exact phone scope, team allocations and previous notification/display regressions. Native frame/model responses are explicit test boundaries; no physical Android, APK, WAN or visual acceptance."
+  },
   "conversation-phone-handoff": {
     "class": "dev.pocketengine.ConversationPhoneStartNativeTest",
     "additionalClasses": [
@@ -1657,13 +1683,19 @@
       "dev.pocketengine.features.assistant.OwnerComposerPreviewRefsTest",
       "dev.pocketengine.ui.ChatInputRulesTest",
       "dev.pocketengine.store.OwnerInputQueueTest",
-      "dev.pocketengine.features.local.project.ProjectPackageNativeDeliveryJourneyTest"
+      "dev.pocketengine.features.local.project.ProjectPackageNativeDeliveryJourneyTest",
+      "dev.pocketengine.store.ReviewedDevelopmentContinuationTest",
+      "dev.pocketengine.ProjectConversationContinuationNativeTest",
+      "dev.pocketengine.ui.web.PocketWebProjectContinuationTest",
+      "dev.pocketengine.ui.ProjectWorkbenchStateTest"
     ],
     "helpers": [
-      "dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest"
+      "dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest",
+      "dev.pocketengine.testutil.ReadyApplicationFixture",
+      "dev.pocketengine.testutil.HttpServer"
     ],
     "robolectric": true,
-    "description": "Original immutable active-workspace and settled private fixed-package preview selection: bounded values, native document lifetime, independent composer CAS, original SQL carrier, exact package operation/producing run/archive identity and receiving run/source checks before MAIN and SUMMARY. Real TaskStore/Local/Workspace/request fixtures; package SQL fixtures reuse the original managed host without npm. Native JNI/SDK dependencies required. Pure value or Web checks do not prove Android touch/WebView, SQL, model/file-CAS or device acceptance. Live-service selection and explicit ended-project continuation remain separate original requirements.",
+    "description": "Original immutable active-workspace and settled private fixed-package preview selection: bounded values, native document lifetime, independent composer CAS, original SQL carrier, exact package operation/producing run/archive identity and receiving run/source checks before MAIN and SUMMARY. Reviewed ended-project continuation retains the same task, original cumulative scope/checkpoint and actual Assistant conversation slot/mailbox; separate Send remains explicit. Real TaskStore/Local/Workspace/Engine/request fixtures; package SQL fixtures reuse the original managed host without npm. Native JNI/SDK dependencies required. Authored native fixtures require actual execution; pure value or Web checks do not prove Android touch/WebView, SQL, model/file-CAS or device acceptance. Live-service selection remains a separate original requirement.",
     "native": true
   },
   "bedrock-sts-session": {

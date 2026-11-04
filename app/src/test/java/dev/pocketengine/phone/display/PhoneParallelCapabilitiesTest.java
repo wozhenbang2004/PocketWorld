@@ -22,19 +22,20 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=35,manifest=Config.NONE,application=Application.class)
 public final class PhoneParallelCapabilitiesTest {
-    @Test public void explicitUnsupportedListsTheIsolationPrerequisitesWithoutEnablingConcurrency()throws Exception {
-        JSONObject capability=PhoneParallelCapabilities.current();assertFalse(capability.getBoolean("supported"));assertFalse(capability.getBoolean("deviceIsolationVerified"));
-        assertEquals(1,capability.getInt("maximumActivePhoneRuns"));assertEquals("parallel_phone_isolation_unverified",capability.getString("code"));assertFalse(capability.getBoolean("automaticFallback"));
-        JSONArray missing=capability.getJSONArray("unmetPrerequisites");Set<String> prerequisites=new HashSet<>();for(int i=0;i<missing.length();i++)prerequisites.add(missing.getString(i));
-        assertEquals(Set.of("canonical_per_run_phone_leases","independent_host_session_routing","device_focus_and_ime_isolation","cross_display_input_and_capture_isolation","confirmed_per_run_cleanup"),prerequisites);
+    @Test public void softwareRoutingCapacityDoesNotClaimPhysicalDeviceVerification()throws Exception {
+        JSONObject capability=PhoneParallelCapabilities.current();assertTrue(capability.getBoolean("supported"));assertFalse(capability.getBoolean("deviceIsolationVerified"));
+        assertEquals(4,capability.getInt("maximumActivePhoneRuns"));assertEquals("per_run_background_sessions",capability.getString("code"));assertFalse(capability.getBoolean("automaticFallback"));
+        assertEquals(2,capability.getInt("sessionRouting"));assertTrue(capability.getBoolean("requiresLiveIsolationChecks"));assertTrue(capability.getBoolean("sameAppUserExclusive"));
+        JSONArray pending=capability.getJSONArray("unverifiedOnDevice");Set<String> checks=new HashSet<>();for(int i=0;i<pending.length();i++)checks.add(pending.getString(i));
+        assertEquals(Set.of("simultaneous_focus_and_ime","cross_display_input_and_capture","per_run_physical_cleanup"),checks);
     }
     @Test public void countAndBooleanContractsCannotRoundOrCoerceARequestIntoSupportedSingleSession()throws Exception {
         PhoneParallelCapabilities.require(null);PhoneParallelCapabilities.require(new JSONObject().put("parallel",false).put("concurrentSessions",1));
         assertThrows(IllegalArgumentException.class,()->PhoneParallelCapabilities.require(new JSONObject().put("parallel","true")));
         for(Object invalid:new Object[]{0,5,1.5,"1",true,JSONObject.NULL})assertThrows(String.valueOf(invalid),RuntimeException.class,()->PhoneParallelCapabilities.require(new JSONObject().put("concurrentSessions",invalid)));
-        for(int requested:new int[]{2,3,4})assertThrows(UnsupportedOperationException.class,()->PhoneParallelCapabilities.require(new JSONObject().put("concurrentSessions",requested)));
+        for(int requested:new int[]{2,3,4})PhoneParallelCapabilities.require(new JSONObject().put("parallel",true).put("concurrentSessions",requested));
     }
-    @Test public void parallelCreateIsRejectedBeforeConfigurationProbeTransportOrSessionMutation()throws Exception {
+    @Test public void parallelCreateWithoutNativeRunIsRejectedBeforeConfigurationProbeTransportOrSessionMutation()throws Exception {
         Context android=RuntimeEnvironment.getApplication();android.getSharedPreferences("display_backend",0).edit().putString("backend","adb").commit();
         AtomicInteger configured=new AtomicInteger(),probes=new AtomicInteger(),transport=new AtomicInteger();
         AdbBootstrapClient adb=new AdbBootstrapClient(){
@@ -52,7 +53,7 @@ public final class PhoneParallelCapabilitiesTest {
         RunControl original=new RunControl();try{
             String before=module.session().toString();
             for(JSONObject request:new JSONObject[]{new JSONObject().put("parallel",true),new JSONObject().put("concurrentSessions",2)}){
-                UnsupportedOperationException rejected=assertThrows(UnsupportedOperationException.class,()->module.create(request,original));assertEquals("parallel_phone_isolation_unverified",rejected.getMessage());
+                assertThrows(SecurityException.class,()->module.create(request,original));
             }
             assertEquals(0,configured.get());assertEquals(0,probes.get());assertEquals(0,transport.get());assertFalse(module.hasSession());assertEquals(before,module.session().toString());
         }finally{original.cancel();module.close();}

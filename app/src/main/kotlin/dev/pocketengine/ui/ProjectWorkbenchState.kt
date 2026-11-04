@@ -80,7 +80,7 @@ internal object ProjectWorkbenchGuard {
         return try { dev.pocketengine.features.local.project.ProjectDevelopment.originalPollRequest(task.raw, operation) } catch (_: Exception) { null }
     }
 
-    fun canContinue(task: UiTask): Boolean = task.raw.has("operations") && task.status in setOf("completed", "failed", "cancelled", "canceled", "stopped", "paused", "interrupted", "needs_confirmation", "awaiting_user", "waiting_user", "waiting_permission", "awaiting_permission") &&
+    fun canContinue(task: UiTask): Boolean = task.raw.has("operations") && !task.raw.optBoolean("cancelRequested") && task.status in setOf("completed", "failed", "paused", "interrupted", "needs_confirmation", "awaiting_user") &&
         unresolvedOperations(task).isEmpty() && task.raw.optJSONArray("approvals").objects().none { it.optString("state") == "pending" }
 
     fun failureDraft(task: UiTask, operationId: String? = null): String? {

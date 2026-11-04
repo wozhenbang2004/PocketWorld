@@ -11,7 +11,7 @@ import json
 import re
 
 VERSION = "1.0"
-PROFILE = "pwp1_37a2c7990f46ec2f9ea27ac7223cd2a845eb8b7ff491a7ede3f2d31a626e6675"
+PROFILE = "pwp1_94a3b250d77be4eadd62d184dfa70facfe4e78444f0cd80903d00e339ef25147"
 MAX_CONTROL_BYTES = 65_536
 MAX_PAIRING_BYTES = 16_384
 MAX_DEPTH = 16
@@ -139,7 +139,9 @@ def validate_resource_binding(capability_version, binding):
     if capability_version == "1.0":
         mode = binding.get("screenMode")
         if mode in ("main_screen", "background"):
-            _keys(binding, {"screenMode", "packageNames"}, {"allowWholeDisplayCapture", "allowWholeDisplayInput"})
+            _keys(binding, {"screenMode", "packageNames"}, {"allowWholeDisplayCapture", "allowWholeDisplayInput", "androidUserId"})
+            if "androidUserId" in binding:
+                integer(binding["androidUserId"], "androidUserId", 0, 21474)
             packages = binding["packageNames"]
             if not isinstance(packages, list) or not 1 <= len(packages) <= 128 or any(not isinstance(item, str) or len(item) > 255 or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+", item) for item in packages) or len(set(packages)) != len(packages):
                 _fail("invalid_request", "Invalid exact Android package scope")

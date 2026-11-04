@@ -366,9 +366,9 @@
           "class": "dev.pocketengine.phone.display.PhoneParallelCapabilitiesTest",
           "source": "app/src/test/java/dev/pocketengine/phone/display/PhoneParallelCapabilitiesTest.java",
           "methods": [
-            "explicitUnsupportedListsTheIsolationPrerequisitesWithoutEnablingConcurrency",
+            "softwareRoutingCapacityDoesNotClaimPhysicalDeviceVerification",
             "countAndBooleanContractsCannotRoundOrCoerceARequestIntoSupportedSingleSession",
-            "parallelCreateIsRejectedBeforeConfigurationProbeTransportOrSessionMutation"
+            "parallelCreateWithoutNativeRunIsRejectedBeforeConfigurationProbeTransportOrSessionMutation"
           ]
         }
       ],

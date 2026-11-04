@@ -47,7 +47,7 @@ public final class LocalPhoneLeaseIsolationNativeTest {
         assertEquals(before.toString(),row("phone.local").toString());assertEquals(first.getString("runId"),before.getString("runId"));
         assertEquals(1,runs());assertTrue(store.get(next,false).optString("runId").isEmpty());
     }
-    @Test public void expiredBackgroundLeaseStillBlocksBothLocalPhoneModes()throws Exception {
+    @Test public void unboundLegacyBackgroundLeaseStillBlocksBothLocalPhoneModes()throws Exception {
         String resource="phone.local.bg:"+UUID.randomUUID(),owner=UUID.randomUUID().toString();lease(resource,owner,7,0);
         String first=task(),second=task();
         assertThrows(IllegalStateException.class,()->store.startAttempt(first,"main_screen",4));
@@ -89,5 +89,43 @@ public final class LocalPhoneLeaseIsolationNativeTest {
         journal.finishOperation(operation,new JSONObject().put("accepted",JSONObject.NULL).put("code","action_unknown"));db.execSQL("UPDATE leases SET expires_at=0 WHERE resource_id='phone.local'");
         assertThrows(IllegalStateException.class,()->store.startAttempt(id,"main_screen",4));String other=task();assertThrows(IllegalStateException.class,()->store.startAttempt(other,"main_screen",4));
         assertTrue(store.hasUnresolved(id));assertEquals(run,row("phone.local").getString("runId"));assertEquals(1,runs());
+    }
+    private void dispatch(JSONObject task)throws Exception {
+        RunControl control=new RunControl();control.bindHostRun(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"));
+        RunJournal journal=store.journal(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),control);
+        String operation=journal.beginOperation("phone_back",new JSONObject());journal.finishOperation(operation,new JSONObject().put("ok",true).put("accepted",true));
+    }
+    @Test public void fourBackgroundRunsHaveIndependentLeasesAndTheFifthCannotDisplaceOne()throws Exception {
+        JSONObject[] active=new JSONObject[4];java.util.Set<String> resources=new java.util.HashSet<>();
+        for(int i=0;i<active.length;i++){
+            active[i]=store.startAttempt(task(),"background",4);String resource=active[i].getString("leaseResource");
+            assertEquals("phone.local.bg:"+active[i].getString("runId"),resource);assertTrue(resources.add(resource));dispatch(active[i]);
+        }
+        String fifth=task(),main=task();assertThrows(IllegalStateException.class,()->store.startAttempt(fifth,"background",4));
+        assertThrows(IllegalStateException.class,()->store.startAttempt(main,"main_screen",4));assertEquals(4,runs());
+        for(JSONObject current:active)assertEquals(current.getString("runId"),row(current.getString("leaseResource")).getString("runId"));
+    }
+    @Test public void endingOneBackgroundRunLeavesTheOtherRunAndItsJournalCurrent()throws Exception {
+        JSONObject first=store.startAttempt(task(),"background",4),second=store.startAttempt(task(),"background",4);
+        String id=first.getString("id"),oldRun=first.getString("runId");
+        store.endAttempt(id,oldRun,"cancelled","只结束原会话",new JSONObject());assertNull(row(first.getString("leaseResource")));
+        dispatch(second);assertEquals(second.getString("leaseResource"),store.requirePhoneLeaseCurrent(second.getString("id"),second.getString("runId"),second.getInt("coordinatorEpoch")));
+        JSONObject replacement=store.startAttempt(id,"background",4);store.endAttempt(id,oldRun,"cancelled","晚到清场",new JSONObject());
+        dispatch(replacement);dispatch(second);assertNotEquals(first.getString("leaseResource"),replacement.getString("leaseResource"));
+        assertThrows(SecurityException.class,()->store.requirePhoneLeaseCurrent(id,oldRun,first.getInt("coordinatorEpoch")));
+    }
+    @Test public void expirationRetainsItsBackgroundSlotButCannotAuthorizeDispatchOrDuplicateTheTask()throws Exception {
+        JSONObject first=store.startAttempt(task(),"background",4);String id=first.getString("id"),run=first.getString("runId"),resource=first.getString("leaseResource");
+        db.execSQL("UPDATE leases SET expires_at=0 WHERE resource_id=?",new Object[]{resource});
+        assertThrows(SecurityException.class,()->dispatch(first));assertThrows(IllegalStateException.class,()->store.startAttempt(id,"background",4));
+        for(int i=0;i<3;i++)dispatch(store.startAttempt(task(),"background",4));
+        String fifth=task();assertThrows(IllegalStateException.class,()->store.startAttempt(fifth,"background",4));
+        assertEquals(run,row(resource).getString("runId"));assertEquals(0,row(resource).getLong("expiresAt"));assertEquals(4,runs());
+    }
+    @Test public void oneBackgroundTaskCannotUseAnotherTasksExactRunOrEpoch()throws Exception {
+        JSONObject first=store.startAttempt(task(),"background",4),second=store.startAttempt(task(),"background",4);
+        assertThrows(SecurityException.class,()->store.requirePhoneLeaseCurrent(first.getString("id"),second.getString("runId"),second.getInt("coordinatorEpoch")));
+        assertThrows(SecurityException.class,()->store.requirePhoneLeaseCurrent(first.getString("id"),first.getString("runId"),first.getInt("coordinatorEpoch")+1));
+        dispatch(first);dispatch(second);assertNull(row("phone.local"));
     }
 }

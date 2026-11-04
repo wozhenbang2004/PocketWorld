@@ -2603,6 +2603,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun readWebTeamSnapshot(done: (JSONObject?, String?) -> Unit) {
         readWebOwnerFeatureSnapshot("teams", done)
     }
+    internal fun runTeamPhoneWork(work: Runnable) { check(!closed); io.execute(work) }
     internal fun readWebOwnerFeatureSnapshot(feature: String, done: (JSONObject?, String?) -> Unit) {
         require(feature in setOf("teams", "media", "proxy"))
         check(webPrivateOwnerVisible()) { "请在原私人工作页面读取" }
@@ -3443,7 +3444,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val targetTask = input.optString("taskId")
         val executionPlanOwnerAction = originalOwnerCurrent != null && (action == "enterTaskPlanning" || action == "approveCapability" &&
             listOf("expectedScopeRevision", "planRevision", "planArtifactRef", "planHash").all(input::has))
-        val taskAction = targetTask.takeIf { it.isNotBlank() && action in setOf("resumeTask", "stopTask", "approveCapability", "confirmResult", "resolveOperation", "updateTask", "reconcileExternalTask", "configureTaskExecutionScope", "enterTaskPlanning", "answerOwnerQuestion") }
+        val projectContinuationOwnerAction = originalOwnerCurrent != null && action == "continueDevelopmentTask"
+        val guardedOwnerAction = executionPlanOwnerAction || projectContinuationOwnerAction
+        val taskAction = targetTask.takeIf { it.isNotBlank() && action in setOf("resumeTask", "continueDevelopmentTask", "stopTask", "approveCapability", "confirmResult", "resolveOperation", "updateTask", "reconcileExternalTask", "configureTaskExecutionScope", "enterTaskPlanning", "answerOwnerQuestion") }
         if (taskAction != null) state = state.copy(taskActionErrors = state.taskActionErrors - taskAction)
         val needsGroupOwner = action in setOf("resumeTask", "stopTask", "approveCapability", "confirmResult", "resolveOperation", "updateTask", "reconcileExternalTask") && state.tasks.any { it.id == targetTask && it.raw.optJSONObject("origin")?.optString("kind") == "group" }
         val groupWindow = if (needsGroupOwner && groupTaskId == targetTask) groupTaskWindow else null
@@ -3464,6 +3467,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     else if (originalOwnerCurrent != null && action == "featureRequest") {
                         app.features.request(input, java.util.function.BooleanSupplier { originalOwnerCurrent() })
                         null
+                    } else if (projectContinuationOwnerAction) {
+                        // The original Assistant slot owns admission before Engine/SQL locks.
+                        // Never enter that continuation while holding the generic app monitor.
+                        val current = checkNotNull(originalOwnerCurrent)
+                        check(current()) { "原项目审阅窗口已关闭，未续接排队任务" }
+                        app.dispatchReviewedOwnerAction(action, input, java.util.function.BooleanSupplier { current() })
                     } else if (originalOwnerCurrent != null) synchronized(app) {
                         check(originalOwnerCurrent()) { "原审阅窗口已关闭，未执行排队操作" }
                         if (executionPlanOwnerAction) {
@@ -3500,6 +3509,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     }
                     if (action == "configureTaskExecutionScope" && result != null) { mergeTask(result); state = state.copy(notice = "原范围已更新，累计用量保留；没有自动继续或重放动作") }
                     if (action == "enterTaskPlanning") { getTask(input.optString("taskId")); app.sendState() }
+                    if (projectContinuationOwnerAction) { getTask(targetTask); refreshCurrentConversationTurn(); app.sendState() }
                     if (action == "getTask" && result != null) {
                         val task = result.optJSONObject("task") ?: if (result.has("id")) result else null
                         task?.let { mergeTask(it) }
@@ -3521,10 +3531,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 }
             } catch (error: Exception) {
                 main.post {
-                    if (!closed && executionPlanOwnerAction && originalOwnerCurrent?.invoke() != true && ownerRequestId != null) {
+                    if (!closed && guardedOwnerAction && originalOwnerCurrent?.invoke() != true && ownerRequestId != null) {
                         state = state.copy(moduleBusy = state.moduleBusy - ("owner." + action))
                     }
-                    if (!closed && (!executionPlanOwnerAction || originalOwnerCurrent?.invoke() == true)) {
+                    if (!closed && (!guardedOwnerAction || originalOwnerCurrent?.invoke() == true)) {
                         if (ownerRequestId != null) {
                             val key = "owner." + action
                             state = state.copy(moduleBusy = state.moduleBusy - key, moduleErrors = state.moduleErrors + (key to message(error)))

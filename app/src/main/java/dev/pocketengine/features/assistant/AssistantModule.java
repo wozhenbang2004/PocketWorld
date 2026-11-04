@@ -31,6 +31,7 @@ public final class AssistantModule implements EngineModule {
         /** Native owner settings, never copied into provider messages or stored owner prose. */
         default JSONObject startScoped(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{if(ownerScope!=null)throw new SecurityException("原宿主尚未支持明确任务范围，未丢弃主人选择或新建执行");return start(conversationId,goal,message,config,control);}
         default JSONObject startProject(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart selected)throws Exception{throw new SecurityException("原宿主未接显式项目记忆同意，未回退全局任务");}
+        default JSONObject continueProject(JSONObject reviewedTask,String feedback,ModelConfig config,RunControl control,java.util.function.BooleanSupplier currentOwnerWindow)throws Exception{throw new SecurityException("原宿主尚未支持原项目续接，请保留草稿并核对原任务");}
         JSONObject append(String conversationId,JSONObject message,String mode,JSONObject expected,RunControl control)throws Exception;
         /** Native task hosts also persist cancellation and enqueue their original child stops. */
         default void cancel(RunControl control)throws Exception{control.cancel();}
@@ -334,6 +335,45 @@ public final class AssistantModule implements EngineModule {
     }
     /** Native sends ACK before model work; only the original admitted runner receives later input. */
     public JSONObject sendProjectForOwner(JSONObject input,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart selected)throws Exception{if(nativeInputHost==null)throw new SecurityException("项目记忆需要原native任务宿主");return sendNative(input,java.util.Objects.requireNonNull(selected));}
+    /** Native reviewed continuation only. It creates neither a conversation nor an owner message. */
+    public JSONObject continueProjectForOwner(JSONObject reviewedTask,String feedback,java.util.function.BooleanSupplier currentOwnerWindow)throws Exception{
+        if(reviewedTask==null||!(reviewedTask.opt("id") instanceof String task)||task.isBlank()
+                ||!(reviewedTask.opt("conversationId") instanceof String conversation)||conversation.isBlank())throw new SecurityException("请重新读取原项目任务与对话");
+        if(feedback==null||feedback.isBlank()||feedback.trim().length()>8000)throw new IllegalArgumentException("请填写1至8000字的继续要求；不会读取或发送对话草稿");
+        JSONObject reviewed=copy(reviewedTask);String note=feedback.trim();
+        requireContinuationWindow(currentOwnerWindow);requireLegacyWritable();
+        NativeInputHost host=nativeInputHost;
+        if(host==null||executor==null||historyTasks==null)throw new SecurityException("原项目续接需要原TaskStore与会话执行宿主");
+        synchronized(admission){
+            requireContinuationWindow(currentOwnerWindow);
+            if(migrationInProgress)throw new IllegalStateException("原文迁移正在对账，尚未接收项目续接");
+            if(conversationLive(conversation))throw new IllegalStateException("原对话仍有执行或停止回执，请先核对原任务");
+            findConversation(conversation);
+            ModelConfig config=context.model();if(config==null)throw new IllegalStateException("原任务模型绑定不可读取，请核对原任务");
+            RunControl original=new RunControl();var lease=reserveLive(conversation,config,original);
+            java.util.concurrent.atomic.AtomicBoolean rejected=new java.util.concurrent.atomic.AtomicBoolean();
+            try{
+                requireContinuationWindow(currentOwnerWindow);
+                JSONObject binding=host.continueProject(copy(reviewed),note,config,original,currentOwnerWindow);
+                Object run=binding==null?null:binding.opt("runId"),epoch=binding==null?null:binding.opt("epoch");
+                if(binding==null||!task.equals(binding.opt("taskId"))||!(run instanceof String)||((String)run).isBlank()
+                        ||!(epoch instanceof Integer||epoch instanceof Long)||((Number)epoch).longValue()<1||((Number)epoch).longValue()>Integer.MAX_VALUE
+                        ||!original.matchesHostRun(task,(String)run,((Number)epoch).intValue())||run.equals(reviewed.opt("runId")))throw new SecurityException("续接回执不是原项目的新执行身份");
+                JSONObject turn=copy(binding).put("conversationId",conversation);lease.original().binding=copy(turn);
+                original.check();resourceState(turn,original,"queued");requireContinuationWindow(currentOwnerWindow);
+                // The accepted slot is independent of the old review page. Engine rechecks
+                // its reserved native tuple/scope at pickup; no fresh chat history is supplied.
+                liveTurns.submit(lease,()->executeNativeTurn(lease,turn,reviewed.optString("goal"),new JSONArray(),config,original,null),
+                        ()->{rejected.set(true);executorRejected(lease,null);});
+                if(rejected.get())throw new IllegalStateException("原项目续接已登记，但执行器未接手；请核对原任务，不要重复提交");
+                return copy(turn).put("continued",true).put("resourceType","assistant_text").put("resourceState",lease.resourceState());
+            }catch(Exception failure){
+                if(!rejected.get())stopUnstarted(lease);
+                releaseLive(lease);throw failure;
+            }
+        }
+    }
+    private static void requireContinuationWindow(java.util.function.BooleanSupplier current){if(current==null||!current.getAsBoolean())throw new SecurityException("原项目审阅窗口已关闭，请重新核对；对话草稿未发送");}
     private JSONObject sendNative(JSONObject input)throws Exception{return sendNative(input,null);}
     private JSONObject sendNative(JSONObject input,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart)throws Exception {
         if(migrationInProgress)throw new IllegalStateException("原文迁移正在对账，未接收新消息；不会重复新建任务");

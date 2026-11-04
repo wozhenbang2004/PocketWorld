@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { RiArrowLeftLine, RiCloseLine, RiCursorLine, RiRefreshLine } from '@remixicon/react';
+import { RiArrowLeftLine, RiCloseLine, RiCursorLine, RiRefreshLine, RiHistoryLine } from '@remixicon/react';
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button, IconButton, SelectField } from './forms-library';
 import { ProgressCircle } from './library';
@@ -8,7 +8,7 @@ import './project-preview.css';
 
 type Data = Record<string, any>;
 type Action = 'projects.preview.mode' | 'projects.preview.reload' | 'projects.preview.close' | 'projects.preview.return';
-type Options = { value: unknown; projectId: string; resumeRevision: number; active: boolean; blocked: boolean; can: (action: string) => boolean; onReturned: () => void; onPackageTask: (taskId: string) => void };
+type Options = { value: unknown; projectId: string; resumeRevision: number; active: boolean; blocked: boolean; can: (action: string) => boolean; onReturned: () => void; onPackageTask: (taskId: string, entry?: 'process' | 'review') => void };
 
 /** Local presentation intent. No element, URL or draft authority is constructed here. */
 export function useProjectPreview(options: Options) {
@@ -147,7 +147,7 @@ export function useProjectPreview(options: Options) {
     return true;
   };
   return { expanded, view, busy, error, unknown, open, hide, action, handleBack, showPackage, choices, selectedEntry, setSelectedEntry, openPackage,
-    returnToPackageTask: () => { if (choices) { hide(); optionsRef.current.onPackageTask(choices.taskId); } }, blocked: options.blocked, can: options.can };
+    returnToPackageTask: () => { const taskId = view?.taskId || choices?.taskId; if (taskId) { hide(); optionsRef.current.onPackageTask(taskId, view ? 'review' : 'process'); } }, blocked: options.blocked, can: options.can };
 }
 
 export function ProjectPreviewPane({ control, composer }: { control: ReturnType<typeof useProjectPreview>; composer: Data }) {
@@ -191,6 +191,7 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
         disabled={!view?.ready || !view.selectionAvailable && !view.selecting || !!busy || unknown || blocked || !can('projects.preview.mode')} aria-pressed={view?.selecting === true}
         onClick={() => control.action('projects.preview.mode', { enabled: !view?.selecting })}>{view?.selecting ? '退出选择' : '选择元素'}</Button>
       <span className="pw-grow"/>
+      {view && can('tasks.open') && <IconButton icon={RiHistoryLine} aria-label="核对原任务" title="核对原任务" disabled={!!busy} onClick={control.returnToPackageTask}/>}
       <IconButton icon={RiRefreshLine} aria-label="重新载入预览" title="重新载入会使旧元素引用失效" disabled={!view || !!busy || unknown || !can('projects.preview.reload')} onClick={() => control.action('projects.preview.reload')}/>
       <IconButton icon={RiCloseLine} aria-label="关闭预览" title="关闭后需要重新选择元素" disabled={!view || !!busy || unknown || !can('projects.preview.close')} onClick={() => control.action('projects.preview.close')}/>
     </div>}

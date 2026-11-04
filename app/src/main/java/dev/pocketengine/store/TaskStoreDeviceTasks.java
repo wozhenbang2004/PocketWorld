@@ -16,6 +16,66 @@ import org.json.JSONObject;
 /** Device indices in the ORIGINAL TaskStore SQL authority. No database, Runner or retry loop of its own.
  * All task/run/operation facts are stored in the existing tables; device_inbound only resolves wire IDs. */
 public final class TaskStoreDeviceTasks {
+    private final java.util.Map<String,dev.pocketengine.features.teams.TeamPhoneHost.Approval> teamPhoneApprovals=new java.util.HashMap<>();
+    private final java.util.Map<String,dev.pocketengine.features.teams.TeamCoordinator.PhoneCall> teamPhoneSources=new java.util.HashMap<>();
+
+    /** Native review adds explicitly approved allocations to the original team's existing pool. */
+    public void installTeamPhonePlan(dev.pocketengine.features.teams.TeamCoordinator.InitialBudgetPlan plan,
+            dev.pocketengine.features.teams.TeamPhoneHost.Approval approval)throws Exception {
+        plan.checkCurrent();JSONObject source=plan.view(),review=approval.view();String id=source.getString("id");
+        synchronized(owner){db.beginTransaction();try{
+            JSONObject parent=task(id);if(parent==null||!"teams".equals(parent.optString("kind"))||!"owner".equals(parent.optString("actorId"))||!"private".equals(parent.optString("spaceId"))||!parent.optString("parentTaskId").isEmpty()||teamPhoneApprovals.containsKey(id))throw new SecurityException("手机团队需本次原生主人启动，不能借父模型扩大权限");
+            JSONObject pool=parent.getJSONObject("teamReservationPool");int tools=pool.getInt("toolOperationLimit"),models=pool.getInt("modelRequestLimit");
+            JSONArray members=review.getJSONArray("members");for(int i=0;i<members.length();i++){var binding=approval.requireMember(members.getJSONObject(i).getString("memberId"));tools=Math.addExact(tools,binding.sourceToolBudget());models=Math.addExact(models,binding.modelBudget());}
+            if(tools>400||models>128)throw new SecurityException("本次手机团队总预算超过原生上限，请减少成员额度");
+            pool.put("toolOperationLimit",tools).put("modelRequestLimit",models);pool.getJSONObject("budgetSource").put("nativePhoneWorkPlan",true).put("phoneOwnerReview",review);
+            parent.put("teamReservationPool",pool).put("teamPhoneScope",review).put("teamPhoneChildren",new JSONObject());access.write(parent);
+            access.event(parent,new JSONObject().put("type","team_phone_scope_owner_confirmed").put("scope",review).put("autoRefill",false));
+            plan.checkCurrent();teamPhoneApprovals.put(id,approval);db.setTransactionSuccessful();
+        }finally{db.endTransaction();}}
+    }
+    private JSONObject teamPhoneParent(dev.pocketengine.features.teams.TeamCoordinator.PhoneCall call)throws Exception {
+        call.checkRetained();call.approval().requireRun(call.teamRunId);JSONObject parent=task(call.teamRunId);
+        if(parent==null||teamPhoneApprovals.get(call.teamRunId)!=call.approval()||parent.optBoolean("cancelRequested")||parent.optString("status").matches("cancelled|stopping|interrupted"))throw new SecurityException("原手机团队已停止或失去本次批准");return parent;
+    }
+    public JSONObject prepareTeamPhone(dev.pocketengine.features.teams.TeamCoordinator.PhoneCall call,
+            dev.pocketengine.features.teams.TeamPhoneHost.Binding binding,RunControl original)throws Exception {
+        synchronized(owner){db.beginTransaction();try{
+            JSONObject parent=teamPhoneParent(call);if(binding!=call.approval().requireMember(call.memberId)||original==null||original.hasHostRun()||original.isCancelled()||original.isPaused())throw new SecurityException("需要本原成员控制器和准确范围");
+            String key=call.memberId+":"+call.round;JSONObject children=parent.getJSONObject("teamPhoneChildren");
+            if(children.has(key)){JSONObject known=task(children.getString(key));db.setTransactionSuccessful();return duplicate(known);}
+            JSONObject child=binding.remote()?owner.createCapabilityTask(call.goal(),""):owner.create(call.goal(),"background");String id=child.getString("id"),mode=binding.remote()?"capabilities":"background";
+            JSONObject scope=TaskExecutionScope.create(id,mode,1,binding.expiresAt(),binding.sourceToolBudget(),binding.modelBudget(),0,0,binding.toolNames(),true);
+            child.put("origin",new JSONObject().put("kind","team_phone").put("teamRunId",call.teamRunId).put("memberId",call.memberId).put("round",call.round))
+                    .put("executionScope",scope).put("teamPhoneScope",binding.view()).put("teamPhoneCaller",call.identity()).put("status","queued");access.write(child);
+            children.put(key,id);parent.put("teamPhoneChildren",children);access.write(parent);teamPhoneSources.put(id,call);
+            access.event(child,new JSONObject().put("type","team_phone_child_created").put("teamRunId",call.teamRunId).put("memberId",call.memberId));db.setTransactionSuccessful();return duplicate(child);
+        }finally{db.endTransaction();}}
+    }
+    public JSONObject startTeamPhone(dev.pocketengine.features.teams.TeamCoordinator.PhoneCall call,String id,RunControl original)throws Exception {
+        synchronized(owner){db.beginTransaction();try{
+            JSONObject parent=teamPhoneParent(call),child=task(id);if(teamPhoneSources.get(id)!=call||!child.optString("runId").isEmpty()||!"team_phone".equals(child.getJSONObject("origin").optString("kind")))throw new SecurityException("原手机分工不可重复开始");
+            var selected=call.approval().requireMember(call.memberId);child=owner.startTeamPhoneAttempt(id,child.getString("executionMode"),selected.sourceToolBudget());String run=child.getString("runId");int epoch=child.getInt("coordinatorEpoch");
+            JSONObject pool=parent.getJSONObject("teamReservationPool"),identity=new JSONObject().put("teamRunId",call.teamRunId).put("childTaskId",id).put("childRunId",run).put("childEpoch",epoch).put("memberId",call.memberId).put("assignmentId",id);
+            for(int i=0;i<selected.modelBudget();i++)dev.pocketengine.features.teams.TeamParentBudget.reserve(pool,identity,"member","phone:"+id+":"+run+":model:"+i,1,0);
+            for(int i=0;i<selected.sourceToolBudget();i++)dev.pocketengine.features.teams.TeamParentBudget.reserve(pool,identity,"member","phone:"+id+":"+run+":tool:"+i,0,1);
+            parent.put("teamReservationPool",pool);access.write(parent);JSONObject accepted=duplicate(child);original.bindHostRun(id,run,epoch);db.setTransactionSuccessful();return accepted;
+        }finally{db.endTransaction();}}
+    }
+    /** Does not call original.check(): this is itself the original RunControl authority callback. */
+    public void requireTeamPhoneCurrent(dev.pocketengine.features.teams.TeamCoordinator.PhoneCall call,String id,RunControl original)throws Exception {
+        synchronized(owner){teamPhoneParent(call);JSONObject child=task(id);if(teamPhoneSources.get(id)!=call||original==null||original.isCancelled()||!original.matchesHostRun(id,child.optString("runId"),child.optInt("coordinatorEpoch"))||child.optBoolean("cancelRequested"))throw new SecurityException("原手机成员执行已失效");
+            JSONObject scope=child.getJSONObject("executionScope"),permission=access.grant(child.getString("runId"));
+            if(TaskExecutionScope.effectiveDeadline(scope)<=System.currentTimeMillis()||permission==null||permission.optLong("expiresAt")<=System.currentTimeMillis()||!"owner".equals(permission.optString("principalId"))||!"private".equals(permission.optString("spaceId")))throw new SecurityException("原手机成员预算或期限已失效");
+            if(!"capabilities".equals(child.getString("executionMode"))&&!child.optString("status").matches("completed|failed|cancelled|interrupted|awaiting_user|awaiting_approval|needs_confirmation|blocked_unknown|reconciling"))owner.requirePhoneLeaseCurrent(id,child.getString("runId"),child.getInt("coordinatorEpoch"));
+        }
+    }
+    public void recordTeamPhoneOperation(dev.pocketengine.features.teams.TeamCoordinator.PhoneCall call,String id,RunControl original,String operation)throws Exception {
+        synchronized(owner){requireTeamPhoneCurrent(call,id,original);JSONObject child=task(id);if(child.has("teamPhoneDeviceOperation"))throw new SecurityException("已有原设备操作，只查询原 ID");
+            try(Cursor row=db.rawQuery("SELECT tool FROM operations WHERE task_id=? AND run_id=? AND operation_id=?",new String[]{id,child.getString("runId"),operation})){if(!row.moveToFirst()||!"device_delegate_goal".equals(row.getString(0)))throw new SecurityException("需要原TaskStore准备的分派操作");}
+            child.put("teamPhoneDeviceOperation",operation);access.write(child);
+        }
+    }
     private final java.util.Map<String,GoalModelApproval> goalModels=new java.util.HashMap<>();
     /** Reducing authority only. Management permission comes from the original SQL audience,
      * not a source proof or control lease; it never authorizes pause/respond/resume or content. */
@@ -62,7 +122,7 @@ public final class TaskStoreDeviceTasks {
     public GoalModelReview reviewGoalModel(String id,long expectedRevision,DeviceExecutionAdmission admission,dev.pocketengine.core.ModelConfig selected)throws Exception{
         admission.checkCurrent();java.util.Objects.requireNonNull(selected);
         synchronized(owner){JSONObject current=task(id);requireDevice(current);requireSameSession(current,admission);
-            if(admission.kind()!=DeviceExecutionAdmission.Kind.GOAL||!"capabilities".equals(admission.executionMode())||!current.optString("runId").isEmpty()||!current.optString("status").matches("queued|awaiting_user")||current.optLong("deviceStateRevision")!=expectedRevision||current.optBoolean("cancelRequested"))throw new SecurityException("原设备目标或本机待审版本已变化");
+            if(admission.kind()!=DeviceExecutionAdmission.Kind.GOAL||!current.optString("runId").isEmpty()||!current.optString("status").matches("queued|awaiting_user")||current.optLong("deviceStateRevision")!=expectedRevision||current.optBoolean("cancelRequested"))throw new SecurityException("原设备目标或本机待审版本已变化");
             return new GoalModelReview(this,id,expectedRevision,admission,selected);
         }
     }
@@ -225,8 +285,9 @@ public final class TaskStoreDeviceTasks {
         public JSONObject view()throws Exception{return duplicate(route).put("executionAuthorized",false);}
         public JSONArray sourceTargetShares(String issuerDeviceId,String sourceAllocation)throws Exception{checkCurrent(original);JSONArray shares=new JSONArray().put(dev.pocketengine.features.devices.DelegationGrant.targetShare(issuerDeviceId,sourceAllocation,option.receivingGrant().targetDeviceId(),option.resourceBinding(),route.getLong("localToolShare"),route.getLong("localModelShare")));JSONArray children=route.optJSONArray("downstreamShares");for(int i=0;children!=null&&i<children.length();i++){JSONObject share=children.getJSONObject(i);shares.put(dev.pocketengine.features.devices.DelegationGrant.targetShare(issuerDeviceId,sourceAllocation,share.getString("targetDeviceId"),share.getJSONObject("resourceBinding"),share.getLong("toolBudget"),share.getLong("modelBudget")));}return shares;}
     }
+    private boolean nativeTeamPhoneSource(String id,JSONObject current)throws Exception {var call=teamPhoneSources.get(id);if(call==null||!"team_phone".equals(current.getJSONObject("origin").optString("kind")))return false;teamPhoneParent(call);return true;}
     private JSONObject sourceOwnerTask(String id)throws Exception{
-        JSONObject current=task(id);if(!"owner".equals(current.optString("actorId"))||!"private".equals(current.optString("spaceId"))||current.optJSONObject("origin")!=null||!current.optString("kind").matches("assistant|phone")||current.optBoolean("cancelRequested")||current.optString("status").matches("completed|cancelled|failed|interrupted|reconciling"))throw new SecurityException("设备源范围只属于原私人owner任务，其他来源不能借入口降级");
+        JSONObject current=task(id);if(!"owner".equals(current.optString("actorId"))||!"private".equals(current.optString("spaceId"))||current.optJSONObject("origin")!=null&&!nativeTeamPhoneSource(id,current)||!current.optString("kind").matches("assistant|phone")||current.optBoolean("cancelRequested")||current.optString("status").matches("completed|cancelled|failed|interrupted|reconciling"))throw new SecurityException("设备源范围只属于原私人owner任务，其他来源不能借入口降级");
         if(TaskExecutionScope.effectiveDeadline(current.optJSONObject("executionScope"))<=System.currentTimeMillis())throw new SecurityException("请先在原任务范围中明确期限/预算，不能由设备选择补授权");return current;
     }
     /** Owner page projection only, not a peer endpoint or an execution admission. */
@@ -718,6 +779,7 @@ public final class TaskStoreDeviceTasks {
         admission.checkCurrent();
         synchronized (owner) {
             owner.requireExecutionEnabled();
+            String boundRun=null;boolean successful=false;
             db.beginTransaction(); try {
                 JSONObject current = task(id); requireDevice(current); requireSameSession(current, admission);
                 if (original == null || original.hasHostRun() || original.isCancelled() || original.isPaused()) throw new SecurityException("需要新的原生控制器");
@@ -727,10 +789,10 @@ public final class TaskStoreDeviceTasks {
                 JSONObject scope = current.getJSONObject("deviceExecutionScope"); long now = System.currentTimeMillis(), expires = scope.getLong("deadline");
                 if (expires <= now || admission.kind()==DeviceExecutionAdmission.Kind.DEVICE_TOOLS&&scope.getInt("toolLimit")<1 || admission.kind() == DeviceExecutionAdmission.Kind.GOAL && scope.getInt("modelCallLimit") < 1)
                     throw new SecurityException("设备执行条件或预算不足");
-                boolean phone = !admission.executionMode().equals("capabilities");
-                if(phone)try{owner.requireExclusivePhoneLeaseFree();}
+                String mode=admission.executionMode(); boolean phone = !mode.equals("capabilities");
+                if(phone)try{owner.requirePhoneLeaseFree(mode);}
                 catch(IllegalStateException held){throw new SecurityException("手机仍有原执行租约；到期不等于旧执行器已停止",held);}
-                String run = UUID.randomUUID().toString(); int epoch = current.optInt("coordinatorEpoch") + 1;
+                String run = UUID.randomUUID().toString();boundRun=run; int epoch = current.optInt("coordinatorEpoch") + 1;
                 JSONObject permission = new JSONObject().put("principalId", admission.principalId()).put("spaceId", admission.spaceId())
                         .put("nativePairedDevice", true).put("grantId", admission.request().grantId()).put("authorizationEpoch", admission.request().authorizationEpoch())
                         .put("mode", admission.executionMode()).put("expiresAt", expires).put("tools", admission.toolNames())
@@ -738,14 +800,19 @@ public final class TaskStoreDeviceTasks {
                         .put("stepCeiling", Math.max(1,Math.min(400, scope.getInt("toolLimit")))).put("deviceScopeRevision", scope.getLong("revision"));
                 ContentValues row = new ContentValues(); row.put("run_id", run); row.put("task_id", id); row.put("epoch", epoch); row.put("status", "running");
                 row.put("checkpoint", new JSONObject().put("steps", 0).put("messages", new JSONArray()).toString()); row.put("grant_json", permission.toString()); row.put("created_at", now); row.put("updated_at", now); db.insertOrThrow("runs", null, row);
-                if (phone) { ContentValues lease = new ContentValues(); lease.put("resource_id", "phone.local"); lease.put("run_id", run); lease.put("epoch", epoch); lease.put("expires_at", expires); db.insertOrThrow("leases", null, lease); }
+                if (phone) current.put("leaseResource",owner.acquirePhoneLease(id,mode,run,epoch,expires)); else current.remove("leaseResource");
                 current.put("deviceAcceptedRunId",run).put("deviceAcceptedExecutorEpoch",epoch).put("runId", run).put("coordinatorEpoch", epoch).put("status", "preparing").put("stepCeiling", permission.getInt("stepCeiling")); access.write(current);
                 if(localOwnerModel!=null){current.put("deviceModelSelection",localOwnerModel.publicView());access.write(current);}
-                admission.checkCurrent(); db.setTransactionSuccessful();
+                admission.checkCurrent();
+                JSONObject accepted=duplicate(current);
                 original.bindHostRun(id, run, epoch); live.put(run, new Live(original, admission));
                 if(localOwnerModel!=null){localOwnerModel.consumed=true;localOwnerModel.original=original;localOwnerModel.run=run;localOwnerModel.epoch=epoch;goalModels.put(run,localOwnerModel);}
-                return duplicate(current);
-            } finally { db.endTransaction(); }
+                db.setTransactionSuccessful();successful=true;return accepted;
+            } finally {
+                boolean committed=false;
+                try{db.endTransaction();committed=successful;}
+                finally{if(!committed&&boundRun!=null){live.remove(boundRun);goalModels.remove(boundRun);if(original!=null&&original.hasHostRun())original.cancel();if(localOwnerModel!=null&&localOwnerModel.original==original){localOwnerModel.original=null;localOwnerModel.run=null;localOwnerModel.epoch=0;}}}
+            }
         }
     }
     /** Main TaskStore fence calls this only for persisted paired_device origin. No caller-supplied grant. */
@@ -762,7 +829,7 @@ public final class TaskStoreDeviceTasks {
             if (!permission.optBoolean("nativePairedDevice") || !permission.optString("principalId").equals(current.getString("actorId"))
                     || !permission.optString("spaceId").equals(current.getString("spaceId")) || permission.optLong("expiresAt") <= System.currentTimeMillis()
                     || permission.optLong("deviceScopeRevision") != scope.getLong("revision")) throw new SecurityException("设备原生授权已失效");
-            if(!current.getString("executionMode").equals("capabilities"))owner.requireExclusivePhoneLeaseCurrent(run,epoch);
+            if(!current.getString("executionMode").equals("capabilities"))owner.requirePhoneLeaseCurrent(id,run,epoch);
         }
     }
     public void checkCapability(String id, String run, int epoch, String tool) throws Exception {

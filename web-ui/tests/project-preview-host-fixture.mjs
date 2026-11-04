@@ -3,6 +3,10 @@ export function installProjectPreviewHost(options = {}) {
   let token = 'preview-document-1', revision = 0, serial = 0, heldReturn = null, holdReturnState = false, ended = false;
   let unavailable = false, capture = null;
   let holdInspect = false, heldInspect = null, holdOpen = false, heldOpen = null, holdClose = false, heldClose = null, sourceChanged = false;
+  const continuationOptions = options.continuation === true ? {} : options.continuation;
+  const continuationHandles = new Map();
+  let continuationTask = null, reviewGeneration = 1, reviewSerial = 0, holdContinuation = false, heldContinuation = null, continuationReceiptMode = 'actual';
+  const continuationReceipts = [];
   window.__pocketDocumentToken = token;
   const calls = [], errors = [];
   const quote = { sourceRef: { sourceId: 'original-message', revision: 7 }, offset: 2, chars: 9 };
@@ -38,6 +42,20 @@ export function installProjectPreviewHost(options = {}) {
       raw: { id: 'original-project-task', kind: 'assistant', actorId: 'owner', spaceId: 'private', runId: 'source-run', coordinatorEpoch: 4, conversationId: originalDraft.conversationId,
         developmentContext: { projectId: 'project-a', checkoutId: 'checkout-original' }, operations: packageOperations, events: [] } }];
   }
+  if (continuationOptions) {
+    commands.push('tasks.close', 'tasks.refresh', 'tasks.review', 'tasks.resume', 'conversation.select');
+    const status = continuationOptions.status || 'completed';
+    continuationTask = { id: 'original-project-task', goal: '调整原项目中的保存按钮', status, summary: '原版本已结束，请先核对范围与本次修改要求。', executionMode: 'capabilities', updatedAt: 1,
+      raw: { id: 'original-project-task', goal: '调整原项目中的保存按钮', kind: 'assistant', actorId: 'owner', spaceId: 'private', status,
+        runId: 'source-run', coordinatorEpoch: 4, conversationId: originalDraft.conversationId, executionMode: 'capabilities', cancelRequested: false,
+        developmentContext: { projectId: 'project-a', checkoutId: 'checkout-original' }, operations: packageOperations, events: [], approvals: [],
+        executionScope: { format: 'pocketworld.task-execution-scope.v1', taskId: 'original-project-task', principalId: 'owner', spaceId: 'private', state: 'active', revision: 8,
+          toolLimit: 20, toolsUsed: 7, modelCallLimit: 12, modelCallsUsed: 4, deadlineAt: 0, lifetime: 'until_complete_or_stopped_or_budget', autoRefill: false,
+          tools: ['project_read_file', 'project_execute'], toolsPinned: true } } };
+    snapshot.state.tasks = continuationOptions.initialTaskHidden ? [] : [continuationTask];
+    snapshot.state.taskActionErrors = {}; snapshot.state.activeTaskId = null;
+    ended = true;
+  }
   const publish = () => window.PocketWeb.receive({ v: 1, kind: 'state', revision: ++revision, snapshot: structuredClone(snapshot) });
   const reply = (request, value, error) => window.PocketWeb.receive({ v: 1, kind: 'result', id: request.id, ok: !error, ...(error ? { error } : { value }) });
   const saveDraft = () => { if (snapshot.composer.conversationId === originalDraft.conversationId) Object.assign(originalDraft, structuredClone(snapshot.composer)); };
@@ -47,16 +65,54 @@ export function installProjectPreviewHost(options = {}) {
     if (!preview || args.sessionId !== preview.sessionId) throw new Error('原预览文档已变化，未操作新页面');
     return preview;
   };
+  const continuationReview = () => {
+    const task = continuationTask;
+    const reason = continuationOptions.reason || (!['paused', 'interrupted', 'awaiting_user', 'needs_confirmation', 'failed', 'completed'].includes(task.status) ? '原任务当前不能继续；已停止或取消的任务不会重新启动。' : undefined);
+    const reviewHandle = 'continuation-review-' + ++reviewSerial;
+    continuationHandles.set(reviewHandle, { identity: JSON.stringify(task), generation: reviewGeneration, allowed: !reason });
+    return { reviewHandle, expiresInMs: 120000, task: structuredClone(task), actions: reason ? [] : [{ action: 'tasks.resume', label: '在原范围内继续项目任务' }],
+      approvals: [], unresolvedOperations: [], projectContinuation: { feedbackRequired: true, conversationId: originalDraft.conversationId, ...(reason ? { reason } : {}) } };
+  };
+  const continueOriginal = args => {
+    const handle = continuationHandles.get(args.reviewHandle); continuationHandles.delete(args.reviewHandle);
+    if (Object.keys(args).sort().join(',') !== 'confirmed,feedback,reviewHandle' || args.confirmed !== true || typeof args.feedback !== 'string' || !args.feedback.trim() || args.feedback.trim().length > 8000)
+      throw new Error('续接只接受原审阅、明确确认与主人填写的反馈。');
+    if (!handle?.allowed || handle.generation !== reviewGeneration || snapshot.view.taskId !== continuationTask.id || handle.identity !== JSON.stringify(continuationTask))
+      throw new Error('原任务审阅已失效，没有换一份任务继续。');
+    // Synthetic native acceptance occurs before its intentionally delayed receipt.
+    // This validates Web presentation only, not SQL admission or the actual Assistant slot.
+    continuationTask.status = continuationTask.raw.status = 'running'; continuationTask.updatedAt++;
+    continuationTask.raw.runId = 'continued-run-' + (continuationReceipts.length + 1); continuationTask.raw.coordinatorEpoch++;
+    snapshot.state.activeTaskId = continuationTask.id; ended = false;
+    const value = { taskId: continuationTask.id, runId: continuationTask.raw.runId, epoch: continuationTask.raw.coordinatorEpoch,
+      conversationId: originalDraft.conversationId, continued: true, resourceState: 'owned_running', acceptsFollowUp: true };
+    continuationReceipts.push({ value: structuredClone(value), feedback: args.feedback, composerAtAdmission: structuredClone(snapshot.composer) });
+    publish(); return value;
+  };
   const execute = request => {
     const { action, args } = request;
     try {
       if (request.hostDocumentToken !== token) throw new Error('原页面已变化');
       let value = { accepted: true };
       if (action === 'app.ready' || action === 'app.refresh') { publish(); value = { ready: true }; }
-      else if (action === 'tasks.open' && options.packages) {
+      else if (action === 'tasks.open' && (options.packages || continuationOptions)) {
+        if (continuationOptions) {
+          if (continuationOptions.initialTaskHidden && !snapshot.state.tasks.length && snapshot.state.projectPreview?.taskId !== args.id) throw new Error('原任务尚未出现在可读窗口。');
+          snapshot.state.tasks = [continuationTask]; reviewGeneration++; continuationHandles.clear();
+        }
         if (args.id !== 'original-project-task') throw new Error('原任务不同'); snapshot.view.taskId = args.id; value = { taskId: args.id, readOnly: true, executionAuthorized: false }; publish();
-      } else if (action === 'tasks.close' && options.packages) {
+      } else if (action === 'tasks.close' && (options.packages || continuationOptions)) {
+        if (continuationOptions) { reviewGeneration++; continuationHandles.clear(); }
         if (holdClose) { heldClose = request; return; } snapshot.view.taskId = null; publish();
+      } else if (action === 'tasks.review' && continuationOptions) {
+        if (snapshot.view.taskId !== args.id || args.id !== continuationTask.id) throw new Error('原任务窗口已关闭'); value = continuationReview();
+      } else if (action === 'tasks.resume' && continuationOptions) {
+        value = continueOriginal(args);
+        if (continuationReceiptMode === 'wrong_task') value = { ...value, taskId: 'different-task' };
+        if (continuationReceiptMode === 'accepted_only') value = { accepted: true };
+        if (holdContinuation) { heldContinuation = { request, value }; return; }
+      } else if (action === 'conversation.select' && continuationOptions) {
+        if (args.id !== originalDraft.conversationId) throw new Error('本旅程只返回原私人项目对话'); restoreDraft(); publish();
       } else if (action === 'projects.package.preview.inspect' && options.packages) {
         if (Object.keys(args).sort().join(',') !== 'operationId,taskId' || args.taskId !== 'original-project-task' || snapshot.view.taskId) throw new Error('原任务窗口或读取参数不符');
         const item = packages.find(row => row.operationId === args.operationId); if (!item || item.unavailable) throw new Error('原固定包已不可读取，没有改用当前工作区。');
@@ -109,10 +165,10 @@ export function installProjectPreviewHost(options = {}) {
       } else if (action === 'composer.send') {
         if (ended) throw new Error('原项目任务已结束，无法沿原任务发送；草稿仍保留。');
         if (!snapshot.composer.previewRefsAvailable) throw new Error('原预览已失效');
-        if (!options.packages) throw new Error('Fixture does not execute model requests');
+        if (!options.packages && !continuationOptions) throw new Error('Fixture does not execute model requests');
         if (!args.text.trim()) throw new Error('需要原主人文字'); value = { accepted: true, status: 'accepted', taskId: 'original-project-task' };
       } else if (action === 'projects.select') { if (!snapshot.state.projects.some(row => row.id === args.id)) throw new Error('未知项目'); snapshot.state.projectId = args.id; snapshot.state.filePath = null; publish(); }
-      else if (!['composer.reading', 'projects.refresh', ...(options.packages ? ['tasks.refresh'] : [])].includes(action)) throw new Error('Unexpected fixture command: ' + action);
+      else if (!['composer.reading', 'projects.refresh', ...(options.packages || continuationOptions ? ['tasks.refresh'] : [])].includes(action)) throw new Error('Unexpected fixture command: ' + action);
       reply(request, value);
     } catch (failure) {
       const message = String(failure.message || failure);
@@ -145,7 +201,7 @@ export function installProjectPreviewHost(options = {}) {
     holdReturn() { holdReturnState = true; },
     releaseReturn() { if (!heldReturn) throw new Error('No held return state'); heldReturn = null; holdReturnState = false; restoreDraft(); publish(); },
     rotateDocument() { token += '-next'; snapshot.state.resumeRevision++; snapshot.state.projectPreview = null; originalDraft.previewRefsAvailable = originalDraft.previewRefs.length === 0; if (snapshot.composer.conversationId === originalDraft.conversationId) snapshot.composer.previewRefsAvailable = originalDraft.previewRefsAvailable; window.PocketWeb.hostConfiguration({ documentToken: token }); publish(); },
-    endRecipient() { ended = true; },
+    endRecipient() { ended = true; if (continuationTask) { continuationTask.status = continuationTask.raw.status = 'completed'; continuationTask.updatedAt++; snapshot.state.activeTaskId = null; publish(); } },
     coldReference() { if (!originalDraft.previewRefs.length) throw new Error('No original ref'); snapshot.state.projectPreview = null; originalDraft.previewRefsAvailable = false; restoreDraft(); publish(); },
     holdClose() { holdClose = true; },
     releaseClose() { if (!heldClose) throw new Error('No held close'); const request = heldClose; heldClose = null; holdClose = false; snapshot.view.taskId = null; publish(); reply(request, { accepted: true }); },
@@ -157,5 +213,11 @@ export function installProjectPreviewHost(options = {}) {
     retirePackage(index = 0) { packages[index].unavailable = true; },
     clearText() { snapshot.composer.text = ''; snapshot.composer.revision++; saveDraft(); publish(); },
     packageOperation: index => packages[index].operationId,
+    continuationReceipts: () => structuredClone(continuationReceipts),
+    holdContinuation() { holdContinuation = true; },
+    releaseContinuation() { if (!heldContinuation) throw new Error('No original continuation receipt'); const { request, value } = heldContinuation; heldContinuation = null; holdContinuation = false; reply(request, value); },
+    continuationReceipt(mode) { continuationReceiptMode = mode; },
+    rotateReviewDocument() { token += '-review-next'; reviewGeneration++; continuationHandles.clear(); window.PocketWeb.hostConfiguration({ documentToken: token }); },
+    resumeReviewWindow() { snapshot.state.resumeRevision++; snapshot.view.taskId = null; reviewGeneration++; continuationHandles.clear(); publish(); },
   };
 }
