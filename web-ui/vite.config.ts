@@ -24,7 +24,8 @@ export default defineConfig({
     cssTarget: 'chrome111',
     outDir: '../app/src/main/assets/pocket-ui',
     emptyOutDir: true,
-    manifest: true,
+    // AAPT filters dot-prefixed assets; the receipt-listed manifest must stay visible.
+    manifest: 'manifest.json',
     sourcemap: false,
   },
 });

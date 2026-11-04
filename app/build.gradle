@@ -19,6 +19,26 @@ if (pocketworldVersionProcess.result.get().exitValue != 0) {
     throw new GradleException(pocketworldVersionProcess.standardError.asText.get().trim())
 }
 def pocketworldVersion = new groovy.json.JsonSlurper().parseText(pocketworldVersionProcess.standardOutput.asText.get())
+// Optional private self-update service. No endpoint or credentials are shipped by default.
+def updateManifestUrl = providers.gradleProperty('pocketworldUpdateManifestUrl').getOrElse('')
+def updatePublicKey = providers.gradleProperty('pocketworldUpdatePublicKey').getOrElse('')
+if (updateManifestUrl.isEmpty() != updatePublicKey.isEmpty()) throw new GradleException('Set both private update URL and pinned RSA public key')
+if (!updateManifestUrl.isEmpty()) {
+    try {
+        def updateUri = new URI(updateManifestUrl)
+        if (updateUri.scheme != 'https' || updateUri.host == null || updateUri.userInfo != null || updateUri.fragment != null || updateUri.query != null)
+            throw new IllegalArgumentException('Invalid private update URL')
+        if (!(updatePublicKey ==~ /[A-Za-z0-9+\/=]{256,6000}/)) throw new IllegalArgumentException('Invalid public key encoding')
+        // A format-looking base64 string may be a PRIVATE key. Parse SPKI before
+        // embedding anything in resources, so an operator mistake cannot leak it.
+        def publicKey = java.security.KeyFactory.getInstance('RSA').generatePublic(
+                new java.security.spec.X509EncodedKeySpec(java.util.Base64.decoder.decode(updatePublicKey)))
+        if (!(publicKey instanceof java.security.interfaces.RSAPublicKey) || publicKey.modulus.bitLength() < 2048 || publicKey.modulus.bitLength() > 8192)
+            throw new IllegalArgumentException('Invalid public key strength')
+    } catch (Exception invalidUpdateConfiguration) {
+        throw new GradleException('Private update configuration requires HTTPS without embedded credentials and a base64 RSA SPKI PUBLIC key (2048-8192 bits); values were not embedded')
+    }
+}
 android {
     namespace 'dev.pocketengine'
     compileSdk 35
@@ -32,6 +52,8 @@ android {
         externalNativeBuild { cmake { arguments '-DANDROID_STL=c++_static' } }
         versionCode pocketworldVersion.versionCode
         versionName pocketworldVersion.versionName
+        resValue 'string', 'pocketworld_update_manifest_url', updateManifestUrl
+        resValue 'string', 'pocketworld_update_public_key', updatePublicKey
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
@@ -68,6 +90,8 @@ def helperTask = tasks.register('buildDisplayHelper', Exec) {
     commandLine 'bash', rootProject.file('tools/build-display-helper.sh').absolutePath, layout.buildDirectory.file('generated/display-helper-assets/pocketengine-display-helper.jar').get().asFile.absolutePath
 }
 android.sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/display-helper-assets'))
+// Official, fixed Apache-2.0 streaming applier only. Generator remains an offline release tool.
+android.sourceSets.main.java.srcDir(rootProject.file('third-party/archive-patcher/applier/src/main/java'))
 tasks.named('preBuild').configure { dependsOn helperTask }
 def libraryWebTask = tasks.register('verifyLibraryWebBundle', Exec) {
     inputs.dir('src/main/assets/pocket-ui')

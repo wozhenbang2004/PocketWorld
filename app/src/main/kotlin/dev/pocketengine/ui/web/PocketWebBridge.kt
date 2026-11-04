@@ -154,7 +154,7 @@ internal class PocketWebBridge(
             "skillDraft.open", "skillDraft.read", "skillDraft.source", "skillDraft.confirm", "skillDraft.cancel", "skillDraft.query", "skillDraft.close", "voice.start", "voice.stop", "voice.review", "voice.accept", "voice.discard", "speech.speak", "speech.stop", "speech.taskAnnouncements", "speech.stopTaskAnnouncement",
             "tasks.refresh", "tasks.open", "tasks.close", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.answerQuestion", "tasks.answerQuestionChoice", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
             "projects.refresh", "projects.select", "projects.create", "projects.open", "projects.newFile", "projects.edit", "projects.save", "projects.close", "projects.history", "projects.revision", "projects.useRevision", "projects.retry",
-            "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser",
+            "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser", "settings.openAppUpdates",
             "connections.enter", "connections.leave", "models.snapshot", "models.review", "models.select", "models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select", "devices.snapshot", "history.read", "usage.read", "usage.task", "usage.close", "usage.reestimate",
             "phone.prepare", "phone.start", "phone.query", "phone.draft.edit", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
             "queued.open", "queued.refresh", "queued.close", "queued.edit", "queued.change", "queued.save", "queued.editor.close",
@@ -877,6 +877,12 @@ internal class PocketWebBridge(
                     "browse" -> controller.openBrowser()
                     else -> error("请选择网页研究工作区或内置浏览器")
                 }
+            }
+            "settings.openAppUpdates" -> {
+                checkedPayload(args, emptySet())
+                check(controller.webPrivateOwnerVisible()) { "请在前台私有设置中打开应用更新" }
+                val activity = controller.webPresentationActivity()
+                activity.startActivity(android.content.Intent(activity, dev.pocketengine.features.updates.AppUpdateActivity::class.java))
             }
             "settings.saveLocalObservation" -> controller.saveLocalObservation(requiredBoolean(args, "capture"), requiredBoolean(args, "ocr"))
             "settings.openSystem" -> when (requiredString(args, "section")) {
