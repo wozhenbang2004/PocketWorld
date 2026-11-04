@@ -66,6 +66,61 @@ It models native responses and does not prove SQLite, Android admission or devic
 execution. Native tests are registered in the `conversation-phone-handoff` host
 group; full Android compilation and a source-matched APK are separate checks.
 
+## Continuous phone viewing
+
+The conversation and original task detail can show one selected background phone
+run continuously. The compact entry, grey inline card, mobile bottom sheet and
+centered desktop workspace are adapted from OpenMuse's actual computer UI at
+`a4944f4c471d3dc93b8bfc060b5da309b5216ab2`. Retained originals, MIT license,
+file identities, exact adaptations and visual-reference limits are in
+[`PROVENANCE.md`](src/library/upstream/openmuse-a4944f4/PROVENANCE.md).
+The sheet uses the original 600px breakpoint, 26px radius and 790px desktop
+maximum width. Card and expanded workspace share one feed. The owner can select
+another eligible task, pause or resume the selected original run, and close
+viewing without stopping execution or losing the conversation draft.
+
+This is a bounded JPEG preview of an already attached Android independent
+display, not E2B/VNC or video sent to the model. Reads are sequential, scheduled
+no faster than every 200ms, with a native admission limit and one in-flight
+request. Frames have a maximum long edge of 960px at JPEG quality 65. Actual
+device delivery rate depends on capture and transport. The model's existing
+observe/action path remains separate; viewing neither creates an observation
+reference nor changes its cache, OCR, action geometry or input authority.
+
+`phone.viewer.open`, `phone.viewer.frame` and `phone.viewer.close` bind an opaque
+viewer to the exact task/run/epoch and owner navigation window. The first
+successful read pins its session/display; later substitutions and regressions
+are rejected. The retained native run, canonical stored run and private phone
+lease must still match. Local owner/private background tasks and their eligible
+team phone runs are supported; shared/remote origins and the main display are
+excluded. Selecting a task never follows `activeTaskId` as a fallback.
+
+Display preparation waits automatically on the same viewer. A transient read
+failure backs off; a changed run/session/window closes the feed and requires an
+explicit retry where appropriate. Hiding the WebView, navigating away or ending
+the task releases the viewer. An interrupted or ended task may retain its last
+image in memory with an explicit stale/last-frame label. Frames are not written
+to storage, the conversation history, command-receipt cache or full state
+snapshots. Pausing execution does not by itself stop viewing, including when the
+run has released phone input while doing browser work.
+
+After building the production bundle, run the focused browser journey:
+
+```sh
+node web-ui/tests/phone-viewer-ui.mjs \
+  --bundle app/src/main/assets/pocket-ui --output app/build/reports/phone-viewer-web
+```
+
+It uses an isolated native-host fixture and visibly labelled synthetic phone
+frames. It checks continuous decoding, shared mobile/desktop viewing, task
+switching with a late frame, pause/resume, hidden cleanup, stale-display refusal,
+draft/back continuity and ended-run cleanup. Protocol tests are part of
+`npm test --prefix web-ui`; the actual native/helper/controller tests are
+registered as `phone-live-preview` in `tools/host-tests.json` and run through
+`python3 tools/host-tests.py --group phone-live-preview` with the documented
+Android/JDK prerequisites. These host checks do not replace physical Android
+capture, multi-display isolation, thermal or frame-rate acceptance.
+
 ## Reading and team continuity
 
 The message menu opens a frozen, in-memory reading view. Later host snapshots

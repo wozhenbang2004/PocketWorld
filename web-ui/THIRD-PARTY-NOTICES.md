@@ -324,3 +324,33 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 Nine exact-version legal supplements are retained in `licenses/upstream-supplements.json`: seven Radix packages use the actual MIT text, copyright2022 WorkOS, from official release commit `46235ece78931b198e6908a2cec0b66798d55c79`; each retained package.json proves the corresponding installed version. `@remixicon/react@4.9.0` uses the actual **Remix Icon License v1.0**, copyright2017–2026 Remix Design, from official v4.9.0 commit `019480ec14b97959a1ad35c3de302a224714b068`. It is not relabeled MIT or Apache. Both legal originals match their official Git blob identities.
 
 The collector uses a supplement only for its exact installed package, version and declared license when npm legal text is absent, then verifies retained SHA-256/Git blob hashes and release evidence before copying the original body and source receipt into the packaged notices. The official upstream later provided the MIT license for `react-remove-scroll-bar@2.3.7` at commit `8ca9ba5ea52de03308fe8ced94f7b159a44d28ff`, whose package and source match the release. The npm archive and release tag did not include the license text. `client-only@0.0.1` remains an explicit missing legal-body item in the installed dependency audit.
+
+## OpenMuse phone viewer adaptation
+
+Source: https://github.com/CopilotKit/openmuse/tree/a4944f4c471d3dc93b8bfc060b5da309b5216ab2
+
+The phone viewer adapts ComputerEntry, DesktopToolCard, ComputerSheet and their shared UI styles. Original files, exact file identities, source-to-adaptation mapping and evidence boundaries are retained in `src/library/upstream/openmuse-a4944f4/`. The official computer image there is research evidence only, not bundled product or device imagery.
+
+```text
+MIT License
+
+Copyright (c) 2026 OpenMuse contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
