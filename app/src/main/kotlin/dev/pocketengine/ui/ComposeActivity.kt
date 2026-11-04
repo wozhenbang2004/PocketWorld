@@ -38,10 +38,19 @@ class ComposeActivity : ComponentActivity() {
         if (result.resultCode == Activity.RESULT_OK && result.data != null) controller.importAttachments(result.data!!, importTaskId, importProjectId)
         importTaskId = null; importProjectId = null
     }
-    private val outcomeExportPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        controller.attachmentOutcomes.exportResult(if(result.resultCode==Activity.RESULT_OK)result.data?.data else null)
+    // Reserve the former static registration position so other saved picker keys do not shift.
+    // A legacy result has no request nonce and cannot authorize any current export.
+    @Suppress("unused")
+    private val legacyOutcomeExportPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
+    private val outcomeExportPicker = AttachmentExportPicker(activityResultRegistry){requestId,uri->controller.attachmentOutcomes.exportResult(requestId,uri)}
+    private fun restoreOutcomeDocument(requestId:String){
+        val flow=controller.attachmentOutcomes
+        try{outcomeExportPicker.restore(requestId)}catch(_:RuntimeException){flow.exportLaunchResult(requestId,OutcomeExportLaunch.UNKNOWN)}
     }
-    internal fun createOutcomeDocument(mime:String,name:String){outcomeExportPicker.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime).putExtra(Intent.EXTRA_TITLE,name))}
+    internal fun createOutcomeDocument(mime:String,name:String){
+        val flow=controller.attachmentOutcomes;val requestId=flow.exportRequestId?:return
+        flow.exportLaunchResult(requestId,outcomeExportPicker.launch(requestId,mime,name))
+    }
     private val ownerArchiveImportPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> controller.ownerArchives.importResult(uri) }
     private val ownerArchiveExportPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri -> controller.ownerArchives.exportResult(uri) }
     internal fun pickOwnerDataArchive() { try { ownerArchiveImportPicker.launch(arrayOf("application/zip", "application/octet-stream")) } catch (_: RuntimeException) { controller.ownerArchives.importResult(null) } }
@@ -98,6 +107,7 @@ class ComposeActivity : ComponentActivity() {
         media = MediaController(this, engine::publish)
         controller = PocketWorldController(this, engine)
         controller.attachmentOutcomes.restore(savedInstanceState)
+        controller.attachmentOutcomes.exportRequestId?.let(::restoreOutcomeDocument)
         controller.projectPackages.restore(savedInstanceState)
         controller.ownerArchives.restore(savedInstanceState)
         controller.projectStorage.restore(savedInstanceState)
@@ -198,7 +208,7 @@ class ComposeActivity : ComponentActivity() {
         if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) webHost.resume()
     }
 
-    override fun onResume() { super.onResume(); if (!nativeWorkspace && ::webHost.isInitialized) webHost.resume(); if (::controller.isInitialized) { controller.projectLivePreviewForeground(true); controller.notificationPreviewsForeground(true) }; (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, true); (application as EngineApplication).refreshRemoteAttention(); if (::controller.isInitialized) { controller.realtimeForeground(true); controller.refresh(); controller.backgroundSetupResumed(); controller.attachmentOutcomes.foreground(true); controller.projectFileImports.foreground(true);controller.projectPackages.foreground(true); controller.ownerArchives.foreground(true); controller.projectStorage.foreground(true); controller.projectGitImports.foreground(true) } }
+    override fun onResume() { super.onResume(); if (!nativeWorkspace && ::webHost.isInitialized) webHost.resume(); if (::controller.isInitialized) { controller.projectLivePreviewForeground(true); controller.notificationPreviewsForeground(true) }; (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, true); (application as EngineApplication).refreshRemoteAttention(); if (::controller.isInitialized) { controller.realtimeForeground(true); controller.refresh(); controller.backgroundSetupResumed(); controller.attachmentOutcomes.exportRequestId?.let(::restoreOutcomeDocument); controller.attachmentOutcomes.foreground(true); controller.projectFileImports.foreground(true);controller.projectPackages.foreground(true); controller.ownerArchives.foreground(true); controller.projectStorage.foreground(true); controller.projectGitImports.foreground(true) } }
     override fun onPause() { if (!nativeWorkspace && ::webHost.isInitialized) webHost.pause(); if (::controller.isInitialized) { controller.projectLivePreviewForeground(false); controller.notificationPreviewsForeground(false) }; (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, false); if (::controller.isInitialized) { controller.persistOwnerComposer(); controller.projectFileImports.foreground(false);controller.projectPackages.foreground(false); controller.ownerArchives.foreground(false); controller.projectStorage.foreground(false); controller.projectGitImports.foreground(false); controller.attachmentOutcomes.foreground(false); controller.realtimeForeground(false) }; if (::media.isInitialized) media.stopListening(); super.onPause() }
     override fun onWindowFocusChanged(hasFocus: Boolean) { super.onWindowFocusChanged(hasFocus); if (::controller.isInitialized) controller.notificationPreviewsFocus(hasFocus) }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverSharedFiles(intent); deliverSkillDocument(intent); deliverAccountEntry(intent); deliverCompatibilityChat(intent) }
@@ -309,5 +319,5 @@ class ComposeActivity : ComponentActivity() {
         controller.projectGitImports.save(outState)
         super.onSaveInstanceState(outState)
     }
-    override fun onDestroy() { nativeWorkspaceView?.disposeComposition(); nativeWorkspaceView = null; if (::webHost.isInitialized) webHost.close(); workingFilePickers.values.toList().forEach { it.unregister() };workingFilePickers.clear();if (::controller.isInitialized) controller.detach(); if (::media.isInitialized) media.close(); super.onDestroy() }
+    override fun onDestroy() { nativeWorkspaceView?.disposeComposition(); nativeWorkspaceView = null; if (::webHost.isInitialized) webHost.close(); outcomeExportPicker.close();workingFilePickers.values.toList().forEach { it.unregister() };workingFilePickers.clear();if (::controller.isInitialized) controller.detach(); if (::media.isInitialized) media.close(); super.onDestroy() }
 }

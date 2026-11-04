@@ -1790,8 +1790,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 if (exportFile.canonicalFile.parentFile != app.cacheDir.canonicalFile || !exportFile.name.startsWith("owner-export-") || !exportFile.isFile) throw IllegalStateException("导出内容不可用，请重新导出")
                 if (uri == null) { main.post { if (!closed) state = state.copy(exportPending = false, notice = "已取消保存文件") }; return@execute }
                 if (uri.scheme != "content") throw SecurityException("只可保存到系统文档选择器授权的位置")
-                val stream = app.contentResolver.openOutputStream(uri, "wt") ?: throw IllegalStateException("无法写入选择的位置")
-                stream.use { output -> exportFile.inputStream().use { input -> input.copyTo(output) }; output.flush() }
+                WorkspaceExportOutput.write(exportFile) { app.contentResolver.openOutputStream(uri, "wt") }
                 main.post { if (!closed) state = state.copy(exportPending = false, notice = "文件已保存到你选择的位置") }
             } catch (error: Exception) { main.post { if (!closed) state = state.copy(exportPending = false, error = message(error)) } }
             finally { temporary?.delete() }
@@ -3123,7 +3122,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     if (action in setOf("confirmResult", "resumeTask", "updateTask", "resolveOperation")) app.sendState()
                     if (action == "resolveOperation" && input.optString("taskId") == state.inspectionTaskId) observeInspection()
                     if (action == "reconcileExternalTask") { getTask(input.optString("taskId")); app.sendState(); state = state.copy(notice = "已记录你核对的结果，未重新执行外部操作") }
-                    if (action == "approveCapability") { state = state.copy(notice = if (input.optBoolean("approved") && result?.optBoolean("originalTeamContinuationRequired")==true) "审批已保存在原分工，请回团队继续该成员或唯一整合者" else if (input.optBoolean("approved")) "已授权这次操作，助手会在原任务中继续" else "已拒绝这次操作"); getTask(input.optString("taskId")); app.sendState() }
+                    if (action == "approveCapability") { state = state.copy(notice = capabilityApprovalNotice(result, input.optBoolean("approved"))); getTask(input.optString("taskId")); app.sendState() }
                     if (action in setOf("resumeTask", "updateTask")) state = state.copy(savedFeedbackRevision = state.savedFeedbackRevision + 1, savedFeedbackTaskId = input.optString("taskId"), savedFeedback = input.optString("feedback"), notice = if (action == "updateTask" && app.activeId() == input.optString("taskId")) "补充已保存，正在结束本次执行；结束后可继续原任务" else if (action == "updateTask") "补充已保存在原任务中" else null)
                     if (action == "startRun" && input.optString("executionMode") == "main_screen" && result != null) moveOriginalPhoneToBackground(result)
                     if (action in setOf("startOwnedPhonePractice", "resumeTask", "resumeRun")) {

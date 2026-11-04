@@ -18,6 +18,8 @@ public final class AutomationBook {
     private final Object lock;
     private final GoalTaskResolver goalTasks;
     private final AutomationConditions.Source conditions;
+    @FunctionalInterface interface FileMove {void move(File source,File target,java.nio.file.CopyOption... options)throws java.io.IOException;}
+    private final FileMove fileMove;
     /** Read the original TaskStore task only. Native facts, never caller/model assertions. */
     public interface GoalTaskResolver {
         JSONObject resolve(String occurrenceId)throws Exception;
@@ -26,7 +28,9 @@ public final class AutomationBook {
     }
     public AutomationBook(File file)throws Exception {this(file,null);}
     public AutomationBook(File file,GoalTaskResolver resolver)throws Exception {this(file,resolver,null);}
-    public AutomationBook(File file,GoalTaskResolver resolver,AutomationConditions.Source conditions)throws Exception {this.file=file;goalTasks=resolver;this.conditions=conditions;lock=LOCKS.computeIfAbsent(file.getCanonicalPath(),key->new Object());}
+    public AutomationBook(File file,GoalTaskResolver resolver,AutomationConditions.Source conditions)throws Exception {this(file,resolver,conditions,(source,target,options)->Files.move(source.toPath(),target.toPath(),options));}
+    /** Package-local IO fixtures retain the real staged write and fsync. */
+    AutomationBook(File file,GoalTaskResolver resolver,AutomationConditions.Source conditions,FileMove fileMove)throws Exception {this.file=file;goalTasks=resolver;this.conditions=conditions;this.fileMove=java.util.Objects.requireNonNull(fileMove);lock=LOCKS.computeIfAbsent(file.getCanonicalPath(),key->new Object());}
 
     /** Body-free origin inventory. No resolver/callback is entered under the Book monitor. */
     public JSONArray nativeScheduleOrigins()throws Exception {
@@ -530,8 +534,11 @@ public final class AutomationBook {
         File parent=file.getParentFile();if(parent!=null&&!parent.isDirectory()&&!parent.mkdirs())throw new IllegalStateException("无法建立规则目录");
         byte[] bytes=value.toString().getBytes(StandardCharsets.UTF_8);if(bytes.length>8_000_000)throw new IllegalStateException("规则记录已达到容量上限，请先删除旧规则");
         File temporary=new File(file.getPath()+".new");try(FileOutputStream out=new FileOutputStream(temporary)){out.write(bytes);out.getFD().sync();}
-        try{Files.move(temporary.toPath(),file.toPath(),StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);}
-        catch(AtomicMoveNotSupportedException unsupported){Files.move(temporary.toPath(),file.toPath(),StandardCopyOption.REPLACE_EXISTING);}
+        try{fileMove.move(temporary,file,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);}
+        catch(AtomicMoveNotSupportedException unsupported){
+            // Do not risk replacing the original rules and delivery receipts non-atomically.
+            throw new IllegalStateException("此存储不支持原子保存，原规则和投递回执未更新",unsupported);
+        }
     }
     private static int indexOf(JSONArray values,String id)throws Exception{for(int i=0;i<values.length();i++)if(id.equals(values.getJSONObject(i).optString("id")))return i;return -1;}
     private static JSONObject copy(JSONObject value)throws Exception{return new JSONObject(value.toString());}

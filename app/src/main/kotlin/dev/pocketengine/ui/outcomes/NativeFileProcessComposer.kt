@@ -9,6 +9,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.pocketengine.features.attachments.OwnerFilePreviewSource
+import dev.pocketengine.features.attachments.processing.NativeMediaTrim
 import org.json.JSONObject
 
 @Composable
@@ -32,12 +33,12 @@ internal fun NativeFileProcessComposer(state:AttachmentOutcomeState,flow:Attachm
                 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){for(kind in listOf("png","jpeg"))FilterChip(format==kind,{format=kind;flow.forgetProcessingReview()},enabled=!state.busy,label={Text(kind.uppercase())})}
                 if(format=="jpeg"){OutlinedTextField(quality,{quality=it.filter(Char::isDigit).take(2);flow.forgetProcessingReview()},label={Text("JPEG质量50–95")},singleLine=true,enabled=!state.busy);Text("JPEG有损且透明区域变白；PNG保留透明。宽高可分别设置，非等比例可能改变图像比例。",style=MaterialTheme.typography.bodySmall)}
             }else{
-                Text("原时长 ${info.optLong("durationMillis")}ms。起点向前对齐实际同步帧，结束按样本边界；无损重封装，不是帧精确转码。",style=MaterialTheme.typography.bodySmall)
+                Text("原时长 ${info.optLong("durationMillis")}ms。起点向前对齐实际${NativeMediaTrim.startAlignmentLabel(info)}，结束按样本边界；无损重封装，不保证请求时间精确起止。",style=MaterialTheme.typography.bodySmall)
                 OutlinedTextField(start,{start=it.filter(Char::isDigit).take(6);flow.forgetProcessingReview()},label={Text("请求开始毫秒")},singleLine=true,enabled=!state.busy,modifier=Modifier.fillMaxWidth())
                 OutlinedTextField(end,{end=it.filter(Char::isDigit).take(6);flow.forgetProcessingReview()},label={Text("请求结束毫秒")},singleLine=true,enabled=!state.busy,modifier=Modifier.fillMaxWidth())
             }
             OutlinedButton(onClick={try{localError=null;val args=if(image)JSONObject().put("left",crop[0].toInt()).put("top",crop[1].toInt()).put("right",crop[2].toInt()).put("bottom",crop[3].toInt()).put("width",crop[4].toInt()).put("height",crop[5].toInt()).put("rotation",rotation).put("format",format).put("quality",quality.toInt())else JSONObject().put("startMillis",start.toLong()).put("endMillis",end.toLong());flow.reviewProcessing(args)}catch(_:Exception){localError="请填写范围内的完整整数"}},enabled=!state.busy&&state.pendingProcessingTask==null,modifier=Modifier.fillMaxWidth()){Text("核对实际加工范围")}
-            state.processingReview?.let{review->val actual=review.metadata();Text(if(image)"输出 ${actual.optInt("width")} × ${actual.optInt("height")}，旋转 ${actual.optInt("rotation")}°，${actual.optString("outputFormat").uppercase()}"else "实际同步帧起点 ${actual.optLong("actualStartUs")/1000}ms；请求结束 ${actual.optLong("requestedEndUs")/1000}ms。",style=MaterialTheme.typography.bodyMedium)}
+            state.processingReview?.let{review->val actual=review.metadata();Text(if(image)"输出 ${actual.optInt("width")} × ${actual.optInt("height")}，旋转 ${actual.optInt("rotation")}°，${actual.optString("outputFormat").uppercase()}"else "实际${NativeMediaTrim.startAlignmentLabel(actual)}起点 ${actual.optLong("actualStartUs")/1000}ms；请求结束 ${actual.optLong("requestedEndUs")/1000}ms。",style=MaterialTheme.typography.bodyMedium)}
             state.pendingProcessingTask?.let{Text("原动作 ${it.take(12)} 待核，不重复加工。",style=MaterialTheme.typography.bodySmall);OutlinedButton(onClick=flow::queryProcessing,enabled=!state.busy){Text("核对原加工结果")}}
         }
         Button(onClick={confirm=true},enabled=!state.busy&&state.processingReview!=null&&state.pendingProcessingTask==null,modifier=Modifier.fillMaxWidth()){Text("保存新的加工原件")}

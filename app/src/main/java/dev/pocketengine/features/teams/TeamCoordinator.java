@@ -371,6 +371,30 @@ public final class TeamCoordinator implements AutoCloseable {
     public synchronized JSONObject startWithScope(JSONObject team,String goal,int rounds,ModelConfig config,String operationId,EvidenceFactory evidence,ExternalMemberFactory external,TeamWriteScope nativeScope)throws Exception{
         return startSelected(team,goal,rounds,config,operationId,evidence,external,java.util.Objects.requireNonNull(nativeScope));
     }
+    /** Native start ticket, captured before the original worker can leave this monitor. */
+    public static final class OriginalResearchStart {
+        private final TeamCoordinator issuer;private final Run run;private final RunControl control;private final int generation;private final String accepted;
+        private OriginalResearchStart(TeamCoordinator issuer,Run run,RunControl control,int generation,JSONObject accepted){this.issuer=issuer;this.run=run;this.control=control;this.generation=generation;this.accepted=accepted.toString();}
+        public JSONObject accepted()throws Exception{return new JSONObject(accepted);}
+        /** Requests only the captured generation. Cancellation is not resource settlement. */
+        public JSONObject requestStop()throws Exception{synchronized(issuer){
+            // Native cancellation callbacks can re-enter owner pause/resume synchronously.
+            // Complete the captured control's entire child chain before checking the mark target.
+            control.cancel();
+            boolean current=issuer.runs.get(run.json.optString("id"))==run&&run.control==control&&run.generation==generation;
+            if(current){
+                run.generation++;run.json.put("generation",run.generation).put("status","cancelled").put("phase","cancelled").put("summary","原父研究执行已请求停止；已有资料、用量与未知效果保留");
+                for(int i=0;i<roster(run).length();i++){JSONObject member=roster(run).getJSONObject(i);if(!done(member.optString("status")))member.put("status","cancelled");JSONArray states=member.getJSONArray("roundStates");for(int r=0;r<states.length();r++)if(!done(states.getJSONObject(r).optString("status")))states.getJSONObject(r).put("status","cancelled");}
+                issuer.activity(run,"cancelled","原父研究执行请求停止原代次",null);issuer.save(run);
+            }
+            return new JSONObject().put("teamRunId",run.json.getString("id")).put("originalGeneration",generation).put("appliedToCurrentGeneration",current).put("stopRequested",true).put("resourceSettlement","not_asserted");
+        }}
+    }
+    public synchronized OriginalResearchStart startOriginalResearch(JSONObject team,String goal,int rounds,ModelConfig config,String operationId,EvidenceFactory evidence,ExternalMemberFactory external)throws Exception{
+        if(researchFactory==null||"produce".equals(team.optString("mode")))throw new SecurityException("不是原只读研究启动");
+        OriginalResearchStart[] original=new OriginalResearchStart[1];
+        startSelected(team,goal,rounds,config,operationId,evidence,external,null,null,null,original);return original[0];
+    }
     public synchronized void requireParentStartable()throws Exception{if(closed)throw new IllegalStateException("团队执行器已关闭");for(Run run:runs.values())if(active(run))throw new IllegalStateException("请先处理原团队的真实活动/暂停工作，不重复启动");}
     /** Exact native SQL start claim, same coordinator, worker pool and assignment lifecycle. */
     public synchronized JSONObject startParentPlan(dev.pocketengine.store.TaskStore.TeamParentStart approved,ModelConfig model,EvidenceFactory evidence,ExternalMemberFactory external)throws Exception{
@@ -383,6 +407,9 @@ public final class TeamCoordinator implements AutoCloseable {
         return startSelected(team,goal,rounds,config,operationId,evidence,external,nativeScope,initialWorkPlan,null);
     }
     private JSONObject startSelected(JSONObject team,String goal,int rounds,ModelConfig config,String operationId,EvidenceFactory evidence,ExternalMemberFactory external,TeamWriteScope nativeScope,JSONObject initialWorkPlan,dev.pocketengine.store.TaskStore.TeamParentStart nativeStart)throws Exception{
+        return startSelected(team,goal,rounds,config,operationId,evidence,external,nativeScope,initialWorkPlan,nativeStart,null);
+    }
+    private JSONObject startSelected(JSONObject team,String goal,int rounds,ModelConfig config,String operationId,EvidenceFactory evidence,ExternalMemberFactory external,TeamWriteScope nativeScope,JSONObject initialWorkPlan,dev.pocketengine.store.TaskStore.TeamParentStart nativeStart,OriginalResearchStart[] originalStart)throws Exception{
         if(operationId==null||!operationId.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("operationId无效");if(runs.containsKey(operationId)||archived.containsKey(operationId))throw new IllegalStateException("此任务已存在，请读取原结果");
         if(closed)throw new IllegalStateException("团队执行器已关闭");for(Run run:runs.values())if(active(run))throw new IllegalStateException("已有团队任务运行或暂停，请先处理原任务");
         if(goal==null||goal.trim().isEmpty()||goal.length()>8000)throw new IllegalArgumentException("团队目标需为1至8000字");if(rounds<1||rounds>2)throw new IllegalArgumentException("讨论轮数为1或2");if(config==null||config.baseUrl.isEmpty()&&!config.usesAccount()||config.model.isEmpty())throw new IllegalStateException("请先配置模型");
@@ -408,7 +435,7 @@ public final class TeamCoordinator implements AutoCloseable {
         if(!mode.equals("produce")&&researchFactory!=null)json.put("researchExecutionFormat",RESEARCH_FORMAT).put("researchBudgetAutoRefill",false);
         if(nativeScope!=null)json.put("productionScope",nativeScope.snapshot());
         if(initialWorkPlan!=null){if(nativeScope==null||!operationId.equals(initialWorkPlan.getString("teamRunId")))throw new SecurityException("原父计划与原制作scope不匹配");TeamWorkItems.validate(initialWorkPlan.getJSONArray("items"),roster);json.put("workPlan",JsonFiles.copy(initialWorkPlan)).put("phase","work_items").put("callLimit",nativeScope.snapshot().getJSONObject("initialBudget").getInt("callLimit")).put("toolCallLimit",nativeScope.snapshot().getJSONObject("initialBudget").getInt("toolCallLimit")).put("externalTurnLimit",0);}
-if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateException("团队保留记录已满，原任务与待核对结果未删除；请先处理现有团队");makeRoom();Run run=new Run(json,new RunControl(),config,evidence,external);run.modelSelections.putAll(capturedProfileModels);if(profilePins){nativeStart.checkCurrent();json.put("nativeWorkProfileModels",JsonFiles.copy(team.getJSONObject("nativeWorkProfileModels")));}runs.put(operationId,run);try{if(budgetHost!=null)budgetHost.initialize(new InitialBudgetPlan(run));message(run,"*",0,"user","goal",redact(goal,config),null);activity(run,"created","团队任务已建立",null);board(run);appendParentEvent(run);persist();}catch(Exception failure){runs.remove(operationId);throw failure;}JSONObject accepted=JsonFiles.copy(json);schedule(run);return accepted;
+if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateException("团队保留记录已满，原任务与待核对结果未删除；请先处理现有团队");makeRoom();Run run=new Run(json,new RunControl(),config,evidence,external);RunControl originalControl=run.control;int originalGeneration=run.generation;run.modelSelections.putAll(capturedProfileModels);if(profilePins){nativeStart.checkCurrent();json.put("nativeWorkProfileModels",JsonFiles.copy(team.getJSONObject("nativeWorkProfileModels")));}runs.put(operationId,run);try{if(budgetHost!=null)budgetHost.initialize(new InitialBudgetPlan(run));message(run,"*",0,"user","goal",redact(goal,config),null);activity(run,"created","团队任务已建立",null);board(run);appendParentEvent(run);persist();}catch(Exception failure){runs.remove(operationId);throw failure;}JSONObject accepted=JsonFiles.copy(json);if(originalStart!=null)originalStart[0]=new OriginalResearchStart(this,run,originalControl,originalGeneration,accepted);schedule(run);return accepted;
     }
     /** Native foreground budget source only. No model JSON can construct this review pin. */
     public static final class ResearchBudgetPlan {
@@ -475,17 +502,6 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
     }
     public interface CancelAdmission {void check()throws Exception;}
     public synchronized OriginalCancellation originalCancellation(String id)throws Exception{return new OriginalCancellation(required(id));}
-    public final class OriginalResearchStart {
-        private final JSONObject accepted;private final OriginalCancellation cancellation;
-        private OriginalResearchStart(JSONObject accepted,OriginalCancellation cancellation)throws Exception{this.accepted=JsonFiles.copy(accepted);this.cancellation=cancellation;}
-        public JSONObject accepted()throws Exception{return JsonFiles.copy(accepted);}
-        public boolean cancel()throws Exception{return cancellation.cancel();}
-    }
-    public synchronized OriginalResearchStart startOriginalResearch(JSONObject team,String goal,int rounds,ModelConfig config,String operationId,EvidenceFactory evidence,ExternalMemberFactory external)throws Exception {
-        if(researchFactory==null||"produce".equals(team.optString("mode")))throw new SecurityException("不是原只读研究启动");
-        JSONObject accepted=startSelected(team,goal,rounds,config,operationId,evidence,external,null);
-        return new OriginalResearchStart(accepted,originalCancellation(operationId));
-    }
     public synchronized JSONObject pause(String id,String memberId)throws Exception{
         Run run=required(id);boolean all=memberId==null||memberId.isEmpty();if(!all)member(run,memberId);if(run.json.optString("status").equals("cancelled"))throw new IllegalStateException("该团队任务已停止");if(all||run.json.optString("phase").equals("synthesis")){run.paused=true;run.generation++;if(run.control!=null)run.control.cancel();run.json.put("generation",run.generation);}
         for(int i=0;i<roster(run).length();i++){JSONObject member=roster(run).getJSONObject(i);if(all||memberId.equals(member.getString("id")))pauseMember(run,member);}
@@ -497,15 +513,19 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
         if(run.json.optString("status").equals("cancelled"))throw new IllegalStateException("该团队任务已停止");
         if(text==null||text.trim().isEmpty()||text.length()>4000)throw new IllegalArgumentException("补充消息需为1至4000字");
         if(run.json.getJSONArray("inbox").length()>=20)throw new IllegalStateException("本任务已保留20条补充，请先完成当前任务");
-        if(memberId!=null&&!memberId.isEmpty())member(run,memberId);
+        if(memberId!=null&&!memberId.isEmpty()&&!memberId.equals("*"))member(run,memberId);
     }
     public synchronized JSONObject feedback(String id,String memberId,String text)throws Exception{
         Run run=required(id);requireFeedback(run,memberId,text);boolean summarizing=run.json.optString("phase").equals("synthesis");JSONArray inbox=run.json.getJSONArray("inbox");String target=memberId==null||memberId.isEmpty()?"*":memberId;
-        String content=redact(text.trim(),run.config);inbox.put(new JSONObject().put("id",freshResearchMessageId(run)).put("targetMemberId",target).put("text",content).put("status","pending").put("consumedBy",new JSONArray()).put("deliveries",new JSONArray()).put("at",System.currentTimeMillis()));
+        String content=redact(text.trim(),run.config);JSONObject letter=new JSONObject().put("id",freshResearchMessageId(run)).put("targetMemberId",target).put("text",content).put("status","pending").put("consumedBy",new JSONArray()).put("deliveries",new JSONArray()).put("at",System.currentTimeMillis());inbox.put(letter);
+        return applyFeedback(run,target,content,letter,summarizing);
+    }
+    private JSONObject applyFeedback(Run run,String target,String content,JSONObject letter,boolean summarizing)throws Exception {
         message(run,target,run.json.optInt("round"),"user","intervention",content,null);run.json.put("summaryStale",true);
         for(int i=0;i<roster(run).length();i++){JSONObject member=roster(run).getJSONObject(i);if(!member.optBoolean("exited")&&(target.equals("*")||target.equals(member.getString("id")))){int retry=unfinishedRound(run,member);if(retry<1)retry=plannedRounds(run);resetFrom(run,member,retry);pauseMember(run,member);}}
         if(!target.equals("*"))invalidateDependents(run,target,new java.util.HashSet<>());
         if(target.equals("*")||summarizing){run.paused=true;run.generation++;if(run.control!=null)run.control.cancel();run.json.put("generation",run.generation);}
+        if(letter.has("revisionRequestHash"))letter.put("revisionFeedbackState","feedback_applied").put("nativeAssignmentInput",false).put("status","pending");
         run.json.put("status",hasRunningMember(run)?"running":"paused").put("phase","intervention").put("summary","补充已按FIFO排队，指定成员已暂停；继续时发送，不会假装已阅读");activity(run,"feedback","主人补充了要求，等待成员继续",target);save(run);return JsonFiles.copy(run.json);
     }
     /** Ordinary conversation is targeted, queued and visible; unlike feedback it never interrupts anyone. */
@@ -642,7 +662,7 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
             nativeAdmission.approve();JSONObject result=resume(run.json.getString("id"),slot.getString("id"),model,run.evidenceFactory,run.externalFactory);slot.remove("parentPause");save(run);return JsonFiles.copy(run.json).put("parentContinuation",true).put("budgetIncreased",false);
         }
     }
-    public synchronized JSONObject parentExecutorState(String id)throws Exception{Run run=required(id);boolean active=run.executing||!run.children.isEmpty()||assignmentFactory!=null&&assignmentFactory.hasActiveWork(id)||researchFactory!=null&&researchFactory.hasActiveWork(id);return new JSONObject().put("activeNativeExecutors",active).put("resourcesReleased",!active).put("requestedStopNotTerminal",active&&run.json.optString("status").matches("paused|cancelled"));}
+    public synchronized JSONObject parentExecutorState(String id)throws Exception{Run run=required(id);boolean active=run.executing||!run.children.isEmpty()||!run.researchTurns.isEmpty()||assignmentFactory!=null&&assignmentFactory.hasActiveWork(id)||researchFactory!=null&&researchFactory.hasActiveWork(id);return new JSONObject().put("activeNativeExecutors",active).put("resourcesReleased",!active).put("requestedStopNotTerminal",active&&run.json.optString("status").matches("paused|cancelled"));}
     private JSONObject reviewedSnapshot(Run run,JSONObject input)throws Exception {
         Object revision=input.get("expectedRevision"),generation=input.get("expectedGeneration");
         if(!(revision instanceof Integer||revision instanceof Long)||!(generation instanceof Integer)||run.json.optLong("revision")!=((Number)revision).longValue()||run.generation!=(Integer)generation)throw new IllegalStateException("团队快照已改变，请刷新后操作");
@@ -740,6 +760,38 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
         if(run.json.optString("status").equals("cancelled")||run.children.containsKey(memberId)||member.optString("status").matches("running|awaiting_approval"))throw new IllegalStateException("成员仍在运行、等待授权或任务已停止");
         boolean unread=false;JSONArray mailbox=run.json.getJSONArray("mailbox");for(int i=0;i<mailbox.length();i++){JSONObject letter=mailbox.getJSONObject(i);if(memberId.equals(letter.getString("targetMemberId"))&&!letter.optString("status").equals("consumed"))unread=true;}if(!unread)throw new IllegalStateException("该成员没有待使用的成员消息");
         int from=unfinishedRound(run,member);if(from<1)from=plannedRounds(run);resetFrom(run,member,from);pauseMember(run,member);invalidateDependents(run,memberId,new java.util.HashSet<>());run.json.put("summaryStale",true);activity(run,"owner_mail_delivery","主人明确继续该成员以使用待处理消息",memberId);return resume(id,memberId,config,evidence,external);
+    }
+    private static String revisionRequestHash(String command,JSONObject input)throws Exception {
+        JSONObject request=new JSONObject().put("command",command);for(String key:new String[]{"runId","assignmentId","memberId","revisionRequestId","text","expectedFrozenRunId","expectedArtifactsHash"})request.put(key,input.getString(key));
+        if(command.equals("continueOutcome"))for(String key:new String[]{"expectedIntegrationReviewId","expectedIntegrationPlanHash"})request.put(key,input.getString(key));
+        return TeamWorkFiles.hash(TeamWorkFiles.canonical(request));
+    }
+    /** Read the original bounded inbox, including its complete archived context. Never hydrates or restores execution. */
+    public synchronized JSONObject revisionFeedback(String command,JSONObject input)throws Exception {
+        String id=input.getString("runId"),request=input.getString("revisionRequestId");Run hot=runs.get(id);JSONObject json=hot==null?null:hot.json;
+        if(json==null){JSONObject summary=archived.get(id);if(summary==null)throw new IllegalArgumentException("团队任务不存在");json=JsonFiles.read(contextFile(id));if(!id.equals(json.optString("id"))||summary.optLong("revision")!=json.optLong("revision"))throw new SecurityException("原团队修订记录缺失或版本不一致，不能重放");}
+        JSONArray inbox=json.getJSONArray("inbox");for(int i=0;i<inbox.length();i++){JSONObject row=inbox.getJSONObject(i);if(!request.equals(row.getString("id")))continue;
+            if(!input.getString("assignmentId").equals(row.optString("revisionAssignmentId"))||!command.equals(row.optString("revisionCommand"))||!revisionRequestHash(command,input).equals(row.optString("revisionRequestHash")))throw new SecurityException("原修订请求编号已绑定其他内容，不重送反馈");return JsonFiles.copy(row);
+        }return null;
+    }
+    /** Reuses one of the original 20 retained inbox rows as a durable fence, before pausing or cancelling anything. */
+    public synchronized JSONObject reviewedRevisionFeedback(String command,JSONObject input,TeamWriteScope continuedScope)throws Exception {
+        if(!command.matches("reviseAssignment|continueOutcome"))throw new SecurityException("不是原文件修订入口");
+        if(revisionFeedback(command,input)!=null)throw new IllegalStateException("原修订已有反馈记录，请核对原assignment，不重放");
+        checkRevision(input,continuedScope);Run run=runs.get(input.getString("runId"));String request=input.getString("revisionRequestId"),target=input.getString("memberId");
+        if(!request.matches("[a-f0-9-]{36}"))throw new SecurityException("原修订请求编号无效");JSONArray mailbox=run.json.getJSONArray("mailbox");for(int i=0;i<mailbox.length();i++)if(request.equals(mailbox.getJSONObject(i).getString("id")))throw new SecurityException("原修订请求编号与已有消息冲突");
+        JSONObject letter=new JSONObject().put("id",request).put("targetMemberId",target).put("text",redact(input.getString("text").trim(),run.config)).put("status","revision_pending").put("nativeAssignmentInput",true).put("consumedBy",new JSONArray()).put("deliveries",new JSONArray()).put("at",System.currentTimeMillis()).put("revisionAssignmentId",input.getString("assignmentId")).put("revisionCommand",command).put("revisionRequestHash",revisionRequestHash(command,input)).put("revisionFeedbackState","pending_unknown");
+        run.json.getJSONArray("inbox").put(letter);save(run);
+        // The retained pending row survives a crash or a later save/SQL failure. It is never an automatic retry grant.
+        return applyFeedback(run,target,letter.getString("text"),letter,run.json.optString("phase").equals("synthesis"));
+    }
+    /** No persistence, cancellation or TaskStore callback: reject a stale/misdirected revision before feedback. */
+    public synchronized void checkRevision(JSONObject input,TeamWriteScope continuedScope)throws Exception {
+        Run run=runs.get(input.getString("runId"));if(run==null)throw new IllegalStateException("请先重新载入原团队再审阅修订");
+        JSONObject slot=reviewedSnapshot(run,input),assignment=slot==null?null:slot.optJSONObject("assignmentTask");
+        if(!run.json.optString("mode").equals("produce")||slot==null||slot.optBoolean("exited")||assignment==null||!input.getString("assignmentId").equals(assignment.optString("assignmentId")))throw new SecurityException("修订不是该成员当前原assignment");
+        String text=input.getString("text");if(run.json.optString("status").equals("cancelled")||text.trim().isEmpty()||text.length()>4000||run.json.getJSONArray("inbox").length()>=20)throw new IllegalStateException("原团队已停止或补充消息无法排队");
+        if(continuedScope!=null){JSONObject next=continuedScope.snapshot(),previous=run.json.getJSONObject("productionScope");for(String key:new String[]{"parentTaskId","parentRunId","targetProjectId","definitionHash","initialBudget"})if(!TeamWorkFiles.canonical(previous.get(key)).equals(TeamWorkFiles.canonical(next.get(key))))throw new SecurityException("原成果继续不能替换任务、项目、计划或预算");}
     }
     /** Optional exact native review envelope for the new leaf; check and mutation share this monitor. */
     public synchronized JSONObject reviewedControl(String command,JSONObject input,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external)throws Exception {
@@ -860,6 +912,7 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
                     JSONArray blockers=TeamWorkPlan.blockers(roster(run),member,round);state.put("blockedBy",blockers);
                     if(blockers.length()>0){String waiting=TeamWorkPlan.permanentlyBlocked(roster(run),member,round)?"blocked_dependency":"waiting_dependency";state.put("status",waiting);member.put("status",waiting);continue;}
                     RunControl child=new RunControl();Turn turn=new Turn(run,i,round,generation,member.optInt("generation"),child);
+                    if(researchEnabled(run)){turn.researchOwner=owner;turn.researchCancellation=child::cancel;run.researchTurns.add(turn);owner.onCancel(turn.researchCancellation);}
                     run.children.put(member.getString("id"),child);member.put("round",round).put("status","running");state.put("status","running").put("turnId",turn.id).put("generation",turn.memberGeneration).put("startedAt",System.currentTimeMillis());
                     pending.add(members.submit(()->{performMember(turn,run.config,previous,round);return null;}));
                 }
@@ -890,7 +943,7 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
         synchronized(this){guard(turn);JSONObject current=roster(run).getJSONObject(turn.index);if(discussionInput!=null){progress(current,round).put("unacceptedDiscussionOutput",text);save(run);JSONObject record=TeamEvidenceDiscussion.commit(run.json,memberId,round,turn.id,turn.memberGeneration,discussionInput,text);invalidateDiscussionAfter(run,round);progress(current,round).put("discussionRecord",record).remove("unacceptedDiscussionOutput");text=TeamEvidenceDiscussion.render(record);}current.put("status","completed").put("text",text);progress(current,round).put("status","completed").put("text",text).put("finishedAt",System.currentTimeMillis());message(run,memberId,round,"assistant","answer",text,null);run.json.getJSONArray("transcript").getJSONObject(run.json.getJSONArray("transcript").length()-1).put("memberSnapshot",new JSONObject(turn.memberIdentity));if(discussionInput!=null){JSONObject shown=run.json.getJSONArray("transcript").getJSONObject(run.json.getJSONArray("transcript").length()-1);shown.put("discussionStage",TeamEvidenceDiscussion.stage(round)).put("discussionRecordId",progress(current,round).getJSONObject("discussionRecord").getString("recordId"));}consumeFeedback(turn,true);consumePeerMessages(turn,true);activity(run,"member_completed","成员完成本轮真实产出",memberId);save(run);}
     }catch(InterruptedException stopped){synchronized(this){try{RunControl parent=run.control;JSONObject member=roster(run).getJSONObject(turn.index);if(parent!=null&&!parent.isCancelled()&&run.generation==turn.runGeneration&&member.optInt("generation")==turn.memberGeneration&&turn.control.isCancelled()){member.put("status","cancelled");progress(member,round).put("status","cancelled");message(run,member.getString("id"),round,"system","assignment_stopped","原成员执行已停止；实际动作与结果保留，未知效果仍需回原任务核对",null);save(run);}}catch(Exception unavailable){}}}
     catch(Exception failure){synchronized(this){try{guard(turn);JSONObject member=roster(run).getJSONObject(turn.index),state=progress(member,round);boolean uncertain=!state.optString("externalOperationId").isEmpty()&&!state.optBoolean("externalSettled");String status=uncertain?"blocked_unknown":"failed",reason=failure instanceof ContextLimitException?failure.getMessage():uncertain?"外部操作尚未取得可确认终态；保留原操作身份，继续只查询，不重新提交":"本轮模型、证据或执行端未返回有效结果；没有编造答案";member.put("status",status);state.put("status",status).put("message",reason).put("nativeErrorType",failure.getClass().getSimpleName()).put("nativeErrorMessage",redact(String.valueOf(failure.getMessage()),run.config));message(run,member.getString("id"),round,"system","error",reason,null);consumeFeedback(turn,false);save(run);}catch(Exception stale){}}}
-    finally{synchronized(this){turn.active=false;try{if(!turn.peerConsumed){consumePeerMessages(turn,false);save(run);}}catch(Exception ignored){}if(!memberId.isEmpty()&&run.children.get(memberId)==turn.control)run.children.remove(memberId);}}
+    finally{synchronized(this){turn.active=false;if(turn.researchOwner!=null){turn.researchOwner.removeCancelAction(turn.researchCancellation);run.researchTurns.remove(turn);}try{if(!turn.peerConsumed){consumePeerMessages(turn,false);save(run);}}catch(Exception ignored){}if(!memberId.isEmpty()&&run.children.get(memberId)==turn.control)run.children.remove(memberId);}}
     }
     private String researchChild(Turn turn,JSONObject slot,JSONArray messages,ModelConfig captured)throws Exception {
         ResearchFactory factory=researchFactory;if(factory==null)throw new SecurityException("原研究child宿主尚未挂载");ResearchCall call;
@@ -1164,7 +1217,7 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
     }
     private void makeRoom()throws Exception{
         if(runs.size()<HOT_RUN_LIMIT)return;Run candidate=null;AssignmentFactory nativeHost=assignmentFactory;
-        for(Run run:runs.values())if(!active(run)&&!run.executing&&!run.enqueued&&run.children.isEmpty()&&(nativeHost==null||!nativeHost.hasActiveWork(run.json.getString("id")))){candidate=run;break;}
+        for(Run run:runs.values())if(!active(run)&&!run.executing&&!run.enqueued&&run.children.isEmpty()&&run.researchTurns.isEmpty()&&(nativeHost==null||!nativeHost.hasActiveWork(run.json.getString("id")))){candidate=run;break;}
         if(candidate==null)throw new IllegalStateException("团队仍有实际执行或暂停工作，原上下文未移出；请先处理现有任务");
         String id=candidate.json.getString("id");File destination=contextFile(id);JSONObject previous=JsonFiles.read(destination);
         if(previous.length()>0&&(!id.equals(previous.optString("id"))||previous.optLong("revision")>candidate.json.optLong("revision")))throw new IllegalStateException("团队历史版本已改变，原记录未覆盖");
@@ -1193,7 +1246,7 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
     private static String answer(JSONObject response,ModelConfig config)throws Exception{if(response.optJSONArray("tool_calls")!=null&&response.getJSONArray("tool_calls").length()>0)throw new IllegalArgumentException("团队总结不能继续执行工具");return TeamOutputText.received(response.optString("content"),config==null?null:config.apiKey);}
     private static String redact(String text,ModelConfig config){return config==null||config.apiKey.isEmpty()?text:text.replace(config.apiKey,"[密钥已隐藏]");}
     @Override public synchronized void close(){closed=true;for(Run run:runs.values()){if(run.control!=null)run.control.cancel();for(RunControl child:run.children.values())child.cancel();}coordinator.shutdownNow();members.shutdownNow();}
-    private static final class Run{final JSONObject json;volatile RunControl control;volatile ModelConfig config;volatile EvidenceFactory evidenceFactory;volatile ExternalMemberFactory externalFactory;final Map<String,TeamMemberModels.Selection> modelSelections=new LinkedHashMap<>();final Map<String,RunControl> children=new LinkedHashMap<>();final Map<String,dev.pocketengine.store.TaskStore.TeamResearchWakeAdmission> researchWakes=new LinkedHashMap<>();final java.util.concurrent.ConcurrentHashMap<String,Integer> memberVersions=new java.util.concurrent.ConcurrentHashMap<>();volatile int generation;volatile long nativeRevision;volatile boolean paused;boolean enqueued,executing,reschedule;Run(JSONObject json,RunControl control,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external){this.json=json;this.control=control;this.config=config;this.evidenceFactory=evidence;this.externalFactory=external;this.generation=json.optInt("generation");nativeRevision=json.optLong("revision");JSONArray members=json.optJSONArray("members");for(int i=0;members!=null&&i<members.length();i++){JSONObject member=members.optJSONObject(i);if(member!=null)memberVersions.put(member.optString("id"),member.optInt("identityRevision",1));}}}
-    private static final class Turn{final Run run;final String id=UUID.randomUUID().toString();final JSONArray peerIds=new JSONArray();boolean peerConsumed;volatile boolean active=true;final int index,round,runGeneration,memberGeneration,ownerGeneration,itemRevision;final String workItemId;int requestOrdinal;volatile AssignmentCall assignmentCall;final RunControl control;final String memberIdentity;Turn(Run run,int index,int round,int runGeneration,int memberGeneration,RunControl control)throws Exception{this(run,index,round,runGeneration,memberGeneration,control,null);}Turn(Run run,int index,int round,int runGeneration,int memberGeneration,RunControl control,JSONObject item)throws Exception{memberIdentity=memberSnapshot(roster(run).getJSONObject(index)).toString();this.run=run;this.index=index;this.round=round;this.runGeneration=runGeneration;this.memberGeneration=memberGeneration;this.control=control;workItemId=item==null?"":item.optString("workItemId");ownerGeneration=item==null?0:item.optInt("ownerGeneration");itemRevision=item==null?0:item.optInt("itemRevision");}}
+    private static final class Run{final JSONObject json;volatile RunControl control;volatile ModelConfig config;volatile EvidenceFactory evidenceFactory;volatile ExternalMemberFactory externalFactory;final Map<String,TeamMemberModels.Selection> modelSelections=new LinkedHashMap<>();final Map<String,RunControl> children=new LinkedHashMap<>();final Set<Turn> researchTurns=new java.util.LinkedHashSet<>();final Map<String,dev.pocketengine.store.TaskStore.TeamResearchWakeAdmission> researchWakes=new LinkedHashMap<>();final java.util.concurrent.ConcurrentHashMap<String,Integer> memberVersions=new java.util.concurrent.ConcurrentHashMap<>();volatile int generation;volatile long nativeRevision;volatile boolean paused;boolean enqueued,executing,reschedule;Run(JSONObject json,RunControl control,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external){this.json=json;this.control=control;this.config=config;this.evidenceFactory=evidence;this.externalFactory=external;this.generation=json.optInt("generation");nativeRevision=json.optLong("revision");JSONArray members=json.optJSONArray("members");for(int i=0;members!=null&&i<members.length();i++){JSONObject member=members.optJSONObject(i);if(member!=null)memberVersions.put(member.optString("id"),member.optInt("identityRevision",1));}}}
+    private static final class Turn{final Run run;final String id=UUID.randomUUID().toString();final JSONArray peerIds=new JSONArray();boolean peerConsumed;volatile boolean active=true;final int index,round,runGeneration,memberGeneration,ownerGeneration,itemRevision;final String workItemId;int requestOrdinal;volatile AssignmentCall assignmentCall;RunControl researchOwner;Runnable researchCancellation;final RunControl control;final String memberIdentity;Turn(Run run,int index,int round,int runGeneration,int memberGeneration,RunControl control)throws Exception{this(run,index,round,runGeneration,memberGeneration,control,null);}Turn(Run run,int index,int round,int runGeneration,int memberGeneration,RunControl control,JSONObject item)throws Exception{memberIdentity=memberSnapshot(roster(run).getJSONObject(index)).toString();this.run=run;this.index=index;this.round=round;this.runGeneration=runGeneration;this.memberGeneration=memberGeneration;this.control=control;workItemId=item==null?"":item.optString("workItemId");ownerGeneration=item==null?0:item.optInt("ownerGeneration");itemRevision=item==null?0:item.optInt("itemRevision");}}
     private static final class ContextLimitException extends IllegalArgumentException{ContextLimitException(String message){super(message);}}
 }

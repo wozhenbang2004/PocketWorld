@@ -81,14 +81,14 @@ public final class AttachmentsModule implements EngineModule {
         if(command.equals("importUri"))return repository.importUri(Uri.parse(input.getString("uri")),0,input.optString("taskId"),input.optString("projectId"));
         if(command.equals("createText")){String name=input.optString("name","note.txt"),mime=input.optString("mimeType","text/plain");if(!java.util.Set.of("text/plain","text/markdown","text/csv","text/tab-separated-values").contains(mime)||name.toLowerCase(java.util.Locale.ROOT).matches(".*\\.(docx?|xlsx?|pptx?|pdf|png|jpe?g|webp|mp[34]|wav|apk)$"))throw new IllegalArgumentException("文字保存只能创建真实文本格式；不能将文字命名为Office、PDF或媒体文件");String text=input.getString("content");if(text.length()>65536)throw new IllegalArgumentException("新文本附件最多65536字符");JSONObject source=new JSONObject().put("kind","created_text");if(input.has("taskId"))source.put("taskId",input.getString("taskId"));if(input.has("projectId"))source.put("projectId",input.getString("projectId"));return repository.book.importBytes(new ByteArrayInputStream(text.getBytes(StandardCharsets.UTF_8)),input.optString("name","note.txt"),input.optString("mimeType","text/plain"),source);}
         if(command.matches("createDocument|transformImage|trimMedia"))throw new SecurityException("文档生成必须沿原宿主动作和原执行控制；普通JSON不能提供身份");
-        String id=input.getString("id");ownerRecord(repository.book.get(id));
+        String id=input.getString("id");JSONObject selected=repository.book.get(id);ownerRecord(selected);String expectedSha256=selected.getString("sha256");
         switch(command){
             case "get":return repository.book.get(id);
-            case "readText":return repository.book.readText(id);
-            case "exportToUri":return repository.exportToUri(id,Uri.parse(input.getString("uri")));
+            case "readText":return repository.book.readText(id,expectedSha256);
+            case "exportToUri":return repository.exportVerifiedToUri(id,expectedSha256,Uri.parse(input.getString("uri")),new RunControl());
             case "remove":repository.remove(id);return new JSONObject().put("id",id).put("status","removed");
-            case "view":context.android.startActivity(repository.viewIntent(id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));return new JSONObject().put("id",id).put("status","viewer_requested").put("verified",false);
-            case "share":context.android.startActivity(Intent.createChooser(repository.shareIntent(id),"分享附件").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));return new JSONObject().put("id",id).put("status","share_sheet_requested").put("verified",false);
+            case "view":context.android.startActivity(repository.viewIntent(id,expectedSha256).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));return new JSONObject().put("id",id).put("status","viewer_requested").put("verified",false);
+            case "share":context.android.startActivity(Intent.createChooser(repository.shareIntent(id,expectedSha256),"分享附件").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));return new JSONObject().put("id",id).put("status","share_sheet_requested").put("verified",false);
             default:throw new IllegalArgumentException("不支持的附件操作");
         }
     }

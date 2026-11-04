@@ -13,7 +13,11 @@ public final class WorkspaceArtifacts {
     public static final long MAX_PROJECT_PACKAGE_BYTES=64L*1024*1024;
     private final File root,catalog;
     private final VersionedWorkspace workspace;
-    public WorkspaceArtifacts(File root,VersionedWorkspace workspace){this.root=root;this.catalog=new File(root,"catalog.json");this.workspace=workspace;}
+    @FunctionalInterface interface CreateCatalogWrite {void write(File target,JSONObject value)throws Exception;}
+    private final CreateCatalogWrite createCatalogWrite;
+    public WorkspaceArtifacts(File root,VersionedWorkspace workspace){this(root,workspace,JsonFiles::write);}
+    /** Package-local IO fixtures still write the real catalog before simulating a lost ACK. */
+    WorkspaceArtifacts(File root,VersionedWorkspace workspace,CreateCatalogWrite createCatalogWrite){this.root=root;this.catalog=new File(root,"catalog.json");this.workspace=workspace;this.createCatalogWrite=java.util.Objects.requireNonNull(createCatalogWrite);}
     /** Only this original catalog can issue a reference; JSON metadata grants no read or execution. */
     public static final class ArtifactRef {
         private final WorkspaceArtifacts issuer;private final JSONObject metadata;
@@ -66,7 +70,9 @@ public final class WorkspaceArtifacts {
         File record=new File(root,id+".json");long total=artifact.toString().getBytes(StandardCharsets.UTF_8).length;File[] retained=root.listFiles(file->file.isFile()&&file.getName().matches("[a-f0-9-]{36}\\.json"));if(retained!=null)for(File file:retained)total+=file.length();
         if(total>8*1024*1024)throw new IllegalStateException("文件成果已达8MiB上限，请先整理已有成果");
         JsonFiles.write(record,artifact);JSONObject metadata=metadata(artifact);all.put(metadata);
-        try{JsonFiles.write(catalog,new JSONObject().put("artifacts",all));}catch(Exception failure){Files.deleteIfExists(record.toPath());throw failure;}
+        // A failed acknowledgement cannot prove that the catalog did not publish this record.
+        try{createCatalogWrite.write(catalog,new JSONObject().put("artifacts",all));}
+        catch(Exception failure){throw new java.io.IOException("成果目录登记结果未知，原成果记录已保留；请仅按原成果ID "+id+" 查询，不重放保存",failure);}
         return JsonFiles.copy(metadata);
     }
     public synchronized JSONObject read(String id)throws Exception {

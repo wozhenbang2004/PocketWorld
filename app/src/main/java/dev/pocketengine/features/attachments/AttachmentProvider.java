@@ -15,7 +15,17 @@ public final class AttachmentProvider extends ContentProvider {
     @Override public boolean onCreate(){return true;}
     @Override public String getType(Uri uri){try{return metadata(uri).getString("mimeType");}catch(Exception error){return null;}}
     @Override public Cursor query(Uri uri,String[] projection,String selection,String[] arguments,String sortOrder){try{JSONObject record=metadata(uri);String[] columns=projection==null?new String[]{OpenableColumns.DISPLAY_NAME,OpenableColumns.SIZE}:projection;MatrixCursor cursor=new MatrixCursor(columns,1);Object[] values=new Object[columns.length];for(int i=0;i<columns.length;i++)if(OpenableColumns.DISPLAY_NAME.equals(columns[i]))values[i]=record.getString("name");else if(OpenableColumns.SIZE.equals(columns[i]))values[i]=record.getLong("size");cursor.addRow(values);return cursor;}catch(Exception error){throw new IllegalArgumentException("附件不存在或不可读取");}}
-    @Override public ParcelFileDescriptor openFile(Uri uri,String mode)throws FileNotFoundException{if(!"r".equals(mode))throw new FileNotFoundException("附件仅允许只读访问");try{return ParcelFileDescriptor.open(isView(uri)?snapshots().file(id(uri)):repository().book.file(id(uri)),ParcelFileDescriptor.MODE_READ_ONLY);}catch(Exception failure){throw new FileNotFoundException("附件不存在或不可读取");}}
+    @Override public ParcelFileDescriptor openFile(Uri uri,String mode)throws FileNotFoundException{
+        if(!"r".equals(mode))throw new FileNotFoundException("附件仅允许只读访问");
+        try{
+            if(isView(uri))return snapshots().openReadOnly(id(uri));
+            // Old canonical URIs remain valid for native WebView file selection. Resolve
+            // only this original ID/version into the existing bounded snapshot path.
+            String original=id(uri);AttachmentRepository repository=repository();android.content.Intent prepared=repository.verifiedViewIntent(original,repository.book.get(original).getString("sha256"),new dev.pocketengine.core.RunControl());ParcelFileDescriptor opened=null;
+            try{opened=snapshots().openReadOnly(prepared.getData().getLastPathSegment());snapshots().discardUnissuedView(prepared);ParcelFileDescriptor result=opened;opened=null;return result;}
+            catch(Exception failure){if(opened!=null)try{opened.close();}catch(Exception cleanup){failure.addSuppressed(cleanup);}try{snapshots().discardUnissuedView(prepared);}catch(Exception cleanup){failure.addSuppressed(cleanup);}throw failure;}
+        }catch(Exception failure){FileNotFoundException unavailable=new FileNotFoundException("附件不存在或不可读取");unavailable.initCause(failure);throw unavailable;}
+    }
     @Override public Uri insert(Uri uri,ContentValues values){throw new UnsupportedOperationException("只读附件提供器");}
     @Override public int delete(Uri uri,String selection,String[] arguments){throw new UnsupportedOperationException("只读附件提供器");}
     @Override public int update(Uri uri,ContentValues values,String selection,String[] arguments){throw new UnsupportedOperationException("只读附件提供器");}

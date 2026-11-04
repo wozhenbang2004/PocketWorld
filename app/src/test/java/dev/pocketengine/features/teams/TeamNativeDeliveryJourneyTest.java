@@ -35,7 +35,7 @@ public final class TeamNativeDeliveryJourneyTest {
     private static JSONObject tool(String name,JSONObject args)throws Exception {return calls(new JSONArray().put(call(name,args)));}
     private static JSONObject text(String text)throws Exception {return new JSONObject().put("role","assistant").put("content",text);}
     private static JSONArray rows(JSONObject value,String key)throws Exception {JSONArray a=value.optJSONArray(key);return a==null?new JSONArray():a;}
-    private static final class Fixture implements AutoCloseable {
+    static final class Fixture implements AutoCloseable {
         final TaskStore tasks=new TaskStore(RuntimeEnvironment.getApplication());
         final TeamWorkFilesTest.Fixture files=new TeamWorkFilesTest.Fixture();
         final String run=id(),parent,parentRun;final ModelConfig model;final HttpServer server;

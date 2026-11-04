@@ -67,15 +67,24 @@ public final class BrowserProfileRegistry {
         next.getJSONArray("profiles").put(created);next.put("revision",revision);save(next);return visible(created);
     }
 
-    synchronized void select(String id,long expected,boolean supported)throws Exception {
+    /** Read-only owner preflight. The real mutation repeats this check under the same monitor. */
+    synchronized void checkSelect(String id,long expected,boolean supported)throws Exception {
         requireRevision(expected);JSONObject profile=required(id);requireActive(profile,supported);
+    }
+
+    synchronized void select(String id,long expected,boolean supported)throws Exception {
+        checkSelect(id,expected,supported);
         invalidateSession();JSONObject next=copy(state).put("selectedProfileId",id).put("revision",revision()+1);save(next);
     }
 
-    synchronized void requestDelete(String id,long expected,boolean supported)throws Exception {
+    synchronized void checkDelete(String id,long expected,boolean supported)throws Exception {
         requireRevision(expected);JSONObject current=required(id);
         if(!current.getString("status").equals("active"))throw new IllegalStateException("此资料已停用，请查看清理状态");
         if(!supported||!storage(current,supported).equals("androidx"))throw new UnsupportedOperationException("此资料不能按隔离Profile清除；未声称删除默认WebView数据");
+    }
+
+    synchronized void requestDelete(String id,long expected,boolean supported)throws Exception {
+        checkDelete(id,expected,supported);
         if(session!=null&&session.profileId.equals(id))invalidateSession();
         JSONObject next=copy(state);long revision=revision()+1;
         find(next,id).put("status","delete_pending").put("deletionDetail","pending_provider_cleanup").put("revision",revision).remove("ownerHistory");

@@ -110,6 +110,34 @@ class DeviceProtocolTests(unittest.TestCase):
                     with self.assertRaises(p.ProtocolError) as error:p.parse_request(p.canonical_bytes(row["message"]))
                     self.assertEqual(row["error"],error.exception.code)
 
+    def test_pair_grant_schema_covers_native_management_and_nested_receipts(self):
+        directory = Path(__file__).resolve().parents[1] / "protocol/device-v1"
+        schema = json.loads((directory / "schema.json").read_text())
+        onboarding = json.loads((directory / "onboarding-schema.json").read_text())
+        grant = copy.deepcopy(self.fixtures["pairingCommits"][0]["completion"]["grantReceipt"]["body"]["grant"])
+        if "operation.cancel" not in grant["capabilities"]:
+            grant["capabilities"].append("operation.cancel")
+        pairing.validate_grant(grant, grant["localDeviceId"], grant["peerDeviceId"], grant["issuedAt"])
+        capabilities = schema["$defs"]["PairGrant"]["properties"]["capabilities"]["items"]["enum"]
+        self.assertIn("operation.cancel", capabilities)
+        self.assertTrue(set(capabilities).issubset(p.METHODS))
+        self.assertTrue(set(grant["capabilities"]).issubset(capabilities))
+        self.assertNotIn("operation.unknown", capabilities)
+        self.assertEqual({"$ref": "#/$defs/PairGrant"}, schema["$defs"]["PairGrantReceipt"]["properties"]["body"]["properties"]["grant"])
+        self.assertEqual({"$ref": schema["$id"] + "#/$defs/PairGrant"}, onboarding["$defs"]["GrantReceipt"]["properties"]["body"]["properties"]["grant"])
+        self.assertEqual({"$ref": "#/$defs/GrantReceipt"}, onboarding["$defs"]["Completion"]["properties"]["grantReceipt"])
+
+    def test_shared_pairing_rejections_keep_authentic_fixture_signatures(self):
+        for row in self.fixtures["pairingCommits"]:
+            with self.subTest(row["name"]):
+                certificate = base64.b64decode(row["certificateDer"], validate=True)
+                completion = row["completion"]
+                pairing._verify_record_signature(certificate, completion["grantReceipt"], "PairGrantReceipt")
+                receipt = completion["pairingReceipt"]
+                if "commitReceipt" in receipt:
+                    pairing._verify_record_signature(certificate, receipt["commitReceipt"], "PairingCommitReceipt")
+                pairing._verify_confirmation_certificate(receipt["localConfirmation"], certificate, row["transcript"])
+
     def test_exact_target_resources_shared_corpus_forbids_cartesian_expansion(self):
         for row in self.fixtures["targetResourceScopes"]:
             with self.subTest(row["name"]):

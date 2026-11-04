@@ -3,8 +3,8 @@
   "protocolVersion": "1.0",
   "files": {
     "schema.json": {
-      "sha256": "0222ee6e5786d1a237f0bfc3ec3e814e4792317e9c5f1b8ded9375c0406d435d",
-      "bytes": 74042
+      "sha256": "3402a8423ed508cfaf680b7b1fb688f816de8a39d15a724cbd35ae37b4a3d9a8",
+      "bytes": 74076
     },
     "onboarding-schema.json": {
       "sha256": "bb90a84565660837fb89bd0b3158f8e268b42e65ec01d27bbb123c5b380be2b0",
@@ -97,5 +97,5 @@
     "resume": "request review at expectedRevision, original phone owner confirms reviewRevision; no new task/run/grant",
     "unknown": "query original operation only; never rewrite or replay original wire"
   },
-  "profileId": "pwp1_953641fabc7e4316996f69c2c3ac9b74db1a30f3750ee83adbfd95768730ae8b"
+  "profileId": "pwp1_cdf06c78390cb32246ba396f9ab45ca88a7d6964591fa25f69ccd605d0c8b2a6"
 }

@@ -1,4 +1,15 @@
 {
+  "attachment-legacy-integrity": {
+    "class": "dev.pocketengine.features.attachments.LegacyAttachmentIntegrityTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.attachments.AttachmentBookTest",
+      "dev.pocketengine.features.attachments.AttachmentRepositoryTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "linuxPosixFd": true,
+    "description": "Exact legacy module/export/provider bytes, pinned SHA, owner/group/retirement and quota tests. Requires Linux JDK17 with readable /proc/self/fd; the selected host-test JVM alone opens java.io and sun.nio.fs for the real POSIX dup fixture. No device, mounted UI or external-reader acceptance."
+  },
   "mika-skill-lifecycle": {
     "class": "dev.pocketengine.features.skills.NativeSkillExecutionHostTest",
     "additionalClasses": [
@@ -48,6 +59,20 @@
     "helpers": [],
     "robolectric": true,
     "description": "Exact original-source targeted tests; no complete Android, physical device, external service or UI acceptance."
+  },
+  "capability-approval-run-boundary": {
+    "class": "dev.pocketengine.store.CapabilityApprovalRunBoundaryTest",
+    "additionalClasses": [
+      "dev.pocketengine.CapabilityApprovalContinuationNativeTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original SQL and Engine approval decisions: old or missing runs are rejected, current exact decisions remain single use, late phone replacement and queued assistant pickup cannot continue a successor, and unresolved effects remain fenced. Current assistant pickup reaches its real same-task attempt and tool grant before an explicit pre-Runner fixture stop; current phone resumes only its original control. Only startup/presentation and service/executor boundaries are controlled, with a real empty native plugin host. No normal fresh-run full approval-loop, external model/tool, device or visual acceptance."
+  },
+  "capability-approval-ui-run-projection": {
+    "class": "dev.pocketengine.ui.CapabilityApprovalRunProjectionTest",
+    "helpers": [],
+    "description": "Exact pending-capability projection: only current nonempty-run unexpired pending rows are visible; old, missing, blank, expired and decided entries remain hidden. Saved/queued/blocked notices retain the actual receipt and the original team continuation boundary. No mounted Compose, Android device or visual acceptance."
   },
   "main-model-selection": {
     "class": "dev.pocketengine.store.SettingsMainSelectionTest",
@@ -176,7 +201,11 @@
     "class": "dev.pocketengine.browser.BrowserTaskHostAdmissionTest",
     "helpers": [],
     "robolectric": true,
-    "description": "Targeted original App/TaskStore monitor-order and same-run private-owner browser admission races; no model, device or renderer acceptance."
+    "description": "Targeted original App/TaskStore monitor-order and same-run private-owner browser admission races; no model, device or renderer acceptance. Read-only profile-change preflight, exact original research cancellation and honest post-stop CAS/persistence failures; metadata provider fixtures do not prove WebView support. Original native stop tickets pin displayed task/run/epoch and control/plan/space objects; delayed A cleanup cannot stop B. Controlled cross-caller scheduling, not a single-panel or device reproduction.",
+    "additionalClasses": [
+      "dev.pocketengine.browser.BrowserProfileChangePreflightTest",
+      "dev.pocketengine.browser.BrowserOriginalStopTest"
+    ]
   },
   "browser-expression": {
     "class": "dev.pocketengine.browser.BrowserPageProgramsTest",
@@ -1287,5 +1316,24 @@
     ],
     "robolectric": true,
     "description": "Original Application/Gateway/Book/source retirement and owner-channel HTTP/SSE/outbox paths. Exact physical-send and post-response checks, already-accepted QQ ACK preservation, cancellation and unknown-no-replay. Original approved schedule source transaction also covers its local notification dispatch; source deletion races and post-dispatch uncertainty retain the same occurrence. Controlled loopback endpoints and native notification shadows; no live provider/platform or phone acceptance."
+  },
+  "team-original-research-stop": {
+    "class": "dev.pocketengine.features.teams.TeamResearchOriginalStartNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.teams.TeamResearchOriginalGenerationTest",
+      "dev.pocketengine.features.teams.TeamResearchParentResourceStateTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Actual approved native research start through HostToolSupervisor/FeatureHost/Module/Coordinator/SQLite, delayed original callback versus explicit replacement generation, dynamic original child cancellation, physical-finally retention and existing durable unknown resource-state regression. Controlled research workers only; no model, remote, device or UI acceptance."
+  },
+  "attachment-export-picker-lifecycle": {
+    "class": "dev.pocketengine.ui.AttachmentExportPickerLifecycleTest",
+    "helpers": [],
+    "robolectric": true,
+    "description": "Real Activity launcher, original coordinator and SAF/repository bytes with controlled launch failures, reentry and saved-state fixtures. Does not establish real-device overlapping pickers or mounted UI acceptance.",
+    "additionalClasses": [
+      "dev.pocketengine.ui.AttachmentExportPickerRegistryTest"
+    ]
   }
 }

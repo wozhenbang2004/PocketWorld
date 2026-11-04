@@ -47,8 +47,28 @@ def select(registry, groups, classes):
     return chosen
 
 
+def check_posix_descriptor_fixture(entries):
+    """Bounded prerequisites for the explicitly selected Linux/JDK17 FD fixture."""
+    if not any(entry.get('linuxPosixFd', False) for entry in entries):
+        return
+    if sys.platform != 'linux':
+        raise PrerequisiteError('attachment-legacy-integrity requires Linux JDK17 POSIX descriptors and readable /proc/self/fd; not an Android/device test')
+    descriptor = None
+    try:
+        descriptor = os.open(os.devnull, os.O_RDONLY | os.O_CLOEXEC)
+        with os.scandir('/proc/self/fd') as entries:
+            next(entries, None)  # One bounded directory read, never a recursive scan.
+        os.readlink('/proc/self/fd/' + str(descriptor))
+    except OSError as error:
+        raise PrerequisiteError('attachment-legacy-integrity requires permission to read /proc/self/fd and its own descriptor links: ' + str(error)) from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def preflight(args, registry, groups):
     entries = [registry[group] for group in groups]
+    check_posix_descriptor_fixture(entries)
     if any(entry.get('nativeCompiler', False) for entry in entries):
         executable(os.environ.get('CC', 'cc'), 'C compiler for the native CLI protocol fixture')
     java_home = args.java_home or os.environ.get('JAVA_HOME')
@@ -211,6 +231,7 @@ def main(argv=None):
         'Requirements: JDK 17; SDK 35/build-tools 35.0.0 and the declared NDK 28.2.13676358 '
         'for AGP configuration. managed-runtime additionally needs Linux, C++17/JNI headers, '
         '/bin/sh, Python 3.8+ and Node.js; gateway-continuation needs Python 3.11+ and CC/cc for its native CLI fixture. '
+        'attachment-legacy-integrity additionally needs Linux and readable /proc/self/fd for its scoped JDK17 POSIX fixture. '
         'Robolectric offline groups need the pinned SDK 35 jar. '
         'See --list for exact registered classes and scope. Results: a unique run directory '
         'with invocation/selection, exact locked classpath, JUnit XML and result.json; '

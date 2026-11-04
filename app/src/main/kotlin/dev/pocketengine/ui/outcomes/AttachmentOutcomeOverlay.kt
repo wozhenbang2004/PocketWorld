@@ -123,7 +123,7 @@ private fun OutcomeFileDetail(file:JSONObject,state:AttachmentOutcomeState,flow:
     Text(if(state.group!=null)"文件属于原群任务与原受众，保持在群文件空间。打开或导出不会发送群消息。"else if(file.optString("sourceKind")=="document_extract")"这是当前已读范围的文字摘录，带有原文件版本、来源定位和读取说明。原文件与尚未读取的后续内容分别保留。"else "这是实际保存的文件。预览和文档提取用于查看来源；内容是否达到目标仍由原任务的证据核对。",color=SecondaryInk,fontSize=13.sp,lineHeight=22.sp)
     Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
         Button(onClick=flow::openOriginalFile,enabled=!state.busy){Text("查看原件")}
-        OutlinedButton(onClick=flow::prepareExport,enabled=!state.busy){Text("导出到手机")}
+        OutlinedButton(onClick=flow::prepareExport,enabled=!state.busy&&!flow.exportPending){Text("导出到手机")}
     }
     Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
         TextButton(onClick=flow::openExternal,enabled=!state.busy){Text("用其他应用打开")}

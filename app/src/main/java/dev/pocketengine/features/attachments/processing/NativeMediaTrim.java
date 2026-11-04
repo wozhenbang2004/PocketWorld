@@ -11,20 +11,20 @@ import java.util.*;
 import org.json.*;
 
 /** Platform extractor/muxer remux, never an arbitrary ffmpeg/shell command. Original bytes are
- * copied to a dedicated immutable input before codecs see them. Sync-frame approximation is
+ * copied to a dedicated immutable input before codecs see them. Sample-boundary approximation (video sync sample or audio sample) is
  * displayed in the review and receipt; no sample/frame-accurate transcode claim. */
 public final class NativeMediaTrim {
     public static final class Review {
         private final OwnerFilePreviewSource source;private final JSONObject metadata;
         public final long requestedStartUs,requestedEndUs,actualStartUs,durationUs;public final String identity;
         private Review(OwnerFilePreviewSource source,long start,long end,long actual,long duration,JSONArray tracks)throws Exception{
-            this.source=source;requestedStartUs=start;requestedEndUs=end;actualStartUs=actual;durationUs=duration;metadata=new JSONObject().put("format","pocketworld.media-trim.v1").put("sourceIdentity",source.identity).put("sourceSha256",source.sha256).put("requestedStartUs",start).put("requestedEndUs",end).put("actualStartUs",actual).put("sourceDurationUs",duration).put("tracks",tracks).put("outputContainer","mp4").put("transcoding",false).put("startAlignment","previous_video_sync_sample").put("endAlignment","last_sample_before_requested_end").put("allOriginalBytesRetained",true);identity=ProjectSources.digest(metadata);
+            this.source=source;requestedStartUs=start;requestedEndUs=end;actualStartUs=actual;durationUs=duration;metadata=new JSONObject().put("format","pocketworld.media-trim.v1").put("sourceIdentity",source.identity).put("sourceSha256",source.sha256).put("requestedStartUs",start).put("requestedEndUs",end).put("actualStartUs",actual).put("sourceDurationUs",duration).put("tracks",tracks).put("outputContainer","mp4").put("transcoding",false).put("startAlignment",startAlignment(tracks)).put("endAlignment","last_sample_before_requested_end").put("allOriginalBytesRetained",true);identity=ProjectSources.digest(metadata);
         }
         public JSONObject metadata()throws Exception{return ProjectSources.copy(metadata).put("planDigest",identity);}
         public OwnerFilePreviewSource source(){return source;}
     }
     private NativeMediaTrim(){}
-    public static JSONObject inspect(OwnerFilePreviewSource source,File privateCache,RunControl control)throws Exception{try(var budget=OriginalFileProcessingBudget.acquire(control);var original=new Original(source,privateCache,control)){MediaExtractor extractor=new MediaExtractor();try{extractor.setDataSource(original.file.getAbsolutePath());JSONArray tracks=tracks(extractor);long duration=0;for(int i=0;i<tracks.length();i++)duration=Math.max(duration,tracks.getJSONObject(i).getLong("durationUs"));source.requireCurrent(control);return new JSONObject().put("sourceIdentity",source.identity).put("sha256",source.sha256).put("durationMillis",duration/1000).put("tracks",tracks).put("editable",duration<=600_000_000L).put("transcoding",false);}finally{extractor.release();}}}
+    public static JSONObject inspect(OwnerFilePreviewSource source,File privateCache,RunControl control)throws Exception{try(var budget=OriginalFileProcessingBudget.acquire(control);var original=new Original(source,privateCache,control)){MediaExtractor extractor=new MediaExtractor();try{extractor.setDataSource(original.file.getAbsolutePath());JSONArray tracks=tracks(extractor);long duration=0;for(int i=0;i<tracks.length();i++)duration=Math.max(duration,tracks.getJSONObject(i).getLong("durationUs"));source.requireCurrent(control);return new JSONObject().put("sourceIdentity",source.identity).put("sha256",source.sha256).put("durationMillis",duration/1000).put("tracks",tracks).put("startAlignment",startAlignment(tracks)).put("editable",duration<=600_000_000L).put("transcoding",false);}finally{extractor.release();}}}
     public static Review review(OwnerFilePreviewSource source,long startMillis,long endMillis,File privateCache,RunControl control)throws Exception{
         if(startMillis<0||endMillis<=startMillis||endMillis-startMillis>120000||endMillis>600000)throw new IllegalArgumentException("本机无损重封装截取最多2分钟，来源最多10分钟；结束需晚于开始，未重编码或修改原件");
         try(var budget=OriginalFileProcessingBudget.acquire(control);var original=new Original(source,privateCache,control)){
@@ -34,7 +34,7 @@ public final class NativeMediaTrim {
         }
     }
     public static ProcessedOriginalFile execute(Review review,File privateCache,RunControl control)throws Exception{
-        if(review==null)throw new SecurityException("请先核对原文件与实际同步帧起点");
+        if(review==null)throw new SecurityException("请先核对原文件与实际样本起点");
         try(var budget=OriginalFileProcessingBudget.acquire(control);var original=new Original(review.source,privateCache,control)){
             File output=File.createTempFile("trim-output-",".mp4",original.directory);MediaExtractor extractor=new MediaExtractor();MediaMuxer muxer=null;boolean started=false,stopped=false;int samples=0;long first=Long.MAX_VALUE,last=-1;int videos=0;Set<Integer> videoSeen=new HashSet<>();
             try{
@@ -52,6 +52,14 @@ public final class NativeMediaTrim {
     }
     private static JSONArray tracks(MediaExtractor actual)throws Exception{
         if(actual.getDrmInitData()!=null||actual.getPsshInfo()!=null&&!actual.getPsshInfo().isEmpty())throw new SecurityException("受保护媒体不能重封装");int count=actual.getTrackCount();if(count<1||count>4)throw new IllegalArgumentException("当前支持1至4个真实媒体轨道");JSONArray result=new JSONArray();for(int i=0;i<count;i++){MediaFormat f=actual.getTrackFormat(i);String mime=f.getString(MediaFormat.KEY_MIME);if(!Set.of("video/avc","video/hevc","audio/mp4a-latm").contains(mime)||!f.containsKey(MediaFormat.KEY_DURATION)||f.getLong(MediaFormat.KEY_DURATION)<=0)throw new IllegalArgumentException("当前支持MP4中的H.264/H.265与AAC；不静默丢弃字幕、额外数据、未知或无时长轨道");JSONObject track=new JSONObject().put("index",i).put("mimeType",mime).put("durationUs",f.getLong(MediaFormat.KEY_DURATION));for(String key:new String[]{MediaFormat.KEY_WIDTH,MediaFormat.KEY_HEIGHT,MediaFormat.KEY_SAMPLE_RATE,MediaFormat.KEY_CHANNEL_COUNT,MediaFormat.KEY_ROTATION})if(f.containsKey(key))track.put(key,f.getInteger(key));result.put(track);}return result;
+    }
+    private static String startAlignment(JSONArray tracks)throws Exception{
+        for(int i=0;i<tracks.length();i++)if(tracks.getJSONObject(i).getString("mimeType").startsWith("video/"))return "previous_video_sync_sample";
+        return "previous_audio_sample";
+    }
+    /** Present only the inspected/reviewed alignment; unknown receipts do not imply video. */
+    public static String startAlignmentLabel(JSONObject metadata){
+        return switch(metadata.optString("startAlignment")){case "previous_video_sync_sample"->"视频同步帧";case "previous_audio_sample"->"音频样本";default->"媒体样本";};
     }
     private static final class Original implements AutoCloseable {
         final File file,directory;
