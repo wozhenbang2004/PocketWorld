@@ -31,6 +31,9 @@ public final class RemoteAssignmentWorkspaces {
     public Selection captureProjectSelection(JSONObject nativeReviewedMember,dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen originalPackage,JSONObject nativeCommandScope)throws Exception {return new Selection(RemoteProjectAssignments.capture(module,nativeReviewedMember,originalPackage,nativeCommandScope));}
     /** Native UI/captured project files only. Selection evidence never dispatches or reserves a job. */
     public Selection captureSelection(TaskStore tasks,String sourceTask,String snapshotId,String profileId,String environmentId,JSONArray nativeFiles,JSONObject limits,String model,boolean billingAcknowledged)throws Exception {
+        return captureSelection(tasks,sourceTask,snapshotId,profileId,environmentId,nativeFiles,limits,model,billingAcknowledged,"codex_app_server","",false);
+    }
+    public Selection captureSelection(TaskStore tasks,String sourceTask,String snapshotId,String profileId,String environmentId,JSONArray nativeFiles,JSONObject limits,String model,boolean billingAcknowledged,String worker,String modeId,boolean executionAcknowledged)throws Exception {
         if(!billingAcknowledged)throw new SecurityException("请明确确认独立远端job授权：内部模型次数/token/费用不能硬限");validateLimits(limits);
         JSONObject snapshot=tasks.remoteResultSnapshot(sourceTask,snapshotId),source=snapshot.getJSONObject("source");String binding=module.profileBindingHash(profileId);JSONObject profile=module.requireProfileBinding(profileId,binding);
         if(!profileId.equals(source.getString("profileId"))||!profile.getString("serviceBase").equals(source.getString("serviceBase"))||!environmentId.equals(source.getString("environmentId")))throw new SecurityException("请选择原成果的同一电脑与环境；不导入任意host文件");
@@ -38,19 +41,22 @@ public final class RemoteAssignmentWorkspaces {
         if(!environment.optString("kind","local").equals("local")||!environment.optBoolean("writeAllowed")||environment.optJSONObject("assignmentWorkspaceCapabilities")==null||!environment.getJSONObject("assignmentWorkspaceCapabilities").optBoolean("copySupported")||!environment.getJSONObject("assignmentWorkspaceCapabilities").optString("protocol").equals("selected_files_v1"))throw new SecurityException("当前仅支持明确允许写的POSIX本地Companion所选文件副本");String generation=environment.getString("bindingHash");
         JSONArray paths=new JSONArray(),manifest=snapshot.getJSONArray("files");for(int i=0;i<nativeFiles.length();i++){JSONObject file=nativeFiles.getJSONObject(i),found=null;paths.put(file.getString("path"));for(int j=0;j<manifest.length();j++)if(file.getString("path").equals(manifest.getJSONObject(j).getString("path")))found=manifest.getJSONObject(j);if(found==null||!file.getString("baseHash").equals(found.getString("sha256"))||file.getInt("baseVersion")<0)throw new SecurityException("原项目实际base与远端冻结文件字节不同，不能冒充同一基线");}RemoteResultSnapshots.paths(paths);
         for(int i=0;i<paths.length();i++){String path=paths.getString(i);JSONObject bytes=module.readResultSnapshot(new JSONObject(source.toString()).put("profileId",profileId).put("_profileBinding",binding).put("snapshotId",snapshotId).put("snapshotVersion",snapshot.getString("snapshotVersion")).put("path",path));if(!RemoteResultSnapshots.file(bytes,snapshot,path).optString("preview").equals("utf8_text"))throw new SecurityException("本片只支持明确所选既有UTF-8文字文件，不能把二进制/Git项目冒作制作基线");}
-        JSONObject probeInput=new JSONObject(query.toString()).put("environmentId",environmentId).put("environmentBinding",generation).put("worker","codex_app_server");if(model!=null&&!model.trim().isEmpty())probeInput.put("model",model);JSONObject probe=module.handle("probeWorker",probeInput);
-        if(!probe.optBoolean("available")||!probe.optBoolean("protocolVerified")||!probe.optBoolean("accountConfigured")||!probe.optBoolean("selectedModelAvailable"))throw new SecurityException("原执行器尚未确认可用账号/模型/协议；没有开启推理");
+        if(!worker.equals("codex_app_server"))RemoteTaskRequest.environment(new JSONObject().put("environments",new JSONArray().put(environment)),environmentId,worker);
+        RemoteHarnessSelection.requireProductionWorker(environment,"assignmentWorkspaceCapabilities",worker);
+        JSONObject probeInput=new JSONObject(query.toString()).put("environmentId",environmentId).put("environmentBinding",generation).put("worker",worker);if(model!=null&&!model.trim().isEmpty())probeInput.put("model",model);if(modeId!=null&&!modeId.isEmpty())probeInput.put("modeId",modeId);JSONObject probe=module.handle("probeWorker",probeInput);
         module.requireProfileBinding(profileId,binding);if(!generation.equals(findEnvironment(module.handle("environments",query),environmentId).getString("bindingHash")))throw new SecurityException("选择期间远端环境generation已变化");
         JSONObject selected=new JSONObject().put("profileId",profileId).put("profileGeneration",binding).put("serviceBase",profile.getString("serviceBase")).put("environmentId",environmentId).put("environmentGeneration",generation).put("environmentBinding",generation)
                 .put("sourceTaskId",sourceTask).put("sourceJobId",snapshot.getString("jobId")).put("snapshotId",snapshotId).put("snapshotVersion",snapshot.getString("snapshotVersion")).put("files",new JSONArray(nativeFiles.toString())).put("limits",new JSONObject(limits.toString()))
-                .put("worker","codex_app_server").put("assignmentWorkspaceCapabilities",new JSONObject(environment.getJSONObject("assignmentWorkspaceCapabilities").toString())).put("internalInferenceBillingUnboundedAcknowledged",true).put("mode","selected_file_copy_not_git_project").put("fullProject",false).put("osReadIsolationVerified",false).put("commandAllowlistEnforced",false).put("probeReceiptHash",TaskStore.capabilityFingerprint(probe)).put("capturedAt",System.currentTimeMillis());
+                .put("worker",worker).put("assignmentWorkspaceCapabilities",new JSONObject(environment.getJSONObject("assignmentWorkspaceCapabilities").toString())).put("internalInferenceBillingUnboundedAcknowledged",true).put("mode","selected_file_copy_not_git_project").put("fullProject",false).put("osReadIsolationVerified",false).put("commandAllowlistEnforced",false).put("probeReceiptHash",TaskStore.capabilityFingerprint(probe)).put("capturedAt",System.currentTimeMillis());
+        RemoteHarnessSelection.bindProduction(probe,selected,worker,executionAcknowledged);if(modeId!=null&&!modeId.isEmpty())selected.put("modeId",modeId);
         if(model!=null&&!model.trim().isEmpty())selected.put("model",model);return new Selection(selected);
     }
     /** Owner-only V2 source. Probe and immutable reads confer no job, approval or budget. */
     public Selection captureRevisionSelection(TaskStore tasks,TaskStore.TeamRemoteRevisionSource source,JSONArray actualFiles)throws Exception {
         source.checkCurrent();JSONObject facts=source.view(),old=facts.getJSONObject("originalSelection");
         if(!canonical(actualFiles).equals(canonical(facts.getJSONArray("appliedHeads"))))throw new SecurityException("手机当前成果已偏离原整合准确版本，请重新审查；不沿旧远端base覆盖");
-        Selection selected=captureSelection(tasks,facts.getString("sourceTaskId"),facts.getString("snapshotId"),old.getString("profileId"),old.getString("environmentId"),actualFiles,old.getJSONObject("limits"),old.optString("model"),true);
+        Selection selected=captureSelection(tasks,facts.getString("sourceTaskId"),facts.getString("snapshotId"),old.getString("profileId"),old.getString("environmentId"),actualFiles,old.getJSONObject("limits"),old.optString("model"),true,old.optString("worker","codex_app_server"),old.optString("modeId"),old.optBoolean("externalExecutionRiskAcknowledged"));
+        for(String key:new String[]{"worker","model","modeId","harnessSelection"})if(!canonical(selected.view().opt(key)).equals(canonical(old.opt(key))))throw new SecurityException("原制作 Harness 配置已变化，请重新核对新范围");
         source.checkCurrent();return selected;
     }
     /** Full-project V2 reuses the original work-item revision authority and the phone integrator's
@@ -68,14 +74,14 @@ public final class RemoteAssignmentWorkspaces {
         for(int i=0;i<affected.length();i++){JSONObject item=affected.getJSONObject(i);if(item.optJSONObject("remoteSelection")==null)continue;JSONArray expected=new JSONArray(),heads=item.getJSONArray("appliedHeads");for(int f=0;f<heads.length();f++){JSONObject head=heads.getJSONObject(f);expected.put(new JSONObject().put("path",head.getString("path")).put("baseVersion",head.getInt("version")).put("baseHash",head.getString("sha256")));}if(canonical(expected).equals(canonical(actualFiles))){if(target!=null)throw new SecurityException("多个原工作项匹配此基线，请按原计划明确选择");target=item;}}
         if(target==null)throw new SecurityException("V2原工作项或准确手机head不匹配");JSONObject old=target.getJSONObject("remoteSelection");if(!RemoteProjectAssignments.full(old))throw new SecurityException("不能把旧所选文件副本默升完整项目命令权限");
         JSONObject scope=new JSONObject(nativeCommandScope.toString());if(!canonical(scope.getJSONArray("files")).equals(canonical(actualFiles))||!canonical(scope.getJSONObject("limits")).equals(canonical(old.getJSONObject("limits"))))throw new SecurityException("本修订不能静默改变原文件范围或job限制");
-        JSONObject member=new JSONObject().put("device",new JSONObject().put("profileId",old.getString("profileId")).put("environmentId",old.getString("environmentId"))).put("model",old.optString("model"));Selection captured=captureProjectSelection(member,originalPackage,scope);JSONObject selected=captured.view();
-        for(String key:new String[]{"profileId","serviceBase","environmentId","worker","model"})if(!canonical(selected.opt(key)).equals(canonical(old.opt(key))))throw new SecurityException("原远端连接/环境/worker/模型已变化，不能沿旧修订审阅替换");
+        JSONObject member=new JSONObject().put("device",new JSONObject().put("profileId",old.getString("profileId")).put("environmentId",old.getString("environmentId"))).put("model",old.optString("model")).put("runner",old.optString("worker","codex_app_server")).put("modeId",old.optString("modeId")).put("externalExecutionRiskAcknowledged",old.optBoolean("externalExecutionRiskAcknowledged"));Selection captured=captureProjectSelection(member,originalPackage,scope);JSONObject selected=captured.view();
+        for(String key:new String[]{"profileId","serviceBase","environmentId","worker","model","modeId","harnessSelection"})if(!canonical(selected.opt(key)).equals(canonical(old.opt(key))))throw new SecurityException("原远端连接/环境/worker/模型已变化，不能沿旧修订审阅替换");
         tasks.checkTeamRemoteProjectRevisionSource(source);return captured;
     }
     private static JSONObject findEnvironment(JSONObject list,String id)throws Exception {JSONArray environments=list.getJSONArray("environments");for(int i=0;i<environments.length();i++){JSONObject value=environments.getJSONObject(i);if(id.equals(value.optString("id")))return value;}throw new SecurityException("原选定environment不存在");}
     public static void validateLimits(JSONObject value)throws Exception {
         java.util.Set<String> allowed=new java.util.HashSet<>(java.util.Arrays.asList("maxWallTimeSeconds","maxOutputBytes","maxContributionBytes","hardTokenLimit","hardCostLimit"));java.util.Iterator<String> keys=value.keys();while(keys.hasNext())if(!allowed.contains(keys.next()))throw new SecurityException("未支持的远端job硬限");
-        if(value.has("hardTokenLimit")&&!value.isNull("hardTokenLimit")||value.has("hardCostLimit")&&!value.isNull("hardCostLimit"))throw new SecurityException("Codex内部模型token/费用没有硬cap，不能承接此硬限");
+        if(value.has("hardTokenLimit")&&!value.isNull("hardTokenLimit")||value.has("hardCostLimit")&&!value.isNull("hardCostLimit"))throw new SecurityException("执行器内部模型token/费用没有已验证硬限，不能承接此硬限");
         String[] names={"maxWallTimeSeconds","maxOutputBytes","maxContributionBytes"};int[] lows={10,1024,1024},highs={900,196608,524288};for(int i=0;i<names.length;i++){Object raw=value.get(names[i]);if(!(raw instanceof Integer||raw instanceof Long)||((Number)raw).longValue()<lows[i]||((Number)raw).longValue()>highs[i])throw new SecurityException("原external_job界限无效: "+names[i]);}
     }
     public static final class Preparation {
@@ -86,6 +92,7 @@ public final class RemoteAssignmentWorkspaces {
     }
     public static final class Execution {
         private final RemoteAssignmentWorkspaces issuer;private final TaskStore.TeamRemoteContext context;private final TaskStore.TeamRemoteClaim claim;
+        private final java.util.Map<String,String> teamAnswers=new java.util.LinkedHashMap<>(),teamRequests=new java.util.LinkedHashMap<>();
         private Execution(RemoteAssignmentWorkspaces issuer,TaskStore.TeamRemoteContext context,TaskStore.TeamRemoteClaim claim){this.issuer=issuer;this.context=context;this.claim=claim;}
         public JSONObject view()throws Exception{return claim.view();}
     }
@@ -123,6 +130,25 @@ public final class RemoteAssignmentWorkspaces {
         else actual=module.handle("getJob",input.put("jobId",view.getString("jobId")).put("jobOperationId",view.getString("jobOperationId")));
         host.checkOriginalRead(execution.context);host.record(original,actual);return actual;
     }
+    /** Replies through the original live assignment callback; a restored unknown job gains no new sender. */
+    public void deliverTeamTools(NativeHost host,Execution execution,JSONObject actual,dev.pocketengine.features.teams.TeamCoordinator.AssignmentCall call)throws Exception {
+        check(host,execution);call.checkCurrent();JSONArray pending=actual.optJSONArray("pendingTeamTools");if(pending==null||pending.length()==0)return;
+        if(pending.length()>16)throw new SecurityException("原制作团队工具队列超出边界");
+        JSONObject expected=call.teamContext();if(actual.optJSONObject("teamContext")==null||!canonical(expected).equals(canonical(actual.getJSONObject("teamContext"))))return;
+        JSONObject input=wire(execution.claim.view()).put("jobId",actual.getString("id")).put("jobOperationId",actual.getString("operationId")).put("serviceBase",actual.getString("serviceBase"));
+        for(int i=0;i<pending.length();i++){
+            call.checkCurrent();host.checkExecutionCurrent(host.context());JSONObject request=pending.getJSONObject(i);String id=request.getString("requestId"),name=request.getString("name");JSONObject arguments=request.getJSONObject("arguments");
+            if(id.isEmpty()||id.length()>160||!name.matches("team_send_message|team_read_messages|team_list_members")||arguments.toString().length()>4096)throw new SecurityException("原制作团队工具请求无效");
+            String fingerprint=canonical(new JSONObject().put("name",name).put("arguments",arguments)),previous=execution.teamRequests.get(id);
+            if(previous!=null&&!previous.equals(fingerprint))throw new SecurityException("原团队工具请求编号已绑定另一内容");
+            if(!execution.teamAnswers.containsKey(id)){
+                if(execution.teamAnswers.size()>=128)throw new SecurityException("本次原job团队工具回执已达到上限");
+                JSONObject answer=call.callTeamTool(id,name,arguments);execution.teamRequests.put(id,fingerprint);execution.teamAnswers.put(id,answer.toString());
+            }
+            call.checkCurrent();host.checkExecutionCurrent(host.context());
+            try{module.answerTeamTool(new JSONObject(input.toString()).put("requestId",id).put("result",new JSONObject(execution.teamAnswers.get(id))));}catch(java.io.IOException uncertain){return;}
+        }
+    }
     public JSONObject cancel(NativeHost host,Execution execution,String preparedOperation,RunControl original)throws Exception {
         check(host,execution);JSONObject scope=executionScope(host,execution).put("arguments",new JSONObject());TaskStore.TeamRemoteClaim claim=host.claim(TaskStore.TeamRemoteAction.CANCEL,preparedOperation,scope,original);if(!claim.canDispatch())return claim.view();JSONObject input=wire(claim.view());JSONObject actual;
         try{actual=module.cancelAssignmentJob(claim,()->host.beforeDispatch(claim,original));}catch(java.io.IOException unavailable){actual=notice(input,"unknown");}host.record(claim,actual);return actual;
@@ -157,6 +183,7 @@ public final class RemoteAssignmentWorkspaces {
     private void check(NativeHost host,Execution value)throws Exception {if(value==null||value.issuer!=this)throw new SecurityException("原execution来源不符");host.checkOriginalRead(value.context);sameScope(host.context().view(),value.context.view());}
     private void check(NativeHost host,Contribution value)throws Exception {if(value==null||value.issuer!=this)throw new SecurityException("原贡献来源不符");host.checkOriginalRead(value.context);sameScope(host.context().view(),value.context.view());}
     private static void sameScope(JSONObject current,JSONObject original)throws Exception {
+        for(String key:new String[]{"worker","model","modeId","harnessSelection"})if(!canonical(current.opt(key)).equals(canonical(original.opt(key))))throw new SecurityException("原制作 Harness 配置已变化");
         for(String key:new String[]{"ownerScopeId","ownerScopeRevision","profileId","profileGeneration","serviceBase","environmentId","environmentGeneration","files","limits","targetProjectId"})if(!canonical(current.get(key)).equals(canonical(original.get(key))))throw new SecurityException("新attempt不是原assignment已批scope");
         if(RemoteProjectAssignments.full(current)!=RemoteProjectAssignments.full(original))throw new SecurityException("制作模式已变化，旧job不能借权");for(String key:RemoteProjectAssignments.baseFields(current))if(!canonical(current.get(key)).equals(canonical(original.get(key))))throw new SecurityException("原项目/快照base已变化");
         for(String key:new String[]{"taskId","parentTaskId","parentRunId","parentEpoch","teamRunId","assignmentId","assignmentRevision","memberId"})if(!canonical(current.getJSONObject("nativeAssignment").get(key)).equals(canonical(original.getJSONObject("nativeAssignment").get(key))))throw new SecurityException("原制作改派/改版/换parent，旧成果只读");

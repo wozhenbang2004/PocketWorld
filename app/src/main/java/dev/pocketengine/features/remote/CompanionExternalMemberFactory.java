@@ -14,7 +14,7 @@ public final class CompanionExternalMemberFactory implements ExternalMemberFacto
     public interface CommandPort {JSONObject call(String command,JSONObject input)throws Exception;}
     private final CommandPort remote;
     private final ExternalChildJournal journal;
-    public CompanionExternalMemberFactory(RemoteModule remote,ExternalChildJournal journal){this(remote::handle,journal);}
+    public CompanionExternalMemberFactory(RemoteModule remote,ExternalChildJournal journal){this((command,input)->command.equals("answerTeamTool")?remote.answerTeamTool(input):remote.handle(command,input),journal);}
     public CompanionExternalMemberFactory(CommandPort remote,ExternalChildJournal journal){this.remote=Objects.requireNonNull(remote);this.journal=Objects.requireNonNull(journal);}
 
     @Override public ExternalMemberDriver forSlot(JSONObject slot)throws Exception {
@@ -25,21 +25,25 @@ public final class CompanionExternalMemberFactory implements ExternalMemberFacto
         private final JSONObject slot,binding;
         private JSONObject lastProbe;
         private long probeAt;
+        private final java.util.Map<String,String> teamAnswers=new java.util.LinkedHashMap<>(),teamRequests=new java.util.LinkedHashMap<>();
         Member(JSONObject slot)throws Exception {
-            if(!slot.optString("runner").matches("codex_app_server|claude"))throw new UnsupportedOperationException("该团队成员没有已实现的原生协议适配器");
-            if(slot.optString("runner").equals("claude")&&!Boolean.TRUE.equals(slot.opt("externalExecutionRiskAcknowledged")))throw new SecurityException("Claude成员尚未确认非OS沙箱与账号/费用边界");
+            if(!RemoteHarnessSelection.isTeamWorker(slot.optString("runner")))throw new UnsupportedOperationException("该团队成员没有已实现的原生协议适配器");
+            if(!slot.optString("runner").equals("codex_app_server")&&!Boolean.TRUE.equals(slot.opt("externalExecutionRiskAcknowledged")))throw new SecurityException("外部成员尚未确认实际工具权限与账号/费用边界");
             identifier(slot,"id");JSONObject device=slot.getJSONObject("device");
             binding=new JSONObject().put("profileId",identifier(device,"profileId")).put("environmentId",identifier(device,"environmentId"))
                     .put("worker",slot.getString("runner"));
-            if(slot.getString("runner").equals("claude"))binding.put("teamReadOnlyTools",true).put("externalExecutionRiskAcknowledged",true);else binding.put("readOnly",true);
+            if(slot.getString("runner").equals("claude"))binding.put("teamReadOnlyTools",true).put("externalExecutionRiskAcknowledged",true);
+            else if(slot.getString("runner").equals("codex_app_server"))binding.put("readOnly",true);
+            else binding.put("readOnly",false).put("externalExecutionRiskAcknowledged",true);
             if(!slot.optString("model").isEmpty())binding.put("model",text(slot,"model",200));
+            if(!slot.optString("modeId").isEmpty())binding.put("modeId",text(slot,"modeId",200));
             this.slot=slot;
         }
         private void verify(JSONObject supplied)throws Exception {
             if(!slot.optString("id").equals(supplied.optString("id"))||!slot.optString("runner").equals(supplied.optString("runner")))throw new SecurityException("团队成员身份已改变");
             JSONObject device=supplied.getJSONObject("device");
             if(!binding.getString("profileId").equals(device.optString("profileId"))||!binding.getString("environmentId").equals(device.optString("environmentId"))
-                    ||!slot.optString("model").equals(supplied.optString("model"))||slot.optBoolean("externalExecutionRiskAcknowledged")!=supplied.optBoolean("externalExecutionRiskAcknowledged"))throw new SecurityException("团队执行环境或模型已改变");
+                    ||!slot.optString("model").equals(supplied.optString("model"))||!slot.optString("modeId").equals(supplied.optString("modeId"))||slot.optBoolean("externalExecutionRiskAcknowledged")!=supplied.optBoolean("externalExecutionRiskAcknowledged"))throw new SecurityException("团队执行环境或模型已改变");
         }
         @Override public JSONObject probe(JSONObject supplied,RunControl control)throws Exception {
             verify(supplied);control.check();if(control.isPaused())throw new InterruptedException("团队成员已暂停");
@@ -47,15 +51,22 @@ public final class CompanionExternalMemberFactory implements ExternalMemberFacto
             JSONObject selected=null;JSONArray rows=directory.getJSONArray("environments");for(int i=0;i<rows.length();i++)if(binding.getString("environmentId").equals(rows.getJSONObject(i).optString("id")))selected=rows.getJSONObject(i);
             if(selected==null||!selected.optString("bindingHash").matches("[a-f0-9]{64}"))throw new SecurityException("原电脑环境没有可核对的配置绑定，未启动Harness");
             binding.put("environmentBinding",selected.getString("bindingHash"));
-            JSONObject result=remote.call("probeWorker",copy(binding));control.check();result.put("environmentBinding",selected.getString("bindingHash")).put("workspace",selected.optString("workspace")).put("executionKind",selected.optString("kind")).put("sessionPersistence","resume_original_settled_job").put("processReuse",false);lastProbe=copy(result);probeAt=System.nanoTime();return result;
+            if(RemoteHarnessSelection.isGenericWorker(binding.getString("worker")))RemoteTaskRequest.environment(directory,binding.getString("environmentId"),binding.getString("worker"));
+            JSONObject result=remote.call("probeWorker",copy(binding));control.check();
+            if(RemoteHarnessSelection.isGenericWorker(binding.getString("worker"))&&result.optBoolean("available"))binding.put("harnessSelection",RemoteHarnessSelection.fromProbe(result,binding.getString("worker")));
+            result.put("environmentBinding",selected.getString("bindingHash")).put("workspace",selected.optString("workspace")).put("executionKind",selected.optString("kind")).put("sessionPersistence","resume_original_settled_job").put("processReuse",false);lastProbe=copy(result);probeAt=System.nanoTime();return result;
         }
         @Override public JSONObject execute(JSONObject request,RunControl control,Consumer<JSONObject> events)throws Exception {
+            return execute(request,control,events,null);
+        }
+        @Override public JSONObject execute(JSONObject request,RunControl control,Consumer<JSONObject> events,TeamBridge bridge)throws Exception {
             verify(request.getJSONObject("slot"));
             if(!slot.getString("id").equals(request.optString("memberId")))throw new SecurityException("请求不属于绑定成员");
             text(request,"hostTaskId",80);text(request,"runId",80);identifier(request,"operationId");
             if(request.optInt("round")<1||request.optInt("generation")<0)throw new IllegalArgumentException("成员轮次或执行代次无效");
             control.check();if(control.isPaused())throw new InterruptedException("团队成员已暂停");
             long pauseRevision=control.pauseRevision();
+            if(RemoteHarnessSelection.isGenericWorker(binding.getString("worker")))binding.put("harnessSelection",RemoteHarnessSelection.checked(request.optJSONObject("harnessSelection"),binding.getString("worker")));
             JSONObject link=journal.prepare(copy(request),copy(binding));
             String operation=identifier(link,"operationId");text(link,"taskId",80);
             if(!(link.opt("knownOperation") instanceof Boolean))throw new SecurityException("宿主缺少操作登记回执");
@@ -71,12 +82,15 @@ public final class CompanionExternalMemberFactory implements ExternalMemberFacto
                     catch(InterruptedException stopped){return save(link,cancelled(operation),events);}
                     catch(IOException unavailable){return save(link,new JSONObject().put("operationId",operation).put("status","blocked").put("message","无法探测所选Harness能力；未提交任务"),events);}
                     JSONObject caps=capability.optJSONObject("capabilities");
-                    boolean claude=binding.getString("worker").equals("claude");
-                    if(!capability.optBoolean("available")||(claude?!capability.optBoolean("cliFlagsVerified"):!capability.optBoolean("protocolVerified")||!capability.optBoolean("accountConfigured")||!capability.optBoolean("configReadVerified")||caps==null||!caps.optBoolean("readOnlySandbox"))){
+                    boolean claude=binding.getString("worker").equals("claude"),generic=RemoteHarnessSelection.isGenericWorker(binding.getString("worker")),pi=binding.getString("worker").equals("pi");
+                    boolean ready=generic?capability.optBoolean("protocolVerified"):pi?capability.optBoolean("protocolVerified")&&capability.optBoolean("noTools"):claude?capability.optBoolean("cliFlagsVerified"):capability.optBoolean("protocolVerified")&&capability.optBoolean("accountConfigured")&&capability.optBoolean("configReadVerified")&&caps!=null&&caps.optBoolean("readOnlySandbox");
+                    if(generic&&capability.optBoolean("available"))RemoteHarnessSelection.requireSame(binding.getJSONObject("harnessSelection"),RemoteHarnessSelection.fromProbe(capability,binding.getString("worker")),binding.getString("worker"));
+                    if(!capability.optBoolean("available")||!ready){
                         return save(link,new JSONObject().put("operationId",operation).put("status","blocked").put("message","所选Harness前置检查未通过；未启动任务"),events);
                     }
                     if(stopped(control,pauseRevision))return save(link,cancelled(operation),events);
                     JSONObject body=copy(binding).put("operationId",operation).put("prompt",text(request,"prompt",12000)).put("timeoutSeconds",300);
+                    if(bridge!=null&&request.has("teamContext"))body.put("teamContext",copy(request.getJSONObject("teamContext")));
                     if(request.has("sessionSource")){JSONObject source=request.getJSONObject("sessionSource");body.put("threadId",text(source,"threadId",200)).put("resumeJobId",identifier(source,"jobId")).put("jobOperationId",identifier(source,"operationId")).put("serviceBase",text(source,"serviceBase",2048));}
                     try{receipt=remote.call("submitJob",body);}
                     catch(IOException uncertain){receipt=unknown(operation,"任务提交回执未确认；保留原操作编号，不会重复提交");}
@@ -85,6 +99,7 @@ public final class CompanionExternalMemberFactory implements ExternalMemberFacto
             // Persist first. A journal failure must never be followed by another dispatch.
             if(request.has("sessionSource"))link.put("expectedThreadId",request.getJSONObject("sessionSource").getString("threadId"));
             JSONObject result=save(link,receipt,events);
+            try{deliverTeamTools(request,receipt,bridge,control,pauseRevision);}catch(InterruptedException stopped){return stopAfterTeamInterruption(link,receipt,operation,events);}
             if(stopped(control,pauseRevision)&&cancellable(receipt))return stopAndReconcile(link,receipt,operation,events);
             long deadline=System.nanoTime()+305_000_000_000L;
             while(active(receipt.optString("status"))){
@@ -96,9 +111,32 @@ public final class CompanionExternalMemberFactory implements ExternalMemberFacto
                 try{receipt=remote.call("getJob",jobRequest(receipt));}
                 catch(IOException uncertain){receipt=unknown(operation,"电脑任务状态无法读取；原任务可能继续执行，未重复提交").put("id",receipt.optString("id")).put("serviceBase",receipt.optString("serviceBase")).put("profileBinding",receipt.opt("profileBinding"));}
                 result=save(link,receipt,events);
+                try{deliverTeamTools(request,receipt,bridge,control,pauseRevision);}catch(InterruptedException stopped){return stopAfterTeamInterruption(link,receipt,operation,events);}
                 if(stopped(control,pauseRevision)&&cancellable(receipt))return stopAndReconcile(link,receipt,operation,events);
             }
             return result;
+        }
+        private JSONObject stopAfterTeamInterruption(JSONObject link,JSONObject receipt,String operation,Consumer<JSONObject> events)throws Exception {
+            boolean interrupted=Thread.interrupted();
+            try{return stopAndReconcile(link,receipt,operation,events);}finally{if(interrupted)Thread.currentThread().interrupt();}
+        }
+        private void deliverTeamTools(JSONObject request,JSONObject receipt,TeamBridge bridge,RunControl control,long pauseRevision)throws Exception {
+            JSONArray pending=receipt.optJSONArray("pendingTeamTools");if(bridge==null||pending==null||pending.length()==0||stopped(control,pauseRevision))return;
+            JSONObject expected=request.optJSONObject("teamContext"),actual=receipt.optJSONObject("teamContext");
+            if(expected==null||actual==null||!dev.pocketengine.features.teams.TeamWorkFiles.canonical(expected).equals(dev.pocketengine.features.teams.TeamWorkFiles.canonical(actual)))return;
+            if(pending.length()>16)throw new SecurityException("原任务团队工具队列超出边界");
+            for(int i=0;i<pending.length();i++){
+                control.check();if(stopped(control,pauseRevision))return;
+                JSONObject call=pending.getJSONObject(i);String requestId=text(call,"requestId",160),name=text(call,"name",80);
+                if(!name.matches("team_send_message|team_read_messages|team_list_members"))throw new SecurityException("原团队工具未授权");
+                JSONObject arguments=call.getJSONObject("arguments");if(arguments.toString().length()>4096)throw new SecurityException("团队工具参数过大");
+                String fingerprint=dev.pocketengine.features.teams.TeamWorkFiles.canonical(new JSONObject().put("name",name).put("arguments",arguments));
+                if(teamRequests.containsKey(requestId)&&!fingerprint.equals(teamRequests.get(requestId)))throw new SecurityException("原团队工具请求编号已绑定另一内容");
+                if(!teamAnswers.containsKey(requestId)){if(teamAnswers.size()>=128)throw new SecurityException("本次原job团队工具回执已达到上限");JSONObject answer=bridge.call(requestId,name,copy(arguments));teamRequests.put(requestId,fingerprint);teamAnswers.put(requestId,answer.toString());}
+                control.check();if(stopped(control,pauseRevision))return;
+                try{remote.call("answerTeamTool",jobRequest(receipt).put("requestId",requestId).put("result",new JSONObject(teamAnswers.get(requestId))));}
+                catch(IOException uncertain){return;}
+            }
         }
         private JSONObject queryOperation(String operation)throws Exception {
             try{return remote.call("reconcileOperation",copy(binding).put("operationId",operation));}
@@ -124,17 +162,19 @@ public final class CompanionExternalMemberFactory implements ExternalMemberFacto
             if(!link.getString("operationId").equals(receipt.optString("operationId")))throw new SecurityException("电脑回执属于另一操作");
             String status=receipt.optString("status","unknown"),content=receipt.optString("output","");
             boolean claude=binding.getString("worker").equals("claude");
-            boolean confirmed=claude?"claude_stream_json".equals(receipt.optString("protocol"))&&receipt.optBoolean("protocolVerified")&&receipt.optBoolean("sessionIdentityConfirmed")&&receipt.optBoolean("teamReadOnlyTools")&&receipt.optBoolean("readOnly")&&receipt.optString("sessionId").equals(receipt.optString("threadId")):"codex_app_server".equals(receipt.optString("protocol"))&&receipt.optBoolean("readOnly")&&receipt.optBoolean("readOnlyConfirmed")&&receipt.optBoolean("externalToolsDisabled");
+            boolean generic=RemoteHarnessSelection.isGenericWorker(binding.getString("worker")),pi=binding.getString("worker").equals("pi");
+            boolean confirmed=generic?RemoteHarnessSelection.terminalConfirmed(receipt,binding.getString("worker")):pi?"pi_rpc_v1".equals(receipt.optString("protocol"))&&receipt.optBoolean("protocolVerified")&&RemoteHarnessSelection.piScopeConfirmed(receipt)&&receipt.optBoolean("nativeSettled")&&receipt.opt("resourcesHeld")==Boolean.FALSE&&receipt.optJSONObject("processCleanupProof")!=null&&receipt.getJSONObject("processCleanupProof").opt("processGroupStoppedVerified")==Boolean.TRUE&&!receipt.optString("sessionId").isEmpty()&&receipt.optString("sessionId").equals(receipt.optString("threadId"))&&!receipt.optString("promptRequestId").isEmpty():claude?"claude_stream_json".equals(receipt.optString("protocol"))&&receipt.optBoolean("protocolVerified")&&receipt.optBoolean("sessionIdentityConfirmed")&&receipt.optBoolean("teamReadOnlyTools")&&receipt.optBoolean("readOnly")&&receipt.optString("sessionId").equals(receipt.optString("threadId")):"codex_app_server".equals(receipt.optString("protocol"))&&receipt.optBoolean("readOnly")&&receipt.optBoolean("readOnlyConfirmed")&&receipt.optBoolean("externalToolsDisabled");
+            if(generic&&confirmed)RemoteHarnessSelection.requireSame(binding.getJSONObject("harnessSelection"),receipt.optJSONObject("harnessSelection"),binding.getString("worker"));
             if(link.has("expectedThreadId")&&!link.getString("expectedThreadId").equals(receipt.optString("threadId")))confirmed=false;
-            if("completed".equals(status)&&!confirmed){status="unknown";receipt.put("status",status).put("message","电脑终态回执未证实本次只读协议与外部工具限制，需核对原任务");}
+            if("completed".equals(status)&&!confirmed){status="unknown";receipt.put("status",status).put("message","电脑终态回执未证实本次实际协议、执行范围与会话结算，需核对原任务");}
             if("completed".equals(status)&&content.trim().isEmpty()){status="failed";receipt.put("status",status).put("message","Harness终态没有返回有效成员文本，未标记成员完成");}
             journal.record(copy(link),copy(receipt));
             JSONObject external=copy(binding).put("childTaskId",link.getString("taskId")).put("operationId",link.getString("operationId"));
-            for(String key:new String[]{"threadId","sessionId","promptRequestId","turnId","protocol","controls","capabilities","serviceBase","protocolVerified","teamReadOnlyTools","osReadIsolationVerified","processCleanupProof"})if(receipt.has(key))external.put(key,receipt.get(key));
+            for(String key:new String[]{"threadId","sessionId","promptRequestId","turnId","protocol","controls","capabilities","serviceBase","protocolVerified","teamReadOnlyTools","osReadIsolationVerified","processCleanupProof","harnessSelection","harness","resumeSupported","nativeSettled","noTools","teamTools","teamToolsOnly","codingToolsSupported","resourcesHeld","promptTerminalConfirmed","teamContext","teamToolReceipts"})if(receipt.has(key))external.put(key,receipt.get(key));
             if(receipt.has("id"))external.put("jobId",receipt.get("id"));
             JSONObject result=new JSONObject().put("status",status).put("external",external).put("message",receipt.optString("message","已收到实际电脑回执"));
             if(!content.isEmpty())result.put("content",content.length()>12000?content.substring(0,12000):content).put("contentTruncated",content.length()>12000);
-            if(status.matches("completed|failed|cancelled")&&confirmed&&!receipt.optString("threadId").isEmpty()&&!receipt.optString("serviceBase").isEmpty())result.put("sessionSource",copy(external));
+            if(status.matches("completed|failed|cancelled")&&confirmed&&(!generic||receipt.optBoolean("resumeSupported"))&&!receipt.optString("threadId").isEmpty()&&!receipt.optString("serviceBase").isEmpty())result.put("sessionSource",copy(external));
             JSONArray questions=receipt.optJSONArray("pendingQuestions");if(questions!=null)result.put("pendingQuestions",new JSONArray(questions.toString()));
             JSONArray approvals=receipt.optJSONArray("pendingApprovals");if(approvals!=null)result.put("pendingApprovals",new JSONArray(approvals.toString()));
             if(events!=null)events.accept(copy(result));return result;
