@@ -60,6 +60,20 @@
     "robolectric": true,
     "description": "Exact original-source targeted tests; no complete Android, physical device, external service or UI acceptance."
   },
+  "capability-approval-run-boundary": {
+    "class": "dev.pocketengine.store.CapabilityApprovalRunBoundaryTest",
+    "additionalClasses": [
+      "dev.pocketengine.CapabilityApprovalContinuationNativeTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original SQL and Engine approval decisions: old or missing runs are rejected, current exact decisions remain single use, late phone replacement and queued assistant pickup cannot continue a successor, and unresolved effects remain fenced. Current assistant pickup reaches its real same-task attempt and tool grant before an explicit pre-Runner fixture stop; current phone resumes only its original control. Only startup/presentation and service/executor boundaries are controlled, with a real empty native plugin host. No normal fresh-run full approval-loop, external model/tool, device or visual acceptance."
+  },
+  "capability-approval-ui-run-projection": {
+    "class": "dev.pocketengine.ui.CapabilityApprovalRunProjectionTest",
+    "helpers": [],
+    "description": "Exact pending-capability projection: only current nonempty-run unexpired pending rows are visible; old, missing, blank, expired and decided entries remain hidden. Saved/queued/blocked notices retain the actual receipt and the original team continuation boundary. No mounted Compose, Android device or visual acceptance."
+  },
   "main-model-selection": {
     "class": "dev.pocketengine.store.SettingsMainSelectionTest",
     "helpers": [],

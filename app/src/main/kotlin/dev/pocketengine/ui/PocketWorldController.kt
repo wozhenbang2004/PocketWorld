@@ -2536,7 +2536,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     if (action in setOf("confirmResult", "resumeTask", "updateTask", "resolveOperation")) app.sendState()
                     if (action == "resolveOperation" && input.optString("taskId") == state.inspectionTaskId) observeInspection()
                     if (action == "reconcileExternalTask") { getTask(input.optString("taskId")); app.sendState(); state = state.copy(notice = "已记录你核对的结果，未重新执行外部操作") }
-                    if (action == "approveCapability") { state = state.copy(notice = if (input.optBoolean("approved") && result?.optBoolean("originalTeamContinuationRequired")==true) "审批已保存在原分工，请回团队继续该成员或唯一整合者" else if (input.optBoolean("approved")) "已授权这次操作，助手会在原任务中继续" else "已拒绝这次操作"); getTask(input.optString("taskId")); app.sendState() }
+                    if (action == "approveCapability") { state = state.copy(notice = capabilityApprovalNotice(result, input.optBoolean("approved"))); getTask(input.optString("taskId")); app.sendState() }
                     if (action in setOf("resumeTask", "updateTask")) state = state.copy(savedFeedbackRevision = state.savedFeedbackRevision + 1, savedFeedbackTaskId = input.optString("taskId"), savedFeedback = input.optString("feedback"), notice = if (action == "updateTask" && app.activeId() == input.optString("taskId")) "补充已保存，正在结束本次执行；结束后可继续原任务" else if (action == "updateTask") "补充已保存在原任务中" else null)
                     if (action in setOf("startRun", "startOwnedPhonePractice", "resumeTask", "resumeRun")) {
                         val taskId = result?.optString("taskId")?.takeIf { it.isNotBlank() } ?: app.activeId()

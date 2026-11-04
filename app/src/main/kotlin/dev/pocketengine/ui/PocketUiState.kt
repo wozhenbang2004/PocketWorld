@@ -239,7 +239,18 @@ internal fun executionLocation(mode: String): String = when (mode) {
 
 internal fun isPhoneTask(task: UiTask): Boolean = task.raw.optString("kind", "phone") == "phone" && task.executionMode in setOf("background", "main_screen")
 
-internal fun pendingCapabilityApprovals(task: UiTask): List<JSONObject> = task.raw.optJSONArray("approvals").objects().filter { it.optString("state", it.optString("status")) == "pending" && it.optLong("expiresAt", Long.MAX_VALUE) > System.currentTimeMillis() }
+internal fun pendingCapabilityApprovals(task: UiTask): List<JSONObject> {
+    val run = task.raw.optString("runId")
+    if (run.isBlank()) return emptyList()
+    return task.raw.optJSONArray("approvals").objects().filter { it.optString("runId") == run && it.optString("state", it.optString("status")) == "pending" && it.optLong("expiresAt", Long.MAX_VALUE) > System.currentTimeMillis() }
+}
+
+internal fun capabilityApprovalNotice(result: JSONObject?, approved: Boolean): String {
+    if (!approved) return "已拒绝这次操作"
+    if (result?.optBoolean("originalTeamContinuationRequired") == true) return "审批已保存在原分工，请回团队继续该成员或唯一整合者"
+    if (result?.optBoolean("approvalDecisionSaved") == true) return result.optString("message", "审批已保存，请核对原任务续接状态")
+    return "已授权这次操作，助手会在原任务中继续"
+}
 
 internal fun ownerConfirmedExternalNotOccurred(result: JSONObject, tasks: List<UiTask>): Boolean {
     val taskId = result.optString("hostTaskId")
