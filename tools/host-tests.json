@@ -1346,5 +1346,13 @@
     "additionalClasses": [
       "dev.pocketengine.ui.AttachmentExportPickerRegistryTest"
     ]
+  },
+  "capability-approval-consumption": {
+    "class": "dev.pocketengine.CapabilityApprovalConsumptionNativeTest",
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Actual private assistant App/Runner/loopback Gateway/TaskStore/HostToolSupervisor journey: exact approval consumption, changed arguments, one-use, withdrawn tools, cumulative model/tool budgets, stale/expired queue pickup and unknown receipts. Startup/presentation and executor pickup are controlled; final workspace module only records dispatch and returns a fixture receipt without business effects. No external model, real workspace mutation, clean full-app build, device or visual acceptance."
   }
 }
