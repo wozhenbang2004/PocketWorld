@@ -325,11 +325,7 @@ Nine exact-version legal supplements are retained in `licenses/upstream-suppleme
 
 The collector uses a supplement only for its exact installed package, version and declared license when npm legal text is absent, then verifies retained SHA-256/Git blob hashes and release evidence before copying the original body and source receipt into the packaged notices. The official upstream later provided the MIT license for `react-remove-scroll-bar@2.3.7` at commit `8ca9ba5ea52de03308fe8ced94f7b159a44d28ff`, whose package and source match the release. The npm archive and release tag did not include the license text. `client-only@0.0.1` remains an explicit missing legal-body item in the installed dependency audit.
 
-## OpenMuse phone viewer adaptation
-
-Source: https://github.com/CopilotKit/openmuse/tree/a4944f4c471d3dc93b8bfc060b5da309b5216ab2
-
-Selected phone-viewer presentation and styles were adapted with reference to ComputerEntry, DesktopToolCard, ComputerSheet and shared UI styles. The original source and reference image are no longer retained in this repository. This notice remains for the existing adaptation; it does not describe the PocketWorld-specific Android preview transport as OpenMuse code.
+## Phone viewer UI
 
 ```text
 MIT License

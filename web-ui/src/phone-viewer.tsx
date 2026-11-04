@@ -1,8 +1,4 @@
-/**
- * Adapted from CopilotKit/openmuse ComputerEntry, DesktopToolCard and ComputerSheet.
- * Copyright (c) 2026 OpenMuse contributors. MIT.
- * License notice: ../THIRD-PARTY-NOTICES.md
- */
+/** Third-party copyright and license notices: ../THIRD-PARTY-NOTICES.md. */
 import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { ChevronDown, Expand, LoaderCircle, Monitor, Pause, Play, RefreshCw, X } from 'lucide-react';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -109,7 +105,7 @@ function statusLabel(task: PhoneViewerTask, feed: Feed): string {
   return '连续预览';
 }
 
-/** OpenMuse ComputerEntry: quiet centered capsule with a text-labelled status dot. */
+/** Centered viewing entry with a text-labelled status dot. */
 export function PhoneComputerEntry({ task, feed, expanded, onOpen }: { task: PhoneViewerTask; feed: Feed; expanded: boolean; onOpen: () => void }) {
   const label = statusLabel(task, feed);
   return <button type="button" className="pw-phone-viewer-entry" aria-label={`查看手机独立屏 · ${label}`} aria-haspopup="dialog" aria-expanded={expanded} onClick={onOpen}>
@@ -160,7 +156,7 @@ function PhoneControls({ task, feed, controls }: { task: PhoneViewerTask; feed: 
   </>;
 }
 
-/** OpenMuse DesktopToolCard, adapted to the original phone run and a portrait-safe image. */
+/** Preview card bound to the original phone run and a portrait-safe image. */
 export function PhoneViewerCard({ task, feed, controls, onExpand, tasks, onSelectTask }: Pick<PhoneViewerProps, 'task' | 'tasks' | 'onSelectTask'> & { feed: Feed; controls: Controls; onExpand: () => void }) {
   return <section className="pw-phone-viewer-card" aria-label="手机独立屏预览">
     <header className="pw-phone-viewer-card-header"><span className="pw-phone-viewer-icon"><Monitor size={21} aria-hidden="true" /></span><div className="pw-phone-viewer-card-title"><strong>手机独立屏</strong><span title={task.title}>{task.title || '这次手机任务'}</span></div><span className="pw-phone-viewer-status" role="status">{statusLabel(task, feed)}</span></header>
@@ -176,7 +172,7 @@ function useCompactSheet() {
   return compact;
 }
 
-/** OpenMuse Sheet geometry, with existing Vaul/Radix focus, escape and touch behavior. */
+/** Responsive workspace with existing focus, escape and touch behavior. */
 export function PhoneViewerSheet({ task, feed, controls, expanded, onExpandedChange, tasks, onSelectTask, returnFocus }: Pick<PhoneViewerProps, 'task' | 'tasks' | 'onSelectTask'> & { feed: Feed; controls: Controls; expanded: boolean; onExpandedChange: (value: boolean) => void; returnFocus: RefObject<HTMLElement | null> }) {
   const compact = useCompactSheet(), descriptionId = useId();
   const Title = compact ? Drawer.Title : Dialog.Title, Description = compact ? Drawer.Description : Dialog.Description;

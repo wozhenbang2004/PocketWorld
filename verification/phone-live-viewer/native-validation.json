@@ -1,0 +1,147 @@
+{
+  "schema": "pocketworld.phone-live-viewer.native-validation.v1",
+  "status": "passed",
+  "group": "phone-live-preview",
+  "tests": 23,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "perClass": {
+    "dev.pocketengine.displayhelper.DisplayLivePreviewTest": {
+      "status": "passed",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "dev.pocketengine.phone.display.PhoneLivePreviewHostTest": {
+      "status": "passed",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "dev.pocketengine.phone.display.PhonePreviewSocketTest": {
+      "status": "passed",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "dev.pocketengine.ui.web.PocketWebPhoneViewerTest": {
+      "status": "passed",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "dev.pocketengine.ui.web.PocketWebPhoneViewerWindowTest": {
+      "status": "passed",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "report": "/workspace/scratch/498814bf3f67/PocketWorld/app/build/reports/host-tests/run-vucobv0d",
+  "resultJson": "/workspace/scratch/498814bf3f67/PocketWorld/app/build/reports/host-tests/run-vucobv0d/result.json",
+  "junitDirectory": "/workspace/scratch/498814bf3f67/PocketWorld/app/build/reports/host-tests/run-vucobv0d/junit",
+  "runtimeJarComparison": {
+    "checkedClasses": 8880,
+    "mismatchedClasses": [],
+    "missingClasses": [],
+    "coherent": true,
+    "appliesToBehavioralResult": "/workspace/scratch/498814bf3f67/PocketWorld/app/build/reports/host-tests/run-vucobv0d/result.json",
+    "recheckedForMetadataRepack": false
+  },
+  "productionCheckpoint": {
+    "scope": "Metadata-only repack build, from frozen inputs through verified package",
+    "unchanged": true,
+    "inputFiles": 19,
+    "checkpoint": "/workspace/scratch/498814bf3f67/toolchains/phone-viewer-apk-metadata-repack-inputs.json",
+    "nativeAndBuildInputFilesIdenticalToBehavioralRun": 13,
+    "jsAndCssIdenticalToBehavioralRun": true
+  },
+  "apkVerification": "verification/phone-live-viewer/apk-verification.json",
+  "apkSha256": "8ad77c4a43bf07054e7c99420480109f75f3aad352702a640a53ddb7f3e239fd",
+  "existingHostTestGroupsUnchanged": true,
+  "legacyExploratoryHistory": {
+    "cleanBaseComparisonPerformed": false,
+    "temporaryLegacyFixtureEditsOccurred": true,
+    "restoredFilesSha256": {
+      "app/src/test/java/dev/pocketengine/phone/display/OcrNativeBridgeTest.java": "110fb602a5033d454668ef583d6bf94452e5a27658a03568b28064958fddbe2c",
+      "app/src/test/java/dev/pocketengine/displayhelper/DisplayGestureCleanupTest.java": "921f1b4d9989f7007396a5ff1fb26323fcd3998e23ebe6cf092f523978ca8560"
+    },
+    "restoredBytesMatchCurrentGitBase": true,
+    "outcomes": [
+      {
+        "report": "app/build/reports/host-tests/run-dnf0i3qz",
+        "status": "failed",
+        "tests": 51,
+        "failures": 15,
+        "notes": "Included unchanged gesture display-ID assertion failure and obsolete OCR Tree-constructor fixtures; App startup fixture and stale runtime JAR also failed."
+      },
+      {
+        "report": "app/build/reports/host-tests/run-7rmyy1p2",
+        "status": "failed",
+        "tests": 31,
+        "failures": 5,
+        "notes": "Current runtime classes; temporary legacy OCR constructor repair exposed incompatible accessibility shadow; browser preview fixture attempted a paused surface transition."
+      },
+      {
+        "report": "app/build/reports/host-tests/run-29fyajqq",
+        "status": "failed",
+        "tests": 31,
+        "failures": 4,
+        "notes": "Temporary legacy OCR shadow repair exposed ownership-snapshot fixture failures. All new viewer cases passed in that broader run."
+      }
+    ],
+    "resolution": "New preview bitmap/socket cases moved to dedicated feature test classes; old gesture/OCR test files restored exactly. No clean-base success or broader-suite success is claimed."
+  },
+  "interruptedRun": {
+    "report": "app/build/reports/host-tests/run-4_ead4ba",
+    "status": "interrupted",
+    "reason": "exec-server transport disconnected: executor key changed during session recovery; no final result JSON; no remaining Java process after recovery",
+    "log": "/workspace/scratch/498814bf3f67/toolchains/phone-live-preview-feature-interrupted.log",
+    "sameFeatureGateRerunWithoutSourceChanges": true
+  },
+  "limitations": [
+    "Host integration with explicit startup, helper-peer, shell-context and captured-pixel fixtures; not a physical-device test.",
+    "No physical Android display-isolation, sustained frame-rate, battery, device compatibility or WAN result is claimed."
+  ],
+  "statusScope": "The recorded 23/23 feature behavioral run passed; the currently associated APK is a separately verified metadata-only repack with identical executable payloads.",
+  "behavioralValidationApkSha256": "9e45dae6787a2524a433d546f15d61980aaac9207a7f8f7adcc24554a6184287",
+  "behavioralProductionCheckpoint": {
+    "unchanged": true,
+    "inputFiles": 16,
+    "checkpoint": "/workspace/scratch/498814bf3f67/toolchains/phone-viewer-apk-inputs.json",
+    "appliesTo": "/workspace/scratch/498814bf3f67/PocketWorld/app/build/reports/host-tests/run-vucobv0d/result.json"
+  },
+  "metadataOnlyRepack": {
+    "status": "verified",
+    "behavioralTestsRerun": false,
+    "behavioralResult": "/workspace/scratch/498814bf3f67/PocketWorld/app/build/reports/host-tests/run-vucobv0d/result.json",
+    "previousApkSha256": "9e45dae6787a2524a433d546f15d61980aaac9207a7f8f7adcc24554a6184287",
+    "currentApkSha256": "8ad77c4a43bf07054e7c99420480109f75f3aad352702a640a53ddb7f3e239fd",
+    "comparedApkEntries": 1062,
+    "identicalApkEntries": 1059,
+    "changedPackagedFiles": [
+      "assets/pocket-ui/build-identity.json",
+      "assets/pocket-ui/licenses/THIRD-PARTY-NOTICES.md",
+      "assets/pocket-ui/licenses/dependencies.json"
+    ],
+    "addedPackagedFiles": [],
+    "removedPackagedFiles": [],
+    "allDexNativeHelperJsCssPayloadsIdentical": true,
+    "packagedBuildIdentitySha256": "2078cbc56602e214c662008a0b249fa67af41b60bd6f7f0c8048fc99a493cca5",
+    "packagedNoticeSha256": "39528836555056ca083eb04531bbf39639da650bf8c598cb6a7e20cecad18fe6",
+    "buildLog": "/workspace/scratch/498814bf3f67/toolchains/assemble-phone-viewer-metadata-repack.log",
+    "packagingCorrection": {
+      "initialPackageRejected": true,
+      "reason": "One stale generated JS asset was absent from the frozen source bundle and build receipt.",
+      "unexpectedAsset": "assets/pocket-ui/assets/index-DiWhkOAI.js",
+      "resolution": "Explicit task-scoped rerun of mergeDebugAssets, compressDebugAssets and packageDebug; final full APK entry set has no additions or removals.",
+      "rejectedAttempt": "/workspace/scratch/498814bf3f67/toolchains/phone-viewer-metadata-repack-rejected.json"
+    }
+  }
+}

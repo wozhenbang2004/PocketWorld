@@ -1,4 +1,20 @@
 {
+  "phone-live-preview": {
+    "class": "dev.pocketengine.phone.display.PhoneLivePreviewHostTest",
+    "additionalClasses": [
+      "dev.pocketengine.ui.web.PocketWebPhoneViewerTest",
+      "dev.pocketengine.ui.web.PocketWebPhoneViewerWindowTest",
+      "dev.pocketengine.displayhelper.DisplayLivePreviewTest",
+      "dev.pocketengine.phone.display.PhonePreviewSocketTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest",
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
+    ],
+    "robolectric": true,
+    "description": "Read-only private owner live phone preview: exact native App/run/session/port and SQL lease selection, stale owner/replacement rejection, independent pause/model cache, bounded helper JPEG and native socket admission. Helper/socket fixtures are explicit boundaries; no physical Android, device isolation, frame-rate or visual acceptance."
+  },
   "phone-team-sessions": {
     "class": "dev.pocketengine.BackgroundPhoneRunTest",
     "additionalClasses": [

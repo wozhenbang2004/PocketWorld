@@ -25,6 +25,12 @@ identify upstream code, retained originals, adaptations, and library-authored
 reconstructions separately. Retained upstream reference files are excluded
 from the application TypeScript roots.
 
+New product changes should contain implementation, relevant tests and required
+third-party notices. Keep research-only source archives, reference screenshots
+and design-source reports outside the product checkout. Commit titles should
+describe the resulting product behavior; required copyright and license text
+stays in the ordinary third-party notices.
+
 ## Host boundary
 
 Only the fixed local asset origin receives `PocketNative`. The versioned bridge
@@ -69,10 +75,12 @@ group; full Android compilation and a source-matched APK are separate checks.
 ## Continuous phone viewing
 
 The conversation and original task detail can show one selected background phone
-run continuously, in an inline preview or expanded workspace. Card and expanded
-workspace share one feed. The owner can select another eligible task, pause or
-resume the selected original run, and close viewing without stopping execution
-or losing the conversation draft.
+run continuously through a compact entry, grey inline card, mobile bottom sheet
+and centered desktop workspace. The sheet uses a 600px breakpoint, 26px radius
+and 790px desktop
+maximum width. Card and expanded workspace share one feed. The owner can select
+another eligible task, pause or resume the selected original run, and close
+viewing without stopping execution or losing the conversation draft.
 
 This is a bounded JPEG preview of an already attached Android independent
 display, not E2B/VNC or video sent to the model. Reads are sequential, scheduled

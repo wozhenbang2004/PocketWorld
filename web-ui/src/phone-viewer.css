@@ -1,6 +1,4 @@
-/* OpenMuse a4944f4 ComputerEntry / DesktopToolCard / Sheet, MIT.
-   React Native styles ported to scoped CSS; phone geometry and neutral palette adapted.
-   MIT notice: ../THIRD-PARTY-NOTICES.md. */
+/* Phone viewing layout. Third-party notices: ../THIRD-PARTY-NOTICES.md. */
 .pw-phone-viewer {
   --phone-text: #11191c;
   --phone-muted: #697176;
@@ -67,7 +65,7 @@
 .pw-phone-viewer-description { margin: 4px 0 0; color: #697176; font-size: 14px; line-height: 21px; overflow-wrap: anywhere; }
 .pw-phone-viewer-close { display: grid; place-items: center; flex: 0 0 44px; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; background: #fff; color: #697176; cursor: pointer; }
 .pw-phone-viewer-sheet-body { display: flex; flex-direction: column; gap: 16px; min-height: 0; padding: 24px; overflow: auto; overscroll-behavior: contain; }
-/* Like OpenMuse's ScrollView, scroll full-height children instead of shrinking the image figure. */
+/* Scroll full-height children instead of shrinking the image figure. */
 .pw-phone-viewer-sheet-body > * { flex: 0 0 auto; }
 .pw-phone-viewer-sheet-status { display: flex; align-items: center; gap: 12px; padding: 18px; border-radius: 20px; background: #f1f3f4; }
 .pw-phone-viewer-sheet-status > div { min-width: 0; }
