@@ -22,12 +22,18 @@ final class MemoryRecallBudget {
         return normalized.substring(0,first)+" "+normalized.substring(last);
     }
     static JSONObject pack(List<JSONObject> core,List<JSONObject> retrieved,Map<String,JSONObject> admitted,int limit,int maxChars,String header,boolean queryTruncated,int queryChars,String backend)throws Exception{
+        return pack(core,retrieved,admitted,limit,maxChars,header,queryTruncated,queryChars,backend,false);
+    }
+    static JSONObject pack(List<JSONObject> core,List<JSONObject> retrieved,Map<String,JSONObject> admitted,int limit,int maxChars,String header,boolean queryTruncated,int queryChars,String backend,boolean ownerContext)throws Exception{
         List<JSONObject> all=new ArrayList<>(core);all.addAll(retrieved);
         Map<String,String> lines=new LinkedHashMap<>();for(JSONObject row:admitted.values())lines.put(row.getString("id"),row.toString()+"\n");
         Set<String> selected=new HashSet<>();int[] used={0};
         int coreQuota=retrieved.isEmpty()?limit:limit/2,coreCharsTarget=retrieved.isEmpty()?maxChars:Math.max(0,(maxChars-header.length())/2);
         // Guarantee a fitting task match a place before core can fill either count or characters.
-        for(JSONObject row:retrieved)if(take(row,admitted,lines,selected,used,limit,maxChars,header.length()))break;
+        for(JSONObject row:retrieved)if((!ownerContext||!ownerCurrent(admitted.get(row.getString("id"))))&&take(row,admitted,lines,selected,used,limit,maxChars,header.length()))break;
+        // A personal turn also reserves one fitting current owner fact. It is still an exact
+        // formal record in the original budget, not an untracked profile appended afterward.
+        if(ownerContext)for(JSONObject row:retrieved)if(ownerCurrent(admitted.get(row.getString("id")))&&take(row,admitted,lines,selected,used,limit,maxChars,header.length()))break;
         int cores=0,coreChars=0;
         for(JSONObject row:core){String id=row.getString("id"),line=lines.get(id);if(line==null||cores>=coreQuota||coreChars+line.length()>coreCharsTarget)continue;
             if(take(row,admitted,lines,selected,used,limit,maxChars,header.length())){cores++;coreChars+=line.length();}}
@@ -38,13 +44,13 @@ final class MemoryRecallBudget {
         for(JSONObject row:all){String id=row.getString("id");boolean isCore=row.optBoolean("core");
             if(selected.contains(id)){
                 JSONObject value=admitted.get(id);if(context.length()==0)context.append(header);context.append(lines.get(id));records.put(value);
-                selection.put(identity(value).put("reason",isCore?"owner_core":"task_query_match"));if(isCore)keptCore++;else keptRetrieved++;
+                selection.put(identity(value).put("reason",isCore?"owner_core":ownerContext&&ownerCurrent(value)?"owner_current":"task_query_match"));if(isCore)keptCore++;else keptRetrieved++;
             }else{
                 String line=lines.get(id),reason=line==null?"source_or_record_changed":selected.size()>=limit?"record_limit":header.length()+line.length()>maxChars?"record_too_large":"character_limit";
                 counts.put(reason,counts.optInt(reason)+1);if(omitted.length()<MAX_OMISSIONS)omitted.put(identity(row).put("reason",reason));
             }
         }
-        JSONObject diagnostics=new JSONObject().put("format",1).put("policy","balanced_core_task_v1").put("limit",limit).put("maxChars",maxChars).put("charsUsed",context.length())
+        JSONObject diagnostics=new JSONObject().put("format",1).put("policy",ownerContext?"balanced_core_owner_task_v1":"balanced_core_task_v1").put("limit",limit).put("maxChars",maxChars).put("charsUsed",context.length())
                 .put("coreAvailable",core.size()).put("retrievedAvailable",retrieved.size()).put("coreSelected",keptCore).put("retrievedSelected",keptRetrieved)
                 .put("coreQuota",coreQuota).put("coreCharsTarget",coreCharsTarget).put("queryTruncated",queryTruncated).put("queryChars",queryChars)
                 .put("queryTruncation",queryTruncated?"head_and_tail":"none").put("backend",backend).put("selected",selection).put("omitted",omitted)
@@ -52,6 +58,7 @@ final class MemoryRecallBudget {
         return new JSONObject().put("records",records).put("context",context.toString()).put("selectionDiagnostics",diagnostics)
                 .put("coreSelected",keptCore).put("retrievedSelected",keptRetrieved);
     }
+    private static boolean ownerCurrent(JSONObject row){return row!=null&&"owner_current".equals(row.optString("selectionReason"));}
     private static boolean take(JSONObject row,Map<String,JSONObject> admitted,Map<String,String> lines,Set<String> selected,int[] used,int limit,int chars,int header)throws Exception{
         String id=row.getString("id");if(!admitted.containsKey(id)||selected.contains(id)||selected.size()>=limit)return false;
         String line=lines.get(id);if(header+used[0]+line.length()>chars)return false;selected.add(id);used[0]+=line.length();return true;
@@ -62,7 +69,7 @@ final class MemoryRecallBudget {
     static JSONObject checked(JSONObject input,JSONArray references)throws Exception{
         if(input==null)return null;JSONObject d=new JSONObject(input.toString());
         keys(d,Set.of("format","policy","limit","maxChars","charsUsed","coreAvailable","retrievedAvailable","coreSelected","retrievedSelected","coreQuota","coreCharsTarget","queryTruncated","queryChars","queryTruncation","backend","selected","omitted","omissionCounts","omissionsTruncated"));
-        if(SourceRef.integer(d,"format",1)!=1||!"balanced_core_task_v1".equals(d.optString("policy")))throw new IllegalArgumentException("记忆选择预算版本无效");
+        if(SourceRef.integer(d,"format",1)!=1||!Set.of("balanced_core_task_v1","balanced_core_owner_task_v1").contains(d.optString("policy")))throw new IllegalArgumentException("记忆选择预算版本无效");
         int limit=number(d,"limit",16),chars=number(d,"maxChars",12000),used=number(d,"charsUsed",12000);
         int core=number(d,"coreAvailable",1000),retrieved=number(d,"retrievedAvailable",1000),keptCore=number(d,"coreSelected",16),keptRetrieved=number(d,"retrievedSelected",16);
         number(d,"coreQuota",16);number(d,"coreCharsTarget",12000);number(d,"queryChars",500);
@@ -75,7 +82,7 @@ final class MemoryRecallBudget {
             JSONObject row=selected.getJSONObject(i),ref=references.getJSONObject(i);checkedIdentity(row,ids);
             if(!row.getString("id").equals(ref.getString("id"))||SourceRef.integer(row,"revision",1)!=SourceRef.integer(ref,"revision",1)||!row.getString("selection").equals(ref.getString("selection")))throw new SecurityException("选择说明不是该次原始记录");
             boolean isCore="core".equals(row.getString("selection"));if(isCore)actualCore++;
-            if(!(isCore?"owner_core":"task_query_match").equals(row.getString("reason")))throw new IllegalArgumentException("记忆选择原因无效");
+            if(!(isCore?"owner_core":"task_query_match").equals(row.getString("reason"))&&!("balanced_core_owner_task_v1".equals(d.getString("policy"))&&!isCore&&"owner_current".equals(row.getString("reason"))))throw new IllegalArgumentException("记忆选择原因无效");
         }
         int omittedTotal=core+retrieved-selected.length();JSONObject counts=d.getJSONObject("omissionCounts");int total=0;
         for(var it=counts.keys();it.hasNext();){String reason=it.next();if(!REASONS.contains(reason))throw new IllegalArgumentException("记忆省略原因无效");total+=number(counts,reason,1000);}

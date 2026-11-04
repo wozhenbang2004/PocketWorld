@@ -9,6 +9,11 @@ public abstract class ExecutionPlanning implements AutoCloseable {
     public static final String SUBMIT="execution_plan_submit",REQUEST="execution_phase_request",REVIEW="execution_plan_review";
     public enum Access { READ, RESTRICTED_PROPOSAL, DENY }
     public enum ReadOutcome { RECEIPT, FAILED, UNCONFIRMED }
+    /** The original run, control, phase and plan still match; only its scope revision
+     * changed. This rejects old decisions and does not authorize a replacement snapshot. */
+    public static final class ScopeRevisionChanged extends SecurityException {
+        public ScopeRevisionChanged(){super("原执行范围已换版，旧模型决定未派发");}
+    }
     private final RunControl original;
 
     protected ExecutionPlanning(RunControl original){this.original=Objects.requireNonNull(original);}

@@ -144,7 +144,17 @@ final class ExtensionCapabilityPort implements CapabilityPort {
         check(control);return null;
     }
     @Override public void afterTool(String name,JSONObject arguments,JSONObject receipt,RunControl control)throws Exception {
-        check(control);requireRequestCurrent(control);existing.afterTool(name,arguments,receipt,control);
+        check(control);
+        try{requireRequestCurrent(control);}
+        catch(ExecutionPlanning.ScopeRevisionChanged changed){
+            // The real receipt and checkpoint are already durable. A native allocation
+            // may change this same run's budget; retire its old callbacks and decisions,
+            // then let the next normal turn capture the current scope. Other refusals
+            // and storage failures still propagate, including source/plan revocation.
+            check(control);stale=true;if(capabilitySnapshot!=null)capabilitySnapshot.invalidate();
+            closeCatalogAccess();closeDiscovery();return;
+        }
+        existing.afterTool(name,arguments,receipt,control);
         if(runtime!=null&&admittedFingerprint.equals(sync(false)))runtime.event("tool_result",new JSONObject().put("name",name).put("arguments",eventData(arguments)).put("receipt",eventData(receipt)),original);
         if(discovery!=null)discovery.afterTool(name,receipt,control);
     }

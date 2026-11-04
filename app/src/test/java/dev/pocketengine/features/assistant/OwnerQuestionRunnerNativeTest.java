@@ -1,6 +1,7 @@
 package dev.pocketengine.features.assistant;
 
 import dev.pocketengine.testutil.HttpServer;
+import dev.pocketengine.testutil.ReadyApplicationFixture;
 import dev.pocketengine.EngineApplication;
 import dev.pocketengine.features.assistant.notifications.OwnerQuestionReply;
 import dev.pocketengine.store.TaskStore;
@@ -24,15 +25,16 @@ import static org.junit.Assert.*;
 /** Actual Application -> TaskStore -> original Runner -> local HTTP -> ordinary wait ->
  * native owner answer -> same original Runner. No paid model, phone or account operation. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class)
+@Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class,shadows=ReadyApplicationFixture.NoUnrelatedStartup.class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 public final class OwnerQuestionRunnerNativeTest {
     @org.junit.Before public void nativeKeyFixture(){java.security.Security.addProvider(new java.security.Provider("OwnerQuestionFixtureKeys",1.0d,"Test-only AndroidKeyStore provider"){{put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
-    @org.junit.After public void removeNativeKeyFixture(){java.security.Security.removeProvider("OwnerQuestionFixtureKeys");}
+    @org.junit.After public void removeNativeKeyFixture()throws Exception{try{ReadyApplicationFixture.closeHost((EngineApplication)RuntimeEnvironment.getApplication());}finally{java.security.Security.removeProvider("OwnerQuestionFixtureKeys");}}
     private static final class Fixture implements AutoCloseable {
-        final EngineApplication app=(EngineApplication)RuntimeEnvironment.getApplication();final AssistantModule assistant=(AssistantModule)app.features.module("assistant");
-        final HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);final AtomicInteger calls=new AtomicInteger();final List<String> requests=new CopyOnWriteArrayList<>();
+        final EngineApplication app=(EngineApplication)RuntimeEnvironment.getApplication();final AssistantModule assistant;
+        final HttpServer server;final AtomicInteger calls=new AtomicInteger();final List<String> requests=new CopyOnWriteArrayList<>();
         Fixture()throws Exception{
+            ReadyApplicationFixture.initializeHost(app);assistant=(AssistantModule)app.features.module("assistant");server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
             server.createContext("/",exchange->{try{
                 requests.add(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));int count=calls.incrementAndGet();
                 JSONObject message=count==1?new JSONObject().put("role","assistant").put("content",JSONObject.NULL).put("tool_calls",new JSONArray().put(new JSONObject().put("id","call_owner_question").put("type","function").put("function",new JSONObject().put("name","run_ask_user").put("arguments",new JSONObject().put("question","Which original option?").toString()))))
@@ -40,7 +42,7 @@ public final class OwnerQuestionRunnerNativeTest {
                 byte[] bytes=new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("message",message).put("finish_reason",count==1?"tool_calls":"stop"))).toString().getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
             }finally{exchange.close();}});server.start();
-            app.getSharedPreferences("private_settings",0).edit().putString("baseUrl","http://127.0.0.1:"+server.getAddress().getPort()).putString("provider","openai_chat").putString("model","controlled-owner-question-fixture").putBoolean("supportsImageInput",false).putBoolean("sendScreenshots",false).putInt("maxSteps",8).commit();
+            app.settings.save(new JSONObject().put("baseUrl","http://127.0.0.1:"+server.getAddress().getPort()).put("provider","openai_chat").put("model","controlled-owner-question-fixture").put("supportsImageInput",false).put("sendScreenshots",false).put("maxSteps",8));
         }
         JSONObject start(int modelBudget)throws Exception{
             return assistant.handle("send",new JSONObject().put("message","Ask the fixture's ordinary question, then use my answer").put("clientMessageId",UUID.randomUUID().toString())
@@ -65,7 +67,7 @@ public final class OwnerQuestionRunnerNativeTest {
         }
         String grant(String run)throws Exception{var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);var db=(android.database.sqlite.SQLiteDatabase)field.get(app.tasks);try(var row=db.rawQuery("SELECT grant_json FROM runs WHERE run_id=?",new String[]{run})){assertTrue(row.moveToFirst());return row.getString(0);}}
         int runs(String id)throws Exception{var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);var db=(android.database.sqlite.SQLiteDatabase)field.get(app.tasks);try(var row=db.rawQuery("SELECT count(*) FROM runs WHERE task_id=?",new String[]{id})){assertTrue(row.moveToFirst());return row.getInt(0);}}
-        public void close()throws Exception{assistant.handle("cancel",new JSONObject());assistant.close();server.stop(0);var field=EngineApplication.class.getDeclaredField("capabilityWorkers");field.setAccessible(true);((java.util.concurrent.ExecutorService)field.get(app)).shutdownNow();}
+        public void close()throws Exception{try{assistant.handle("cancel",new JSONObject());}finally{server.stop(0);ReadyApplicationFixture.closeHost(app);}}
     }
     @Test public void nativeTaskPageAnswerReturnsToSameRunWithOriginalGrantAndCumulativeUsage()throws Exception{try(Fixture f=new Fixture()){
         JSONObject ack=f.start(4),waiting=f.waiting(ack.getString("taskId"));String run=waiting.getString("runId"),grant=f.grant(run);int epoch=waiting.getInt("coordinatorEpoch"),used=waiting.getJSONObject("executionScope").getInt("modelCallsUsed");

@@ -3,7 +3,7 @@ package dev.pocketengine.ui
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal data class UiMessage(val role: String, val content: String, val at: Long, val taskId: String? = null, val id: String? = null, val submission: JSONObject? = null, val attachmentCount: Int = 0, val attachments: List<UiChatAttachment> = emptyList(), val sourceRevision: Long = 1, val attachmentFiles: List<JSONObject> = emptyList(), val memoryReference: JSONObject? = null, val ownerOriginalLocator: JSONObject? = null, val phoneResult: UiPhoneResult? = null)
+internal data class UiMessage(val role: String, val content: String, val at: Long, val taskId: String? = null, val id: String? = null, val submission: JSONObject? = null, val attachmentCount: Int = 0, val attachments: List<UiChatAttachment> = emptyList(), val sourceRevision: Long = 1, val attachmentFiles: List<JSONObject> = emptyList(), val memoryReference: JSONObject? = null, val ownerOriginalLocator: JSONObject? = null, val phoneResult: UiPhoneResult? = null, val replyContext: UiReplyContext? = null, val taskResult: UiTaskResult? = null)
 internal data class UiAttachmentOpen(val checking: Boolean = false, val requested: Boolean = false, val error: String? = null)
 internal data class UiConversation(val id: String, val title: String, val updatedAt: Long)
 internal data class UiProject(val id: String, val name: String)
@@ -40,6 +40,9 @@ internal data class PocketUiState(
     val notificationsEnabled: Boolean = false,
     val phoneReadiness: PhoneReadinessState = PhoneReadinessState(),
     val activeTaskId: String? = null,
+    val activePhoneTaskIds: List<String> = emptyList(),
+    val maximumActiveBackgroundPhoneRuns: Int = 0,
+    val foregroundTaskId: String? = null,
     val tasks: List<UiTask> = emptyList(),
     val conversations: List<UiConversation> = emptyList(),
     val conversationId: String? = null,
@@ -48,6 +51,7 @@ internal data class PocketUiState(
     val chatBusy: Boolean = false,
     val chatSubmitting: Boolean = false,
     val chatActiveTurn: JSONObject? = null,
+    val foregroundTurn: JSONObject? = null,
     val chatSendMode: String = "queue",
     val chatReceipts: Map<String, JSONObject> = emptyMap(),
     val selectedChatAttachments: List<UiChatAttachment> = emptyList(),

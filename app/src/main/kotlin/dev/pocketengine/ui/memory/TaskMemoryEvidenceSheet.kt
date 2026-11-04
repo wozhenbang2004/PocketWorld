@@ -276,7 +276,11 @@ fun TaskMemoryEvidenceSheet(
                             Text(when (proof.optString("phase")) { "provided_to_request" -> "已提供 · 采用未证实"; "prepared" -> "仅检索"; else -> "提供状态不可核对" }, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         EvidenceText("版本 ${TaskMemoryEvidenceGuard.revision(record)} · ${rowStatus(record.optString("status"))}")
-                        if (proof.optBoolean("selectionDiagnosticsAvailable")) EvidenceText(if (record.optString("selectionReason") == "owner_core") "选入原因：你明确选择的核心参考" else "选入原因：匹配这轮任务的检索词")
+                        if (proof.optBoolean("selectionDiagnosticsAvailable")) EvidenceText(when (record.optString("selectionReason")) {
+                            "owner_core" -> "选入原因：你明确选择的核心参考"
+                            "owner_current" -> "选入原因：与你有关的当前记忆"
+                            else -> "选入原因：匹配这轮任务的检索词"
+                        })
                         if (proof.optString("status") in setOf("current", "invalidated") && record.optString("status") == "current") {
                             MemoryQuotedText(record.getString("text"), record.getString("id") + TaskMemoryEvidenceGuard.revision(record))
                             EvidenceText(record.optString("source", "来源声明不代表事实已核实"))

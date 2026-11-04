@@ -102,7 +102,7 @@ class PhoneResultProjectionTest {
             .put("executionAuthorized", true).put("resultVerified", true)
             .put("taskResultEvidence", JSONObject().put("rawToolBody", "must stay native"))
         val result = requireNotNull(UiPhoneResult.fromNativeMessage(row)).toJson()
-        assertEquals(setOf("taskId", "runId", "epoch", "deliveryId", "status", "endedAt", "summaryTruncated", "summaryChars"), result.keySet())
+        assertEquals(setOf("taskId", "runId", "epoch", "deliveryId", "status", "endedAt", "summaryTruncated", "summaryChars"), result.keys().asSequence().toSet())
         assertEquals(1_790_000_000_000L, result.getLong("endedAt"))
         assertTrue(result.getBoolean("summaryTruncated")); assertEquals(25_000, result.getInt("summaryChars"))
         assertFalse(result.toString().contains("must stay native"))

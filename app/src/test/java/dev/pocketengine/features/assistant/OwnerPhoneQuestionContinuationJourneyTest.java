@@ -28,6 +28,7 @@ import dev.pocketengine.runtime.ModelGateway;
 import dev.pocketengine.runtime.models.ModelBinding;
 import dev.pocketengine.runtime.models.ModelFacts;
 import dev.pocketengine.testutil.HttpServer;
+import dev.pocketengine.testutil.ReadyApplicationFixture;
 import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -62,7 +63,7 @@ import org.robolectric.annotation.SQLiteMode;
  * SQLite audit. The physical tree and local model responses are explicit fixtures. This
  * does not certify a real phone, provider, OS background delivery or notification visuals. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class)
+@Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class,shadows=ReadyApplicationFixture.NoUnrelatedStartup.class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 @LooperMode(LooperMode.Mode.PAUSED)
 public final class OwnerPhoneQuestionContinuationJourneyTest {
@@ -88,14 +89,14 @@ public final class OwnerPhoneQuestionContinuationJourneyTest {
     private final List<JSONObject> requests=new CopyOnWriteArrayList<>();
     private final CountDownLatch releaseWorker=new CountDownLatch(1),secondRequest=new CountDownLatch(1),releaseSecondResponse=new CountDownLatch(1);
 
-    @Before public void nativeKeys(){
+    @Before public void nativeKeys()throws Exception{
         Security.addProvider(new java.security.Provider("PhoneQuestionJourneyKeys",1.0d,"Test-only AndroidKeyStore"){{
             put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());
         }});
+        app=(EngineApplication)RuntimeEnvironment.getApplication();ReadyApplicationFixture.initializeHost(app);db=(SQLiteDatabase)get(app.tasks,"db");
     }
 
     @Test public void actualRemoteInputResumesTheOriginalWorkerThroughHttpAndSettlesTheSameRun()throws Exception {
-        app=(EngineApplication)RuntimeEnvironment.getApplication();db=(SQLiteDatabase)get(app.tasks,"db");
         startModel();configureOriginalModel();
         shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS);
         accessibilityController=Robolectric.buildService(PhoneAccessibilityService.class).create();
@@ -208,10 +209,10 @@ public final class OwnerPhoneQuestionContinuationJourneyTest {
     }
 
     private void configureOriginalModel()throws Exception {
-        app.getSharedPreferences("private_settings",0).edit().putString("baseUrl","http://127.0.0.1:"+model.getAddress().getPort())
-            .putString("provider","openai_chat").putString("model","ordinary-phone-continuation-fixture")
-            .putBoolean("supportsImageInput",false).putBoolean("sendScreenshots",false).putBoolean("localCaptureAllowed",false).putBoolean("localOcrAllowed",false)
-            .putInt("maxSteps",8).putInt("requestTimeoutSeconds",20).commit();
+        app.settings.save(new JSONObject().put("baseUrl","http://127.0.0.1:"+model.getAddress().getPort())
+            .put("provider","openai_chat").put("model","ordinary-phone-continuation-fixture")
+            .put("supportsImageInput",false).put("sendScreenshots",false).put("localCaptureAllowed",false).put("localOcrAllowed",false)
+            .put("maxSteps",8).put("requestTimeoutSeconds",20));
         assertNotNull("the original App must mount its model catalog",app.modelConnections);
         app.modelConnections.connections();app.modelConnections.configure(null,ModelBinding.Format.OPENAI,URI.create(app.settings.apiConfigForCatalog().baseUrl+"/models"));
         ModelConfig selected=app.settings.apiConfigForCatalog();ModelBinding binding=selected.capabilityBinding;
@@ -314,7 +315,7 @@ public final class OwnerPhoneQuestionContinuationJourneyTest {
             try{if(serviceController!=null)serviceController.destroy();if(worker!=null)worker.awaitTermination(5,TimeUnit.SECONDS);shadowOf(Looper.getMainLooper()).idle();}
             finally{
                 if(receiver!=null)app.unregisterReceiver(receiver);if(accessibilityController!=null)accessibilityController.destroy();if(model!=null)model.stop(0);
-                if(app!=null){app.onTerminate();if(app.features!=null)app.features.close();}if(db!=null&&db.isOpen())db.close();Security.removeProvider("PhoneQuestionJourneyKeys");
+                try{if(app!=null)ReadyApplicationFixture.closeHost(app);}finally{Security.removeProvider("PhoneQuestionJourneyKeys");}
             }
         }
     }

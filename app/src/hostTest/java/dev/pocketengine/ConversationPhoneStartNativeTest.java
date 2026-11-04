@@ -61,6 +61,9 @@ public final class ConversationPhoneStartNativeTest {
     private EngineApplication app;private AssistantModule assistant;private Queue queue;
     private static Field field(Class<?> type,String name)throws Exception{Field field=type.getDeclaredField(name);field.setAccessible(true);return field;}
     @Before public void prepare()throws Exception {
+        // Shadowed Application bytecode uses Robolectric's wall clock; ordinary store
+        // classes use the JVM clock. Align them before testing a real native deadline.
+        android.os.SystemClock.setCurrentTimeMillis(System.currentTimeMillis());
         app=(EngineApplication)RuntimeEnvironment.getApplication();app.deleteDatabase(TaskStore.DATABASE_NAME);
         app.getSharedPreferences("private_settings",0).edit().clear().commit();
         app.tasks=new TaskStore(app);dev.pocketengine.testutil.ReadyApplicationFixture.complete(app);
@@ -101,11 +104,20 @@ public final class ConversationPhoneStartNativeTest {
         assertNull(app.tasks.get(closed.view().getString("requestId"),false));assertNull(shadowOf(app).getNextStartedService());
     }
     @Test public void exactNativeReviewStartsOnceAndDuplicateDoesNotRenewScopeOrRun()throws Exception {
-        var review=review();long confirmedAt=System.currentTimeMillis();JSONObject accepted=start(review);String id=accepted.getString("taskId");
+        var review=review();long[] confirmedAt={-1L};
+        JSONObject accepted=app.startConversationPhone(review,true,()->true,allocated->{
+            // EngineApplication is instrumented and reads Robolectric's fixed wall
+            // clock, whereas this test and TaskStore read the advancing JVM clock.
+            // Pin the former at the actual native allocation boundary: aligning only
+            // in @Before leaves fixture setup time incorrectly deducted from the scope.
+            assertEquals(-1L,confirmedAt[0]);confirmedAt[0]=System.currentTimeMillis();
+            assertTrue(android.os.SystemClock.setCurrentTimeMillis(confirmedAt[0]));
+        });String id=accepted.getString("taskId");
         assertTrue(accepted.getBoolean("accepted"));assertTrue(accepted.getBoolean("admitted"));assertEquals(review.view().getString("requestId"),id);
         assertEquals("reviewed-model",app.config(id).model);JSONObject scope=app.tasks.get(id,false).getJSONObject("executionScope");
-        assertEquals(7,scope.getInt("toolLimit"));assertEquals(9,scope.getInt("modelCallLimit"));assertTrue(scope.getLong("deadlineAt")>=confirmedAt+30*60_000L);
+        assertEquals(7,scope.getInt("toolLimit"));assertEquals(9,scope.getInt("modelCallLimit"));assertEquals(confirmedAt[0]+30*60_000L,scope.getLong("deadlineAt"));
         Intent intent=shadowOf(app).getNextStartedService();assertNotNull(intent);assertEquals(PhoneRunService.START,intent.getAction());
+        assertTrue(android.os.SystemClock.setCurrentTimeMillis(confirmedAt[0]+60_000L));
         JSONObject duplicate=app.startConversationPhone(review,true,()->false,ignored->{throw new AssertionError("duplicate allocated again");});
         assertTrue(duplicate.getBoolean("duplicate"));assertEquals(id,duplicate.getString("taskId"));assertEquals(accepted.getString("runId"),duplicate.getString("runId"));
         assertEquals(accepted.getInt("epoch"),duplicate.getInt("epoch"));assertEquals(scope.toString(),app.tasks.get(id,false).getJSONObject("executionScope").toString());

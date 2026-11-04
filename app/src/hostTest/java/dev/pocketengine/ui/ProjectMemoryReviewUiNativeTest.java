@@ -12,6 +12,7 @@ import dev.pocketengine.features.memory.MemoryModule;
 import dev.pocketengine.features.memory.ProjectMemoryNamespaces;
 import dev.pocketengine.features.skills.SkillsModule;
 import dev.pocketengine.features.workspace.WorkspaceModule;
+import dev.pocketengine.media.MediaController;
 import dev.pocketengine.store.SecretVault;
 import dev.pocketengine.store.SettingsStore;
 import dev.pocketengine.store.TaskStore;
@@ -23,6 +24,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
@@ -58,10 +60,19 @@ public final class ProjectMemoryReviewUiNativeTest {
     }
     static final class Fixture implements AutoCloseable {
         final EngineApplication app=new EngineApplication();final PocketWorldController controller;final ExecutorService io;private final ObservedExecutor observed;final android.database.sqlite.SQLiteDatabase db;
+        private final org.robolectric.android.controller.ActivityController<ComposeActivity> activityOwner;
+        private final MediaController media;
         final WorkspaceModule workspace;final LocalModule local;final MemoryModule memory;final ProjectMemoryNamespaces nativeScopes;
         Fixture()throws Exception{
             Method attach=Application.class.getDeclaredMethod("attach",android.content.Context.class);attach.setAccessible(true);attach.invoke(app,RuntimeEnvironment.getApplication());app.deleteDatabase("pocket-world.db");app.settings=new SettingsStore(app);app.tasks=new TaskStore(app);var database=TaskStore.class.getDeclaredField("db");database.setAccessible(true);db=(android.database.sqlite.SQLiteDatabase)database.get(app.tasks);app.features=new FeatureHost(event->{},app.tasks,()->false);
-            FeatureContext context=new FeatureContext(app,app.settings,new SecretVault(app),event->{});workspace=new WorkspaceModule(context);local=new LocalModule(context,workspace);app.features.register(workspace);app.features.register(local);app.features.register(new dev.pocketengine.features.attachments.AttachmentsModule(context));MemorySourceBridge sources=new MemorySourceBridge(app.features,app.tasks);sources.bindWorkspace(workspace);memory=new MemoryModule(context,sources.assertionResolver());app.features.register(memory);app.features.register(new SkillsModule(context,memory::resolveExperience));app.features.setMemorySynchronizer(sources::synchronize);app.nativeOwnerWorkflows=new NativeOwnerWorkflows(app.features,context,app.tasks,sources);nativeScopes=app.nativeOwnerWorkflows.projectMemoryForOwner();controller=new PocketWorldController(new ComposeActivity(),app);var field=PocketWorldController.class.getDeclaredField("io");field.setAccessible(true);observed=new ObservedExecutor((ExecutorService)field.get(controller));io=observed;field.set(controller,io);
+            FeatureContext context=new FeatureContext(app,app.settings,new SecretVault(app),event->{});workspace=new WorkspaceModule(context);local=new LocalModule(context,workspace);app.features.register(workspace);app.features.register(local);app.features.register(new dev.pocketengine.features.attachments.AttachmentsModule(context));MemorySourceBridge sources=new MemorySourceBridge(app.features,app.tasks);sources.bindWorkspace(workspace);memory=new MemoryModule(context,sources.assertionResolver());app.features.register(memory);app.features.register(new SkillsModule(context,memory::resolveExperience));app.features.setMemorySynchronizer(sources::synchronize);app.nativeOwnerWorkflows=new NativeOwnerWorkflows(app.features,context,app.tasks,sources);nativeScopes=app.nativeOwnerWorkflows.projectMemoryForOwner();
+            // Component fixture: attach the original Activity and honor mountBusiness's media-before-controller
+            // constructor contract. This does not simulate App bootstrap or grant a foreground/audio lease.
+            activityOwner=Robolectric.buildActivity(ComposeActivity.class);
+            ComposeActivity activity=activityOwner.get();Shadows.shadowOf(activity).setApplication(app);
+            media=new MediaController(activity,app::publish);
+            var mediaField=ComposeActivity.class.getDeclaredField("media");mediaField.setAccessible(true);mediaField.set(activity,media);
+            controller=new PocketWorldController(activity,app);var field=PocketWorldController.class.getDeclaredField("io");field.setAccessible(true);observed=new ObservedExecutor((ExecutorService)field.get(controller));io=observed;field.set(controller,io);
         }
         JSONObject create(String name)throws Exception{
             String id=workspace.handle("create",new JSONObject().put("name",name)).getString("id");workspace.handle("write",new JSONObject().put("projectId",id).put("path","notes.txt").put("content",WORDS).put("expectedVersion",0));JSONObject checkout=local.handle("prepare",new JSONObject().put("projectId",id));JSONArray choices=nativeScopes.choicesForOwner();for(int i=0;i<choices.length();i++){JSONObject row=choices.getJSONObject(i);if(checkout.getString("id").equals(row.getString("checkoutId")))return row;}throw new AssertionError("missing actual project choice");
@@ -94,7 +105,7 @@ public final class ProjectMemoryReviewUiNativeTest {
         ProjectMemoryNamespaces.Selection token()throws Exception{var field=PocketWorldController.class.getDeclaredField("memoryReviewScope");field.setAccessible(true);Object scope=field.get(controller);var getter=scope.getClass().getDeclaredMethod("getSelected");getter.setAccessible(true);return (ProjectMemoryNamespaces.Selection)getter.invoke(scope);}
         JSONObject file()throws Exception{return result("projectFileChoices",new JSONObject()).getJSONArray("files").getJSONObject(0);}
         JSONObject propose(JSONObject file)throws Exception{return result("proposeProjectFile",new JSONObject().put("path",file.getString("path")).put("version",file.getInt("version")).put("revisionId",file.getString("revisionId")).put("sha256",file.getString("sha256")).put("offset",0).put("chars",4000));}
-        public void close(){controller.detach();app.onTerminate();db.close();}
+        public void close(){controller.detach();media.close();activityOwner.close();app.onTerminate();db.close();}
     }
     @Test public void ownerCanSelectRealProjectProposeReviewAndForgetWithoutPrivateFallback()throws Exception{try(Fixture f=new Fixture()){
         JSONObject choice=f.create("当前项目");f.enter();assertEquals("private",f.snapshot().getString("namespaceStatus"));f.choose(choice);assertEquals("project",f.snapshot().getString("namespaceStatus"));assertEquals(choice.getString("spaceId"),f.snapshot().getJSONObject("scope").getString("spaceId"));JSONObject file=f.file();assertEquals("text",file.getString("kind"));assertTrue(file.getLong("sizeBytes")>0);JSONObject result=f.propose(file),candidate=result.getJSONObject("candidate");assertFalse(result.getBoolean("modelCalled"));assertEquals(WORDS,candidate.getString("text"));assertEquals("pending",candidate.getString("status"));JSONObject record=f.result("acceptCandidate",new JSONObject().put("id",candidate.getString("id")).put("revision",candidate.getLong("revision"))).getJSONObject("record");assertEquals(choice.getString("spaceId"),record.getString("spaceId"));assertEquals(0,f.memory.handle("list",new JSONObject().put("scope",owner())).getJSONArray("records").length());

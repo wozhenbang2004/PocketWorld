@@ -1,12 +1,33 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, SelectField, TextAreaField, TextField } from './forms-library';
+import { assertionEvidenceText } from './memory-assertion-evidence';
 
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
 const date = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? new Date(value).toISOString() : '';
 
+type EditableAssertionProps = { readOnly?: false; readHandle: string; candidate: Data; run: Run; onReview: (value: Data) => void };
+type AssertionProps = EditableAssertionProps | { readOnly: true; candidate: Data; title?: string };
+
+/** Both surfaces read the same assertion. Draft review never supplies a knowledge edit handle. */
+export function MemoryAssertionFields(props: AssertionProps) {
+  if (!props.readOnly) return <EditableAssertionFields {...props} />;
+  const value = props.candidate.assertion;
+  if (!value || typeof value !== 'object') return null;
+  const kinds: Data = { user_said: '你的原话', observed: '直接观察', inferred: '推测', told: '转述', imagined: '计划或想象' };
+  const times: Array<[string, string]> = [['eventTime', '发生或计划时间'], ['validFrom', '生效时间'], ['validTo', '结束时间'], ['reviewAfter', '下次核对时间']];
+  const spans: Data[] = Array.isArray(value.evidenceSpans) ? value.evidenceSpans : [];
+  return <section className="pw-source-record pw-memory-assertion" aria-label={props.title || '这条记忆的主体与依据'}><h3>{props.title || '主体与依据'}</h3>
+    <dl className="pw-facts"><div><dt>主体</dt><dd>{value.subjectId === 'owner' ? '你' : value.subjectLabel || '尚未明确'}</dd></div>
+      <div><dt>陈述</dt><dd>{value.predicate} · {value.object}</dd></div><div><dt>类型</dt><dd>{kinds[value.kind] || value.kind}</dd></div>
+      {value.condition && <div><dt>适用条件</dt><dd>{value.condition}</dd></div>}
+      {times.filter(([key]) => typeof value[key] === 'number' && Number.isFinite(value[key])).map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{new Date(value[key]).toLocaleString('zh-CN')}</dd></div>)}
+    </dl>{spans.map((span, index) => <blockquote className="pw-reading-copy" key={`${span.sourceRef?.sourceId || ''}:${span.offset}:${index}`}><p>{assertionEvidenceText(span, props.candidate.assertionEvidence) ?? '原句当前不可读取'}</p><footer className="pw-muted">原句 · 来源修订 {span.sourceRef?.revision ?? '待核对'}</footer></blockquote>)}
+  </section>;
+}
+
 /** Adapts the original candidate identity review into the existing BoardUI form components. */
-export function MemoryAssertionFields({ readHandle, candidate, run, onReview }: { readHandle: string; candidate: Data; run: Run; onReview: (value: Data) => void }) {
+function EditableAssertionFields({ readHandle, candidate, run, onReview }: EditableAssertionProps) {
   const old = candidate.assertion || {};
   const [subject, setSubject] = useState(old.subjectId === 'owner' ? 'owner' : old.subjectId ? 'candidate' : '');
   const [subjectLabel, setSubjectLabel] = useState(old.subjectLabel || ''), [target, setTarget] = useState(old.objectId === 'owner' ? 'owner' : old.objectId ? 'candidate' : '');

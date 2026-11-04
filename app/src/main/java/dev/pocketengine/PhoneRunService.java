@@ -31,6 +31,8 @@ import org.json.JSONObject;
 public final class PhoneRunService extends Service {
     public static final String START="dev.pocketengine.START",STOP="dev.pocketengine.STOP",CONTINUE="dev.pocketengine.CONTINUE";
     public static final String OWNER_DISABLE_ALL="dev.pocketengine.OWNER_DISABLE_ALL";
+    /** Holds visibility for an already admitted capability run; never starts a runner. */
+    public static final String OWNER_WORK_LIFETIME="dev.pocketengine.OWNER_WORK_LIFETIME";
     public static final String DEVICE_TOOLS="dev.pocketengine.DEVICE_TOOLS";
     public static final String DEVICE_GOAL="dev.pocketengine.DEVICE_GOAL",DEVICE_GOAL_CONTINUE="dev.pocketengine.DEVICE_GOAL_CONTINUE",DEVICE_GOAL_CLOSE_RESULT="dev.pocketengine.DEVICE_GOAL_CLOSE_RESULT";
     private volatile dev.pocketengine.features.devices.DeviceGoalSession deviceGoal;
@@ -50,6 +52,13 @@ public final class PhoneRunService extends Service {
     private volatile dev.pocketengine.features.proxy.NativeHarnessGatewayBridge gatewayOnly;
     private static final String CHANNEL=PhoneReadiness.TASK_CHANNEL;
     private static final int NOTIFICATION=100;
+    private static final int OWNER_WORK_NOTIFICATION=102;
+    /** Main-thread-only exact native run identities. Task events cannot replace these tuples. */
+    private final java.util.LinkedHashMap<String,OwnerWorkLifetime> ownerWorkLifetimes=new java.util.LinkedHashMap<>();
+    private static final class OwnerWorkLifetime {
+        final String task,run;final int epoch;JSONObject view;
+        OwnerWorkLifetime(String task,String run,int epoch,JSONObject view){this.task=task;this.run=run;this.epoch=epoch;this.view=view;}
+    }
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
     private final java.util.concurrent.ScheduledExecutorService leaseSupervisor=Executors.newScheduledThreadPool(dev.pocketengine.core.ExecutionResources.MAX_BACKGROUND_PHONE_RUNS,r->{Thread t=new Thread(r,"pocket-task-lease");t.setDaemon(true);return t;});
     private volatile java.util.concurrent.ScheduledFuture<?> leaseWatch;
@@ -74,6 +83,8 @@ public final class PhoneRunService extends Service {
     private final java.util.concurrent.ConcurrentHashMap<String,BackgroundPhoneRun> backgroundRuns=new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.atomic.AtomicInteger backgroundNotificationIds=new java.util.concurrent.atomic.AtomicInteger(1000);
     private final EngineApplication.Observer observer=event->{
+        if(destroyed)return;
+        if("task".equals(event.optString("type"))){JSONObject changed=event.optJSONObject("task");if(changed!=null&&ownerWorkLifetimes.containsKey(changed.optString("id")))settleForegroundOwnership(latestServiceStartId);}
         if("task".equals(event.optString("type"))){JSONObject changed=event.optJSONObject("task");BackgroundPhoneRun session=changed==null?null:backgroundRuns.get(changed.optString("id"));if(session!=null){session.onTaskEvent(changed);refreshBackgroundNotifications();}}
         if(runningId==null||!"task".equals(event.optString("type")))return;
         JSONObject task=event.optJSONObject("task");if(task==null||!runningId.equals(task.optString("id")))return;
@@ -92,6 +103,7 @@ public final class PhoneRunService extends Service {
     @Override public int onStartCommand(Intent intent,int flags,int startId){
         latestServiceStartId=Math.max(latestServiceStartId,startId);
         if(intent==null){settleForegroundOwnership(startId);return START_NOT_STICKY;}
+        if(OWNER_WORK_LIFETIME.equals(intent.getAction())){retainOwnerWorkLifetime(intent,startId);return START_NOT_STICKY;}
         if(OWNER_DISABLE_ALL.equals(intent.getAction())){
             try{if(app.executionAllowed()||intent.getLongExtra("ownerExecutionRevision",-1)!=app.tasks.ownerExecutionState().getLong("revision")){settleForegroundOwnership(startId);return START_NOT_STICKY;}}
             catch(Exception unknown){app.error("原总停用广播身份尚未确认；未选择其他任务");settleForegroundOwnership(startId);return START_NOT_STICKY;}
@@ -212,6 +224,7 @@ public final class PhoneRunService extends Service {
             else notifications.notify(session.notificationId,note);
         }catch(Exception unavailable){app.error("原后台任务通知暂不可用，请在任务页核对原执行");}
         var receiver=receiverOnly;if(receiver!=null)notifications.notify(RECEIVER_NOTIFICATION,receiverNotification(receiver));
+        showOwnerWorkNotification(false);
     }
     /** Native original-task recovery only; no AgentRunner, PhonePort or phone.local grant. */
     private void startGatewayParent(Intent intent,int startId){
@@ -220,12 +233,44 @@ public final class PhoneRunService extends Service {
     }
     private void watchGatewayParent(EngineApplication.GatewayParentRun owner,int startId){if(destroyed||gatewayParent!=owner)return;try{owner.checkCurrent();JSONObject projection=owner.snapshot();String state=projection.optString("state")+":"+projection.optInt("nativeCallsInProgress")+":"+projection.optInt("remainingModels");if(!state.equals(lastGatewayProjection)){lastGatewayProjection=state;app.refreshGatewayParentProjection(owner.task());getSystemService(NotificationManager.class).notify(NOTIFICATION,notification(app.tasks.get(owner.task(),false)));}}catch(Exception stopped){stopGatewayParent(owner,startId);return;}main.postDelayed(()->watchGatewayParent(owner,startId),500);}
     private void stopGatewayParent(EngineApplication.GatewayParentRun owner,int startId){if(gatewayParent!=owner)return;gatewayParent=null;gatewayOnly=null;runningId=null;runningRunId=null;ownerControl=null;lastGatewayProjection=null;CLEANUP.execute(()->{try{owner.close();}finally{main.post(()->settleForegroundOwnership(startId));}});settleForegroundOwnership(startId);}
-    private void startTaskForeground(JSONObject task){startForeground(NOTIFICATION,notification(task));var resource=receiverOnly;if(resource!=null)getSystemService(NotificationManager.class).notify(RECEIVER_NOTIFICATION,receiverNotification(resource));}
+    private void startTaskForeground(JSONObject task){startForeground(NOTIFICATION,notification(task));var resource=receiverOnly;if(resource!=null)getSystemService(NotificationManager.class).notify(RECEIVER_NOTIFICATION,receiverNotification(resource));showOwnerWorkNotification(false);}
+    private void retainOwnerWorkLifetime(Intent intent,int startId){
+        String id=intent.getStringExtra("taskId"),run=intent.getStringExtra("runId");int epoch=intent.getIntExtra("epoch",-1);
+        if(destroyed)return;
+        try{
+            if(id!=null&&!id.isEmpty()&&run!=null&&!run.isEmpty()&&epoch>0){
+                JSONObject current=app.ownerWorkServiceTask(id,run,epoch);
+                if(current!=null)ownerWorkLifetimes.put(id,new OwnerWorkLifetime(id,run,epoch,current));
+            }
+        }catch(Exception unavailable){app.error("原后台工作通知暂不可核对，请在应用中查看原工作");}
+        settleForegroundOwnership(startId);
+    }
+    private void refreshOwnerWorkLifetimes(){
+        for(var entries=ownerWorkLifetimes.entrySet().iterator();entries.hasNext();){
+            OwnerWorkLifetime original=entries.next().getValue();JSONObject current=null;
+            try{current=app.ownerWorkServiceTask(original.task,original.run,original.epoch);}
+            catch(Exception unavailable){app.error("原后台工作通知暂不可核对，请在应用中查看原工作");}
+            if(current==null)entries.remove();else original.view=current;
+        }
+    }
+    private void showOwnerWorkNotification(boolean foreground){
+        NotificationManager notifications=getSystemService(NotificationManager.class);
+        if(ownerWorkLifetimes.isEmpty()){notifications.cancel(OWNER_WORK_NOTIFICATION);return;}
+        Intent open=new Intent(this,dev.pocketengine.ui.ComposeActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent view=PendingIntent.getActivity(this,OWNER_WORK_NOTIFICATION,open,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+        String text=ownerWorkLifetimes.size()+" 项后台工作 · 打开应用查看进度";
+        if(ownerWorkLifetimes.size()==1){JSONObject task=ownerWorkLifetimes.values().iterator().next().view;String status=switch(task.optString("status")){case "preparing","queued"->"准备中";case "paused"->"已暂停";case "pausing"->"正在暂停";case "stopping"->"正在停止";default->"进行中";};String goal=task.optString("goal");text=status+" · "+(goal.isEmpty()?"打开应用查看原工作":goal.substring(0,Math.min(120,goal.length())));}
+        Notification notice=new Notification.Builder(this,CHANNEL).setSmallIcon(R.drawable.ic_app).setContentTitle("管家后台工作").setContentText(text).setContentIntent(view).setOngoing(true).setOnlyAlertOnce(true).setCategory(Notification.CATEGORY_SERVICE).setVisibility(Notification.VISIBILITY_PRIVATE).build();
+        if(foreground)startForeground(OWNER_WORK_NOTIFICATION,notice);else notifications.notify(OWNER_WORK_NOTIFICATION,notice);
+    }
     /** Composable resource foreground ownership, never a task admission or release. Main thread only. */
     private void settleForegroundOwnership(int completedStartId){
         if(destroyed)return;
+        refreshOwnerWorkLifetimes();
         if(!backgroundRuns.isEmpty()){refreshBackgroundNotifications();return;}
-        if(runningId!=null||app.activeId()!=null)return;
+        if(runningId!=null||app.activeId()!=null){showOwnerWorkNotification(false);return;}
+        if(!ownerWorkLifetimes.isEmpty()){showOwnerWorkNotification(true);NotificationManager notifications=getSystemService(NotificationManager.class);notifications.cancel(NOTIFICATION);var receiver=receiverOnly;if(receiver!=null)notifications.notify(RECEIVER_NOTIFICATION,receiverNotification(receiver));return;}
+        getSystemService(NotificationManager.class).cancel(OWNER_WORK_NOTIFICATION);
         var resource=receiverOnly;if(resource!=null){startForeground(RECEIVER_NOTIFICATION,receiverNotification(resource));getSystemService(NotificationManager.class).cancel(NOTIFICATION);return;}
         stopForeground(STOP_FOREGROUND_REMOVE);getSystemService(NotificationManager.class).cancel(RECEIVER_NOTIFICATION);stopSelfResult(Math.max(latestServiceStartId,completedStartId));
     }
@@ -234,7 +279,7 @@ public final class PhoneRunService extends Service {
         if(resource==null){settleForegroundOwnership(startId);return;}
         if(receiverOnly!=null&&receiverOnly!=resource){app.error("原设备监听尚未释放，不叠新监听");return;}
         receiverOnly=resource;
-        if(runningId==null&&backgroundRuns.isEmpty())startForeground(RECEIVER_NOTIFICATION,receiverNotification(resource));else getSystemService(NotificationManager.class).notify(RECEIVER_NOTIFICATION,receiverNotification(resource));
+        if(runningId==null&&backgroundRuns.isEmpty()&&ownerWorkLifetimes.isEmpty())startForeground(RECEIVER_NOTIFICATION,receiverNotification(resource));else getSystemService(NotificationManager.class).notify(RECEIVER_NOTIFICATION,receiverNotification(resource));
         NotificationManager notifications=getSystemService(NotificationManager.class);
         boolean visible=notifications.areNotificationsEnabled()&&(android.os.Build.VERSION.SDK_INT<33||checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)==android.content.pm.PackageManager.PERMISSION_GRANTED)&&notifications.getNotificationChannel(RECEIVER_CHANNEL).getImportance()!=NotificationManager.IMPORTANCE_NONE;
         if(!visible){resource.requestStop();stopDeviceReceiver(resource,startId);app.error("设备接收需要本机可见通知；未开启mTLS监听");return;}
@@ -587,7 +632,7 @@ public final class PhoneRunService extends Service {
             if(id.equals(runningId)){runningId=null;runningRunId=null;taskBackgroundPort=null;deviceGoal=null;pendingDeviceApproval=null;if(leaseWatch!=null){leaseWatch.cancel(false);leaseWatch=null;}}
             app.released(id,owner);app.pushTask(id);
             String active=app.activeId();
-            if(!destroyed&&(active==null||id.equals(active))){PhoneAccessibilityService phone=PhoneAccessibilityService.get();if(phone!=null)phone.hideControls(owner);if(receiverOnly==null)stopForeground(STOP_FOREGROUND_REMOVE);}
+            if(!destroyed&&(active==null||id.equals(active))){PhoneAccessibilityService phone=PhoneAccessibilityService.get();if(phone!=null)phone.hideControls(owner);}
             if(!destroyed)settleForegroundOwnership(startId);
         });
     }
@@ -634,6 +679,6 @@ public final class PhoneRunService extends Service {
     }
     private static String safeMessage(Exception e){String m=e.getMessage();return m==null?"任务执行异常，请查看步骤后重试":m.length()>250?m.substring(0,250):m;}
     private synchronized void releaseWakeLock(){if(wakeLock!=null){if(wakeLock.isHeld())wakeLock.release();wakeLock=null;}}
-    @Override public void onDestroy(){synchronized(this){destroyed=true;}for(BackgroundPhoneRun session:new java.util.ArrayList<>(backgroundRuns.values())){session.destroy();getSystemService(NotificationManager.class).cancel(session.notificationId);}backgroundRuns.clear();var receiver=receiverOnly;receiverOnly=null;if(receiver!=null){receiver.requestStop();CLEANUP.execute(()->{try{receiver.close();}catch(Exception ignored){}app.deviceReceiverReleased(receiver);});}receiverIo.shutdown();getSystemService(NotificationManager.class).cancel(RECEIVER_NOTIFICATION);if(gatewayParent!=null){destroyed=true;var owner=gatewayParent;gatewayParent=null;gatewayOnly=null;main.removeCallbacksAndMessages(null);CLEANUP.execute(owner::close);runningId=null;runningRunId=null;app.removeObserver(observer);worker.shutdownNow();leaseSupervisor.shutdownNow();super.onDestroy();return;}if(gatewayOnly!=null){destroyed=true;var bridge=gatewayOnly;gatewayOnly=null;main.removeCallbacksAndMessages(null);CLEANUP.execute(bridge::close);runningId=null;runningRunId=null;app.removeObserver(observer);worker.shutdownNow();leaseSupervisor.shutdownNow();super.onDestroy();return;}destroyed=true;waitingForUser=false;ownerWaitGeneration++;main.removeCallbacksAndMessages(null);JSONObject cleanup=closeHeldAsync();if(runningId!=null){String id=runningId;RunControl owner=ownerControl;if(owner!=null){try{app.stopOriginalPhoneRun(id,runningRunId,runningEpoch);}catch(Exception stale){owner.cancel();}}try{if(runningRunId!=null&&!runningRunId.isEmpty())app.tasks.endAttempt(id,runningRunId,"cancelled","执行服务已结束；原资源清理以回执为准，目标与上下文保留",withOriginalEvidence(id,runningRunId,runningEpoch,cleanup));else app.setStatus(id,"interrupted","执行服务已结束，请检查已有结果",owner);}catch(Exception failure){app.error("任务中断状态保存失败，请核对已有结果");}app.released(id,owner);}app.removeObserver(observer);worker.shutdownNow();leaseSupervisor.shutdownNow();releaseWakeLock();PhoneAccessibilityService phone=PhoneAccessibilityService.get();if(phone!=null)phone.hideControls(ownerControl);super.onDestroy();}
+    @Override public void onDestroy(){synchronized(this){destroyed=true;}ownerWorkLifetimes.clear();getSystemService(NotificationManager.class).cancel(OWNER_WORK_NOTIFICATION);for(BackgroundPhoneRun session:new java.util.ArrayList<>(backgroundRuns.values())){session.destroy();getSystemService(NotificationManager.class).cancel(session.notificationId);}backgroundRuns.clear();var receiver=receiverOnly;receiverOnly=null;if(receiver!=null){receiver.requestStop();CLEANUP.execute(()->{try{receiver.close();}catch(Exception ignored){}app.deviceReceiverReleased(receiver);});}receiverIo.shutdown();getSystemService(NotificationManager.class).cancel(RECEIVER_NOTIFICATION);if(gatewayParent!=null){destroyed=true;var owner=gatewayParent;gatewayParent=null;gatewayOnly=null;main.removeCallbacksAndMessages(null);CLEANUP.execute(owner::close);runningId=null;runningRunId=null;app.removeObserver(observer);worker.shutdownNow();leaseSupervisor.shutdownNow();super.onDestroy();return;}if(gatewayOnly!=null){destroyed=true;var bridge=gatewayOnly;gatewayOnly=null;main.removeCallbacksAndMessages(null);CLEANUP.execute(bridge::close);runningId=null;runningRunId=null;app.removeObserver(observer);worker.shutdownNow();leaseSupervisor.shutdownNow();super.onDestroy();return;}destroyed=true;waitingForUser=false;ownerWaitGeneration++;main.removeCallbacksAndMessages(null);JSONObject cleanup=closeHeldAsync();if(runningId!=null){String id=runningId;RunControl owner=ownerControl;if(owner!=null){try{app.stopOriginalPhoneRun(id,runningRunId,runningEpoch);}catch(Exception stale){owner.cancel();}}try{if(runningRunId!=null&&!runningRunId.isEmpty())app.tasks.endAttempt(id,runningRunId,"cancelled","执行服务已结束；原资源清理以回执为准，目标与上下文保留",withOriginalEvidence(id,runningRunId,runningEpoch,cleanup));else app.setStatus(id,"interrupted","执行服务已结束，请检查已有结果",owner);}catch(Exception failure){app.error("任务中断状态保存失败，请核对已有结果");}app.released(id,owner);}app.removeObserver(observer);worker.shutdownNow();leaseSupervisor.shutdownNow();releaseWakeLock();PhoneAccessibilityService phone=PhoneAccessibilityService.get();if(phone!=null)phone.hideControls(ownerControl);super.onDestroy();}
     @Override public IBinder onBind(Intent intent){return null;}
 }

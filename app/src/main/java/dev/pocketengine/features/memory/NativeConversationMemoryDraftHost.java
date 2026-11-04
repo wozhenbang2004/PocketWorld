@@ -24,17 +24,19 @@ public final class NativeConversationMemoryDraftHost {
         return new JSONObject().put("action",new JSONObject().put("type","string").put("enum",new JSONArray().put("create").put("update").put("forget")))
                 .put("text",text(4000)).put("layer",new JSONObject().put("type","string").put("enum",new JSONArray().put("fact").put("preference").put("episodic").put("procedural")))
                 .put("applicability",text(1000)).put("confidence",new JSONObject().put("type","number").put("minimum",0).put("maximum",1)).put("reason",text(1000))
-                .put("sources",new JSONObject().put("type","array").put("minItems",1).put("maxItems",20).put("items",source))
+                .put("sources",new JSONObject().put("type","array").put("maxItems",20).put("items",source))
+                .put("assertion",LearningAssertionDraft.proposalSchema())
                 .put("target",object(new JSONObject().put("id",text(80)).put("revision",integer(Long.MAX_VALUE)),"id","revision"));
     }
     /** Closed inert draft. In particular, assistant prose cannot provide user_said authority. */
     public static JSONObject checkedDraft(JSONObject supplied)throws Exception {
         if(supplied==null||supplied.toString().length()>32768)throw new IllegalArgumentException("记忆草稿超过本次原参数范围");
         JSONObject draft=new JSONObject(supplied.toString());String action=draft.getString("action");
-        Set<String> allowed=switch(action){case "create"->Set.of("action","text","layer","applicability","confidence","reason","sources");case "update"->Set.of("action","text","reason","sources","target");case "forget"->Set.of("action","reason","sources","target");default->throw new IllegalArgumentException("请选择新增、纠正或遗忘记忆");};
+        Set<String> allowed=switch(action){case "create"->Set.of("action","text","layer","applicability","confidence","reason","sources","assertion");case "update"->Set.of("action","text","reason","sources","target","assertion");case "forget"->Set.of("action","reason","sources","target");default->throw new IllegalArgumentException("请选择新增、纠正或遗忘记忆");};
         for(var fields=draft.keys();fields.hasNext();)if(!allowed.contains(fields.next()))throw new SecurityException("记忆草稿不能设置来源身份、权限、主体证明或保存状态");
         bounded(draft,"reason",1,1000);JSONArray selected=draft.getJSONArray("sources");if(selected.length()<1||selected.length()>20)throw new IllegalArgumentException("请选择1至20条真实主人消息");Set<String> ids=new HashSet<>();
         for(int i=0;i<selected.length();i++){JSONObject ref=selected.getJSONObject(i);if(ref.length()!=2||!identity(ref,"sourceId")||!ids.add(ref.getString("sourceId")))throw new SecurityException("来源只能是互不重复的原消息身份与版本");positive(ref,"revision");}
+        if(draft.has("assertion"))LearningAssertionDraft.checkIndexedProposal(draft.getJSONObject("assertion"),selected.length());
         if(action.equals("create")){bounded(draft,"text",1,4000);bounded(draft,"layer",1,20);if(draft.has("applicability"))bounded(draft,"applicability",0,1000);learningDraft(draft);}
         else {JSONObject target=draft.getJSONObject("target");if(target.length()!=2||!identity(target,"id"))throw new SecurityException("修改须选择确切旧记忆及其版本");positive(target,"revision");if(action.equals("update"))bounded(draft,"text",1,4000);}
         return draft;
@@ -43,6 +45,23 @@ public final class NativeConversationMemoryDraftHost {
     private static long positive(JSONObject row,String field)throws Exception{Object value=row.get(field);if(!(value instanceof Integer||value instanceof Long)||((Number)value).longValue()<1)throw new IllegalArgumentException("原修订必须为正整数");return ((Number)value).longValue();}
     private static String bounded(JSONObject row,String field,int minimum,int maximum)throws Exception{Object value=row.get(field);if(!(value instanceof String))throw new IllegalArgumentException("记忆内容须为文字");String text=(String)value;MemoryBook.validateUnicode(text);if(text.length()>maximum||text.trim().length()<minimum)throw new IllegalArgumentException("记忆内容长度超出审阅范围");return text.trim();}
     private static JSONObject learningDraft(JSONObject draft)throws Exception {JSONObject content=new JSONObject();for(String key:new String[]{"text","layer","reason","applicability","confidence"})if(draft.has(key))content.put(key,draft.get(key));return MemoryBook.checkedLearningDraft(content);}
+    private JSONObject learningDraft(JSONObject draft,JSONArray refs)throws Exception {
+        JSONObject content=learningDraft(draft);if(!draft.has("assertion"))return content;
+        JSONObject assertion=assertion(draft,refs,content.getString("text"));if(assertion!=null)content.put("assertion",assertion);return content;
+    }
+    private JSONObject assertion(JSONObject draft,JSONArray refs,String text)throws Exception {
+        JSONObject claim=new JSONObject(draft.getJSONObject("assertion").toString()),chosen=draft.getJSONArray("sources").getJSONObject(claim.getInt("sourceIndex"));claim.remove("sourceIndex");
+        SourceRef expected=null;for(int i=0;i<refs.length();i++){SourceRef ref=SourceRef.fromJson(refs.getJSONObject(i));if(ref.sourceId.equals(chosen.getString("sourceId"))&&ref.revision==chosen.getLong("revision"))expected=ref;}
+        if(expected==null||!"message".equals(expected.kind)||!"owner".equals(expected.ownerId)||!"private".equals(expected.spaceId)||memory.isSourceForgotten(scope(),expected))throw new SecurityException("人本草稿不是当前已准备的主人原消息");
+        sources.requireLearningReference(expected);var original=sources.read(expected);
+        if(original==null||!expected.equals(original.ref))throw new SecurityException("人本草稿原句不可读或版本已变化");
+        JSONObject checked=LearningAssertionDraft.checkedAssertion(claim,text,expected,original.text);
+        sources.requireLearningReference(expected);if(memory.isSourceForgotten(scope(),expected))throw new SecurityException("人本草稿原句已被遗忘");return checked;
+    }
+    private JSONObject updateDraft(JSONObject draft,JSONArray refs,JSONObject before)throws Exception {
+        JSONObject value=new JSONObject().put("text",bounded(draft,"text",1,4000));
+        if(draft.has("assertion")){JSONObject assertion=assertion(draft,refs,value.getString("text"));if(assertion==null)throw new SecurityException("纠正主体须为明确主人；其他主体请走原生身份审阅");value.put("assertion",assertion);}return value;
+    }
     public static String proposalDigest(JSONObject draft)throws Exception{return TaskStore.capabilityFingerprint(checkedDraft(draft));}
     private static String digest(JSONObject value)throws Exception{return TaskStore.capabilityFingerprint(value);}
     private static String refsDigest(JSONArray refs)throws Exception{java.util.List<String> sorted=new java.util.ArrayList<>();for(int i=0;i<refs.length();i++)sorted.add(digest(refs.getJSONObject(i)));java.util.Collections.sort(sorted);return digest(new JSONObject().put("sources",new JSONArray(sorted)));}
@@ -54,7 +73,7 @@ public final class NativeConversationMemoryDraftHost {
     private static JSONObject candidatePin(JSONObject candidate)throws Exception{return new JSONObject().put("id",candidate.getString("id")).put("revision",candidate.getLong("revision")).put("digest",digest(new JSONObject().put("draft",candidateContent(candidate)).put("sources",refsDigest(candidate.getJSONArray("sourceRefs")))));}
     private JSONObject pendingCandidate(JSONObject pin,JSONObject draft,JSONArray refs)throws Exception {
         JSONObject candidate=memory.handle("getCandidate",new JSONObject().put("scope",scope()).put("id",pin.getString("id"))).getJSONObject("candidate");
-        if(!"pending".equals(candidate.optString("status"))||positive(pin,"revision")!=candidate.getLong("revision")||!pin.getString("digest").equals(candidatePin(candidate).getString("digest"))||!digest(learningDraft(draft)).equals(digest(candidateContent(candidate)))||!refsDigest(refs).equals(refsDigest(candidate.getJSONArray("sourceRefs"))))throw new SecurityException("原待审候选已修改、失效或审阅，不能用旧提案继续确认");return candidate;
+        if(!"pending".equals(candidate.optString("status"))||positive(pin,"revision")!=candidate.getLong("revision")||!pin.getString("digest").equals(candidatePin(candidate).getString("digest"))||!digest(learningDraft(draft,refs)).equals(digest(candidateContent(candidate)))||!refsDigest(refs).equals(refsDigest(candidate.getJSONArray("sourceRefs"))))throw new SecurityException("原待审候选已修改、失效或审阅，不能用旧提案继续确认");return candidate;
     }
     public JSONObject sourcesForTask(String task,String run,int epoch,RunControl original)throws Exception {
         if(original==null||!original.matchesHostRun(task,run,epoch))throw new SecurityException("来源发现缺少原运行控制器");tasks.checkCapability(task,run,epoch,"memory_draft_sources",original);JSONObject current=originalTask(task,run,epoch);
@@ -64,11 +83,11 @@ public final class NativeConversationMemoryDraftHost {
         JSONObject draft=checkedDraft(supplied);tasks.requireMemoryProposalPrepared(task,run,epoch,operation,draft,original);String conversation=originalTask(task,run,epoch).getString("conversationId");JSONArray selected=draft.getJSONArray("sources"),refs=tasks.preparedConversationUserRefs(task,run,epoch,conversation,selected);String action=draft.getString("action");
         JSONObject projection=sources.withCurrentUserSources(refs,()->tasks.withMemoryProposalSourceCurrent(task,run,epoch,conversation,selected,()->{
             original.check();originalTask(task,run,epoch);tasks.requireMemoryProposalPrepared(task,run,epoch,operation,draft,original);
-            if(action.equals("create")){SourceRef[] actual=new SourceRef[refs.length()];for(int i=0;i<refs.length();i++)actual[i]=SourceRef.fromJson(refs.getJSONObject(i));JSONObject candidate=memory.proposeLearning(scope(),learningDraft(draft),actual).getJSONObject("candidate");
-                if(!"pending".equals(candidate.optString("status"))||!digest(learningDraft(draft)).equals(digest(candidateContent(candidate))))return new JSONObject().put("existingCandidate",new JSONObject().put("id",candidate.getString("id")).put("revision",candidate.getLong("revision")).put("status",candidate.getString("status")));
+            if(action.equals("create")){SourceRef[] actual=new SourceRef[refs.length()];for(int i=0;i<refs.length();i++)actual[i]=SourceRef.fromJson(refs.getJSONObject(i));JSONObject content=learningDraft(draft,refs),candidate=memory.proposeLearning(scope(),content,actual).getJSONObject("candidate");
+                if(!"pending".equals(candidate.optString("status"))||!digest(content).equals(digest(candidateContent(candidate))))return new JSONObject().put("existingCandidate",new JSONObject().put("id",candidate.getString("id")).put("revision",candidate.getLong("revision")).put("status",candidate.getString("status")));
                 return new JSONObject().put("candidate",candidatePin(candidate));
             }
-            JSONObject target=record(draft.getJSONObject("target"));if(action.equals("update")){if(target.has("appKnowledge"))throw new SecurityException("App方法须沿原版本试用与修订入口更新");if(target.getString("text").equals(bounded(draft,"text",1,4000)))throw new IllegalArgumentException("新正文与原记忆相同");}return new JSONObject().put("target",targetPin(target));
+            JSONObject target=record(draft.getJSONObject("target"));if(action.equals("update")){if(target.has("appKnowledge"))throw new SecurityException("App方法须沿原版本试用与修订入口更新");JSONObject content=updateDraft(draft,refs,target);if(target.getString("text").equals(content.getString("text"))&&(!content.has("assertion")||MemoryArchive.canonical(content.getJSONObject("assertion")).equals(MemoryArchive.canonical(target.optJSONObject("assertion")))))throw new IllegalArgumentException("新正文及结构化认知与原记忆相同");}return new JSONObject().put("target",targetPin(target));
         }));
         tasks.requireMemoryProposalPrepared(task,run,epoch,operation,draft,original);
         if(projection.has("existingCandidate"))return new JSONObject().put("ok",true).put("proposed",false).put("outcome","existing_candidate_review_barrier").put("candidate",projection.getJSONObject("existingCandidate")).put("formalMemorySaved",false).put("executionAuthorized",false);
@@ -78,12 +97,38 @@ public final class NativeConversationMemoryDraftHost {
         return new JSONObject().put("ok",true).put("proposed",true).put("memoryDraft",proposal).put("reviewRequired",true).put("formalMemorySaved",false).put("executionAuthorized",false);
     }
     private JSONObject checkedOwnerRow(String task,String run,int epoch,String operation,String expectedDigest)throws Exception{JSONObject row=tasks.memoryProposalForOwner(task,run,epoch,operation);if(!expectedDigest.equals(row.getJSONObject("proposal").getString("proposalDigest"))||!expectedDigest.equals(proposalDigest(row.getJSONObject("arguments")))||!"pending_owner".equals(row.getJSONObject("apply").getString("status")))throw new SecurityException("原记忆草稿已变化、已取消或已提交");return row;}
+    private static JSONArray retainedSources(JSONArray before,JSONArray added)throws Exception {
+        java.util.LinkedHashMap<SourceRef,JSONObject> refs=new java.util.LinkedHashMap<>();
+        for(JSONArray selected:new JSONArray[]{before,added})for(int i=0;selected!=null&&i<selected.length();i++){SourceRef ref=SourceRef.fromJson(selected.getJSONObject(i));refs.put(ref,ref.toJson());}
+        if(refs.size()>20)throw new IllegalArgumentException("原记忆与新增原句合计超过20条来源，请改为新增独立记忆并审阅关联");
+        return new JSONArray(refs.values());
+    }
+    /** Owner-only review bytes are a transient projection beside the formal assertion. The
+     * evidence schema and the durable candidate digest never acquire an extra quote field. */
+    private JSONObject assertionEvidence(JSONObject row,boolean required)throws Exception {
+        if(row==null||!row.has("assertion"))return row;JSONArray evidence=new JSONArray(),spans=row.getJSONObject("assertion").getJSONArray("evidenceSpans");
+        for(int i=0;i<spans.length();i++){JSONObject span=spans.getJSONObject(i);
+            try{evidence.put(sources.readAssertionEvidence(scope(),SourceRef.fromJson(span.getJSONObject("sourceRef")),span.getInt("offset"),span.getInt("chars"),span.getString("sha256")));}
+            catch(Exception unavailable){if(required)throw unavailable;evidence.put(new JSONObject(span.toString()).put("verifiedOriginalSpan",false).put("assertionTruthVerified",false).put("status","source_unavailable"));}
+        }return row.put("assertionEvidence",evidence);
+    }
     private JSONObject presentation(JSONObject proposal,JSONObject draft,JSONArray refs)throws Exception {
         String action=proposal.getString("action");JSONObject before=null,after=null;
         if(action.equals("create"))after=pendingCandidate(proposal.getJSONObject("candidate"),draft,refs);
-        else {before=record(proposal.getJSONObject("target"));if(!proposal.getJSONObject("target").getString("digest").equals(targetPin(before).getString("digest")))throw new SecurityException("原记忆状态或正文已改变");if(action.equals("update")){after=new JSONObject().put("id",before.getString("id")).put("expectedPreviousRevision",before.getLong("revision")).put("layer",before.getString("layer")).put("text",bounded(draft,"text",1,4000)).put("sourceRefs",before.optJSONArray("sourceRefs")).put("existingSourceLineagePreserved",true).put("priorLearningRationaleRetired",before.has("learningRationale"));if(before.has("assertion")){JSONObject assertion=before.getJSONObject("assertion");after.put("assertionEffect",new JSONObject().put("kind","imagined".equals(assertion.optString("kind"))?"imagined":"inferred").put("object",bounded(draft,"text",1,4000)).put("oldEvidenceSpansRetired",true).put("oldObjectIdentityRemoved",!assertion.optString("object").equals(bounded(draft,"text",1,4000))).put("assertedAt","when_saved"));}}}
+        else {
+            before=record(proposal.getJSONObject("target"));if(!proposal.getJSONObject("target").getString("digest").equals(targetPin(before).getString("digest")))throw new SecurityException("原记忆状态或正文已改变");
+            if(action.equals("update")){
+                JSONObject content=updateDraft(draft,refs,before);
+                after=new JSONObject().put("id",before.getString("id")).put("expectedPreviousRevision",before.getLong("revision")).put("layer",before.getString("layer")).put("text",content.getString("text"))
+                        .put("sourceRefs",content.has("assertion")?retainedSources(before.optJSONArray("sourceRefs"),refs):before.optJSONArray("sourceRefs"))
+                        .put("existingSourceLineagePreserved",true).put("priorLearningRationaleRetired",before.has("learningRationale"));
+                if(content.has("assertion"))after.put("assertion",content.getJSONObject("assertion")).put("assertionEffect",new JSONObject().put("structuredCorrection",true).put("oldEvidenceSpansRetired",before.has("assertion")).put("newEvidenceVerified",true));
+                else if(before.has("assertion")){JSONObject assertion=before.getJSONObject("assertion");after.put("assertionEffect",new JSONObject().put("kind","imagined".equals(assertion.optString("kind"))?"imagined":"inferred").put("object",content.getString("text")).put("oldEvidenceSpansRetired",true).put("oldObjectIdentityRemoved",!assertion.optString("object").equals(content.getString("text"))).put("assertedAt","when_saved"));}
+            }
+        }
+        before=assertionEvidence(before,false);after=assertionEvidence(after,true);
         return new JSONObject().put("proposal",proposal).put("scope",scope()).put("action",action).put("before",before==null?JSONObject.NULL:before).put("after",after==null?JSONObject.NULL:after).put("sourceRefs",refs).put("reason",bounded(draft,"reason",1,1000))
-                .put("contentNature","assistant_proposed_summary").put("truthVerified",false).put("sourceRefsDescribeProposal",true).put("existingSourceLineagePreserved",!action.equals("create")).put("retireDerivedMemory",!action.equals("create")).put("forgetSameEvidenceMemory",action.equals("forget")).put("blocksOldSourceAutomaticReimport",action.equals("forget")).put("originalSourcesDeleted",false).put("requiresExplicitOwnerConfirm",true).put("executionAuthorized",false);
+                .put("contentNature","assistant_proposed_summary").put("truthVerified",false).put("sourceRefsDescribeProposal",!draft.has("assertion")).put("existingSourceLineagePreserved",!action.equals("create")).put("retireDerivedMemory",!action.equals("create")).put("forgetSameEvidenceMemory",action.equals("forget")).put("blocksOldSourceAutomaticReimport",action.equals("forget")).put("originalSourcesDeleted",false).put("requiresExplicitOwnerConfirm",true).put("executionAuthorized",false);
     }
     public Review reviewForOwner(String task,String run,int epoch,String operation,String expectedDigest)throws Exception {
         JSONObject row=checkedOwnerRow(task,run,epoch,operation,expectedDigest),proposal=row.getJSONObject("proposal"),draft=checkedDraft(row.getJSONObject("arguments"));String conversation=originalTask(task,run,epoch).getString("conversationId");JSONArray selected=draft.getJSONArray("sources"),refs=tasks.preparedConversationUserRefs(task,run,epoch,conversation,selected);
@@ -103,7 +148,7 @@ public final class NativeConversationMemoryDraftHost {
             try {
                 JSONObject result=sources.withCurrentUserSources(proposal.getJSONArray("sourceRefs"),()->tasks.withMemoryProposalSourceCurrent(task,run,epoch,conversation,draft.getJSONArray("sources"),()->{
                     nativeOwner.check();originalTask(task,run,epoch);presentation(proposal,draft,proposal.getJSONArray("sourceRefs"));String action=proposal.getString("action");entered[0]=true;
-                    return switch(action){case "create"->{JSONObject candidate=proposal.getJSONObject("candidate");yield memory.acceptCandidate(scope(),candidate.getString("id"),candidate.getLong("revision"));}case "update"->{JSONObject target=proposal.getJSONObject("target");yield sources.correctReviewed(scope(),target.getString("id"),target.getLong("revision"),bounded(draft,"text",1,4000));}case "forget"->{JSONObject target=proposal.getJSONObject("target");yield sources.forgetReviewed(scope(),target.getString("id"),target.getLong("revision"));}default->throw new SecurityException("未知原记忆操作");};
+                    return switch(action){case "create"->{JSONObject candidate=proposal.getJSONObject("candidate");yield memory.acceptCandidate(scope(),candidate.getString("id"),candidate.getLong("revision"));}case "update"->{JSONObject target=proposal.getJSONObject("target");if(draft.has("assertion")){JSONObject content=updateDraft(draft,proposal.getJSONArray("sourceRefs"),NativeConversationMemoryDraftHost.this.record(target));yield sources.correctAssertionReviewed(scope(),target.getString("id"),target.getLong("revision"),content.getString("text"),content.getJSONObject("assertion"),proposal.getJSONArray("sourceRefs"));}yield sources.correctReviewed(scope(),target.getString("id"),target.getLong("revision"),bounded(draft,"text",1,4000));}case "forget"->{JSONObject target=proposal.getJSONObject("target");yield sources.forgetReviewed(scope(),target.getString("id"),target.getLong("revision"));}default->throw new SecurityException("未知原记忆操作");};
                 }));
                 JSONObject saved=savedReceipt(proposal,reviewDigest,result);record(saved);return saved;
             }catch(Exception unavailable){JSONObject result=receipt(proposal,reviewDigest,entered[0]?"unknown":"rejected").put("accepted",entered[0]?JSONObject.NULL:false).put("mutationApplied",entered[0]?JSONObject.NULL:false).put("formalMemorySaved",entered[0]?JSONObject.NULL:false).put("message",entered[0]?"原记忆操作结果尚未完整确认，请查询原回执；不会再次应用":"原消息、记忆或候选已变化，本次未进入正式记忆修改");record(result);return result;}

@@ -216,6 +216,14 @@ public final class MemorySourceBridge {
         EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");MemoryModule memory=(MemoryModule)module;
         reconcilePending(scope,memory);return mutate(scope,memory,false,"owner_correction",receipt->memory.correctReviewed(scope,id,revision,text,receipt));
     }
+    public synchronized JSONObject correctAssertionReviewed(JSONObject scope,String id,long revision,String text,JSONObject assertion,JSONArray refs)throws Exception {
+        EngineModule module=host.module("memory");if(!(module instanceof MemoryModule memory))throw new IllegalStateException("记忆模块暂不可用");
+        JSONObject checked=dev.pocketengine.features.memory.MemoryAssertion.checked(assertion);JSONArray spans=checked.getJSONArray("evidenceSpans");
+        if(spans.length()!=1)throw new SecurityException("人本纠正须有当前原句证据");JSONObject span=spans.getJSONObject(0);
+        SourceRef reviewedSource=SourceRef.fromJson(span.getJSONObject("sourceRef"));
+        readAssertionEvidence(scope,reviewedSource,span.getInt("offset"),span.getInt("chars"),span.getString("sha256"));
+        reconcilePending(scope,memory);return mutate(scope,memory,false,"owner_correction",reviewedSource,receipt->memory.correctAssertionReviewed(scope,id,revision,text,checked,refs,receipt));
+    }
     /** Reuses the original source reconciliation domain before exact pending-candidate review. */
     public synchronized JSONObject prepareAssertionReview(JSONObject scope,JSONObject request)throws Exception{
         synchronize(scope);EngineModule module=host.module("memory");if(!(module instanceof MemoryModule))throw new IllegalStateException("记忆模块暂不可用");
@@ -249,6 +257,9 @@ public final class MemorySourceBridge {
         return mutate(scope,memory,eraseSnapshots,eraseSnapshots?"owner_forget":"source_change",mutation);
     }
     private JSONObject mutate(JSONObject scope,MemoryModule memory,boolean eraseSnapshots,String cause,Mutation mutation)throws Exception{
+        return mutate(scope,memory,eraseSnapshots,cause,null,mutation);
+    }
+    private JSONObject mutate(JSONObject scope,MemoryModule memory,boolean eraseSnapshots,String cause,SourceRef reviewedAssertionSource,Mutation mutation)throws Exception{
         final java.util.List<String> cleanups=new java.util.ArrayList<>();
         final JSONObject[] contextRetirement={null};
         try{
@@ -257,7 +268,7 @@ public final class MemorySourceBridge {
                 host.clearWorkingMemory(scope);
                 contextRetirement[0]=tasks.invalidateMemoryContexts(MemoryBook.Scope.from(scope),removed);
                 AssistantModule conversation=assistant;
-                if(conversation!=null&&"owner".equals(scope.optString("ownerId"))&&"private".equals(scope.optString("spaceId")))contextRetirement[0].put("conversationReferencesRetired",conversation.retireMemoryContexts(removed,cause));
+                if(conversation!=null&&"owner".equals(scope.optString("ownerId"))&&"private".equals(scope.optString("spaceId")))contextRetirement[0].put("conversationReferencesRetired",conversation.retireMemoryContexts(retiredConversationSources(removed,reviewedAssertionSource),cause));
                 JSONArray bounded=boundedCleanupRefs(scope,removed,eraseSnapshots);
                 // TaskStore deliberately bounds journal arrays. Every batch must be
                 // durable before returning to MemoryBook's single atomic mutation.
@@ -282,6 +293,16 @@ public final class MemorySourceBridge {
             for(String id:cleanups)try{JSONObject state=tasks.get(id,false);if(state!=null&&!java.util.Set.of("completed","failed").contains(state.optString("status")))tasks.status(id,"reconciling","原记忆变更或派生清理尚未核对；未重放原操作");}catch(Exception ignored){}
             throw failure;
         }
+    }
+    /** An exact original utterance just reselected in native semantic review stays readable.
+     * All old formal/derived/task references above still retire, as does assistant prose in
+     * retireMemoryContexts. This does not revive forgotten, edited or withdrawn source versions. */
+    private static JSONArray retiredConversationSources(JSONArray removed,SourceRef reviewed)throws Exception {
+        if(reviewed==null)return removed;JSONArray result=new JSONArray();
+        for(int i=0;i<removed.length();i++){JSONObject row=new JSONObject(removed.getJSONObject(i).toString());JSONArray sources=row.optJSONArray("sourceRefs"),kept=new JSONArray();
+            for(int j=0;sources!=null&&j<sources.length();j++)if(!reviewed.equals(SourceRef.fromJson(sources.getJSONObject(j))))kept.put(sources.getJSONObject(j));
+            row.put("sourceRefs",kept);result.put(row);
+        }return result;
     }
     private static boolean retiredVersionsAbsent(JSONObject scope,MemoryModule memory,JSONArray removed)throws Exception{
         if(removed.length()==0)return false;JSONArray rows=memory.handle("list",new JSONObject().put("scope",scope)).getJSONArray("records");

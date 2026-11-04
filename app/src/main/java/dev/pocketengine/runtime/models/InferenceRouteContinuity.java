@@ -10,6 +10,16 @@ public final class InferenceRouteContinuity {
     private InferenceRouteContinuity(){}
     public static void requireCurrent(ModelConfig capturedInference,ModelConfig selectedSettings,RunControl original)throws Exception {
         Objects.requireNonNull(capturedInference);Objects.requireNonNull(selectedSettings);Objects.requireNonNull(original);original.check();
+        requireCurrentFromAuthorityCheck(capturedInference,selectedSettings,original);
+        original.check();
+    }
+    /**
+     * Route continuity inside the original controller's authority callback. The enclosing
+     * RunControl.check retains execution admission and all source checks; re-entering it
+     * here would recursively invoke this same callback. Ordinary callers use requireCurrent.
+     */
+    public static void requireCurrentFromAuthorityCheck(ModelConfig capturedInference,ModelConfig selectedSettings,RunControl original)throws Exception {
+        Objects.requireNonNull(capturedInference);Objects.requireNonNull(selectedSettings);Objects.requireNonNull(original);requireNotStopped(original);
         boolean same=capturedInference.usesAccount()==selectedSettings.usesAccount()
                 &&capturedInference.provider.equals(selectedSettings.provider)&&capturedInference.model.equals(selectedSettings.model)
                 &&capturedInference.baseUrl.equals(selectedSettings.baseUrl)
@@ -35,6 +45,9 @@ public final class InferenceRouteContinuity {
                 same=ModelGateway.accountSelectionContinues(original,capturedInference.accountModel,renewed.accountModel);}
         }
         if(!same)throw new SecurityException("原模型路由、受准入的账号版本或当前授权已变化或暂不可核对；未换号、重放或使用旧来源。");
-        original.check();
+        requireNotStopped(original);
+    }
+    private static void requireNotStopped(RunControl original)throws InterruptedException {
+        if(original.isCancelled()||Thread.currentThread().isInterrupted())throw new InterruptedException("Run stopped");
     }
 }

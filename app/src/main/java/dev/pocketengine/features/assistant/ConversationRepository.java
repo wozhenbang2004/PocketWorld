@@ -424,6 +424,48 @@ public final class ConversationRepository {
         requirePhoneResultIndex(prior,conversation,task,run,epoch,key);boolean available=phoneResultAvailable(prior);
         return ack.put("found",true).put("messageId",prior.getString("sourceId")).put("available",available);
     }
+    JSONObject appendOwnerWorkResult(dev.pocketengine.store.TaskStore original,dev.pocketengine.store.TaskStore.OwnerWorkDelivery delivery,boolean busy)throws Exception{
+        delivery.requireMutationScope(original);if(monitor!=original)throw new SecurityException("私人工作必须投递到同一原数据库");
+        JSONObject result=delivery.snapshot();String conversation=result.getString("conversationId"),task=result.getString("taskId"),run=result.getString("runId"),key=result.getString("deliveryId"),digest=result.getString("resultDigest"),status=result.getString("status");int epoch=result.getInt("epoch");
+        if(!digest.matches("[a-f0-9]{64}")||!Set.of("completed","needs_confirmation","awaiting_user","failed","cancelled","interrupted","reconciling","paused").contains(status))throw new SecurityException("原私人工作结果不可核对");
+        JSONObject ack=new JSONObject().put("taskId",task).put("runId",run).put("epoch",epoch).put("conversationId",conversation).put("deliveryId",key).put("executionAuthorized",false),prior=sourceByReply(key);
+        if(!activeGeneration().equals(result.getString("generation")))return ack.put("accepted",false).put("available",false).put("conversationDeleted",true);
+        if(prior!=null){
+            requirePhoneResultIndex(prior,conversation,task,run,epoch,key);if(!digest.equals(prior.optString("nativeReplyDigest"))||!status.equals(prior.optString("nativeStatus")))throw new SecurityException("同一私人工作结果不能更换内容");
+            return ack.put("accepted",true).put("duplicate",true).put("messageId",prior.getString("sourceId")).put("available",phoneResultAvailable(prior));
+        }
+        if(!exists(conversation))return ack.put("accepted",false).put("conversationDeleted",true).put("available",false);
+        if(busy)return ack.put("accepted",false).put("waitingForOriginalConversation",true).put("available",false);
+        String text=result.getString("content");if(text.isBlank()||text.length()>24000||!StandardCharsets.UTF_8.newEncoder().canEncode(text))throw new SecurityException("私人工作结果正文无效");
+        long now=System.currentTimeMillis();String messageId;do{messageId=UUID.randomUUID().toString();}while(source(messageId)!=null);
+        JSONObject message=new JSONObject().put("id",messageId).put("revision",1L).put("role","assistant").put("content",text).put("at",now).put("conversationId",conversation)
+                .put("taskId",task).put("nativeReplyId",key).put("nativeDeliveryId",key).put("nativeDeliveryKind","owner_work").put("nativeRunId",run).put("nativeEpoch",epoch)
+                .put("nativeStatus",status).put("status",status).put("taskEndedAt",result.getLong("endedAt")).put("resultDigest",digest)
+                .put("summaryTruncated",result.optBoolean("summaryTruncated")).put("summaryChars",result.optInt("summaryChars",text.length()))
+                .put("taskReference",new JSONObject().put("taskId",task).put("runId",run).put("epoch",epoch))
+                .put("replyToMessageIds",new JSONArray(result.getJSONArray("replyToMessageIds").toString())).put("replyToSourceRefs",new JSONArray(result.getJSONArray("sourceMessageRefs").toString()))
+                .put("executionAuthorized",false).put("resultVerified",false);
+        JSONObject answerProof=result.optJSONObject("nativeFinalAnswerProof");
+        if(answerProof!=null)for(String field:new String[]{"memoryReference","memoryContext"})if(answerProof.has(field))message.put(field,new JSONObject(answerProof.getJSONObject(field).toString()));
+        JSONObject state=new SourceRef("message",messageId,1,"owner","private").toJson().put("conversationId",conversation).put("role","assistant").put("deleted",false).put("updatedAt",now)
+                .put("nativeReplyId",key).put("nativeReplyDigest",digest).put("nativeTaskId",task).put("nativeRunId",run).put("nativeEpoch",epoch).put("nativeStatus",status);
+        saveSource(state);saveMessage(conversation,message);JSONObject header=header(conversation);header.put("updatedAt",now);saveConversation(header);
+        JSONArray consumed=new JSONArray(),inputs=result.optJSONArray("consumableInputs");
+        for(int i=0;inputs!=null&&i<inputs.length();i++){
+            JSONObject row=inputs.getJSONObject(i);
+            if(result.optJSONObject("nativeFinalAnswerProof")==null||row.has("ownerWorkRoute")||!task.equals(row.optString("acceptedTaskId"))||!run.equals(row.optString("materializedRunId"))||epoch!=row.optInt("materializedEpoch"))throw new SecurityException("私人工作不能消费其他回合或未被答复采用的主人输入");
+            requireQueuedOwnerMessageCurrent(conversation,row);String inputId=row.getString("messageId");JSONObject inputSource=source(inputId),inputMessage=message(conversation,inputId),inputAck=new JSONObject(inputSource.getJSONObject("submission").toString());
+            if("consumed".equals(inputAck.optString("status")))continue;
+            boolean missingAck="unconfirmed".equals(inputAck.optString("status"))&&!inputAck.has("taskId")&&!inputAck.has("runId")&&!inputAck.has("epoch");
+            if(missingAck)inputAck.put("taskId",task).put("runId",row.getString("acceptedRunId")).put("epoch",integer(row,"acceptedEpoch",1));
+            if(!task.equals(inputAck.optString("taskId"))||!row.getString("acceptedRunId").equals(inputAck.optString("runId"))||integer(row,"acceptedEpoch",1)!=integer(inputAck,"epoch",1))throw new SecurityException("补充输入的原接收身份不能被工作续接替换");
+            inputAck.put("status","consumed").put("queueState","materialized").put("queueRevision",integer(row,"queueRevision",1))
+                    .put("ownerMessageRevision",integer(row,"ownerMessageRevision",1)).put("mode",row.getString("mode"))
+                    .put("consumedRunId",run).put("consumedEpoch",epoch).put("replyMessageId",messageId).put("consumedAt",now).put("reconciliationRequired",false);
+            inputSource.put("submission",new JSONObject(inputAck.toString())).put("updatedAt",now);inputMessage.put("submission",new JSONObject(inputAck.toString()));saveSource(inputSource);saveMessage(conversation,inputMessage);consumed.put(inputAck);
+        }
+        return ack.put("accepted",true).put("duplicate",false).put("messageId",messageId).put("available",true).put("consumed",consumed);
+    }
     private static String phoneHandoffDeliveryId(String task,String run,long epoch){
         if(task==null||run==null||!task.matches("[a-fA-F0-9-]{36}")||!run.matches("[a-fA-F0-9-]{36}")||epoch<1||epoch>Integer.MAX_VALUE)throw new IllegalArgumentException("原手机任务执行身份无效");
         return "phone_handoff:"+task+":"+run+":"+epoch;
@@ -438,6 +480,19 @@ public final class ConversationRepository {
     private void requirePhoneResultMessage(JSONObject source,String conversation,String task,String run,long epoch,String key)throws Exception{
         JSONObject actual=message(conversation,source.getString("sourceId"));
         if(actual==null||!"assistant".equals(actual.optString("role"))||!task.equals(actual.optString("taskId"))||!run.equals(actual.optString("nativeRunId"))||epoch!=integer(actual,"nativeEpoch",1)||!key.equals(actual.optString("nativeDeliveryId")))throw new SecurityException("原手机投递消息与唯一索引不一致");
+    }
+    /** Owner UI only: no arbitrary source body can be selected through an unrelated reply. */
+    public JSONObject readOriginalReplySource(String conversation,String replyId,String sourceId,int offset,int maxChars)throws Exception{
+        if(offset<0||maxChars<1||maxChars>12000)throw new IllegalArgumentException("原文分页范围无效");
+        JSONObject reply=message(conversation,replyId),result=new JSONObject().put("conversationId",conversation).put("replyMessageId",replyId).put("sourceMessageId",sourceId).put("available",false);
+        if(reply==null||!"assistant".equals(reply.optString("role")))return result.put("message","原答复已不可用");
+        JSONArray refs=reply.optJSONArray("replyToMessageIds");boolean bound=false;for(int i=0;refs!=null&&i<refs.length();i++)if(sourceId.equals(refs.optString(i)))bound=true;
+        if(!bound)throw new SecurityException("这条消息不是原答复对应的主人请求");
+        JSONObject state=source(sourceId),original=message(conversation,sourceId);
+        if(state==null||original==null||!conversation.equals(state.optString("conversationId"))||!"user".equals(state.optString("role"))||!phoneResultAvailable(state))return result.put("message","原请求已删除或不再可用");
+        String text=original.getString("content");if(offset>text.length()||offset>0&&offset<text.length()&&Character.isLowSurrogate(text.charAt(offset))&&Character.isHighSurrogate(text.charAt(offset-1)))throw new IllegalArgumentException("原文分页起点无效");
+        int end=Math.min(text.length(),offset+maxChars);if(end<text.length()&&end>offset&&Character.isHighSurrogate(text.charAt(end-1)))end--;
+        return result.put("available",true).put("text",text.substring(offset,end)).put("offset",offset).put("nextOffset",end).put("totalChars",text.length()).put("hasMore",end<text.length());
     }
     public void saveSource(JSONObject source)throws Exception{saveSource(activeGeneration(),source);}
     private void saveSource(String gen,JSONObject source)throws Exception{
