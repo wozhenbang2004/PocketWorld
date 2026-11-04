@@ -11,7 +11,7 @@ import json
 import re
 
 VERSION = "1.0"
-PROFILE = "pwp1_cdf06c78390cb32246ba396f9ab45ca88a7d6964591fa25f69ccd605d0c8b2a6"
+PROFILE = "pwp1_94a3b250d77be4eadd62d184dfa70facfe4e78444f0cd80903d00e339ef25147"
 MAX_CONTROL_BYTES = 65_536
 MAX_PAIRING_BYTES = 16_384
 MAX_DEPTH = 16
@@ -24,6 +24,7 @@ TASK_STATES = frozenset("queued_local submitting accepted waiting_approval waiti
 TRANSPORT_STATES = frozenset("connecting online degraded offline revoked incompatible".split())
 METHODS = {
     "device.describe": ("DeviceRequest", "read"),
+    "desktop.viewer": ("DeviceRequest", "write"),
     "tool.invoke": ("ToolInvocation", "tool"),
     "operation.get": ("DeviceRequest", "read"),
     "operation.cancel": ("DeviceRequest", "write"),
@@ -138,7 +139,9 @@ def validate_resource_binding(capability_version, binding):
     if capability_version == "1.0":
         mode = binding.get("screenMode")
         if mode in ("main_screen", "background"):
-            _keys(binding, {"screenMode", "packageNames"}, {"allowWholeDisplayCapture", "allowWholeDisplayInput"})
+            _keys(binding, {"screenMode", "packageNames"}, {"allowWholeDisplayCapture", "allowWholeDisplayInput", "androidUserId"})
+            if "androidUserId" in binding:
+                integer(binding["androidUserId"], "androidUserId", 0, 21474)
             packages = binding["packageNames"]
             if not isinstance(packages, list) or not 1 <= len(packages) <= 128 or any(not isinstance(item, str) or len(item) > 255 or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+", item) for item in packages) or len(set(packages)) != len(packages):
                 _fail("invalid_request", "Invalid exact Android package scope")
@@ -392,6 +395,30 @@ def parse_request(raw):
         if "delegationAuthorization" in args:
             import delegation_policy
             delegation_policy.validate_wire_proof(args["delegationAuthorization"])
+    elif method == "desktop.viewer":
+        shapes = {"configuration": (set(), {"target"}), "negotiate": ({"offer"}, set()),
+                  "status": ({"streamId"}, set()), "take": ({"streamId", "expectedRevision"}, set()),
+                  "release": ({"streamId", "expectedRevision"}, set()), "input": ({"streamId", "controlLease", "frameRef", "input"}, set()),
+                  "close": (set(), {"streamId"})}
+        action = args.get("action")
+        shape = shapes.get(action) if isinstance(action, str) else None
+        if shape is None: _fail("invalid_request", "Unknown owner desktop action")
+        _keys(args, {"action", "viewerSessionId"} | shape[0], shape[1])
+        identifier(args.get("viewerSessionId"), "viewerSessionId")
+        if "streamId" in args: identifier(args["streamId"], "streamId")
+        if "expectedRevision" in args: integer(args["expectedRevision"], "expectedRevision", 0, 10000)
+        for field in ("target", "offer", "controlLease", "frameRef", "input"):
+            if field in args and not isinstance(args[field], dict): _fail("invalid_request", "Invalid desktop " + field)
+        if "target" in args:
+            _keys(args["target"], {"pid", "windowId"})
+            for field in ("pid", "windowId"): integer(args["target"][field], field, 1)
+        if "offer" in args:
+            _keys(args["offer"], {"type", "sdp"})
+            if args["offer"]["type"] != "offer": _fail("invalid_request", "Expected WebRTC offer")
+            text(args["offer"]["sdp"], "sdp", 32768)
+        if value.get("capabilityVersion") != "desktop-v2" or value.get("originDeviceId") != value.get("callerDeviceId") or value.get("delegationChain", []):
+            _fail("invalid_request", "Desktop viewer requires a direct owner desktop grant")
+        validate_resource_binding("desktop-v2", value.get("resourceBinding"))
     elif method == "device.describe":
         _keys(args, set())
     elif method in ("operation.get", "operation.cancel"):
@@ -577,6 +604,10 @@ def validate_message(value):
             if result.get("messageType")!="DeviceDescription":_fail("invalid_request","Describe requires typed paired metadata")
             validate_message(result)
             if result["deviceId"]!=value["executorDeviceId"] or result["instanceId"]!=value["instanceId"]:_fail("wrong_audience","Description belongs to another native device instance")
+        elif method == "desktop.viewer":
+            _keys(result, {"viewerSessionId", "operationId", "status"}, set("expiresAt width height control state streamId answer iceServers bundlePolicy transport lastFrame inputChannel metadataChannel reason transportClosedVerified target frameRef inputReceipt noAutomaticReplay message".split()))
+            identifier(result["viewerSessionId"], "viewerSessionId"); identifier(result["operationId"], "operationId")
+            if result["status"] not in {"completed", "unknown", "failed"}: _fail("invalid_request", "Invalid desktop viewer receipt status")
         elif method in ("tool.invoke","task.submitGoal","operation.get","operation.cancel","task.respond","task.pause","task.cancel","task.acquireControl","task.answerQuestion","task.steer","task.requestResume"):
             if result.get("messageType")!="OperationReceipt":_fail("invalid_request","Method requires an original typed operation receipt")
             validate_message(result)

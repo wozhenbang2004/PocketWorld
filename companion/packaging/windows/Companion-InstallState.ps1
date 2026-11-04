@@ -73,7 +73,7 @@ function Assert-PWRelease($Paths, $Pointer) {
         if (-not $declared.Contains($relative)) { throw 'Unregistered file in immutable release.' }
     }
     if (-not $Pointer.allowUnsignedDevelopment) {
-        foreach ($relative in @('app\PocketWorld-Companion.exe', 'driver\cua-driver.exe')) {
+        foreach ($relative in @('app\PocketWorld-Companion.exe', 'driver\cua-driver.exe', 'driver\agent-desktop.exe')) {
             $signature = Get-AuthenticodeSignature -LiteralPath (Join-Path $expected $relative)
             if ($signature.Status -ne 'Valid' -or -not $Pointer.signerThumbprint -or $signature.SignerCertificate.Thumbprint -ne $Pointer.signerThumbprint) { throw 'Installed executable signer mismatch.' }
         }

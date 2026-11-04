@@ -198,6 +198,8 @@ class PairingOwnerController:
                  "capabilities": ["tool.invoke", "operation.get", "operation.cancel", "artifact.describe", "artifact.readChunk"],
                  "toolNames": tools, "resources": resources, "allowedOrigins": [candidate.device_id], "allowDelegation": False,
                  "maxDelegationDepth": 0, "toolBudget": tool_budget, "modelBudget": 0}
+        if "desktop" in selected_ids:
+            grant["capabilities"].append("desktop.viewer")
         if history_read:
             grant["historyRead"] = {"expiresAt": now + 86400000, "methods": ["operation.get", "artifact.describe", "artifact.readChunk"]}
         if len(protocol.canonical_bytes(grant)) > 8192:
@@ -206,7 +208,7 @@ class PairingOwnerController:
                   "workspacePaths": {item["id"]: self.manager._environment(item["resources"][0]["environmentId"])["root"] for item in selected if item["version"] == "workspace-v1"},
                   "endpoint": self.endpoint, "enableDesktop": "desktop" in selected_ids}
         summary = ("仅下列资源和工具；电脑不运行第二Agent/Goal，不需要Codex，模型额度为0。\r\n"
-                   "主屏desktop授权覆盖当前交互会话的所有窗口，不是文件沙箱；命令也不是OS沙箱。\r\n"
+                   "主屏desktop授权覆盖当前交互会话的所有窗口，包括手机实时观看与人工接管；不是文件沙箱。命令也不是OS沙箱。\r\n"
                    "这不会恢复任何旧任务。完整指纹、地址、额度和期限：\r\n" + json.dumps(record, ensure_ascii=False, indent=2))
         if len(summary) > 16000:
             raise PlatformError("Select fewer scopes so the COMPLETE review fits the native confirmation window")

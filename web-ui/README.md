@@ -39,6 +39,33 @@ Android capture requires the exact verified APK, supported ARM64 execution, and
 an actual WebView provider at least version 111. Unsupported device images fail
 instead of changing the APK or weakening the selected components.
 
+## Conversation phone outcomes
+
+Each native phone-result message exposes an immutable `phoneResult` containing
+its task/run/epoch, delivery identity, ended status/time and summary limits.
+The message shows that ended run even when the task is running again. Its task
+link reads the current original task; it does not resume execution or reuse an
+old review. Ordinary or imported messages cannot supply this native read target.
+
+A saved task that has no result message is linked from its original conversation.
+Native task headers carry the compact `conversationPhoneLink` display association;
+detail windows retain the original association. This uses the existing bounded
+task window, not a complete conversation task directory. Older tasks remain
+available through task-history pagination. No phone-goal chat message is invented.
+
+After building the Web bundle, run the isolated production-page regression:
+
+```sh
+node web-ui/tests/phone-handoff-ui.mjs \
+  --bundle app/src/main/assets/pocket-ui --output app/build/reports/phone-handoff-web
+```
+
+The fixture covers unknown-receipt recovery, explicit rejection, two ended runs,
+saved-but-unadmitted creation, and a reopened conversation using a summary header.
+It models native responses and does not prove SQLite, Android admission or device
+execution. Native tests are registered in the `conversation-phone-handoff` host
+group; full Android compilation and a source-matched APK are separate checks.
+
 ## Reading and team continuity
 
 The message menu opens a frozen, in-memory reading view. Later host snapshots

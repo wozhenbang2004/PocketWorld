@@ -1,0 +1,9 @@
+# Prepared Windows x64 media wheels; no downloads or pip at Companion runtime.
+# Install with --no-deps --require-hashes --only-binary=:all: into a builder whose
+# complete dependency set is separately reviewed in windows-runtime-inputs.v1.
+# The standard build checks every dependency wheel/hash and the full environment.
+# aiortc 1.15 supports PyAV <18; do not silently substitute the newer PyAV 19.
+aiortc==1.15.0 --hash=sha256:4e1e54bff31a9c2cb654c7b7edc068085a7df53365e5df24a5cb24168e3f95f7
+av==17.0.1 \
+    --hash=sha256:9af524e8632a54032e361d6b88895bd3e7c6212ca560de60f5ccc525323c764c \
+    --hash=sha256:b87b98afe971cde123953073bc9c95ab0b7efd2ecc082dd2dbd11f9d9abf190e

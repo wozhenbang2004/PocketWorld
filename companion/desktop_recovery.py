@@ -49,6 +49,17 @@ def _leases(database, local_device_id, context):
 
 def _stop_evidence(lease, backend, context):
     binding = lease["workerBinding"]
+    if binding.get("format") == "windows_original_jobs_v2":
+        workers = binding.get("workers")
+        if (not isinstance(workers, list) or not 1 <= len(workers) <= 4
+                or any(not isinstance(item, dict) or item.get("format") != "windows_original_job_v1" for item in workers)
+                or len({item.get("jobName") for item in workers}) != len(workers)):
+            return {"nativeStopVerified": False, "knownActive": False, "reason": "invalid_original_worker_set"}
+        # Each exact original native Job is queried. A stopped visual worker
+        # cannot stand in for the independent semantic child or vice versa.
+        evidence = [_stop_evidence({"workerBinding": item}, backend, context) for item in workers]
+        return {"nativeStopVerified": all(item["nativeStopVerified"] for item in evidence),
+                "knownActive": any(item["knownActive"] for item in evidence), "workers": evidence}
     if binding.get("format") != "windows_original_job_v1" or binding.get("sessionId") != context["sessionId"]:
         return {"nativeStopVerified": False, "knownActive": False, "reason": "original_native_job_or_session_binding_unavailable"}
     host = backend.original_host_stopped(binding["hostPid"], binding["hostCreated"], binding["sessionId"])

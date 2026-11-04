@@ -129,9 +129,21 @@ public final class TaskAuditStore {
             else if(value instanceof JSONObject&&jsonBytes(value,8192,0)>=0)out.put(key,new JSONObject(value.toString()));
         }
         JSONObject learning=task.optJSONObject("sourceLearningJob");if(learning!=null){JSONObject small=new JSONObject().put("headerOnly",true).put("inputsIncluded",false).put("executionAuthorized",false);for(String field:new String[]{"format","revision","nextIndex","reservedModelAttempts"}){Object value=learning.opt(field);if(value instanceof Number||value instanceof Boolean||value instanceof String&&((String)value).length()<=160)small.put(field,value);}out.put("sourceLearningJob",small);}
+        JSONObject phoneLink=conversationPhoneLink(task);if(phoneLink!=null)out.put("conversationPhoneLink",phoneLink);
         out.put("taskProjection","summary").put("auditBodyIncluded",false).put("events",new JSONArray());
         if(utf8(out.toString())>MAX_HEADER_BYTES-2048){for(String key:new String[]{"origin","developmentContext","sshSelection","teamAssignment"})out.remove(key);out.put("metadataLimited",true);}
         return out;
+    }
+    /** Navigation only: retain the verified identity without copying the review/goal or granting a run.
+     * An unavailable association omits this optional view; it never hides or rewrites the original task. */
+    static JSONObject conversationPhoneLink(JSONObject task){
+        if(!task.has("conversationPhoneHandoff"))return null;
+        try{
+            JSONObject link=ConversationPhoneHandoff.association(task);String conversation=link.getString("conversationId");
+            ConversationPhoneHandoff.nativeId(conversation);
+            if(!conversation.equals(link.getJSONObject("source").getString("conversationId")))return null;
+            return new JSONObject().put("taskId",link.getString("taskId")).put("conversationId",conversation);
+        }catch(Exception unavailable){return null;}
     }
     /** Bounded display classification derives from original native rows, including markers before
      * the current event window. The marker never authorizes a learning run or another tool. */

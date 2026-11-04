@@ -556,17 +556,18 @@ public final class PairingCoordinator {
     // Separate frozen scope for the immediately preceding phone-task profile.
     // This is only an original-SQL restore policy, never another wire profile.
     static final String PERSISTED_PHONE_TASK_GRANT_PROFILE="pwp1_953641fabc7e4316996f69c2c3ac9b74db1a30f3750ee83adbfd95768730ae8b";
+    static final String PERSISTED_PRE_VIEWER_GRANT_PROFILE="pwp1_cdf06c78390cb32246ba396f9ab45ca88a7d6964591fa25f69ccd605d0c8b2a6";
     private static final Set<String> PERSISTED_PHONE_TASK_GRANT_METHODS=Set.of(
             "device.describe","tool.invoke","operation.get","operation.cancel","task.submitGoal",
             "task.get","task.events","task.respond","task.pause","task.cancel","task.acquireControl",
             "artifact.describe","artifact.readChunk","task.answerQuestion","task.steer","task.requestResume");
     private static boolean persistedGrantEpochCurrent(JSONObject known,JSONObject receipt,JSONObject grant){
-        return !PERSISTED_PHONE_TASK_GRANT_PROFILE.equals(receipt.optString("protocolProfile"))||known.optLong("authorizationEpoch") == grant.optLong("authorizationEpoch");
+        return !Set.of(PERSISTED_PHONE_TASK_GRANT_PROFILE,PERSISTED_PRE_VIEWER_GRANT_PROFILE).contains(receipt.optString("protocolProfile"))||known.optLong("authorizationEpoch") == grant.optLong("authorizationEpoch");
     }
     private static JSONObject verifyPersistedGrantRecord(DeviceIdentity.AuthenticatedPeer target,JSONObject receipt)throws Exception{
         Set<String> methods;
         if(PERSISTED_GRANT_PROFILE.equals(receipt.optString("protocolProfile")))methods=PERSISTED_GRANT_METHODS;
-        else if(PERSISTED_PHONE_TASK_GRANT_PROFILE.equals(receipt.optString("protocolProfile")))methods=PERSISTED_PHONE_TASK_GRANT_METHODS;
+        else if(Set.of(PERSISTED_PHONE_TASK_GRANT_PROFILE,PERSISTED_PRE_VIEWER_GRANT_PROFILE).contains(receipt.optString("protocolProfile")))methods=PERSISTED_PHONE_TASK_GRANT_METHODS;
         else return verifyRecord(target,receipt,"PairGrantReceipt");
         JSONObject body=verifyRecordSignature(target.certificateDer(),receipt,"PairGrantReceipt");
         JSONArray capabilities=body.getJSONObject("grant").getJSONArray("capabilities");

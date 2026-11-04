@@ -3,8 +3,8 @@
   "protocolVersion": "1.0",
   "files": {
     "schema.json": {
-      "sha256": "3402a8423ed508cfaf680b7b1fb688f816de8a39d15a724cbd35ae37b4a3d9a8",
-      "bytes": 74076
+      "sha256": "65121fda3aa5e2bcb8d74c6df51e576d300bd9d9e3c31bca0e82d9a926e1814c",
+      "bytes": 87650
     },
     "onboarding-schema.json": {
       "sha256": "bb90a84565660837fb89bd0b3158f8e268b42e65ec01d27bbb123c5b380be2b0",
@@ -97,5 +97,13 @@
     "resume": "request review at expectedRevision, original phone owner confirms reviewRevision; no new task/run/grant",
     "unknown": "query original operation only; never rewrite or replay original wire"
   },
-  "profileId": "pwp1_cdf06c78390cb32246ba396f9ab45ca88a7d6964591fa25f69ccd605d0c8b2a6"
+  "desktopHybrid": {
+    "structuredObservation": "Exact-window default semantic; fresh native UIA tree delivery before element actions; whole-display default hybrid. Retired or undelivered observations cannot authorize input.",
+    "visualFallback": "Explicit visual/hybrid observation includes verified image and native pixel geometry; no silent semantic-to-physical fallback.",
+    "ownerViewer": "desktop.viewer direct owner PairGrant only; opaque native page session, original TaskStore one-use transport ticket and original Companion ledger before dispatch; no Agent task/run.",
+    "media": "Independent bounded WebRTC DTLS-SRTP; SDP on original exact-pin mTLS; metadata-only datachannel; native control lease and recent geometry frame required for each input.",
+    "handoff": "Exact native resource fencing across Agent and human; unknown input remains needs_reconcile; expiry never proves native input stopped.",
+    "legacyGrants": "Pinned old SQL receipt profiles retain only their old method allowlists. New desktop.viewer authority requires explicit current owner review."
+  },
+  "profileId": "pwp1_94a3b250d77be4eadd62d184dfa70facfe4e78444f0cd80903d00e339ef25147"
 }

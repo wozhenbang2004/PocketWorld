@@ -56,7 +56,7 @@ tasks.withType(Test).configureEach {
     }
     // SDK35 host Conscrypt inspects InetAddress on JDK17 for the real phone/OAuth TLS peers.
     // Open only this host-test JVM package; production TLS and certificate checks are unchanged.
-    if (selected.contains('phone-task-platform') || classes.contains('dev.pocketengine.features.plugins.McpOAuthNativeRunnerJourneyTest')) {
+    if (selected.contains('phone-task-platform') || selected.contains('desktop-hybrid') || classes.contains('dev.pocketengine.features.plugins.McpOAuthNativeRunnerJourneyTest')) {
         jvmArgs '--add-opens=java.base/java.net=ALL-UNNAMED'
     }
     enableAssertions = true

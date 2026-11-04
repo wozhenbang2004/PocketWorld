@@ -38,6 +38,7 @@ final class DisplayEngine {
     private final Handler main;
     private final DisplayManager displayManager;
     private VirtualDisplay display;
+    private volatile boolean closed;
     private ImageReader reader;
     private volatile LeasePolicy lease;
     private OwnerTaskTransfer ownerTransfer;
@@ -96,6 +97,7 @@ final class DisplayEngine {
     }
 
     JSONObject handle(JSONObject request) throws Exception {
+        if(closed)throw new Failure("helper_session_closed","原后台显示已关闭。",false);
         String cmd=request.optString("command");
         if("hello".equals(cmd)||"status".equals(cmd))return status();
         if("audio_recovery.get".equals(cmd)||"audio_recovery.set".equals(cmd))return onMain(()->{
@@ -191,6 +193,7 @@ final class DisplayEngine {
         int w=integer(request,"width",320,1600,720),h=integer(request,"height",320,2400,1280),d=integer(request,"density",120,640,240);
         if((long)w*h>2_400_000)throw new Failure("invalid_dimensions","后台屏尺寸过大。",false);
         return onMain(()->{
+            if(closed)throw new Failure("helper_session_closed","原后台显示已关闭。",false);
             if(lease!=null&&!lease.expired(SystemClock.uptimeMillis()))throw new Failure("display_busy","后台屏已有会话，请先释放。",false);
             release();
             try {
@@ -203,7 +206,7 @@ final class DisplayEngine {
                 width=w;height=h;density=d;
                 reader.setOnImageAvailableListener(r->consumeFrame(r),main);
                 dispatchDeadline();
-                display=displayManager.createVirtualDisplay("PocketEngine background",w,h,d,reader.getSurface(),flags);
+                display=displayManager.createVirtualDisplay("PocketEngine background "+UUID.randomUUID(),w,h,d,reader.getSurface(),flags);
                 if(display==null||display.getDisplay()==null||display.getDisplay().getDisplayId()<=0)throw new Failure("display_creation_failed","系统未创建独立后台屏。",false);
                 requiredDisplayFlags=requiredIsolationFlags();
                 if(!display.getDisplay().isValid()||(display.getDisplay().getFlags()&requiredDisplayFlags)!=requiredDisplayFlags||!destroysContentOnRemoval(display.getDisplay()))throw new Failure("focus_isolation_unavailable","系统未提供所需的后台隔离，不启动后台任务。",false);
@@ -571,7 +574,7 @@ final class DisplayEngine {
                 &&destroysContentOnRemoval(display.getDisplay());
     }
     void tick(){LeasePolicy current=lease;if(current!=null)try{onMain(()->{if(lease==current){if(current.expired(SystemClock.uptimeMillis())||!displayIsValid(current))release();else try{synchronizeGeometry(current,false);}catch(Exception unavailable){blockGeometry();}}return null;});}catch(Exception ignored){}}
-    void close(){try{onMain(()->{release();return null;});}catch(Exception ignored){ /* Process teardown also revokes its display token. */ }}
+    void close(){closed=true;try{onMain(()->{release();return null;});}catch(Exception ignored){ /* Process teardown also revokes its display token. */ }}
     private void release(){
         if(geometryListenerRegistered){displayManager.unregisterDisplayListener(geometryListener);geometryListenerRegistered=false;}
         LeasePolicy cancelling=lease;if(cancelling!=null)gesturePaths.cancelLease(cancelling,event->{inject(cancelling,event,-1);return true;});

@@ -115,6 +115,24 @@ class DevicePairingTests(unittest.TestCase):
         value["argumentsDigest"] = wire.arguments_digest(value)
         return wire.parse_request(json.dumps(value).encode())
 
+    def test_explicit_android_user_scope_cannot_authorize_other_or_omitted_user(self):
+        self.binding["androidUserId"] = 0
+        self.pair()
+        self.coordinator.check_permission(self.peer_a, self.envelope(), self.now)
+        omitted = {key: value for key, value in self.binding.items() if key != "androidUserId"}
+        for requested in (dict(self.binding, androidUserId=1), omitted):
+            with self.subTest(resource=requested):
+                with self.assertRaises(PermissionError):
+                    self.coordinator.check_permission(self.peer_a, self.envelope(resourceBinding=requested), self.now)
+
+    def test_omitted_android_user_scope_keeps_exact_legacy_semantics(self):
+        self.pair()
+        self.coordinator.check_permission(self.peer_a, self.envelope(), self.now)
+        for user in (0, 1):
+            with self.subTest(androidUserId=user):
+                with self.assertRaises(PermissionError):
+                    self.coordinator.check_permission(self.peer_a, self.envelope(resourceBinding=dict(self.binding, androidUserId=user)), self.now)
+
     def test_tls_loading_crash_leaves_only_password_encrypted_owned_temporary(self):
         from cryptography.hazmat.primitives import serialization
         script = """import os,sys; import device_identity as i

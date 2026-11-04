@@ -43,13 +43,13 @@ final class DeviceSourceToolContracts {
                 case "command.run" -> {p.put("argv",new JSONObject().put("type","array").put("items",text(12000)).put("minItems",1).put("maxItems",80)).put("timeoutSeconds",integer(1,3600));required=new String[]{"argv"};}
             }return out.put(object(p,required));
         }
-        if(name.equals("desktop.observe"))return out.put(object(new JSONObject().put("discovery",enumeration(true)),"discovery")).put(object(new JSONObject().put("pid",integer(1,4294967295L)).put("windowId",integer(1,DeviceProtocol.MAX_SAFE_INTEGER)),"pid","windowId")).put(object(new JSONObject()));
+        if(name.equals("desktop.observe"))return out.put(object(new JSONObject().put("discovery",enumeration(true)),"discovery")).put(object(new JSONObject().put("pid",integer(1,4294967295L)).put("windowId",integer(1,DeviceProtocol.MAX_SAFE_INTEGER)).put("observationMode",enumeration("semantic","visual","hybrid")),"pid","windowId")).put(object(new JSONObject().put("observationMode",enumeration("visual","hybrid"))));
         if(name.equals("desktop.control"))return out.put(object(new JSONObject().put("action",enumeration("acquire")).put("durationMs",integer(1000,30000)),"action")).put(object(new JSONObject().put("action",enumeration("release")).put("lease",lease()),"action","lease"));
         for(String kind:new String[]{"click","insert_text","set_text","hotkey","press_key","scroll"}){
             int targets=kind.equals("click")?2:1;
             for(int target=0;target<targets;target++)for(boolean foreground:new boolean[]{false,true}){
                 if(foreground&&kind.equals("set_text"))continue;
-                JSONObject p=new JSONObject().put("kind",enumeration(kind)).put("lease",lease()).put("verification",verification()).put("deliveryMode",enumeration(foreground?"foreground":"background"));JSONArray required=new JSONArray().put("kind").put("lease");
+                JSONObject p=new JSONObject().put("kind",enumeration(kind)).put("observationMode",enumeration("semantic","visual","hybrid")).put("lease",lease()).put("verification",verification()).put("deliveryMode",enumeration(foreground?"foreground":"background"));JSONArray required=new JSONArray().put("kind").put("lease");
                 if(foreground){p.put("foregroundAfterOperationId",text(128));required.put("deliveryMode").put("foregroundAfterOperationId");}
                 switch(kind){
                     case "click" -> {p.put("button",enumeration("left","right","middle")).put("count",integer(1,3));if(target==0){p.put("elementToken",token());required.put("elementToken");}else{p.put("x",integer(0,1199)).put("y",integer(0,1199));required.put("x").put("y");}}
@@ -64,9 +64,9 @@ final class DeviceSourceToolContracts {
         }return out;
     }
     static String guidance(String name){return switch(name){
-        case "desktop.observe" -> "{discovery:true}只列进程/窗口，不是action-ready。用准确pid+windowId取该窗口的新observationRef、state.elements[element_token]及真实capture。{}仅整显示观察。";
+        case "desktop.observe" -> "{discovery:true}只列进程/窗口，不是action-ready。用准确pid+windowId默认取semantic结构和新observationRef，不要求截图。需要坐标/真实键鼠操作时显式observationMode=hybrid或visual，才返回真实capture。{}仅整显示hybrid观察。";
         case "desktop.control" -> "先acquire取得原job的payload.desktopReceipt.lease；每次act传该准确lease。HELD过期不自动转让：只可显式release原lease再acquire；unknown/NEEDS_RECONCILE不可自动释放或重放。";
-        case "desktop.act" -> "必须外层observationRef=最新实际送入当前模型的同窗口frame，arguments.lease来自已结算的desktop.control。set_text用目标UIA ValuePattern完整替换（text空串为清空；固定UIA省略空值/读失败时只可回unknown，不能把缺value当清空成功或重放）；不支持时明确拒绝，不自动按键清空或降为追加。insert_text只插入，不混坐标focus+输入。每次act后改用payload.desktopReceipt.afterObservation的新ref，不复用旧ref。verification仅证明新观察的窗口条件，不证明文件保存；没条件或unknown不得称业务成功。foreground仅准确known-no-input background拒绝后独立新操作+新ref，禁止自动升级。";
+        case "desktop.act" -> "外层observationRef必须来自最新实际送入当前模型的同窗口结构或frame；semantic只用于支持的元素语义操作，坐标/键鼠需先观察hybrid/visual，arguments.lease来自已结算的desktop.control。set_text用目标UIA ValuePattern完整替换（text空串为清空；固定UIA省略空值/读失败时只可回unknown，不能把缺value当清空成功或重放）；不支持时明确拒绝，不自动按键清空或降为追加。insert_text只插入，不混坐标focus+输入。每次act后改用payload.desktopReceipt.afterObservation的新ref，不复用旧ref。verification仅证明新观察的窗口条件，不证明文件保存；没条件或unknown不得称业务成功。foreground仅准确known-no-input background拒绝后独立新操作+新ref，禁止自动升级。";
         case "workspace.location" -> "只用{}读取该准确已授权workspace的native rootPath/pathStyle，供SaveAs定位；不能猜Documents/cwd或从binding反推。locationOnly=true，guiDirectorySandbox=false；不代表GUI具备OS目录写入沙箱。";
         case "workspace.write" -> "仅workspace相对path；expectedVersion来自原workspace.read的sha256版本，新文件为absent。不能覆盖版本不明/已变文件。";
         case "workspace.project.export" -> "只回读本任务已原生审阅导入的receiveOperationId所标识的新项目副本，目标按原清单封装修改字节；不读取整个workspace。收到后仅落原附件，需主人选包审阅导入。";

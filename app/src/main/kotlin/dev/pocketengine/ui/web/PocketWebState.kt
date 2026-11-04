@@ -50,6 +50,7 @@ internal object PocketWebState {
         .put("attachments", JSONArray().also { out -> row.attachments.forEach { out.put(attachment(it)) } })
         .put("attachmentFiles", JSONArray().also { out -> row.attachmentFiles.forEach { out.put(publicValue(it)) } })
         .put("submission", publicValue(row.submission)).put("memoryReference", publicValue(row.memoryReference))
+        .also { value -> row.phoneResult?.let { value.put("phoneResult", it.toJson()) } }
 
     fun task(row: UiTask, images: Boolean = false): JSONObject = JSONObject()
         .put("id", row.id).put("goal", row.goal).put("status", row.status)

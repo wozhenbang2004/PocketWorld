@@ -38,7 +38,7 @@ public final class PhoneNotificationControls {
             String id=intent.getStringExtra("taskId"),run=intent.getStringExtra(RUN);int epoch=intent.getIntExtra(EPOCH,-1);
             synchronized(app){
                 if(!handles(intent.getAction())||id==null||run==null||!id.equals(serviceTask)||!run.equals(serviceRun)||epoch!=serviceEpoch
-                        ||original==null||!id.equals(app.activeId())||original!=app.control(id)||!original.hasHostRun()||!original.matchesHostRun(id,run,epoch))return false;
+                        ||original==null||original!=app.control(id)||!original.hasHostRun()||!original.matchesHostRun(id,run,epoch))return false;
                 nativeOwner=true;
             }
             JSONObject task=app.tasks.get(id,false);

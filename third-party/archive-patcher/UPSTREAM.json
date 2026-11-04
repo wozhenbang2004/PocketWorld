@@ -1,0 +1,106 @@
+{
+  "repository": "https://github.com/google/archive-patcher",
+  "commit": "50ca40a3de7983392a383ed3cc7b48e25f1b69b3",
+  "commit_date": "2019-03-26T18:06:59Z",
+  "verified_at": "2026-11-04",
+  "archived_at": "2024-06-24",
+  "license": "Apache-2.0; DivSuffixSorter.java additional MIT notice in LICENSE",
+  "local_modifications": false,
+  "files": {
+    "LICENSE": {
+      "sha256": "9e69074ca08973d9129cfd12658e6bc6cc502edb3bb99824db836726cb11a86f",
+      "git_blob_sha1": "e41154e36c29af24abd4f6067396fddea1887d26",
+      "bytes": 12521
+    },
+    "applier/src/main/java/com/google/archivepatcher/applier/DeltaApplier.java": {
+      "sha256": "6cf3805f7024a6ee4df28331017f97729049f1f0261f17fbd3545d320da231a5",
+      "git_blob_sha1": "84f0392cd483f7c97bea69c1fc8cab743ddddc88",
+      "bytes": 1304
+    },
+    "applier/src/main/java/com/google/archivepatcher/applier/PatchFormatException.java": {
+      "sha256": "9be5e8b627c3f85d8caaaddbd4e58b384e2f3e6703f05486f675c5f74da58c21",
+      "git_blob_sha1": "dfda1a65dde9a0a44a5462e7ccece9e557288c2b",
+      "bytes": 1280
+    },
+    "applier/src/main/java/com/google/archivepatcher/applier/bsdiff/BsDiffDeltaApplier.java": {
+      "sha256": "1a6e590d70453c1e93d2495bfc7c6c982117fe261164dd3b2b1cfbc9a8a67d73",
+      "git_blob_sha1": "9e9ab04caf0364b90c3cf3153cd761d80d50b24e",
+      "bytes": 1439
+    },
+    "applier/src/main/java/com/google/archivepatcher/applier/bsdiff/BsPatch.java": {
+      "sha256": "14ca30f8d89faae5f03edf81e699e3566bb4533d762e4008937b77a4b9a08601",
+      "git_blob_sha1": "cfa8dedb6cd60d92630af753b1dfe1633abcb0af",
+      "bytes": 14327
+    },
+    "generator/src/main/java/com/google/archivepatcher/generator/DeltaGenerator.java": {
+      "sha256": "fa3f9ae10efddece874ba71450e0cdd835e7f666b34478251cfc3fe83184bea2",
+      "git_blob_sha1": "03cd2b52299e66e738e7cd0b9b124b589e60ea9e",
+      "bytes": 1392
+    },
+    "generator/src/main/java/com/google/archivepatcher/generator/bsdiff/BsDiff.java": {
+      "sha256": "f3323f21039c67e9067ac5bd2cbc32ac99dccabeb16483884938b67f8ea461b8",
+      "git_blob_sha1": "d42522173071adbe2b1bffe9330db0c2263c80cf",
+      "bytes": 5679
+    },
+    "generator/src/main/java/com/google/archivepatcher/generator/bsdiff/BsDiffDeltaGenerator.java": {
+      "sha256": "34fb591810061672240ca47abeea89e3deb4a3e99ba59538fe635b623a9fd225",
+      "git_blob_sha1": "1f0c79b3840d1e714cb4e142f038c058490f6a77",
+      "bytes": 1374
+    },
+    "generator/src/main/java/com/google/archivepatcher/generator/bsdiff/BsDiffMatcher.java": {
+      "sha256": "1f1b64eab75c49aecdf374dc639ae4189fdcaab277e5258950d9c3c2065b8401",
+      "git_blob_sha1": "e456823392fea992d653629e464a03d77c22e00d",
+      "bytes": 6127
+    },
+    "generator/src/main/java/com/google/archivepatcher/generator/bsdiff/BsDiffPatchWriter.java": {
+      "sha256": "d8a00e132a3f2164822026ba71960497ffc9c6c9568df59598ca23aab55fc17d",
+      "git_blob_sha1": "43e7898519a5809c130a4e5a52cc66264a94a49b",
+      "bytes": 15843
+    },
+    "generator/src/main/java/com/google/archivepatcher/generator/bsdiff/BsUtil.java": {
+      "sha256": "483d6540a7d86902d17804daec9c2edcc1c69a8b49b3710100ed97b2a0069a25",
+      "git_blob_sha1": "3631dcc1c1d301716648d6068c5fa65e0b48605d",
+      "bytes": 3706
+    },
+    "generator/src/main/java/com/google/archivepatcher/generator/bsdiff/DivSuffixSorter.java": {
+      "sha256": "fea0a3328ebfaa6b6321b4220c84d4f4541dd4b8a755c28cabfa3d4e06d74524",
+      "git_blob_sha1": "35ed2fe63fc069bcd80e3e1a634687955e436a57",
+      "bytes": 64564
+    },
+    "generator/src/main/java/com/google/archivepatcher/generator/bsdiff/Matcher.java": {
+      "sha256": "32f9183ec5c638595a52e1798c1b25c8664d55546f7799615c6a032bff2e1cf5",
+      "git_blob_sha1": "2e496df652a02721bab100935e0afe310c21e2b4",
+      "bytes": 1744
+    },
+    "generator/src/main/java/com/google/archivepatcher/generator/bsdiff/RandomAccessObject.java": {
+      "sha256": "a84729c31ac82c30d145cc31c54e1b923e543530552341e39ffb616ed7f9867d",
+      "git_blob_sha1": "6a8789a8dcba98bd8b50892e308b005b23644994",
+      "bytes": 15700
+    },
+    "generator/src/main/java/com/google/archivepatcher/generator/bsdiff/RandomAccessObjectFactory.java": {
+      "sha256": "06e9df5450d2ad3adc0f0b8998ef0bd50e0b51f85a6796d2d96a067aee1c67d9",
+      "git_blob_sha1": "24369fabc4426a9bb04a3fe633a9f097d53f80c5",
+      "bytes": 4747
+    },
+    "generator/src/main/java/com/google/archivepatcher/generator/bsdiff/SuffixSorter.java": {
+      "sha256": "cd67459b822ac43498a3c68137ac0a765fb3fdaf80c5bf3c395d2171c9d3be37",
+      "git_blob_sha1": "a6231cece7016ab9ec3c254e46088f98ad31c485",
+      "bytes": 1320
+    },
+    "applier/src/test/resources/com/google/archivepatcher/applier/bsdiff/testdata/bsdifftest_minimal_blob_a.bin": {
+      "sha256": "6aa095ee83b7df93fe8140570a885fafeb8270f7a174e1aa4d554172a1ab73b2",
+      "git_blob_sha1": "ed66dcdae701a5190aa5c2a63ae12c02fe103a15",
+      "bytes": 8508
+    },
+    "applier/src/test/resources/com/google/archivepatcher/applier/bsdiff/testdata/bsdifftest_minimal_blob_b.bin": {
+      "sha256": "67cb5240ce1cc2d358efe6630f8bb7e2bf9306d6e05c9a8630df3256e603b396",
+      "git_blob_sha1": "4292b5294dbbf19818d850aff9005cd3046e0e3c",
+      "bytes": 8538
+    },
+    "applier/src/test/resources/com/google/archivepatcher/applier/bsdiff/testdata/bsdifftest_minimal_patch_a_to_b.bin": {
+      "sha256": "8b5ab12d213a9dc846b3bd511761febffe79726c6d9c71691bea3a0c9a85d77d",
+      "git_blob_sha1": "5b0bc8ba510e121294db7c1879cd84ea70c01f41",
+      "bytes": 8682
+    }
+  }
+}

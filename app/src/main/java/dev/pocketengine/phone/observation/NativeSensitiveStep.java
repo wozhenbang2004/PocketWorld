@@ -13,13 +13,23 @@ import org.json.JSONObject;
 /** Human-only sensitive steps, not an approval/grant. Only native drivers mint this refusal. */
 public final class NativeSensitiveStep {
     private NativeSensitiveStep() { }
+    private static final java.util.concurrent.atomic.AtomicInteger OWNER_UPDATE_WINDOWS = new java.util.concurrent.atomic.AtomicInteger();
+    /** Native Activity lifetime only. No tool argument, model text or stored receipt can acquire/release this window. */
+    public static AutoCloseable openOwnerUpdateWindow() {
+        OWNER_UPDATE_WINDOWS.incrementAndGet();
+        java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean();
+        return () -> { if (closed.compareAndSet(false, true)) OWNER_UPDATE_WINDOWS.decrementAndGet(); };
+    }
+    public static void requireOwnerUpdateWindow(RunControl control, long revision) throws Exception {
+        if (OWNER_UPDATE_WINDOWS.get() > 0) refuse(Reason.PERMISSION_ELEVATION, control, revision);
+    }
     public enum Reason { PAYMENT_CONFIRMATION, TRANSFER_CONFIRMATION, LOGIN_CODE, PERMISSION_ELEVATION, SENSITIVE_TARGET_UNCERTAIN }
     public static final class OwnerRequired extends Exception {
         private final RunControl original;
         private final long revision;
         public final Reason reason;
         private OwnerRequired(Reason reason,RunControl original,long revision) {
-            super("这一步涉及付款、登录验证或权限升级，请主人亲手完成；交还后将重新观察，不重放旧动作。");
+            super("这一步涉及付款、登录验证、应用安装或权限升级，请主人亲手完成；交还后将重新观察，不重放旧动作。");
             this.reason=reason;this.original=original;this.revision=revision;
         }
         /** The original Runner may settle only this still-unentered operation, never a prior unknown. */
@@ -108,6 +118,9 @@ public final class NativeSensitiveStep {
 
     /** Preserves existing pure-image input when there is no semantic evidence; it does NOT certify safety. */
     public static void requireCoordinate(AccessibilityForest fresh,int x,int y,int x2,int y2,boolean swipe,RunControl control,long revision)throws Exception {
+        // Even an image-only target cannot use a missing/blank accessibility tree
+        // to press a system installer's final confirmation. Back remains a separate native action.
+        if (packageInstaller(fresh.packageName)) refuse(Reason.PERMISSION_ELEVATION, control, revision);
         JSONObject selected=null;double area=Double.MAX_VALUE;
         for(int i=0;i<fresh.nodes.length();i++) {
             JSONObject n=fresh.nodes.getJSONObject(i);JSONObject b=n.optJSONObject("bounds");
@@ -184,6 +197,11 @@ public final class NativeSensitiveStep {
         label=normal(label).trim();String id=normal(resource),where=normal(context),own=label+" "+id;
         String actionId=normal(resource.substring(resource.lastIndexOf('/')+1)).replaceAll("^(?:btn|button|action) ","").replaceAll(" (?:btn|button)$","");
         if(DENY.matcher(label).matches())return null;
+        if (!typing && !editable && packageInstaller(pkg) && !label.matches("(?:cancel|back|close|done|取消|返回|关闭|完成)"))
+            return Reason.PERMISSION_ELEVATION;
+        if (!typing && !editable && (label.matches("(?:安装|立即安装|确认安装|安装新版本|安装更新|install|install now|install update|install new version|confirm installation)")
+                || "dev.pocketengine".equals(pkg) && (id.endsWith("owner app update install") || id.endsWith("owner app update download"))))
+            return Reason.PERMISSION_ELEVATION;
         boolean search=own.matches(".*(?:\\bsearch\\b|搜索|搜尋).*"),editor=own.contains("source code")||own.contains("code editor")||own.contains("codeeditor")||own.contains("源代码")||own.contains("代码编辑");
         if(!search&&!editor&&OTP.matcher(own).find()&&(editable||typing||!label.matches(".*(?:\\bhelp\\b|\\blearn\\b|documentation|example|tutorial|帮助|教程|示例|说明).*")))return Reason.LOGIN_CODE;
         if(!typing&&!editable) {
@@ -200,6 +218,10 @@ public final class NativeSensitiveStep {
             if(label.isEmpty()&&!typing)return Reason.SENSITIVE_TARGET_UNCERTAIN;
         }
         return null;
+    }
+    private static boolean packageInstaller(String pkg) {
+        return pkg != null && (pkg.equals("com.android.packageinstaller") || pkg.equals("com.google.android.packageinstaller")
+                || pkg.endsWith(".packageinstaller"));
     }
     private static Reason risk(String context) {
         String text=normal(context);

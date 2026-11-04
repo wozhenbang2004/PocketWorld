@@ -26,9 +26,17 @@ public final class SafeModelRecovery {
         return delay;
     }
     public void waitBeforeRetry(long delay,RunControl original)throws InterruptedException {
+        debit(delay);original.sleep(delay);original.checkpoint();
+    }
+    /** Runner owner-input wake-up retains the same already-debited recovery allowance. */
+    public void waitBeforeRetry(long delay,RunControl original,long ownerInputRevision)throws InterruptedException {
+        debit(delay);
+        try(var request=original.openModelRequest(ownerInputRevision)){request.sleep(delay);}
+    }
+    private void debit(long delay){
         if(delay<0||delay>MAX_TOTAL_WAIT_MILLIS-waited||retries>=MAX_RETRIES_PER_TASK)throw new IllegalArgumentException("recovery_budget_exhausted");
         // Debit before waiting; pause, cancellation or process loss never refunds a request allowance.
-        retries++;waited+=delay;original.sleep(delay);original.checkpoint();
+        retries++;waited+=delay;
     }
     public int retries(){return retries;}
     public long waitedMillis(){return waited;}

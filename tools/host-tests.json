@@ -1,4 +1,47 @@
 {
+  "phone-team-sessions": {
+    "class": "dev.pocketengine.BackgroundPhoneRunTest",
+    "additionalClasses": [
+      "dev.pocketengine.core.ExecutionResourcesTest",
+      "dev.pocketengine.store.LocalPhoneLeaseIsolationNativeTest",
+      "dev.pocketengine.PhoneNotificationControlsTest",
+      "dev.pocketengine.PhoneRunServiceTest",
+      "dev.pocketengine.phone.PhoneOwnerControlsTest",
+      "dev.pocketengine.displayhelper.DisplaySessionRegistryTest",
+      "dev.pocketengine.phone.display.DisplayModuleParallelTest",
+      "dev.pocketengine.phone.display.PhoneParallelCapabilitiesTest",
+      "dev.pocketengine.phone.display.DisplayModuleTest",
+      "dev.pocketengine.features.devices.DeviceGoalPhonePortTest",
+      "dev.pocketengine.features.teams.TeamPhoneBudgetTest",
+      "dev.pocketengine.features.devices.DevicePhoneGoalReadinessTest",
+      "dev.pocketengine.features.teams.TeamPhoneOriginalHostJourneyTest",
+      "dev.pocketengine.features.devices.DeviceControlDispatchIsolationTest",
+      "dev.pocketengine.features.devices.DeviceProtocolTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest"
+    ],
+    "robolectric": true,
+    "description": "Bounded original App/Service/TaskStore multi-run lifecycle, per-display routing, exact phone scope, team allocations and previous notification/display regressions. Native frame/model responses are explicit test boundaries; no physical Android, APK, WAN or visual acceptance."
+  },
+  "conversation-phone-handoff": {
+    "class": "dev.pocketengine.ConversationPhoneStartNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.store.ConversationPhoneHandoffTest",
+      "dev.pocketengine.ui.PhoneResultProjectionTest",
+      "dev.pocketengine.ui.web.PocketWebPhoneResultNavigationTest",
+      "dev.pocketengine.features.assistant.ConversationPhoneDeliveryPassTest",
+      "dev.pocketengine.store.ConversationPhoneStorageNativeTest",
+      "dev.pocketengine.features.assistant.ConversationPhoneHandoffNativeTest",
+      "dev.pocketengine.features.assistant.AssistantPhoneHandoffDeliveryNativeTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
+    ],
+    "robolectric": true,
+    "description": "Original native review, fixed model and scope admission, one request/task identity, source currentness, per-run frozen phone outcomes, same-SQL conversation publication and deletion/unknown recovery. Accessibility, foreground service execution and startup are controlled fixture boundaries; no live provider, Android device, APK or visual acceptance."
+  },
   "attachment-legacy-integrity": {
     "class": "dev.pocketengine.features.attachments.LegacyAttachmentIntegrityTest",
     "additionalClasses": [
@@ -894,6 +937,9 @@
   "runner-budget-stream": {
     "class": "dev.pocketengine.runtime.context.RunnerBudgetIntegrationTest",
     "additionalClasses": [
+      "dev.pocketengine.core.ModelSteeringControlTest",
+      "dev.pocketengine.runtime.OwnerSteeringRunnerTest",
+      "dev.pocketengine.runtime.SafeModelRecoveryTest",
       "dev.pocketengine.runtime.RecoveryProjectionTest",
       "dev.pocketengine.runtime.RuntimeStreamingProtocolTest",
       "dev.pocketengine.runtime.OwnerIntentRunnerNativeTest",
@@ -1424,13 +1470,17 @@
   },
   "attachment-import-recovery": {
     "class": "dev.pocketengine.features.attachments.AttachmentImportRecoveryTest",
-    "additionalClasses": ["dev.pocketengine.features.attachments.AttachmentBookTest"],
+    "additionalClasses": [
+      "dev.pocketengine.features.attachments.AttachmentBookTest"
+    ],
     "helpers": [],
     "description": "Original ordinary attachment import interruption, saved-byte/index reconciliation, unknown/native preservation and cross-Book file-lock exclusion. Pure JVM fixtures; no Android process-death or device acceptance."
   },
   "pocket-web-model-accounts": {
     "class": "dev.pocketengine.ui.web.PocketWebApiModelsTest",
-    "additionalClasses": ["dev.pocketengine.ui.web.PocketWebAccountCommandsTest"],
+    "additionalClasses": [
+      "dev.pocketengine.ui.web.PocketWebAccountCommandsTest"
+    ],
     "helpers": [],
     "description": "Original Web API model identity projection and account command receipts. Pure JVM contracts; no OAuth provider or mounted Android acceptance."
   },
@@ -1530,5 +1580,22 @@
     "helpers": [],
     "robolectric": true,
     "description": "Original connection/editor/draft/native test identities, strict receipt projection, per-profile compatibility and cache settings CAS. Controlled provider/repository fixtures; no live provider, real cache hit or Android visual acceptance."
+  },
+  "desktop-hybrid": {
+    "class": "dev.pocketengine.features.devices.DeviceDesktopViewerNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.devices.DeviceSemanticObservationsTest",
+      "dev.pocketengine.features.devices.DeviceProtocolTest",
+      "dev.pocketengine.features.devices.DeviceSourceToolContractsTest",
+      "dev.pocketengine.features.devices.NativeRelayOwnerWindowTest",
+      "dev.pocketengine.features.devices.NativeDesktopOwnerWindowTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.devices.DeviceIngressNativeTest",
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
+    ],
+    "robolectric": true,
+    "description": "Original SQLite, native grant and one-use TLS send gates; semantic structure delivery through the real AgentRunner; shared protocol vectors. Explicit loopback peers and UIA receipts, not Windows/Android physical acceptance."
   }
 }

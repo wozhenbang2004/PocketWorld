@@ -3,13 +3,14 @@ from pathlib import Path
 import hashlib
 import importlib.metadata
 import json
-from PyInstaller.utils.hooks import copy_metadata
+from PyInstaller.utils.hooks import collect_all, collect_delvewheel_libs_directory, copy_metadata
 
 ROOT = Path(SPECPATH).resolve().parents[2]
 COMPANION = ROOT / "companion"
 if not COMPANION.is_dir():
     raise RuntimeError("Spec must live in the product companion/packaging/windows directory")
-required = ["device_protocol.py", "device_identity.py", "device_pairing.py", "device_artifacts.py", "desktop_runtime.py"]
+required = ["device_protocol.py", "device_identity.py", "device_pairing.py", "device_artifacts.py", "desktop_runtime.py",
+            "desktop_stream.py", "desktop_viewer.py", "agent_desktop_driver.py"]
 if any(not (COMPANION / name).is_file() for name in required):
     raise RuntimeError("Build the integrated product tree; required shared protocol/identity/artifact modules are missing")
 hidden = [path.stem for path in COMPANION.glob("*.py")
@@ -46,8 +47,38 @@ desktop_data = [(str(desktop_lock_path), "build-materials"),
                 (str(COMPANION / "requirements-windows-desktop.txt"), "build-materials"),
                 (str(desktop_license), "licenses")] + copy_metadata("pillow")
 hidden += ["PIL.Image", "PIL.PngImagePlugin"]
-a = Analysis([str(COMPANION / "desktop_worker.py")], pathex=[str(COMPANION)], binaries=[],
-             datas=[(str(ROOT / "licenses" / "cua-driver-MIT.txt"), "licenses")] + pairing_data + desktop_data,
+hidden += ["PIL.ImageGrab", "_cffi_backend"]
+stream_lock_path = COMPANION / "packaging" / "windows-stream-dependencies.json"
+stream_lock = json.loads(stream_lock_path.read_text(encoding="utf-8"))
+if {item["name"]: item["version"] for item in stream_lock["components"]} != {"aiortc": "1.15.0", "av": "17.0.1"}:
+    raise RuntimeError("Unexpected desktop stream dependency contract")
+stream_data = [(str(stream_lock_path), "build-materials"),
+               (str(COMPANION / "requirements-desktop-stream.txt"), "build-materials")]
+stream_binaries = []
+for item in stream_lock["components"]:
+    if importlib.metadata.version(item["name"]) != item["version"]:
+        raise RuntimeError("Prepare the exact hash-locked media dependency before building")
+    license_path = ROOT / item["licenseFile"]
+    if hashlib.sha256(license_path.read_bytes()).hexdigest() != item["licenseSha256"]:
+        raise RuntimeError("Pinned media license material changed")
+    stream_data.append((str(license_path), "licenses"))
+# Explicit collection handles dynamic codec imports and Windows wheel DLLs.
+# The actual frozen --stream-self-test must encode VP8 before provenance exists.
+for package in ("aiortc", "av", "aioice", "pylibsrtp", "google_crc32c", "pyee", "OpenSSL", "ifaddr", "dns"):
+    package_data, package_binaries, package_hidden = collect_all(package)
+    stream_data += package_data
+    stream_binaries += package_binaries
+    hidden += package_hidden
+for package in ("av", "pylibsrtp", "google_crc32c"):
+    stream_data, stream_binaries = collect_delvewheel_libs_directory(package, datas=stream_data, binaries=stream_binaries)
+agent_pin_path = COMPANION / "packaging" / "agent-desktop-pin.json"
+agent_pin = json.loads(agent_pin_path.read_text(encoding="utf-8"))
+agent_license = ROOT / agent_pin["licenseFile"]
+if hashlib.sha256(agent_license.read_bytes()).hexdigest() != agent_pin["licenseSha256"]:
+    raise RuntimeError("Pinned agent-desktop license material changed")
+agent_data = [(str(agent_pin_path), "build-materials"), (str(agent_license), "licenses")]
+a = Analysis([str(COMPANION / "desktop_worker.py")], pathex=[str(COMPANION)], binaries=stream_binaries,
+             datas=[(str(ROOT / "licenses" / "cua-driver-MIT.txt"), "licenses")] + pairing_data + desktop_data + stream_data + agent_data,
              hiddenimports=hidden, hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=["png", "qrcode.image.pil"], noarchive=False)
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="PocketWorld-Companion", debug=False,

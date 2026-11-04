@@ -329,6 +329,115 @@ public final class ConversationRepository {
     public JSONObject sourceByClient(String client)throws Exception{return sourceByKey("client_message_id",client);}
     public JSONObject sourceByReply(String reply)throws Exception{return sourceByKey("native_reply_id",reply);}
     private JSONObject sourceByKey(String field,String key)throws Exception{try(Cursor row=db.rawQuery("SELECT source_id FROM assistant_sources WHERE generation=? AND "+field+"=? LIMIT 1",new String[]{activeGeneration(),key})){return row.moveToFirst()?source(row.getString(0)):null;}}
+
+    /** Native review metadata only. The caller holds the same original TaskStore
+     * transaction used by source edits/deletion; no assistant Run must still be live. */
+    JSONObject preparePhoneHandoffSource(String conversation)throws Exception{
+        requirePhoneHandoffTransaction();
+        if(conversation==null||conversation.isBlank()||conversation.length()>240||!StandardCharsets.UTF_8.newEncoder().canEncode(conversation))throw new IllegalArgumentException("原私人会话身份无效");
+        String id;
+        // Select the last native user row before checking availability. A withdrawn or
+        // deleted latest intention must not silently fall back to an older instruction.
+        try(Cursor row=db.rawQuery("SELECT s.source_id FROM assistant_sources s JOIN assistant_messages m ON m.generation=s.generation AND m.source_id=s.source_id AND m.conversation_id=s.conversation_id WHERE s.generation=? AND s.conversation_id=? AND s.role='user' ORDER BY m.sequence DESC LIMIT 1",new String[]{activeGeneration(),conversation})){
+            if(!row.moveToFirst())throw new SecurityException("此原会话没有可固定的主人消息，请先保存本次要求");id=row.getString(0);
+        }
+        return phoneHandoffSourceFacts(conversation,id);
+    }
+    /** Source currentness for prepare -> explicit native launch only. Already-recorded
+     * phone outcomes do not need this old user message to remain editable/current. */
+    public void requirePhoneHandoffSource(JSONObject snapshot)throws Exception{
+        requirePhoneHandoffTransaction();
+        Set<String> fields=Set.of("format","generation","conversationId","conversationTitle","sourceMessageId","sourceMessageRevision","bodyFingerprint","sourceSequence");
+        if(snapshot==null||snapshot.length()!=fields.size())throw new SecurityException("原会话手机任务来源快照无效");
+        for(var keys=snapshot.keys();keys.hasNext();)if(!fields.contains(keys.next()))throw new SecurityException("来源快照不能夹带执行权限或正文");
+        if(!"pocketworld.phone-handoff-source.v1".equals(snapshot.getString("format"))||!(snapshot.opt("conversationTitle") instanceof String)
+                ||snapshot.getString("conversationTitle").length()>200||!snapshot.getString("bodyFingerprint").matches("sha256:[a-f0-9]{64}"))throw new SecurityException("原会话手机任务来源格式无效");
+        long revision=integer(snapshot,"sourceMessageRevision",1),sequence=integer(snapshot,"sourceSequence",1);
+        JSONObject actual=phoneHandoffSourceFacts(snapshot.getString("conversationId"),snapshot.getString("sourceMessageId"));
+        for(String key:List.of("generation","conversationId","sourceMessageId","bodyFingerprint"))if(!actual.getString(key).equals(snapshot.getString(key)))throw new SecurityException("审阅后的原主人来源已经改变，请重新审阅");
+        if(actual.getLong("sourceMessageRevision")!=revision||actual.getLong("sourceSequence")!=sequence)throw new SecurityException("审阅后的原主人消息版本已经改变，请重新审阅");
+    }
+    private void requirePhoneHandoffTransaction(){
+        if(!Thread.holdsLock(monitor)||!db.inTransaction())throw new SecurityException("原会话手机任务核对必须在同一TaskStore事务内");
+    }
+    private JSONObject phoneHandoffSourceFacts(String conversation,String id)throws Exception{
+        String gen=activeGeneration();JSONObject header=header(conversation),state=source(id),metadata=metadata(id);
+        if(state==null||metadata==null||metadata.optBoolean("deleted")||!conversation.equals(metadata.optString("conversationId"))||!"user".equals(metadata.optString("role"))
+                ||!conversation.equals(state.optString("conversationId"))||!"user".equals(state.optString("role")))throw new SecurityException("原主人来源已删除或不属于此私人会话");
+        SourceRef ref=SourceRef.fromJson(state);
+        if(!"message".equals(ref.kind)||!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId)||!id.equals(ref.sourceId)
+                ||metadata.getLong("revision")!=ref.revision||metadata.optLong("memorySourceRetiredThrough")>=ref.revision||metadata.optBoolean("memoryContextRetired"))throw new SecurityException("原主人来源已撤回或停用");
+        JSONObject message=message(conversation,id);
+        if(message==null||!id.equals(message.optString("id"))||!"user".equals(message.optString("role"))||integer(message,"revision",1)!=ref.revision)throw new SecurityException("原主人消息正文和来源版本不一致");
+        String text=message.getString("content");if(!StandardCharsets.UTF_8.newEncoder().canEncode(text))throw new SecurityException("原主人消息编码不可核对");
+        byte[] body=text.getBytes(StandardCharsets.UTF_8);String fingerprint="sha256:"+shaBytes(body);long sequence;
+        try(Cursor row=db.rawQuery("SELECT sequence,revision,body_sha,body_bytes FROM assistant_messages WHERE generation=? AND conversation_id=? AND source_id=? AND body IS NOT NULL LIMIT 1",new String[]{gen,conversation,id})){
+            if(!row.moveToFirst()||row.getLong(1)!=ref.revision||!fingerprint.equals(row.getString(2))||body.length!=row.getLong(3))throw new SecurityException("原主人消息完整性不可核对");
+            sequence=row.getLong(0);if(sequence<1)throw new SecurityException("原主人消息顺序不可核对");
+        }
+        String title=header.optString("title","");if(title.length()>200){int end=200;if(Character.isHighSurrogate(title.charAt(end-1)))end--;title=title.substring(0,end);}
+        return new JSONObject().put("format","pocketworld.phone-handoff-source.v1").put("generation",gen).put("conversationId",conversation).put("conversationTitle",title)
+                .put("sourceMessageId",id).put("sourceMessageRevision",ref.revision).put("bodyFingerprint",fingerprint).put("sourceSequence",sequence);
+    }
+
+    /** Exact frozen TaskStore outcome only. No model/source callback, admission lock,
+     * network I/O or event emission is performed under the original SQL transaction. */
+    JSONObject appendPhoneHandoffResult(dev.pocketengine.store.TaskStore original,dev.pocketengine.store.TaskStore.ConversationPhoneDelivery delivery,boolean conversationBusy)throws Exception{
+        requirePhoneHandoffTransaction();if(monitor!=original)throw new SecurityException("不能替换原手机结果数据库宿主");
+        JSONObject result=delivery.snapshot();String conversation=result.getString("conversationId"),task=result.getString("taskId"),run=result.getString("runId");
+        long epoch=integer(result,"epoch",1);String key=phoneHandoffDeliveryId(task,run,epoch),digest=result.getString("resultDigest"),status=result.getString("status");
+        if(!"pocketworld.conversation-phone-delivery.v1".equals(result.optString("format"))||!key.equals(result.getString("deliveryId"))||!task.equals(result.getString("requestId"))
+                ||!digest.matches("[a-f0-9]{64}")||!Set.of("completed","needs_confirmation","awaiting_user","failed","cancelled","interrupted","reconciling","paused").contains(status))throw new SecurityException("原手机结果身份或终态不可核对");
+        if(!activeGeneration().equals(result.getString("generation")))throw new SecurityException("原结果的会话留存代次已变化，未重建或冒充已删除");
+        JSONObject prior=sourceByReply(key);
+        if(prior!=null){
+            requirePhoneResultIndex(prior,conversation,task,run,epoch,key);
+            if(!digest.equals(prior.optString("nativeReplyDigest"))||!status.equals(prior.optString("nativeStatus")))throw new SecurityException("同一手机结果编号不能更换原结果");
+            boolean available=phoneResultAvailable(prior);
+            if(available)requirePhoneResultMessage(prior,conversation,task,run,epoch,key);
+            return phoneResultAck(conversation,task,run,epoch,key).put("accepted",true).put("duplicate",true).put("messageId",prior.getString("sourceId")).put("available",available);
+        }
+        if(!exists(conversation)){
+            try(Cursor tombstone=db.rawQuery("SELECT deleted FROM assistant_conversations WHERE generation=? AND conversation_id=? LIMIT 1",new String[]{activeGeneration(),conversation})){
+                if(tombstone.moveToFirst()&&tombstone.getInt(0)!=0)return phoneResultAck(conversation,task,run,epoch,key).put("accepted",false).put("available",false).put("conversationDeleted",true);
+            }
+            throw new SecurityException("原结果会话无法核对，未创建替代会话");
+        }
+        if(conversationBusy)return phoneResultAck(conversation,task,run,epoch,key).put("accepted",false).put("available",false).put("waitingForOriginalConversation",true);
+        String text=result.getString("content");if(text.isBlank()||text.length()>24000||!StandardCharsets.UTF_8.newEncoder().canEncode(text))throw new IllegalArgumentException("原手机结果超过对话保存范围，原任务结果仍保留");
+        JSONObject evidence=result.getJSONObject("evidence");if(evidence.toString().length()>4096)throw new SecurityException("手机结果只能携带固定任务证据引用");
+        long endedAt=integer(result,"endedAt",0),now=System.currentTimeMillis();String messageId;do{messageId=UUID.randomUUID().toString();}while(source(messageId)!=null);
+        JSONObject message=new JSONObject().put("id",messageId).put("revision",1L).put("role","assistant").put("content",text).put("at",now).put("conversationId",conversation)
+                .put("taskId",task).put("nativeRunId",run).put("nativeEpoch",epoch).put("nativeDeliveryId",key).put("status",status).put("nativeStatus",status)
+                .put("resultDigest",digest).put("taskEndedAt",endedAt).put("taskResultEvidence",new JSONObject(evidence.toString()))
+                .put("summaryTruncated",result.getBoolean("summaryTruncated")).put("summaryChars",integer(result,"summaryChars",0)).put("summaryDigest",result.getString("summaryDigest"))
+                .put("taskReference",new JSONObject().put("taskId",task).put("runId",run).put("epoch",epoch)).put("resultVerified",false).put("executionAuthorized",false);
+        JSONObject state=new SourceRef("message",messageId,1,"owner","private").toJson().put("conversationId",conversation).put("role","assistant").put("deleted",false).put("updatedAt",now)
+                .put("nativeReplyId",key).put("nativeReplyDigest",digest).put("nativeTaskId",task).put("nativeRunId",run).put("nativeEpoch",epoch).put("nativeStatus",status);
+        saveSource(state);saveMessage(conversation,message);JSONObject header=header(conversation);header.put("updatedAt",now);saveConversation(header);
+        return phoneResultAck(conversation,task,run,epoch,key).put("accepted",true).put("duplicate",false).put("messageId",messageId).put("available",true);
+    }
+    JSONObject queryPhoneHandoffResult(String conversation,String task,String run,int epoch)throws Exception{
+        String key=phoneHandoffDeliveryId(task,run,epoch);JSONObject prior=sourceByReply(key),ack=phoneResultAck(conversation,task,run,epoch,key).put("bodyIncluded",false);
+        if(prior==null)return ack.put("found",false).put("available",false);
+        requirePhoneResultIndex(prior,conversation,task,run,epoch,key);boolean available=phoneResultAvailable(prior);
+        return ack.put("found",true).put("messageId",prior.getString("sourceId")).put("available",available);
+    }
+    private static String phoneHandoffDeliveryId(String task,String run,long epoch){
+        if(task==null||run==null||!task.matches("[a-fA-F0-9-]{36}")||!run.matches("[a-fA-F0-9-]{36}")||epoch<1||epoch>Integer.MAX_VALUE)throw new IllegalArgumentException("原手机任务执行身份无效");
+        return "phone_handoff:"+task+":"+run+":"+epoch;
+    }
+    private static JSONObject phoneResultAck(String conversation,String task,String run,long epoch,String key)throws Exception{return new JSONObject().put("conversationId",conversation).put("taskId",task).put("runId",run).put("epoch",epoch).put("deliveryId",key).put("executionAuthorized",false).put("resultVerified",false);}
+    private static boolean phoneResultAvailable(JSONObject source){return !source.optBoolean("deleted")&&!source.optBoolean("memoryContextRetired")&&source.optLong("memorySourceRetiredThrough")<source.optLong("revision");}
+    private static void requirePhoneResultIndex(JSONObject source,String conversation,String task,String run,long epoch,String key)throws Exception{
+        SourceRef ref=SourceRef.fromJson(source);
+        if(!"message".equals(ref.kind)||!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId)||!"assistant".equals(source.optString("role"))||!conversation.equals(source.optString("conversationId"))
+                ||!task.equals(source.optString("nativeTaskId"))||!run.equals(source.optString("nativeRunId"))||epoch!=integer(source,"nativeEpoch",1)||!key.equals(source.optString("nativeReplyId")))throw new SecurityException("原手机投递索引不属于这个任务、执行或会话");
+    }
+    private void requirePhoneResultMessage(JSONObject source,String conversation,String task,String run,long epoch,String key)throws Exception{
+        JSONObject actual=message(conversation,source.getString("sourceId"));
+        if(actual==null||!"assistant".equals(actual.optString("role"))||!task.equals(actual.optString("taskId"))||!run.equals(actual.optString("nativeRunId"))||epoch!=integer(actual,"nativeEpoch",1)||!key.equals(actual.optString("nativeDeliveryId")))throw new SecurityException("原手机投递消息与唯一索引不一致");
+    }
     public void saveSource(JSONObject source)throws Exception{saveSource(activeGeneration(),source);}
     private void saveSource(String gen,JSONObject source)throws Exception{
         SourceRef ref=SourceRef.fromJson(source);if(!"message".equals(ref.kind)||!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId))throw new SecurityException("原始消息来源不能更换私人身份");

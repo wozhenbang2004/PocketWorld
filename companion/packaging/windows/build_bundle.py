@@ -19,6 +19,8 @@ import zipfile
 CUA_COMMIT = "f595a4fb6f524e555e5e422aab81c3457fe4a713"
 CUA_VERSION = "0.38.0"
 CUA_NOTICES_SHA256 = "5860ee54b73d3d84f8af8a3c3fc996739755297d91e259314416378548ee8f6d"
+AGENT_DESKTOP_COMMIT = "6660fbac768dc7e7332837b90ed465684859afa3"
+AGENT_DESKTOP_LICENSE_SHA256 = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
 MANAGEMENT_SCRIPTS = ("Install-Companion.ps1", "Manage-Companion.ps1", "Launch-Companion.ps1", "Companion-InstallState.ps1")
 
 
@@ -64,7 +66,8 @@ def tree(root):
 
 def bundle(frozen_dir, driver_binary, driver_sha256, source_commit, version, output, driver_provenance,
            *, runtime_provenance=None, runtime_notices=None, driver_notices=None,
-           signing_provenance=None, management_dir=None, allow_unsigned_development=False):
+           signing_provenance=None, management_dir=None, allow_unsigned_development=False,
+           agent_desktop_binary=None, agent_desktop_provenance=None):
     frozen_dir, driver_binary, output = Path(frozen_dir), Path(driver_binary), Path(output)
     if type(allow_unsigned_development) is not bool:
         raise ValueError("Development mode must be an explicit boolean")
@@ -92,12 +95,32 @@ def bundle(frozen_dir, driver_binary, driver_sha256, source_commit, version, out
         raise ValueError("Exact pinned Cua Windows third-party notices are required")
     if runtime_provenance is None or runtime_notices is None:
         raise ValueError("Runtime build provenance and license materials must be supplied")
+    if agent_desktop_binary is None or agent_desktop_provenance is None:
+        raise ValueError("Pinned agent-desktop executable and source-build provenance are required")
+    agent_desktop_binary = Path(agent_desktop_binary)
+    semantic = json.loads(Path(agent_desktop_provenance).read_text(encoding="utf-8"))
+    if (semantic.get("sourceCommit") != AGENT_DESKTOP_COMMIT or semantic.get("sourceClean") is not True
+            or semantic.get("cargoLockGitBlobSha1") != "de3997ec90e91217baa87fefaa3363b7784c9be9"
+            or semantic.get("platform") != "windows-x64" or semantic.get("driverVersion") != "1.1.0"
+            or semantic.get("contractVersion") != "2.6" or semantic.get("runtime") != "headless-semantic-cli"
+            or semantic.get("license") != "Apache-2.0" or not re.fullmatch(r"[a-f0-9]{64}", semantic.get("artifactSha256", ""))
+            or not re.fullmatch(r"[a-f0-9]{64}", semantic.get("cargoLockSha256", ""))):
+        raise ValueError("agent-desktop source-build provenance differs from its pinned contract")
+    agent_license = source / "licenses/agent-desktop-Apache-2.0.txt"
+    if not agent_license.is_file() or file_hash(agent_license) != AGENT_DESKTOP_LICENSE_SHA256:
+        raise ValueError("Exact agent-desktop Apache-2.0 license material is required")
     runtime = json.loads(Path(runtime_provenance).read_text(encoding="utf-8"))
     if (runtime.get("format") != "pocketworld.windows-runtime-build.v1" or runtime.get("sourceCommit") != source_commit
             or runtime.get("platform") != "windows-x64"
             or any(not isinstance(runtime.get(k), str) or not runtime[k] for k in ("pythonVersion", "pyinstallerVersion", "cryptographyVersion", "toolchainDescription"))
             or not re.fullmatch(r"[a-f0-9]{64}", runtime.get("inputLockSha256", ""))):
         raise ValueError("Complete fixed Windows runtime build inputs are required")
+    stream_probe = runtime.get("runtimeStreamProbe", {})
+    if (runtime.get("aiortcVersion") != "1.15.0" or runtime.get("pyavVersion") != "17.0.1"
+            or stream_probe.get("available") is not True or stream_probe.get("codec") != "video/VP8"
+            or stream_probe.get("networkOpened") is not False or stream_probe.get("desktopCaptured") is not False
+            or not re.fullmatch(r"[a-f0-9]{64}", runtime.get("runtimeStreamProbeSha256", ""))):
+        raise ValueError("Frozen runtime must pass its real bounded media codec self-test")
     frozen_files = tree(frozen_dir)
     if set(runtime.get("unsignedFiles", {})) != {name for name, _ in frozen_files}:
         raise ValueError("Runtime provenance must cover every frozen file exactly")
@@ -108,7 +131,7 @@ def bundle(frozen_dir, driver_binary, driver_sha256, source_commit, version, out
     if signing is not None and (signing.get("format") != "pocketworld.windows-signing.v1" or signing.get("sourceCommit") != source_commit or signing.get("complete") is not True):
         raise ValueError("Incomplete or mismatched signing provenance")
     signed = signing.get("artifacts", {}) if signing else {}
-    required_signed = {"app/PocketWorld-Companion.exe", "driver/cua-driver.exe"} | {"tools/"+name for name in MANAGEMENT_SCRIPTS}
+    required_signed = {"app/PocketWorld-Companion.exe", "driver/cua-driver.exe", "driver/agent-desktop.exe"} | {"tools/"+name for name in MANAGEMENT_SCRIPTS}
     if not allow_unsigned_development and not required_signed.issubset(signed):
         raise ValueError("Final runtime and management signatures must precede bundle hashing")
     def admitted_hash(name, path, unsigned_hash):
@@ -128,6 +151,7 @@ def bundle(frozen_dir, driver_binary, driver_sha256, source_commit, version, out
     admitted["driver/cua-driver.exe"] = admitted_hash("driver/cua-driver.exe", driver_binary, provenance["artifactSha256"])
     if admitted["driver/cua-driver.exe"] != driver_sha256:
         raise ValueError("Driver admitted identity differs from supplied SHA-256")
+    admitted["driver/agent-desktop.exe"] = admitted_hash("driver/agent-desktop.exe", agent_desktop_binary, semantic["artifactSha256"])
     for name in MANAGEMENT_SCRIPTS:
         path = management_dir / name
         if not path.is_file(): raise ValueError("Management entry missing from package")
@@ -138,6 +162,7 @@ def bundle(frozen_dir, driver_binary, driver_sha256, source_commit, version, out
     admitted.update({"licenses/runtime/"+name: runtime["licenseFiles"][name] for name, _ in license_files})
     admitted["licenses/cua-driver-THIRD-PARTY-NOTICES.md"] = CUA_NOTICES_SHA256
     admitted["licenses/cua-driver-MIT.txt"] = file_hash(source / "licenses/cua-driver-MIT.txt")
+    admitted["licenses/agent-desktop-Apache-2.0.txt"] = AGENT_DESKTOP_LICENSE_SHA256
     with tempfile.TemporaryDirectory(prefix="pocketworld-bundle-") as temporary:
         root = Path(temporary)
         def write_metadata(name, value):
@@ -153,9 +178,12 @@ def bundle(frozen_dir, driver_binary, driver_sha256, source_commit, version, out
         (root / "driver").mkdir()
         shutil.copyfile(driver_binary, root / "driver" / "cua-driver.exe")
         write_metadata("driver/cua-build-provenance.json", provenance)
+        shutil.copyfile(agent_desktop_binary, root / "driver" / "agent-desktop.exe")
+        write_metadata("driver/agent-desktop-build-provenance.json", semantic)
         (root / "licenses").mkdir()
         shutil.copyfile(source / "licenses" / "cua-driver-MIT.txt", root / "licenses" / "cua-driver-MIT.txt")
         shutil.copyfile(notices, root / "licenses" / "cua-driver-THIRD-PARTY-NOTICES.md")
+        shutil.copyfile(agent_license, root / "licenses" / "agent-desktop-Apache-2.0.txt")
         for name, path in license_files:
             target = root / "licenses" / "runtime" / name; target.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(path, target)
         (root / "tools").mkdir()
@@ -176,6 +204,9 @@ def bundle(frozen_dir, driver_binary, driver_sha256, source_commit, version, out
                     "sourceCommit": source_commit, "platform": "windows-x64", "protocol": "device-v1",
                     "cua": {"version": CUA_VERSION, "sourceCommit": CUA_COMMIT, "sha256": driver_sha256,
                             "releaseStatus": "prerelease", "spacesIncluded": False, "perceptionIncluded": False},
+                    "agentDesktop": {"version": "1.1.0", "contractVersion": "2.6", "sourceCommit": AGENT_DESKTOP_COMMIT,
+                                     "sha256": admitted["driver/agent-desktop.exe"], "runtime": "headless-semantic-cli", "license": "Apache-2.0"},
+                    "desktopStream": {"transport": "webrtc", "aiortcVersion": "1.15.0", "pyavVersion": "17.0.1", "hardwareEncodingVerified": False},
                     "credentialsIncluded": False, "guiAcceptance": "unverified", "codeSigning": "unsigned_development" if allow_unsigned_development else "verified_final_bytes",
                     "installationSchemaVersion": 2, "runtimeProvenanceSha256": admitted["runtime-build-provenance.json"],
                     "files": entries}
@@ -214,6 +245,8 @@ def main():
     parser.add_argument("--driver-binary", type=Path, required=True)
     parser.add_argument("--driver-sha256", required=True)
     parser.add_argument("--driver-provenance", type=Path, required=True)
+    parser.add_argument("--agent-desktop-binary", type=Path, required=True)
+    parser.add_argument("--agent-desktop-provenance", type=Path, required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -227,6 +260,7 @@ def main():
     print(json.dumps(bundle(args.frozen_dir, args.driver_binary, args.driver_sha256, args.source_commit, args.version, args.output, args.driver_provenance,
         runtime_provenance=args.runtime_provenance, runtime_notices=args.runtime_notices, driver_notices=args.driver_notices,
         signing_provenance=args.signing_provenance, management_dir=args.management_dir,
+        agent_desktop_binary=args.agent_desktop_binary, agent_desktop_provenance=args.agent_desktop_provenance,
         allow_unsigned_development=args.allow_unsigned_development)))
 
 

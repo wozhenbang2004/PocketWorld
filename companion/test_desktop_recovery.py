@@ -62,6 +62,45 @@ class OsEvidenceFixture:
         return {"verified": True, "contractFixture": True}
 
 
+class CompositeRecoveryContractTests(unittest.TestCase):
+    def setUp(self):
+        self.os = OsEvidenceFixture()
+        self.workers = [{"format": "windows_original_job_v1", "jobName": "fixture-job-" + str(index),
+                         "hostPid": 1234, "hostCreated": "fixture-created", "sessionId": 1,
+                         "logonContext": self.os.context} for index in range(2)]
+        self.binding = {"format": "windows_original_jobs_v2", "workers": self.workers}
+
+    def test_each_original_job_is_required_for_native_stop_proof(self):
+        calls = []
+        original = self.os.named_job_stopped
+        def query(name):
+            calls.append(name)
+            return original(name)
+        self.os.named_job_stopped = query
+        evidence = recovery._stop_evidence({"workerBinding": self.binding}, self.os, self.os.context)
+        self.assertTrue(evidence["nativeStopVerified"])
+        self.assertEqual([worker["jobName"] for worker in self.workers], calls)
+        self.assertEqual(2, len(evidence["workers"]))
+
+    def test_one_active_or_unproven_worker_prevents_composite_stop(self):
+        for available, active in ((True, 1), (False, 0)):
+            def query(name):
+                failed = name == self.workers[1]["jobName"]
+                return {"processGroupStoppedVerified": not failed or available and active == 0,
+                        "activeProcesses": active if failed else 0}
+            self.os.named_job_stopped = query
+            evidence = recovery._stop_evidence({"workerBinding": self.binding}, self.os, self.os.context)
+            self.assertFalse(evidence["nativeStopVerified"])
+            self.assertEqual(bool(active), evidence["knownActive"])
+
+    def test_duplicate_or_wrong_session_worker_cannot_be_stop_evidence(self):
+        self.binding["workers"] = [self.workers[0], self.workers[0]]
+        self.assertFalse(recovery._stop_evidence({"workerBinding": self.binding}, self.os, self.os.context)["nativeStopVerified"])
+        self.binding["workers"] = self.workers
+        self.workers[1]["sessionId"] = 2
+        self.assertFalse(recovery._stop_evidence({"workerBinding": self.binding}, self.os, self.os.context)["nativeStopVerified"])
+
+
 @unittest.skipUnless(SHARED_IDENTITY, "Requires the single identity domain; no fake long-term key implementation")
 class LocalRecoveryContractTests(unittest.TestCase):
     def setUp(self):

@@ -54,7 +54,7 @@ class RealWindowsGuiAcceptance(unittest.TestCase):
                 binding = {"kind": "desktop", "sessionId": health.probe()["sessionId"], "displayId": "primary", "windowId": target["windowId"]}
                 metadata = {"taskId": "controlled-test-task", "requestRunId": "controlled-test-run", "requestExecutorEpoch": 1, "operationId": "controlled-read-1"}
                 current = lambda: None  # Local explicit tester, not a remote execution path.
-                before = adapter.observe(binding, {"pid": target["pid"], "windowId": target["windowId"]}, metadata, current)
+                before = adapter.observe(binding, {"pid": target["pid"], "windowId": target["windowId"], "observationMode": "hybrid"}, metadata, current)
                 edits = [item for item in before["state"].get("elements", []) if item.get("role") in {"Edit", "Document"} and item.get("element_token")]
                 self.assertEqual(1, len(edits), "The controlled edit must have one real UIA identity; do not fall back to blind typing")
                 lease = adapter.control("acquire", binding, "explicit-local-test-operator", {"action": "acquire"}, current)["lease"]
@@ -96,7 +96,7 @@ class RealWindowsGuiAcceptance(unittest.TestCase):
                 self.assertFalse(refused["inputDispatched"])
                 self.assertTrue(refused["actionOutcome"]["foregroundEscalationPermitted"])
                 self.assertIsNone(backend.read_bytes(str(root), "saved-chinese.txt"))
-                fresh = adapter.observe(binding, {"pid": target["pid"], "windowId": target["windowId"]}, {**metadata, "operationId": "controlled-read-foreground"}, current)
+                fresh = adapter.observe(binding, {"pid": target["pid"], "windowId": target["windowId"], "observationMode": "hybrid"}, {**metadata, "operationId": "controlled-read-foreground"}, current)
                 saved = adapter.act(binding, fresh["observationRef"], "explicit-local-test-operator",
                                     {"kind": "hotkey", "lease": lease, "keys": ["ctrl", "s"], "deliveryMode": "foreground", "foregroundAfterOperationId": background_operation,
                                      "verification": {"kind": "window_title_equals", "value": "PocketWorld Test Editor - 已保存"}},

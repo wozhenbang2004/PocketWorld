@@ -40,7 +40,7 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
     public DeviceWorkspaceNativeOwner(EngineApplication originalApp, TaskStoreDeviceTrust originalSameDatabaseTrust, java.util.concurrent.Executor originalIngressWorker) {
         app = java.util.Objects.requireNonNull(originalApp); tasks = java.util.Objects.requireNonNull(app.tasks);
         trust = java.util.Objects.requireNonNull(originalSameDatabaseTrust); network = new DeviceWorkspaceLanRuntime(this, originalIngressWorker); grants = new DeviceWorkspaceGrantOwner(this);
-        host = new NativeDeviceWorkspaceHost(this::snapshot, new Receiver(), new Pairing(), new Goals(), new Controls());
+        host = new NativeDeviceWorkspaceHost(this::snapshot, new Receiver(), new Pairing(), new Goals(), new Controls(), new DeviceWorkspaceDesktopOwner(this, originalIngressWorker));
         taskScopeHost = new NativeDeviceTaskScopeHost(tasks, new NativeDeviceTaskScopeHost.NativeOptionSource() {
             public Iterable<PairingCoordinator.OutgoingGrant> originalOutgoingGrants() throws Exception { return nativeOutgoingGrants(); }
             public JSONObject authenticatedCapabilities(String id) throws Exception { return DeviceWorkspaceNativeOwner.this.authenticatedCapabilities(id); }
@@ -269,12 +269,20 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
     JSONObject decorateGrantInputs(JSONObject safe, String peerId) throws Exception { return grants.decorate(safe, peerId); }
     DeviceWorkspaceGrantOwner.Review reviewGrantFor(String peerId, NativeDeviceWorkspaceHost.GrantChoice choice) throws Exception { return grants.review(peerId, choice); }
     JSONObject grantView(DeviceWorkspaceGrantOwner.Review review) throws Exception { return grants.view(review); }
+    /** Preparation only. Real admission rechecks the original SQL lease and App run slot. */
+    private boolean backgroundGoalCapacity()throws Exception {
+        synchronized(app){
+            if(app.activePhoneRunCount()>=dev.pocketengine.core.ExecutionResources.MAX_BACKGROUND_PHONE_RUNS)return false;
+            JSONArray ids=app.activePhoneRunIds();for(int i=0;i<ids.length();i++){String id=ids.getString(i);RunControl original=app.control(id);if(original==null||!app.isBackgroundPhoneRun(id,original))return false;}
+            return true;
+        }
+    }
     private final class Goals implements NativeDeviceWorkspaceHost.GoalOwner {
         public NativeDeviceWorkspaceHost.Availability reviewAvailability(String id) throws Exception {
             JSONObject task = tasks.get(id, false);
             if (!TaskStoreDeviceTasks.deviceTask(task) || !"GOAL".equals(task.optString("deviceExecutionKind")) || !app.hasPendingDeviceGoal(id)) return NativeDeviceWorkspaceHost.Availability.blocked("当前没有待确认的设备目标");
             if (!task.optString("runId").isEmpty() || task.optBoolean("cancelRequested")) return NativeDeviceWorkspaceHost.Availability.blocked("任务状态已变化，请查看执行结果");
-            if (app.activeId() != null) return NativeDeviceWorkspaceHost.Availability.blocked("这台手机正在执行另一项任务，请先完成或停止它");
+            if ("background".equals(task.optString("executionMode")) ? !backgroundGoalCapacity() : app.activePhoneRunCount()>0) return NativeDeviceWorkspaceHost.Availability.blocked("所选屏幕暂无可用运行位置，请先处理占用它的原任务");
             return NativeDeviceWorkspaceHost.Availability.ready();
         }
         public NativeDeviceWorkspaceHost.GoalReviewAction review(String id) throws Exception {
@@ -294,7 +302,7 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         public NativeDeviceWorkspaceHost.Availability stopAvailability(String id) throws Exception {
             JSONObject task = tasks.get(id, false); RunControl control = app.control(id);
             if (pendingCancelAvailability(id).available) return NativeDeviceWorkspaceHost.Availability.ready();
-            if (!TaskStoreDeviceTasks.deviceTask(task) || !id.equals(app.activeId()) || control == null || !control.matchesHostRun(id, task.optString("runId"), task.optInt("coordinatorEpoch"))) return NativeDeviceWorkspaceHost.Availability.blocked("这项任务当前没有可停止的本机执行");
+            if (!TaskStoreDeviceTasks.deviceTask(task) || control == null || !control.matchesHostRun(id, task.optString("runId"), task.optInt("coordinatorEpoch"))) return NativeDeviceWorkspaceHost.Availability.blocked("这项任务当前没有可停止的本机执行");
             if (control.isCancelled()) return NativeDeviceWorkspaceHost.Availability.blocked("停止请求已发出，等待执行端确认");
             return NativeDeviceWorkspaceHost.Availability.ready();
         }
@@ -348,7 +356,7 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         }
         private RunControl exact(String id) throws Exception {
             JSONObject task = tasks.get(id, false); RunControl original = app.control(id);
-            if (!TaskStoreDeviceTasks.deviceTask(task) || !id.equals(app.activeId()) || original == null || !original.matchesHostRun(id, task.optString("runId"), task.optInt("coordinatorEpoch"))) throw new SecurityException("没有这个设备任务的当前执行，不会新建执行");
+            if (!TaskStoreDeviceTasks.deviceTask(task) || original == null || !original.matchesHostRun(id, task.optString("runId"), task.optInt("coordinatorEpoch"))) throw new SecurityException("没有这个设备任务的当前执行，不会新建执行");
             return original;
         }
         public NativeDeviceWorkspaceHost.Availability pauseAvailability(String id) throws Exception {
@@ -389,13 +397,15 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
     }
     /** Options derive from installed native handlers, launchable apps and original private
      * checkouts. A model/peer cannot provide this list or authorize the whole workspace. */
-    JSONArray localGrantOptions() throws Exception {
+    public JSONArray localGrantOptions() throws Exception {
         JSONArray result = new JSONArray(); long expiry = System.currentTimeMillis() + 30L * 86400_000;
         JSONObject readiness = app.phoneReadiness();
         boolean mainReady = readiness.optJSONObject("mainObservation") != null && readiness.getJSONObject("mainObservation").optBoolean("ready");
         boolean backgroundReady = app.features.module("display") instanceof dev.pocketengine.phone.display.DisplayModule && ((dev.pocketengine.phone.display.DisplayModule) app.features.module("display")).isConnected() && readiness.optJSONObject("backgroundExecution") != null && readiness.getJSONObject("backgroundExecution").optBoolean("ready");
+        JSONObject helperFacts=app.features.module("display") instanceof dev.pocketengine.phone.display.DisplayModule module?module.snapshot():null;
+        boolean backgroundGoalReady=DevicePhoneGoalReadiness.canPrepareBackground(readiness,helperFacts);
         boolean backgroundCapture = backgroundReady && readiness.optJSONObject("backgroundCapture") != null && readiness.getJSONObject("backgroundCapture").optBoolean("ready");
-        if (mainReady || backgroundReady) {
+        if (mainReady || backgroundReady || backgroundGoalReady) {
             Intent launcher = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
             List<ResolveInfo> apps = new ArrayList<>(app.getPackageManager().queryIntentActivities(launcher, 0));
             apps.sort(Comparator.comparing(row -> row.loadLabel(app.getPackageManager()).toString())); Set<String> seen = new HashSet<>();
@@ -421,7 +431,28 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
                                 .put("canGrantWholeDisplayCapture", backgroundCapture).put("effectSummary", "允许在独立后台屏点击坐标、滑动和系统返回；不会改用主屏，截图另行授权。"); result.put(whole);
                     }
                 }
+                if(backgroundGoalReady&&android.os.Process.myUid()/100000==0){
+                    JSONObject target=new JSONObject(resource.toString()).put("screenMode","background").put("androidUserId",0);
+                    String key=DeviceProtocol.sha256(packageName.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    result.put(option("goal_background_app_"+key,"手机目标 · 后台应用节点 · "+label,target,tools,true,expiry).put("displayCreated",false).put("runtimeVerificationRequired",true).put("canGrantWholeDisplayCapture",false));
+                    JSONArray inputs=new JSONArray();for(int n=0;n<declarations.length();n++)inputs.put(declarations.getJSONObject(n).getString("toolName"));
+                    result.put(option("goal_background_screen_"+key,"手机目标 · 后台整屏输入 · "+label,new JSONObject(target.toString()).put("allowWholeDisplayInput",true),inputs,true,expiry).put("displayCreated",false).put("runtimeVerificationRequired",true).put("canGrantWholeDisplayCapture",false));
+                }
                 if (seen.size() >= 256) break;
+            }
+        }
+        // Autonomous GUI goals are separately selected native scopes, never an upgrade of a tool grant.
+        if (android.os.Process.myUid() / 100000 == 0) {
+            int phoneOptions = result.length();
+            for (int i = 0; i < phoneOptions; i++) {
+                JSONObject source = result.getJSONObject(i), resource = source.getJSONArray("resources").getJSONObject(0);
+                if(source.getString("optionId").startsWith("goal_")||!"main_screen".equals(resource.optString("screenMode")))continue;
+                if("main_screen".equals(resource.optString("screenMode"))&&(!(app.features.module("display") instanceof dev.pocketengine.phone.display.DisplayModule display)||!display.isConnected()))continue;
+                JSONObject goalResource = new JSONObject(resource.toString()).put("androidUserId", 0);
+                JSONObject goalOption = option("goal_" + source.getString("optionId"), "手机目标 · " + source.getString("label"), goalResource,
+                        new JSONArray(source.getJSONArray("toolNames").toString()), true, expiry)
+                        .put("canGrantWholeDisplayCapture", source.optBoolean("canGrantWholeDisplayCapture"));
+                result.put(goalOption);
             }
         }
         result.put(option("context_goal", "处理目标，不访问本机项目", new JSONObject().put("screenMode", "capabilities"), new JSONArray().put("phone_request_user").put("phone_finish"), true, expiry));
@@ -512,7 +543,14 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             JSONObject readiness = app.phoneReadiness(); String field = "background".equals(mode) ? "backgroundExecution" : "read".equals(request.toolInvocation().effect()) ? "mainObservation" : "mainExecution";
             JSONObject state = readiness.optJSONObject(field); if (state == null || !state.optBoolean("ready")) throw new SecurityException("这台手机的操作权限或指定屏幕暂未就绪");
         } else {
-            if (!"capabilities".equals(mode)) throw new SecurityException("目标只能在你选择的能力范围执行");
+            if (!"capabilities".equals(mode)) {
+                if (!mode.matches("main_screen|background") || resource.optInt("androidUserId",-1)!=0) throw new SecurityException("手机目标需要主人选择的准确显示和 Android 用户范围");
+                JSONObject readiness=app.phoneReadiness(),helper=app.features.module("display") instanceof dev.pocketengine.phone.display.DisplayModule display?display.snapshot():null;
+                if("background".equals(mode)){
+                    boolean alreadyAdmitted=false;try{JSONObject original=tasks.get(DeviceProtocol.receiverTaskId(request),false);alreadyAdmitted=!original.optString("runId").isEmpty()&&"background".equals(original.optString("executionMode"));}catch(Exception absent){/* First admission has no run or display yet. */}
+                    if(!(alreadyAdmitted?DevicePhoneGoalReadiness.admittedBackgroundPrerequisites(readiness,helper):DevicePhoneGoalReadiness.canPrepareBackground(readiness,helper)))throw new SecurityException("主人选定的后台创建条件暂未就绪");
+                }else{JSONObject state=readiness.optJSONObject(resource.optBoolean("allowWholeDisplayInput")?"mainExecution":"mainObservation");if(state==null||!state.optBoolean("ready")||helper==null||!helper.optBoolean("helperConnected"))throw new SecurityException("主人选定的主屏或准确应用用户核对条件暂未就绪");}
+            }
             if (resource.has("checkoutId")) {
                 if (!(app.features.module("local") instanceof LocalModule)) throw new SecurityException("本机项目环境未就绪");
                 LocalModule local = (LocalModule) app.features.module("local"); JSONObject checkout = local.projectCheckoutForHost(resource.getString("checkoutId"));
@@ -522,7 +560,7 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         }
     }
     private JSONObject health(PairingCoordinator.DiscoveryPermission permission) throws Exception {
-        JSONObject readiness = app.phoneReadiness(), result = new JSONObject().put("receiverEnabled", network.ownerEnabled()).put("busy", app.activeId() != null)
+        JSONObject readiness = app.phoneReadiness(), result = new JSONObject().put("receiverEnabled", network.ownerEnabled()).put("busy", app.activePhoneRunCount()>0).put("goalExecutorBusy",!backgroundGoalCapacity())
                 .put("goalOwnerReviewAvailable", true).put("scopedProjectPortInstalled", app.features.module("local") instanceof LocalModule).put("nativeDeviceRoutesReady", app.hasOriginalDeviceSourceRoutes())
                 .put("scheduleDraftsInstalled",app.features.module("automation") instanceof dev.pocketengine.features.automation.AutomationModule).put("scheduleDraftsAuthorized",false);
         JSONObject exactCurrentGrant = null;

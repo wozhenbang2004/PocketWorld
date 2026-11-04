@@ -2,6 +2,7 @@
 from pathlib import Path
 
 from cua_desktop_adapter import McpCuaDriver
+from agent_desktop_driver import AgentDesktopCli, AgentDesktopDriver
 from desktop_adapter import DesktopAdapter, DesktopError
 from desktop_jobs import DesktopJobs
 from desktop_sessions import WindowsDesktopHealth
@@ -63,11 +64,16 @@ def attach_desktop(manager, local_identity, artifact_store, *, budget_claim=None
     backend = get_backend()
     if backend.name != "windows":
         return UnavailableDesktop("windows_interactive_user_session_required; existing POSIX command/files remain independent")
-    if set(settings) - {"enabled", "binary", "sha256"}:
+    if set(settings) - {"enabled", "binary", "sha256", "agentDesktop", "streaming"}:
         return UnavailableDesktop("unknown_desktop_runtime_configuration")
     binary, sha256 = settings.get("binary"), settings.get("sha256")
     if not isinstance(binary, str) or not Path(binary).is_absolute() or not isinstance(sha256, str):
         return UnavailableDesktop("pinned_driver_artifact_not_configured")
+    semantic = settings.get("agentDesktop")
+    if semantic is not None and (not isinstance(semantic, dict) or set(semantic) != {"binary", "sha256"}
+            or not isinstance(semantic["binary"], str) or not Path(semantic["binary"]).is_absolute()
+            or not isinstance(semantic["sha256"], str)):
+        return UnavailableDesktop("pinned_agent_desktop_artifact_not_configured")
     if artifact_store.source_device_id != local_identity.device_id:
         return UnavailableDesktop("artifact_source_device_identity_mismatch")
     from desktop_recovery import apply_pending_local_request
@@ -84,5 +90,9 @@ def attach_desktop(manager, local_identity, artifact_store, *, budget_claim=None
         original = artifact_store.register_snapshot(raw, metadata, expires)
         revision += 1
         return artifact_store.wire_descriptor(original, instance_id=local_identity.instance_id, revision=revision)
-    adapter = DesktopAdapter(manager, McpCuaDriver(binary, sha256, backend, private_state=manager.state / "cua-driver"), WindowsDesktopHealth(), capture_store, local_identity.device_id)
+    driver = McpCuaDriver(binary, sha256, backend, private_state=manager.state / "cua-driver")
+    if semantic is not None:
+        driver = AgentDesktopDriver(driver, AgentDesktopCli(semantic["binary"], semantic["sha256"], backend,
+                                                           private_state=manager.state / "agent-desktop"))
+    adapter = DesktopAdapter(manager, driver, WindowsDesktopHealth(), capture_store, local_identity.device_id)
     return DesktopRuntime(DesktopJobs(manager, adapter, budget_claim=budget_claim))
