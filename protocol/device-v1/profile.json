@@ -3,8 +3,8 @@
   "protocolVersion": "1.0",
   "files": {
     "schema.json": {
-      "sha256": "7a5aa52d72905ba4bf9c337fde3cd27c915446d70ff0f12812ff42bab5465c88",
-      "bytes": 87291
+      "sha256": "65121fda3aa5e2bcb8d74c6df51e576d300bd9d9e3c31bca0e82d9a926e1814c",
+      "bytes": 87650
     },
     "onboarding-schema.json": {
       "sha256": "bb90a84565660837fb89bd0b3158f8e268b42e65ec01d27bbb123c5b380be2b0",
@@ -105,5 +105,5 @@
     "handoff": "Exact native resource fencing across Agent and human; unknown input remains needs_reconcile; expiry never proves native input stopped.",
     "legacyGrants": "Pinned old SQL receipt profiles retain only their old method allowlists. New desktop.viewer authority requires explicit current owner review."
   },
-  "profileId": "pwp1_37a2c7990f46ec2f9ea27ac7223cd2a845eb8b7ff491a7ede3f2d31a626e6675"
+  "profileId": "pwp1_94a3b250d77be4eadd62d184dfa70facfe4e78444f0cd80903d00e339ef25147"
 }

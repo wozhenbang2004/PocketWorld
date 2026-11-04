@@ -15,7 +15,7 @@ public final class DeviceGoalSession {
         this.taskId = java.util.Objects.requireNonNull(taskId); this.admission = java.util.Objects.requireNonNull(admission);
         this.original = java.util.Objects.requireNonNull(original); this.approval=java.util.Objects.requireNonNull(approval);this.captured = approval.capturedModel();
         if (admission.kind() != DeviceExecutionAdmission.Kind.GOAL || !original.hasHostRun() || !taskId.equals(original.hostRunIdentity().taskId())
-                || !"capabilities".equals(admission.executionMode())) throw new SecurityException("设备目标需要独立准入的原能力run，不借主屏START");
+                || !admission.executionMode().matches("capabilities|main_screen|background")) throw new SecurityException("设备目标需要独立准入的原执行run，不借其他屏幕START");
         if(approval.deviceAdmission()!=admission)throw new SecurityException("模型不是本原设备目标准入");approval.checkCurrent(original);
     }
     private boolean runnerActive;private Finished latest;private volatile boolean ownerResultClosed;

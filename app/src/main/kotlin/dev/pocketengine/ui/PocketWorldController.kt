@@ -2414,6 +2414,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun readWebTeamSnapshot(done: (JSONObject?, String?) -> Unit) {
         readWebOwnerFeatureSnapshot("teams", done)
     }
+    internal fun runTeamPhoneWork(work: Runnable) { check(!closed); io.execute(work) }
     internal fun readWebOwnerFeatureSnapshot(feature: String, done: (JSONObject?, String?) -> Unit) {
         require(feature in setOf("teams", "media", "proxy"))
         check(webPrivateOwnerVisible()) { "请在原私人工作页面读取" }

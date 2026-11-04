@@ -35,7 +35,7 @@ public final class DeviceGoalCapabilityPort implements CapabilityPort {
             if (name.startsWith("memory_") || name.startsWith("skills_") || name.startsWith("attachments_") || name.startsWith("workspace_")
                     || name.startsWith("remote_") || name.startsWith("ssh_") || name.startsWith("teams_"))
                 throw new SecurityException("设备目标没有环境私记忆/全目录/共享远端令牌权限；须另建准确范围合同");
-            if (!name.startsWith("project_") && !name.startsWith("device_") && !name.matches("phone_request_user|phone_finish")) throw new SecurityException("未知设备目标工具合同");
+            if (!name.startsWith("project_") && !name.startsWith("device_") && !name.matches("phone_request_user|phone_finish") && !(phoneMode() && DeviceToolsRuntime.supports(name))) throw new SecurityException("未知设备目标工具合同");
             if (!name.startsWith("project_") || PROJECT_TOOLS.contains(name)) allowed.add(name);
         }
         admission.checkCurrent();
@@ -44,6 +44,8 @@ public final class DeviceGoalCapabilityPort implements CapabilityPort {
         if (closed || control != original || original.isCancelled() || original.isPaused()) throw new SecurityException("原设备目标控制已停止或变化");
         admission.checkCurrent(); original.check(); currentModel.check();
     }
+    private boolean phoneMode(){return !"capabilities".equals(admission.executionMode());}
+    private boolean phoneTool(String name){return phoneMode()&&(name.equals("phone_wait")||allowed.contains(name)&&DeviceToolsRuntime.supports(name));}
     private void tool(String name, RunControl control) throws Exception { check(control); if (!allowed.contains(name) || !nativeScoped.supports(name)) throw new SecurityException("工具不在设备目标闭集范围"); }
     @Override public JSONArray tools() throws Exception {
         check(original); JSONArray result = new JSONArray(), tools = nativeScoped.tools();
@@ -74,12 +76,12 @@ public final class DeviceGoalCapabilityPort implements CapabilityPort {
     @Override public JSONObject afterModelResponse(String requestId,String answerId,RunControl control)throws Exception {check(control);return nativeScoped.afterModelResponse(requestId,answerId,control);}
     @Override public void modelRequestAbandoned(String requestId)throws Exception {nativeScoped.modelRequestAbandoned(requestId);}
     @Override public JSONObject beforeTool(String name, JSONObject args, RunControl control) throws Exception {
-        if(dev.pocketengine.runtime.policy.RunOutcomeTools.supports(name)){check(control);return null;}
+        if(dev.pocketengine.runtime.policy.RunOutcomeTools.supports(name)||phoneTool(name)){check(control);return null;}
         tool(name, control); return nativeScoped.beforeTool(name, args, control);
     }
     @Override public JSONObject execute(String name, JSONObject args, RunControl control) throws Exception { tool(name, control); return nativeScoped.execute(name, args, control); }
     @Override public void afterTool(String name, JSONObject args, JSONObject receipt, RunControl control) throws Exception {
-        if(dev.pocketengine.runtime.policy.RunOutcomeTools.supports(name)){check(control);return;}
+        if(dev.pocketengine.runtime.policy.RunOutcomeTools.supports(name)||phoneTool(name)){check(control);return;}
         tool(name, control); nativeScoped.afterTool(name, args, receipt, control);
     }
     @Override public NativeToolObservation.Requirement observationRequirement(String name, JSONObject args, RunControl control) throws Exception { tool(name, control); return nativeScoped.observationRequirement(name, args, control); }

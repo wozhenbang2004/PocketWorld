@@ -103,7 +103,7 @@ public final class MainActivity extends Activity {
         }catch(Exception failure){deliver(EngineApplication.json("type","connection_test","ok",false,"message",safeMessage(failure)));}
     }
     private RunControl requireOriginalPhone(String id,String run,int epoch,RunControl captured){
-        synchronized(app){RunControl current=app.control(id);if(id.isBlank()||run.isBlank()||epoch<1||current==null||captured!=null&&current!=captured||!id.equals(app.activeId())||!current.matchesHostRun(id,run,epoch))throw new SecurityException("原手机执行已变化，请刷新核对");return current;}
+        synchronized(app){RunControl current=app.control(id);if(id.isBlank()||run.isBlank()||epoch<1||current==null||captured!=null&&current!=captured||!current.matchesHostRun(id,run,epoch))throw new SecurityException("原手机执行已变化，请刷新核对");return current;}
     }
     private void controlOriginalPhone(JSONObject request,String action){
         try{
