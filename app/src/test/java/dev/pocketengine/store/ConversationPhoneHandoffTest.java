@@ -35,6 +35,17 @@ public final class ConversationPhoneHandoffTest {
         for(Object bad:new Object[]{"4",4.0,true,0,401})assertThrows(SecurityException.class,()->ConversationPhoneHandoff.review(TASK,source(),"goal","background",facts().put("toolLimit",bad)));
         assertThrows(IllegalArgumentException.class,()->ConversationPhoneHandoff.review(TASK,source(),"goal","background",facts().put("scopeMinutes",10)));
     }
+    @Test public void canonicalDigestKeepsNestedKeyOrderIndependent()throws Exception {
+        JSONObject first=new JSONObject().put("z",new org.json.JSONArray().put(new JSONObject().put("b",2).put("a",1))).put("a","value");
+        JSONObject reordered=new JSONObject().put("a","value").put("z",new org.json.JSONArray().put(new JSONObject().put("a",1).put("b",2)));
+        assertEquals(ConversationPhoneHandoff.digest(first),ConversationPhoneHandoff.digest(reordered));
+        reordered.getJSONArray("z").getJSONObject(0).put("a",3);
+        assertNotEquals(ConversationPhoneHandoff.digest(first),ConversationPhoneHandoff.digest(reordered));
+    }
+    @Test public void reviewRejectsUnknownKeysEvenWhenTheirValuesAreJsonNull()throws Exception {
+        assertThrows(SecurityException.class,()->ConversationPhoneHandoff.review(TASK,source().put("unexpected",JSONObject.NULL),"goal","background",facts()));
+        assertThrows(SecurityException.class,()->ConversationPhoneHandoff.review(TASK,source(),"goal","background",facts().put("unexpected",JSONObject.NULL)));
+    }
     @Test public void creationAckSeparatesStoredTaskFromAdmittedRunAndKeepsIdentity()throws Exception {
         JSONObject task=task(review()),created=ConversationPhoneHandoff.creation(task,false);
         assertTrue(created.getBoolean("accepted"));assertTrue(created.getBoolean("created"));assertFalse(created.getBoolean("admitted"));assertFalse(created.getBoolean("duplicate"));
