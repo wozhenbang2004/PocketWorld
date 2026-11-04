@@ -40,8 +40,11 @@ internal class AttachmentOutcomeCoordinator(
     var state by mutableStateOf(AttachmentOutcomeState());private set
     private var pendingDocumentAction:String?=null;private var pendingProcessingAction:String?=null
     private var restoredDocumentDraft:JSONObject?=null
+    private var restoredExportNotice:String?=null
     private var generation=0L;private var wait:RunControl?=null;private var observation:RunControl?=null
-    private var export:JSONObject?=null;private var restoreFile:JSONObject?=null;private var exportResult:Uri?=null;private var resumed=false;private var closed=false
+    private var export:JSONObject?=null;private var restoreFile:JSONObject?=null;private var exportResult:Uri?=null;private var exportAbandoned=false;private var resumed=false;private var closed=false
+    var exportPending by mutableStateOf(false);private set
+    val exportRequestId:String? get()=export?.takeIf{it.optString("exportPhase","waiting")=="waiting"}?.optString("exportRequestId")
     private var teamHost:TeamWorkspaceOutcomeHost?=null;private var originalAssignment:((JSONObject)->Unit)?=null
     fun bindTeamOutcomes(host:TeamWorkspaceOutcomeHost,onAssignment:(JSONObject)->Unit){check(!state.open&&wait==null&&export==null){"请先关闭当前成果或完成原导出"};teamHost=host;originalAssignment=onAssignment}
     fun openTeamArtifact(selected:TeamWorkspaceOutcomeHost.Selection)=openTeamArtifactInternal(selected,null)
@@ -72,7 +75,7 @@ internal class AttachmentOutcomeCoordinator(
             actual to file
         }
     }
-    fun close(){cancel();restoredDocumentDraft=null;releaseWindow();state=AttachmentOutcomeState()}
+    fun close(){if(export!=null)exportAbandoned=true;cancel();restoredDocumentDraft=null;releaseWindow();state=AttachmentOutcomeState()}
     fun detach(){closed=true;close()}
     fun cancel(){generation++;wait?.cancel();wait=null;observation?.cancel();observation=null;state=state.copy(busy=false,observing=false)}
     fun foreground(visible:Boolean){resumed=visible;if(!visible){cancel();return};if(exportResult!=null)finishExport()else if(state.open&&state.snapshot==null&&!state.busy)refresh()}
@@ -236,18 +239,55 @@ internal class AttachmentOutcomeCoordinator(
         }
     }
     fun prepareExport(){
-        if(state.team!=null){val actual=state.snapshot?.optJSONObject("artifact")?:return;if(actual.optString("kind")=="file_tombstone"){state=state.copy(notice="删除修订没有文件正文；历史与原分工保留。");return};export=locator().put("provider","teams");activity.createOutcomeDocument(actual.getString("mimeType"),actual.getString("path").substringAfterLast('/'));return}
-        val file=state.file?:return;export=locator().put("file",JSONObject(file.toString()));activity.createOutcomeDocument(file.optString("mimeType","application/octet-stream"),file.optString("name","群成果"))
+        // The Activity result launcher has one outstanding request. Never replace its original source pin.
+        if(closed||!state.open||state.busy||export!=null)return
+        val pin:JSONObject;val mime:String;val name:String
+        if(state.team!=null){
+            val actual=state.snapshot?.optJSONObject("artifact")?:return
+            if(actual.optString("kind")=="file_tombstone"){state=state.copy(notice="删除修订没有文件正文；历史与原分工保留。");return}
+            pin=locator().put("provider","teams");mime=actual.getString("mimeType");name=actual.getString("path").substringAfterLast('/')
+        }else{
+            val file=state.file?:return
+            pin=locator().put("file",JSONObject(file.toString()));mime=file.optString("mimeType","application/octet-stream");name=file.optString("name","群成果")
+        }
+        pin.put("exportRequestId",java.util.UUID.randomUUID().toString()).put("exportPhase","waiting")
+        export=pin;exportResult=null;exportAbandoned=false;exportPending=true
+        val requestId=pin.getString("exportRequestId")
+        try{activity.createOutcomeDocument(mime,name)}
+        catch(_:android.content.ActivityNotFoundException){exportLaunchResult(requestId,OutcomeExportLaunch.NOT_STARTED)}
+        catch(_:RuntimeException){exportLaunchResult(requestId,OutcomeExportLaunch.UNKNOWN)}
     }
-    fun exportResult(uri:Uri?){if(uri==null){export=null;exportResult=null;return};exportResult=uri;if(resumed)finishExport()}
-    private fun finishExport(){val pin=export?:return;val uri=exportResult?:return;exportResult=null
-        if(pin.optString("provider")=="teams"){
-            val selected=TeamWorkspaceOutcomeHost.Selection(pin.getJSONObject("team"));work{c,_->val host=requireTeamHost();val bytes=host.verifiedBytes(selected,c)
-                try{host.checkRead(selected,c);val actual=AttachmentRepository.get(app).exportNativeSnapshot(bytes,selected.sha256(),uri,c);host.checkRead(selected,c);export=null;actual.put("outcomeNotice","已导出原成员冻结成果的真实文件；原分工和原项目保留") to null}catch(failed:Exception){throw IllegalStateException("导出未完整确认，目标可能已有部分内容；请核对所选文件和原分工",failed)}finally{java.util.Arrays.fill(bytes,0.toByte())}}
+    fun exportLaunchResult(requestId:String,result:OutcomeExportLaunch){
+        val pin=export?:return
+        if(pin.optString("exportRequestId")!=requestId||pin.optString("exportPhase","waiting")!="waiting")return
+        when(result){
+            OutcomeExportLaunch.NOT_STARTED->{clearExport(pin);state=state.copy(error="系统文件选择器未启动；原文件保留，可以重试导出。")}
+            OutcomeExportLaunch.UNKNOWN->{pin.put("exportLaunchUnknown",true);state=state.copy(error="系统文件选择器是否启动尚未确认；请先返回原选择器完成或取消，没有重新请求导出。")}
+            OutcomeExportLaunch.REQUESTED->Unit
+        }
+    }
+    fun exportResult(requestId:String,uri:Uri?){
+        val pin=export?:return
+        if(pin.optString("exportRequestId")!=requestId||pin.optString("exportPhase","waiting")!="waiting")return
+        pin.put("exportPhase","consumed")
+        if(uri==null||exportAbandoned||closed){clearExport(pin);return}
+        exportResult=uri;if(resumed)finishExport()
+    }
+    private fun clearExport(pin:JSONObject){if(export!==pin)return;export=null;exportResult=null;exportAbandoned=false;exportPending=false}
+    private fun finishExport(){
+        val pin=export?:return;val uri=exportResult?:return
+        exportResult=null
+        if(exportAbandoned||closed){clearExport(pin);return}
+        // Advance once on main before queuing IO. Late callbacks and old completions cannot consume another pin.
+        try{if(pin.optString("provider")=="teams"){
+            val selected=TeamWorkspaceOutcomeHost.Selection(pin.getJSONObject("team"));pin.put("exportPhase","writing");work(groupAuthority=false,onFinished={clearExport(pin)}){c,_->val host=requireTeamHost();val bytes=host.verifiedBytes(selected,c)
+                try{host.checkRead(selected,c);val actual=AttachmentRepository.get(app).exportNativeSnapshot(bytes,selected.sha256(),uri,c);host.checkRead(selected,c);actual.put("outcomeNotice","已导出原成员冻结成果的真实文件；原分工和原项目保留") to null}catch(failed:Exception){throw IllegalStateException("导出未完整确认，目标可能已有部分内容；请核对所选文件和原分工",failed)}finally{java.util.Arrays.fill(bytes,0.toByte())}}
             return
         }
         val target=groupFrom(pin.optJSONObject("group"));val task=pin.optString("taskId").takeIf{it.isNotBlank()};val file=pin.getJSONObject("file")
-        work{c,w->val result=if(target==null)app.attachmentOutcomes.export(task,file.getString("id"),file.getString("sha256"),uri,c)else groupCall(w){app.exportGroupOutcome(target,uri,c)};export=null;result.put("outcomeNotice","已导出真实文件；原任务与群投递状态分别保留") to null}
+        pin.put("exportPhase","writing")
+        work(groupAuthority=target!=null,onFinished={clearExport(pin)}){c,w->val result=if(target==null)app.attachmentOutcomes.export(task,file.getString("id"),file.getString("sha256"),uri,c)else groupCall(w){app.exportGroupOutcome(target,uri,c)};result.put("outcomeNotice","已导出真实文件；原任务与群投递状态分别保留") to null}
+        }catch(failed:Exception){if(pin.optString("exportPhase")!="writing")clearExport(pin);state=state.copy(error=if(pin.optString("exportPhase")=="writing")"导出是否开始尚未确认；请核对所选目标文件，没有自动重写。"else safe(failed))}
     }
     fun refreshMedia(operation:String,fetch:Boolean=false){val group=state.group;val task=state.taskId?:return
         work{c,w->if(group==null){app.attachmentOutcomes.originalMedia(task,operation,if(fetch)"fetchResults" else "getJob",c);app.ownerOutcomeSnapshot(task,c) to null}
@@ -268,19 +308,23 @@ internal class AttachmentOutcomeCoordinator(
         state.team?.let{selected->val navigate=originalAssignment;if(navigate==null){state=state.copy(error="原分工入口尚未挂载，请从原团队任务继续");return};work(onSuccess={actual->close();navigate(actual)}){c,_->requireTeamHost().assignmentLocator(selected,c) to null};return}
         state.taskId?.let{close();originalTask(it)}
     }
-    private fun work(document:Boolean=false,replaceDocumentWithFile:Boolean=false,teamDifference:Boolean=false,onSuccess:((JSONObject)->Unit)?=null,call:(RunControl,String?)->Pair<JSONObject,JSONObject?>){
+    private fun work(document:Boolean=false,replaceDocumentWithFile:Boolean=false,teamDifference:Boolean=false,groupAuthority:Boolean?=null,onFinished:(()->Unit)?=null,onSuccess:((JSONObject)->Unit)?=null,call:(RunControl,String?)->Pair<JSONObject,JSONObject?>){
         wait?.cancel();observation?.cancel();observation=null;val token=++generation;val c=RunControl();wait=c
-        val group=state.group;val window=if(group!=null||export?.optJSONObject("group")!=null)try{ownerWindow()}catch(e:Exception){state=state.copy(error=safe(e),busy=false);return}else null
+        val group=state.group;val window=if(groupAuthority?:(group!=null||export?.optJSONObject("group")!=null))try{ownerWindow()}catch(e:Exception){state=state.copy(error=listOfNotNull(restoredExportNotice,safe(e)).joinToString(" "),busy=false);restoredExportNotice=null;if(onFinished!=null){if(wait===c)wait=null;c.cancel();onFinished()};return}else null
         state=state.copy(busy=true,error=null,observing=false,documentOpen=document||state.documentOpen)
-        io.execute{try{val(result,file)=call(c,window);c.check();main.post{if(!closed&&state.open&&generation==token&&wait===c&&!c.isCancelled){
+        try{io.execute{try{val(result,file)=call(c,window);c.check();main.post{if(!closed&&state.open&&generation==token&&wait===c&&!c.isCancelled){
             val actualFile=if(group!=null&&result.optJSONObject("artifact")!=null)result.getJSONObject("artifact").let{JSONObject(it.toString()).put("id",it.getString("artifactId")).put("size",it.getLong("bytes")).put("name","群任务成果")}else file
             state=if(teamDifference)state.copy(busy=false,teamDifference=result)else if(document)state.copy(busy=false,document=result)else state.copy(busy=false,snapshot=if(result.has("sources")||result.has("kind")||result.optString("provider")=="teams"&&result.has("artifact"))result else state.snapshot,file=actualFile?:state.file,notice=result.optString("outcomeNotice").takeIf{it.isNotBlank()},documentOpen=if(replaceDocumentWithFile)false else state.documentOpen,document=if(replaceDocumentWithFile)null else state.document,thumbnail=if(replaceDocumentWithFile)null else state.thumbnail)
+            restoredExportNotice?.let{state=state.copy(error=it);restoredExportNotice=null}
             onSuccess?.invoke(result)
-        };if(file!=null)restoreFile=null;val preview=state.file?.optString("mimeType")?.startsWith("image/")==true&&state.thumbnail==null&&file!=null;if(wait===c)wait=null;c.cancel();if(preview&&generation==token)loadThumbnail()}}catch(e:Exception){main.post{if(!closed&&state.open&&generation==token&&wait===c){state=state.copy(busy=false,error=if(c.isCancelled)"读取已停止；原文件与任务保留" else safe(e));wait=null};c.cancel()}}}
+        };if(file!=null)restoreFile=null;val preview=state.file?.optString("mimeType")?.startsWith("image/")==true&&state.thumbnail==null&&file!=null;if(wait===c)wait=null;c.cancel();if(preview&&generation==token)loadThumbnail()}}catch(e:Exception){main.post{if(!closed&&state.open&&generation==token&&wait===c){val message=if(onFinished!=null)"导出未完整确认，目标可能已有部分内容；请核对所选文件，没有自动重写。"else if(c.isCancelled)"读取已停止；原文件与任务保留"else safe(e);state=state.copy(busy=false,error=listOfNotNull(restoredExportNotice,message).joinToString(" "));restoredExportNotice=null;wait=null};c.cancel()}}finally{if(onFinished!=null)main.post{onFinished()}}}}catch(rejected:java.util.concurrent.RejectedExecutionException){if(onFinished==null)throw rejected;state=state.copy(busy=false,error="导出未开始，原文件保留；请稍后明确重试");if(wait===c)wait=null;c.cancel();onFinished()}
     }
     private fun groupCall(window:String?,call:()->JSONObject):JSONObject {val actual=window?:throw SecurityException("当前原生主人窗口不可用");return app.groupOwnerWorkflows.call(actual){call()}}
-    fun save(bundle:Bundle){pendingProcessingAction?.let{bundle.putString("attachmentPendingProcessingTask",it)};pendingDocumentAction?.let{bundle.putString("attachmentPendingDocumentTask",it)};if(state.open)bundle.putString("attachmentOutcomeLocator",locator().toString());export?.let{bundle.putString("attachmentOutcomeExport",it.toString())};bundle.remove("attachmentDocumentDraft");(state.documentDraft?:restoredDocumentDraft)?.let{draft->runCatching{DocumentDraft(draft);draft.toString().takeIf{it.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES}?.let{bundle.putString("attachmentDocumentDraft",it)}}}}
-    fun restore(bundle:Bundle?){bundle?.getString("attachmentPendingProcessingTask")?.takeIf{it.matches(Regex("[a-f0-9-]{36}"))}?.let{pendingProcessingAction=it;state=state.copy(pendingProcessingTask=it)};bundle?.getString("attachmentPendingDocumentTask")?.takeIf{it.matches(Regex("[a-f0-9-]{36}"))}?.let{pendingDocumentAction=it;state=state.copy(pendingDocumentTask=it)};try{bundle?.getString("attachmentOutcomeExport")?.let{export=JSONObject(it)};bundle?.getString("attachmentOutcomeLocator")?.let{val pin=JSONObject(it);val team=pin.optJSONObject("team")?.let{TeamWorkspaceOutcomeHost.Selection(it)};val previous=runCatching{pin.optJSONObject("teamPrevious")?.let{TeamWorkspaceOutcomeHost.Selection(it)}}.getOrNull();restoreFile=pin.optJSONObject("file");state=AttachmentOutcomeState(open=true,pendingDocumentTask=state.pendingDocumentTask,pendingProcessingTask=state.pendingProcessingTask,taskId=team?.toJson()?.getString("taskId")?:pin.optString("taskId").takeIf(String::isNotBlank),group=groupFrom(pin.optJSONObject("group")),team=team,teamPrevious=team?.let{matchingPrevious(it,previous)});bundle?.getString("attachmentDocumentDraft")?.let{saved->check(team==null&&state.group==null&&saved.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES){"原文档草稿超出可恢复范围"};val draft=JSONObject(saved);DocumentDraft(draft);restoredDocumentDraft=draft};main.post{if(!closed&&resumed)refresh()}}}catch(_:Exception){restoredDocumentDraft=null;state=AttachmentOutcomeState(open=true,pendingDocumentTask=pendingDocumentAction,pendingProcessingTask=pendingProcessingAction,error="原成果定位或文档草稿暂不可恢复，请从原任务重新打开；已有保存动作仍只核对原结果")}}
+    fun save(bundle:Bundle){pendingProcessingAction?.let{bundle.putString("attachmentPendingProcessingTask",it)};pendingDocumentAction?.let{bundle.putString("attachmentPendingDocumentTask",it)};if(state.open)bundle.putString("attachmentOutcomeLocator",locator().toString());bundle.remove("attachmentOutcomeExport");bundle.remove("attachmentOutcomeExportResult");bundle.remove("attachmentOutcomeExportAbandoned");export?.let{bundle.putString("attachmentOutcomeExport",it.toString());bundle.putBoolean("attachmentOutcomeExportAbandoned",exportAbandoned);};bundle.remove("attachmentDocumentDraft");(state.documentDraft?:restoredDocumentDraft)?.let{draft->runCatching{DocumentDraft(draft);draft.toString().takeIf{it.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES}?.let{bundle.putString("attachmentDocumentDraft",it)}}}}
+    fun restore(bundle:Bundle?){bundle?.getString("attachmentPendingProcessingTask")?.takeIf{it.matches(Regex("[a-f0-9-]{36}"))}?.let{pendingProcessingAction=it;state=state.copy(pendingProcessingTask=it)};bundle?.getString("attachmentPendingDocumentTask")?.takeIf{it.matches(Regex("[a-f0-9-]{36}"))}?.let{pendingDocumentAction=it;state=state.copy(pendingDocumentTask=it)};try{bundle?.getString("attachmentOutcomeExport")?.let{val pin=JSONObject(it);val requestId=pin.optString("exportRequestId")
+            if(requestId.matches(Regex("[a-f0-9-]{36}"))&&pin.optString("exportPhase","waiting")=="waiting"){
+                export=pin;exportPending=true;exportAbandoned=bundle.getBoolean("attachmentOutcomeExportAbandoned");if(pin.optBoolean("exportLaunchUnknown"))restoredExportNotice="系统文件选择器是否启动尚未确认；请先返回原选择器完成或取消，没有重新请求导出。"
+            }else {restoredExportNotice="原导出结果尚未确认；请核对所选目标文件，没有自动重写或重新打开选择器。";state=state.copy(error=restoredExportNotice)}};bundle?.getString("attachmentOutcomeLocator")?.let{val pin=JSONObject(it);val team=pin.optJSONObject("team")?.let{TeamWorkspaceOutcomeHost.Selection(it)};val previous=runCatching{pin.optJSONObject("teamPrevious")?.let{TeamWorkspaceOutcomeHost.Selection(it)}}.getOrNull();restoreFile=pin.optJSONObject("file");state=AttachmentOutcomeState(open=true,error=state.error,pendingDocumentTask=state.pendingDocumentTask,pendingProcessingTask=state.pendingProcessingTask,taskId=team?.toJson()?.getString("taskId")?:pin.optString("taskId").takeIf(String::isNotBlank),group=groupFrom(pin.optJSONObject("group")),team=team,teamPrevious=team?.let{matchingPrevious(it,previous)});bundle?.getString("attachmentDocumentDraft")?.let{saved->check(team==null&&state.group==null&&saved.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES){"原文档草稿超出可恢复范围"};val draft=JSONObject(saved);DocumentDraft(draft);restoredDocumentDraft=draft};main.post{if(!closed&&resumed&&!state.busy){if(exportResult!=null)finishExport()else refresh()}}}}catch(_:Exception){restoredDocumentDraft=null;state=AttachmentOutcomeState(open=true,pendingDocumentTask=pendingDocumentAction,pendingProcessingTask=pendingProcessingAction,error="原成果定位或文档草稿暂不可恢复，请从原任务重新打开；已有保存动作仍只核对原结果")}}
     private fun locator():JSONObject=JSONObject().put("taskId",state.taskId.orEmpty()).also{value->state.team?.let{value.put("team",it.toJson())};state.teamPrevious?.let{value.put("teamPrevious",it.toJson())};state.file?.let{value.put("file",JSONObject().put("id",it.optString("id")).put("sha256",it.optString("sha256")))};state.group?.let{s->value.put("group",JSONObject().put("requestId",s.requestId).put("taskId",s.taskId).put("spaceId",s.spaceId).put("outputId",s.outputId).put("artifactId",s.artifactId).put("audience",s.audience).put("visibility",s.visibility).put("operation",s.sourceOperationHint).put("sourceRun",s.sourceRunHint))}}
     private fun groupFrom(value:JSONObject?):GroupResultAccess.Selection?=value?.let{GroupResultAccess.Selection(it.getString("requestId"),it.getString("taskId"),it.getString("spaceId"),it.getString("outputId"),it.getString("artifactId"),it.getString("audience"),it.getString("visibility"),it.optString("operation"),it.optString("sourceRun"))}
     private fun safe(error:Exception):String {val message=error.message.orEmpty();return if(message.isBlank()||message.contains("content://")||message.contains("http"))"文件或原操作暂不可用，请核对原任务；没有重新提交或重发" else message.take(300)}

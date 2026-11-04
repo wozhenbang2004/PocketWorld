@@ -68,7 +68,7 @@ internal fun TeamWorkspaceArtifactPage(flow:AttachmentOutcomeCoordinator){
         HorizontalDivider(color=Line)
         Column(Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
             if(meta!=null&&meta.optString("kind")!="file_tombstone")OutlinedButton(onClick=flow::openOriginalFile,enabled=!state.busy,modifier=Modifier.fillMaxWidth()){Text("查看这份原件")}
-            OutlinedButton(onClick=flow::prepareExport,enabled=!state.busy&&meta!=null&&meta.optString("kind")!="file_tombstone",modifier=Modifier.fillMaxWidth()){Text("导出这份固定版本")}
+            OutlinedButton(onClick=flow::prepareExport,enabled=!state.busy&&!flow.exportPending&&meta!=null&&meta.optString("kind")!="file_tombstone",modifier=Modifier.fillMaxWidth()){Text("导出这份固定版本")}
             Button(onClick=flow::continueTask,enabled=!state.busy&&actual!=null,modifier=Modifier.fillMaxWidth()){Text("回原分工处理修改")}
         }
     }

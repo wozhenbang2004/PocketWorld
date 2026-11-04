@@ -1301,5 +1301,14 @@
     ],
     "robolectric": true,
     "description": "Original Application/Gateway/Book/source retirement and owner-channel HTTP/SSE/outbox paths. Exact physical-send and post-response checks, already-accepted QQ ACK preservation, cancellation and unknown-no-replay. Original approved schedule source transaction also covers its local notification dispatch; source deletion races and post-dispatch uncertainty retain the same occurrence. Controlled loopback endpoints and native notification shadows; no live provider/platform or phone acceptance."
+  },
+  "attachment-export-picker-lifecycle": {
+    "class": "dev.pocketengine.ui.AttachmentExportPickerLifecycleTest",
+    "helpers": [],
+    "robolectric": true,
+    "description": "Real Activity launcher, original coordinator and SAF/repository bytes with controlled launch failures, reentry and saved-state fixtures. Does not establish real-device overlapping pickers or mounted UI acceptance.",
+    "additionalClasses": [
+      "dev.pocketengine.ui.AttachmentExportPickerRegistryTest"
+    ]
   }
 }
