@@ -871,12 +871,13 @@ public final class EngineApplication extends Application implements dev.pocketen
     private String admit(String taskId,String executionMode,ModelConfig c)throws Exception {
         return admit(taskId,executionMode,c,false);
     }
-    private String admit(String taskId,String executionMode,ModelConfig c,boolean manualOnly)throws Exception {
+    private String admit(String taskId,String executionMode,ModelConfig c,boolean manualOnly)throws Exception {return admit(taskId,executionMode,c,manualOnly,null,null);}
+    private String admit(String taskId,String executionMode,ModelConfig c,boolean manualOnly,JSONObject reviewed,String feedback)throws Exception {
         dev.pocketengine.phone.display.DisplayModule display=features.module("display") instanceof dev.pocketengine.phone.display.DisplayModule?(dev.pocketengine.phone.display.DisplayModule)features.module("display"):null;
         if(display!=null)display.pinOwner(taskId);
         String token=java.util.UUID.randomUUID().toString();
-        if(!resources.acquirePhone(token)){if(display!=null)display.unpinOwner(taskId);if(!tasks.automationConditionWaiting(taskId))tasks.status(taskId,"awaiting_user","浏览器正在执行，请先停止或接管浏览器任务");throw new IllegalStateException("浏览器正在使用执行资源，请先停止或接管");}
-        RunControl nextControl=new RunControl();JSONObject t;try{if(channelTaskHost!=null)channelTaskHost.protect(taskId,nextControl);tasks.warmToolOutputSources(taskId,nextControl);JSONObject source=tasks.get(taskId,false).optJSONObject("origin");t=source!=null&&"channel".equals(source.optString("kind"))?tasks.startChannelPhoneAttempt(phoneChannels().phoneTaskRequest(source.getString("requestId")),executionMode,c.maxSteps,nextControl):tasks.startAttempt(taskId,executionMode,c.maxSteps);}catch(Exception failure){resources.releasePhone(token);if(display!=null)display.unpinOwner(taskId);throw failure;}
+        if(!resources.acquirePhone(token)){if(display!=null)display.unpinOwner(taskId);synchronized(tasks){if(reviewed!=null)tasks.requireReviewedPrivateTaskAttempt(reviewed);if(!tasks.automationConditionWaiting(taskId))tasks.status(taskId,"awaiting_user","浏览器正在执行，请先停止或接管浏览器任务");}throw new IllegalStateException("浏览器正在使用执行资源，请先停止或接管");}
+        RunControl nextControl=new RunControl();JSONObject t;try{if(channelTaskHost!=null)channelTaskHost.protect(taskId,nextControl);tasks.warmToolOutputSources(taskId,nextControl);JSONObject source=tasks.get(taskId,false).optJSONObject("origin");t=reviewed!=null?tasks.startReviewedPrivateTaskAttempt(reviewed,executionMode,c.maxSteps,feedback,nextControl):source!=null&&"channel".equals(source.optString("kind"))?tasks.startChannelPhoneAttempt(phoneChannels().phoneTaskRequest(source.getString("requestId")),executionMode,c.maxSteps,nextControl):tasks.startAttempt(taskId,executionMode,c.maxSteps);}catch(Exception failure){resources.releasePhone(token);if(display!=null)display.unpinOwner(taskId);throw failure;}
         activeResourceToken=token;
         activeTaskId=taskId;activeControl=nextControl;activeConfig=c.withStepCeiling(t.getInt("stepCeiling"));activeMode=executionMode;activePort=null;
         try{activeControl.bindHostRun(taskId,t.getString("runId"),t.getInt("coordinatorEpoch"));protectAutomationTask(taskId,activeControl);activeControl.check();startForegroundService(new Intent(this,PhoneRunService.class).setAction(PhoneRunService.START).putExtra("taskId",activeTaskId).putExtra("manualOnly",manualOnly));}
@@ -887,8 +888,9 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(features!=null&&activeTaskId!=null&&(id==null||id.equals(activeTaskId)))features.cancelRelatedTasks(activeTaskId);
         if(activeControl!=null&&(id==null||id.equals(activeTaskId))){activeControl.cancel();boolean saved=false;try{tasks.requestCancel(activeTaskId,null);saved=true;}catch(Exception failure){error("取消状态保存失败，当前执行已停止；请核对已有动作");}setStatus(activeTaskId,"stopping","正在停止后续操作；已发生的动作不会被撤回");OriginalDeviceChildStops stops=originalDeviceChildStops;if(saved&&stops!=null)try{stops.enqueue(activeTaskId,activeControl);}catch(Exception notQueued){error("下游止损尚未入队；原预留仍保留，不能视为远端已停止");}}
     }
-    public synchronized String continueTask(String id,String feedback,boolean consent,String mode)throws Exception {
-        JSONObject t=tasks.get(id,false);if(t==null||!"phone".equals(t.optString("kind")))throw new IllegalArgumentException("该任务不是可恢复的手机任务");if(dev.pocketengine.store.TaskStoreDeviceTasks.deviceTask(t)){if(feedback!=null&&!feedback.isBlank())throw new SecurityException("设备工具不导入私人反馈；原设备须提交准确新操作");if(!mode.equals(t.getString("executionMode")))throw new SecurityException("设备工具不能换显示");resumeDeviceExecution(id);return id;}
+    public synchronized String continueTask(String id,String feedback,boolean consent,String mode)throws Exception {return continueTask(id,feedback,consent,mode,null);}
+    private synchronized String continueTask(String id,String feedback,boolean consent,String mode,JSONObject reviewed)throws Exception {
+        JSONObject t=reviewed==null?tasks.get(id,false):tasks.requireReviewedPrivateTaskAttempt(reviewed);if(t==null||!"phone".equals(t.optString("kind")))throw new IllegalArgumentException("该任务不是可恢复的手机任务");if(dev.pocketengine.store.TaskStoreDeviceTasks.deviceTask(t)){if(feedback!=null&&!feedback.isBlank())throw new SecurityException("设备工具不导入私人反馈；原设备须提交准确新操作");if(!mode.equals(t.getString("executionMode")))throw new SecurityException("设备工具不能换显示");resumeDeviceExecution(id);return id;}
         JSONObject origin=t.optJSONObject("origin");if(origin!=null&&origin.optString("kind").equals("channel")){
             if(channelTaskHost==null)throw new SecurityException("原渠道授权不可用");phoneChannels().checkHostTaskAuthority(origin.getString("requestId"));tasks.channelTask(id,origin);
         }
@@ -905,7 +907,10 @@ public final class EngineApplication extends Application implements dev.pocketen
             if(!activeControl.phoneSurfaceActive())throw new SecurityException("请在原网页工作区交还，未恢复手机输入");
             if(activePort instanceof dev.pocketengine.phone.display.BackgroundPhonePort&&((dev.pocketengine.phone.display.BackgroundPhonePort)activePort).ownerHandoffActive())throw new SecurityException("请先将应用交还原副屏");
             if(tasks.hasUnresolved(id))throw new IllegalStateException("请先核对未决动作");
-            if(feedback!=null&&!feedback.trim().isEmpty())tasks.feedback(id,feedback.trim());resume();return id;
+            synchronized(tasks){
+                if(reviewed!=null){tasks.requireReviewedPrivateTaskAttempt(reviewed);if(!activeControl.matchesHostRun(id,reviewed.getString("runId"),reviewed.getInt("epoch")))throw new SecurityException("当前手机控制器不属于原执行");}
+                if(feedback!=null&&!feedback.trim().isEmpty())tasks.feedback(id,feedback.trim());resume();return id;
+            }
         }
         if("main_screen".equals(mode)&&PhoneAccessibilityService.get()==null)throw new IllegalStateException("请先开启手机操作无障碍服务");
         if("background".equals(mode)){
@@ -914,8 +919,8 @@ public final class EngineApplication extends Application implements dev.pocketen
             if(nm==null||!nm.areNotificationsEnabled()||!(display instanceof dev.pocketengine.phone.display.DisplayModule)||!((dev.pocketengine.phone.display.DisplayModule)display).isConnected())throw new IllegalStateException("请先恢复后台助手与任务通知，不会改用主屏");
         }
         ModelConfig config=settings.get();SettingsStore.validate(config);
-        if(feedback!=null&&!feedback.trim().isEmpty())tasks.feedback(id,feedback.trim());
-        return admit(id,mode,config);
+        if(reviewed==null&&feedback!=null&&!feedback.trim().isEmpty())tasks.feedback(id,feedback.trim());
+        return admit(id,mode,config,false,reviewed,feedback);
     }
     private static JSONArray toolNames(JSONArray definitions)throws Exception{JSONArray names=new JSONArray();for(int i=0;i<definitions.length();i++)names.put(definitions.getJSONObject(i).getJSONObject("function").getString("name"));return names;}
     private JSONObject readAutomationArtifact(String id)throws Exception{
@@ -1906,7 +1911,11 @@ public final class EngineApplication extends Application implements dev.pocketen
         return resumeCapabilityTask(id,feedback,voice,authority,developmentContinuation,roundContinuation,null);
     }
     private JSONObject resumeCapabilityTask(String id,String feedback,dev.pocketengine.media.voice.tasks.VoiceTaskHostPort.Command voice,dev.pocketengine.media.voice.tasks.VoiceTaskHostPort.Authority authority,boolean developmentContinuation,dev.pocketengine.features.teams.TeamProjectRoundHost.Continuation roundContinuation,CapabilityApprovalContinuation approval)throws Exception{
+        return resumeCapabilityTask(id,feedback,voice,authority,developmentContinuation,roundContinuation,approval,null);
+    }
+    private JSONObject resumeCapabilityTask(String id,String feedback,dev.pocketengine.media.voice.tasks.VoiceTaskHostPort.Command voice,dev.pocketengine.media.voice.tasks.VoiceTaskHostPort.Authority authority,boolean developmentContinuation,dev.pocketengine.features.teams.TeamProjectRoundHost.Continuation roundContinuation,CapabilityApprovalContinuation approval,JSONObject reviewed)throws Exception{
         synchronized(assistantAdmissions){
+        if(reviewed!=null)tasks.requireReviewedPrivateTaskAttempt(reviewed);
         if(approval!=null)synchronized(tasks){approval.requireCurrent(tasks);}
         if(voice!=null)authority.check();
         if(developmentContinuation){if(voice!=null||projectOwnerWorkflows==null||feedback==null||feedback.isBlank())throw new SecurityException("请从原私人项目任务明确补充要求");projectOwnerWorkflows.requireTask(id);}
@@ -1921,20 +1930,21 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(groupOrigin(task)){if(voice!=null)throw new SecurityException("语音目标不能转为群执行");groupOwnerWorkflows.check();if(feedback!=null&&!feedback.isBlank())throw new SecurityException("群任务不能导入私人补充，请在原群提出后续请求");if(groups==null)throw new IllegalStateException("原生群宿主未就绪");groups.ownerCommand("task.resume",json("requestId",task.getJSONObject("origin").getString("requestId"),"runId",task.optString("runId"),"coordinatorEpoch",task.optInt("coordinatorEpoch"),"taskRevision",task.getLong("groupStateRevision")));return tasks.get(id,false);}
         if(automationPlanTask(task))reviewedAutomationRequest(task);
         if(tasks.hasUnresolved(id))throw new IllegalStateException("请先核对未决操作");if(task.optString("status").equals("completed")&&!developmentContinuation)throw new IllegalStateException("任务已完成");
-        ModelConfig selected=roundContinuation!=null?roundContinuation.model():voice==null?null:settings.get();if(voice!=null||roundContinuation!=null){SettingsStore.validate(selected);dev.pocketengine.runtime.ModelGateway.validate(selected);}
+        ModelConfig selected=roundContinuation!=null?roundContinuation.model():voice==null&&reviewed==null?null:settings.get();if(voice!=null||roundContinuation!=null||reviewed!=null){SettingsStore.validate(selected);dev.pocketengine.runtime.ModelGateway.validate(selected);}
         RunControl control=new RunControl();if(capabilityControls.putIfAbsent(id,control)!=null)throw new IllegalStateException("任务正在执行");
         JSONObject reserved=null;boolean handedOff=false;
         try{
             if(voice!=null){synchronized(tasks){authority.check();reserved=tasks.startReviewedRealtimeAttempt(id,voice.reference.text,voice.reference.source(),voice.expectedRunId,voice.expectedEpoch,voice.expectedRevision,selected.maxSteps,control);}}
             if(roundContinuation!=null)reserved=roundContinuation.startOriginalAttempt(control);
-            if(feedback!=null&&!feedback.trim().isEmpty())tasks.feedback(id,feedback.trim());
+            if(reviewed!=null){tasks.warmToolOutputSources(id,control);reserved=tasks.startReviewedPrivateTaskAttempt(reviewed,"capabilities",selected.maxSteps,feedback,control);}
+            if(reviewed==null&&feedback!=null&&!feedback.trim().isEmpty())tasks.feedback(id,feedback.trim());
             final JSONObject admitted=reserved;java.util.concurrent.atomic.AtomicInteger pickup=new java.util.concurrent.atomic.AtomicInteger();
-            Runnable beforePickupCancel=()->{if(admitted==null||!pickup.compareAndSet(0,2))return;try{tasks.endAttempt(id,admitted.getString("runId"),"cancelled","原语音任务尚未派发，已停止；已有记录保留",new JSONObject());}catch(Exception failure){error("原语音任务停止记录未确认，请核对原任务");}finally{capabilityControls.remove(id,control);pushTask(id);}};
+            Runnable beforePickupCancel=()->{if(admitted==null||!pickup.compareAndSet(0,2))return;try{tasks.endAttempt(id,admitted.getString("runId"),"cancelled","原任务尚未派发，已停止；已有记录保留",new JSONObject());}catch(Exception failure){error("原任务停止记录未确认，请核对原任务");}finally{capabilityControls.remove(id,control);pushTask(id);}};
             if(admitted!=null)control.onCancel(beforePickupCancel);
             // The run is deliberately independent of Activity/audio lifetime after native admission.
-            try{capabilityWorkers.execute(()->{if(!pickup.compareAndSet(0,1))return;control.removeCancelAction(beforePickupCancel);try{JSONObject response=runCapabilityAttempt(id,null,selected==null?settings.get():selected,control,null,null,null,approval);String conversation=task.optString("conversationId");EngineModule assistant=features.module("assistant");if(!conversation.isEmpty()&&assistant instanceof dev.pocketengine.features.assistant.AssistantModule&&!response.optBoolean("nativeOwnerReplyRecorded"))((dev.pocketengine.features.assistant.AssistantModule)assistant).appendTaskResult(conversation,id,response);}catch(Exception failure){error(approval==null?failure.getMessage():"审批已保存，但未继续执行："+failure.getMessage());}finally{if(admitted!=null&&control.isCancelled())try{JSONObject current=tasks.get(id,false);if(current!=null&&admitted.getString("runId").equals(current.optString("runId"))&&current.optString("status").matches("preparing|stopping"))tasks.endAttempt(id,admitted.getString("runId"),"cancelled","原语音任务已停止后续派发；请核对已有动作",new JSONObject());}catch(Exception failure){error("原语音任务停止记录未确认，请核对原任务");}capabilityControls.remove(id,control);pushTask(id);}});}
+            try{capabilityWorkers.execute(()->{if(!pickup.compareAndSet(0,1))return;control.removeCancelAction(beforePickupCancel);try{JSONObject response=runCapabilityAttempt(id,null,selected==null?settings.get():selected,control,null,null,null,approval);String conversation=task.optString("conversationId");EngineModule assistant=features.module("assistant");if(!conversation.isEmpty()&&assistant instanceof dev.pocketengine.features.assistant.AssistantModule&&!response.optBoolean("nativeOwnerReplyRecorded"))((dev.pocketengine.features.assistant.AssistantModule)assistant).appendTaskResult(conversation,id,response);}catch(Exception failure){error(approval==null?failure.getMessage():"审批已保存，但未继续执行："+failure.getMessage());}finally{if(admitted!=null&&control.isCancelled())try{JSONObject current=tasks.get(id,false);if(current!=null&&admitted.getString("runId").equals(current.optString("runId"))&&current.optString("status").matches("preparing|stopping"))tasks.endAttempt(id,admitted.getString("runId"),"cancelled","原任务已停止后续派发；请核对已有动作",new JSONObject());}catch(Exception failure){error("原任务停止记录未确认，请核对原任务");}capabilityControls.remove(id,control);pushTask(id);}});}
             catch(RuntimeException refused){pickup.set(2);control.removeCancelAction(beforePickupCancel);throw refused;}
-            handedOff=true;if(voice!=null||roundContinuation!=null)pushTask(id);return voice==null&&roundContinuation==null?task:tasks.get(id,false);
+            handedOff=true;if(voice!=null||roundContinuation!=null||reviewed!=null)pushTask(id);return voice==null&&roundContinuation==null&&reviewed==null?task:tasks.get(id,false);
         }catch(Exception failure){if(!handedOff){capabilityControls.remove(id,control);if(reserved!=null){tasks.endAttempt(id,reserved.getString("runId"),"failed","原任务执行尚未接手，请核对原记录；没有自动重试",new JSONObject());pushTask(id);}}throw failure;}
         }
     }
@@ -2160,6 +2170,33 @@ public final class EngineApplication extends Application implements dev.pocketen
     public dev.pocketengine.features.teams.TeamProjectRoundHost.ContinuationPage openTeamProjectRoundContinuationPage(String task)throws Exception{if(teamProjectRounds==null)throw new IllegalStateException("原结果round预算续审宿主未准备");return teamProjectRounds.openContinuation(task);}
     public dev.pocketengine.features.teams.TeamProjectRoundHost.Page openTeamProjectRoundPage(String run)throws Exception{if(teamProjectRounds==null)throw new IllegalStateException("原完整成果新一轮宿主尚未挂载");EngineModule team=features.module("teams");if(!(team instanceof dev.pocketengine.features.teams.TeamsModule))throw new IllegalStateException("原团队模块不可用");return ((dev.pocketengine.features.teams.TeamsModule)team).newProjectRoundPage(teamProjectRounds,run);}
     public dev.pocketengine.features.teams.TeamProjectRoundHost.Page openTeamFailedProjectRoundPage(String run,String item)throws Exception{if(teamProjectRounds==null)throw new IllegalStateException("原失败副本新一轮宿主尚未挂载");EngineModule team=features.module("teams");if(!(team instanceof dev.pocketengine.features.teams.TeamsModule))throw new IllegalStateException("原团队模块不可用");return ((dev.pocketengine.features.teams.TeamsModule)team).newFailedProjectRoundPage(teamProjectRounds,run,item);}
+    private static boolean ordinaryPrivateTaskControl(JSONObject task){
+        if(task==null||!task.optString("kind").matches("phone|assistant"))return false;
+        JSONObject source=task.optJSONObject("origin");return source==null||source.optString("kind").equals("owner_reviewed_realtime");
+    }
+    private void requireReviewedPrivateControl(JSONObject input,RunControl original,boolean capability)throws Exception{
+        tasks.requireReviewedPrivateTaskAttempt(input);String id=input.getString("taskId");
+        if(capability){RunControl live=capabilityControls.get(id);if(live!=original&&(live!=null||pendingCapabilityStops.get(id)!=original))throw new SecurityException("原能力控制器已变化，未停止后继执行");}
+        else if(control(id)!=original)throw new SecurityException("原手机控制器已变化，未停止后继执行");
+    }
+    private synchronized void stopReviewedPrivateTask(JSONObject input)throws Exception{
+        synchronized(tasks){
+            JSONObject task=tasks.requireReviewedPrivateTaskAttempt(input);String id=task.getString("id"),run=task.getString("runId");int epoch=task.getInt("coordinatorEpoch");
+            RunControl original=capabilityControls.get(id);if(original==null)original=pendingCapabilityStops.get(id);boolean capability=original!=null;if(original==null)original=control(id);
+            if(original==null||!original.hasHostRun()||!original.matchesHostRun(id,run,epoch))throw new SecurityException("没有属于原执行的本机控制器，未按任务编号停止其他执行");
+            boolean retry=capability&&pendingCapabilityStops.get(id)==original;if(capability&&original.isCancelled()&&!retry)return;
+            // Cancellation actions are synchronous and may reenter native admission on this thread.
+            original.cancel();JSONObject cancelled=tasks.requireReviewedPrivateTaskAttempt(input);
+            if(capability&&task.optString("status").equals("preparing")&&cancelled.optString("status").equals("cancelled")&&capabilityControls.get(id)==null&&pendingCapabilityStops.get(id)!=original)return;
+            requireReviewedPrivateControl(input,original,capability);
+            if(!cancelled.optBoolean("cancelRequested")&&!cancelled.optString("status").matches("completed|failed|cancelled|interrupted|needs_confirmation|reconciling")){tasks.requestCancel(id,run);tasks.status(id,"stopping","正在停止后续操作；已发生的动作不会被撤回");}
+            features.cancelRelatedTasks(id);requireReviewedPrivateControl(input,original,capability);
+            OriginalDeviceChildStops stops=originalDeviceChildStops;
+            if(capability){pendingCapabilityStops.put(id,original);if(stops==null)throw new IllegalStateException("下游止损宿主尚未就绪；原执行仍需核对");}
+            if(stops!=null)try{stops.enqueue(id,original);if(capability)pendingCapabilityStops.remove(id,original);}catch(Exception notQueued){throw new IllegalStateException("下游止损尚未入队；原预留仍保留，不能视为远端已停止",notQueued);}
+        }
+        pushTask(input.getString("taskId"));
+    }
     public JSONObject dispatchOwnerAction(String action,JSONObject input)throws Exception {
         if(input==null)input=new JSONObject();
         if(input.has("taskId")&&java.util.Set.of("updateTask","resumeTask","configureTaskExecutionScope","approveCapability","resolveOperation","reconcileExternalTask","confirmResult","stopTask","takeoverTask","ownerPhoneHandoff","observeTask","manualTaskAction","ownerSecretInput","continueDevelopmentTask").contains(action)
@@ -2220,8 +2257,10 @@ public final class EngineApplication extends Application implements dev.pocketen
                     groups.ownerCommand("task.resume",json("requestId",task.getJSONObject("origin").getString("requestId"),"runId",input.getString("runId"),"coordinatorEpoch",input.getInt("epoch"),"taskRevision",input.getLong("taskRevision")));
                     pushTask(id);return json("taskId",id);
                 }
-                if(teamWriteOrigin(task))throw new SecurityException("请回原团队分工继续，不能从通用任务入口另开执行");if(task!=null&&task.optString("kind").equals("assistant")){resumeCapabilityTask(id,input.optString("feedback"));return json("taskId",id);}
-                return json("taskId",continueTask(id,input.optString("feedback"),input.optBoolean("screenConsent"),input.optString("executionMode","background")));
+                if(teamWriteOrigin(task))throw new SecurityException("请回原团队分工继续，不能从通用任务入口另开执行");
+                JSONObject reviewed=null;if(ordinaryPrivateTaskControl(task)){tasks.requireReviewedPrivateTaskAttempt(input);reviewed=json("taskId",id,"runId",input.getString("runId"),"epoch",input.getInt("epoch"));}
+                if(task!=null&&task.optString("kind").equals("assistant")){resumeCapabilityTask(id,input.optString("feedback"),null,null,false,null,null,reviewed);return json("taskId",id);}
+                return json("taskId",continueTask(id,input.optString("feedback"),input.optBoolean("screenConsent"),input.optString("executionMode","background"),reviewed));
             }
             case "openBrowserResearch":{if(browserTaskHost==null)throw new IllegalStateException("浏览研究工作区暂不可用");String id=input.optString("taskId");if(!id.isEmpty()){JSONObject original=tasks.get(id,false);if(original==null||!"owner".equals(original.optString("actorId"))||!"private".equals(original.optString("spaceId"))||!original.optString("kind").matches("assistant|phone")||groupOrigin(original)||teamWriteOrigin(original)||"channel".equals(original.optJSONObject("origin")==null?"":original.getJSONObject("origin").optString("kind"))||features.ownsMediaTask(id)||memoryConsolidationTask(id))throw new SecurityException("请从原团队、渠道或专用任务继续；私人网页工作区不改变原受众或另开替代执行");}browserTaskHost.openUiForOwner(id);return json("opened",true);}
             case "approveCapability":{
@@ -2263,7 +2302,7 @@ public final class EngineApplication extends Application implements dev.pocketen
                 if(channelTaskHost!=null)channelTaskHost.stop(id);
                 else synchronized(tasks){task=tasks.get(id,false);tasks.cancelChannelTask(id,source,task.optString("runId"),task.optInt("coordinatorEpoch"),capabilityControls.get(id));features.cancelRelatedTasks(id);pushTask(id);}
                 return null;
-            }if(automationPlanTask(task))return controlAutomationPlanTask(automationModule(),json("taskId",id,"runId",task.optString("runId"),"coordinatorEpoch",task.optInt("coordinatorEpoch"),"occurrenceId",source.getString("occurrenceId"),"commitmentId",source.getString("commitmentId")),"cancel");RunControl capability=capabilityControls.get(id);if(capability==null)capability=pendingCapabilityStops.get(id);if(capability!=null)cancelCapabilityAttempt(capability);else {features.cancelRelatedTasks(id);stop(id);}return null;}
+            }if(automationPlanTask(task))return controlAutomationPlanTask(automationModule(),json("taskId",id,"runId",task.optString("runId"),"coordinatorEpoch",task.optInt("coordinatorEpoch"),"occurrenceId",source.getString("occurrenceId"),"commitmentId",source.getString("commitmentId")),"cancel");if(ordinaryPrivateTaskControl(task)){stopReviewedPrivateTask(input);return null;}RunControl capability=capabilityControls.get(id);if(capability==null)capability=pendingCapabilityStops.get(id);if(capability!=null)cancelCapabilityAttempt(capability);else {features.cancelRelatedTasks(id);stop(id);}return null;}
             case "takeoverTask":return takeoverTask(input.getString("taskId"));
             case "ownerPhoneHandoff":return ownerPhoneHandoff(input.getString("taskId"),input.getString("handoffAction"),input.optString("handoffId"));
             case "observeTask":return observeTask(input.getString("taskId"),input);

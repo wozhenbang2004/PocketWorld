@@ -1333,6 +1333,25 @@ public final class TaskStore {
         JSONObject task=required(id);requireChannelIdentity(task,channelOrigin(origin));
         if(control.hasHostRun()&&(!control.matchesHostRun(id,task.optString("runId"),task.optInt("coordinatorEpoch"))||task.optBoolean("cancelRequested")))throw new SecurityException("渠道任务的执行代次或取消状态已失效");
     }
+    /** The native owner's original nonempty task/run/epoch tuple is mandatory; never infer a current run. */
+    public synchronized JSONObject requireReviewedPrivateTaskAttempt(JSONObject input)throws Exception{
+        Object id=input.opt("taskId"),run=input.opt("runId"),epoch=input.opt("epoch");
+        if(!(id instanceof String)||!(run instanceof String)||((String)run).isEmpty()||!(epoch instanceof Integer||epoch instanceof Long)
+                ||((Number)epoch).longValue()<1||((Number)epoch).longValue()>Integer.MAX_VALUE)throw new SecurityException("请重新读取原私人任务的执行身份");
+        JSONObject task=required((String)id);requirePrivateOwner(task);JSONObject source=task.optJSONObject("origin");
+        if(!task.optString("kind").matches("phone|assistant")||source!=null&&!source.optString("kind").equals("owner_reviewed_realtime")
+                ||!run.equals(task.optString("runId"))||((Number)epoch).intValue()!=task.optInt("coordinatorEpoch"))throw new SecurityException("原私人任务执行已变化，未处理后继执行");
+        return copy(task,false);
+    }
+    /** Recheck the original review, persist feedback and reserve/bind one fresh run atomically before enqueue. */
+    public synchronized JSONObject startReviewedPrivateTaskAttempt(JSONObject input,String mode,int allocation,String feedback,RunControl control)throws Exception{
+        db.beginTransaction();try{
+            JSONObject task=requireReviewedPrivateTaskAttempt(input);if(control==null||control.hasHostRun())throw new SecurityException("不能替换原私人任务的执行控制");control.check();
+            if(feedback!=null&&!feedback.trim().isEmpty())feedback(task.getString("id"),feedback.trim());
+            JSONObject admitted=startAttempt(task.getString("id"),mode,allocation);control.bindHostRun(task.getString("id"),admitted.getString("runId"),admitted.getInt("coordinatorEpoch"));
+            db.setTransactionSuccessful();return admitted;
+        }finally{db.endTransaction();}
+    }
     /** Reuse only the actually reserved running attempt; never start a second run for a queued worker. */
     public synchronized JSONObject requireCapabilityAttempt(String id,RunControl control)throws Exception{
         JSONObject task=required(id);String run=task.optString("runId");int epoch=task.optInt("coordinatorEpoch");

@@ -1725,7 +1725,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     fun pausePhone() { native("pauseRun") }
     fun continuePhone() { state.tasks.find { it.id == state.activeTaskId }?.let { resumeTask(it, "") } }
-    fun stopPhone() { native("stopRun") }
+    fun stopPhone() {
+        val task = state.tasks.find { it.id == state.activeTaskId }
+        if (task != null && isPhoneTask(task)) stopReviewedTask(task) else state = state.copy(error = "请先读取原手机任务，再停止该次执行")
+    }
     internal fun releaseHeldPhoneResources(task: UiTask, window: android.view.View) {
         if (!privateWorkspaceView() || state.activeTaskId != task.id || task.raw.optString("actorId") != "owner"
             || task.raw.optString("spaceId") != "private" || !phoneOwnerWindowCurrent(window)) return
@@ -1737,10 +1740,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             state = state.copy(notice = "已请求停止原任务并释放其独立屏；实际结果以原回执为准。")
         } catch (_: Exception) { state = state.copy(notice = "原保留会话暂不可核对，请刷新原任务；未停止其他执行。") }
     }
-    fun stopTask(taskId: String) { val team=state.tasks.find { it.id==taskId && it.raw.optJSONObject("origin")?.optString("kind") in setOf("team_assignment","team_integration","team_review") };native("stopTask",team?.let(::reviewedTaskInput)?:JSONObject().put("taskId",taskId)) }
-    private fun reviewedTaskInput(task: UiTask): JSONObject = JSONObject().put("taskId", task.id).also {
-        if (task.raw.optJSONObject("origin")?.optString("kind") in setOf("group", "team_assignment", "team_integration", "team_review")) it.put("runId", task.raw.optString("runId")).put("epoch", task.raw.optInt("coordinatorEpoch"))
+    fun stopTask(taskId: String) {
+        val task = state.tasks.find { it.id == taskId }
+        if (task != null) stopReviewedTask(task) else state = state.copy(error = "请先读取原任务，再停止该次执行")
     }
+    private fun reviewedTaskInput(task: UiTask): JSONObject = JSONObject().put("taskId", task.id)
+        .put("runId", task.raw.optString("runId")).put("epoch", task.raw.optInt("coordinatorEpoch"))
     fun stopReviewedTask(task: UiTask) { native("stopTask", reviewedTaskInput(task)) }
     fun confirmReviewedTask(task: UiTask, done: Boolean, feedback: String) { native("confirmResult", reviewedTaskInput(task).put("resultReviewDigest", task.raw.optString("resultReviewDigest")).put("completed", done).put("feedback", feedback)) }
     fun resolveReviewedTask(task: UiTask, operationId: String, outcome: String) { native("resolveOperation", reviewedTaskInput(task).put("operationId", operationId).put("outcome", outcome)) }
