@@ -135,6 +135,16 @@ python .\companion\packaging\windows\build_bundle.py `
 包必须通过媒体探针后才可产生有效构建凭据。完整依赖与原生 FFmpeg 许可保留
 方式见 [DESKTOP-STREAM.md](packaging/windows/DESKTOP-STREAM.md)。
 
+### 采用关系
+
+[微软 HCU](https://github.com/microsoft/Hybrid-Computer-Use) 提供程序化工具、
+辅助功能结构和 GUI 三种互补通路，其 MCP 接口是 AX 与 GUI。本项目参考这一
+分工，将程序化操作保留在原 shell/API 工具中，将结构化路径接到固定的
+agent-desktop，将显式视觉路径接到既有 Cua Driver。HCU 本身没有作为新的 Agent
+或另一套权限服务器运行；本次也没有承诺覆盖 HCU 的完整批处理、所有平台或
+上游基准表现。这样可继续复用手机原有任务、授权、预算及 Windows 输入锁。
+用户观看另走 WebRTC，这项产品能力与模型通过结构或截图观察是不同的调用路径。
+
 ## 验证范围
 
 在 `companion` 目录可运行本次相关回归：
@@ -144,8 +154,17 @@ python -B -m unittest -v test_desktop_stream test_desktop_worker_stream test_win
 python -B -m unittest -v test_desktop_viewer test_desktop_semantic_human test_device_protocol
 ```
 
-实现阶段的 Linux 契约、路由、语义和打包规则回归已运行；真实 aiortc/PyAV
-回环与编码测试因当前环境缺少 SDK 跳过，不能据此宣称媒体已实机跑通。
+2026-11-04 本地集成检查：Python 161 项中 159 通过，真实 aiortc/PyAV 回环与编码
+两项因环境缺少运行库跳过；Java 共享协议 17 项及原生 Window 关闭竞态 4 项通过。
+协议、结构观察与原生 Host 核心源码通过 Android SDK 35 javac 检查；TypeScript、
+Vite、18 项 Node 契约及 6 个标明 mock RTC/native host 的真实浏览器界面旅程通过。
+这些界面旅程使用真实 canvas MediaStream/video 解码，不能证明 Windows 传输。
+
+[PR #42](https://github.com/wozhenbang2004/PocketWorld/pull/42) 已注册完整 AGP
+Java/Kotlin 编译和 Robolectric/真实 loopback mTLS 检查。首轮
+[GitHub Actions](https://github.com/wozhenbang2004/PocketWorld/actions/runs/41823649450)
+在 runner 分配前失败：runner ID 为 0、步骤为空且没有日志，未执行代码编译。
+该环境阻塞的具体原因未从当前 API 获得；完整原生 host 测试仍是未完成的交付门槛。
 Windows 原生 UIA、窗口捕获、物理输入、冻结 EXE/安装器、Android WebView 播放与
 触控，以及跨网络连接仍须在真实设备验收。这里提供的是已接入正式产品路径的
 源码与构建入口，不是已完成这些平台验收的发布包。

@@ -778,4 +778,3 @@ class DesktopStreamService:
                 self.thread.join(timeout=2)
         return {"closed": True, "captureWorkerStoppedVerified": capture_stopped,
                 "mediaLoopStoppedVerified": self.thread is None or not self.thread.is_alive()}
-
