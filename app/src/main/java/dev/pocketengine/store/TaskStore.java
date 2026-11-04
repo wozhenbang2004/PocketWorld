@@ -7611,7 +7611,7 @@ public final class TaskStore {
     }
     public synchronized JSONObject decideCapabilityApproval(String id,String approvalId,boolean approved)throws Exception{
         JSONObject task=required(id);JSONArray approvals=task.optJSONArray("approvals");if(approvals!=null)for(int i=0;i<approvals.length();i++){JSONObject a=approvals.getJSONObject(i);if(approvalId.equals(a.optString("id"))){
-            if(task.optJSONObject("origin")!=null&&task.getJSONObject("origin").optString("kind").equals("group")&&!task.optString("runId").equals(a.optString("runId")))throw new SecurityException("审批不属于当前原群执行代次");
+            if(task.optString("runId").isBlank()||!task.optString("runId").equals(a.optString("runId")))throw new SecurityException("审批不属于当前原执行代次");
             if(!a.optString("state").equals("pending")||a.optLong("expiresAt")<=System.currentTimeMillis())throw new IllegalStateException("该审批已处理或过期");a.put("state",approved?"approved":"denied");write(task);return copy(task,false);}}
         throw new IllegalArgumentException("找不到该审批");
     }
