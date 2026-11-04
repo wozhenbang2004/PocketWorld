@@ -286,14 +286,14 @@ sleep 3
 
 PW_STAGE=open-work-switcher
 PW_POINT=$(python3 tools/ci/verify-web-ui.py target --xml "$PW_CAPTURE_DIR/entry.xml" \
-    --label '全部工作' --out "$PW_CAPTURE_DIR/open-work-target.json")
+    --label '打开导航' --out "$PW_CAPTURE_DIR/open-work-target.json")
 read -r PW_X PW_Y <<< "$PW_POINT"
 [[ "$PW_X" =~ ^[0-9]+$ && "$PW_Y" =~ ^[0-9]+$ ]]
 pw_adb shell input tap "$PW_X" "$PW_Y"
 sleep 1
 pw_scene all-work work-menu
 PW_CLOSE_POINT=$(python3 tools/ci/verify-web-ui.py target --xml "$PW_CAPTURE_DIR/all-work.xml" \
-    --label '关闭全部工作' --out "$PW_CAPTURE_DIR/close-work-target.json")
+    --label '关闭导航' --out "$PW_CAPTURE_DIR/close-work-target.json")
 pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/02-all-work.png"
 sleep 3
 
@@ -306,28 +306,28 @@ pw_scene return workroom
 python3 - "$PW_CAPTURE_DIR/return.xml" <<'PY'
 import sys, xml.etree.ElementTree as ET
 nodes = list(ET.parse(sys.argv[1]).getroot().iter('node'))
-assert not any(n.get('content-desc') == '关闭全部工作' or n.get('text') == '关闭全部工作' for n in nodes), 'Work switcher did not close'
+assert not any(n.get('content-desc') == '关闭导航' or n.get('text') == '关闭导航' for n in nodes), 'Work switcher did not close'
 PY
 python3 tools/ci/verify-web-ui.py target --xml "$PW_CAPTURE_DIR/return.xml" \
-    --label '全部工作' --out "$PW_CAPTURE_DIR/return-work-target.json" > /dev/null
+    --label '打开导航' --out "$PW_CAPTURE_DIR/return-work-target.json" > /dev/null
 pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/03-workroom-return.png"
 
 PW_STAGE=primary-task-navigation
-pw_tap return '全部工作' primary-tasks-menu-target
+pw_tap return '打开导航' primary-tasks-menu-target
 pw_scene primary-tasks-menu work-menu
 pw_tap primary-tasks-menu '任务' primary-tasks-target
 pw_scene tasks-root tasks
 pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/11-tasks.png"
 
 PW_STAGE=primary-project-navigation
-pw_tap tasks-root '全部工作' primary-projects-menu-target
+pw_tap tasks-root '打开导航' primary-projects-menu-target
 pw_scene primary-projects-menu work-menu
-pw_tap primary-projects-menu '项目与文件' primary-projects-target
+pw_tap primary-projects-menu '项目' primary-projects-target
 pw_scene projects-root projects
 pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/12-projects.png"
 
 PW_STAGE=primary-work-navigation
-pw_tap projects-root '全部工作' primary-work-menu-target
+pw_tap projects-root '打开导航' primary-work-menu-target
 pw_scene primary-work-menu work-menu
 pw_tap primary-work-menu '对话' primary-work-target
 pw_scene primary-work-return workroom
@@ -349,9 +349,9 @@ pw_scene workroom-ime-return workroom false
 pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/14-workroom-ime-return.png"
 
 PW_STAGE=settings-root
-pw_tap workroom-ime-return '全部工作' settings-work-target
+pw_tap workroom-ime-return '打开导航' settings-work-target
 pw_scene settings-menu work-menu
-pw_tap settings-menu '设置与连接' settings-target
+pw_tap settings-menu '设置' settings-target
 pw_scene settings settings
 pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/05-settings.png"
 

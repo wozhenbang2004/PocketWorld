@@ -16,7 +16,7 @@ const browser = await chromium.launch({ headless: true });
 const results = [];
 const baseline = process.argv.includes('--baseline');
 async function navigate(page, name) {
-  await page.getByRole('button', { name: '全部工作', exact: true }).click();
+  await page.getByRole('button', { name: '打开导航', exact: true }).click();
   const drawer = page.locator('.pw-work-drawer');
   await drawer.getByRole('link', { name, exact: true }).click();
   await drawer.waitFor({ state: 'hidden' });
@@ -42,14 +42,14 @@ try {
     await page.getByText('本次授权', { exact: true }).waitFor();
   }, 'accounts');
   await check('api-models-retain-connection-identity', async page => {
-    await page.getByRole('button', { name: 'same-model', exact: true }).click();
+    await page.getByRole('button', { name: '切换模型：same-model', exact: true }).click();
     await page.getByText('备用连接', { exact: false }).first().waitFor({ timeout: 2500 });
     assert.ok(await page.getByText('工作连接', { exact: false }).count());
     assert.ok(await page.getByText('最近使用', { exact: false }).count());
     assert.ok(await page.getByText('图片', { exact: false }).count());
   });
   await check('old-create-receipt-keeps-new-dialog', async page => {
-    await navigate(page, '项目与文件');
+    await navigate(page, '项目');
     await page.getByRole('button', { name: '新项目', exact: true }).click();
     await page.getByRole('textbox', { name: '项目名称', exact: true }).fill('第一次创建');
     await page.getByRole('button', { name: '创建', exact: true }).click();
@@ -88,7 +88,7 @@ try {
       await page.getByRole('textbox', { name: '账号名称（可选）', exact: true }).waitFor({ state: 'hidden' });
     }, 'accounts');
     await check('api-selection-keeps-original-connection', async page => {
-      await page.getByRole('button', { name: 'same-model', exact: true }).click();
+      await page.getByRole('button', { name: '切换模型：same-model', exact: true }).click();
       await page.getByRole('option', { name: /备用连接/ }).click();
       await page.getByRole('button', { name: '确认切换主模型', exact: true }).click();
       await page.getByRole('button', { name: '关闭模型选择', exact: true }).waitFor({ state: 'hidden' });
@@ -101,7 +101,7 @@ try {
       assert.equal(models.find(row => row.selected).connectionId, 'api-b');
     });
     await check('api-favorite-recent-and-disabled-model', async page => {
-      await page.getByRole('button', { name: 'same-model', exact: true }).click();
+      await page.getByRole('button', { name: '切换模型：same-model', exact: true }).click();
       await page.getByText('最近使用', { exact: true }).click();
       assert.equal(await page.getByRole('option').count(), 1);
       await page.getByRole('option', { name: /备用连接/ }).click();
@@ -118,11 +118,11 @@ try {
     });
     await check('old-model-review-cannot-replace-reopened-picker', async page => {
       await page.evaluate(() => window.modelFixture.setDelay(['models.api.review']));
-      await page.getByRole('button', { name: 'same-model', exact: true }).click();
+      await page.getByRole('button', { name: '切换模型：same-model', exact: true }).click();
       await page.getByRole('option', { name: /备用连接/ }).click();
       await page.waitForFunction(() => window.modelFixture.pending.some(call => call.action === 'models.api.review'));
       await page.getByRole('button', { name: '关闭模型选择', exact: true }).click();
-      await page.getByRole('button', { name: 'same-model', exact: true }).click();
+      await page.getByRole('button', { name: '切换模型：same-model', exact: true }).click();
       await page.getByRole('option', { name: /备用连接/ }).waitFor();
       await page.evaluate(() => window.modelFixture.settle('models.api.review', { windowId: 'api-window-1', viewGeneration: 1, selectionRevision: 8, reviewHandle: 'old', model: window.modelFixture.getModels()[1] }));
       await page.waitForTimeout(50);
@@ -132,7 +132,7 @@ try {
     });
     await check('old-newfile-receipt-keeps-new-dialog', async page => {
       await page.evaluate(() => window.modelFixture.publish({ projectId: 'original-project', projects: [{ id: 'original-project', name: '原项目' }], files: [] }));
-      await navigate(page, '项目与文件');
+      await navigate(page, '项目');
       await page.getByRole('button', { name: '新文件', exact: true }).click();
       await page.getByRole('textbox', { name: '文件路径', exact: true }).fill('first.txt');
       await page.getByRole('button', { name: '创建', exact: true }).click();

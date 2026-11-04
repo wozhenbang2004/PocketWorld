@@ -1,6 +1,5 @@
 // PW-02/03/04/05: controlled ports of actual saved Affect library v3 JSX/CSS.
-// Source controls and classes retained; compact is an opt-in product layout.
-// All sample data and business timers removed.
+// Source DOM classes and hierarchy retained; all sample data and business timers removed.
 import {useLayoutEffect,useRef,useState,type ReactNode} from 'react';
 import type {ChatComposerProps,ModelOption,DataPanelProps,Step} from './types';
 import {FrameA,FrameB,Card,Icon,ToolButton,statusLabel,records,textOf} from './core';
@@ -8,29 +7,49 @@ import {PressButton} from './press';
 import {MessageActions} from './message';
 import {CitedAnswer} from './context';
 import {MarkdownBody} from './MarkdownBody';
-import '../composer-models.css';
-export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disabled,placeholder='输入目标，或补充上下文…',attachments=[],onRemoveAttachment,onAttach,onVoice,listening,voiceStatus,onDiscardVoice,modelName,onSelectModel,toolbar,children,status,label='工作输入',composerKey,className='',compact=false,sendDisabled=false,sendLabel}:ChatComposerProps&{sendDisabled?:boolean;sendLabel?:string}){
+function sizeComposerEditor(editor:HTMLTextAreaElement|null){
+ if(!editor)return;
+ editor.style.height='0px';
+ const height=editor.value?editor.scrollHeight:44;
+ editor.style.height=`${Math.min(120,Math.max(44,height))}px`;
+ editor.style.overflowY=height>120?'auto':'hidden';
+}
+
+export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disabled,placeholder='输入目标，或补充上下文…',attachments=[],onRemoveAttachment,onAttach,onVoice,listening,voiceStatus,onDiscardVoice,modelName,onSelectModel,toolbar,children,status,label='工作输入',composerKey,className='',sendDisabled=false,sendLabel}:ChatComposerProps&{sendDisabled?:boolean;sendLabel?:string}){
  const editor=useRef<HTMLTextAreaElement>(null);
+ useLayoutEffect(()=>{sizeComposerEditor(editor.current)},[value,listening,composerKey]);
  useLayoutEffect(()=>{
-  const el=editor.current;if(!el)return;
-  const resize=()=>{el.style.height='0px';el.style.height=`${Math.min(120,Math.max(compact?48:32,el.scrollHeight))}px`};
-  resize();
-  if(!compact||typeof ResizeObserver==='undefined')return;
-  let width=el.getBoundingClientRect().width;
-  const observer=new ResizeObserver(()=>{const next=el.getBoundingClientRect().width;if(next!==width){width=next;resize()}});
-  observer.observe(el);return()=>observer.disconnect();
- },[value,listening,composerKey,compact]);
+  const el=editor.current;
+  if(!el||typeof ResizeObserver==='undefined')return;
+  let width=el.clientWidth;
+  const observer=new ResizeObserver(()=>{
+   if(el.clientWidth===width)return;
+   width=el.clientWidth;
+   sizeComposerEditor(el);
+  });
+  observer.observe(el);
+  return()=>observer.disconnect();
+ },[listening,composerKey]);
  const canSend=!disabled&&!submitting&&!sendDisabled&&!!value.trim();
- const input=listening?<div className="afa-recording"><i/><span>{voiceStatus||'正在听写…'}</span>{onDiscardVoice&&<ToolButton label="取消本次听写" icon="close" onClick={onDiscardVoice}/>}</div>:<textarea ref={editor} rows={compact?1:undefined} aria-label={label} placeholder={placeholder} value={value} disabled={disabled} onChange={e=>onChange(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();if(canSend)onSend()}}}/>;
- const model=onSelectModel&&<button type="button" className="afa-btn pw-model-trigger" onClick={onSelectModel}><Icon name="spark"/><span>{modelName||'选择模型'}</span><Icon name="chevron" size={12}/></button>;
- const attach=onAttach&&<ToolButton label="添加附件" icon="plus" onClick={onAttach} disabled={submitting}/>;
- const voice=onVoice&&<ToolButton label={listening?'正在听写':'语音输入'} icon="mic" onClick={onVoice} disabled={submitting}/>;
- const send=(!compact||!busy||!onStop||!!value.trim())&&<PressButton compact aria-label={submitting?'正在登记':sendLabel||(busy?'补充给当前工作':'发送')} disabled={!canSend} onClick={onSend}><Icon name="arrow" size={18}/></PressButton>;
- const stop=busy&&onStop&&<button type="button" className="afa-stop" onClick={onStop} aria-label="停止当前回复"><span aria-hidden="true">■</span></button>;
- return <FrameA className={`pw-composer-host ${compact?'pw-composer-compact ':''}${className}`}><section className="afa-composer" aria-label={label} data-composer-key={composerKey}>
- <div className="afa-card">{(!compact||attachments.length>0)&&<div className="afa-filechips">{attachments.map(f=><span key={f.id}><Icon name="file"/>{f.name}{f.status&&<small>{f.status}</small>}{onRemoveAttachment&&<button type="button" aria-label={`移除 ${f.name}`} onClick={()=>onRemoveAttachment(f.id)}>×</button>}</span>)}</div>}
- {compact?<><div className="pw-composer-row">{toolbar&&<div className="pw-composer-leading">{toolbar}</div>}{input}<div className="pw-composer-actions">{attach}{voice}{send}{stop}</div></div>{model&&<div className="pw-composer-model">{model}</div>}</>:<>{input}<div className="afa-toolbar">{attach}<span className="afa-push"/>{model}{toolbar}{voice}{send}{stop}</div></>}
- </div>{children&&<div className="afa-composerbottom">{children}</div>}{status&&<div className="afa-muted pw-composer-status" role="status">{status}</div>}</section></FrameA>
+ return <FrameA className={`pw-composer-host pw-compact-composer ${className}`}>
+  <section className="afa-composer" aria-label={label} data-composer-key={composerKey}>
+   <div className="afa-card pw-composer-card">
+    {attachments.length>0&&<div className="afa-filechips" aria-label="已附加文件" role="list">{attachments.map(f=><span key={f.id} role="listitem"><Icon name="file"/><span className="pw-composer-file-name" title={f.name}>{f.name}</span>{f.status&&<small>{f.status}</small>}{onRemoveAttachment&&<button type="button" aria-label={`移除 ${f.name}`} onClick={()=>onRemoveAttachment(f.id)}>×</button>}</span>)}</div>}
+    {onSelectModel&&<div className="pw-composer-model"><button type="button" className="afa-btn pw-model-trigger" onClick={onSelectModel}><Icon name="spark"/><span>{modelName||'选择模型'}</span><Icon name="chevron" size={12}/></button></div>}
+    <div className="pw-composer-row">
+     {(toolbar||onAttach)&&<div className="pw-composer-leading">{toolbar}{onAttach&&<ToolButton label="添加附件" icon="plus" onClick={onAttach} disabled={submitting}/>}</div>}
+     {listening?<div className="afa-recording" role="status"><i aria-hidden="true"/><span>{voiceStatus||'正在听写…'}</span>{onDiscardVoice&&<ToolButton label="取消本次听写" icon="close" onClick={onDiscardVoice}/>}</div>:<textarea ref={editor} rows={1} aria-label={label} placeholder={placeholder} value={value} disabled={disabled} onChange={e=>onChange(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing&&e.nativeEvent.keyCode!==229){e.preventDefault();if(canSend)onSend()}}}/>}
+     <div className="afa-toolbar">
+      {onVoice&&<ToolButton label={listening?'结束听写':'语音输入'} icon="mic" onClick={onVoice} disabled={submitting}/>}
+      <PressButton compact aria-label={submitting?'正在登记':sendLabel||(busy?'补充给当前工作':'发送')} disabled={!canSend} onClick={onSend}><Icon name="arrow" size={18}/></PressButton>
+      {busy&&onStop&&<button type="button" className="afa-stop" onClick={onStop} aria-label="停止当前回复"><span aria-hidden="true">■</span></button>}
+     </div>
+    </div>
+   </div>
+   {children&&<div className="afa-composerbottom">{children}</div>}
+   {status&&<div className="afa-muted pw-composer-status" role="status">{status}</div>}
+  </section>
+ </FrameA>
 }
 export function ModelPicker({models,value,onChange,open=true,onOpenChange,label='选择模型'}:{models:ModelOption[];value?:string;onChange:(id:string)=>void;open?:boolean;onOpenChange?:(open:boolean)=>void;label?:string}){
  const list=useRef<HTMLDivElement>(null);const[query,setQuery]=useState('');const shown=models.filter(x=>`${x.name} ${x.description||''}`.toLowerCase().includes(query.toLowerCase()));
@@ -42,6 +61,6 @@ export function AgentSteering({data,title,onAction,value,onChange,onSubmit}:Data
  const steps:Step[]=Array.isArray(data?.steps)?data.steps:[];const queued:SteeringItem[]=Array.isArray(data?.queued)?data.queued:records(data);const applied:SteeringItem[]=Array.isArray(data?.applied)?data.applied:[];
  return <FrameA><section className="afa-card afa-steering"><header><Icon/><span><strong>{title||data?.title||'补充给当前工作'}</strong>{data?.status&&<small>{statusLabel(String(data.status))}</small>}</span></header>{steps.length>0&&<ol className="afa-steerplan" aria-label="执行阶段">{steps.map(s=><li key={s.id} className={s.status==='running'?'afa-currentstep':s.status==='complete'?'afa-completedstep':''}><span className="afa-stepmark">{s.status==='complete'?'✓':s.status==='running'?<i/>:'○'}</span><div>{s.title||s.label}{applied.filter(x=>x.step===s.id).map(x=><small key={x.id} className="afa-appliednote">↳ {x.text}</small>)}</div></li>)}</ol>}<div className="afa-steerqueued"><div className="afa-label">待采用 <span>{data===undefined?'未载入':queued.length}</span></div>{queued.map(n=><div className="afa-queuednote" key={n.id}><span>{n.text}{n.status&&<small>{statusLabel(n.status)}</small>}</span>{onAction&&n.editable!==false&&<><button type="button" className="afa-minilink" onClick={()=>onAction('edit',n)}>编辑</button><ToolButton label="撤回这条补充" icon="close" onClick={()=>onAction('remove',n)}/></>}</div>)}{!queued.length&&<p className="afa-muted">{data===undefined?'补充队列尚未载入':'暂无待采用补充'}</p>}</div>{onSubmit&&onChange&&<footer><div className="afa-steerinput"><input aria-label="补充当前工作" value={value||''} onChange={e=>onChange(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.nativeEvent.isComposing&&value?.trim()){e.preventDefault();onSubmit(e.ctrlKey||e.metaKey?'steer':'queue')}}}/><PressButton compact disabled={!value?.trim()} aria-label="加入补充队列" onClick={()=>onSubmit('queue')}><Icon name="arrow"/></PressButton></div></footer>}</section></FrameA>
 }
-export function AIAnswer({text='',children,sources=[],onOpenSource,onCopy,onSpeak,speaking,busy,actions,onOpenLink,onCopyCode,hideActions=false}:{text?:string;children?:ReactNode;sources?:any[];onOpenSource?:(source:any)=>void;onCopy?:(text?:string)=>void|Promise<unknown>;onSpeak?:(speaking:boolean)=>void;speaking?:boolean;busy?:boolean;actions?:ReactNode;hideActions?:boolean;onOpenLink?:(url:string)=>void|Promise<unknown>;onCopyCode?:(text:string)=>void|Promise<unknown>}){
- return <FrameA><article className="afa-card afa-answer" aria-busy={busy}><div className="afa-answerbody">{sources.length?<CitedAnswer text={text} sources={sources} onOpenSource={onOpenSource} onOpenLink={onOpenLink} onCopyCode={onCopyCode}/>:children||<><MarkdownBody text={text} onOpenLink={onOpenLink} onCopyCode={onCopyCode}/>{busy&&<i className="afa-cursor"/>}</>}</div>{!hideActions&&<footer className="afa-actions"><MessageActions text={text} onCopy={onCopy} onSpeak={onSpeak} speaking={speaking}/>{actions}</footer>}</article></FrameA>
+export function AIAnswer({text='',children,sources=[],onOpenSource,onCopy,onSpeak,speaking,busy,actions,showActions=true,onOpenLink,onCopyCode}:{text?:string;children?:ReactNode;sources?:any[];onOpenSource?:(source:any)=>void;onCopy?:(text?:string)=>void|Promise<unknown>;onSpeak?:(speaking:boolean)=>void;speaking?:boolean;busy?:boolean;actions?:ReactNode;showActions?:boolean;onOpenLink?:(url:string)=>void|Promise<unknown>;onCopyCode?:(text:string)=>void|Promise<unknown>}){
+ return <FrameA><article className="afa-card afa-answer" aria-busy={busy}><div className="afa-answerbody">{sources.length?<CitedAnswer text={text} sources={sources} onOpenSource={onOpenSource} onOpenLink={onOpenLink} onCopyCode={onCopyCode}/>:children||<><MarkdownBody text={text} onOpenLink={onOpenLink} onCopyCode={onCopyCode}/>{busy&&<i className="afa-cursor"/>}</>}</div>{showActions&&<footer className="afa-actions"><MessageActions text={text} onCopy={onCopy} onSpeak={onSpeak} speaking={speaking}/>{actions}</footer>}</article></FrameA>
 }
