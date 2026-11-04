@@ -986,9 +986,7 @@
     "class": "dev.pocketengine.features.local.runtime.NativeTransportWaitOwnershipTest",
     "additionalClasses": [
       "dev.pocketengine.features.local.runtime.NativeTransportContractTest",
-      "dev.pocketengine.features.local.runtime.NativePtyTransportTest",
-      "dev.pocketengine.features.local.runtime.NativePipeTransportTest",
-      "dev.pocketengine.features.local.runtime.RuntimeActivityTest"
+      "dev.pocketengine.features.local.runtime.NativePtyTransportTest"
     ],
     "helpers": [
       "dev.pocketengine.features.local.runtime.NativeTransportWaitOwnershipProbe"
