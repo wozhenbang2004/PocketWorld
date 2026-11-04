@@ -26,6 +26,17 @@ PERSISTED_GRANT_PROFILE = "pwp1_e58652456ec50f920a0036626e11782bf0a8805712d018e5
 PERSISTED_GRANT_METHODS = frozenset({"device.describe", "tool.invoke", "operation.get", "operation.cancel", "task.submitGoal",
                                      "task.get", "task.events", "task.respond", "task.pause", "task.cancel", "task.acquireControl",
                                      "artifact.describe", "artifact.readChunk"})
+# The immediately preceding phone-task profile already supported these 16
+# methods. Only an original SQL receipt may restore them, never an old wire.
+PERSISTED_PHONE_TASK_GRANT_PROFILE = "pwp1_953641fabc7e4316996f69c2c3ac9b74db1a30f3750ee83adbfd95768730ae8b"
+PERSISTED_PHONE_TASK_GRANT_METHODS = frozenset({"device.describe", "tool.invoke", "operation.get", "operation.cancel", "task.submitGoal",
+                                                "task.get", "task.events", "task.respond", "task.pause", "task.cancel", "task.acquireControl",
+                                                "artifact.describe", "artifact.readChunk", "task.answerQuestion", "task.steer", "task.requestResume"})
+
+
+def _persisted_grant_epoch_current(known, receipt, grant):
+    return (receipt.get("protocolProfile") != PERSISTED_PHONE_TASK_GRANT_PROFILE
+            or known["authorizationEpoch"] == grant["authorizationEpoch"])
 
 
 def _copy(value):
@@ -950,6 +961,7 @@ class OutgoingGrant:
         stored = self._owner.store.outgoing_grant(self.target_device_id, self.grant_id)
         _require(known is not None and not known["revoked"] and known["fingerprint"] == self._target.certificate_fingerprint
                  and known["instanceId"] == self.target_instance_id
+                 and _persisted_grant_epoch_current(known, self._receipt, self._grant)
                  and stored is not None and protocol.canonical_bytes(stored["body"]["grant"]) == protocol.canonical_bytes(self._grant)
                  and stored["body"]["targetInstanceId"] == self.target_instance_id, "Native history route changed or revoked")
         validate_grant(self._grant, self.target_device_id, self._owner.local_device_id, now_ms, for_history=True)
@@ -990,7 +1002,7 @@ class OutgoingGrant:
     def check_current(self, now_ms):
         known = self._owner.store.peer(self.target_device_id)
         stored = self._owner.store.outgoing_grant(self.target_device_id, self.grant_id)
-        _require(known is not None and not known["revoked"] and known["fingerprint"] == self._target.certificate_fingerprint and known["instanceId"] == self.target_instance_id and stored is not None and protocol.canonical_bytes(stored["body"]["grant"]) == protocol.canonical_bytes(self._grant) and stored["body"]["targetInstanceId"] == self.target_instance_id, "Native outgoing route changed or revoked")
+        _require(known is not None and not known["revoked"] and known["fingerprint"] == self._target.certificate_fingerprint and known["instanceId"] == self.target_instance_id and _persisted_grant_epoch_current(known, self._receipt, self._grant) and stored is not None and protocol.canonical_bytes(stored["body"]["grant"]) == protocol.canonical_bytes(self._grant) and stored["body"]["targetInstanceId"] == self.target_instance_id, "Native outgoing route changed or revoked")
         validate_grant(self._grant, self.target_device_id, self._owner.local_device_id, now_ms)
 
 
@@ -1414,7 +1426,7 @@ class PairingCoordinator:
         receipt = self.store.outgoing_grant(target.device_id, grant_id)
         _require(known is not None and not known["revoked"] and known["fingerprint"] == target.certificate_fingerprint and receipt is not None,
                  "No paired persisted outgoing route")
-        _require(receipt.get("protocolProfile") in (protocol.PROFILE, PERSISTED_GRANT_PROFILE), "Unsupported persisted grant profile")
+        _require(receipt.get("protocolProfile") in (protocol.PROFILE, PERSISTED_GRANT_PROFILE, PERSISTED_PHONE_TASK_GRANT_PROFILE), "Unsupported persisted grant profile")
         body = _verify_record_signature(target.certificate_der, receipt, "PairGrantReceipt")
         protocol._keys(body, {"grant", "targetInstanceId", "issuedAt"})
         grant = body["grant"]
@@ -1422,6 +1434,10 @@ class PairingCoordinator:
         if receipt["protocolProfile"] == PERSISTED_GRANT_PROFILE:
             _require(set(grant["capabilities"]).issubset(PERSISTED_GRANT_METHODS),
                      "Persisted earlier grant contains an unsupported capability")
+        elif receipt["protocolProfile"] == PERSISTED_PHONE_TASK_GRANT_PROFILE:
+            _require(set(grant["capabilities"]).issubset(PERSISTED_PHONE_TASK_GRANT_METHODS),
+                     "Persisted phone-task grant contains an unsupported capability")
+            _require(_persisted_grant_epoch_current(known, receipt, grant), "Persisted original grant epoch changed")
         protocol.identifier(body["targetInstanceId"], "targetInstanceId")
         _require(grant["grantId"] == grant_id and not grant.get("revoked",False) and known["instanceId"] == body["targetInstanceId"]
                  and protocol.integer(body["issuedAt"], "issuedAt", 1) <= now_ms, "Persisted outgoing route changed")
