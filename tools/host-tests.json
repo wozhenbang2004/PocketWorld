@@ -1,4 +1,13 @@
 {
+  "attachment-import-context": {
+    "class": "dev.pocketengine.features.attachments.OwnerAttachmentImportTest",
+    "additionalClasses": [
+      "dev.pocketengine.ui.AttachmentImportPickerRegistryTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original task/project nonce pin, no-replay AndroidX registry save/restore, real repository/task-link receipts, missing-context library preservation and partial/unknown association. No mounted Activity, actual process-death or device acceptance."
+  },
   "attachment-index-recovery": {
     "class": "dev.pocketengine.features.attachments.AttachmentIndexRecoveryTest",
     "additionalClasses": [
