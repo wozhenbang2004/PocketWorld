@@ -74,7 +74,7 @@ public final class RemoteOriginalCancellationTest {
     }
     @Test public void missingOriginalIdentityNeverSendsAnyCancellation()throws Exception {
         try(Server server=new Server();RemoteModule module=module(server,true)){
-            JSONObject input=target(server);input.remove("jobOperationId");try{module.handle("cancelJob",input);}catch(SecurityException expected){}
+            JSONObject input=target(server);input.remove("jobOperationId");assertThrows(IllegalArgumentException.class,()->module.handle("cancelJob",input));
             assertEquals(0,server.legacy.get());assertEquals(0,server.original.get());
         }
     }
@@ -91,6 +91,29 @@ public final class RemoteOriginalCancellationTest {
                 JSONObject actual=first.handle("cancelJob",target(server));assertEquals("unknown",actual.getString("status"));assertEquals(0,first.snapshot().getJSONArray("jobs").length());assertEquals(1,server.original.get());
             }finally{first.close();}
             try(RemoteModule recovered=module(server,false)){JSONObject actual=recovered.handle("cancelJob",target(server));assertEquals(1,server.original.get());assertEquals(0,server.legacy.get());assertTrue(actual.getBoolean("queryOnly"));assertEquals("original-operation",actual.getString("operationId"));}
+        }
+    }
+    private JSONObject target()throws Exception{return new JSONObject().put("jobId","job-original").put("jobOperationId","operation-original").put("serviceBase","http://127.0.0.1:8766");}
+    private JSONObject receipt()throws Exception{return new JSONObject().put("id","job-original").put("operationId","operation-original").put("serviceBase","http://127.0.0.1:8766").put("status","cancelled")
+            .put("originalCancellation",new JSONObject().put("protocol",RemoteOriginalCancellation.PROTOCOL).put("jobId","job-original").put("jobOperationId","operation-original").put("identityMatched",true).put("effectsReversed",false));}
+    @Test public void capabilityRequiresTheExactServerMutationContract()throws Exception {
+        RemoteOriginalCancellation.requireSupport(new JSONObject().put("originalJobCancellation",capability()));
+        for(String field:new String[]{"supported","protocol","endpoint","identityCheck","scope","requiredFields"}){
+            JSONObject missing=capability();missing.remove(field);assertThrows(field,SecurityException.class,()->RemoteOriginalCancellation.requireSupport(new JSONObject().put("originalJobCancellation",missing)));
+        }
+        for(JSONObject bad:new JSONObject[]{capability().put("supported","true"),capability().put("endpoint","/v1/jobs/{jobId}/cancel"),capability().put("requiredFields",new JSONArray()),capability().put("requiredFields",new JSONArray().put("jobOperationId").put("profileId"))})
+            assertThrows(SecurityException.class,()->RemoteOriginalCancellation.requireSupport(new JSONObject().put("originalJobCancellation",bad)));
+    }
+    @Test public void proofMustMatchTheOriginalJobOperationAndOriginWithStrictBooleans()throws Exception {
+        RemoteOriginalCancellation.requireReceipt(target(),receipt());
+        for(String field:new String[]{"id","operationId","serviceBase"}){
+            JSONObject wrong=receipt().put(field,"successor");assertThrows(field,SecurityException.class,()->RemoteOriginalCancellation.requireReceipt(target(),wrong));
+        }
+        for(String field:new String[]{"protocol","jobId","jobOperationId","identityMatched","effectsReversed"}){
+            JSONObject missing=receipt();missing.getJSONObject("originalCancellation").remove(field);assertThrows(field,SecurityException.class,()->RemoteOriginalCancellation.requireReceipt(target(),missing));
+        }
+        for(String field:new String[]{"identityMatched","effectsReversed"}){
+            JSONObject coerced=receipt();coerced.getJSONObject("originalCancellation").put(field,field.equals("identityMatched")?"true":"false");assertThrows(SecurityException.class,()->RemoteOriginalCancellation.requireReceipt(target(),coerced));
         }
     }
 }

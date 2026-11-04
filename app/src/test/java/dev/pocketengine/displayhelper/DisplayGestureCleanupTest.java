@@ -75,18 +75,54 @@ public final class DisplayGestureCleanupTest {
         assertFalse(shell.getSystemService(KeyguardManager.class).isDeviceLocked());assertFalse(shell.getSystemService(KeyguardManager.class).isKeyguardLocked());
         engine=new DisplayEngine(shell,new Handler(Looper.getMainLooper()));original=display();lease=new LeasePolicy("original-session",original.getDisplay().getDisplayId(),SystemClock.uptimeMillis(),600000);
         set(engine,"display",original);set(engine,"lease",lease);set(engine,"width",320);set(engine,"height",480);set(engine,"requiredDisplayFlags",requiredFlags());
+        set(engine,"density",160);set(engine,"geometry",new DisplayGeometry(1,320,480,160,0));set(engine,"geometryReady",true);
+        ((java.util.concurrent.atomic.AtomicLong)get(engine,"geometryGeneration")).set(1);
         ((java.util.concurrent.atomic.AtomicLong)get(engine,"frameGeneration")).set(7);
         input=new FakeInput();set(engine,"inputManager",input);set(engine,"inject",FakeInput.class.getMethod("inject",InputEvent.class,int.class));
         Method setDisplay=InputEvent.class.getDeclaredMethod("setDisplayId",int.class);setDisplay.setAccessible(true);set(engine,"setDisplay",setDisplay);
     }
     private JSONObject request(boolean swipe)throws Exception {
-        JSONObject r=new JSONObject().put("command",swipe?"swipe":"tap").put("sessionId",lease.session()).put("displayId",lease.display()).put("frameGeneration",7);
+        JSONObject r=new JSONObject().put("command",swipe?"swipe":"tap").put("sessionId",lease.session()).put("displayId",lease.display()).put("frameGeneration",7).put("geometryGeneration",1);
         return swipe?r.put("x1",100).put("y1",200).put("x2",800).put("y2",900).put("durationMs",100):r.put("x",400).put("y",600);
     }
     private DisplayEngine.Failure failed(boolean swipe)throws Exception{return assertThrows(DisplayEngine.Failure.class,()->engine.handle(request(swipe)));}
     private void actions(int... actions){assertEquals(actions.length,input.points.size());for(int i=0;i<actions.length;i++)assertEquals(actions[i],input.points.get(i).action);}
     private void unknown(DisplayEngine.Failure failure){assertEquals("action_unknown",failure.code);assertTrue(failure.dispatched);assertTrue(failure.getMessage().contains("勿直接重放"));}
     @After public void close(){Thread.interrupted();if(engine!=null)engine.close();for(VirtualDisplay v:displays)try{v.release();}catch(Exception ignored){}ShadowProcess.setUid(10000);}
+    private void rotate(int rotation)throws Exception {
+        Class<?> type=Class.forName("android.hardware.display.DisplayManagerGlobal");Object global=type.getDeclaredMethod("getInstance").invoke(null);
+        Object info=type.getDeclaredMethod("getDisplayInfo",int.class).invoke(global,lease.display());
+        info.getClass().getField("rotation").setInt(info,rotation);
+        info.getClass().getField("logicalWidth").setInt(info,(rotation&1)==0?320:480);
+        info.getClass().getField("logicalHeight").setInt(info,(rotation&1)==0?480:320);
+        Object shadow=org.robolectric.shadow.api.Shadow.extract(global);Method change=shadow.getClass().getDeclaredMethod("changeDisplay",int.class,info.getClass());change.setAccessible(true);change.invoke(shadow,lease.display(),info);
+        assertEquals(rotation,original.getDisplay().getRotation());
+    }
+    @Test public void rotationAfterDownCancelsOriginalCoordinatesBeforeAnyMove()throws Exception {
+        fixture();input.onDown=()->{try{rotate(1);}catch(Exception failure){throw new IllegalStateException(failure);}};
+        DisplayEngine.Failure failure=failed(true);unknown(failure);actions(MotionEvent.ACTION_DOWN,MotionEvent.ACTION_CANCEL);
+        Point down=input.points.get(0),cancel=input.points.get(1);assertEquals(down.downTime,cancel.downTime);assertEquals(down.x,cancel.x,0f);assertEquals(down.y,cancel.y,0f);
+        assertSame(lease,get(engine,"lease"));assertSame(original,get(engine,"display"));assertNull(get(engine,"activeTouch"));
+        DisplayGeometry geometry=(DisplayGeometry)get(engine,"geometry");assertEquals(480,geometry.width);assertEquals(320,geometry.height);assertEquals(1,geometry.rotation);assertTrue(geometry.generation>1);
+        android.media.ImageReader reader=(android.media.ImageReader)get(engine,"reader");assertEquals(320,reader.getWidth());assertEquals(480,reader.getHeight());
+    }
+    @Test public void halfTurnWithUnchangedDimensionsRejectsOldDown()throws Exception {
+        fixture();rotate(2);DisplayEngine.Failure failure=failed(false);assertEquals("stale_observation",failure.code);assertFalse(failure.dispatched);actions();
+        DisplayGeometry geometry=(DisplayGeometry)get(engine,"geometry");assertEquals(320,geometry.width);assertEquals(480,geometry.height);assertEquals(2,geometry.rotation);assertTrue(geometry.generation>1);
+        assertSame(lease,get(engine,"lease"));assertSame(original,get(engine,"display"));
+    }
+    @Test public void delayedGeometryEventInvalidatesRoundTripEvenWithOriginalFinalSize()throws Exception {
+        fixture();rotate(1);rotate(0);
+        ((DisplayManager.DisplayListener)get(engine,"geometryListener")).onDisplayChanged(lease.display());
+        DisplayEngine.Failure failure=failed(false);assertEquals("stale_observation",failure.code);assertFalse(failure.dispatched);actions();
+        DisplayGeometry geometry=(DisplayGeometry)get(engine,"geometry");assertEquals(0,geometry.rotation);assertTrue(geometry.generation>1);
+        assertTrue(((java.util.concurrent.atomic.AtomicLong)get(engine,"frameGeneration")).get()>7);
+    }
+    @Test public void geometryChangeCannotClearUnconfirmedOriginalDownOrReplayIt()throws Exception {
+        fixture();input.rejectDown=true;unknown(failed(false));assertNotNull(get(engine,"activeTouch"));
+        rotate(1);DisplayEngine.Failure failure=failed(false);assertEquals("geometry_unavailable",failure.code);assertFalse(failure.dispatched);
+        actions(MotionEvent.ACTION_DOWN);assertNotNull(get(engine,"activeTouch"));assertSame(lease,get(engine,"lease"));assertFalse((Boolean)get(engine,"geometryReady"));
+    }
     @Test public void moveToPrimaryPolicyRefusesInputDespiteEveryRequiredFocusFlag()throws Exception {
         fixture();assertThrows(NoSuchFieldException.class,()->Display.class.getDeclaredField("FLAG_DESTROY_CONTENT_ON_REMOVAL"));assertEquals(requiredFlags(),original.getDisplay().getFlags());
         setRemoveMode(original.getDisplay(),removeMode("REMOVE_MODE_MOVE_CONTENT_TO_PRIMARY"));DisplayEngine.Failure failure=failed(false);assertEquals("display_lost",failure.code);assertFalse(failure.dispatched);actions();assertNull(get(engine,"activeTouch"));

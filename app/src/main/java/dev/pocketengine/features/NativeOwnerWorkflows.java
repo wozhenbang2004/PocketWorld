@@ -39,6 +39,7 @@ public final class NativeOwnerWorkflows {
     private JSONObject selectedModel;
     private long accountSnapshotRevision;
     private volatile boolean accountInferenceInstalled;
+    public dev.pocketengine.runtime.routes.NativePhoneRouteReferenceHost phoneRouteReferencesForOwner(){return new dev.pocketengine.runtime.routes.NativePhoneRouteReferenceHost(tasks,sources);}
     /** Install only the host-owned singleton. The model sees public references, never credentials. */
     public void installAccountInference(){
         dev.pocketengine.runtime.ModelGateway.installAccountInferencePort(new dev.pocketengine.runtime.ModelGateway.AccountInferencePort(){
@@ -215,6 +216,15 @@ public final class NativeOwnerWorkflows {
         control.check();JSONObject scope=ownerScope();host.synchronizeMemory(scope);
         switch(command){
             case "snapshot":case "listProcedures":return learningSnapshot();
+            case "inspectTaskEpisode":case "retainTaskEpisode":{
+                boolean retain="retainTaskEpisode".equals(command);Set<String> fields=retain?Set.of("taskId","runId","epoch","expectedEpisodeDigest"):Set.of("taskId","runId","epoch");
+                if(payload.length()!=fields.size())throw new SecurityException("任务经过只接受原执行身份与所审阅指纹");for(var keys=payload.keys();keys.hasNext();)if(!fields.contains(keys.next()))throw new SecurityException("不能用界面或模型正文替代原任务经过");
+                String task=payload.getString("taskId"),run=payload.getString("runId");int epoch=Math.toIntExact(positiveVersion(payload,"epoch"));control.check();
+                if(!retain){JSONObject original=tasks.taskEpisodeForOwner(task,run,epoch);return original.put("title","原已结束任务经过（结果分类独立，仅待审候选）").put("text",dev.pocketengine.features.memory.TaskEpisodeEvidence.text(original.getJSONObject("evidence"))).put("retained",false).put("formalMemorySaved",false);}
+                JSONObject retained=tasks.retainTaskEpisodeForOwner(task,run,epoch,payload.getString("expectedEpisodeDigest"));SourceRef ref=SourceRef.fromJson(retained.getJSONObject("sourceRef"));control.check();
+                if(memory().isSourceForgotten(scope,ref))return retained.put("status","source_forgotten").put("learningAllowed",false).put("formalMemorySaved",false);
+                KnowledgeLearningWorkflow.SourceDocument document=learningSource(ref);return retained.put("title",document.title).put("text",document.text).put("status","current").put("learningAllowed",true).put("formalMemorySaved",false);
+            }
             case "prepareLearningSource":{
                 String kind=payload.getString("kind"),id=payload.getString("sourceId");
                 sources.prepareSourceHead(kind,id,control);
@@ -232,6 +242,7 @@ public final class NativeOwnerWorkflows {
             case "importExperience":return learning().importExperience(scope,payload.getString("recordId"),positiveVersion(payload,"expectedRevision"),payload.getJSONObject("draft"),payload.getJSONObject("options"));
             case "approveExperience":{
                 long revision=positiveVersion(payload,"revision");if(revision>Integer.MAX_VALUE)throw new IllegalArgumentException("技能版本无效");
+                if(payload.has("expectedExecutionGeneration"))return skills().approveExperienceReviewed(scope,payload.getString("id"),(int)revision,payload.getString("digest"),nativeOffset(payload,"expectedExecutionGeneration"));
                 return learning().approveExperience(scope,payload.getString("id"),(int)revision,payload.getString("digest"));
             }
             case "appQualityApplications":return tasks.learnedMethodApplications(payload.getString("recordId"),positiveVersion(payload,"revision"),payload.optString("cursor"),20);
@@ -325,7 +336,7 @@ public final class NativeOwnerWorkflows {
             case "cancelMcpTask":return plugins().reconcileMcpTaskForOwner(tasks,payload.getString("taskId"),payload.getString("operationId"),true,observation,payload.getString("_operationId"));
             case "listMcpPrompts":return plugins().listMcpPrompts(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),observation,payload.getString("_operationId"));
             case "getMcpPrompt":return plugins().getMcpPrompt(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),payload.getString("name"),payload.getString("descriptorDigest"),payload.getJSONObject("arguments"),observation,payload.getString("_operationId"));
-            case "setEnabledReviewed":return plugins().setEnabledReviewed(payload.getString("id"),payload.getString("expectedInstallationId"),payload.getBoolean("enabled"));
+            case "setEnabledReviewed":return plugins().setEnabledReviewed(payload.getString("id"),payload.getString("expectedInstallationId"),mcpStateRevision(payload),payload.getString("expectedGrantsDigest"),payload.getBoolean("enabled"));
             case "setToolGrantReviewed":return plugins().setToolGrantReviewed(payload.getString("id"),payload.getString("expectedInstallationId"),payload.getString("expectedGrantsDigest"),payload.getString("tool"),payload.getBoolean("granted"));
             case "discoverMcp":{
                 // No credential-bearing JSON enters the view-model or generic feature dispatcher.

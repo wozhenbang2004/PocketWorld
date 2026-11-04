@@ -39,4 +39,34 @@ public class TeamCoordinatorTest {
             release.countDown();Thread.sleep(80);JSONObject saved=c.get(id);assertEquals("cancelled",saved.getString("status"));assertFalse(saved.toString().contains("late result must not commit"));assertEquals(2,calls.get());
         }finally{release.countDown();}
     }
+    @Test public void capturedCancellationCannotCancelAResumedGeneration()throws Exception {
+        File state=new File(Files.createTempDirectory("team-original-cancel").toFile(),"runs.json");CountDownLatch entered=new CountDownLatch(1);
+        try(TeamCoordinator c=new TeamCoordinator(state,(config,messages,control)->{entered.countDown();while(true){control.check();Thread.sleep(5);}},event->{})){
+            String id=c.start(team(),"retain original generation",1,config()).getString("id");assertTrue(entered.await(1,TimeUnit.SECONDS));
+            var old=c.originalCancellation(id);c.pause(id,"");JSONObject resumed=c.resume(id,"",config(),null,null);
+            assertFalse(old.cancel());assertFalse("cancelled".equals(c.get(id).getString("status")));assertEquals(resumed.getInt("generation"),c.get(id).getInt("generation"));
+            assertTrue(c.originalCancellation(id).cancel());assertEquals("cancelled",c.get(id).getString("status"));
+        }
+    }
+    @Test public void ordinaryResumeNeverRefillsAnyBudget()throws Exception {
+        File state=new File(Files.createTempDirectory("team-preserve-budget").toFile(),"runs.json");
+        try(TeamCoordinator c=new TeamCoordinator(state,(config,messages,control)->new JSONObject().put("content","original result"),event->{})){
+            String id=c.start(team(),"preserve spent calls",1,config()).getString("id");JSONObject completed=waitDone(c,id);assertTrue(completed.getInt("callsUsed")>0);
+            String member=completed.getJSONArray("members").getJSONObject(0).getString("id");c.feedback(id,member,"revise within the original remaining allowance");
+            JSONObject resumed=c.resume(id,member,config(),null,null);
+            for(String key:new String[]{"callLimit","toolCallLimit","externalTurnLimit"})assertEquals(key,completed.getInt(key),resumed.getInt(key));
+            assertTrue(resumed.getInt("callsUsed")>=completed.getInt("callsUsed"));
+        }
+    }
+    @Test public void invalidAssignmentRevisionDoesNotAppendFeedbackOrPauseMembers()throws Exception {
+        File state=new File(Files.createTempDirectory("team-invalid-revision").toFile(),"runs.json");
+        try(TeamCoordinator c=new TeamCoordinator(state,(config,messages,control)->new JSONObject().put("content","original result"),event->{})){
+            String id=c.start(team(),"validate first",1,config()).getString("id");JSONObject before=waitDone(c,id),member=before.getJSONArray("members").getJSONObject(0);
+            JSONObject input=new JSONObject().put("runId",id).put("expectedRevision",before.getLong("revision")).put("expectedGeneration",before.getInt("generation")).put("memberId",member.getString("id")).put("expectedMemberGeneration",member.getInt("generation")).put("text","must not be saved for an invalid assignment");
+            assertThrows(SecurityException.class,()->c.reviseAssignment(input,()->{throw new SecurityException("original SQL frozen version mismatch");}));
+            assertEquals(before.toString(),c.get(id).toString());
+            input.put("text"," ");AtomicInteger commits=new AtomicInteger();assertThrows(IllegalArgumentException.class,()->c.reviseAssignment(input,()->{commits.incrementAndGet();return new JSONObject();}));assertEquals(0,commits.get());
+        }
+    }
+
 }

@@ -120,14 +120,15 @@ final class McpData {
     private static JSONObject result(JSONObject source,String token,boolean viewLimits)throws Exception {
         if(source.has("isError")&&!(source.get("isError") instanceof Boolean))throw new IllegalArgumentException("MCP isError格式无效");
         JSONArray content=source.getJSONArray("content");if(viewLimits&&content.length()>64)throw new IllegalArgumentException("MCP结果块过多");
-        JSONArray text=new JSONArray(),omitted=new JSONArray();int characters=0;OutputTextProjection textProjection=new OutputTextProjection();
+        JSONArray text=new JSONArray(),omitted=new JSONArray();int characters=0;
         for(int i=0;i<content.length();i++){
             JSONObject block=content.getJSONObject(i);String type=block.getString("type");
             if(type.equals("text")){
                 String value=block.getString("text");characters+=value.length();if(viewLimits&&characters>32768)throw new IllegalArgumentException("MCP文字结果超过32Ki字符");
-                text.put(new JSONObject().put("type","text").put("text",textProjection.project(value,token)));
+                text.put(new JSONObject().put("type","text").put("text",value));
             }else omitted.put(new JSONObject().put("index",i).put("type",redactOutputText(type,token)).put("reason","当前仅接收文本；未读取或执行二进制、资源或链接内容"));
         }
+        projectTextBlocks(text,token);
         JSONObject result=new JSONObject().put("isError",source.optBoolean("isError",false)).put("content",text)
                 .put("omittedContent",omitted).put("untrusted",true).put("instructionsAreData",true).put("outputProjection",outputProjection());
         if(source.has("structuredContent")){
@@ -180,33 +181,54 @@ final class McpData {
      * Inputs are already bounded by the matched transport; incomplete private blocks consume
      * the remaining output, rather than returning their undecidable tail as public text. */
     private static String redactOutputText(String value,String token){
-        return new OutputTextProjection().project(value,token);
+        return new OutputTextProjection(value,token).project(0,value.length());
     }
-    /** A result's ordered text blocks share only this in-call unfinished-PEM state. It never
-     * crosses RPC results or treats unrelated structured fields as a shared text stream. */
+    /** Identify spans before clipping/capturing, then map them back to the original blocks.
+     * A marker, credential or PEM footer may be split at any position by the server. */
+    private static void projectTextBlocks(JSONArray blocks,String token)throws Exception {
+        StringBuilder joined=new StringBuilder();
+        for(int i=0;i<blocks.length();i++)joined.append(blocks.getJSONObject(i).getString("text"));
+        OutputTextProjection projection=new OutputTextProjection(joined.toString(),token);int offset=0;
+        for(int i=0;i<blocks.length();i++){
+            // A block beginning with Bearer/Basic is still a boundary even when the previous
+            // block ends in a word. Its value may continue through subsequent blocks.
+            projection.authAtBoundary(offset);offset+=blocks.getJSONObject(i).getString("text").length();
+        }
+        offset=0;
+        for(int i=0;i<blocks.length();i++){
+            JSONObject block=blocks.getJSONObject(i);int end=offset+block.getString("text").length();
+            block.put("text",projection.project(offset,end));offset=end;
+        }
+    }
+    /** One already bounded result only. Unrelated structured fields and later RPC results
+     * are projected separately; the mask is never a persistent secret-detection state. */
     private static final class OutputTextProjection {
-        private java.util.regex.Pattern privateEnd;
-        String project(String value,String token){
+        private final String value;
+        private final java.util.BitSet hidden;
+        OutputTextProjection(String value,String token){
+            this.value=value;hidden=new java.util.BitSet(value.length());
             // Recognize forms before replacing the bound literal: a bound value such as
             // "PRIVATE" or "Bearer" must not destroy a marker and expose another credential.
-            StringBuilder pemSafe=new StringBuilder();int offset=0;
-            if(privateEnd!=null){
-                java.util.regex.Matcher end=privateEnd.matcher(value);
-                if(!end.find())return value.isEmpty()?"":redact("[凭据已隐藏]",token);
-                pemSafe.append("[凭据已隐藏]");offset=end.end();privateEnd=null;
-            }
-            java.util.regex.Matcher begin=OUTPUT_PRIVATE_PEM.matcher(value);
+            int offset=0;java.util.regex.Matcher begin=OUTPUT_PRIVATE_PEM.matcher(value);
             while(begin.find(offset)){
-                pemSafe.append(value,offset,begin.start()).append("[凭据已隐藏]");
                 java.util.regex.Pattern closing=java.util.regex.Pattern.compile("-----END[ \\t]+"+java.util.regex.Pattern.quote(begin.group(1))+"-----",java.util.regex.Pattern.CASE_INSENSITIVE);
                 java.util.regex.Matcher end=closing.matcher(value);
-                if(!end.find(begin.end())){privateEnd=closing;offset=value.length();break;}
-                offset=end.end();
+                offset=end.find(begin.end())?end.end():value.length();hidden.set(begin.start(),offset);
             }
-            pemSafe.append(value,offset,value.length());
-            java.util.regex.Matcher auth=OUTPUT_AUTH.matcher(pemSafe);StringBuffer safe=new StringBuffer();
-            while(auth.find())auth.appendReplacement(safe,java.util.regex.Matcher.quoteReplacement(auth.group(1)+" [凭据已隐藏]"));
-            auth.appendTail(safe);return redact(safe.toString(),token);
+            java.util.regex.Matcher auth=OUTPUT_AUTH.matcher(value);
+            while(auth.find())hidden.set(auth.start(2),auth.end(2));
+            if(!token.isEmpty())for(int at=value.indexOf(token);at>=0;at=value.indexOf(token,at+1))hidden.set(at,at+token.length());
+        }
+        void authAtBoundary(int offset){
+            java.util.regex.Matcher auth=OUTPUT_AUTH.matcher(value).region(offset,value.length());
+            if(auth.lookingAt())hidden.set(auth.start(2),auth.end(2));
+        }
+        String project(int start,int end){
+            StringBuilder safe=new StringBuilder();int offset=start;
+            for(int secret=hidden.nextSetBit(offset);secret>=0&&secret<end;secret=hidden.nextSetBit(offset)){
+                safe.append(value,offset,secret).append("[凭据已隐藏]");offset=Math.min(end,hidden.nextClearBit(secret));
+            }
+            return safe.append(value,offset,end).toString();
         }
     }
     static boolean containsSecret(Object value,String token,int depth)throws Exception {

@@ -109,6 +109,6 @@ public final class TaskStoreProjectHost implements ProjectDevelopment.HostPort {
         if(ProjectGitImport.INTENT.equals(link.optString("intent"))){tasks.recordOwnerGitImportBackendForHost(new JSONObject(backend.toString()));return;}
         JSONObject binding=new JSONObject();for(String key:new String[]{"taskId","runId","operationId","coordinatorEpoch"})binding.put(key,link.get(key));
         JSONObject row=tasks.projectOperationForHost(binding),args=row.getJSONObject("arguments"),plan=ProjectBuildPlan.verified(args.getJSONObject("plan"));
-        JSONObject exact=ProjectDevelopment.exact(plan,ProjectBuildPlan.step(plan,args.getString("stepId")));if(java.util.Set.of("freezeProjectPackage","collectProjectOutput").contains(exact.getString("command")))throw new SecurityException("文件成果回执只由原Local/catalog生产，不采纳外部终端回调");tasks.recordProjectOperation(binding,exact,new JSONObject(backend.toString()));tasks.finishOwnerGitFromReceipt(binding);
+        JSONObject exact=ProjectDevelopment.exact(plan,ProjectBuildPlan.step(plan,args.getString("stepId")));if(java.util.Set.of("freezeProjectPackage","collectProjectOutput").contains(exact.getString("command")))throw new SecurityException("文件成果回执只由原Local/catalog生产，不采纳外部终端回调");tasks.recordProjectOperation(binding,exact,new JSONObject(backend.toString()));tasks.finishOwnerGitFromReceipt(binding);tasks.finishOwnerLocalTerminalFromReceipt(binding);
     }
 }

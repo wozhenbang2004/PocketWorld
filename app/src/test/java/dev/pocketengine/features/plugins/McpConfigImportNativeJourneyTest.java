@@ -103,7 +103,7 @@ public final class McpConfigImportNativeJourneyTest {
     @Test public void installationRevisionChangesInvalidateNativeReviewWithoutChangingOtherSourceState()throws Exception {
         try(Journey j=new Journey()){
             JSONObject installed=installEcho(j.plugins);j.write(network("https://fixture.invalid/mcp"));McpConfigImportAdapter.Preview review=j.preview();JSONObject input=j.publicInput(review,"existing");assertEquals(installed.getString("installationId"),input.getString("expectedInstallationId"));assertEquals(installed.getLong("stateRevision"),input.getLong("expectedStateRevision"));
-            j.plugins.handle("enable",new JSONObject().put("id","existing").put("enabled",true));Map<String,String> changed=files(new File(j.android.getFilesDir(),"plugins"));
+            dev.pocketengine.features.plugins.PluginOwnerTestReview.enableCurrent(j.plugins,"existing",true);Map<String,String> changed=files(new File(j.android.getFilesDir(),"plugins"));
             assertEquals("installation_changed_since_preview",assertThrows(McpConfigImportAdapter.Rejected.class,()->j.publicInput(review,"existing")).code);assertEquals(changed,files(new File(j.android.getFilesDir(),"plugins")));assertEquals(1,j.opened.get());assertEquals(1,j.closed.get());assertEquals(0,j.plugins.toolRegistry().length());
         }
     }
@@ -127,7 +127,7 @@ public final class McpConfigImportNativeJourneyTest {
     @Test public void delayedDiscoveryCannotUseCapturedStateAfterNativeReviewBecomesStale()throws Exception {
         try(Journey j=new Journey();McpFixture server=new McpFixture()){
             installEcho(j.plugins);j.write(network(server.endpoint()));McpConfigImportAdapter.Preview review=j.preview();JSONObject input=j.publicInput(review,"existing");
-            j.plugins.handle("enable",new JSONObject().put("id","existing").put("enabled",true));Map<String,String> current=files(new File(j.android.getFilesDir(),"plugins"));
+            dev.pocketengine.features.plugins.PluginOwnerTestReview.enableCurrent(j.plugins,"existing",true);Map<String,String> current=files(new File(j.android.getFilesDir(),"plugins"));
             IllegalStateException rejected=assertThrows(IllegalStateException.class,()->j.plugins.handle("discoverMcp",input));
             assertEquals("插件安装或状态已变化，请刷新后重新审阅MCP配置",rejected.getMessage());assertEquals(0,server.received.size());assertEquals(current,files(new File(j.android.getFilesDir(),"plugins")));
         }

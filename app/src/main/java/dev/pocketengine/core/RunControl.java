@@ -6,7 +6,23 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /** One run's cancellation and pause authority; never reused by a later run. */
 public final class RunControl {
+    private final boolean recoveryOnly;
+    public RunControl(){this(false);}
+    private RunControl(boolean recoveryOnly){this.recoveryOnly=recoveryOnly;}
+    /** Native identity for an already-recorded operation only. This is never a grant or a
+     * new execution admission; callers retain the original source/read/cancel authority. */
+    public static RunControl forOriginalRecovery(String task,String run,int epoch){
+        if(task==null||task.isEmpty()||run==null||run.isEmpty()||epoch<1)throw new IllegalArgumentException("Original recovery identity required");
+        RunControl original=new RunControl(true);original.boundTask=task;original.hostRun=new HostRun(run,epoch);return original;
+    }
+    public boolean recoveryOnly(){return recoveryOnly;}
+    public void requireExecution(){if(recoveryOnly)throw new SecurityException("原操作核对控制不能升级为新执行或重放");}
     public interface AuthorityCheck {void check()throws Exception;}
+    /** Native Application hook into its one TaskStore. It only narrows existing run authority. */
+    public interface HostAdmission {AuthorityCheck bind(RunControl original,String task,String run,int epoch)throws Exception;}
+    private static volatile HostAdmission hostAdmission;
+    public static void installHostAdmission(HostAdmission original){hostAdmission=java.util.Objects.requireNonNull(original);}
+    private volatile AuthorityCheck executionAdmission;
     /** Native temporary condition, distinct from revoked authority and owner cancellation. */
     public static final class ConditionWaitException extends InterruptedException {
         private final RunControl owner;
@@ -42,14 +58,21 @@ public final class RunControl {
     public void setAuthorityCheck(AuthorityCheck check){authorityCheck=java.util.Objects.requireNonNull(check);}
     /** Native invocation scope adds live authority without replacing the original source's check. */
     public AutoCloseable retainAuthorityCheck(AuthorityCheck check){AuthorityCheck retained=java.util.Objects.requireNonNull(check);retainedAuthorityChecks.add(retained);return ()->retainedAuthorityChecks.remove(retained);}
-    public synchronized void bindTask(String id){
+    public void bindTask(String id){
+        requireExecution();
         if(id==null||id.isEmpty())throw new IllegalArgumentException("Task identity required");
-        if(boundTask!=null&&!boundTask.equals(id))throw new SecurityException("Control already belongs to another task");boundTask=id;
+        synchronized(this){if(boundTask!=null){if(!boundTask.equals(id))throw new SecurityException("Control already belongs to another task");return;}}
+        AuthorityCheck admitted=admit(id,"",0);
+        synchronized(this){if(boundTask!=null&&!boundTask.equals(id))throw new SecurityException("Control already belongs to another task");boundTask=id;if(executionAdmission==null)executionAdmission=admitted;}
     }
-    public synchronized void bindHostRun(String id,String runId,int epoch){
-        bindTask(id);if(runId==null||runId.isEmpty()||epoch<1)throw new IllegalArgumentException("Run identity required");
-        if(hostRun!=null&&(!hostRun.runId.equals(runId)||hostRun.epoch!=epoch))throw new SecurityException("Control cannot be reused by a new run");hostRun=new HostRun(runId,epoch);
+    public void bindHostRun(String id,String runId,int epoch){
+        requireExecution();
+        if(runId==null||runId.isEmpty()||epoch<1)throw new IllegalArgumentException("Run identity required");bindTask(id);
+        synchronized(this){if(hostRun!=null&&(!hostRun.runId.equals(runId)||hostRun.epoch!=epoch))throw new SecurityException("Control cannot be reused by a new run");}
+        AuthorityCheck admitted=admit(id,runId,epoch);
+        synchronized(this){if(hostRun!=null&&(!hostRun.runId.equals(runId)||hostRun.epoch!=epoch))throw new SecurityException("Control cannot be reused by a new run");hostRun=new HostRun(runId,epoch);if(admitted!=null)executionAdmission=admitted;}
     }
+    private AuthorityCheck admit(String id,String run,int epoch){HostAdmission gate=hostAdmission;if(gate==null)return null;try{return gate.bind(this,id,run,epoch);}catch(Exception unavailable){throw new SecurityException("原任务被本机总停用门禁拒绝",unavailable);}}
     /** Read-only native identity. Holding this value never replaces this original control object. */
     public record HostRunIdentity(String taskId,String runId,int epoch){}
     public HostRunIdentity hostRunIdentity(){HostRun run=hostRun;return run==null?null:new HostRunIdentity(boundTask,run.runId,run.epoch);}
@@ -117,6 +140,8 @@ public final class RunControl {
     }
     public void check() throws InterruptedException {
         if (cancelled.get() || Thread.currentThread().isInterrupted()) throw new InterruptedException("Run stopped");
+        AuthorityCheck admission=executionAdmission;
+        if(admission!=null)try{admission.check();}catch(Exception disabled){cancel();InterruptedException stopped=new InterruptedException("PocketWorld 已停用或原准入已撤销");stopped.initCause(disabled);throw stopped;}
         AuthorityCheck authority=authorityCheck;ConditionWaitException waiting=null;
         if(authority!=null)try{authority.check();}catch(ConditionWaitException temporary){if(temporary.owner!=this){cancel();throw new InterruptedException("运行条件不属于原控制器");}waiting=temporary;}catch(Exception revoked){cancel();InterruptedException stopped=new InterruptedException("任务来源授权已失效，已停止后续派发");stopped.initCause(revoked);throw stopped;}
         for(AuthorityCheck retained:retainedAuthorityChecks)try{retained.check();}catch(ConditionWaitException temporary){if(temporary.owner!=this){cancel();throw new InterruptedException("运行条件不属于原控制器");}if(waiting==null||temporary.validUntil<waiting.validUntil)waiting=temporary;}catch(Exception revoked){cancel();InterruptedException stopped=new InterruptedException("原任务调用授权已失效，已停止后续派发");stopped.initCause(revoked);throw stopped;}
@@ -138,6 +163,7 @@ public final class RunControl {
     }
     /** A paused entry additionally requires the native owner permit checked by its caller. */
     public void dispatchAtPauseState(long expectedPauseRevision,boolean ownerEntry,DispatchEntry entry) throws Exception {
+        requireExecution();
         java.util.Objects.requireNonNull(entry);
         // Authority may acquire TaskStore locks or invoke pause. Never call it while
         // holding this monitor: cancellation also signals the monitor after callbacks.
@@ -145,6 +171,9 @@ public final class RunControl {
         synchronized(monitor) {
             if(cancelled.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Run stopped");
             if(paused!=ownerEntry||pauseRevision.get()!=expectedPauseRevision)throw new SecurityException("执行暂停状态已变化，旧派发决定失效");
+            // Host admission is a lock-free immutable policy projection. Recheck after
+            // re-entrant authority callbacks, immediately before the native effect.
+            AuthorityCheck admitted=executionAdmission;if(admitted!=null)admitted.check();
             entry.enter();
         }
     }

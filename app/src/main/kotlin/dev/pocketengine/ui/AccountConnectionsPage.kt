@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import dev.pocketengine.features.proxy.accounts.ChatGptRecovery
 import dev.pocketengine.runtime.models.ModelConnectionService
+import dev.pocketengine.runtime.models.ModelSelectionCoordinator
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -236,30 +237,46 @@ internal fun AccountConnectionsPage(
     var modelQuery by remember(expandedId) { mutableStateOf("") }
     var modelOptions by remember { mutableStateOf<Pair<JSONObject, JSONObject>?>(null) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    var modelPreferences by remember(modelService) { mutableStateOf(JSONObject()) }
+    var modelPreferences by remember(modelService, expandedId) { mutableStateOf(JSONObject()) }
+    var preferenceRevision by remember(modelService, expandedId) { mutableLongStateOf(-1L) }
     var preferenceBusy by remember(modelService) { mutableStateOf(false) }
     var preferenceError by remember(modelService) { mutableStateOf<String?>(null) }
     val preferencesAlive = remember(modelService) { java.util.concurrent.atomic.AtomicBoolean(true) }
     val preferenceGeneration = remember(modelService) { java.util.concurrent.atomic.AtomicLong() }
     val preferencesMain = remember { Handler(Looper.getMainLooper()) }
-    DisposableEffect(modelService) { onDispose { preferencesAlive.set(false) } }
-    fun updateModelPreferences(accountId: String, action: () -> JSONObject) {
+    val selection = remember(modelService) { modelService?.modelSelection() }
+    val pendingWrite = remember(modelService) { java.util.concurrent.atomic.AtomicReference<ModelSelectionCoordinator.Mutation?>(null) }
+    var shared by remember(selection) { mutableStateOf(selection?.status()) }
+    DisposableEffect(modelService) {
+        preferencesAlive.set(true)
+        val subscription = selection?.observe { preferencesMain.post { if (preferencesAlive.get()) shared = selection.status() } }
+        shared = selection?.status()
+        onDispose { preferencesAlive.set(false); pendingWrite.getAndSet(null)?.close(); subscription?.close() }
+    }
+    fun updateModelPreferences(accountId: String, mutation: Boolean = false, action: () -> JSONObject) {
         val worker = modelWorker ?: return
         if (!preferencesAlive.get()) return
+        val reservation = if (mutation) try { selection?.beginMutation(preferenceRevision) ?: return } catch (failed: IllegalStateException) { preferenceError = failed.message; shared = selection?.status(); return } else null
+        if (reservation != null) pendingWrite.set(reservation)
         val generation = preferenceGeneration.incrementAndGet()
-        preferenceBusy = true; preferenceError = null
+        preferenceBusy = true; if (mutation) preferenceError = null
         try { worker(Runnable {
-            val result = runCatching(action)
+            val writeFailure = if (reservation != null) runCatching { reservation.run { action() } }.exceptionOrNull() else null
+            if (reservation != null) pendingWrite.compareAndSet(reservation, null)
+            val result = runCatching { requireNotNull(selection).readStable { if (mutation) requireNotNull(modelService).accountModelPreferences(accountId) else action() } }
             preferencesMain.post { if (preferencesAlive.get() && preferenceGeneration.get() == generation) {
-                preferenceBusy = false
-                if (expandedId == accountId) result.fold({ modelPreferences = it }, { preferenceError = "模型收藏记录暂不可保存，原账号选择和授权保持不变。" })
+                preferenceBusy = false; shared = selection?.status()
+                if (expandedId == accountId) result.fold({
+                    if (shared?.pending() != true && shared?.revision() == it.revision()) { modelPreferences = it.value(); preferenceRevision = it.revision() }
+                }, { preferenceRevision = -1L; preferenceError = "模型收藏记录暂不可读取，原账号选择和授权保持不变。" })
+                if (writeFailure != null) preferenceError = writeFailure.message ?: "模型收藏记录暂不可保存，原账号选择和授权保持不变。"
             } }
-        }) } catch (_: Exception) { preferenceBusy = false; preferenceError = "本机工作线程暂不可用，请重新打开账号页。" }
+        }) } catch (_: Exception) { reservation?.close(); if (reservation != null) pendingWrite.compareAndSet(reservation, null); preferenceBusy = false; preferenceError = "本机工作线程暂不可用，请重新打开账号页。" }
     }
-    LaunchedEffect(modelService, expandedId, responses["models"]) {
-        modelPreferences = JSONObject()
+    LaunchedEffect(modelService, expandedId, responses["models"], shared) {
         val id = expandedId; val service = modelService
-        if (id != null && service != null) updateModelPreferences(id) { service.accountModelPreferences(id) }
+        if (id == null) modelPreferences = JSONObject()
+        if (id != null && service != null && shared?.pending() != true) updateModelPreferences(id) { service.accountModelPreferences(id) }
     }
     val rows = accountConnectionsRows(snapshot)
     val login = snapshot.optJSONObject("login")
@@ -267,7 +284,7 @@ internal fun AccountConnectionsPage(
     val closed = snapshot.optBoolean("closed")
     val unresolved = requests.values.any { it.requestId !in completedRequests && accountConnectionsEnvelope(it, responses[it.command]) == null }
     val cancelBusy = "cancelLogin" in pendingCommands || requests["cancelLogin"]?.let { it.requestId !in completedRequests && accountConnectionsEnvelope(it, responses[it.command]) == null } == true
-    val busy = loading || pendingCommands.isNotEmpty() || unresolved
+    val busy = loading || pendingCommands.isNotEmpty() || unresolved || shared?.pending() == true
     val hasSnapshot = snapshot.optJSONArray("accounts") != null
     val submit: (String, JSONObject) -> Unit = { command, payload ->
         try {
@@ -436,9 +453,9 @@ internal fun AccountConnectionsPage(
                                         if (ref == null) AccountConnectionsCaption("缺少有效原生引用，不能选择。") }
                                     if (modelService != null && modelWorker != null) TextButton(onClick = {
                                         accountConnectionsModelReference(modelRequest, modelEnvelope, snapshot, modelId, System.currentTimeMillis())?.let { current ->
-                                            updateModelPreferences(id) { modelService.favoriteAccountModel(current.getString("accountId"), current.getString("modelId"), preference?.optBoolean("favorite") != true) }
+                                            updateModelPreferences(id, mutation = true) { modelService.favoriteAccountModel(current.getString("accountId"), current.getString("modelId"), preference?.optBoolean("favorite") != true) }
                                         }
-                                    }, enabled = ref != null && !busy && !closed && !preferenceBusy && modelPreferences.optBoolean("preferencesAvailable", true)) { Text(if (preference?.optBoolean("favorite") == true) "已收藏" else "收藏") }
+                                    }, enabled = ref != null && !busy && !closed && !preferenceBusy && preferenceRevision >= (shared?.revision() ?: 0L) && modelPreferences.optBoolean("preferencesAvailable", true)) { Text(if (preference?.optBoolean("favorite") == true) "已收藏" else "收藏") }
                                     TextButton(onClick = {
                                         accountConnectionsModelReference(modelRequest, modelEnvelope, snapshot, modelId, System.currentTimeMillis())?.let {
                                             modelOptions = JSONObject(model.toString()) to it

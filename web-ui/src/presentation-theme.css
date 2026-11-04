@@ -1,0 +1,99 @@
+/* Existing UiAppearance/PocketWorldTheme dark palette, applied through the
+ * adopted BoardUI .dark and product/source tokens. No filters touch media. */
+:root.dark {
+  color-scheme: dark;
+  --pw-canvas: #121212;
+  --pw-surface: #1b1b1b;
+  --pw-inset: #2b2b2b;
+  --pw-selected: #353535;
+  --pw-edge: #4b4b4b;
+  --pw-edge-hover: #777;
+  --pw-ink: #e8e8e8;
+  --pw-copy: #bdbdbd;
+  --pw-muted: #b7b7b7;
+  --pw-disabled: #929292;
+  --pw-strong: #ededed;
+  --pw-focus: #ededed;
+  --pw-on-strong: #181818;
+  --background: var(--pw-surface);
+  --foreground: var(--pw-ink);
+  --accent: var(--pw-selected);
+  --accent-foreground: var(--pw-ink);
+  --primary: var(--pw-strong);
+  --primary-foreground: var(--pw-on-strong);
+  --border: var(--pw-edge);
+  --input: var(--pw-edge);
+  background: var(--pw-canvas);
+  color: var(--pw-ink);
+}
+
+/* The workspace retains a local light token block; use the same native palette
+ * here so its children and portaled settings agree with the root preference. */
+:root.dark .pw-redesign {
+  --pw-canvas: #121212;
+  --pw-edge: #4b4b4b;
+  --pw-ink: #e8e8e8;
+  --pw-strong: #ededed;
+}
+:root.dark :is(.pw-app, .pw-secondary) { background: var(--pw-canvas); color: var(--pw-ink); }
+:root.dark .pw-library { color: var(--pw-ink); color-scheme: dark; }
+:root.dark .pw-workspace[data-ovio-world] { --ovio-track: var(--pw-surface); }
+
+/* Original product surfaces with fixed light fills. Geometry, typography,
+ * source component animation and their media contents are unchanged. */
+:root.dark :is(.pw-app-header, .pw-secondary-header, .pw-settings-section,
+  .pw-settings-dialog, .pw-drawer, .pw-work-drawer, .pw-task-drawer,
+  .pw-task-header, .pw-task-footer, .pw-file-actions) {
+  background: var(--pw-surface);
+  color: var(--pw-ink);
+  border-color: var(--pw-edge);
+}
+:root.dark .pw-redesign .pw-app-header { background: transparent; }
+:root.dark .pw-redesign :is(.pw-chat-workspace, .pw-workspace .pw-page) {
+  background: var(--pw-surface);
+  border-color: var(--pw-edge);
+}
+:root.dark .pw-redesign .pw-user-text { background: var(--pw-inset); color: var(--pw-ink); }
+:root.dark .pw-redesign .pw-active-bar { background: var(--pw-inset); }
+:root.dark .pw-redesign .pw-composer-region .pw-composer-host .afa-composer > .afa-card {
+  background: var(--pw-surface);
+  color: var(--pw-ink);
+  border-color: var(--pw-edge);
+}
+:root.dark :is(.pw-error, .pw-banner, .pw-banner-error, .pw-linked-task.button-press-motion,
+  .pw-priority-decisions .ui-dic__card, .pw-project-thumbnail,
+  .pw-work-drawer .pw-work-search > button, .pw-task-review .pw-permission .cb-permission2-request) {
+  background: var(--pw-inset);
+  color: var(--pw-ink);
+  border-color: var(--pw-edge);
+}
+:root.dark :is(.pw-task-row, .pw-outcome-related, .pw-task-entry-list,
+  .pw-work-drawer .pw-work-management, .pw-outcome-document, .pw-outcome-conversation,
+  .pw-outcome-empty, .pw-file-actions) { border-color: var(--pw-edge); }
+:root.dark :is(.pw-work-eyebrow, .pw-page-introduction p, .pw-task-collection > h3,
+  .pw-task-row-status, .pw-history-link.button-press-motion, .pw-project-location > span,
+  .pw-task-header .pw-task-context, .pw-outcome-heading h3,
+  .pw-priority-decisions .ui-dic__detail, .pw-secondary-header p,
+  .pw-muted, .pw-current-work p, .pw-text-link) { color: var(--pw-muted); }
+:root.dark .pw-redesign .pw-start > p { color: var(--pw-copy); }
+:root.dark :is(.pw-brand-mark, .pw-linked-task, .pw-priority-decisions .ui-dic__head) { color: var(--pw-ink); }
+:root.dark .pw-priority-decisions .ui-dic__btn:not(.ui-dic__btn--primary) { color: var(--pw-copy); }
+
+/* Product-specific primary overrides must retain the original inverse contrast. */
+:root.dark :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown)
+  :is(.button-press-motion.bg-button-primary, .button-press-motion.bg-button-danger) {
+  color: var(--pw-on-strong);
+}
+:root.dark :is(.pw-app, .pw-drawer, .pw-settings-dialog, .shadow-dropdown)
+  :is(.button-press-motion.bg-button-primary, .button-press-motion.bg-button-danger):disabled {
+  color: var(--pw-disabled);
+}
+:root.dark :is(.pw-library .afa-primary, .pw-app .acc-btn-primary, .pw-drawer .acc-btn-primary) {
+  color: var(--pw-on-strong) !important;
+}
+:root.dark :is(.pw-app, .pw-drawer) .ui-dic {
+  --ui-dic-solid-hover: #bdbdbd;
+  --ui-dic-on-solid: var(--pw-on-strong);
+}
+:root.dark :is(button, a, input, textarea):focus-visible { outline-color: var(--pw-focus); }
+:root.dark .pw-radio-option .bg-control-indicator-background { background-color: var(--pw-on-strong); }

@@ -46,7 +46,7 @@ internal fun NativeDocumentComposer(original:JSONObject,busy:Boolean,error:Strin
         if(value.length>limit){editError="此项最多${limit}字；超出的输入未写入。";return}
         change(edit)
     }
-    BackHandler(enabled=!busy,onBack=back)
+    BackHandler { nativeBusyBack(busy, back) }
     Column(Modifier.fillMaxSize().systemBarsPadding().imePadding().padding(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Text(if(presentation)"编辑原演示文稿"else "可编辑文档",style=MaterialTheme.typography.titleLarge,modifier=Modifier.weight(1f));TextButton(onClick=back,enabled=!busy){Text("返回")}}
         Text(if(original.has("parentArtifactId"))"从已选原成果的固定源继续；保存新的独立版本，原文件保留。"else "在本机生成真实Word或PDF，并保留可继续修改的原始内容。",style=MaterialTheme.typography.bodySmall)

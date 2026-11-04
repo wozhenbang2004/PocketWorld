@@ -54,7 +54,7 @@ public final class PluginApprovalIdentityTest {
         JSONObject tool=new JSONObject().put("name","write").put("kind","http").put("endpoint",endpoint).put("effect","write").put("schema",schema);
         plugins.handle("install",new JSONObject().put("manifest",new JSONObject().put("id","approval-test").put("name","审批测试").put("version","1").put("tools",new JSONArray().put(tool))));
         plugins.handle("grant",new JSONObject().put("id","approval-test").put("grants",new JSONArray().put("tool:write")));
-        plugins.handle("enable",new JSONObject().put("id","approval-test").put("enabled",true));
+        dev.pocketengine.features.plugins.PluginOwnerTestReview.enableCurrent(plugins,"approval-test",true);
     }
     private static final class Endpoint implements AutoCloseable{
         final ServerSocket server;final AtomicInteger requests=new AtomicInteger();final Thread worker;

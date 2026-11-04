@@ -1,0 +1,685 @@
+{
+  "sources": [
+    {
+      "group": "boardui-registry",
+      "path": "upstream/boardui-registry/popover.json",
+      "sha256": "438ad1d775a44ab23b2bdc73fb6077122f8c4492983096b788d33df3e9a5cb32",
+      "identity": "Official BoardUI registry captured 2026-11-01; separate from old Git ZIP"
+    },
+    {
+      "group": "boardui-registry",
+      "path": "upstream/boardui-registry/context-menu.json",
+      "sha256": "62a7ad99e9f9fe6490052f83731c4d241451db3ff512f8f493d8a59e98ba460c",
+      "identity": "Official BoardUI registry captured 2026-11-01; separate from old Git ZIP"
+    },
+    {
+      "group": "boardui",
+      "path": "upstream/boardui/utils/cx.ts",
+      "sha256": "4ca0de6224d878d97323fef81ed08a5f80721e208336fc7b79b431d17eb367b4",
+      "identity": "Official BoardUI MIT / registry increment where noted"
+    },
+    {
+      "group": "boardui",
+      "path": "upstream/boardui/components/foundations/template-copy/template-copy.tsx",
+      "sha256": "a5663d556ecb29e7ccee9352d9cd183d6f1fd526eeb5fc1d87c45ca85e07d827",
+      "identity": "Official BoardUI MIT / registry increment where noted"
+    },
+    {
+      "group": "boardui",
+      "path": "upstream/boardui/components/base/context-menu/context-menu.tsx",
+      "sha256": "553ae7ee47f20a78b258e780d8f10d795047b6282bddca219fcbd7a9dcd69c67",
+      "identity": "Official BoardUI MIT / registry increment where noted"
+    },
+    {
+      "group": "boardui",
+      "path": "upstream/boardui/components/foundations/scroll-fade/scroll-fade.tsx",
+      "sha256": "94a1d1032e59b40091ed546835b796d0776838aa82fa554be176f926d0b3b54d",
+      "identity": "Official BoardUI MIT / registry increment where noted"
+    },
+    {
+      "group": "boardui",
+      "path": "upstream/boardui/components/foundations/direction/direction.tsx",
+      "sha256": "cb7e973ed50f1ea4b4dbf3039ac86de321f4bb4fb7df2ce64ce36b323dfdb2a0",
+      "identity": "Official BoardUI MIT / registry increment where noted"
+    },
+    {
+      "group": "boardui",
+      "path": "upstream/boardui/components/base/dropdown/menu-styles.ts",
+      "sha256": "2d911a7d99caf800f1095f9db3c285ce11aa27c362e5dd2fd5919115a9d74b1b",
+      "identity": "Official BoardUI MIT / registry increment where noted"
+    },
+    {
+      "group": "boardui",
+      "path": "upstream/boardui/components/base/popover/popover.tsx",
+      "sha256": "b712f37a2153d42ee40ad7ec329f184ef0ab3186cd7c7f3fd111047a26ff178e",
+      "identity": "Official BoardUI MIT / registry increment where noted"
+    },
+    {
+      "group": "boardui",
+      "path": "upstream/boardui/utils/use-dismiss-on-outside-press.ts",
+      "sha256": "4c2cf34afe5c618bb7cefc4cef2400a92264db4e8db3781580d867922315a28a",
+      "identity": "Official BoardUI MIT / registry increment where noted"
+    },
+    {
+      "group": "boardui",
+      "path": "upstream/boardui/components/base/tooltip/tooltip.tsx",
+      "sha256": "ba251679535d76e7ce94bdecc5ec5c3d6db72b67ba3ded11a2bab1a180cdbd1c",
+      "identity": "Official BoardUI MIT / registry increment where noted"
+    },
+    {
+      "group": "boardui",
+      "path": "upstream/boardui/components/base/tabs/tabs.tsx",
+      "sha256": "343761c69bd612a8a9c5f8aa1ef8aabdc32deda23e7870b5722c40623e325f0b",
+      "identity": "Official BoardUI MIT / registry increment where noted"
+    },
+    {
+      "group": "boardui",
+      "path": "upstream/boardui/styles/theme.css",
+      "sha256": "e85c110a117273168bb2c5c055efa69496ead8779985529593a9626cd0b0ada7",
+      "identity": "Official BoardUI MIT"
+    },
+    {
+      "group": "boardui",
+      "path": "upstream/boardui/styles/typography.css",
+      "sha256": "5f101d1a18e9e1e1cc7ce3c598c41446563c0aa69c571fe427d7a82ad50acf0f",
+      "identity": "Official BoardUI MIT"
+    },
+    {
+      "group": "boardui",
+      "path": "upstream/boardui/LICENSE",
+      "sha256": "ea8a0a9ec64dcf0fdb223a4bb8a4878b6027b83f7b14a57cdd506fbeee69d6c2",
+      "identity": "Official BoardUI MIT"
+    },
+    {
+      "group": "boardui",
+      "path": "upstream/boardui/components/application/dashboard/dashboard-sidebar.tsx",
+      "sha256": "b4e7bc7740cf9fef982d11edba7af4df82fd765aee29ba2f7c7b2f476a479ee9",
+      "identity": "Official BoardUI MIT; adapter retains NavItem/Collapsible and removes demo menus"
+    },
+    {
+      "group": "ovio",
+      "path": "upstream/ovio/components/ovio/liquid-tabs/liquid-tabs.tsx",
+      "sha256": "985a29cd727ce78aeaa1d7d1df13afd6ed0a3a391381ce7692c200c1059f67fa",
+      "identity": "Ovio MIT 81a1bcb6737356038163728b3b2a657c9dcffa32"
+    },
+    {
+      "group": "ovio",
+      "path": "upstream/ovio/components/ovio/liquid-tabs/worlds/index.ts",
+      "sha256": "5ca14d4e8b48e2d255feab6d826b9306366b367966b9d143549dfe79ee6d6488",
+      "identity": "Ovio MIT 81a1bcb6737356038163728b3b2a657c9dcffa32"
+    },
+    {
+      "group": "ovio",
+      "path": "upstream/ovio/components/ovio/liquid-tabs/worlds/toy.tsx",
+      "sha256": "d353362111e1d9817a351e0389cf94fe3457ba9c4ad1550ce00a92677972e708",
+      "identity": "Ovio MIT 81a1bcb6737356038163728b3b2a657c9dcffa32"
+    },
+    {
+      "group": "ovio",
+      "path": "upstream/ovio/lib/utils.ts",
+      "sha256": "d1f1e0d62cb8d8d1e04c26e14de842d8a151f75812d81b046c65b5d1fe8e4b27",
+      "identity": "Ovio MIT 81a1bcb6737356038163728b3b2a657c9dcffa32"
+    },
+    {
+      "group": "ovio",
+      "path": "upstream/ovio/lib/motion.ts",
+      "sha256": "20bc8167cd80e3b55e415041b42cd46b5f5c22ec144c1173bb01221c4cea3c67",
+      "identity": "Ovio MIT 81a1bcb6737356038163728b3b2a657c9dcffa32"
+    },
+    {
+      "group": "ovio",
+      "path": "upstream/ovio/components/ovio/liquid-tabs/worlds/retro.tsx",
+      "sha256": "d74eec683c2024bcf46f3861b68f10e88c691ea7855c2aea08e2c001e14b515e",
+      "identity": "Ovio MIT 81a1bcb6737356038163728b3b2a657c9dcffa32"
+    },
+    {
+      "group": "ovio",
+      "path": "upstream/ovio/components/ovio/liquid-tabs/parts.tsx",
+      "sha256": "8ea53a94b7cf81e78b5968db94a594cc24ccc068fac1a61073f58fa33551236d",
+      "identity": "Ovio MIT 81a1bcb6737356038163728b3b2a657c9dcffa32"
+    },
+    {
+      "group": "ovio",
+      "path": "upstream/ovio/components/ovio/liquid-tabs/use-liquid.ts",
+      "sha256": "52c7a843104badf1139865fb71326fa60e816b6f7178be7eb5af5a3097f87fd3",
+      "identity": "Ovio MIT 81a1bcb6737356038163728b3b2a657c9dcffa32"
+    },
+    {
+      "group": "ovio",
+      "path": "upstream/ovio/components/shared/goo-filter.tsx",
+      "sha256": "f4d804ab0b63a9d66b03297fff302ee4ae581e1f400feba34753ef1333272667",
+      "identity": "Ovio MIT 81a1bcb6737356038163728b3b2a657c9dcffa32"
+    },
+    {
+      "group": "ovio",
+      "path": "upstream/ovio/components/ovio/liquid-tabs/worlds/craft.tsx",
+      "sha256": "209f7acc77abc1eb760b50f2b840f5299e127c777755e938cb7105bd884a39b7",
+      "identity": "Ovio MIT 81a1bcb6737356038163728b3b2a657c9dcffa32"
+    },
+    {
+      "group": "ovio",
+      "path": "upstream/ovio/components/ovio/liquid-tabs/worlds/minimal.tsx",
+      "sha256": "49e0d5e7aa9f8e3c7fc1aa1b37a7a5bc11b458681c2a7df865511b78fda421be",
+      "identity": "Ovio MIT 81a1bcb6737356038163728b3b2a657c9dcffa32"
+    },
+    {
+      "group": "ovio",
+      "path": "upstream/ovio/lib/keys.ts",
+      "sha256": "c8098ef2643dc5e3d138dce383fe7730c23493149885b7d356a4d9d368fbe614",
+      "identity": "Ovio MIT 81a1bcb6737356038163728b3b2a657c9dcffa32"
+    },
+    {
+      "group": "ovio",
+      "path": "upstream/ovio/lib/world.ts",
+      "sha256": "32386d5d63ebf31e1cd1cca41effc4a1d45f4e1fde2d9debbb8849183fa07fc9",
+      "identity": "Ovio MIT 81a1bcb6737356038163728b3b2a657c9dcffa32"
+    },
+    {
+      "group": "ovio",
+      "path": "upstream/ovio/components/shared/world-provider.tsx",
+      "sha256": "42e42dce0f494d4d9cef1a4d6509cb87a36aaacf19c47c154c32d73a53dfb8d2",
+      "identity": "Ovio MIT 81a1bcb6737356038163728b3b2a657c9dcffa32"
+    },
+    {
+      "group": "ovio",
+      "path": "upstream/ovio/LICENSE",
+      "sha256": "9cc1ae60b5608abf96341d6d3f22f8d3b46cd06e4cbbc600bebe65eb9b305b1f",
+      "identity": "Ovio MIT"
+    },
+    {
+      "group": "vaul",
+      "path": "upstream/vaul/src/helpers.ts",
+      "sha256": "1e9f295748054a4bc080ed18c2e656b982db7f5f28a0d67d77c5256b2d22db99",
+      "identity": "Vaul 1.1.2 MIT 3e97aac6a38e4481bade71d7233ed6002e80f9b0"
+    },
+    {
+      "group": "vaul",
+      "path": "upstream/vaul/src/index.tsx",
+      "sha256": "1bc911d9909c75e475cccd7a685eae65459849941981837327367666ad5222ee",
+      "identity": "Vaul 1.1.2 MIT 3e97aac6a38e4481bade71d7233ed6002e80f9b0"
+    },
+    {
+      "group": "vaul",
+      "path": "upstream/vaul/src/use-prevent-scroll.ts",
+      "sha256": "b1c208298e26baa5f371467065c65b097dec3c96529e28769151842624a228ef",
+      "identity": "Vaul 1.1.2 MIT 3e97aac6a38e4481bade71d7233ed6002e80f9b0"
+    },
+    {
+      "group": "vaul",
+      "path": "upstream/vaul/src/style.css",
+      "sha256": "f1eb8b59701a7c89bc0444c9d6660d56cde5bf01690671a6d5b01d2d74391c78",
+      "identity": "Vaul 1.1.2 MIT 3e97aac6a38e4481bade71d7233ed6002e80f9b0"
+    },
+    {
+      "group": "vaul",
+      "path": "upstream/vaul/src/constants.ts",
+      "sha256": "d01f8986db09f61f7812428b56d3d5d83415531a114ad314a2b3036fca4f9eca",
+      "identity": "Vaul 1.1.2 MIT 3e97aac6a38e4481bade71d7233ed6002e80f9b0"
+    },
+    {
+      "group": "vaul",
+      "path": "upstream/vaul/src/context.ts",
+      "sha256": "c41f01276236655afed4931990a2c24da4c1764bd9f6a57ee23417efecd9ab8f",
+      "identity": "Vaul 1.1.2 MIT 3e97aac6a38e4481bade71d7233ed6002e80f9b0"
+    },
+    {
+      "group": "vaul",
+      "path": "upstream/vaul/src/use-position-fixed.ts",
+      "sha256": "4836887ad4580276e76e5dc62022a2c67ba6c020f5a0ed929af859015a6763e3",
+      "identity": "Vaul 1.1.2 MIT 3e97aac6a38e4481bade71d7233ed6002e80f9b0"
+    },
+    {
+      "group": "vaul",
+      "path": "upstream/vaul/src/use-scale-background.ts",
+      "sha256": "71c55aa27a71b73608456f523cb32de3ba2332343ed64f8205b64cfe9923f135",
+      "identity": "Vaul 1.1.2 MIT 3e97aac6a38e4481bade71d7233ed6002e80f9b0"
+    },
+    {
+      "group": "vaul",
+      "path": "upstream/vaul/src/types.ts",
+      "sha256": "a265e6796fca93187bec4cf88f98ba77f386fb29a19193e92d6a1479549cebe5",
+      "identity": "Vaul 1.1.2 MIT 3e97aac6a38e4481bade71d7233ed6002e80f9b0"
+    },
+    {
+      "group": "vaul",
+      "path": "upstream/vaul/src/browser.ts",
+      "sha256": "37f98e1ee70a146d2fb2ec0b1ff563a8126003a4122ad1d1e9c608f4d3fbb920",
+      "identity": "Vaul 1.1.2 MIT 3e97aac6a38e4481bade71d7233ed6002e80f9b0"
+    },
+    {
+      "group": "vaul",
+      "path": "upstream/vaul/src/use-controllable-state.ts",
+      "sha256": "13bb02d4432f603307be85ec3fdb132827bb3dad8391f0409c76a3a57cf4bd8c",
+      "identity": "Vaul 1.1.2 MIT 3e97aac6a38e4481bade71d7233ed6002e80f9b0"
+    },
+    {
+      "group": "vaul",
+      "path": "upstream/vaul/src/use-composed-refs.ts",
+      "sha256": "6e170c355dfdc2177351b8b5a1a7c4bf6a6eba73f3936c8690c7fa6cce1e7751",
+      "identity": "Vaul 1.1.2 MIT 3e97aac6a38e4481bade71d7233ed6002e80f9b0"
+    },
+    {
+      "group": "vaul",
+      "path": "upstream/vaul/src/use-snap-points.ts",
+      "sha256": "c763c9c613eba8579da93cad3f5878f795e8dbb5c5098cf852838cae3511ecc8",
+      "identity": "Vaul 1.1.2 MIT 3e97aac6a38e4481bade71d7233ed6002e80f9b0"
+    },
+    {
+      "group": "vaul",
+      "path": "upstream/vaul/LICENSE.md",
+      "sha256": "b09b9ccf866cc09b502d9cf4679e2461beb1469709ea0c6a30009766e10b3acf",
+      "identity": "Vaul MIT"
+    },
+    {
+      "group": "tree",
+      "path": "upstream/tree/src/tree-view.tsx",
+      "sha256": "3402620bb01da941cc052ae4b0667c071d17962d6dc0eadd39ef1b8b084728d5",
+      "identity": "MrLightful TreeView MIT 41624def7189c141553e7a164c117b44178d5b3a"
+    },
+    {
+      "group": "tree",
+      "path": "upstream/tree/src/lib/utils.ts",
+      "sha256": "d1f1e0d62cb8d8d1e04c26e14de842d8a151f75812d81b046c65b5d1fe8e4b27",
+      "identity": "MrLightful TreeView MIT 41624def7189c141553e7a164c117b44178d5b3a"
+    },
+    {
+      "group": "tree",
+      "path": "upstream/tree/LICENSE",
+      "sha256": "bda7f95308971841a52fc8f9dc92ea32af2815885ca30cc4a1a8bf773cc07858",
+      "identity": "MrLightful TreeView MIT 41624def7189c141553e7a164c117b44178d5b3a"
+    },
+    {
+      "group": "affect",
+      "path": "upstream/affect/src/demos/screens/workspace.tsx",
+      "sha256": "7b35b5f25b28b8f8f4ddb80119ae8a8d23cf14dcd7f751002b6b49f87d320832",
+      "identity": "Library independent v3 0e69029b except upstream/decision-inbox-clean.tsx official MIT 37b91fa"
+    },
+    {
+      "group": "affect",
+      "path": "upstream/affect/src/demos/screens/common.tsx",
+      "sha256": "4eea43ee66fcf71cd9f602f4c0fe1ce42481a2c9528d7a773cc096ea24034060",
+      "identity": "Library independent v3 0e69029b except upstream/decision-inbox-clean.tsx official MIT 37b91fa"
+    },
+    {
+      "group": "affect",
+      "path": "upstream/affect/src/demos/screens/screens.css",
+      "sha256": "80eff9e9746791b0081474daa4ba3c14ac58123a146fcd6e355b3bb2b244e3fd",
+      "identity": "Library independent v3 0e69029b except upstream/decision-inbox-clean.tsx official MIT 37b91fa"
+    },
+    {
+      "group": "affect",
+      "path": "upstream/affect/src/demos/components-a/inputs.tsx",
+      "sha256": "2973ad4104527909f1ea77dd865dcfbb1a3b39eed6829ddc38edc5040bd08830",
+      "identity": "Library independent v3 0e69029b except upstream/decision-inbox-clean.tsx official MIT 37b91fa"
+    },
+    {
+      "group": "affect",
+      "path": "upstream/affect/src/demos/components-a/styles.css",
+      "sha256": "f779eab43d45833c8dac1786302ab9b92fc1b3659944873b8980fe79fdd56d50",
+      "identity": "Library independent v3 0e69029b except upstream/decision-inbox-clean.tsx official MIT 37b91fa"
+    },
+    {
+      "group": "affect",
+      "path": "upstream/affect/src/demos/components-c/pro-more.tsx",
+      "sha256": "3bb78793f7b6b30244bad8802f2817c19ba28bcbb3276a295ff8a02c339db199",
+      "identity": "Library independent v3 0e69029b except upstream/decision-inbox-clean.tsx official MIT 37b91fa"
+    },
+    {
+      "group": "affect",
+      "path": "upstream/affect/src/demos/components-c/style.ts",
+      "sha256": "f55222203718089e6fdd3be2905dae3ddc2e173380f6416b1bba493be99562d3",
+      "identity": "Library independent v3 0e69029b except upstream/decision-inbox-clean.tsx official MIT 37b91fa"
+    },
+    {
+      "group": "affect",
+      "path": "upstream/affect/src/demos/components-c/upstream/decision-inbox-clean.tsx",
+      "sha256": "fc1a45571459c0823a4ea083e2c6e1b608eaf672e6a67a036f115288e58c88f5",
+      "identity": "Library independent v3 0e69029b except upstream/decision-inbox-clean.tsx official MIT 37b91fa"
+    },
+    {
+      "group": "affect",
+      "path": "upstream/affect/src/demos/components-b/tools.css",
+      "sha256": "26ff45ae4c08f1b4ace3306ae862cc437731658c13af9d8de17d8d16f5f2b46e",
+      "identity": "Library independent v3 0e69029b; controlled adapter source"
+    },
+    {
+      "group": "affect",
+      "path": "upstream/affect/src/demos/components-b/tools.tsx",
+      "sha256": "b3e383910e0ec43bbc28e8d1d634735bc795db48ab42d21c993673d3c3532bcb",
+      "identity": "Library independent v3 0e69029b; controlled adapter source"
+    },
+    {
+      "group": "affect",
+      "path": "upstream/affect/src/demos/components-c/pro.tsx",
+      "sha256": "beeb8bc3c94b7f401155d5dc57e1634ddf70cb01b39abc4a84e8d4305e062c0b",
+      "identity": "Library independent v3 0e69029b; controlled adapter source"
+    }
+  ],
+  "externalDependencies": [
+    "@remixicon/react",
+    "clsx",
+    "motion",
+    "motion/react",
+    "react",
+    "react-aria-components",
+    "react-dom",
+    "tailwind-merge"
+  ],
+  "adaptations": [
+    "BoardUI registry aliases changed to local relative modules",
+    "Ovio aliases changed to local relative modules; minimal selected",
+    "Tree selected item gains controlled prop; no drag mutations",
+    "Source originals retained alongside adapters; no fixture data used",
+    "Vaul 1.1.2 React 19 compatibility only: RefObject<HTMLDivElement | null> in context/use-snap-points; browser-compatible ReturnType<typeof setTimeout> replaces NodeJS.Timeout. Upstream source remains byte-identical.",
+    "CI19 visual correction: ReviewCenter queue retains real source objects; mobile queue cards stack full title/description/status beside a fixed arrow, horizontal object scrolling and one-column detail. No content hidden or fixture settlement introduced.",
+    "Vaul style.css adapter syntax correction: pointer:fine rule targets the existing data-vaul-handle-hitarea span, whose touch target is expanded to 44px by the preceding base rule; remove stray colon from attribute selector to restore intended fine-pointer width/height 100%. This is not a pseudo-element. Upstream 1.1.2 raw remains unchanged."
+  ],
+  "usage": [
+    {
+      "id": "PW-15",
+      "source": "upstream/vaul/src/index.tsx @ 3e97aac6a38e4481bade71d7233ed6002e80f9b0 / 1.1.2 MIT",
+      "adapter": "adapted/vaul/src/index.tsx",
+      "renderedAt": "App: allWork, task detail, phone/voice review, create project/file, chat attachment picker",
+      "hostFields": [
+        "tasks",
+        "projects",
+        "composer",
+        "phoneDraft",
+        "chatAttachmentPickerOpen"
+      ],
+      "hostActions": [
+        "tasks.open",
+        "tasks.close",
+        "tasks.review",
+        "phone.prepare",
+        "phone.start",
+        "voice.review",
+        "voice.accept",
+        "voice.discard",
+        "attachments.openPicker",
+        "attachments.closePicker"
+      ],
+      "controlledChanges": "Source complete graph; no original drag/focus/scroll algorithm replacement; neutral product surfaces, shouldScaleBackground=false",
+      "status": {
+        "sourceCopied": true,
+        "adapted": true,
+        "usedInFeature": true,
+        "hostWiring": "implemented; not runtime verified",
+        "compile": "pending GitHub CI",
+        "visualInteraction": "not verified"
+      }
+    },
+    {
+      "id": "PW-16",
+      "source": "upstream/boardui/components/application/dashboard/dashboard-sidebar.tsx / ec5c source ZIP MIT",
+      "adapter": "WorkSidebar.tsx",
+      "renderedAt": "App: 全部工作 > main work navigation",
+      "hostFields": [
+        "conversationId",
+        "conversations",
+        "projectId",
+        "projects"
+      ],
+      "hostActions": [
+        "conversation.new",
+        "conversation.select"
+      ],
+      "controlledChanges": "Retain source NavItem + Collapsible; real controlled nav; remove sample account/team/support/theme menus, gradient to gray",
+      "status": {
+        "sourceCopied": true,
+        "adapted": true,
+        "usedInFeature": true,
+        "hostWiring": "implemented; not runtime verified",
+        "compile": "pending GitHub CI",
+        "visualInteraction": "not verified"
+      }
+    },
+    {
+      "id": "PW-17",
+      "source": "upstream/ovio/components/ovio/liquid-tabs @ 81a1bcb6737356038163728b3b2a657c9dcffa32 MIT",
+      "adapter": "adapted/ovio/components/ovio/liquid-tabs/liquid-tabs.tsx + worlds/minimal.tsx",
+      "renderedAt": "App: projects > 工作 / 预览",
+      "hostFields": [
+        "projectId",
+        "files",
+        "filePath",
+        "fileVersion"
+      ],
+      "hostActions": [
+        "projects.preview"
+      ],
+      "controlledChanges": "Real upstream minimal variant, relative import graph, compact neutral tokens; preview remains separate native isolated content",
+      "status": {
+        "sourceCopied": true,
+        "adapted": true,
+        "usedInFeature": true,
+        "hostWiring": "implemented; not runtime verified",
+        "compile": "pending GitHub CI",
+        "visualInteraction": "not verified"
+      }
+    },
+    {
+      "id": "PW-18",
+      "source": "upstream/boardui/components/base/tabs/tabs.tsx / ec5c source ZIP MIT",
+      "adapter": "adapted/boardui/components/base/tabs/tabs.tsx",
+      "renderedAt": "App: task filter and projects file/tree navigation",
+      "hostFields": [
+        "tasks",
+        "files"
+      ],
+      "hostActions": [],
+      "controlledChanges": "Original React Aria underline tabs; controlled real filters and local view",
+      "status": {
+        "sourceCopied": true,
+        "adapted": true,
+        "usedInFeature": true,
+        "hostWiring": "implemented; not runtime verified",
+        "compile": "pending GitHub CI",
+        "visualInteraction": "not verified"
+      }
+    },
+    {
+      "id": "PW-19",
+      "source": "upstream/boardui-registry/popover.json / saved official registry increment 2026-11-01 MIT",
+      "adapter": "adapted/boardui/components/base/popover/popover.tsx",
+      "renderedAt": "App: composer input intent, queue/steer semantics, per-message source/actions",
+      "hostFields": [
+        "chatBusy",
+        "chatSendMode",
+        "composer",
+        "phoneDraft",
+        "messages"
+      ],
+      "hostActions": [
+        "composer.intent",
+        "composer.mode",
+        "speech.speak",
+        "speech.stop"
+      ],
+      "controlledChanges": "Original registry source; aliases localized; controlled real actions, no fixture data",
+      "status": {
+        "sourceCopied": true,
+        "adapted": true,
+        "usedInFeature": true,
+        "hostWiring": "implemented; not runtime verified",
+        "compile": "pending GitHub CI",
+        "visualInteraction": "not verified"
+      }
+    },
+    {
+      "id": "PW-20",
+      "source": "upstream/boardui-registry/context-menu.json / saved official registry increment 2026-11-01 MIT",
+      "adapter": "adapted/boardui/components/base/context-menu/context-menu.tsx + FilesBrowser.tsx",
+      "renderedAt": "App: projects > file list > visible object more / long press",
+      "hostFields": [
+        "projectId",
+        "files"
+      ],
+      "hostActions": [
+        "projects.open"
+      ],
+      "controlledChanges": "Registry original keyboard/long press/menu behavior; expose existing openFrom to visible button, no synthetic events; copy exact path only",
+      "status": {
+        "sourceCopied": true,
+        "adapted": true,
+        "usedInFeature": true,
+        "hostWiring": "implemented; not runtime verified",
+        "compile": "pending GitHub CI",
+        "visualInteraction": "not verified"
+      }
+    },
+    {
+      "id": "PW-21",
+      "source": "upstream/affect/src/demos/components-a/inputs.tsx::CommandMenu / library independent v3 0e69029b",
+      "adapter": "CommandMenu.tsx",
+      "renderedAt": "App: 全部工作 > 搜索已加载的工作与功能",
+      "hostFields": [
+        "conversations",
+        "projects"
+      ],
+      "hostActions": [
+        "conversation.select",
+        "projects.select"
+      ],
+      "controlledChanges": "Keep source grouping/search/keyboard; controlled loaded objects; remove sample commands and fake opened completion",
+      "status": {
+        "sourceCopied": true,
+        "adapted": true,
+        "usedInFeature": true,
+        "hostWiring": "implemented; not runtime verified",
+        "compile": "pending GitHub CI",
+        "visualInteraction": "not verified"
+      }
+    },
+    {
+      "id": "PW-22",
+      "source": "upstream/affect/src/demos/screens/workspace.tsx::Files / library independent v3 0e69029b",
+      "adapter": "FilesBrowser.tsx",
+      "renderedAt": "App: projects > 文件列表",
+      "hostFields": [
+        "projectId",
+        "files",
+        "filePath"
+      ],
+      "hostActions": [
+        "projects.open"
+      ],
+      "controlledChanges": "Source FileArt/FileCard and files region; remove seed folders/documents/people; default compact list, real path filtering; type illustration is not content preview; optional controlled view/onViewChange/showToolbar retain local defaults and FileArt/FileCard/ContextMenu; App owns one BoardUI view popover/search without synthetic DOM event forwarding",
+      "status": {
+        "sourceCopied": true,
+        "adapted": true,
+        "usedInFeature": true,
+        "hostWiring": "implemented; not runtime verified",
+        "compile": "pending GitHub CI",
+        "visualInteraction": "not verified"
+      }
+    },
+    {
+      "id": "PW-23",
+      "source": "upstream/tree/src/tree-view.tsx @ 41624def7189c141553e7a164c117b44178d5b3a MIT",
+      "adapter": "adapted/tree/src/tree-view.tsx",
+      "renderedAt": "App: projects > 目录层级",
+      "hostFields": [
+        "projectId",
+        "files",
+        "filePath"
+      ],
+      "hostActions": [
+        "projects.open"
+      ],
+      "controlledChanges": "Original source keyboard/accordion tree; controlled selectedItemId; no fabricated drag mutations",
+      "status": {
+        "sourceCopied": true,
+        "adapted": true,
+        "usedInFeature": true,
+        "hostWiring": "implemented; not runtime verified",
+        "compile": "pending GitHub CI",
+        "visualInteraction": "not verified"
+      }
+    },
+    {
+      "id": "PW-24",
+      "source": "upstream/affect/src/demos/components-c/pro-more.tsx::InlineDiffDemo / library independent v3 0e69029b",
+      "adapter": "InlineDiff.tsx",
+      "renderedAt": "App: projects > open file > 查看修改",
+      "hostFields": [
+        "projectId",
+        "filePath",
+        "fileContent",
+        "fileBaseline",
+        "fileVersion",
+        "fileSaving"
+      ],
+      "hostActions": [
+        "projects.edit",
+        "projects.save"
+      ],
+      "controlledChanges": "Keep original diff structure; real before/after entire file; remove sample hunks, timed/fake accept/reject/Undo; save guarded by exact original version",
+      "status": {
+        "sourceCopied": true,
+        "adapted": true,
+        "usedInFeature": true,
+        "hostWiring": "implemented; not runtime verified",
+        "compile": "pending GitHub CI",
+        "visualInteraction": "not verified"
+      }
+    },
+    {
+      "id": "PW-25",
+      "source": "upstream/affect/src/demos/components-b/tools.tsx::PermissionRequestDemo + components-c/pro.tsx::ReviewCenterDemo / library independent v3 0e69029b",
+      "adapter": "Review.tsx",
+      "renderedAt": "App: current task > review child layer + phone goal/range review",
+      "hostFields": [
+        "tasks.id/raw",
+        "phoneDraft"
+      ],
+      "hostActions": [
+        "tasks.review",
+        "tasks.confirm",
+        "tasks.approve",
+        "tasks.resolve",
+        "tasks.resume",
+        "tasks.scope",
+        "phone.prepare",
+        "phone.start"
+      ],
+      "controlledChanges": "Retain original request heading/reason/scope/action hierarchy and original one-use host reviewHandle; current task no longer mounts the unrelated global task queue; overview, process, review and scope are bounded Vaul child layers; scope editor appears only on entry; no fixture requests/confidence/auto-grants/implicit Enter/fake Undo",
+      "status": {
+        "sourceCopied": true,
+        "adapted": true,
+        "usedInFeature": true,
+        "hostWiring": "implemented; not runtime verified",
+        "compile": "pending GitHub CI",
+        "visualInteraction": "not verified"
+      }
+    },
+    {
+      "id": "PW-26",
+      "source": "upstream/affect/src/demos/components-c/upstream/decision-inbox-clean.tsx / official Affect free source 37b91fa MIT",
+      "adapter": "DecisionInbox.tsx",
+      "renderedAt": "App: tasks > attention filter only, replacing the normal task rows for that filter",
+      "hostFields": [
+        "tasks"
+      ],
+      "hostActions": [
+        "tasks.open"
+      ],
+      "controlledChanges": "Original source retained; controlled host task settlement; deleted 1100ms fake answer/fold timer; viewing a task never marks it resolved",
+      "status": {
+        "sourceCopied": true,
+        "adapted": true,
+        "usedInFeature": true,
+        "hostWiring": "implemented; not runtime verified",
+        "compile": "pending GitHub CI",
+        "visualInteraction": "not verified"
+      }
+    }
+  ],
+  "verification": {
+    "frozenFor": "first GitHub compile",
+    "localRuntime": "not run",
+    "browser": "not used",
+    "visual": "not verified",
+    "note": "Source presence and rendering call sites do not establish successful host runtime or user aesthetic acceptance."
+  }
+}

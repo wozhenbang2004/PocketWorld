@@ -44,13 +44,15 @@ internal fun NativeReminders(state: PocketUiState, controller: PocketWorldContro
                 if (schedule?.optString("type") == "cron") CenterCaption("cron · ${schedule.optString("expression")} · ${schedule.optString("zone")}")
                 CenterCaption("规则版本 ${rule.optInt("revision")}")
                 if (!editableCalendar) CenterCaption("此日历格式或版本暂不支持。暂停保留原记录；删除会移除此提醒。")
+                if (exhaustedOnce && rule.has("nativeOrigin")) CenterCaption("此提醒来自原对话；请在原对话重新明确提出安排，未复制旧来源。")
+                if (exhaustedOnce && !rule.has("nativeOrigin") && rule.opt("manualOriginVersion") != 1) CenterCaption("此旧提醒的手建来源尚未确认，请从空白明确新建，未复制旧目标。")
                 Row {
-                    if (exhaustedOnce && !rule.optBoolean("sourceInvalidated") && !rule.optBoolean("sourceCheckPending")) TextButton(onClick = { rescheduleFrom = JSONObject(rule.toString()); create = true }) { Text("重新安排", fontSize = 12.sp) }
+                    if (exhaustedOnce && rule.opt("manualOriginVersion") == 1 && !rule.has("nativeOrigin") && !rule.optBoolean("sourceInvalidated") && !rule.optBoolean("sourceCheckPending")) TextButton(onClick = { rescheduleFrom = JSONObject(rule.toString()); create = true }) { Text("重新安排", fontSize = 12.sp) }
                     TextButton(onClick = { editing = JSONObject(rule.toString()) }, enabled = editableCalendar && !rule.optBoolean("sourceInvalidated") && !rule.optBoolean("sourceCheckPending")) { Text("编辑", fontSize = 12.sp) }
                     TextButton(onClick = { deleting = JSONObject(rule.toString()) }) { Text("删除", fontSize = 12.sp, color = Danger) }
                 }
             }
-            Switch(checked = rule.optBoolean("enabled"), onCheckedChange = { controller.requestFeature("automation", "setEnabled", JSONObject().put("id", rule.optString("id")).put("revision", rule.optInt("revision")).put("enabled", it)) }, enabled = "automation.setEnabled" !in state.moduleBusy && !rule.optBoolean("sourceInvalidated") && !exhaustedOnce && (rule.optBoolean("enabled") || editableCalendar))
+            Switch(checked = rule.optBoolean("enabled"), onCheckedChange = { controller.requestFeature("automation", "setEnabled", JSONObject().put("id", rule.optString("id")).put("revision", rule.optInt("revision")).put("enabled", it)) }, enabled = "automation.setEnabled" !in state.moduleBusy && !rule.optBoolean("sourceInvalidated") && !exhaustedOnce && (rule.optBoolean("enabled") || !rule.optBoolean("sourceCheckPending") && editableCalendar))
         }
         HorizontalDivider(color = Line)
     }
@@ -64,7 +66,7 @@ internal fun NativeReminders(state: PocketUiState, controller: PocketWorldContro
         if (receipt.optString("status") == "delivery_unknown") CenterCaption("投递情况仍未知；刷新记录只核对原记录，不会重发。")
         val goalState = receipt.optJSONObject("goalState")
         if (goalState != null) CenterCaption("原任务：" + reminderGoalStateLabel(goalState.optString("state")))
-        if (receipt.optString("kind") == "phone_goal" && receipt.optString("status") in setOf("awaiting_user", "blocked_notifications")) TextButton(onClick = { controller.prepareReminderOccurrence(receipt.optString("id")) }) { Text("查看原任务目标", fontSize = 12.sp) }
+        if (receipt.optString("kind") == "phone_goal" && receipt.optString("status") in setOf("awaiting_user", "blocked_notifications")) TextButton(onClick = { controller.prepareReminderOccurrence(receipt.optString("id")) }) { Text("准备原手机任务（不执行）", fontSize = 12.sp) }
     }
     if (create || editing != null) key(editing?.optString("id"), editing?.optInt("revision"), rescheduleFrom?.optString("id"), rescheduleFrom?.optInt("revision")) { ReminderEditor(state, controller, editing, rescheduleFrom) { create = false; editing = null; rescheduleFrom = null } }
     deleting?.let { rule -> ConfirmAction("删除这个提醒？", rule.optString("title"), "删除提醒", { deleting = null }) { controller.requestFeature("automation", "delete", JSONObject().put("id", rule.optString("id")).put("revision", rule.optInt("revision"))); deleting = null } }
@@ -101,11 +103,13 @@ internal fun reminderScheduleDraft(type: String, minutes: String, time: String, 
 }
 
 /** Preserve original policy fields and pause state; this draft cannot create execution authority. */
-internal fun reminderRuleDraft(original: JSONObject?, title: String, phone: Boolean, goal: String, schedule: JSONObject, misfire: String, overlap: String, maxCatchUp: Int): JSONObject {
+internal fun reminderRuleDraft(original: JSONObject?, title: String, phone: Boolean, goal: String, schedule: JSONObject, misfire: String, overlap: String, maxCatchUp: Int, rescheduleSource: JSONObject? = null): JSONObject {
+    require(rescheduleSource == null || original == null && !rescheduleSource.has("nativeOrigin") && rescheduleSource.opt("manualOriginVersion") == 1) { "原提醒来源尚未确认，请从空白明确新建或在原对话重新提出安排" }
     val policy = JSONObject(original?.optJSONObject("policy")?.toString() ?: "{}")
     policy.put("misfire", misfire).put("overlap", overlap).put("maxCatchUp", maxCatchUp)
     return JSONObject().put("title", title.trim()).put("kind", if (phone) "phone_goal" else "reminder").put("goal", goal.trim()).put("schedule", schedule).put("policy", policy).apply {
         if (original == null) put("enabled", true) else put("id", original.getString("id")).put("revision", original.getInt("revision"))
+        if (rescheduleSource != null) put("rescheduleSource", JSONObject().put("id", rescheduleSource.getString("id")).put("revision", rescheduleSource.getInt("revision")))
     }
 }
 
@@ -114,11 +118,12 @@ internal fun reminderPreservedSchedule(original: JSONObject): JSONObject = dev.p
 /** UI currentness only; the original Book remains the save authority. */
 internal fun reminderRescheduleSourceCurrent(source: JSONObject?, rules: JSONArray?): Boolean {
     if (source == null) return true
+    if (source.has("nativeOrigin") || source.opt("manualOriginVersion") != 1) return false
     if (rules == null) return false
     for (i in 0 until rules.length()) {
         val current = rules.optJSONObject(i) ?: continue
         if (current.optString("id") == source.optString("id") && current.optInt("revision", -1) == source.optInt("revision", -2) &&
-            !current.optBoolean("sourceInvalidated") && !current.optBoolean("sourceCheckPending")) return true
+            !current.has("nativeOrigin") && current.opt("manualOriginVersion") == 1 && !current.optBoolean("sourceInvalidated") && !current.optBoolean("sourceCheckPending")) return true
     }
     return false
 }
@@ -228,7 +233,7 @@ private fun ReminderEditor(state: PocketUiState, controller: PocketWorldControll
         val currentDraft = runCatching { schedule(System.currentTimeMillis()) }
         if (currentDraft.isSuccess) {
         submitError = null
-        submittedRequest = controller.requestFeature("automation", "save", JSONObject().put("rule", reminderRuleDraft(original, title, phone, goal, currentDraft.getOrThrow(), if (repeating) misfire else "skip", if (repeating) overlap else "buffer_one", maxCatchUp.toIntOrNull() ?: 3)))
+        submittedRequest = controller.requestFeature("automation", "save", JSONObject().put("rule", reminderRuleDraft(original, title, phone, goal, currentDraft.getOrThrow(), if (repeating) misfire else "skip", if (repeating) overlap else "buffer_one", maxCatchUp.toIntOrNull() ?: 3, newFrom)))
         } else submitError = currentDraft.exceptionOrNull()?.message ?: "时间安排当前不可用，请核对后重试"
     }, enabled = !busy && rescheduleCurrent && previewResult.isSuccess && nextExists && (misfire != "catch_up" || (maxCatchUp.toIntOrNull() ?: 0) in 1..20) && title.isNotBlank() && (!phone || goal.isNotBlank())) { Text(if (busy) "保存中" else if (original == null) "创建提醒" else "保存修改") } }, dismissButton = { TextButton(onClick = close, enabled = !busy) { Text("取消") } })
 }

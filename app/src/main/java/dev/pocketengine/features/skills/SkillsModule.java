@@ -21,11 +21,14 @@ public final class SkillsModule implements EngineModule {
     SkillsModule(FeatureContext context,SkillBook book,SkillGitClient gitClient){this.context=java.util.Objects.requireNonNull(context);this.book=java.util.Objects.requireNonNull(book);this.gitClient=java.util.Objects.requireNonNull(gitClient);}
     @Override public String id(){return "skills";}
     private static JSONObject privateScope()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private");}
+    public JSONObject exportBackupForOwner(dev.pocketengine.core.RunControl original)throws Exception{return book.exportBackupForOwner(privateScope(),original);}
+    public dev.pocketengine.features.workspace.OwnerConfigurationBackupSections.Review reviewBackupForOwner(JSONObject section,String action,dev.pocketengine.core.RunControl original)throws Exception{return book.reviewBackupForOwner(privateScope(),section,action,original);}
+    public JSONObject queryBackupForOwner(JSONObject section,String action,dev.pocketengine.core.RunControl original)throws Exception{return book.queryBackupForOwner(privateScope(),section,action,original);}
     @Override public JSONObject snapshot()throws Exception{return new JSONObject().put("available",true).put("skills",book.list(privateScope(),System.currentTimeMillis()))
             .put("progressiveReading",true).put("textResourcesOnly",true).put("grantsFromInstructions",false).put("scriptExecution",false).put("validationOnLoad",true)
             .put("nativeGitSourceReview",true).put("gitSourceProvider","github_public_https").put("nativeRetainedRevisionReview",true)
             .put("nativeMcpSourceReview",mcpSources!=null).put("mcpSourceAutomaticSync",false)
-            .put("nativeReviewedRemoval",true).put("nativeSingleSkillDocument",true).put("nativePackageStreams",true).put("maxPackageArchiveBytes",SkillArchive.MAX_ARCHIVE_BYTES)
+            .put("nativeReviewedRemoval",true).put("nativeSingleSkillDocument",true).put("nativeSingleSkillDocumentExport",true).put("nativePackageStreams",true).put("maxPackageArchiveBytes",SkillArchive.MAX_ARCHIVE_BYTES)
             .put("nativeDiscovery",true).put("discoveryMatching","lexical-v1")
             .put("nativeSourcePolicyReview",true).put("sourcePriority","project_then_user_then_bundled_then_stable_id").put("modelInvocationPolicyEnforced",true)
             .put("nativeProjectSourceBinding",projectNamespaces!=null).put("automaticProjectWatch",false)
@@ -40,7 +43,13 @@ public final class SkillsModule implements EngineModule {
             case "get":return new JSONObject().put("skill",book.get(scope,input.getString("id"),now));
             case "read":return book.read(scope,input.getString("id"),input.optString("path","SKILL.md"),input.optInt("offset",0),input.optInt("length",8000),now);
             case "import":result=new JSONObject().put("skill",book.install(scope,input,now));break;
-            case "setEnabled":result=new JSONObject().put("skill",book.setEnabled(scope,input.getString("id"),input.getBoolean("enabled"),input.optString("acceptedDigest"),input.optBoolean("confirmed",false),now));break;
+            case "setEnabled":
+                if(input.has("expectedRevision")||input.has("expectedExecutionGeneration")){
+                    if(!input.optBoolean("confirmed",false))throw new SecurityException("请先明确核对原技能版本");
+                    Object revision=input.get("expectedRevision"),generation=input.get("expectedExecutionGeneration");
+                    if(!(revision instanceof Integer)||((Integer)revision)<1||!(generation instanceof Integer||generation instanceof Long)||((Number)generation).longValue()<0)throw new SecurityException("原技能版本或批准代次无效");
+                    result=new JSONObject().put("skill",book.setEnabledReviewed(scope,input.getString("id"),(Integer)revision,input.getString("acceptedDigest"),((Number)generation).longValue(),input.getBoolean("enabled"),now));
+                }else result=new JSONObject().put("skill",book.setEnabled(scope,input.getString("id"),input.getBoolean("enabled"),input.optString("acceptedDigest"),input.optBoolean("confirmed",false),now));break;
             case "delete":throw new SecurityException("请在原生技能页面停用并审阅卸载；泛型命令不能绕过原使用和资源门禁");
             default:throw new IllegalArgumentException("未知技能操作");
         }
@@ -142,6 +151,12 @@ public final class SkillsModule implements EngineModule {
         JSONObject result=new JSONObject().put("skill",book.approveExperience(authenticatedScope,id,revision,digest,System.currentTimeMillis()));
         context.emit(id(),new JSONObject().put("event","skills_changed"));return result;
     }
+    public JSONObject setEnabledReviewedForOwner(JSONObject scope,String id,int revision,String digest,long executionGeneration,boolean enabled)throws Exception {
+        JSONObject result=new JSONObject().put("skill",book.setEnabledReviewed(scope,id,revision,digest,executionGeneration,enabled,System.currentTimeMillis()));context.emit(id(),new JSONObject().put("event","skills_changed"));return result;
+    }
+    public JSONObject approveExperienceReviewed(JSONObject scope,String id,int revision,String digest,long executionGeneration)throws Exception {
+        JSONObject result=new JSONObject().put("skill",book.approveExperienceReviewed(scope,id,revision,digest,executionGeneration,System.currentTimeMillis()));context.emit(id(),new JSONObject().put("event","skills_changed"));return result;
+    }
     public SkillBook.ReferenceSelection selectReferenceForHost(JSONObject scope,String id,int revision,String digest,Set<String> capabilities)throws Exception {
         return book.selectReferenceForHost(scope,id,revision,digest,capabilities,System.currentTimeMillis());
     }
@@ -166,11 +181,21 @@ public final class SkillsModule implements EngineModule {
         JSONObject result=new JSONObject().put("skill",book.importDocument(scope,document,options,System.currentTimeMillis()));context.emit(id(),new JSONObject().put("event","skills_changed"));return result;
     }
 
+    // NativeConversationSkillDraftHost owns the original operation/owner confirmation.
+    // No generic feature command can call these package-private Book adapters.
+    SkillBook.SourceReview inspectConversationDraft(JSONObject scope,JSONObject draft,JSONObject target,JSONObject origin)throws Exception{return book.inspectConversationDraft(scope,draft,target,origin,System.currentTimeMillis());}
+    JSONObject readConversationDraftFile(JSONObject scope,SkillBook.SourceReview review,String side,String path,int offset,int length)throws Exception{return book.readConversationDraftFile(scope,review,side,path,offset,length,System.currentTimeMillis());}
+    JSONObject applyConversationDraft(JSONObject scope,SkillBook.SourceReview review)throws Exception{return book.applyConversationDraft(scope,review,System.currentTimeMillis());}
+    JSONObject findConversationDraftResult(JSONObject scope,JSONObject origin,String digest)throws Exception{return book.findConversationDraftResult(scope,origin,digest,System.currentTimeMillis());}
+    void conversationDraftChanged()throws Exception{context.emit(id(),new JSONObject().put("event","skills_changed").put("reason","conversation_draft_saved"));}
+
     public JSONObject importPackage(JSONObject scope,InputStream archive,JSONObject options)throws Exception{
         JSONObject skill=book.importPackage(scope,archive,options,System.currentTimeMillis());
         context.emit(id(),new JSONObject().put("event","skills_changed"));return new JSONObject().put("skill",skill);
     }
     public JSONObject exportPackage(JSONObject scope,String id,int revision,String expectedDigest,OutputStream output)throws Exception{return book.exportPackage(scope,id,revision,expectedDigest,output,System.currentTimeMillis());}
+    public JSONObject inspectDocumentExport(JSONObject scope,String id,int revision,String expectedDigest)throws Exception{return book.inspectDocumentExport(scope,id,revision,expectedDigest,System.currentTimeMillis());}
+    public JSONObject exportDocument(JSONObject scope,String id,int revision,String expectedDigest,String expectedDocumentSha256,OutputStream output)throws Exception{return book.exportDocument(scope,id,revision,expectedDigest,expectedDocumentSha256,output,System.currentTimeMillis());}
     /** App composition once, using the already mounted original MCP installation authority. */
     public synchronized void mountMcpSources(dev.pocketengine.features.plugins.PluginsModule plugins){
         if(mcpSources!=null)throw new IllegalStateException("原MCP技能来源已挂载");

@@ -32,12 +32,12 @@ public class PluginsModuleTest {
         JSONObject manifest=new JSONObject().put("id","echoTools").put("name","工具").put("version","1").put("tools",new JSONArray().put(new JSONObject().put("name","show").put("kind","echo")));
         try{
             module.handle("install",new JSONObject().put("manifest",manifest));assertEquals(0,module.toolRegistry().length());
-            module.handle("enable",new JSONObject().put("id","echoTools").put("enabled",true));assertEquals(0,module.toolRegistry().length());
+            dev.pocketengine.features.plugins.PluginOwnerTestReview.enableCurrent(module,"echoTools",true);assertEquals(0,module.toolRegistry().length());
             module.handle("grant",new JSONObject().put("id","echoTools").put("grants",new JSONArray().put("tool:show")));JSONObject descriptor=module.toolRegistry().getJSONObject(0);
             assertEquals("plugin:echoTools:show",descriptor.getString("id"));assertTrue(descriptor.getString("name").matches("plugin_[a-f0-9]{24}"));assertEquals("read",descriptor.getString("effect"));
             JSONObject invoke=new JSONObject().put("id","echoTools").put("tool","show").put("expectedVersion",descriptor.getString("version")).put("expectedInstallationId",descriptor.getString("installationId")).put("arguments",new JSONObject().put("actual","content"));
             assertEquals("content",module.handle("invoke",invoke).getJSONObject("value").getString("actual"));
-            module.handle("install",new JSONObject().put("manifest",manifest));module.handle("enable",new JSONObject().put("id","echoTools").put("enabled",true));module.handle("grant",new JSONObject().put("id","echoTools").put("grants",new JSONArray().put("tool:show")));
+            module.handle("install",new JSONObject().put("manifest",manifest));dev.pocketengine.features.plugins.PluginOwnerTestReview.enableCurrent(module,"echoTools",true);module.handle("grant",new JSONObject().put("id","echoTools").put("grants",new JSONArray().put("tool:show")));
             try{module.handle("invoke",invoke);fail("reinstallation invalidates the exact tool descriptor even at the same manifest version");}catch(SecurityException expected){}
             module.handle("grant",new JSONObject().put("id","echoTools").put("grants",new JSONArray()));assertEquals(0,module.toolRegistry().length());
         }finally{module.close();}
@@ -53,7 +53,7 @@ public class PluginsModuleTest {
                 byte[] body="{\"ok\":true,\"value\":\"late write result\"}".getBytes(StandardCharsets.UTF_8);socket.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Length: "+body.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));socket.getOutputStream().write(body);
             }catch(Exception ignored){}});responder.setDaemon(true);responder.start();
             JSONObject manifest=new JSONObject().put("id","testPlugin").put("name","测试工具").put("version","1").put("tools",new JSONArray().put(new JSONObject().put("name","write").put("kind","http").put("endpoint","http://127.0.0.1:"+server.getLocalPort()+"/tool")));
-            module.handle("install",new JSONObject().put("manifest",manifest));module.handle("grant",new JSONObject().put("id","testPlugin").put("grants",new JSONArray().put("tool:write")));module.handle("enable",new JSONObject().put("id","testPlugin").put("enabled",true));
+            module.handle("install",new JSONObject().put("manifest",manifest));module.handle("grant",new JSONObject().put("id","testPlugin").put("grants",new JSONArray().put("tool:write")));dev.pocketengine.features.plugins.PluginOwnerTestReview.enableCurrent(module,"testPlugin",true);
             String operation=java.util.UUID.randomUUID().toString();Future<JSONObject> result=executor.submit(()->module.handle("invoke",new JSONObject().put("id","testPlugin").put("tool","write").put("_operationId",operation)));
             assertTrue(accepted.await(2,TimeUnit.SECONDS));long before=System.nanoTime();
             module.handle("grant",new JSONObject().put("id","testPlugin").put("grants",new JSONArray()));assertTrue("revocation must not wait for HTTP timeout",System.nanoTime()-before<1_000_000_000L);

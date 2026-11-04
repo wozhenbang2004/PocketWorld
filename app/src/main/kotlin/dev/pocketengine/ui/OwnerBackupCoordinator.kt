@@ -9,6 +9,8 @@ import androidx.compose.runtime.setValue
 import dev.pocketengine.EngineApplication
 import dev.pocketengine.core.RunControl
 import dev.pocketengine.features.workspace.OwnerDataArchives
+import dev.pocketengine.features.workspace.OwnerBackupWebDavHost
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Future
@@ -17,7 +19,9 @@ internal data class OwnerBackupState(
     val open: Boolean = false, val busy: Boolean = false, val presentation: String = "settings", val projectMemoryName: String? = null, val projectMemoryCurrent: Boolean = false, val inventory: JSONObject? = null,
     val selection: JSONObject? = null, val preview: JSONObject? = null, val review: JSONObject? = null,
     val originalAction: String? = null, val originalPhase: JSONObject? = null, val result: JSONObject? = null,
-    val experiencePage: JSONObject? = null, val projectAction: String? = null, val passwordPrompt: String? = null, val notice: String? = null, val error: String? = null
+    val experiencePage: JSONObject? = null, val projectAction: String? = null, val passwordPrompt: String? = null, val passwordPromptId: String? = null, val notice: String? = null, val error: String? = null,
+    val webDavConfig: JSONObject? = null, val webDavVersions: JSONArray? = null, val webDavReview: JSONObject? = null,
+    val webDavAction: String? = null, val webDavUpload: JSONObject? = null
 )
 
 /** Native owner selection and read-side lifecycle. Original FeatureHost/TaskStore
@@ -30,10 +34,11 @@ internal class OwnerBackupCoordinator(
     var state by mutableStateOf(OwnerBackupState()); private set
     private var generation = 0L
     private var experienceRevision = 0L
-    private var foreground = true
-    private var closed = false
+    @Volatile private var foreground = true
+    @Volatile private var closed = false
     private var observation: RunControl? = null
     private var future: Future<*>? = null
+    private val pendingArchiveSubmission = java.util.concurrent.atomic.AtomicReference<OwnerDataArchives.Confirmed?>()
     private var selected: OwnerDataArchives.Selection? = null
     // Live native selection only. Bundle/JSON never restores this opaque authority.
     private var projectMemorySelection: dev.pocketengine.features.memory.ProjectMemoryNamespaces.Selection? = null
@@ -44,13 +49,16 @@ internal class OwnerBackupCoordinator(
     private var receivedPickerUri: Uri? = null
     private var receivedPicker = false
     private var protectedPicker: Pair<Uri, JSONObject>? = null
+    private var webDavPassword: JSONObject? = null
+    private var webDavReview: OwnerBackupWebDavHost.Review? = null
     @Volatile private var passwordInFlight: CharArray? = null
     private fun host() = app.features.ownerDataArchives(app)
+    private fun webDav() = app.features.ownerBackupWebDav(app)
     private fun owner() { check(!closed && foreground && privateOwner()) { "请在本机私人页面打开备份与迁移" } }
     fun open() { owner(); projectMemorySelection = null; state = state.copy(open = true, presentation = "settings", projectMemoryName = null, projectMemoryCurrent = false); refresh() }
     fun openProjectMemory(selected: dev.pocketengine.features.memory.ProjectMemoryNamespaces.Selection, name: String) {
         owner(); if (state.busy || pending()) { state = state.copy(error = "请先核对原备份动作；未更换范围。"); return }
-        clearReview(); this.selected = null; projectMemorySelection = selected
+        clearReview(); clearWebDavReview(); this.selected = null; projectMemorySelection = selected
         state = OwnerBackupState(open = true, presentation = "memory_review", projectMemoryName = name, projectMemoryCurrent = true, notice = "仅备份刚才原生显选的项目及其记忆；不会读取主人全局或其它项目记忆。")
         refresh()
     }
@@ -58,7 +66,7 @@ internal class OwnerBackupCoordinator(
     fun openCache(id: String) {
         owner(); projectMemorySelection = null; state = state.copy(open = true, presentation = "settings", projectMemoryName = null, projectMemoryCurrent = false)
         if (state.busy || pending()) { state = state.copy(error = "请先核对原恢复动作；当前备份身份没有切换。"); return }
-        clearReview()
+        clearReview(); clearWebDavReview()
         work { c -> val actual = host().readLocalCacheForOwner(id, c); val metadata = actual.metadata(); val preview = host().preview(actual, c); { selected = actual; state = state.copy(selection = metadata, preview = preview, experiencePage = null, result = null, notice = "已核对原本机备份缓存；可以明确导出或仅移除此临时副本。") } }
     }
     fun refresh() = work { c ->
@@ -68,13 +76,13 @@ internal class OwnerBackupCoordinator(
         val meta = reopened?.metadata(); val preview = reopened?.let { host().preview(it, c) }
         return@work { selected = reopened; state = state.copy(inventory = actual, selection = meta ?: pin, preview = preview ?: state.preview) }
     }
-    fun closePage() { cancelPassword(); cancelRead(); clearReview(); projectMemorySelection = null; state = state.copy(open = false, busy = false, projectMemoryName = null, projectMemoryCurrent = false) }
+    fun closePage() { cancelPassword(); cancelRead(); clearReview(); clearWebDavReview(); projectMemorySelection = null; state = state.copy(open = false, busy = false, review = null, projectMemoryName = null, projectMemoryCurrent = false) }
     fun create(sections: Set<String>) {
         owner(); if (!state.open) { state = state.copy(error = "原备份页面已关闭；没有生成其它范围的备份。"); return }; if (state.busy || pending()) return
         val project = projectMemorySelection
         if (state.projectMemoryName != null && (project == null || !state.projectMemoryCurrent)) { state = state.copy(error = "原项目记忆选择已失效；请回原记忆审核页重新显选。未回退全局备份。"); return }
         if (project != null && sections != setOf("projects", "memory")) { state = state.copy(error = "项目记忆备份仅含此项目、其私人副本和其记忆；没有扩大分区。"); return }
-        clearReview()
+        clearReview(); clearWebDavReview(); cancelPassword()
         work(onFailure = { if (project != null) { projectMemorySelection = null; state = state.copy(projectMemoryCurrent = false) } }) { c ->
             val original = if (project != null) host().createProjectMemory(project, c) else host().create(sections, c)
             val metadata = original.metadata(); val preview = host().preview(original, c)
@@ -92,8 +100,8 @@ internal class OwnerBackupCoordinator(
     fun chooseImport() = chooseImport(true)
     fun choosePlainImport() = chooseImport(false)
     private fun chooseImport(encrypted: Boolean) {
-        owner(); if (state.busy || pending() || picker != null || protectedPicker != null) return
-        clearReview(); picker = JSONObject().put("kind", "import").put("encrypted", encrypted); restoredPicker = false; activity.pickOwnerDataArchive()
+        owner(); if (state.busy || pending() || picker != null || protectedPicker != null || webDavPassword != null) return
+        clearReview(); clearWebDavReview(); picker = JSONObject().put("kind", "import").put("encrypted", encrypted); restoredPicker = false; activity.pickOwnerDataArchive()
     }
     fun importResult(uri: Uri?) { receivePicker(uri, "import") }
     private fun receivePicker(uri: Uri?, expectedKind: String) {
@@ -106,18 +114,24 @@ internal class OwnerBackupCoordinator(
         val uri = receivedPickerUri ?: return; val pin = picker ?: return
         receivedPickerUri = null; receivedPicker = false; picker = null
         if (!privateOwner()) { state = state.copy(error = "请回私人页面重新选择文件；没有读写或恢复。"); return }
-        if (pin.optBoolean("encrypted")) { protectedPicker = uri to pin; state = state.copy(passwordPrompt = pin.getString("kind")); return }
+        if (pin.optBoolean("encrypted")) { protectedPicker = uri to pin; state = state.copy(passwordPrompt = pin.getString("kind"), passwordPromptId = java.util.UUID.randomUUID().toString()); return }
         if (pin.optString("kind") == "export") finishExport(uri, pin) else finishImport(uri)
     }
-    fun cancelPassword() { protectedPicker = null; state = state.copy(passwordPrompt = null) }
+    fun cancelPassword() { protectedPicker = null; webDavPassword = null; state = state.copy(passwordPrompt = null, passwordPromptId = null) }
     fun usePassword(supplied: CharArray) {
         var password: CharArray? = null
         try {
             owner(); if (state.busy) return
-            val exact = protectedPicker ?: return
+            val remote = webDavPassword
+            val exact = protectedPicker
+            if (remote == null && exact == null) return
             dev.pocketengine.features.workspace.OwnerBackupEnvelope.requirePassword(supplied)
-            password = supplied.copyOf(); passwordInFlight = password; protectedPicker = null; state = state.copy(passwordPrompt = null)
-            if (exact.second.optString("kind") == "export") finishExport(exact.first, exact.second, password) else finishImport(exact.first, password)
+            password = supplied.copyOf(); passwordInFlight = password; protectedPicker = null; webDavPassword = null; state = state.copy(passwordPrompt = null, passwordPromptId = null)
+            if (remote != null) {
+                if (remote.getString("kind") == "webdav_upload") prepareWebDavUpload(remote, password) else finishWebDavImport(remote, password)
+            } else if (exact != null) {
+                if (exact.second.optString("kind") == "export") finishExport(exact.first, exact.second, password) else finishImport(exact.first, password)
+            }
             password = null // The one I/O operation owns and clears its temporary array.
         } catch (failure: Exception) { state = state.copy(error = failure.message ?: "口令未采用") }
         finally { supplied.fill('\u0000'); clearPassword(password) }
@@ -142,7 +156,7 @@ internal class OwnerBackupCoordinator(
     fun offerExport() = offerExport(true)
     fun offerPlainExport() = offerExport(false)
     private fun offerExport(encrypted: Boolean) {
-        owner(); if (state.busy || picker != null || protectedPicker != null) return
+        owner(); if (state.busy || picker != null || protectedPicker != null || webDavPassword != null) return
         val meta = state.selection ?: return
         picker = JSONObject().put("kind", "export").put("encrypted", encrypted).put("selectionId", meta.getString("selectionId")).put("sha256", meta.getString("archiveSha256")); restoredPicker = false
         activity.createOwnerDataArchive(if (encrypted) "PocketWorld-data-backup.pwbackup" else "PocketWorld-data-backup.zip")
@@ -162,6 +176,96 @@ internal class OwnerBackupCoordinator(
         }
     }
     private fun pending(): Boolean = state.originalAction != null && state.originalPhase?.optString("status") !in setOf("completed", "failed")
+    fun loadWebDav() = work { _ -> val config = webDav().configuration(); { state = state.copy(webDavConfig = config, webDavVersions = if (state.webDavConfig?.optLong("revision") == config.optLong("revision")) state.webDavVersions else null) } }
+    fun saveWebDavConfiguration(revision: Long, collection: String, username: String, supplied: CharArray, enabled: Boolean) {
+        var password: CharArray? = null
+        try {
+            owner(); if (state.busy) return
+            clearWebDavReview(); password = supplied.copyOf(); passwordInFlight = password
+            val exact = password
+            work { _ -> try { val saved = webDav().saveConfiguration(revision, collection, username, exact, enabled); { state = state.copy(webDavConfig = saved, webDavVersions = null, notice = "WebDAV 目录已保存。每次上传仍须选择固定备份、输入备份口令并确认；没有自动上传。") } } finally { clearPassword(exact) } }
+            password = null
+        } finally { supplied.fill('\u0000'); clearPassword(password) }
+    }
+    fun listWebDavVersions() {
+        owner(); if (state.busy || webDavReview != null) return
+        work { c -> val listing = webDav().listVersions(c); val versions = listing.getJSONArray("versions"); listing.remove("versions"); { state = state.copy(webDavConfig = listing, webDavVersions = versions, notice = "仅列出了当前目录的备份版本。文件尚未下载、解密或恢复。") } }
+    }
+    fun offerWebDavUpload() {
+        owner(); if (state.busy || webDavReview != null || pendingReview != null || picker != null || protectedPicker != null || webDavPassword != null) return
+        val source = state.selection ?: return; val connection = state.webDavConfig ?: return
+        if (!connection.optBoolean("enabled")) { state = state.copy(error = "请先保存并启用 WebDAV 专用目录。"); return }
+        webDavPassword = JSONObject().put("kind", "webdav_upload").put("selectionId", source.getString("selectionId")).put("sha256", source.getString("archiveSha256")).put("connectionRevision", connection.getLong("revision"))
+        state = state.copy(passwordPrompt = "webdav_upload", passwordPromptId = java.util.UUID.randomUUID().toString())
+    }
+    private fun prepareWebDavUpload(pin: JSONObject, password: CharArray) {
+        work { c ->
+            try {
+                val exact = host().reopen(pin.getString("selectionId"), pin.getString("sha256"), c)
+                val original = RunControl(); val stopOriginal = Runnable { original.cancel() }; c.onCancel(stopOriginal)
+                try {
+                    val review = webDav().reviewUpload(exact, password, pin.getLong("connectionRevision"), original)
+                    val stopReview = Runnable { runCatching { review.close() } }; c.onCancel(stopReview)
+                    val metadata = review.metadata()
+                    return@work { c.removeCancelAction(stopReview); c.removeCancelAction(stopOriginal); webDavReview = review; state = state.copy(webDavReview = metadata, notice = "密文已在本机准备，尚未上传。请核对目标目录、范围和新版本文件名。") }
+                } catch (failure: Exception) { original.cancel(); c.removeCancelAction(stopOriginal); throw failure }
+            } finally { clearPassword(password) }
+        }
+    }
+    fun cancelWebDavReview() { owner(); clearWebDavReview() }
+    fun confirmWebDavUpload() {
+        owner(); if (state.busy) return
+        val review = webDavReview ?: return
+        try {
+            val confirmed = review.confirm(); val id = confirmed.actionId(); webDavReview = null
+            state = state.copy(webDavReview = null, webDavAction = id, webDavUpload = null, notice = "已确认这份密文和目标目录，正在登记一次上传。")
+            work { c ->
+                val stop = Runnable { confirmed.original().cancel() }; c.onCancel(stop)
+                try { val row = webDav().upload(confirmed); return@work { state = state.copy(webDavUpload = row, notice = webDavNotice(row)) } }
+                finally { c.removeCancelAction(stop) }
+            }
+        } catch (failure: Exception) { state = state.copy(error = failure.message?.take(400) ?: "原上传审阅已失效，请重新核对。") }
+    }
+    fun readWebDavUpload(id: String) {
+        owner(); if (state.busy) return
+        work { _ -> val row = webDav().uploadRecord(id); { state = state.copy(webDavAction = id, webDavUpload = row, notice = webDavNotice(row)) } }
+    }
+    fun queryWebDavUpload() {
+        owner(); if (state.busy) return
+        val id = state.webDavAction ?: return
+        work { c -> val row = webDav().queryUpload(id, c); { state = state.copy(webDavUpload = row, notice = webDavNotice(row)) } }
+    }
+    fun stopWebDavUpload() {
+        owner(); val id = state.webDavAction ?: return
+        cancelRead(); state = state.copy(busy = false)
+        work { _ -> val row = webDav().cancelUpload(id); { state = state.copy(webDavUpload = row, notice = "已请求停止原上传。已经发送的字节不会撤回；原结果只能只读核对。") } }
+    }
+    fun offerWebDavImport(name: String) {
+        owner(); if (state.busy || pending() || webDavReview != null || pendingReview != null || picker != null || protectedPicker != null || webDavPassword != null) return
+        val config = state.webDavConfig ?: return
+        if (!config.optBoolean("enabled")) { state = state.copy(error = "请先保存并启用 WebDAV 专用目录。"); return }
+        try { dev.pocketengine.features.workspace.OwnerBackupWebDavTarget(config.getString("collection")).file(name) }
+        catch (failure: Exception) { state = state.copy(error = failure.message); return }
+        webDavPassword = JSONObject().put("kind", "webdav_import").put("name", name).put("connectionRevision", config.getLong("revision")); state = state.copy(passwordPrompt = "webdav_import", passwordPromptId = java.util.UUID.randomUUID().toString())
+    }
+    private fun finishWebDavImport(pin: JSONObject, password: CharArray) {
+        work { c -> try {
+            val original = webDav().readVersion(pin.getString("name"), pin.getLong("connectionRevision"), password, c)
+            val metadata = original.metadata(); val preview = host().preview(original, c)
+            return@work { selected = original; state = state.copy(selection = metadata, preview = preview, experiencePage = null, result = null, projectAction = null, notice = "远端备份已完整下载、解密和核对，尚未恢复任何分区。请继续在此页逐分区审阅。") }
+        } finally { clearPassword(password) } }
+    }
+    private fun webDavNotice(row: JSONObject): String {
+        row.optString("notice").takeIf { it.isNotEmpty() }?.let { return it }
+        val receipt = row.optJSONObject("receipt")
+        return when (receipt?.optString("status")) {
+            "completed" -> if (receipt.optBoolean("remoteBytesVerified")) "远端密文字节与原上传完全一致。恢复尚未验证；可从版本列表下载、解密并预览。" else "远端已确认接收，仍需核对字节和恢复。"
+            "rejected" -> "远端拒绝了这次上传；没有覆盖或重试。请核对目录、专用凭据或容量。"
+            "cancelled" -> "原上传在进入发送前已停止。已有本机与远端备份保留。"
+            else -> "原上传结果尚未确认。请只读核对原版本；不会自动重传或覆盖文件。"
+        }
+    }
+    private fun clearWebDavReview() { val review = webDavReview; webDavReview = null; if (review != null) runCatching { review.close() }; state = state.copy(webDavReview = null) }
     fun reviewPhase(phase: String) {
         owner(); if (state.busy || pending()) return
         val metadata = state.selection ?: return
@@ -183,7 +287,25 @@ internal class OwnerBackupCoordinator(
         // acknowledgement can only be queried, never silently confirmed again.
         pendingReview = null; reviewControl = null
         state = state.copy(review = null, originalAction = action, originalPhase = null, result = null, notice = "已确认原分区动作；正在登记原任务。")
-        work { _ -> val original = app.features.submitOwnerArchivePhaseForOwner(confirmed); { state = state.copy(originalPhase = original, notice = "原恢复任务已登记。离开本页不会重新恢复；应用重开后按原编号只读核对。") } }
+        if (!pendingArchiveSubmission.compareAndSet(null, confirmed)) {
+            confirmed.original().cancel()
+            error("已有原恢复等待登记")
+        }
+        try {
+            work { _ ->
+                if (!pendingArchiveSubmission.compareAndSet(confirmed, null)) throw InterruptedException("恢复确认在队列执行前已取消")
+                // Ownership transfers once to FeatureHost. Closing the observation page
+                // after this point cannot replay or cancel the original admitted phase.
+                val original = app.features.submitOwnerArchivePhaseForOwner(confirmed)
+                return@work { state = state.copy(originalPhase = original, notice = "原恢复任务已登记。离开本页不会重新恢复；应用重开后按原编号只读核对。") }
+            }
+        } catch (failure: Exception) {
+            if (pendingArchiveSubmission.compareAndSet(confirmed, null)) {
+                confirmed.original().cancel()
+                state = state.copy(busy = false, originalAction = null, originalPhase = null, error = "恢复未进入工作队列；未写入恢复数据。")
+            } else state = state.copy(busy = false, error = "原恢复登记结果待核对，请保留原编号。")
+            throw failure
+        }
     }
     fun pollOriginal() {
         val id = state.originalAction ?: return
@@ -210,21 +332,27 @@ internal class OwnerBackupCoordinator(
     }
     fun openRestoredAttachment(value: JSONObject) { owner(); if (!state.busy && value.optString("id").isNotEmpty()) { closePage(); openAttachment(value) } }
     fun invalidateExperienceReadings() { experienceRevision++; state = state.copy(experiencePage = null) }
-    fun foreground(visible: Boolean) { invalidateExperienceReadings(); foreground = visible; if (!visible) { cancelPassword(); cancelRead(); clearReview(); projectMemorySelection = null; state = state.copy(busy = false, review = null, projectMemoryCurrent = false, notice = if (state.projectMemoryName != null) "原项目记忆选择未在后台保留；生成新备份前请回原审核页重新显选。已有原包仍可只读核对。" else state.notice) } else processPicker() }
-    fun detach() { cancelPassword(); closed = true; cancelRead(); clearReview() }
+    fun foreground(visible: Boolean) { invalidateExperienceReadings(); foreground = visible; if (!visible) { cancelPassword(); cancelRead(); clearReview(); clearWebDavReview(); projectMemorySelection = null; state = state.copy(busy = false, review = null, projectMemoryCurrent = false, notice = if (state.projectMemoryName != null) "原项目记忆选择未在后台保留；生成新备份前请回原审核页重新显选。已有原包仍可只读核对。" else state.notice) } else processPicker() }
+    fun detach() { cancelPassword(); closed = true; cancelRead(); clearReview(); clearWebDavReview() }
     fun save(bundle: Bundle) {
-        val pin = JSONObject().put("selectionId", state.selection?.optString("selectionId").orEmpty()).put("sha256", state.selection?.optString("archiveSha256").orEmpty()).put("actionId", state.originalAction.orEmpty()).put("projectActionId", state.projectAction.orEmpty())
+        val pin = JSONObject().put("selectionId", state.selection?.optString("selectionId").orEmpty()).put("sha256", state.selection?.optString("archiveSha256").orEmpty()).put("actionId", state.originalAction.orEmpty()).put("projectActionId", state.projectAction.orEmpty()).put("webDavActionId", state.webDavAction.orEmpty())
         bundle.putString("ownerDataArchivePosition", pin.toString()); if (picker != null) bundle.putBoolean("ownerDataArchivePickerPending", true)
     }
     fun restore(bundle: Bundle?) {
         projectMemorySelection = null; state = state.copy(projectMemoryCurrent = false)
         restoredPicker = bundle?.getBoolean("ownerDataArchivePickerPending") == true
         val raw = bundle?.getString("ownerDataArchivePosition") ?: return
-        runCatching { val pin = JSONObject(raw); state = state.copy(selection = pin.optString("selectionId").takeIf { it.isNotEmpty() }?.let { JSONObject().put("selectionId", it).put("archiveSha256", pin.getString("sha256")) }, originalAction = pin.optString("actionId").takeIf { it.isNotEmpty() }, projectAction = pin.optString("projectActionId").takeIf { it.isNotEmpty() }, notice = "只恢复了原备份和动作定位；没有恢复确认、凭据或写权限。请先核对原结果。") }
+        runCatching { val pin = JSONObject(raw); state = state.copy(selection = pin.optString("selectionId").takeIf { it.isNotEmpty() }?.let { JSONObject().put("selectionId", it).put("archiveSha256", pin.getString("sha256")) }, originalAction = pin.optString("actionId").takeIf { it.isNotEmpty() }, projectAction = pin.optString("projectActionId").takeIf { it.isNotEmpty() }, webDavAction = pin.optString("webDavActionId").takeIf { it.isNotEmpty() }, notice = "只恢复了原备份和动作定位；没有恢复确认、凭据或写权限。请先核对原结果。") }
     }
     private fun clearReview() { pendingReview = null; reviewControl?.cancel(); reviewControl = null }
     private fun clearPassword(password: CharArray?) { password?.fill('\u0000'); if (passwordInFlight === password) passwordInFlight = null }
-    private fun cancelRead() { clearPassword(passwordInFlight); generation++; observation?.cancel(); observation = null; future?.cancel(true); future = null }
+    private fun cancelRead() {
+        pendingArchiveSubmission.getAndSet(null)?.let { pending ->
+            pending.original().cancel()
+            if (state.originalAction == pending.actionId()) state = state.copy(originalAction = null, originalPhase = null, result = null, notice = "恢复确认在队列执行前已取消；未写入数据，可重新审阅。")
+        }
+        clearPassword(passwordInFlight); generation++; observation?.cancel(); observation = null; future?.cancel(true); future = null
+    }
     private fun requireContent(uri: Uri) { check(uri.scheme == "content" && !uri.authority.isNullOrBlank()) { "系统未返回可用的文件引用，没有读写其他路径。" } }
     private fun work(onFailure: (() -> Unit)? = null, read: (RunControl) -> (() -> Unit)) {
         owner(); if (state.busy) return

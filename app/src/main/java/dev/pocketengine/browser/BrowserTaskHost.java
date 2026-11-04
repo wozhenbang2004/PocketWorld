@@ -214,8 +214,13 @@ public final class BrowserTaskHost {
     private void revokeScope(Scope scope,String reason){try{JSONObject actions=tasks.browserActionsForOwner(scope.binding.taskId,scope.binding.runId,scope.binding.epoch,scope.control);if(actions.optLong("revision",0)>0)tasks.revokeBrowserActions(scope.binding.taskId,scope.binding.runId,scope.binding.epoch,scope.control,actions.getLong("revision"));}catch(Exception staleRun){/* No new authority or other-run revocation. */}String id=scope.readScopeId;if(id.isEmpty())return;try{tasks.revokeBrowserReadScope(scope.binding.taskId,scope.binding.runId,scope.binding.epoch,id,reason);}catch(Exception staleRun){/* Closing an old scope must never revoke a newer original run. */}finally{if(scope.port!=null)scope.port.cancelReadScopeNative(id);}}
     /** Precise native approval branch; null means this is another capability's existing workflow. */
     public JSONObject decideIfWaiting(String taskId,String approvalId,boolean approved)throws Exception {
+        Scope original=active.get(taskId);if(original==null)return null;
+        return decideIfWaiting(taskId,approvalId,approved,original.binding.runId,original.binding.epoch);
+    }
+    public JSONObject decideIfWaiting(String taskId,String approvalId,boolean approved,String expectedRun,int expectedEpoch)throws Exception {
         Scope scope=active.get(taskId);RunControl current=originals.currentControl(taskId);if(scope==null||scope.approvals==null||!scope.approvals.isWaiting(taskId,approvalId,current))return null;
-        JSONObject task=tasks.decideCapabilityApproval(taskId,approvalId,approved);scope.approvals.nativeDecisionChanged(taskId,approvalId,current);emit(taskId,new JSONObject().put("type","browser_approval_decided").put("taskId",taskId).put("approvalId",approvalId));return task;
+        if(!scope.binding.runId.equals(expectedRun)||scope.binding.epoch!=expectedEpoch)throw new SecurityException("原浏览审批执行代次已变化，请重新核对");
+        JSONObject task=tasks.decideCapabilityApproval(taskId,approvalId,approved,expectedRun,expectedEpoch);scope.approvals.nativeDecisionChanged(taskId,approvalId,current);emit(taskId,new JSONObject().put("type","browser_approval_decided").put("taskId",taskId).put("approvalId",approvalId));return task;
     }
     public JSONObject snapshotForOwner()throws Exception {return snapshotWithStopForOwner().state;}
     public OwnerSnapshot snapshotWithStopForOwner()throws Exception {

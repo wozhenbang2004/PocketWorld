@@ -32,6 +32,10 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
     private boolean sending;
     private boolean submitting;
     private String clientMessageId;
+    private volatile boolean voiceHandoffPreparing;
+    private QuickPanelVoiceHandoff.Offer voiceOffer;
+    private boolean voiceHandoffAccepted;
+    private volatile boolean audioWorking;
 
     QuickPanelCoordinator(PhoneAccessibilityService service, OwnerScreenContextHost host,
                           JSONObject task, String location) throws Exception {
@@ -40,6 +44,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
                 .put("epoch", task.getInt("coordinatorEpoch")).put("executionMode", task.getString("executionMode"));
         drafts = new QuickPanelDraftStore(service.getFilesDir(), expected.getString("taskId"), expected.getString("runId"), expected.getInt("epoch"));
         surface = new QuickPanelSurface(service, task.getString("goal"), location, this);
+        surface.audioScope("background".equals(task.getString("executionMode")));
     }
 
     void show() {
@@ -66,7 +71,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
     @Override public void capture(boolean includeScreenshot) {
         final int pending;
         synchronized (captureState) {
-            if (closed || !draftReady || sending || clientMessageId != null || preparingCapture || capture != null) return;
+            if (closed || !draftReady || audioWorking || voiceHandoffPreparing || sending || clientMessageId != null || preparingCapture || capture != null) return;
             pending = ++request; preparingCapture = true;
         }
         surface.capturing();
@@ -112,7 +117,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
     @Override public void cancelPreview() {
         final OwnerScreenContext previous;
         synchronized (captureState) {
-            if (closed || sending || clientMessageId != null) return;
+            if (closed || voiceHandoffPreparing || sending || clientMessageId != null) return;
             ++request; preparingCapture = false; previous = capture; capture = null; preview = null;
         }
         if (previous != null) previous.close(); surface.ready();
@@ -122,7 +127,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
         final OwnerScreenContext local; final OwnerScreenContext.Preview selected;
         synchronized (captureState) {
             local = capture; selected = preview;
-            if (closed || !draftReady || sending || local == null || selected == null || clientMessageId != null) return;
+            if (closed || !draftReady || audioWorking || voiceHandoffPreparing || sending || local == null || selected == null || clientMessageId != null) return;
         }
         if (note.length() > 1500) { surface.error("补充说明最多1500字，请编辑后再发送。"); return; }
         clientMessageId = UUID.randomUUID().toString(); sending = true;
@@ -152,7 +157,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
     /** Coalesce typing into the existing bounded lifecycle worker; closing never discards queued saves. */
     @Override public void noteChanged(String note) {
         synchronized (draftState) {
-            if (closed || !draftReady || clientMessageId != null) return;
+            if (closed || !draftReady || voiceHandoffPreparing || clientMessageId != null) return;
             latestNote = note;
             editGeneration++;
             if (draftSaveQueued) return;
@@ -181,7 +186,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
     }
 
     @Override public void clearDraft() {
-        if (closed || !draftReady || sending || clientMessageId != null) return;
+        if (closed || !draftReady || voiceHandoffPreparing || sending || clientMessageId != null) return;
         final long generation;
         synchronized (draftState) { latestNote = ""; generation = ++editGeneration; }
         worker.execute(() -> {
@@ -249,6 +254,79 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
         service.startActivity(launch);
     }
 
+    @Override public void reviewAudio() { audio(null,false); }
+    @Override public void setAudio(String reviewId,boolean muted) { if(reviewId!=null&&!reviewId.isBlank())audio(reviewId,muted); }
+    private void audio(String reviewId,boolean muted) {
+        synchronized(captureState){
+            if(closed||audioWorking||sending||submitting||preparingCapture||voiceHandoffPreparing)return;
+            audioWorking=true;
+        }
+        surface.audioLoading(reviewId!=null);
+        worker.execute(()->{
+            if(closed)return;
+            try {
+                if(!(service.getApplication() instanceof dev.pocketengine.EngineApplication app))throw new SecurityException("原任务宿主已变化");
+                JSONObject exact=new JSONObject().put("taskId",expected.getString("taskId")).put("runId",expected.getString("runId")).put("epoch",expected.getInt("epoch"));
+                JSONObject result=reviewId==null?app.reviewTaskAudio(exact):app.setTaskAudio(exact,reviewId,muted);
+                if(!exact.getString("taskId").equals(result.optString("taskId"))||!exact.getString("runId").equals(result.optString("runId"))||exact.getInt("epoch")!=result.optInt("epoch"))
+                    throw new SecurityException("音频回执不属于原任务，请回原任务核对");
+                main.post(()->{if(!closed){audioWorking=false;surface.audioResult(result,reviewId==null);}});
+            } catch(Exception unavailable){main.post(()->{if(!closed){audioWorking=false;surface.audioFailure(detail(unavailable,reviewId==null?"原 App 的声音暂不可核对。":"这次音频结果暂不能确认；请重新读取状态，不会重复派发。"));}});}
+        });
+    }
+
+    @Override public void voice() {
+        synchronized (captureState) {
+            if (closed || !draftReady || audioWorking || voiceHandoffPreparing || sending || submitting || preparingCapture || clientMessageId != null) return;
+            voiceHandoffPreparing = true;
+        }
+        final String note;
+        synchronized (draftState) { note = latestNote; }
+        surface.openingVoice();
+        worker.execute(() -> {
+            QuickPanelVoiceHandoff.Offer offered = null;
+            boolean draftSaved = false;
+            try {
+                QuickPanelDraftStore.State saved = drafts.saveNote(note);
+                draftSaved = true;
+                offered = QuickPanelVoiceHandoff.offer(drafts,saved,expected,taskId -> {
+                    // Reuse the existing original task/control check. Opening it reads no screen.
+                    try (OwnerScreenContext checked = host.openOwnerScreenContext(new JSONObject(expected.toString()))) {
+                        if (!(service.getApplication() instanceof dev.pocketengine.EngineApplication app)) throw new SecurityException("原快捷补充宿主已变化");
+                        return app.tasks.getForUi(taskId,false);
+                    }
+                },() -> main.post(() -> {
+                    if (closed) return;
+                    voiceHandoffAccepted = true; close();
+                }));
+                final QuickPanelVoiceHandoff.Offer selected = offered;
+                main.post(() -> {
+                    if (closed) { selected.close();return; }
+                    voiceOffer = selected;
+                    try {
+                        service.startActivity(new Intent(service,dev.pocketengine.ui.ComposeActivity.class)
+                                .setAction(QuickPanelVoiceHandoff.ACTION)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                                .putExtra(QuickPanelVoiceHandoff.TOKEN_EXTRA,selected.token));
+                    } catch (RuntimeException unavailable) {
+                        selected.close();voiceOffer=null;voiceHandoffPreparing=false;
+                        surface.error("前台听写窗口暂不可打开；原说明仍在本机，没有录音或发送。");
+                    }
+                });
+            } catch (Exception unavailable) {
+                if (offered != null) offered.close();
+                final boolean storageFailed = !draftSaved;
+                if (storageFailed) draftReady = unavailable instanceof IllegalArgumentException;
+                main.post(() -> {
+                    if (closed) return;
+                    voiceHandoffPreparing=false;
+                    if (storageFailed) surface.draftFailure(detail(unavailable,"原草稿保存尚未确认，未打开听写。"));
+                    surface.error(detail(unavailable,"原草稿或任务暂不可核对，没有打开听写或发送。"));
+                });
+            }
+        });
+    }
+
     @Override public void close() {
         final OwnerScreenContext previous;
         synchronized (captureState) {
@@ -260,6 +338,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
         // A dispatched durable input write may already have won. Closing the surface does not
         // cancel the original task or manufacture a second send; its receipt stays in TaskStore.
         if (previous != null) previous.close();
+        if (!voiceHandoffAccepted && voiceOffer != null) voiceOffer.close();
         worker.shutdown();
         surface.close(); service.quickPanelClosed(this);
     }

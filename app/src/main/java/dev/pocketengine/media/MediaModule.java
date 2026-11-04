@@ -72,6 +72,7 @@ public final class MediaModule implements EngineModule {
     /** Native host entry retains revocable authority across every HTTP dispatch and artifact import. */
     public JSONObject handleForHost(String command, JSONObject input, RunControl control) throws Exception {
         if (control == null) throw new SecurityException("媒体执行需要原任务实时控制");
+        if(control.recoveryOnly()&&!java.util.Set.of("getOperation","getJob","reconcileOperation","fetchResults","cancelJob").contains(command))throw new SecurityException("原媒体核对控制不能用于提交或配置");
         control.check();
         if (control.hasHostRun() && !control.matchesHostRun(input.optString("_taskId"), input.optString("_runId"), input.optInt("_epoch"))) {
             throw new SecurityException("媒体执行控制与原任务代次不一致");
@@ -102,9 +103,8 @@ public final class MediaModule implements EngineModule {
         if (!control.matchesHostRun(input.optString("_taskId"), input.optString("_runId"), input.optInt("_epoch"))) throw new SecurityException("进度观察代次已变化");
         control.check();
         final JSONObject config;
-        final RunControl observerControl = new RunControl();
-        observerControl.bindHostRun(input.getString("_taskId"), input.getString("_runId"), input.getInt("_epoch"));
-        observerControl.setAuthorityCheck(control::check);
+        final RunControl observerControl = RunControl.forOriginalRecovery(input.getString("_taskId"), input.getString("_runId"), input.getInt("_epoch"));
+        observerControl.retainAuthorityCheck(control::check);
         synchronized (this) {
             if (closed || progressControls.size() >= 2) throw new IllegalStateException("媒体模块已关闭或观察连接已达上限");
             config = read();
@@ -126,6 +126,8 @@ public final class MediaModule implements EngineModule {
 
     private JSONObject handleInternal(String command, JSONObject input, RunControl control, boolean nativeControl) throws Exception {
         if (command.matches("reviewResultDownload|confirmResultDownload")) throw new SecurityException("一次原结果下载只能由原生主人审阅入口授权");
+        boolean submission=command.matches("generateImage|generateVideo|editImage|synthesizeSpeech|submitWorkflow");
+        if(submission){control.requireExecution();context.requireExecutionEnabled();}
         if (command.equals("configure")) return configure(input);
         if (command.equals("listJobs") || command.equals("getOperation")) {
             synchronized (this) { if (closed) throw new IllegalStateException("媒体模块已关闭"); }
@@ -176,6 +178,7 @@ public final class MediaModule implements EngineModule {
     private synchronized JSONObject configure(JSONObject input) throws Exception {
         if (closed) throw new IllegalStateException("媒体模块已关闭");
         if (active != null || !progressControls.isEmpty()) throw new IllegalStateException("媒体请求或进度观察期间不能更改服务配置，请先停止原观察");
+        if(input.has("expectedConfigurationRevision")&&(!(input.opt("expectedConfigurationRevision") instanceof String)||!MediaJobs.configurationRevision(read()).equals(input.getString("expectedConfigurationRevision"))))throw new SecurityException("原媒体服务配置已变化，请重新读取后保存");
         String base = input.getString("baseUrl").trim();
         MediaTransport.base(base);
         String provider = input.optString("provider", "openai_compatible");

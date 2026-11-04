@@ -65,6 +65,25 @@ public final class CapabilityApprovalContinuationNativeTest {
     private JSONObject decide(JSONObject run,String approval)throws Exception{return app.dispatchOwnerAction("approveCapability",new JSONObject().put("taskId",run.getString("id")).put("approvalId",approval).put("approved",true));}
     private void waitForDecision(JSONObject run)throws Exception{app.tasks.endAttempt(run.getString("id"),run.getString("runId"),"awaiting_user","original decision pending",new JSONObject());}
 
+    @Test public void reviewedDecisionKeepsTheEpochFenceThroughQueuedContinuation()throws Exception{
+        JSONObject original=start(false);String id=original.getString("id"),approval=pending(original);waitForDecision(original);
+        JSONObject reviewed=new JSONObject().put("taskId",id).put("approvalId",approval).put("approved",true)
+                .put("runId",original.getString("runId")).put("epoch",original.getInt("coordinatorEpoch")+1);
+        String before=app.tasks.get(id,false).toString();
+        assertThrows(SecurityException.class,()->app.dispatchOwnerAction("approveCapability",reviewed));
+        assertEquals(before,app.tasks.get(id,false).toString());assertTrue(queue.pending.isEmpty());
+
+        reviewed.put("epoch",original.getInt("coordinatorEpoch"));
+        JSONObject receipt=app.dispatchOwnerAction("approveCapability",reviewed);
+        assertTrue(receipt.getBoolean("approvalDecisionSaved"));assertTrue(receipt.getBoolean("continuationScheduled"));
+        assertFalse(receipt.getBoolean("continuedOriginalRun"));assertEquals(original.getInt("coordinatorEpoch"),receipt.getInt("approvalEpoch"));
+        JSONObject successor=app.tasks.startAttempt(id,"capabilities",4);waitForDecision(successor);
+        String successorBeforePickup=app.tasks.get(id,false).toString();
+        queue.pickUp();shadowOf(Looper.getMainLooper()).idle();
+        assertEquals(successorBeforePickup,app.tasks.get(id,false).toString());
+        assertTrue(queue.pending.isEmpty());
+    }
+
     @Test public void staleDecisionCannotQueueAContinuationOrWriteFeedbackIntoTheSuccessor()throws Exception{
         JSONObject original=start(false);String approval=pending(original);waitForDecision(original);
         JSONObject successor=app.tasks.startAttempt(original.getString("id"),"capabilities",4);waitForDecision(successor);

@@ -197,8 +197,8 @@ private fun RemoteConnections(state: PocketUiState, controller: PocketWorldContr
             Text(profile.optString("name"), fontSize = 15.sp, fontWeight = FontWeight.Medium)
             CenterCaption(profile.optString("baseUrl") + if (profile.optBoolean("hasToken")) " · 已保存密钥" else " · 未保存密钥")
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = { selected = id; controller.requestFeature("remote", "probe", JSONObject().put("profileId", id)); controller.requestFeature("remote", "environments", JSONObject().put("profileId", id)) }, enabled = "remote.probe" !in state.moduleBusy) { Text("探测", fontSize = 12.sp) }
-                TextButton(onClick = { selected = id; controller.requestFeature("remote", "reconnect", JSONObject().put("profileId", id)) }, enabled = "remote.reconnect" !in state.moduleBusy) { Text("同步原任务", fontSize = 12.sp) }
+                TextButton(onClick = { selected = id; controller.requestFeature("remote", "probe", JSONObject().put("profileId", id).put("_profileBinding", profile.optString("bindingHash"))); controller.requestFeature("remote", "environments", JSONObject().put("profileId", id).put("_profileBinding", profile.optString("bindingHash"))) }, enabled = "remote.probe" !in state.moduleBusy) { Text("探测", fontSize = 12.sp) }
+                TextButton(onClick = { selected = id; controller.requestFeature("remote", "reconnect", JSONObject().put("profileId", id).put("_profileBinding", profile.optString("bindingHash"))) }, enabled = "remote.reconnect" !in state.moduleBusy) { Text("同步原任务", fontSize = 12.sp) }
                 TextButton(onClick = { editing = profile }) { Text("编辑", fontSize = 12.sp) }
                 TextButton(onClick = { deleting = profile }) { Text("移除", fontSize = 12.sp, color = Danger) }
             }
@@ -224,11 +224,12 @@ private fun RemoteConnections(state: PocketUiState, controller: PocketWorldContr
             state.tasks.firstOrNull { it.raw.optString("feature") == "remote" && it.raw.optString("externalId") == job.optString("id") && it.raw.optJSONObject("externalRefs")?.optString("profileId") == id }?.let { task ->
                 TextButton(onClick = { controller.focusTask(task.id) }) { Text("打开本机原任务与补充回执", fontSize = 12.sp) }
             }
-            if (job.optString("status") in setOf("queued", "running", "stopping", "awaiting_approval", "awaiting_input")) TextButton(onClick = { controller.requestFeature("remote", "cancelJob", JSONObject().put("profileId", id).put("jobId", job.optString("id")).put("jobOperationId", job.optString("operationId")).put("serviceBase", job.optString("serviceBase"))) }) { Text("请求停止", fontSize = 12.sp) }
+            val originalProfileBinding = job.optString("profileBinding")
+            if (job.optString("status") in setOf("queued", "running", "stopping", "awaiting_approval", "awaiting_input")) TextButton(onClick = { controller.requestFeature("remote", "cancelJob", JSONObject().put("profileId", id).put("jobId", job.optString("id")).put("jobOperationId", job.optString("operationId")).put("serviceBase", job.optString("serviceBase")).put("_profileBinding", originalProfileBinding)) }) { Text("请求停止", fontSize = 12.sp) }
         }
     }
     editing?.let { profile -> RemoteProfileDialog(profile, state, controller) { editing = null } }
-    deleting?.let { profile -> ConfirmAction("移除这个电脑连接？", "不会撤回已经在电脑发生的操作，请先核对原任务。", "移除连接", { deleting = null }) { controller.requestFeature("remote", "removeProfile", JSONObject().put("profileId", profile.optString("id"))); deleting = null } }
+    deleting?.let { profile -> ConfirmAction("移除这个电脑连接？", "不会撤回已经在电脑发生的操作，请先核对原任务。", "移除连接", { deleting = null }) { controller.requestFeature("remote", "removeProfile", JSONObject().put("profileId", profile.optString("id")).put("expectedBindingHash", profile.optString("bindingHash"))); deleting = null } }
 }
 
 @Composable
@@ -236,18 +237,20 @@ private fun RemoteProfileDialog(profile: JSONObject, state: PocketUiState, contr
     var name by remember { mutableStateOf(profile.optString("name")) }
     var url by remember { mutableStateOf(profile.optString("baseUrl")) }
     var token by remember { mutableStateOf("") }
-    var submitted by remember { mutableStateOf(false) }
-    val busy = "remote.saveProfile" in state.moduleBusy
-    LaunchedEffect(busy) { if (submitted && !busy && state.moduleErrors["remote.saveProfile"] == null) close() }
+    var attempted by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var alive by remember { mutableStateOf(true) }
+    DisposableEffect(Unit) { onDispose { alive = false; token = "" } }
     AlertDialog(onDismissRequest = { if (!busy) close() }, containerColor = MaterialTheme.colorScheme.surface, title = { Text(if (profile.has("id")) "编辑电脑连接" else "添加电脑连接") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedTextField(name, { name = it }, label = { Text("名称") }, singleLine = true)
             OutlinedTextField(url, { url = it }, label = { Text("Companion 地址") }, placeholder = { Text("https://你的电脑地址") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
             OutlinedTextField(token, { token = it }, label = { Text("访问密钥") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
             CenterCaption(if (profile.optBoolean("hasToken")) "相同服务可留空保留已存密钥；更换服务需重新填写。" else "填写电脑端配置的访问密钥。")
-            state.moduleErrors["remote.saveProfile"]?.let { Text(it, color = Danger, fontSize = 12.sp) }
+            error?.let { Text(it + " 请先核对连接列表，再重新打开编辑。", color = Danger, fontSize = 12.sp) }
         }
-    }, confirmButton = { Button(onClick = { submitted = true; controller.requestFeature("remote", "saveProfile", JSONObject().put("name", name.trim()).put("baseUrl", url.trim()).put("token", token).also { if (profile.has("id")) it.put("id", profile.getString("id")) }) }, enabled = !busy && name.isNotBlank() && url.isNotBlank()) { Text(if (busy) "保存中" else "保存连接") } }, dismissButton = { TextButton(onClick = close, enabled = !busy) { Text("取消") } })
+    }, confirmButton = { Button(onClick = { attempted = true; busy = true; val input = JSONObject().put("name", name.trim()).put("baseUrl", url.trim()).put("token", token).put("expectedBindingHash", profile.optString("bindingHash")).also { if (profile.has("id")) it.put("id", profile.getString("id")) }; token = ""; try { controller.requestFeatureReceipt("remote", "saveProfile", input) { result, failure -> if (alive) { busy = false; if (result != null && failure == null) close() else error = failure ?: "未确认这次保存" } } } catch (failure: Exception) { busy = false; error = failure.message } }, enabled = !busy && !attempted && name.isNotBlank() && url.isNotBlank()) { Text(if (busy) "保存中" else "保存连接") } }, dismissButton = { TextButton(onClick = close, enabled = !busy) { Text("取消") } })
 }
 
 @Composable
@@ -424,7 +427,7 @@ private fun NativeChannels(state: PocketUiState, controller: PocketWorldControll
                     CenterCaption("已绑定账号：" + binding.optString("senderId"))
                 }
                 Switch(binding.optBoolean("ownerTasksEnabled"), { enabled ->
-                    taskPermission = JSONObject(binding.toString()).put("enabled", enabled).put("profileName", profile.optString("name"))
+                    taskPermission = JSONObject(binding.toString()).put("enabled", enabled).put("profileName", profile.optString("name")).put("expectedTransportEpoch", profile.getString("transportEpoch"))
                 }, enabled = !taskBusy && (binding.optBoolean("ownerTasksEnabled") || profile.optBoolean("enabled") && taskHostReady))
             }
             CenterCaption("仅 /task 明确提交目标；不授予手机控制。写入与外发仍须在本机按原参数审批，私聊里的“同意”不算授权。")
@@ -451,7 +454,7 @@ private fun NativeChannels(state: PocketUiState, controller: PocketWorldControll
     }
     taskPermission?.let { proposal ->
         val current = bindings.find { it.optString("profileId") == proposal.optString("profileId") }
-        val unchanged = current != null && current.optString("bindingEpoch") == proposal.optString("bindingEpoch") && current.optString("taskGrantEpoch") == proposal.optString("taskGrantEpoch")
+        val unchanged = current != null && current.optString("bindingEpoch") == proposal.optString("bindingEpoch") && current.optString("taskGrantEpoch") == proposal.optString("taskGrantEpoch") && channels.optJSONArray("profiles").objects().singleOrNull { it.optString("id") == proposal.optString("profileId") }?.optString("transportEpoch") == proposal.optString("expectedTransportEpoch")
         val enabling = proposal.optBoolean("enabled")
         AlertDialog(onDismissRequest = { if (!taskBusy) taskPermission = null }, containerColor = MaterialTheme.colorScheme.surface,
             title = { Text(if (enabling) "允许这个主人私聊创建任务？" else "关闭这个渠道的任务权限？") },
@@ -461,7 +464,7 @@ private fun NativeChannels(state: PocketUiState, controller: PocketWorldControll
                 if (!unchanged) Text("绑定或权限已变化，请返回核对最新身份。", color = Danger, fontSize = 12.sp)
             } },
             confirmButton = { Button(onClick = {
-                controller.requestFeature("channels", "owner.tasks.set", JSONObject().put("profileId", proposal.optString("profileId")).put("enabled", enabling).put("confirmed", true).put("expectedBindingEpoch", proposal.optString("bindingEpoch")).put("expectedTaskGrantEpoch", proposal.optString("taskGrantEpoch")))
+                controller.requestFeature("channels", "owner.tasks.set", JSONObject().put("profileId", proposal.optString("profileId")).put("enabled", enabling).put("confirmed", true).put("expectedBindingEpoch", proposal.optString("bindingEpoch")).put("expectedTaskGrantEpoch", proposal.optString("taskGrantEpoch")).put("expectedTransportEpoch", proposal.getString("expectedTransportEpoch")))
                 taskPermission = null
             }, enabled = unchanged && !taskBusy) { Text(if (enabling) "明确允许" else "关闭权限") } },
             dismissButton = { TextButton(onClick = { taskPermission = null }, enabled = !taskBusy) { Text("返回") } })
@@ -491,7 +494,7 @@ private fun NativePlugins(state: PocketUiState, controller: PocketWorldControlle
     }
     plugins.optJSONArray("plugins").objects().forEach { plugin ->
         val manifest = plugin.optJSONObject("manifest") ?: JSONObject()
-        Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(manifest.optString("name", plugin.optString("id")), fontSize = 14.sp); CenterCaption("版本 " + manifest.optString("version") + " · " + (plugin.optJSONArray("grants")?.length() ?: 0) + " 项已授权限") }; if (manifest.optJSONObject("mcpSource") != null || manifest.optJSONArray("tools").objects().any { it.optString("kind") == "mcp" }) TextButton(onClick = { controller.openConnection("mcp") }) { Text(if (plugin.optBoolean("enabled")) "已启用 · 管理" else "已停用 · 管理", fontSize = 12.sp) } else Switch(plugin.optBoolean("enabled"), { controller.requestFeature("plugins", "enable", JSONObject().put("id", plugin.optString("id")).put("enabled", it)) }, enabled = "plugins.enable" !in state.moduleBusy) }
+        Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(manifest.optString("name", plugin.optString("id")), fontSize = 14.sp); CenterCaption("版本 " + manifest.optString("version") + " · " + (plugin.optJSONArray("grants")?.length() ?: 0) + " 项已授权限") }; if (manifest.optJSONObject("mcpSource") != null || manifest.optJSONArray("tools").objects().any { it.optString("kind") == "mcp" }) TextButton(onClick = { controller.openConnection("mcp") }) { Text(if (plugin.optBoolean("enabled")) "已启用 · 管理" else "已停用 · 管理", fontSize = 12.sp) } else Switch(plugin.optBoolean("enabled"), { controller.requestFeature("plugins", "enable", JSONObject().put("id", plugin.optString("id")).put("expectedInstallationId", plugin.getString("installationId")).put("expectedStateRevision", plugin.getLong("stateRevision")).put("expectedGrantsDigest", plugin.getString("grantsDigest")).put("enabled", it)) }, enabled = "plugins.enable" !in state.moduleBusy) }
         HorizontalDivider(color = Line)
     }
     PluginVersions(state, controller)
@@ -558,7 +561,7 @@ private fun NativeSkills(state: PocketUiState, controller: PocketWorldController
         val enabled = skill.optBoolean("enabled")
         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).clickable { selected = skill; content = ""; nextOffset = 0; hasMore = true; controller.requestFeature("skills", "read", JSONObject().put("id", skill.optString("id")).put("path", "SKILL.md").put("offset", 0).put("length", 8000)) }) { Text(skill.optString("name", skill.optString("id")), fontSize = 14.sp); CenterCaption(if (enabled) "已启用" else "未启用") }
-            if (enabled) TextButton(onClick = { controller.requestFeature("skills", "setEnabled", JSONObject().put("id", skill.optString("id")).put("enabled", false).put("confirmed", true)) }) { Text("停用", fontSize = 12.sp) }
+            if (enabled) TextButton(onClick = { controller.requestFeature("skills", "setEnabled", JSONObject().put("id", skill.optString("id")).put("enabled", false).put("acceptedDigest", skill.getString("digest")).put("expectedRevision", skill.getInt("revision")).put("expectedExecutionGeneration", skill.optLong("executionGeneration", 0)).put("confirmed", true)) }) { Text("停用", fontSize = 12.sp) }
         }
         HorizontalDivider(color = Line)
     }
@@ -572,7 +575,7 @@ private fun NativeSkills(state: PocketUiState, controller: PocketWorldController
         if (hasMore) TextButton(onClick = { controller.requestFeature("skills", "read", JSONObject().put("id", skill.optString("id")).put("path", "SKILL.md").put("offset", nextOffset).put("length", 8000)) }, enabled = "skills.read" !in state.moduleBusy) { Text("读取后续说明") }
         if (!skill.optBoolean("enabled")) OutlinedButton(onClick = { enabling = skill }, enabled = content.isNotBlank() && !hasMore) { Text("启用这个版本") }
     }
-    enabling?.let { skill -> AlertDialog(onDismissRequest = { enabling = null }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("启用这个技能版本？") }, text = { Text("确认已核对来源和当前说明。能力调用仍受宿主授权约束。") }, confirmButton = { Button(onClick = { controller.requestFeature("skills", "setEnabled", JSONObject().put("id", skill.optString("id")).put("enabled", true).put("acceptedDigest", skill.optString("digest")).put("confirmed", true)); enabling = null }) { Text("确认启用") } }, dismissButton = { TextButton(onClick = { enabling = null }) { Text("取消") } }) }
+    enabling?.let { skill -> AlertDialog(onDismissRequest = { enabling = null }, containerColor = MaterialTheme.colorScheme.surface, title = { Text("启用这个技能版本？") }, text = { Text("确认已核对来源和当前说明。能力调用仍受宿主授权约束。") }, confirmButton = { Button(onClick = { controller.requestFeature("skills", "setEnabled", JSONObject().put("id", skill.optString("id")).put("enabled", true).put("acceptedDigest", skill.optString("digest")).put("expectedRevision", skill.getInt("revision")).put("expectedExecutionGeneration", skill.optLong("executionGeneration", 0)).put("confirmed", true)); enabling = null }) { Text("确认启用") } }, dismissButton = { TextButton(onClick = { enabling = null }) { Text("取消") } }) }
 }
 
 @Composable

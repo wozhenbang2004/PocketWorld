@@ -53,6 +53,33 @@ public final class ChannelTaskCoordinatorTest {
             assertEquals(1,f.tasks.get(id,false).getInt("coordinatorEpoch"));assertEquals(1,f.tasks.list().length());
         }
     }
+    @Test public void staleOwnerStopCannotSelectTheCurrentChannelRun()throws Exception {
+        try(Fixture f=new Fixture()){
+            f.install((id,initial,config,control)->new JSONObject());
+            String id=f.submit("原运行取消必须有身份").getString("taskId");JSONObject before=f.tasks.get(id,false);
+            RunControl original=f.controls.get(id);assertNotNull(original);
+            assertThrows(SecurityException.class,()->f.coordinator.stopOriginal(id,UUID.randomUUID().toString(),before.getInt("coordinatorEpoch")));
+            assertFalse(original.isCancelled());assertEquals(before.getString("status"),f.tasks.get(id,false).getString("status"));
+            assertFalse(f.tasks.get(id,false).optBoolean("cancelRequested"));
+        }
+    }
+    @Test public void reviewedResumeReservesTheOriginalIdentityAndRejectsADelayedSecondRequest()throws Exception{
+        try(Fixture f=new Fixture()){
+            AtomicInteger calls=new AtomicInteger();f.install((id,initial,config,control)->{
+                calls.incrementAndGet();JSONObject current=f.tasks.requireCapabilityAttempt(id,control);
+                f.tasks.endAttempt(id,current.getString("runId"),"paused","Original worker settled",new JSONObject());return new JSONObject();
+            });
+            String id=f.submit("原渠道继续保留身份").getString("taskId");f.work.runNext();JSONObject first=f.tasks.get(id,false);
+            assertEquals(1,calls.get());assertTrue(f.controls.isEmpty());assertEquals("paused",first.getString("status"));
+            f.coordinator.resumeOriginal(id,first.getString("runId"),first.getInt("coordinatorEpoch"),"Keep the original receipt");
+            JSONObject next=f.tasks.get(id,false);assertEquals(first.getInt("coordinatorEpoch")+1,next.getInt("coordinatorEpoch"));
+            assertTrue(f.controls.get(id).matchesHostRun(id,next.getString("runId"),next.getInt("coordinatorEpoch")));assertEquals(1,f.work.size());
+            assertEquals("Keep the original receipt",next.getString("feedback"));String before=next.toString();
+            assertThrows(SecurityException.class,()->f.coordinator.resumeOriginal(id,first.getString("runId"),first.getInt("coordinatorEpoch"),"Stale feedback"));
+            assertEquals(before,f.tasks.get(id,false).toString());assertEquals(1,f.work.size());f.work.runNext();
+            assertEquals(2,calls.get());assertTrue(f.controls.isEmpty());assertEquals(next.getString("runId"),f.tasks.get(id,false).getString("runId"));
+        }
+    }
     @Test public void revocationWhileQueuedFencesDispatchAndNativeStopStillWorks()throws Exception{
         try(Fixture f=new Fixture()){
             AtomicInteger calls=new AtomicInteger();f.install((id,initial,config,control)->{calls.incrementAndGet();return new JSONObject();});

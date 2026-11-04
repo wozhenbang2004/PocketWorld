@@ -54,8 +54,8 @@ public final class McpOutputNativeRunnerJourneyTest {
             JSONObject preview=plugins.handle("discoverMcp",new JSONObject().put("id","output-native").put("name","本机受控原MCP").put("endpoint",wire.endpoint()).put("token",TOKEN).put("protocolVersion",McpData.VERSION));
             JSONObject installed=plugins.handle("installMcp",new JSONObject().put("previewId",preview.getString("previewId")).put("expectedInstallationId",preview.getString("expectedInstallationId")).put("tools",new JSONArray().put("lookup")));
             NativeOwnerWorkflows owner=new NativeOwnerWorkflows(features,context,tasks,new MemorySourceBridge(features,tasks));
-            owner.mcp("setToolGrantReviewed",new JSONObject().put("id",installed.getString("id")).put("expectedInstallationId",installed.getString("installationId")).put("expectedGrantsDigest",installed.getString("grantsDigest")).put("tool","lookup").put("granted",true));
-            owner.mcp("setEnabledReviewed",new JSONObject().put("id",installed.getString("id")).put("expectedInstallationId",installed.getString("installationId")).put("enabled",true));
+            JSONObject granted=owner.mcp("setToolGrantReviewed",new JSONObject().put("id",installed.getString("id")).put("expectedInstallationId",installed.getString("installationId")).put("expectedGrantsDigest",installed.getString("grantsDigest")).put("tool","lookup").put("granted",true));
+            owner.mcp("setEnabledReviewed",PluginOwnerTestReview.payload(granted,true));
             assertEquals(0,wire.count("tools/call"));
         }
         long outputs(){try(Cursor c=db.rawQuery("SELECT count(*) FROM task_output_sources",null)){assertTrue(c.moveToFirst());return c.getLong(0);}}
@@ -263,8 +263,8 @@ public final class McpOutputNativeRunnerJourneyTest {
             JSONObject installed=plugins.handle("install",new JSONObject().put("manifest",new JSONObject().put("id","http-output-native").put("name","原HTTP结果").put("version","1").put("tools",new JSONArray().put(tool))).put("token",TOKEN));
             assertFalse(installed.getBoolean("enabled"));assertEquals(0,installed.getJSONArray("grants").length());
             NativeOwnerWorkflows owner=new NativeOwnerWorkflows(features,context,tasks,new MemorySourceBridge(features,tasks));
-            owner.mcp("setToolGrantReviewed",new JSONObject().put("id",installed.getString("id")).put("expectedInstallationId",installed.getString("installationId")).put("expectedGrantsDigest",installed.getString("grantsDigest")).put("tool","lookup").put("granted",true));
-            owner.mcp("setEnabledReviewed",new JSONObject().put("id",installed.getString("id")).put("expectedInstallationId",installed.getString("installationId")).put("enabled",true));
+            JSONObject granted=owner.mcp("setToolGrantReviewed",new JSONObject().put("id",installed.getString("id")).put("expectedInstallationId",installed.getString("installationId")).put("expectedGrantsDigest",installed.getString("grantsDigest")).put("tool","lookup").put("granted",true));
+            owner.mcp("setEnabledReviewed",PluginOwnerTestReview.payload(granted,true));
         }
         String base(){return "http://127.0.0.1:"+server.getAddress().getPort();}
         JSONObject respond(JSONObject request)throws Exception {

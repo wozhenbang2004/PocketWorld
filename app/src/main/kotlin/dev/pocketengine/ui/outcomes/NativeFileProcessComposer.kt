@@ -18,7 +18,7 @@ internal fun NativeFileProcessComposer(state:AttachmentOutcomeState,flow:Attachm
     val defaults=remember(source.identity){val w=info.optInt("width",1);val h=info.optInt("height",1);val scale=minOf(1.0,2000.0/w,2000.0/h);listOf("0","0",w.toString(),h.toString(),(w*scale).toInt().coerceAtLeast(1).toString(),(h*scale).toInt().coerceAtLeast(1).toString())}
     var crop by remember(source.identity){mutableStateOf(defaults)};var rotation by remember(source.identity){mutableIntStateOf(0)};var format by remember(source.identity){mutableStateOf("png")};var quality by remember(source.identity){mutableStateOf("90")};var start by remember(source.identity){mutableStateOf("0")};var end by remember(source.identity){mutableStateOf(minOf(10000,info.optLong("durationMillis",1000)).toString())}
     var localError by remember(source.identity){mutableStateOf<String?>(null)};var confirm by remember(source.identity){mutableStateOf(false)}
-    BackHandler(enabled=!state.busy,onBack=flow::closeProcessing)
+    BackHandler { nativeBusyBack(state.busy, flow::closeProcessing) }
     Column(Modifier.fillMaxSize().systemBarsPadding().imePadding().padding(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
         Row{Text(if(image)"原图加工"else "截取原媒体",style=MaterialTheme.typography.titleLarge,modifier=Modifier.weight(1f));TextButton(onClick=flow::closeProcessing,enabled=!state.busy){Text("返回原件")}}
         Text(source.name,style=MaterialTheme.typography.titleMedium)
@@ -48,6 +48,7 @@ internal fun NativeFileProcessComposer(state:AttachmentOutcomeState,flow:Attachm
 
 @Composable
 internal fun NativeImageVersionComparison(pair:Pair<OwnerFilePreviewSource,OwnerFilePreviewSource>,back:()->Unit){
+    BackHandler(onBack = back)
     var selected by remember(pair.first.identity,pair.second.identity){mutableIntStateOf(1)}
     Column(Modifier.fillMaxSize()){
         Row(Modifier.fillMaxWidth().statusBarsPadding(),horizontalArrangement=Arrangement.spacedBy(8.dp)){TextButton(onClick=back){Text("返回成果")};FilterChip(selected==0,{selected=0},label={Text("父原图")});FilterChip(selected==1,{selected=1},label={Text("这个版本")})}

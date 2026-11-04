@@ -61,7 +61,11 @@ public final class GroupsModule implements EngineModule {
                 execution.check();GroupHostPort.TaskReceipt receipt=host.resume(request,execution);execution.checkRead();validate(request,receipt);return registry.receipt(request.requestId,receipt);
             }
             case "task.cancel":return cancel(GroupJson.id(value,"requestId"),GroupJson.text(value,"runId",36),(int)GroupJson.number(value,"coordinatorEpoch",1,Integer.MAX_VALUE),this::ownerCheck);
-            case "delivery.send":return sendOutput(GroupJson.id(value,"requestId"),GroupJson.id(value,"outputId"));
+            case "delivery.send":{
+                GroupHostPort.Request request=registry.request(GroupJson.id(value,"requestId"));
+                boolean reviewed=value.has("taskRevision")||value.has("runId")||value.has("coordinatorEpoch")||value.has("expectedOutput");
+                return sendOutput(request,GroupJson.id(value,"outputId"),request.event,null,reviewed?value:null);
+            }
             case "delivery.inspect":return inspectDelivery(GroupJson.id(value,"deliveryId"),true);
             default:throw new IllegalArgumentException("未知原生群管理操作");
         }
@@ -219,6 +223,9 @@ public final class GroupsModule implements EngineModule {
         GroupHostPort.Request request=registry.request(requestId);return sendOutput(request,outputId,request.event,null);
     }
     private JSONObject sendOutput(GroupHostPort.Request request,String outputId,GroupIngressPort.Event target,GroupIngressPort.Event reader)throws Exception {
+        return sendOutput(request,outputId,target,reader,null);
+    }
+    private JSONObject sendOutput(GroupHostPort.Request request,String outputId,GroupIngressPort.Event target,GroupIngressPort.Event reader,JSONObject reviewed)throws Exception {
         open();requireHost();if(delivery==null)throw new IllegalStateException("官方群消息或媒体投递端尚未接入，未发送结果");
         GroupHostPort.Authority read=readAuthority(request,reader);read.checkRead();
         GroupHostPort.Progress progress=host.inspectProgress(request,read);GroupHostPort.TaskReceipt receipt=progress==null?null:progress.task;read.checkRead();validate(request,receipt);registry.receipt(request.requestId,receipt);
@@ -226,6 +233,11 @@ public final class GroupsModule implements EngineModule {
         if(receipt==null||!receipt.status.equals("completed"))throw new IllegalStateException("任务尚无已核验完成的结果");
         GroupHostPort.Output output=null;for(GroupHostPort.Output candidate:receipt.outputs)if(candidate.outputId.equals(outputId))output=candidate;
         if(output==null)throw new IllegalArgumentException("TaskStore回执中没有此产物");
+        if(reviewed!=null){
+            reviewedResume(reviewed,receipt);
+            if(!GroupJson.canonical(output.json()).equals(GroupJson.canonical(reviewed.getJSONObject("expectedOutput"))))
+                throw new SecurityException("原产物内容或受众已变化，请重新审阅后发回");
+        }
         if(!delivery.supports(target,request.audience,output.mimeType))throw new IllegalStateException("该官方渠道不支持此受众或媒体类型，未发送");
         GroupDeliveryPort.Delivery value=registry.prepareDelivery(request.requestId,output,target,clock.getAsLong());
         JSONObject result=deliver(request,value,target);read.checkRead();return result;

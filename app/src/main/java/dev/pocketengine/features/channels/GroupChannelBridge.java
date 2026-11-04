@@ -30,6 +30,9 @@ public final class GroupChannelBridge implements GroupIngressPort,GroupDeliveryP
     private final ControlFeedback controlFeedback;
     private volatile Executor workers;
     private volatile boolean closed;
+    private java.util.function.Consumer<RunControl> executionAdmission=original->{};
+    void setExecutionAdmission(java.util.function.Consumer<RunControl> original){executionAdmission=java.util.Objects.requireNonNull(original);}
+    void stopOriginalResources(){for(ActiveDelivery original:new java.util.ArrayList<>(sending.values()))original.control.cancel();for(ActiveDelivery original:new java.util.ArrayList<>(importing.values()))original.control.cancel();}
     private final java.util.concurrent.ConcurrentHashMap<String,ActiveDelivery> sending=new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentHashMap<String,ActiveDelivery> importing=new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -130,7 +133,7 @@ public final class GroupChannelBridge implements GroupIngressPort,GroupDeliveryP
         GroupArtifactStore storage=artifacts;if(storage==null)throw new IllegalStateException("原生群附件存储尚未挂载");
         synchronized(this){JSONObject current=proofs.getJSONObject(eventId);if(current.optString("intake").equals("imported"))return;if(!current.optString("intake").equals("prepared"))throw new SecurityException("原群附件导入状态未知，只能核对原事件");JSONObject next=new JSONObject(proofs.toString());next.getJSONObject(eventId).put("intake","importing");save(next);proofs=next;}
         JSONObject scope=module.authenticatedScope(eventId);GroupHostPort.Authority nativeProof=()->{check(authenticate(eventId));JSONObject current=module.authenticatedScope(eventId);if(!scope.toString().equals(current.toString()))throw new SecurityException("原群附件作用域已变化");};
-        RunControl control=new RunControl();control.setAuthorityCheck(nativeProof::check);ActiveDelivery intake=new ActiveDelivery(event.getString("profileId"),control);if(importing.putIfAbsent(eventId,intake)!=null)throw new SecurityException("原群附件仍在导入，不能重复下载");JSONArray imported=new JSONArray();JSONObject parts=event.optJSONObject("messageParts")==null?new JSONObject():new JSONObject(event.getJSONObject("messageParts").toString());
+        RunControl control=new RunControl();executionAdmission.accept(control);control.setAuthorityCheck(nativeProof::check);ActiveDelivery intake=new ActiveDelivery(event.getString("profileId"),control);if(importing.putIfAbsent(eventId,intake)!=null)throw new SecurityException("原群附件仍在导入，不能重复下载");JSONArray imported=new JSONArray();JSONObject parts=event.optJSONObject("messageParts")==null?new JSONObject():new JSONObject(event.getJSONObject("messageParts").toString());
         try {
             for(int i=0;i<incoming.length();i++){JSONObject attachment=incoming.getJSONObject(i);try(GroupInboundFiles.Download download=inbound.open(attachment,control)){
                 JSONObject actual=storage.importInput(scope.getString("spaceId"),scope.getString("actorId"),"group",eventId,attachment.getString("mimeType"),download.input,scope.getLong("maxArtifactBytes"),nativeProof);
@@ -154,7 +157,7 @@ public final class GroupChannelBridge implements GroupIngressPort,GroupDeliveryP
         boolean media=!delivery.output.mimeType.equals("text/plain");
         JSONObject queued=media?core.queueGroupMedia(delivery.deliveryId,original,delivery.output,authority):delivery.kind.equals("feedback")?core.queueGroupFeedback(delivery.deliveryId,original,delivery.output.text,authority):core.queueGroupOutput(delivery.deliveryId,original,delivery.output.text,authority);
         if(queued.getBoolean("known"))return inspect(delivery,authority); // Including queued: lost ACK never authorizes another send.
-        JSONObject row=core.prepareGroupSend(delivery.deliveryId,authority),profile=core.profile(delivery.event.accountId);RunControl control=new RunControl();
+        JSONObject row=core.prepareGroupSend(delivery.deliveryId,authority),profile=core.profile(delivery.event.accountId);RunControl control=new RunControl();executionAdmission.accept(control);
         control.setAuthorityCheck(()->{authority.beforeDelivery();check(delivery.event);core.checkGroupSend(delivery.deliveryId,authority);});
         ChannelHttp.DispatchGuard guard=control::check;ActiveDelivery active=new ActiveDelivery(delivery.event.accountId,control);if(sending.putIfAbsent(delivery.deliveryId,active)!=null)throw new SecurityException("原群投递仍在发送");
         try {

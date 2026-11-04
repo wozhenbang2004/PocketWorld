@@ -9,6 +9,10 @@ import org.json.JSONObject;
 /** One physical Gateway invocation; streaming snapshots and JSON negotiation share one identity. */
 public final class InferenceCapture {
     public interface Admission {void check()throws Exception;}
+    public interface BudgetAttribution {void check(InferenceReceipt.Context context,InferenceTokenReservation.NativeIdentity identity)throws Exception;}
+    private static volatile BudgetAttribution budgetAttribution=(context,route)->{};
+    /** Original TaskStore only. Unattributed call sites cannot bypass an enabled saved-route guard. */
+    public static void installBudgetAttribution(BudgetAttribution original){budgetAttribution=java.util.Objects.requireNonNull(original);}
     public interface Sink {
         void started(InferenceReceipt receipt)throws Exception;
         void finished(InferenceReceipt receipt)throws Exception;
@@ -48,6 +52,7 @@ public final class InferenceCapture {
     private InferenceFailure failure;
     private final String secret;
     private final ModelConfig pricingConfig;
+    private final InferenceTokenReservation.NativeIdentity budgetIdentity;
     private JSONObject frozenPrice;
     private final JSONObject route=new JSONObject();
     private long startedAt,startNanos;
@@ -56,7 +61,7 @@ public final class InferenceCapture {
     public InferenceCapture(ModelConfig config,RunControl control,Target target)throws Exception{this(config,control,target,config.usesAccount()?"openai_responses":config.provider);}
     private InferenceCapture(ModelConfig config,RunControl control,Target target,String protocol)throws Exception{
         this.target=java.util.Objects.requireNonNull(target);observer=presentationObserver;
-        secret=config.apiKey;pricingConfig=config;
+        secret=config.apiKey;pricingConfig=config;budgetIdentity=InferenceTokenReservation.captureIdentity(config);
         requireOriginalContext(control,target);
         usage=new ProviderUsage.Collector(protocol);
         route.put("kind",config.usesAccount()?"account":"api_key").put("protocol",protocol).put("requestedModel",config.model)
@@ -96,6 +101,10 @@ public final class InferenceCapture {
         if(!secret.isEmpty()&&diagnostics.toString().contains(secret))diagnostics=new JSONObject().put("format","pocketworld.provider-projection.v1").put("identityRedacted",true).put("cacheHitKnown",false);
         route.put("providerProjection",diagnostics);
     }
+    public void tokenReservation(org.json.JSONArray messages,org.json.JSONArray tools)throws Exception {
+        if(started||finished)throw new SecurityException("token_reservation_after_dispatch");
+        route.put("tokenReservation",InferenceTokenReservation.prepare(pricingConfig,messages,tools));
+    }
     public void returnedHistory(JSONObject assistant)throws Exception {if(finished)throw new SecurityException("receipt_already_finished");JSONObject metadata=assistant.optJSONObject("provider_data");if(metadata!=null)route.put("historyDigest",historyDigest(metadata));}
     public static String historyDigest(JSONObject metadata)throws Exception {JSONObject copy=new JSONObject(metadata.toString());copy.remove("originCallId");byte[] bytes=java.security.MessageDigest.getInstance("SHA-256").digest(canonical(copy).getBytes(java.nio.charset.StandardCharsets.UTF_8));StringBuilder out=new StringBuilder();for(byte b:bytes)out.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return out.toString();}
     private static String canonical(Object value)throws Exception {if(value instanceof JSONObject j){java.util.List<String> keys=new java.util.ArrayList<>();j.keys().forEachRemaining(keys::add);java.util.Collections.sort(keys);StringBuilder out=new StringBuilder("{");for(String key:keys){if(out.length()>1)out.append(',');out.append(JSONObject.quote(key)).append(':').append(canonical(j.get(key)));}return out.append('}').toString();}if(value instanceof org.json.JSONArray a){StringBuilder out=new StringBuilder("[");for(int i=0;i<a.length();i++){if(i>0)out.append(',');out.append(canonical(a.get(i)));}return out.append(']').toString();}return value instanceof String?JSONObject.quote((String)value):String.valueOf(value);}
@@ -128,6 +137,7 @@ public final class InferenceCapture {
     public void dispatch()throws Exception{
         if(started)return;
         target.admission.check();
+        budgetAttribution.check(target.context,budgetIdentity);
         JSONObject projection=route.optJSONObject("providerProjection");if(projection!=null)projection.put("dispatchAttempted",true).put("hintDelivery",projection.optBoolean("hintPrepared")?"unknown":"not_requested");
         startedAt=System.currentTimeMillis();startNanos=System.nanoTime();
         frozenPrice=InferencePricing.freeze(pricingConfig,startedAt);
@@ -153,6 +163,6 @@ public final class InferenceCapture {
         String model=usage.reportedModel();
         if(model!=null&&(secret.isEmpty()||!model.contains(secret)))route.put("responseModel",model);
         return new InferenceReceipt(callId,target.context,outcome,startedAt,
-                outcome==InferenceReceipt.Outcome.STARTED?0:System.currentTimeMillis(),Math.max(0,System.nanoTime()-startNanos),route,InferencePricing.apply(usage.toJson(),frozenPrice),outcome==InferenceReceipt.Outcome.STARTED?null:failure);
+                outcome==InferenceReceipt.Outcome.STARTED?0:System.currentTimeMillis(),Math.max(0,System.nanoTime()-startNanos),route,InferencePricing.apply(usage.toJson(),frozenPrice),outcome==InferenceReceipt.Outcome.STARTED?null:failure,budgetIdentity);
     }
 }

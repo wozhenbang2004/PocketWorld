@@ -5,6 +5,8 @@ import android.content.SharedPreferences;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.runtime.models.ModelBinding;
 import dev.pocketengine.runtime.models.ModelCatalogRoutes;
+import dev.pocketengine.runtime.models.ModelTargetRef;
+import dev.pocketengine.runtime.models.ReasoningOptions;
 import java.lang.reflect.Proxy;
 import java.util.HashMap;
 import java.util.Map;
@@ -86,5 +88,57 @@ public final class SettingsApiProfilesTest {
         assertEquals(2,secrets.values.size());secrets.failGet=true;JSONObject current=row;
         assertThrows(IllegalStateException.class,()->store.saveApiConnection(current.getString("id"),current.getLong("revision"),"A",new JSONObject()));
         store.saveApiConnection(current.getString("id"),current.getLong("revision"),"A",new JSONObject().put("apiKey","new-owner-replacement"));secrets.failGet=false;assertEquals("new-owner-replacement",store.get().apiKey);assertEquals(2,secrets.values.size());
+    }
+    @Test public void explicitApiAndAccountChoicesReplaceOnlyTheOldMainPurpose()throws Exception{
+        store.apiConnections();JSONObject a=add("A","https://a.fixture/v1","model-a","a-secret"),b=add("B","https://b.fixture/v1","model-b","b-secret");
+        store.selectApiConnection(a.getString("id"),1);
+        ModelTargetRef target=ModelTargetRef.exact(b.getString("id"),"model-b");
+        store.selectModelPurpose("MAIN",target);store.selectModelPurpose("SUMMARY",target);assertEquals("model-b",store.get().model);
+        store.selectAccountModel(account());assertTrue(store.get().usesAccount());assertNull(store.modelPurposeTarget("MAIN"));assertEquals(target,store.modelPurposeTarget("SUMMARY"));
+        store.selectModelPurpose("MAIN",target);store.useApiKeyModel();assertEquals("model-a",store.get().model);assertNull(store.modelPurposeTarget("MAIN"));
+        store.selectModelPurpose("MAIN",target);store.selectApiConnection(a.getString("id"),1);assertEquals("model-a",store.get().model);assertNull(store.modelPurposeTarget("MAIN"));
+        store.selectModelPurpose("MAIN",target);store.save(new JSONObject().put("model","api-saved"));assertEquals("api-saved",store.get().model);assertNull(store.modelPurposeTarget("MAIN"));
+        ModelConfig catalog=store.configureApiCatalog(null,ModelBinding.Format.OPENAI,ModelCatalogRoutes.modelsEndpoint(store.get()));
+        store.selectModelPurpose("MAIN",target);store.selectCatalogModel(catalog.capabilityBinding,"catalog-selected",4096,ReasoningOptions.DEFAULT,0);
+        assertEquals("catalog-selected",store.get().model);assertNull(store.modelPurposeTarget("MAIN"));assertEquals(target,store.modelPurposeTarget("SUMMARY"));
+    }
+    @Test public void addingAndSelectingNeverEditsOrInheritsTheOldProfile()throws Exception{
+        store.apiConnections();JSONObject old=add("Original","https://a.fixture/v1","old-model","original-secret");store.selectApiConnection(old.getString("id"),1);
+        JSONObject added=store.addAndSelectApiConnection("New",input("https://a.fixture/v1","new-model",""));
+        assertNotEquals(old.getString("id"),added.getString("id"));assertEquals("new-model",store.get().model);assertEquals("",store.get().apiKey);
+        JSONObject original=store.apiConnectionsSnapshot().getJSONArray("connections").getJSONObject(0);
+        assertEquals(old.getString("id"),original.getString("id"));assertEquals(1,original.getLong("revision"));assertEquals("old-model",original.getString("model"));
+        store.selectApiConnection(old.getString("id"),1);assertEquals("original-secret",store.get().apiKey);
+    }
+    @Test public void unsavedAddTestCannotInheritTheCurrentConnectionsSecret()throws Exception{
+        store.apiConnections();JSONObject old=add("Original","https://a.fixture/v1","old-model","original-secret");store.selectApiConnection(old.getString("id"),1);
+        String before=prefs.getAll().toString();JSONObject input=input("https://a.fixture/v1","test-model","");
+        ModelConfig added=store.previewApiConnection("",0,input);assertEquals("",added.apiKey);assertNull(added.capabilityBinding);
+        ModelConfig edited=store.previewApiConnection(old.getString("id"),1,input);assertEquals("original-secret",edited.apiKey);assertNotNull(edited.capabilityBinding);
+        assertThrows(IllegalStateException.class,()->store.previewApiConnection(old.getString("id"),0,input));
+        assertThrows(IllegalStateException.class,()->store.previewApiConnection("",1,input));assertEquals(before,prefs.getAll().toString());
+    }
+    @Test public void anExistingRunKeepsItsOptionsWhenTheNextTaskModelChanges()throws Exception{
+        store.apiConnections();JSONObject a=add("A","https://a.fixture/v1","original-model","original-secret");store.selectApiConnection(a.getString("id"),1);
+        ModelConfig captured=store.get().withStepCeiling(80);
+        store.save(new JSONObject().put("model","next-model").put("maxOutputTokens",8192).put("requestTimeoutSeconds",110).put("sendScreenshots",false));
+        assertEquals("next-model",store.get().model);ModelConfig current=store.currentForCaptured(captured);
+        assertEquals(captured.model,current.model);assertEquals(captured.maxOutputTokens,current.maxOutputTokens);assertEquals(captured.requestTimeoutSeconds,current.requestTimeoutSeconds);
+        assertEquals(captured.sendScreenshots,current.sendScreenshots);assertEquals(80,current.maxSteps);assertEquals(captured.capabilityBinding,current.capabilityBinding);
+        dev.pocketengine.runtime.models.InferenceRouteContinuity.requireCurrent(captured,current,new dev.pocketengine.core.RunControl());
+    }
+    @Test public void pendingWriteIsSharedByActivitiesAndCannotCaptureThePreviousChoice()throws Exception{
+        store.apiConnections();JSONObject a=add("A","https://a.fixture/v1","old-model","original-secret");store.selectApiConnection(a.getString("id"),1);ModelConfig original=store.get();
+        SettingsStore other=new SettingsStore(prefs,secrets);assertSame(store.modelSelection(),other.modelSelection());
+        var write=store.modelSelection().beginMutation();assertThrows(IllegalStateException.class,other::get);
+        assertEquals("old-model",other.currentForCaptured(original).model);
+        write.run(()->{store.save(new JSONObject().put("model","new-model"));return null;});
+        assertEquals("new-model",other.get().model);assertEquals("old-model",other.currentForCaptured(original).model);
+    }
+    @Test public void originalAccountConfigDoesNotFollowALaterDefaultRoute()throws Exception{
+        store.apiConnections();JSONObject a=add("A","https://a.fixture/v1","api-model","api-secret");store.selectApiConnection(a.getString("id"),1);
+        ModelConfig captured=store.selectAccountModel(account());store.useApiKeyModel();
+        assertFalse(store.get().usesAccount());assertEquals(captured.accountModel,store.currentForCaptured(captured).accountModel);
+        // This is configuration identity only; AccountGateway still checks live account revocation and renewal.
     }
 }

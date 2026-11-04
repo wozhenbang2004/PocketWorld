@@ -140,7 +140,7 @@ public final class PluginCatalogTest {
     @Test public void actualHttpReviewInstallsThroughActualCasDisabledEmptyGrantsAndHistory() throws Exception {
         try (Fixture f = new Fixture()) {
             JSONObject old = f.plugins.handle("install", new JSONObject().put("manifest", f.manifest("older", "echo")));
-            f.plugins.handle("enable", new JSONObject().put("id", "custom").put("enabled", true));
+            dev.pocketengine.features.plugins.PluginOwnerTestReview.enableCurrent(f.plugins,"custom",true);
             f.plugins.handle("grant", new JSONObject().put("id", "custom").put("grants", new JSONArray().put("tool:show")));
             PluginCatalog.Snapshot snapshot = f.refresh();
             JSONObject row = f.catalog.candidates(snapshot, new RunControl()).getJSONArray("entries").getJSONObject(0);

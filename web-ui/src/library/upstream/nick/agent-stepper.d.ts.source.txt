@@ -1,0 +1,34 @@
+export interface Subtask {
+  at: number;
+  label: string;
+  doneLabel?: string;
+  labelZh?: string;
+  doneLabelZh?: string;
+}
+export interface Step {
+  id: string;
+  label: string;
+  labelZh?: string;
+  duration?: number;
+  requiresApproval?: boolean;
+  tasks?: Subtask[];
+}
+export interface RunState {
+  state: 'playing' | 'paused' | 'awaiting-approval' | 'complete';
+  currentIndex: number;
+  elapsed: number;
+  duration: number;
+}
+export const DEMO_STEPS: Step[];
+export const AGENT_STEPPER_CSS: string;
+export class AgentStepper extends HTMLElement {
+  steps: Step[];
+  playbackRate: number;
+  readonly duration: number;
+  readonly elapsed: number;
+  readonly playing: boolean;
+  play(): void;
+  pause(): void;
+  reset(options?: { autoplay?: boolean }): void;
+  seek(seconds: number): void;
+}

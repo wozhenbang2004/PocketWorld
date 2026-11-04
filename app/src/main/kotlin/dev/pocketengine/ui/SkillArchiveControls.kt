@@ -1,5 +1,6 @@
 package dev.pocketengine.ui
 
+import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -15,18 +16,20 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketengine.EngineApplication
+import dev.pocketengine.core.RunControl
 import dev.pocketengine.features.skills.SkillsModule
 import java.io.OutputStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-internal data class SkillExportPin(val id: String, val revision: Int, val digest: String, val fileName: String)
+internal data class SkillExportPin(val id: String, val revision: Int, val digest: String, val fileName: String, val documentSha256: String? = null)
 private data class SkillPickerTarget(val id: String?, val singleDocument: Boolean = false)
-private data class SkillArchivePreview(val uri: Uri, val targetId: String?, val inspection: JSONObject, val singleDocument: Boolean = false)
+private data class SkillArchivePreview(val uri: Uri, val targetId: String?, val inspection: JSONObject, val singleDocument: Boolean = false, val requestId: String? = null, val displayName: String? = null)
 private val skillDigestPattern = Regex("[0-9a-f]{64}")
 
 /** The only scope offered by this native owner surface. Archive/model data never selects it. */
@@ -40,6 +43,13 @@ internal fun skillExportPin(skill: JSONObject): SkillExportPin {
     return SkillExportPin(id, revision, digest, "$name.zip")
 }
 
+internal fun skillDocumentExportPin(reviewed: JSONObject): SkillExportPin {
+    val pin = skillExportPin(reviewed)
+    val documentSha256 = reviewed.getString("documentSha256")
+    require(skillDigestPattern.matches(documentSha256) && reviewed.optBoolean("singleDocumentOnly")) { "单文件审阅信息不完整，请重新检查" }
+    return pin.copy(fileName = "SKILL.md", documentSha256 = documentSha256)
+}
+
 internal fun skillInspectionIsCurrent(inspection: JSONObject, targetId: String?, current: JSONObject?): Boolean {
     val incoming = inspection.optJSONObject("package") ?: return false
     if (!skillDigestPattern.matches(incoming.optString("digest"))) return false
@@ -48,7 +58,8 @@ internal fun skillInspectionIsCurrent(inspection: JSONObject, targetId: String?,
     if (current == null || current.optString("id") != targetId || comparison.optString("id") != targetId) return false
     return comparison.optString("kind") in setOf("same-content", "changed-content", "repair") &&
         comparison.optInt("revision", -1) > 0 && comparison.optInt("revision") == current.optInt("revision", -2) &&
-        skillDigestPattern.matches(comparison.optString("expectedCurrentDigest")) && comparison.optString("expectedCurrentDigest") == current.optString("digest")
+        skillDigestPattern.matches(comparison.optString("expectedCurrentDigest")) && comparison.optString("expectedCurrentDigest") == current.optString("digest") &&
+        comparison.has("expectedExecutionGeneration") && comparison.optLong("expectedExecutionGeneration", -1) == current.optLong("executionGeneration", 0)
 }
 
 internal fun skillImportOptions(inspection: JSONObject, targetId: String?, source: String, current: JSONObject?): JSONObject {
@@ -57,7 +68,7 @@ internal fun skillImportOptions(inspection: JSONObject, targetId: String?, sourc
     return JSONObject().put("source", source.trim()).put("inspectedDigest", inspection.getJSONObject("package").getString("digest")).also { options ->
         if (targetId != null) {
             val comparison = inspection.getJSONObject("comparison")
-            options.put("id", targetId).put("revision", comparison.getInt("revision")).put("expectedCurrentDigest", comparison.getString("expectedCurrentDigest"))
+            options.put("id", targetId).put("revision", comparison.getInt("revision")).put("expectedCurrentDigest", comparison.getString("expectedCurrentDigest")).put("expectedExecutionGeneration", comparison.getLong("expectedExecutionGeneration"))
         }
     }
 }
@@ -71,8 +82,9 @@ internal fun writeSkillArchive(output: OutputStream, export: (OutputStream) -> J
 
 @Composable
 internal fun SkillArchiveControls(state: PocketUiState, controller: PocketWorldController) {
-    val resolver = LocalContext.current.contentResolver
-    val app = LocalContext.current.applicationContext as? EngineApplication
+    val context = LocalContext.current
+    val resolver = context.contentResolver
+    val app = context.applicationContext as? EngineApplication
     val module = remember(app) { app?.features?.module("skills") as? SkillsModule }
     val worker = rememberCoroutineScope()
     val skills = state.feature("skills").optJSONArray("skills").objects()
@@ -82,10 +94,15 @@ internal fun SkillArchiveControls(state: PocketUiState, controller: PocketWorldC
     var pendingImport by remember { mutableStateOf<SkillPickerTarget?>(null) }
     var pendingExport by remember { mutableStateOf<SkillExportPin?>(null) }
     var preview by remember { mutableStateOf<SkillArchivePreview?>(null) }
+    var documentExportReview by remember { mutableStateOf<JSONObject?>(null) }
+    var shareControl by remember { mutableStateOf<RunControl?>(null) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val latestSkills by rememberUpdatedState(skills)
+    val incoming = controller.skillDocuments.pending
+    LaunchedEffect(incoming?.requestId) { if (incoming != null) expanded = true }
+    DisposableEffect(Unit) { onDispose { shareControl?.cancel() } }
 
     val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val target = pendingImport; pendingImport = null
@@ -125,6 +142,26 @@ internal fun SkillArchiveControls(state: PocketUiState, controller: PocketWorldC
             }
         }
     }
+    val documentExportPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
+        val pin = pendingExport; pendingExport = null
+        if (uri == null) { message = "已取消保存，未导出文件。" }
+        else if (pin?.documentSha256 == null || module == null) { error = "原单文件审阅已结束，请重新检查；所选目标可能是空文件。" }
+        else {
+            busy = true; error = null; message = null
+            worker.launch {
+                try {
+                    withContext(Dispatchers.IO) {
+                        ensureActive()
+                        val output = resolver.openOutputStream(uri, "wt") ?: throw IllegalStateException("无法打开保存位置")
+                        writeSkillArchive(output) { module.exportDocument(skillOwnerPrivateScope(), pin.id, pin.revision, pin.digest, pin.documentSha256, it) }
+                    }
+                    message = "SKILL.md 已保存（修订 ${pin.revision}），不包含旁边的脚本或资源。"
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Exception) { error = (failure.message ?: "单文件导出失败") + "。目标可能含不完整数据，请在文件应用中移除或重新导出。" }
+                finally { busy = false }
+            }
+        }
+    }
 
     HorizontalDivider(Modifier.padding(vertical = 18.dp), color = Line)
     OutlinedButton(onClick = { expanded = !expanded }, enabled = !busy) { Text(if (expanded) "收起文件导入导出" else "文件导入与版本恢复") }
@@ -132,14 +169,39 @@ internal fun SkillArchiveControls(state: PocketUiState, controller: PocketWorldC
     error?.let { Text(it, color = Danger, fontSize = 12.sp, lineHeight = 21.sp) }
     if (!expanded) return
     if (module == null) { SkillArchiveCaption("技能文件模块暂不可用，请刷新连接中心。"); return }
+    incoming?.let { original ->
+        SkillArchiveCaption("收到一份待检查的 SKILL.md。打开文件不会自动读取或导入；检查后仍需确认内容与来源。")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = {
+                if (busy || pendingImport != null || pendingExport != null) return@Button
+                busy = true; preview = null; error = null; message = null
+                worker.launch {
+                    try {
+                        val checked = withContext(Dispatchers.IO) {
+                            val selected = controller.skillDocuments.requireOriginal(original.requestId)
+                            val inspection = resolver.openInputStream(selected.uri)?.use { module.inspectDocument(skillOwnerPrivateScope(), it, null) } ?: throw IllegalStateException("无法读取收到的文件")
+                            val name = runCatching { skillDocumentDisplayName(context, selected.uri) }.getOrNull()
+                            controller.skillDocuments.requireOriginal(original.requestId)
+                            SkillArchivePreview(selected.uri, null, JSONObject(inspection.toString()), true, original.requestId, name)
+                        }
+                        controller.skillDocuments.requireOriginal(original.requestId)
+                        targetId = null; source = "机主从外部应用打开的文件（来源待核对）"; preview = checked
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (failure: Exception) { error = failure.message ?: "收到的文件无法检查，请重新选择。" }
+                    finally { busy = false }
+                }
+            }, enabled = !busy && pendingImport == null && pendingExport == null) { Text("检查收到的 SKILL.md") }
+            TextButton(onClick = { controller.skillDocuments.discard(original.requestId); if (preview?.requestId == original.requestId) preview = null }, enabled = !busy) { Text("放弃收到的文件") }
+        }
+    }
     SkillArchiveCaption("使用 ZIP 转移完整技能包，也可单独导入 SKILL.md。单文件只包含说明正文，不会读取旁边的脚本或资源。选择现有技能可更新或恢复旧内容；导入后产生新的停用修订，需另行审阅和启用。")
     Row {
-        RadioButton(selected = targetId == null, onClick = { targetId = null; preview = null }, enabled = !busy && pendingImport == null && pendingExport == null)
+            RadioButton(selected = targetId == null, onClick = { targetId = null; preview = null; documentExportReview = null }, enabled = !busy && pendingImport == null && pendingExport == null)
         Text("登记为新技能", fontSize = 13.sp, modifier = Modifier.padding(top = 13.dp))
     }
     skills.forEach { skill ->
         Row {
-            RadioButton(selected = targetId == skill.optString("id"), onClick = { targetId = skill.optString("id"); preview = null }, enabled = !busy && pendingImport == null && pendingExport == null)
+            RadioButton(selected = targetId == skill.optString("id"), onClick = { targetId = skill.optString("id"); preview = null; documentExportReview = null }, enabled = !busy && pendingImport == null && pendingExport == null)
             Column(Modifier.padding(top = 10.dp).weight(1f)) {
                 Text(skill.optString("name"), fontSize = 13.sp)
                 SkillArchiveCaption("修订 " + skill.optInt("revision") + " · 来源版本 " + skill.optString("sourceVersion", "未注明"))
@@ -169,6 +231,64 @@ internal fun SkillArchiveControls(state: PocketUiState, controller: PocketWorldC
         try { importPicker.launch(arrayOf("text/markdown", "text/plain", "application/octet-stream")) }
         catch (_: Exception) { pendingImport = null; error = "系统文件选择器不可用，请稍后重试。" }
     }, enabled = !busy && pendingImport == null && pendingExport == null && (targetId == null || skills.any { it.optString("id") == targetId })) { Text("选择单个 SKILL.md 并检查") }
+    TextButton(onClick = {
+        if (busy || pendingImport != null || pendingExport != null) return@TextButton
+        try {
+            val pin = skillExportPin(skills.find { it.optString("id") == targetId } ?: throw IllegalStateException("请先选择要分享的技能"))
+            busy = true; documentExportReview = null; error = null; message = null
+            worker.launch {
+                try { documentExportReview = withContext(Dispatchers.IO) { module.inspectDocumentExport(skillOwnerPrivateScope(), pin.id, pin.revision, pin.digest) } }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Exception) { error = failure.message ?: "无法检查单文件导出" }
+                finally { busy = false }
+            }
+        } catch (failure: Exception) { error = failure.message }
+    }, enabled = targetId != null && !busy && pendingImport == null && pendingExport == null) { Text("检查单文件导出与分享") }
+    documentExportReview?.let { reviewed ->
+        val pin = skillDocumentExportPin(reviewed)
+        val current = skills.find { it.optString("id") == pin.id }
+        val sameVersion = current != null && current.optInt("revision") == pin.revision && current.optString("digest") == pin.digest
+        Text("仅分享 SKILL.md", fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 18.dp))
+        SkillArchiveCaption(reviewed.optString("name") + " · 修订 " + pin.revision + " · " + reviewed.optLong("documentBytes") + " 字节")
+        val omitted = reviewed.getJSONArray("omittedResources")
+        val mentioned = reviewed.getJSONArray("mentionedOmittedResources")
+        SkillArchiveCaption(if (omitted.length() == 0) "此技能包没有其他资源。" else "本次不包含：" + (0 until omitted.length()).joinToString("、") { omitted.getString(it) })
+        if (mentioned.length() > 0) Text("正文提到了这些未包含资源：" + (0 until mentioned.length()).joinToString("、") { mentioned.getString(it) }, color = Danger, fontSize = 12.sp, lineHeight = 21.sp)
+        SkillArchiveCaption("这里只核对正文是否提到包内路径，无法证明资源引用完整。需要脚本或其他文件时请导出 ZIP。请检查下方将实际分享的完整正文；授权、启用状态和本机来源绑定不随文件转移。")
+        SelectionContainer {
+            Column(Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(rememberScrollState())) { Text(reviewed.getString("manifest"), fontSize = 12.sp, lineHeight = 20.sp) }
+        }
+        SelectionContainer { SkillArchiveCaption("SKILL.md 摘要 " + pin.documentSha256) }
+        if (!sameVersion) Text("所选技能已变化，请重新检查导出内容。", color = Danger, fontSize = 12.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = {
+                if (busy || pendingImport != null || pendingExport != null) return@OutlinedButton
+                pendingExport = pin; error = null; message = null
+                try { documentExportPicker.launch(pin.fileName) }
+                catch (_: Exception) { pendingExport = null; error = "系统保存位置选择器不可用。" }
+            }, enabled = sameVersion && !busy && pendingImport == null && pendingExport == null) { Text("保存 SKILL.md") }
+            Button(onClick = {
+                if (busy || pendingImport != null || pendingExport != null) return@Button
+                val original = RunControl(); shareControl = original
+                busy = true; error = null; message = null
+                worker.launch {
+                    var prepared: Intent? = null; var handedOff = false
+                    try {
+                        withContext(Dispatchers.IO) { prepared = prepareSkillDocumentShare(context, module, JSONObject(reviewed.toString()), original) }
+                        ensureActive(); original.check()
+                        context.startActivity(Intent.createChooser(checkNotNull(prepared), "分享 SKILL.md"))
+                        handedOff = true; message = "系统分享面板已打开，请选择接收应用；尚未确认发送结果。"
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (failure: Exception) { error = failure.message ?: "无法打开系统分享面板。" }
+                    finally {
+                        if (!handedOff) prepared?.let { intent -> withContext(NonCancellable + Dispatchers.IO) { runCatching { discardUnsentSkillDocumentShare(context, intent) } } }
+                        original.cancel(); if (shareControl === original) shareControl = null; busy = false
+                    }
+                }
+            }, enabled = sameVersion && !busy && pendingImport == null && pendingExport == null) { Text("打开系统分享") }
+        }
+        TextButton(onClick = { documentExportReview = null }, enabled = !busy) { Text("关闭单文件审阅") }
+    }
     if (app != null && !busy && pendingImport == null && pendingExport == null) SkillRemovalControls(skills.find { it.optString("id") == targetId }, module, app, controller)
     if (busy) SkillArchiveCaption("正在处理真实文件。离开页面后请返回核对技能列表与保存位置，避免重复操作。")
     preview?.let { checked ->
@@ -176,10 +296,17 @@ internal fun SkillArchiveControls(state: PocketUiState, controller: PocketWorldC
         val info = inspection.getJSONObject("package")
         val comparison = inspection.getJSONObject("comparison")
         val current = skills.find { it.optString("id") == checked.targetId }
-        val isCurrent = skillInspectionIsCurrent(inspection, checked.targetId, current)
+        val isCurrent = skillInspectionIsCurrent(inspection, checked.targetId, current) && (checked.requestId == null || controller.skillDocuments.isCurrent(checked.requestId))
         Text("待导入：" + info.optString("name"), fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 18.dp))
         SkillArchiveCaption("来源版本 " + info.optString("sourceVersion") + " · " + info.optLong("sizeBytes") + " 字节\n" + if (checked.targetId == null) "将登记为新技能" else "将替换所选技能修订 " + comparison.optInt("revision"))
         SkillArchiveCaption("来源记录：" + source.trim())
+        checked.displayName?.let { SkillArchiveCaption("文件显示名：" + it + "（仅供识别，不代表可信来源）") }
+        if (checked.singleDocument) {
+            inspection.optJSONObject("document")?.let { document ->
+                SelectionContainer { Column(Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(rememberScrollState())) { Text(document.getString("manifest"), fontSize = 12.sp, lineHeight = 20.sp) } }
+                SkillArchiveCaption("以上为将导入的完整正文；旁边的资源不会被读取。")
+            }
+        }
         SelectionContainer { SkillArchiveCaption("内容摘要 " + info.optString("digest")) }
         when (comparison.optString("kind")) {
             "repair" -> Text("当前已安装内容无法通过校验。本次完整导入可修复内容，但不能证明所选文件可信。", color = Danger, fontSize = 12.sp, lineHeight = 21.sp)
@@ -204,12 +331,15 @@ internal fun SkillArchiveControls(state: PocketUiState, controller: PocketWorldC
                     try {
                         val imported = withContext(Dispatchers.IO) {
                             ensureActive()
+                            checked.requestId?.let { controller.skillDocuments.requireOriginal(it) }
                             resolver.openInputStream(checked.uri)?.use { stream ->
                                 ensureActive()
+                                checked.requestId?.let { controller.skillDocuments.requireOriginal(it) }
                                 if (checked.singleDocument) module.importDocument(skillOwnerPrivateScope(), stream, options) else module.importPackage(skillOwnerPrivateScope(), stream, options)
                             } ?: throw IllegalStateException("无法重新读取文件，请重新选择并检查")
                         }
                         val skill = imported.getJSONObject("skill")
+                        checked.requestId?.let { controller.skillDocuments.discard(it) }
                         preview = null; message = "已导入 " + skill.optString("name") + "（修订 " + skill.getInt("revision") + "），保持停用。请核对说明后另行启用。"
                         controller.refresh()
                     } catch (cancelled: CancellationException) { throw cancelled }
@@ -218,7 +348,7 @@ internal fun SkillArchiveControls(state: PocketUiState, controller: PocketWorldC
                 }
             } catch (failure: Exception) { preview = null; error = failure.message }
         }, enabled = isCurrent && source.isNotBlank() && !busy && pendingImport == null && pendingExport == null, modifier = Modifier.padding(top = 10.dp)) { Text(if (checked.targetId == null) "确认导入并保持停用" else "确认替换为新修订") }
-        TextButton(onClick = { preview = null }, enabled = !busy) { Text("放弃本次检查") }
+        TextButton(onClick = { preview = null; checked.requestId?.let { controller.skillDocuments.discard(it) } }, enabled = !busy) { Text("放弃本次检查") }
     }
 }
 

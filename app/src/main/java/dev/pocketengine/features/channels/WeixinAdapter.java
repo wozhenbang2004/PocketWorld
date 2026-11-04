@@ -37,7 +37,10 @@ final class WeixinAdapter implements AutoCloseable {
             case "weixin.login.inspect":return inspectLogin(input);
             case "weixin.login.poll":return pollLogin(input);
             case "weixin.login.cancel":return cancelLogin(input);
-            case "weixin.poll":return pull(ChannelCore.identifier(input,"id"),new RunControl());
+            case "weixin.poll":{
+                String id=ChannelCore.identifier(input,"id");RunControl original=newExecutionControl();
+                try(AutoCloseable reviewed=original.retainAuthorityCheck(()->core.checkProfileReview(id,input))){original.check();return pull(id,original);}
+            }
             case "weixin.start":return start(ChannelCore.identifier(input,"id"));
             case "weixin.stop":{String id=ChannelCore.identifier(input,"id");cancel(id);return new JSONObject().put("requested",true).put("message","已停止接收；已投递消息不会撤回");}
             default:throw new IllegalArgumentException("未知微信接入操作");
@@ -48,13 +51,16 @@ final class WeixinAdapter implements AutoCloseable {
         return new JSONObject().put("available",true).put("accountType","weixin_ilink_bot").put("personalChatHistory",false).put("wecom",false).put("officialAccount",false).put("requiresPublicCallback",false).put("privateText",true).put("groupMessages",false).put("media",false).put("ownerDmSelectedMedia",true).put("ownerDmSelectedMediaConsentDefault",false).put("ownerDmSelectedMediaMaxBytes",OwnerDmMedia.MAX_BYTES).put("automaticMediaUnderstanding",false).put("ownerDmImages",true).put("ownerDmImageConsentDefault",false).put("ownerDmImageFormats",new JSONArray().put("png").put("jpeg").put("webp")).put("ownerDmImageLimits","4images_4MiB_each_8MiB_total_12MP_each").put("mixedItemText",true).put("nativeQuotes",true).put("idOnlyQuoteRestore",true).put("quoteSource","original_inbox_same_account_peer_scope_and_transport").put("quoteBounds","max200_original_messages_30days").put("unsupportedItemsExplained",true)
                 .put("backgroundPersistence","app_process_only").put("connections",rows);
     }
+    private RunControl newExecutionControl(){RunControl original=new RunControl();context.admitResourceExecution(original);return original;}
     private JSONObject startLogin(JSONObject input)throws Exception {
         String name=input.optString("name","我的微信").trim();if(name.isEmpty()||name.length()>80)throw new IllegalArgumentException("连接名称需为1至80字");
         String id=input.has("loginId")?loginId(input):UUID.randomUUID().toString();Login login;
         // Register before HTTP. A close overtaking queued start fences this same transient row.
         synchronized(logins){if(closed)throw new SecurityException("原登录宿主已关闭");pruneLogins();Login previous=logins.get(id);if(previous!=null){if(!previous.name.isEmpty()&&!previous.name.equals(name))throw new SecurityException("原登录编号不能改用于另一配置");return loginView(id,previous);}
             int active=0;for(Login row:logins.values())if(!row.control.isCancelled()&&!row.status.matches("confirmed|failed|cancelled|expired|verify_code_blocked"))active++;
-            if(active>=3||logins.size()>=32)throw new IllegalStateException("请先完成或取消已有扫码登录");login=new Login(name,new RunControl());logins.put(id,login);}
+            if(active>=3||logins.size()>=32)throw new IllegalStateException("请先完成或取消已有扫码登录");
+            synchronized(core.configurationLock){login=new Login(name,newExecutionControl(),ChannelConfigurationReview.loginProfiles(core.snapshot().getJSONArray("profiles")).toString());}
+            logins.put(id,login);}
         final Login original=login;login.control.setAuthorityCheck(()->{if(closed||logins.get(id)!=original||System.currentTimeMillis()>original.expiresAt)throw new SecurityException("原登录已关闭或到期");});
         try{JSONObject qr=client.startLogin(login.control);login.control.check();String code=qr.optString("qrcode"),content=qr.optString("qrcode_img_content");
             if(code.isEmpty()||code.length()>4096||content.isEmpty()||content.length()>16000)throw new IllegalStateException("微信未返回有效二维码");
@@ -81,10 +87,11 @@ final class WeixinAdapter implements AutoCloseable {
         String id=loginId(input);Login login=logins.get(id);
         if(login==null)return inspectLogin(input);
         if(login.expiresAt<System.currentTimeMillis()){login.control.cancel();return loginView(id,login);}
-        if(login.code.isEmpty()||login.status.matches("cancelled|failed|confirmed"))return loginView(id,login);
+        if(login.code.isEmpty()||login.status.matches("cancelled|failed|confirmed|unknown"))return loginView(id,login);
         if(!login.polling.compareAndSet(false,true))throw new IllegalStateException("正在检查此二维码，请稍候");
         try{
             JSONObject raw=client.pollLogin(login.base,login.code,input.optString("verifyCode"),login.control);login.control.check();String status=raw.optString("status");
+            if(status.equals("confirmed"))return confirmLogin(id,login,raw);
             synchronized(login){
             login.control.check();if(closed||logins.get(id)!=login)throw new SecurityException("原登录宿主已关闭或身份变化");
             JSONObject safe=new JSONObject().put("loginId",id).put("status",status).put("ownerBound",false);
@@ -92,19 +99,6 @@ final class WeixinAdapter implements AutoCloseable {
                 String host=raw.optString("redirect_host");if(host.isEmpty())throw new IllegalStateException("微信未返回继续登录的地址");
                 login.base=WeixinClient.validateApiBase(host.contains("://")?host:"https://"+host);login.status=status;return safe;
             }
-            if(status.equals("confirmed")){synchronized(login){
-                login.control.check();
-                String token=raw.optString("bot_token"),bot=ChannelCore.identifier(raw,"ilink_bot_id"),base=WeixinClient.validateApiBase(raw.optString("baseurl",WeixinClient.DEFAULT_BASE));
-                if(token.isEmpty()||token.length()>8192||token.indexOf('\r')>=0||token.indexOf('\n')>=0)throw new IllegalStateException("微信未返回有效登录凭据");
-                String profileId=UUID.randomUUID().toString();boolean reconnect=false;JSONArray profiles=core.snapshot().getJSONArray("profiles");
-                for(int i=0;i<profiles.length();i++){JSONObject existing=profiles.getJSONObject(i);if(existing.optString("provider").equals("weixin")&&bot.equals(existing.optString("appId"))){profileId=existing.getString("id");reconnect=true;break;}}
-                profileChanging.accept(profileId);if(reconnect)core.prepareCredentialChange(profileId);context.secrets.put(secretSlot(profileId),token);resetContexts(profileId);
-                JSONObject profile;
-                try{profile=core.saveProfile(new JSONObject().put("id",profileId).put("name",login.name).put("provider","weixin").put("appId",bot).put("apiBase",base).put("enabled",true).put("autoReply",false));}
-                catch(Exception failure){if(!reconnect)context.secrets.remove(secretSlot(profileId));throw failure;}
-                login.profileId=profileId;login.status="confirmed";login.content="";login.code="";
-                safe.put("profile",profile).put("authenticated",true).put("message","已登录；主人绑定仍需收到私聊后由本机确认，尚未自动开始回复");emit("weixin_logged_in",profileId);return safe;
-            }}
             if(status.equals("expired")||status.equals("verify_code_blocked")){login.status=status;login.content="";login.code="";login.control.cancel();return safe;}
             if(!status.matches("wait|scaned|expired|need_verifycode|verify_code_blocked|binded_redirect"))throw new IllegalStateException("微信返回未知登录状态，未保存凭据");
             login.status=status;
@@ -112,9 +106,38 @@ final class WeixinAdapter implements AutoCloseable {
             }
         }finally{login.polling.set(false);}
     }
+    /** HTTP has ended. Never hold Login while cancelling receivers (backgroundLock -> Login exists). */
+    private JSONObject confirmLogin(String id,Login login,JSONObject raw)throws Exception {
+        boolean commitStarted=false;JSONObject profile;String profileId;
+        try {
+            String token=raw.optString("bot_token"),bot=ChannelCore.identifier(raw,"ilink_bot_id"),base=WeixinClient.validateApiBase(raw.optString("baseurl",WeixinClient.DEFAULT_BASE));
+            if(token.isEmpty()||token.length()>8192||token.indexOf('\r')>=0||token.indexOf('\n')>=0)throw new IllegalStateException("微信未返回有效登录凭据");
+            synchronized(core.configurationLock) {
+                login.control.check();if(closed||logins.get(id)!=login)throw new SecurityException("原登录宿主已关闭或身份变化");
+                JSONObject previous=ChannelConfigurationReview.loginTarget(new JSONArray(login.originalProfiles),core.snapshot().getJSONArray("profiles"),bot);
+                profileId=previous==null?UUID.randomUUID().toString():previous.getString("id");
+                JSONObject candidate=new JSONObject().put("id",profileId).put("name",login.name).put("provider","weixin").put("appId",bot).put("apiBase",base).put("enabled",true).put("autoReply",false);
+                core.validateProfile(candidate);
+                profileChanging.accept(profileId);login.control.check();
+                commitStarted=true;
+                if(previous!=null)core.prepareCredentialChange(profileId);
+                context.secrets.put(secretSlot(profileId),token);resetContexts(profileId);
+                try {profile=core.saveProfile(candidate);}
+                catch(Exception failure){if(previous==null)context.secrets.remove(secretSlot(profileId));throw failure;}
+                // A completed local commit remains a real receipt even if cancellation arrives afterwards.
+                synchronized(login){login.profileId=profileId;login.status="confirmed";login.content="";login.code="";}
+            }
+        } catch(Exception failure) {
+            synchronized(login){if(!login.status.equals("cancelled"))login.status=commitStarted?"unknown":"failed";login.content="";login.code="";login.control.cancel();}
+            throw failure;
+        }
+        emit("weixin_logged_in",profileId);
+        return new JSONObject().put("loginId",id).put("status","confirmed").put("ownerBound",false).put("profile",profile).put("authenticated",true)
+                .put("message","已登录；主人绑定仍需收到私聊后由本机确认，尚未自动开始回复");
+    }
     private JSONObject start(String id)throws Exception {
         requireProfile(id);if(monitors.size()>=3&&!monitors.containsKey(id))throw new IllegalStateException("当前最多同时接收3个微信账号");
-        RunControl control=new RunControl();if(monitors.putIfAbsent(id,control)!=null)throw new IllegalStateException("此微信连接已在接收");
+        RunControl control=newExecutionControl();if(monitors.putIfAbsent(id,control)!=null)throw new IllegalStateException("此微信连接已在接收");
         state(id,"starting","正在连接微信iLink，尚未确认同步成功",0);
         Thread thread=new Thread(()->{
             try{while(!closed&&!control.isCancelled()){
@@ -176,6 +199,11 @@ final class WeixinAdapter implements AutoCloseable {
     }
     private synchronized String getContext(String id,String eventId)throws Exception {String stored=context.secrets.get(contextSlot(id));return stored.isEmpty()?"":new JSONObject(stored).optString(eventId);}
     void cancel(String id){RunControl control=monitors.get(id);if(control!=null)control.cancel();RunControl pull=activePulls.get(id);if(pull!=null)pull.cancel();}
+    void stopOriginalReceivers(){
+        for(RunControl original:new java.util.ArrayList<>(monitors.values()))original.cancel();
+        for(RunControl original:new java.util.ArrayList<>(activePulls.values()))original.cancel();
+        for(Login original:new java.util.ArrayList<>(logins.values()))synchronized(original){original.control.cancel();if(!original.status.equals("confirmed")){original.status="cancelled";original.content="";original.code="";}}
+    }
     boolean isRunning(String id){return monitors.containsKey(id);}
     private void state(String id,String status,String message,long success) {try{JSONObject previous=states.get(id);long last=success>0?success:previous==null?0:previous.optLong("lastSyncAt");states.put(id,new JSONObject().put("status",status).put("message",message).put("lastSyncAt",last));emit("weixin_state",id);}catch(Exception ignored){/* Status telemetry never changes an authenticated event or its durable cursor. */}}
     private void emit(String type,String id)throws Exception{context.emit("channels",new JSONObject().put("type",type).put("profileId",id));}
@@ -184,5 +212,5 @@ final class WeixinAdapter implements AutoCloseable {
     private static String cursorSlot(String id){return "channels."+id+".weixin-cursor";}
     private static String contextSlot(String id){return "channels."+id+".weixin-context";}
     @Override public void close(){closed=true;for(RunControl control:monitors.values())control.cancel();for(RunControl control:activePulls.values())control.cancel();for(Login login:logins.values())synchronized(login){login.control.cancel();}logins.clear();}
-    private static final class Login {final String name;final RunControl control;final AtomicBoolean polling=new AtomicBoolean();final long expiresAt=System.currentTimeMillis()+300_000;volatile String code="",content="",status="starting",profileId="",base=WeixinClient.DEFAULT_BASE;Login(String name,RunControl control){this.name=name;this.control=control;}}
+    private static final class Login {final String name,originalProfiles;final RunControl control;final AtomicBoolean polling=new AtomicBoolean();final long expiresAt=System.currentTimeMillis()+300_000;volatile String code="",content="",status="starting",profileId="",base=WeixinClient.DEFAULT_BASE;Login(String name,RunControl control){this(name,control,"[]");}Login(String name,RunControl control,String originalProfiles){this.name=name;this.control=control;this.originalProfiles=originalProfiles;}}
 }

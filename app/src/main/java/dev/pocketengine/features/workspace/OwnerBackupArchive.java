@@ -44,7 +44,7 @@ public final class OwnerBackupArchive {
         public long exportEncrypted(OutputStream target,char[] password,RunControl control)throws Exception{current(control);try(InputStream input=Files.newInputStream(file.toPath(),LinkOption.NOFOLLOW_LINKS)){long bytes=OwnerBackupEnvelope.encrypt(input,target,size,sha,password,control);current(control);return bytes;}}
 
     }
-    private static final Set<String> SECTIONS=Set.of("projects","artifacts","memory","experiences","remoteConnections","sshConnections");
+    private static final Set<String> SECTIONS=Set.of("projects","artifacts","memory","experiences","remoteConnections","sshConnections","settings","skills","schedules");
     private OwnerBackupArchive(){}
     public static Verified create(File newFile,Map<String,ObjectBytes> supplied,Map<String,String> sections,RunControl control)throws Exception{
         if(newFile.exists()||Files.isSymbolicLink(newFile.toPath()))throw new SecurityException("备份目标必须是新的本机临时文件，未覆盖");Map<String,ObjectBytes> objects=new TreeMap<>();long total=0;

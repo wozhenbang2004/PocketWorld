@@ -54,6 +54,9 @@ public final class RealtimeSessionModule implements EngineModule {
     private String sessionId="",invitationState="idle",invitationMessage="";
     private JSONObject invitation;
     private boolean closed,accepting,changingCapture,lastMicrophonePermission,lastCameraPermission,terminalReceived;
+    // A Web owner request keeps its original visible window through queued/native admission.
+    // Native callers retain their existing Activity authority; this only adds a restrictive fence.
+    private final ThreadLocal<java.util.function.BooleanSupplier> reviewedWindow=new ThreadLocal<>();
 
     public RealtimeSessionModule(FeatureContext context,RealtimeMediaSession.Factory factory){this(context,factory,new Credentials(){public boolean contains(String slot){return context.secrets.contains(slot);}public String get(String slot)throws Exception{return context.secrets.get(slot);}public void put(String slot,String value)throws Exception{context.secrets.put(slot,value);}public void remove(String slot)throws Exception{context.secrets.remove(slot);}});}
     RealtimeSessionModule(FeatureContext context,RealtimeMediaSession.Factory factory,Credentials credentials){
@@ -146,6 +149,7 @@ public final class RealtimeSessionModule implements EngineModule {
         throw new SecurityException("通话操作只能从原生主人界面确认");
     }
     public JSONObject handleOwner(Activity owner,String command,JSONObject input)throws Exception{
+        if(java.util.Set.of("prepareCall","prepareProviderCall","prepareNaturalVoice","startVoiceTurn","acceptInvitation","startVoiceTask","commitVoiceTask","commitTurn","readVoiceTask").contains(command))context.requireExecutionEnabled();
         synchronized(this){if(owner==null||visibleOwner.get()!=owner)throw new SecurityException("通话界面已变化，请重新打开");requireVisible();}
         switch(command){
             case "snapshot":return snapshot();
@@ -180,6 +184,33 @@ public final class RealtimeSessionModule implements EngineModule {
             default:throw new IllegalArgumentException("不支持的原生通话操作");
         }
     }
+    /** Reviewed local presentation only. Configuration/prepare compare-and-use shares the
+     * original module lock; network calls retain their original cancellable lock boundaries. */
+    public JSONObject handleReviewedOwner(Activity owner,String command,JSONObject input,long expectedConfigurationRevision,
+            java.util.function.BooleanSupplier window)throws Exception {
+        java.util.Objects.requireNonNull(window);
+        if(reviewedWindow.get()!=null)throw new IllegalStateException("已有原通话请求正在处理");
+        reviewedWindow.set(window);
+        try {
+            if(java.util.Set.of("configure","configureNaturalVoice","clearNaturalVoice","configureEndpointProvider","clearEndpointProvider",
+                    "prepareCall","prepareProviderCall","prepareNaturalVoice").contains(command)) {
+                synchronized(this){
+                    requireOwner(owner);
+                    if(expectedConfigurationRevision<0||read().optLong("revision")!=expectedConfigurationRevision)
+                        throw new IllegalStateException("原通话配置已经变化，请重新读取并核对");
+                    return handleOwner(owner,command,input);
+                }
+            }
+            requireReviewedWindow();
+            return handleOwner(owner,command,input);
+        } finally {reviewedWindow.remove();}
+    }
+    /** Native global owner stop only. Keep the module reusable; never replay a voice turn on resume. */
+    public synchronized JSONObject stopForOwnerDisable()throws Exception{
+        if(!(context.android instanceof dev.pocketengine.EngineApplication app)||app.executionAllowed())throw new SecurityException("需要原本机已保存的总停用状态");
+        cancelProviderAccept();voice.cancelForLifecycle("owner_disabled");invitationState="cancelled";
+        invitationMessage="PocketWorld 已停用；原文字和任务记录保留，没有自动续听";stopSession("owner_disabled");emitState();return snapshot();
+    }
     public synchronized RealtimeMediaSession.VideoBinding bindVideo(Activity owner,String expectedSessionId,String trackSid){
         if(owner!=visibleOwner.get()||!visible()||session==null||!sessionId.equals(expectedSessionId)||!session.snapshot().optString("state").equals("connected"))throw new IllegalStateException("通话或视频已变化");
         return session.bindVideo(owner,trackSid);
@@ -189,7 +220,8 @@ public final class RealtimeSessionModule implements EngineModule {
         return session.listenAudio(listener);
     }
     private JSONObject requestPermission(Activity owner,String permission,int request)throws Exception{
-        main.post(()->{synchronized(this){if(!closed&&visibleOwner.get()==owner&&visible())owner.requestPermissions(new String[]{permission},request);}});
+        java.util.function.BooleanSupplier window=reviewedWindow.get();
+        main.post(()->{synchronized(this){if(!closed&&visibleOwner.get()==owner&&visible()&&(window==null||window.getAsBoolean()))owner.requestPermissions(new String[]{permission},request);}});
         return new JSONObject().put("status","permission_requested").put("automaticallyConnects",false);
     }
     private synchronized JSONObject prepareCall(Activity owner)throws Exception{
@@ -300,6 +332,7 @@ public final class RealtimeSessionModule implements EngineModule {
         }
     }
     private JSONObject changeCapture(Activity owner,boolean enabled,boolean camera,JSONObject input)throws Exception{
+        if(enabled)context.requireExecutionEnabled();
         final RealtimeMediaSession current;final long epoch;
         synchronized(this){requireOwner(owner);requireSession(input);if(session==null||!session.snapshot().optString("state").equals("connected")||accepting||changingCapture)throw new IllegalStateException("通话尚未就绪或采集操作正在处理");if(enabled)requireCapturePermission(!camera,camera);current=session;epoch=lifecycleEpoch;changingCapture=true;}
         try{
@@ -370,7 +403,8 @@ public final class RealtimeSessionModule implements EngineModule {
     }
     private VoiceTaskHostPort.Authority taskAuthority(Activity owner){
         final long ownerEpoch=taskOwnerEpoch.get(),sessionEpoch=taskSessionEpoch.get();final WeakReference<Activity> captured=new WeakReference<>(owner);
-        return ()->{Activity current=captured.get();if(current==null||current.isDestroyed()||current.isFinishing()||ownerEpoch!=taskOwnerEpoch.get()||sessionEpoch!=taskSessionEpoch.get())throw new SecurityException("原生语音主人或会话已变化");};
+        final java.util.function.BooleanSupplier window=reviewedWindow.get();
+        return ()->{Activity current=captured.get();if(current==null||current.isDestroyed()||current.isFinishing()||ownerEpoch!=taskOwnerEpoch.get()||sessionEpoch!=taskSessionEpoch.get()||window!=null&&!window.getAsBoolean())throw new SecurityException("原生语音主人或会话已变化");};
     }
     private JSONObject readVoiceTask(Activity owner,JSONObject input)throws Exception{
         final MediaController media;synchronized(this){requireOwner(owner);if(active()||accepting||pendingInvitation()||!leaseToken.isEmpty()||voice.active()||mediaOwner==null)throw new IllegalStateException("请先结束当前语音并等待音频释放，再朗读原任务记录");media=mediaOwner;}
@@ -389,8 +423,9 @@ public final class RealtimeSessionModule implements EngineModule {
     private void requireReviewSession(JSONObject input)throws Exception{requireSession(input);if(!reviewSessionReady())throw new IllegalStateException("当前通话正在连接、恢复或收尾，请稍后重新复核保留的最终文字");}
     private void stopSession(String reason){lifecycleEpoch++;adapterEpoch++;turns.stop();if(session!=null)session.disconnect(reason);}
     private void releaseLease(String owner,boolean confirmed){if(owner.isEmpty()||!owner.equals(leaseToken))return;MediaController media=leaseMedia;if(media!=null)media.releaseRealtimeAudio(owner,confirmed);if(confirmed){leaseToken="";leaseMedia=null;}}
-    private void requireOwner(Activity owner){if(owner==null||owner!=visibleOwner.get())throw new SecurityException("原生主人界面已变化");requireVisible();}
-    private void checkEpoch(long epoch){if(epoch!=lifecycleEpoch||!visible()||closed)throw new IllegalStateException("通话确认已失效");}
+    private void requireReviewedWindow(){java.util.function.BooleanSupplier window=reviewedWindow.get();if(window!=null&&!window.getAsBoolean())throw new SecurityException("原通话窗口已关闭，请重新核对");}
+    private void requireOwner(Activity owner){requireReviewedWindow();if(owner==null||owner!=visibleOwner.get())throw new SecurityException("原生主人界面已变化");requireVisible();}
+    private void checkEpoch(long epoch){requireReviewedWindow();if(epoch!=lifecycleEpoch||!visible()||closed)throw new IllegalStateException("通话确认已失效");}
     private void requireSession(JSONObject input)throws Exception{if(sessionId.isEmpty()||!sessionId.equals(input.getString("sessionId")))throw new IllegalStateException("通话已变化，请操作当前通话");}
     private void requireInvitation(JSONObject input)throws Exception{requireVisible();expireInvitation();if(!pendingInvitation()||!invitation.getString("id").equals(input.getString("invitationId")))throw new IllegalStateException("邀请已变化、处理或过期，请重新确认");}
     private boolean pendingInvitation(){return invitation!=null&&invitationState.equals("awaiting_owner");}

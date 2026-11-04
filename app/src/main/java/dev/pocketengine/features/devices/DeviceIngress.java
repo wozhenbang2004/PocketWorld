@@ -10,6 +10,8 @@ public final class DeviceIngress {
         default JSONObject acceptedHistoryAudience(DeviceTaskEnvelope query)throws Exception{throw new SecurityException("成果原生SQL历史受众未配置");}
     }
     private final Artifacts artifacts;
+    @FunctionalInterface public interface ScheduleDrafts {JSONObject receive(DeviceScheduleDrafts.Admission original)throws Exception;}
+    private final ScheduleDrafts scheduleDrafts;
     private final DeviceTaskCoordinator.AcceptanceGate acceptanceGate;
     private final String localDeviceId, localInstanceId;
     private final PairingCoordinator pairing;
@@ -26,7 +28,12 @@ public final class DeviceIngress {
     }
     public DeviceIngress(String localDeviceId,String localInstanceId,PairingCoordinator pairing,DeviceExecutionAdmission.LocalPolicy localPolicy,
             DeviceCapabilityRegistry capabilities,DeviceTaskCoordinator tasks,Artifacts artifacts,DeviceTaskCoordinator.AcceptanceGate acceptanceGate){
+        this(localDeviceId,localInstanceId,pairing,localPolicy,capabilities,tasks,artifacts,acceptanceGate,null);
+    }
+    public DeviceIngress(String localDeviceId,String localInstanceId,PairingCoordinator pairing,DeviceExecutionAdmission.LocalPolicy localPolicy,
+            DeviceCapabilityRegistry capabilities,DeviceTaskCoordinator tasks,Artifacts artifacts,DeviceTaskCoordinator.AcceptanceGate acceptanceGate,ScheduleDrafts scheduleDrafts){
         this.artifacts = artifacts;
+        this.scheduleDrafts=scheduleDrafts;
         this.acceptanceGate=java.util.Objects.requireNonNull(acceptanceGate);
         this.localDeviceId = java.util.Objects.requireNonNull(localDeviceId); this.localInstanceId = java.util.Objects.requireNonNull(localInstanceId); this.pairing = java.util.Objects.requireNonNull(pairing);
         this.localPolicy = java.util.Objects.requireNonNull(localPolicy); this.capabilities = java.util.Objects.requireNonNull(capabilities);
@@ -50,6 +57,12 @@ public final class DeviceIngress {
         }
         PairingCoordinator.Permission permission = pairing.checkPermission(peer, request, System.currentTimeMillis());
         permission.checkCurrent(System.currentTimeMillis()); JSONObject result;
+        if(DeviceScheduleDrafts.handles(request)){
+            DeviceScheduleDrafts.Admission original=DeviceScheduleDrafts.admit(permission);
+            if(scheduleDrafts==null)throw new SecurityException("本机没有原计划草稿接收入口");
+            result=original.queryOnly()?scheduleDrafts.receive(original):acceptanceGate.accept(()->scheduleDrafts.receive(original));
+            return response(request,result);
+        }
         result = switch (request.method()) {
             case "tool.invoke", "task.submitGoal" -> tasks.submit(DeviceExecutionAdmission.issue(permission, localPolicy),acceptanceGate);
             case "operation.get" -> tasks.operation(permission);
@@ -71,7 +84,7 @@ public final class DeviceIngress {
         return response(request,result);
     }
     private JSONObject response(DeviceTaskEnvelope request,JSONObject result)throws Exception{
-        if(java.util.Set.of("tool.invoke","task.submitGoal","operation.get","task.pause","task.cancel","task.respond","task.acquireControl","task.answerQuestion","task.steer","task.requestResume").contains(request.method()))result=tasks.operationReceipt(request,result);
+        if(!DeviceScheduleDrafts.handles(request)&&java.util.Set.of("tool.invoke","task.submitGoal","operation.get","task.pause","task.cancel","task.respond","task.acquireControl","task.answerQuestion","task.steer","task.requestResume").contains(request.method()))result=tasks.operationReceipt(request,result);
         return DeviceProtocol.validateMessage(new JSONObject().put("protocolVersion", DeviceProtocol.VERSION).put("protocolProfile",DeviceProtocol.PROFILE).put("messageType", "DeviceResponse")
                 .put("requestId", request.requestId()).put("method", request.method()).put("executorDeviceId", localDeviceId)
                 .put("instanceId", localInstanceId).put("result", result));

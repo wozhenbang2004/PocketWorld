@@ -77,6 +77,53 @@ public final class TaskRecoveryTest {
         assertFalse(store.requireCapabilityApproval(id,next.getString("runId"),"workspace_write",reordered).getBoolean("approved"));
         assertFalse(store.requireCapabilityApproval(id,next.getString("runId"),"workspace_write",new JSONObject().put("path","different.txt").put("content","x")).getBoolean("approved"));
     }
+    @Test public void queuedReviewedApprovalOrDenialCannotWriteIntoASuccessorRun()throws Exception{
+        TaskStore store=new TaskStore(context());
+        for(boolean approved:new boolean[]{true,false}){
+            String id=store.createCapabilityTask("原审阅随后换代","").getString("id");JSONObject original=store.startAttempt(id,"capabilities",20);
+            String approval=store.requireCapabilityApproval(id,original.getString("runId"),"workspace_write",new JSONObject().put("path","original.txt").put("content","reviewed")).getString("approvalId");
+            String reviewedRun=original.getString("runId");int reviewedEpoch=original.getInt("coordinatorEpoch");
+            store.endAttempt(id,reviewedRun,"awaiting_user","等待原决定",new JSONObject());
+            // Deterministic queue interleaving: the reviewed callback executes only after another owner resumes.
+            JSONObject successor=store.startAttempt(id,"capabilities",20);String before=store.get(id,false).toString();
+            assertThrows(SecurityException.class,()->store.decideCapabilityApproval(id,approval,approved,reviewedRun,reviewedEpoch));
+            assertEquals(before,store.get(id,false).toString());
+            assertEquals(successor.getString("runId"),store.get(id,false).getString("runId"));
+            assertEquals("pending",store.get(id,false).getJSONArray("approvals").getJSONObject(0).getString("state"));
+        }
+    }
+    @Test public void currentRunIdentityCannotBlessAnOlderPendingApproval()throws Exception{
+        TaskStore store=new TaskStore(context());String id=store.createCapabilityTask("不移用旧审批","").getString("id");JSONObject original=store.startAttempt(id,"capabilities",20);
+        String approval=store.requireCapabilityApproval(id,original.getString("runId"),"workspace_write",new JSONObject().put("path","old.txt")).getString("approvalId");
+        store.endAttempt(id,original.getString("runId"),"awaiting_user","原审批未作决定",new JSONObject());JSONObject successor=store.startAttempt(id,"capabilities",20);String before=store.get(id,false).toString();
+        for(boolean approved:new boolean[]{true,false}){
+            assertThrows(SecurityException.class,()->store.decideCapabilityApproval(id,approval,approved,successor.getString("runId"),successor.getInt("coordinatorEpoch")));
+            assertThrows(SecurityException.class,()->store.decideCapabilityApproval(id,approval,approved));
+        }
+        assertEquals(before,store.get(id,false).toString());
+    }
+    @Test public void reviewedApprovalRequiresTheExactEpochForBothDecisions()throws Exception{
+        TaskStore store=new TaskStore(context());String id=store.createCapabilityTask("准确审批代次","").getString("id");JSONObject original=store.startAttempt(id,"capabilities",20);
+        String approval=store.requireCapabilityApproval(id,original.getString("runId"),"workspace_write",new JSONObject().put("path","current.txt")).getString("approvalId");String before=store.get(id,false).toString();
+        for(boolean approved:new boolean[]{true,false})assertThrows(SecurityException.class,()->store.decideCapabilityApproval(id,approval,approved,original.getString("runId"),original.getInt("coordinatorEpoch")+1));
+        assertEquals(before,store.get(id,false).toString());
+    }
+    @Test public void currentReviewedDecisionIsOneUseAndApprovedContinuationKeepsItsExactArguments()throws Exception{
+        TaskStore store=new TaskStore(context());
+        for(boolean approved:new boolean[]{true,false}){
+            String id=store.createCapabilityTask("本次准确决定","").getString("id");JSONObject original=store.startAttempt(id,"capabilities",20),args=new JSONObject().put("path","exact.txt").put("content","original pixels are not authority");
+            String approval=store.requireCapabilityApproval(id,original.getString("runId"),"workspace_write",args).getString("approvalId");
+            store.endAttempt(id,original.getString("runId"),"awaiting_user","等待主人",new JSONObject());
+            JSONObject decided=store.decideCapabilityApproval(id,approval,approved,original.getString("runId"),original.getInt("coordinatorEpoch"));
+            assertEquals(approved?"approved":"denied",decided.getJSONArray("approvals").getJSONObject(0).getString("state"));
+            assertThrows(IllegalStateException.class,()->store.decideCapabilityApproval(id,approval,!approved,original.getString("runId"),original.getInt("coordinatorEpoch")));
+            if(approved){
+                JSONObject next=store.startAttempt(id,"capabilities",20);
+                assertTrue(store.requireCapabilityApproval(id,next.getString("runId"),"workspace_write",args).getBoolean("approved"));
+                assertFalse(store.requireCapabilityApproval(id,next.getString("runId"),"workspace_write",args).getBoolean("approved"));
+            }else assertFalse(store.requireCapabilityApproval(id,original.getString("runId"),"workspace_write",args).getBoolean("approved"));
+        }
+    }
     @Test public void aFinishedCapabilityRunCannotUseItsPreviouslyGrantedTools()throws Exception{
         TaskStore store=new TaskStore(context());String id=store.createCapabilityTask("读取项目","").getString("id");JSONObject task=store.startAttempt(id,"capabilities",20);
         store.authorizeTools(id,task.getString("runId"),new JSONArray().put("workspace_read"));RunControl control=new RunControl();

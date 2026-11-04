@@ -48,7 +48,7 @@ public final class GroupTaskHost implements GroupHostPort,AutoCloseable {
             try {ModelConfig selected=configs.get();SettingsStore.validate(selected);ModelConfig config=groupConfig(selected,request);services.requireAvailable(request);schedule(request,authority,config,true);}
             catch(Exception unavailable){
                 // Settlement is native-only and never grants execution/read access to a revoked member.
-                synchronized(tasks){JSONObject actual=tasks.get(request.taskId,false);if(actual!=null&&actual.optString("runId").isEmpty()&&actual.optString("status").equals("queued")){RunControl neverStarted=new RunControl();neverStarted.bindTask(request.taskId);tasks.checkGroupTaskControl(request,neverStarted);tasks.status(request.taskId,"failed","本次群服务、授权或模型未就绪，未发起执行；请核对本机配置后使用新的群请求");}}
+                synchronized(tasks){JSONObject actual=tasks.get(request.taskId,false);if(actual!=null&&actual.optString("runId").isEmpty()&&actual.optString("status").equals("queued")){RunControl neverStarted=new RunControl();tasks.checkGroupTaskControl(request,neverStarted);tasks.status(request.taskId,"failed","本次群服务、授权或模型未就绪，未发起执行；请核对本机配置后使用新的群请求");}}
                 error.accept("本次群请求未能执行，原TaskStore失败或中断记录已保留，未自动重试");
             }
         }

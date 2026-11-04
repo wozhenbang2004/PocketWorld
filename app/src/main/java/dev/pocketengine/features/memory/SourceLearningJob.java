@@ -43,15 +43,18 @@ public final class SourceLearningJob {
         JSONObject get(String task)throws Exception;JSONObject list(String cursor,int limit)throws Exception;
         JSONObject run(String task,long revision,RunControl original)throws Exception;
         default JSONObject run(String task,long revision,RunControl original,int maxBatches)throws Exception{if(maxBatches!=CALLS_PER_ATTEMPT)throw new IllegalStateException("原宿主不支持这个连续批次窗口");return run(task,revision,original);}
-        JSONObject skip(String task,long revision,boolean confirmed)throws Exception;JSONObject stop(String task)throws Exception;
+        JSONObject skip(String task,long revision,boolean confirmed)throws Exception;JSONObject stop(String task,String run,int epoch)throws Exception;
     }
     public static JSONObject dispatch(String command,JSONObject payload,RunControl original,OwnerCommands host)throws Exception{
-        java.util.Objects.requireNonNull(host);java.util.Objects.requireNonNull(original);java.util.Set<String> allowed=switch(command){case "createLearningJob"->java.util.Set.of("sourceRefs");case "addLearningJobSource"->java.util.Set.of("taskId","revision","sourceRef");case "getLearningJob","stopLearningJob"->java.util.Set.of("taskId");case "listLearningJobs"->java.util.Set.of("cursor","limit");case "runLearningJob"->java.util.Set.of("taskId","revision","confirmModelUse","maxBatches");case "skipLearningJobBatch"->java.util.Set.of("taskId","revision","confirmUnknownUse");default->throw new IllegalArgumentException("不是原逐批来源学习操作");};
+        java.util.Objects.requireNonNull(host);java.util.Objects.requireNonNull(original);java.util.Set<String> allowed=switch(command){case "createLearningJob"->java.util.Set.of("sourceRefs");case "addLearningJobSource"->java.util.Set.of("taskId","revision","sourceRef");case "getLearningJob"->java.util.Set.of("taskId");case "stopLearningJob"->java.util.Set.of("taskId","runId","epoch");case "listLearningJobs"->java.util.Set.of("cursor","limit");case "runLearningJob"->java.util.Set.of("taskId","revision","confirmModelUse","maxBatches");case "skipLearningJobBatch"->java.util.Set.of("taskId","revision","confirmUnknownUse");default->throw new IllegalArgumentException("不是原逐批来源学习操作");};
         if(payload==null||payload.length()<(command.equals("runLearningJob")?allowed.size()-1:allowed.size())||payload.length()>allowed.size())throw new SecurityException("逐批来源任务参数不完整或含替代字段");for(var keys=payload.keys();keys.hasNext();)if(!allowed.contains(keys.next()))throw new SecurityException("逐批来源任务不能覆盖模型、身份、回执或授权");original.check();
         return switch(command){
             case "createLearningJob"->host.create(payload.getJSONArray("sourceRefs"));
             case "addLearningJobSource"->host.add(payload.getString("taskId"),positiveInteger(payload,"revision"),SourceRef.fromJson(payload.getJSONObject("sourceRef")));
-            case "getLearningJob"->host.get(payload.getString("taskId"));case "stopLearningJob"->host.stop(payload.getString("taskId"));
+            case "getLearningJob"->host.get(payload.getString("taskId"));case "stopLearningJob"->{
+                Object run=payload.opt("runId"),epoch=payload.opt("epoch");if(!(run instanceof String)||!(epoch instanceof Integer||epoch instanceof Long)||((Number)epoch).longValue()<0||((Number)epoch).longValue()>Integer.MAX_VALUE||((String)run).isEmpty()!=(((Number)epoch).longValue()==0))throw new SecurityException("停止须携带所读取的原学习执行身份，不能临时借用当前执行");
+                yield host.stop(payload.getString("taskId"),(String)run,((Number)epoch).intValue());
+            }
             case "listLearningJobs"->host.list(payload.getString("cursor"),Math.toIntExact(positiveInteger(payload,"limit")));
             case "runLearningJob"->{if(!Boolean.TRUE.equals(payload.opt("confirmModelUse")))throw new SecurityException("须由主人明确确认本次把所选来源发给当前模型");int max=payload.has("maxBatches")?Math.toIntExact(positiveInteger(payload,"maxBatches")):CALLS_PER_ATTEMPT;if(max>MAX_INPUTS)throw new IllegalArgumentException("本次最多20批，不能扩展原来源清单");yield host.run(payload.getString("taskId"),positiveInteger(payload,"revision"),original,max);}
             default->{if(!Boolean.TRUE.equals(payload.opt("confirmUnknownUse")))throw new SecurityException("须明确确认跳过，未知调用不退款");yield host.skip(payload.getString("taskId"),positiveInteger(payload,"revision"),true);}

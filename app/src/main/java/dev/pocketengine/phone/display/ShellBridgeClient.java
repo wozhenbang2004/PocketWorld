@@ -38,8 +38,8 @@ final class ShellBridgeClient {
             if(control!=null){control.check();fresh(control,expectedRevision,ownerTakeover);}
             DataOutputStream output=new DataOutputStream(socket.getOutputStream());
             if(admission!=null){
-                if(control==null||ownerTakeover)throw new SecurityException("OCR目标必须保留原模型执行控制");
-                dev.pocketengine.phone.observation.NativePhoneEntry.call(control,expectedRevision,admission,()->{writeEntered.set(true);DisplayWire.write(output,request.toString(),32*1024);return null;});
+                if(control==null||ownerTakeover&&!java.util.Set.of("ownership","audio.get","audio.set").contains(command))throw new SecurityException("原生准入不能扩大暂停后的主人动作范围");
+                dev.pocketengine.phone.observation.NativePhoneEntry.call(control,expectedRevision,ownerTakeover,admission,()->{writeEntered.set(true);DisplayWire.write(output,request.toString(),32*1024);return null;});
             }else if(command.startsWith("owner_handoff_")&&control!=null){
                 if(!ownerTakeover)throw new SecurityException("移屏仅供原生主人");
                 control.dispatchAtPauseState(expectedRevision,true,()->{writeEntered.set(true);DisplayWire.write(output,request.toString(),32*1024);});

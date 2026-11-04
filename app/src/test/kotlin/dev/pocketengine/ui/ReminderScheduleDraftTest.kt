@@ -72,13 +72,16 @@ class ReminderScheduleDraftTest {
         assertThrows(IllegalArgumentException::class.java) { reminderPreservedSchedule(JSONObject(source.toString()).put("scheduleVersion", 2)) }
     }
     @Test fun reschedulingRequiresSameLiveRuleAndNoRevocation() {
-        val source = JSONObject().put("id", "original").put("revision", 4)
+        val source = JSONObject().put("id", "original").put("revision", 4).put("manualOriginVersion", 1)
         fun rules(value: JSONObject) = org.json.JSONArray().put(value)
         assertTrue(reminderRescheduleSourceCurrent(source, rules(JSONObject(source.toString()))))
         assertFalse(reminderRescheduleSourceCurrent(source, rules(JSONObject(source.toString()).put("revision", 5))))
         assertFalse(reminderRescheduleSourceCurrent(source, rules(JSONObject(source.toString()).put("sourceInvalidated", true))))
         assertFalse(reminderRescheduleSourceCurrent(source, rules(JSONObject(source.toString()).put("sourceCheckPending", true))))
         assertFalse(reminderRescheduleSourceCurrent(source, org.json.JSONArray()))
+        val unknown = JSONObject(source.toString()); unknown.remove("manualOriginVersion")
+        assertFalse(reminderRescheduleSourceCurrent(unknown, rules(unknown)))
+        assertFalse(reminderRescheduleSourceCurrent(source, rules(JSONObject(source.toString()).put("nativeOrigin", JSONObject()))))
         assertTrue(reminderRescheduleSourceCurrent(null, null))
     }
 }

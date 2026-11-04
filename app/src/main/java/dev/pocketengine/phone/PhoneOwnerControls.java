@@ -22,36 +22,30 @@ final class PhoneOwnerControls {
                 &&original.matchesHostRun(taskId,task.optString("runId"),task.optInt("coordinatorEpoch"));
     }
     void toggle() {
-        synchronized(app) {
-            try {
-                if(!ownsRun()||original.isCancelled())return;
-                if(original.isPaused()) {
-                    // resume() owns unresolved/manual-action checks and wakes the original PhoneRunService.
-                    // Never resume the raw control here, even when the button looks enabled.
-                    app.resume();
-                } else app.pause();
-            } catch(Exception unavailable) {app.error("原手机任务状态暂不可核对，请返回应用；未继续执行");}
-        }
+        try {
+            if(!ownsControl()||!original.hasHostRun()||original.isCancelled())return;
+            var identity=original.hostRunIdentity();
+            if(original.isPaused())app.resumeOriginalPhoneRun(taskId,identity.runId(),identity.epoch());
+            else app.pauseOriginalPhoneRun(taskId,identity.runId(),identity.epoch());
+        } catch(Exception unavailable) {app.error("原手机任务状态暂不可核对，请返回应用；未继续执行");}
     }
     boolean pause() {
-        synchronized(app) {
-            try {
-                if(!ownsRun()||original.isCancelled())return false;
-                if(!original.isPaused())app.pause();
-                return true;
-            } catch(Exception unavailable) {
-                if(!ownsControl())return false;
-                original.pause();app.error("已请求暂停，请返回应用核对原任务状态");return true;
-            }
+        try {
+            if(!ownsControl()||!original.hasHostRun()||original.isCancelled())return false;
+            var identity=original.hostRunIdentity();
+            if(!original.isPaused())app.pauseOriginalPhoneRun(taskId,identity.runId(),identity.epoch());
+            return true;
+        } catch(Exception unavailable) {
+            if(!ownsControl())return false;
+            original.pause();app.error("已请求暂停原控制，请返回应用核对任务状态");return true;
         }
     }
     void stop() {
-        synchronized(app) {
-            // Stopping remains available if durable state cannot be read, but never targets a new owner.
-            if(!ownsControl())return;
-            try {if(ownsRun())app.stop(taskId);else original.cancel();}
-            catch(Exception unavailable) {original.cancel();app.error("已停止原执行控制，请返回应用核对任务记录");}
-        }
+        if(!ownsControl())return;
+        try {
+            var identity=original.hostRunIdentity();
+            if(identity==null)original.cancel();else app.stopOriginalPhoneRun(taskId,identity.runId(),identity.epoch());
+        } catch(Exception unavailable) {original.cancel();app.error("已停止原执行控制，请返回应用核对任务记录");}
     }
     ViewState view(String goal) {
         synchronized(app) {

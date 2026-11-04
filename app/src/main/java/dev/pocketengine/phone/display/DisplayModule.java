@@ -70,10 +70,22 @@ public final class DisplayModule implements EngineModule {
         if(ownerTaskId.isEmpty())bootstrapEpoch++;
         ownerTaskId=taskId;
     }
-    public synchronized void unpinOwner(String taskId){if(ownerTaskId.equals(taskId))ownerTaskId="";}
+    public synchronized void unpinOwner(String taskId){
+        if(ownerTaskId.equals(taskId)){ownerTaskId="";if(!context.executionAllowed())try{stopForOwnerDisable();}catch(Exception unknown){message="总停用后原后台资源释放尚未确认，请核对原连接";}}
+    }
+    /** Only our original helper bindings are stopped; pending display/audio recovery stays explicit. */
+    public synchronized JSONObject stopForOwnerDisable()throws Exception {
+        if(context.executionAllowed())throw new SecurityException("总运行状态已恢复，旧清理失效");
+        if(!ownerTaskId.isEmpty()||releasePending||state.optBoolean("sessionActive"))
+            return new JSONObject().put("state","original_display_cleanup_pending").put("releaseConfirmed",false).put("helperStopRequested",false);
+        bootstrapEpoch++;verifiedAdbStatus=null;verifiedAdbEpoch=-1;connected=false;
+        adb.cancel();JSONObject actual=shizuku.stop();
+        return new JSONObject().put("state","stop_requested").put("helperStopRequested",true).put("physicalCleanupVerified",false).put("shizuku",actual);
+    }
     synchronized boolean ownedBy(String taskId){return !ownerTaskId.isEmpty()&&ownerTaskId.equals(taskId);}
     @Override public synchronized JSONObject handle(String command,JSONObject input)throws Exception {
         if(input==null)input=new JSONObject();
+        if(java.util.Set.of("adb.pair","adb.connect","shizuku.start","create").contains(command))context.requireExecutionEnabled();
         // Native owner controls remain available during a run so revocation reaches its live fences.
         if("access.set".equals(command)){
             new dev.pocketengine.phone.access.AndroidPhoneAccessStore(context.android).setOwnerRule(
@@ -212,6 +224,9 @@ public final class DisplayModule implements EngineModule {
     // place also covers a release whose successful reply was lost before reaching the app.
     synchronized void acceptStatus(JSONObject answer)throws Exception {
         validateStatus(answer);
+        dev.pocketengine.displayhelper.DisplayGeometry incoming=dev.pocketengine.displayhelper.DisplayGeometry.read(answer);
+        if(answer.optBoolean("sessionActive")&&answer.optString("sessionId").equals(state.optString("sessionId"))
+                &&answer.optInt("displayId",-1)==state.optInt("displayId",-1))requireGeometryAdvance(state,incoming);
         boolean active=answer.optBoolean("sessionActive");
         boolean recovery=releasePending||state.optBoolean("recoveryRequired")
                 ||active&&!answer.optString("sessionId").equals(state.optString("sessionId"));
@@ -231,11 +246,13 @@ public final class DisplayModule implements EngineModule {
             throw new SecurityException("后台助手返回的会话身份无效");
     }
     public synchronized JSONObject create(JSONObject input,RunControl control)throws Exception {
+        context.requireExecutionEnabled();
         PhoneParallelCapabilities.require(input);
         connect(control);
         if(state.optBoolean("sessionActive"))throw new IllegalStateException("后台屏已有会话，请先释放");
         JSONObject answer=client().call("create",input,control);
         requireOk(answer);if(answer.optInt("displayId",-1)<=0)throw new SecurityException("后台助手返回了无效显示");
+        dev.pocketengine.displayhelper.DisplayGeometry.read(answer);
         state=publicState(answer).put("sessionActive",true);connected=true;message="独立后台屏已创建；主屏不会作为备用执行位置。";
         return snapshot();
     }
@@ -285,6 +302,18 @@ public final class DisplayModule implements EngineModule {
         JSONObject pinned=new JSONObject(payload.toString()).put("sessionId",expectedSession).put("displayId",expectedDisplay);
         return request(command,pinned,control,revision,false,control==null?null:admission);
     }
+    /** Native owner audio review only. Its admission is rechecked at the original helper write;
+     * the application and TaskStore monitors are not held while waiting for the helper reply. */
+    JSONObject ownerAudioForTask(String command,JSONObject payload,String task,String run,int epoch,String expectedSession,int expectedDisplay,RunControl original,long revision,boolean paused,dev.pocketengine.phone.observation.NativePhoneEntry.Admission admission)throws Exception {
+        if(!java.util.Set.of("ownership","audio.get","audio.set").contains(command)||original==null||admission==null)throw new SecurityException("original_owner_audio_admission_required");
+        dev.pocketengine.phone.observation.NativePhoneEntry.Admission checked=()->{
+            admission.check();
+            if(!original.matchesHostRun(task,run,epoch)||original.isCancelled()||original.isPaused()!=paused||original.pauseRevision()!=revision)throw new SecurityException("original_owner_audio_run_changed");
+            synchronized(DisplayModule.this){JSONObject current=session();if(!ownedBy(task)||expectedDisplay!=current.optInt("displayId",-1)||!expectedSession.equals(current.optString("sessionId")))throw new SecurityException("original_owner_audio_session_changed");}
+        };
+        checked.check();JSONObject pinned=new JSONObject(payload.toString()).put("sessionId",expectedSession).put("displayId",expectedDisplay);
+        return request(command,pinned,original,revision,paused,checked);
+    }
     /** Explicit native owner undo; no model tool exposes it and no live session is displaced. */
     public synchronized JSONObject audioRecovery(String command,JSONObject payload)throws Exception {
         if(!java.util.Set.of("audio.get","audio.set").contains(command)||!ownerTaskId.isEmpty()||bootstrapBusy()||!isConnected())throw new SecurityException("owner_audio_recovery_unavailable");
@@ -311,7 +340,24 @@ public final class DisplayModule implements EngineModule {
         catch(Exception unavailable){connected=false;message="后台连接中断，停止后续操作。";throw unavailable;}
         if(result.optBoolean("ok")&&(result.optInt("displayId",-1)!=display||!sessionId.equals(result.optString("sessionId"))))
             throw new SecurityException("后台显示或会话回执身份不匹配");
+        if("frame".equals(command)&&result.optBoolean("ok"))adoptFrameGeometry(result,sessionId,display);
         return result;
+    }
+    /** Only the authenticated original helper may advance this session's geometry. */
+    private synchronized void adoptFrameGeometry(JSONObject frame,String originalSession,int originalDisplay)throws Exception {
+        if(!originalSession.equals(state.optString("sessionId"))||originalDisplay!=state.optInt("displayId",-1))
+            throw new SecurityException("原后台帧返回时会话已变化");
+        dev.pocketengine.displayhelper.DisplayGeometry incoming=dev.pocketengine.displayhelper.DisplayGeometry.read(frame);
+        requireGeometryAdvance(state,incoming);
+        if(incoming!=null){
+            JSONObject next=new JSONObject(state.toString());incoming.writeTo(next,frame.optBoolean("geometryReady"));
+            state=next.put("captureAvailable",!frame.optBoolean("empty"));
+        }
+    }
+    private static void requireGeometryAdvance(JSONObject previous,dev.pocketengine.displayhelper.DisplayGeometry incoming) {
+        dev.pocketengine.displayhelper.DisplayGeometry known=dev.pocketengine.displayhelper.DisplayGeometry.read(previous);
+        if(known!=null&&(incoming==null||!incoming.canFollow(known)))
+            throw new SecurityException("后台几何身份已过期或缺失，未恢复旧尺寸");
     }
     /** Native task supervisor only. It supplies a freshly checked canonical deadline, never a model duration. */
     public synchronized JSONObject renewTaskLease(String taskId,String runId,int epoch,RunControl control,String expectedSession,int expectedDisplay,long taskDeadline)throws Exception {
@@ -377,7 +423,7 @@ public final class DisplayModule implements EngineModule {
     }
     static void requireOk(JSONObject result){if(!result.optBoolean("ok"))throw new IllegalStateException(result.optString("message","后台请求未成功"));}
     private static JSONObject publicState(JSONObject input)throws Exception {
-        JSONObject out=new JSONObject();for(String key:new String[]{"sessionActive","displayId","sessionId","width","height","density","sdk","requestedPackageName","backgroundOnly","focusIsolationRequested","displayFlagsConfirmed","recoveryRequired","frameMetadataOnly","imeIsolation","imeReason","inputInjectionAvailable","captureAvailable"})if(input.has(key))out.put(key,input.get(key));return out;
+        JSONObject out=new JSONObject();for(String key:new String[]{"sessionActive","displayId","sessionId","width","height","density","sdk","requestedPackageName","backgroundOnly","focusIsolationRequested","displayFlagsConfirmed","recoveryRequired","frameMetadataOnly","imeIsolation","imeReason","inputInjectionAvailable","captureAvailable","geometryTracking","geometryReady","geometryGeneration","rotation","captureWidth","captureHeight"})if(input.has(key))out.put(key,input.get(key));return out;
     }
     private static String randomHex(int count){byte[] data=new byte[count];new SecureRandom().nextBytes(data);StringBuilder result=new StringBuilder();for(byte b:data)result.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return result.toString();}
 }

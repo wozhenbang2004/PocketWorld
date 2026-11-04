@@ -50,7 +50,7 @@ internal fun ChannelAccountSetupPanel(state: PocketUiState, controller: PocketWo
 internal fun ChannelProfileActions(profile: JSONObject, binding: JSONObject?, state: PocketUiState, controller: PocketWorldController) {
     var edit by remember { mutableStateOf(false) }
     var bind by remember { mutableStateOf(false) }
-    var unbind by remember { mutableStateOf(false) }
+    var unbind by remember { mutableStateOf<JSONObject?>(null) }
     var history by remember { mutableStateOf(false) }
     val id = profile.optString("id")
     ChannelSetupCaption(if (!profile.optBoolean("enabled")) "下一步：启用此连接后，再核对真实接收状态。" else if (binding == null) "下一步：先接收一条本人私聊，再在本机核对主人。连接保存不等于身份已绑定。" else "已绑定主人；自动问答、允许任务和持续接收仍是独立设置。")
@@ -58,8 +58,8 @@ internal fun ChannelProfileActions(profile: JSONObject, binding: JSONObject?, st
         TextButton(onClick = { edit = true }) { Text("连接设置", fontSize = 12.sp) }
         TextButton(onClick = { history = true }) { Text("已读历史范围", fontSize = 13.sp) }
         TextButton(onClick = { bind = true }) { Text(if (binding == null) "核对主人私聊" else "重新核对主人", fontSize = 12.sp) }
-        if (binding != null) TextButton(onClick = { unbind = true }) { Text("解除绑定", fontSize = 12.sp) }
-        if (profile.optString("provider") == "weixin") TextButton(onClick = { controller.requestFeature("channels", "weixin.poll", JSONObject().put("id", id)) }, enabled = profile.optBoolean("enabled") && "channels.weixin.poll" !in state.moduleBusy) { Text("同步一次", fontSize = 12.sp) }
+        if (binding != null) TextButton(onClick = { unbind = channelOriginalReview(profile, binding) }) { Text("解除绑定", fontSize = 12.sp) }
+        if (profile.optString("provider") == "weixin") TextButton(onClick = { controller.requestFeature("channels", "weixin.poll", JSONObject().put("id", id).put("expectedTransportEpoch", profile.getString("transportEpoch"))) }, enabled = profile.optBoolean("enabled") && "channels.weixin.poll" !in state.moduleBusy) { Text("同步一次", fontSize = 12.sp) }
     }
     for (command in listOf("profile.probe", "weixin.poll", "owner.bind", "owner.unbind")) {
         val key = "channels.$command"
@@ -69,11 +69,26 @@ internal fun ChannelProfileActions(profile: JSONObject, binding: JSONObject?, st
     if (edit) ChannelProfileDialog(profile, state, controller) { edit = false }
     if (history) ChannelHistoryDialog(profile, state, controller) { history = false }
     if (bind) ChannelOwnerBindingDialog(profile, state, controller) { bind = false }
-    if (unbind) AlertDialog(onDismissRequest = { unbind = false }, title = { Text("解除这个账号的主人绑定？") }, text = { Text("新的消息将回到独立外部会话；旧私聊任务授权及私人回答不能继续使用。已发生的外部动作不会撤回。", fontSize = 13.sp) }, confirmButton = { Button(onClick = { controller.requestFeature("channels", "owner.unbind", JSONObject().put("profileId", id)); unbind = false }) { Text("解除绑定") } }, dismissButton = { TextButton(onClick = { unbind = false }) { Text("返回") } })
+    unbind?.let { original -> AlertDialog(onDismissRequest = { unbind = null }, title = { Text("解除这个账号的主人绑定？") }, text = { Text("新的消息将回到独立外部会话；旧私聊任务授权及私人回答不能继续使用。已发生的外部动作不会撤回。" + if (channelOriginalReviewCurrent(original, state)) "" else "\n原连接或绑定已变化，请返回后重新核对。", fontSize = 13.sp) }, confirmButton = { Button(onClick = { controller.requestFeature("channels", "owner.unbind", JSONObject(original.toString())); unbind = null }, enabled = channelOriginalReviewCurrent(original, state)) { Text("解除绑定") } }, dismissButton = { TextButton(onClick = { unbind = null }) { Text("返回") } }) }
 }
 
+internal fun channelOriginalReview(profile: JSONObject, binding: JSONObject?): JSONObject = JSONObject()
+    .put("profileId", profile.getString("id")).put("expectedTransportEpoch", profile.getString("transportEpoch"))
+    .put("expectedBindingEpoch", binding?.getString("bindingEpoch") ?: "").put("expectedTaskGrantEpoch", binding?.getString("taskGrantEpoch") ?: "")
+internal fun channelOriginalReviewCurrent(review: JSONObject, state: PocketUiState): Boolean = runCatching {
+    val channels = state.feature("channels"); val id = review.getString("profileId")
+    val profile = channels.optJSONArray("profiles").objects().singleOrNull { it.optString("id") == id }
+    val binding = channels.optJSONArray("bindings").objects().singleOrNull { it.optString("profileId") == id }
+    dev.pocketengine.features.channels.ChannelConfigurationReview.profile(profile, review.getString("expectedTransportEpoch"))
+    dev.pocketengine.features.channels.ChannelConfigurationReview.binding(binding, review.getString("expectedBindingEpoch"), review.getString("expectedTaskGrantEpoch"))
+}.isSuccess
+
 @Composable
-private fun ChannelProfileDialog(original: JSONObject?, state: PocketUiState, controller: PocketWorldController, close: () -> Unit) {
+private fun ChannelProfileDialog(initial: JSONObject?, state: PocketUiState, controller: PocketWorldController, close: () -> Unit) {
+    val original = remember { initial?.let { JSONObject(it.toString()) } }
+    val draftId = remember { original?.getString("id") ?: UUID.randomUUID().toString() }
+    val current = state.feature("channels").optJSONArray("profiles").objects().singleOrNull { it.optString("id") == draftId }
+    val unchanged = runCatching { dev.pocketengine.features.channels.ChannelConfigurationReview.profile(current, original?.getString("transportEpoch") ?: "") }.isSuccess
     var name by remember { mutableStateOf(original?.optString("name") ?: "我的QQ机器人") }
     var appId by remember { mutableStateOf(original?.optString("appId") ?: "") }
     var secret by remember { mutableStateOf("") } // Never saved to the activity bundle.
@@ -113,14 +128,17 @@ private fun ChannelProfileDialog(original: JSONObject?, state: PocketUiState, co
             }
             ChannelSetupCaption("群和非主人私聊只能用明确配置的API-key模型；已认证并由本机绑定的主人私聊才可用本人套餐。文字问答不授予手机工具或群任务能力。")
             if (original != null) ChannelSetupCaption("保存会更新连接代次并停止当前接收/生成；已有动作不回滚。原群任务与待发回复可能需要重新核对来源。")
+            if (!unchanged) Text("原连接已在其他页面改变，请返回后重新核对，未沿用旧表单覆盖。", color = Danger, fontSize = 13.sp)
+            if (submitted != null && !busy) ChannelSetupCaption("本次保存已提交；请返回核对当前配置。未知回执不自动重复保存。")
             if (submitted != null && state.moduleResultInputs["channels.profile.save"]?.optString("_requestId") == submitted) state.moduleErrors["channels.profile.save"]?.let { Text(it, color = Danger, fontSize = 12.sp) }
         }
     }, confirmButton = { Button(onClick = {
         val payload = original?.let { JSONObject(it.toString()) } ?: JSONObject()
+        payload.put("id", draftId).put("expectedTransportEpoch", original?.getString("transportEpoch") ?: "")
         payload.put("name", name.trim()).put("provider", provider).put("appId", appId.trim()).put("enabled", enabled).put("autoReply", auto).put("ownerImagesEnabled", (provider == "weixin" || provider == "qq") && ownerImages).put("qqGuildEnabled", provider == "qq" && qqGuild).put("qqStreamRepliesEnabled", provider == "qq" && qqStream).put("ownerMediaEnabled", (provider == "weixin" || provider == "qq") && ownerMedia)
         if (secret.isNotEmpty()) payload.put("secret", secret)
         submitted = controller.requestFeature("channels", "profile.save", payload); secret = ""
-    }, enabled = !busy && name.trim().isNotEmpty() && (provider != "qq" || appId.trim().isNotEmpty() && (original != null || secret.isNotEmpty()))) { Text(if (busy) "保存中" else "保存配置") } }, dismissButton = { TextButton(onClick = { secret = ""; close() }, enabled = !busy) { Text("取消") } })
+    }, enabled = !busy && unchanged && submitted == null && name.trim().isNotEmpty() && (provider != "qq" || appId.trim().isNotEmpty() && (original != null || secret.isNotEmpty()))) { Text(if (busy) "保存中" else "保存配置") } }, dismissButton = { TextButton(onClick = { secret = ""; close() }, enabled = !busy) { Text("返回") } })
 }
 
 /** Merge only the response belonging to this original native login. It never issues start. */
@@ -202,7 +220,10 @@ private fun NativeWeixinQr(content: String) {
 }
 
 @Composable
-private fun ChannelOwnerBindingDialog(profile: JSONObject, state: PocketUiState, controller: PocketWorldController, close: () -> Unit) {
+private fun ChannelOwnerBindingDialog(initial: JSONObject, state: PocketUiState, controller: PocketWorldController, close: () -> Unit) {
+    val profile = remember { JSONObject(initial.toString()) }
+    val original = remember { channelOriginalReview(profile, state.feature("channels").optJSONArray("bindings").objects().singleOrNull { it.optString("profileId") == profile.optString("id") }) }
+    val unchanged = channelOriginalReviewCurrent(original, state)
     var selected by remember { mutableStateOf<String?>(null) }
     var accepted by remember { mutableStateOf(false) }
     var submitted by remember { mutableStateOf<String?>(null) }
@@ -220,9 +241,10 @@ private fun ChannelOwnerBindingDialog(profile: JSONObject, state: PocketUiState,
             for (event in candidates.take(10)) Row { RadioButton(selected == event.optString("id"), { selected = event.optString("id"); accepted = false }); Column(Modifier.weight(1f).padding(top = 9.dp)) { Text(event.optString("senderId"), fontSize = 13.sp); ChannelSetupCaption(event.optString("text").take(160)); ChannelSetupCaption("认证来源：" + event.optString("authenticatedBy")); if (event.optString("conversationKind").startsWith("qq_")) ChannelSetupCaption("原生场景：" + event.optString("conversationKind") + if (event.has("qqGuildId")) " · 频道会话 " + event.optString("qqGuildId") else "") } }
             Row { Checkbox(accepted, { accepted = it }, enabled = actual != null); Text("我已核对这是我自己的账号", fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp)) }
             ChannelSetupCaption("绑定后本人私聊可使用私人问答与记忆；创建任务仍需另开权限，任何写入、外发和手机工具不因此自动批准。")
+            if (!unchanged) Text("原连接或主人绑定已变化，请返回后重新核对。", color = Danger, fontSize = 13.sp)
             if (submitted != null && state.moduleResultInputs["channels.owner.bind"]?.optString("_requestId") == submitted) state.moduleErrors["channels.owner.bind"]?.let { Text(it, color = Danger, fontSize = 12.sp) }
         }
-    }, confirmButton = { Button(onClick = { if (lifecycle.currentState == Lifecycle.State.RESUMED && actual != null) submitted = controller.requestFeature("channels", "owner.bind", JSONObject().put("profileId", id).put("verifiedEventId", actual.optString("id")).put("confirmed", true)) }, enabled = !busy && actual != null && accepted) { Text("核对后绑定") } }, dismissButton = { TextButton(onClick = close, enabled = !busy) { Text("返回") } })
+    }, confirmButton = { Button(onClick = { if (lifecycle.currentState == Lifecycle.State.RESUMED && actual != null) submitted = controller.requestFeature("channels", "owner.bind", JSONObject(original.toString()).put("verifiedEventId", actual.optString("id")).put("confirmed", true)) }, enabled = !busy && unchanged && submitted == null && actual != null && accepted) { Text("核对后绑定") } }, dismissButton = { TextButton(onClick = close, enabled = !busy) { Text("返回") } })
 }
 
 @Composable

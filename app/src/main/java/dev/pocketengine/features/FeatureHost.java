@@ -49,21 +49,100 @@ public final class FeatureHost implements AutoCloseable {
     private final ThreadPoolExecutor signals=new ThreadPoolExecutor(2,2,0,TimeUnit.SECONDS,new ArrayBlockingQueue<>(16));
     private final EventSink events;
     private final java.util.concurrent.ConcurrentHashMap<dev.pocketengine.features.memory.WorkingMemorySession,JSONObject> workingMemory=new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<dev.pocketengine.features.memory.WorkingMemorySession,RunControl> workingMemoryControls=new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.atomic.AtomicLong memoryContextRevision=new java.util.concurrent.atomic.AtomicLong();
     public void retainWorkingMemory(dev.pocketengine.features.memory.WorkingMemorySession session,JSONObject scope)throws Exception{workingMemory.put(session,new JSONObject(scope.toString()));}
+    public void retainWorkingMemory(dev.pocketengine.features.memory.WorkingMemorySession session,JSONObject scope,RunControl original,long expectedPause)throws Exception {
+        JSONObject captured=new JSONObject(scope.toString());
+        synchronized(workingMemory){
+            if(original==null||!original.hasHostRun()||!original.matchesHostRun(captured.getString("taskId"),captured.getString("runId"),captured.getInt("epoch"))||original.isCancelled()||original.isPaused()||original.pauseRevision()!=expectedPause){session.close();throw new SecurityException("原工作记忆执行已暂停、停止或变化");}
+            workingMemoryControls.put(session,original);workingMemory.put(session,captured);
+        }
+    }
+    public boolean ownsTaskStore(TaskStore expected){return expected!=null&&tasks==expected;}
+    /** Only notes registered by this native control are scrubbed; unbound notes remain explicitly unknown. */
+    public boolean clearOriginalRunWorkingMemory(String task,String run,int epoch,RunControl original,long pause){
+        if(original==null||!original.matchesHostRun(task,run,epoch)||!original.isPaused()||original.pauseRevision()!=pause)return false;
+        boolean complete=true;synchronized(workingMemory){
+            if(!original.isPaused()||original.pauseRevision()!=pause)return false;
+            for(var entry:workingMemory.entrySet()){
+                JSONObject identity=entry.getValue();if(!task.equals(identity.optString("taskId")))continue;
+                if(workingMemoryControls.get(entry.getKey())==original&&run.equals(identity.optString("runId"))&&epoch==identity.optInt("epoch"))releaseWorkingMemory(entry.getKey());
+                else if(!identity.has("runId")||!identity.has("epoch"))complete=false;
+            }
+        }return complete;
+    }
     public boolean hasWorkingMemory(dev.pocketengine.features.memory.WorkingMemorySession session){return workingMemory.containsKey(session);}
-    public void clearTaskWorkingMemory(String taskId){for(var entry:workingMemory.entrySet())if(taskId!=null&&taskId.equals(entry.getValue().optString("taskId"))){if(workingMemory.remove(entry.getKey(),entry.getValue()))entry.getKey().close();}}
-    public void releaseWorkingMemory(dev.pocketengine.features.memory.WorkingMemorySession session){workingMemory.remove(session);session.close();}
+    public void clearTaskWorkingMemory(String taskId){for(var entry:workingMemory.entrySet())if(taskId!=null&&taskId.equals(entry.getValue().optString("taskId"))){if(workingMemory.remove(entry.getKey(),entry.getValue())){workingMemoryControls.remove(entry.getKey());entry.getKey().close();}}}
+    public void releaseWorkingMemory(dev.pocketengine.features.memory.WorkingMemorySession session){workingMemory.remove(session);workingMemoryControls.remove(session);session.close();}
     public long memoryContextRevision(){return memoryContextRevision.get();}
     /** Scrub ephemeral notes before source/forget cleanup returns; no TaskStore or model I/O here. */
     public void clearWorkingMemory(JSONObject scope){
-        memoryContextRevision.incrementAndGet();for(var entry:workingMemory.entrySet())if(scope.optString("ownerId").equals(entry.getValue().optString("ownerId"))&&scope.optString("spaceId").equals(entry.getValue().optString("spaceId"))){if(workingMemory.remove(entry.getKey(),entry.getValue()))entry.getKey().close();}
+        memoryContextRevision.incrementAndGet();for(var entry:workingMemory.entrySet())if(scope.optString("ownerId").equals(entry.getValue().optString("ownerId"))&&scope.optString("spaceId").equals(entry.getValue().optString("spaceId"))){if(workingMemory.remove(entry.getKey(),entry.getValue())){workingMemoryControls.remove(entry.getKey());entry.getKey().close();}}
     }
     private final TaskStore tasks;
     private final dev.pocketengine.media.MediaWorkflowHost mediaWorkflows;
     private volatile AutomationPlanHost automationPlans;
+    private volatile dev.pocketengine.features.skills.NativeConversationSkillDraftHost conversationSkillDrafts;
+    public void setConversationSkillDrafts(dev.pocketengine.features.skills.NativeConversationSkillDraftHost host){conversationSkillDrafts=java.util.Objects.requireNonNull(host);}
+    public boolean hasConversationSkillDrafts(){return conversationSkillDrafts!=null;}
+    /** Native owner review only; model callers use the inert original-task methods below. */
+    public dev.pocketengine.features.skills.NativeConversationSkillDraftHost conversationSkillDraftsForOwner(){var host=conversationSkillDrafts;if(host==null)throw new IllegalStateException("原对话技能草稿宿主尚未就绪");return host;}
+    public JSONObject conversationSkillSourcesForTask(String task,String run,int epoch,RunControl original)throws Exception{return conversationSkillDraftsForOwner().sourcesForTask(task,run,epoch,original);}
+    public JSONObject proposeConversationSkillForTask(String task,String run,int epoch,String operation,JSONObject draft,RunControl original)throws Exception{return conversationSkillDraftsForOwner().proposeForTask(task,run,epoch,operation,draft,original);}
+    private volatile dev.pocketengine.features.memory.NativeConversationMemoryDraftHost conversationMemoryDrafts;
+    public void setConversationMemoryDrafts(dev.pocketengine.features.memory.NativeConversationMemoryDraftHost host){conversationMemoryDrafts=java.util.Objects.requireNonNull(host);}
+    public boolean hasConversationMemoryDrafts(){return conversationMemoryDrafts!=null;}
+    public dev.pocketengine.features.memory.NativeConversationMemoryDraftHost conversationMemoryDraftsForOwner(){var host=conversationMemoryDrafts;if(host==null)throw new IllegalStateException("原对话记忆草稿宿主尚未就绪");return host;}
+    public JSONObject conversationMemorySourcesForTask(String task,String run,int epoch,RunControl original)throws Exception{return conversationMemoryDraftsForOwner().sourcesForTask(task,run,epoch,original);}
+    public JSONObject proposeConversationMemoryForTask(String task,String run,int epoch,String operation,JSONObject draft,RunControl original)throws Exception{return conversationMemoryDraftsForOwner().proposeForTask(task,run,epoch,operation,draft,original);}
+    private volatile dev.pocketengine.features.assistant.notifications.ImmediateTaskNotifications taskNotices;
+    public void setTaskNotices(dev.pocketengine.features.assistant.notifications.ImmediateTaskNotifications notices){taskNotices=java.util.Objects.requireNonNull(notices);}
+    public boolean hasTaskNotices(){return taskNotices!=null;}
+    public JSONObject postTaskNotice(String task,String run,int epoch,String operation,JSONObject arguments,String approval,RunControl original)throws Exception {
+        var notices=taskNotices;if(tasks==null||notices==null)throw new IllegalStateException("原任务通知宿主尚未就绪");
+        try{return tasks.postTaskNoticeForHost(task,run,epoch,operation,arguments,approval,original,notices::post);}finally{emitTask(task);}
+    }
     private volatile dev.pocketengine.features.local.project.TaskStoreProjectHost projectHost;
     public void setProjectHost(dev.pocketengine.features.local.project.TaskStoreProjectHost host){projectHost=java.util.Objects.requireNonNull(host);}
+    private final java.util.concurrent.ConcurrentHashMap<String,RunControl> ownerLocalTerminalControls=new java.util.concurrent.ConcurrentHashMap<>();
+    public RunControl localTerminalControl(String id){return id==null?null:ownerLocalTerminalControls.get(id);}
+    public dev.pocketengine.features.local.project.OwnerLocalTerminal.Review reviewLocalTerminalForOwner(JSONObject input)throws Exception {
+        if(tasks==null||projectHost==null||!(module("local") instanceof dev.pocketengine.features.local.LocalModule local))throw new IllegalStateException("原本机项目宿主未就绪");tasks.requireExecutionEnabled();return dev.pocketengine.features.local.project.OwnerLocalTerminal.review(local,input);
+    }
+    /** Called once by the native owner confirmation worker; the actual launcher is the existing host. */
+    public JSONObject submitLocalTerminalForOwner(dev.pocketengine.features.local.project.OwnerLocalTerminal.Confirmed confirmed)throws Exception {
+        if(tasks==null||projectHost==null||!(module("local") instanceof dev.pocketengine.features.local.LocalModule local))throw new IllegalStateException("原本机项目宿主未就绪");confirmed.requireCurrent(local);JSONObject admitted=tasks.beginOwnerLocalTerminal(confirmed);String id=confirmed.requestId();
+        if(admitted.optBoolean("knownOperation"))return localTerminalForOwner(id,false).put("knownOperation",true);
+        JSONObject plan=confirmed.plan(),binding=new JSONObject().put("taskId",id).put("runId",id).put("coordinatorEpoch",1).put("operationId",id),exact=dev.pocketengine.features.local.project.ProjectDevelopment.exact(plan,dev.pocketengine.features.local.project.OwnerLocalTerminal.step(plan));RunControl original=new RunControl();
+        try{
+            original.bindHostRun(id,id,1);original.setAuthorityCheck(()->tasks.requireOwnerLocalTerminalCurrent(id,original));if(ownerLocalTerminalControls.putIfAbsent(id,original)!=null)throw new SecurityException("原终端已经持有控制器");
+            confirmed.requireCurrent(local);projectHost.dispatch(binding,exact);
+        }catch(dev.pocketengine.features.local.project.ProjectDevelopment.NotDispatched refused){tasks.ownerLocalTerminalPreflightRejected(id,refused.receipt);original.cancel();}
+        catch(Exception uncertain){
+            // A still-prepared row proves the original host never consumed its launch. Once
+            // unknown was committed, only this original native process may be observed/stopped.
+            tasks.ownerLocalTerminalPreflightRejected(id,new JSONObject().put("code","owner_terminal_preflight_rejected"));original.cancel();
+            try{JSONObject observed=local.projectReceiptForHost(exact,binding,true);tasks.recordProjectOperation(binding,exact,observed);}catch(Exception unavailable){}
+            if(tasks.hasUnresolved(id))tasks.endAttempt(id,id,"reconciling","原手动终端派发或输入结果待核对；只查询原编号，不重新启动",new JSONObject().put("nativeOwnerTerminal",true).put("operationId",id));
+        }
+        tasks.finishOwnerLocalTerminalFromReceipt(binding);finishLocalTerminalIfSettled(id);emitTask(id);sendState();return localTerminalForOwner(id,false).put("knownOperation",false);
+    }
+    public void finishLocalTerminalIfSettled(String id)throws Exception {
+        JSONObject task=tasks.get(id,false);if(task==null||!task.has("ownerLocalTerminal")||!task.optString("status").matches("completed|failed|paused"))return;RunControl original=ownerLocalTerminalControls.remove(id);if(original!=null)original.cancel();
+    }
+    /** Query/stop uses only the original immutable plan and actual backend ref, including after restart. */
+    public JSONObject localTerminalForOwner(String id,boolean cancel)throws Exception {
+        JSONObject original=cancel?tasks.cancelOwnerLocalTerminalForOwner(id):tasks.ownerLocalTerminalOriginalForOwner(id),binding=original.getJSONObject("binding"),plan=original.getJSONObject("plan"),operation=original.getJSONObject("operation");
+        if(cancel){RunControl control=ownerLocalTerminalControls.get(id);if(control!=null)control.cancel();}
+        JSONObject receipt=operation.optJSONObject("receipt");if(receipt!=null&&receipt.optJSONObject("projectExecution")!=null){
+            var local=(dev.pocketengine.features.local.LocalModule)module("local");JSONObject exact=dev.pocketengine.features.local.project.ProjectDevelopment.exact(plan,dev.pocketengine.features.local.project.OwnerLocalTerminal.step(plan));
+            try{JSONObject backend=local.projectReceiptForHost(exact,receipt.getJSONObject("projectExecution"),cancel);tasks.recordProjectOperation(binding,exact,backend);}catch(Exception unavailable){/* An unknown original job never becomes a new launch. */}
+        }else if(cancel&&"prepared".equals(operation.optString("state")))tasks.ownerLocalTerminalPreflightRejected(id,new JSONObject().put("code","owner_terminal_cancelled_before_dispatch"));
+        tasks.finishOwnerLocalTerminalFromReceipt(binding);finishLocalTerminalIfSettled(id);JSONObject current=tasks.ownerLocalTerminalOriginalForOwner(id),task=current.getJSONObject("task"),row=current.getJSONObject("operation");
+        RunControl live=ownerLocalTerminalControls.get(id);boolean input=live!=null&&!live.isCancelled()&&!live.isPaused()&&"project_running".equals(row.getString("state"))&&task.getJSONObject("ownerLocalTerminal").getLong("expiresAt")>System.currentTimeMillis();
+        return new JSONObject().put("taskId",id).put("runId",id).put("epoch",1).put("executionId",id).put("status",task.getString("status")).put("operationState",row.getString("state")).put("scope",task.getJSONObject("ownerLocalTerminal")).put("receipt",row.optJSONObject("receipt")).put("inputAvailable",input).put("modelDispatched",false).put("replayAllowed",false).put("viewerOnlyClose",true);
+    }
     public dev.pocketengine.features.local.project.ProjectOwnerLiveFileSave.Review reviewProjectLiveFileForOwner(String task,dev.pocketengine.features.local.project.ProjectFileDraft.SaveIntent original,dev.pocketengine.core.RunControl observation)throws Exception{
         var host=projectHost;if(host==null)throw new IllegalStateException("原项目宿主尚未挂载");return host.ownerFileSaves().review(task,original,observation);
     }
@@ -82,6 +161,12 @@ public final class FeatureHost implements AutoCloseable {
     public JSONObject ownerStorageCleanupForOwner(String id)throws Exception{return tasks.ownerStorageCleanupForOwner(id);}
     public boolean ownsOwnerStorageTask(String id)throws Exception{JSONObject task=tasks==null?null:tasks.get(id,false);return task!=null&&task.has("ownerStorageCleanup");}
     public JSONObject cancelOwnerStorageCleanupForOwner(String id)throws Exception{JSONObject result=tasks.cancelOwnerStorageCleanupForOwner(id);var control=ownerStorageControls.get(id);if(control!=null)control.cancel();emitTask(id);sendState();return result;}
+    private volatile dev.pocketengine.features.workspace.OwnerBackupWebDavHost ownerBackupUploads;
+    /** Native settings only; neither feature JSON nor model tools expose backup credentials or uploads. */
+    public synchronized dev.pocketengine.features.workspace.OwnerBackupWebDavHost ownerBackupWebDav(android.content.Context nativeOwner)throws Exception {
+        if(ownerBackupUploads==null){if(tasks==null)throw new IllegalStateException("原任务账本不可用");android.content.Context app=nativeOwner.getApplicationContext();ownerBackupUploads=new dev.pocketengine.features.workspace.OwnerBackupWebDavHost(new java.io.File(app.getFilesDir(),"owner-backup-webdav"),ownerDataArchives(app),tasks,new dev.pocketengine.store.SecretVault(app),id->{try{emitTask(id);sendState();}catch(Exception unavailable){events.emit(json("type","error","message","原备份上传状态请在原编号核对"));}});}
+        return ownerBackupUploads;
+    }
     private volatile dev.pocketengine.features.workspace.OwnerDataArchives ownerArchives;
     private final java.util.concurrent.ConcurrentHashMap<String,dev.pocketengine.core.RunControl> ownerArchiveControls=new java.util.concurrent.ConcurrentHashMap<>();
     /** Native owner settings only; no request()/module/model command can obtain this host. */
@@ -106,13 +191,41 @@ public final class FeatureHost implements AutoCloseable {
             public JSONObject query(JSONObject section,String action,String archiveSha,dev.pocketengine.core.RunControl original)throws Exception{original.checkpoint();return project(section)?projects().queryArchiveRestoreForOwner(section,archiveSha,action):query(section,action,original);}
         });
         if(module("memory") instanceof dev.pocketengine.features.memory.MemoryModule memory)backend.put("experiences",new dev.pocketengine.features.workspace.OwnerExperienceArchive(tasks,memory));
+        android.content.Context ownerApplication=nativeOwner instanceof dev.pocketengine.EngineApplication?nativeOwner:nativeOwner.getApplicationContext();
+        if(ownerApplication instanceof dev.pocketengine.EngineApplication app)backend.put("settings",new dev.pocketengine.features.workspace.OwnerDataArchives.SectionBackend(){
+            public JSONObject export(RunControl original)throws Exception{return app.settings.exportBackupForOwner(original);}
+            public dev.pocketengine.features.workspace.OwnerDataArchives.SectionReview review(JSONObject section,String action,RunControl original)throws Exception{return configurationArchiveReview(app.settings.reviewBackupForOwner(section,action,original));}
+            public JSONObject query(JSONObject section,String action,RunControl original)throws Exception{return app.settings.queryBackupForOwner(section,action,original);}
+        });
+        if(module("skills") instanceof dev.pocketengine.features.skills.SkillsModule skills)backend.put("skills",new dev.pocketengine.features.workspace.OwnerDataArchives.SectionBackend(){
+            public JSONObject export(RunControl original)throws Exception{return skills.exportBackupForOwner(original);}
+            public dev.pocketengine.features.workspace.OwnerDataArchives.SectionReview review(JSONObject section,String action,RunControl original)throws Exception{return configurationArchiveReview(skills.reviewBackupForOwner(section,action,original));}
+            public JSONObject query(JSONObject section,String action,RunControl original)throws Exception{return skills.queryBackupForOwner(section,action,original);}
+        });
+        if(module("automation") instanceof dev.pocketengine.features.automation.AutomationModule automation)backend.put("schedules",new dev.pocketengine.features.workspace.OwnerDataArchives.SectionBackend(){
+            public JSONObject export(RunControl original)throws Exception{return automation.exportBackupForOwner(original);}
+            public dev.pocketengine.features.workspace.OwnerDataArchives.SectionReview review(JSONObject section,String action,RunControl original)throws Exception{return configurationArchiveReview(automation.reviewBackupForOwner(section,action,original));}
+            public JSONObject query(JSONObject section,String action,RunControl original)throws Exception{return automation.queryBackupForOwner(section,action,original);}
+        });
         if(module("remote") instanceof dev.pocketengine.features.remote.RemoteModule remote)backend.put("remoteConnections",new dev.pocketengine.features.workspace.OwnerDataArchives.SectionBackend(){public JSONObject export(dev.pocketengine.core.RunControl original)throws Exception{return remote.exportConnectionBackupForOwner(original);}public dev.pocketengine.features.workspace.OwnerDataArchives.SectionReview review(JSONObject section,String action,dev.pocketengine.core.RunControl original)throws Exception{var exact=remote.reviewConnectionBackupForOwner(section,action,original);return new dev.pocketengine.features.workspace.OwnerDataArchives.SectionReview(){public JSONObject metadata()throws Exception{return exact.metadata();}public JSONObject restore()throws Exception{return remote.restoreConnectionBackupForOwner(exact.confirm(),original);}};}public JSONObject query(JSONObject section,String action,dev.pocketengine.core.RunControl original)throws Exception{return remote.queryConnectionBackupForOwner(section,action,original);}});
         if(module("ssh") instanceof dev.pocketengine.features.ssh.SshModule ssh)backend.put("sshConnections",new dev.pocketengine.features.workspace.OwnerDataArchives.SectionBackend(){public JSONObject export(dev.pocketengine.core.RunControl original)throws Exception{return ssh.exportConnectionBackupForOwner(original);}public dev.pocketengine.features.workspace.OwnerDataArchives.SectionReview review(JSONObject section,String action,dev.pocketengine.core.RunControl original)throws Exception{var exact=ssh.reviewConnectionBackupForOwner(section,action,original);return new dev.pocketengine.features.workspace.OwnerDataArchives.SectionReview(){public JSONObject metadata()throws Exception{return exact.metadata();}public JSONObject restore()throws Exception{return ssh.restoreConnectionBackupForOwner(exact.confirm(),original);}};}public JSONObject query(JSONObject section,String action,dev.pocketengine.core.RunControl original)throws Exception{return ssh.queryConnectionBackupForOwner(section,action,original);}});
         ownerArchives=new dev.pocketengine.features.workspace.OwnerDataArchives(new java.io.File(nativeOwner.getApplicationContext().getFilesDir(),"owner-data-archives"),workspace,local,attachments,backend);return ownerArchives;
     }
+    private static dev.pocketengine.features.workspace.OwnerDataArchives.SectionReview configurationArchiveReview(dev.pocketengine.features.workspace.OwnerConfigurationBackupSections.Review exact){
+        return new dev.pocketengine.features.workspace.OwnerDataArchives.SectionReview(){
+            public JSONObject metadata()throws Exception{return exact.metadata();}
+            public void reserve()throws Exception{exact.reserve();}
+            public JSONObject restore()throws Exception{return exact.restore();}
+        };
+    }
     /** Original external task owns one fixed native phase; pages only observe it. */
     public JSONObject submitOwnerArchivePhaseForOwner(dev.pocketengine.features.workspace.OwnerDataArchives.Confirmed confirmed)throws Exception {
-        if(ownerArchives==null)throw new IllegalStateException("原备份入口未挂载");ownerArchives.requireConfirmed(confirmed);JSONObject admitted=tasks.beginOwnerArchivePhaseForOwner(confirmed);String id=confirmed.actionId();if(admitted.optBoolean("knownOperation"))return tasks.ownerArchivePhaseForOwner(id);var original=confirmed.original();original.bindHostRun(id,id,1);original.setAuthorityCheck(()->tasks.requireOwnerArchiveCurrentForOwner(id,original));ownerArchiveControls.put(id,original);emitTask(id);sendState();
+        var original=confirmed.original();String id=confirmed.actionId();
+        try{
+            if(ownerArchives==null)throw new IllegalStateException("原备份入口未挂载");ownerArchives.requireConfirmed(confirmed);JSONObject admitted=tasks.beginOwnerArchivePhaseForOwner(confirmed);
+            if(admitted.optBoolean("knownOperation")){if(ownerArchiveControls.get(id)!=original)original.cancel();return tasks.ownerArchivePhaseForOwner(id);}
+            original.bindHostRun(id,id,1);original.setAuthorityCheck(()->tasks.requireOwnerArchiveCurrentForOwner(id,original));ownerArchiveControls.put(id,original);emitTask(id);sendState();
+        }catch(Exception notQueued){ownerArchiveControls.remove(id,original);original.cancel();throw notQueued;}
         try{workers.execute(()->{try{JSONObject result=confirmed.restore();tasks.recordOwnerArchivePhaseForOwner(id,result);}catch(Exception unknown){try{JSONObject scope=tasks.ownerArchivePhaseForOwner(id).getJSONObject("scope");tasks.recordOwnerArchivePhaseForOwner(id,new JSONObject(scope.toString()).put("found",false).put("status","unknown"));}catch(Exception unrecorded){}}finally{ownerArchiveControls.remove(id,original);original.cancel();try{emitTask(id);sendState();}catch(Exception ignored){}}});}
         catch(java.util.concurrent.RejectedExecutionException rejected){ownerArchiveControls.remove(id,original);original.cancel();/* The persisted original intent stays query-only, never silently submitted later. */throw new IllegalStateException("本机任务队列暂满；请只读核对原恢复编号，不自动重派："+id,rejected);}return tasks.ownerArchivePhaseForOwner(id);
     }
@@ -140,6 +253,7 @@ public final class FeatureHost implements AutoCloseable {
     public dev.pocketengine.core.RunControl mediaControl(String taskId){return mediaWorkflows==null?null:mediaWorkflows.currentControl(taskId);}
     public boolean ownsMediaTask(String taskId)throws Exception{return mediaWorkflows!=null&&mediaWorkflows.ownsTask(taskId);}
     public JSONObject cancelMediaTask(String taskId)throws Exception{return mediaWorkflows==null?null:mediaWorkflows.cancelTask(taskId);}
+    public JSONObject cancelOriginalMediaTask(String taskId,String run,int epoch)throws Exception{return mediaWorkflows==null?null:mediaWorkflows.cancelOriginalTask(taskId,run,epoch);}
     /** Native attachment/outcome viewer only; the supplied control can stop this original read/fetch. */
     public JSONObject originalMediaForOwner(String command,JSONObject payload,dev.pocketengine.core.RunControl control)throws Exception{
         EngineModule module=module("media");if(mediaWorkflows==null||!(module instanceof dev.pocketengine.media.MediaModule))throw new IllegalStateException("原媒体宿主尚未就绪");
@@ -345,8 +459,8 @@ public final class FeatureHost implements AutoCloseable {
                 }
                 researchStartEntered=researchSource!=null;
                 if(researchSource!=null){
-                    var started=((dev.pocketengine.features.teams.TeamsModule)module).startOriginalResearch(nativeInput);result=started.accepted();
-                    control.onCancel(()->nativeOwnerCleanup(()->{try{started.requestStop();}catch(Exception ignored){}}));
+                    var originalStart=((dev.pocketengine.features.teams.TeamsModule)module).startOriginalResearch(nativeInput);result=originalStart.accepted();
+                    control.onCancel(()->nativeOwnerCleanup(()->{try{originalStart.requestStop();}catch(Exception unavailable){events.emit(json("type","error","message","原研究团队停止尚未确认，请核对原任务"));}}));
                     tasks.completeTeamResearchParentStart(researchSource);
                 }else result=module.handle("start",nativeInput);
             }}updateTask(operationId,result);return result.put("hostTaskId",operationId).put("taskId",operationId).put("parentTaskId",parent);}
@@ -383,35 +497,60 @@ public final class FeatureHost implements AutoCloseable {
         tasks.updateExternal(child,result);emitTask(child);control.check();tasks.checkCapability(parent,parentRun,epoch,dev.pocketengine.features.remote.RemoteTaskCapabilities.READ,control);
         return result.put("hostTaskId",child).put("parentTaskId",parent).put("queryOnly",true);
     }
+    /** SQL-only immutable snapshot; it cannot be dispatched before native bindings are captured. */
+    private static final class RelatedTaskSnapshot {
+        private final String task,run,feature;private final int epoch;
+        private final java.util.List<RelatedTaskSnapshot> children;
+        private final java.util.List<TaskStore.LocalMcpInvocationRecord> mcp;
+        private RelatedTaskSnapshot(JSONObject original,java.util.List<RelatedTaskSnapshot> children,java.util.List<TaskStore.LocalMcpInvocationRecord> mcp)throws Exception{
+            task=original.getString("id");run=original.optString("runId");epoch=original.optInt("coordinatorEpoch");feature=original.optString("feature");this.children=java.util.List.copyOf(children);this.mcp=java.util.List.copyOf(mcp);
+        }
+    }
     /** Native cancellation ticket. JSON commands cannot select a parent or add later children. */
     public static final class RelatedTaskCancellation {
         private final FeatureHost issuer;private final String task,run,feature;private final int epoch;
         private final java.util.List<RelatedTaskCancellation> children;
         private final java.util.List<TaskStore.LocalMcpInvocationRecord> mcp;
-        private RelatedTaskCancellation(FeatureHost issuer,JSONObject original,java.util.List<RelatedTaskCancellation> children,java.util.List<TaskStore.LocalMcpInvocationRecord> mcp)throws Exception{
-            this.issuer=issuer;task=original.getString("id");run=original.optString("runId");epoch=original.optInt("coordinatorEpoch");feature=original.optString("feature");this.children=java.util.List.copyOf(children);this.mcp=java.util.List.copyOf(mcp);
+        private final EngineModule module;
+        private final dev.pocketengine.features.teams.TeamCoordinator.OriginalCancellation team;
+        private RelatedTaskCancellation(FeatureHost issuer,RelatedTaskSnapshot original,java.util.List<RelatedTaskCancellation> children,EngineModule module,dev.pocketengine.features.teams.TeamCoordinator.OriginalCancellation team){
+            this.issuer=issuer;task=original.task;run=original.run;epoch=original.epoch;feature=original.feature;this.children=java.util.List.copyOf(children);mcp=original.mcp;this.module=module;this.team=team;
         }
     }
-    /** Capture before cancelling the original control, under the same monitor as attempt admission. */
+    /** Capture before cancelling the parent. SQL is frozen first; native locks are acquired only after releasing TaskStore. */
     public RelatedTaskCancellation captureRelatedTaskCancellation(String parent,String run,int epoch){
         if(tasks==null)return null;
-        try{synchronized(tasks){JSONObject original=tasks.get(parent,false);if(original==null||!run.equals(original.optString("runId"))||epoch!=original.optInt("coordinatorEpoch"))throw new SecurityException("原父执行已变化");return captureRelatedTaskCancellation(original,new java.util.HashSet<>());}}
+        // A caller's outer monitor would otherwise survive the inner synchronized block.
+        if(Thread.holdsLock(tasks))throw new IllegalStateException("related_task_capture_requires_unlocked_tasks");
+        try{
+            RelatedTaskSnapshot original;
+            synchronized(tasks){JSONObject current=tasks.get(parent,false);if(current==null||!run.equals(current.optString("runId"))||epoch!=current.optInt("coordinatorEpoch"))throw new SecurityException("原父执行已变化");if(current.optBoolean("cancelRequested"))throw new SecurityException("原父执行已取消，请核对既有清场记录，不能重新选取团队代次");original=snapshotRelatedTaskCancellation(current,new java.util.HashSet<>());}
+            return bindRelatedTaskCancellation(original);
+        }
         catch(Exception unknown){events.emit(json("type","error","message","原父执行或子任务清场范围未确认；未选择当前新执行，请查看原任务"));return null;}
     }
-    private RelatedTaskCancellation captureRelatedTaskCancellation(JSONObject original,java.util.Set<String> seen)throws Exception{
+    private RelatedTaskSnapshot snapshotRelatedTaskCancellation(JSONObject original,java.util.Set<String> seen)throws Exception{
         String parent=original.getString("id"),run=original.optString("runId");if(!seen.add(parent))throw new SecurityException("原子任务关联存在重复或循环");
-        java.util.List<RelatedTaskCancellation> children=new java.util.ArrayList<>();JSONArray links=original.optJSONArray("relatedTasks");
+        java.util.List<RelatedTaskSnapshot> children=new java.util.ArrayList<>();JSONArray links=original.optJSONArray("relatedTasks");
         for(int i=0;links!=null&&i<links.length();i++){
             JSONObject link=links.getJSONObject(i),child=tasks.get(link.getString("taskId"),false);
             if(child==null||!child.optString("status").matches("preparing|queued|running|paused|awaiting_user|stopping"))continue;
             if(!parent.equals(child.optString("parentTaskId"))||child.has("parentRunId")&&!run.equals(child.getString("parentRunId"))||link.has("runId")&&!link.getString("runId").equals(child.optString("runId")))continue;
             String feature=child.optString("feature");if(!feature.equals("teams")&&!(feature.equals("remote")&&!child.optString("externalId").isEmpty()))continue;
-            children.add(captureRelatedTaskCancellation(child,seen));
+            children.add(snapshotRelatedTaskCancellation(child,seen));
         }
         java.util.List<TaskStore.LocalMcpInvocationRecord> mcp=new java.util.ArrayList<>();
         try{if(tasks.hasLocalMcpInvocationsForHost(parent))for(var record:tasks.localMcpInvocationsForOwner(parent))if(run.equals(record.runId()))mcp.add(record);}
         catch(Exception unknown){events.emit(json("type","error","message","原本机MCP进程清场范围尚未确认；保留原操作，不重新启动"));}
-        return new RelatedTaskCancellation(this,original,children,mcp);
+        return new RelatedTaskSnapshot(original,children,mcp);
+    }
+    /** The final ticket captures module identity and the actual team generation before any parent cancel callback. */
+    private RelatedTaskCancellation bindRelatedTaskCancellation(RelatedTaskSnapshot original)throws Exception{
+        EngineModule selected=module(original.feature);
+        var team=selected instanceof dev.pocketengine.features.teams.TeamsModule nativeTeam?nativeTeam.originalCancellation(original.run):null;
+        java.util.List<RelatedTaskCancellation> children=new java.util.ArrayList<>();
+        for(var child:original.children)children.add(bindRelatedTaskCancellation(child));
+        return new RelatedTaskCancellation(this,original,children,selected,team);
     }
     public void cancelRelatedTasks(RelatedTaskCancellation original){
         if(original==null)return;
@@ -426,19 +565,99 @@ public final class FeatureHost implements AutoCloseable {
             synchronized(tasks){if(!originalRelatedTaskCurrent(root)||!originalRelatedTaskCurrent(original))return;}
             if(!original.mcp.isEmpty())observeLocalMcpInvocationsForOwner(original.task,true,original.mcp);
             for(var child:original.children){
-                Runnable stop=()->{try{
-                    synchronized(tasks){if(!originalRelatedTaskCurrent(root)||!originalRelatedTaskCurrent(original)||!originalRelatedTaskCurrent(child))return;}
-                    if(child.feature.equals("remote"))cancelOriginalRemoteTask(child.task,child.run,child.epoch,null);
-                    else {
-                        synchronized(tasks){if(!originalRelatedTaskCurrent(root)||!originalRelatedTaskCurrent(original)||!originalRelatedTaskCurrent(child))return;tasks.requestCancel(child.task,child.run);}
-                        EngineModule selected=module(child.feature);if(selected==null)throw new IllegalStateException("原子任务宿主不可用");JSONObject receipt=selected.handle("cancel",json("runId",child.run));
-                        synchronized(tasks){if(originalRelatedTaskCurrent(child))tasks.updateExternal(child.task,receipt==null?new JSONObject():receipt);}emitTask(child.task);
+                try{
+                    EngineModule selected=child.module;
+                    if(selected==null)throw new IllegalStateException("原子任务宿主不可用");
+                    var team=child.team;
+                    JSONObject remoteTarget;
+                    synchronized(tasks){
+                        if(!originalRelatedTaskCurrent(root)||!originalRelatedTaskCurrent(original)||!originalRelatedTaskCurrent(child))continue;
+                        remoteTarget=child.feature.equals("remote")?tasks.originalRemoteChildStopTarget(original.task,original.run,child.task):null;
                     }
-                }catch(Exception unknown){events.emit(json("type","error","message","原子任务停止结果尚未确认；没有选择新执行，请查询原任务"));}};
-                (child.feature.equals("remote")?workers:controls).execute(stop);
+                    Runnable stop=()->{try{
+                        if(module(child.feature)!=selected)throw new SecurityException("原子任务宿主已变化");
+                        synchronized(tasks){if(!originalRelatedTaskCurrent(root)||!originalRelatedTaskCurrent(original)||!originalRelatedTaskCurrent(child))return;}
+                        if(child.feature.equals("remote")){
+                            if(!(selected instanceof dev.pocketengine.features.remote.RemoteModule remote))throw new SecurityException("原电脑停止宿主不可用");
+                            dev.pocketengine.store.OriginalRemoteStopClaim claim;
+                            synchronized(tasks){
+                                if(!originalRelatedTaskCurrent(root)||!originalRelatedTaskCurrent(original)||!originalRelatedTaskCurrent(child))return;
+                                tasks.requestOriginalRelatedCancel(original.task,original.run,original.epoch,child.task,child.run,child.epoch);
+                                claim=tasks.claimOriginalRemoteStop(child.task,child.run,child.epoch,remoteTarget.getString("_profileBinding"));
+                            }
+                            remote.cancelOriginalPinnedJob(claim);emitTask(child.task);
+                        }else if(team!=null){
+                            if(team.cancel(()->{synchronized(tasks){
+                                if(!originalRelatedTaskCurrent(root)||!originalRelatedTaskCurrent(original)||!originalRelatedTaskCurrent(child))throw new SecurityException("原父子执行已变化");
+                                tasks.requestOriginalRelatedCancel(original.task,original.run,original.epoch,child.task,child.run,child.epoch);
+                            }}))emitTask(child.task);
+                        }else{
+                            // Preserve the existing EngineModule transport contract with the same frozen tuple.
+                            synchronized(tasks){
+                                if(!originalRelatedTaskCurrent(root)||!originalRelatedTaskCurrent(original)||!originalRelatedTaskCurrent(child))return;
+                                tasks.requestOriginalRelatedCancel(original.task,original.run,original.epoch,child.task,child.run,child.epoch);
+                            }
+                            JSONObject receipt=selected.handle("cancel",json("runId",child.run));
+                            synchronized(tasks){if(originalRelatedTaskCurrent(child))tasks.updateExternal(child.task,receipt==null?new JSONObject():receipt);}emitTask(child.task);
+                        }
+                    }catch(Exception unknown){events.emit(json("type","error","message","原子任务停止结果尚未确认；没有选择新执行，请查询原任务"));}};
+                    (child.feature.equals("remote")?workers:controls).execute(stop);
+                }catch(Exception unknown){events.emit(json("type","error","message","原子任务停止身份尚未完整确认；保留原任务，不选择后继执行"));}
                 cancelRelatedTasks(root,child);
             }
         }catch(Exception unknown){events.emit(json("type","error","message","原子任务停止状态尚未确认，请查看原任务"));}
+    }
+    /** Compatibility for callers already holding the original run; traversal uses one frozen ticket. */
+    public void cancelRelatedTasks(String parent,String expectedRun,int expectedEpoch){
+        cancelRelatedTasks(captureRelatedTaskCancellation(parent,expectedRun,expectedEpoch));
+    }
+    /** Freeze existing native team controllers before recording the parent stop. No ID is resolved later. */
+    public Runnable prepareOriginalPhoneTeamStops(String parent,String run,int epoch)throws Exception {
+        JSONObject task=tasks.get(parent,false);
+        if(task==null||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("原父执行已变化");
+        EngineModule selected=module("teams");java.util.ArrayList<Runnable> captured=new java.util.ArrayList<>();
+        if(selected instanceof dev.pocketengine.features.teams.TeamsModule team){
+            JSONArray links=task.optJSONArray("relatedTasks");
+            if(links!=null&&links.length()>100)throw new SecurityException("原团队关联范围尚未完整核对");
+            for(int i=0;links!=null&&i<links.length();i++){
+                JSONObject link=links.getJSONObject(i);String id=link.getString("taskId");JSONObject child=tasks.get(id,false);
+                if(child==null||!"teams".equals(child.optString("feature"))||!parent.equals(child.optString("parentTaskId"))||!run.equals(child.optString("parentRunId")))continue;
+                String childRun=child.getString("runId");int childEpoch=child.getInt("coordinatorEpoch");
+                if(!childRun.equals(link.optString("runId")))throw new SecurityException("原团队关联执行已变化");
+                var original=team.originalCancellation(childRun);
+                captured.add(()->{try{if(module("teams")!=selected)throw new SecurityException("原团队宿主已变化");original.cancel(()->tasks.requestOriginalRelatedCancel(parent,run,epoch,id,childRun,childEpoch));}catch(Exception unavailable){events.emit(json("type","error","message","原团队停止尚未确认，未按编号停止后继执行"));}});
+            }
+        }
+        return ()->controls.execute(()->captured.forEach(Runnable::run));
+    }
+    /** Native stop receipt only. Each remote POST consumes its original SQL claim exactly once. */
+    public void cancelOriginalPhoneChildren(TaskStore.PhoneStopBatch batch)throws Exception {
+        if(tasks==null||batch==null||!batch.newlyCreated())return;
+        EngineModule selected=module("remote");java.util.List<String> ids=batch.remoteChildIds();
+        if(ids.isEmpty())return;
+        if(!(selected instanceof dev.pocketengine.features.remote.RemoteModule remote))throw new SecurityException("原电脑停止宿主不可用");
+        controls.execute(()->{for(String child:ids)try{
+            if(module("remote")!=remote)throw new SecurityException("原电脑停止宿主已变化");
+            var claim=tasks.claimOriginalRemoteChild(batch,child);remote.cancelOriginalPinnedJob(claim);emitTask(child);
+        }catch(Exception unknown){events.emit(json("type","error","message","原电脑子任务停止尚未确认；保留原操作，不重新派发"));}});
+    }
+    /** The global owner stop queues one frozen original job, never a later task/profile lookup. */
+    public void cancelOriginalRemoteForOwnerStop(JSONObject target,JSONObject source)throws Exception {
+        JSONObject original=new JSONObject(target.toString()),input=new JSONObject(source.toString());
+        EngineModule selected=module("remote");
+        if(!(selected instanceof dev.pocketengine.features.remote.RemoteModule remote))throw new SecurityException("原远端停止宿主不可用");
+        dev.pocketengine.store.OriginalRemoteStopClaim claim;
+        synchronized(tasks){
+            tasks.requireOriginalExecutionStopTarget(original);
+            String id=original.getString("taskId");JSONObject current=tasks.remoteOwnerTarget(id);
+            for(String key:new String[]{"profileId","serviceBase","jobId","jobOperationId"})
+                if(!current.getString(key).equals(input.getString(key)))throw new SecurityException("原远端停止目标已变化");
+            claim=tasks.claimOriginalRemoteStop(id,original.getString("runId"),original.getInt("epoch"),input.getString("_profileBinding"));
+        }
+        controls.execute(()->{try{
+            if(module("remote")!=remote)throw new SecurityException("原远端停止宿主已变化");
+            remote.cancelOriginalPinnedJob(claim);emitTask(original.getString("taskId"));
+        }catch(Exception unknown){events.emit(json("type","error","message","原电脑停止结果尚未确认；请只核对原操作，不重新提交"));}});
     }
     private JSONObject cancelOriginalRemoteTask(String id,String run,int epoch,String generation)throws Exception {
         EngineModule selected=module("remote");if(tasks==null||!(selected instanceof dev.pocketengine.features.remote.RemoteModule remote))throw new SecurityException("没有原电脑任务的原生停止宿主");
@@ -454,11 +673,16 @@ public final class FeatureHost implements AutoCloseable {
         return cancelOriginalRemoteTask(id,run,epoch,input.has("_profileBinding")?input.getString("_profileBinding"):null);
     }
     public void request(JSONObject request){
+        request(request,()->true);
+    }
+    /** Captured by the local owner UI; JSON cannot mint or replace this queue admission check. */
+    public void request(JSONObject request,BooleanSupplier originalOwnerCurrent){
+        java.util.Objects.requireNonNull(originalOwnerCurrent);
         String feature=request.optString("feature"),command=request.optString("command"),requestId=request.optString("requestId");
         if(requestId.length()>100||feature.length()>40||command.length()>80){reply(feature,command,requestId,false,null,"请求标识过长");return;}
         Runnable work=()->{
             String tracked=null,trackedRun=null,operation=null,browserTask=null,browserAdmission=null;
-            try{EngineModule module=module(feature);if(module==null)throw new IllegalArgumentException("此能力尚未接入");
+            try{if(!originalOwnerCurrent.getAsBoolean())throw new SecurityException("原审阅窗口已关闭，未执行排队操作");EngineModule module=module(feature);if(module==null)throw new IllegalArgumentException("此能力尚未接入");
                 JSONObject payload=request.optJSONObject("payload");JSONObject input=payload==null?new JSONObject():new JSONObject(payload.toString());
                 if(feature.equals("ssh")&&command.equals("doctor"))throw new SecurityException("请使用当前本机私人环境诊断页；通用能力回执不接收诊断正文");
                 if(feature.equals("automation")&&java.util.Set.of("approvePlanExecution","startPlanExecution","setPlanPaused","cancelPlanExecution","editPlanStep","retryPlanStep","preparePlanTask","planTaskRequest","bindPlanTask","refreshPlanTasks","ownerCommand","automationPlan").contains(command))throw new SecurityException("执行计划须从本机目标审阅入口控制，工具参数不能授予执行权限");
@@ -482,6 +706,7 @@ public final class FeatureHost implements AutoCloseable {
                 if(feature.equals("automation")&&AutomationPlanHost.handles(command)){
                     AutomationPlanHost plans=automationPlans;
                     if(plans==null||!(module instanceof dev.pocketengine.features.automation.AutomationModule))throw new IllegalStateException("原生计划宿主尚未就绪");
+                    if(!originalOwnerCurrent.getAsBoolean())throw new SecurityException("原审阅窗口已关闭，未修改原承诺");
                     JSONObject result=plans.handle((dev.pocketengine.features.automation.AutomationModule)module,command,input);
                     emitPlanTasks(result);reply(feature,command,requestId,true,result,null);sendState();return;
                 }
@@ -542,6 +767,7 @@ public final class FeatureHost implements AutoCloseable {
                 }
                 String reviewedTeamTask=null;
                 if(tasks!=null&&feature.equals("teams")&&command.matches("resume|continueMessages|reviseAssignment|continueOutcome")&&(input.has("expectedRevision")||input.has("expectedGeneration")))reviewedTeamTask=tasks.requireReviewedTeamControl(input);
+                if(!originalOwnerCurrent.getAsBoolean())throw new SecurityException("原审阅窗口已关闭，未进入原模块操作");
                 JSONObject result=tasks!=null&&feature.equals("remote")&&command.equals("cancelJob")?cancelOriginalRemoteRequest(input):module.handle(command,input);
                 if(result==null)result=new JSONObject();
                 if(tracked!=null){JSONObject receipt=new JSONObject(result.toString());if(feature.equals("browser")){if(!trackedRun.equals(result.optString("runId"))||!tracked.equals(result.optString("taskId"))||!result.optBoolean("active")||!resources.ownsBrowser(trackedRun))throw new SecurityException("浏览器没有返回本次执行的有效租约");tasks.requireExternalRun(tracked,trackedRun,feature,false);receipt.put("status","running");}updateTask(tracked,receipt);result.put("hostTaskId",tracked);}
@@ -717,5 +943,5 @@ public final class FeatureHost implements AutoCloseable {
     private static boolean isControl(String command){return command.equals("qq.stop")||command.equals("continueMessages")||command.equals("sendMessage")||command.equals("answerAssignment")||command.equals("pause")||command.equals("resume")||command.equals("feedback")||command.equals("cancel")||command.equals("adb.cancel")||command.equals("termux.cancel")||command.equals("download.cancel")||command.equals("weixin.stop")||command.equals("weixin.login.cancel")||command.equals("outbox.cancel")||command.equals("takeover")||command.equals("ask.cancel")||command.equals("cancelJob")||command.equals("release")||command.equals("reset")||command.equals("stop")||command.equals("server.stop");}
     private static String safe(Exception error){String value=error.getMessage();if(value==null||value.trim().isEmpty())return "操作未完成，请检查配置和连接状态";value=value.replaceAll("(?i)(Bearer\\s+)[^\\s]+","$1[隐藏]").replaceAll("(?i)((?:api[_-]?key|token|secret)=)[^&\\s]+","$1[隐藏]");return value.length()>400?value.substring(0,400):value;}
     private static JSONObject json(Object... pairs){JSONObject j=new JSONObject();try{for(int i=0;i+1<pairs.length;i+=2)j.put(String.valueOf(pairs[i]),pairs[i+1]);}catch(Exception ignored){}return j;}
-    @Override public synchronized void close(){for(var control:ownerMcpDiscoveryControls.values())control.cancel();ownerMcpDiscoveryControls.clear();for(var control:ownerGitImportControls.values())control.cancel();ownerGitImportControls.clear();for(var control:ownerGitPublicationControls.values())control.cancel();ownerGitPublicationControls.clear();for(var control:ownerStorageControls.values())control.cancel();ownerStorageControls.clear();for(var control:ownerArchiveControls.values())control.cancel();ownerArchiveControls.clear();for(var session:workingMemory.keySet())releaseWorkingMemory(session);if(mediaWorkflows!=null)mediaWorkflows.close();for(EngineModule module:modules.values())try{module.close();}catch(RuntimeException ignored){}workers.shutdownNow();controls.shutdownNow();signals.shutdownNow();}
+    @Override public synchronized void close(){for(var original:ownerLocalTerminalControls.values())original.cancel();ownerLocalTerminalControls.clear();if(ownerBackupUploads!=null)ownerBackupUploads.close();for(var control:ownerMcpDiscoveryControls.values())control.cancel();ownerMcpDiscoveryControls.clear();for(var control:ownerGitImportControls.values())control.cancel();ownerGitImportControls.clear();for(var control:ownerGitPublicationControls.values())control.cancel();ownerGitPublicationControls.clear();for(var control:ownerStorageControls.values())control.cancel();ownerStorageControls.clear();for(var control:ownerArchiveControls.values())control.cancel();ownerArchiveControls.clear();for(var session:workingMemory.keySet())releaseWorkingMemory(session);if(mediaWorkflows!=null)mediaWorkflows.close();for(EngineModule module:modules.values())try{module.close();}catch(RuntimeException ignored){}workers.shutdownNow();controls.shutdownNow();signals.shutdownNow();}
 }

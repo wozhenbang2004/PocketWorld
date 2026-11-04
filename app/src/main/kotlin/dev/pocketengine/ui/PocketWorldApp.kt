@@ -62,7 +62,7 @@ internal val Rounded = RoundedCornerShape(16.dp)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun PocketWorldApp(controller: PocketWorldController) {
+internal fun PocketWorldApp(controller: PocketWorldController, requestWebWorkspace: (((() -> Boolean)) -> Unit)? = null) {
     val state = controller.state
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var settings by rememberSaveable { mutableStateOf(false) }
@@ -78,6 +78,25 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
     LaunchedEffect(controller.conversationOrganizationOwnerVisible) { if (!controller.conversationOrganizationOwnerVisible) { conversationRename = null; conversationRenameBusy = false; conversationManageMessage = null } }
     var projectDialog by rememberSaveable { mutableStateOf(false) }
     var fileDialog by rememberSaveable { mutableStateOf(false) }
+    // Keep one stable state object so a pending switch rechecks the current sheet.
+    val chatQuoteMessage = remember { mutableStateOf<Triple<Long, String, UiMessage>?>(null) }
+    val chatQuoteGeneration = remember { mutableLongStateOf(0L) }
+    val openChatQuote: (UiMessage) -> Unit = { message ->
+        val conversation = message.ownerOriginalLocator?.optString("conversationId").orEmpty()
+        if (conversation.isNotEmpty() && controller.state.conversationId == conversation) {
+            check(chatQuoteGeneration.longValue < Long.MAX_VALUE) { "引用窗口代次已耗尽" }
+            chatQuoteGeneration.longValue += 1
+            chatQuoteMessage.value = Triple(chatQuoteGeneration.longValue, conversation, message)
+        }
+    }
+    val quoteConversation = state.conversationId
+    LaunchedEffect(quoteConversation) {
+        if (controller.state.conversationId == quoteConversation && chatQuoteMessage.value?.second != quoteConversation)
+            chatQuoteMessage.value = null
+    }
+    val chatTaskMemoryReference = remember { mutableStateOf<JSONObject?>(null) }
+    val chatAnswerSources = remember { mutableStateOf<JSONObject?>(null) }
+    val chatAnswerSourceMemory = remember { mutableStateOf<JSONObject?>(null) }
     var phoneDraft by rememberSaveable { mutableStateOf("") }
     var phoneIntent by rememberSaveable { mutableStateOf(false) }
     val privateDraft=controller.composerDraft
@@ -171,9 +190,29 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
     LaunchedEffect(tab, settings, connections, selectedTaskId, conversationPicker, teamLaunch) {
         if(tab!=0||settings||connections||selectedTaskId!=null||conversationPicker||teamLaunch)controller.voiceInputModeChanged()
     }
+    fun canLeaveNative(): Boolean {
+        val latest = controller.state
+        val openLayer = tab != 0 || settings || connections || teamLaunch || selectedTaskId != null ||
+            taskMemorySearch || conversationPicker || conversationRename != null ||
+            chatQuoteMessage.value != null || chatTaskMemoryReference.value != null || chatAnswerSources.value != null ||
+            projectDialog || fileDialog || consentGoal != null || suggestedGoal != null ||
+            latest.teamRunId != null || latest.inspectionTaskId != null || latest.backgroundSetupOpen ||
+            latest.filePath != null || latest.workspaceArtifactView != null || latest.chatAttachmentPickerOpen ||
+            controller.notificationPreviewsOpen || controller.attachmentOutcomes.state.open ||
+            controller.nativeEvaluationOpen || controller.nativeInferenceHistoryOpen ||
+            controller.conversationReader != null || controller.queuedInputsPage != null
+        val pendingWork = latest.ownerPending.isNotEmpty() || latest.moduleBusy.isNotEmpty() ||
+            latest.chatSubmitting || latest.phoneSubmitting || latest.fileSaving || latest.modelSaving ||
+            latest.modelTesting || controller.modelSelectionPending() || latest.agentPreferencesSaving || latest.inspectionBusy ||
+            latest.exportPending || controller.composerSaving || controller.voicePresentationBusy()
+        return nativeWorkspaceExitAllowed(openLayer, pendingWork)
+    }
     if (controller.notificationPreviewsOpen) {
         PocketWorldTheme { OwnerNotificationPreviewsPage(controller) }
         return
+    }
+    BackHandler(enabled = requestWebWorkspace != null && canLeaveNative()) {
+        requestWebWorkspace?.invoke(::canLeaveNative)
     }
     PocketWorldTheme {
         Scaffold(
@@ -186,6 +225,9 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
                     Text(" / ", fontSize = 14.sp, color = SecondaryInk)
                     Text(listOf("对话", "任务", "项目")[tab], fontSize = 14.sp, color = SecondaryInk)
                     Spacer(Modifier.weight(1f))
+                    if (requestWebWorkspace != null && canLeaveNative()) {
+                        TextButton(onClick = { requestWebWorkspace(::canLeaveNative) }) { Text("网页工作台") }
+                    }
                     if(tab == 0) IconButton(onClick = { conversationPicker = true },
                         enabled = controller.composerDraft != null,
                         modifier = Modifier.semantics { contentDescription = "历史对话" }) {
@@ -222,7 +264,7 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
                 when (tab) {
                     0 -> ChatScreen(state, draft, changeDraft, phoneIntent, changePhoneIntent, executionMode, { executionMode = it }, {
                         if(phoneIntent==phoneComposerVisible){if (phoneComposerVisible) consentGoal = draft else if (draft.isNotBlank()) { controller.sendChat(draft,composerKey,composerEpoch) }}
-                    }, controller, { settings = true }, { task -> openTask(task.id) }, { teamLaunch = true }, chatScroll, observedMessage, { observedMessage = it }, newReplies, { newReplies = it }, readingReady, missingReadingAnchor)
+                    }, controller, { settings = true }, { task -> openTask(task.id) }, { teamLaunch = true }, chatScroll, observedMessage, { observedMessage = it }, newReplies, { newReplies = it }, readingReady, missingReadingAnchor, chatQuoteMessage, openChatQuote, chatTaskMemoryReference, chatAnswerSources, chatAnswerSourceMemory)
                     1 -> TaskAuditList(state, controller, { openTask(it.id) }, { taskMemorySearch = true })
                     2 -> ProjectsScreen(state, controller, { projectDialog = true }, { fileDialog = true })
                 }
@@ -238,7 +280,7 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
         if (state.backgroundSetupOpen) BackgroundPhoneSetup(state, controller)
         if (conversationPicker) ModalBottomSheet(modifier = Modifier.pocketDepth(PocketDepth.FLOATING, 28.dp), onDismissRequest = { conversationPicker = false }, containerColor = MaterialTheme.colorScheme.surface) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp).navigationBarsPadding()) {
-                ConversationHistoryBrowser(state.conversations.map(controller::conversationOrganizationItem), state.conversationId, state.chatBusy || state.chatSubmitting,
+                ConversationHistoryBrowser(state.conversations.map(controller::conversationOrganizationItem), state.conversationId, state.chatSubmitting,
                     { controller.openConversation(it); conversationPicker = false }, { controller.newConversation(); conversationPicker = false }, allowReadWhenBlocked = true,
                     onRename = { conversationManageMessage = null; conversationRename = it },
                     onPin = { item -> conversationManageMessage = null; controller.organizeConversation(item.id, item.organizationRevision, null, item.pinOrder <= 0) { _, error -> conversationManageMessage = error ?: if (item.pinOrder > 0) "已取消置顶；没有启动任务。" else "已置顶；没有启动任务。" } },
@@ -263,24 +305,30 @@ internal fun PocketWorldApp(controller: PocketWorldController) {
             Text(if (executionMode == "background") "需要已连接的后台助手。无法建立独立屏幕时会停止等待。" else "会切换手机应用并占用当前屏幕。暂停后再自行操作，停止不会撤回已发生的动作。", color = SecondaryInk)
             Text("任务中的可见文字会发给你配置的模型；启用视觉后也会发送截图。", color = SecondaryInk, fontSize = 12.sp)
             Text("原目标内累计 ${controller.newTaskToolBudget} 次工具、${controller.newTaskModelBudget} 次模型；" + if(controller.newTaskScopeMinutes==0) "持续至完成、主人停止或预算耗尽。" else "${controller.newTaskScopeMinutes}分钟后停止新派发。",color=SecondaryInk,fontSize=12.sp)
-        } }, confirmButton = { Button(onClick = { controller.startPhone(goal, executionMode); consentGoal = null }) { Text("开始任务") } }, dismissButton = { TextButton(onClick = { controller.cancelChannelPhone(); consentGoal = null }) { Text("取消") } }) }
+        } }, confirmButton = { Button(onClick = { if (controller.startPhone(goal, executionMode)) consentGoal = null }) { Text("开始任务") } }, dismissButton = { TextButton(onClick = { controller.cancelChannelPhone(); consentGoal = null }) { Text("取消") } }) }
         BackHandler(enabled = !settings && !connections && !teamLaunch && state.teamRunId == null && state.inspectionTaskId == null && !state.backgroundSetupOpen && selectedTaskId == null && !conversationPicker && state.filePath == null && tab != 0) { tab = 0 }
         NativeInferenceHistory(controller)
         NativeEvaluationPage(controller)
         ConversationReader(controller)
         QueuedOwnerInputsPanel(controller)
         AttachmentOutcomeOverlay(controller.attachmentOutcomes)
+        QuickPanelVoiceReview(controller)
     }
 }
 
 @Composable
 private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) -> Unit, phone: Boolean, onPhone: (Boolean) -> Unit, mode: String, onMode: (String) -> Unit, send: () -> Unit, controller: PocketWorldController, settings: () -> Unit, task: (UiTask) -> Unit, collaborate: () -> Unit,
-    scroll: LazyListState, observedMessage: String, observeMessage: (String) -> Unit, newReplies: Boolean, setNewReplies: (Boolean) -> Unit, readingReady:Boolean, missingReadingAnchor:Boolean) {
+    scroll: LazyListState, observedMessage: String, observeMessage: (String) -> Unit, newReplies: Boolean, setNewReplies: (Boolean) -> Unit, readingReady:Boolean, missingReadingAnchor:Boolean,
+    quoteMessageState: MutableState<Triple<Long, String, UiMessage>?>, openQuote: (UiMessage) -> Unit, taskMemoryState: MutableState<JSONObject?>, answerSourcesState: MutableState<JSONObject?>, answerSourceMemoryState: MutableState<JSONObject?>) {
     var chatTools by remember { mutableStateOf(false) }
     var composerDetails by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
-    var quoteMessage by remember(state.conversationId) { mutableStateOf<UiMessage?>(null) }
-    quoteMessage?.let { MessageQuoteSheet(it, controller) { quoteMessage = null } }
+    var quoteMessage by quoteMessageState
+    quoteMessage?.let { (token, conversation, original) ->
+        if (conversation == controller.state.conversationId) key(token) {
+            MessageQuoteSheet(original, controller) { if (quoteMessage?.first == token) quoteMessage = null }
+        }
+    }
     var modelPickerOpen by remember { mutableStateOf(false) }
     val modelConnections = controller.nativeModelConnections()
     if (modelPickerOpen && modelConnections != null) ComposerModelPicker(modelConnections,
@@ -289,15 +337,17 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
         { modelPickerOpen = false; controller.openConnection("accounts") },
         { modelPickerOpen = false })
     ChatAttachmentChooser(state,controller)
-    var taskMemoryReference by remember { mutableStateOf<JSONObject?>(null) }
+    var taskMemoryReference by taskMemoryState
     taskMemoryReference?.let { TaskMemoryWorkflowSheet(controller, it) { taskMemoryReference = null } }
-    var answerSources by remember { mutableStateOf<JSONObject?>(null) }
-    var answerSourceMemory by remember { mutableStateOf<JSONObject?>(null) }
+    var answerSources by answerSourcesState
+    var answerSourceMemory by answerSourceMemoryState
     answerSources?.let { FinalAnswerSourcesSheet(controller, it, answerSourceMemory) { answerSources = null } }
     val ownerDraft=controller.composerDraft
     val ownerKey=ownerDraft?.key.orEmpty();val ownerEpoch=controller.composerViewEpoch
-    if(!phone&&ownerDraft!=null&&ownerDraft.voiceText.isNotEmpty()&&!controller.canReviewVoiceDraft(false))RecoveredComposerVoiceReview(ownerDraft,controller)
-    else VoiceInputDraftReview(state.voiceInput,controller.canReviewVoiceDraft(phone),{ id,text -> controller.useVoiceDraft(id,text,phone)?.let { onDraft(if(draft.isBlank())it else draft+"\n"+it) } },controller::discardVoiceDraft)
+    if (controller.quickPanelVoice == null) {
+        if(!phone&&ownerDraft!=null&&ownerDraft.voiceText.isNotEmpty()&&!controller.canReviewVoiceDraft(false))RecoveredComposerVoiceReview(ownerDraft,controller)
+        else VoiceInputDraftReview(state.voiceInput,controller.canReviewVoiceDraft(phone),{ id,text -> controller.useVoiceDraft(id,text,phone)?.let { onDraft(if(draft.isBlank())it else draft+"\n"+it) } },controller::discardVoiceDraft)
+    }
     val lastAssistant=state.messages.lastOrNull { it.role=="assistant"&&it.content.isNotBlank() }
     val realtimeAudioActive = state.feature("realtime").optJSONObject("session")?.optString("state") in setOf("connecting", "connected", "reconnecting", "disconnecting")
     val usesChatGptPlan = controller.usesChatGptPlan(phone)
@@ -352,7 +402,7 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                 if(messageDetails) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = { clipboard.setText(AnnotatedString(message.content)) }, enabled = message.content.isNotEmpty(), modifier = Modifier.testTag("message_copy")) { Text("复制", fontSize = 12.sp) }
-                        if (!phone && message.ownerOriginalLocator != null) TextButton(onClick = { quoteMessage = message }, enabled = !state.chatSubmitting && ownerDraft != null && message.content.isNotEmpty(), modifier = Modifier.testTag("message_quote")) { Text("引用到草稿", fontSize = 12.sp) }
+                        if (!phone && message.ownerOriginalLocator != null) TextButton(onClick = { openQuote(message) }, enabled = !state.chatSubmitting && ownerDraft != null && message.content.isNotEmpty(), modifier = Modifier.testTag("message_quote")) { Text("引用到草稿", fontSize = 12.sp) }
                     }
                     message.id?.let { id -> SourceMemoryControl("message", id, message.content, state, controller, compact = true) }
                     finalAnswerSourceSelection(message)?.let { selection -> TextButton(onClick = { answerSources = selection; answerSourceMemory = message.memoryReference }, modifier = Modifier.testTag("final_answer_sources_open")) { Text("这次回答的来源", fontSize = 11.sp) } }
@@ -469,7 +519,7 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                     if (ownerDraft == null) "正在恢复输入…" else if (controller.composerSaving) "正在保存草稿…" else "草稿已保存在本机",
                     fontSize = 13.sp, color = SecondaryInk)
                 if(controller.composerPending.isNotEmpty())Column(Modifier.heightIn(max=170.dp).verticalScroll(rememberScrollState())) {
-                    controller.composerPending.forEach{item->Column { Row(verticalAlignment=Alignment.CenterVertically){Text(if(controller.canRetryLocallyUnsent(item.clientId))"本进程确认未派发，原输入仍保留" else if(item.draftKey==ownerKey)"本输入登记待核对，未自动重发" else "另有原输入待核对",fontSize=11.sp,color=SecondaryInk,modifier=Modifier.weight(1f));if(item.draftKey!=ownerKey)TextButton(onClick={controller.returnToPendingComposer(item.clientId)},enabled=!state.chatBusy&&!state.chatSubmitting){Text("回原输入",fontSize=11.sp)};TextButton(onClick={controller.queryChatSubmission(item.clientId)}){Text("查询原回执",fontSize=11.sp)}};if(controller.canRetryLocallyUnsent(item.clientId))TextButton(onClick={controller.retryLocallyUnsent(item.clientId)}){Text("重新保存并发送这条原输入",fontSize=11.sp)} } }
+                    controller.composerPending.forEach{item->Column { Row(verticalAlignment=Alignment.CenterVertically){Text(if(controller.canRetryLocallyUnsent(item.clientId))"本进程确认未派发，原输入仍保留" else if(item.draftKey==ownerKey)"本输入登记待核对，未自动重发" else "另有原输入待核对",fontSize=11.sp,color=SecondaryInk,modifier=Modifier.weight(1f));if(item.draftKey!=ownerKey)TextButton(onClick={controller.returnToPendingComposer(item.clientId)},enabled=!state.chatSubmitting){Text("回原输入",fontSize=11.sp)};TextButton(onClick={controller.queryChatSubmission(item.clientId)}){Text("查询原回执",fontSize=11.sp)}};if(controller.canRetryLocallyUnsent(item.clientId))TextButton(onClick={controller.retryLocallyUnsent(item.clientId)}){Text("重新保存并发送这条原输入",fontSize=11.sp)} } }
                 }
             }
             if (composerDetails || state.voiceInput.optString("message").isNotBlank()
@@ -913,6 +963,7 @@ private fun FileEditor(state: PocketUiState, controller: PocketWorldController) 
 @Composable
 private fun SettingsSheet(state: PocketUiState, controller: PocketWorldController, close: () -> Unit, connections: () -> Unit) {
     var settingsSection by rememberSaveable { mutableIntStateOf(0) }
+    var executionReview by remember { mutableStateOf<JSONObject?>(null) }
     val modelScroll = rememberScrollState()
     val phoneScroll = rememberScrollState()
     val connectionsScroll = rememberScrollState()
@@ -934,12 +985,17 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
                     SettingEntry("ChatGPT 账号与模型目录", "连接账号，选择可用模型") { controller.openConnection("accounts") }
                     HorizontalDivider(color = Line)
                     SettingEntry("API 连接与模型目录", "按原连接编辑参数、截图发送与输入能力") { controller.openConnection("models") }
-            if (state.modelRoute == "account") {
-                Text("当前账号模型：" + state.modelName, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp))
-                Text("支持文字与工具调用，暂不支持截图、音频和视频。账号刷新、停用或退出后可能需要重新选择目录模型；不会自动换号、降级或重试付费请求。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 10.dp))
-                OutlinedButton(onClick = controller::useApiKeyModel, enabled = !state.modelSaving, modifier = Modifier.padding(top = 12.dp)) { Text(if (state.modelSaving) "切换中…" else "切回已保存的 API 密钥模型") }
-                state.error?.let { Text(it, color = Danger, fontSize = 12.sp) }
-            }
+                    if (state.modelRoute == "account") {
+                        Text("当前账号模型：" + state.modelName, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp))
+                        SettingEntry("选择已保存的 API 连接", "选择用于后续任务的连接；正在执行的任务保留原模型") { controller.openConnection("models") }
+                    }
+                }
+                if (settingsSection == 1) SettingsSurface("PocketWorld 运行开关", "停用保持到你明确恢复；不自动重放旧任务") {
+                    val policy = controller.ownerExecutionPolicy
+                    SettingEntry(if (policy.optBoolean("enabled") && policy.optBoolean("acceptingNewWork")) "全部停止并停用" else "恢复新任务准入", "保留原任务和未决效果，资源收尾按实际回执核对") {
+                        if (!controller.ownerExecutionSaving && policy.optLong("revision") > 0) executionReview = JSONObject(policy.toString()).put("nextEnabled", !policy.optBoolean("enabled"))
+                    }
+                    policy.optJSONObject("lastStop")?.let { report -> Text("原控制取消请求：${report.optInt("originalControlsCancelled")}。任务与资源的最终状态仍需核对；不表示远端效果已撤销。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 18.sp) }
                 }
                 if (settingsSection == 1) SettingsSurface("任务偏好", "回复详略与普通操作节奏") {
                     AgentPreferencesControls(state.agentPreferences, state.agentPreferencesSaving, state.agentPreferencesError, controller::saveAgentPreferences)
@@ -948,6 +1004,14 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
                     AutomaticUserLearningControls(controller)
                 }
                 if (settingsSection == 1) SettingsSurface("手机执行", "授权与后台任务入口") {
+                    val screenshotPolicy = controller.taskScreenshotPolicy
+                    val durations = listOf(0L, 86_400_000L, 604_800_000L, 2_592_000_000L)
+                    Text("任务结果截图留存", fontSize = 14.sp)
+                    if (screenshotPolicy.optLong("revision") > 0 && screenshotPolicy.optLong("retentionMillis", -1) in durations) PocketSegmentedTabs(listOf("不保存", "1天", "7天", "30天"), durations.indexOf(screenshotPolicy.optLong("retentionMillis", -1)), { index ->
+                        controller.changeTaskScreenshotPolicy(screenshotPolicy.getLong("revision"), durations[index]) { _, _ -> }
+                    }, !controller.taskScreenshotSaving)
+                    else TextButton(onClick = { controller.readTaskScreenshotPolicy { _, _ -> } }) { Text("读取当前留存设置") }
+                    Text("仅作用于之后生成的结果截图，使用本机密钥加密。已有旧截图保留到你主动删除或被该任务的新结果替换。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 18.sp)
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("允许本地按需取图", fontSize = 14.sp); Text("独立于云截图发送；关闭后不会为 OCR 采集像素。更改用于后续运行。", color = SecondaryInk, fontSize = 12.sp) }; Switch(state.localCaptureAllowed, { controller.saveLocalObservation(it, state.localOcrAllowed) }) }
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("允许本地 OCR", fontSize = 14.sp); Text("优先本地识字。像素不外发，但识别文字会作为有来源的上下文发送给所选推理服务。", color = SecondaryInk, fontSize = 12.sp) }; Switch(state.localOcrAllowed, { controller.saveLocalObservation(state.localCaptureAllowed, it) }) }
                     BackgroundConnectionSummary(state, controller, compact = true)
@@ -960,6 +1024,13 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
                     SettingEntry("界面读取与主屏控制", if (state.accessibilityEnabled) "无障碍服务已连接，可读取系统允许访问的节点" else "后台节点和文字读取、主屏控制需要无障碍授权", controller::openAccessibility)
                 }
                 if (settingsSection == 1) SettingsSurface("浏览器与语音", "网页研究、独立浏览与系统语音") {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) { Text("任务状态语音提示", fontSize = 14.sp); Text("仅前台私有任务的状态提示，不读任务正文；系统语音引擎可能联网。默认关闭。", color = SecondaryInk, fontSize = 12.sp, lineHeight = 18.sp) }
+                        Switch(controller.taskAnnouncementState.optBoolean("enabled"), { enabled -> controller.saveTaskAnnouncements(enabled) { _, _ -> } }, enabled = !controller.taskAnnouncementSaving)
+                    }
+                    controller.taskAnnouncementState.optJSONObject("readout")?.takeIf { it.optBoolean("active") }?.let { readout ->
+                        TextButton(onClick = { controller.stopTaskAnnouncement(readout.getString("readoutId")) }) { Text("停止这次状态提示") }
+                    }
                     SettingEntry("网页研究工作区", "选择登录资料，多页比较、保留依据与下载，随时接管", controller::openBrowserResearch)
                     HorizontalDivider(color = Line)
                     SettingEntry("内置浏览器", if (state.feature("browser").optBoolean("open")) "有打开的页面，点击后进入人工浏览" else "使用独立登录环境，不共享系统 Chrome 账号", controller::openBrowser)
@@ -978,6 +1049,13 @@ private fun SettingsSheet(state: PocketUiState, controller: PocketWorldControlle
             }
         }
     }
+
+    executionReview?.let { original ->
+        ConfirmAction(if (original.getBoolean("nextEnabled")) "恢复新任务准入？" else "全部停止并停用？", if (original.getBoolean("nextEnabled")) "仅允许后续新工作和有效自动计划，不继续旧任务或重放未知操作。" else "持久禁止新执行，并请求停止原任务、监听、网关、显示与音频。未决效果及实际清理回执会保留。", "确认", { if (!controller.ownerExecutionSaving) executionReview = null }) {
+            if (!controller.ownerExecutionSaving) controller.changeOwnerExecution(original.getLong("revision"), original.getBoolean("nextEnabled")) { _, _ -> executionReview = null }
+        }
+    }
+
 }
 
 // Layout adaptation of the retained Affect Integration Settings sections and action footer

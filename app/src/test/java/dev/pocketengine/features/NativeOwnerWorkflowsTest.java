@@ -31,8 +31,9 @@ public final class NativeOwnerWorkflowsTest {
         final FeatureContext context=new FeatureContext(app,new SettingsStore(app),new SecretVault(app),event->{});
         final MemorySourceBridge sources=new MemorySourceBridge(host,tasks);
         final MemoryModule memory=new MemoryModule(context,sources::resolve);
+        final PluginsModule plugins=new PluginsModule(context);
         final NativeOwnerWorkflows flows=new NativeOwnerWorkflows(host,context,tasks,sources);
-        Fixture()throws Exception{host.register(memory);host.register(new dev.pocketengine.features.skills.SkillsModule(context,memory::resolveExperience));host.register(new PluginsModule(context));host.setMemorySynchronizer(sources::synchronize);}
+        Fixture()throws Exception{host.register(memory);host.register(new dev.pocketengine.features.skills.SkillsModule(context,memory::resolveExperience));host.register(plugins);host.setMemorySynchronizer(sources::synchronize);}
         public void close(){try{flows.cancelPendingLogin();}catch(Exception ignored){}host.close();}
     }
     @Test public void safConfigOnlyReturnsCredentialFreeWhitelist()throws Exception{
@@ -66,6 +67,24 @@ public final class NativeOwnerWorkflowsTest {
             rejected(()->fixture.flows.memory("sourceUpdated",new JSONObject()));
             rejected(()->fixture.flows.mcp("grant",new JSONObject()));
             rejected(()->fixture.flows.mcp("enable",new JSONObject()));
+        }
+    }
+    @Test public void nativeEnableRequiresTheDisplayedStateAndGrantsEvenOnTheSameInstallation()throws Exception{
+        try(Fixture fixture=new Fixture()){
+            JSONObject manifest=new JSONObject().put("id","owner-toggle").put("name","Owner toggle").put("version","1")
+                    .put("tools",new JSONArray().put(new JSONObject().put("name","lookup").put("kind","echo")));
+            JSONObject installed=fixture.plugins.handle("install",new JSONObject().put("manifest",manifest));
+            JSONObject reviewed=dev.pocketengine.features.plugins.PluginOwnerTestReview.payload(installed,true);
+            JSONObject missingRevision=new JSONObject(reviewed.toString());missingRevision.remove("expectedStateRevision");
+            assertThrows(org.json.JSONException.class,()->fixture.flows.mcp("setEnabledReviewed",missingRevision));
+            JSONObject missingGrants=new JSONObject(reviewed.toString());missingGrants.remove("expectedGrantsDigest");
+            assertThrows(org.json.JSONException.class,()->fixture.flows.mcp("setEnabledReviewed",missingGrants));
+            JSONObject granted=fixture.flows.mcp("setToolGrantReviewed",new JSONObject().put("id",installed.getString("id"))
+                    .put("expectedInstallationId",installed.getString("installationId")).put("expectedGrantsDigest",installed.getString("grantsDigest")).put("tool","lookup").put("granted",true));
+            assertThrows(IllegalStateException.class,()->fixture.flows.mcp("setEnabledReviewed",reviewed));
+            assertFalse(fixture.flows.mcpSnapshot().getJSONArray("plugins").getJSONObject(0).getBoolean("enabled"));assertEquals(0,fixture.plugins.toolRegistry().length());
+            JSONObject enabled=fixture.flows.mcp("setEnabledReviewed",dev.pocketengine.features.plugins.PluginOwnerTestReview.payload(granted,true));
+            assertTrue(enabled.getBoolean("enabled"));assertEquals(1,fixture.plugins.toolRegistry().length());
         }
     }
     @Test public void sourceViewerRequiresExactOwnerAndCurrentTaskEvidence()throws Exception{

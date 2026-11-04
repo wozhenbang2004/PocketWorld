@@ -32,7 +32,7 @@ public class PluginDiagnosticsModuleTest {
         return new JSONObject().put("id","diagnostics").put("tool","submit").put("expectedInstallationId",installed.getString("installationId")).put("arguments",args);
     }
     private void enable(PluginsModule module)throws Exception {
-        module.handle("enable",new JSONObject().put("id","diagnostics").put("enabled",true));
+        dev.pocketengine.features.plugins.PluginOwnerTestReview.enableCurrent(module,"diagnostics",true);
         module.handle("grant",new JSONObject().put("id","diagnostics").put("grants",new JSONArray().put("tool:submit")));
     }
     @Test public void diagnosticsAreReadOnlyWithoutGrantOrNetworkAndDoNotAuthorizeInvoke()throws Exception {
@@ -52,7 +52,7 @@ public class PluginDiagnosticsModuleTest {
             assertArrayEquals(before,Files.readAllBytes(file.toPath()));assertEquals(secretsBefore,context.getSharedPreferences("feature_secrets",Context.MODE_PRIVATE).getAll());
             assertEquals(0,module.snapshot().getJSONArray("active").length());assertEquals(0,module.toolRegistry().length());assertEquals(0,events.get());
             try{module.handle("invoke",good);fail("valid arguments do not grant execution");}catch(IllegalStateException disabled){}
-            module.handle("enable",new JSONObject().put("id","diagnostics").put("enabled",true));
+            dev.pocketengine.features.plugins.PluginOwnerTestReview.enableCurrent(module,"diagnostics",true);
             assertTrue(module.handle("validateArguments",good).getBoolean("valid"));
             try{module.handle("invoke",good);fail("diagnostics do not create a grant");}catch(SecurityException ungranted){}
             try(java.net.Socket unexpected=server.accept()){fail("validation must never send HTTP");}catch(SocketTimeoutException noRequest){}

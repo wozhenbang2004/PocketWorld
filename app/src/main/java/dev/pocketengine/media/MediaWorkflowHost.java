@@ -148,9 +148,9 @@ public final class MediaWorkflowHost implements AutoCloseable {
                 if(ownerDownload&&command.equals("reviewResultDownload")&&payload.has("downloadReview"))throw new SecurityException("请先读取原结果，不能指定下载审阅内容");
                 if(ownerDownload)requireOwnerDownloadApproval(task,op);
                 String revision=op.getJSONObject("arguments").getString("configurationRevision");
-                RunControl control=new RunControl();control.bindHostRun(taskId,op.getString("runId"),source.getInt("epoch"));
+                RunControl control=RunControl.forOriginalRecovery(taskId,op.getString("runId"),source.getInt("epoch"));
                 entry=new Active(taskId,op.getString("runId"),source.getInt("epoch"),operation,op.getString("tool"),revision,op.getJSONObject("arguments"),control,true,task.optBoolean("cancelRequested"));
-                active.put(operation,entry);control.setAuthorityCheck(()->{check(entry);if(ownerDownload)synchronized(tasks){JSONObject actual=current(entry);requireOwnerDownloadApproval(actual,operation(actual,entry.operation));}});input=new JSONObject(payload.toString());bind(input,entry);
+                active.put(operation,entry);control.retainAuthorityCheck(()->{check(entry);if(ownerDownload)synchronized(tasks){JSONObject actual=current(entry);requireOwnerDownloadApproval(actual,operation(actual,entry.operation));}});input=new JSONObject(payload.toString());bind(input,entry);
             }
         }
         Runnable cancelled=entry.control::cancel;if(caller!=null)caller.onCancel(cancelled);
@@ -164,8 +164,8 @@ public final class MediaWorkflowHost implements AutoCloseable {
     /** Urgent local control only. In particular this never waits on /history, /queue or /interrupt. */
     public JSONObject observeOriginal(MediaModule module,String taskId,String operationId,RunControl parent,dev.pocketengine.media.jobs.ComfyUiProgressObserver.Listener listener)throws Exception{
         requireOpen();JSONObject source=tasks.ownerMediaOperationSource(taskId,operationId);String revision=source.getJSONObject("arguments").getString("configurationRevision");
-        RunControl observer=new RunControl();observer.bindHostRun(taskId,source.getString("runId"),source.getInt("epoch"));
-        observer.setAuthorityCheck(()->{requireOpen();parent.check();JSONObject actual=tasks.ownerMediaOperationSource(taskId,operationId);
+        RunControl observer=RunControl.forOriginalRecovery(taskId,source.getString("runId"),source.getInt("epoch"));
+        observer.retainAuthorityCheck(()->{requireOpen();parent.check();JSONObject actual=tasks.ownerMediaOperationSource(taskId,operationId);
             for(String key:new String[]{"runId","argumentsHash","tool"})if(!source.getString(key).equals(actual.getString(key)))throw new SecurityException("原媒体观察来源已变化");if(source.getInt("epoch")!=actual.getInt("epoch"))throw new SecurityException("原媒体观察代次已变化");});
         Runnable stop=observer::cancel;parent.onCancel(stop);
         try{return module.observeProgress(new JSONObject().put("operationId",operationId).put("_operationId",operationId).put("_taskId",taskId).put("_runId",source.getString("runId")).put("_epoch",source.getInt("epoch")).put("_configurationRevision",revision).put("maxDurationMs",30000),observer,listener);}
@@ -184,6 +184,9 @@ public final class MediaWorkflowHost implements AutoCloseable {
             return withHost(receipt,entry);
         }
     }
+    public JSONObject cancelOriginalTask(String taskId,String run,int epoch)throws Exception {
+        synchronized(tasks){tasks.requireOriginalExecutionStopTarget(new JSONObject().put("taskId",taskId).put("runId",run).put("epoch",epoch));return cancelTask(taskId);}
+    }
     public JSONObject cancelTask(String taskId)throws Exception{
         ReadContinuation waiting=null;for(ReadContinuation next:continuedReads.values())if(next.task.equals(taskId)){waiting=next;break;}
         if(waiting!=null){waiting.control.cancel();tasks.requestCancel(waiting.task,waiting.run);tasks.event(waiting.task,new JSONObject().put("type","media_read_continuation_stopped").put("operationId",waiting.operation).put("remoteTerminationConfirmed",false));}
@@ -198,9 +201,8 @@ public final class MediaWorkflowHost implements AutoCloseable {
         synchronized(tasks){
             String taskId=tasks.operationTask("media",receipt.getString("operationId"));if(taskId==null)return;
             JSONObject task=requiredTask(taskId),op=operation(task,receipt.getString("operationId"));
-            if(!op.optString("runId").equals(task.optString("runId")))return;
             Active entry=active.get(receipt.getString("operationId"));
-            if(entry==null){RunControl control=new RunControl();control.bindHostRun(taskId,op.getString("runId"),task.getInt("coordinatorEpoch"));entry=new Active(taskId,op.getString("runId"),task.getInt("coordinatorEpoch"),op.getString("operationId"),op.getString("tool"),op.getJSONObject("arguments").getString("configurationRevision"),op.getJSONObject("arguments"),control,true,task.optBoolean("cancelRequested"));}
+            if(entry==null||!entry.run.equals(task.optString("runId"))||entry.epoch!=task.optInt("coordinatorEpoch")){JSONObject source=tasks.ownerMediaOperationSource(taskId,op.getString("operationId"));RunControl control=new RunControl();entry=new Active(taskId,source.getString("runId"),source.getInt("epoch"),op.getString("operationId"),op.getString("tool"),op.getJSONObject("arguments").getString("configurationRevision"),op.getJSONObject("arguments"),control,true,task.optBoolean("cancelRequested"));}
             persist(entry,receipt,false);
         }
     }
@@ -229,7 +231,7 @@ public final class MediaWorkflowHost implements AutoCloseable {
     private void continueReads(MediaModule module,ReadContinuation waiting){
         String ended="limit_or_authority";int reads=0;
         try{
-            waiting.control.setAuthorityCheck(()->{requireOpen();if(continuedReads.get(waiting.operation)!=waiting||System.currentTimeMillis()>=waiting.until)throw new SecurityException("原job续查已到期");JSONObject source=tasks.ownerMediaOperationSource(waiting.task,waiting.operation);if(!waiting.run.equals(source.getString("runId"))||waiting.epoch!=source.getInt("epoch")||!waiting.argumentHash.equals(source.getString("argumentsHash")))throw new SecurityException("原job来源已换代");continuationAuthority(waiting.task,source);if(!waiting.revision.equals(module.snapshot().getString("configurationRevision")))throw new SecurityException("原服务配置已撤回或变化");});
+            waiting.control.retainAuthorityCheck(()->{requireOpen();if(continuedReads.get(waiting.operation)!=waiting||System.currentTimeMillis()>=waiting.until)throw new SecurityException("原job续查已到期");JSONObject source=tasks.ownerMediaOperationSource(waiting.task,waiting.operation);if(!waiting.run.equals(source.getString("runId"))||waiting.epoch!=source.getInt("epoch")||!waiting.argumentHash.equals(source.getString("argumentsHash")))throw new SecurityException("原job来源已换代");continuationAuthority(waiting.task,source);if(!waiting.revision.equals(module.snapshot().getString("configurationRevision")))throw new SecurityException("原服务配置已撤回或变化");});
             for(;reads<60;reads++){
                 while(!active.isEmpty()||module.snapshot().optBoolean("busy")){waiting.control.check();Thread.sleep(100);}
                 waiting.control.check();JSONObject actual=module.originalReceiptForHost(waiting.operation);if(!actual.optBoolean("providerJobIdConfirmed")||!waiting.job.equals(actual.optString("providerJobId"))||!waiting.revision.equals(actual.optString("configurationRevision")))throw new SecurityException("原已确认job身份改变");
@@ -241,8 +243,8 @@ public final class MediaWorkflowHost implements AutoCloseable {
         finally{continuedReads.remove(waiting.operation,waiting);waiting.control.cancel();try{module.finishOriginalReadContinuationForHost(waiting.operation,ended,reads);}catch(Exception unavailable){}try{tasks.event(waiting.task,new JSONObject().put("type","media_read_continuation_ended").put("operationId",waiting.operation).put("reason",ended).put("reads",reads).put("remoteTerminationConfirmed",false).put("newSubmission",false));}catch(Exception unavailable){}}
     }
     private static final class ReadContinuation{
-        final String task,run,operation,job,revision,argumentHash;final int epoch;final long until;final RunControl control=new RunControl();
-        ReadContinuation(String task,String run,int epoch,String operation,String job,String revision,long until,String hash){this.task=task;this.run=run;this.epoch=epoch;this.operation=operation;this.job=job;this.revision=revision;this.until=until;argumentHash=hash;control.bindHostRun(task,run,epoch);}
+        final String task,run,operation,job,revision,argumentHash;final int epoch;final long until;final RunControl control;
+        ReadContinuation(String task,String run,int epoch,String operation,String job,String revision,long until,String hash){this.task=task;this.run=run;this.epoch=epoch;this.operation=operation;this.job=job;this.revision=revision;this.until=until;argumentHash=hash;control=RunControl.forOriginalRecovery(task,run,epoch);}
     }
     private void check(Active entry)throws Exception{
         if(closed||active.get(entry.operation)!=entry||entry.control.isCancelled()||entry.control.isPaused())throw new SecurityException("原媒体等待控制已停止或被替换");

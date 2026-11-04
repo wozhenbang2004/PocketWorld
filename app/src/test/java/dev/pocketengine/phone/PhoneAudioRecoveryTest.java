@@ -46,4 +46,17 @@ public final class PhoneAudioRecoveryTest {
         Audio io=new Audio();io.unknownSilence=true;PhoneAudioRecovery first=new PhoneAudioRecovery(io,io);assertEquals("silence_unconfirmed",first.silence("a",MUSIC,true).getString("outcome"));int before=io.writes;io.unknownSilence=false;
         PhoneAudioRecovery cold=new PhoneAudioRecovery(io,io);assertEquals("audio_changed_by_owner",cold.silence("a",MUSIC,true).getString("outcome"));assertEquals(before,io.writes);assertEquals("allow",io.read(MUSIC));assertEquals(1,cold.snapshot().getInt("pendingCount"));
     }
+    @Test public void switchingTargetRestoresOnlyPreviousAppsAndReportsTheirUnknownRestoration()throws Exception {
+        Audio io=new Audio();PhoneAudioRecovery ledger=new PhoneAudioRecovery(io,io);AppCopyKey next=new AppCopyKey("example.next",0),other=new AppCopyKey("example.other",10);
+        ledger.silence("original",MUSIC,true);ledger.silence("original",next,true);ledger.silence("another",other,true);
+        io.failRestore=true;assertEquals(1,ledger.restoreOwnerExcept("original",next).getInt("pending"));assertEquals("ignore",io.read(next));
+        io.failRestore=false;JSONObject restored=ledger.restoreOwnerExcept("original",next);assertEquals(0,restored.getInt("pending"));assertEquals(1,restored.getInt("restored"));
+        assertEquals("allow",io.read(MUSIC));assertEquals("ignore",io.read(next));assertEquals("ignore",io.read(other));assertEquals(2,ledger.snapshot().getInt("pendingCount"));
+    }
+    @Test public void reviewedRestoreDoesNotRestoreAnotherAppFromTheSameRun()throws Exception {
+        Audio io=new Audio();PhoneAudioRecovery ledger=new PhoneAudioRecovery(io,io);AppCopyKey other=new AppCopyKey("example.other",0);
+        ledger.silence("original",MUSIC,true);ledger.silence("original",other,true);JSONObject restored=ledger.restoreApp("original",MUSIC);
+        assertEquals(0,restored.getInt("pending"));assertEquals(1,restored.getInt("restored"));assertEquals("ignore",io.read(other));assertEquals(1,ledger.snapshot().getInt("pendingCount"));
+        assertThrows(SecurityException.class,()->ledger.inspectOwner("another",other));assertThrows(SecurityException.class,()->ledger.restoreApp("another",other));
+    }
 }

@@ -113,7 +113,7 @@ public final class SettingsWorkProfileTest {
             JSONObject manifest = new JSONObject().put("id", "profile-echo").put("name", "Profile echo").put("version", "1").put("tools", new org.json.JSONArray().put(new JSONObject().put("name", "read").put("kind", "echo")));
             JSONObject plugin = plugins.handle("install", new JSONObject().put("manifest", manifest));
             String installation = plugin.getString("installationId");
-            plugin = plugins.setEnabledReviewed("profile-echo", installation, true);
+            plugin = dev.pocketengine.features.plugins.PluginOwnerTestReview.enableReviewed(plugins, plugin, true);
             JSONObject pluginRef = new JSONObject().put("id", "profile-echo").put("installationId", installation).put("stateRevision", plugin.getLong("stateRevision")).put("manifestDigest", WorkProfile.fingerprint(plugin.getJSONObject("manifest"))).put("tools", new org.json.JSONArray().put("read")).put("optional", false);
             JSONObject definition = draft().put("skillRefs", new org.json.JSONArray().put(skillRef)).put("pluginRefs", new org.json.JSONArray().put(pluginRef));
             var sources = new dev.pocketengine.features.controlplane.NativeWorkProfileSources(settings, features, nativePlugins, Set.of(), null);

@@ -38,6 +38,8 @@ public final class SecretVault implements SettingsStore.ApiSecrets {
     public synchronized void create(String slot,String plain)throws Exception{synchronized(ENTRY_LOCK){validate(slot);if(plain==null||plain.isEmpty()||prefs.contains(slot))throw new SecurityException("凭据用途已存在或内容为空");put(slot,plain);}}
     /** Commit removal BEFORE returning a one-use secret. A failed commit never returns it for exchange. */
     public synchronized String take(String slot)throws Exception{synchronized(ENTRY_LOCK){String value=get(slot);if(!value.isEmpty())remove(slot);return value;}}
+    byte[] sealTaskScreenshot(byte[] plain,byte[] aad)throws Exception{synchronized(ENTRY_LOCK){return TaskScreenshotStorage.seal(key(),plain,aad);}}
+    byte[] openTaskScreenshot(byte[] encrypted,byte[] aad)throws Exception{synchronized(ENTRY_LOCK){return TaskScreenshotStorage.open(key(),encrypted,aad);}}
     private SecretKey key()throws Exception{
         KeyStore store=KeyStore.getInstance("AndroidKeyStore");store.load(null);
         if(!store.containsAlias(ALIAS)){

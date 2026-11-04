@@ -30,6 +30,16 @@ public final class MediaController implements AutoCloseable,VoiceCompanionTurn.A
     private static final Set<MediaController> controllers=Collections.newSetFromMap(new WeakHashMap<>());
     private static volatile String realtimeAudioOwner;
     private static volatile boolean audioReleaseUnknown;
+    private boolean executionAllowed(){return !(activity.getApplication() instanceof dev.pocketengine.EngineApplication app)||app.executionAllowed();}
+    /** Stop the existing main-thread audio owners without clearing an uncertain original lease. */
+    public static CompletableFuture<JSONObject> stopForOwnerDisable(dev.pocketengine.EngineApplication app){
+        CompletableFuture<JSONObject> result=new CompletableFuture<>();new Handler(Looper.getMainLooper()).post(()->{
+            if(app.executionAllowed()){result.completeExceptionally(new SecurityException("总运行状态已恢复，旧停止请求失效"));return;}
+            int count=0;boolean callsAccepted=true;
+            for(MediaController controller:new ArrayList<>(controllers)){if(controller.activity.getApplication()!=app)continue;count++;boolean input=controller.stopListeningInternal(),output=controller.stopSpeakingInternal();callsAccepted&=input&&output;}
+            result.complete(json("controllers",count,"stopCallsAccepted",callsAccepted,"audioReleaseUnknown",audioReleaseUnknown,"leaseStillHeld",realtimeAudioOwner!=null,"physicalCleanupVerified",false));
+        });return result;
+    }
     private final Activity activity;
     private final EventSink events;
     private final Handler main=new Handler(Looper.getMainLooper());
@@ -70,6 +80,7 @@ public final class MediaController implements AutoCloseable,VoiceCompanionTurn.A
         });return result;
     }
     private void beginListening(String owner,CompletableFuture<String> result){
+        if(!executionAllowed()){speechFailure(result,"owner_disabled","PocketWorld 已停用；没有打开麦克风。");return;}
         if(closed||(owner==null?realtimeAudioOwner!=null:!ownsRealtimeAudio(owner))){speechFailure(result,"audio_owner_changed","音频归属已变化，未开始识别。");return;}
         try{if(!SpeechRecognizer.isRecognitionAvailable(activity)){speechFailure(result,"recognition_unavailable","这台手机没有可用的系统语音识别服务。可继续用文字输入。");return;}}catch(RuntimeException unavailable){speechFailure(result,"recognition_unavailable","系统语音服务暂时不可用，可继续用文字输入。");return;}
         if(listening){speechFailure(result,"recognition_busy","系统语音服务正忙，请稍后重试。");return;}
@@ -113,6 +124,7 @@ public final class MediaController implements AutoCloseable,VoiceCompanionTurn.A
         beginSpeech(owner,text,result,authority,true);
     }
     private void beginSpeech(String owner,String text,CompletableFuture<Void> result,RunControl authority,boolean requireMicrophone){
+        if(!executionAllowed()){speechFailure(result,"owner_disabled","PocketWorld 已停用；没有开始朗读。");return;}
         if(closed||(owner==null?realtimeAudioOwner!=null:!ownsRealtimeAudio(owner))){speechFailure(result,"audio_owner_changed","音频归属已变化，未开始朗读。");return;}
         if(!speechAuthorityCurrent(authority)){speechFailure(result,"voice_authority_changed","");return;}
         if(owner!=null&&requireMicrophone&&activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){speechFailure(result,"microphone_denied","");return;}
@@ -140,6 +152,7 @@ public final class MediaController implements AutoCloseable,VoiceCompanionTurn.A
     @Override public CompletableFuture<String> acquireRealtimeAudio(String owner){
         CompletableFuture<String> result=new CompletableFuture<>();
         onMain(()->{
+            if(!executionAllowed()){result.completeExceptionally(new SpeechFailure("owner_disabled"));return;}
             if(closed||owner==null||owner.isEmpty()||audioReleaseUnknown||(realtimeAudioOwner!=null&&!realtimeAudioOwner.equals(owner))){result.completeExceptionally(new IllegalStateException("音频资源正被占用或释放未确认"));return;}
             realtimeAudioOwner=owner;
             try{
@@ -148,6 +161,35 @@ public final class MediaController implements AutoCloseable,VoiceCompanionTurn.A
                 emitState();result.complete(owner);
             }catch(RuntimeException failure){audioReleaseUnknown=true;result.completeExceptionally(new IllegalStateException("系统语音资源释放未确认，未开始通话"));}
         });return result;
+    }
+    /** Optional status speech must never interrupt a manual recording, readout, call or pending permission. */
+    private CompletableFuture<String> acquireTaskAnnouncementAudio(String owner){
+        CompletableFuture<String> result=new CompletableFuture<>();onMain(()->{
+            if(!taskAnnouncementsAllowed()||realtimeAudioOwner!=null||audioReleaseUnknown){result.completeExceptionally(new IllegalStateException("当前不播放任务状态提示"));return;}
+            for(MediaController controller:new ArrayList<>(controllers))if(!controller.closed&&(controller.listening||controller.speaking||controller.recognition!=null||controller.awaitingPermission||controller.pendingSpeech!=null||controller.ownedSpeech!=null||controller.ownedRecognition!=null)){
+                result.completeExceptionally(new IllegalStateException("当前音频正在使用，未打断原输入或播放"));return;
+            }
+            acquireRealtimeAudio(owner).whenComplete((value,failure)->{if(failure==null)result.complete(value);else result.completeExceptionally(failure);});
+        });return result;
+    }
+    /** Playback eligibility only; a system speech engine may still require network for its selected voice. */
+    public boolean taskAnnouncementsAllowed(){
+        try{
+            if(!executionAllowed()||closed||activity.isDestroyed()||activity.isFinishing()||!activity.hasWindowFocus())return false;
+            android.app.KeyguardManager lock=activity.getSystemService(android.app.KeyguardManager.class);
+            android.view.accessibility.AccessibilityManager accessibility=activity.getSystemService(android.view.accessibility.AccessibilityManager.class);
+            return lock!=null&&!lock.isDeviceLocked()&&!lock.isKeyguardLocked()&&accessibility!=null&&!accessibility.isTouchExplorationEnabled()
+                    &&accessibility.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_SPOKEN).isEmpty();
+        }catch(RuntimeException unavailable){return false;}
+    }
+    public dev.pocketengine.media.voice.tasks.VoiceTaskReadout.Audio taskAnnouncementAudio(){
+        return new dev.pocketengine.media.voice.tasks.VoiceTaskReadout.Audio(){
+            public CompletableFuture<String> acquire(String owner){return acquireTaskAnnouncementAudio(owner);}
+            public CompletableFuture<Void> speak(String owner,String text,RunControl authority){return speakOwnedTaskResult(owner,text,authority);}
+            public CompletableFuture<Void> stop(String owner){return stopRealtimeTurn(owner);}
+            public void release(String owner,boolean confirmed){releaseRealtimeAudio(owner,confirmed);}
+            public boolean releaseUnknown(){return audioReleaseUnknown();}
+        };
     }
     @Override public boolean audioReleaseUnknown(){return audioReleaseUnknown;}
     @Override public boolean ownsRealtimeAudio(String owner){return !closed&&!audioReleaseUnknown&&owner!=null&&owner.equals(realtimeAudioOwner);}

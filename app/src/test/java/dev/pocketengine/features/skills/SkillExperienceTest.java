@@ -48,6 +48,8 @@ public final class SkillExperienceTest {
         assertThrows(SecurityException.class,()->book.setEnabled(scope(),row.getString("id"),true,row.getString("digest"),true,1200));
         assertThrows(SecurityException.class,()->book.approveExperience(scope(),row.getString("id"),2,row.getString("digest"),1200));
         assertThrows(SecurityException.class,()->book.exportPackage(scope(),row.getString("id"),1,row.getString("digest"),new ByteArrayOutputStream(),1200));
+        assertThrows(SecurityException.class,()->book.inspectDocumentExport(scope(),row.getString("id"),1,row.getString("digest"),1200));
+        ByteArrayOutputStream singleDocument=new ByteArrayOutputStream();assertThrows(SecurityException.class,()->book.exportDocument(scope(),row.getString("id"),1,row.getString("digest"),"0".repeat(64),singleDocument,1200));assertEquals(0,singleDocument.size());
         approve(book,row);JSONObject content=read(book,row);assertTrue(content.getString("content").contains("UNVERIFIED_BODY"));assertFalse(content.getBoolean("executable"));
         assertFalse(content.getJSONObject("origin").getBoolean("executionVerified"));assertEquals(1,discover(book).getJSONArray("skills").length());
         assertEquals(1,disk(root).getJSONArray("skills").length());assertEquals(0,disk(root).getJSONArray("experienceCleanup").length());

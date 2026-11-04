@@ -93,4 +93,62 @@ public final class PhoneNotificationControlsTest {
         } finally {field.set(app.tasks,android.database.sqlite.SQLiteDatabase.openDatabase(path,null,android.database.sqlite.SQLiteDatabase.OPEN_READWRITE));}
     }
 
+    @Test public void queuedOldPhoneControlsRejectTheReplacementAttempt()throws Exception {
+        prepare();String oldRun=run;int oldEpoch=epoch;RunControl old=original;
+        app.tasks.endAttempt(id,run,"paused","original ended",new JSONObject());install(app.tasks.startAttempt(id,"background",6));
+        assertThrows(SecurityException.class,()->app.pauseOriginalPhoneRun(id,oldRun,oldEpoch));
+        assertThrows(SecurityException.class,()->app.stopOriginalPhoneRun(id,oldRun,oldEpoch));
+        assertThrows(SecurityException.class,()->app.resumeOriginalPhoneRun(id,oldRun,oldEpoch));
+        assertFalse(original.isCancelled());assertFalse(original.isPaused());assertFalse(old.isCancelled());
+        assertEquals("preparing",app.tasks.get(id,false).getString("status"));
+    }
+    @Test public void pauseWaitingForTasksDoesNotHoldApplicationMonitorAndCannotPauseLaterRun()throws Exception {
+        prepare();String oldRun=run;int oldEpoch=epoch;RunControl old=original;
+        java.util.concurrent.atomic.AtomicReference<Throwable> failure=new java.util.concurrent.atomic.AtomicReference<>();
+        Thread request=new Thread(()->{try{app.pauseOriginalPhoneRun(id,oldRun,oldEpoch);}catch(Throwable error){failure.set(error);}},"original-pause-request");request.setDaemon(true);
+        var probe=java.util.concurrent.Executors.newSingleThreadExecutor(r->{Thread t=new Thread(r,"application-monitor-probe");t.setDaemon(true);return t;});
+        try{
+            synchronized(app.tasks){
+                request.start();long until=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+                while(request.getState()!=Thread.State.BLOCKED&&request.isAlive()&&System.nanoTime()<until)Thread.sleep(2);
+                assertEquals("pause must reach the real TaskStore monitor",Thread.State.BLOCKED,request.getState());
+                assertTrue(probe.submit(()->{synchronized(app){return true;}}).get(2,java.util.concurrent.TimeUnit.SECONDS));
+                app.tasks.endAttempt(id,run,"paused","original ended while waiting",new JSONObject());install(app.tasks.startAttempt(id,"background",6));
+            }
+            request.join(2000);assertFalse(request.isAlive());assertTrue(String.valueOf(failure.get()),failure.get() instanceof SecurityException);
+            assertFalse(old.isPaused());assertFalse(original.isPaused());assertEquals("preparing",app.tasks.get(id,false).getString("status"));
+        }finally{probe.shutdownNow();}
+    }
+    @Test public void oldServiceDestructionCannotStopOrReleaseTheReplacementRun()throws Exception {
+        prepare();RunControl old=original;String oldRun=run;int oldEpoch=epoch;
+        app.tasks.endAttempt(id,oldRun,"paused","old service ended",new JSONObject());JSONObject next=app.tasks.startAttempt(id,"background",6);
+        RunControl replacement=new RunControl();replacement.bindHostRun(id,next.getString("runId"),next.getInt("coordinatorEpoch"));
+        set(app,"activeControl",replacement); // Leave the Service bound to the old captured identity.
+        service.onDestroy();service=null;
+        assertTrue(old.isCancelled());assertFalse(replacement.isCancelled());assertSame(replacement,app.control(id));assertEquals(id,app.activeId());
+        assertEquals(next.getString("runId"),app.tasks.get(id,false).getString("runId"));assertEquals("preparing",app.tasks.get(id,false).getString("status"));
+    }
+    @Test public void delayedContinueWakeCannotTouchTheSameTasksNewRun()throws Exception {
+        prepare();Intent oldWake=new Intent(app,PhoneRunService.class).setAction(PhoneRunService.CONTINUE).putExtra("taskId",id).putExtra("phoneRunId",run).putExtra("phoneEpoch",epoch);
+        app.tasks.endAttempt(id,run,"paused","old attempt ended",new JSONObject());install(app.tasks.startAttempt(id,"background",6));set(service,"waitingForUser",true);
+        service.onStartCommand(oldWake,0,20);
+        assertFalse(original.isPaused());assertFalse(original.isCancelled());assertEquals("preparing",app.tasks.get(id,false).getString("status"));
+    }
+    @Test public void resumeRetainsTheOriginalBudgetAndWakeIdentity()throws Exception {
+        prepare();app.tasks.initializeExecutionScope(id,6);JSONObject before=app.tasks.get(id,false).getJSONObject("executionScope");
+        app.pauseOriginalPhoneRun(id,run,epoch);JSONObject resumed=app.resumeOriginalPhoneRun(id,run,epoch);
+        JSONObject after=app.tasks.get(id,false).getJSONObject("executionScope");assertEquals(before.toString(),after.toString());assertFalse(resumed.getBoolean("budgetIncreased"));
+        Intent wake=Shadows.shadowOf(app).getNextStartedService();assertNotNull(wake);assertEquals(run,wake.getStringExtra("phoneRunId"));assertEquals(epoch,wake.getIntExtra("phoneEpoch",-1));
+    }
+    @Test public void coldContinuationUsesRemainingScopeAndRejectsStaleFeedbackAtomically()throws Exception {
+        prepare();app.tasks.initializeExecutionScope(id,6);String oldRun=run;int oldEpoch=epoch;
+        JSONObject before=app.tasks.get(id,false).getJSONObject("executionScope");app.tasks.endAttempt(id,run,"paused","owner paused",new JSONObject());
+        JSONObject continued=app.tasks.startOriginalPhoneAttempt(id,run,epoch,"background",40);
+        assertNotEquals(oldRun,continued.getString("runId"));assertEquals(oldEpoch+1,continued.getInt("coordinatorEpoch"));
+        JSONObject after=continued.getJSONObject("executionScope");assertEquals(before.getInt("toolLimit"),after.getInt("toolLimit"));assertEquals(before.getInt("toolsUsed"),after.getInt("toolsUsed"));assertEquals(before.getInt("modelCallLimit"),after.getInt("modelCallLimit"));assertEquals(before.getInt("modelCallsUsed"),after.getInt("modelCallsUsed"));
+        assertThrows(SecurityException.class,()->app.tasks.startOriginalPhoneAttempt(id,oldRun,oldEpoch,"background",40,null,null,"stale feedback"));
+        assertFalse(app.tasks.get(id,false).optString("feedback").contains("stale feedback"));
+        install(continued);
+    }
+
 }

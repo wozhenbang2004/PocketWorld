@@ -28,7 +28,14 @@ public final class InferenceRouteContinuity {
                 &&capturedInference.imageTokenReserve==selectedSettings.imageTokenReserve;
         // maxSteps is the original task's allocation, not a different connection. It remains
         // enforced by TaskStore/Runner and is deliberately not compared with a new default.
-        if(same&&capturedInference.usesAccount())same=ModelGateway.accountSelectionContinues(original,capturedInference.accountModel,selectedSettings.accountModel);
+        if(same&&capturedInference.usesAccount()){
+            // Current settings may now choose another task's model. Only this run's actually
+            // admitted account renewals can advance its frozen identity; the native port still
+            // checks disable/logout/version revocation before any further request.
+            same=capturedInference.accountModel.sameModel(selectedSettings.accountModel);
+            if(same){ModelConfig renewed=ModelGateway.accountBudgetConfig(capturedInference,original);
+                same=ModelGateway.accountSelectionContinues(original,capturedInference.accountModel,renewed.accountModel);}
+        }
         if(!same)throw new SecurityException("原模型路由、受准入的账号版本或当前授权已变化或暂不可核对；未换号、重放或使用旧来源。");
         original.check();
     }

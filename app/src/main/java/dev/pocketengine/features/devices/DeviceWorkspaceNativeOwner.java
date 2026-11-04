@@ -387,8 +387,8 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         }
         public void requestStop(String id) throws Exception { stopAvailability(id).require(); if (pendingCancelAvailability(id).available) { cancelPendingGoal(id); return; } JSONObject task = tasks.get(id, false); app.controlDeviceExecution(id, task.getString("runId"), task.getInt("coordinatorEpoch"), "cancel"); changed(); }
     }
-    /** All options derive from actual local launchable apps and original private checkouts. A
-     * model/peer cannot provide this list. Selecting an option never authorizes the whole workspace. */
+    /** Options derive from installed native handlers, launchable apps and original private
+     * checkouts. A model/peer cannot provide this list or authorize the whole workspace. */
     JSONArray localGrantOptions() throws Exception {
         JSONArray result = new JSONArray(); long expiry = System.currentTimeMillis() + 30L * 86400_000;
         JSONObject readiness = app.phoneReadiness();
@@ -435,6 +435,11 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
                 option.put("isolation", false); result.put(option);
             }
         }
+        if(app.features.module("automation") instanceof dev.pocketengine.features.automation.AutomationModule)result.put(new JSONObject().put("optionId","schedule_drafts").put("label","仅提交定时草稿，等待本机确认")
+                .put("capabilities",new JSONArray().put("device.describe").put("tool.invoke")).put("toolNames",DeviceScheduleDrafts.tools()).put("resources",new JSONArray().put(DeviceScheduleDrafts.resource()))
+                .put("canGrantWholeDisplayCapture",false).put("toolBudgetMin",0).put("modelBudgetMin",0).put("toolBudgetMax",0).put("modelBudgetMax",0).put("expiresAtMax",expiry)
+                .put("allowDelegation",false).put("maxDelegationDepth",0).put("additionalOriginsAllowed",false).put("historyReadExpiresAtMax",0).put("historyReadMethods",new JSONArray())
+                .put("effectSummary","只接收待审提醒或手机目标草稿，每30秒最多一次、每小时八份；不启动任务或模型。撤销此范围会暂停原草稿及其提醒，正文和原记录保留。"));
         return result;
     }
     private JSONObject option(String id, String label, JSONObject resource, JSONArray tools, boolean goal, long expiry) throws Exception {
@@ -479,7 +484,8 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         JSONArray options = localGrantOptions();
         for (int i = 0; i < options.length(); i++) {
             JSONObject option = options.getJSONObject(i);
-            if (DeviceProtocol.canonical(option.getJSONArray("resources")).equals(DeviceProtocol.canonical(grant.getJSONArray("resources")))) {
+            if (DeviceProtocol.canonical(option.getJSONArray("resources")).equals(DeviceProtocol.canonical(grant.getJSONArray("resources")))
+                    &&DeviceProtocol.canonical(option.getJSONArray("toolNames")).equals(DeviceProtocol.canonical(grant.getJSONArray("toolNames")))) {
                 view.put("label", option.getString("label")); if (option.has("isolation")) view.put("isolation", option.getBoolean("isolation")); break;
             }
         }
@@ -491,7 +497,10 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         DeviceTaskCoordinator coordinator = new DeviceTaskCoordinator(tasks, originalTaskHost(), local.deviceId(), local.instanceId());
         DeviceTaskCoordinator.AcceptanceGate accept = receivingGate(receiver);
         return new DeviceIngress(local.deviceId(), local.instanceId(), pairing(), this::checkAcceptedPolicy,
-                new DeviceCapabilityRegistry(local.deviceId(), local.instanceId(), (DeviceCapabilityRegistry.ScopedNativeHealth) this::health), coordinator, originalArtifacts(), accept);
+                new DeviceCapabilityRegistry(local.deviceId(), local.instanceId(), (DeviceCapabilityRegistry.ScopedNativeHealth) this::health), coordinator, originalArtifacts(), accept,original->{
+                    if(!(app.features.module("automation") instanceof dev.pocketengine.features.automation.AutomationModule automation))throw new SecurityException("本机原计划模块不可用");
+                    return automation.receiveDeviceScheduleDraft(original,tasks);
+                });
     }
     static DeviceTaskCoordinator.AcceptanceGate receivingGate(DeviceReceiverServiceResource exactReceiver) {
         return exactReceiver == null ? originalAcceptance -> { throw new SecurityException("这台手机未开启新的设备任务接收"); }
@@ -514,7 +523,8 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
     }
     private JSONObject health(PairingCoordinator.DiscoveryPermission permission) throws Exception {
         JSONObject readiness = app.phoneReadiness(), result = new JSONObject().put("receiverEnabled", network.ownerEnabled()).put("busy", app.activeId() != null)
-                .put("goalOwnerReviewAvailable", true).put("scopedProjectPortInstalled", app.features.module("local") instanceof LocalModule).put("nativeDeviceRoutesReady", app.hasOriginalDeviceSourceRoutes());
+                .put("goalOwnerReviewAvailable", true).put("scopedProjectPortInstalled", app.features.module("local") instanceof LocalModule).put("nativeDeviceRoutesReady", app.hasOriginalDeviceSourceRoutes())
+                .put("scheduleDraftsInstalled",app.features.module("automation") instanceof dev.pocketengine.features.automation.AutomationModule).put("scheduleDraftsAuthorized",false);
         JSONObject exactCurrentGrant = null;
         if (permission != null) {
             JSONArray peers = trust.workspaceSnapshot(System.currentTimeMillis()).getJSONArray("devices");
@@ -525,6 +535,7 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
                     if ("active".equals(scope.optString("state"))) {
                         JSONObject candidate = trust.grant(scope.getString("grantId"));
                         if (candidate != null && PairingCoordinator.contains(candidate.optJSONArray("capabilities"), "tool.invoke")) {
+                            if(PairingCoordinator.contains(candidate.optJSONArray("toolNames"),DeviceScheduleDrafts.PROPOSE)){DeviceScheduleDrafts.requireGrant(candidate);result.put("scheduleDraftsAuthorized",true);continue;}
                             if (exactCurrentGrant != null) throw new SecurityException("本机当前应用授权存在多个范围，请分别核对");
                             exactCurrentGrant = candidate;
                         }

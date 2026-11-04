@@ -63,8 +63,8 @@ public final class GroupMediaService {
     /** Bounded explicit observer; closing observation has no remote cancellation or generation effect. */
     public JSONObject cancelOriginal(GroupHostPort.Request request,String operation,RunControl cancelWait,GroupHostPort.Authority cancellationAuthority)throws Exception {
         cancellationAuthority.check();cancelWait.check();JSONObject source=source(request,operation,cancellationAuthority);
-        RunControl control=new RunControl();control.bindHostRun(request.taskId,source.getString("runId"),source.getInt("epoch"));
-        control.setAuthorityCheck(()->{cancelWait.check();cancellationAuthority.check();sameSource(source,source(request,operation,cancellationAuthority));});Runnable stop=control::cancel;cancelWait.onCancel(stop);
+        RunControl control=RunControl.forOriginalRecovery(request.taskId,source.getString("runId"),source.getInt("epoch"));
+        control.retainAuthorityCheck(()->{cancelWait.check();cancellationAuthority.check();sameSource(source,source(request,operation,cancellationAuthority));});Runnable stop=control::cancel;cancelWait.onCancel(stop);
         try{
             JSONObject actual=media.handleForHost("cancelJob",binding(request,source),control);
             if(!actual.has("taskId"))return new JSONObject().put("operationId",operation).put("taskId",request.taskId).put("sourceTaskRunId",source.getString("runId"))
@@ -116,8 +116,8 @@ public final class GroupMediaService {
         throw new SecurityException("原群媒体参数尚未取得当前原生审批，未提交服务");
     }
     private RunControl readControl(GroupHostPort.Request request,JSONObject source,RunControl parent,GroupHostPort.Authority authority)throws Exception {
-        parent.check();authority.checkRead();RunControl read=new RunControl();read.bindHostRun(request.taskId,source.getString("runId"),source.getInt("epoch"));
-        read.setAuthorityCheck(()->{parent.check();authority.checkRead();sameSource(source,source(request,source.getString("operationId"),authority));});return read;
+        parent.check();authority.checkRead();RunControl read=RunControl.forOriginalRecovery(request.taskId,source.getString("runId"),source.getInt("epoch"));
+        read.retainAuthorityCheck(()->{parent.check();authority.checkRead();sameSource(source,source(request,source.getString("operationId"),authority));});return read;
     }
     private static void sameSource(JSONObject expected,JSONObject actual)throws Exception {
         for(String key:new String[]{"taskId","operationId","runId","tool","argumentsHash"})if(!expected.getString(key).equals(actual.getString(key)))throw new SecurityException("原媒体来源已变化");

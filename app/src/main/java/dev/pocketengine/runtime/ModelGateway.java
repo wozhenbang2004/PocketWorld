@@ -317,7 +317,7 @@ public final class ModelGateway {
             ModelRoutePlan.Candidate chosen=eligible.get(candidateIndex);ModelConfig selected=chosen.config();
             RunControl.HostRunIdentity originalRun=control.hostRunIdentity();String originalTask=resourceOwner!=null?resourceOwner:originalRun==null?target.context.taskId:originalRun.taskId();
             ModelCallAdmission.Permit permit=MODEL_CALLS.enter(control,originalTask,deadline,inheritedResourceLimit);InferenceCapture capture;
-            try{checkGroup(plan,chosen);preflight.check(selected);capture=new InferenceCapture(selected,control,InferenceCapture.withAdmission(target,()->checkGroup(plan,chosen)));capture.limitDeadlineAt(deadline);
+            try{checkGroup(plan,chosen);preflight.check(selected);capture=new InferenceCapture(selected,control,InferenceCapture.withAdmission(target,()->checkGroup(plan,chosen)));capture.limitDeadlineAt(deadline);capture.tokenReservation(messages,tools);
                 if(authority!=null){capture.logical(logical,attempt,chosen.candidateId(),plan.requestedAlias,ingress,retryReason,deadline);authority.reserve(logical,capture.callId,attempt,chosen.candidateId(),retryReason);}
             }catch(Exception|Error refused){permit.close();throw refused;}
             final boolean[] committed={false};SemanticCommit commit=(call,sequence)->{control.check();checkGroup(plan,chosen);if(!capture.callId.equals(call))throw new SecurityException("semantic_call_identity_changed");if(!committed[0]){if(authority!=null)authority.commit(logical,call,sequence);committed[0]=true;}};
@@ -602,6 +602,7 @@ public final class ModelGateway {
             // The account version callback keeps its stable checked GatewayFailure protocol.
             // Only this invocation's exact native source refusal may cross back to the Runner.
             final java.util.concurrent.atomic.AtomicReference<dev.pocketengine.features.memory.ToolOutputCapture.OutputSourceUnavailable> sourceRefusal=new java.util.concurrent.atomic.AtomicReference<>();
+            final java.util.concurrent.atomic.AtomicReference<ModelRequestPolicy.Rejected> budgetRefusal=new java.util.concurrent.atomic.AtomicReference<>();
             try{
                 AccountBinding binding=binding(control,config.accountModel,port);
                 ModelConfig.AccountModelRef expected=binding.current();
@@ -613,6 +614,7 @@ public final class ModelGateway {
                     if(admitted[0]!=null||actualVersion<expected.accountVersion)throw new GatewayFailure("STALE_ACCOUNT_VERSION");
                     admitted[0]=binding.advance(expected,actualVersion);
                     try{capture.accountVersion(actualVersion);capture.dispatch();}
+                    catch(ModelRequestPolicy.Rejected budget){budgetRefusal.compareAndSet(null,budget);throw new GatewayFailure("INFERENCE_RECEIPT_STORE_UNAVAILABLE");}
                     catch(dev.pocketengine.features.memory.ToolOutputCapture.OutputSourceUnavailable source){sourceRefusal.compareAndSet(null,source);throw new GatewayFailure("INFERENCE_RECEIPT_STORE_UNAVAILABLE");}
                     catch(Exception storage){throw new GatewayFailure("INFERENCE_RECEIPT_STORE_UNAVAILABLE");}
                 },new ChatGptProvider.EventSink(){
@@ -636,6 +638,7 @@ public final class ModelGateway {
             }catch(GatewayFailure failure){
                 control.check();
                 dev.pocketengine.features.memory.ToolOutputCapture.OutputSourceUnavailable source=sourceRefusal.get();if(source!=null)throw source;
+                if(budgetRefusal.get()!=null)throw budgetRefusal.get();
                 if(stream!=null&&"CANCELLED".equals(failure.code))throw new java.util.concurrent.CancellationException(accountFailure(failure.code));
                 throw new GatewayException(accountFailure(failure.code),InferenceFailure.account(failure.code,failure.httpStatus,failure.retryAt,System.currentTimeMillis()));
             }finally{control.removeCancelAction(cancel);}

@@ -42,4 +42,29 @@ public final class ModelSelectionPreferencesTest {
     @Test public void invalidPublicIdentityAndControlCharactersAreRejected(){
         assertThrows(IllegalArgumentException.class,()->key("a\r\nHeader","m"));assertThrows(IllegalArgumentException.class,()->key("a","m\n"));
     }
+    @Test public void staleServiceCannotEraseAnotherInstancesFavoritesOrRecentUse()throws Exception{
+        var first=new ModelSelectionPreferences(file());var second=new ModelSelectionPreferences(file());
+        var a=key("a","one");var b=key("b","two");
+        first.favorites(List.of(a),true);second.used(b,2000);first.used(a,1000);second.favorites(List.of(a),false);
+        var reopened=new ModelSelectionPreferences(file());assertEquals(2,reopened.entries().size());
+        assertFalse(reopened.get(a).favorite());assertEquals(1000,reopened.get(a).lastUsedAt());assertEquals(2000,reopened.get(b).lastUsedAt());
+        first.refresh();assertEquals(reopened.entries(),first.entries());
+    }
+    @Test public void multipleWritersMergeTheirOwnDistinctFavorites()throws Exception{
+        var start=new java.util.concurrent.CountDownLatch(1);var workers=java.util.concurrent.Executors.newFixedThreadPool(4);
+        var pending=new ArrayList<java.util.concurrent.Future<?>>();
+        try{
+            for(int i=0;i<20;i++){var preferences=new ModelSelectionPreferences(file());var model=key("shared","model-"+i);
+                pending.add(workers.submit(()->{assertTrue(start.await(5,java.util.concurrent.TimeUnit.SECONDS));preferences.favorites(List.of(model),true);return null;}));}
+            start.countDown();for(var write:pending)write.get(10,java.util.concurrent.TimeUnit.SECONDS);
+            var reopened=new ModelSelectionPreferences(file());assertEquals(20,reopened.entries().size());
+            for(var entry:reopened.entries())assertTrue(entry.favorite());
+        }finally{start.countDown();workers.shutdownNow();}
+    }
+    @Test public void removedOrCorruptObservedFileIsNotRecreatedFromAStaleCache()throws Exception{
+        var preferences=new ModelSelectionPreferences(file());var a=key("a","one");preferences.favorites(List.of(a),true);
+        Files.delete(file());assertThrows(java.io.IOException.class,()->preferences.used(a,2000));assertFalse(Files.exists(file()));
+        Files.writeString(file(),"{damaged");preferences.refresh();assertFalse(preferences.readable());
+        assertThrows(IllegalStateException.class,()->preferences.favorites(List.of(a),false));assertEquals("{damaged",Files.readString(file()));
+    }
 }

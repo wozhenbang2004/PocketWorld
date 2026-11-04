@@ -12,6 +12,8 @@ import org.json.JSONObject;
 
 /** Durable routing authority. Only authenticated transports may supply canonical events. */
 public final class ChannelCore {
+    /** Serializes local credential/config commits across editor and official login; no network IO. */
+    final Object configurationLock=new Object();
     private final File file;
     private JSONObject state;
 
@@ -54,8 +56,13 @@ public final class ChannelCore {
     }
 
     public synchronized JSONObject saveProfile(JSONObject input) throws Exception {
+        JSONObject profile=validatedProfile(input);replace("profiles","id",profile.getString("id"),profile);save();return copy(profile);
+    }
+    synchronized void validateProfile(JSONObject input)throws Exception {validatedProfile(input);}
+    private JSONObject validatedProfile(JSONObject input)throws Exception {
         String id=input.optString("id").isEmpty()?UUID.randomUUID().toString():identifier(input,"id");
         JSONObject previous=find("profiles","id",id);
+        if(input.has("expectedTransportEpoch"))ChannelConfigurationReview.profile(previous,reviewEpoch(input,"expectedTransportEpoch"));
         String provider=input.optString("provider",previous==null?"webhook":previous.optString("provider"));
         if(!provider.equals("webhook")&&!provider.equals("qq")&&!provider.equals("weixin"))throw new IllegalArgumentException("当前支持可信桥接、QQ官方机器人和微信iLink私聊");
         String appId=provider.equals("qq")||provider.equals("weixin")?text(input,"appId",180,false):"";
@@ -73,10 +80,22 @@ public final class ChannelCore {
                 .put("qqGuildEnabled",provider.equals("qq")&&input.optBoolean("qqGuildEnabled",previous!=null&&previous.optBoolean("qqGuildEnabled"))).put("qqStreamRepliesEnabled",provider.equals("qq")&&input.optBoolean("qqStreamRepliesEnabled",false)).put("ownerMediaEnabled",provider.matches("weixin|qq")&&input.optBoolean("ownerMediaEnabled",false)).put("autoReply",input.optBoolean("autoReply",false)).put("ownerImagesEnabled",provider.matches("weixin|qq")&&input.optBoolean("ownerImagesEnabled",false)).put("replyUrl",input.optString("replyUrl","").trim())
                 .put("maxRepliesPerHour",Math.max(1,Math.min(200,input.optInt("maxRepliesPerHour",30))))
                 .put("updatedAt",System.currentTimeMillis());
-        replace("profiles","id",id,profile);save();return copy(profile);
+        return profile;
     }
     public synchronized JSONObject profile(String id)throws Exception {
         JSONObject profile=find("profiles","id",id);if(profile==null)throw new IllegalArgumentException("渠道连接不存在");JSONObject view=copy(profile);view.remove("nativeQqResume");return view;
+    }
+    synchronized void checkProfileReview(String id,JSONObject input)throws Exception {
+        if(input.has("expectedTransportEpoch"))ChannelConfigurationReview.profile(find("profiles","id",id),reviewEpoch(input,"expectedTransportEpoch"));
+    }
+    private static String reviewEpoch(JSONObject input,String key)throws Exception {
+        Object value=input.opt(key);if(!(value instanceof String)||((String)value).length()>180)throw new SecurityException("请重新读取原渠道版本");return (String)value;
+    }
+    synchronized void checkOwnerReview(String profileId,JSONObject input)throws Exception {
+        boolean reviewed=input.has("expectedTransportEpoch")||input.has("expectedBindingEpoch")||input.has("expectedTaskGrantEpoch");
+        if(!reviewed)return;
+        ChannelConfigurationReview.profile(find("profiles","id",profileId),reviewEpoch(input,"expectedTransportEpoch"));
+        ChannelConfigurationReview.binding(find("bindings","profileId",profileId),reviewEpoch(input,"expectedBindingEpoch"),reviewEpoch(input,"expectedTaskGrantEpoch"));
     }
     synchronized String originalQqBotUser(JSONObject captured)throws Exception {JSONObject actual=profile(captured.getString("id")),proof=actual.optJSONObject("nativeQqBotUser");if(!actual.getString("transportEpoch").equals(captured.getString("transportEpoch"))||proof==null||!actual.getString("transportEpoch").equals(proof.optString("transportEpoch")))return "";return identifier(proof,"botUserId");}
     synchronized void recordQqBotUser(JSONObject captured,String nativeId)throws Exception {JSONObject actual=find("profiles","id",captured.getString("id"));if(actual==null||!actual.optString("provider").equals("qq")||!actual.optString("transportEpoch").equals(captured.getString("transportEpoch")))throw new SecurityException("QQ机器人认证代次已变化");String checked=identifier(new JSONObject().put("id",nativeId),"id");JSONObject prior=actual.optJSONObject("nativeQqBotUser");if(prior!=null&&!prior.optString("botUserId").equals(checked))throw new SecurityException("同一原QQ连接认证出不同机器人身份，停止并重新配置");actual.put("nativeQqBotUser",new JSONObject().put("botUserId",checked).put("transportEpoch",actual.getString("transportEpoch")).put("source","authenticated_gateway_ready"));save();}
@@ -242,7 +261,11 @@ public final class ChannelCore {
         if(profile(profileId).getString("provider").equals("qq"))QqConversation.copyNative(event,binding);resetTaskGrant(binding);
         replace("bindings","profileId",profileId,binding);save();return copy(binding);
     }
+    synchronized JSONObject bindOwner(String profileId,String eventId,boolean confirmed,JSONObject reviewed)throws Exception {
+        checkOwnerReview(profileId,reviewed);return bindOwner(profileId,eventId,confirmed);
+    }
     public synchronized void unbindOwner(String profileId)throws Exception {remove("bindings","profileId",profileId);save();}
+    synchronized void unbindOwner(String profileId,JSONObject reviewed)throws Exception {checkOwnerReview(profileId,reviewed);unbindOwner(profileId);}
     /** This separate, native opt-in is never accepted from profile fields or incoming text. */
     public synchronized JSONObject setOwnerTasks(String profileId,boolean enabled,boolean confirmed)throws Exception {
         if(!confirmed)throw new SecurityException("请在本机确认主人私聊任务权限");
@@ -258,6 +281,11 @@ public final class ChannelCore {
                 ||!expectedBindingEpoch.equals(binding.optString("bindingEpoch"))||!expectedTaskGrantEpoch.equals(binding.optString("taskGrantEpoch")))
             throw new SecurityException("主人绑定或任务权限已变化，请重新核对后确认");
         return setOwnerTasks(profileId,enabled,confirmed);
+    }
+    synchronized JSONObject setOwnerTasks(String profileId,boolean enabled,boolean confirmed,JSONObject reviewed)throws Exception {
+        // Native callers already supply the binding/grant pair; the Web additionally fixes profile epoch.
+        if(reviewed.has("expectedTransportEpoch"))checkOwnerReview(profileId,reviewed);
+        return setOwnerTasks(profileId,enabled,confirmed,identifier(reviewed,"expectedBindingEpoch"),identifier(reviewed,"expectedTaskGrantEpoch"));
     }
     private static void resetTaskGrant(JSONObject binding)throws Exception{binding.put("ownerTasksEnabled",false).put("taskGrantEpoch",UUID.randomUUID().toString());}
 
@@ -479,6 +507,16 @@ public final class ChannelCore {
     }
     public synchronized void eventStatus(String id,String status,String message)throws Exception {
         JSONObject row=find("inbox","id",id);if(row==null)return;row.put("status",status).put("message",message);save();
+    }
+    /** Presentation pointer only; usage and all older attempts stay in the original TaskStore. */
+    synchronized void answerInference(JSONObject captured,JSONObject capturedRoute,JSONObject reference)throws Exception {
+        checkAnswerOrigin(captured,capturedRoute);
+        if(!"CHANNEL_CHAT".equals(reference.optString("purpose"))||!reference.optBoolean("accountingOnly")
+                ||reference.optBoolean("executionAuthorized",true)||!reference.optString("taskId").matches("[a-f0-9-]{36}")
+                ||!reference.optString("runId").matches("[a-f0-9-]{36}")||reference.optInt("epoch")<1)
+            throw new SecurityException("原问答用量记录不完整，未调用模型");
+        JSONObject row=find("inbox","id",captured.getString("id"));
+        row.put("latestInferenceReference",copy(reference)).put("latestInferenceStartedAt",System.currentTimeMillis());save();
     }
     public synchronized JSONObject beginAnswer(String id)throws Exception {
         JSONObject row=find("inbox","id",id);if(row==null)throw new IllegalArgumentException("消息记录不存在");

@@ -56,6 +56,7 @@ public final class PrivateTaskRunControlNativeTest {
     @After public void close()throws Exception{workers.shutdownNow();app.features.close();shadowOf(Looper.getMainLooper()).idle();Field field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);((android.database.sqlite.SQLiteDatabase)field.get(app.tasks)).close();}
     private JSONObject start(boolean phone)throws Exception{
         JSONObject task=phone?app.tasks.create("original private phone","background"):app.tasks.createCapabilityTask("original private assistant","");
+        app.tasks.initializeExecutionScope(task.getString("id"),4);
         return app.tasks.startAttempt(task.getString("id"),phone?"background":"capabilities",4);
     }
     private JSONObject review(JSONObject task)throws Exception{return new JSONObject().put("taskId",task.getString("id")).put("runId",task.optString("runId")).put("epoch",task.optInt("coordinatorEpoch")).put("screenConsent",true).put("executionMode",task.getString("executionMode")).put("feedback","original reviewed feedback");}
@@ -93,6 +94,9 @@ public final class PrivateTaskRunControlNativeTest {
     @Test public void currentPrivateAssistantResumeReservesAndBindsItsActualRunBeforeWorkerPickup()throws Exception{
         JSONObject original=start(false);settle(original);String id=original.getString("id");app.dispatchOwnerAction("resumeTask",review(original));JSONObject admitted=app.tasks.get(id,false);
         assertNotEquals(original.getString("runId"),admitted.getString("runId"));assertEquals(original.getInt("coordinatorEpoch")+1,admitted.getInt("coordinatorEpoch"));assertEquals("preparing",admitted.getString("status"));
+        JSONObject beforeScope=original.getJSONObject("executionScope"),afterScope=admitted.getJSONObject("executionScope");
+        for(String key:new String[]{"revision","deadlineAt","toolLimit","modelCallLimit","toolsUsed","modelCallsUsed"})assertEquals(key,beforeScope.getLong(key),afterScope.getLong(key));
+        assertFalse(afterScope.getBoolean("autoRefill"));
         RunControl control=(RunControl)((java.util.Map<?,?>)get(app,"capabilityControls")).get(id);assertNotNull(control);assertTrue(control.matchesHostRun(id,admitted.getString("runId"),admitted.getInt("coordinatorEpoch")));assertEquals("original reviewed feedback",admitted.getString("feedback"));assertEquals(1,workers.pending.size());
         control.cancel();workers.pickUp();assertIdentity(admitted);assertEquals(0,app.tasks.get(id,false).getJSONArray("operations").length());
     }
@@ -130,11 +134,36 @@ public final class PrivateTaskRunControlNativeTest {
         assertThrows(SecurityException.class,()->app.dispatchOwnerAction("stopTask",review(original)));
         assertTrue(workers.pending.isEmpty());JSONObject actual=app.tasks.get(id,false);assertEquals("",actual.optString("runId"));assertEquals(0,actual.optInt("coordinatorEpoch"));assertEquals("",actual.getString("feedback"));
     }
+    @Test public void legacyPrivateAssistantRequiresReviewedCumulativeScopeBeforeResume()throws Exception{
+        JSONObject task=app.tasks.createCapabilityTask("legacy original without cumulative scope","");
+        JSONObject original=app.tasks.startAttempt(task.getString("id"),"capabilities",4);settle(original);
+        assertThrows(SecurityException.class,()->app.dispatchOwnerAction("resumeTask",review(original)));
+        assertThrows(SecurityException.class,()->app.tasks.startReviewedPrivateTaskAttempt(review(original),"capabilities",4,"must not be saved",new RunControl()));
+        assertTrue(workers.pending.isEmpty());assertIdentity(original);
+        JSONObject actual=app.tasks.get(original.getString("id"),false);assertFalse(actual.has("executionScope"));assertEquals("",actual.getString("feedback"));
+    }
+
     @Test public void exactPrivateResumeKeepsTheOriginalUnresolvedEffectAndDoesNotQueue()throws Exception{
         JSONObject original=start(false);String id=original.getString("id");RunControl control=new RunControl();control.bindHostRun(id,original.getString("runId"),original.getInt("coordinatorEpoch"));
         app.tasks.authorizeTools(id,original.getString("runId"),new org.json.JSONArray().put("workspace_write"));String operation=app.tasks.journal(id,original.getString("runId"),original.getInt("coordinatorEpoch"),control).beginOperation("workspace_write",new JSONObject().put("path","unresolved.txt"));
         assertThrows(IllegalStateException.class,()->app.dispatchOwnerAction("resumeTask",review(original)));assertTrue(workers.pending.isEmpty());assertIdentity(original);assertTrue(app.tasks.hasUnresolved(id));
         assertEquals(operation,app.tasks.get(id,false).getJSONArray("operations").getJSONObject(0).getString("operationId"));assertEquals("",app.tasks.get(id,false).getString("feedback"));
+    }
+
+    @Test public void delayedServiceCleanupCannotStopAReplacementPhoneControl()throws Exception{
+        JSONObject first=start(true);RunControl original=phoneControl(first);original.cancel();
+        JSONObject next=successor(first,true);RunControl replacement=phoneControl(next);
+        String before=TaskStore.capabilityFingerprint(app.tasks.get(next.getString("id"),false));
+        app.stop(first.getString("id"),original);
+        assertFalse(replacement.isCancelled());assertTrue(replacement.isPaused());assertIdentity(next);
+        assertEquals(before,TaskStore.capabilityFingerprint(app.tasks.get(next.getString("id"),false)));assertTrue(childStops.isEmpty());
+    }
+    @Test public void serviceStopRechecksItsOriginalControlAfterSynchronousCancelReentry()throws Exception{
+        JSONObject first=start(true);RunControl original=phoneControl(first);JSONObject[] next={null};RunControl[] replacement={null};
+        original.onCancel(()->{try{next[0]=successor(first,true);replacement[0]=phoneControl(next[0]);}catch(Exception failure){throw new AssertionError(failure);}});
+        app.stop(first.getString("id"),original);
+        assertTrue(original.isCancelled());assertNotNull(replacement[0]);assertFalse(replacement[0].isCancelled());assertTrue(replacement[0].isPaused());assertIdentity(next[0]);
+        JSONObject current=app.tasks.get(first.getString("id"),false);assertFalse(current.optBoolean("cancelRequested"));assertEquals("paused",current.getString("status"));assertTrue(childStops.isEmpty());
     }
 
     @Test public void synchronousPhoneCancelCannotRewriteOrEnqueueTheSuccessorControl()throws Exception{

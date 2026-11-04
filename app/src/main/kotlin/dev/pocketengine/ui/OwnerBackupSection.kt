@@ -28,6 +28,10 @@ import org.json.JSONObject
     var confirmed by remember(state.review?.optString("actionId")) { mutableStateOf(false) }
     var details by remember { mutableStateOf(false) }
     var discard by remember { mutableStateOf(false) }
+    var webDavOpen by remember { mutableStateOf(false) }
+    var webDavSettings by remember { mutableStateOf(false) }
+    var webDavOriginalId by remember { mutableStateOf(state.webDavAction.orEmpty()) }
+    var webDavFileName by remember { mutableStateOf("") }
     var originalId by remember { mutableStateOf(state.originalAction.orEmpty()) }
     val labels = linkedMapOf("projects" to "项目、保留版本与私人工作副本", "artifacts" to "固定成果与私人原件", "memory" to "记忆档案（恢复后不自动启用）", "experiences" to "原聊天、任务事件与工具原回执（只读快照）", "remoteConnections" to "电脑连接配置（不含凭据）", "sshConnections" to "SSH 配置（不含密钥或信任）")
     LaunchedEffect(state.open, state.originalAction, state.originalPhase?.optString("status"), state.busy) {
@@ -36,14 +40,14 @@ import org.json.JSONObject
     state.passwordPrompt?.let { kind ->
         var password by remember(kind) { mutableStateOf("") }
         var repeated by remember(kind) { mutableStateOf("") }
-        val exporting = kind == "export"
+        val exporting = kind == "export" || kind == "webdav_upload"
         AlertDialog(onDismissRequest = flow::cancelPassword, title = { Text(if (exporting) "设置备份口令" else "解密所选备份") }, text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("至少12个字符，建议使用独立长口令。口令不会保存；遗失后无法恢复。文件完整认证通过后仍须逐分区审阅。", fontSize = 13.sp)
                 OutlinedTextField(password, { if (it.length <= 1024) password = it }, label = { Text("备份口令") }, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), singleLine = true)
                 if (exporting) OutlinedTextField(repeated, { if (it.length <= 1024) repeated = it }, label = { Text("再次输入口令") }, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), singleLine = true)
             }
-        }, confirmButton = { TextButton(onClick = { val exact = password.toCharArray(); password = ""; repeated = ""; flow.usePassword(exact) }, enabled = password.length >= 12 && (!exporting || password == repeated)) { Text(if (exporting) "加密并导出" else "解密并只读核对") } }, dismissButton = { TextButton(onClick = flow::cancelPassword) { Text("取消") } })
+        }, confirmButton = { TextButton(onClick = { val exact = password.toCharArray(); password = ""; repeated = ""; flow.usePassword(exact) }, enabled = password.length >= 12 && (!exporting || password == repeated)) { Text(if (kind == "webdav_upload") "准备密文，继续审阅" else if (exporting) "加密并导出" else "解密并只读核对") } }, dismissButton = { TextButton(onClick = flow::cancelPassword) { Text("取消") } })
     }
     if (discard) AlertDialog(onDismissRequest = { discard = false }, title = { Text("移除本机备份缓存？") }, text = { Text("只删除这份临时备份副本，不删除项目、原件、成果或已导出的文件。有原恢复未决时会拒绝移除。") }, confirmButton = { TextButton(onClick = { discard = false; flow.discardLocalCache() }) { Text("仅移除本机缓存") } }, dismissButton = { TextButton(onClick = { discard = false }) { Text("保留") } })
     ModalBottomSheet(onDismissRequest = flow::closePage, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
@@ -57,7 +61,7 @@ import org.json.JSONObject
             TextButton(onClick = { details = !details }) { Text(if (details) "收起范围说明" else "包含什么，不包含什么") }
             if (details) {
                 Caption("项目保留当前版本库中的最近八版与删除标记，并复制可读、已停止的私人活动副本。活动副本按项目包规则排除工具环境、依赖缓存、Git 历史及已知账号配置，保留实际排除清单；版本库中的原文件按所选内容保存，仍可能包含敏感文本。未完成的团队活动副本不纳入。模块之间不是一次跨库事务，任何读取失败都不会发布半份备份。")
-                Caption("备份上限 1.5GiB，原件仍受原单件和总量限制。文件在磁盘中分段复制，不把整包装入内存；空间不足会明确失败。本机审阅缓存未加密；默认导出为口令加密的 .pwbackup 文件。口令不保存，丢失无法恢复。用户文本、图片或项目内容仍可能含敏感信息。登录凭据、密钥、SSH 信任、会话、执行授权、未决委派与未保存草稿不迁移。Skills/Plugins 安装、模型/API设置、设备配对、自动化规则及运行环境不在此六分区档案中；这不是整机或完整应用备份。")
+                Caption("备份上限 1.5GiB，原件仍受原单件和总量限制。文件在磁盘中分段复制，不把整包装入内存；空间不足会明确失败。本机审阅缓存未加密；默认导出为口令加密的 .pwbackup 文件。口令不保存，丢失无法恢复。用户文本、图片或项目内容仍可能含敏感信息。登录凭据、密钥、SSH 信任、会话、执行授权、未决委派与未保存草稿不迁移。设置、技能和排程分区可在备份工作台单独选择，恢复后保持停用并重新核对来源；插件安装、设备配对及运行环境不迁移。这不是整机备份。")
                 TextButton(onClick = flow::choosePlainImport, enabled = !state.busy) { Text("读取旧版未加密 ZIP，只读核对…") }
                 state.inventory?.let { Caption("当前 ${it.optJSONArray("projects")?.length() ?: 0} 个项目，${it.optJSONArray("privateCheckouts")?.length() ?: 0} 个私人副本，${it.optJSONArray("workspaceArtifacts")?.length() ?: 0} 项固定成果，${it.optJSONArray("attachments")?.length() ?: 0} 个原件。实际可读取性会在生成时重核。") }
             }
@@ -77,6 +81,55 @@ import org.json.JSONObject
                     TextButton(onClick = { flow.reviewPhase(key) }, enabled = !state.busy && state.review == null, modifier = Modifier.testTag("owner_data_backup_review_$key")) { Text("审阅恢复这一分区") }
                 } }
                 if (details) Caption("固定 SHA：${archive.optString("archiveSha256")}\n本机临时定位：${archive.optString("selectionId")}")
+            }
+            TextButton(onClick = { webDavOpen = !webDavOpen; if (webDavOpen && state.webDavConfig == null) flow.loadWebDav() }, enabled = !state.busy || webDavOpen, modifier = Modifier.testTag("owner_backup_webdav_open")) { Text(if (webDavOpen) "收起 WebDAV 云备份" else "WebDAV 云备份与远端版本…") }
+            if (webDavOpen) {
+                HorizontalDivider()
+                Text("WebDAV 云备份", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Caption("上传使用独立备份口令加密；每次创建新的版本文件，连接中断后只核对原文件。请先在 WebDAV 服务中建立专用目录。这里不会自动同步、删除或覆盖已有备份。")
+                state.webDavConfig?.let { config ->
+                    Caption(if (config.optBoolean("enabled")) config.optString("collection") else "尚未启用 WebDAV 目录")
+                    TextButton(onClick = { webDavSettings = !webDavSettings }, enabled = !state.busy && state.webDavReview == null) { Text(if (webDavSettings) "收起连接设置" else "连接设置…") }
+                    if (webDavSettings || config.optString("collection").isEmpty()) {
+                        var collection by remember(config.optLong("revision")) { mutableStateOf(config.optString("collection")) }
+                        var username by remember(config.optLong("revision")) { mutableStateOf(config.optString("username")) }
+                        var credential by remember(config.optLong("revision")) { mutableStateOf("") }
+                        var enabled by remember(config.optLong("revision")) { mutableStateOf(config.optBoolean("enabled")) }
+                        OutlinedTextField(collection, { if (it.length <= 2048) collection = it }, label = { Text("HTTPS WebDAV 目录，以 / 结尾") }, modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !state.busy)
+                        OutlinedTextField(username, { if (it.length <= 256) username = it }, label = { Text("专用用户名") }, modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !state.busy)
+                        OutlinedTextField(credential, { if (it.length <= 4096) credential = it }, label = { Text(if (config.optBoolean("credentialConfigured")) "专用口令（留空保留当前）" else "专用口令") }, modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !state.busy, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
+                        Caption("仅支持 HTTPS 与 Basic 认证（UTF-8）。连接口令保存在本机加密凭据库中；它与每份备份的解密口令分开。更换目录或用户名须重新填写连接口令。")
+                        Row(Modifier.fillMaxWidth()) { Checkbox(enabled, { enabled = it }, enabled = !state.busy); Text("启用此目录，仍由我逐次确认上传", Modifier.weight(1f).padding(top = 13.dp), fontSize = 13.sp) }
+                        OutlinedButton(onClick = { val exact = credential.toCharArray(); credential = ""; flow.saveWebDavConfiguration(config.optLong("revision"), collection, username, exact, enabled) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth().testTag("owner_backup_webdav_save")) { Text("保存连接设置") }
+                    }
+                    if (state.selection != null) OutlinedButton(onClick = flow::offerWebDavUpload, enabled = config.optBoolean("enabled") && !state.busy && state.review == null && state.webDavReview == null, modifier = Modifier.fillMaxWidth().testTag("owner_backup_webdav_prepare")) { Text("为这份固定备份设置口令，准备上传…") }
+                    state.webDavReview?.let { review ->
+                        var approve by remember(review.optString("actionId")) { mutableStateOf(false) }
+                        Text("核对这次上传", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Caption("目标：${review.optString("destination")}\n加密后：${review.optLong("encryptedBytes")} 字节\n分区：${review.optJSONObject("sections")?.keys()?.asSequence()?.map { labels[it] ?: it }?.joinToString("、").orEmpty()}")
+                        Row(Modifier.fillMaxWidth()) { Checkbox(approve, { approve = it }, enabled = !state.busy); Text("我确认将这份加密备份发送到上述目录", Modifier.weight(1f).padding(top = 13.dp), fontSize = 13.sp) }
+                        Button(onClick = flow::confirmWebDavUpload, enabled = approve && !state.busy, modifier = Modifier.fillMaxWidth().testTag("owner_backup_webdav_upload")) { Text("仅上传这个新版本") }
+                        TextButton(onClick = flow::cancelWebDavReview, enabled = !state.busy) { Text("取消，保留本机备份") }
+                    }
+                    state.webDavAction?.let { id ->
+                        val upload = state.webDavUpload
+                        Caption("原上传编号：$id")
+                        upload?.optJSONObject("scope")?.let { Caption("原版本：${it.optString("destination").substringAfterLast('/')}") }
+                        TextButton(onClick = flow::queryWebDavUpload, enabled = !state.busy, modifier = Modifier.testTag("owner_backup_webdav_query")) { Text("只读核对原版本字节") }
+                        if (upload == null || upload.optString("operationState") != "receipt") TextButton(onClick = flow::stopWebDavUpload, modifier = Modifier.testTag("owner_backup_webdav_stop")) { Text("请求停止原上传") }
+                    }
+                    TextButton(onClick = flow::listWebDavVersions, enabled = config.optBoolean("enabled") && !state.busy && state.webDavReview == null, modifier = Modifier.testTag("owner_backup_webdav_versions")) { Text("读取远端版本列表") }
+                    state.webDavVersions?.let { versions ->
+                        if (versions.length() == 0) Caption("当前目录未列出可读取的 PocketWorld 备份。")
+                        versions.rows().forEach { version -> TextButton(onClick = { webDavFileName = version.getString("name"); flow.offerWebDavImport(webDavFileName) }, enabled = !state.busy && state.webDavReview == null, modifier = Modifier.fillMaxWidth()) { Text("${version.optString("modified")} · ${version.optLong("encryptedBytes")} 字节\n${version.optString("name")}") } }
+                    }
+                    OutlinedTextField(webDavFileName, { if (it.length <= 100) webDavFileName = it }, label = { Text("或填写当前目录中的 .pwbackup 文件名") }, modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !state.busy)
+                    TextButton(onClick = { flow.offerWebDavImport(webDavFileName) }, enabled = config.optBoolean("enabled") && !state.busy && state.webDavReview == null && webDavFileName.isNotEmpty(), modifier = Modifier.testTag("owner_backup_webdav_read")) { Text("下载并解密，只读核对…") }
+                    if (details) {
+                        OutlinedTextField(webDavOriginalId, { if (it.length <= 36) webDavOriginalId = it }, label = { Text("已有原上传编号") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        TextButton(onClick = { flow.readWebDavUpload(webDavOriginalId) }, enabled = !state.busy && webDavOriginalId.matches(Regex("[a-f0-9-]{36}"))) { Text("读取原上传登记，不发送") }
+                    }
+                } ?: TextButton(onClick = flow::loadWebDav, enabled = !state.busy) { Text("读取本机 WebDAV 设置") }
             }
             state.experiencePage?.let { page ->
                 HorizontalDivider()

@@ -15,7 +15,7 @@ public final class CompanionExternalMemberFactoryTest {
     private JSONObject request()throws Exception{return new JSONObject().put("hostTaskId","parent-task").put("runId","team-run").put("memberId","member-0").put("round",1).put("generation",0).put("operationId","stable-member-operation").put("prompt","Inspect actual project").put("slot",slot());}
     private JSONObject environments()throws Exception{return new JSONObject().put("environments",new JSONArray().put(new JSONObject().put("id","project").put("bindingHash","a".repeat(64)).put("workspace","/fixture/project").put("kind","ssh")));}
     private JSONObject probe()throws Exception{return new JSONObject().put("available",true).put("protocolVerified",true).put("accountConfigured",true).put("configReadVerified",true).put("capabilities",new JSONObject().put("readOnlySandbox",true));}
-    private JSONObject job(String status)throws Exception{return new JSONObject().put("id","actual-job").put("operationId","stable-member-operation").put("status",status).put("protocol","codex_app_server").put("threadId","actual-thread").put("turnId","actual-turn").put("readOnly",true).put("readOnlyConfirmed",true).put("externalToolsDisabled",true).put("output","Actual fixture receipt");}
+    private JSONObject job(String status)throws Exception{return new JSONObject().put("id","actual-job").put("operationId","stable-member-operation").put("serviceBase","http://127.0.0.1:1234").put("status",status).put("protocol","codex_app_server").put("threadId","actual-thread").put("turnId","actual-turn").put("readOnly",true).put("readOnlyConfirmed",true).put("externalToolsDisabled",true).put("output","Actual fixture receipt");}
     private static final class Journal implements ExternalChildJournal {
         boolean prepared,known,failRecord;int writes;JSONObject recorded;
         @Override public JSONObject prepare(JSONObject request,JSONObject binding)throws Exception{
@@ -49,7 +49,7 @@ public final class CompanionExternalMemberFactoryTest {
     }
     @Test public void stoppingAKnownActiveJobCallsRealCancelWithoutResubmitting()throws Exception{
         Journal journal=new Journal();journal.known=true;List<String> calls=new ArrayList<>();RunControl control=new RunControl();
-        CompanionExternalMemberFactory factory=new CompanionExternalMemberFactory((command,input)->{calls.add(command);return job(command.equals("cancelJob")?"cancelled":"running");},journal);
+        CompanionExternalMemberFactory factory=new CompanionExternalMemberFactory((command,input)->{calls.add(command);if(command.equals("cancelJob")){assertEquals("actual-job",input.getString("jobId"));assertEquals("stable-member-operation",input.getString("jobOperationId"));assertEquals("http://127.0.0.1:1234",input.getString("serviceBase"));}return job(command.equals("cancelJob")?"cancelled":"running");},journal);
         JSONObject result=factory.forSlot(slot()).execute(request(),control,event->{if(event.optString("status").equals("running"))control.cancel();});
         assertEquals("cancelled",result.getString("status"));assertEquals(List.of("reconcileOperation","cancelJob"),calls);
     }

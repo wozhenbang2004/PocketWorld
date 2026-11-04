@@ -7,6 +7,7 @@ import android.content.ComponentName;
 import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.PixelFormat;
+import android.graphics.Point;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
 import android.media.Image;
@@ -16,6 +17,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Base64;
+import android.util.DisplayMetrics;
 import android.view.InputEvent;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -34,6 +36,7 @@ import java.util.concurrent.atomic.AtomicLong;
 final class DisplayEngine {
     private final Context context;
     private final Handler main;
+    private final DisplayManager displayManager;
     private VirtualDisplay display;
     private ImageReader reader;
     private volatile LeasePolicy lease;
@@ -41,6 +44,22 @@ final class DisplayEngine {
     private final DisplayTaskTopology taskTopology=new DisplayTaskTopology();
     private final DisplayGesturePaths gesturePaths;
     private int width,height,density;
+    private volatile DisplayGeometry geometry;
+    private volatile boolean geometryReady;
+    private final AtomicLong geometryGeneration=new AtomicLong();
+    private boolean geometryListenerRegistered;
+    private final DisplayManager.DisplayListener geometryListener=new DisplayManager.DisplayListener(){
+        public void onDisplayAdded(int id) { }
+        public void onDisplayRemoved(int id) {
+            LeasePolicy original=lease;if(original!=null&&id==original.display())release();
+        }
+        public void onDisplayChanged(int id) {
+            LeasePolicy original=lease;if(original==null||id!=original.display())return;
+            // Even a round trip with equal final dimensions invalidates old references.
+            // Replacing one non-null surface with another does not change display state.
+            try{synchronizeGeometry(original,true);}catch(Exception unavailable){blockGeometry();}
+        }
+    };
     private int requiredDisplayFlags;
     private String packageName="";
     private String imeState="unknown",imeReason="display_not_created";
@@ -60,13 +79,13 @@ final class DisplayEngine {
     // Owned only on main, including cleanup. A stale worker cannot cancel a replacement sequence.
     private TouchSequence activeTouch;
     private static final class TouchSequence {
-        final LeasePolicy lease;final VirtualDisplay display;final long downTime;
-        volatile boolean downAccepted,upAccepted,cancelAccepted;
+        final LeasePolicy lease;final VirtualDisplay display;final long downTime;final DisplayGeometry geometry;
+        volatile boolean downAttempted,downAccepted,upAccepted,cancelAccepted,cancelAttempted;
         float x,y;
-        TouchSequence(LeasePolicy lease,VirtualDisplay display,long downTime){this.lease=lease;this.display=display;this.downTime=downTime;}
+        TouchSequence(LeasePolicy lease,VirtualDisplay display,long downTime,DisplayGeometry geometry){this.lease=lease;this.display=display;this.downTime=downTime;this.geometry=geometry;}
     }
     private static final ThreadLocal<Long> DISPATCH_DEADLINE=new ThreadLocal<>();
-    DisplayEngine(Context context,Handler main){this.context=context;this.main=main;this.gesturePaths=new DisplayGesturePaths(main);requirePrivilegedEnvironment();}
+    DisplayEngine(Context context,Handler main){this.context=context;this.main=main;this.gesturePaths=new DisplayGesturePaths(main);requirePrivilegedEnvironment();this.displayManager=context.getSystemService(DisplayManager.class);}
 
     private void requirePrivilegedEnvironment(){
         int uid=android.os.Process.myUid();
@@ -111,8 +130,8 @@ final class DisplayEngine {
         });
         else if("gesture".equals(cmd)){
             long generation=request.optLong("frameGeneration",-1);
-            if(framePending||generation<0||generation!=frameGeneration.get())throw new Failure("stale_observation","多指动作需要当前副屏帧。",false);
-            result=gesturePaths.run(current,request,width,height,()->{valid(current);if(activeTouch!=null)throw new Failure("gesture_in_flight","原单指动作未结束。",false);},event->{inject(current,event,event.getActionMasked()==MotionEvent.ACTION_DOWN?generation:-1);return true;});
+            DisplayGeometry original=inputGeometry(current,request);
+            result=gesturePaths.run(current,request,original.width,original.height,()->{valid(current);requireGeometry(current,original);if(activeTouch!=null)throw new Failure("gesture_in_flight","原单指动作未结束。",false);},event->{inject(current,event,event.getActionMasked()==MotionEvent.ACTION_DOWN?generation:-1,null,original);return true;});
         }
         else if("apps".equals(cmd))result=apps();
         else if("audio.get".equals(cmd)||"audio.set".equals(cmd)){
@@ -156,13 +175,14 @@ final class DisplayEngine {
         return onMain(()->{
             LeasePolicy current=lease;
             if(current!=null&&(current.expired(SystemClock.uptimeMillis())||!displayIsValid(current)))release();
-            if(lease!=null)probeIme(lease.display(),false);
-            return ok().put("protocol",1).put("uid",android.os.Process.myUid()).put("sdk",Build.VERSION.SDK_INT)
+            if(lease!=null){probeIme(lease.display(),false);try{synchronizeGeometry(lease,false);}catch(Exception unavailable){blockGeometry();}}
+            JSONObject result=ok().put("protocol",1).put("uid",android.os.Process.myUid()).put("sdk",Build.VERSION.SDK_INT)
                     .put("parallelPhone",dev.pocketengine.phone.display.PhoneParallelCapabilities.current()).put("frameMetadataOnly",true).put("backgroundOnly",true).put("minimumSdk",34).put("sessionActive",lease!=null)
                     .put("displayId",lease==null?JSONObject.NULL:lease.display()).put("sessionId",lease==null?JSONObject.NULL:lease.session())
                     .put("width",width).put("height",height).put("density",density).put("requestedPackageName",packageName)
                     .put("focusIsolationRequested",lease!=null).put("displayFlagsConfirmed",lease!=null&&displayIsValid(lease))
                     .put("imeIsolation",imeState).put("imeReason",imeReason).put("inputInjectionAvailable",inject!=null&&setDisplay!=null).put("captureAvailable",lease==null?JSONObject.NULL:latestPixels!=null).put("deviceVerified",false);
+            return geometry==null?result:geometry.writeTo(result,geometryReady);
         });
     }
     private JSONObject create(JSONObject request)throws Exception {
@@ -177,24 +197,110 @@ final class DisplayEngine {
                 prepareInput();
                 int flags=DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC|DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
                         |flag("VIRTUAL_DISPLAY_FLAG_TRUSTED")|flag("VIRTUAL_DISPLAY_FLAG_SUPPORTS_TOUCH")
+                        |flag("VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT")
                         |flag("VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL")|flag("VIRTUAL_DISPLAY_FLAG_OWN_FOCUS")|flag("VIRTUAL_DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED");
                 reader=ImageReader.newInstance(w,h,PixelFormat.RGBA_8888,3);
                 width=w;height=h;density=d;
                 reader.setOnImageAvailableListener(r->consumeFrame(r),main);
-                DisplayManager manager=context.getSystemService(DisplayManager.class);
                 dispatchDeadline();
-                display=manager.createVirtualDisplay("PocketEngine background",w,h,d,reader.getSurface(),flags);
+                display=displayManager.createVirtualDisplay("PocketEngine background",w,h,d,reader.getSurface(),flags);
                 if(display==null||display.getDisplay()==null||display.getDisplay().getDisplayId()<=0)throw new Failure("display_creation_failed","系统未创建独立后台屏。",false);
                 requiredDisplayFlags=requiredIsolationFlags();
                 if(!display.getDisplay().isValid()||(display.getDisplay().getFlags()&requiredDisplayFlags)!=requiredDisplayFlags||!destroysContentOnRemoval(display.getDisplay()))throw new Failure("focus_isolation_unavailable","系统未提供所需的后台隔离，不启动后台任务。",false);
                 configureIme(display.getDisplay().getDisplayId());
                 lease=new LeasePolicy(UUID.randomUUID().toString(),display.getDisplay().getDisplayId(),SystemClock.uptimeMillis(),600_000);
-                return ok().put("sessionId",lease.session()).put("displayId",lease.display()).put("width",w).put("height",h)
-                        .put("density",d).put("frameMetadataOnly",true).put("backgroundOnly",true).put("focusIsolationRequested",true).put("displayFlagsConfirmed",true).put("imeIsolation",imeState).put("imeReason",imeReason).put("inputInjectionAvailable",inject!=null&&setDisplay!=null).put("captureAvailable",JSONObject.NULL).put("deviceVerified",false);
+                synchronizeGeometry(lease,false);
+                displayManager.registerDisplayListener(geometryListener,main);geometryListenerRegistered=true;
+                return geometry.writeTo(ok().put("sessionId",lease.session()).put("displayId",lease.display())
+                        .put("frameMetadataOnly",true).put("backgroundOnly",true).put("focusIsolationRequested",true).put("displayFlagsConfirmed",true).put("imeIsolation",imeState).put("imeReason",imeReason).put("inputInjectionAvailable",inject!=null&&setDisplay!=null).put("captureAvailable",JSONObject.NULL).put("deviceVerified",false),geometryReady);
             }catch(Exception failure){release();throw failure;}
         });
     }
+    /** Main owns both geometry and the capture surface. No replacement display/lease is created. */
+    private DisplayGeometry synchronizeGeometry(LeasePolicy expected,boolean changedEvent)throws Exception {
+        valid(expected);
+        final DisplayGeometry actual;
+        try{actual=readOwnedGeometry(Math.max(1,geometryGeneration.get()));}
+        catch(Exception unavailable){blockGeometry();throw unavailable;}
+        DisplayGeometry previous=geometry;
+        if(!changedEvent&&geometryReady&&actual.sameConfiguration(previous))return previous;
+        long generation=previous==null||changedEvent||geometryReady||!actual.sameConfiguration(previous)
+                ?geometryGeneration.incrementAndGet():previous.generation;
+        DisplayGeometry next=actual.withGeneration(generation);
+        synchronized(frameLock){geometry=next;geometryReady=false;latestPixels=null;frameAt=0;framePending=true;frameGeneration.incrementAndGet();}
+        main.removeCallbacks(trailingFrame);scheduledFrameReader=null;lastFrameConsumed=0;
+        cancelForGeometry(expected);
+        if(activeTouch!=null||gesturePaths.active())throw new Failure("geometry_unavailable","旋转后原触摸取消尚未确认，请核对或释放原副屏；不会继续输入。",false);
+        ImageReader replacement=null;
+        try{
+            replacement=ImageReader.newInstance(next.captureWidth,next.captureHeight,PixelFormat.RGBA_8888,3);
+            replacement.setOnImageAvailableListener(this::consumeFrame,main);
+            // Rotation changes logical coordinates, not the display's natural surface size.
+            // Resize only when that physical extent/density really changed; never swap twice.
+            if(reader==null||reader.getWidth()!=next.captureWidth||reader.getHeight()!=next.captureHeight||density!=next.density)
+                display.resize(next.captureWidth,next.captureHeight,next.density);
+            display.setSurface(replacement.getSurface());
+            ImageReader old=reader;reader=replacement;replacement=null;
+            if(old!=null){old.setOnImageAvailableListener(null,null);old.close();}
+            width=next.width;height=next.height;density=next.density;
+            if(!next.sameConfiguration(readOwnedGeometry(next.generation)))throw new Failure("geometry_pending","副屏尺寸仍在变化，请重新观察。",false);
+            geometryReady=true;
+            return next;
+        }catch(Exception unavailable){blockGeometry();throw unavailable;}
+        finally{if(replacement!=null)replacement.close();}
+    }
+    private DisplayGeometry readOwnedGeometry(long generation)throws Exception {
+        android.view.Display owned=display==null?null:display.getDisplay();
+        if(owned==null||lease==null||owned.getDisplayId()!=lease.display()||!owned.isValid())
+            throw new Failure("display_lost","原副屏已失效。",false);
+        Point first=new Point(),second=new Point();DisplayMetrics a=new DisplayMetrics(),b=new DisplayMetrics();
+        int firstRotation=owned.getRotation();owned.getRealSize(first);owned.getRealMetrics(a);
+        int secondRotation=owned.getRotation();owned.getRealSize(second);owned.getRealMetrics(b);
+        if(firstRotation!=secondRotation||!first.equals(second)||a.densityDpi!=b.densityDpi)
+            throw new Failure("geometry_pending","副屏尺寸仍在变化，请重新观察。",false);
+        try{return new DisplayGeometry(generation,first.x,first.y,a.densityDpi,firstRotation);}
+        catch(IllegalArgumentException unsupported){throw new Failure("geometry_unavailable","系统返回的副屏尺寸不可安全捕获，未继续输入。",false);}
+    }
+    private void cancelForGeometry(LeasePolicy original) {
+        TouchSequence touch=activeTouch;
+        if(touch!=null&&touch.lease==original)cancelTouch(touch,false);
+        gesturePaths.cancelLease(original,event->{inject(original,event,-1);return true;});
+    }
+    private void blockGeometry() {
+        synchronized(frameLock){
+            if(geometryReady&&geometry!=null)geometry=geometry.withGeneration(geometryGeneration.incrementAndGet());
+            if(geometryReady||latestPixels!=null)frameGeneration.incrementAndGet();
+            geometryReady=false;latestPixels=null;frameAt=0;framePending=true;
+        }
+        LeasePolicy original=lease;if(original!=null)cancelForGeometry(original);
+    }
+    private DisplayGeometry inputGeometry(LeasePolicy original,JSONObject request)throws Exception {
+        return onMain(()->{
+            DisplayGeometry current=synchronizeGeometry(original,false);
+            long expectedFrame=request.optLong("frameGeneration",-1);
+            if(framePending||expectedFrame<0||expectedFrame!=frameGeneration.get())throw new Failure("stale_observation","后台画面已变化，请重新观察。",false);
+            if(request.has("geometryGeneration")&&request.optLong("geometryGeneration",-1)!=current.generation)
+                throw new Failure("stale_observation","后台屏已旋转或改变尺寸，请重新观察。",false);
+            return current;
+        });
+    }
+    private void requireGeometry(LeasePolicy original,DisplayGeometry expected)throws Exception {
+        onMain(()->{
+            DisplayGeometry actual=synchronizeGeometry(original,false);
+            if(expected==null||!expected.sameObservation(actual))throw new Failure("stale_observation","原后台几何已失效，未继续旧坐标。",false);
+            return null;
+        });
+    }
+    /** AOSP virtual-display sinks queue an untransformed full buffer. Never rotate unknown producer metadata twice. */
+    @SuppressLint("BlockedPrivateApi")
+    private int captureTransform(Image image)throws Exception {
+        requirePrivilegedEnvironment();
+        return ((Number)Image.class.getDeclaredMethod("getTransform").invoke(image)).intValue();
+    }
     private void consumeFrame(ImageReader source){
+        if(source!=reader||lease==null)return;
+        final DisplayGeometry capturedGeometry;
+        try{capturedGeometry=synchronizeGeometry(lease,false);}catch(Exception unavailable){blockGeometry();return;}
         if(source!=reader)return;
         framePending=true;
         long now=SystemClock.uptimeMillis(),delay=150-(now-lastFrameConsumed);
@@ -208,49 +314,57 @@ final class DisplayEngine {
         boolean acquired=false,published=false;
         try(Image image=source.acquireLatestImage()){
             if(image==null)return;acquired=true;lastFrameConsumed=now;
+            var crop=image.getCropRect();
+            if(crop==null||crop.left!=0||crop.top!=0||crop.right!=capturedGeometry.captureWidth
+                    ||crop.bottom!=capturedGeometry.captureHeight||captureTransform(image)!=0)return;
             Image.Plane[] planes=image.getPlanes();if(planes.length!=1)return;
-            Image.Plane plane=planes[0];int pixelStride=plane.getPixelStride(),rowStride=plane.getRowStride();
-            if(pixelStride<4||image.getWidth()!=width||image.getHeight()!=height)return;
-            ByteBuffer data=plane.getBuffer();byte[] pixels=new byte[width*height*4];
-            for(int y=0;y<height;y++)for(int x=0;x<width;x++){
-                int offset=y*rowStride+x*pixelStride,dest=(y*width+x)*4;
-                if(offset+3>=data.limit())return;
-                pixels[dest]=data.get(offset);pixels[dest+1]=data.get(offset+1);pixels[dest+2]=data.get(offset+2);pixels[dest+3]=data.get(offset+3);
+            Image.Plane plane=planes[0];
+            byte[] pixels=capturedGeometry.logicalPixels(plane.getBuffer(),plane.getPixelStride(),plane.getRowStride(),image.getWidth(),image.getHeight());
+            if(!capturedGeometry.sameConfiguration(readOwnedGeometry(capturedGeometry.generation))){synchronizeGeometry(lease,false);return;}
+            synchronized(frameLock){
+                if(source!=reader||!geometryReady||!capturedGeometry.sameObservation(geometry))return;
+                if(!java.util.Arrays.equals(latestPixels,pixels)){latestPixels=pixels;frameGeneration.incrementAndGet();}frameAt=SystemClock.uptimeMillis();published=true;
             }
-            synchronized(frameLock){if(!java.util.Arrays.equals(latestPixels,pixels)){latestPixels=pixels;frameGeneration.incrementAndGet();}frameAt=SystemClock.uptimeMillis();published=true;}
-        }catch(RuntimeException ignored){acquired=true;}
+        }catch(Exception ignored){acquired=true;}
         finally{
-            if(acquired&&!published)synchronized(frameLock){latestPixels=null;frameAt=0;frameGeneration.incrementAndGet();}
-            framePending=false;
+            if(source==reader)synchronized(frameLock){
+                if(acquired&&!published){latestPixels=null;frameAt=0;frameGeneration.incrementAndGet();}
+                framePending=!geometryReady;
+            }
         }
     }
     private JSONObject frame(LeasePolicy expected,JSONObject request)throws Exception {
         if(request.has("includeImage")&&!(request.opt("includeImage") instanceof Boolean))
             throw new Failure("invalid_arguments","includeImage 必须是布尔值。",false);
+        DisplayGeometry original=onMain(()->synchronizeGeometry(expected,false));
         if(!request.optBoolean("includeImage",true)){
             valid(expected);
             JSONObject result;
             synchronized(frameLock){
-                result=ok().put("displayId",expected.display()).put("sessionId",expected.session()).put("width",width).put("height",height)
+                if(!geometryReady||!original.sameObservation(geometry))throw new Failure("stale_observation","后台几何在读取期间变化，请重新观察。",false);
+                result=original.writeTo(ok().put("displayId",expected.display()).put("sessionId",expected.session())
                         .put("frameGeneration",frameGeneration.get()).put("capturedAt",frameAt).put("framePending",framePending)
-                        .put("empty",latestPixels==null).put("imageIncluded",false).put("frameMetadataOnly",true).put("requestedPackageName",packageName);
+                        .put("empty",latestPixels==null).put("imageIncluded",false).put("frameMetadataOnly",true).put("requestedPackageName",packageName),true);
             }
-            valid(expected);return result;
+            requireGeometry(expected,original);return result;
         }
         long until=SystemClock.uptimeMillis()+3000;
         while((latestPixels==null||framePending)&&SystemClock.uptimeMillis()<until){valid(expected);Thread.sleep(40);}
-        valid(expected);byte[] pixels;long frame,captured;int frameWidth=width,frameHeight=height;
-        synchronized(frameLock){if(framePending)throw new Failure("frame_pending","后台画面正在更新，请重新观察。",false);pixels=latestPixels;frame=frameGeneration.get();captured=frameAt;}
+        requireGeometry(expected,original);byte[] pixels;long frame,captured;
+        synchronized(frameLock){
+            if(latestPixels==null&&geometryReady&&original.sameObservation(geometry))throw new Failure("frame_unavailable","后台屏暂未产生画面，请先打开应用再观察。",false);
+            if(framePending||!geometryReady||!original.sameObservation(geometry))throw new Failure("frame_pending","后台画面正在更新，请重新观察。",false);pixels=latestPixels;frame=frameGeneration.get();captured=frameAt;
+        }
         if(pixels==null)throw new Failure("frame_unavailable","后台屏暂未产生画面，请先打开应用再观察。",false);
         
-        Bitmap bitmap=Bitmap.createBitmap(frameWidth,frameHeight,Bitmap.Config.ARGB_8888);
+        Bitmap bitmap=Bitmap.createBitmap(original.width,original.height,Bitmap.Config.ARGB_8888);
         try{
             bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(pixels));ByteArrayOutputStream jpeg=new ByteArrayOutputStream();
             if(!bitmap.compress(Bitmap.CompressFormat.JPEG,75,jpeg))throw new Failure("frame_encoding","后台屏图片编码失败。",false);
-            valid(expected);return ok().put("displayId",expected.display()).put("sessionId",expected.session()).put("width",frameWidth).put("height",frameHeight)
+            requireGeometry(expected,original);return original.writeTo(ok().put("displayId",expected.display()).put("sessionId",expected.session())
                     .put("imageBase64",Base64.encodeToString(jpeg.toByteArray(),Base64.NO_WRAP)).put("imageMimeType","image/jpeg")
                     .put("frameGeneration",frame).put("capturedAt",captured).put("framePending",false).put("empty",false)
-                    .put("imageIncluded",true).put("requestedPackageName",packageName);
+                    .put("imageIncluded",true).put("requestedPackageName",packageName),true);
         }finally{bitmap.recycle();}
     }
     private JSONObject launch(LeasePolicy expected,JSONObject request)throws Exception {
@@ -315,15 +429,15 @@ final class DisplayEngine {
     }
     private JSONObject gesture(LeasePolicy expected,JSONObject request,boolean swipe)throws Exception {
         long expectedFrame=request.optLong("frameGeneration",-1);
-        if(framePending||expectedFrame<0||expectedFrame!=frameGeneration.get())throw new Failure("stale_observation","后台画面已变化，请重新观察。",false);
+        DisplayGeometry original=inputGeometry(expected,request);
         int x=integer(request,swipe?"x1":"x",0,1000,-1),y=integer(request,swipe?"y1":"y",0,1000,-1);
         int x2=swipe?integer(request,"x2",0,1000,-1):x,y2=swipe?integer(request,"y2",0,1000,-1):y;
         int duration=swipe?integer(request,"durationMs",100,2000,400):60;
         long start=SystemClock.uptimeMillis();
         TouchSequence touch=onMain(()->{
-            valid(expected);
+            valid(expected);requireGeometry(expected,original);
             if(activeTouch!=null||gesturePaths.active())throw new Failure("gesture_in_flight","原触摸尚未结束，请核对或释放原副屏后再操作。",false);
-            activeTouch=new TouchSequence(expected,display,start);return activeTouch;
+            activeTouch=new TouchSequence(expected,display,start,original);return activeTouch;
         });
         try{
             int steps=swipe?Math.max(2,duration/25):1;
@@ -331,7 +445,7 @@ final class DisplayEngine {
                 valid(expected);long eventTime=SystemClock.uptimeMillis();
                 float f=step/(float)steps;
                 MotionEvent e=MotionEvent.obtain(start,eventTime,step==0?MotionEvent.ACTION_DOWN:step==steps?MotionEvent.ACTION_UP:MotionEvent.ACTION_MOVE,
-                        (x+(x2-x)*f)*(width-1)/1000f,(y+(y2-y)*f)*(height-1)/1000f,0);
+                        (x+(x2-x)*f)*(original.width-1)/1000f,(y+(y2-y)*f)*(original.height-1)/1000f,0);
                 e.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
                 try{inject(expected,e,step==0?expectedFrame:-1,touch);}finally{e.recycle();}
                 if(step<steps)Thread.sleep(Math.max(1,duration/steps));
@@ -354,20 +468,22 @@ final class DisplayEngine {
         try{return onMain(()->{
             if(activeTouch!=touch||lease!=touch.lease||display!=touch.display)return "not_attempted_original_sequence_or_display_gone";
             if(touch.upAccepted||touch.cancelAccepted){activeTouch=null;return "not_needed_already_ended";}
-            if(!touch.downAccepted){if(!uncertain)activeTouch=null;return uncertain?"not_attempted_down_unconfirmed":"not_needed_down_not_accepted";}
+            if(!touch.downAccepted){boolean unknown=uncertain||touch.downAttempted;if(!unknown)activeTouch=null;return unknown?"not_attempted_down_unconfirmed":"not_needed_down_not_accepted";}
+            if(touch.cancelAttempted)return "cancel_unconfirmed";
             valid(touch.lease);
             MotionEvent cancel=MotionEvent.obtain(touch.downTime,SystemClock.uptimeMillis(),MotionEvent.ACTION_CANCEL,touch.x,touch.y,0);
             cancel.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
-            try{inject(touch.lease,cancel,-1,touch);return "cancel_accepted_not_business_proof";}finally{cancel.recycle();}
+            try{touch.cancelAttempted=true;inject(touch.lease,cancel,-1,touch);return "cancel_accepted_not_business_proof";}finally{cancel.recycle();}
         });}catch(InterruptedException unconfirmed){Thread.currentThread().interrupt();return "cancel_unconfirmed";}
         catch(Exception unconfirmed){return "cancel_unconfirmed";}
     }
     private JSONObject key(LeasePolicy expected,JSONObject request)throws Exception {
-        if(framePending||request.optLong("frameGeneration",-1)<0||request.optLong("frameGeneration",-1)!=frameGeneration.get())throw new Failure("stale_observation","后台画面已变化，请重新观察。",false);
+        DisplayGeometry original=inputGeometry(expected,request);
         int code=request.optInt("keyCode",-1);
         if(code!=KeyEvent.KEYCODE_BACK)throw new Failure("unsupported_key","后台模式仅支持定向返回键，桌面操作不受支持。",false);
         valid(expected);long time=SystemClock.uptimeMillis();
-        inject(expected,new KeyEvent(time,time,KeyEvent.ACTION_DOWN,code,0),request.getLong("frameGeneration"));
+        inject(expected,new KeyEvent(time,time,KeyEvent.ACTION_DOWN,code,0),request.getLong("frameGeneration"),null,original);
+        // A key UP has no coordinates and only ends this already admitted original key.
         try{inject(expected,new KeyEvent(time,SystemClock.uptimeMillis(),KeyEvent.ACTION_UP,code,0),-1);return receipt();}
         catch(Exception failure){throw new Failure("action_unknown","返回键已部分派发，请重新观察。",true);}
     }
@@ -403,6 +519,9 @@ final class DisplayEngine {
         inject(expected,event,expectedFrame,null);
     }
     private void inject(LeasePolicy expected,InputEvent event,long expectedFrame,TouchSequence touch)throws Exception {
+        inject(expected,event,expectedFrame,touch,touch==null?null:touch.geometry);
+    }
+    private void inject(LeasePolicy expected,InputEvent event,long expectedFrame,TouchSequence touch,DisplayGeometry originalGeometry)throws Exception {
         final MotionEvent motion=touch==null?null:(MotionEvent)event;
         if(motion!=null&&motion.getPointerCount()!=1)throw new Failure("unsupported_motion","此后台入口只接受原单指触摸，尚未派发。",false);
         final int touchAction=motion==null?-1:motion.getActionMasked(),nativeAction=motion==null?0:motion.getAction();
@@ -410,7 +529,9 @@ final class DisplayEngine {
         final long downTime=motion==null?0:motion.getDownTime(),eventTime=motion==null?0:motion.getEventTime();
         final int metaState=motion==null?0:motion.getMetaState(),source=motion==null?0:motion.getSource();
         final boolean queuedTouch=motion!=null&&Looper.myLooper()!=main.getLooper();
+        final boolean cleanup=event instanceof MotionEvent&&((MotionEvent)event).getActionMasked()==MotionEvent.ACTION_CANCEL;
         onMain(()->{valid(expected);
+            if(!cleanup&&originalGeometry!=null)requireGeometry(expected,originalGeometry);
             if(touch!=null&&(activeTouch!=touch||lease!=touch.lease||display!=touch.display))throw new Failure("invalid_lease","原触摸或独立显示已变化，未继续输入。",false);
             if(expectedFrame>=0&&(framePending||expectedFrame!=frameGeneration.get()))throw new Failure("stale_observation","后台画面在派发前已变化，请重新观察。",false);
             // Only these private single-pointer constructors cross queues. The worker may
@@ -421,6 +542,7 @@ final class DisplayEngine {
                 setDisplay.invoke(actual,expected.display());
                 final Object result;
                 dispatchDeadline();
+                if(touch!=null&&touchAction==MotionEvent.ACTION_DOWN)touch.downAttempted=true;
                 try{result=inject.invoke(inputManager,actual,2);}
                 catch(java.lang.reflect.InvocationTargetException unknown){throw new Failure("action_unknown","系统输入回执异常，结果尚未确认，请核对后继续。",true);}
                 // WAIT_FOR_FINISHED false also represents Android TIMED_OUT, not proof of no input.
@@ -448,13 +570,14 @@ final class DisplayEngine {
                 &&(display.getDisplay().getFlags()&requiredDisplayFlags)==requiredDisplayFlags
                 &&destroysContentOnRemoval(display.getDisplay());
     }
-    void tick(){LeasePolicy current=lease;if(current!=null)try{onMain(()->{if(lease==current&&(current.expired(SystemClock.uptimeMillis())||!displayIsValid(current)))release();return null;});}catch(Exception ignored){}}
+    void tick(){LeasePolicy current=lease;if(current!=null)try{onMain(()->{if(lease==current){if(current.expired(SystemClock.uptimeMillis())||!displayIsValid(current))release();else try{synchronizeGeometry(current,false);}catch(Exception unavailable){blockGeometry();}}return null;});}catch(Exception ignored){}}
     void close(){try{onMain(()->{release();return null;});}catch(Exception ignored){ /* Process teardown also revokes its display token. */ }}
     private void release(){
+        if(geometryListenerRegistered){displayManager.unregisterDisplayListener(geometryListener);geometryListenerRegistered=false;}
         LeasePolicy cancelling=lease;if(cancelling!=null)gesturePaths.cancelLease(cancelling,event->{inject(cancelling,event,-1);return true;});
         ownerTransfer=null;taskTopology.clear();
         main.removeCallbacks(trailingFrame);scheduledFrameReader=null;framePending=false;lastFrameConsumed=0;
-        LeasePolicy old=lease;activeTouch=null;if(old!=null)old.release();latestPixels=null;frameAt=0;packageName="";requiredDisplayFlags=0;
+        LeasePolicy old=lease;activeTouch=null;if(old!=null)old.release();latestPixels=null;frameAt=0;packageName="";requiredDisplayFlags=0;geometry=null;geometryReady=false;
         if(display!=null){display.release();display=null;}if(reader!=null){reader.close();reader=null;}
         // An unconfirmed CANCEL stays occupied until physical display teardown succeeds.
         // Keep the stopped original lease on a teardown failure so cleanup can be reconciled.

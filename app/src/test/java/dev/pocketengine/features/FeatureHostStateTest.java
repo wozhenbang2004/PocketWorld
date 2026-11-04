@@ -79,4 +79,20 @@ public final class FeatureHostStateTest {
             assertEquals("awaiting_user",tasks.get(id,false).getString("status"));assertTrue(resources.acquirePhone("next-phone"));resources.releasePhone("next-phone");
         }
     }
+    @Test public void originalPauseScrubsOnlyItsBoundWorkingMemoryAndRejectsLateRetention()throws Exception {
+        TaskStore tasks=new TaskStore(RuntimeEnvironment.getApplication());JSONObject scope=new JSONObject().put("ownerId","owner").put("spaceId","private");
+        dev.pocketengine.core.RunControl old=new dev.pocketengine.core.RunControl(),next=new dev.pocketengine.core.RunControl();old.bindHostRun("task","old",1);next.bindHostRun("task","next",2);
+        var fence=new dev.pocketengine.features.memory.MemoryHostFence(){public void check(){}public JSONObject admit(Admission action)throws Exception{return action.run();}};
+        var first=new dev.pocketengine.features.memory.WorkingMemorySession(scope,"task","old",1,fence);
+        var later=new dev.pocketengine.features.memory.WorkingMemorySession(scope,"task","next",2,fence);
+        try(FeatureHost host=new FeatureHost(event->{},tasks,()->false)){
+            host.retainWorkingMemory(first,new JSONObject(scope.toString()).put("taskId","task").put("runId","old").put("epoch",1),old,0);
+            host.retainWorkingMemory(later,new JSONObject(scope.toString()).put("taskId","task").put("runId","next").put("epoch",2),next,0);
+            old.pause();assertTrue(host.clearOriginalRunWorkingMemory("task","old",1,old,old.pauseRevision()));
+            assertFalse(host.hasWorkingMemory(first));assertTrue(host.hasWorkingMemory(later));assertNotNull(later.snapshot());assertThrows(IllegalStateException.class,first::snapshot);
+            var late=new dev.pocketengine.features.memory.WorkingMemorySession(scope,"task","old",1,fence);
+            assertThrows(SecurityException.class,()->host.retainWorkingMemory(late,new JSONObject(scope.toString()).put("taskId","task").put("runId","old").put("epoch",1),old,0));assertFalse(host.hasWorkingMemory(late));assertThrows(IllegalStateException.class,late::snapshot);
+        }
+    }
+
 }

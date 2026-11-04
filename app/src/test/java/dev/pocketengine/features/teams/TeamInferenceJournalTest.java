@@ -114,6 +114,8 @@ public final class TeamInferenceJournalTest {
             JSONObject usage=rig.tasks.inferenceUsage(rig.operation);assertEquals(3,usage.getInt("attempts"));assertEquals(3,usage.getInt("completed"));
             JSONArray receipts=usage.getJSONArray("receipts");for(int i=0;i<receipts.length();i++){JSONObject original=receipts.getJSONObject(i).getJSONObject("context");assertEquals("EXTERNAL_TASK_RUN",original.getString("bindingKind"));assertEquals(rig.operation,original.getString("taskId"));assertEquals(rig.operation,original.getString("runId"));assertEquals(0,original.getInt("epoch"));}
             JSONArray reservations=task.getJSONObject("teamReservationPool").getJSONArray("reservations");assertEquals(3,reservations.length());for(int i=0;i<reservations.length();i++)assertEquals("settled",reservations.getJSONObject(i).getString("state"));
+            JSONObject tokens=task.getJSONObject("tokenBudget");assertEquals(42,tokens.getLong("knownTokens"));assertEquals(0,tokens.getLong("heldTokens"));assertEquals(3,tokens.getLong("calls"));assertFalse(tokens.getBoolean("enabled"));
+            for(int i=0;i<receipts.length();i++)assertEquals(rig.operation,receipts.getJSONObject(i).getJSONObject("tokenBudget").getString("taskOwner"));
         }
     }
     @Test public void persistentFixtureRootRequiresExplicitBaseMarkerAndNoSymlinks()throws Exception {

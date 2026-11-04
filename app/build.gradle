@@ -69,6 +69,24 @@ def helperTask = tasks.register('buildDisplayHelper', Exec) {
 }
 android.sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/display-helper-assets'))
 tasks.named('preBuild').configure { dependsOn helperTask }
+def libraryWebTask = tasks.register('verifyLibraryWebBundle') {
+    doLast {
+        def root = file('src/main/assets/pocket-ui').toPath().toAbsolutePath().normalize()
+        def identity = root.resolve('build-identity.json').toFile()
+        if (!identity.isFile()) throw new GradleException('Build the selected Web UI first: npm ci --prefix web-ui && npm run build --prefix web-ui')
+        def receipt = new groovy.json.JsonSlurper().parse(identity)
+        if (receipt.kind != 'pocketworld-library-web') throw new GradleException('Unexpected Web UI bundle identity')
+        if (!root.resolve('index.html').toFile().getText('UTF-8').contains('data-pocket-ui="library-web"')) throw new GradleException('Selected Web UI entry is missing')
+        receipt.files.each { item ->
+            def path = root.resolve(item.path.toString()).normalize()
+            if (!path.startsWith(root) || !path.toFile().isFile()) throw new GradleException('Missing bundled Web UI resource: ' + item.path)
+            def data = path.toFile().bytes
+            def actual = java.security.MessageDigest.getInstance('SHA-256').digest(data).encodeHex().toString()
+            if (data.length != item.bytes || actual != item.sha256) throw new GradleException('Web UI bundle changed after verification: ' + item.path)
+        }
+    }
+}
+tasks.named('preBuild').configure { dependsOn libraryWebTask }
 dependencies {
     implementation platform('androidx.compose:compose-bom:2025.02.00')
     implementation 'androidx.activity:activity-compose:1.10.1'

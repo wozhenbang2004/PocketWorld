@@ -32,4 +32,23 @@ public class TeamsDefinitionTest {
             JSONArray capabilities=module.snapshot().getJSONArray("runnerCapabilities");for(int i=0;i<capabilities.length();i++)if(capabilities.getJSONObject(i).getString("id").equals("claude"))assertFalse(capabilities.getJSONObject(i).getBoolean("available"));
         }
     }
+    @Test public void reviewedEditRemoveAndStartCannotUseAReplacedDefinition()throws Exception {
+        try(TeamsModule module=module()){
+            JSONObject first=module.handle("save",definition());String id=first.getString("id"),reviewed=first.toString();
+            JSONObject updated=module.handle("save",definition().put("id",id).put("name","新的职责配置").put("expectedDefinition",reviewed));
+            assertThrows(SecurityException.class,()->module.handle("save",definition().put("id",id).put("expectedDefinition",reviewed)));
+            assertThrows(SecurityException.class,()->module.handle("remove",new JSONObject().put("id",id).put("expectedDefinition",reviewed)));
+            assertThrows(SecurityException.class,()->module.handle("start",new JSONObject().put("teamId",id).put("goal","旧页面的目标").put("rounds",1).put("expectedDefinition",reviewed)));
+            assertEquals(updated.toString(),module.snapshot().getJSONArray("teams").getJSONObject(0).toString());assertEquals(0,module.snapshot().getJSONArray("runs").length());
+            assertTrue(module.handle("remove",new JSONObject().put("id",id).put("expectedDefinition",updated.toString())).getBoolean("removed"));
+            assertThrows(SecurityException.class,()->module.handle("remove",new JSONObject().put("id",id).put("expectedDefinition",updated.toString())));
+        }
+    }
+    @Test public void reviewedCreationCannotOverwriteAnAlreadySavedTeam()throws Exception {
+        try(TeamsModule module=module()){
+            String id=java.util.UUID.randomUUID().toString();JSONObject draft=definition().put("id",id).put("expectedDefinition","");
+            JSONObject saved=module.handle("save",draft);assertThrows(SecurityException.class,()->module.handle("save",draft));
+            assertEquals(saved.toString(),module.snapshot().getJSONArray("teams").getJSONObject(0).toString());
+        }
+    }
 }

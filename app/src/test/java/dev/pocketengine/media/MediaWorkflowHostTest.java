@@ -69,6 +69,16 @@ public final class MediaWorkflowHostTest {
     private JSONObject args()throws Exception{return new JSONObject().put("configurationRevision",media.snapshot().getString("configurationRevision")).put("workflow",new JSONObject().put("6",new JSONObject().put("class_type","CLIPTextEncode").put("inputs",new JSONObject().put("text","labelled loopback fixture"))));}
     private JSONObject prepared(JSONObject args)throws Exception{JSONObject prepared=host.prepareFromOwner(media,"submitWorkflow",args);taskId.set(prepared.getString("taskId"));return new JSONObject(args.toString()).put("taskId",taskId.get());}
     private int rows(String table)throws Exception{try(SQLiteDatabase db=SQLiteDatabase.openDatabase(app.getDatabasePath("pocket-world.db").getAbsolutePath(),null,SQLiteDatabase.OPEN_READONLY);Cursor cursor=db.rawQuery("SELECT count(*) FROM "+table,null)){cursor.moveToFirst();return cursor.getInt(0);}}
+    @Test public void reviewedServiceConfigurationCannotReplaceANewerSavedVersion()throws Exception{
+        String reviewed=media.snapshot().getString("configurationRevision");configure();
+        String current=media.snapshot().getString("configurationRevision");
+        JSONObject input=new JSONObject().put("provider","comfyui").put("baseUrl","http://127.0.0.1:"+server.getAddress().getPort()+"/proxy")
+                .put("expectedConfigurationRevision",reviewed).put("comfyJobsApi",true);
+        assertThrows(SecurityException.class,()->media.handle("configure",input));
+        assertEquals(current,media.snapshot().getString("configurationRevision"));
+        JSONObject saved=media.handle("configure",new JSONObject(input.toString()).put("expectedConfigurationRevision",current));
+        assertTrue(saved.getJSONObject("configuration").getBoolean("comfyJobsApi"));assertEquals(0,posts.get());
+    }
     @Test public void cleanFirstSuccessHasRealIntentGrantAndOriginalArtifactWithoutTaskSuccess()throws Exception{
         JSONObject input=prepared(args());assertEquals(0,posts.get());assertEquals(0,rows("runs"));assertEquals(0,rows("operations"));
         JSONObject receipt=host.submitFromOwner(media,"submitWorkflow",input);String operation=receipt.getString("operationId");
@@ -171,5 +181,30 @@ public final class MediaWorkflowHostTest {
             JSONObject receipt=result.get(5,TimeUnit.SECONDS);assertEquals("unknown",receipt.getString("status"));assertEquals("reconciling",tasks.get(taskId.get(),false).getString("status"));assertEquals(1,posts.get());assertEquals(0,interrupts.get());assertNull(eventFailure.get());
             assertTrue(host.submitFromOwner(media,"submitWorkflow",input).getBoolean("knownOperation"));assertEquals(1,posts.get());
         }finally{release.countDown();worker.shutdownNow();}
+    }
+    @Test public void lateOriginalReceiptSurvivesANewerRunWithoutSettlingOrChargingIt()throws Exception{
+        JSONObject first=host.submitFromOwner(media,"submitWorkflow",prepared(args()));
+        String id=first.getString("taskId"),operation=first.getString("operationId"),oldRun=first.getString("runId");
+        JSONObject oldSource=tasks.ownerMediaOperationSource(id,operation);
+        JSONObject newer=tasks.startAttempt(id,"capabilities",1);String newRun=newer.getString("runId");int newEpoch=newer.getInt("coordinatorEpoch");
+        assertNotEquals(oldRun,newRun);assertTrue(newEpoch>oldSource.getInt("epoch"));
+        tasks.status(id,"reconciling","The newer run is awaiting its own owner decision");
+        JSONObject before=tasks.get(id,false);String grantAndCheckpoint=runGrantAndCheckpoint(newRun);
+        JSONObject late=new JSONObject(first.toString()).put("status","running").put("delayedNativeFixture",true);
+        host.recordEvent(new JSONObject().put("type","feature_event").put("feature","media").put("payload",late));
+        JSONObject after=tasks.get(id,false),original=after.getJSONArray("operations").getJSONObject(0);
+        assertEquals(oldRun,original.getString("runId"));assertEquals("running",original.getJSONObject("receipt").getString("status"));assertTrue(original.getJSONObject("receipt").getBoolean("delayedNativeFixture"));
+        assertEquals(newRun,after.getString("runId"));assertEquals(newEpoch,after.getInt("coordinatorEpoch"));assertEquals("reconciling",after.getString("status"));assertEquals(before.getString("summary"),after.getString("summary"));
+        assertEquals(String.valueOf(before.opt("executionScope")),String.valueOf(after.opt("executionScope")));assertEquals(grantAndCheckpoint,runGrantAndCheckpoint(newRun));
+        assertEquals(2,rows("runs"));assertEquals(1,rows("operations"));assertEquals(1,posts.get());assertEquals(0,queries.get());
+        JSONObject forged=new JSONObject(late.toString()).put("runId",newRun);
+        assertThrows(SecurityException.class,()->host.recordEvent(new JSONObject().put("type","feature_event").put("feature","media").put("payload",forged)));
+        assertEquals(oldRun,tasks.get(id,false).getJSONArray("operations").getJSONObject(0).getJSONObject("receipt").getString("runId"));
+        assertEquals(grantAndCheckpoint,runGrantAndCheckpoint(newRun));assertNull(eventFailure.get());
+    }
+    private String runGrantAndCheckpoint(String run)throws Exception{
+        try(SQLiteDatabase db=SQLiteDatabase.openDatabase(app.getDatabasePath("pocket-world.db").getAbsolutePath(),null,SQLiteDatabase.OPEN_READONLY);Cursor cursor=db.rawQuery("SELECT status,grant_json,checkpoint FROM runs WHERE run_id=?",new String[]{run})){
+            assertTrue(cursor.moveToFirst());return new JSONArray().put(cursor.getString(0)).put(cursor.getString(1)).put(cursor.getString(2)).toString();
+        }
     }
 }

@@ -155,7 +155,7 @@ public final class PluginsModule implements EngineModule {
                 return install(all,restore,target);
             }
             switch(command){
-                case "enable":found.put("enabled",input.getBoolean("enabled"));break;
+                case "enable":return setEnabledReviewed(id,input.getString("expectedInstallationId"),PluginRevisions.expectedStateRevision(input),input.getString("expectedGrantsDigest"),input.getBoolean("enabled"));
                 case "grant":found.put("grants",PluginRules.grants(found.getJSONObject("manifest"),input.getJSONArray("grants")));break;
                 case "remove":all.remove(index);JsonFiles.write(file,new JSONObject().put("plugins",all));cancelPlugin(id);closeMcp(installationId(found));removeCredential(found);return new JSONObject().put("removed",true);
                 default:throw new IllegalArgumentException("不支持的插件操作");
@@ -164,14 +164,17 @@ public final class PluginsModule implements EngineModule {
             JsonFiles.write(file,new JSONObject().put("plugins",all));cancelPlugin(id);return publicPlugin(found);
         }
     }
-    /** Native-only owner toggle pinned to the installation displayed in the confirmation surface. */
-    public synchronized JSONObject setEnabledReviewed(String id,String expectedInstallationId,boolean enabled)throws Exception {
+    /** Owner toggle pinned to the installation, grants and state displayed in its review.
+     * Returning to an old enabled value never revives an older review (the revision is monotonic). */
+    public synchronized JSONObject setEnabledReviewed(String id,String expectedInstallationId,long expectedStateRevision,String expectedGrantsDigest,boolean enabled)throws Exception {
         if(closed)throw new IllegalStateException("插件执行器已关闭");
         if(expectedInstallationId==null||expectedInstallationId.isEmpty())throw new IllegalArgumentException("请先读取当前插件，再确认启停");
+        if(expectedStateRevision<0||expectedGrantsDigest==null||!expectedGrantsDigest.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("请先读取当前状态和工具授权，再确认启停");
         JSONArray all=list();
         for(int i=0;i<all.length();i++){
             JSONObject plugin=all.getJSONObject(i);if(!id.equals(plugin.getString("id")))continue;
             if(!expectedInstallationId.equals(installationId(plugin)))throw new IllegalStateException("插件安装已变化，请刷新后再操作");
+            if(expectedStateRevision!=PluginRevisions.stateRevision(plugin)||!expectedGrantsDigest.equals(PluginRules.grantsDigest(plugin.optJSONArray("grants"))))throw new IllegalStateException("插件启停或工具授权已变化，请重新审阅；没有采用旧确认");
             if(plugin.optBoolean("enabled")==enabled)return publicPlugin(plugin);
             plugin.put("enabled",enabled);PluginRevisions.advanceState(plugin);JsonFiles.write(file,new JSONObject().put("plugins",all));cancelPlugin(id);if(!enabled)closeMcp(installationId(plugin));return publicPlugin(plugin);
         }
@@ -409,24 +412,27 @@ public final class PluginsModule implements EngineModule {
     /** Owner-only query/cancel of an exact durable operation; a new connection cannot execute it. */
     public JSONObject reconcileMcpTaskForOwner(TaskStore tasks,String taskId,String operationId,boolean cancel,RunControl observation,String requestId)throws Exception {
         if(!UUID.fromString(requestId).toString().equals(requestId))throw new SecurityException("需要原核对请求身份");
-        McpTaskCoordinator.Binding binding=tasks.mcpTaskBindingForOwner(taskId,operationId);observation.bindHostRun(binding.taskId,binding.runId,binding.epoch);
+        McpTaskCoordinator.Binding binding=tasks.mcpTaskBindingForOwner(taskId,operationId);
+        RunControl recovery=RunControl.forOriginalRecovery(binding.taskId,binding.runId,binding.epoch);
         McpTaskCoordinator.Host journal=mcpTaskHost(tasks.mcpTaskHostForOwner(taskId,operationId),null);journal.check(binding,cancel?McpTaskCoordinator.Access.CANCEL:McpTaskCoordinator.Access.QUERY);
+        recovery.retainAuthorityCheck(()->{observation.check();journal.check(binding,cancel?McpTaskCoordinator.Access.CANCEL:McpTaskCoordinator.Access.QUERY);});recovery.check();
         final McpClient client;
         synchronized(this){JSONObject plugin=currentMcpTaskInstallation(binding,null);if(active.containsKey(requestId)||active.size()>=2)throw new SecurityException("已有原MCP请求，请等待或取消后核对");for(Invocation pending:active.values())if(pending.pluginId.equals(plugin.getString("id")))throw new SecurityException("此安装仍有原请求运行，请先核对或停止原请求");
             var auth=plugin.optJSONObject("mcpAuthorization")==null?null:oauth().credential(plugin.getJSONObject("mcpAuthorization"));String ref=plugin.optString("credentialRef"),token=auth!=null||ref.isEmpty()?"":context.secrets.get(ref);
-            client=auth==null?mcpFactory.create(binding.endpoint,token,McpData.VERSION,ignored->{}):auth.client(McpData.VERSION,observation);active.put(requestId,new Invocation(plugin.getString("id"),observation));
+            client=auth==null?mcpFactory.create(binding.endpoint,token,McpData.VERSION,ignored->{}):auth.client(McpData.VERSION,recovery);active.put(requestId,new Invocation(plugin.getString("id"),recovery));
         }
+        Runnable stop=recovery::cancel;observation.onCancel(stop);
         try(client){
             JSONObject stored=tasks.mcpTaskReceiptForOwner(taskId,operationId),receipt=stored.getJSONObject(dev.pocketengine.store.TaskStoreMcpTasks.KEY).getJSONObject("receipt");
             // A lost creation ACK or already resolved receipt needs no network at all.
-            if(!receipt.has("remoteTaskId")||receipt.optBoolean("resolved")){if(cancel)new McpTaskCoordinator(journal,client).cancel(binding,observation);return tasks.mcpTaskReceiptForOwner(taskId,operationId).put("networkRequested",false);}
-            if(!cancel&&(receipt.optBoolean("receiptExpired")||receipt.has("ttlMs")&&!receipt.isNull("ttlMs")&&System.currentTimeMillis()>=Math.addExact(java.time.Instant.parse(receipt.getString("createdAt")).toEpochMilli(),receipt.getLong("ttlMs")))){new McpTaskCoordinator(journal,client).query(binding,observation);return tasks.mcpTaskReceiptForOwner(taskId,operationId).put("networkRequested",false);}
+            if(!receipt.has("remoteTaskId")||receipt.optBoolean("resolved")){if(cancel)new McpTaskCoordinator(journal,client).cancel(binding,recovery);return tasks.mcpTaskReceiptForOwner(taskId,operationId).put("networkRequested",false);}
+            if(!cancel&&(receipt.optBoolean("receiptExpired")||receipt.has("ttlMs")&&!receipt.isNull("ttlMs")&&System.currentTimeMillis()>=Math.addExact(java.time.Instant.parse(receipt.getString("createdAt")).toEpochMilli(),receipt.getLong("ttlMs")))){new McpTaskCoordinator(journal,client).query(binding,recovery);return tasks.mcpTaskReceiptForOwner(taskId,operationId).put("networkRequested",false);}
             if(!cancel&&System.currentTimeMillis()<receipt.optLong("nextPollAt"))return stored.put("networkRequested",false).put("waitingForPollInterval",true);
-            client.connectForTask(binding.declaration(),observation);String nativeTool=stored.getJSONObject(dev.pocketengine.store.TaskStoreMcpTasks.KEY).getString("nativeTool");
-            McpResultCapture output=cancel?null:McpResultCapture.open(tasks.mcpTaskRecoveryOutput(taskId,operationId,observation),nativeTool,operationId,observation,new JSONObject().put("installationId",binding.installationId).put("serverDigest",binding.serverDigest).put("descriptorDigest",binding.descriptorDigest).put("endpointDigest",McpData.digest(binding.endpoint)).put("protocolVersion",McpData.VERSION).put("recovery",true));
-            McpTaskCoordinator coordinator=new McpTaskCoordinator(journal,taskTransport(client,output));if(cancel)coordinator.cancel(binding,observation);else coordinator.query(binding,observation);
+            client.connectForTask(binding.declaration(),recovery);String nativeTool=stored.getJSONObject(dev.pocketengine.store.TaskStoreMcpTasks.KEY).getString("nativeTool");
+            McpResultCapture output=cancel?null:McpResultCapture.open(tasks.mcpTaskRecoveryOutput(taskId,operationId,recovery),nativeTool,operationId,recovery,new JSONObject().put("installationId",binding.installationId).put("serverDigest",binding.serverDigest).put("descriptorDigest",binding.descriptorDigest).put("endpointDigest",McpData.digest(binding.endpoint)).put("protocolVersion",McpData.VERSION).put("recovery",true));
+            McpTaskCoordinator coordinator=new McpTaskCoordinator(journal,taskTransport(client,output));if(cancel)coordinator.cancel(binding,recovery);else coordinator.query(binding,recovery);
             return tasks.recordMcpTaskObservationForOwner(taskId,operationId,withOutputCapture(tasks.mcpTaskReceiptForOwner(taskId,operationId),output)).put("networkRequested",true);
-        }finally{synchronized(this){active.remove(requestId);}}
+        }finally{observation.removeCancelAction(stop);recovery.cancel();synchronized(this){active.remove(requestId);}}
     }
     /** Native owner source browser only. A resource URI is data, never a tool alias or a file path. */
     public JSONObject listMcpResources(String id,String installation,long revision,RunControl original,String operation)throws Exception {

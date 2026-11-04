@@ -1,0 +1,280 @@
+/**
+ * Agent / Subagent Stepper — independent reference reproduction, 2026-10-30.
+ * Visual reference: https://x.com/n___vc/status/2115869056582795401 (nick).
+ * No upstream implementation was obtained. Reference media has no inferred license.
+ * This module has no dependencies and does not execute or send real tasks.
+ */
+
+export const DEMO_STEPS = [
+  { id: 'collect', label: 'Collect fee data', labelZh: '收集费率数据', duration: 4,
+    tasks: [
+      { at: 0, label: 'Querying fee endpoints', doneLabel: 'Queried 6 endpoints', labelZh: '查询费率接口', doneLabelZh: '已查询 6 个接口' },
+      { at: 1.8, label: 'Normalizing rates', doneLabel: 'Normalized rates to USD', labelZh: '统一费率单位', doneLabelZh: '已换算为美元费率' },
+    ] },
+  { id: 'compare', label: 'Compare validators', labelZh: '比较验证者', duration: 5,
+    tasks: [
+      { at: 0, label: 'Ranking by uptime', doneLabel: 'Ranked 40 validators', labelZh: '按在线率排序', doneLabelZh: '已排序 40 位验证者' },
+      { at: 2.5, label: 'Scoring commission', doneLabel: 'Scored commission', labelZh: '评估佣金', doneLabelZh: '佣金评估完成' },
+    ] },
+  { id: 'draft', label: 'Draft the report', labelZh: '起草报告', duration: 8,
+    tasks: [
+      { at: 0, label: 'Pulling sources', doneLabel: 'Pulled 24 sources', labelZh: '检索资料', doneLabelZh: '已检索 24 份资料' },
+      { at: 2, label: 'Writing fee overview', doneLabel: 'Wrote fee overview', labelZh: '撰写费率概览', doneLabelZh: '费率概览已完成' },
+      { at: 4, label: 'Writing validator section', doneLabel: 'Wrote validator section', labelZh: '撰写验证者章节', doneLabelZh: '验证者章节已完成' },
+    ] },
+  { id: 'check', label: 'Check every number', labelZh: '核对每个数字', duration: 3,
+    tasks: [{ at: 0, label: 'Cross-checking figures', doneLabel: 'Checked 58 figures', labelZh: '交叉核对数字', doneLabelZh: '已核对 58 组数字' }] },
+  { id: 'send', label: 'Send to team', labelZh: '发送给团队', requiresApproval: true },
+];
+
+export const AGENT_STEPPER_CSS = String.raw`
+:host{--stepper-background:#131313;--stepper-border:#292929;--stepper-text:#e8e8e8;--stepper-muted:#828282;--stepper-pending:#4d4d4d;--stepper-line:#383838;--stepper-blue:#389fff;--stepper-gold:#e9ad45;--stepper-duration:340ms;display:block;width:352px;max-width:100%;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:var(--stepper-text);color-scheme:dark;box-sizing:border-box}
+*,*::before,*::after{box-sizing:border-box}.panel{position:relative;padding:12px 16px;border:1px solid var(--stepper-border);border-radius:19px;background:var(--stepper-background);isolation:isolate;box-shadow:inset 0 1px 0 #ffffff03;overflow:hidden}.spine{position:absolute;inset:0;pointer-events:none;z-index:-1;width:100%;height:100%;overflow:visible}.spine path{fill:none;stroke:var(--stepper-line);stroke-width:1.3;stroke-linecap:round;stroke-linejoin:round}.spine path.complete{stroke:var(--stepper-blue);stroke-width:1.7}.step{position:relative}.row{display:grid;grid-template-columns:16px minmax(0,1fr) auto;column-gap:20px;align-items:center;min-height:32px}.label{font-size:14px;font-weight:400;line-height:20px;white-space:normal;overflow-wrap:anywhere;color:var(--stepper-pending);transition:color 220ms ease}.step[data-status=running]>.row .label,.step[data-status=locked]>.row .label{color:var(--stepper-text)}.step[data-status=complete]>.row .label{color:var(--stepper-muted)}.node{width:16px;height:16px;display:grid;place-items:center;position:relative;border:1.4px solid #414141;border-radius:50%;background:var(--stepper-background);color:white;transition:background 180ms ease,border-color 180ms ease;flex-shrink:0}.node svg{width:11px;height:11px;display:block}.step[data-status=complete]>.row .node{background:var(--stepper-blue);border-color:var(--stepper-blue)}.step[data-status=running]>.row .node{border-color:var(--stepper-gold);color:var(--stepper-gold)}.step[data-status=locked]>.row .node{border-color:var(--stepper-blue);color:var(--stepper-blue);box-shadow:0 0 0 1px #389fff1c}.step[data-status=pending]>.row .node svg{display:none}.clock-sweep{transform-origin:8px 8px;animation:clock-turn 3s linear infinite}.step[data-status=running] .clock-sweep{animation-play-state:running}:host([paused]) .clock-sweep{animation-play-state:paused}.time{font-size:13px;color:#717171;font-variant-numeric:tabular-nums;line-height:18px;display:flex;align-items:center;gap:1px;min-width:23px;justify-content:flex-end}.step[data-status=pending] .time{visibility:hidden}.step[data-status=locked] .time{display:none}.digit-window{height:18px;min-width:9px;position:relative;overflow:hidden;text-align:right}.digit{display:block;line-height:18px;animation:digit-enter 260ms cubic-bezier(.2,.75,.25,1) both}.digit.out{position:absolute;inset:0;animation:digit-leave 260ms cubic-bezier(.2,.75,.25,1) both}.badge{color:#e8ad4a;background:#31250d;border-radius:20px;padding:2px 7px;font-size:10px;font-weight:500;line-height:14px;white-space:nowrap}.subtasks{display:grid;grid-template-rows:0fr;transition:grid-template-rows var(--stepper-duration) cubic-bezier(.22,.8,.26,1);opacity:.15}.subtasks.open{grid-template-rows:1fr;opacity:1}.subtasks>.clip{min-height:0;overflow:hidden}.subtask{display:grid;grid-template-rows:0fr;opacity:0;transition:grid-template-rows 280ms cubic-bezier(.22,.8,.26,1),opacity 200ms ease}.subtask.shown{grid-template-rows:1fr;opacity:1}.subtask>.clip{min-height:0;overflow:hidden}.subrow{display:grid;grid-template-columns:16px minmax(0,1fr);column-gap:20px;min-height:24px;align-items:center}.subnode{width:5px;height:5px;margin-left:18.5px;border-radius:50%;background:#606060;box-shadow:0 0 0 4px var(--stepper-background)}.sublabel{font-size:12px;line-height:18px;color:#777;overflow-wrap:anywhere;padding:3px 0}.subtask.current .subnode{background:var(--stepper-gold);box-shadow:0 0 0 4px var(--stepper-background),0 0 9px #e9ad4520}.subtask.current .sublabel{color:#b6b6b6}.spacer{height:5px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}@keyframes digit-enter{from{transform:translateY(110%);opacity:0}to{transform:translateY(0);opacity:1}}@keyframes digit-leave{from{transform:translateY(0);opacity:1}to{transform:translateY(-110%);opacity:0}}@keyframes clock-turn{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}.digit.out{display:none}}
+`;
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const glyphs = {
+  pending: '',
+  complete: '<svg aria-hidden="true" viewBox="0 0 16 16"><path d="m3.4 8.2 3 3.1 6.2-6.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  running: '<svg aria-hidden="true" viewBox="0 0 16 16"><path class="clock-sweep" d="M8 2v6l-3.5 4A5.4 5.4 0 0 0 8 2Z" fill="currentColor"/><path d="M8 3v5H5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>',
+  locked: '<svg aria-hidden="true" viewBox="0 0 16 16"><rect x="4" y="7" width="8" height="6.5" rx="1" fill="currentColor"/><path d="M5.6 7V5a2.4 2.4 0 1 1 4.8 0v2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 9.3v1.7" stroke="var(--stepper-background)" stroke-width="1.3" stroke-linecap="round"/></svg>',
+};
+
+/** A dependency-free, reusable progress display. All labels enter via textContent. */
+export class AgentStepper extends HTMLElement {
+  static observedAttributes = ['language'];
+
+  constructor() {
+    super();
+    this.attachShadow({mode:'open'});
+    this._steps = this._validate(DEMO_STEPS);
+    this._elapsed = 0;
+    this._playing = false;
+    this._rate = 1;
+    this._raf = 0;
+    this._last = 0;
+    this._lastState = '';
+  }
+
+  connectedCallback() {
+    this._build();
+    this._observer = new ResizeObserver(() => this._drawSpine());
+    this._observer.observe(this._panel);
+    this._rows.forEach(row => this._observer.observe(row.group));
+    if (this.hasAttribute('autoplay')) this.play();
+  }
+
+  disconnectedCallback() {
+    this.pause();
+    this._observer?.disconnect();
+  }
+
+  attributeChangedCallback() {
+    if (this.isConnected && this._rows) this._render(true);
+  }
+
+  get steps() { return structuredClone(this._steps); }
+  set steps(value) {
+    const steps = this._validate(value);
+    this.pause();
+    this._steps = steps;
+    this._elapsed = 0;
+    this._lastState = '';
+    if (this.isConnected) {
+      this._observer?.disconnect();
+      this._build();
+      this._observer?.observe(this._panel);
+      this._rows.forEach(row => this._observer?.observe(row.group));
+    }
+  }
+
+  get duration() { return this._steps.reduce((sum, step) => sum + (step.duration || 0), 0); }
+  get elapsed() { return this._elapsed; }
+  get playing() { return this._playing; }
+  get playbackRate() { return this._rate; }
+  set playbackRate(value) {
+    if (!Number.isFinite(value) || value <= 0 || value > 16) throw new RangeError('playbackRate must be > 0 and <= 16');
+    this._rate = value;
+  }
+
+  play() {
+    if (this._playing || this._elapsed >= this.duration || !this.isConnected) return;
+    this._playing = true;
+    this.removeAttribute('paused');
+    this._last = 0;
+    this._render();
+    const tick = now => {
+      if (!this._playing) return;
+      if (this._last) this._elapsed = Math.min(this.duration, this._elapsed + Math.min((now-this._last)/1000, .1)*this._rate);
+      this._last = now;
+      this._render();
+      if (this._elapsed < this.duration) this._raf = requestAnimationFrame(tick);
+      else { this._playing = false; this.setAttribute('paused',''); this._render(); }
+    };
+    this._raf = requestAnimationFrame(tick);
+  }
+
+  pause() {
+    this._playing = false;
+    this.setAttribute('paused','');
+    cancelAnimationFrame(this._raf);
+    this._last = 0;
+    if (this._rows) this._render();
+  }
+
+  reset({autoplay=false} = {}) {
+    this.pause();
+    this._elapsed = 0;
+    this._render(true);
+    if (autoplay) this.play();
+  }
+
+  seek(seconds) {
+    if (!Number.isFinite(seconds)) throw new TypeError('seek expects finite seconds');
+    this._elapsed = Math.min(this.duration, Math.max(0, seconds));
+    if (this._elapsed === this.duration) this.pause();
+    this._last = 0;
+    this._render(true);
+  }
+
+  _validate(value) {
+    if (!Array.isArray(value) || value.length === 0) throw new TypeError('steps must be a non-empty array');
+    const result = structuredClone(value);
+    const ids = new Set();
+    result.forEach((step, i) => {
+      if (!step.id || ids.has(step.id) || typeof step.label !== 'string') throw new TypeError('Every step needs a unique id and label');
+      ids.add(step.id);
+      if (step.requiresApproval) {
+        if (i !== result.length-1) throw new TypeError('An approval gate must be the final step');
+        step.duration = 0;
+        step.tasks = [];
+      } else {
+        if (!Number.isFinite(step.duration) || step.duration <= 0) throw new RangeError('Step duration must be positive');
+        step.tasks = step.tasks || [];
+        step.tasks.forEach((task, j) => {
+          if (typeof task.label !== 'string' || !Number.isFinite(task.at) || task.at < 0 || task.at >= step.duration || (j && task.at <= step.tasks[j-1].at)) throw new TypeError('Tasks need labels and increasing at times within their step');
+        });
+      }
+    });
+    return result;
+  }
+
+  _build() {
+    this.shadowRoot.replaceChildren();
+    const style = document.createElement('style');
+    style.textContent = AGENT_STEPPER_CSS;
+    this._panel = document.createElement('div');
+    this._panel.className = 'panel';
+    this._panel.setAttribute('role','list');
+    this._spine = document.createElementNS(SVG_NS,'svg');
+    this._spine.classList.add('spine');
+    this._spine.setAttribute('aria-hidden','true');
+    this._panel.append(this._spine);
+    this._rows = this._steps.map(step => {
+      const group = document.createElement('div'); group.className = 'step'; group.setAttribute('role','listitem');
+      const row = document.createElement('div'); row.className = 'row';
+      const node = document.createElement('span'); node.className = 'node'; node.setAttribute('aria-hidden','true');
+      const label = document.createElement('span'); label.className = 'label';
+      const time = document.createElement('span'); time.className = 'time'; time.setAttribute('aria-hidden','true');
+      const digitWindow = document.createElement('span'); digitWindow.className = 'digit-window';
+      const unit = document.createElement('span'); unit.textContent = 's';
+      time.append(digitWindow,unit);
+      row.append(node,label,time);
+      if (step.requiresApproval) { const badge = document.createElement('span'); badge.className='badge'; row.append(badge); }
+      const children = document.createElement('div'); children.className='subtasks'; children.setAttribute('aria-hidden','true');
+      const clip = document.createElement('div'); clip.className='clip';
+      const top = document.createElement('div'); top.className='spacer'; clip.append(top);
+      const tasks = step.tasks.map(() => {
+        const item = document.createElement('div'); item.className='subtask';
+        const inner = document.createElement('div'); inner.className='clip';
+        const subrow = document.createElement('div'); subrow.className='subrow';
+        const subnode = document.createElement('span'); subnode.className='subnode';
+        const sublabel = document.createElement('span'); sublabel.className='sublabel';
+        subrow.append(subnode,sublabel); inner.append(subrow); item.append(inner); clip.append(item);
+        return {item,subnode,sublabel};
+      });
+      const bottom = document.createElement('div'); bottom.className='spacer'; clip.append(bottom); children.append(clip);
+      group.append(row,children); this._panel.append(group);
+      return {group,row,node,label,time,digitWindow,children,tasks,status:'',second:-1};
+    });
+    this._live = document.createElement('div'); this._live.className='sr-only'; this._live.setAttribute('role','status'); this._live.setAttribute('aria-live','polite');
+    this.shadowRoot.append(style,this._panel,this._live);
+    this.setAttribute('paused','');
+    this._render(true);
+    requestAnimationFrame(() => this._drawSpine());
+  }
+
+  _text(item, key='label') {
+    return this.getAttribute('language') === 'zh' ? (item[key+'Zh'] || item[key] || item.label) : (item[key] || item.label);
+  }
+
+  _render(force=false) {
+    if (!this._rows) return;
+    const zh = this.getAttribute('language') === 'zh';
+    let geometryChanged = force;
+    this._panel.setAttribute('aria-label',zh?'任务进度':'Task progress');
+    let start = 0, current = -1;
+    this._steps.forEach((step,i) => {
+      const r = this._rows[i];
+      const end = start + step.duration;
+      const status = step.requiresApproval ? 'locked' : this._elapsed >= end ? 'complete' : this._elapsed >= start ? 'running' : 'pending';
+      if (status === 'running') current = i;
+      if (r.status !== status) { r.node.innerHTML = glyphs[status]; r.status = status; r.group.dataset.status=status; geometryChanged=true; }
+      if (r.label.textContent !== this._text(step)) r.label.textContent=this._text(step);
+      const second = status === 'complete' ? step.duration : Math.floor(Math.max(0,this._elapsed-start));
+      if (!step.requiresApproval && (r.second !== second || force)) {
+        const old = r.digitWindow.querySelector('.digit:not(.out)');
+        r.digitWindow.querySelectorAll('.out').forEach(el=>el.remove());
+        if (old) { old.classList.add('out'); old.addEventListener('animationend',()=>old.remove(),{once:true}); setTimeout(()=>old.remove(),300); }
+        const digit=document.createElement('span'); digit.className='digit'; digit.textContent=String(second); r.digitWindow.append(digit); r.second=second;
+      }
+      const statusLabel=zh?{pending:'待执行',running:this._playing?'执行中':'已暂停',complete:'已完成',locked:'需先确认'}[status]:{pending:'Pending',running:this._playing?'Running':'Paused',complete:'Complete',locked:'Asks first'}[status];
+      r.group.setAttribute('aria-label',`${this._text(step)}: ${statusLabel}${status==='running'||status==='complete'?`, ${second}${zh?'秒':' seconds'}`:''}`);
+      if (step.requiresApproval) r.row.querySelector('.badge').textContent=zh?'先确认':'Asks first';
+      const local = Math.max(0,this._elapsed-start);
+      const activeTask = step.tasks.findLastIndex(task=>local>=task.at);
+      r.children.classList.toggle('open',status==='running' && activeTask>=0);
+      r.children.setAttribute('aria-hidden',status==='running'?'false':'true');
+      r.tasks.forEach((t,j)=>{
+        const shown = j<=activeTask;
+        t.item.classList.toggle('shown',shown);
+        t.item.classList.toggle('current',j===activeTask);
+        const text=this._text(step.tasks[j],j<activeTask?'doneLabel':'label');
+        if(t.sublabel.textContent !== text) t.sublabel.textContent=text;
+        t.item.setAttribute('aria-hidden',!shown?'true':'false');
+      });
+      start=end;
+    });
+    const state = this._elapsed >= this.duration ? (this._steps.at(-1).requiresApproval?'awaiting-approval':'complete') : this._playing?'playing':'paused';
+    this.dataset.state=state;
+    if(geometryChanged) requestAnimationFrame(()=>this._drawSpine());
+    const stateKey=`${state}:${current}`;
+    if (stateKey !== this._lastState || force) {
+      this._lastState=stateKey;
+      this._live.textContent=current>=0?`${this._text(this._steps[current])} — ${zh?(state==='playing'?'执行中':'已暂停'):(state==='playing'?'Running':'Paused')}`:state==='awaiting-approval'?(zh?'已完成准备，等待确认。未发送任何内容。':'Preparation complete. Waiting for approval; nothing has been sent.'):(zh?'所有任务已完成。':'All tasks complete.');
+      this.dispatchEvent(new CustomEvent('runstatechange',{bubbles:true,composed:true,detail:{state,currentIndex:current,elapsed:this._elapsed,duration:this.duration}}));
+    }
+  }
+
+  _drawSpine() {
+    if (!this.isConnected || !this._rows?.length) return;
+    const panel=this._panel.getBoundingClientRect();
+    const centers=this._rows.map(r=>{const b=r.node.getBoundingClientRect();return{x:b.left-panel.left+b.width/2,y:b.top-panel.top+b.height/2};});
+    this._spine.setAttribute('viewBox',`0 0 ${panel.width} ${panel.height}`);
+    this._spine.replaceChildren();
+    for(let i=0;i<centers.length-1;i++) {
+      const a=centers[i],b=centers[i+1],r=this._rows[i];
+      const childHeight=r.children.getBoundingClientRect().height;
+      const offset=Math.min(13,Math.max(0,childHeight/2));
+      const x=a.x, inset=x+offset;
+      const top=a.y+15, bottom=b.y-15;
+      const bend=Math.min(9,Math.max(0,(bottom-top)/3));
+      const d=offset>.1 && bottom>top ? `M ${x} ${a.y} V ${top-bend} C ${x} ${top+2} ${inset} ${top-2} ${inset} ${top+bend} V ${bottom-bend} C ${inset} ${bottom+2} ${x} ${bottom-2} ${x} ${bottom+bend} V ${b.y}` : `M ${x} ${a.y} V ${b.y}`;
+      const path=document.createElementNS(SVG_NS,'path'); path.setAttribute('d',d);
+      if(r.status==='complete') path.classList.add('complete');
+      this._spine.append(path);
+    }
+  }
+}
+
+if (!customElements.get('agent-stepper')) customElements.define('agent-stepper',AgentStepper);

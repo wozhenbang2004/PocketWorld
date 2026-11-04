@@ -33,8 +33,8 @@ import static org.junit.Assert.*;
 @Config(sdk=35,manifest=Config.NONE,application=Application.class,shadows={PhoneAudioNativeBridgeTest.Socket.class,PhoneAudioNativeBridgeTest.Vault.class,PhoneAudioNativeBridgeTest.Safety.class})
 public final class PhoneAudioNativeBridgeTest {
     static int peerUid,payloads,sets,launches,ownershipReads,releases;static String mode,session;static JSONObject lastSet,lastRelease;static boolean dropSetReceipt;
-    static Runnable afterGet;static RunControl cancelAfterSet;
-    @Before public void reset(){peerUid=2000;payloads=sets=launches=ownershipReads=releases=0;mode="allow";session="original-audio-session";lastSet=lastRelease=null;afterGet=null;cancelAfterSet=null;dropSetReceipt=false;}
+    static Runnable afterGet;static RunControl cancelAfterSet;static String ownedApp;
+    @Before public void reset(){peerUid=2000;payloads=sets=launches=ownershipReads=releases=0;mode="allow";session="original-audio-session";lastSet=lastRelease=null;afterGet=null;cancelAfterSet=null;dropSetReceipt=false;ownedApp=null;}
     @After public void clear()throws Exception{afterGet=null;cancelAfterSet=null;Field f=PhoneAccessibilityService.class.getDeclaredField("instance");f.setAccessible(true);f.set(null,null);}
     @Implements(SecretVault.class) public static class Vault {@Implementation public String get(String slot){return "fixture-token";}}
     @Implements(PhoneAccessibilityService.class) public static class Safety {@Implementation public String observationSafetyFailure(){return null;}}
@@ -65,8 +65,11 @@ public final class PhoneAudioNativeBridgeTest {
     private static JSONObject ownership()throws Exception {
         JSONObject primary=new JSONObject().put("taskId",1).put("rootTaskId",1).put("displayId",0).put("androidUserId",0).put("userId",0)
                 .put("packageName","example.launcher").put("component","example.launcher/.Home").put("rootIdentity","fixture-primary-root");
-        return new JSONObject().put("status","observed").put("primary",new JSONArray().put(primary)).put("owned",new JSONArray())
-                .put("taskTopology",new JSONObject().put("schemaVersion",1).put("status","observed").put("complete",true).put("readOnly",true).put("tasks",new JSONArray().put(primary)));
+        JSONArray owned=new JSONArray(),tasks=new JSONArray().put(primary);
+        if(ownedApp!=null){JSONObject app=new JSONObject().put("taskId",2).put("rootTaskId",2).put("displayId",5).put("androidUserId",0).put("userId",0)
+                .put("packageName",ownedApp).put("component",ownedApp+"/.Main").put("rootIdentity","fixture-owned-root");owned.put(app);tasks.put(app);}
+        return new JSONObject().put("status","observed").put("primary",new JSONArray().put(primary)).put("owned",owned)
+                .put("taskTopology",new JSONObject().put("schemaVersion",1).put("status","observed").put("complete",true).put("readOnly",true).put("tasks",tasks));
     }
     private static void field(Object object,String name,Object value)throws Exception{Field f=object.getClass().getDeclaredField(name);f.setAccessible(true);f.set(object,value);}
     private final class Fixture implements AutoCloseable {
@@ -138,5 +141,38 @@ public final class PhoneAudioNativeBridgeTest {
     }}
     @Test public void modelModuleCommandSurfaceCannotEnableTheNativeOwnerPolicy()throws Exception{try(Fixture f=new Fixture()){
         f.module.unpinOwner("original-task");assertThrows(IllegalArgumentException.class,()->f.module.handle("audio.policy",new JSONObject().put("enabled",true)));assertFalse(AndroidPhoneAudioRecovery.silenceEnabled(f.app));assertEquals(0,sets);
+    }}
+    private static JSONObject onWorker(java.util.concurrent.Callable<JSONObject> call)throws Exception {
+        java.util.concurrent.FutureTask<JSONObject> work=new java.util.concurrent.FutureTask<>(call);new Thread(work,"original-owner-audio-fixture").start();
+        try{return work.get(5,java.util.concurrent.TimeUnit.SECONDS);}catch(java.util.concurrent.ExecutionException failed){if(failed.getCause() instanceof Exception cause)throw cause;throw failed;}
+    }
+    @Test public void pausedOwnerReviewsAndRestoresThroughTheActualOriginalWireAdmission()throws Exception{try(Fixture f=new Fixture()){
+        ownedApp="example.music";f.original.pause();JSONObject review=onWorker(()->f.port.reviewAudioForOwner(f.original,()->{}));assertEquals(0,sets);
+        JSONObject muted=onWorker(()->f.port.setAudioForOwner(review.getString("reviewId"),true,f.original,()->{}));assertTrue(muted.getBoolean("confirmed"));assertEquals("ignore",mode);assertEquals(1,sets);
+        assertTrue(f.original.isPaused());assertThrows(Exception.class,()->onWorker(()->f.port.setAudioForOwner(review.getString("reviewId"),true,f.original,()->{})));assertEquals(1,sets);
+        JSONObject restoredReview=onWorker(()->f.port.reviewAudioForOwner(f.original,()->{}));JSONObject restored=onWorker(()->f.port.setAudioForOwner(restoredReview.getString("reviewId"),false,f.original,()->{}));
+        assertTrue(restored.getBoolean("confirmed"));assertEquals("allow",mode);assertEquals(2,sets);assertEquals(0,f.pending());assertTrue(f.original.isPaused());
+    }}
+    @Test public void ownerReviewCannotCrossPauseGenerationOrCurrentAppAtSetTime()throws Exception{try(Fixture f=new Fixture()){
+        ownedApp="example.music";JSONObject review=onWorker(()->f.port.reviewAudioForOwner(f.original,()->{}));f.original.pause();f.original.resume();
+        assertThrows(Exception.class,()->onWorker(()->f.port.setAudioForOwner(review.getString("reviewId"),true,f.original,()->{})));assertEquals(0,sets);
+        JSONObject second=onWorker(()->f.port.reviewAudioForOwner(f.original,()->{}));ownedApp="example.other";
+        assertThrows(Exception.class,()->onWorker(()->f.port.setAudioForOwner(second.getString("reviewId"),true,f.original,()->{})));assertEquals(0,sets);assertEquals(0,f.pending());
+    }}
+    @Test public void ownerAudioBridgeRefusesWrongTuplePauseSessionAndUnrelatedCommandsBeforeWire()throws Exception{try(Fixture f=new Fixture()){
+        JSONObject args=new JSONObject().put("packageName","example.music").put("userId",0).put("mode","ignore");
+        assertThrows(SecurityException.class,()->f.module.ownerAudioForTask("audio.set",args,"original-task","other-run",1,session,5,f.original,0,false,()->{}));
+        assertThrows(SecurityException.class,()->f.module.ownerAudioForTask("audio.set",args,"original-task","original-run",2,session,5,f.original,0,false,()->{}));
+        assertThrows(SecurityException.class,()->f.module.ownerAudioForTask("audio.set",args,"original-task","original-run",1,"other-session",5,f.original,0,false,()->{}));
+        assertThrows(SecurityException.class,()->f.module.ownerAudioForTask("audio.set",args,"original-task","original-run",1,session,5,f.original,1,false,()->{}));
+        assertThrows(SecurityException.class,()->f.module.ownerAudioForTask("launch",args,"original-task","original-run",1,session,5,f.original,0,false,()->{}));
+        assertThrows(SecurityException.class,()->f.module.ownerAudioForTask("audio.set",args,"original-task","original-run",1,session,5,f.original,0,false,null));
+        assertEquals(0,payloads);assertEquals(0,sets);
+    }}
+    @Test public void missingOwnerSetReceiptIsNotReplayedAfterReadOnlyReconnection()throws Exception{try(Fixture f=new Fixture()){
+        ownedApp="example.music";JSONObject review=onWorker(()->f.port.reviewAudioForOwner(f.original,()->{}));dropSetReceipt=true;
+        JSONObject result=onWorker(()->f.port.setAudioForOwner(review.getString("reviewId"),true,f.original,()->{}));assertFalse(result.getBoolean("confirmed"));assertEquals(1,sets);assertEquals(1,f.pending());
+        dropSetReceipt=false;f.module.acceptStatus(status());JSONObject observed=onWorker(()->f.port.reviewAudioForOwner(f.original,()->{}));assertTrue(observed.getJSONObject("state").getBoolean("muted"));assertFalse(observed.getJSONObject("state").getBoolean("canMute"));
+        assertThrows(Exception.class,()->onWorker(()->f.port.setAudioForOwner(observed.getString("reviewId"),true,f.original,()->{})));assertEquals(1,sets);
     }}
 }

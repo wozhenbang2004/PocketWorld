@@ -27,6 +27,19 @@ public final class TaskStoreTest {
         assertEquals(3,store.get(id,false).getJSONArray("events").length());
         assertEquals("interrupted",new TaskStore(context).get(id,false).getString("status"));
     }
+    @Test public void nativeResourceAdmissionCannotSurviveDisableAndColdRestore()throws Exception {
+        Context context=RuntimeEnvironment.getApplication();TaskStore store=new TaskStore(context);
+        dev.pocketengine.core.RunControl original=new dev.pocketengine.core.RunControl();
+        original.retainAuthorityCheck(store.admitExecutionControl(original,"","",0));original.check();
+        store.setExecutionEnabledForOwner(1,false);
+        assertThrows(InterruptedException.class,original::check);
+        TaskStore restored=new TaskStore(context);assertFalse(restored.executionEnabled());
+        assertThrows(SecurityException.class,()->restored.admitExecutionControl(new dev.pocketengine.core.RunControl(),"","",0));
+        store.setExecutionEnabledForOwner(2,true);
+        assertThrows(SecurityException.class,()->store.admitExecutionControl(original,"","",0));
+        assertThrows(InterruptedException.class,original::check);
+        dev.pocketengine.core.RunControl fresh=new dev.pocketengine.core.RunControl();fresh.retainAuthorityCheck(store.admitExecutionControl(fresh,"","",0));fresh.check();
+    }
     @Test public void finalResultAndOwnerConfirmationRemainDistinct() throws Exception {
         TaskStore store=new TaskStore(RuntimeEnvironment.getApplication());
         String id=store.create("检查结果").getString("id");
@@ -38,6 +51,15 @@ public final class TaskStoreTest {
         assertFalse(result.getJSONObject("evidence").getBoolean("automaticallyVerified"));
         assertTrue(result.getJSONArray("events").getJSONObject(0).getBoolean("completed"));
         assertEquals("completed",result.getString("status"));
+    }
+    @Test public void oldAssistantSlotCallbackCannotRewriteTheSuccessorRun()throws Exception {
+        Context context=RuntimeEnvironment.getApplication();TaskStore first=new TaskStore(context);
+        JSONObject original=first.startAttempt(first.createCapabilityTask("original conversation",java.util.UUID.randomUUID().toString()).getString("id"),"capabilities",12);
+        String id=original.getString("id"),run=original.getString("runId");int epoch=original.getInt("coordinatorEpoch");dev.pocketengine.core.RunControl control=new dev.pocketengine.core.RunControl();control.bindHostRun(id,run,epoch);
+        JSONObject binding=new JSONObject().put("taskId",id).put("runId",run).put("epoch",epoch);first.recordAssistantResourceState(binding,control,"queued");assertEquals("queued",first.get(id,false).getString("resourceState"));
+        TaskStore restored=new TaskStore(context);JSONObject next=restored.startAttempt(id,"capabilities",12);dev.pocketengine.core.RunControl successor=new dev.pocketengine.core.RunControl();successor.bindHostRun(id,next.getString("runId"),next.getInt("coordinatorEpoch"));
+        restored.recordAssistantResourceState(new JSONObject().put("taskId",id).put("runId",next.getString("runId")).put("epoch",next.getInt("coordinatorEpoch")),successor,"running");
+        control.cancel();assertThrows(SecurityException.class,()->first.recordAssistantResourceState(binding,control,"stopping"));assertEquals("running",restored.get(id,false).getString("resourceState"));
     }
     @Test public void invalidRecordsDoNotPreventReadingValidTasks() throws Exception {
         Context context=RuntimeEnvironment.getApplication();

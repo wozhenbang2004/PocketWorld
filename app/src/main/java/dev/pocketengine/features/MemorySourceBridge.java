@@ -147,13 +147,14 @@ public final class MemorySourceBridge {
             text=joined.toString();title="原已读取文档范围 · "+result.optString("coverage")+"（不是全文或独立成功证明）";
         }else if("browser_source_retained".equals(event.optString("type"))){text=dev.pocketengine.features.memory.TaskSavedEvidence.browserText(event);title="原已批准保存的网页安全证据范围（非当前网页或整页）";}
         else if("app_learning_evidence".equals(event.optString("type"))){text=dev.pocketengine.features.memory.TaskSavedEvidence.appLearningText(event);title="原任务 App 动作经过（未独立核实成功，仅待审候选）";}
+        else if(dev.pocketengine.features.memory.TaskEpisodeEvidence.EVENT_TYPE.equals(event.optString("type"))){text=dev.pocketengine.features.memory.TaskEpisodeEvidence.text(event);title="原已结束任务经过（结果分类独立，仅待审候选）";}
         else if(McpResourceEvidence.EVENT_TYPE.equals(event.optString("type"))){
             var book=attachmentBook;if(book==null)throw new IllegalStateException("原附件Book尚未绑定");
             text=McpResourceEvidence.readRetainedText(book,event,new dev.pocketengine.core.RunControl());title="原已保存MCP文本快照（外部低信任数据；非当前资源或工具授权）";
         }
         else throw new IllegalStateException("这份保存来源尚无准确安全正文路由");
         String excerpt=dev.pocketengine.features.memory.TaskSavedEvidence.excerpt(expected,text);requireCurrentReference(expected);tasks.savedMemorySourceEvent(expected);
-        return new KnowledgeLearningWorkflow.SourceDocument(expected,title,excerpt,"app_learning_evidence".equals(event.optString("type"))?event.getJSONObject("context"):null);
+        return new KnowledgeLearningWorkflow.SourceDocument(expected,title,excerpt,"app_learning_evidence".equals(event.optString("type"))?event.getJSONObject("context"):null,dev.pocketengine.features.memory.TaskEpisodeEvidence.EVENT_TYPE.equals(event.optString("type"))?dev.pocketengine.features.memory.TaskEpisodeEvidence.snapshot(event):null);
     }
     public synchronized void synchronize(JSONObject scope)throws Exception{
         if(assistant==null){EngineModule registered=host.module("assistant");if(registered instanceof AssistantModule)bindAssistant((AssistantModule)registered);}

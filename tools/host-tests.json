@@ -1,53 +1,4 @@
 {
-  "related-task-cancellation": {
-    "class": "dev.pocketengine.features.RelatedTaskCancellationTest",
-    "additionalClasses": [
-      "dev.pocketengine.RelatedTaskCancellationNativeTest"
-    ],
-    "helpers": [],
-    "robolectric": true,
-    "description": "Original TaskStore/FeatureHost snapshot and queued child-stop fences, including controlled SQL successors in the actual cancelCapabilityAttempt native entry (invoked reflectively) and its finally chain and a reentrant original-control callback. Same-parent later links, parent/child run or epoch changes and captured descendants cannot select new work. Startup/presentation, team transport and successor admission are controlled fixtures; no model, physical team/remote/MCP settlement or device acceptance."
-  },
-  "attachment-import-context": {
-    "class": "dev.pocketengine.features.attachments.OwnerAttachmentImportTest",
-    "additionalClasses": [
-      "dev.pocketengine.ui.AttachmentImportPickerRegistryTest"
-    ],
-    "helpers": [],
-    "robolectric": true,
-    "description": "Original task/project nonce pin, no-replay AndroidX registry save/restore, real repository/task-link receipts, missing-context library preservation and partial/unknown association. No mounted Activity, actual process-death or device acceptance."
-  },
-  "attachment-index-recovery": {
-    "class": "dev.pocketengine.features.attachments.AttachmentIndexRecoveryTest",
-    "additionalClasses": [
-      "dev.pocketengine.features.attachments.AttachmentBookTest",
-      "dev.pocketengine.features.attachments.NativeAttachmentPublicationTest",
-      "dev.pocketengine.features.attachments.AttachmentOutcomeJourneyTest"
-    ],
-    "helpers": [],
-    "robolectric": true,
-    "description": "Bounded read-only owner inventory with explicit incomplete diagnostics, unchanged original bytes and unknown native publications, strict archive/replay scans, physical slot/byte quotas and fail-closed enumeration/read budgets. No mounted UI, Android process-death or device acceptance."
-  },
-  "attachment-pdf-scratch-recovery": {
-    "class": "dev.pocketengine.features.attachments.NativePdfScratchRecoveryTest",
-    "additionalClasses": [
-      "dev.pocketengine.features.attachments.documents.DocumentReaderTest"
-    ],
-    "helpers": [
-      "dev.pocketengine.features.attachments.documents.DocumentFixtures"
-    ],
-    "robolectric": true,
-    "description": "Actual PDF text/OCR private-copy paths with hard-killed host JVMs and fresh-process cold recovery; exact factory namespace, no-follow cleanup and live ownership through renderer release. Renderer-only zero-page shadows, not PDF correctness, Android device/process-death, or cross-process-lock acceptance."
-  },
-  "attachment-view-recovery": {
-    "class": "dev.pocketengine.features.attachments.AttachmentViewSnapshotsRecoveryTest",
-    "helpers": [
-      "dev.pocketengine.features.attachments.LegacyAttachmentIntegrityTest"
-    ],
-    "robolectric": true,
-    "linuxPosixFd": true,
-    "description": "Opt-in real-disk preview orphan recovery with controlled JDK17 child-process kills, original TTL, exact quota and unknown-index preservation. Requires Linux and readable /proc/self/fd for the existing POSIX reader fixture. No Android device/process-kill or external URI-grant acceptance."
-  },
   "attachment-legacy-integrity": {
     "class": "dev.pocketengine.features.attachments.LegacyAttachmentIntegrityTest",
     "additionalClasses": [
@@ -982,18 +933,6 @@
     "python": true,
     "description": "Pinned Pi no-tools owner/session continuation through original SQL and Companion; synthetic vendor peer, not real account or coding capability acceptance. Original queued next-turn drafts add four actual owner SQL/Companion fixture journeys, eleven pure dispatch/draft contracts and eight mounted Compose semantics methods, including visible editor/cursor changes. No live Pi steering, implicit send, model adoption, real vendor or visual acceptance."
   },
-  "native-transport-wait-ownership": {
-    "class": "dev.pocketengine.features.local.runtime.NativeTransportWaitOwnershipTest",
-    "additionalClasses": [
-      "dev.pocketengine.features.local.runtime.NativeTransportContractTest",
-      "dev.pocketengine.features.local.runtime.NativePtyTransportTest"
-    ],
-    "helpers": [
-      "dev.pocketengine.features.local.runtime.NativeTransportWaitOwnershipProbe"
-    ],
-    "native": true,
-    "description": "Actual Linux JNI PTY/duplex transport and isolated competing exact-child waitpid before initial exit observation and after a real zombie observation at the next/final scan. After observing ECHILD or changed identity, no further numeric signal or group/session release proof is permitted. Checks and signals are not atomic against arbitrary competing reapers. Historical precise transport receipts stay read-only; no real PID reuse, unrelated signal target, App-wide reaper, Android device or full-suite claim."
-  },
   "native-normal-cleanup": {
     "class": "dev.pocketengine.features.local.runtime.NativeNormalCleanupTest",
     "additionalClasses": [
@@ -1396,6 +1335,122 @@
     "additionalClasses": [
       "dev.pocketengine.ui.AttachmentExportPickerRegistryTest"
     ]
+  },
+  "restored-owner-controls": {
+    "class": "dev.pocketengine.CompatibilityOwnerControlsTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.FeatureOwnerQueueAdmissionTest",
+      "dev.pocketengine.features.ProxyReviewedOwnerTest",
+      "dev.pocketengine.media.RealtimeReviewedOwnerTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original compatibility bridge and FeatureHost queue fences for old task/run/epoch, shared model selection, closed owner pages, and realtime/proxy reviewed owner CAS. Controlled native fixtures; no actual device, platform service or network-provider acceptance."
+  },
+  "native-token-budgets": {
+    "class": "dev.pocketengine.store.NativeTokenBudgetJourneyTest",
+    "additionalClasses": [
+      "dev.pocketengine.runtime.usage.InferenceTokenReservationTest",
+      "dev.pocketengine.runtime.usage.InferenceCaptureBudgetIdentityTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original TaskStore physical inference reservation, stable account/connection daily budgets and parent-task pools, settings CAS, cold reconciliation and unknown holds. UTF-8 admission estimates are explicitly not exact billing or provider caps; SDK35 SQLite fixtures and pure reservation tests, not live provider acceptance."
+  },
+  "channel-original-usage": {
+    "class": "dev.pocketengine.features.channels.WeixinQuoteNativeJourneyTest",
+    "additionalClasses": [],
+    "helpers": [
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.GroupTaskFlowsTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Actual channel native inference factory and original TaskStore usage receipts, iLink login/poll/quote/model/outbox against controlled loopback fixtures. Omitted provider usage stays unknown, duplicate polling does not issue another call and accounting records cannot execute tools. No live WeChat login or delivery, Android device or UI claim."
+  },
+  "display-rotation-geometry": {
+    "class": "dev.pocketengine.displayhelper.DisplayGeometryTest",
+    "additionalClasses": [
+      "dev.pocketengine.displayhelper.DisplayGestureCleanupTest",
+      "dev.pocketengine.phone.display.DisplayModuleTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Actual helper logical/capture geometry transforms and original down/cancel lifecycle, including native geometry generations, 180-degree and same-size round trips, and unknown down retention. Pure geometry tests and Android shadow gesture fixtures; OEM virtual-display rotation and real image producer transforms require physical validation."
+  },
+  "owner-configuration-backups": {
+    "class": "dev.pocketengine.store.SettingsConfigurationBackupTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.skills.SkillBackupTest",
+      "dev.pocketengine.features.automation.AutomationBackupTest",
+      "dev.pocketengine.features.workspace.OwnerConfigurationBackupSectionsTest",
+      "dev.pocketengine.features.workspace.OwnerDataArchivePrimitiveTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Versioned configuration/skill/schedule sections in the original archive and stores: deterministic new identities, inactive restore, exact catalog CAS, settings mutation reservation, source receipts and query-only recovery. Pending work profiles require native source rebind; credentials and old permissions stay excluded. Old archive section compatibility retained. Android/SQLite host fixtures plus pure domain cases; no physical migration acceptance."
+  },
+  "related-task-cancellation": {
+    "class": "dev.pocketengine.features.RelatedTaskCancellationTest",
+    "additionalClasses": [
+      "dev.pocketengine.RelatedTaskCancellationNativeTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original TaskStore/FeatureHost snapshot and queued child-stop fences, including controlled SQL successors in the actual cancelCapabilityAttempt native entry (invoked reflectively) and its finally chain and a reentrant original-control callback. Same-parent later links, parent/child run or epoch changes and captured descendants cannot select new work. Startup/presentation, team transport and successor admission are controlled fixtures; no model, physical team/remote/MCP settlement or device acceptance."
+  },
+  "attachment-import-context": {
+    "class": "dev.pocketengine.features.attachments.OwnerAttachmentImportTest",
+    "additionalClasses": [
+      "dev.pocketengine.ui.AttachmentImportPickerRegistryTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original task/project nonce pin, no-replay AndroidX registry save/restore, real repository/task-link receipts, missing-context library preservation and partial/unknown association. No mounted Activity, actual process-death or device acceptance."
+  },
+  "attachment-index-recovery": {
+    "class": "dev.pocketengine.features.attachments.AttachmentIndexRecoveryTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.attachments.AttachmentBookTest",
+      "dev.pocketengine.features.attachments.NativeAttachmentPublicationTest",
+      "dev.pocketengine.features.attachments.AttachmentOutcomeJourneyTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Bounded read-only owner inventory with explicit incomplete diagnostics, unchanged original bytes and unknown native publications, strict archive/replay scans, physical slot/byte quotas and fail-closed enumeration/read budgets. No mounted UI, Android process-death or device acceptance."
+  },
+  "attachment-pdf-scratch-recovery": {
+    "class": "dev.pocketengine.features.attachments.NativePdfScratchRecoveryTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.attachments.documents.DocumentReaderTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.attachments.documents.DocumentFixtures"
+    ],
+    "robolectric": true,
+    "description": "Actual PDF text/OCR private-copy paths with hard-killed host JVMs and fresh-process cold recovery; exact factory namespace, no-follow cleanup and live ownership through renderer release. Renderer-only zero-page shadows, not PDF correctness, Android device/process-death, or cross-process-lock acceptance."
+  },
+  "attachment-view-recovery": {
+    "class": "dev.pocketengine.features.attachments.AttachmentViewSnapshotsRecoveryTest",
+    "helpers": [
+      "dev.pocketengine.features.attachments.LegacyAttachmentIntegrityTest"
+    ],
+    "robolectric": true,
+    "linuxPosixFd": true,
+    "description": "Opt-in real-disk preview orphan recovery with controlled JDK17 child-process kills, original TTL, exact quota and unknown-index preservation. Requires Linux and readable /proc/self/fd for the existing POSIX reader fixture. No Android device/process-kill or external URI-grant acceptance."
+  },
+  "native-transport-wait-ownership": {
+    "class": "dev.pocketengine.features.local.runtime.NativeTransportWaitOwnershipTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.local.runtime.NativeTransportContractTest",
+      "dev.pocketengine.features.local.runtime.NativePtyTransportTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.local.runtime.NativeTransportWaitOwnershipProbe"
+    ],
+    "native": true,
+    "description": "Actual Linux JNI PTY/duplex transport and isolated competing exact-child waitpid before initial exit observation and after a real zombie observation at the next/final scan. After observing ECHILD or changed identity, no further numeric signal or group/session release proof is permitted. Checks and signals are not atomic against arbitrary competing reapers. Historical precise transport receipts stay read-only; no real PID reuse, unrelated signal target, App-wide reaper, Android device or full-suite claim."
   },
   "private-task-run-control": {
     "class": "dev.pocketengine.PrivateTaskRunControlNativeTest",

@@ -111,6 +111,54 @@ public final class DeviceIngressNativeTest {
     private static void refusedReply(Throwing action)throws Exception{try{action.run();fail("malformed or wrongly bound response must refuse");}catch(SecurityException|DeviceProtocol.ProtocolException expected){}}
     private interface Throwing { void run() throws Exception; }
     private long count(String table) { try (Cursor rows = sql.rawQuery("SELECT COUNT(*) FROM " + table, null)) { rows.moveToFirst(); return rows.getLong(0); } }
+    private record ScheduleFixture(dev.pocketengine.features.automation.AutomationModule module,dev.pocketengine.features.AutomationPlanHost plans){}
+    private ScheduleFixture scheduleFixture(boolean clear)throws Exception{
+        var context=RuntimeEnvironment.getApplication();if(clear){Files.deleteIfExists(new java.io.File(context.getFilesDir(),"automation/rules.json").toPath());Files.deleteIfExists(new java.io.File(context.getFilesDir(),"automation/commitments.json").toPath());}
+        binding=DeviceScheduleDrafts.resource();nativeGrant.put("capabilities",new JSONArray().put("device.describe").put("tool.invoke")).put("toolNames",DeviceScheduleDrafts.tools()).put("resources",new JSONArray().put(binding)).put("toolBudget",0).put("modelBudget",0);
+        ContentValues grant=new ContentValues();grant.put("body_json",nativeGrant.toString());assertEquals(1,sql.update("device_grants",grant,"grant_id=?",new String[]{"grant-test"}));
+        var host=new dev.pocketengine.features.AutomationPlanHost(tasks);var features=new dev.pocketengine.features.FeatureContext(context,new SettingsStore(context),new dev.pocketengine.store.SecretVault(context),event->{});
+        return new ScheduleFixture(new dev.pocketengine.features.automation.AutomationModule(features,null,host),host);
+    }
+    private JSONObject scheduleWire(String operation,String tool,JSONObject arguments)throws Exception{
+        JSONObject request=wire(operation,"phone_observe",new JSONObject(),null).put("resourceBinding",DeviceScheduleDrafts.resource());
+        request.put("budget",new JSONObject().put("allocationId",DeviceProtocol.allocationId("parent-fixture",target,DeviceScheduleDrafts.resource(),"tool_session",null)).put("toolCalls",0).put("modelCalls",0));
+        request.put("arguments",new JSONObject().put("toolName",tool).put("effect",DeviceScheduleDrafts.PROPOSE.equals(tool)?"write":"read").put("arguments",arguments));
+        if(DeviceScheduleDrafts.PROPOSE.equals(tool))request.put("argumentsDigest",DeviceProtocol.argumentsDigest(request));else{request.remove("operationId");request.remove("argumentsDigest");}return request;
+    }
+    private JSONObject scheduleDraft()throws Exception{return new JSONObject().put("title","原已配对脚本的提醒").put("kind","reminder").put("schedule",new JSONObject().put("type","once").put("at",System.currentTimeMillis()+120_000));}
+    private DeviceIngress scheduleIngress(ScheduleFixture fixture,DeviceTaskCoordinator.AcceptanceGate gate){return new DeviceIngress(target,"receiver-fixture",pairing,(request,kind)->{throw new AssertionError("draft must not enter execution admission");},new DeviceCapabilityRegistry(target,"receiver-fixture",()->new JSONObject()),coordinator(tasks),null,gate,original->fixture.module().receiveDeviceScheduleDraft(original,tasks));}
+    @Test public void pairedScheduleDraftAndOriginalQueryNeverCreateATaskRunOperationOrAlarm()throws Exception{
+        ScheduleFixture fixture=scheduleFixture(true);DeviceIngress ingress=scheduleIngress(fixture,DeviceTaskCoordinator.Acceptance::commit);JSONObject wire=scheduleWire(UUID.randomUUID().toString(),DeviceScheduleDrafts.PROPOSE,scheduleDraft());
+        int alarms=org.robolectric.Shadows.shadowOf(RuntimeEnvironment.getApplication().getSystemService(android.app.AlarmManager.class)).getScheduledAlarms().size();
+        JSONObject receipt=ingress.receive(caller,DeviceProtocol.canonicalBytes(wire)).getJSONObject("result");assertTrue(receipt.getBoolean("accepted"));assertEquals("succeeded",receipt.getString("status"));assertFalse(receipt.getJSONObject("payload").getBoolean("executionAuthorized"));assertFalse(receipt.getJSONObject("payload").getBoolean("modelCalled"));assertFalse(receipt.has("runId"));assertEquals("source-run",receipt.getJSONObject("audience").getString("requestRunId"));
+        JSONObject row=fixture.module().scheduleProposalsForTask(null).getJSONObject(0);assertEquals("paired_device_schedule",row.getJSONObject("origin").getString("kind"));assertFalse(row.getJSONObject("origin").has("conversationId"));
+        ingress.receive(caller,DeviceProtocol.canonicalBytes(wire));JSONObject query=scheduleWire("unused",DeviceScheduleDrafts.QUERY,new JSONObject().put("operationId",wire.getString("operationId")).put("argumentsDigest",wire.getString("argumentsDigest")));
+        JSONObject found=ingress.receive(caller,DeviceProtocol.canonicalBytes(query)).getJSONObject("result");assertEquals(row.getString("id"),found.getJSONObject("payload").getString("proposalId"));assertEquals(1,fixture.module().scheduleProposalsForTask(null).length());
+        assertEquals(alarms,org.robolectric.Shadows.shadowOf(RuntimeEnvironment.getApplication().getSystemService(android.app.AlarmManager.class)).getScheduledAlarms().size());assertEquals(0,count("tasks"));assertEquals(0,count("runs"));assertEquals(0,count("operations"));assertEquals(0,count("device_inbound"));assertEquals(0,starts.get());
+    }
+    @Test public void scheduleDraftRequiresAuthenticationExactZeroGrantAndCurrentReceiverEntry()throws Exception{
+        ScheduleFixture fixture=scheduleFixture(true);JSONObject wire=scheduleWire(UUID.randomUUID().toString(),DeviceScheduleDrafts.PROPOSE,scheduleDraft());DeviceIngress ingress=scheduleIngress(fixture,DeviceTaskCoordinator.Acceptance::commit);
+        refusedReply(()->ingress.receive(null,DeviceProtocol.canonicalBytes(wire)));
+        JSONObject budget=new JSONObject(wire.toString());budget.getJSONObject("budget").put("modelCalls",1);budget.put("argumentsDigest",DeviceProtocol.argumentsDigest(budget));refusedReply(()->ingress.receive(caller,DeviceProtocol.canonicalBytes(budget)));
+        JSONObject injected=scheduleWire(UUID.randomUUID().toString(),DeviceScheduleDrafts.PROPOSE,scheduleDraft().put("approved",true));refusedReply(()->ingress.receive(caller,DeviceProtocol.canonicalBytes(injected)));
+        DeviceIngress stopped=scheduleIngress(fixture,original->{throw new SecurityException("original receiver disabled before entry");});refused(()->stopped.receive(caller,DeviceProtocol.canonicalBytes(wire)));
+        assertEquals(0,fixture.module().scheduleProposalsForTask(null).length());assertEquals(0,count("tasks"));assertEquals(0,starts.get());
+    }
+    @Test public void scheduleGrantRevokedBetweenWireCheckAndBookEntryHasNoDraft()throws Exception{
+        ScheduleFixture fixture=scheduleFixture(true);JSONObject wire=scheduleWire(UUID.randomUUID().toString(),DeviceScheduleDrafts.PROPOSE,scheduleDraft());DeviceIngress ingress=scheduleIngress(fixture,original->{pairing.revokeLocally(caller.deviceId(),System.currentTimeMillis());return original.commit();});
+        refused(()->ingress.receive(caller,DeviceProtocol.canonicalBytes(wire)));assertEquals(0,fixture.module().scheduleProposalsForTask(null).length());assertEquals(0,count("tasks"));assertEquals(0,count("operations"));
+    }
+    @Test public void scheduleGrantBodyChangedAfterReviewIsRejectedEvenWhenMethodStillAllowed()throws Exception{
+        ScheduleFixture fixture=scheduleFixture(true);JSONObject wire=scheduleWire(UUID.randomUUID().toString(),DeviceScheduleDrafts.PROPOSE,scheduleDraft());DeviceIngress ingress=scheduleIngress(fixture,original->{ContentValues changed=new ContentValues();changed.put("body_json",new JSONObject(nativeGrant.toString()).put("issuedAt",nativeGrant.getLong("issuedAt")-1).toString());assertEquals(1,sql.update("device_grants",changed,"grant_id=?",new String[]{"grant-test"}));return original.commit();});
+        refused(()->ingress.receive(caller,DeviceProtocol.canonicalBytes(wire)));assertEquals(0,fixture.module().scheduleProposalsForTask(null).length());assertEquals(0,count("tasks"));
+    }
+    @Test public void lostScheduleAckColdQueriesOnlyOriginalDraftAndRevocationBlocksOwnerApproval()throws Exception{
+        ScheduleFixture fixture=scheduleFixture(true);JSONObject wire=scheduleWire(UUID.randomUUID().toString(),DeviceScheduleDrafts.PROPOSE,scheduleDraft());DeviceIngress lost=scheduleIngress(fixture,original->{original.commit();throw new java.io.IOException("original response lost after actual draft write");});
+        assertThrows(java.io.IOException.class,()->lost.receive(caller,DeviceProtocol.canonicalBytes(wire)));ScheduleFixture cold=scheduleFixture(false);JSONObject query=scheduleWire("unused",DeviceScheduleDrafts.QUERY,new JSONObject().put("operationId",wire.getString("operationId")).put("argumentsDigest",wire.getString("argumentsDigest")));
+        DeviceIngress readonly=scheduleIngress(cold,original->{throw new AssertionError("query must not enter a new-write receiver gate");});JSONObject found=readonly.receive(caller,DeviceProtocol.canonicalBytes(query)).getJSONObject("result");assertTrue(found.getBoolean("accepted"));assertFalse(found.getJSONObject("payload").getBoolean("replayAllowed"));assertEquals(1,cold.module().scheduleProposalsForTask(null).length());
+        JSONObject row=cold.module().scheduleProposalsForTask(null).getJSONObject(0);pairing.revokeLocally(caller.deviceId(),System.currentTimeMillis());refused(()->cold.plans().ownerCommand(cold.module(),"approveSchedule",new JSONObject().put("id",row.getString("id")).put("digest",row.getString("digest"))));
+        cold.module().reconcileNativeScheduleSources();JSONObject retained=cold.module().scheduleProposalsForTask(null).getJSONObject(0);assertTrue(retained.getBoolean("sourceCheckPending"));assertEquals(row.getJSONObject("draft").getString("title"),retained.getJSONObject("draft").getString("title"));assertEquals(0,cold.module().snapshot().getJSONArray("rules").length());assertEquals(0,count("tasks"));assertEquals(0,count("operations"));
+    }
     @Test public void acceptedCommitsBeforeHostPickupAndChangedDigestCannotReplaceIt() throws Exception {
         DeviceExecutionAdmission first = admission(wire("observe-a", "phone_observe", new JSONObject(), null));
         JSONObject accepted = coordinator(tasks).submit(first); assertTrue(accepted.getBoolean("accepted")); assertFalse(accepted.getBoolean("knownOperation"));

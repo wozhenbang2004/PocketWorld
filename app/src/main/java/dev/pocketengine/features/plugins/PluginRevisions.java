@@ -22,6 +22,7 @@ public final class PluginRevisions {
         }catch(NumberFormatException|ArithmeticException invalid){/* Reject lossy or malformed revision values. */}
         throw new IllegalArgumentException("插件状态序号无效，请重新读取当前状态");
     }
+    static long expectedStateRevision(JSONObject input)throws Exception{return revision(input.get("expectedStateRevision"));}
     static void advanceState(JSONObject plugin)throws Exception {plugin.put("stateRevision",Math.addExact(stateRevision(plugin),1));}
 
     static void checkExpected(JSONObject current,JSONObject input,boolean required)throws Exception {

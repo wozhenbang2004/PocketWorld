@@ -35,6 +35,10 @@ public final class DeviceCapabilityRegistry {
                 .put("supported",new JSONObject().put("scopedProject",project).put("explicitDeviceRoutes",routes))
                 .put("unsupported",new JSONArray(new String[]{"autonomous_phone_GUI","owned_service","PTY","Git","freeze_package","collect","preview","ambient_private_memory","whole_private_workspace"}))
                 .put("account",new JSONObject().put("ready",false).put("authorized",false).put("reason","CHATGPT_DEVICE_GOAL_AUDIENCE_UNPROVEN")));
+        boolean draftInstalled=current.optBoolean("scheduleDraftsInstalled"),draftAuthorized=current.optBoolean("scheduleDraftsAuthorized"),draftReady=enabled&&draftInstalled&&draftAuthorized;
+        capabilities.put(new JSONObject().put("id",DeviceScheduleDrafts.CAPABILITY).put("version",DeviceProtocol.VERSION).put("implemented",true).put("installed",draftInstalled).put("authorized",draftAuthorized).put("ready",draftReady).put("blocked",!draftReady)
+                .put("reason",!enabled?"receiver_disabled":!draftInstalled?"native_schedule_drafts_unavailable":!draftAuthorized?"explicit_schedule_draft_grant_required":"").put("toolNames",DeviceScheduleDrafts.tools()).put("resourceBinding",DeviceScheduleDrafts.resource())
+                .put("toolCalls",0).put("modelCalls",0).put("reviewRequired",true).put("automaticExecution",false).put("queryOriginalOnlyOnUnknown",true).put("maxDraftsPerHour",8).put("minimumDraftIntervalMs",30000));
         // Native health is assembled in-process using this SAME opaque discovery permission and
         // the original local signer. Still filter recipient/epoch and bound the resulting control frame.
         JSONArray receipts=new JSONArray(),provided=current.optJSONArray("grantReceipts");boolean truncated=current.optBoolean("grantReceiptsTruncated")||provided!=null&&provided.length()>=16;
