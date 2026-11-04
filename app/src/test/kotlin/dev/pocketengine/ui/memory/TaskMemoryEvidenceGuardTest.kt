@@ -84,4 +84,23 @@ class TaskMemoryEvidenceGuardTest {
         assertFalse(TaskMemoryEvidenceGuard.sameSource(transported,JSONObject(native.toString()).put("sourceId","another")))
         assertThrows(IllegalArgumentException::class.java){TaskMemoryEvidenceGuard.receipt("task-a","run-a",receipt(),"wrong-request","answer-a")}
     }
+    @Test fun currentOwnerReasonRequiresItsNativePolicyAndOriginalRecordVersion() {
+        fun diagnosed(policy: String = "balanced_core_owner_task_v1", reason: String = "owner_current"): JSONObject {
+            val value = receipt().put("selectionDiagnosticsAvailable", true)
+            value.getJSONArray("records").getJSONObject(0).put("selectionReason", reason)
+            return value.put("selectionDiagnostics", JSONObject().put("format", 1).put("policy", policy)
+                .put("coreSelected", 0).put("retrievedSelected", 1).put("charsUsed", 30).put("maxChars", 12000).put("limit", 16)
+                .put("selected", JSONArray().put(JSONObject().put("id", "record-a").put("revision", 3L).put("selection", "retrieved").put("reason", reason)))
+                .put("omitted", JSONArray()).put("omissionCounts", JSONObject()))
+        }
+        assertEquals("owner_current", parse(diagnosed()).getJSONArray("records").getJSONObject(0).getString("selectionReason"))
+        assertEquals("task_query_match", parse(diagnosed("balanced_core_task_v1", "task_query_match")).getJSONArray("records").getJSONObject(0).getString("selectionReason"))
+        assertThrows(IllegalArgumentException::class.java) { parse(diagnosed("balanced_core_task_v1")) }
+        val mismatched = diagnosed()
+        mismatched.getJSONObject("selectionDiagnostics").getJSONArray("selected").getJSONObject(0).put("revision", 4L)
+        assertThrows(IllegalArgumentException::class.java) { parse(mismatched) }
+        val wrongReason = diagnosed()
+        wrongReason.getJSONArray("records").getJSONObject(0).put("selectionReason", "task_query_match")
+        assertThrows(IllegalArgumentException::class.java) { parse(wrongReason) }
+    }
 }
