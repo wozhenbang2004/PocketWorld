@@ -77,7 +77,6 @@ public final class PhoneSetupModuleNativeTest {
             public boolean connected() { return false; }
             public String services() { return "example.other/.Reader"; }
             public int enabled() { return 1; }
-            public boolean writeServices(String value) { throw new AssertionError("Permission must not be granted by setup"); }
         };
         recovery = new AccessibilityRecovery(app.getSharedPreferences("phone_connection_recovery", 0), platform,
                 "dev.pocketengine/.phone.PhoneAccessibilityService", 10001);
@@ -193,7 +192,7 @@ public final class PhoneSetupModuleNativeTest {
         assertEquals(2, finished.get()); assertEquals(0, display.connectCalls);
         module.recoverAfterLifecycle(finished::incrementAndGet); drain();
         assertEquals(1, display.connectCalls);
-        assertEquals("secure_settings_permission_missing", module.snapshot().getJSONObject("recovery").getString("lastOutcome"));
+        assertEquals("initial_accessibility_authorization_required", module.snapshot().getJSONObject("recovery").getString("lastOutcome"));
         assertEquals("original_helper_authenticated", module.snapshot().getJSONObject("recovery").getString("connectionOutcome"));
     }
 

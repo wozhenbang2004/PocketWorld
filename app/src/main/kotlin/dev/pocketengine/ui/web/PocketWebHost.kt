@@ -63,11 +63,20 @@ internal class PocketWebHost(
     private var keyboardVisible = false
     private var pendingState: JSONObject? = null
     private val bridge = PocketWebBridge(controller, ::send)
+    private var bundle: PocketWebBundle? = null
     private val loader = WebViewAssetLoader.Builder().setDomain(HOST)
         .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(activity)).build()
 
     @SuppressLint("SetJavaScriptEnabled")
     fun start() {
+        bundle = try {
+            activity.assets.open("pocket-ui/build-identity.json").use { PocketWebBundle.read(it) }
+        } catch (_: Exception) {
+            view.addView(android.widget.TextView(activity).apply {
+                text = "工作台资源不完整，请安装完整版本后重新打开。"
+            })
+            return
+        }
         with(web.settings) {
             javaScriptEnabled = true
             domStorageEnabled = false
@@ -208,8 +217,7 @@ internal class PocketWebHost(
         }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
     }
 
-    private fun trusted(uri: Uri): Boolean = uri.scheme == "https" && uri.host == HOST &&
-        uri.path.orEmpty().startsWith(PREFIX) && uri.pathSegments.none { it == "." || it == ".." || it.contains('\\') }
+    private fun trusted(uri: Uri): Boolean = bundle?.allows(uri.toString()) == true
 
     private fun response(uri: Uri, method: String): WebResourceResponse {
         if (trusted(uri) && method == "GET") loader.shouldInterceptRequest(uri)?.let { return it }

@@ -2617,18 +2617,24 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         }
     }
-    /** Ledger -> short Module command, never Module monitor -> ledger. Explicit undo only. */
+    /** Ledger -> short Module command, never Module monitor -> ledger. Explicit owner setting only. */
     internal fun restoreBackgroundAudio(done: (JSONObject?, String?) -> Unit) {
-        if (!privateWorkspaceView()) return
+        if (!privateWorkspaceView() || !state.backgroundSetupOpen) return
+        val view = phoneSetupViewRevision.get()
+        fun requireOriginalView() {
+            check(privateWorkspaceView() && state.backgroundSetupOpen && view == phoneSetupViewRevision.get()) { "原声音设置窗口已关闭或变化，请重新核对" }
+        }
         io.execute {
-            if (!privateWorkspaceView()) return@execute
             val result = runCatching {
+                requireOriginalView()
                 val module = app.features.module("display") as? dev.pocketengine.phone.display.DisplayModule ?: error("原后台手机模块尚未挂载")
-                dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.withCommands(module::audioRecovery) {
-                    dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.get(app).restoreAll()
+                dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.withCommands({ command, args ->
+                    requireOriginalView(); module.audioRecovery(command, args)
+                }) {
+                    dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.get(app).setAllOriginalForOwner()
                 }.also { try { app.features.sendState() } catch (_: Exception) { } }
             }
-            main.post { if (privateWorkspaceView()) result.fold({ done(it, null) }, { done(null, message(it)) }) }
+            main.post { if (privateWorkspaceView() && state.backgroundSetupOpen && view == phoneSetupViewRevision.get()) result.fold({ done(it, null) }, { done(null, message(it)) }) }
         }
     }
     fun openBackgroundSetup() {

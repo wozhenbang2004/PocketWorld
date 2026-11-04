@@ -316,12 +316,15 @@ final class QuickPanelSurface implements AutoCloseable {
         body.addView(text("目标 App 声音",13,UiAppearance.foreground(context)));
         if(audioTarget!=null)body.addView(text(audioTarget,12,UiAppearance.secondary(context)));
         if(audioState!=null){String mode=audioState.optString("mode");String label=switch(mode){case "ignore" -> "静音（已读回）";case "allow" -> "允许播放（已读回）";case "deny" -> "系统拒绝播放（已读回）";case "foreground" -> "仅前台播放（已读回）";default -> "系统默认（已读回）";};body.addView(text(label,12,UiAppearance.foreground(context)));}
-        body.addView(text(audioMessage==null?"读取当前目标后，可只静音这个 App 或恢复它原来的声音。当前支持 user 0；不会调整手机总音量。":audioMessage,12,UiAppearance.secondary(context)));
+        body.addView(text(audioMessage==null?"读取当前目标后，可只静音这个 App，或明确将它设为原记录的声音模式。当前支持 user 0；不会调整手机总音量。":audioMessage,12,UiAppearance.secondary(context)));
         boolean ready=!audioBusy&&phase!=Phase.CAPTURING&&phase!=Phase.SENDING&&phase!=Phase.OPENING_VOICE;
         if(audioReviewId!=null&&audioState!=null){
             final String review=audioReviewId;
             if(audioState.optBoolean("canMute")){Button mute=button("仅静音这个 App",()->actions.setAudio(review,true),false);mute.setTag("quick_panel_audio_mute");mute.setEnabled(ready);body.addView(mute);}
-            if(audioState.optBoolean("canRestore")){Button restore=button("恢复原声音",()->actions.setAudio(review,false),false);restore.setTag("quick_panel_audio_restore");restore.setEnabled(ready);body.addView(restore);}
+            if(audioState.optBoolean("canRestore")){
+                body.addView(text("这是现在明确发出的声音设置；同时发生的其他修改可能以本次设置为准。",12,UiAppearance.secondary(context)));
+                Button restore=button("按原记录设置声音",()->actions.setAudio(review,false),false);restore.setTag("quick_panel_audio_restore");restore.setEnabled(ready);body.addView(restore);
+            }
             if(!audioState.optBoolean("canMute")&&!audioState.optBoolean("canRestore"))body.addView(text("当前没有本任务可恢复的声音记录，保持 App 现有状态。",12,UiAppearance.secondary(context)));
         }
         Button read=button(audioBusy?"核对声音中…":"读取目标 App 声音",actions::reviewAudio,false);read.setTag("quick_panel_audio_read");read.setEnabled(ready);body.addView(read);

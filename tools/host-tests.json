@@ -1409,6 +1409,23 @@
     "robolectric": true,
     "description": "Original task/project nonce pin, no-replay AndroidX registry save/restore, real repository/task-link receipts, missing-context library preservation and partial/unknown association. No mounted Activity, actual process-death or device acceptance."
   },
+  "attachment-import-recovery": {
+    "class": "dev.pocketengine.features.attachments.AttachmentImportRecoveryTest",
+    "additionalClasses": ["dev.pocketengine.features.attachments.AttachmentBookTest"],
+    "helpers": [],
+    "description": "Original ordinary attachment import interruption, saved-byte/index reconciliation, unknown/native preservation and cross-Book file-lock exclusion. Pure JVM fixtures; no Android process-death or device acceptance."
+  },
+  "pocket-web-model-accounts": {
+    "class": "dev.pocketengine.ui.web.PocketWebApiModelsTest",
+    "additionalClasses": ["dev.pocketengine.ui.web.PocketWebAccountCommandsTest"],
+    "helpers": [],
+    "description": "Original Web API model identity projection and account command receipts. Pure JVM contracts; no OAuth provider or mounted Android acceptance."
+  },
+  "pocket-web-bundle": {
+    "class": "dev.pocketengine.ui.web.PocketWebBundleTest",
+    "helpers": [],
+    "description": "Original runtime resource allowlist, exact origin, canonical paths and bounded receipt admission. No mounted Android WebView or APK acceptance."
+  },
   "attachment-index-recovery": {
     "class": "dev.pocketengine.features.attachments.AttachmentIndexRecoveryTest",
     "additionalClasses": [
@@ -1443,6 +1460,7 @@
   "native-transport-wait-ownership": {
     "class": "dev.pocketengine.features.local.runtime.NativeTransportWaitOwnershipTest",
     "additionalClasses": [
+      "dev.pocketengine.features.local.runtime.NativeLaunchObservationTest",
       "dev.pocketengine.features.local.runtime.NativeTransportContractTest",
       "dev.pocketengine.features.local.runtime.NativePtyTransportTest"
     ],
@@ -1450,7 +1468,7 @@
       "dev.pocketengine.features.local.runtime.NativeTransportWaitOwnershipProbe"
     ],
     "native": true,
-    "description": "Actual Linux JNI PTY/duplex transport and isolated competing exact-child waitpid before initial exit observation and after a real zombie observation at the next/final scan. After observing ECHILD or changed identity, no further numeric signal or group/session release proof is permitted. Checks and signals are not atomic against arbitrary competing reapers. Historical precise transport receipts stay read-only; no real PID reuse, unrelated signal target, App-wide reaper, Android device or full-suite claim."
+    "description": "Actual Linux JNI ordinary/PTY/duplex transports with a private single-threaded command parent and a private clone wait domain. Exercises owner death plus real command reap after the last successful live/zombie observation, ordinary App reapers, control EOF and absent pidfd support; losing the original control channel keeps cleanup unknown and never authorizes App-side numeric signals. Historical transport receipts remain read-only. Requires /proc in the current PID namespace; does not prove Android device behavior, forced PID reuse or safety against uncoordinated same-process __WALL/__WCLONE sweepers."
   },
   "private-task-run-control": {
     "class": "dev.pocketengine.PrivateTaskRunControlNativeTest",

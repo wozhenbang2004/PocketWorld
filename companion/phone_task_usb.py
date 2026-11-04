@@ -1,21 +1,73 @@
-"""Owner-requested ADB forward only; existing paired mTLS still authorizes tasks.
+"""Owner-requested private ADB stream; paired mTLS still authorizes every task.
 
 No device discovery/auto-selection, app bootstrap, token fetch, install, pairing,
-remote command execution or reconnect. Tests inject a controlled ADB process port.
+or reconnect. The only shell command reads the exact selected phone's boot count.
+No shared ADB forward is created or removed: that registry has no compare/delete.
 """
 from __future__ import annotations
+import ipaddress
+import os
 import re
 from pathlib import Path
+import socket
 import subprocess
 import threading
+import time
 
 
 class UsbForwardError(Exception):
     pass
 
 
+def _adb_server_target(environment):
+    """Freeze the selected TCP server with adb's environment precedence.
+
+    ADB_SERVER_SOCKET takes precedence over ANDROID_ADB_SERVER_ADDRESS/PORT.
+    Only explicit TCP endpoints are supported here; an unsupported socket must
+    never silently select the default server instead.
+    """
+    configured = environment.get("ADB_SERVER_SOCKET")
+    if configured is not None:
+        if not isinstance(configured, str) or not configured.startswith("tcp:"):
+            raise UsbForwardError("ADB_SERVER_SOCKET must use TCP for this private stream; non-TCP servers are not supported")
+        endpoint = configured[4:]
+        if re.fullmatch(r"[0-9]+", endpoint):
+            host, port = "localhost", endpoint
+        else:
+            selected = re.fullmatch(r"\[([^\[\]]+)\]:([0-9]+)|([^:\[\]]+):([0-9]+)", endpoint)
+            if selected is None:
+                raise UsbForwardError("Use ADB_SERVER_SOCKET=tcp:<port>, tcp:<host>:<port>, or tcp:[<IPv6>]:<port>")
+            host, port = (selected[1], selected[2]) if selected[1] is not None else (selected[3], selected[4])
+    else:
+        host = environment.get("ANDROID_ADB_SERVER_ADDRESS", "localhost")
+        port = environment.get("ANDROID_ADB_SERVER_PORT") or "5037"
+        if isinstance(host, str) and host.startswith("[") and host.endswith("]"):
+            host = host[1:-1]
+    if not isinstance(port, str) or not re.fullmatch(r"[0-9]{1,5}", port) or not 1 <= int(port) <= 65535:
+        raise UsbForwardError("Selected ADB server port must be an explicit number from 1 to 65535")
+    if not isinstance(host, str) or not 0 < len(host) <= 253:
+        raise UsbForwardError("Selected ADB server address is invalid")
+    if ":" in host:
+        try:
+            if not re.fullmatch(r"[0-9A-Fa-f:.]+(?:%[A-Za-z0-9_.-]+)?", host):
+                raise ValueError()
+            ipaddress.IPv6Address(host)
+        except ValueError:
+            raise UsbForwardError("Selected ADB server IPv6 address is invalid") from None
+    elif not re.fullmatch(r"[A-Za-z0-9_.-]+", host):
+        raise UsbForwardError("Selected ADB server address is invalid")
+    return host, int(port)
+
+
 class OwnedUsbForward:
-    def __init__(self, adb, serial, expected_boot, remote_port, *, run=subprocess.run):
+    """Retained native API name; now owns one socket, never a global forward.
+
+    ADB's documented host:transport:<serial> followed by tcp:<port> switches the
+    same smart socket into a private stream to that exact transport. Replacing a
+    shared forward cannot redirect it, and socket.close cannot delete a successor
+    mapping. The ADB control and boot observation use the same frozen server.
+    """
+    def __init__(self, adb, serial, expected_boot, remote_port, *, run=subprocess.run, connect=socket.create_connection, environment=None):
         executable = Path(adb)
         if not executable.is_absolute() or not executable.is_file():
             raise UsbForwardError("Use an explicit existing absolute ADB executable")
@@ -24,14 +76,22 @@ class OwnedUsbForward:
         if type(remote_port) is not int or not 1 <= remote_port <= 65535:
             raise UsbForwardError("Use the existing phone's explicit native control-listener port")
         self.adb, self.serial, self.boot, self.remote_port = str(executable), serial, expected_boot, remote_port
-        self.run, self.local_port = run, None
+        # Read configuration once, before any dispatch. Later environment changes
+        # cannot move either boot observations or the original private stream.
+        self._server = _adb_server_target(dict(os.environ if environment is None else environment))
+        self.run, self.connect = run, connect
+        self._stream = None
         self.state, self.cleanup_confirmed = "not_started", True
         # A cancelled asyncio.to_thread(open) may still be completing ADB. Cleanup
-        # waits for that exact attempt rather than racing and leaving its port open.
+        # waits for that exact attempt and closes only its socket object.
         self._lock = threading.RLock()
 
     def _adb(self, *arguments):
-        result = self.run([self.adb, "-s", self.serial, *arguments], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        # adb ignores ADB_SERVER_SOCKET when -H/-P are explicit. Supply BOTH so
+        # ANDROID_ADB_SERVER_ADDRESS/PORT cannot fill either from a changed env.
+        host, port = self._server
+        cli_host = f"[{host}]" if ":" in host else host
+        result = self.run([self.adb, "-H", cli_host, "-P", str(port), "-s", self.serial, *arguments], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE, timeout=6, check=False)
         if result.returncode != 0 or len(result.stdout) > 65536:
             raise UsbForwardError("Selected ADB operation was not confirmed")
@@ -42,12 +102,37 @@ class OwnedUsbForward:
         if not value.isdigit() or int(value) != self.boot:
             raise UsbForwardError("Selected phone boot changed; the old USB target cannot be reused")
 
-    def _owned(self):
-        if self.local_port is None:
-            return False
-        expected = (self.serial, "tcp:" + str(self.local_port), "tcp:" + str(self.remote_port))
-        rows = [tuple(line.split()) for line in self._adb("forward", "--list").splitlines()]
-        return expected in rows and sum(len(row) == 3 and row[1] == expected[1] for row in rows) == 1
+    @staticmethod
+    def _request(stream, service):
+        data = service.encode("ascii", "strict")
+        if not 0 < len(data) <= 65535:
+            raise UsbForwardError("ADB service request outside bound")
+        deadline = time.monotonic() + 6
+
+        def remaining():
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise UsbForwardError("Selected ADB service timed out")
+            stream.settimeout(left)
+
+        pending = memoryview(f"{len(data):04x}".encode("ascii") + data)
+        while pending:
+            remaining()
+            sent = stream.send(pending)
+            if sent <= 0:
+                raise UsbForwardError("Selected ADB request stream closed")
+            pending = pending[sent:]
+        status = bytearray()
+        while len(status) < 4:
+            remaining()
+            part = stream.recv(4 - len(status))
+            if not part:
+                raise UsbForwardError("Selected ADB service response was incomplete")
+            status.extend(part)
+        if status != b"OKAY":
+            # A FAIL body is untrusted diagnostic text, not authority or a retry
+            # request. Close this exact stream without opening any fallback.
+            raise UsbForwardError("Selected ADB service was not accepted")
 
     def open(self):
         with self._lock:
@@ -55,24 +140,20 @@ class OwnedUsbForward:
 
     def _open(self):
         if self.state != "not_started":
-            raise UsbForwardError("Original USB forward cannot be replayed")
-        self.check_boot()
-        self.state, self.cleanup_confirmed = "dispatch_prepared", False
+            raise UsbForwardError("Original USB stream cannot be replayed")
+        self.state = "dispatch_prepared"
         try:
-            value = self._adb("forward", "--no-rebind", "tcp:0", "tcp:" + str(self.remote_port))
-            if not value.isdigit() or not 1 <= int(value) <= 65535:
-                raise UsbForwardError("Original ADB forward result is unknown; no retry")
-            self.local_port = int(value)
-            if not self._owned():
-                raise UsbForwardError("ADB did not retain this exact original forward")
             self.check_boot()
+            self._stream = self.connect(self._server, timeout=6)
+            self.cleanup_confirmed = False
+            self._request(self._stream, "host:transport:" + self.serial)
+            self._request(self._stream, "tcp:" + str(self.remote_port))
+            self.check_boot()
+            self._stream.setblocking(False)
             self.state = "ready"
-            return self.local_port
-        except Exception:
-            self.state = "unknown"
-            # A missing original port is not permission to clear all forwards.
-            if self.local_port is not None:
-                self.close()
+            return self._stream
+        except BaseException:
+            self._close()
             raise
 
     def close(self):
@@ -80,14 +161,14 @@ class OwnedUsbForward:
             return self._close()
 
     def check_current(self):
-        """Read this exact serial/boot/forward; never discover, replace or reconnect."""
+        """Check the original stream and serial/boot; never select a replacement."""
         with self._lock:
             if self.state != "ready":
                 raise UsbForwardError("Original USB route is no longer ready")
             try:
                 self.check_boot()
-                if not self._owned():
-                    raise UsbForwardError("Original USB forward changed or disappeared")
+                if self._stream is None or self._stream.fileno() < 0:
+                    raise UsbForwardError("Original USB stream closed")
             except Exception:
                 self.state = "invalidated"
                 raise
@@ -103,20 +184,52 @@ class OwnedUsbForward:
         """A bounded local observation, not proof of a phone task's execution."""
         with self._lock:
             return {"state": self.state, "cleanupConfirmed": self.cleanup_confirmed,
-                    "ownedPortKnown": self.local_port is not None, "automaticReconnect": False}
+                    "ownedPortKnown": False, "ownedStreamKnown": self._stream is not None,
+                    "transport": "adb_direct_stream", "sharedForwardCreated": False,
+                    "cleanupScope": "owned_adb_stream", "automaticReconnect": False}
 
     def _close(self):
-        if self.local_port is None:
-            return self.cleanup_confirmed
         try:
-            # Removal never affects a forward replaced by another actor/serial.
-            if self._owned():
-                self._adb("forward", "--remove", "tcp:" + str(self.local_port))
-            self.cleanup_confirmed = not self._owned()
+            stream = self._stream
+            if stream is not None:
+                try:
+                    stream.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                stream.close()
+            self.cleanup_confirmed = stream is None or stream.fileno() < 0
             self.state = "closed" if self.cleanup_confirmed else "unknown"
         except Exception:
             self.cleanup_confirmed, self.state = False, "unknown"
         return self.cleanup_confirmed
+
+
+class _OwnedStreamChannel:
+    """The existing TLS engine uses this socket without creating a listener."""
+    def __init__(self, stream, forward):
+        self.stream, self.forward = stream, forward
+
+    async def receive(self, timeout=0.1):
+        import asyncio
+        import device_transport as transport
+        try:
+            raw = await asyncio.wait_for(asyncio.get_running_loop().sock_recv(self.stream, transport.MAX_PACKET), timeout)
+        except asyncio.TimeoutError:
+            return None
+        if not raw:
+            raise EOFError("Original ADB stream closed")
+        return raw
+
+    async def send(self, raw):
+        import asyncio
+        import device_transport as transport
+        if not 0 < len(raw) <= transport.MAX_PACKET:
+            raise transport.TransportError("TLS record outside bound")
+        await asyncio.wait_for(asyncio.get_running_loop().sock_sendall(self.stream, raw), 10)
+
+    async def close(self):
+        import asyncio
+        await asyncio.to_thread(self.forward.close)
 
 
 class _CurrentUsbChannel:
@@ -161,8 +274,7 @@ async def attach(service, peer_id, grant_id, forward):
     try:
         # Keep creation inside the cleanup region: cancellation does not stop an
         # already running ADB child, and therefore cannot be called not-dispatched.
-        port = await asyncio.to_thread(forward.open)
-        await asyncio.to_thread(forward.check_boot)
+        stream = await asyncio.to_thread(forward.open)
         pin = base64.b64decode(known["certificateDer"], validate=True)
         def current_peer():
             if service.closed or getattr(service.manager, "closed", False):
@@ -195,9 +307,9 @@ async def attach(service, peer_id, grant_id, forward):
             actual.on_close = closed
             admitted.set()
         context = transport.native_device_context(service.identity, [pin], server_side=False)
-        connection = await transport.open_lan("127.0.0.1", port, context=context, expected_certificate_der=pin, lane="control",
-                                              on_frame=lambda peer, frame: None, on_connection=bound)
-        connection.channel = _CurrentUsbChannel(connection.channel, forward, current_peer)
+        channel = _CurrentUsbChannel(_OwnedStreamChannel(stream, forward), forward, current_peer)
+        connection = transport.DeviceConnection(channel, transport.MemoryBioTls(context, server_side=False, expected_certificate_der=pin),
+                                               lane="control", on_frame=lambda peer, frame: None, on_connection=bound)
         task = asyncio.create_task(connection.run())
         service.tasks.append(task)
         # Transport-online alone is insufficient: original native _bind must

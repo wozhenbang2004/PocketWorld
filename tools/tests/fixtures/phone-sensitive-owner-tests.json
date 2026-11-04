@@ -25,6 +25,8 @@
       "class": "dev.pocketengine.phone.display.PhoneObservationBoundariesNativeTest",
       "source": "app/src/hostTest/java/dev/pocketengine/phone/display/PhoneObservationBoundariesNativeTest.java",
       "methods": [
+        "sameSizeGeometryRoundTripRejectsOldNodeButFreshObservationKeepsSameSession",
+        "geometryChangeWhileNativeTreeWorkerIsBlockedCannotDispatchOldNodeAfterReturn",
         "foregroundUnrelatedTickerDoesNotInvalidateExactStableButton",
         "backgroundPixelAnimationAndUnrelatedTickerDoNotInvalidateSemanticButton",
         "exactReplacementMoveAncestorAndNewCoverEachRefuseOldTarget",

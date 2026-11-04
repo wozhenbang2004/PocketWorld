@@ -36,7 +36,8 @@ try:
                 if row['event']=='owned_scope':
                     if scope is not None:raise RuntimeError('duplicate_owned_scope')
                     scope=row
-                    if row['leader']['parent']!=worker.pid or row['leader']['group']!=row['leader']['pid'] or row['leader']['session']!=row['leader']['pid']:raise RuntimeError('original_native_session_not_observed')
+                    if row['owner']['parent']!=worker.pid or row['leader']['parent']!=row['owner']['pid'] or row['leader']['group']!=row['leader']['pid'] or row['leader']['session']!=row['leader']['pid']:raise RuntimeError('original_native_owner_and_session_not_observed')
+                    if not exact(fact(row['owner']['pid']),row['owner']):raise RuntimeError('original_private_owner_identity_changed')
                     actual=fact(row['child']['pid'])
                     if not exact(actual,row['child']) or actual['parent'] not in (row['leader']['pid'],os.getpid()):raise RuntimeError('child_not_our_original_subtree')
                     observations.append(dict(event='exact_child_observed',fact=actual,elapsedMillis=int((time.monotonic()-started)*1000)))

@@ -44,6 +44,8 @@ internal object ChatInputRules {
  if(!state.chatAttachmentPickerOpen)return
  AlertDialog(onDismissRequest=controller::closeChatAttachmentPicker,title={Text("选择本条消息的附件")},text={Column(Modifier.heightIn(max=420.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)){
   Text("导入只进入私有附件库；只有此处勾选并发送，才会交给本轮模型。最多4个，过期摘要或不支持内容会明确拒绝。",fontSize=12.sp)
+  if(state.feature("attachments").optJSONObject("indexDiagnostics")?.optBoolean("incomplete")==true)
+   Text("部分附件尚未核对完整，可读文件仍可选择。未确认的原件已保留，请核对后再备份。",fontSize=13.sp,color=MaterialTheme.colorScheme.error)
   Text(if(state.chatAttachmentModel.optBoolean("supportsImageInput"))"当前任务模型由目录或机主声明支持图像输入，未声称已实测识图效果。" else "当前任务/所选模型未配置图像输入，可选受支持文档；图像需先在模型设置明确配置。",fontSize=12.sp,color=SecondaryInk)
   val rows=state.feature("attachments").optJSONArray("attachments").objects();if(rows.isEmpty())Text("还没有附件，可先导入。",fontSize=13.sp)
   rows.forEach{raw->val file=ChatInputRules.attachment(raw);if(file!=null){val selected=state.selectedChatAttachments.any{it.id==file.id};val image=file.mimeType.startsWith("image/");Row(verticalAlignment=Alignment.CenterVertically){Checkbox(selected,{controller.toggleChatAttachment(raw)},enabled=selected||!image||state.chatAttachmentModel.optBoolean("supportsImageInput"));Column(Modifier.weight(1f)){Text(file.name,fontSize=14.sp);Text(file.mimeType+" · "+file.size+" bytes",fontSize=11.sp,color=SecondaryInk)};TextButton(onClick={controller.closeChatAttachmentPicker();controller.openAttachmentOutcome(raw)}){Text("来源",fontSize=11.sp)}}}}

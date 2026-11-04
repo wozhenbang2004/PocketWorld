@@ -101,7 +101,7 @@ class HostTestEntrypointTest(unittest.TestCase):
             sources = [path for path in matches if path.is_file()]
             self.assertEqual(1, len(sources))
             methods += len(re.findall(r'@Test\s+public\s+void\s+\w+\s*\(', sources[0].read_text()))
-        self.assertEqual(23, methods)
+        self.assertEqual(24, methods)
         helper = (HOST.ROOT / 'app/src/hostTest/java/dev/pocketengine/features/local/project/ProjectManagedRunnerJourneyTest.java').read_text()
         self.assertIn('createFixture(true)', helper)
         self.assertIn('createTerminalFixture()throws Exception {createFixture(false);}', helper)
@@ -175,7 +175,7 @@ class HostTestEntrypointTest(unittest.TestCase):
             source = (HOST.ROOT / 'app/src/test/java' / (name.replace('.', '/') + '.java')).read_text()
             methods += len(re.findall(r'@Test(?:\([^)]*\))?\s+public\s+void\s+\w+\s*\(', source))
             self.assertNotIn('@Ignore', source)
-        self.assertEqual(29, methods)
+        self.assertEqual(30, methods)
         source = (HOST.ROOT / 'app/src/main/java/dev/pocketengine/features/local/NativeCommandExecutor.java').read_text()
         loader = source[source.index('File[] saved='):source.index('private static JSONObject readOriginal')]
         self.assertNotIn('JsonFiles.write', loader)
@@ -234,7 +234,7 @@ class HostTestEntrypointTest(unittest.TestCase):
             self.assertEqual(len(methods), len(set(methods)), item['class'])
             self.assertEqual(sorted(item['methods']), sorted(methods), item['class'])
             self.assertNotIn('@Ignore', source)
-        self.assertEqual([12, 30, 8], [len(item['methods']) for item in manifest['classes'][:3]])
+        self.assertEqual([12, 32, 8], [len(item['methods']) for item in manifest['classes'][:3]])
         self.assertEqual([6, 7, 13, 1, 7, 5, 9, 4], [len(item['methods']) for item in manifest['classes'][3:]])
 
     def test_phone_sensitive_owner_explicit_group_does_not_expand_the_shared_native_class(self):
@@ -284,13 +284,13 @@ class HostTestEntrypointTest(unittest.TestCase):
             self.assertEqual([manifest['group']], invocation['groups'])
             self.assertEqual(classes, invocation['classes'])
             self.assertEqual(counts, json.loads((runs[0] / 'result.json').read_text())['executed'])
-            self.assertEqual(102, sum(counts.values()))
+            self.assertEqual(104, sum(counts.values()))
 
     def test_advanced_phone_groups_register_exact_bodies_and_compile_only_helpers(self):
         # Registry/source closure only; SDK35 production/test compilation remains the host Gradle gate.
         manifest = json.loads((HOST.ROOT / 'tools/tests/fixtures/phone-advanced-execution-tests.json').read_text())
         self.assertEqual(1, manifest['schemaVersion'])
-        expected_counts = {'phone-setup-recovery': 28, 'phone-input-extensions': 30,
+        expected_counts = {'phone-setup-recovery': 30, 'phone-input-extensions': 30,
                            'phone-semantic-profile': 45, 'phone-access-history': 38}
         self.assertEqual(set(expected_counts), set(manifest['groups']))
         for group, inventory in manifest['groups'].items():
@@ -639,10 +639,13 @@ class HostTestEntrypointTest(unittest.TestCase):
     def test_registered_fixtures_do_not_require_repository_as_jvm_working_directory(self):
         for entry in REGISTRY.values():
             for name in [entry['class']] + entry['helpers']:
-                relative = name.replace('.', '/') + '.java'
-                source = next((HOST.ROOT / root / relative).read_text()
-                              for root in ('app/src/hostTest/java', 'app/src/test/java')
-                              if (HOST.ROOT / root / relative).is_file())
+                relative = name.replace('.', '/')
+                candidates = [HOST.ROOT / root / (relative + suffix) for root, suffix in (
+                    ('app/src/hostTest/java', '.java'), ('app/src/test/java', '.java'),
+                    ('app/src/test/kotlin', '.kt'))]
+                sources = [candidate for candidate in candidates if candidate.is_file()]
+                self.assertEqual(1, len(sources), name)
+                source = sources[0].read_text()
                 self.assertNotIn('System.getProperty("user.dir")', source, name)
                 for literal in re.findall(r'(?:new File|Path\.of|Paths\.get)\(\s*"([^"\n]*)"', source):
                     self.assertTrue(Path(literal).is_absolute(), name + ': implicit cwd path ' + literal)

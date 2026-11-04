@@ -56,7 +56,7 @@ final class OwnerTaskAudio {
         if(muted)restoredByOwner.remove(selected.target.app);else restoredByOwner.add(selected.target.app);
         JSONObject result;
         try {
-            JSONObject effect=muted?recovery.silence(owner,selected.target.app,true):recovery.restoreApp(owner,selected.target.app);
+            JSONObject effect=muted?recovery.silence(owner,selected.target.app,true):recovery.setOriginalForOwner(owner,selected.target.app);
             result=base(selected.target).put("reviewId",id).put("requestedMuted",muted).put("receipt",effect)
                     .put("automaticReplayAllowed",false).put("requiresFreshReview",true);
             try {
@@ -89,6 +89,8 @@ final class OwnerTaskAudio {
     }
     private JSONObject view(Review value,JSONObject state)throws Exception {
         return base(value.target).put("state",new JSONObject(state.toString())).put("paused",value.paused).put("pauseRevision",value.pauseRevision)
+                .put("restoreActionLabel","将此 App 设为原记录的声音模式")
+                .put("restoreActionNotice","这是现在明确发出的声音设置；若其他程序同时更改，可能以本次设置为准。不会自动执行或重复派发。")
                 .put("scope","background_current_app_user0").put("mainScreenSupported",false).put("otherProfilesSupported",false);
     }
     private JSONObject base(Target target)throws Exception {
