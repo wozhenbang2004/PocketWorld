@@ -4,6 +4,7 @@ import android.media.*;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.attachments.OwnerFilePreviewSource;
 import dev.pocketengine.features.local.project.ProjectSources;
+import dev.pocketengine.media.NativeMediaScratch;
 import java.io.*;
 import java.nio.*;
 import java.nio.file.*;
@@ -36,7 +37,8 @@ public final class NativeMediaTrim {
     public static ProcessedOriginalFile execute(Review review,File privateCache,RunControl control)throws Exception{
         if(review==null)throw new SecurityException("请先核对原文件与实际样本起点");
         try(var budget=OriginalFileProcessingBudget.acquire(control);var original=new Original(review.source,privateCache,control)){
-            File output=File.createTempFile("trim-output-",".mp4",original.directory);MediaExtractor extractor=new MediaExtractor();MediaMuxer muxer=null;boolean started=false,stopped=false;int samples=0;long first=Long.MAX_VALUE,last=-1;int videos=0;Set<Integer> videoSeen=new HashSet<>();
+            try(var outputCopy=NativeMediaScratch.trimOutput(privateCache)){
+            File output=outputCopy.file();MediaExtractor extractor=new MediaExtractor();MediaMuxer muxer=null;boolean started=false,stopped=false;int samples=0;long first=Long.MAX_VALUE,last=-1;int videos=0;Set<Integer> videoSeen=new HashSet<>();
             try{
                 extractor.setDataSource(original.file.getAbsolutePath());JSONArray tracks=tracks(extractor);if(!ProjectSources.canonical(tracks).equals(ProjectSources.canonical(review.metadata.getJSONArray("tracks"))))throw new SecurityException("原媒体实际轨道已变化");muxer=new MediaMuxer(output.getAbsolutePath(),MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);int[] indexes=new int[tracks.length()];long[] written=new long[tracks.length()];Arrays.fill(written,-1);
                 for(int i=0;i<tracks.length();i++){MediaFormat format=extractor.getTrackFormat(i);indexes[i]=muxer.addTrack(format);extractor.selectTrack(i);if(tracks.getJSONObject(i).getString("mimeType").startsWith("video/")){videos++;if(format.containsKey(MediaFormat.KEY_ROTATION))muxer.setOrientationHint(format.getInteger(MediaFormat.KEY_ROTATION));}}
@@ -47,7 +49,8 @@ public final class NativeMediaTrim {
                 for(long count:written)if(count<0)throw new IllegalStateException("所选范围没有包含每个原轨道的实际样本，未静默丢轨");if(samples<1)throw new IllegalArgumentException("所选范围没有可复制媒体样本");muxer.stop();stopped=true;control.check();if(output.length()<8||output.length()>20*1024*1024)throw new IOException("实际MP4输出为空或超限");
                 int actualTracks;MediaExtractor reopened=new MediaExtractor();try{reopened.setDataSource(output.getAbsolutePath());actualTracks=reopened.getTrackCount();if(actualTracks!=tracks.length())throw new SecurityException("重开输出后的真实轨道数量不同");for(int i=0;i<actualTracks;i++){reopened.selectTrack(i);if(reopened.getSampleSize()<1)throw new SecurityException("重开输出没有实际样本");reopened.unselectTrack(i);}}finally{reopened.release();}
                 review.source.requireCurrent(control);byte[] bytes=Files.readAllBytes(output.toPath());return new ProcessedOriginalFile(bytes,videos>0?"video/mp4":"audio/mp4","mp4",review.source.identity,review.source.sha256,review.identity,review.metadata().put("outputSamples",samples).put("firstCopiedSampleUs",first).put("lastCopiedSampleUs",last).put("outputTracks",actualTracks).put("reopened",true).put("actualEndIsSampleBoundary",true));
-            }finally{extractor.release();if(muxer!=null){if(started&&!stopped)try{muxer.stop();}catch(Exception ignored){}muxer.release();}Files.deleteIfExists(output.toPath());}
+            }finally{try{extractor.release();}finally{if(muxer!=null){if(started&&!stopped)try{muxer.stop();}catch(Exception ignored){}muxer.release();}}}
+            }
         }
     }
     private static JSONArray tracks(MediaExtractor actual)throws Exception{
@@ -62,10 +65,10 @@ public final class NativeMediaTrim {
         return switch(metadata.optString("startAlignment")){case "previous_video_sync_sample"->"视频同步帧";case "previous_audio_sample"->"音频样本";default->"媒体样本";};
     }
     private static final class Original implements AutoCloseable {
-        final File file,directory;
+        final File file;private final NativeMediaScratch.Lease copy;
         Original(OwnerFilePreviewSource source,File privateCache,RunControl control)throws Exception{
-            byte[] bytes=source.bytes(control);try{if(bytes.length<12||bytes[4]!='f'||bytes[5]!='t'||bytes[6]!='y'||bytes[7]!='p')throw new IllegalArgumentException("此入口只接受实际MP4容器，未从URL或播放列表加载其他资源");directory=new File(privateCache,"original-media-processing");if(Files.isSymbolicLink(directory.toPath())||!directory.isDirectory()&&!directory.mkdirs())throw new IOException("无法准备原媒体处理缓存");File[] old=directory.listFiles();if(old==null||old.length>8)throw new IOException("原媒体处理缓存未释放，请明确核对清理后重试");file=File.createTempFile("trim-source-",".mp4",directory);try{Files.write(file.toPath(),bytes);source.requireCurrent(control);}catch(Exception failure){Files.deleteIfExists(file.toPath());throw failure;}}finally{Arrays.fill(bytes,(byte)0);}
+            byte[] bytes=source.bytes(control);try{if(bytes.length<12||bytes[4]!='f'||bytes[5]!='t'||bytes[6]!='y'||bytes[7]!='p')throw new IllegalArgumentException("此入口只接受实际MP4容器，未从URL或播放列表加载其他资源");copy=NativeMediaScratch.trimSource(privateCache);file=copy.file();try{Files.write(file.toPath(),bytes);source.requireCurrent(control);}catch(Exception|Error failure){copy.close();throw failure;}}finally{Arrays.fill(bytes,(byte)0);}
         }
-        public void close()throws Exception{Files.deleteIfExists(file.toPath());}
+        public void close()throws Exception{copy.close();}
     }
 }
