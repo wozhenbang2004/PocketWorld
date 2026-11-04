@@ -100,6 +100,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         add("workspace","createArtifact","workspace_create_artifact","将真实已提交文件冻结为本任务成果，需要主人授权。",true,props("projectId",text(80),"path",text(240),"version",integer(0,Integer.MAX_VALUE)),"projectId","path");
         add("remote","$profiles","remote_profiles","列出主人已配置的电脑连接元数据，不返回令牌。",false,new JSONObject());
         add("remote","environments","remote_environments","读取指定电脑实际可用环境。",false,props("profileId",text(80)),"profileId");
+        add("remote","probeWorker","remote_probe_worker","对已读取的原电脑与环境实际探测执行器协议、模型及模式，返回当前选择证据；不发送模型任务、不创建job、不授予工具或执行权限。仅使用电脑主人已配置的执行器，不能提供启动命令。",false,props("profileId",text(80),"bindingHash",text(64),"environmentId",text(80),"environmentBinding",text(64),"worker",text(80),"model",text(200),"modeId",text(200)),"profileId","bindingHash","environmentId","environmentBinding","worker");
         add("remote","listJobs","remote_list_jobs","查询指定电脑的已有任务，不提交或重试任务。",false,props("profileId",text(80)),"profileId");
         add("remote","getJob","remote_get_job","查询电脑原任务状态和真实结果。",false,props("profileId",text(80),"jobId",text(80)),"profileId","jobId");
         add("remote","readFile","remote_read_file","读取已连接电脑所选工作区内的实际文本文件。",false,props("profileId",text(80),"environmentId",text(80),"path",text(2048)),"profileId","environmentId","path");
@@ -379,7 +380,9 @@ public final class HostToolSupervisor implements CapabilityPort {
                             .put("status",result.getString("status")).put("replyToMessageIds",result.getJSONArray("replyToMessageIds")).put("content",body.substring(0,end)).put("totalChars",body.length()).put("hasMore",end<body.length());
                     String encoded=view.toString();if(resultChars+encoded.length()>3600)break;resultChars+=encoded.length();
                     reference.append("\n待管家结合原请求处理的真实工作结果；hasMore为true时先用owner_work_get读取原工作，不重复执行：\n").append(encoded);
-                    ownerWorkReferences.put(result.getString("deliveryId"),new JSONObject().put("taskId",result.getString("taskId")).put("deliveryId",result.getString("deliveryId")).put("referenceText",encoded));
+                    // Attest the exact native context prefix through this result, including the
+                    // preceding references. A result copied elsewhere is not the selected frame.
+                    ownerWorkReferences.put(result.getString("deliveryId"),new JSONObject().put("taskId",result.getString("taskId")).put("deliveryId",result.getString("deliveryId")).put("referenceText",reference.toString()));
                 }
             }
         }
@@ -481,7 +484,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         boolean read=switch(tool.feature){
             case "memory"->Set.of("search","recall","$memory_draft_sources").contains(tool.command);
             case "workspace"->Set.of("$projects","list","read","history","diff","listArtifacts","readArtifact","diffArtifact").contains(tool.command);
-            case "remote"->Set.of("$profiles","environments","listJobs","getJob","readFile").contains(tool.command);
+            case "remote"->Set.of("$profiles","environments","probeWorker","listJobs","getJob","readFile").contains(tool.command);
             case "skills"->Set.of("$skills_list","$skills_read","$skills_draft_sources").contains(tool.command);
             case "automation"->"$schedule_list".equals(tool.command);
             case "attachments"->Set.of("list","readText").contains(tool.command);
