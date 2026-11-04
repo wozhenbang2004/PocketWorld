@@ -82,7 +82,7 @@ public final class BrowserActivity extends ComponentActivity {
         try{String task=researchTaskContextForOwner();if(task.isEmpty()&&taskSpace!=null)task=taskSpace.binding.taskId;returnToOwner(task);}
         catch(RuntimeException unavailable){if(message!=null)message.setText("原任务入口暂不可用；网页仍保留，请稍后重试。");}
     }
-    @Override public void onNewIntent(android.content.Intent intent){super.onNewIntent(intent);setIntent(intent);if(intent.getBooleanExtra("showResearch",false))showResearchPanelForOwner();}
+    @Override public void onNewIntent(android.content.Intent intent){super.onNewIntent(intent);setIntent(intent);registerForOwner();if(intent.getBooleanExtra("showResearch",false))showResearchPanelForOwner();}
     private static volatile WeakReference<BrowserActivity> current=new WeakReference<>(null);
     private static volatile java.util.function.Consumer<JSONObject> events;
     private volatile WebView web;
@@ -110,6 +110,7 @@ public final class BrowserActivity extends ComponentActivity {
     private volatile long navigation;
     private BrowserProfiles profiles;
     private volatile BrowserProfileRegistry.Session profileSession;
+    private BrowserProfileRegistry.Session recoveryProfile,blockedSession;
     private String profileError="";
     private String observationId;
     private String observationUrl;
@@ -166,6 +167,7 @@ public final class BrowserActivity extends ComponentActivity {
         if(web!=null&&(browserState==null||web.restoreState(browserState)==null))navigate(sameProfile?saved.getString("browserUrl"):getIntent().getStringExtra("url"));
     }
     private void createWebView(){
+        recoveryProfile=null;blockedSession=null;
         rendererRecoveryNeeded=false;if(profiles==null){lease.bindProfile(null);message.setText(profileError);return;}
         WebView fresh=null;try{if(profileSession==null||!profileSession.current()){profileSession=profiles.openSession();lease.bindProfile(profileSession);}fresh=new WebView(this);profiles.bindFreshWebView(fresh,profileSession);Page page=new Page(UUID.randomUUID().toString(),fresh,profileSession,null);pages.put(page.id,page);configureWebView(fresh);selectPage(page);profileError="";}
         catch(Exception unavailable){if(fresh!=null)fresh.destroy();profiles.endSession(profileSession);profileSession=null;web=null;lease.bindProfile(null);profileError="所选浏览器资料不可用，请主人从原生设置选择资料";message.setText(profileError);return;}
@@ -553,6 +555,31 @@ public final class BrowserActivity extends ComponentActivity {
         if(page.view.getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)page.view.getParent()).removeView(page.view);page.view.destroy();
     }
     public static BrowserActivity current(){BrowserActivity activity=current.get();return activity==null||activity.isDestroyed()||activity.isFinishing()?null:activity;}
+    private void registerForOwner(){
+        requireMain();if(isDestroyed()||isFinishing())return;
+        BrowserProfileRegistry.Session original=profileSession!=null?profileSession:recoveryProfile;
+        if(original!=null&&!original.current()){
+            BrowserProfileRegistry.Session blocker=blockedSession;
+            BrowserActivity successor=current.get();
+            if(successor!=null&&successor!=this&&!successor.isDestroyed()&&successor.profileSession!=null&&successor.profileSession.current())blocker=successor.profileSession;
+            boolean occupied=blocker!=null&&blocker.current();
+            // A newer Activity permanently invalidates this session. Retire only this
+            // Activity's objects; a fresh owner view never restores its lease or task tabs.
+            closeProfileSession("原浏览器会话已结束，旧执行授权未恢复");recoveryUrl="https://www.bing.com";if(address!=null)address.setText("");
+            recoveryProfile=occupied?original:null;blockedSession=occupied?blocker:null;
+            if(!occupied&&originalProfileSelected(original)){createWebView();if(web!=null)navigate(null);}
+            else{profileError=occupied?"另一个浏览器会话仍在使用；请主人明确重新打开或选择资料，未恢复旧网页或执行授权。":"原浏览器资料已变化；请主人从原生设置重新选择，未恢复旧网页或执行授权。";if(message!=null)message.setText(profileError);}
+        }
+        current=new WeakReference<>(this);
+    }
+    private boolean originalProfileSelected(BrowserProfileRegistry.Session original){
+        if(profiles==null)return false;
+        try{
+            JSONObject state=profiles.snapshot();if(!original.profileId.equals(state.getString("selectedProfileId"))||!original.isolation.equals(state.getString("profileIsolation")))return false;
+            JSONArray all=state.getJSONArray("profiles");for(int i=0;i<all.length();i++){JSONObject profile=all.getJSONObject(i);if(original.profileId.equals(profile.getString("id")))return profile.getBoolean("available")&&profile.getLong("revision")==original.profileRevision;}
+        }catch(Exception unavailable){/* Do not replace an unknown original profile with another selection. */}
+        return false;
+    }
     public static void setEvents(java.util.function.Consumer<JSONObject> listener){events=listener;}
     public void openForOwner(String url){takeover("主人重新打开了浏览器");if(web==null){createWebView();navigate(url!=null&&!url.trim().isEmpty()?url:recoveryUrl);}else if(url!=null&&!url.trim().isEmpty())navigate(url);}
     public JSONObject snapshot(){return json("open",web!=null,"url",web==null||web.getUrl()==null?"":web.getUrl(),"title",web==null||web.getTitle()==null?"":web.getTitle(),"loading",loading,"navigation",navigation,"lease",lease.snapshot(),"agentDomTools",true,"backgroundDisplay",false,"profileId",profileSession==null?profiles==null?"":profiles.selectedId():profileSession.profileId,"profileRevision",profileSession==null?0:profileSession.profileRevision,"browserSessionId",profileSession==null?"":profileSession.sessionId,"profileIsolation",profileSession==null?"unavailable":profileSession.isolation,"profiles",profileState(),"profileError",profileError,"sharedWithSystemChrome",false,"domIsolation","page-world-untrusted","operationInFlight",pending!=null&&!pending.isDone(),"rendererRecoveryNeeded",rendererRecoveryNeeded,"fileChooserPending",fileChooser!=null,"uploadInProgress",uploadDestination!=null||artifactUpload!=null&&artifactUpload.active(),"uploadViaOwnerPicker",true,"uploadExactTaskArtifact",true,"downloadToAttachments",true,"downloadsRequireOwnerConfirmation",true,"pageDialog",lastPageDialog==null?JSONObject.NULL:lastPageDialog,"siteNotice",currentSiteNotice(),"pageCapabilities",json("javascriptDialogs","native_owner_confirmation","popupWindows","native_owner_origin_confirmation","oauthPopup","same_profile_task_opener_return","hardwarePermissions","exact_owner_and_android_permission"));}
@@ -561,6 +588,7 @@ public final class BrowserActivity extends ComponentActivity {
     public void profileChangedForOwner(){closeProfileSession("主人已切换或停用浏览器资料，原会话执行已停止");createWebView();if(web!=null)navigate(null);}
     private void closeProfileSession(String reason){closeProfileSession(reason,false);}
     private void closeProfileSession(String reason,boolean rendererGone){
+        recoveryProfile=null;blockedSession=null;
         closingProfile=true;takeover(reason);if(taskSpace!=null)try{taskSpace.endNative("profile_closed");}catch(Exception ignored){}cancelFileChooser();if(downloadDialog!=null){downloadDialog.dismiss();downloadDialog=null;}
         BrowserProfileRegistry.Session old=profileSession;profileSession=null;if(profiles!=null)profiles.endSession(old);lease.bindProfile(null);navigation++;invalidateObservation();
         if(old!=null)try{BrowserDownloads.get(this).cancelSession(old.sessionId);}catch(Exception ignored){}
@@ -1085,9 +1113,15 @@ public final class BrowserActivity extends ComponentActivity {
     }
     @Override public void onWindowFocusChanged(boolean focused){super.onWindowFocusChanged(focused);if(!focused&&stopNativeInput!=null)stopNativeInput.run();}
     @Override public void onPause(){ownerForeground=false;if(artifactUpload!=null)artifactUpload.close();if(stopNativeInput!=null)stopNativeInput.run();deniedSiteRequests.clear();if(siteRequest!=null&&!siteRequest.awaitingPlatform)cancelSiteRequest(siteRequest.page,false);if(externalLinkConfirmation!=null){externalLinkConfirmation.dismiss();externalLinkConfirmation=null;}if(pageDialog!=null){cancelPageDialog(null,BrowserPageDialog.Reason.OWNER_LEFT);takeover("你已离开网页，网页提示已取消；已发生的动作请回原任务核对。");}for(Page page:pages.values())page.view.onPause();super.onPause();}
-    @Override public void onResume(){super.onResume();refreshChromeAppearance();ownerForeground=true;if(web!=null)web.onResume();if(siteRequest!=null&&siteRequest.platformAllowed!=null)finishSitePlatformResult(siteRequest);}
+    @Override public void onResume(){super.onResume();registerForOwner();refreshChromeAppearance();ownerForeground=true;if(web!=null)web.onResume();if(siteRequest!=null&&siteRequest.platformAllowed!=null)finishSitePlatformResult(siteRequest);}
     @Override protected void onSaveInstanceState(Bundle state){Page owner=activePage!=null&&activePage.taskOwner==null?activePage:null;if(owner==null)for(Page page:pages.values())if(page.taskOwner==null){owner=page;break;}if(owner!=null&&profileSession!=null&&profileSession.current()){Bundle page=new Bundle();owner.view.saveState(page);state.putBundle("browserState",page);state.putString("browserProfileId",profileSession.profileId);state.putLong("browserProfileRevision",profileSession.profileRevision);state.putString("browserProfileIsolation",profileSession.isolation);if(owner.view.getUrl()!=null)state.putString("browserUrl",owner.view.getUrl());}super.onSaveInstanceState(state);}
-    @Override public void onDestroy(){if(closeConfirmation!=null){closeConfirmation.dismiss();closeConfirmation=null;}if(current.get()==this)current.clear();closeProfileSession("浏览器已关闭");if(ownerPanel!=null)try{ownerPanel.close();}catch(Exception ignored){}ownerPanel=null;browserIo.shutdown();leaseTimers.removeCallbacksAndMessages(null);lease.setExpirationListener(null);super.onDestroy();}
+    @Override public void onDestroy(){
+        BrowserActivity waiting=current.get();BrowserProfileRegistry.Session ending=profileSession;
+        if(closeConfirmation!=null){closeConfirmation.dismiss();closeConfirmation=null;}if(current.get()==this)current.clear();closeProfileSession("浏览器已关闭");if(ownerPanel!=null)try{ownerPanel.close();}catch(Exception ignored){}ownerPanel=null;browserIo.shutdown();leaseTimers.removeCallbacksAndMessages(null);lease.setExpirationListener(null);super.onDestroy();
+        // Only the already registered foreground Activity waiting on this exact
+        // ended session may retry. Never choose a replacement owner or task here.
+        if(ending!=null&&!ending.current()&&waiting!=null&&waiting!=this&&current.get()==waiting&&waiting.ownerForeground&&waiting.recoveryProfile!=null&&waiting.blockedSession==ending)waiting.registerForOwner();
+    }
     private void refreshChromeAppearance(){
         UiAppearance.window(this);View root=getWindow().getDecorView().findViewWithTag("browser_root");
         if(root!=null){root.setBackgroundColor(UiAppearance.surface(this));colorNativeChrome(root);}
