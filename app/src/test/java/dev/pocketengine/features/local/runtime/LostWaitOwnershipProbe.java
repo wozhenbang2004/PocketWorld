@@ -10,12 +10,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Isolated test JVM only. The linked test helper reaps one exact original child. */
+/** Isolated test JVM only. Owner death permits this test subreaper to consume the exact original command. */
 public final class LostWaitOwnershipProbe {
     private static native void arm(int observations);
     private static native long[] facts();
     public static void main(String[] args)throws Exception {
-        NativeProcessSupervisor supervisor=new NativeProcessSupervisor();if(!supervisor.available())throw new AssertionError("Original JNI unavailable");
+        NativeProcessSupervisor supervisor=new NativeProcessSupervisor();if(args[0].equals("availability")){System.out.println(new JSONObject().put("available",supervisor.available()));return;}if(!supervisor.available())throw new AssertionError("Original JNI unavailable");
         String mode=args[0],python=new File(args[1]).getCanonicalPath();File root=new File(args[2]);int after=Integer.parseInt(args[3]);arm(after);
         AtomicBoolean finished=new AtomicBoolean();Thread watchdog=new Thread(()->{try{Thread.sleep(5500);if(!finished.get()&&facts()[1]==1){System.out.println(new JSONObject().put("watchdogAfterActualReap",true).put("facts",proof()).toString());System.out.flush();Runtime.getRuntime().halt(124);}}catch(Exception failure){throw new AssertionError(failure);}},"own-lost-wait-proof");watchdog.setDaemon(true);watchdog.start();
         long start=System.nanoTime();List<String> command=List.of(python,"-I","-c","import sys,time; print('original-output',flush=True); time.sleep(.08); sys.exit(7)");

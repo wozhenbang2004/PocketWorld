@@ -46,7 +46,11 @@ internal fun PhoneResourceStatus(task: UiTask, state: PocketUiState, controller:
             Text("停止或期限届满不等于已释放；只有原会话的实际回执会确认结果。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             TextButton(onClick = controller::openBackgroundSetup, modifier = Modifier.heightIn(min = 48.dp)) { Text("核对原后台连接") }
         }
-        if (resources.optString("audioRecovery") == "pending") Text("本任务的声音复原仍待核对。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        if (resources.optString("audioRecovery") == "pending") {
+            Text("原 App 可能仍静音，需要你核对并明确设置声音。结束任务或释放独立屏不会自动改写当前声音；原恢复记录继续保留。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            if (task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private")
+                TextButton(onClick = controller::openBackgroundSetup, modifier = Modifier.heightIn(min = 48.dp)) { Text("处理声音恢复记录") }
+        }
         Text("仅回收原任务拥有的显示与活动，不强行停止其他 App 的进程。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

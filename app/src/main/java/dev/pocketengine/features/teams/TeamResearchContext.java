@@ -87,9 +87,12 @@ public final class TeamResearchContext implements AutoCloseable {
                 try{reservation=tasks.reserveTeamResearchInference(binding,purpose);}
                 catch(TeamParentBudget.Exhausted empty){if(!"modelRequests".equals(empty.dimension))throw empty;throw new RunJournal.NativeBudgetPaused(binding.taskId(),binding.runId(),binding.epoch(),empty.parentTaskId,empty.parentRunId,purpose.name(),empty.used,empty.limit);}
                 call.budgetChanged(reservation.getJSONObject("parentBudget"));
-                // Original task/run Target still supplies STARTED/terminal/usage and cap1.
-                // The additional source gate runs outside those original SQL callbacks.
-                return InferenceCapture.withAdmission(originalJournal.inferenceTarget(purpose,call.memberId),fence::metadata);
+                // TaskStore keeps the original journal sink and binds each physical
+                // attempt to its own reservation in this same native parent pool.
+                // Source checks and coordinator feedback stay outside SQL callbacks.
+                return InferenceCapture.withAdmission(tasks.teamResearchInferenceTarget(binding,purpose,reservation.getString("reservationId")),()->{
+                    fence.metadata();call.budgetChanged(tasks.teamBudgetSnapshot(call.teamRunId));
+                });
             }
         };
         CompactionJournal nativeCompaction=tasks.compactionJournal(binding.taskId(),binding.runId(),binding.epoch(),original,raw,()->captured);

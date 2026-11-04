@@ -12,7 +12,8 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 import static org.junit.Assert.*;
 
-/** Real SharedPreferences and component identity with an explicit fault-injection seam for secure settings writes. */
+/** Real SharedPreferences and component identity with external secure-setting changes
+ * injected immediately after reads. No fake atomic writer is supplied. */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35, manifest = Config.NONE, application = Application.class)
 public final class AccessibilityRecoveryMutationTest {
@@ -25,20 +26,16 @@ public final class AccessibilityRecoveryMutationTest {
     private static final class Platform implements AccessibilityRecovery.Platform {
         String services = OTHER + ":" + OWN;
         boolean permitted = true, unlocked = true, connected;
-        int enabled = 1, writes, failFrom = Integer.MAX_VALUE;
-        Runnable afterFirstWrite = () -> { };
+        int enabled = 1;
+        Runnable afterRead;
         public boolean unlocked() { return unlocked; }
         public boolean permitted() { return permitted; }
         public boolean connected() { return connected; }
-        public String services() { return services; }
-        public int enabled() { return enabled; }
-        public boolean writeServices(String value) {
-            writes++;
-            if (writes >= failFrom) throw new IllegalStateException("injected_secure_write_failure");
-            services = value;
-            if (writes == 1) afterFirstWrite.run();
-            return true;
+        public String services() {
+            String observed=services;Runnable change=afterRead;afterRead=null;
+            if(change!=null)change.run();return observed;
         }
+        public int enabled() { return enabled; }
     }
 
     @Before public void setup() {
@@ -48,9 +45,9 @@ public final class AccessibilityRecoveryMutationTest {
         recovery = new AccessibilityRecovery(preferences, platform, OWN, 10001);
     }
 
-    @Test public void revokedRevisionStopsReenableButCompensatesOnlyOriginalRemoval() throws Exception {
+    @Test public void revokedRevisionNeverRewritesTheListOrCreatesANewCompensation() throws Exception {
         recovery.setConsent(true, 0);
-        platform.afterFirstWrite = () -> {
+        platform.afterRead = () -> {
             platform.services += ":example.added/.Reader";
             try { recovery.setConsent(false, 1); } catch (Exception e) { throw new AssertionError(e); }
         };
@@ -61,34 +58,38 @@ public final class AccessibilityRecoveryMutationTest {
         assertTrue(platform.services.contains(OWN));
         assertTrue(platform.services.contains("example.added/.Reader"));
         assertTrue(platform.services.contains(OTHER));
-        assertEquals(2, platform.writes);
         assertEquals(1, platform.enabled);
+        assertFalse(result.getBoolean("settingsMutation"));
     }
 
-    @Test public void failedCompensationSurvivesColdReadAndRequiresOwnerAction() throws Exception {
+    @Test public void legacyCompensationStaysPendingUntilTheOwnerHasRestoredTheRegistration() throws Exception {
         recovery.setConsent(true, 0);
-        platform.failFrom = 2;
-        assertEquals("compensation_pending", recovery.restore().getString("lastOutcome"));
+        preferences.edit().putBoolean("compensationPending",true).putString("compensationComponent",OWN).putInt("compensationUid",10001).commit();
+        platform.services=OTHER;
         assertTrue(recovery.snapshot().getBoolean("compensationPending"));
         assertFalse(platform.services.contains(OWN));
         AccessibilityRecovery cold = new AccessibilityRecovery(preferences, platform, OWN, 10001);
-        int previousWrites = platform.writes;
         assertEquals("recovery_pending_owner_action", cold.restore().getString("lastOutcome"));
-        assertEquals(previousWrites, platform.writes);
         platform.services += ":example.new/.Reader";
-        platform.failFrom = Integer.MAX_VALUE;
+        JSONObject pending=cold.compensate();
+        assertEquals("compensation_pending",pending.getString("lastOutcome"));assertTrue(pending.getBoolean("needsOwnerAction"));
+        assertEquals(OTHER+":example.new/.Reader",platform.services);assertTrue(preferences.getBoolean("compensationPending",false));
+        // The owner changes the system setting, not this recovery module.
+        platform.services += ":"+OWN;
         JSONObject restored = cold.compensate();
         assertEquals("original_registration_restored", restored.getString("lastOutcome"));
         assertFalse(restored.getBoolean("compensationPending"));
         assertTrue(platform.services.contains(OWN));
         assertTrue(platform.services.contains("example.new/.Reader"));
+        assertFalse(restored.getBoolean("settingsMutation"));
+        assertFalse(restored.getBoolean("bindingVerified"));
     }
 
     @Test public void ownerGlobalDisableIsNotUndoneByRecovery() throws Exception {
         recovery.setConsent(true, 0);
         platform.enabled = 0;
         assertEquals("owner_accessibility_disabled", recovery.restore().getString("lastOutcome"));
-        assertEquals(0, platform.writes);
+        assertEquals(OTHER+":"+OWN, platform.services);
         assertEquals(0, platform.enabled);
     }
 
@@ -96,7 +97,6 @@ public final class AccessibilityRecoveryMutationTest {
         platform.services = OTHER;
         recovery.setConsent(true, 0);
         assertEquals("initial_accessibility_authorization_required", recovery.restore().getString("lastOutcome"));
-        assertEquals(0, platform.writes);
         assertEquals(OTHER, platform.services);
     }
 
@@ -104,15 +104,14 @@ public final class AccessibilityRecoveryMutationTest {
         recovery.setConsent(true, 0);
         platform.services = OTHER; // Other services keep the system-wide switch on.
         assertEquals("owner_accessibility_disabled", recovery.restore().getString("lastOutcome"));
-        assertEquals(0, platform.writes);
         assertEquals(OTHER, platform.services);
         assertFalse(recovery.snapshot().getBoolean("compensationPending"));
     }
 
-    @Test public void cancellationRestoresOnlyTheRecordedRegistration() throws Exception {
+    @Test public void cancellationCannotMutateTheObservedRegistration() throws Exception {
         recovery.setConsent(true, 0);
         AtomicBoolean current = new AtomicBoolean(true);
-        platform.afterFirstWrite = () -> current.set(false);
+        platform.afterRead = () -> current.set(false);
         assertEquals("recovery_consent_revoked", recovery.restore(current::get).getString("lastOutcome"));
         assertEquals(OTHER + ":" + OWN, platform.services);
         assertFalse(recovery.snapshot().getBoolean("compensationPending"));
@@ -122,17 +121,39 @@ public final class AccessibilityRecoveryMutationTest {
         recovery.setConsent(true, 0);
         AccessibilityRecovery otherOwner = new AccessibilityRecovery(preferences, platform, OWN, 110001);
         assertEquals("consent_required", otherOwner.restore().getString("lastOutcome"));
-        assertEquals(0, platform.writes);
+        preferences.edit().putBoolean("compensationPending",true).putString("compensationComponent",OWN).putInt("compensationUid",10001).commit();
+        assertEquals("compensation_pending",otherOwner.compensate().getString("lastOutcome"));
+        assertTrue(preferences.getBoolean("compensationPending",false));
     }
 
     @Test public void registrationReadbackAndBindingRemainSeparate() throws Exception {
         recovery.setConsent(true, 0);
         JSONObject result = recovery.restore();
-        assertEquals("registered_waiting_for_binding", result.getString("lastOutcome"));
+        assertEquals("owner_settings_required", result.getString("lastOutcome"));
         assertTrue(result.getBoolean("registrationVerified"));
         assertFalse(result.getBoolean("bindingVerified"));
         assertFalse(result.getBoolean("busy"));
         assertFalse(result.getBoolean("changesWirelessDebugging"));
         assertEquals(OTHER + ":" + OWN, platform.services);
+        assertTrue(result.getBoolean("needsOwnerAction"));
+        assertFalse(result.getBoolean("automaticRegistrationRestoreSupported"));
+    }
+
+    @Test public void externalAdditionOrRemovalAfterTheFinalReadIsNeverOverwritten()throws Exception {
+        recovery.setConsent(true,0);
+        platform.afterRead=()->platform.services=OTHER+":example.new/.Reader";
+        JSONObject result=recovery.restore();
+        assertEquals(OTHER+":example.new/.Reader",platform.services);
+        assertEquals("owner_settings_required",result.getString("lastOutcome"));
+        assertTrue(result.getBoolean("registrationObservationOnly"));assertFalse(result.getBoolean("settingsMutation"));
+        assertFalse(preferences.getBoolean("compensationPending",false));
+        assertEquals("owner_accessibility_disabled",new AccessibilityRecovery(preferences,platform,OWN,10001).restore().getString("lastOutcome"));
+    }
+
+    @Test public void secureSettingsPermissionDoesNotInventAConditionalWriteInterface()throws Exception {
+        recovery.setConsent(true,0);platform.permitted=false;
+        JSONObject result=recovery.restore();
+        assertEquals("owner_settings_required",result.getString("lastOutcome"));assertFalse(result.getBoolean("secureSettingsGranted"));
+        assertEquals(OTHER+":"+OWN,platform.services);assertFalse(result.getBoolean("settingsMutation"));
     }
 }

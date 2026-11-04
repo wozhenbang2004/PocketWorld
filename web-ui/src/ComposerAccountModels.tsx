@@ -70,14 +70,14 @@ export function ComposerAccountModels({ state, can, act, onSelected, onSelection
   try { selection = accountModelSelection(review, state.modelSelectionRevision, options); } catch { /* The button remains unavailable until the original review and options are valid. */ }
   const confirm = async () => {
     if (locked || !selection || needsRead || pending.current) return;
-    pending.current = true; setSelecting(true); callbacks.current.onSelectionPending(true); setError('');
+    const original = ++request.current; pending.current = true; setSelecting(true); callbacks.current.onSelectionPending(true); setError('');
     try {
       const result = await act('models.accounts.select', selection);
       if (result?.status !== 'saved') throw new Error('原模型选择尚未确认，请重新读取账号状态；不会自动重试。');
-      if (mounted.current) callbacks.current.onSelected();
+      if (mounted.current && original === request.current) callbacks.current.onSelected();
     } catch (failure) {
-      if (mounted.current) { setReview(null); setProjection(null); setNeedsRead(true); setError((failure instanceof Error ? failure.message : '原模型选择结果待核对。') + ' 请重新读取当前选择后核对，没有自动重选。'); }
-    } finally { pending.current = false; if (mounted.current) setSelecting(false); callbacks.current.onSelectionPending(false); }
+      if (mounted.current && original === request.current) { setReview(null); setProjection(null); setNeedsRead(true); setError((failure instanceof Error ? failure.message : '原模型选择结果待核对。') + ' 请重新读取当前选择后核对，没有自动重选。'); }
+    } finally { pending.current = false; if (mounted.current && original === request.current) { setSelecting(false); callbacks.current.onSelectionPending(false); } }
   };
   const current = accountModelProjectionCurrent(projection, state.modelSelectionRevision), catalog = accountModelCatalog(projection, state.modelSelectionRevision);
   const accounts = accountModelAccountRows(projection, state.modelSelectionRevision), selected = projection?.accountSnapshot?.selectedModelRef;

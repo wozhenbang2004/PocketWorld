@@ -68,11 +68,22 @@ internal class PocketWebHost private constructor(
     private var keyboardVisible = false
     private var pendingState: JSONObject? = null
     private val bridge = endpoint(::send)
+    private var bundle: PocketWebBundle? = null
     private val loader = WebViewAssetLoader.Builder().setDomain(HOST)
         .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(activity)).build()
 
     @SuppressLint("SetJavaScriptEnabled")
     fun start() {
+        bundle = try {
+            activity.assets.open("pocket-ui/build-identity.json").use { PocketWebBundle.read(it) }
+        } catch (_: Exception) {
+            // No trusted document can show maintenance feedback when the packaged identity is invalid.
+            // Use the existing closed-host exit; never load unverified assets or create another UI.
+            Log.e(TAG, "bundle-identity-unavailable; install a complete compatible package")
+            close()
+            activity.finish()
+            return
+        }
         with(web.settings) {
             javaScriptEnabled = true
             domStorageEnabled = false
@@ -208,8 +219,7 @@ internal class PocketWebHost private constructor(
         }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
     }
 
-    private fun trusted(uri: Uri): Boolean = uri.scheme == "https" && uri.host == HOST &&
-        uri.path.orEmpty().startsWith(PREFIX) && uri.pathSegments.none { it == "." || it == ".." || it.contains('\\') }
+    private fun trusted(uri: Uri): Boolean = bundle?.allows(uri.toString()) == true
 
     private fun response(uri: Uri, method: String): WebResourceResponse {
         if (trusted(uri) && method == "GET") loader.shouldInterceptRequest(uri)?.let { return it }

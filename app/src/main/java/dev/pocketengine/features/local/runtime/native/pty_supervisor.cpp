@@ -1,4 +1,6 @@
 #include <jni.h>
+#include "child_owner.h"
+// child_owner.h SHA256: c394fb6a7464f34ab8ab148964c2555a3bafbefcd5d1b45496ef0c77c88f4f8a
 #include <cerrno>
 #include <csignal>
 #include <cstdlib>
@@ -19,8 +21,8 @@
 #include <string>
 #include <vector>
 
-// A second IO mode of the same pocketprocess library/NativeProcessSupervisor. The accepted pipe7
-// entry remains byte-for-byte unchanged. No task, grant, scheduler, recoverable PID or UID sandbox.
+// PTY IO with a private single-threaded owner of the original child/session.
+// No task, grant, scheduler, recoverable PID or UID sandbox.
 namespace {
 long long clock_ms(){timespec time{};clock_gettime(CLOCK_MONOTONIC,&time);return static_cast<long long>(time.tv_sec)*1000+time.tv_nsec/1000000;}
 void close_fd(int& fd){if(fd>=0){close(fd);fd=-1;}}
@@ -53,14 +55,30 @@ Scan scan(pid_t leader,Tracked& tracked,bool& escaped){
     return out;
 }
 bool members(const Scan& current,pid_t leader,const Tracked& tracked){for(const auto& p:current.processes){auto known=tracked.find(p.pid);if(p.pid!=leader&&(p.session==leader||(known!=tracked.end()&&known->second==p.born)))return true;}return false;}
-// Numeric leader/group signals are guarded by current original-child ownership below.
-// Other processes use pidfds after birth checks; unsupported kernels fail closed.
-void signal_members(pid_t leader,const Scan& current,const Tracked& tracked,int signal){
+// The true parent owns the original group. A different group in that same
+// session needs its own stable member fd. Escaped numeric identities are never
+// promoted to signal handles; their final cleanup remains explicitly unknown.
+bool signal_members(pid_t leader,const Scan& current,const Tracked& tracked,int signal,pocketprocess::ChildOwner& owner){
 #if defined(__NR_pidfd_open) && defined(__NR_pidfd_send_signal)
-    for(const auto& p:current.processes){auto known=tracked.find(p.pid);if(p.pid==leader||known==tracked.end()||known->second!=p.born)continue;int fd=static_cast<int>(syscall(__NR_pidfd_open,p.pid,0));if(fd<0)continue;Process actual;if(process(p.pid,actual)&&actual.born==known->second)syscall(__NR_pidfd_send_signal,fd,signal,nullptr,0);close(fd);}
+    bool capability_checked=false,available=false;
+    for(const auto& p:current.processes){
+        auto known=tracked.find(p.pid);
+        if(p.pid==leader||p.session!=leader||p.group==leader||known==tracked.end()||known->second!=p.born)continue;
+        if(!capability_checked){available=pocketprocess::pidfd_signals_available();capability_checked=true;}
+        if(!available)continue; // Never substitute a numeric signal on old kernels/API 30.
+        int fd=static_cast<int>(syscall(__NR_pidfd_open,p.pid,0));if(fd<0)continue;
+        // Bind first, then read membership, then verify that the fd's target has
+        // not been reaped. The original session must still have its owned leader.
+        Process actual;bool original=pocketprocess::pidfd_not_reaped(fd)&&process(p.pid,actual)
+                &&actual.born==known->second&&actual.session==leader&&pocketprocess::pidfd_not_reaped(fd);
+        if(original){bool exited=false;if(!owner.observe(exited)){close(fd);return false;}
+            if(syscall(__NR_pidfd_send_signal,fd,signal,nullptr,0)<0&&errno!=ESRCH){close(fd);return false;}}
+        close(fd);
+    }
 #else
-    (void)leader;(void)current;(void)tracked;(void)signal;
+    (void)leader;(void)current;(void)tracked;(void)signal;(void)owner;
 #endif
+    return true;
 }
 unsigned int u32(const std::string& value,size_t at){unsigned int n=0;for(size_t i=0;i<4;i++)n=(n<<8)|static_cast<unsigned char>(value[at+i]);return n;}
 unsigned long long u64(const std::string& value,size_t at){unsigned long long n=0;for(size_t i=0;i<8;i++)n=(n<<8)|static_cast<unsigned char>(value[at+i]);return n;}
@@ -68,7 +86,7 @@ struct Input {jlong token=0;unsigned int kind=0,rows=0,columns=0;std::string dat
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_ptyProtocol(JNIEnv*,jclass){return 2;}
+Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_ptyProtocol(JNIEnv*,jclass){return 3;}
 
 extern "C" JNIEXPORT jlongArray JNICALL
 Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_runPty(
@@ -76,7 +94,7 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_runPty(
         jlong timeout_ms,jlong grace_ms,jint rows,jint columns,jobject observer){
     auto argv=strings(env,command),env_values=strings(env,environment);auto argv_ptr=pointers(argv),env_ptr=pointers(env_values);std::string cwd=bytes(env,directory);if(env->ExceptionCheck())return nullptr;
     jclass type=env->GetObjectClass(observer);jmethodID output=env->GetMethodID(type,"output","(I[B)Z"),cancelled=env->GetMethodID(type,"cancelled","()Z"),started=env->GetMethodID(type,"started","()Z"),identity=env->GetMethodID(type,"ptyIdentity","(JJJ)V"),next=env->GetMethodID(type,"nextTerminalCommand","()[B"),input_current=env->GetMethodID(type,"terminalCommandCurrent","(J)Z"),ack=env->GetMethodID(type,"terminalCommandResult","(JIIIIZ)V");if(env->ExceptionCheck())return nullptr;
-    int master=-1,slave=-1,launch[2]={-1,-1},launch_error=0;pid_t pid=-1;bool entry_cancelled=env->CallBooleanMethod(observer,cancelled)==JNI_TRUE;
+    int master=-1,slave=-1,launch[2]={-1,-1},launch_error=0;pid_t pid=-1;pocketprocess::ChildOwner owner;bool entry_cancelled=env->CallBooleanMethod(observer,cancelled)==JNI_TRUE;
     if(env->ExceptionCheck()){env->ExceptionClear();entry_cancelled=true;}if(entry_cancelled)launch_error=ECANCELED;
     if(!launch_error){master=posix_openpt(O_RDWR|O_NOCTTY|O_CLOEXEC);if(master<0)launch_error=errno;}
     if(!launch_error&&(grantpt(master)<0||unlockpt(master)<0))launch_error=errno;
@@ -84,7 +102,7 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_runPty(
     if(!launch_error){slave=open(slave_name,O_RDWR|O_NOCTTY|O_CLOEXEC);if(slave<0)launch_error=errno;}
     if(!launch_error){winsize size{};size.ws_row=static_cast<unsigned short>(rows);size.ws_col=static_cast<unsigned short>(columns);if(ioctl(slave,TIOCSWINSZ,&size)<0)launch_error=errno;}
     if(!launch_error&&pipe2(launch,O_CLOEXEC)<0)launch_error=errno;
-    if(!launch_error){pid=fork();if(pid<0)launch_error=errno;else if(pid==0){
+    if(!launch_error){const int transport[]={master,slave,launch[0],launch[1]};pid=owner.spawn(transport,4,grace_ms,launch_error);if(pid==0){
         close(master);close(launch[0]);if(setsid()<0||ioctl(slave,TIOCSCTTY,0)<0)child_error(launch[1],errno);
         sigset_t empty;sigemptyset(&empty);sigprocmask(SIG_SETMASK,&empty,nullptr);struct sigaction normal{};normal.sa_handler=SIG_DFL;sigemptyset(&normal.sa_mask);for(int signal:{SIGTERM,SIGINT,SIGHUP,SIGQUIT,SIGPIPE,SIGTSTP,SIGTTIN,SIGTTOU})sigaction(signal,&normal,nullptr);
         if(dup2(slave,STDIN_FILENO)<0||dup2(slave,STDOUT_FILENO)<0||dup2(slave,STDERR_FILENO)<0){child_error(launch[1],errno);}
@@ -93,29 +111,26 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_runPty(
         execve(argv_ptr[0],argv_ptr.data(),env_ptr.data());child_error(launch[1],errno);
     }}
     close_fd(slave);close_fd(launch[1]);nonblocking(master);nonblocking(launch[0]);
-    bool stopped=entry_cancelled,timed_out=false,io_complete=true,leader_done=false,reaped=false,start_notified=false,escaped=false,session_absent=pid<=0,owns_leader=pid>0;long long begin=clock_ms(),stop_at=0,leader_at=0;int status=0;unsigned long long leader_born=0;Tracked tracked;Input pending;
+    bool stopped=entry_cancelled,timed_out=false,io_complete=pid>0||owner.certain_no_child(),leader_done=false,reaped=false,start_notified=false,escaped=false,session_absent=pid<=0&&owner.certain_no_child(),owns_leader=pid>0;long long begin=clock_ms(),stop_at=0,leader_at=0;int status=0;unsigned long long leader_born=0;Tracked tracked;Input pending;
     auto request_stop=[&](){if(!stopped){stopped=true;stop_at=clock_ms();}};
     auto acknowledge=[&](int error,int actual_rows,int actual_columns,bool effects){env->CallVoidMethod(observer,ack,pending.token,static_cast<jint>(pending.written),error,actual_rows,actual_columns,effects?JNI_TRUE:JNI_FALSE);pending.active=false;if(env->ExceptionCheck()){env->ExceptionClear();io_complete=false;request_stop();}};
     auto observe_leader=[&](){
         if(!owns_leader)return false;
-        siginfo_t info{};int waited;const auto deadline=clock_ms()+50;
-        do{waited=waitid(P_PID,static_cast<id_t>(pid),&info,WEXITED|WNOHANG|WNOWAIT);}while(waited<0&&errno==EINTR&&clock_ms()<deadline);
+        bool exited=false;
         Process actual;
-        if(waited<0||(info.si_pid!=0&&info.si_pid!=pid)||!process(pid,actual)||actual.parent!=getpid()||actual.born!=leader_born){owns_leader=false;io_complete=false;request_stop();return false;}
-        if(info.si_pid==pid&&!leader_done){leader_done=true;leader_at=clock_ms();}
+        if(!owner.observe(exited)||!process(pid,actual)||actual.parent!=owner.parent()||actual.born!=leader_born){owns_leader=false;io_complete=false;request_stop();return false;}
+        if(exited&&!leader_done){leader_done=true;leader_at=clock_ms();}
         return true;
     };
     auto signal_owned=[&](const Scan& current,int signal){
-        // WNOWAIT keeps the original child unreaped. ECHILD or an unreadable/
-        // changed birth cannot authorize either numeric signal, even after exit.
         if(!observe_leader())return false;
-        kill(-pid,signal);
-        if(!observe_leader())return false;
-        kill(pid,signal);
-        signal_members(pid,current,tracked,signal);return true;
+        // The signal is executed by the child's single-threaded true parent.
+        // A last successful App-side observation never authorizes numeric kill.
+        if(!owner.signal(signal)){owns_leader=false;io_complete=false;request_stop();return false;}
+        if(!signal_members(pid,current,tracked,signal,owner)){owns_leader=false;io_complete=false;request_stop();return false;}return true;
     };
     if(pid>0){
-        Process original;if(process(pid,original)&&original.parent==getpid())leader_born=original.born;else{owns_leader=false;io_complete=false;request_stop();}
+        Process original;if(process(pid,original)&&original.parent==owner.parent())leader_born=original.born;else{owns_leader=false;io_complete=false;request_stop();}
         while(owns_leader){
             long long time=clock_ms();Scan current=scan(pid,tracked,escaped);
             bool wants_stop=env->CallBooleanMethod(observer,cancelled)==JNI_TRUE;if(env->ExceptionCheck()){env->ExceptionClear();wants_stop=true;io_complete=false;}if(time-begin>=timeout_ms){timed_out=true;wants_stop=true;}if(!current.complete||escaped)wants_stop=true;if(wants_stop)request_stop();
@@ -141,7 +156,7 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_runPty(
                 for(int batch=0;batch<16;batch++){
                     char buffer[8192];ssize_t n=read(fd,buffer,sizeof(buffer));
                     if(n==0||(n<0&&source==0&&errno==EIO)){close_fd(fd);if(source==1&&!launch_error&&!leader_done&&!stopped&&!start_notified){
-                        Process leader;if(!observe_leader()||!process(pid,leader)||leader.born!=leader_born||leader.parent!=getpid()||leader.session!=pid){io_complete=false;request_stop();}
+                        Process leader;if(!observe_leader()||!process(pid,leader)||leader.born!=leader_born||leader.parent!=owner.parent()||leader.session!=pid){io_complete=false;request_stop();}
                         else if(leader.state!='Z'&&leader.state!='X'){tracked.emplace(pid,leader.born);env->CallVoidMethod(observer,identity,static_cast<jlong>(pid),static_cast<jlong>(leader.born),static_cast<jlong>(leader.session));bool accepted=false;if(!env->ExceptionCheck())accepted=env->CallBooleanMethod(observer,started)==JNI_TRUE;if(env->ExceptionCheck())env->ExceptionClear();if(!accepted){io_complete=false;request_stop();}else start_notified=true;}
                     }break;}
                     if(n<0){if(errno==EINTR)continue;if(errno!=EAGAIN&&errno!=EWOULDBLOCK){io_complete=false;close_fd(fd);request_stop();}break;}
@@ -155,14 +170,15 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_runPty(
         }
         if(owns_leader){Scan current=scan(pid,tracked,escaped);
             if(signal_owned(current,SIGKILL)){
-                pid_t waited;do{waited=waitpid(pid,&status,WNOHANG);}while(waited<0&&errno==EINTR);reaped=waited==pid;
+                pid_t waited=owner.reap(status);reaped=waited==pid;
                 if(!reaped)io_complete=false;
                 Scan final_scan=scan(pid,tracked,escaped);session_absent=reaped&&final_scan.complete&&!escaped&&!members(final_scan,pid,tracked);
             }
         }
         if(pending.active)acknowledge(EPIPE,0,0,pending.written>0);
     }
-    close_fd(master);close_fd(slave);close_fd(launch[0]);close_fd(launch[1]);bool group_absent=pid<=0||(reaped&&kill(-pid,0)<0&&errno==ESRCH);
+    close_fd(master);close_fd(slave);close_fd(launch[0]);close_fd(launch[1]);bool owner_finished=owner.finish();if(!owner_finished){io_complete=false;session_absent=false;}
+    bool group_absent=owner_finished&&((pid<=0&&owner.certain_no_child())||(reaped&&kill(-pid,0)<0&&errno==ESRCH));
     const jlong result[8]={reaped&&WIFEXITED(status)?WEXITSTATUS(status):-1,reaped&&WIFSIGNALED(status)?WTERMSIG(status):0,launch_error,stopped?1:0,timed_out?1:0,group_absent?1:0,io_complete?1:0,session_absent?1:0};
     jlongArray answer=env->NewLongArray(8);if(answer)env->SetLongArrayRegion(answer,0,8,result);env->DeleteLocalRef(type);return answer;
 }

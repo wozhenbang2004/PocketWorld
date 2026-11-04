@@ -290,7 +290,7 @@ class HostTestEntrypointTest(unittest.TestCase):
         # Registry/source closure only; SDK35 production/test compilation remains the host Gradle gate.
         manifest = json.loads((HOST.ROOT / 'tools/tests/fixtures/phone-advanced-execution-tests.json').read_text())
         self.assertEqual(1, manifest['schemaVersion'])
-        expected_counts = {'phone-setup-recovery': 28, 'phone-input-extensions': 30,
+        expected_counts = {'phone-setup-recovery': 30, 'phone-input-extensions': 30,
                            'phone-semantic-profile': 45, 'phone-access-history': 38}
         self.assertEqual(set(expected_counts), set(manifest['groups']))
         for group, inventory in manifest['groups'].items():

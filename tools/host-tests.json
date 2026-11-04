@@ -788,7 +788,8 @@
       "dev.pocketengine.ui.PhoneAudioOwnerUiNativeTest",
       "dev.pocketengine.phone.PhoneDiagnosticReportTest",
       "dev.pocketengine.phone.AndroidPhoneDiagnosticsNativeTest",
-      "dev.pocketengine.ui.PhoneDiagnosticsOwnerNativeTest"
+      "dev.pocketengine.ui.PhoneDiagnosticsOwnerNativeTest",
+      "dev.pocketengine.phone.display.OwnerTaskAudioTest"
     ],
     "helpers": [],
     "robolectric": true,
@@ -955,7 +956,7 @@
       "dev.pocketengine.features.local.runtime.RuntimeContractsTest"
     ],
     "native": true,
-    "description": "Actual Linux JNI ordinary protocol3 bounded read-only original-group drain and original ManagedProcessJobs/preparation leases: controlled orphan reap settles, beyond-deadline held member keeps its actual lease and unknown receipt across cold reads, cancel and close. Isolated real competing waitpid fixtures compare the pinned historical protocol2 nonconvergence with current lost-wait convergence before/after observed exit; lost identity forbids later signals and release. Exact historical exit7 contracts preserved; failed lease close also remains unresolved. Separate fixture launcher only, not App-wide subreaper, full task/device or global PID cleanup."
+    "description": "Actual Linux JNI ordinary protocol4 private command-parent ownership and original ManagedProcessJobs/preparation leases. Controlled orphan reap settles; missing original control-channel proof, beyond-deadline members or failed lease close retain unknown receipts and original leases. Isolated competing-reaper and historical protocol2 nonconvergence fixtures keep historical exit7 assertions. No App-wide subreaper, unrelated PID signals, Android device or full-suite acceptance."
   },
   "memory-archive-currentness": {
     "class": "dev.pocketengine.features.memory.MemoryArchiveCurrentnessTest",
@@ -1456,6 +1457,7 @@
   "native-transport-wait-ownership": {
     "class": "dev.pocketengine.features.local.runtime.NativeTransportWaitOwnershipTest",
     "additionalClasses": [
+      "dev.pocketengine.features.local.runtime.NativeLaunchObservationTest",
       "dev.pocketengine.features.local.runtime.NativeTransportContractTest",
       "dev.pocketengine.features.local.runtime.NativePtyTransportTest"
     ],
@@ -1463,7 +1465,7 @@
       "dev.pocketengine.features.local.runtime.NativeTransportWaitOwnershipProbe"
     ],
     "native": true,
-    "description": "Actual Linux JNI PTY/duplex transport and isolated competing exact-child waitpid before initial exit observation and after a real zombie observation at the next/final scan. After observing ECHILD or changed identity, no further numeric signal or group/session release proof is permitted. Checks and signals are not atomic against arbitrary competing reapers. Historical precise transport receipts stay read-only; no real PID reuse, unrelated signal target, App-wide reaper, Android device or full-suite claim."
+    "description": "Actual Linux JNI ordinary/PTY/duplex transports with a private single-threaded command parent and a private clone wait domain. Exercises owner death plus real command reap after the last successful live/zombie observation, ordinary App reapers, control EOF and absent pidfd support; losing the original control channel keeps cleanup unknown and never authorizes App-side numeric signals. Historical transport receipts remain read-only. Requires /proc in the current PID namespace; does not prove Android device behavior, forced PID reuse or safety against uncoordinated same-process __WALL/__WCLONE sweepers."
   },
   "private-task-run-control": {
     "class": "dev.pocketengine.PrivateTaskRunControlNativeTest",
@@ -1491,9 +1493,14 @@
   "bootstrap-database-maintenance": {
     "class": "dev.pocketengine.bootstrap.BootstrapAdmissionNativeTest",
     "additionalClasses": [
+      "dev.pocketengine.BootstrapAdmissionNativeTest",
       "dev.pocketengine.bootstrap.BootstrapStatusTest",
       "dev.pocketengine.store.DatabaseFilePreservationTest",
-      "dev.pocketengine.store.TaskDatabaseMaintenanceNativeTest"
+      "dev.pocketengine.store.TaskDatabaseRecoveryManifestTest",
+      "dev.pocketengine.store.TaskDatabaseMaintenanceNativeTest",
+      "dev.pocketengine.bootstrap.BootstrapOriginalRetryNativeTest",
+      "dev.pocketengine.bootstrap.LegacyBootstrapEntryNativeTest",
+      "dev.pocketengine.features.assistant.ConversationReadOnlyRecoveryNativeTest"
     ],
     "helpers": [
       "dev.pocketengine.testutil.ReadyApplicationFixture"
@@ -1504,12 +1511,106 @@
   "model-connection-owner-policy": {
     "class": "dev.pocketengine.store.ProviderCompatibilityNativeTest",
     "additionalClasses": [
-      "dev.pocketengine.ui.ModelConnectionTestIdentityTest"
+      "dev.pocketengine.ui.ModelConnectionTestIdentityTest",
+      "dev.pocketengine.runtime.models.ProviderCompatProfileTest",
+      "dev.pocketengine.runtime.ProviderCompatibilityTest"
     ],
     "helpers": [
       "dev.pocketengine.testutil.HttpServer"
     ],
     "robolectric": true,
     "description": "Saved original provider compatibility/cache policy, real loopback SettingsStore/Gateway projection and native test identity matching. No external-provider or Android UI acceptance."
+  },
+  "team-member-fallback": {
+    "class": "dev.pocketengine.features.teams.TeamMemberFallbackNativeJourneyTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.teams.TeamMemberModelTargetNativeJourneyTest",
+      "dev.pocketengine.features.teams.TeamMemberModelsTest",
+      "dev.pocketengine.features.teams.TeamParentBudgetTest",
+      "dev.pocketengine.store.TeamResearchRetryTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.features.teams.TeamResearchAgentNativeJourneyTest",
+      "dev.pocketengine.features.teams.TeamBudgetPersistentApplication",
+      "dev.pocketengine.store.ResearchModelFixtureSettings"
+    ],
+    "robolectric": true,
+    "description": "Default native TeamResearchHost/Coordinator -> original child Runner -> ModelGateway -> exact SQLite logical/physical receipts and original parent reservations. New frozen API groups may reserve one next candidate after a definite presemantic HTTP 5xx; original cap1 pins, summaries, unknown completion, partial output, cancellation and revoked sources do not gain retries. Distinct call IDs, shared deadline, atomic parent budget and unknown billing retained. Pure strict failure-policy tests do not establish Android/SQLite/HTTP runtime acceptance."
+  },
+  "project-image-model-input": {
+    "class": "dev.pocketengine.features.local.project.ProjectImageSourceNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.local.project.ProjectImageRunnerNativeTest",
+      "dev.pocketengine.core.NativeToolObservationTest",
+      "dev.pocketengine.browser.BrowserVisualRunnerTest",
+      "dev.pocketengine.features.teams.TeamProjectImageNativeTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.browser.BrowserSemanticReadTest",
+      "dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest",
+      "dev.pocketengine.browser.BrowserProfileCapabilityBindingTest",
+      "dev.pocketengine.browser.BrowserSemanticReadSqlTest",
+      "dev.pocketengine.browser.BrowserTaskPersistenceTest",
+      "dev.pocketengine.browser.BrowserTaskSpaceTest",
+      "dev.pocketengine.browser.BrowserVisualPortNativeTest",
+      "dev.pocketengine.features.teams.TeamProjectRunnerDeliveryJourneyTest"
+    ],
+    "robolectric": true,
+    "description": "Original selected checkout or same-private-task artifact image bytes through magic/MIME/SHA validation, native one-use observation and original Runner image request budget. Current source/grant/run/epoch/cancel/pause checks repeat at actual inference admission; metadata and preview are not model vision, team artifacts cannot borrow private scope. Max two images, source withdrawal and late delivery regression. Native fixtures require Android SDK35; pure carrier checks are separately evidenced.",
+    "native": true
+  },
+  "attachment-import-recovery": {
+    "class": "dev.pocketengine.features.attachments.AttachmentImportRecoveryTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.attachments.AttachmentBookTest"
+    ],
+    "helpers": [],
+    "description": "Original ordinary attachment import interruption, saved-byte/index reconciliation, unknown/native preservation and cross-Book file-lock exclusion. Pure JVM fixtures; no Android process-death or device acceptance."
+  },
+  "pocket-web-model-accounts": {
+    "class": "dev.pocketengine.ui.web.PocketWebApiModelsTest",
+    "additionalClasses": [
+      "dev.pocketengine.ui.web.PocketWebAccountCommandsTest"
+    ],
+    "helpers": [],
+    "description": "Original Web API model identity projection and account command receipts. Pure JVM contracts; no OAuth provider or mounted Android acceptance."
+  },
+  "pocket-web-bundle": {
+    "class": "dev.pocketengine.ui.web.PocketWebBundleTest",
+    "helpers": [],
+    "description": "Original runtime resource allowlist, exact origin, canonical paths and bounded receipt admission. No mounted Android WebView or APK acceptance."
+  },
+  "bootstrap-maintenance": {
+    "class": "dev.pocketengine.bootstrap.BootstrapStatusTest",
+    "additionalClasses": [
+      "dev.pocketengine.bootstrap.BootstrapAdmissionNativeTest",
+      "dev.pocketengine.BootstrapAdmissionNativeTest",
+      "dev.pocketengine.store.DatabaseFilePreservationTest",
+      "dev.pocketengine.store.TaskDatabaseRecoveryManifestTest",
+      "dev.pocketengine.store.TaskDatabaseMaintenanceNativeTest",
+      "dev.pocketengine.bootstrap.BootstrapOriginalRetryNativeTest",
+      "dev.pocketengine.bootstrap.LegacyBootstrapEntryNativeTest",
+      "dev.pocketengine.features.assistant.ConversationReadOnlyRecoveryNativeTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
+    ],
+    "robolectric": true,
+    "description": "Original bootstrap state, nondestructive database preservation, exact recovery manifest and maintenance/open gates; real repository read-only export and legacy Activity entry lifecycle. Native SQLite and Activity bodies require the host SDK35/Robolectric gate. Pure-file checks alone do not prove Android cutover or physical-device WebView behavior."
+  },
+  "model-connection-identity": {
+    "class": "dev.pocketengine.ui.ModelConnectionTestIdentityTest",
+    "additionalClasses": [
+      "dev.pocketengine.store.ProviderCompatibilityNativeTest",
+      "dev.pocketengine.runtime.models.ProviderCompatProfileTest",
+      "dev.pocketengine.runtime.ProviderCompatibilityTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "robolectric": true,
+    "description": "Original connection/editor/draft/native test identities, strict receipt projection, per-profile compatibility and cache settings CAS. Controlled provider/repository fixtures; no live provider, real cache hit or Android visual acceptance."
   }
 }

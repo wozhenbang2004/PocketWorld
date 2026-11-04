@@ -71,21 +71,21 @@ public final class BackgroundPhonePort implements PhonePort,dev.pocketengine.pho
         lifecycleContext=context.getApplicationContext();audioRecovery=dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.get(lifecycleContext);audioTask=task;audioOwner=owner;lifecycleControl=original;lifecycleRun=run;lifecycleEpoch=epoch;
         if(ownerAudio==null)ownerAudio=new OwnerTaskAudio(owner,displayId,audioRecovery);
     }
-    /** Cleanup may undo only this original run's durable changes, including after cancellation. */
+    /** Cleanup reconciles only this run's durable audio records. It cannot write system modes. */
     public synchronized JSONObject restoreTaskAudio()throws Exception {
         if(ownerAudio!=null)ownerAudio.invalidate();
         if(audioRecovery==null)return new JSONObject().put("pending",0).put("status","audio_not_configured");
-        return dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.withCommands((command,payload)->module.audioForTask(command,payload,audioTask,sessionId,displayId,null,-1,null),()->audioRecovery.restoreOwner(audioOwner));
+        return dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.withObservationCommands((command,payload)->module.audioForTask(command,payload,audioTask,sessionId,displayId,null,-1,null),()->audioRecovery.restoreOwner(audioOwner));
     }
     private void beforeOpenAudio(String pkg,RunControl control,long revision)throws Exception {beforeOpenAudio(pkg,0,control,revision);}
     private void beforeOpenAudio(String pkg,int user,RunControl control,long revision)throws Exception {
-        // Explicit owner takeover restores sound; manual owner actions must not mute it again.
+        // Manual owner actions must not create another automatic mute.
         if(isOwner(control)||lifecycleContext==null)return;
         if(control!=lifecycleControl||audioRecovery==null)throw new SecurityException("original_audio_controller_required");
         var target=new dev.pocketengine.phone.access.AppCopyKey(pkg,user);
         dev.pocketengine.phone.observation.NativePhoneEntry.Admission cleanup=()->{guard(control,revision);if(control!=lifecycleControl||!module.ownedBy(audioTask))throw new SecurityException("original_audio_controller_required");};
-        JSONObject restored=dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.withCommands((command,payload)->module.audioForTask(command,payload,audioTask,sessionId,displayId,control,revision,cleanup),()->audioRecovery.restoreOwnerExcept(audioOwner,target));
-        if(restored.optLong("pending")!=0)throw new PhoneFailure("audio_policy_unconfirmed","上一目标的声音恢复尚未证实；未继续切换目标 App，请核对原恢复记录。");
+        JSONObject restored=dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.withObservationCommands((command,payload)->module.audioForTask(command,payload,audioTask,sessionId,displayId,control,revision,cleanup),()->audioRecovery.restoreOwnerExcept(audioOwner,target));
+        if(restored.optLong("pending")!=0)throw new PhoneFailure("audio_policy_unconfirmed","上一目标可能仍静音，自动恢复不能安全覆盖当前声音；未继续切换 App，请明确处理原声音记录。");
         if(!dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.silenceEnabled(lifecycleContext)||ownerAudio!=null&&!ownerAudio.automaticMuteAllowed(target))return;
         dev.pocketengine.phone.observation.NativePhoneEntry.Admission admitted=()->{cleanup.check();if(!dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.silenceEnabled(lifecycleContext)||ownerAudio!=null&&!ownerAudio.automaticMuteAllowed(target))throw new SecurityException("owner_audio_policy_revoked");};
         // This retained legacy launch lane is the helper's verified shell-user-0 context;

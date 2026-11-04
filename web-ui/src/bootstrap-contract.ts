@@ -3,8 +3,12 @@ export type BootstrapReason = { code: string; message: string; nextStep: string 
 export type RepairFile = { name: string; exists?: boolean; length?: number; sha256?: string; copiedLength?: number; copiedSha256?: string; verified?: boolean };
 export type RepairConsistency = { quiescence?: string; sqliteLogicalIntegrity?: string; sourceBefore?: string; sourceAfter?: string | null; preCorruptionCallbackBytes?: string; copiesSha256AndLengthVerified?: boolean };
 export type RepairMode = 'empty_database' | 'verified_copy';
+export type RepairGap = { sourceConversationId: string; reason: string; recordCount: number | null };
+export type RecoveredConversation = { sourceConversationId: string; restoredConversationId: string; messageCount: number; omittedCount: number; exportSha256: string; exportBytes: number };
 export type RepairRestoration = {
-  section: 'conversations'; conversationCount: number; messageCount: number; omittedCount: number; contentUtf8Bytes: number;
+  section: 'conversations'; sourceConversationCount: number; conversationCount: number; messageCount: number; omittedCount: number;
+  unreadableConversationCount: number; partial: boolean; contentUtf8Bytes: number; sourceGeneration: string;
+  manifestSha256: string; manifestBytes: number; conversations: RecoveredConversation[]; gaps: RepairGap[];
   sourceFingerprint: string; sourceReadOnly: true; restoresExistingIds: false; restoresActiveGrants: false;
   restoresTaskHistory: false; restoresAttachmentBytes: false; restoresCredentialsOrPairings: false; omissionMeaning: string;
 };
@@ -45,7 +49,11 @@ export function currentBootstrapView(native: BootstrapView | null, received: Boo
 }
 export function retainedBootstrapOperation(local: BootstrapOperation | null, saved?: BootstrapOperation): BootstrapOperation | undefined {
   if (local?.status === 'unknown') return { ...local, repairId: local.repairId || (saved?.requestId === local.requestId ? saved.repairId : '') };
-  return saved?.status === 'unknown' ? saved : local || saved;
+  if (saved?.status === 'unknown') return saved;
+  // Native completion is retained until this document has acknowledged delivery.
+  // A lost delivery acknowledgement must leave a usable read-and-acknowledge path.
+  if (saved?.status === 'completed' && !local) return { ...saved, status: 'unknown' };
+  return local || saved;
 }
 export function repairAllowed(view: BootstrapView | null, command: string): boolean {
   return Boolean(view && Array.isArray(view.maintenance?.allowedCommands) && view.maintenance.allowedCommands.includes(command));
@@ -69,26 +77,41 @@ export function repairPin(view: BootstrapView): Pick<RepairReview, 'generation' 
   if (!item?.preservationVerified || !item.repairId || !item.sourceFingerprint || !item.backupFingerprint) throw new Error('尚未取得已验证的原件保全身份，不能准备替换。');
   return { generation: view.generation, repairId: item.repairId, sourceFingerprint: item.sourceFingerprint, backupFingerprint: item.backupFingerprint };
 }
-export function repairRestoration(value: unknown, sourceFingerprint: string): RepairRestoration | null {
-  const item = record(value);
-  if (item.section !== 'conversations' || item.sourceFingerprint !== sourceFingerprint || item.sourceReadOnly !== true ||
-      ['conversationCount', 'messageCount', 'omittedCount', 'contentUtf8Bytes'].some(key => !Number.isSafeInteger(item[key]) || item[key] < 0) ||
-      ['restoresExistingIds', 'restoresActiveGrants', 'restoresTaskHistory', 'restoresAttachmentBytes', 'restoresCredentialsOrPairings'].some(key => item[key] !== false) ||
-      typeof item.omissionMeaning !== 'string') return null;
-  return item as RepairRestoration;
-}
-export function repairReviewPayload(view: BootstrapView, mode: RepairMode, requestId: string) {
-  if (!repairModeAllowed(view, mode)) throw new Error('当前原生维护记录没有开放所选方案，请重新读取。');
-  const pin = repairPin(view);
-  return { expectedGeneration: pin.generation, requestId, repairId: pin.repairId, sourceFingerprint: pin.sourceFingerprint,
-    backupFingerprint: pin.backupFingerprint, mode, ...(mode === 'verified_copy' ? { sections: ['conversations'] } : {}) };
-}
 export function bootstrapRetryPayload(view: BootstrapView, requestId: string) {
   if (!view.retryAvailable || view.state === 'initializing') throw new Error('当前启动代次仍不可重试，请先只读核对。');
   if (view.maintenance?.phase === 'preserved' && view.maintenance.originalRetryAvailable !== true) throw new Error('原生尚未开放对同一原数据库的重试。');
   const original = view.maintenance?.originalRetryAvailable === true ? repairPin(view) : null;
   return { expectedGeneration: view.generation, requestId, ...(original ? { repairId: original.repairId,
     sourceFingerprint: original.sourceFingerprint, backupFingerprint: original.backupFingerprint } : {}) };
+}
+export function repairRestoration(value: unknown, sourceFingerprint: string): RepairRestoration | null {
+  const item = record(value);
+  if (item.section !== 'conversations' || item.sourceFingerprint !== sourceFingerprint || item.sourceReadOnly !== true ||
+      ['sourceConversationCount', 'conversationCount', 'messageCount', 'omittedCount', 'unreadableConversationCount', 'contentUtf8Bytes', 'manifestBytes'].some(key => !Number.isSafeInteger(item[key]) || item[key] < 0) ||
+      ['restoresExistingIds', 'restoresActiveGrants', 'restoresTaskHistory', 'restoresAttachmentBytes', 'restoresCredentialsOrPairings'].some(key => item[key] !== false) ||
+      typeof item.omissionMeaning !== 'string' || typeof item.sourceGeneration !== 'string' || !item.sourceGeneration ||
+      typeof item.manifestSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(item.manifestSha256) || item.manifestBytes === 0 ||
+      !Array.isArray(item.conversations) || item.conversations.length !== item.conversationCount || !Array.isArray(item.gaps) ||
+      item.sourceConversationCount !== item.conversationCount + item.unreadableConversationCount ||
+      item.partial !== (item.omittedCount > 0 || item.unreadableConversationCount > 0)) return null;
+  if (item.conversations.some((entry: unknown) => {
+    const row = record(entry);
+    return typeof row.sourceConversationId !== 'string' || !row.sourceConversationId || typeof row.restoredConversationId !== 'string' || !row.restoredConversationId || row.sourceConversationId === row.restoredConversationId ||
+      ['messageCount', 'omittedCount', 'exportBytes'].some(key => !Number.isSafeInteger(row[key]) || row[key] < 0) ||
+      typeof row.exportSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(row.exportSha256);
+  }) || item.gaps.some((entry: unknown) => {
+    const gap = record(entry);
+    return typeof gap.sourceConversationId !== 'string' || !gap.sourceConversationId || typeof gap.reason !== 'string' || !gap.reason ||
+      (gap.recordCount !== null && (!Number.isSafeInteger(gap.recordCount) || gap.recordCount < 0));
+  }) || (item.partial && item.gaps.length === 0)) return null;
+  return item as RepairRestoration;
+}
+export function repairReviewPayload(view: BootstrapView, mode: RepairMode, requestId: string, includeConversationContent = false) {
+  if (!repairModeAllowed(view, mode)) throw new Error('当前原生维护记录没有开放所选方案，请重新读取。');
+  if (mode === 'verified_copy' && !includeConversationContent) throw new Error('请先明确选择在本机读取并恢复对话文字。');
+  const pin = repairPin(view);
+  return { expectedGeneration: pin.generation, requestId, repairId: pin.repairId, sourceFingerprint: pin.sourceFingerprint,
+    backupFingerprint: pin.backupFingerprint, mode, ...(mode === 'verified_copy' ? { sections: ['conversations'], includeConversationContent: true } : {}) };
 }
 export function captureRepairReview(view: BootstrapView, requestedMode: RepairMode = 'empty_database'): RepairReview {
   const review = view.maintenance?.review;

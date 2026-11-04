@@ -72,4 +72,17 @@ public final class RunProgressCheckpointNativeTest {
             assertEquals(saved,decorated.restore().getJSONObject("progressGuard").toString());assertEquals(saved,f.journal.restore().getJSONObject("progressGuard").toString());
         }
     }
+    @Test public void priorRunJournalCannotOverwriteTheSuccessorGuard()throws Exception {
+        try(Fixture f=new Fixture()){
+            RepeatToolNotice priorGuard=f.failures(3);f.journal.checkpoint(f.history(),3,new JSONObject(),priorGuard.snapshot());
+            RunJournal priorJournal=f.journal;RunControl priorControl=f.control;String priorRun=f.run;int priorEpoch=f.epoch;
+            f.tasks.endAttempt(f.task,priorRun,"awaiting_user","等待核对",new JSONObject());f.control=new RunControl();
+            f.bind(f.tasks.startOriginalCapabilityAttempt(f.task,priorRun,priorEpoch,24,f.control,""));
+            JSONObject successorBefore=f.journal.restore();assertNotEquals(priorRun,f.run);
+            assertFalse(priorControl.isCancelled());
+            assertThrows(SecurityException.class,()->priorJournal.checkpoint(f.history(),6,new JSONObject(),f.failures(6).snapshot()));
+            JSONObject successorAfter=f.journal.restore();assertEquals(successorBefore.getJSONObject("progressGuard").toString(),successorAfter.getJSONObject("progressGuard").toString());
+            assertEquals(successorBefore.getInt("steps"),successorAfter.getInt("steps"));assertFalse(f.control.isCancelled());priorControl.cancel();
+        }
+    }
 }

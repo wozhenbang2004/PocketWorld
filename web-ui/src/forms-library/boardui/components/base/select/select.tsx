@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useRef, useState } from "react";
+import { createContext, useContext, useState } from "react";
 import type { ReactNode, Ref } from "react";
 import {
   Button as AriaButton,
@@ -24,7 +24,6 @@ import {
 } from "../dropdown/menu-styles";
 import { ChevronDownSmall } from "../../foundations/icons/chevrons";
 import { cx } from "../../../utils/cx";
-import { useDismissOnOutsidePress, useTriggerToggle } from "../../../utils/use-dismiss-on-outside-press";
 
 /**
  * Figma source: Board UI → dashboard 1 dropdown triggers ("All prices" filter
@@ -75,33 +74,22 @@ export function Select<T extends object>({
   ref,
   ...props
 }: SelectProps<T>) {
-  // The popover is `isNonModal`: react-aria's modal scroll lock puts
-  // `overflow: hidden` on <html>, which — with this app's `h-full` root —
-  // collapses the page scroll position and visibly yanks the sticky
-  // sidebar upward every time a select opens. Non-modal skips the lock,
-  // but also disables react-aria's outside-press dismissal (`isDismissable`
-  // is hard-coupled to `!isNonModal` in usePopover), so open state is
-  // controlled here and dismissal restored manually — the same fix as the
-  // date-picker family (see utils/use-dismiss-on-outside-press.ts).
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const popoverRef = useRef<HTMLElement>(null);
+  // The app scrolls long forms inside a nested container. Keep the menu modal
+  // so a queued form-scroll event cannot close it immediately after a pointer
+  // opens it. React Aria owns outside dismissal, focus and scroll locking.
   const [isOpen, setIsOpen] = useState(false);
-  useDismissOnOutsidePress(isOpen, () => setIsOpen(false), [triggerRef, popoverRef]);
-  // Pressing the trigger while open closes the popover instead of reopening
-  const allowOpenChange = useTriggerToggle(isOpen, triggerRef);
 
   return (
     <AriaSelect
       ref={ref}
       {...props}
       isOpen={isOpen}
-      onOpenChange={(o) => allowOpenChange(o) && setIsOpen(o)}
+      onOpenChange={setIsOpen}
       className={cx("group flex flex-col", className)}
     >
       {({ isOpen }) => (
         <>
           <AriaButton
-            ref={triggerRef}
             className={cx(
               "flex w-full cursor-pointer items-center justify-between rounded-2lg",
               "border border-border-button-default bg-background-primary-default shadow-xs",
@@ -133,8 +121,6 @@ export function Select<T extends object>({
             />
           </AriaButton>
           <AriaPopover
-            ref={popoverRef}
-            isNonModal
             offset={4}
             className={cx(
               MENU_POPOVER_WIDTH,

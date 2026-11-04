@@ -187,6 +187,41 @@ def run_evidence(command, destination):
         subprocess.run(command, stdout=handle, stderr=subprocess.STDOUT, check=True)
 
 
+def verify_packaged_web(bundle):
+    """Verify the actual APK file set, including assets merged by other build inputs."""
+    prefix = "assets/pocket-ui/"
+    identity = prefix + "build-identity.json"
+    entries = [entry for entry in bundle.infolist() if entry.filename.startswith(prefix)]
+    names = [entry.filename for entry in entries]
+    assert len(names) == len(set(names)), "Duplicate packaged Web resource"
+    assert identity in names and bundle.getinfo(identity).file_size <= 1024 * 1024, "Missing or oversized Web receipt"
+    receipt = json.loads(bundle.read(identity))
+    assert receipt.get("kind") == "pocketworld-library-web", "Unexpected packaged Web identity"
+    files = receipt.get("files")
+    assert isinstance(files, list) and 0 < len(files) <= 4096, "Invalid packaged Web receipt"
+    listed = {}
+    for item in files:
+        name = item.get("path")
+        assert isinstance(name, str) and 0 < len(name) <= 512 and not re.search(r"[\\%?#\x00-\x20\x7f]", name), "Invalid Web path"
+        assert all(part not in ("", ".", "..") for part in name.split("/")), "Noncanonical Web path"
+        assert name != "build-identity.json" and name not in listed, "Duplicate or self-listed Web resource"
+        assert type(item.get("bytes")) is int and item["bytes"] >= 0, "Invalid Web resource size"
+        assert isinstance(item.get("sha256"), str) and re.fullmatch(r"[a-f0-9]{64}", item["sha256"]), "Invalid Web resource digest"
+        listed[name] = item
+    assert set(names) == {identity} | {prefix + name for name in listed}, "Packaged Web resources differ from the receipt"
+    assert "index.html" in listed, "Missing packaged Web entry"
+    for required in ("assets/", "fonts/", "licenses/"):
+        assert any(name.startswith(required) for name in listed), "Incomplete packaged Web resources"
+    for entry in entries:
+        assert not entry.is_dir() and (entry.external_attr >> 16) & 0o170000 in (0, 0o100000), "Non-regular packaged Web resource"
+        if entry.filename == identity:
+            continue
+        item = listed[entry.filename[len(prefix):]]
+        assert entry.file_size == item["bytes"], "Packaged Web resource size mismatch"
+        assert hashlib.sha256(bundle.read(entry)).hexdigest() == item["sha256"], "Packaged Web resource hash mismatch"
+    return sorted(names)
+
+
 def verify_apk(args):
     """Retains the original APK signature, alignment and native payload checks."""
     apk = pathlib.Path(args.apk)
@@ -214,7 +249,7 @@ def verify_apk(args):
                 assert data[:4] == b"\x7fELF" and data[4] == 2 and int.from_bytes(data[18:20], "little") == 183, "Not AArch64 ELF: " + name
         with zipfile.ZipFile(io.BytesIO(bundle.read("assets/pocketengine-display-helper.jar"))) as helper:
             assert helper.testzip() is None and "classes.dex" in helper.namelist(), "Display helper DEX missing"
-        web_files = sorted(name for name in names if name.startswith("assets/pocket-ui/"))
+        web_files = verify_packaged_web(bundle)
         assert not any(b"__POCKET_VISUAL_FIXTURE__" in bundle.read(name) for name in web_files), "An isolated browser fixture was packaged as the real app"
         assert any(name.endswith(".js") for name in web_files), "Packaged Web application JavaScript is missing"
         assert any(name.endswith(".css") for name in web_files), "Packaged Web application styles are missing"

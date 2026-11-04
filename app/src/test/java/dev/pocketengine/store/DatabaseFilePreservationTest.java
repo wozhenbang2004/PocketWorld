@@ -50,5 +50,23 @@ public final class DatabaseFilePreservationTest {
         File original=database();Path source=original.toPath();Path outside=temporary.newFile().toPath();Files.writeString(outside,"outside");Files.delete(source);Files.createSymbolicLink(source,outside);
         try{DatabaseFilePreservation.inspect(original);fail();}catch(java.io.IOException expected){}assertEquals("outside",Files.readString(outside));
     }
+    @Test public void symbolicDestinationParentIsRejectedBeforeAnyCopyIsCreated()throws Exception {
+        File original=database();Path outside=temporary.newFolder().toPath();
+        Path alias=temporary.getRoot().toPath().resolve("destination-alias");Files.createSymbolicLink(alias,outside);
+        try{DatabaseFilePreservation.preserve(original,alias.resolve("preserved").toFile(),DatabaseFilePreservation.inspect(original),()->true);fail();}
+        catch(java.io.IOException expected){}
+        assertFalse("No data may be copied through a replaced parent",Files.exists(outside.resolve("preserved")));
+    }
+    @Test public void growingSourceCannotFillCopyBeyondTheReviewedLength()throws Exception {
+        File original=database();var before=DatabaseFilePreservation.inspect(original);
+        File destination=new File(temporary.getRoot(),"bounded-copy");Path copied=destination.toPath().resolve(original.getName());
+        java.util.concurrent.atomic.AtomicBoolean changed=new java.util.concurrent.atomic.AtomicBoolean();
+        try{DatabaseFilePreservation.preserve(original,destination,before,()->{
+            if(Files.exists(copied)&&changed.compareAndSet(false,true))try{Files.write(original.toPath(),new byte[131072],java.nio.file.StandardOpenOption.APPEND);}catch(Exception failure){throw new AssertionError(failure);}
+            return true;
+        });fail();}catch(java.io.IOException expected){}
+        assertTrue("The growing original remains intact",original.length()>before.bytes());
+        assertTrue("An unverified copy stays within its reviewed length",!Files.exists(copied)||Files.size(copied)<=before.bytes());
+    }
     private static void rejects(JSONArray files,String fingerprint)throws Exception{try{DatabaseFilePreservation.fromManifest("pocket-world.db",files,fingerprint);fail();}catch(SecurityException expected){}}
 }

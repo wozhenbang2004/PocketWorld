@@ -29,6 +29,9 @@ class ComposeActivity : ComponentActivity() {
     private var crossedBootstrap = false
     private var ignoredBusinessResult = false
     private var startupSaved: Bundle? = null
+    // Only a new content selection received by this live Activity may wait for startup.
+    // Saved picker, voice and continue operations never enter this slot.
+    private var freshBootstrapContent: Intent? = null
     private var bootstrapPresentation: org.json.JSONObject? = null
     private val pickerOwners = mutableMapOf<String, Long>()
     private fun businessCurrent(): Boolean = businessMounted && ::controller.isInitialized &&
@@ -141,6 +144,7 @@ class ComposeActivity : ComponentActivity() {
         val engine = application as EngineApplication
         startupSaved = savedInstanceState?.let { Bundle(it) }
         crossedBootstrap = savedInstanceState?.getBoolean("bootstrapWasShown") == true || !engine.businessReady()
+        if (savedInstanceState == null && crossedBootstrap) retainFreshBootstrapContent(intent)
         bootstrapPresentation = savedInstanceState?.getString("bootstrapPresentation")?.let { runCatching { org.json.JSONObject(it) }.getOrNull() }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -195,18 +199,23 @@ class ComposeActivity : ComponentActivity() {
         if (crossedBootstrap) {
             // Navigation can be revalidated. Old picker/voice/import/continue mutations cannot be replayed into a fresh Controller.
             val pending = intent
-            val needsNewRequest = pending?.action in setOf(Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE, Intent.ACTION_VIEW, dev.pocketengine.phone.QuickPanelVoiceHandoff.ACTION) ||
+            val freshContent = freshBootstrapContent
+            freshBootstrapContent = null
+            val contentSelection = pending?.action in setOf(Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE, Intent.ACTION_VIEW)
+            val needsNewRequest = (contentSelection && freshContent == null) || pending?.action == dev.pocketengine.phone.QuickPanelVoiceHandoff.ACTION ||
                 pending?.hasExtra(dev.pocketengine.features.assistant.CompatibilityChatHandoff.EXTRA) == true || ignoredBusinessResult
-            if (needsNewRequest) {
+            if (contentSelection || needsNewRequest) {
                 pending?.action = null
-                pending?.data = null
+                if (pending?.data?.host !in setOf("owner-request", "automation")) pending?.data = null
                 pending?.clipData = null
                 pending?.removeExtra(Intent.EXTRA_STREAM)
                 pending?.removeExtra(dev.pocketengine.phone.QuickPanelVoiceHandoff.TOKEN_EXTRA)
                 pending?.removeExtra(dev.pocketengine.features.assistant.CompatibilityChatHandoff.EXTRA)
-                engine.error("启动维护期间的文件选择、听写或继续请求没有重放。请回原入口核对后重新选择；原操作结果仍需查询。")
             }
+            if (needsNewRequest) engine.error("此前文件选择、听写或继续请求没有重放。请回原入口核对后重新选择；原操作结果仍需查询。")
             deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverAccountEntry(intent)
+            // Original content-only import/inspection paths; no old task target, grant or continue token.
+            deliverSharedFiles(freshContent); deliverSkillDocument(freshContent)
             startupSaved?.getString("channelPhoneEventId")?.let { controller.prepareChannelPhone(it) }
             startupSaved = null
             return
@@ -337,9 +346,14 @@ class ComposeActivity : ComponentActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) { super.onWindowFocusChanged(hasFocus); if (::controller.isInitialized) controller.notificationPreviewsFocus(hasFocus && businessCurrent()) }
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent); setIntent(intent)
-        if (!businessCurrent()) return
+        if (!businessCurrent()) { retainFreshBootstrapContent(intent); return }
         deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverSharedFiles(intent)
         deliverSkillDocument(intent); deliverAccountEntry(intent); deliverCompatibilityChat(intent)
+    }
+    private fun retainFreshBootstrapContent(incoming: Intent?) {
+        val content = incoming?.action in setOf(Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE) ||
+            incoming?.action == Intent.ACTION_VIEW && incoming.data?.scheme == "content"
+        freshBootstrapContent = if (incoming != null && content && (incoming.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0) Intent(incoming) else null
     }
     private fun deliverCompatibilityChat(intent: Intent?) {
         val id = intent?.getStringExtra(dev.pocketengine.features.assistant.CompatibilityChatHandoff.EXTRA) ?: return

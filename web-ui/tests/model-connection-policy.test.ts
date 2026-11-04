@@ -42,6 +42,16 @@ test('unknown or not-dispatched responses remain typed and cannot turn into succ
   assert.equal(connectionTestResult(unknown, draft, draft), null);
 });
 
+test('a success flag cannot contradict the native test outcome', () => {
+  for (const outcome of ['failed', 'unknown', 'not_dispatched']) {
+    const contradictory = result(); contradictory.snapshot.connectionTest.outcome = outcome;
+    assert.equal(connectionTestResult(contradictory, draft, draft), null);
+  }
+  const incomplete: any = result(); delete incomplete.snapshot.ok;
+  incomplete.snapshot.connectionTest.outcome = 'failed';
+  assert.equal(connectionTestResult(incomplete, draft, draft), null);
+});
+
 test('compatibility saves only the supported definition and never caller-supplied identity or secrets', () => {
   const selected = compatibilityDraft({ ...saved, apiKey: 'fixture-secret', installationId: 'forged' });
   assert.deepEqual(compatibilityOptions(selected, 'openai_chat'), { tokenField: 'MAX_COMPLETION_TOKENS', streamUsage: 'OMIT', toolWireShape: 'NATIVE',

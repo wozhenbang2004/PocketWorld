@@ -46,7 +46,13 @@ public final class RepeatToolRunnerTest {
                 public boolean supports(String name){return tool.equals(name);}public boolean sideEffecting(String name){return sideEffecting;}
                 public void validate(String name,JSONObject args){if("validation".equals(refusalPhase))throw new SecurityException("original authority denied");}
                 public JSONObject beforeTool(String name,JSONObject args,RunControl original)throws Exception{return "beforeTool".equals(refusalPhase)?new JSONObject().put("ok",false).put("accepted",false).put("code","permission_denied"):null;}
-                public JSONObject execute(String name,JSONObject arguments,RunControl original)throws Exception{assertSame(control,original);int index=calls.incrementAndGet();return new JSONObject().put("ok",false).put("code",index==unknownAt?"effect_unknown":"not_found").put("message","PRIVATE ORIGINAL RECEIPT");}
+                public JSONObject execute(String name,JSONObject arguments,RunControl original)throws Exception{
+                    assertSame(control,original);int index=calls.incrementAndGet();
+                    if("alternating_read".equals(refusalPhase)&&index%2==1)return new JSONObject().put("ok",true).put("content","unchanged original source").put("observationId","new-handle-"+index);
+                    JSONObject receipt=new JSONObject().put("ok",false).put("code",index==unknownAt?"effect_unknown":"not_found").put("message","PRIVATE ORIGINAL RECEIPT");
+                    if("reconcile_flag".equals(refusalPhase)&&index==unknownAt)receipt.put("code","original_receipt_incomplete").put("requiresReconciliation",true);
+                    return receipt;
+                }
             };
             ContextBudgetPolicy.Source budget=selected->ContextBudgetPolicy.RouteBudget.forRoute(selected,new ContextWindow.Budget(128000,1000,1000,2L*1024*1024,64,0),ContextBudgetPolicy.SourceKind.OWNER_OVERRIDE,1,1);
             AgentRunner.OwnerInputs inputs=ownerAfter<0?null:new AgentRunner.OwnerInputs(){boolean delivered;public JSONArray poll(JSONArray included,boolean boundary,boolean close,RunControl original)throws Exception{
@@ -100,6 +106,20 @@ public final class RepeatToolRunnerTest {
         try(Journey j=new Journey("project_search",false,false,-1,-1,12,20,"execute")){
             j.journal.refuseCheckpointAt=4;RunOutcome stopped=j.run();assertEquals("failed",stopped.status);assertEquals(4,j.calls.get());assertEquals(4,j.requests.size());
             assertEquals(3,j.journal.saved.getInt("steps"));assertEquals(3,j.journal.saved.getJSONObject("progressGuard").getInt("consecutiveAllFailed"));
+        }
+    }
+    @Test public void repeatedSuccessfulReadBetweenFailuresCannotRestartTheFailureChain()throws Exception {
+        try(Journey j=new Journey("project_search",false,false,-1,-1,20,20,"alternating_read")){
+            RunOutcome stopped=j.run();assertEquals(stopped.summary,"awaiting_user",stopped.status);
+            assertEquals(12,j.calls.get());assertEquals(12,j.requests.size());assertEquals(1,j.notices());
+            assertEquals(6,j.journal.saved.getJSONObject("progressGuard").getInt("consecutiveAllFailed"));
+            assertEquals("awaiting_user",j.run().status);assertEquals(12,j.calls.get());assertEquals(12,j.requests.size());
+        }
+    }
+    @Test public void nativeReconciliationFlagStopsWithoutAnotherRequestOrReplay()throws Exception {
+        try(Journey j=new Journey("plugin_action",false,true,3,-1,12,20,"reconcile_flag")){
+            RunOutcome stopped=j.run();assertEquals(stopped.summary,"awaiting_user",stopped.status);assertTrue(stopped.evidence.getBoolean("requiresReconciliation"));
+            assertEquals(3,j.calls.get());assertEquals(3,j.requests.size());assertEquals(3,j.journal.begins);assertEquals(3,j.journal.finishes);assertEquals(0,j.notices());
         }
     }
 

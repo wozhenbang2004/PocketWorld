@@ -93,6 +93,8 @@ public final class EngineApplication extends Application implements dev.pocketen
                 if(!bootstrapCleanupConfirmed||tasks!=null)throw new SecurityException("原连接或资源尚未关闭，不能再次初始化");
                 Object expected=payload.get("expectedGeneration");if(!(expected instanceof Integer||expected instanceof Long)||((Number)expected).longValue()<0)throw new SecurityException("缺少准确启动代次");
                 long previous=((Number)expected).longValue();String request=payload.getString("requestId");
+                // Check before persisting a one-use permit; rejected/duplicate requests never consume it.
+                if(!bootstrap.checkRetry(previous,request))return bootstrapState();
                 dev.pocketengine.store.TaskDatabaseMaintenance.OriginalReadPermit permit=null;
                 if(maintenance!=null&&maintenance.blocksBusinessOpen()){
                     if(!maintenance.originalRetryAvailable()||previous!=bootstrap.generation()||!bootstrap.snapshot().getBoolean("retryAvailable"))throw new SecurityException("原维护状态不允许再次初始化，请读取同一记录");
@@ -620,6 +622,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             modelStreams=new dev.pocketengine.features.NativeModelStreamUi(tasks,main,this::ownsRunControl,event->{for(Observer observer:observers)try{observer.onEvent(event);}catch(RuntimeException ignored){}});
             initializeFeatures();initializeDeviceWorkspace();
             // These are the original recovery consumers, completed on this same initializer before ready.
+            dev.pocketengine.features.attachments.AttachmentRepository.get(this).book.recoverInterruptedImports();
             if(channelTaskHost!=null)channelTaskHost.recover();
             memorySources.synchronize(json("ownerId","owner","spaceId","private"));
             automationHost=new dev.pocketengine.features.HostAutomationCoordinator(this,features,tasks,automationPlans);
@@ -632,8 +635,11 @@ public final class EngineApplication extends Application implements dev.pocketen
             hasReachedBusinessReady=true;
             try{queueReadyMaintenance(generation);}catch(java.util.concurrent.RejectedExecutionException stopped){error("原启动后的维护队列已关闭，未重新派发");}
         }catch(Exception|LinkageError failure){
-            for(Throwable cause=failure;cause!=null;cause=cause.getCause())if(cause instanceof TaskStore.DatabaseOpenFailure known&&"database_close_unconfirmed".equals(known.reasonCode))bootstrapCleanupConfirmed=false;
+            // Feature modules can contain best-effort worker closes; a fresh process must establish their new boundary.
+            if(features!=null)bootstrapCleanupConfirmed=false;
+            for(Throwable cause=failure;cause!=null;cause=cause.getCause())if(cause instanceof TaskStore.DatabaseOpenFailure known&&java.util.Set.of("database_close_unconfirmed","cleanup_unconfirmed").contains(known.reasonCode))bootstrapCleanupConfirmed=false;
             bootstrapCleanupConfirmed=closeFailedBootstrap();String code=bootstrapFailureCode(failure);String next=bootstrapNextStep(code);String text=bootstrapFailureMessage(code);
+            if(!bootstrapCleanupConfirmed){text+="；原资源完全关闭尚未证实";next="保留原件，完全关闭应用进程后重新打开，再读取原启动与维护记录";}
             try{Object actual=bootstrap.snapshot().opt("observedSchema");if(actual instanceof Number)observed=((Number)actual).intValue();}catch(Exception unavailable){/* Keep the earlier header observation; never guess the schema. */}
             try{if(databaseMaintenance!=null){if(permit!=null)databaseMaintenance.failOriginalRetry(permit,code);databaseMaintenance.failure(code,text,observed);}}catch(Exception unavailable){bootstrapCleanupConfirmed=false;code="maintenance_record_unreadable";text="原维护记录无法可靠保存，原库未被清空";next="核对本机存储后重新打开应用，不重建原记录";}
             bootstrap.failed(generation,code,text,next,bootstrapCleanupConfirmed&&!code.equals("newer_schema")&&!code.equals("migration_failed"));
@@ -653,6 +659,7 @@ public final class EngineApplication extends Application implements dev.pocketen
      * Keep that process query-only; a fresh process can preserve the same repair record before DB open. */
     private boolean quiesceOriginalDatabaseForMaintenance()throws Exception {
         bootstrap.maintenance("database_maintenance","正在关闭新派发并核对原资源","未证实静止前不会替换数据库",false);
+        if(!bootstrapCleanupConfirmed)return false;
         if(hasReachedBusinessReady){
             TaskStore original=tasks;if(original!=null){JSONObject policy=original.ownerExecutionState();changeOwnerExecutionEnabled(policy.getLong("revision"),false);}
             if(features!=null)features.close();if(deviceWorkspaceOwner!=null)deviceWorkspaceOwner.close();
@@ -693,7 +700,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         case "database_locked"->"原数据库暂被占用，未当作损坏清空";
         case "newer_schema"->"原数据库来自较新版本，当前包不能读取";
         case "migration_failed"->"原数据库迁移未完成，保留原数据和失败阶段";
-        case "database_close_unconfirmed"->"原数据库连接关闭尚未确认；本进程保持准入关闭，不重新打开或复制原库";
+        case "database_close_unconfirmed","cleanup_unconfirmed"->"原数据库连接关闭尚未确认；本进程保持准入关闭，不重新打开或复制原库";
         case "package_incompatible","required_resource_incompatible"->"当前安装身份、平台或必要资源不兼容";
         case "maintenance_record_unreadable"->"原维护记录无法核对，未创建替代记录";
         default->"原初始化或恢复尚未完成，执行准入保持关闭";
@@ -703,7 +710,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         case "storage_full"->"释放本机空间后重试；不要删除数据库或journal文件";
         case "storage_unwritable"->"核对本机存储可写状态后重试";
         case "database_locked"->"等待原占用结束后重试，不重复打开数据库";
-        case "database_close_unconfirmed"->"退出当前应用进程后重新打开，仅核对原维护记录与原文件";
+        case "database_close_unconfirmed","cleanup_unconfirmed"->"退出当前应用进程后重新打开，仅核对原维护记录与原文件";
         case "newer_schema","migration_failed","package_incompatible","required_resource_incompatible"->"安装与原数据兼容的可信版本；可先保全原件";
         default->"保留原失败阶段，核对本机存储后重试或保全原件";
     };}

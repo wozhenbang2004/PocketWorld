@@ -71,36 +71,67 @@ public final class RepeatToolNotice {
                 ||"reconcile".equals(receipt.optString("nextObservationAction"))||receipt.has("accepted")&&receipt.isNull("accepted")){
             round.put("allFailed",false);return;
         }
+        String call=callFingerprint(tool,arguments),source=sourceVersion(receipt);
+        if(Boolean.TRUE.equals(receipt.opt("ok"))){
+            round.put("allFailed",false);
+            if(nativeNotDispatched)return;
+            if(!nativeReadOnly){clearChain();return;}
+            // A new handle, timestamp or successful transport is not new task evidence.
+            // Keep only bounded digests, including across recovery and failure-chain resets,
+            // so alternating the same reads cannot repeatedly buy another failed allowance.
+            String result=readEvidence(receipt,source);
+            if(result.isEmpty())return;
+            String fingerprint=ScopedToolCatalog.fingerprint(new JSONObject().put("call",call).put("result",result));
+            boolean seen=false,modernBaseline=false,legacyObserved=false;
+            for(int i=recentFingerprints.length()-1;i>=0;i--){JSONObject prior=recentFingerprints.getJSONObject(i);
+                if("read_result".equals(prior.getString("category"))){
+                    if(call.equals(prior.getString("call"))&&source.equals(prior.getString("source")))modernBaseline=true;
+                    if(fingerprint.equals(prior.getString("fingerprint"))){seen=true;break;}
+                }else if("observed_result".equals(prior.getString("category"))&&call.equals(prior.getString("call"))&&source.equals(prior.getString("source")))legacyObserved=true;
+            }
+            // Published wait checkpoints did not retain a content digest. The first modern
+            // observation establishes that baseline without renewing the old failure allowance.
+            if(legacyObserved&&!modernBaseline)seen=true;
+            if(!seen)clearChain();
+            remember(tool,call,source,fingerprint,"read_result");return;
+        }
+        if(observationWait(tool)&&!nativeNotDispatched||!Boolean.FALSE.equals(receipt.opt("ok"))||(!nativeReadOnly&&!nativeNotDispatched)||code.isEmpty()){
+            round.put("allFailed",false);return;
+        }
+        // A previously unseen source version is new evidence. Returning to an already
+        // observed version is part of the same bounded cycle, not another fresh allowance.
+        if(!source.isEmpty()){
+            boolean seen=false,changedSource=false;
+            for(int i=recentFingerprints.length()-1;i>=0;i--){JSONObject prior=recentFingerprints.getJSONObject(i);
+                if(call.equals(prior.getString("call"))){String previous=prior.getString("source");
+                    if(source.equals(previous))seen=true;else if(!previous.isEmpty())changedSource=true;}}
+            if(changedSource&&!seen)clearChain();
+        }
+        String fingerprint=ScopedToolCatalog.fingerprint(new JSONObject().put("call",call).put("category",code).put("source",source));
+        remember(tool,call,source,fingerprint,publicCategory(code));round.getJSONArray("failures").put(fingerprint);
+    }
+
+    private void remember(String tool,String call,String source,String fingerprint,String category)throws Exception {
+        recentFingerprints.put(new JSONObject().put("call",call).put("source",source).put("fingerprint",fingerprint)
+                .put("tool",tool.length()<=128?tool:"tool_"+ScopedToolCatalog.fingerprint(tool)).put("category",category));
+        recentFingerprints=tail(recentFingerprints,RECENT);
+    }
+
+    private static String callFingerprint(String tool,Object arguments)throws Exception {
         Object normalized=arguments;
         if(arguments instanceof String raw){try{normalized=new JSONObject(raw);}catch(Exception invalid){normalized=new JSONObject().put("invalidArgumentsDigest",ScopedToolCatalog.fingerprint(raw));}}
-        String call=ScopedToolCatalog.fingerprint(new JSONObject().put("tool",tool).put("arguments",normalized));
-        String source=sourceVersion(receipt);
-        JSONObject prior=null;
-        for(int i=recentFingerprints.length()-1;i>=0;i--){JSONObject candidate=recentFingerprints.getJSONObject(i);if(call.equals(candidate.getString("call"))){prior=candidate;break;}}
-        // A native validation refusal is not a wait. Delivered waits remain neutral unless a real
-        // successful result or changed source is observed; rereading that same result is not progress.
-        if(observationWait(tool)&&!nativeNotDispatched){
-            boolean completed=Set.of("completed","succeeded","success","done").contains(status);
-            if(Boolean.TRUE.equals(receipt.opt("ok"))&&(!source.isEmpty()||completed)){
-                String observed=ScopedToolCatalog.fingerprint(new JSONObject().put("call",call).put("source",source).put("status",status));
-                if(prior==null||!source.isEmpty()&&!source.equals(prior.getString("source"))||completed&&!observed.equals(prior.getString("fingerprint")))clearChain();
-                recentFingerprints.put(new JSONObject().put("call",call).put("source",source).put("fingerprint",observed)
-                        .put("tool",tool.length()<=128?tool:"tool_"+ScopedToolCatalog.fingerprint(tool)).put("category","observed_result"));
-                recentFingerprints=tail(recentFingerprints,RECENT);
-            }
-            round.put("allFailed",false);return;
-        }
-        if(Boolean.TRUE.equals(receipt.opt("ok"))){clearChain();recentFingerprints=new JSONArray();round.put("allFailed",false);return;}
-        if(!Boolean.FALSE.equals(receipt.opt("ok"))||(!nativeReadOnly&&!nativeNotDispatched)||code.isEmpty()){
-            round.put("allFailed",false);return;
-        }
-        // A real version change is new evidence; receipt timestamps/messages/operation IDs are not.
-        if(prior!=null&&!source.isEmpty()&&!prior.getString("source").isEmpty()&&!source.equals(prior.getString("source")))clearChain();
-        JSONObject fingerprint=new JSONObject().put("call",call).put("source",source)
-                .put("fingerprint",ScopedToolCatalog.fingerprint(new JSONObject().put("call",call).put("category",code).put("source",source)))
-                .put("tool",tool.length()<=128?tool:"tool_"+ScopedToolCatalog.fingerprint(tool)).put("category",publicCategory(code));
-        recentFingerprints.put(fingerprint);recentFingerprints=tail(recentFingerprints,RECENT);
-        round.getJSONArray("failures").put(fingerprint.getString("fingerprint"));
+        return ScopedToolCatalog.fingerprint(new JSONObject().put("tool",tool).put("arguments",normalized));
+    }
+
+    private static String readEvidence(JSONObject receipt,String source)throws Exception {
+        if(!source.isEmpty())return source;
+        JSONObject content=new JSONObject();
+        // These are original result payloads, not delivery receipts or status prose. Unknown
+        // receipt shapes remain neutral rather than being presumed to establish progress.
+        for(String key:Set.of("content","text","body","result","results","data","items","entries","rows","matches","files",
+                "lines","stdout","stderr","nodes","packageName","screenWidth","screenHeight","url","title"))
+            if(receipt.has(key)&&!receipt.isNull(key))content.put(key,receipt.get(key));
+        return content.length()==0?"":ScopedToolCatalog.fingerprint(content);
     }
 
     void finishRound()throws Exception {

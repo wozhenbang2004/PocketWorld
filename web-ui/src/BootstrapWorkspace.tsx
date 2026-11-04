@@ -5,17 +5,27 @@ import { usePocketAppearance } from './usePocketAppearance';
 import { Accordion, AccordionItem, Button, CheckboxField, ObjectTable, SettingsDialog } from './forms-library';
 import { Spinner } from './forms-library/boardui/components/base/spinner/spinner';
 import { bootstrapView, bootstrapRetryPayload, currentBootstrapView, retainedBootstrapOperation, captureRepairReview, repairAllowed, repairModeAllowed, repairConsistencyText, repairConfirmPayload, repairOutcome, repairRestoration, repairReviewPayload, repairReviewCurrent,
-  type BootstrapOperation, type BootstrapView, type RepairFile, type RepairMode, type RepairRestoration, type RepairReview } from './bootstrap-contract';
+  type BootstrapOperation, type BootstrapView, type RepairFile, type RepairGap, type RepairMode, type RepairRestoration, type RepairReview } from './bootstrap-contract';
 import './bootstrap.css';
 
 const stages = { configured: '检查安装与配置', data_opened: '打开本机记录', migrated: '核对数据格式', features_ready: '准备工作能力' };
 const recoveries = { not_started: '尚未开始核对原任务', running: '正在核对原任务与原回执', completed: '原任务核对已完成', failed: '原任务核对尚未完成' };
-const phaseLabels: Record<string, string> = { not_started: '尚未保全原件', detected: '已识别原件', inspecting: '核对原件', preserving: '正在保全原件', preserved: '原件副本已核验', preservation_failed: '保全尚未完成', quiescence_unconfirmed: '尚未确认原资源已静止', reviewing: '核验所选隔离方案', review_failed: '所选方案尚未通过核验', staging: '准备隔离暂存', staged: '隔离暂存已核验', reviewed: '等待本次确认', switching: '正在切换本机数据', verifying: '核对本次切换结果', completed: '本次维修已完成', original_retry_prepared: '原数据库重试结果待核对', original_retry_completed: '原数据库恢复器已完成核对', unknown: '切换结果待核对' };
+const phaseLabels: Record<string, string> = { not_started: '尚未保全原件', detected: '已识别原件', inspecting: '核对原件', preserving: '正在保全原件', preserved: '原件副本已核验', preservation_failed: '保全尚未完成', quiescence_unconfirmed: '尚未确认原资源已静止', reviewing: '核验所选隔离方案', review_failed: '所选方案尚未通过核验', staging: '准备隔离暂存', staged: '隔离暂存已核验', reviewed: '等待本次确认', switching: '正在切换本机数据', verifying: '核对本次切换结果', completed: '本次维修已完成', unknown: '操作结果待核对', original_retry_prepared: '原库重新打开已登记', original_retry_completed: '原库重新核对已完成' };
 const newRequest = () => crypto.randomUUID();
 const fileSize = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? `${value.toLocaleString('zh-CN')} 字节` : '尚未取得';
 const modeLabel = (mode: RepairMode) => mode === 'verified_copy' ? '恢复对话文字' : '建立空库';
 function RestorationSummary({ value }: { value: RepairRestoration }) {
-  return <section className="pw-bootstrap-restoration" aria-label="本次对话文字恢复范围"><h3>本次仅恢复对话文字</h3><dl className="pw-bootstrap-facts"><div><dt>对话 / 消息</dt><dd>{value.conversationCount} 段 / {value.messageCount} 条</dd></div><div><dt>明确省略</dt><dd>{value.omittedCount} 条原记录</dd></div><div><dt>内容包大小</dt><dd>{fileSize(value.contentUtf8Bytes)}</dd></div><div><dt>内容身份</dt><dd>以新对话身份导入，原对话 ID 不继承</dd></div></dl><p>{value.omissionMeaning}</p><p>原任务历史、附件原件及授权、密钥和设备配对不恢复；旧运行与执行授权保持停用。</p></section>;
+  const gapReasons: Record<string, string> = { deleted_or_unavailable: '原消息已删除或不可用', unsupported_historical_record_role: '原记录不属于可恢复的对话角色', attachment_bytes_and_grants_not_exported: '附件原件及授权不恢复', external_source_grants_not_exported: '外部来源授权不恢复', message_deleted: '原消息已删除', source_deleted: '原来源已删除', role_not_exportable: '不属于可导出的对话文字', role_not_conversation_content: '不属于可导出的对话文字', source_integrity_unavailable: '原内容完整性未确认', source_revision_or_role_unavailable: '原记录版本或角色无法核对', message_read_limited: '原记录读取受限', conversation_unreadable: '原对话无法完整读取', source_conversation_corrupt: '原对话数据损坏，未能读取', source_conversation_read_limited: '原对话读取受限', source_conversation_validation_failed: '原对话完整性核对未通过', source_conversation_unreadable: '原对话无法完整读取', retired_for_derived_context: '原记录已退出派生上下文' };
+  return <section className="pw-bootstrap-restoration" aria-label="本次对话文字恢复范围">
+    <h3>{value.partial ? '本次可恢复部分对话文字' : '本次仅恢复对话文字'}</h3>
+    <dl className="pw-bootstrap-facts"><div><dt>对话 / 消息</dt><dd>{value.conversationCount} 段 / {value.messageCount} 条</dd></div><div><dt>明确省略</dt><dd>{value.omittedCount} 条原记录</dd></div><div><dt>未能读取</dt><dd>{value.unreadableConversationCount} 段对话</dd></div><div><dt>内容包大小</dt><dd>{fileSize(value.contentUtf8Bytes)}</dd></div><div><dt>内容身份</dt><dd>以新对话身份导入，原对话 ID 不继承</dd></div></dl>
+    <p>{value.omissionMeaning}</p><p>原任务历史、附件原件及授权、密钥和设备配对不恢复；旧运行与执行授权保持停用。</p>
+    {value.gaps.length > 0 && <Accordion><AccordionItem title={`查看 ${value.gaps.length} 项遗漏说明`}><ObjectTable<RepairGap> label="本次恢复遗漏清单" rows={value.gaps} getRowId={gap => `${gap.sourceConversationId}:${gap.reason}`} empty="没有已记录的遗漏" columns={[
+      { id: 'source', label: '原对话', render: gap => <span className="pw-bootstrap-code">{gap.sourceConversationId}</span> },
+      { id: 'reason', label: '遗漏原因', render: gap => gapReasons[gap.reason] || `原记录未恢复（${gap.reason}）` },
+      { id: 'count', label: '记录数', render: gap => gap.recordCount === null ? '无法确认' : gap.recordCount },
+    ]} /></AccordionItem></Accordion>}
+  </section>;
 }
 
 /** Existing BoardUI controls, with the same local host receipt rules as the normal owner workspaces. */
@@ -27,6 +37,7 @@ export default function BootstrapWorkspace({ snapshot }: { snapshot: PocketSnaps
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [review, setReview] = useState<RepairReview | null>(null), [checked, setChecked] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [includeContent, setIncludeContent] = useState(false);
   const [localOperation, setLocalOperation] = useState<BootstrapOperation | null>(null);
   const request = useRef(0), pending = useRef<BootstrapOperation | null>(null);
   const [queryReady, setQueryReady] = useState(false);
@@ -49,7 +60,7 @@ export default function BootstrapWorkspace({ snapshot }: { snapshot: PocketSnaps
     const invalidate = () => {
       request.current++;
       if (pending.current) setLocalOperation({ ...pending.current, status: 'unknown' });
-      pending.current = null; setBusy(false); setReview(null); setReviewOpen(false); setChecked(false); setQueryReady(false); setReceived(null);
+      pending.current = null; setBusy(false); setReview(null); setReviewOpen(false); setChecked(false); setIncludeContent(false); setQueryReady(false); setReceived(null);
     };
     const unsubscribe = bridge.subscribe(() => { const next = bridge.getDocumentEpoch(); if (next !== epoch) { epoch = next; invalidate(); } });
     const hide = () => { if (document.visibilityState !== 'visible') invalidate(); };
@@ -57,10 +68,11 @@ export default function BootstrapWorkspace({ snapshot }: { snapshot: PocketSnaps
     return () => { unsubscribe(); document.removeEventListener('visibilitychange', hide); window.removeEventListener('pagehide', invalidate); };
   }, []);
   useEffect(() => { if (review && !repairReviewCurrent(view, review)) { setReview(null); setReviewOpen(false); setChecked(false); } }, [view, review]);
+  useEffect(() => { setIncludeContent(false); }, [maintenance?.repairId, maintenance?.backupFingerprint]);
   useEffect(() => { document.documentElement.dataset.pocketUi = connected ? 'maintenance' : 'connecting'; }, [connected]);
   useEffect(() => bridge.setBackHandler(() => { if (!reviewOpen) return false; setReviewOpen(false); setChecked(false); return true; }), [reviewOpen]);
 
-  function acknowledgeReceipt(action: string, args: Record<string, unknown>, outcome: 'success' | 'not_sent') {
+  function markReceived(action: string, args: Record<string, unknown>, outcome: 'success' | 'not_sent') {
     // A display acknowledgement follows an actually received current-window
     // result. It cannot acknowledge an unknown result or replay the native action.
     void bridge.command('bootstrap.received', { requestId: args.requestId, command: action, outcome }).catch(() => {});
@@ -77,13 +89,13 @@ export default function BootstrapWorkspace({ snapshot }: { snapshot: PocketSnaps
       if (ticket !== request.current || epoch !== bridge.getDocumentEpoch()) return null;
       if (!result) throw new Error('没有取得完整的原生状态，请保留原请求并只读核对。');
       setReceived(result);
-      if (mutating) { setLocalOperation(null); pending.current = null; acknowledgeReceipt(action, args, 'success'); }
+      if (mutating) { setLocalOperation(null); pending.current = null; markReceived(action, args, 'success'); }
       return result;
     } catch (failure) {
       if (ticket !== request.current || epoch !== bridge.getDocumentEpoch()) return null;
       const notSent = failure && typeof failure === 'object' && 'code' in failure && failure.code === 'not_sent';
       if (mutating && pending.current) setLocalOperation(notSent ? null : { ...pending.current, status: 'unknown' });
-      if (mutating && notSent) acknowledgeReceipt(action, args, 'not_sent');
+      if (mutating && notSent) markReceived(action, args, 'not_sent');
       pending.current = null;
       setError(failure instanceof Error ? failure.message : '操作结果尚未确认，请核对原请求。');
       return null;
@@ -100,17 +112,17 @@ export default function BootstrapWorkspace({ snapshot }: { snapshot: PocketSnaps
     const result = await run('bootstrap.acknowledge', { requestId: operation.requestId, queryId });
     if (result) { setLocalOperation(null); setQueryReady(false); setError(''); }
   }
-  async function retryStartup() {
-    if (!view) return;
-    try { await run('bootstrap.retry', bootstrapRetryPayload(view, newRequest()), true); }
-    catch (failure) { setError(failure instanceof Error ? failure.message : '当前原数据库身份尚不可重试。'); }
-  }
   async function openReview(mode: RepairMode) {
     if (!view) return;
     try {
-      const result = await run('repair.review', repairReviewPayload(view, mode, newRequest()));
+      const result = await run('repair.review', repairReviewPayload(view, mode, newRequest(), includeContent));
       if (result) { setReview(captureRepairReview(result, mode)); setReviewOpen(true); setChecked(false); }
     } catch (failure) { setError(failure instanceof Error ? failure.message : '本次维修暂不可审阅。'); }
+  }
+  async function retryBootstrap() {
+    if (!view) return;
+    try { await run('bootstrap.retry', bootstrapRetryPayload(view, newRequest()), true); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : '原启动身份已变化，请重新读取。'); }
   }
   async function confirm() {
     if (!review) return;
@@ -140,8 +152,8 @@ export default function BootstrapWorkspace({ snapshot }: { snapshot: PocketSnaps
       {view && <dl className="pw-bootstrap-facts"><div><dt>当前阶段</dt><dd>{stages[view.stage]}</dd></div><div><dt>原任务核对</dt><dd>{recoveries[view.recovery]}</dd></div></dl>}
       {outcome && restored && <RestorationSummary value={restored} />}
       <div className="pw-form-actions">
-        {view?.retryAvailable && supported('bootstrap.retry') && <Button disabled={locked || view.state === 'initializing'} onClick={retryStartup} leadingIcon={RiRefreshLine}>{maintenance?.originalRetryAvailable === true ? '重新核对原数据库' : '重新核对并启动'}</Button>}
-        {repairAllowed(view, 'repair.preserve') && supported('repair.preserve') && <Button disabled={locked} onClick={() => run('repair.preserve', { expectedGeneration: view!.generation, requestId: newRequest() }, true)}>先保全原件</Button>}
+        {view?.retryAvailable && supported('bootstrap.retry') && <Button disabled={locked || view.state === 'initializing'} onClick={retryBootstrap} leadingIcon={RiRefreshLine}>{maintenance?.originalRetryAvailable ? '重新核对原数据库' : '重新核对并启动'}</Button>}
+        {repairAllowed(view, 'repair.preserve') && supported('repair.preserve') && <Button disabled={locked} onClick={() => run('repair.preserve', { expectedGeneration: view!.generation, requestId: newRequest(), repairId: maintenance?.repairId ?? null }, true)}>先保全原件</Button>}
         <Button variant="secondary" disabled={!connected || busy || !supported('bootstrap.read')} onClick={readOriginal}>{busy ? '正在读取原回执…' : unknown ? '只读核对原操作' : '读取当前状态'}</Button>
       </div>
       {view?.state === 'initializing' && <p className="pw-muted">初始化仍在进行时不会重复启动。用时较长不表示失败。</p>}
@@ -155,8 +167,9 @@ export default function BootstrapWorkspace({ snapshot }: { snapshot: PocketSnaps
       <p>{maintenance.reason?.message || '保全副本只保存原件；它不证明历史已恢复，也不会继续原任务。'}</p>
       {maintenance.reason?.nextStep && <p className="pw-bootstrap-next">{maintenance.reason.nextStep}</p>}
       <dl className="pw-bootstrap-facts"><div><dt>保全校验</dt><dd>{maintenance.preservationVerified ? '已通过本次原生校验' : '尚未确认，不能替换'}</dd></div><div><dt>当前记录</dt><dd>{phaseLabels[maintenance.phase] || '请按原记录的下一步核对'}</dd></div></dl>
+      {repairModeAllowed(view, 'verified_copy') && <CheckboxField isSelected={includeContent} isDisabled={locked} onChange={setIncludeContent}>包含原对话文字，在本机读取并准备恢复审阅</CheckboxField>}
       {repairAllowed(view, 'repair.review') && <div className="pw-form-actions">
-        {repairModeAllowed(view, 'verified_copy') && <Button disabled={locked || !maintenance.preservationVerified || !supported('repair.review')} onClick={() => openReview('verified_copy')} trailingIcon={RiArrowRightLine}>审阅恢复对话文字</Button>}
+        {repairModeAllowed(view, 'verified_copy') && <Button disabled={locked || !includeContent || !maintenance.preservationVerified || !supported('repair.review')} onClick={() => openReview('verified_copy')} trailingIcon={RiArrowRightLine}>审阅恢复对话文字</Button>}
         {repairModeAllowed(view, 'empty_database') && <Button variant="secondary" disabled={locked || !maintenance.preservationVerified || !supported('repair.review')} onClick={() => openReview('empty_database')}>审阅建立空库</Button>}
       </div>}
       {repairModeAllowed(view, 'verified_copy') && <p className="pw-muted">先在隔离副本中核验所选对话文字。超过当前恢复上限或校验失败时，原件与保全副本仍保留，不会自动改为建立空库。</p>}
@@ -180,7 +193,7 @@ export default function BootstrapWorkspace({ snapshot }: { snapshot: PocketSnaps
     </Accordion>
 
     <SettingsDialog isOpen={review !== null && reviewOpen} title={review?.mode === 'verified_copy' ? '核对本次对话文字恢复' : '核对原件保全后，建立空库？'} onClose={() => { setReviewOpen(false); setChecked(false); }}>
-      {review && <div className="pw-bootstrap-review"><p>{review.summary}</p>{review.restoration ? <RestorationSummary value={review.restoration} /> : <p>此操作不会恢复原历史。所有保全副本保留；旧任务、执行租约、授权和配对不会进入可执行状态。</p>}<dl className="pw-bootstrap-facts"><div><dt>维修编号</dt><dd className="pw-bootstrap-code">{review.repairId}</dd></div><div><dt>原件指纹</dt><dd className="pw-bootstrap-code">{review.sourceFingerprint}</dd></div><div><dt>已核保全指纹</dt><dd className="pw-bootstrap-code">{review.backupFingerprint}</dd></div></dl><CheckboxField isSelected={checked} onChange={setChecked}>{review.mode === 'verified_copy' ? '我已核对所选对话文字、明确省略和原件保全身份，理解这不会恢复原任务历史或执行授权。' : '我已核对本次原件与保全身份，理解建立空库不代表历史恢复。'}</CheckboxField><div className="pw-form-actions"><Button variant="secondary" onClick={() => { setReviewOpen(false); setChecked(false); }}>保留现状</Button><Button variant="danger" disabled={locked || !checked || !repairReviewCurrent(view, review)} onClick={confirm}>确认本次{modeLabel(review.mode)}</Button></div></div>}
+      {review && <div className="pw-bootstrap-review">{review.restoration ? <><p>保全原件将继续保留。请核对本次可恢复的内容与遗漏，再决定是否替换本机数据库。</p><RestorationSummary value={review.restoration} /></> : <><p>{review.summary}</p><p>所有保全副本保留；旧任务、执行租约、授权和配对不会进入可执行状态。</p></>}<Accordion><AccordionItem title="查看原件与本次审阅身份"><dl className="pw-bootstrap-facts"><div><dt>维修编号</dt><dd className="pw-bootstrap-code">{review.repairId}</dd></div><div><dt>原件指纹</dt><dd className="pw-bootstrap-code">{review.sourceFingerprint}</dd></div><div><dt>已核保全指纹</dt><dd className="pw-bootstrap-code">{review.backupFingerprint}</dd></div></dl></AccordionItem></Accordion><CheckboxField isSelected={checked} onChange={setChecked}>{review.mode === 'verified_copy' ? '我已核对所选对话文字、明确省略和原件保全身份，理解这不会恢复原任务历史或执行授权。' : '我已核对本次原件与保全身份，理解建立空库不代表历史恢复。'}</CheckboxField><div className="pw-form-actions"><Button variant="secondary" onClick={() => { setReviewOpen(false); setChecked(false); }}>保留现状</Button><Button variant="danger" disabled={locked || !checked || !repairReviewCurrent(view, review)} onClick={confirm}>确认本次{modeLabel(review.mode)}</Button></div></div>}
     </SettingsDialog>
   </main>;
 }

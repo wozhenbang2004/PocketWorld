@@ -21,10 +21,15 @@ public final class BootstrapStatus {
     public synchronized long generation(){return generation;}
     public synchronized long beginInitial(){if(generation!=0||inFlight)throw new IllegalStateException("初始化已开始");return begin();}
     private long begin(){ready=false;inFlight=true;generation++;revision++;state="initializing";stage="configured";recovery="not_started";observed=null;optional.clear();retryAvailable=false;code="initializing";message="正在准备本机存储与原任务恢复";next="请等待当前初始化完成";return generation;}
+    /** Validate before a caller persists a one-use maintenance permit; this does not start work. */
+    public synchronized boolean checkRetry(long expected,String requestId){
+        request(requestId);if(requestId.equals(lastRetry))return false;
+        if(expected!=generation||inFlight||!retryAvailable||ready)throw new SecurityException("启动状态已变化，请重新读取");
+        return true;
+    }
     /** A duplicated request only observes its original generation; it never starts another initializer. */
     public synchronized long retry(long expected,String requestId){
-        request(requestId);if(requestId.equals(lastRetry))return 0;
-        if(expected!=generation||inFlight||!retryAvailable||ready)throw new SecurityException("启动状态已变化，请重新读取");
+        if(!checkRetry(expected,requestId))return 0;
         lastRetry=requestId;return begin();
     }
     public synchronized void installed(long original,String installedVersion){if(current(original)){version=installedVersion;revision++;}}

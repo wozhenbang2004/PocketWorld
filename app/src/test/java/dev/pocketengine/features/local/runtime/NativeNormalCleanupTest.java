@@ -15,7 +15,7 @@ public final class NativeNormalCleanupTest {
     @Test public void currentContractsNameTheExactBundledSourcesWithoutRelabellingHistoricalModes()throws Exception {
         Path root=Path.of(Objects.requireNonNull(System.getProperty("pocket.gateway.source"),"original repository source required"));
         String hash=dev.pocketengine.features.local.project.ProjectSources.sha256(Files.readAllBytes(root.resolve("app/src/main/java/dev/pocketengine/features/local/runtime/native/process_supervisor.cpp")));
-        assertEquals("pocketworld.posix-exit7-owner-v3:"+hash,NativeProcessSupervisor.EXIT_RESULT_CONTRACT);
+        assertEquals("pocketworld.posix-exit7-owner-v4:"+hash,NativeProcessSupervisor.EXIT_RESULT_CONTRACT);
         String oldHash=dev.pocketengine.features.local.project.ProjectSources.sha256(Files.readAllBytes(root.resolve("app/src/test/resources/runtime/ordinary-process-protocol2.cpp")));
         assertEquals("pocketworld.posix-exit7-drain-v2:"+oldHash,NativeProcessSupervisor.DRAIN_V2_EXIT_RESULT_CONTRACT);
         assertEquals("pocketworld.posix-pty-exit8-v1:f9132cee828fcbafd4252e71a139cb7c21839b1336111e1a762fab0afe487524",NativeProcessSupervisor.LEGACY_PTY_EXIT_RESULT_CONTRACT);
@@ -59,12 +59,12 @@ public final class NativeNormalCleanupTest {
         Process process=new ProcessBuilder(new File(System.getProperty("java.home"),"bin/java").getPath(),"-Djava.library.path="+library,"-cp",String.join(File.pathSeparator,entries),LostWaitOwnershipProbe.class.getName(),mode,Objects.requireNonNull(System.getProperty("a25.python")),work.toString(),Integer.toString(after)).redirectErrorStream(true).redirectOutput(work.resolve("probe.log").toFile()).start();
         boolean finished;try{finished=process.waitFor(15,TimeUnit.SECONDS);}finally{if(process.isAlive()){process.destroyForcibly();process.waitFor(2,TimeUnit.SECONDS);}}
         assertTrue("Own probe timed out; exact child cleanup unconfirmed; evidence="+work,finished);String output=new String(Files.readAllBytes(work.resolve("probe.log")),StandardCharsets.UTF_8);JSONObject result=null;for(String line:output.split("\\R"))if(line.startsWith("{"))result=new JSONObject(line);
-        assertNotNull("Missing native facts: "+output,result);assertEquals("Original probe failed: "+output,old?124:0,process.exitValue());JSONObject facts=result.getJSONObject("facts");assertEquals(1,facts.getInt("actualReapCount"));assertTrue(facts.getLong("exactReapedPid")>0);assertEquals(7<<8,facts.getInt("realWaitStatus"));assertTrue(facts.getInt("realEchildCount")>0);
-        if(old){assertTrue(result.getBoolean("watchdogAfterActualReap"));assertTrue(facts.getInt("signalsAfterReap")>0);}else{assertEquals(0,facts.getInt("signalsAfterReap"));assertTrue(result.getLong("elapsedMillis")<5000);}return result;
+        assertNotNull("Missing native facts: "+output,result);assertEquals("Original probe failed: "+output,0,process.exitValue());if(old){assertFalse(result.getBoolean("available"));return result;}JSONObject facts=result.getJSONObject("facts");assertEquals(1,facts.getInt("actualReapCount"));assertTrue(facts.getLong("exactReapedPid")>0);assertEquals(7<<8,facts.getInt("realWaitStatus"));assertTrue(facts.getInt("realEchildCount")>0);
+        assertEquals(0,facts.getInt("signalsAfterReap"));assertTrue(result.getLong("elapsedMillis")<5000);return result;
     }
-    @Test public void originalProtocolTwoActuallyFailsToConvergeAfterAnotherThreadReapsItsExactLeader()throws Exception {lostWait("direct",1,true);}
-    @Test public void lostOriginalWaitOwnershipReturnsUnknownWithoutSignallingAReapedNumber()throws Exception {assertLostExit(lostWait("direct",1,false));}
-    @Test public void alreadyObservedZombieStillRequiresCurrentWaitOwnershipBeforeCleanup()throws Exception {assertLostExit(lostWait("direct",2,false));}
+    @Test public void anEarlierNativeAlgorithmCannotBecomeANewExecutionFallback()throws Exception {lostWait("availability",1,true);}
+    @Test public void ownerDeathAfterFinalObservationReturnsUnknownWithoutSignallingAReapedNumber()throws Exception {assertLostExit(lostWait("direct",1,false));}
+    @Test public void anAlreadyObservedZombieStillNeedsTheOriginalOwnerForCleanup()throws Exception {assertLostExit(lostWait("direct",2,false));}
     private static void assertLostExit(JSONObject result)throws Exception {JSONObject exit=result.getJSONObject("receipt");assertEquals(-1,exit.getInt("exitCode"));assertEquals(0,exit.getInt("signal"));assertEquals(0,exit.getInt("launchErrno"));assertFalse(exit.getBoolean("groupAbsent"));assertFalse(exit.getBoolean("outputComplete"));assertFalse(exit.getBoolean("noChildCreated"));assertEquals(NativeProcessSupervisor.EXIT_RESULT_CONTRACT,exit.getString("contract"));}
     @Test public void lostWaitThroughOriginalManagedCommandRetainsTheActualLeaseAndColdIdentity()throws Exception {assertLostManaged(lostWait("command",1,false));}
     @Test public void lostWaitThroughOriginalPreparationRetainsTheActualLeaseWithoutReplay()throws Exception {assertLostManaged(lostWait("preparation",1,false));}
@@ -85,7 +85,7 @@ public final class NativeNormalCleanupTest {
     }
     @Test public void exactHistoricalContractsRemainValidWithoutRelabellingThemAsTheNewAlgorithm()throws Exception {
         assertNotEquals(NativeProcessSupervisor.LEGACY_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.EXIT_RESULT_CONTRACT);
-        for(String contract:List.of(NativeProcessSupervisor.LEGACY_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.DRAIN_V2_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.PRE_FORMAT_OWNER_V3_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.EXIT_RESULT_CONTRACT)){
+        for(String contract:List.of(NativeProcessSupervisor.LEGACY_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.DRAIN_V2_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.PRE_FORMAT_OWNER_V3_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.OWNER_V3_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.EXIT_RESULT_CONTRACT)){
             assertTrue(NativeProcessSupervisor.knownOrdinaryExitContract(contract));JSONObject proof=new JSONObject().put("nativeResultContract",contract).put("launchPhase","no_child_created").put("noChildCreated",true).put("processLaunched",false).put("processExited",false).put("exitCode",-1).put("terminationSignal",0).put("launchErrno",4).put("timedOut",false).put("processGroupAbsent",true).put("outputComplete",true);
             assertTrue(NativeProcessSupervisor.validatesNoChildReceipt(proof));assertEquals(contract,proof.getString("nativeResultContract"));assertFalse(NativeProcessSupervisor.validatesNoChildReceipt(new JSONObject(proof.toString()).put("processGroupAbsent",false)));assertFalse(NativeProcessSupervisor.validatesNoChildReceipt(new JSONObject(proof.toString()).put("nativeResultContract",contract+"-unknown")));
         }
@@ -97,7 +97,7 @@ public final class NativeNormalCleanupTest {
         var git=dev.pocketengine.features.local.project.ProjectGitImport.class.getDeclaredMethod("drainedSuccess",JSONObject.class);git.setAccessible(true);
         String task=UUID.randomUUID().toString(),run=UUID.randomUUID().toString(),operation=UUID.randomUUID().toString();
         var reference=new dev.pocketengine.features.skills.CompanionSkillBackend.ReceiptRef("owner","private",task,run,1,operation,"a".repeat(64),"b".repeat(64),"original_installation","original_workspace","original_revision",4096,4096);
-        for(String contract:List.of(NativeProcessSupervisor.LEGACY_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.DRAIN_V2_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.PRE_FORMAT_OWNER_V3_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.EXIT_RESULT_CONTRACT)){
+        for(String contract:List.of(NativeProcessSupervisor.LEGACY_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.DRAIN_V2_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.PRE_FORMAT_OWNER_V3_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.OWNER_V3_EXIT_RESULT_CONTRACT,NativeProcessSupervisor.EXIT_RESULT_CONTRACT)){
             JSONObject row=new JSONObject().put("id",operation).put("status","completed").put("receiptReceived",true).put("processExited",true).put("resourcesReleased",true).put("processGroupAbsent",true).put("outputComplete",true).put("exitCode",0).put("nativeResultContract",contract)
                     .put("projectExecution",new JSONObject().put("taskId",task).put("runId",run).put("coordinatorEpoch",1).put("planDigest",reference.planDigest).put("intent",dev.pocketengine.features.skills.ManagedSkillBackend.INTENT));
             assertEquals(Boolean.TRUE,cache.invoke(null,row));assertEquals(Boolean.TRUE,git.invoke(null,row));assertTrue(RuntimeActivity.describe(operation,row,null,false).getBoolean("processTerminal"));

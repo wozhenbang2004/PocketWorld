@@ -42,4 +42,30 @@ public final class NativeLaunchObservationTest {
         }finally{Files.delete(root);}
     }
 
+    @Test public void privateOwnersExitAndCloseDescriptorsAcrossConcurrentJvmWorkers()throws Exception {
+        Path root=Files.createTempDirectory("native-owner-concurrent-");
+        var workers=java.util.concurrent.Executors.newFixedThreadPool(4);
+        try {
+            var nativeProcess=new NativeProcessSupervisor();
+            assertEquals(0,nativeProcess.execute(List.of("/bin/true"),Map.of(),root.toFile(),3000,50,observer(false)).exitCode);
+            long before;try(var descriptors=Files.list(Path.of("/proc/self/fd"))){before=descriptors.count();}
+            var pending=new java.util.ArrayList<java.util.concurrent.Future<Void>>();
+            for(int number=0;number<24;number++) {
+                final String expected="original-"+number;
+                pending.add(workers.submit(()->{
+                    var bytes=new java.io.ByteArrayOutputStream();
+                    var exit=nativeProcess.execute(List.of("/bin/sh","-c","printf '"+expected+"'"),Map.of(),root.toFile(),3000,50,new NativeProcessSupervisor.Observer(){
+                        public boolean cancelled(){return false;}
+                        public boolean output(int stream,byte[] value){if(stream==1)bytes.write(value,0,value.length);return true;}
+                    });
+                    assertEquals(0,exit.exitCode);assertTrue(exit.groupAbsent);assertTrue(exit.outputComplete);
+                    assertEquals(expected,bytes.toString(java.nio.charset.StandardCharsets.UTF_8));return null;
+                }));
+            }
+            for(var job:pending)job.get(15,java.util.concurrent.TimeUnit.SECONDS);
+            workers.shutdown();assertTrue(workers.awaitTermination(3,java.util.concurrent.TimeUnit.SECONDS));
+            try(var descriptors=Files.list(Path.of("/proc/self/fd"))){assertEquals("Native control, wait and IO descriptors must all close",before,descriptors.count());}
+        } finally {workers.shutdownNow();Files.delete(root);}
+    }
+
 }

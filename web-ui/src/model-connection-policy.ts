@@ -71,7 +71,7 @@ export function connectionTestResult(response: unknown, submitted: ConnectionTes
     if (!validReference(ref) || !validReference(result.inferenceReference)) return null;
     for (const key of ['taskId', 'runId', 'epoch', 'purpose', 'accountingOnly', 'executionAuthorized']) if (ref[key] !== result.inferenceReference[key]) return null;
   } else if (['completed', 'failed'].includes(proof.outcome) || result.inferenceReference != null) return null;
-  if (proof.outcome === 'completed' && result.ok !== true) return null;
+  if (result.ok !== (proof.outcome === 'completed')) return null;
   return result;
 }
 

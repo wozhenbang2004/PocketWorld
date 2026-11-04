@@ -31,6 +31,6 @@ public final class AttachmentBookTest {
     }
     @Test public void crashOrphansStillCountTowardDiskQuota()throws Exception{
         File root=Files.createTempDirectory("pocket-attachment-").toFile();Files.write(new File(root,"prior.part").toPath(),new byte[5]);AttachmentBook files=new AttachmentBook(root,4,6);
-        assertThrows(IllegalArgumentException.class,()->files.importBytes(new ByteArrayInputStream(new byte[2]),"a","text/plain",null));assertEquals(0,files.list().length());
+        assertThrows(IllegalArgumentException.class,()->files.importBytes(new ByteArrayInputStream(new byte[2]),"a","text/plain",null));assertThrows(IllegalStateException.class,files::list);assertEquals(1,files.inspectIndex().getJSONObject("indexDiagnostics").getInt("unindexedOriginals"));
     }
 }

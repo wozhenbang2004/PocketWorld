@@ -52,7 +52,7 @@ public final class TeamMemberModels {
         ModelConfig memberConfig=selected.withRoutePlan(null).withPurposePlans(Map.of());
         JSONObject pin=new JSONObject().put("format","pocketworld.team-member-model.v1").put("identityRevision",member.optInt("identityRevision",1));
         if(nativeRoutes){
-            ModelRoutePlan memberPlan=singleAttempt(selected,purpose),summaryPlan=singleAttempt(summary,"SUMMARY");
+            ModelRoutePlan memberPlan=memberAttempts(selected,purpose,previous),summaryPlan=attempts(summary,"SUMMARY",false);
             memberConfig=memberPlan.primary().withRoutePlan(memberPlan).withPurposePlans(Map.of("MEMBER",memberPlan,"MAIN",memberPlan,"SUMMARY",summaryPlan));
             pin.put("memberRoute",stable(memberPlan)).put("summaryRoute",stable(summaryPlan));
             ModelTargetRef memberTarget=chosen==null?reference(selected):chosen,actualSummary=summaryTarget==null?reference(summary):summaryTarget;
@@ -71,12 +71,30 @@ public final class TeamMemberModels {
         if(source.capabilityBinding!=null)return ModelTargetRef.exact(source.capabilityBinding.connectionId(),source.model);
         if(source.usesAccount())return ModelTargetRef.exact("account:"+source.accountModel.accountId,source.model);return null;
     }
-    private static ModelRoutePlan singleAttempt(ModelConfig source,String purpose){
+    private static ModelRoutePlan memberAttempts(ModelConfig source,String purpose,JSONObject previous){
+        // A cold pre-upgrade pin keeps its original physical allowance. The complete
+        // regenerated pin is still compared below; no route/options field is ignored.
+        JSONObject prior=previous==null?null:previous.optJSONObject("memberRoute");
+        boolean oldSingle=prior!=null&&prior.optInt("maxAttempts")==1;
+        return attempts(source,purpose,!oldSingle);
+    }
+    private static ModelRoutePlan attempts(ModelConfig source,String purpose,boolean allowFallback){
         ModelRoutePlan plan=source.routePlan;var rows=new ArrayList<ModelRoutePlan.Candidate>();
         if(plan==null)rows.add(new ModelRoutePlan.Candidate("exact",source.withRoutePlan(null).withPurposePlans(Map.of()),""));
         else for(ModelRoutePlan.Candidate row:plan.candidates)rows.add(new ModelRoutePlan.Candidate(row.candidateId(),row.config()==null?null:row.config().withRoutePlan(null).withPurposePlans(Map.of()),row.exclusion()));
-        // The original team site reserves one physical call. A group never adds a hidden retry.
-        return new ModelRoutePlan(plan==null?source.model:plan.requestedAlias,plan==null?0:plan.groupRevision,purpose,"APP_OWNER",rows,1,0);
+        int eligible=0;
+        if(allowFallback&&plan!=null&&plan.groupRevision>0&&plan.maxAttempts>=2&&plan.maxRouteSwitches>=1){
+            for(ModelRoutePlan.Candidate row:rows){
+                if(row.config()==null||!row.exclusion().isEmpty())continue;
+                // An account route between API candidates cannot be silently skipped.
+                if(row.config().usesAccount()||row.config().capabilityBinding==null)break;
+                if(++eligible==2)break;
+            }
+        }
+        // Only the native research journal may admit the second call, after reserving
+        // another unit in the same parent pool. Legacy sites and SUMMARY remain cap1.
+        boolean fallback=eligible==2;
+        return new ModelRoutePlan(plan==null?source.model:plan.requestedAlias,plan==null?0:plan.groupRevision,purpose,"APP_OWNER",rows,fallback?2:1,fallback?1:0);
     }
     private static JSONObject stable(ModelRoutePlan plan)throws Exception{JSONObject publicPlan=plan.toJson();publicPlan.remove("snapshotId");return publicPlan;}
 }

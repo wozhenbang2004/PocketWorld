@@ -10,7 +10,15 @@ const original = (): BootstrapView => ({ surface: 'bootstrap', revision: 8, gene
 const verifiedCopy = (): BootstrapView => {
   const view = original(); view.maintenance!.reviewModes = ['empty_database', 'verified_copy'];
   view.maintenance!.review = { reviewId: 'original-review', mode: 'verified_copy', summary: '仅恢复所选对话文字', restoration: {
-    section: 'conversations', conversationCount: 3, messageCount: 18, omittedCount: 2, contentUtf8Bytes: 2400,
+    section: 'conversations', sourceConversationCount: 4, conversationCount: 3, messageCount: 18, omittedCount: 2,
+    unreadableConversationCount: 1, partial: true, contentUtf8Bytes: 2400, sourceGeneration: 'original-generation',
+    manifestSha256: 'c'.repeat(64), manifestBytes: 1500,
+    conversations: [
+      { sourceConversationId: 'source-1', restoredConversationId: 'restored-1', messageCount: 6, omittedCount: 1, exportSha256: 'd'.repeat(64), exportBytes: 800 },
+      { sourceConversationId: 'source-2', restoredConversationId: 'restored-2', messageCount: 6, omittedCount: 1, exportSha256: 'e'.repeat(64), exportBytes: 800 },
+      { sourceConversationId: 'source-3', restoredConversationId: 'restored-3', messageCount: 6, omittedCount: 0, exportSha256: 'f'.repeat(64), exportBytes: 800 },
+    ],
+    gaps: [{ sourceConversationId: 'source-1', reason: 'message_deleted', recordCount: 1 }, { sourceConversationId: 'source-2', reason: 'role_not_exportable', recordCount: 1 }, { sourceConversationId: 'source-4', reason: 'source_integrity_unavailable', recordCount: null }],
     sourceFingerprint: 'verified-backup', sourceReadOnly: true, restoresExistingIds: false, restoresActiveGrants: false,
     restoresTaskHistory: false, restoresAttachmentBytes: false, restoresCredentialsOrPairings: false,
     omissionMeaning: '删除和非对话文字记录明确省略，读取失败拒绝本次暂存',
@@ -28,6 +36,18 @@ test('invalid native state or an unsafe generation never creates a usable bootst
   assert.equal(bootstrapView({ ...original(), state: 'blocked' }), null);
   assert.equal(bootstrapView({ ...original(), recovery: 'complete' }), null);
   assert.ok(bootstrapView(original()));
+});
+test('an explicit retry of preserved original bytes carries the exact native preservation identity', () => {
+  const view = original(); view.retryAvailable = true; view.maintenance!.originalRetryAvailable = true;
+  assert.deepEqual(bootstrapRetryPayload(view, 'retry-original'), { expectedGeneration: 3, requestId: 'retry-original', repairId: 'original-repair', sourceFingerprint: 'original-db', backupFingerprint: 'verified-backup' });
+  view.maintenance!.preservationVerified = false;
+  assert.throws(() => bootstrapRetryPayload(view, 'retry-original'));
+});
+test('ordinary retry does not invent repair identity or bypass native unavailability', () => {
+  const view = original(); view.maintenance = null; view.retryAvailable = true;
+  assert.deepEqual(bootstrapRetryPayload(view, 'retry'), { expectedGeneration: 3, requestId: 'retry' });
+  view.retryAvailable = false; assert.throws(() => bootstrapRetryPayload(view, 'retry'));
+  view.retryAvailable = true; view.state = 'initializing'; assert.throws(() => bootstrapRetryPayload(view, 'retry'));
 });
 test('only advertised native repair actions are offered; a preserved copy is not confirmation authority', () => {
   const view = original();
@@ -74,6 +94,10 @@ test('late preservation identity enriches only its original unknown request and 
   assert.deepEqual(retainedBootstrapOperation(local, saved), { ...local, repairId: 'exact-native-repair' });
   assert.equal(retainedBootstrapOperation(local, { ...saved, requestId: 'another-request' })!.repairId, '');
 });
+test('completed native work with unacknowledged delivery retains a read-only resolution path', () => {
+  const saved = { requestId: 'original-request', command: 'repair.preserve', generation: 3, repairId: 'exact-native-repair', status: 'completed' as const };
+  assert.deepEqual(retainedBootstrapOperation(null, saved), { ...saved, status: 'unknown' });
+});
 test('file-set consistency is readable without upgrading byte preservation into database integrity', () => {
   const summary = repairConsistencyText({ quiescence: 'original_business_handles_closed_before_capture', copiesSha256AndLengthVerified: true,
     sourceBefore: 'original', sourceAfter: 'original', sqliteLogicalIntegrity: 'not_claimed', preCorruptionCallbackBytes: 'not_claimed' });
@@ -85,9 +109,18 @@ test('file-set consistency is readable without upgrading byte preservation into 
 test('verified-copy review must be natively offered and explicitly selects only conversation content', () => {
   assert.equal(repairModeAllowed(original(), 'verified_copy'), false);
   assert.throws(() => repairReviewPayload(original(), 'verified_copy', 'request'));
-  assert.deepEqual(repairReviewPayload(verifiedCopy(), 'verified_copy', 'request').sections, ['conversations']);
+  assert.throws(() => repairReviewPayload(verifiedCopy(), 'verified_copy', 'request'), 'conversation content must be explicitly selected before it is read');
+  const selected = repairReviewPayload(verifiedCopy(), 'verified_copy', 'request', true);
+  assert.deepEqual(selected.sections, ['conversations']);
+  assert.equal(selected.includeConversationContent, true);
   assert.equal('sections' in repairReviewPayload(original(), 'empty_database', 'request'), false);
   assert.throws(() => captureRepairReview(verifiedCopy(), 'empty_database'), 'the requested empty mode cannot silently become another mode');
+});
+test('verified-copy review refuses unverified extraction identities or missing gap details', () => {
+  for (const patch of [{ manifestSha256: '' }, { manifestBytes: 0 }, { gaps: undefined }, { sourceGeneration: -1 }, { partial: false }]) {
+    const changed = verifiedCopy(); Object.assign(changed.maintenance!.review!.restoration!, patch);
+    assert.throws(() => captureRepairReview(changed, 'verified_copy'), JSON.stringify(patch));
+  }
 });
 test('verified-copy consent binds actual counts, scope exclusions and the original backup instead of treating it as whole-database recovery', () => {
   const view = verifiedCopy(), review = captureRepairReview(view, 'verified_copy');
@@ -111,6 +144,7 @@ test('verified-copy completion reports only new-identity conversation text and n
   assert.match(repairOutcome(view)!, /恢复范围尚无法完整核对/);
   assert.doesNotMatch(repairOutcome(view)!, /空库/);
 });
+
 test('retry of a preserved original database needs both native gates and its exact file-set identity', () => {
   const view = original(); view.maintenance!.phase = 'preserved'; view.retryAvailable = true; view.maintenance!.originalRetryAvailable = true;
   assert.deepEqual(bootstrapRetryPayload(view, 'original-request'), { expectedGeneration: 3, requestId: 'original-request', repairId: 'original-repair', sourceFingerprint: 'original-db', backupFingerprint: 'verified-backup' });

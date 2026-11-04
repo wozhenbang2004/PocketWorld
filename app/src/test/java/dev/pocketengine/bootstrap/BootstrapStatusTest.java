@@ -35,4 +35,29 @@ public final class BootstrapStatusTest {
         state.maintenance("preserving","preserving","read original",false);assertFalse(state.ready());assertEquals("maintenance",state.snapshot().getString("state"));assertFalse(state.snapshot().getBoolean("retryAvailable"));
         try{state.retry(generation,"retry-while-held");fail();}catch(SecurityException expected){}
     }
+    @Test public void validRetryPreflightDoesNotReserveOrChangeTheGeneration()throws Exception {
+        BootstrapStatus state=new BootstrapStatus(10);long generation=state.beginInitial();state.failed(generation,"database_locked","locked","retry",true);
+        String before=state.snapshot().toString();
+        assertTrue(state.checkRetry(generation,"preflight-valid-1"));assertTrue(state.checkRetry(generation,"preflight-valid-1"));
+        assertEquals(before,state.snapshot().toString());assertEquals(generation,state.generation());
+        assertEquals(generation+1,state.retry(generation,"preflight-valid-1"));
+    }
+    @Test public void duplicateRetryPreflightOnlyObservesTheAlreadyStartedRequest()throws Exception {
+        BootstrapStatus state=new BootstrapStatus(10);long first=state.beginInitial();state.failed(first,"database_locked","locked","retry",true);
+        long next=state.retry(first,"preflight-duplicate-1");String before=state.snapshot().toString();
+        assertFalse(state.checkRetry(first,"preflight-duplicate-1"));assertEquals(0,state.retry(first,"preflight-duplicate-1"));
+        assertEquals(before,state.snapshot().toString());assertEquals(next,state.generation());
+    }
+    @Test public void rejectedRetryPreflightNeverChangesStateOrConsumesTheRequest()throws Exception {
+        BootstrapStatus state=new BootstrapStatus(10);long generation=state.beginInitial();String request="preflight-rejected-1";
+        String initializing=state.snapshot().toString();assertThrows(SecurityException.class,()->state.checkRetry(generation,request));assertEquals(initializing,state.snapshot().toString());
+        state.failed(generation,"database_locked","locked","retry",true);String failed=state.snapshot().toString();
+        assertThrows(SecurityException.class,()->state.checkRetry(generation+1,request));assertEquals(failed,state.snapshot().toString());
+        state.maintenance("quiescence_unconfirmed","not closed","read original",false);String held=state.snapshot().toString();
+        assertThrows(SecurityException.class,()->state.checkRetry(generation,request));assertEquals(held,state.snapshot().toString());
+        state.maintenance("preserved","closed original retained","explicit original retry",true);
+        assertTrue("A rejected preflight did not consume this request",state.checkRetry(generation,request));
+        long next=state.retry(generation,request);state.recovering(next);state.stage(next,"features_ready",10);assertTrue(state.complete(next));String ready=state.snapshot().toString();
+        assertThrows(SecurityException.class,()->state.checkRetry(next,"preflight-after-ready"));assertEquals(ready,state.snapshot().toString());
+    }
 }
