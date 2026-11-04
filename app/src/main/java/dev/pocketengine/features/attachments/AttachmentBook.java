@@ -8,7 +8,11 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.UUID;
@@ -19,6 +23,7 @@ import org.json.JSONObject;
 /** Real imported bytes in private storage. Paths never come from a document name or external URI. */
 public final class AttachmentBook {
     public static final long MAX_FILE_BYTES=20L*1024*1024,MAX_TOTAL_BYTES=100L*1024*1024;
+    static final int MAX_ATTACHMENT_SLOTS=200,MAX_INDEX_ENTRIES=1024,MAX_INDEX_RECORD_BYTES=256*1024,MAX_INDEX_READ_BYTES=4*1024*1024;
     private final File root;
     private final long fileLimit,totalLimit;
     /** Read-only publication of this Book's own successful native byte/metadata checks.
@@ -90,20 +95,93 @@ public final class AttachmentBook {
         if(input==null)throw new IllegalArgumentException("附件来源无法读取");
         if(control!=null)control.checkpoint();long pauseRevision=control==null?0:control.pauseRevision();
         if(!root.isDirectory()&&!root.mkdirs())throw new IllegalStateException("无法创建附件目录");
-        JSONArray existing=list();if(existing.length()>=200)throw new IllegalStateException("附件数量已达200个，请先清理");long total=0;File[] stored=root.listFiles((d,n)->n.endsWith(".blob")||n.endsWith(".part"));if(stored!=null)for(File file:stored)total+=file.length();
+        StorageScan stored=scanStorage();if(!stored.complete||!stored.quotaKnown)throw new IllegalStateException("附件存储占额无法完整核对；原文件和发布证据已保留，未导入");
+        if(stored.slots.size()>=MAX_ATTACHMENT_SLOTS)throw new IllegalStateException("附件及保留的未确认原件数量已达200个，请先核对，未自动清理");long total=stored.bytes;
+        if(total>totalLimit)throw new IllegalArgumentException("附件超出总容量限制；未确认原件仍占用容量");
         String id=nativeId==null?UUID.randomUUID().toString():nativeId;File part=new File(root,id+".part"),blob=new File(root,id+".blob"),record=new File(root,id+".json");long size=0;MessageDigest digest=MessageDigest.getInstance("SHA-256");
         if(nativeId!=null&&(part.exists()||blob.exists()||record.exists()||new File(root,id+".json.pending").exists()))throw new SecurityException("原固定产物发布状态变化，未覆盖");
         try{
-            try(FileOutputStream output=new FileOutputStream(part)){byte[] buffer=new byte[32768];for(int n;(n=input.read(buffer))!=-1;){if(control!=null)control.checkpoint();if(Thread.currentThread().isInterrupted())throw new InterruptedException("附件导入已停止");if(n==0)continue;size+=n;if(size>fileLimit||total+size>totalLimit)throw new IllegalArgumentException("附件超出单文件或总容量限制");output.write(buffer,0,n);digest.update(buffer,0,n);}output.getFD().sync();}
+            try(FileOutputStream output=new FileOutputStream(part)){byte[] buffer=new byte[32768];for(int n;(n=input.read(buffer))!=-1;){if(control!=null)control.checkpoint();if(Thread.currentThread().isInterrupted())throw new InterruptedException("附件导入已停止");if(n==0)continue;if(n>fileLimit-size||n>totalLimit-total-size)throw new IllegalArgumentException("附件超出单文件或总容量限制");size+=n;output.write(buffer,0,n);digest.update(buffer,0,n);}output.getFD().sync();}
             JSONObject meta=new JSONObject().put("id",id).put("name",displayName(name)).put("mimeType",mimeType(mime)).put("size",size).put("sha256",hex(digest.digest())).put("createdAt",System.currentTimeMillis()).put("principalId","owner").put("spaceId","private").put("source",source==null?new JSONObject():new JSONObject(source.toString()));
-            if(control==null){move(part,blob);atomicJson(record,meta);}
-            else control.dispatchAtPauseRevision(pauseRevision,()->{if(nativeId!=null)requireNativeParents(source,control);move(part,blob);atomicJson(record,meta);});
+            byte[] indexBytes=encodedIndex(meta); // Refuse new unreadable metadata before entering publication.
+            if(control==null){move(part,blob);atomicJson(record,indexBytes);}
+            else control.dispatchAtPauseRevision(pauseRevision,()->{if(nativeId!=null)requireNativeParents(source,control);move(part,blob);atomicJson(record,indexBytes);});
             publishOutputEligibility(meta);return visible(meta);
         }catch(Exception failure){revokeOutputEligibility(id);part.delete();if(nativeId==null){blob.delete();record.delete();new File(root,id+".json.pending").delete();}throw failure;}
     }
-    public synchronized JSONArray list()throws Exception{JSONArray result=new JSONArray();File[] records=root.listFiles((d,n)->n.matches("[a-f0-9-]{36}\\.json"));if(records==null)return result;Arrays.sort(records,(a,b)->Long.compare(b.lastModified(),a.lastModified()));for(File record:records){JSONObject meta=new JSONObject(new String(Files.readAllBytes(record.toPath()),StandardCharsets.UTF_8));File data=new File(root,meta.getString("id")+".blob");if(data.isFile()&&data.length()==meta.getLong("size"))result.put(visible(meta));}return result;}
+    /** Complete catalog required by original-publication lookup and owner archive consumers.
+     * They must not mistake an unreadable record for proof that a previous save never happened. */
+    public synchronized JSONArray list()throws Exception{
+        JSONObject inspected=inspectIndex();if(inspected.getJSONObject("indexDiagnostics").getBoolean("incomplete"))throw new IllegalStateException("部分附件索引无法核对；原件、索引和发布证据已原位保留，不能据此备份或重新发布");return inspected.getJSONArray("attachments");
+    }
+    /** Read-only owner display projection, not a recovery grant or an assertion of non-publication.
+     * No index/blob is moved, repaired or deleted. Unknown scope never appears in diagnostics. */
+    public synchronized JSONObject inspectIndex()throws Exception{
+        StorageScan stored=scanStorage();JSONArray readable=new JSONArray();int unreadable=0,oversized=0,budgetExceeded=0;IndexReadBudget budget=new IndexReadBudget();
+        stored.records.sort((a,b)->Long.compare(b.modified,a.modified));
+        for(IndexRecord record:stored.records){
+            if(record.size>MAX_INDEX_RECORD_BYTES){oversized++;revokeOutputEligibility(record.id);continue;}
+            if(budget.bytes>=MAX_INDEX_READ_BYTES){budgetExceeded++;revokeOutputEligibility(record.id);continue;}
+            try{
+                JSONObject meta=readIndex(record.path,budget);BasicFileAttributes data=Files.readAttributes(new File(root,record.id+".blob").toPath(),BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+                if(!record.id.equals(meta.getString("id"))||!data.isRegularFile()||meta.getLong("size")!=data.size()||meta.getLong("size")<0||!meta.getString("sha256").matches("[a-f0-9]{64}")||meta.getString("name").isEmpty()||meta.getString("mimeType").isEmpty()||meta.getString("principalId").isEmpty()||meta.getString("spaceId").isEmpty()||meta.optJSONObject("source")==null)throw new IllegalStateException();
+                readable.put(visible(meta));
+            }catch(IndexReadLimit limit){if(limit.total)budgetExceeded++;else oversized++;revokeOutputEligibility(record.id);}
+            catch(Exception invalid){unreadable++;revokeOutputEligibility(record.id);}
+            catch(StackOverflowError invalid){unreadable++;revokeOutputEligibility(record.id);} // Malformed deep JSON must not defeat the bounded display scan.
+        }
+        boolean incomplete=!stored.complete||!stored.quotaKnown||unreadable+oversized+budgetExceeded>0;
+        JSONObject diagnostics=new JSONObject().put("incomplete",incomplete).put("status",incomplete?"incomplete_retained":"complete").put("unreadableRecords",unreadable).put("oversizedRecords",oversized).put("readBudgetExceededRecords",budgetExceeded)
+                .put("enumerationComplete",stored.complete).put("quotaKnown",stored.complete&&stored.quotaKnown).put("retainedSlots",stored.slots.size()).put("storedBytes",stored.bytes)
+                .put("originalsPreserved",true).put("recovery","retained_in_place").put("automaticCleanup",false).put("publicationReconstructed",false);
+        if(incomplete)diagnostics.put("message","部分附件索引无法核对；可读文件仍可查看，原索引、原件和发布证据已原位保留并占用配额。不能据此重新发布或自动清理。");
+        return new JSONObject().put("attachments",readable).put("indexDiagnostics",diagnostics);
+    }
+    private static final class IndexRecord {
+        final Path path;final String id;final long size,modified;
+        IndexRecord(Path path,String id,long size,long modified){this.path=path;this.id=id;this.size=size;this.modified=modified;}
+    }
+    private static final class StorageScan {
+        final java.util.Set<String> slots=new java.util.HashSet<>();final java.util.List<IndexRecord> records=new java.util.ArrayList<>();
+        long bytes;boolean complete=true,quotaKnown=true;
+    }
+    /** Count physical original identities without trusting JSON. A corrupt/missing index,
+     * .pending or crash orphan retains its slot; every blob/part byte still consumes quota. */
+    private StorageScan scanStorage(){
+        StorageScan result=new StorageScan();Path directory=root.toPath();
+        try{
+            if(!Files.readAttributes(directory,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS).isDirectory()){result.complete=false;result.quotaKnown=false;return result;}
+        }catch(NoSuchFileException absent){return result;}catch(Exception unknown){result.complete=false;result.quotaKnown=false;return result;}
+        try(var entries=Files.newDirectoryStream(directory)){
+            int count=0;for(Path entry:entries){if(++count>MAX_INDEX_ENTRIES){result.complete=false;break;}String name=entry.getFileName().toString(),suffix=null;
+                for(String candidate:new String[]{".json.pending",".json",".blob",".part"})if(name.endsWith(candidate)){suffix=candidate;break;}if(suffix==null)continue;
+                String id=name.substring(0,name.length()-suffix.length());result.slots.add(id);BasicFileAttributes attributes;
+                try{attributes=Files.readAttributes(entry,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);if(!attributes.isRegularFile())result.quotaKnown=false;
+                    else if(suffix.equals(".blob")||suffix.equals(".part"))result.bytes=Math.addExact(result.bytes,attributes.size());
+                }catch(Exception unknown){result.quotaKnown=false;attributes=null;}
+                if(suffix.equals(".json")&&id.matches("[a-f0-9-]{36}"))result.records.add(new IndexRecord(entry,id,attributes==null?-1:attributes.size(),attributes==null?0:attributes.lastModifiedTime().toMillis()));
+            }
+        }catch(Exception unknown){result.complete=false;result.quotaKnown=false;}
+        return result;
+    }
+    private static final class IndexReadBudget {long bytes;}
+    private static final class IndexReadLimit extends Exception {final boolean total;IndexReadLimit(boolean total){this.total=total;}}
+    private static JSONObject readIndex(Path path,IndexReadBudget budget)throws Exception{
+        if(!Files.readAttributes(path,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS).isRegularFile())throw new IllegalStateException();
+        try(InputStream input=Files.newInputStream(path,LinkOption.NOFOLLOW_LINKS);ByteArrayOutputStream bytes=new ByteArrayOutputStream()){
+            byte[] buffer=new byte[8192];for(int count;(count=input.read(buffer,0,(int)Math.min(buffer.length,Math.min(MAX_INDEX_RECORD_BYTES-bytes.size()+1L,MAX_INDEX_READ_BYTES-budget.bytes+1))))!=-1;){
+                if(count==0)continue;budget.bytes+=count;if(budget.bytes>MAX_INDEX_READ_BYTES)throw new IndexReadLimit(true);if(bytes.size()+count>MAX_INDEX_RECORD_BYTES)throw new IndexReadLimit(false);bytes.write(buffer,0,count);
+            }
+            return new JSONObject(StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes.toByteArray())).toString());
+        }
+    }
     public synchronized JSONObject get(String id)throws Exception{return visible(internal(id));}
-    synchronized JSONObject internal(String id)throws Exception{checkId(id);try{File record=new File(root,id+".json"),data=new File(root,id+".blob");if(!record.isFile()||!data.isFile())throw new IllegalArgumentException("附件不存在");JSONObject value=new JSONObject(new String(Files.readAllBytes(record.toPath()),StandardCharsets.UTF_8));if(!id.equals(value.optString("id"))||data.length()!=value.getLong("size"))throw new IllegalStateException("附件记录与文件不一致");return value;}catch(Exception missingOrChanged){revokeOutputEligibility(id);throw missingOrChanged;}}
+    synchronized JSONObject internal(String id)throws Exception{
+        checkId(id);try{File record=new File(root,id+".json"),data=new File(root,id+".blob");if(!record.isFile()||!data.isFile())throw new IllegalArgumentException("附件不存在");JSONObject value=readIndex(record.toPath(),new IndexReadBudget());if(!id.equals(value.optString("id"))||data.length()!=value.getLong("size"))throw new IllegalStateException("附件记录与文件不一致");return value;}
+        catch(org.json.JSONException|IndexReadLimit invalid){revokeOutputEligibility(id);throw new IllegalStateException("附件索引无法核对；原件和发布证据已保留，未修复或删除");}
+        catch(StackOverflowError invalid){revokeOutputEligibility(id);throw new IllegalStateException("附件索引无法核对；原件和发布证据已保留，未修复或删除");}
+        catch(Exception missingOrChanged){revokeOutputEligibility(id);throw missingOrChanged;}
+    }
     public synchronized File file(String id)throws Exception{internal(id);return new File(root,id+".blob");}
     public synchronized JSONObject readText(String id)throws Exception{return readText(id,internal(id).getString("sha256"));}
     synchronized JSONObject readText(String id,String expectedSha256)throws Exception{
@@ -212,6 +290,8 @@ public final class AttachmentBook {
     }
     private static void checkId(String id){if(id==null||!id.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("附件ID无效");}
     private static String hex(byte[] bytes){StringBuilder text=new StringBuilder();for(byte b:bytes)text.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return text.toString();}
-    private static void atomicJson(File file,JSONObject value)throws Exception{File temp=new File(file.getParentFile(),file.getName()+".pending");try(FileOutputStream output=new FileOutputStream(temp)){output.write(value.toString().getBytes(StandardCharsets.UTF_8));output.getFD().sync();}move(temp,file);}
+    private static byte[] encodedIndex(JSONObject value){byte[] bytes=value.toString().getBytes(StandardCharsets.UTF_8);if(bytes.length>MAX_INDEX_RECORD_BYTES)throw new IllegalArgumentException("附件索引元数据超过256KiB，未发布或修改原索引");return bytes;}
+    private static void atomicJson(File file,JSONObject value)throws Exception{atomicJson(file,encodedIndex(value));}
+    private static void atomicJson(File file,byte[] bytes)throws Exception{File temp=new File(file.getParentFile(),file.getName()+".pending");try(FileOutputStream output=new FileOutputStream(temp)){output.write(bytes);output.getFD().sync();}move(temp,file);}
     private static void move(File from,File to)throws Exception{try{Files.move(from.toPath(),to.toPath(),StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);}catch(AtomicMoveNotSupportedException unavailable){Files.move(from.toPath(),to.toPath(),StandardCopyOption.REPLACE_EXISTING);}}
 }
