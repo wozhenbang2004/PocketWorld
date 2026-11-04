@@ -39,7 +39,7 @@ internal class PocketWebData(private val controller: PocketWorldController) {
         check(stop || !(if (archive) archives.state.busy else storage.state.busy)) { "请先等待原数据操作回执" }
         when (action) {
             "archives.refresh" -> { fields(args); archives.refresh() }
-            "archives.create" -> { fields(args, "sections"); val selected = strings(args, "sections", 6); require(selected.isNotEmpty() && SECTIONS.containsAll(selected)); archives.create(selected) }
+            "archives.create" -> { fields(args, "sections"); val selected = strings(args, "sections", SECTIONS.size); require(selected.isNotEmpty() && SECTIONS.containsAll(selected)); archives.create(selected) }
             "archives.chooseImport" -> { fields(args, "encrypted"); if (bool(args, "encrypted")) archives.chooseImport() else archives.choosePlainImport() }
             "archives.offerExport" -> { fields(args, "selectionId", "sha256", "encrypted"); selection(args); if (bool(args, "encrypted")) archives.offerExport() else archives.offerPlainExport() }
             "archives.discardCache" -> { fields(args, "selectionId", "sha256"); selection(args); archives.discardLocalCache() }
@@ -146,7 +146,7 @@ internal class PocketWebData(private val controller: PocketWorldController) {
     private fun json(vararg values: Pair<String, Any?>): JSONObject = JSONObject().also { result -> values.forEach { (key, value) -> result.put(key, PocketWebState.publicValue(value)) } }
 
     companion object {
-        private val SECTIONS = setOf("projects", "artifacts", "memory", "experiences", "remoteConnections", "sshConnections")
+        private val SECTIONS = dev.pocketengine.features.workspace.OwnerDataArchives.SECTIONS
         val COMMANDS = setOf("archives.open", "archives.close", "archives.refresh", "archives.create", "archives.chooseImport", "archives.offerExport", "archives.discardCache", "archives.password.use", "archives.password.cancel", "archives.reviewPhase", "archives.cancelReview", "archives.confirmPhase", "archives.query", "archives.poll", "archives.stop", "archives.readOriginal", "archives.experiences", "archives.openCheckout", "archives.openAttachment", "archives.webdav.load", "archives.webdav.save", "archives.webdav.list", "archives.webdav.offerUpload", "archives.webdav.confirm", "archives.webdav.cancelReview", "archives.webdav.query", "archives.webdav.stop", "archives.webdav.readOriginal", "archives.webdav.offerImport", "storage.open", "storage.close", "storage.refresh", "storage.suggest", "storage.select", "storage.reviewSelected", "storage.confirm", "storage.cancelReview", "storage.query", "storage.poll", "storage.stop", "storage.readOriginal", "storage.savePolicy", "storage.backupCache", "storage.diagnostics.read", "storage.diagnostics.review", "storage.diagnostics.export")
     }
 }

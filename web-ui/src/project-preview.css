@@ -5,7 +5,9 @@
 .pw-preview-pane { display: flex; flex: 1; flex-direction: column; min-height: 0; gap: 8px; padding-top: 8px; }
 .pw-preview-actions, .pw-preview-footer { display: flex; flex: none; align-items: center; gap: 8px; }
 .pw-preview-actions > button { min-height: 44px; }
-.pw-preview-context { flex: none; max-height: min(24dvh,160px); overflow: auto; }
+.pw-preview-context { flex: none; }
+.pw-preview-context > p { margin: 0 0 5px; font-size: 12px; line-height: 1.5; }
+.pw-preview-context [data-slot="accordion-panel"] { max-height: 120px; overflow: auto; }
 .pw-preview-context .pw-error { margin-top: 4px; }
 .pw-preview-entry { display: flex; flex: 1; flex-direction: column; gap: 12px; min-height: 0; padding: 0 2px 8px; overflow: auto; overflow-anchor: none; }
 .pw-preview-entry > * { flex: none; }
@@ -28,6 +30,18 @@
 .pw-preview-source-details dt { color: var(--pw-muted,#777); }
 @media (max-height: 440px) {
   .pw-preview-pane { gap: 2px; padding-top: 2px; }
-  .pw-preview-context { max-height: 36px; }
+  .pw-preview-heading p { display: none; }
   .pw-preview-references { max-height: 24dvh; }
 }
+
+.pw-preview-heading { display: flex; flex: none; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.pw-preview-heading > div { min-width: 0; }
+.pw-preview-heading h3 { font-size: 13px; line-height: 1.5; font-weight: 500; margin: 0; }
+.pw-preview-heading p { margin: 2px 0 0; overflow-wrap: anywhere; color: var(--pw-muted,#777); font-size: 11px; line-height: 1.5; }
+.pw-preview-selection-state { flex: none; font-size: 11px; padding: 4px 7px; border-radius: 7px; background: var(--pw-inset,#ededed); }
+.pw-preview-draft-status { flex: none; margin: 0; color: var(--pw-muted,#777); font-size: 11px; line-height: 1.5; }
+.pw-preview-pane .pw-preview-viewport { border-radius: 12px; box-shadow: 0 1px 8px #00000005; }
+.pw-preview-pane .pw-preview-context h4 button { min-height: 36px; padding-block: 5px; font-size: 12px; }
+.pw-preview-footer { flex-wrap: wrap; }
+.pw-preview-footer > button { min-height: 44px; }
+.pw-preview-pane .pw-preview-source-details { max-height: 120px; overflow: auto; }

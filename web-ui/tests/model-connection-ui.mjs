@@ -184,7 +184,23 @@ async function select(label, option) {
 }
 async function expandPolicy() { await editor().getByRole('button', { name: /请求兼容 输出字段/ }).click(); await layoutReady(); }
 async function expandCache() { await editor().getByRole('button', { name: /前缀缓存 服务商支持/ }).click(); await layoutReady(); }
-async function reopen() { await page.getByRole('region', { name: '连接详情', exact: true }).getByRole('button', { name: '编辑这项连接', exact: true }).click(); await editor().waitFor(); }
+async function expandCredential() {
+  const replacement = editor().getByRole('button', { name: /替换 API 密钥/ });
+  if (await replacement.count() && await replacement.getAttribute('aria-expanded') !== 'true') await replacement.click();
+}
+async function reopen() { await page.getByRole('region', { name: '连接详情', exact: true }).getByRole('button', { name: '配置与测试', exact: true }).click(); await editor().waitFor(); await expandCredential(); }
+async function openCurrentEditor() {
+  await page.getByRole('button', { name: '查看当前 API 连接', exact: true }).click();
+  await page.getByRole('region', { name: '连接详情', exact: true }).waitFor();
+  assert.equal(await editor().count(), 0, 'Every saved connection first opens its overview, without credential fields');
+  await reopen();
+}
+async function backToConnections() {
+  await page.evaluate(() => window.PocketWeb.handleBack());
+  if (await page.getByRole('region', { name: '连接详情', exact: true }).count()) await page.evaluate(() => window.PocketWeb.handleBack());
+  await page.getByRole('region', { name: '连接列表', exact: true }).waitFor();
+}
+
 try {
   await fs.mkdir(output, { recursive: true });
   server = http.createServer(async (req, res) => { try { const name = new URL(req.url, 'http://local').pathname; const file = path.resolve(bundle, '.' + (name === '/' ? '/index.html' : name));
@@ -201,7 +217,7 @@ try {
   await page.getByRole('button', { name: '打开导航', exact: true }).click();
   await page.locator('.pw-work-drawer').getByRole('link', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: /^当前模型/ }).click(); await page.getByRole('button', { name: '管理连接', exact: true }).click();
-  await page.getByRole('button', { name: '编辑当前 API 连接', exact: true }).click(); await editor().waitFor();
+  await openCurrentEditor();
   assert.equal(await editor().getByText('旧连接遗留成功标记', { exact: true }).count(), 0, 'Old global success must not appear as this connection draft result');
   assert.equal(await count('models.connection.test'), 0); check('opening the original editor ignores the prior global connection success and sends no test');
   assert.equal(await apiKeyInput().getAttribute('type'), 'password');
@@ -219,9 +235,8 @@ try {
   check('saved credential metadata is visible without a secret value, and clearing a staged replacement keeps the saved-key semantics without a write');
 
   await apiKeyInput().fill('fixture-cancelled-replacement');
-  await page.evaluate(() => window.PocketWeb.handleBack());
-  await page.getByRole('region', { name: '连接列表', exact: true }).waitFor();
-  await page.getByRole('button', { name: '编辑当前 API 连接', exact: true }).click(); await editor().waitFor();
+  await backToConnections();
+  await openCurrentEditor();
   assert.equal(await apiKeyInput().inputValue(), '', 'Returning to the editor must not restore a cancelled secret draft');
   assert.equal(await apiKeyInput().getAttribute('placeholder'), '已保存 · 留空保留');
   const originalUrl = await editor().getByLabel('接口地址', { exact: true }).inputValue();
@@ -235,8 +250,7 @@ try {
   assert.equal(await count('models.connection.edit'), 0); assert.equal(await count('models.connection.test'), 0);
   check('cancelled secret drafts stay cleared on return and saved-key status follows the original protocol and endpoint');
 
-  await page.evaluate(() => window.PocketWeb.handleBack());
-  await page.getByRole('region', { name: '连接列表', exact: true }).waitFor();
+  await backToConnections();
   await page.getByRole('button', { name: '添加 API 连接', exact: true }).click();
   const newEditor = page.getByRole('region', { name: '新连接配置', exact: true });
   const newApiKey = newEditor.getByLabel('API 密钥', { exact: true });
@@ -245,14 +259,12 @@ try {
   assert.equal(await newApiKey.getAttribute('placeholder'), '输入 API 密钥');
   await newEditor.getByText('请填写这项连接的密钥；新增连接不会借用其他连接的密钥。', { exact: true }).waitFor();
   await newApiKey.fill('fixture-new-unsaved-key');
-  await page.evaluate(() => window.PocketWeb.handleBack());
-  await page.getByRole('region', { name: '连接列表', exact: true }).waitFor();
+  await backToConnections();
   await page.getByRole('button', { name: '添加 API 连接', exact: true }).click(); await newEditor.waitFor();
   assert.equal(await newApiKey.inputValue(), '', 'A cancelled new connection must not cache its secret');
   assert.equal(await newApiKey.getAttribute('placeholder'), '输入 API 密钥');
-  await page.evaluate(() => window.PocketWeb.handleBack());
-  await page.getByRole('region', { name: '连接列表', exact: true }).waitFor();
-  await page.getByRole('button', { name: '编辑当前 API 连接', exact: true }).click(); await editor().waitFor();
+  await backToConnections();
+  await openCurrentEditor();
   assert.equal(await count('models.connection.add'), 0);
   check('a new connection has an empty password input with no borrowed saved-key status, and cancelling keeps it unsaved');
   await select('接口协议', 'Anthropic Messages');

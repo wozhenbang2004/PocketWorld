@@ -43,7 +43,11 @@ type TreeRenderItemParams = {
     hasChildren: boolean
 }
 
+const TreeExpansionContext = React.createContext<{ ids: string[]; change: (id: string, open: boolean) => void } | null>(null)
+
 type TreeProps = React.HTMLAttributes<HTMLDivElement> & {
+    expandedIds?: string[]
+    onExpandedChange?: (ids: string[]) => void
     data: TreeDataItem[] | TreeDataItem
     initialSelectedItemId?: string
     selectedItemId?: string
@@ -96,6 +100,8 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeProps>(
             data,
             initialSelectedItemId,
             selectedItemId: controlledSelectedItemId,
+            expandedIds: controlledExpandedIds,
+            onExpandedChange,
             onSelectChange,
             expandAll,
             defaultLeafIcon,
@@ -175,6 +181,7 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeProps>(
         }, [data, expandAll, initialSelectedItemId])
 
         return (
+            <TreeExpansionContext.Provider value={controlledExpandedIds === undefined ? null : { ids: controlledExpandedIds, change: (id, open) => onExpandedChange?.(open ? [...new Set([...controlledExpandedIds, id])] : controlledExpandedIds.filter(value => value !== id)) }}>
             <div className={cn('overflow-hidden relative p-2', className)}>
                 <TreeItem
                     data={data}
@@ -198,6 +205,7 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeProps>(
                     onDrop={() => { handleDrop({id: '', name: 'parent_div'})}}>
                 </div>
             </div>
+            </TreeExpansionContext.Provider>
         )
     }
 )
@@ -332,9 +340,12 @@ const TreeNode = ({
     renderItem?: (params: TreeRenderItemParams) => React.ReactNode
     level?: number
 }) => {
-    const [value, setValue] = React.useState(
+    const expansion = React.useContext(TreeExpansionContext)
+    const [localValue, setLocalValue] = React.useState(
         expandedItemIds.includes(item.id) ? [item.id] : []
     )
+    const value = expansion ? (expansion.ids.includes(item.id) ? [item.id] : []) : localValue
+    const setValue = (next: string[]) => expansion ? expansion.change(item.id, next.includes(item.id)) : setLocalValue(next)
     const [isDragOver, setIsDragOver] = React.useState(false)
     const hasChildren = !!item.children?.length
     const isSelected = selectedItemId === item.id

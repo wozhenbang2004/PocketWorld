@@ -32,6 +32,8 @@ import {
 } from './forms-library';
 import './secondary.css';
 import './secondary-refactor.css';
+import './model-data-settings.css';
+import { DataOperationHeading, DataOperationRow, useDataSettingsJourney } from './DataSettingsJourney';
 import { backgroundConnection, modelConnectionCommand, wirelessEndpoints, wirelessPort } from './forms-library/host-contracts';
 import { ModelConnectionOptions, ModelConnectionTestFeedback } from './ModelConnectionOptions';
 import { compatibilityDraft, compatibilityNeedsSave, compatibilityOptions, connectionTestResult, type CompatibilityDraft, type ConnectionTestDraft } from './model-connection-policy';
@@ -337,26 +339,27 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
     <TextField label="Session Token" type="password" value={form.sessionToken} onChange={value => change('sessionToken', value)} autoComplete="new-password" />
     <TextField label="UTC 到期时间" value={form.expiresAt} onChange={value => change('expiresAt', value)} placeholder="2026-11-04T12:00:00Z" autoComplete="off" hint="填写这组 STS 凭据原有的到期时间；过期后需要明确替换整组会话。" />
   </div>;
+  const apiKeyField = <TextField label="API 密钥" type="password" value={form.apiKey} onChange={value => change('apiKey', value)} autoComplete="new-password"
+    placeholder={stale ? '先返回核对连接' : canRetainApiKey ? '已保存 · 留空保留' : '输入 API 密钥'} hint={apiKeyHint} />;
   return <div data-model-layer="edit" className="pw-model-edit-layer">
     <section className="pw-model-editor" aria-label={adding ? '新连接配置' : '当前连接配置'}>
+      <header className="pw-connection-editor-heading"><span className="pw-model-eyebrow">{adding ? '新 API 连接' : first(original.current || {}, ['name', 'label', 'id'], '原 API 连接')}</span><h2>连接与凭据</h2>{!adding && <p>原修订 {text(original.current?.revision, '未提供')} · 保存后更新原连接</p>}</header>
       <p className="pw-model-editor-context">{adding ? '保存后使用这项 API 配置。已有工作保留原连接。' : '修改当前 API 配置；测试连接不会切换模型。'}</p>
-      <section className="pw-model-form-section" aria-label="连接身份"><h2>连接</h2><div className="pw-form-grid">
+      <section className="pw-model-form-section" aria-label="连接身份"><h3>服务与模型</h3><div className="pw-form-grid">
         <SelectField label="接口协议" options={providers} value={form.provider} onChange={value => change('provider', value)} />
         {bedrock && <TextField label="AWS 区域" value={form.bedrockRegion} onChange={value => change('bedrockRegion', value)} placeholder="例如 us-east-1" autoComplete="off" />}
         <TextField label={bedrock ? '区域端点（自动生成）' : '接口地址'} type="url" value={bedrock ? bedrockUrl : form.url} onChange={value => { if (!bedrock) change('url', value); }} isReadOnly={bedrock} placeholder={bedrock ? '填写区域后显示' : 'https://…'} autoComplete="off" />
         <TextField label="模型名称" value={form.model} onChange={value => change('model', value)} placeholder={bedrock ? 'anthropic.claude-sonnet-4-6' : undefined} autoComplete="off"
           hint={bedrock ? '目前接入 anthropic.claude-sonnet-4-6 和 anthropic.claude-opus-4-6-v1 两个普通模型 ID。账号与区域是否可用需保存后测试；不提供模型目录或推理配置文件。' : undefined} />
       </div></section>
-      <section className="pw-model-form-section" aria-label="连接凭据"><h2>凭据</h2>{bedrock ? <>
+      <section className="pw-model-form-section" aria-label="连接凭据"><h3>访问凭据</h3>{bedrock ? <>
         <p className="pw-field-hint">使用本人已取得的正式 STS 临时会话。手机不会自动登录 AWS、读取 CLI 凭据或刷新身份。</p>
         {savedAws && form.bedrockRegion.trim() === config.bedrockRegion ? <>
           <Facts items={[[ '状态', savedAwsExpired ? '已过期 · 请替换后保存' : '已保存 · 可用性尚未验证' ], ['到期时间', original.current?.credentialExpiresAt]]} />
-          <Accordion variant="divided"><AccordionItem id="aws-session" title="替换短期凭据" description="整组替换三项凭据与到期时间">{awsFields}</AccordionItem></Accordion>
+          <Accordion key={savedAwsExpired ? 'expired' : 'saved'} defaultExpandedKeys={savedAwsExpired ? ['aws-session'] : []} variant="divided"><AccordionItem id="aws-session" title="替换短期凭据" description="整组替换三项凭据与到期时间">{awsFields}</AccordionItem></Accordion>
         </> : awsFields}
-      </> : <div className="pw-form-grid">
-        <TextField label="API 密钥" type="password" value={form.apiKey} onChange={value => change('apiKey', value)} autoComplete="new-password"
-          placeholder={stale ? '先返回核对连接' : canRetainApiKey ? '已保存 · 留空保留' : '输入 API 密钥'} hint={apiKeyHint} />
-      </div>}</section>
+      </> : canRetainApiKey ? <><p className="pw-credential-summary"><RiShieldCheckLine size={16} aria-hidden="true" />密钥已保存，留空保留原密钥。</p><Accordion variant="divided"><AccordionItem id="api-credential" title="替换 API 密钥" description="仅在明确保存后更换">{apiKeyField}</AccordionItem></Accordion></> : <div className="pw-form-grid">{apiKeyField}</div>}</section>
+      <div className="pw-model-options-heading"><h3>能力与请求选项</h3><p>按服务商的实际支持设置。更换地址、协议或模型后重新核对。</p></div>
       <Accordion className="pw-model-advanced" variant="divided">
         <AccordionItem id="advanced" title="高级设置" description="输出上限、图像输入与截图">
           <div className="pw-form-grid">
@@ -386,6 +389,7 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
       </div>}
       {unknownTest && <div ref={outcomeNotice} className="pw-request-notice" role="status"><p>原测试结果待核对；本表单不会自动重试或再次发送。请先核对原调用与连接，再明确开始新的测试。</p><Button variant="secondary" onClick={onInspect}>返回核对连接</Button></div>}
       {state.error && <p className="pw-field-error" role="alert">{text(state.error)}</p>}
+      <p className="pw-field-hint pw-model-test-cost">测试会向此服务发送文字请求，可能产生费用。保存配置与测试通过分别核对。</p>
       <div className="pw-form-actions pw-model-save-actions"><Button variant="secondary" disabled={stale || unknownSave || unknownTest || bedrockNeedsSave || policyNeedsSave || Boolean(policyError) || requesting || state.modelTesting || state.modelSelectionBusy || !supported('models.connection.test')} onClick={() => request('models.connection.test')}>{state.modelTesting ? '测试中…' : '测试连接'}</Button><PressButton compact disabled={stale || unknownSave || Boolean(policyError) || requesting || state.modelSaving || state.modelTesting || state.modelSelectionBusy || !supported(saveAction)} onClick={() => request(saveAction)}>{state.modelSaving ? '保存中…' : adding ? '添加并用于后续任务' : '保存原连接'}</PressButton></div>
     </section>
     <SettingsDialog isOpen={Boolean(transport)} title="允许这个明文模型连接？" onClose={clearSecret}>
@@ -411,8 +415,8 @@ function ModelConnections({ state, data, supported, run, navigate, open }: { sta
   const configured = Boolean(text(state.baseUrl).trim());
   return <section className="pw-model-connections" data-model-layer="connections" aria-label="连接列表">
       <div className="pw-settings-links">
-        {configured && selectedConnection && <Button variant="ghost" aria-label="编辑当前 API 连接" leadingIcon={RiLink} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => open({ kind: 'edit', id: selectedId })}>
-          <span><span>{first(selectedConnection || {}, ['name', 'label'], 'API 连接设置')}</span><small>{account ? '保留的连接' : '当前使用'}{' · '}{selectedConnection.credentialStatus === 'expired' ? '短期凭据已过期' : selectedConnection.hasApiKey || selectedConnection.hasAwsSession ? '凭据已保存' : '地址、凭据与能力'}</small></span>
+        {configured && selectedConnection && <Button variant="ghost" aria-label="查看当前 API 连接" leadingIcon={RiLink} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => open({ kind: 'connection', id: selectedId })}>
+          <span><span>{first(selectedConnection || {}, ['name', 'label'], 'API 连接设置')}</span><small>{account ? '保留的连接' : '后续任务默认'}{' · '}{selectedConnection.credentialStatus === 'expired' ? '短期凭据已过期' : selectedConnection.hasApiKey || selectedConnection.hasAwsSession ? '凭据已保存' : '地址、凭据与能力'}</small></span>
         </Button>}
         {profiles.filter(row => recordId(row) !== selectedId || !configured).map((row, index) => <Button key={recordId(row, String(index))} variant="ghost" leadingIcon={RiLink} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => open({ kind: 'connection', id: recordId(row) })}>
           <span><span>{first(row, ['name', 'label', 'id'], '已保存连接')}</span><small>{MODEL_PROVIDERS[text(row.provider)] || first(row, ['provider', 'protocol'], 'API')}{row.enabled === false ? ' · 已停用' : ' · 已保存'}</small></span>
@@ -425,12 +429,25 @@ function ModelConnections({ state, data, supported, run, navigate, open }: { sta
   </section>;
 }
 
-function ModelConnectionDetail({ connection, supported, run, open, busy }: { connection: Data | undefined; supported: (action: string) => boolean; run: Run; open: (view: ModelView) => void; busy: boolean }) {
-  return connection ? <section className="pw-model-connection-detail" aria-label="连接详情">
-    <Facts items={[[ '名称', first(connection, ['name', 'label', 'id']) ], ['协议', MODEL_PROVIDERS[text(connection.provider)] || first(connection, ['provider', 'protocol']) ], ['模型', connection.model], ['区域', connection.bedrockRegion], ['地址', first(connection, ['baseUrl', 'endpoint']) ], ['状态', connection.enabled === false ? '已停用' : '已启用'], ['凭据', connection.credentialStatus === 'expired' ? '已过期，请替换完整会话' : connection.hasApiKey || connection.hasAwsSession || connection.credentialsConfigured ? '已配置' : '未配置'], ['到期时间', connection.credentialExpiresAt]]} />
-    <div className="pw-form-actions"><Button variant="secondary" disabled={busy || !supported('models.connection.edit')} onClick={() => open({ kind: 'edit', id: recordId(connection) })}>编辑这项连接</Button><CapabilityAction action="models.connection.select" args={{ id: recordId(connection), expectedRevision: connection.revision }} supported={supported} run={run} disabled={busy || connection.enabled === false || connection.credentialStatus === 'expired' || connection.provider === 'bedrock_anthropic' && !connection.hasAwsSession}>用于后续任务</CapabilityAction></div>
-    <p className="pw-field-hint">正在执行的任务与连续补充保留原模型。停用连接或撤销凭据仍会生效。</p>
-  </section> : <Empty>这项连接已不在当前目录，请返回后刷新。</Empty>;
+function ModelConnectionDetail({ connection, data, state, supported, run, open, busy }: { connection: Data | undefined; data: Data; state: Data; supported: (action: string) => boolean; run: Run; open: (view: ModelView) => void; busy: boolean }) {
+  if (!connection) return <Empty>这项连接已不在当前目录，请返回后刷新。</Empty>;
+  const selected = recordId(connection) === text(object(data.connections).selectedConnectionId);
+  const nativeSelection = object(data.nativeSelection);
+  const nativeConnectionId = text(object(nativeSelection.capabilityBinding).connectionId);
+  const active = !data.selectionUnavailable && state.modelRoute !== 'account' && data.activeRoute !== 'account' && (nativeConnectionId ? nativeConnectionId === recordId(connection) : selected);
+  const grouped = Boolean(object(nativeSelection.modelRoutePlan).requestedAlias);
+  const config = object(connection.configuration);
+  return <section className="pw-model-connection-detail" data-model-layer="connection" aria-label="连接详情">
+    <header className="pw-connection-overview"><span className="pw-model-eyebrow">{active ? grouped ? '默认模型组当前连接' : '后续任务的 API 连接' : selected ? '保留的 API 目录连接' : '已保存的 API 连接'}</span><h2>{text(connection.model, '尚未设置模型')}</h2><p>{MODEL_PROVIDERS[text(connection.provider)] || first(connection, ['provider', 'protocol'])} · 修订 {text(connection.revision, '未提供')}</p></header>
+    <Facts items={[[ '地址', first(connection, ['baseUrl', 'endpoint']) ], ['区域', connection.bedrockRegion || config.bedrockRegion], ['状态', connection.enabled === false ? '已停用' : '已启用'], ['凭据', connection.credentialStatus === 'expired' ? '已过期，请替换完整会话' : connection.hasApiKey || connection.hasAwsSession || connection.credentialsConfigured ? '已配置；可用性需另行测试' : '未配置'], ['到期时间', connection.credentialExpiresAt]]} />
+    <div className="pw-settings-links pw-connection-destinations">
+      <Button variant="ghost" leadingIcon={RiSettings3Line} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" aria-label="配置与测试" disabled={busy || !supported('models.connection.edit')} onClick={() => open({ kind: 'edit', id: recordId(connection) })}><span><span>配置与测试</span><small>地址、模型、凭据与高级请求选项</small></span></Button>
+      {selected && <Button variant="ghost" leadingIcon={RiFileList3Line} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => open({ kind: 'catalog' })}><span><span>这项连接的模型目录</span><small>{data.catalogAvailable === false ? '使用明确模型 ID，目录暂不可用' : '核对能力与参数，再明确选择模型'}</small></span></Button>}
+    </div>
+    {!selected && <p className="pw-field-hint">模型目录属于当前选定的 API 连接。先明确使用这项连接，再查看它的目录。</p>}
+    <div className="pw-connection-selection"><p>{active ? grouped ? '默认模型组当前指向此连接，后续任务仍按原用途和路由规则选择。' : '新任务使用这项 API 连接。' : '明确选择后，仅用于之后发起的工作。'}正在执行的任务与连续补充保留原模型；停用连接或撤销凭据仍会生效。</p><CapabilityAction action="models.connection.select" args={{ id: recordId(connection), expectedRevision: connection.revision }} supported={supported} run={run} disabled={busy || connection.enabled === false || connection.credentialStatus === 'expired' || connection.provider === 'bedrock_anthropic' && !connection.hasAwsSession}>用于后续任务</CapabilityAction></div>
+    <Accordion variant="divided"><AccordionItem id="connection-source" title="原连接身份" description={'修订 ' + text(connection.revision, '未提供')}><Facts items={[[ '原连接', recordId(connection) ], ['原修订', connection.revision], ['目录地址', object(connection.binding).modelsEndpoint]]} /><p className="pw-field-hint">保存与测试分别返回结果。已保存凭据不代表连接测试通过，也不代表免费使用。</p></AccordionItem></Accordion>
+  </section>;
 }
 
 const modelFactText = (value: any) => {
@@ -453,6 +470,7 @@ function ModelCatalog({ state, data, selectedId, active = true, supported, run, 
   }, [modelReview, registerTransientBack, active]);
   useEffect(() => { if (!active) { request.current++; setModelReview(null); setReviewing(false); } }, [active]);
   useEffect(() => { alive.current = true; return () => { alive.current = false; request.current++; }; }, []);
+  const catalogConnection = modelConnectionRows(data).find(row => recordId(row) === text(object(data.connections).selectedConnectionId));
   const models = list(data.models);
   const model = models.find(row => first(row, ['modelId', 'id', 'name']) === selectedId);
   const locked = Boolean(state.modelSelectionBusy || state.chatSubmitting || state.phoneSubmitting || state.modelSaving || state.modelTesting) || selecting;
@@ -471,6 +489,7 @@ function ModelCatalog({ state, data, selectedId, active = true, supported, run, 
   const reviewedModel = models.find(row => first(row, ['modelId', 'id', 'name']) === text(modelReview?.modelId));
   const modelFacts = (record: Data) => <Facts items={[[ '上下文容量', modelFactText(object(record.facts).CONTEXT_WINDOW) ], ['输出上限', modelFactText(object(record.facts).OUTPUT_TOKENS) ], ['图像输入', modelFactText(object(record.facts).IMAGE_INPUT) ], ['工具调用', modelFactText(object(record.facts).TOOL_CALLS) ], ['目录状态', record.catalogFresh ? '已读取' : '未读取或已过期']]} />;
   return <>
+    <div className="pw-model-catalog-source" aria-label="目录所属连接"><div><span className="pw-model-eyebrow">API 目录来源</span><strong>{first(catalogConnection || {}, ['name', 'label', 'id'], '尚未读取连接')}</strong><small>{catalogConnection ? `修订 ${text(catalogConnection.revision, '未提供')} · ${MODEL_PROVIDERS[text(catalogConnection.provider)] || text(catalogConnection.provider)}` : '目录未绑定已保存连接'}</small></div>{catalogConnection && <Button variant="ghost" trailingIcon={RiArrowRightSLine} onClick={() => open({ kind: 'connection', id: recordId(catalogConnection) })}>连接详情</Button>}</div>
     <section className="pw-model-catalog" hidden={Boolean(selectedId)} aria-label="API 模型目录">
       {models.length > 0 ? <ModelPicker label="选择工作模型" value={state.modelRoute === 'account' ? undefined : text(state.modelName)} models={models.map(row => {
         const id = first(row, ['modelId', 'id', 'name']);
@@ -1043,57 +1062,114 @@ function ArchiveWorkspace({ data, supported, run, registerTransientBack, navigat
   const [discard, setDiscard] = useState<Data | null>(null), [configDraft, setConfigDraft] = useState<Data | null>(null);
   const [originalId, setOriginalId] = useState(''), [uploadId, setUploadId] = useState(''), [fileName, setFileName] = useState('');
   const [confirmed, setConfirmed] = useState(false);
+  const journey = useDataSettingsJourney(data.selection?.selectionId ? 'snapshot' : 'list');
+  const [snapshotTab, setSnapshotTab] = useState('export');
+  const lastSelection = useRef(text(data.selection?.selectionId)), lastAction = useRef(text(data.originalAction));
+  const selectionIntent = useRef('export');
   const selection = object(data.selection), pin = { selectionId: selection.selectionId, sha256: selection.archiveSha256 };
   const preview = object(object(data.preview).review), config = object(data.webDavConfig), review = object(data.review), uploadReview = object(data.webDavReview);
   const original = object(data.originalPhase), upload = object(data.webDavUpload), busy = Boolean(data.busy), phasePending = Boolean(data.originalAction && !['completed', 'failed'].includes(original.status));
   const nativeResult = object(object(data.result).nativeResult), nativeScope = object(review.nativeScope);
   const hasReview = Boolean(data.review || data.webDavReview), locked = busy || hasReview || Boolean(data.passwordPromptId);
-  const command: Run = (action, args) => run(action, args);
+  const command: Run = (action, args) => {
+    if (action === 'archives.create') selectionIntent.current = 'export';
+    if (action === 'archives.chooseImport' || action === 'archives.webdav.offerImport') selectionIntent.current = 'restore';
+    return run(action, args);
+  };
+  useEffect(() => {
+    if (selection.selectionId && selection.selectionId !== lastSelection.current) { setSnapshotTab(selectionIntent.current); journey.open('snapshot'); }
+    lastSelection.current = text(selection.selectionId);
+  }, [selection.selectionId]);
+  useEffect(() => {
+    if (data.originalAction && data.originalAction !== lastAction.current) journey.open('result');
+    lastAction.current = text(data.originalAction);
+  }, [data.originalAction]);
   const act = (action: string, args: Data, label: string, disabled = false, primary = false) => <CapabilityAction action={action} args={args} supported={supported} run={command} disabled={busy || disabled} primary={primary}>{label}</CapabilityAction>;
   const cancelReview = () => { const current = data.review ? review : uploadReview; void run(data.review ? 'archives.cancelReview' : 'archives.webdav.cancelReview', { actionId: current.actionId }).catch(() => {}); };
   useEffect(() => setConfirmed(false), [review.actionId, uploadReview.actionId]);
   useEffect(() => { const clear = () => setConfigDraft(value => value ? { ...value, password: '' } : null); const hide = () => { if (document.visibilityState !== 'visible') clear(); }; document.addEventListener('visibilitychange', hide); window.addEventListener('pagehide', clear); return () => { document.removeEventListener('visibilitychange', hide); window.removeEventListener('pagehide', clear); }; }, []);
-  useEffect(() => { registerTransientBack(data.passwordPromptId ? () => { void run('archives.password.cancel', { promptId: data.passwordPromptId }).catch(() => {}); return true; } : configDraft ? () => { setConfigDraft(null); return true; } : discard ? () => { setDiscard(null); return true; } : hasReview ? () => { if (!busy) cancelReview(); return true; } : null); return () => registerTransientBack(null); }, [data.passwordPromptId, configDraft, discard, review.actionId, uploadReview.actionId, busy, registerTransientBack]);
+  useEffect(() => { registerTransientBack(data.passwordPromptId ? () => { void run('archives.password.cancel', { promptId: data.passwordPromptId }).catch(() => {}); return true; } : configDraft ? () => { setConfigDraft(null); return true; } : discard ? () => { setDiscard(null); return true; } : hasReview ? () => { if (!busy) cancelReview(); return true; } : journey.view !== 'list' ? journey.back : null); return () => registerTransientBack(null); }, [data.passwordPromptId, configDraft, discard, review.actionId, uploadReview.actionId, busy, journey.view, registerTransientBack]);
   const extra = object(object(data.inventory).extraSectionsAvailable), hasInventory = Boolean(data.inventory);
   const sectionReady = (key: string) => hasInventory && (['projects', 'artifacts'].includes(key) || extra[key] === true);
   const visibleSections = data.projectMemoryName ? ['projects', 'memory'] : selected.filter(sectionReady);
-  return <>
-    <Card title="备份与迁移" description="生成固定备份、加密导出，或逐分区恢复到新的身份。">
+  const operationNames: Record<string, [string, string]> = {
+    create: ['创建备份', '选择本机数据范围，生成固定副本后再导出。'],
+    import: ['导入备份', '先读取并核对内容，再逐个分区审阅恢复。'],
+    snapshot: ['当前固定备份', '以下内容和操作始终对应这份原备份。'],
+    webdav: ['WebDAV 备份', '每次上传独立版本，明确核对目的地。'],
+    result: ['恢复结果', '读取原动作，不重放结果未知的恢复。'],
+  };
+  return <div className="pw-data-workspace pw-archive-workspace" ref={journey.root} tabIndex={-1} data-data-view={journey.view}>
+    <div className="pw-data-collection" hidden={journey.view !== 'list'}>
+      <p className="pw-reading-lead">带走你的数据，或从备份恢复。先选择一项操作。</p>
+      <div className="pw-settings-links pw-data-purpose-list">
+        <DataOperationRow id="create" title="创建备份" detail="选择范围，生成后加密导出" onOpen={journey.open} />
+        <DataOperationRow id="import" title="导入备份" detail="先预览内容，再逐分区恢复" onOpen={journey.open} />
+        <DataOperationRow id="snapshot" title="当前固定备份" detail={selection.selectionId ? bytesText(selection.archiveBytes) + ' · 本机缓存未加密' : '尚未读取或创建备份'} onOpen={journey.open} />
+      </div>
+      <Accordion variant="divided"><AccordionItem id="archive-more" title="更多备份方式与记录" description="WebDAV、原恢复记录"><div className="pw-settings-links">
+        <DataOperationRow id="webdav" title="加密 WebDAV 备份" detail={text(config.collection, '连接目录与独立远端版本')} onOpen={journey.open} />
+        <DataOperationRow id="result" title="查看恢复记录" detail="原结果、恢复的内容与原动作编号" onOpen={journey.open} />
+      </div></AccordionItem></Accordion>
+    </div>
+    {journey.view !== 'list' && <DataOperationHeading title={operationNames[journey.view][0]} parent="备份操作" description={operationNames[journey.view][1]} onBack={journey.back} />}
+    {data.notice && <p className="pw-receipt-copy" role="status">{text(data.notice)}</p>}{data.error && <p className="pw-field-error" role="alert">{text(data.error)}</p>}
+    {busy && <p className="pw-data-progress" role="status">正在等待原数据操作回执，请勿重复提交。</p>}
+    {data.originalAction && journey.view !== 'result' && <section className="pw-data-action-notice" aria-label="原恢复状态"><p>原恢复 · {statusText(original.status || 'unknown')}</p><p className="pw-field-hint">{phasePending ? '原恢复尚未结束。先核对原动作，不重复恢复。' : '恢复结果保留在原动作中，可继续核对。'}</p><Button variant="secondary" onClick={() => journey.open('result')}>查看原恢复结果</Button></section>}
+      {data.webDavAction && <section className="pw-data-action-notice" aria-label="原上传状态"><h3>原上传结果</h3><Facts items={[[ '原上传', data.webDavAction ], ['目标', object(upload.scope).destination ], ['状态', statusText(object(upload.receipt).status || upload.status) ], ['远端字节', object(upload.receipt).remoteBytesVerified ? '已核对与本次密文一致' : '尚未确认一致' ]]} /><div className="pw-form-actions">{act('archives.webdav.query', { actionId: data.webDavAction }, '只读核对原版本')}<CapabilityAction action="archives.webdav.stop" args={{ actionId: data.webDavAction }} supported={supported} run={run}>请求停止原上传</CapabilityAction></div><p className="pw-field-hint">结果未知时不会自动重传。已发送的字节不会因停止而撤回。</p></section>}
+    {journey.view === 'create' && <Card className="pw-data-operation-body">
       {data.projectMemoryName ? <p>范围：{text(data.projectMemoryName)}及其记忆。</p> : <div className="pw-selection-list">{Object.entries(ARCHIVE_SECTIONS).map(([key, label]) => <CheckboxField key={key} isSelected={selected.includes(key)} isDisabled={locked || phasePending || !sectionReady(key)} onChange={yes => setSelected(value => yes ? [...value, key] : value.filter(item => item !== key))}>{label}{hasInventory && !sectionReady(key) ? ' · 当前不可用' : ''}</CheckboxField>)}</div>}
-      <div className="pw-form-actions">{act('archives.create', { sections: visibleSections }, '生成所选范围的备份', locked || phasePending || visibleSections.length === 0 || Boolean(data.projectMemoryName && !data.projectMemoryCurrent), true)}{act('archives.chooseImport', { encrypted: true }, '选择加密备份…', locked || phasePending)}{act('archives.refresh', {}, '刷新清单', locked)}</div>
-      <Accordion><AccordionItem title="包含范围与旧版 ZIP">
-        <p>备份中的用户文本、图片和项目文件可能包含敏感内容。本机审阅缓存未加密；默认导出为口令加密文件。</p>
-        <p>模型连接、工作配置、技能和排程可分别备份；恢复后保持停用并重新核对来源。登录凭据、密钥、SSH 信任、执行授权、设备配对、插件安装、运行环境和未保存草稿不会迁移。</p>
-        <div className="pw-form-actions">{act('archives.chooseImport', { encrypted: false }, '只读核对旧版 ZIP…', locked || phasePending)}{selection.selectionId && act('archives.offerExport', { ...pin, encrypted: false }, '导出未加密 ZIP…', locked)}</div>
-      </AccordionItem></Accordion>
-    </Card>
-    {selection.selectionId && <Card title="当前固定备份" description="核对实际内容后选择导出或恢复分区。">
-      <Facts items={[[ '备份大小', bytesText(selection.archiveBytes) ], ['本机缓存', '未加密'], ['创建时间', timeText(selection.createdAt) ]]} />
-      <div className="pw-form-actions">{act('archives.offerExport', { ...pin, encrypted: true }, '设置口令并导出…', locked, true)}<Button variant="secondary" disabled={locked} onClick={() => setDiscard({ ...pin })}>移除本机缓存…</Button></div>
-      {Object.entries(preview).map(([key, value]) => { const part = object(value); return <SourceRecord key={key} item={{ title: ARCHIVE_SECTIONS[key] || key }}><Facts items={[[ '项目', part.projects ], ['私人副本', part.checkouts ], ['原件', part.attachments ], ['成果', part.artifacts ], ['配置', Array.isArray(part.profiles) ? part.profiles.length : undefined ], ['快照时间', timeText(part.snapshotAt) ]]} /><ArchiveConfigurationDetails value={part} /><div className="pw-form-actions">{act('archives.reviewPhase', { ...pin, phase: key }, '审阅恢复此分区', locked || phasePending)}{key === 'experiences' && act('archives.experiences', { ...pin, page: 0 }, '查看只读经历', locked)}</div></SourceRecord>; })}
+      <p className="pw-data-caution">用户文本、图片和项目文件可能包含敏感内容。生成后的本机审阅缓存未加密，导出时默认使用口令加密。</p>
+      {selected.includes('experiences') && <p className="pw-data-caution">已包含聊天、任务与工具回执正文，请确认这些私人内容确实需要随备份带走。</p>}
+      <div className="pw-form-actions">{act('archives.create', { sections: visibleSections }, '生成所选范围的备份', locked || phasePending || visibleSections.length === 0 || Boolean(data.projectMemoryName && !data.projectMemoryCurrent), true)}{act('archives.refresh', {}, '刷新清单', locked)}</div>
+      <Accordion><AccordionItem title="不会迁移的内容"><p>模型连接、工作配置、技能和排程可分别备份；恢复后保持停用并重新核对来源。登录凭据、密钥、SSH 信任、执行授权、设备配对、插件安装、运行环境和未保存草稿不会迁移。</p></AccordionItem></Accordion>
     </Card>}
-    <Card title="加密 WebDAV 备份" description="每次上传一个新版本，发送前核对固定备份和目标目录。">
+    {journey.view === 'import' && <Card className="pw-data-operation-body">
+      <div className="pw-data-step"><span>1</span><div><h3>选择备份文件</h3><p>解密和读取仅用于预览，不会恢复任何分区。</p></div></div>
+      <div className="pw-form-actions">{act('archives.chooseImport', { encrypted: true }, '选择加密备份…', locked || phasePending, true)}</div>
+      <div className="pw-data-step"><span>2</span><div><h3>核对内容与来源</h3><p>检查固定备份的 SHA、包含分区和明文缓存，再进入单个恢复审阅。</p></div></div>
+      <p className="pw-data-caution">本机预览缓存未加密。恢复创建新身份，不恢复旧登录、执行授权或设备信任。</p>
+      <Accordion><AccordionItem id="legacy-import" title="导入旧版 ZIP" description="未加密文件，仅先读取预览">{act('archives.chooseImport', { encrypted: false }, '只读核对旧版 ZIP…', locked || phasePending)}</AccordionItem></Accordion>
+    </Card>}
+    {journey.view === 'snapshot' && !selection.selectionId && <Empty>还没有固定备份。返回选择创建或导入。</Empty>}
+    {journey.view === 'snapshot' && selection.selectionId && <Card className="pw-data-operation-body">
+      <Facts items={[[ '备份大小', bytesText(selection.archiveBytes) ], ['本机缓存', '未加密'], ['创建时间', timeText(selection.createdAt) ], ['原备份编号', selection.selectionId ], ['内容 SHA-256', selection.archiveSha256 ], ['包含分区', Object.keys(preview).map(key => ARCHIVE_SECTIONS[key] || key).join('、') || '尚未返回分区清单']]} />
+      <p className="pw-data-caution">这份本机缓存未加密。正文、图片与项目文件可能包含敏感内容。</p>
+      <Tabs selectedKey={snapshotTab} onSelectionChange={key => setSnapshotTab(String(key))} className="pw-data-tabs">
+        <TabList aria-label="固定备份操作"><Tab id="export">导出备份</Tab><Tab id="restore">恢复分区</Tab></TabList>
+        <TabPanel id="export"><p>加密导出整份固定备份；口令由你独立保管。</p>
+      <div className="pw-form-actions">{act('archives.offerExport', { ...pin, encrypted: true }, '设置口令并导出…', locked, true)}<Button variant="secondary" disabled={locked} onClick={() => setDiscard({ ...pin })}>移除本机缓存…</Button></div>
+          <Accordion><AccordionItem id="plain-export" title="导出未加密 ZIP" description="文件中的私人内容不受备份口令保护"><p className="pw-data-caution">任何能读取文件的人都可能看到包含的内容，请先确认保存位置。</p>{act('archives.offerExport', { ...pin, encrypted: false }, '导出未加密 ZIP…', locked)}</AccordionItem></Accordion>
+        </TabPanel>
+        <TabPanel id="restore"><p className="pw-field-hint">一次只审阅一个分区。已存在的数据保留，身份与权限不会自动恢复。</p>
+          <Accordion variant="divided" className="pw-archive-part-list">{Object.entries(preview).map(([key, value]) => { const part = object(value); return <AccordionItem id={key} key={key} title={ARCHIVE_SECTIONS[key] || key} description="查看包含内容，再审阅恢复">
+            <Facts items={[[ '项目', part.projects ], ['私人副本', part.checkouts ], ['原件', part.attachments ], ['成果', part.artifacts ], ['配置', Array.isArray(part.profiles) ? part.profiles.length : undefined ], ['快照时间', timeText(part.snapshotAt) ]]} />
+            <ArchiveConfigurationDetails value={part} />
+            <div className="pw-form-actions">{act('archives.reviewPhase', { ...pin, phase: key }, '审阅恢复此分区', locked || phasePending)}{key === 'experiences' && act('archives.experiences', { ...pin, page: 0 }, '查看只读经历', locked)}</div>
+          </AccordionItem>; })}</Accordion>
+        </TabPanel>
+      </Tabs>
+    </Card>}
+    {journey.view === 'webdav' && <Card className="pw-data-operation-body">
       <div className="pw-form-actions">{act('archives.webdav.load', {}, '读取连接设置', locked)}{data.webDavConfig && <Button variant="secondary" disabled={locked} onClick={() => setConfigDraft({ revision: config.revision, collection: text(config.collection), username: text(config.username), enabled: config.enabled === true, password: '' })}>编辑连接</Button>}</div>
       {data.webDavConfig && <><Facts items={[[ '目录', config.collection ], ['状态', config.enabled ? '已启用，逐次确认上传' : '未启用'], ['专用口令', config.credentialConfigured ? '已保存' : '未配置' ]]} /><div className="pw-form-actions">{selection.selectionId && act('archives.webdav.offerUpload', { ...pin, revision: config.revision }, '为当前备份设置口令并准备上传…', locked || !config.enabled)}{act('archives.webdav.list', { revision: config.revision }, '读取远端版本', locked || !config.enabled)}</div></>}
       {Array.isArray(data.webDavVersions) && (data.webDavVersions.length ? list(data.webDavVersions).map(version => <SourceRecord key={text(version.name)} item={version}><Facts items={[[ '加密后大小', bytesText(version.encryptedBytes) ], ['修改时间', version.modified ]]} />{act('archives.webdav.offerImport', { revision: config.revision, name: version.name }, '下载、解密并核对…', locked || phasePending || !config.enabled)}</SourceRecord>) : <Empty>这个目录尚未返回可读取的备份版本。</Empty>)}
-      {data.webDavAction && <div className="pw-selected-object"><h3>原上传结果</h3><Facts items={[[ '状态', statusText(object(upload.receipt).status || upload.status) ], ['远端字节', object(upload.receipt).remoteBytesVerified ? '已核对与本次密文一致' : '尚未确认一致' ]]} /><div className="pw-form-actions">{act('archives.webdav.query', { actionId: data.webDavAction }, '只读核对原版本')}<CapabilityAction action="archives.webdav.stop" args={{ actionId: data.webDavAction }} supported={supported} run={run}>请求停止原上传</CapabilityAction></div><p className="pw-field-hint">结果未知时不会自动重传。已发送的字节不会因停止而撤回。</p></div>}
       <Accordion><AccordionItem title="按原编号或文件名核对">
         <TextField label="当前目录中的备份文件名" value={fileName} onChange={value => setFileName(value.slice(0, 100))} /><div className="pw-form-actions">{act('archives.webdav.offerImport', { revision: config.revision, name: fileName }, '下载并只读核对…', locked || phasePending || !config.enabled || !fileName)}</div>
         <TextField label="已有上传编号" value={uploadId} onChange={value => setUploadId(value.slice(0, 36))} /><div className="pw-form-actions">{act('archives.webdav.readOriginal', { actionId: uploadId }, '读取原上传登记', !/^[a-f0-9-]{36}$/.test(uploadId))}</div>
       </AccordionItem></Accordion>
-    </Card>
-    {data.experiencePage && <Card title="归档中的只读经历" description="这是固定时间的快照，不恢复旧授权，也不证明之后的状态。"><Facts items={[[ '快照时间', timeText(data.experiencePage.snapshotAt) ], ['页码', text(data.experiencePage.pageIndex + 1) + ' / ' + text(data.experiencePage.pageCount) ]]} /><p>{first(object(data.experiencePage.data), ['title', 'goal', 'text', 'summary'])}</p><Accordion><AccordionItem title="查看这页完整原记录"><pre className="pw-source-code">{JSON.stringify(object(data.experiencePage.data), null, 2)}</pre></AccordionItem></Accordion><div className="pw-form-actions">{act('archives.experiences', { ...pin, page: data.experiencePage.pageIndex - 1 }, '上一页', data.experiencePage.pageIndex <= 0)}{act('archives.experiences', { ...pin, page: data.experiencePage.pageIndex + 1 }, '下一页', !data.experiencePage.hasMore)}</div></Card>}
-    <Card title="恢复结果与原动作">
+    </Card>}
+    {journey.view === 'snapshot' && snapshotTab === 'restore' && data.experiencePage && <Card title="归档中的只读经历" description="这是固定时间的快照，不恢复旧授权，也不证明之后的状态。"><Facts items={[[ '快照时间', timeText(data.experiencePage.snapshotAt) ], ['页码', text(data.experiencePage.pageIndex + 1) + ' / ' + text(data.experiencePage.pageCount) ]]} /><p>{first(object(data.experiencePage.data), ['title', 'goal', 'text', 'summary'])}</p><Accordion><AccordionItem title="查看这页完整原记录"><pre className="pw-source-code">{JSON.stringify(object(data.experiencePage.data), null, 2)}</pre></AccordionItem></Accordion><div className="pw-form-actions">{act('archives.experiences', { ...pin, page: data.experiencePage.pageIndex - 1 }, '上一页', data.experiencePage.pageIndex <= 0)}{act('archives.experiences', { ...pin, page: data.experiencePage.pageIndex + 1 }, '下一页', !data.experiencePage.hasMore)}</div></Card>}
+    {journey.view === 'result' && <Card className="pw-data-operation-body">
       {data.originalAction && <><Facts items={[[ '状态', statusText(original.status || 'unknown') ], ['原动作', data.originalAction ]]} /><div className="pw-form-actions">{act('archives.query', { actionId: data.originalAction }, '只读核对原恢复结果')}{['running', 'queued', 'stopping'].includes(original.status) && act('archives.stop', { actionId: data.originalAction }, '请求停止后续恢复')}</div></>}
       {Object.keys(nativeResult).length > 0 && <><ArchiveConfigurationDetails value={nativeResult} result />{['settings', 'skills', 'schedules'].includes(object(original.scope).phase) && <p>恢复写入与启用分开核对：连接和排程保持停用，技能须重新批准，工作配置须重选本机来源；当前模型选择保留。</p>}<div className="pw-form-actions">{object(original.scope).phase === 'settings' && <><Button variant="secondary" onClick={() => navigate('models')}>管理模型连接</Button><Button variant="secondary" onClick={() => navigate('workProfiles')}>核对工作配置</Button></>}{object(original.scope).phase === 'skills' && <Button variant="secondary" onClick={() => navigate('skills')}>审核恢复的技能</Button>}{object(original.scope).phase === 'schedules' && <Button variant="secondary" onClick={() => navigate('automation')}>核对恢复的排程</Button>}</div></>}
       {list(object(data.result).checkouts).filter(row => row.found).map(row => <div className="pw-form-actions" key={text(row.checkoutId)}>{act('archives.openCheckout', { actionId: data.originalAction, id: row.checkoutId }, '打开恢复项目：' + text(row.name, '项目'))}</div>)}
       {list(object(data.result).attachments).filter(row => row.id).map(row => <div className="pw-form-actions" key={text(row.id)}>{act('archives.openAttachment', { actionId: data.originalAction, id: row.id }, '查看原件：' + text(row.name, '恢复的文件'))}</div>)}
       <Accordion><AccordionItem title="按已有恢复编号读取"><TextField label="原恢复任务编号" value={originalId} onChange={value => setOriginalId(value.slice(0, 36))} /><div className="pw-form-actions">{act('archives.readOriginal', { actionId: originalId }, '读取原恢复定位', !/^[a-f0-9-]{36}$/.test(originalId))}</div></AccordionItem></Accordion>
-      {data.notice && <p className="pw-receipt-copy" role="status">{text(data.notice)}</p>}{data.error && <p className="pw-field-error" role="alert">{text(data.error)}</p>}
-    </Card>
+    </Card>}
     {data.passwordPromptId && <ArchivePassword key={data.passwordPromptId} data={data} supported={supported} run={run} />}
     <SettingsDialog isOpen={hasReview} title={data.review ? '确认恢复这个分区？' : '确认上传这个新版本？'} onClose={() => { if (!busy) cancelReview(); }}>
-      {data.review ? <><Facts items={[[ '分区', ARCHIVE_SECTIONS[review.phase] || review.phase ]]} /><p>仅从这份固定备份创建新数据。现有项目保留；原登录、信任和执行授权不会恢复。</p><ArchiveConfigurationDetails value={nativeScope} />{['settings', 'skills', 'schedules'].includes(review.phase) && <p>连接和排程恢复为停用状态，技能需要重新批准，工作配置需要重新绑定本机来源。恢复不会切换当前模型或自动开始任务。</p>}</> : <><Facts items={[[ '目标', uploadReview.destination ], ['加密后大小', bytesText(uploadReview.encryptedBytes) ], ['分区', Object.keys(object(uploadReview.sections)).map(key => ARCHIVE_SECTIONS[key] || key).join('、') ]]} /><p>仅发送这份密文到上述目录；不会自动重传或覆盖已有版本。</p></>}
+      {data.review ? <><Facts items={[[ '分区', ARCHIVE_SECTIONS[review.phase] || review.phase ], ['原动作', review.actionId ], ['原备份编号', review.selectionId ], ['内容 SHA-256', review.archiveSha256 ]]} /><p>仅从这份固定备份创建新数据。现有项目保留；原登录、信任和执行授权不会恢复。</p><ArchiveConfigurationDetails value={nativeScope} />{['settings', 'skills', 'schedules'].includes(review.phase) && <p>连接和排程恢复为停用状态，技能需要重新批准，工作配置需要重新绑定本机来源。恢复不会切换当前模型或自动开始任务。</p>}</> : <><Facts items={[[ '原动作', uploadReview.actionId ], ['原备份编号', uploadReview.selectionId ], ['内容 SHA-256', uploadReview.archiveSha256 ], ['目标', uploadReview.destination ], ['加密后大小', bytesText(uploadReview.encryptedBytes) ], ['分区', Object.keys(object(uploadReview.sections)).map(key => ARCHIVE_SECTIONS[key] || key).join('、') ]]} /><p>仅发送这份密文到上述目录；不会自动重传或覆盖已有版本。</p></>}
       <CheckboxField isSelected={confirmed} isDisabled={busy} onChange={setConfirmed}>{data.review ? '我已核对此分区，确认恢复到这台设备' : '我已核对这份备份和上传目录'}</CheckboxField>
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={cancelReview}>取消</Button>{act(data.review ? 'archives.confirmPhase' : 'archives.webdav.confirm', { actionId: data.review ? review.actionId : uploadReview.actionId }, data.review ? '仅恢复这个分区' : '仅上传这个新版本', !confirmed, true)}</div>
     </SettingsDialog>
@@ -1105,41 +1181,70 @@ function ArchiveWorkspace({ data, supported, run, registerTransientBack, navigat
       <StretchSwitch label="启用此目录" description="仍需逐次选择备份并确认上传" checked={configDraft.enabled} onChange={value => setConfigDraft(current => current && { ...current, enabled: value })} />
       {configDraft.revision !== config.revision && <p role="alert" className="pw-field-error">连接已在另一窗口变化，请返回重新读取。</p>}
     </div><div className="pw-form-actions"><Button variant="secondary" onClick={() => setConfigDraft(null)}>取消</Button><CapabilityAction action="archives.webdav.save" args={configDraft} supported={supported} run={async (action, args) => { setConfigDraft(null); return run(action, args); }} disabled={busy || configDraft.revision !== config.revision || !configDraft.collection} primary>保存连接设置</CapabilityAction></div></>}</SettingsDialog>
-  </>;
+  </div>;
 }
 
 function StorageWorkspace({ data, supported, run, registerTransientBack, navigate }: DataPageProps) {
   const [showProtected, setShowProtected] = useState(false), [confirmed, setConfirmed] = useState(false), [originalId, setOriginalId] = useState('');
   const [policyDraft, setPolicyDraft] = useState<Data | null>(null);
+  const journey = useDataSettingsJourney();
+  const lastAction = useRef(text(data.originalAction));
   const inventory = object(data.inventory), policy = object(inventory.retentionPolicy), review = object(data.review), original = object(data.original), result = object(data.result);
   const selected: string[] = Array.isArray(data.selected) ? data.selected : [], busy = Boolean(data.busy), locked = busy || Boolean(data.review);
   const rows = list(inventory.groups).filter(row => showProtected || row.cleanable && object(row.usage).logicalBytes !== 0 || object(row.usage).complete !== true);
   const act = (action: string, args: Data, label: string, disabled = false, primary = false) => <CapabilityAction action={action} args={args} supported={supported} run={run} disabled={busy || disabled} primary={primary}>{label}</CapabilityAction>;
   const cancel = () => { void run('storage.cancelReview', { actionId: review.actionId }).catch(() => {}); };
   useEffect(() => setConfirmed(false), [review.actionId]);
-  useEffect(() => { registerTransientBack(policyDraft ? () => { setPolicyDraft(null); return true; } : data.review ? () => { if (!busy) cancel(); return true; } : null); return () => registerTransientBack(null); }, [policyDraft, review.actionId, busy, registerTransientBack]);
-  return <>
-    <Card title="项目存储" description="按实际目录计量，先核对所选范围，再确认清理。">
+  useEffect(() => { if (data.originalAction && data.originalAction !== lastAction.current) journey.open('result'); lastAction.current = text(data.originalAction); }, [data.originalAction]);
+  useEffect(() => { registerTransientBack(policyDraft ? () => { setPolicyDraft(null); return true; } : data.review ? () => { if (!busy) cancel(); return true; } : journey.view !== 'list' ? journey.back : null); return () => registerTransientBack(null); }, [policyDraft, review.actionId, busy, journey.view, registerTransientBack]);
+  const operationNames: Record<string, [string, string]> = {
+    cleanup: ['选择清理范围', '实际计量、逐项选择，再核对本次清理影响。'],
+    caches: ['本机备份缓存', '先核对或导出原备份，再决定是否移除缓存。'],
+    diagnostics: ['导出诊断快照', '只读预览固定内容，核对后保存到自己选择的位置。'],
+    result: ['原清理结果', '只读核对原动作，结果未知时不重复删除。'],
+  };
+  return <div className="pw-data-workspace pw-storage-workspace" ref={journey.root} tabIndex={-1} data-data-view={journey.view}>
+    <div className="pw-data-collection" hidden={journey.view !== 'list'}>
+      <div className="pw-storage-capacity"><span>当前文件系统可用</span><strong>{bytesText(inventory.filesystemUsableBytes)}</strong><small>这是系统可用空间，不是可清理容量。</small></div>
+      <div className="pw-settings-links pw-data-purpose-list">
+        <DataOperationRow id="cleanup" title="查看占用与清理" detail={data.inventory ? '按目录选择，审阅后才删除' : '尚未读取实际目录占用'} onOpen={journey.open} />
+        <DataOperationRow id="caches" title="本机备份缓存" detail={list(data.caches).length ? `${list(data.caches).length} 份 · 先核对内容` : '尚无可读取的本机缓存'} onOpen={journey.open} />
+        <DataOperationRow id="diagnostics" title="导出诊断快照" detail="先看完整内容，不会自动上传" onOpen={journey.open} />
+      </div>
+      <Accordion variant="divided"><AccordionItem id="storage-records" title="原清理记录" description="按原动作读取，保留结果未知状态"><DataOperationRow id="result" title="核对原清理结果" detail="恢复查看，不重放旧动作" onOpen={journey.open} /></AccordionItem></Accordion>
+    </div>
+    {journey.view !== 'list' && <DataOperationHeading title={operationNames[journey.view][0]} parent="存储操作" description={operationNames[journey.view][1]} onBack={journey.back} />}
+    {data.notice && <p className="pw-receipt-copy" role="status">{text(data.notice)}</p>}{data.error && <p className="pw-field-error" role="alert">{text(data.error)}</p>}
+    {busy && <p className="pw-data-progress" role="status">正在等待原数据操作回执，请勿重复提交。</p>}
+    {data.originalAction && journey.view !== 'result' && <section className="pw-data-action-notice" aria-label="原清理状态"><p>原清理 · {statusText(original.status || 'unknown')}</p><p className="pw-field-hint">已删除的缓存不能回滚。结果不明时先核对原动作，不重复清理。</p><Button variant="secondary" onClick={() => journey.open('result')}>查看原清理结果</Button></section>}
+    {journey.view === 'cleanup' && <Card className="pw-data-operation-body">
       <Facts items={[[ '当前文件系统可用', bytesText(inventory.filesystemUsableBytes) ]]} />
       <div className="pw-form-actions">{act('storage.refresh', {}, '重新计量', locked)}{act('storage.suggest', {}, '按保留规则建议勾选', locked)}{data.inventory && <Button variant="secondary" disabled={locked} onClick={() => setPolicyDraft({ revision: policy.revision, generations: policy.keepOldRuntimeGenerations, backups: policy.keepRecentBackupCopies, generated: policy.suggestGeneratedCleanup === true })}>编辑保留建议</Button>}</div>
       <CheckboxField isSelected={showProtected} onChange={setShowProtected}>显示受保护或空的范围</CheckboxField>
-      {!data.inventory ? <Empty>尚未读取实际目录占用。</Empty> : rows.map(row => { const usage = object(row.usage), cleanable = row.cleanable && usage.complete === true; return <div key={text(row.id)} className="pw-selection-object"><CheckboxField isSelected={selected.includes(row.id)} isDisabled={!cleanable || locked} onChange={yes => { void run('storage.select', { id: row.id, selected: yes }).catch(() => {}); }}>{text(row.label || row.id)}</CheckboxField><Facts items={[[ '逻辑大小', usage.complete === true ? bytesText(usage.logicalBytes) : '未完整读取，不能据此清理' ], ['文件', usage.complete === true ? usage.files : undefined ], ['范围', cleanable ? '可供审阅' : '保留' ]]} />{row.note && <p className="pw-field-hint">{text(row.note)}</p>}</div>; })}
+      {!data.inventory ? <Empty>尚未读取实际目录占用。</Empty> : <div className="pw-storage-range-list">{rows.map(row => {
+        const usage = object(row.usage), cleanable = row.cleanable && usage.complete === true;
+        return <div key={text(row.id)} className="pw-storage-range-row" data-storage-range={text(row.id)}>
+          <div className="pw-storage-range-main"><CheckboxField isSelected={selected.includes(row.id)} isDisabled={!cleanable || locked} onChange={yes => { void run('storage.select', { id: row.id, selected: yes }).catch(() => {}); }}>{text(row.label || row.id)}</CheckboxField><strong>{usage.complete === true ? bytesText(usage.logicalBytes) : '未完整读取'}</strong></div>
+          <p className="pw-storage-range-meta">{usage.complete === true ? `${text(usage.files, '未提供')} 个文件 · ${cleanable ? '可供审阅' : '受保护，保留'}` : '不能据此清理，请重新计量'}{row.note ? ' · ' + text(row.note) : ''}</p>
+        </div>;
+      })}</div>}
+      <p className="pw-data-caution">清理会删除缓存或未固定输出，已删除内容不能回滚。分组可能重叠，不将逻辑大小相加为可回收空间。</p>
+      <p className="pw-field-hint">已选 {selected.length} 个范围，下一步仅审阅影响。</p>
       <div className="pw-form-actions">{act('storage.reviewSelected', { selection: selected }, '核对清理影响', locked || selected.length === 0, true)}</div>
       <Accordion><AccordionItem title="计量和保留规则说明"><p>分组可能重叠，不能把逻辑大小直接相加为可回收空间。清理会重新核对原运行和固定目录；当前运行环境、原项目、用户 HOME 和固定成果保留。</p><p>规则只生成建议，不会定时或自动删除。中断后的原动作只能核对，已删除缓存不能回滚。</p></AccordionItem></Accordion>
-    </Card>
-    {list(data.caches).length > 0 && <Card title="本机备份缓存" description="逐份核对或导出后，再从原备份页决定是否移除。">{list(data.caches).map(row => <div key={text(row.selectionId)} className="pw-form-actions"><CapabilityAction action="storage.backupCache" args={{ selectionId: row.selectionId, sha256: row.archiveSha256 }} supported={supported} run={async (action, args) => { const result = await run(action, args); if (result?.navigate === 'archives') navigate('archives'); return result; }} disabled={locked}>核对备份 · {bytesText(row.archiveBytes)}</CapabilityAction></div>)}</Card>}
-    <Card title="原清理结果">
+    </Card>}
+    {journey.view === 'caches' && <Card className="pw-data-operation-body">{list(data.caches).length === 0 && <Empty>尚无可读取的本机备份缓存。</Empty>}{list(data.caches).map(row => <div key={text(row.selectionId)} className="pw-storage-cache-row"><Facts items={[[ '原备份编号', row.selectionId ], ['大小', bytesText(row.archiveBytes)], ['内容 SHA-256', row.archiveSha256]]} /><CapabilityAction action="storage.backupCache" args={{ selectionId: row.selectionId, sha256: row.archiveSha256 }} supported={supported} run={async (action, args) => { const result = await run(action, args); if (result?.navigate === 'archives') navigate('archives'); return result; }} disabled={locked}>核对备份 · {bytesText(row.archiveBytes)}</CapabilityAction></div>)}</Card>}
+    {journey.view === 'result' && <Card className="pw-data-operation-body">
       {data.originalAction && <><Facts items={[[ '原动作', data.originalAction ], ['状态', statusText(original.status || 'unknown') ], ['结果', result.message || result.notice ]]} /><div className="pw-form-actions">{act('storage.query', { actionId: data.originalAction }, '只读核对原结果')}{['running', 'queued', 'stopping'].includes(original.status) && act('storage.stop', { actionId: data.originalAction }, '请求停止后续删除')}</div></>}
       <Accordion><AccordionItem title="按原编号恢复查看"><TextField label="原清理任务编号" value={originalId} onChange={value => setOriginalId(value.slice(0, 36))} /><div className="pw-form-actions">{act('storage.readOriginal', { actionId: originalId }, '读取原清理记录', !/^[a-f0-9-]{36}$/.test(originalId))}</div></AccordionItem></Accordion>
-      {data.notice && <p className="pw-receipt-copy" role="status">{text(data.notice)}</p>}{data.error && <p className="pw-field-error" role="alert">{text(data.error)}</p>}
-    </Card>
-    <Card title="本机诊断元数据" description="先预览固定内容，再选择是否导出；不会自动上传。">
+    </Card>}
+    {journey.view === 'diagnostics' && <Card className="pw-data-operation-body">
       <div className="pw-form-actions">{act('storage.diagnostics.read', {}, '读取只读诊断快照', locked || data.diagnosticPickerPending)}</div>
-      {data.diagnosticText && <><pre className="pw-source-code">{text(data.diagnosticText)}</pre><Facts items={[[ '大小', bytesText(data.diagnosticBytes) ]]} /><CheckboxField isSelected={Boolean(data.diagnosticReviewed)} isDisabled={busy || data.diagnosticPickerPending || data.diagnosticExportEntered} onChange={accepted => { void run('storage.diagnostics.review', { sha256: data.diagnosticSha, accepted }).catch(() => {}); }}>我已核对这份内容，允许写入自己选择的文档</CheckboxField><div className="pw-form-actions">{act('storage.diagnostics.export', { sha256: data.diagnosticSha }, '选择位置并导出…', !data.diagnosticReviewed || data.diagnosticPickerPending || data.diagnosticExportEntered)}</div></>}
-    </Card>
-    <SettingsDialog isOpen={Boolean(data.review)} title="仅清理这些固定范围？" onClose={() => { if (!busy) cancel(); }}><p>依赖可能需要重新安装，未保存的生成内容会丢失。原项目和固定成果保留；已经删除的缓存不会回滚。</p>{list(review.targets).map(target => <SourceRecord key={text(target.id)} item={{ title: list(inventory.groups).find(row => row.id === target.id)?.label || target.id }}><Facts items={[[ '逻辑大小', bytesText(target.logicalBytes) ]]} /></SourceRecord>)}<CheckboxField isSelected={confirmed} isDisabled={busy} onChange={setConfirmed}>我已核对所选范围，接受这些缓存或未固定输出被移除</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={cancel}>保留</Button>{act('storage.confirm', { actionId: review.actionId }, '仅清理这些范围', !confirmed, true)}</div></SettingsDialog>
+      {data.diagnosticText && <><pre className="pw-source-code">{text(data.diagnosticText)}</pre><Facts items={[[ '大小', bytesText(data.diagnosticBytes) ], ['内容 SHA-256', data.diagnosticSha ]]} /><CheckboxField isSelected={Boolean(data.diagnosticReviewed)} isDisabled={busy || data.diagnosticPickerPending || data.diagnosticExportEntered} onChange={accepted => { void run('storage.diagnostics.review', { sha256: data.diagnosticSha, accepted }).catch(() => {}); }}>我已核对这份内容，允许写入自己选择的文档</CheckboxField><div className="pw-form-actions">{act('storage.diagnostics.export', { sha256: data.diagnosticSha }, '选择位置并导出…', !data.diagnosticReviewed || data.diagnosticPickerPending || data.diagnosticExportEntered)}</div></>}
+    </Card>}
+    <SettingsDialog isOpen={Boolean(data.review)} title="仅清理这些固定范围？" onClose={() => { if (!busy) cancel(); }}><Facts items={[['原动作', review.actionId]]} /><p>依赖可能需要重新安装，未保存的生成内容会丢失。原项目和固定成果保留；已经删除的缓存不会回滚。</p>{list(review.targets).map(target => <SourceRecord key={text(target.id)} item={{ title: list(inventory.groups).find(row => row.id === target.id)?.label || target.id }}><Facts items={[[ '逻辑大小', bytesText(target.logicalBytes) ]]} /></SourceRecord>)}<CheckboxField isSelected={confirmed} isDisabled={busy} onChange={setConfirmed}>我已核对所选范围，接受这些缓存或未固定输出被移除</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={cancel}>保留</Button>{act('storage.confirm', { actionId: review.actionId }, '仅清理这些范围', !confirmed, true)}</div></SettingsDialog>
     <SettingsDialog isOpen={policyDraft !== null} title="保留建议" onClose={() => setPolicyDraft(null)}>{policyDraft && <><div className="pw-form-grid"><SelectField label="建议保留旧环境" value={text(policyDraft.generations)} options={[0, 1, 2, 3, 4, 5].map(n => ({ id: String(n), label: n + ' 版' }))} onChange={value => setPolicyDraft(current => current && { ...current, generations: Number(value) })} /><SelectField label="建议保留本机备份" value={text(policyDraft.backups)} options={[0, 1, 2, 3, 4, 5].map(n => ({ id: String(n), label: n + ' 份' }))} onChange={value => setPolicyDraft(current => current && { ...current, backups: Number(value) })} /><CheckboxField isSelected={policyDraft.generated} onChange={value => setPolicyDraft(current => current && { ...current, generated: value })}>建议清理未固定的生成目录</CheckboxField><p>仅保存建议，不启用自动删除。</p>{policyDraft.revision !== policy.revision && <p role="alert" className="pw-field-error">原保留规则已变化，请重新打开。</p>}</div><div className="pw-form-actions"><Button variant="secondary" onClick={() => setPolicyDraft(null)}>取消</Button><CapabilityAction action="storage.savePolicy" args={policyDraft} supported={supported} run={async (action, args) => { setPolicyDraft(null); return run(action, args); }} disabled={busy || policyDraft.revision !== policy.revision} primary>保存建议规则</CapabilityAction></div></>}</SettingsDialog>
-  </>;
+  </div>;
 }
 
 function DataManagement({ kind, ...props }: DataPageProps & { kind: 'archives' | 'storage' }) {
@@ -1204,6 +1309,10 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const rememberScroll = () => scrollPositions.current.set(page + ((page === 'models' || page === 'model-settings') ? ':' + modelView.kind + ':' + (modelView.id || '') : ''), scroll.current?.scrollTop || 0);
   const navigate = (next: string, candidate: LearningCandidateTarget | null = null) => { rememberScroll(); generation.current++; trail.current.push({ page, query, modelView, modelTrail: [...modelTrail.current], candidateTarget }); modelTrail.current = []; setNotice(''); setError(''); setQuery(''); setModelView({ kind: 'list' }); setCandidateTarget(candidate); setPage(next); };
   const openModel = (view: ModelView) => { rememberScroll(); generation.current++; modelTrail.current.push(modelView); setNotice(''); setError(''); setModelView(view); };
+  const finishModelEdit = (view: ModelView) => {
+    if (modelTrail.current.at(-1)?.kind === view.kind && modelTrail.current.at(-1)?.id === view.id) modelTrail.current.pop();
+    generation.current++; setError(''); setModelView(view);
+  };
   const isModelPage = page === 'models' || page === 'model-settings';
   const domain = SECONDARY_DOMAINS.find(x => x.id === page);
   const hostSection = isModelPage ? 'models' : domain?.id;
@@ -1251,7 +1360,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const viewKey = page + (isModelPage ? ':' + modelView.kind + ':' + (modelView.id || '') : '');
   const modelBrowseActive = ['list', 'catalog', 'model'].includes(modelView.kind);
   const modelParent = modelTrail.current.at(-1)?.kind;
-  const modelBackLabel = modelParent === 'connections' ? '返回连接管理' : modelParent === 'catalog' ? '返回模型目录' : '返回模型与连接';
+  const modelBackLabel = modelParent === 'connections' ? '返回连接管理' : modelParent === 'connection' ? '返回连接详情' : modelParent === 'catalog' ? '返回模型目录' : '返回模型与连接';
   useEffect(() => {
     const element = scroll.current;
     if (!element) return;
@@ -1292,13 +1401,14 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
         </> : settingsGroup ? <section className="pw-settings-group-page">{settingRows(settingsGroup.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</section>
           : isModelPage ? <>
             <div className="pw-model-list" data-model-layer={modelView.kind === 'model' ? 'model' : 'list'} hidden={!modelBrowseActive}>
-              {modelView.kind !== 'model' && <header className="pw-model-current"><div><span className="pw-model-eyebrow">当前模型</span><strong>{text(state.modelName) || '尚未连接'}</strong><span className="pw-model-origin">{state.modelRoute === 'account' ? 'ChatGPT 账号' : MODEL_PROVIDERS[text(state.modelProvider)] || 'API 连接'}</span></div><IconButton className="pw-utility-icon" icon={RiSettings3Line} aria-label="管理连接" title="管理连接" onClick={() => openModel({ kind: 'connections' })} /></header>}
+              {modelView.kind !== 'model' && <header className="pw-model-current"><div><span className="pw-model-eyebrow">后续任务默认模型</span><strong>{text(state.modelName) || '尚未连接'}</strong><span className="pw-model-origin">{state.modelRoute === 'account' ? 'ChatGPT 账号' : MODEL_PROVIDERS[text(state.modelProvider)] || 'API 连接'}</span></div><IconButton className="pw-utility-icon" icon={RiSettings3Line} aria-label="管理连接" title="管理连接" onClick={() => openModel({ kind: 'connections' })} /></header>}
               {modelView.kind !== 'model' && state.modelRoute === 'account' && <div className="pw-account-model-entry"><Button variant="secondary" trailingIcon={RiArrowRightSLine} onClick={() => navigate('accounts')}>打开账号模型</Button><p className="pw-field-hint">下面是保留的 API 模型目录。</p></div>}
+              {state.activeTaskId && modelView.kind !== 'model' && <p className="pw-field-hint pw-model-task-context">进行中的任务保留原模型与连接。这里的选择不会替换原任务身份。</p>}
               <ModelCatalog key={page} state={state} data={data} active={modelBrowseActive} selectedId={modelView.kind === 'model' ? modelView.id : undefined} supported={supported} run={run} open={openModel} registerTransientBack={registerTransientBack} />
             </div>
             {modelView.kind === 'connections' ? <><ModelConnections state={state} data={data} supported={supported} run={run} navigate={navigate} open={openModel} /><TokenBudgetsWorkspace supported={supported} registerTransientBack={registerTransientBack} /></>
-              : modelView.kind === 'edit' || modelView.kind === 'add' ? <ModelSettings key={modelDraftKey} state={state} connection={editConnection} supported={supported} run={run} adding={modelView.kind === 'add'} draft={modelDrafts.current[modelDraftKey]} onDraftChange={value => { if (value) modelDrafts.current[modelDraftKey] = value; else delete modelDrafts.current[modelDraftKey]; }} onInspect={() => { void run('models.snapshot', {}).catch(() => {}); setModelView(modelView.kind === 'add' ? { kind: 'connections' } : { kind: 'connection', id: recordId(editConnection || {}) }); }} onSaved={saved => { const id = modelView.kind === 'add' ? text(object(saved.connections).selectedConnectionId) : recordId(editConnection || {}); setModelView(id ? { kind: 'connection', id } : { kind: 'connections' }); }} registerTransientBack={registerTransientBack} />
-              : modelView.kind === 'connection' ? <ModelConnectionDetail connection={connection} supported={supported} run={run} open={openModel} busy={Boolean(state.modelSelectionBusy || state.modelSaving || state.modelTesting || state.chatSubmitting || state.phoneSubmitting)} /> : null}
+              : modelView.kind === 'edit' || modelView.kind === 'add' ? <ModelSettings key={modelDraftKey} state={state} connection={editConnection} supported={supported} run={run} adding={modelView.kind === 'add'} draft={modelDrafts.current[modelDraftKey]} onDraftChange={value => { if (value) modelDrafts.current[modelDraftKey] = value; else delete modelDrafts.current[modelDraftKey]; }} onInspect={() => { void run('models.snapshot', {}).catch(() => {}); finishModelEdit(modelView.kind === 'add' ? { kind: 'connections' } : { kind: 'connection', id: recordId(editConnection || {}) }); }} onSaved={saved => { const id = modelView.kind === 'add' ? text(object(saved.connections).selectedConnectionId) : recordId(editConnection || {}); finishModelEdit(id ? { kind: 'connection', id } : { kind: 'connections' }); setNotice('已收到原连接保存回执。当前修订可在详情核对；保存不代表测试通过。'); }} registerTransientBack={registerTransientBack} />
+              : modelView.kind === 'connection' ? <ModelConnectionDetail connection={connection} data={data} state={state} supported={supported} run={run} open={openModel} busy={Boolean(state.modelSelectionBusy || state.modelSaving || state.modelTesting || state.chatSubmitting || state.phoneSubmitting)} /> : null}
           </>
           : page === 'phone' ? <PhoneSettings state={state} supported={supported} run={run} navigate={navigate} />
           : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} navigate={navigate} />

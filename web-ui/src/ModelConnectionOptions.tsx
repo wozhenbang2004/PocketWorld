@@ -14,20 +14,24 @@ export function ModelConnectionOptions({ value, onChange, provider, adding, revi
     <p className="pw-field-hint">{adding ? '先保存这项连接，再设置兼容与缓存策略。' : revision ? `已保存兼容档案 · 修订 ${revision}。变更后先保存，再进行连接测试。` : '按这项连接保存请求策略；不会改变模型能力、工具权限或历史消息。'}</p>
     {section === 'wire' && <CheckboxField isSelected={value.enabled} isDisabled={adding} onChange={next => change('enabled', next)}>使用连接兼容档案</CheckboxField>}
     {section === 'wire' && value.enabled && <>
+      <section className="pw-connection-policy-group" aria-label="输出请求格式"><h4>输出与用量</h4>
       <SelectField label="输出上限字段" value={value.tokenField} isDisabled={!chat} onChange={next => change('tokenField', next)}
         options={chat ? [native, { id: 'MAX_TOKENS', label: 'max_tokens' }, { id: 'MAX_COMPLETION_TOKENS', label: 'max_completion_tokens' }] : [native]}
         hint={chat ? '只调整当前 Chat 请求的字段；与模型目录精确要求冲突时会在发送前拒绝。' : '当前协议使用原有输出字段，不支持这项改写。'} />
       <SelectField label="流式用量请求" value={value.streamUsage} isDisabled={!chat} onChange={next => change('streamUsage', next)}
         options={chat ? [native, { id: 'OMIT', label: '省略 stream_options' }] : [native]}
         hint="连接测试只验证文字请求，不验证流式用量、图片或工具能力。" />
+      </section><section className="pw-connection-policy-group" aria-label="工具请求格式"><h4>工具声明</h4>
       <SelectField label="工具声明格式" value={value.toolWireShape} isDisabled={!chat && !anthropic} onChange={next => change('toolWireShape', next)}
         options={chat || anthropic ? [native, { id: 'OPENAI_FUNCTION', label: 'OpenAI function' }, { id: 'ANTHROPIC_INPUT_SCHEMA', label: 'Anthropic input_schema' }] : [native]}
         hint="只接受可无损转换的声明；不会删除必需的工具参数。" />
       <SelectField label="工具参数规范" value={value.schemaSubset} onChange={next => change('schemaSubset', next)}
         options={[native, { id: 'CORE_JSON', label: '基础 JSON Schema' }]}
         hint="不支持的关键字会在发送前拒绝，历史消息和工具结果保持原样。" />
+      </section><section className="pw-connection-policy-group" aria-label="发送前请求限制"><h4>发送前限制</h4>
       <TextField label="每次最多携带的工具数" inputMode="numeric" value={value.maxTools} onChange={next => change('maxTools', next.replace(/\D/g, '').slice(0, 3))} hint="1–512；超过时拒绝发送，不截断工具。" />
       <TextField label="请求大小上限（字节）" inputMode="numeric" value={value.maxRequestBytes} onChange={next => change('maxRequestBytes', next.replace(/\D/g, '').slice(0, 8))} hint="256–25165824；在发送前检查实际请求。" />
+      </section>
     </>}
     {section === 'cache' && <>
       {!anthropic ? <p className="pw-field-hint">当前协议尚未接入显式缓存提示，保持关闭。服务商若返回缓存用量，仍按原调用回执显示。</p>
@@ -51,9 +55,12 @@ export function ModelConnectionTestFeedback({ value }: { value: Row }) {
   const calls: Row[] = Array.isArray(feedback.calls) ? feedback.calls : [];
   const unknown = proof.outcome === 'unknown';
   return <section className="pw-request-notice" aria-label="本次连接测试结果" aria-live="polite">
+    <h3>{unknown ? '文字测试 · 结果待核对' : proof.outcome === 'not_dispatched' ? '文字测试 · 未发出' : value.ok === true ? '文字测试 · 已返回结果' : '文字测试 · 未确认可用'}</h3>
     <p>{unknown ? '原测试结果待核对。请先查看实际调用记录，再决定是否发起新的测试。' : String(value.message || '原测试未返回说明。')}</p>
     <p className="pw-field-hint">{proof.outcome === 'not_dispatched' ? '本次没有进入模型调用。' : '仅对应本次草稿的文字测试；图片、流式用量和工具能力尚未验证。'}</p>
-    <Accordion><AccordionItem id="actual-call" title="实际调用详情" description="协议、缓存用量与费用">
+    <p className="pw-field-hint">{proof.connectionId ? `原连接修订 ${String(proof.connectionRevision ?? '未提供')}` : '新连接草稿'} · 草稿修订 {String(proof.draftRevision ?? '未提供')}。此回执不代表已保存配置。</p>
+    <Accordion><AccordionItem id="actual-call" title="实际调用详情" description="原测试身份、协议、缓存用量与费用">
+    <dl className="pw-facts"><div><dt>原测试</dt><dd>{String(proof.testId || '未提供')}</dd></div><div><dt>原连接</dt><dd>{String(proof.connectionId || '未保存的新连接')}</dd></div></dl>
     {feedback.available === true ? calls.map(call => <div key={String(call.callId)}>
       <dl className="pw-facts">
         <div><dt>实际协议</dt><dd>{String(call.protocol || '原回执未提供')}</dd></div>

@@ -28,13 +28,13 @@ export function installProjectPreviewHost(options = {}) {
     arguments: { stepId: 'fixed-' + item.operationId }, receipt: { status: 'completed', accepted: true, code: 'project_file_receipt',
       projectExecution: { authority: 'native_host_operation', intent: 'freeze_package', taskId: 'original-project-task', operationId: item.operationId, runId: 'source-run', projectId: 'project-a', checkoutId: 'checkout-original' },
       executionReceipt: { status: 'completed', artifactReady: true, receiptReceived: true, operationId: item.operationId, packageArtifact: { id: item.artifactId, sha256: item.artifactSha256, kind: 'project_bundle' } } } }));
-  const snapshot = { host: { connected: true, ready: true }, view: { section: null }, capabilities: { commands },
+  const snapshot = { host: { connected: true, ready: true }, view: { section: null, resumeRevision: 1 }, capabilities: { commands },
     composer: structuredClone(originalDraft), phoneDraft: { text: '', epoch: 1, revision: 1, phone: false, mode: 'background' },
     state: { modelName: '当前模型', modelRoute: 'api_key', modelSelectionBusy: false, messages: [], tasks: [],
       projects: [{ id: 'project-a', name: '原项目' }], projectId: 'project-a', files: [{ path: 'index.html', size: 128, language: 'html' }], filePath: null,
       conversations: [{ id: 'project-conversation', title: '原项目讨论' }, { id: 'other-conversation', title: '另一份草稿' }], conversationId: 'project-conversation',
       selectedChatAttachments: [attachment], chatBusy: false, chatSubmitting: false, features: {}, ownerSnapshots: {}, ownerResponses: {}, ownerErrors: {}, ownerPending: [],
-      projectPreview: null, requestedProjectRevision: 0, phoneReadiness: { groups: [] }, resumeRevision: 1 } };
+      projectPreview: null, requestedProjectRevision: 0, phoneReadiness: { groups: [] } } };
   if (options.packages) {
     commands.push('tasks.close', 'tasks.refresh', 'projects.package.preview.inspect', 'projects.package.preview.open');
     snapshot.state.projects.push({ id: 'other-project', name: '另一个项目' }); snapshot.state.projectId = 'other-project';
@@ -200,7 +200,7 @@ export function installProjectPreviewHost(options = {}) {
     otherDraft() { saveDraft(); snapshot.state.conversationId = 'other-conversation'; snapshot.composer = { ...structuredClone(originalDraft), key: 'other-draft', epoch: 8, revision: 1, conversationId: 'other-conversation', text: '另一份未发送草稿', sourceRefs: [], attachments: [], previewRefs: [], previewRefsAvailable: true }; snapshot.state.selectedChatAttachments = []; publish(); },
     holdReturn() { holdReturnState = true; },
     releaseReturn() { if (!heldReturn) throw new Error('No held return state'); heldReturn = null; holdReturnState = false; restoreDraft(); publish(); },
-    rotateDocument() { token += '-next'; snapshot.state.resumeRevision++; snapshot.state.projectPreview = null; originalDraft.previewRefsAvailable = originalDraft.previewRefs.length === 0; if (snapshot.composer.conversationId === originalDraft.conversationId) snapshot.composer.previewRefsAvailable = originalDraft.previewRefsAvailable; window.PocketWeb.hostConfiguration({ documentToken: token }); publish(); },
+    rotateDocument() { token += '-next'; snapshot.view.resumeRevision++; snapshot.state.projectPreview = null; originalDraft.previewRefsAvailable = originalDraft.previewRefs.length === 0; if (snapshot.composer.conversationId === originalDraft.conversationId) snapshot.composer.previewRefsAvailable = originalDraft.previewRefsAvailable; window.PocketWeb.hostConfiguration({ documentToken: token }); publish(); },
     endRecipient() { ended = true; if (continuationTask) { continuationTask.status = continuationTask.raw.status = 'completed'; continuationTask.updatedAt++; snapshot.state.activeTaskId = null; publish(); } },
     coldReference() { if (!originalDraft.previewRefs.length) throw new Error('No original ref'); snapshot.state.projectPreview = null; originalDraft.previewRefsAvailable = false; restoreDraft(); publish(); },
     holdClose() { holdClose = true; },
@@ -218,6 +218,6 @@ export function installProjectPreviewHost(options = {}) {
     releaseContinuation() { if (!heldContinuation) throw new Error('No original continuation receipt'); const { request, value } = heldContinuation; heldContinuation = null; holdContinuation = false; reply(request, value); },
     continuationReceipt(mode) { continuationReceiptMode = mode; },
     rotateReviewDocument() { token += '-review-next'; reviewGeneration++; continuationHandles.clear(); window.PocketWeb.hostConfiguration({ documentToken: token }); },
-    resumeReviewWindow() { snapshot.state.resumeRevision++; snapshot.view.taskId = null; reviewGeneration++; continuationHandles.clear(); publish(); },
+    resumeReviewWindow() { snapshot.view.resumeRevision++; snapshot.view.taskId = null; reviewGeneration++; continuationHandles.clear(); publish(); },
   };
 }
