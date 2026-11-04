@@ -28,14 +28,16 @@
           "class": "dev.pocketengine.phone.setup.AccessibilityRecoveryMutationTest",
           "source": "app/src/test/java/dev/pocketengine/phone/setup/AccessibilityRecoveryMutationTest.java",
           "methods": [
-            "revokedRevisionStopsReenableButCompensatesOnlyOriginalRemoval",
-            "failedCompensationSurvivesColdReadAndRequiresOwnerAction",
+            "revokedRevisionNeverRewritesTheListOrCreatesANewCompensation",
+            "legacyCompensationStaysPendingUntilTheOwnerHasRestoredTheRegistration",
             "ownerGlobalDisableIsNotUndoneByRecovery",
             "neverPreviouslyAuthorizedServiceCannotBeGrantedByRecoveryConsent",
             "laterPerServiceDisableCannotBorrowEarlierRecoveryConsent",
-            "cancellationRestoresOnlyTheRecordedRegistration",
+            "cancellationCannotMutateTheObservedRegistration",
             "changedOwnerUidCannotReuseSavedConsentOrCompensation",
-            "registrationReadbackAndBindingRemainSeparate"
+            "registrationReadbackAndBindingRemainSeparate",
+            "externalAdditionOrRemovalAfterTheFinalReadIsNeverOverwritten",
+            "secureSettingsPermissionDoesNotInventAConditionalWriteInterface"
           ]
         },
         {

@@ -13,6 +13,10 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
+import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.UUID;
@@ -92,6 +96,9 @@ public final class AttachmentBook {
     }
     private JSONObject importBytesInternal(InputStream input,String name,String mime,JSONObject source,RunControl control)throws Exception{return importBytesInternal(input,name,mime,source,control,null);}
     private JSONObject importBytesInternal(InputStream input,String name,String mime,JSONObject source,RunControl control,String nativeId)throws Exception{
+        try(ImportLock ignored=lockImports()) {return importBytesLocked(input,name,mime,source,control,nativeId);}
+    }
+    private JSONObject importBytesLocked(InputStream input,String name,String mime,JSONObject source,RunControl control,String nativeId)throws Exception{
         if(input==null)throw new IllegalArgumentException("附件来源无法读取");
         if(control!=null)control.checkpoint();long pauseRevision=control==null?0:control.pauseRevision();
         if(!root.isDirectory()&&!root.mkdirs())throw new IllegalStateException("无法创建附件目录");
@@ -101,13 +108,122 @@ public final class AttachmentBook {
         String id=nativeId==null?UUID.randomUUID().toString():nativeId;File part=new File(root,id+".part"),blob=new File(root,id+".blob"),record=new File(root,id+".json");long size=0;MessageDigest digest=MessageDigest.getInstance("SHA-256");
         if(nativeId!=null&&(part.exists()||blob.exists()||record.exists()||new File(root,id+".json.pending").exists()))throw new SecurityException("原固定产物发布状态变化，未覆盖");
         try{
+            if(nativeId==null)writeImportIntent(id,"receiving",null);
             try(FileOutputStream output=new FileOutputStream(part)){byte[] buffer=new byte[32768];for(int n;(n=input.read(buffer))!=-1;){if(control!=null)control.checkpoint();if(Thread.currentThread().isInterrupted())throw new InterruptedException("附件导入已停止");if(n==0)continue;if(n>fileLimit-size||n>totalLimit-total-size)throw new IllegalArgumentException("附件超出单文件或总容量限制");size+=n;output.write(buffer,0,n);digest.update(buffer,0,n);}output.getFD().sync();}
             JSONObject meta=new JSONObject().put("id",id).put("name",displayName(name)).put("mimeType",mimeType(mime)).put("size",size).put("sha256",hex(digest.digest())).put("createdAt",System.currentTimeMillis()).put("principalId","owner").put("spaceId","private").put("source",source==null?new JSONObject():new JSONObject(source.toString()));
             byte[] indexBytes=encodedIndex(meta); // Refuse new unreadable metadata before entering publication.
-            if(control==null){move(part,blob);atomicJson(record,indexBytes);}
-            else control.dispatchAtPauseRevision(pauseRevision,()->{if(nativeId!=null)requireNativeParents(source,control);move(part,blob);atomicJson(record,indexBytes);});
+            RunControl.DispatchEntry commit=()->{
+                if(nativeId!=null)requireNativeParents(source,control);
+                else writeImportIntent(id,"ready",meta); // Durable admission precedes either published file.
+                move(part,blob);atomicJson(record,indexBytes);
+            };
+            if(control==null)commit.enter();else control.dispatchAtPauseRevision(pauseRevision,commit);
+            if(nativeId==null)deleteImportIntent(id);
             publishOutputEligibility(meta);return visible(meta);
-        }catch(Exception failure){revokeOutputEligibility(id);part.delete();if(nativeId==null){blob.delete();record.delete();new File(root,id+".json.pending").delete();}throw failure;}
+        }catch(Exception failure){revokeOutputEligibility(id);part.delete();if(nativeId==null){blob.delete();record.delete();new File(root,id+".json.pending").delete();deleteImportIntent(id);}throw failure;}
+    }
+    private void writeImportIntent(String id,String phase,JSONObject meta)throws Exception {
+        JSONObject intent=new JSONObject().put("kind","ordinary_attachment_import_v1").put("id",id).put("phase",phase);
+        if(meta!=null)intent.put("metadata",meta);
+        atomicJson(new File(root,id+".import"),intent);
+    }
+    private void deleteImportIntent(String id){new File(root,id+".import.pending").delete();new File(root,id+".import").delete();}
+    private void finishImportIntent(String id)throws Exception {
+        Files.deleteIfExists(new File(root,id+".import.pending").toPath());Files.deleteIfExists(new File(root,id+".import").toPath());
+    }
+    /** A stable inode outside the catalog. Every writer/recovery uses it; never unlink it. */
+    private ImportLock lockImports()throws Exception {
+        File parent=root.getAbsoluteFile().getParentFile();
+        if(!parent.isDirectory()&&!parent.mkdirs())throw new IllegalStateException("附件存储目录不可用");
+        FileChannel channel=FileChannel.open(new File(parent,"."+root.getName()+"-imports.lock").toPath(),StandardOpenOption.CREATE,StandardOpenOption.WRITE,LinkOption.NOFOLLOW_LINKS);
+        try {
+            FileLock lock=channel.tryLock();
+            if(lock==null)throw new IllegalStateException("附件正在由另一个进程保存或核对，请稍后重试");
+            return new ImportLock(channel,lock);
+        }catch(Exception failure){channel.close();if(failure instanceof OverlappingFileLockException)throw new IllegalStateException("附件正在保存或核对，请稍后重试",failure);throw failure;}
+    }
+    private static final class ImportLock implements AutoCloseable {
+        final FileChannel channel;final FileLock lock;
+        ImportLock(FileChannel channel,FileLock lock){this.channel=channel;this.lock=lock;}
+        public void close()throws Exception {try{lock.release();}finally{channel.close();}}
+    }
+    /** Cold native maintenance, never part of a read-only index request. An admitted ordinary
+     * import can finish from its exact saved bytes; fixed native publications are never replayed. */
+    public synchronized JSONObject recoverInterruptedImports() {
+        int completed=0,discarded=0,removed=0,retained=0;long verifiedBytes=0;
+        if(!Files.exists(root.toPath(),LinkOption.NOFOLLOW_LINKS))return recoveryResult(0,0,0,0,false);
+        try(ImportLock ignored=lockImports()) {
+            StorageScan scan=scanStorage();
+            if(!scan.complete||!scan.quotaKnown)return recoveryResult(0,0,0,scan.slots.size(),false);
+            IndexReadBudget budget=new IndexReadBudget();
+            for(String id:scan.slots) {
+                File intentFile=new File(root,id+".import");
+                File intentPending=new File(root,id+".import.pending");
+                if(!exists(intentFile)&&!exists(intentPending))continue;
+                try {
+                    if(!UUID.fromString(id).toString().equals(id)||UUID.fromString(id).version()!=4)throw new IllegalStateException();
+                    File part=new File(root,id+".part"),blob=new File(root,id+".blob"),record=new File(root,id+".json"),pending=new File(root,id+".json.pending");
+                    if(!exists(intentFile)) {
+                        // The initial intent is written before any source bytes. Its private
+                        // temporary file can be discarded only while no publication exists.
+                        if(exists(part)||exists(blob)||exists(record)||exists(pending)||!Files.isRegularFile(intentPending.toPath(),LinkOption.NOFOLLOW_LINKS))throw new IllegalStateException();
+                        Files.delete(intentPending.toPath());discarded++;continue;
+                    }
+                    JSONObject intent=readIndex(intentFile.toPath(),budget);
+                    if(!"ordinary_attachment_import_v1".equals(intent.getString("kind"))||!id.equals(intent.getString("id")))throw new IllegalStateException();
+                    if("receiving".equals(intent.getString("phase"))) {
+                        if(exists(blob)||exists(record)||exists(pending))throw new IllegalStateException();
+                        // No publication admission was entered. Do not reopen the source or invent metadata.
+                        if(exists(part)&&!Files.isRegularFile(part.toPath(),LinkOption.NOFOLLOW_LINKS))throw new IllegalStateException();
+                        Files.deleteIfExists(part.toPath());finishImportIntent(id);discarded++;continue;
+                    }
+                    boolean retiring="retired".equals(intent.getString("phase"));
+                    if(!retiring&&!"ready".equals(intent.getString("phase")))throw new IllegalStateException();
+                    JSONObject meta=intent.getJSONObject("metadata");
+                    if(!id.equals(meta.getString("id"))||!"owner".equals(meta.getString("principalId"))||!"private".equals(meta.getString("spaceId"))
+                            ||meta.optBoolean("outputSourceRetired")!=retiring||meta.optJSONObject("source")==null||meta.getJSONObject("source").has("nativePublication")
+                            ||meta.getString("name").isEmpty()||meta.getString("mimeType").isEmpty()||!meta.getString("sha256").matches("[a-f0-9]{64}"))throw new IllegalStateException();
+                    long size=meta.getLong("size");if(size<0||size>fileLimit||size>totalLimit-verifiedBytes)throw new IllegalStateException();
+                    if(retiring) {
+                        // This is an explicitly admitted removal, not inferred from a missing
+                        // record. A changed source/scope or changed bytes blocks all deletion.
+                        if(exists(part)||exists(pending)&&!Files.isRegularFile(pending.toPath(),LinkOption.NOFOLLOW_LINKS))throw new IllegalStateException();
+                        if(exists(record)&&!readIndex(record.toPath(),budget).put("outputSourceRetired",true).toString().equals(meta.toString()))throw new IllegalStateException();
+                        if(exists(blob)){verifyRecoveryBytes(blob,meta);verifiedBytes+=size;}
+                        Files.deleteIfExists(blob.toPath());Files.deleteIfExists(record.toPath());Files.deleteIfExists(pending.toPath());finishImportIntent(id);
+                        revokeOutputEligibility(id);removed++;continue;
+                    }
+                    if(exists(part)==exists(blob))throw new IllegalStateException();
+                    File data=exists(blob)?blob:part;verifyRecoveryBytes(data,meta);verifiedBytes+=size;
+                    if(exists(record)) {
+                        if(!exists(blob)||!readIndex(record.toPath(),budget).toString().equals(meta.toString()))throw new IllegalStateException();
+                    }else {
+                        // A partial index write is owned by this durable ready intent. Its bytes
+                        // are not authority; the saved metadata and verified blob are.
+                        if(exists(pending)&&!Files.isRegularFile(pending.toPath(),LinkOption.NOFOLLOW_LINKS))throw new IllegalStateException();
+                        if(exists(part))move(part,blob);
+                        atomicJson(record,meta);
+                    }
+                    // A changed/retired record is never overwritten or resurrected.
+                    if(exists(pending)&&!readIndex(pending.toPath(),budget).toString().equals(meta.toString()))throw new IllegalStateException();
+                    Files.deleteIfExists(pending.toPath());finishImportIntent(id);publishOutputEligibility(meta);completed++;
+                }catch(Exception|StackOverflowError unknown){revokeOutputEligibility(id);retained++;}
+            }
+            return recoveryResult(completed,discarded,removed,retained,false);
+        }catch(Exception unavailable){return recoveryResult(completed,discarded,removed,retained,true);}
+    }
+    private static boolean exists(File file){return Files.exists(file.toPath(),LinkOption.NOFOLLOW_LINKS);}
+    private void verifyRecoveryBytes(File file,JSONObject meta)throws Exception {
+        if(!Files.isRegularFile(file.toPath(),LinkOption.NOFOLLOW_LINKS)||Files.size(file.toPath())!=meta.getLong("size"))throw new IllegalStateException();
+        MessageDigest digest=MessageDigest.getInstance("SHA-256");long count=0;
+        try(InputStream input=Files.newInputStream(file.toPath(),LinkOption.NOFOLLOW_LINKS)) {
+            byte[] bytes=new byte[32768];for(int n;(n=input.read(bytes))!=-1;) {if(n==0)continue;count+=n;if(count>meta.getLong("size"))throw new IllegalStateException();digest.update(bytes,0,n);}
+        }
+        if(count!=meta.getLong("size")||!hex(digest.digest()).equals(meta.getString("sha256")))throw new IllegalStateException();
+    }
+    private static JSONObject recoveryResult(int completed,int discarded,int removed,int retained,boolean busy) {
+        try{return new JSONObject().put("completedImports",completed).put("discardedUnpublishedImports",discarded).put("removedAttachments",removed).put("retainedImports",retained).put("deferred",busy);}
+        catch(org.json.JSONException invalid){throw new IllegalStateException(invalid);}
     }
     /** Complete catalog required by original-publication lookup and owner archive consumers.
      * They must not mistake an unreadable record for proof that a previous save never happened. */
@@ -130,9 +246,11 @@ public final class AttachmentBook {
             catch(Exception invalid){unreadable++;revokeOutputEligibility(record.id);}
             catch(StackOverflowError invalid){unreadable++;revokeOutputEligibility(record.id);} // Malformed deep JSON must not defeat the bounded display scan.
         }
-        boolean incomplete=!stored.complete||!stored.quotaKnown||unreadable+oversized+budgetExceeded>0;
+        int unindexed=stored.slots.size()-stored.records.size();
+        boolean incomplete=!stored.complete||!stored.quotaKnown||unreadable+oversized+budgetExceeded+unindexed>0||!stored.interrupted.isEmpty();
         JSONObject diagnostics=new JSONObject().put("incomplete",incomplete).put("status",incomplete?"incomplete_retained":"complete").put("unreadableRecords",unreadable).put("oversizedRecords",oversized).put("readBudgetExceededRecords",budgetExceeded)
                 .put("enumerationComplete",stored.complete).put("quotaKnown",stored.complete&&stored.quotaKnown).put("retainedSlots",stored.slots.size()).put("storedBytes",stored.bytes)
+                .put("unindexedOriginals",unindexed).put("interruptedImports",stored.interrupted.size())
                 .put("originalsPreserved",true).put("recovery","retained_in_place").put("automaticCleanup",false).put("publicationReconstructed",false);
         if(incomplete)diagnostics.put("message","部分附件索引无法核对；可读文件仍可查看，原索引、原件和发布证据已原位保留并占用配额。不能据此重新发布或自动清理。");
         return new JSONObject().put("attachments",readable).put("indexDiagnostics",diagnostics);
@@ -142,7 +260,7 @@ public final class AttachmentBook {
         IndexRecord(Path path,String id,long size,long modified){this.path=path;this.id=id;this.size=size;this.modified=modified;}
     }
     private static final class StorageScan {
-        final java.util.Set<String> slots=new java.util.HashSet<>();final java.util.List<IndexRecord> records=new java.util.ArrayList<>();
+        final java.util.Set<String> slots=new java.util.HashSet<>(),interrupted=new java.util.HashSet<>();final java.util.List<IndexRecord> records=new java.util.ArrayList<>();
         long bytes;boolean complete=true,quotaKnown=true;
     }
     /** Count physical original identities without trusting JSON. A corrupt/missing index,
@@ -154,8 +272,9 @@ public final class AttachmentBook {
         }catch(NoSuchFileException absent){return result;}catch(Exception unknown){result.complete=false;result.quotaKnown=false;return result;}
         try(var entries=Files.newDirectoryStream(directory)){
             int count=0;for(Path entry:entries){if(++count>MAX_INDEX_ENTRIES){result.complete=false;break;}String name=entry.getFileName().toString(),suffix=null;
-                for(String candidate:new String[]{".json.pending",".json",".blob",".part"})if(name.endsWith(candidate)){suffix=candidate;break;}if(suffix==null)continue;
+                for(String candidate:new String[]{".import.pending",".import",".json.pending",".json",".blob",".part"})if(name.endsWith(candidate)){suffix=candidate;break;}if(suffix==null)continue;
                 String id=name.substring(0,name.length()-suffix.length());result.slots.add(id);BasicFileAttributes attributes;
+                if(suffix.equals(".part")||suffix.endsWith(".pending")||suffix.equals(".import"))result.interrupted.add(id);
                 try{attributes=Files.readAttributes(entry,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);if(!attributes.isRegularFile())result.quotaKnown=false;
                     else if(suffix.equals(".blob")||suffix.equals(".part"))result.bytes=Math.addExact(result.bytes,attributes.size());
                 }catch(Exception unknown){result.quotaKnown=false;attributes=null;}
@@ -260,6 +379,9 @@ public final class AttachmentBook {
     }
     /** Native original group request only: retain why this technical media cache is excluded from private files. */
     public synchronized void retainGroupOrigin(String id,dev.pocketengine.features.groups.GroupHostPort.Request request,String operation,String run,dev.pocketengine.features.groups.GroupHostPort.Authority read)throws Exception {
+        try(ImportLock ignored=lockImports()) {retainGroupOriginLocked(id,request,operation,run,read);}
+    }
+    private void retainGroupOriginLocked(String id,dev.pocketengine.features.groups.GroupHostPort.Request request,String operation,String run,dev.pocketengine.features.groups.GroupHostPort.Authority read)throws Exception {
         read.checkRead();JSONObject record=internal(id),source=record.getJSONObject("source");
         if(!request.taskId.equals(source.optString("taskId"))||!operation.equals(source.optString("operationId"))||!run.equals(source.optString("runId")))throw new SecurityException("技术媒体副本不是原群操作");
         if(source.has("groupSpaceId")&&(!request.spaceId.equals(source.getString("groupSpaceId"))||!request.audience.equals(source.optString("groupAudience"))))throw new SecurityException("技术媒体副本的原群范围变化");
@@ -267,11 +389,18 @@ public final class AttachmentBook {
         revokeOutputEligibility(id);source.put("groupSpaceId",request.spaceId).put("groupAudience",request.audience).put("groupActorId",request.actorId);record.put("source",source);read.checkRead();atomicJson(new File(root,id+".json"),record);read.checkRead();publishOutputEligibility(record);
     }
     public synchronized void remove(String id)throws Exception{
+        try(ImportLock ignored=lockImports()) {removeLocked(id);}
+    }
+    private void removeLocked(String id)throws Exception{
         JSONObject meta=internal(id);revokeOutputEligibility(id);
         // Persist retirement before deleting either file: partial deletion cannot revive an old
         // captured output on a cold reopen. Failure keeps this instance fail-closed as well.
-        File data=new File(root,id+".blob"),record=new File(root,id+".json");meta.put("outputSourceRetired",true);atomicJson(record,meta);
+        File data=new File(root,id+".blob"),record=new File(root,id+".json");meta.put("outputSourceRetired",true);
+        boolean ordinary=UUID.fromString(id).version()==4&&!meta.getJSONObject("source").has("nativePublication");
+        if(ordinary)writeImportIntent(id,"retired",meta);
+        atomicJson(record,meta);
         if(!data.delete())throw new IllegalStateException("附件文件未能删除，派生读取已停用");if(!record.delete())throw new IllegalStateException("附件索引未能删除，派生读取已停用");
+        if(ordinary)finishImportIntent(id);
     }
     public synchronized long exportTo(String id,java.io.OutputStream output)throws Exception{
         String expected=internal(id).getString("sha256");RunControl control=new RunControl();byte[] bytes=verifiedBytes(id,expected,control);

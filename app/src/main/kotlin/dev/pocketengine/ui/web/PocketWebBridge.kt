@@ -12,6 +12,7 @@ import dev.pocketengine.runtime.models.ReasoningOptions
 import dev.pocketengine.ui.ChatInputRules
 import dev.pocketengine.ui.MediaOwnerUi
 import dev.pocketengine.ui.PocketWorldController
+import dev.pocketengine.ui.accountConnectionsFailure
 import dev.pocketengine.ui.UiTask
 import dev.pocketengine.ui.isPhoneTask
 import dev.pocketengine.ui.isDeviceWorkspaceTask
@@ -585,6 +586,7 @@ internal class PocketWebBridge(
             }
             if (action == "models.review") { reviewModel(id, requiredString(args, "modelId")); return }
             if (action == "models.select") { selectModel(id, args); return }
+            if (action in PocketWebAccountCommands.COMMANDS) { accountOwnerCommand(id, action, args); return }
             if (action in setOf("models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select")) { modelConnection(id, action, args); return }
             if (action == "phone.start") { startPhone(id, args); return }
             if (action in setOf("phone.pause", "phone.resume", "phone.stop")) {
@@ -875,24 +877,6 @@ internal class PocketWebBridge(
             "queued.editor.close" -> controller.closeQueuedOwnerInputEditor()
             "accounts.openAuthorization" -> { requireSection("accounts"); controller.openAccountAuthorization(requiredString(args, "sessionId")) }
             "accounts.manageUsage" -> { requireSection("accounts"); checkedPayload(args, emptySet()); controller.openChatGptUsage() }
-            "accounts.beginLogin", "accounts.cancelLogin", "accounts.select", "accounts.refresh", "accounts.retryPlanUsage", "accounts.setEnabled", "accounts.refreshAuthorization", "accounts.reauthorize", "accounts.acknowledgePlanWelcome" -> {
-                requireSection("accounts")
-                val command = when (action) { "accounts.refresh" -> "snapshot"; "accounts.refreshAuthorization" -> "refresh"; "accounts.reauthorize" -> "beginLogin"; else -> action.substringAfter('.') }
-                val payload = checkedPayload(args, when (action) {
-                    "accounts.beginLogin", "accounts.refresh" -> emptySet()
-                    "accounts.cancelLogin" -> setOf("sessionId")
-                    "accounts.setEnabled" -> setOf("accountId", "expectedVersion", "enabled")
-                    else -> setOf("accountId", "expectedVersion")
-                })
-                if (action !in setOf("accounts.beginLogin", "accounts.refresh", "accounts.cancelLogin")) {
-                    requiredString(payload, "accountId")
-                    val version = payload.get("expectedVersion")
-                    require((version is Int || version is Long) && (version as Number).toLong() >= 0) { "请重新读取原账号版本" }
-                }
-                if (action == "accounts.setEnabled") require(payload.opt("enabled") is Boolean) { "请选择此账号的启用状态" }
-                if (action == "accounts.cancelLogin") requiredString(payload, "sessionId")
-                return accepted(controller.requestOwnerDomain("accounts", command, payload))
-            }
             "memory.list", "memory.search" -> { requireSection("memory"); return accepted(controller.requestFeature("memory", action.substringAfter('.'), checkedPayload(args, setOf("query", "cursor", "layer", "limit")))) }
             "memoryReview.list", "memoryReview.candidates", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource" -> {
                 requireSection("memoryReview")
@@ -1099,6 +1083,30 @@ internal class PocketWebBridge(
         if (checked.has("maxTools")) require(requiredInt(checked, "maxTools") in 1..512) { "工具数量上限应为 1–512" }
         if (checked.has("maxRequestBytes")) require(requiredInt(checked, "maxRequestBytes") in 256..25_165_824) { "请求大小上限应为 256–25165824 字节" }
         return checked
+    }
+
+    private fun accountOwnerCommand(requestId: String, action: String, args: JSONObject) {
+        requireSection("accounts")
+        val command = PocketWebAccountCommands.prepare(action, args)
+        val generation = domainGeneration; val document = documentId; val owner = controller.webWindowTicket()
+        controller.requestOwnerDomainReceipt("accounts", command.command(), command.payload()) { result, error ->
+            if (closed) return@requestOwnerDomainReceipt
+            if (generation != domainGeneration || document != documentId || section != "accounts" || owner != controller.webWindowTicket() || !controller.webPrivateOwnerVisible())
+                complete(requestId, null, "原账号页面已变化，请重新读取授权状态；没有自动重试", "outcome_unknown")
+            else if (error != null) {
+                val message = if (error.matches(Regex("[A-Z][A-Z0-9_]+"))) accountConnectionsFailure(error) else error
+                complete(requestId, null, message, "native_failure")
+            } else {
+                val receipt = result ?: JSONObject()
+                complete(requestId, JSONObject().put("status", "completed").put("action", action).put("command", command.command())
+                    .put("receipt", PocketWebState.publicValue(receipt)), null)
+                // Only the matching completed beginLogin may open this still-current native session.
+                // The controller independently checks session identity and pending status again.
+                if (command.command() == "beginLogin" && receipt.optString("status") == "pending" && receipt.optString("sessionId").isNotBlank())
+                    controller.openAccountAuthorization(receipt.getString("sessionId"))
+            }
+            publishState()
+        }
     }
 
     private fun requireModelSelectionIdle(ownMutation: Boolean = false) {

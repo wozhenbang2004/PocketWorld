@@ -11,7 +11,7 @@ public final class OwnedGroupObservationProbe {
   String program="import json,os,pathlib,subprocess,sys,time\n"+
    "def fact(p):\n s=pathlib.Path('/proc/'+str(p)+'/stat').read_text().rsplit(') ',1)[1].split(); return {'pid':p,'parent':int(s[1]),'group':int(s[2]),'session':int(s[3]),'born':int(s[19])}\n"+
    "child=subprocess.Popen([sys.executable,'-I','-c','import time; time.sleep(30)'],stdin=subprocess.DEVNULL,close_fds=True)\n"+
-   "print(json.dumps({'event':'owned_scope','nonce':sys.argv[1],'leader':fact(os.getpid()),'child':fact(child.pid)}),flush=True)\n"+
+   "print(json.dumps({'event':'owned_scope','nonce':sys.argv[1],'owner':fact(os.getppid()),'leader':fact(os.getpid()),'child':fact(child.pid)}),flush=True)\n"+
    "while True: time.sleep(.1)\n";
   if(args.length>3){managed(python,nonce,cwd,program,args[3]);return;}
   NativeProcessSupervisor.Exit exit=new NativeProcessSupervisor().execute(List.of(python,"-I","-c",program,nonce),Map.of("PATH",new File(python).getParent(),"LANG","C.UTF-8"),cwd,15000,150,new NativeProcessSupervisor.Observer(){

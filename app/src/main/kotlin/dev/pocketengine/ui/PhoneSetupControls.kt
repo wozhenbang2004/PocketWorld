@@ -15,7 +15,7 @@ import org.json.JSONObject
 
 /** Low-frequency owner controls inside the existing phone setup; no app policy or diagnostic replacement. */
 @Composable
-internal fun PhoneSetupControls(snapshot: JSONObject, onCommand: (String, JSONObject) -> Unit) {
+internal fun PhoneSetupControls(snapshot: JSONObject, onCommand: (String, JSONObject) -> Unit, onOpenAccessibility: () -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     TextButton(onClick = { expanded = !expanded }) {
         Text(if (expanded) "收起连接恢复" else "断连与重启后的恢复", fontSize = 12.sp)
@@ -25,7 +25,7 @@ internal fun PhoneSetupControls(snapshot: JSONObject, onCommand: (String, JSONOb
     val available = snapshot.has("recovery")
     val busy = recovery.optBoolean("busy")
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("只核对已选连接，并在已有系统权限允许时恢复原界面读取。不会自动重授权限、开启无线调试或重跑任务。",
+        Text("核对已选连接。界面读取断连时保留当前系统登记，由你在系统设置中重新启用；不会自动更改其他服务、开启无线调试或重跑任务。",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("允许恢复原连接", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
@@ -49,7 +49,10 @@ internal fun PhoneSetupControls(snapshot: JSONObject, onCommand: (String, JSONOb
         }
         if (recovery.optBoolean("compensationPending")) TextButton(onClick = {
             onCommand("recovery.compensate", JSONObject())
-        }, enabled = !busy) { Text("复原上次恢复中断前的登记", fontSize = 12.sp) }
+        }, enabled = !busy) { Text("我已在系统中处理，核对旧恢复记录", fontSize = 12.sp) }
+        if (available && recovery.optBoolean("needsOwnerAction")) TextButton(onClick = onOpenAccessibility, enabled = !busy) {
+            Text("打开系统无障碍设置", fontSize = 12.sp)
+        }
     }
 }
 
@@ -181,11 +184,12 @@ internal fun PhonePracticeEvidence(controller: PocketWorldController) {
 private fun recoveryOutcome(value: String): String = when (value) {
     "already_connected" -> "界面读取服务当前已连接。"
     "registered_waiting_for_binding" -> "已核对服务登记，仍需等待系统实际绑定。"
+    "owner_settings_required" -> "服务登记仍在，但系统尚未连接。请在系统无障碍设置中核对本应用；没有改写当前服务列表。"
     "secure_settings_permission_missing" -> "系统未授予直接恢复权限；请在原系统设置中重新启用界面读取。"
     "initial_accessibility_authorization_required", "owner_accessibility_disabled" -> "需要主人先在系统设置中明确启用界面读取。"
     "owner_unlock_required" -> "设备仍未解锁，恢复尚未执行。"
     "consent_required", "recovery_consent_revoked" -> "恢复未获当前同意，已停止后续恢复。"
-    "recovery_pending_owner_action", "compensation_pending" -> "上次恢复的复原尚未确认，请先核对并复原原登记。"
+    "recovery_pending_owner_action", "compensation_pending" -> "旧恢复记录尚未结算。请先在系统无障碍设置中处理本应用，再回到这里核对；当前服务列表保持不变。"
     "original_registration_restored" -> "已读回原服务登记；不代表系统已绑定，也未运行任务。"
     "recovery_cancelled" -> "本次恢复已取消，原登记的复原状态另行保留。"
     "platform_refused", "restore_unconfirmed" -> "系统未确认恢复，请使用原系统设置核对。"

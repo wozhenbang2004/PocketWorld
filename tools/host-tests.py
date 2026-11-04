@@ -200,7 +200,8 @@ def run(args):
                 isolated = report / ('native-' + name)
                 isolated.mkdir()
                 fault_command = command[:command.index(str(source / 'process_supervisor.cpp'))] + [
-                    str(original), str(fixture), '-pthread', '-Wl,--wrap=waitid', '-Wl,--wrap=kill',
+                    str(original), str(fixture), '-pthread', '-Wl,--wrap=waitid', '-Wl,--wrap=waitpid',
+                    '-Wl,--wrap=kill', '-Wl,--wrap=send', '-Wl,--wrap=recv', '-Wl,--wrap=syscall',
                     '-o', str(isolated / 'libpocketprocess.so')]
                 subprocess.run(fault_command, cwd=ROOT, env=env, check=True)
                 props['pocketworldHost' + name + 'Dir'] = str(isolated)
@@ -209,7 +210,8 @@ def run(args):
             isolated.mkdir()
             fixture = ROOT / 'app/src/test/java/dev/pocketengine/features/local/runtime/native_wait_reap_fixture.cpp'
             fault_command = command[:-2] + [str(fixture), '-DPOCKETWORLD_TRANSPORT_WAIT_FIXTURE=1',
-                '-pthread', '-Wl,--wrap=waitid', '-Wl,--wrap=kill', '-Wl,--wrap=opendir',
+                '-pthread', '-Wl,--wrap=waitid', '-Wl,--wrap=waitpid', '-Wl,--wrap=kill',
+                '-Wl,--wrap=send', '-Wl,--wrap=recv', '-Wl,--wrap=syscall', '-Wl,--wrap=opendir',
                 '-o', str(isolated / 'libpocketprocess.so')]
             subprocess.run(fault_command, cwd=ROOT, env=env, check=True)
             props['pocketworldHostTransportLostWaitDir'] = str(isolated)

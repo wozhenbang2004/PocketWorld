@@ -35,6 +35,7 @@ import './secondary-refactor.css';
 import { backgroundConnection, modelConnectionCommand, wirelessEndpoints, wirelessPort } from './forms-library/host-contracts';
 import { ModelConnectionOptions, ModelConnectionTestFeedback } from './ModelConnectionOptions';
 import { compatibilityDraft, compatibilityNeedsSave, compatibilityOptions, connectionTestResult, type CompatibilityDraft, type ConnectionTestDraft } from './model-connection-policy';
+import { ACCOUNT_RECEIPT_ACTIONS, accountActionReceipt, accountLoginArguments } from './account-actions';
 
 /**
  * Product composition of the selected BoardUI SettingsModal/settings rows,
@@ -466,6 +467,7 @@ function PhoneSettings({ state, supported, run, navigate }: { state: Data; suppo
  * display state; this page does not create a task or a second connection. */
 function BackgroundSettings({ state, supported, run, navigate }: { state: Data; supported: (action: string) => boolean; run: Run; navigate: (route: string) => void }) {
   const display = object(object(state.features).display), adb = object(display.adb), discovery = object(adb.discovery);
+  const audioRecovery = object(object(object(state.features).phone_setup).audioRecovery), audioPending = audioRecovery.pendingCount;
   const pending = Array.isArray(state.moduleBusy) ? state.moduleBusy.map(String) : [];
   const connection = backgroundConnection(display, state.activeTaskId, pending);
   const [connecting, setConnecting] = useState(() => connection.requiresConnectionCheck || connection.phase === 'paired' || connection.identityPresent);
@@ -572,6 +574,7 @@ function BackgroundSettings({ state, supported, run, navigate }: { state: Data; 
     </Card>}
     {connection.loaded && !connection.supported && <Card title="此系统使用主屏兼容模式" description="后台独立屏需要 Android 14 或以上；执行主屏任务时会切换应用并占用当前屏幕。"><Button variant="secondary" disabled={connection.taskOwned || connection.busy || !supported('background.selectMainScreen')} onClick={() => setMainScreenConsent(true)}>选择主屏兼容模式</Button></Card>}
     <Card title="本机能力检查" description="逐项来自当前系统检查。已连接仍需核对输入、取帧和输入法隔离能力；从系统设置返回后刷新。">
+      {Number.isSafeInteger(audioPending) && audioPending > 0 && <div role="alert"><p className="pw-field-error">还有 {audioPending} 项声音记录待处理，原 App 可能仍静音。请切换到原生工作台，在后台连接设置中处理原声音记录。</p>{audioRecovery.needsOwnerAction === true && <div className="pw-form-actions"><CapabilityAction action="settings.openSystem" args={{ section: 'accessibility' }} supported={supported} run={run}>打开无障碍设置</CapabilityAction></div>}</div>}
       {list(object(state.phoneReadiness).groups).length === 0 ? <Empty>尚未取得本机能力检查结果。</Empty> : <Accordion variant="divided">{list(object(state.phoneReadiness).groups).map(group => <AccordionItem key={text(group.id)} id={text(group.id)} title={<span className="pw-readiness-title"><span>{text(group.title)}</span><small>{({ ready: '可用', blocked: '需准备', unsupported: '本机不支持', unknown: '尚未核实' } as Data)[text(group.state)] || '尚未核实'}</small></span>}>
         {list(group.checks).length === 0 ? <p className="pw-field-hint">尚未取得实际检查明细。</p> : list(group.checks).map((check, index) => <div key={text(check.id, String(index))} className="pw-readiness-check"><p>{text(check.message, '尚未取得实际状态')}</p>{check.state !== 'ready' && <div className="pw-form-actions">{['accessibility', 'notifications'].includes(check.action) ? <CapabilityAction action="settings.openSystem" args={{ section: check.action }} supported={supported} run={run}>{check.action === 'accessibility' ? '检查界面权限' : '检查任务通知'}</CapabilityAction> : ['background_setup', 'retry'].includes(check.action) ? <CapabilityAction action="background.refresh" supported={supported} run={run}>重新核对</CapabilityAction> : check.action === 'main_screen_choice' ? <Button variant="secondary" disabled={connection.taskOwned || connection.busy || !supported('background.selectMainScreen')} onClick={() => setMainScreenConsent(true)}>选择主屏兼容模式</Button> : null}</div>}</div>)}
       </AccordionItem>)}</Accordion>}
@@ -705,10 +708,12 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack 
   const [catalog, setCatalog] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null);
   const [busy, setBusy] = useState(false), [receipt, setReceipt] = useState<Data | null>(null), [query, setQuery] = useState('');
   const [options, setOptions] = useState({ reasoningEffort: '', outputReserve: '4096', imageTokenReserve: '0' });
-  const alive = useRef(true), generation = useRef(0);
+  const [adding, setAdding] = useState(false), [accountLabel, setAccountLabel] = useState(''), [needsAccountRead, setNeedsAccountRead] = useState(false);
+  const [accountFeedback, setAccountFeedback] = useState<{ message: string; error: boolean } | null>(null);
+  const alive = useRef(true), generation = useRef(0), operationPending = useRef(false);
   const closeReview = () => { generation.current++; setReview(null); };
   useEffect(() => { alive.current = true; return () => { alive.current = false; generation.current++; }; }, []);
-  useEffect(() => { registerTransientBack(review ? () => { if (!busy) closeReview(); return true; } : catalog ? () => { generation.current++; setCatalog(null); return true; } : null); return () => registerTransientBack(null); }, [review, catalog, busy, registerTransientBack]);
+  useEffect(() => { registerTransientBack(adding ? () => { if (!busy) setAdding(false); return true; } : review ? () => { if (!busy) closeReview(); return true; } : catalog ? () => { if (!busy) { generation.current++; setCatalog(null); } return true; } : null); return () => registerTransientBack(null); }, [adding, review, catalog, busy, registerTransientBack]);
   const pending = Array.isArray(state.ownerPending) ? state.ownerPending : [];
   const locked = busy || Boolean(state.modelSelectionBusy) || pending.some((key: string) => key.startsWith('accounts.'));
   const accounts = list(data.accounts), login = object(data.login), selected = object(data.selectedModelRef);
@@ -716,15 +721,37 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack 
   const catalogCurrent = Boolean(catalog && catalog.selectionRevision === state.modelSelectionRevision && catalogAccount?.version === catalogBody.accountVersion);
   const reviewCurrent = Boolean(review && review.selectionRevision === state.modelSelectionRevision && accounts.some(row => row.id === review.accountId && row.version === review.accountVersion));
   const models = list(catalogBody.models), visibleModels = models.filter(row => [row.id, row.displayName].some(value => text(value).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())));
-  const act = (action: string, args: Data, label: string, primary = false) => <CapabilityAction action={action} args={args} supported={supported} run={run} disabled={locked} primary={primary}>{label}</CapabilityAction>;
+  const runAccount: Run = async (action, args = {}) => {
+    if (!ACCOUNT_RECEIPT_ACTIONS.has(action)) return run(action, args);
+    if (operationPending.current) throw new Error('请先等待本次账号操作的回执。');
+    const original = ++generation.current; operationPending.current = true; setBusy(true); setAccountFeedback(null); setCatalog(null); setReview(null);
+    try {
+      const value = await run(action, args), message = accountActionReceipt(action, args, value);
+      if (alive.current && original === generation.current) {
+        setAccountFeedback({ message, error: false });
+        if (action === 'accounts.beginLogin') setAdding(false);
+        if (action === 'accounts.refresh') setNeedsAccountRead(false);
+      }
+      return value;
+    } catch (failure) {
+      if (alive.current && original === generation.current) {
+        setAccountFeedback({ message: failure instanceof Error ? failure.message : String(failure), error: true });
+        if ((failure as { code?: string })?.code !== 'native_failure' && action !== 'accounts.refresh') setNeedsAccountRead(true);
+      }
+      throw failure;
+    } finally { if (alive.current && original === generation.current) { operationPending.current = false; setBusy(false); } }
+  };
+  const act = (action: string, args: Data, label: string, primary = false) => <CapabilityAction action={action} args={args} supported={supported} run={runAccount} disabled={locked} primary={primary}>{label}</CapabilityAction>;
   const readModels = async (row: Data) => {
-    const original = ++generation.current; setBusy(true); setCatalog(null); setReview(null); setReceipt(null); setQuery('');
+    if (operationPending.current || locked) return;
+    const original = ++generation.current; operationPending.current = true; setBusy(true); setCatalog(null); setReview(null); setReceipt(null); setQuery('');
     try { const result = object(await run('accounts.models', { accountId: row.id, expectedVersion: row.version })); if (alive.current && original === generation.current) setCatalog(result); }
     catch { /* The shared page displays the actual native failure. */ }
-    finally { if (alive.current) setBusy(false); }
+    finally { if (alive.current && original === generation.current) { operationPending.current = false; setBusy(false); } }
   };
   const prepare = async (kind: 'model' | 'logout', args: Data) => {
-    const original = ++generation.current; setBusy(true); setReceipt(null);
+    if (operationPending.current || locked) return;
+    const original = ++generation.current; operationPending.current = true; setBusy(true); setReceipt(null);
     try {
       const result = object(await run(kind === 'model' ? 'accounts.model.review' : 'accounts.logout.review', args));
       if (alive.current && original === generation.current) {
@@ -733,20 +760,20 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack 
         setReview({ ...result, kind });
       }
     } catch { /* Preserve the current account; failed review is not a selection. */ }
-    finally { if (alive.current) setBusy(false); }
+    finally { if (alive.current && original === generation.current) { operationPending.current = false; setBusy(false); } }
   };
   const facts = object(object(review?.catalogFacts).facts), levelsFact = object(facts.REASONING_LEVELS);
   const levels = levelsFact.known === true && Array.isArray(levelsFact.value) ? levelsFact.value.filter((value: any) => typeof value === 'string') as string[] : [];
   const output = Number(options.outputReserve), imageReserve = Number(options.imageTokenReserve);
   const valid = /^\d+$/.test(options.outputReserve) && Number.isSafeInteger(output) && output >= 128 && output <= 32768 && /^\d+$/.test(options.imageTokenReserve) && Number.isSafeInteger(imageReserve) && imageReserve >= 0 && imageReserve <= 2_000_000 && (!options.reasoningEffort || levels.includes(options.reasoningEffort));
   const confirm = async () => {
-    if (!review || locked || !reviewCurrent || review.kind === 'model' && !valid) return;
-    const original = review; setBusy(true);
+    if (!review || locked || operationPending.current || !reviewCurrent || review.kind === 'model' && !valid) return;
+    const original = review, attempt = ++generation.current; operationPending.current = true; setBusy(true);
     try {
       const result = object(await run(original.kind === 'model' ? 'accounts.model.select' : 'accounts.logout.confirm', { reviewHandle: original.reviewHandle, ...(original.kind === 'model' ? { options: { reasoningEffort: options.reasoningEffort, outputReserve: output, imageTokenReserve: imageReserve } } : {}) }));
-      if (alive.current) setReceipt({ kind: original.kind, ...result });
-    } catch { if (alive.current) setReceipt({ kind: original.kind, status: 'unknown' }); }
-    finally { if (alive.current) { setBusy(false); closeReview(); setCatalog(null); } }
+      if (alive.current && attempt === generation.current) setReceipt({ kind: original.kind, ...result });
+    } catch { if (alive.current && attempt === generation.current) setReceipt({ kind: original.kind, status: 'unknown' }); }
+    finally { if (alive.current && attempt === generation.current) { operationPending.current = false; setBusy(false); closeReview(); setCatalog(null); } }
   };
   const known = (key: string) => object(facts[key]).known === true ? object(facts[key]).value : undefined;
   const actualReceipt = object(receipt?.receipt);
@@ -754,13 +781,15 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack 
   const loginActive = ['pending', 'exchanging'].includes(text(login.status));
   return <>
     <Card title="ChatGPT 账号" description="登录后读取这个账号的可用模型，再确认用于新任务的模型。">
-      <div className="pw-form-actions">{act('accounts.beginLogin', {}, '添加账号', true)}{act('accounts.refresh', {}, '刷新账号状态')}</div>
+      <div className="pw-form-actions"><PressButton compact disabled={locked || loginActive || needsAccountRead || !supported('accounts.beginLogin')} onClick={() => { setAccountFeedback(null); setAdding(true); }}>添加账号</PressButton>{act('accounts.refresh', {}, '刷新账号状态')}</div>
+      {needsAccountRead && <p className="pw-field-hint">请先刷新账号状态，核对上次操作后再添加账号。</p>}
+      {accountFeedback && !adding && <p className={accountFeedback.error ? 'pw-field-error' : 'pw-receipt-copy'} role={accountFeedback.error ? 'alert' : 'status'}>{accountFeedback.message}</p>}
       {state.modelRoute === 'account' && data.selectedModelRef && <div className="pw-selected-object"><h3>当前账号模型</h3><Facts items={[[ '模型', selected.modelId ], ['账号', accounts.find(row => row.id === selected.accountId)?.label ], ['可用状态', data.selectedModelUsable ? '当前引用可用' : '需要重新读取目录并选择' ]]} /></div>}
       {data.planWelcomeRequired === true && welcomeAccount && <div className="pw-receipt-copy"><h3>已通过 ChatGPT 登录</h3><p>在本应用选择账号模型后，推理使用你的 ChatGPT 套餐，并受套餐和此应用的使用限制。登录不授予手机操作权限；图片仍需任务授权和目录支持。</p><div className="pw-form-actions">{act('accounts.acknowledgePlanWelcome', {accountId: welcomeAccount.id, expectedVersion: welcomeAccount.version}, '知道了')}{act('accounts.manageUsage', {}, '管理用量')}</div></div>}
       <Collection data={data} keys={['accounts']} label="账号">{row => <>
         <Facts items={[[ '套餐', row.plan || row.planName ], ['套餐使用权限', row.planUsageEnabled ? '已授予' : '尚未授予'], ['状态', statusText(row.status)], ['冷却至', timeText(row.cooldownUntil)], ['本机选择', data.selectedAccountId === row.id ? '当前账号' : undefined]]} />
         {row.usageLimited && <p className="pw-field-hint">套餐请求已暂停。明确允许再试后，仍需回到原任务继续；不会自动发送请求。</p>}
-        <StretchSwitch label="启用此账号" description="关闭会停止新的账号请求；已发生的远端操作仍需按原回执核对。" checked={row.enabled === true} disabled={locked || !supported('accounts.setEnabled')} onChange={enabled => { void run('accounts.setEnabled', {accountId: row.id, expectedVersion: row.version, enabled}).catch(() => {}); }} />
+        <StretchSwitch label="启用此账号" description="关闭会停止新的账号请求；已发生的远端操作仍需按原回执核对。" checked={row.enabled === true} disabled={locked || !supported('accounts.setEnabled')} onChange={enabled => { void runAccount('accounts.setEnabled', {accountId: row.id, expectedVersion: row.version, enabled}).catch(() => {}); }} />
         {row.error && <p className="pw-field-error" role="alert">{text(row.error)}</p>}
         <div className="pw-form-actions">
           {act('accounts.select', { accountId: row.id, expectedVersion: row.version }, '选择此账号')}
@@ -775,6 +804,15 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack 
       {login.sessionId && <div className="pw-selected-object"><h3>本次授权</h3><Facts items={[[ '状态', statusText(login.status) ], ['到期时间', timeText(login.expiresAt) ]]} />{login.status === 'pending' && <div className="pw-form-actions">{act('accounts.openAuthorization', { sessionId: login.sessionId }, '打开原授权页面')}{act('accounts.cancelLogin', { sessionId: login.sessionId }, '取消本次授权')}</div>}</div>}
       {receipt && <div className="pw-receipt-copy" role="status">{receipt.status !== 'saved' ? '原操作结果待核对。请刷新账号状态；不会自动重试。' : receipt.kind === 'model' ? '模型选择已保存。当前使用状态以上方统一模型状态为准；已有任务保留原模型。' : actualReceipt.signedOutLocally ? '已在本机退出，账号记录保留。' + (actualReceipt.credentialCleanupRequired ? ' 本机凭据仍需清理。' : '') + (actualReceipt.remoteRevocationConfirmed ? ' 服务商确认撤销授权。' : ' 远端撤销尚未确认。') : '收到原退出回执，请刷新并核对本机状态。'}</div>}
     </Card>
+    <SettingsDialog isOpen={adding} title="添加 ChatGPT 账号" onClose={() => { if (!busy) setAdding(false); }}>
+      <TextField label="账号名称（可选）" placeholder="我的 ChatGPT 账号" value={accountLabel} maxLength={80} isDisabled={busy} onChange={setAccountLabel} hint="名称只用于本机辨认。登录会打开系统浏览器。" />
+      {accountFeedback && <p className={accountFeedback.error ? 'pw-field-error' : 'pw-receipt-copy'} role={accountFeedback.error ? 'alert' : 'status'}>{accountFeedback.message}</p>}
+      {needsAccountRead && <p className="pw-field-hint">请先返回并刷新账号状态，核对原授权后再继续。</p>}
+      <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setAdding(false)}>返回</Button><PressButton compact disabled={locked || needsAccountRead || loginActive} onClick={() => {
+        try { void runAccount('accounts.beginLogin', accountLoginArguments(accountLabel)).catch(() => {}); }
+        catch (failure) { setAccountFeedback({ message: (failure as Error).message, error: true }); }
+      }}>{busy ? '正在准备授权…' : '用 ChatGPT 登录'}</PressButton></div>
+    </SettingsDialog>
     {catalog && <Card title="此账号的模型目录" description="能力以这次实际目录为准；选择不会自动授权手机操作。">
       {!catalogCurrent && <p role="alert" className="pw-field-error">账号或模型设置已变化，请重新读取目录。</p>}
       {models.length > 8 && <SearchField label="筛选账号模型" value={query} onChange={setQuery} placeholder="模型名称" />}

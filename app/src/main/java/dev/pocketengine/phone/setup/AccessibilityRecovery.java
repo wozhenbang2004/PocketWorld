@@ -15,7 +15,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import org.json.JSONObject;
 
-/** Revocable repair of a previously enabled service. Never grants a system permission or replays a task. */
+/** Revocable reconciliation of a previously enabled service. Never grants a system permission
+ * or replays a task. Settings.Secure.putString has no conditional-update argument:
+ * rewriting its whole value can lose another service's concurrent change. Only the system
+ * settings UI may change registrations; this class keeps and reconciles legacy undo evidence. */
 public final class AccessibilityRecovery {
     private static final String PERMISSION = "android.permission.WRITE_SECURE_SETTINGS";
     private static final Object CONSENT_LOCK = new Object();
@@ -26,7 +29,6 @@ public final class AccessibilityRecovery {
         boolean connected();
         String services();
         int enabled();
-        boolean writeServices(String value);
     }
     private final SharedPreferences preferences;
     private final Platform platform;
@@ -48,7 +50,6 @@ public final class AccessibilityRecovery {
             public boolean connected() { return PhoneAccessibilityService.get() != null; }
             public String services() { return Settings.Secure.getString(app.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES); }
             public int enabled() { return Settings.Secure.getInt(app.getContentResolver(), Settings.Secure.ACCESSIBILITY_ENABLED, 0); }
-            public boolean writeServices(String value) { return Settings.Secure.putString(app.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, value); }
         };
     }
 
@@ -78,6 +79,9 @@ public final class AccessibilityRecovery {
                     .put("userUnlocked", platform.unlocked()).put("accessibilityConnected", platform.connected())
                     .put("accessibilityPreviouslyEnabled", preferences.getBoolean("accessibilityPreviouslyEnabled", false))
                     .put("compensationPending", preferences.getBoolean("compensationPending", false))
+                    .put("automaticRegistrationRestoreSupported", false).put("settingsMutation", false)
+                    .put("needsOwnerAction", preferences.getBoolean("compensationPending", false) || !platform.connected())
+                    .put("ownerAction", "open_system_accessibility_settings")
                     .put("lastOutcome", preferences.getString("lastOutcome", "not_requested"))
                     .put("restoresBusinessActions", false).put("changesWirelessDebugging", false)
                     .put("grantsSystemPermission", false).put("busy", RESTORING.get());
@@ -102,15 +106,12 @@ public final class AccessibilityRecovery {
     }
 
     private JSONObject restoreAttempt(BooleanSupplier current) throws Exception {
-        boolean removedOriginal = false;
-        String outcome = "restore_unconfirmed";
-        boolean registered = false;
         try {
             long consentRevision = revision();
             if (!consentCurrent(consentRevision)) return outcome("consent_required", false);
             if (!platform.unlocked()) return outcome("owner_unlock_required", false);
+            requireCurrent(consentRevision, current);
             if (platform.connected()) return outcome("already_connected", true);
-            if (!platform.permitted()) return outcome("secure_settings_permission_missing", false);
             if (preferences.getBoolean("compensationPending", false)) return outcome("recovery_pending_owner_action", false);
             if (!preferences.getBoolean("accessibilityPreviouslyEnabled", false)) return outcome("initial_accessibility_authorization_required", false);
             // A system-wide switch turned off by the owner is not an invitation to turn it on again.
@@ -120,46 +121,19 @@ public final class AccessibilityRecovery {
             // An absent entry may be a later owner revocation. Earlier consent cannot distinguish
             // that from an OEM clearing it, so only rebind a registration that is still present.
             if (!contains(entries, own)) return outcome("owner_accessibility_disabled", false);
-            if (contains(entries, own)) {
-                synchronized (CONSENT_LOCK) {
-                    requireCurrent(consentRevision, current);
-                    List<String> fresh = read();
-                    if (!contains(fresh, own)) return outcome("owner_accessibility_disabled", false);
-                    if (!preferences.edit().putBoolean("compensationPending", true).putString("compensationComponent", own)
-                            .putInt("compensationUid", ownerUid).commit()) throw new IllegalStateException("recovery_journal_save_failed");
-                    // Persist first: a partial settings write must not silently strand the original registration.
-                    removedOriginal = true;
-                    fresh.removeIf(value -> same(value, own));
-                    if (!platform.writeServices(String.join(":", fresh)) || contains(read(), own))
-                        throw new IllegalStateException("remove_unconfirmed");
-                }
-                Thread.sleep(150);
-            }
-            synchronized (CONSENT_LOCK) {
-                requireCurrent(consentRevision, current);
-                List<String> fresh = read();
-                if (!contains(fresh, own)) fresh.add(own);
-                boolean accepted = platform.writeServices(String.join(":", fresh));
-                registered = contains(read(), own);
-                outcome = accepted && registered ? "registered_waiting_for_binding" : "restore_unconfirmed";
-            }
-        } catch (InterruptedException stopped) {
-            Thread.currentThread().interrupt();
-            outcome = "recovery_cancelled";
+            requireCurrent(consentRevision, current);
+            // A fresh read plus putString is not a conditional system update.
+            // Do not remove/re-add our entry, even with WRITE_SECURE_SETTINGS.
+            return outcome("owner_settings_required", true);
         } catch (SecurityException revoked) {
-            outcome = "recovery_consent_revoked";
+            return outcome("recovery_consent_revoked", false);
         } catch (Exception unavailable) {
-            outcome = "platform_refused";
-        } finally {
-            if (removedOriginal) {
-                boolean compensated = compensateOriginal();
-                if (!compensated) outcome = "compensation_pending";
-            }
+            return outcome("platform_refused", false);
         }
-        return outcome(outcome, registered);
     }
 
-    /** Owner-selected undo of this module's recorded removal; never creates a fresh recovery authorization. */
+    /** Reconcile an old release's undo record after the owner has used system settings.
+     * A missing entry stays pending; no whole-list write or replay is permitted. */
     public JSONObject compensate() throws Exception {
         if (!preferences.getBoolean("compensationPending", false)) return snapshot().put("lastOutcome", "no_compensation_pending");
         if (!RESTORING.compareAndSet(false, true)) return snapshot().put("lastOutcome", "recovery_busy");
@@ -175,15 +149,9 @@ public final class AccessibilityRecovery {
             if (!own.equals(preferences.getString("compensationComponent", ""))
                     || ownerUid != preferences.getInt("compensationUid", -1)) return false;
             try {
-                if (!platform.unlocked() || !platform.permitted()) return false;
+                if (!platform.unlocked()) return false;
                 List<String> current = read();
-                // Add only our former registration to the fresh list; never replace another service or enable the global switch.
-                if (!contains(current, own)) {
-                    if (platform.enabled() != 1) return false;
-                    current.add(own);
-                    platform.writeServices(String.join(":", current));
-                }
-                if (!contains(read(), own)) return false;
+                if (!contains(current, own)) return false;
                 return preferences.edit().remove("compensationPending").remove("compensationComponent").remove("compensationUid").commit();
             } catch (Exception pending) { return false; }
         }
@@ -191,7 +159,7 @@ public final class AccessibilityRecovery {
 
     private void requireCurrent(long revision, BooleanSupplier current) {
         if (!current.getAsBoolean() || !consentCurrent(revision)) throw new SecurityException("recovery_consent_revoked");
-        if (!platform.unlocked() || !platform.permitted() || platform.enabled() != 1)
+        if (!platform.unlocked())
             throw new SecurityException("recovery_platform_changed");
     }
 
@@ -212,6 +180,6 @@ public final class AccessibilityRecovery {
         synchronized (CONSENT_LOCK) {
             if (!preferences.edit().putString("lastOutcome", state).commit()) throw new IllegalStateException("recovery_result_save_failed");
         }
-        return snapshot().put("registrationVerified", registered).put("bindingVerified", platform.connected());
+        return snapshot().put("registrationVerified", registered).put("registrationObservationOnly", true).put("bindingVerified", platform.connected());
     }
 }

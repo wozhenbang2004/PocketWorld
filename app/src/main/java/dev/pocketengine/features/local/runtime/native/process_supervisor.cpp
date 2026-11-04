@@ -1,4 +1,6 @@
 #include <jni.h>
+#include "child_owner.h"
+// child_owner.h SHA256: c394fb6a7464f34ab8ab148964c2555a3bafbefcd5d1b45496ef0c77c88f4f8a
 #include <cerrno>
 #include <csignal>
 #include <cstring>
@@ -52,7 +54,7 @@ void child_error(int fd,int error) {
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_ordinaryProtocol(JNIEnv*,jclass) { return 3; }
+Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_ordinaryProtocol(JNIEnv*,jclass) { return 4; }
 
 extern "C" JNIEXPORT jlongArray JNICALL
 Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(
@@ -75,12 +77,12 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(
     for(auto& pair:pipes) {
         if(pipe2(pair,O_CLOEXEC)<0) { launch_error=errno; break; }
     }
-    pid_t pid=-1;
+    pid_t pid=-1;pocketprocess::ChildOwner owner;
     // argv/env storage and pipe setup are complete before fork; the child only uses async-safe calls.
     if(!launch_error) {
-        pid=fork();
-        if(pid<0) launch_error=errno;
-        else if(pid==0) {
+        const int transport[]={pipes[0][0],pipes[0][1],pipes[1][0],pipes[1][1],pipes[2][0],pipes[2][1]};
+        pid=owner.spawn(transport,6,grace_ms,launch_error);
+        if(pid==0) {
             close(pipes[0][0]); close(pipes[1][0]); close(pipes[2][0]);
             if(setsid()<0) child_error(pipes[2][1],errno);
             sigset_t empty;sigemptyset(&empty);sigprocmask(SIG_SETMASK,&empty,nullptr);
@@ -96,7 +98,7 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(
         }
     }
     for(auto& pair:pipes) close_fd(pair[1]);
-    bool stopped=entry_cancelled,timed_out=false,io_complete=true,leader_done=false,kill_sent=false,start_notified=false;
+    bool stopped=entry_cancelled,timed_out=false,io_complete=pid>0||owner.certain_no_child(),leader_done=false,kill_sent=false,start_notified=false;
     long long start=now_ms(),stop_at=0,leader_at=0;
     int status=0;
     bool leader_reaped=false,owns_leader=pid>0;
@@ -104,18 +106,14 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(
         for(auto& pair:pipes) nonblocking(pair[0]);
         auto observe_leader=[&]() {
             if(!owns_leader) return false;
-            siginfo_t info{};int checked;const auto observation_deadline=now_ms()+50;
-            // Keep the exact child waitable until cleanup. Another same-process
-            // reaper can remove it: a failed wait is not a reusable signal handle.
-            do {checked=waitid(P_PID,static_cast<id_t>(pid),&info,WEXITED|WNOHANG|WNOWAIT);}
-            while(checked<0&&errno==EINTR&&now_ms()<observation_deadline);
-            if(checked<0) {owns_leader=false;io_complete=false;return false;}
-            if(info.si_pid==pid&&!leader_done) {leader_done=true;leader_at=now_ms();}
+            bool exited=false;
+            if(!owner.observe(exited)) {owns_leader=false;io_complete=false;return false;}
+            if(exited&&!leader_done) {leader_done=true;leader_at=now_ms();}
             return true;
         };
         auto signal_owned=[&](int signal,bool include_leader) {
             if(!observe_leader()) return false;
-            kill(-pid,signal);if(include_leader) kill(pid,signal);
+            if(!owner.signal(signal,include_leader)){owns_leader=false;io_complete=false;return false;}
             return true;
         };
         while(true) {
@@ -190,15 +188,16 @@ Java_dev_pocketengine_features_local_runtime_NativeProcessSupervisor_run(
         }
         // Even detached stdout does not make a background member an owned persistent job.
         if(owns_leader&&signal_owned(SIGKILL,false)) while(true) {
-            const pid_t waited=waitpid(pid,&status,0);
+            const pid_t waited=owner.reap(status);
             if(waited==pid) {leader_reaped=true;break;}
-            if(waited<0&&errno==EINTR) continue;
+            if(waited==0&&now_ms()<leader_at+grace_ms+3000){poll(nullptr,0,10);continue;}
             io_complete=false;break;
         }
     }
     for(auto& pair:pipes) {close_fd(pair[0]);close_fd(pair[1]);}
-    bool group_absent=pid<=0;
-    if(pid>0&&leader_reaped) {
+    bool owner_finished=owner.finish();if(!owner_finished)io_complete=false;
+    bool group_absent=owner_finished&&pid<=0&&owner.certain_no_child();
+    if(owner_finished&&pid>0&&leader_reaped) {
         // The leader is now reaped: NEVER signal this numeric PID/PGID again.
         // A terminated descendant may briefly await its actual parent's reap.
         // Observe ESRCH only, within the same already established drain deadline.
