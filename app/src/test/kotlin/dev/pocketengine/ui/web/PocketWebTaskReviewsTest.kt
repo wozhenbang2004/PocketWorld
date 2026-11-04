@@ -97,6 +97,17 @@ class PocketWebTaskReviewsTest {
         reject { clock.reviews.take(handle, "tasks.approve", listOf(current)) }
     }
 
+    @Test fun aPlanChangingWithoutANewTimestampInvalidatesItsOriginalApprovalHandle() {
+        val current = task()
+        current.raw.put("executionScope", JSONObject().put("revision", 4).put("executionPhase", "planning")
+            .put("planRevision", 2).put("planArtifactRef", "proposal-a").put("planHash", "a".repeat(64)))
+        val clock = Clock()
+        val handle = clock.reviews.create(current, setOf("tasks.approve"), setOf("approval-a"))
+        current.raw.getJSONObject("executionScope").put("planRevision", 3).put("planArtifactRef", "proposal-b").put("planHash", "b".repeat(64))
+        assertEquals(123_456L, current.updatedAt)
+        reject { clock.reviews.take(handle, "tasks.approve", listOf(current), "approval-a") }
+    }
+
     @Test fun changedRunCannotBorrowThePreviousRunsReview() {
         rejectsChangedTask { it.apply { raw.put("runId", "run-b") } }
     }

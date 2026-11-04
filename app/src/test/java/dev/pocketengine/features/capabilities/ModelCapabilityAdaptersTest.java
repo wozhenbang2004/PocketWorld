@@ -202,6 +202,14 @@ public final class ModelCapabilityAdaptersTest {
         JSONObject args=f.authority.prepare("ssh_read_file",new JSONObject().put("path","note.txt"));port.execute("ssh_read_file",args,f.control);assertEquals(0,f.authority.approvals);assertEquals(1,module.calls);
         JSONObject descriptor=port.descriptors().getJSONObject(1);assertEquals("read",descriptor.getString("effect"));assertTrue(descriptor.getBoolean("journalRequired"));
     }
+    @Test public void planningSshClassificationKeepsNativeReadRoutesAndRejectsAnExecClaimingReadOnly()throws Exception{
+        Fixture f=new Fixture();SshFake module=new SshFake();ModelCapabilityAdapters port=f.ssh(module);assertSame(f.control,f.binding.originalControl());
+        assertTrue(port.sideEffecting("ssh_read_file"));assertEquals(dev.pocketengine.core.ExecutionPlanning.Access.READ,port.planningAccess("ssh_read_file",new JSONObject().put("path","note.txt")));
+        assertEquals(dev.pocketengine.core.ExecutionPlanning.Access.READ,port.planningAccess("ssh_list_files",new JSONObject()));
+        assertEquals(dev.pocketengine.core.ExecutionPlanning.Access.DENY,port.planningAccess("ssh_exec",new JSONObject().put("command","cat note.txt").put("readOnly",true)));
+        assertThrows(Exception.class,()->port.planningAccess("ssh_read_file",new JSONObject().put("path","../outside")));
+        module.profile.put("bindingHash","b".repeat(64));assertThrows(SecurityException.class,()->port.planningAccess("ssh_read_file",new JSONObject().put("path","note.txt")));assertEquals(0,module.calls);assertEquals(0,f.authority.approvals);
+    }
     @Test public void sshWriteRequiresVersionAndExplicitCooperativeConsent()throws Exception {
         Fixture f=new Fixture();ModelCapabilityAdapters port=f.ssh(new SshFake());JSONObject args=new JSONObject().put("path","note.txt").put("content","value").put("expectedVersion","absent").put("acceptCooperativeWrite",true);port.validate("ssh_write_file",args);
         for(String path:new String[]{"../outside","/etc/passwd","a//b","a/../b","a\\b"})assertThrows(Exception.class,()->port.validate("ssh_write_file",new JSONObject(args.toString()).put("path",path)));

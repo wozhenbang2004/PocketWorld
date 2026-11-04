@@ -83,6 +83,12 @@ public final class PhoneTreeCapabilityPort implements CapabilityPort {
     @Override public JSONArray tools()throws Exception{return PhoneExtensionTools.append(appendTools(existing.tools()));}
     @Override public boolean supports(String name){return owns(name)||existing.supports(name);}
     @Override public boolean sideEffecting(String name){return PhoneExtensionTools.NAMES.contains(name)?PhoneExtensionTools.writes(name):NativeTreeScrollPort.TOOL.equals(name)||!PhoneTreeQuery.supports(name)&&existing.sideEffecting(name);}
+    @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception {
+        if(!owns(name))return existing.planningAccess(name,arguments);
+        if(!java.util.Set.of(PhoneTreeQuery.QUERY,PhoneTreeQuery.WAIT,PhoneTreeExtract.TOOL,"phone_list_app_copies","phone_dialog","phone_event").contains(name))return dev.pocketengine.core.ExecutionPlanning.Access.DENY;
+        if(arguments!=null){JSONObject checked=new JSONObject(arguments.toString());checked.remove("_hostOperationId");validate(name,checked);}
+        return dev.pocketengine.core.ExecutionPlanning.Access.READ;
+    }
     @Override public void validate(String name,JSONObject args)throws Exception{if(PhoneExtensionTools.NAMES.contains(name))PhoneExtensionTools.validate(name,args);else if(PhoneTreeQuery.supports(name))PhoneTreeQuery.validate(name,args);else existing.validate(name,args);}
     @Override public JSONObject execute(String name,JSONObject supplied,RunControl control)throws Exception {
         if(!owns(name))return existing.execute(name,supplied,control);

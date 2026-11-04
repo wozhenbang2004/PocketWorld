@@ -487,6 +487,12 @@ public final class ConversationHistory {
         }
         private static JSONObject string(int n)throws Exception{return new JSONObject().put("type","string").put("maxLength",n);}private static JSONObject number(long min,long max)throws Exception{return new JSONObject().put("type","integer").put("minimum",min).put("maximum",max);}private static JSONObject tool(String name,String description,JSONObject props,JSONArray required)throws Exception{return new JSONObject().put("type","function").put("function",new JSONObject().put("name",name).put("description",description).put("parameters",new JSONObject().put("type","object").put("properties",props).put("required",required).put("additionalProperties",false)));}
         @Override public JSONArray tools()throws Exception{return append(existing.tools());}@Override public boolean supports(String name){return !binding.caller.readerRetired()&&own(name)||existing.supports(name);}@Override public boolean sideEffecting(String name){return !own(name)&&existing.sideEffecting(name);}
+        @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{
+            if(!own(name))return existing.planningAccess(name,arguments);
+            if(closed||binding.caller.readerRetired())return dev.pocketengine.core.ExecutionPlanning.Access.DENY;
+            if(arguments!=null){JSONObject checked=new JSONObject(arguments.toString());checked.remove("_hostOperationId");validate(name,checked);}
+            return dev.pocketengine.core.ExecutionPlanning.Access.READ;
+        }
         @Override public JSONObject contextSnapshot(String query)throws Exception{return existing.contextSnapshot(query);}@Override public void beginRun(String goal,RunControl original)throws Exception{lifecycle(original);existing.beginRun(goal,original);}
         @Override public synchronized void prepareTurnSurface(RunControl original)throws Exception{if(closed||original!=binding.caller.control)throw new SecurityException("历史调用不是原控制器");existing.prepareTurnSurface(original);if(binding.caller.readerRetired()){if(!providedMessages.isEmpty()||!providedTasks.isEmpty())throw new SecurityException("已提供的历史原文仍须保持严格来源检查");selections.clear();cursors.clear();}}
         @Override public synchronized void admitCapabilities(CapabilitySnapshot snapshot,RunControl original)throws Exception{existing.admitCapabilities(snapshot,original);lifecycle(original);if(admittedPause!=original.pauseRevision()){selections.clear();cursors.clear();admittedPause=original.pauseRevision();}}

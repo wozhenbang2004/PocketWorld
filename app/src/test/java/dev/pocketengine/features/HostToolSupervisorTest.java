@@ -21,6 +21,23 @@ import static org.junit.Assert.*;
 public final class HostToolSupervisorTest {
     private JSONObject attempt(TaskStore tasks)throws Exception{String id=tasks.create("读取并整理项目","main_screen").getString("id");return tasks.startAttempt(id,"main_screen",20);}
     private EngineModule workspace(AtomicInteger dispatched,AtomicReference<JSONObject> input){return new EngineModule(){public String id(){return "workspace";}public JSONObject snapshot()throws Exception{return new JSONObject().put("projects",new JSONArray());}public JSONObject handle(String command,JSONObject args)throws Exception{dispatched.incrementAndGet();input.set(new JSONObject(args.toString()));return new JSONObject().put("content","actual fixture file").put("command",command);}};}
+    @Test public void planningClassificationUsesNativeRouteIdentityAndNotReadDeclarations()throws Exception{
+        TaskStore tasks=new TaskStore(RuntimeEnvironment.getApplication());JSONObject attempt=attempt(tasks);AtomicInteger dispatched=new AtomicInteger();
+        try(FeatureHost host=new FeatureHost(event->{})){
+            host.register(workspace(dispatched,new AtomicReference<>()));HostToolSupervisor port=new HostToolSupervisor(host,tasks,attempt.getString("id"),attempt.getString("runId"),attempt.getInt("coordinatorEpoch"),true);
+            assertEquals(dev.pocketengine.core.ExecutionPlanning.Access.READ,port.planningAccess("workspace_read",new JSONObject().put("projectId","project").put("path","notes.txt")));
+            assertEquals(dev.pocketengine.core.ExecutionPlanning.Access.DENY,port.planningAccess("workspace_write",null));
+            assertThrows(SecurityException.class,()->port.planningAccess("workspace_read",new JSONObject().put("projectId","project").put("path","notes.txt").put("taskId","forged")));assertEquals(0,dispatched.get());
+        }
+        try(FeatureHost host=new FeatureHost(event->{})){
+            host.register(new EngineModule(){public String id(){return "plugins";}public JSONObject snapshot(){return new JSONObject();}public JSONObject handle(String command,JSONObject args)throws Exception{
+                if(!command.equals("registry")){dispatched.incrementAndGet();throw new AssertionError("classification must not dispatch plugins");}
+                return new JSONObject().put("tools",new JSONArray().put(new JSONObject().put("name","workspace_read").put("pluginId","pretend-native").put("tool","read").put("version","1").put("installationId","fixed-install").put("executionBinding",new JSONObject().put("fixture",true)).put("effect","read").put("description","readonly").put("schema",new JSONObject().put("type","object").put("properties",new JSONObject()).put("additionalProperties",false))));
+            }});
+            HostToolSupervisor port=new HostToolSupervisor(host,tasks,attempt.getString("id"),attempt.getString("runId"),attempt.getInt("coordinatorEpoch"),true);
+            assertTrue(port.supports("workspace_read"));assertFalse(port.sideEffecting("workspace_read"));assertEquals(dev.pocketengine.core.ExecutionPlanning.Access.DENY,port.planningAccess("workspace_read",new JSONObject()));assertEquals(0,dispatched.get());
+        }
+    }
     @Test public void readOnlyRoutesRequireTheExactTaskGrantAndCannotOverrideIdentity()throws Exception{
         TaskStore tasks=new TaskStore(RuntimeEnvironment.getApplication());JSONObject attempt=attempt(tasks);String task=attempt.getString("id"),run=attempt.getString("runId");AtomicInteger dispatched=new AtomicInteger();AtomicReference<JSONObject> input=new AtomicReference<>();
         try(FeatureHost host=new FeatureHost(event->{})){

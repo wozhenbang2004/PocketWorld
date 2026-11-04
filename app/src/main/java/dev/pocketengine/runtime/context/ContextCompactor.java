@@ -1,6 +1,7 @@
 package dev.pocketengine.runtime.context;
 
 import dev.pocketengine.core.ModelConfig;
+import dev.pocketengine.core.ExecutionPlanning;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.core.RunJournal;
 import dev.pocketengine.runtime.ModelGateway;
@@ -22,17 +23,29 @@ public final class ContextCompactor {
     public boolean available(){return journal!=null&&host!=null;}
 
     public RunContextBudget.Projection request(JSONArray raw,JSONArray visible,List<Integer> sourceMap,JSONArray tools,ModelConfig selected,RunControl original,RunContextBudget budget)throws Exception {
-        return request(raw,visible,sourceMap,tools,selected,original,budget,false);
+        ExecutionPlanning planning=journal==null?null:journal.planning();
+        return request(raw,visible,sourceMap,tools,selected,original,budget,planning,planning==null?null:planning.capture());
+    }
+    /** Runner passes the same native turn snapshot used by its MAIN request and tool admission. */
+    public RunContextBudget.Projection request(JSONArray raw,JSONArray visible,List<Integer> sourceMap,JSONArray tools,ModelConfig selected,RunControl original,RunContextBudget budget,
+                                              ExecutionPlanning planning,ExecutionPlanning.Snapshot turn)throws Exception {
+        return request(raw,visible,sourceMap,tools,selected,original,budget,false,planning,turn);
     }
     /** One native provider context-limit recovery. Raw rows remain authoritative; never summarize a summary. */
     public RunContextBudget.Projection afterContextLimit(JSONArray raw,JSONArray visible,List<Integer> sourceMap,JSONArray tools,ModelConfig selected,RunControl original,RunContextBudget budget)throws Exception {
-        if(!available()||active!=null)throw new CompactionPlan.Unavailable("context_limit_no_new_raw_prefix");
-        return request(raw,visible,sourceMap,tools,selected,original,budget,true);
+        ExecutionPlanning planning=journal==null?null:journal.planning();
+        return afterContextLimit(raw,visible,sourceMap,tools,selected,original,budget,planning,planning==null?null:planning.capture());
     }
-    private RunContextBudget.Projection request(JSONArray raw,JSONArray visible,List<Integer> sourceMap,JSONArray tools,ModelConfig selected,RunControl original,RunContextBudget budget,boolean forced)throws Exception {
+    public RunContextBudget.Projection afterContextLimit(JSONArray raw,JSONArray visible,List<Integer> sourceMap,JSONArray tools,ModelConfig selected,RunControl original,RunContextBudget budget,
+                                                        ExecutionPlanning planning,ExecutionPlanning.Snapshot turn)throws Exception {
+        if(!available()||active!=null)throw new CompactionPlan.Unavailable("context_limit_no_new_raw_prefix");
+        return request(raw,visible,sourceMap,tools,selected,original,budget,true,planning,turn);
+    }
+    private RunContextBudget.Projection request(JSONArray raw,JSONArray visible,List<Integer> sourceMap,JSONArray tools,ModelConfig selected,RunControl original,RunContextBudget budget,boolean forced,
+                                               ExecutionPlanning planning,ExecutionPlanning.Snapshot turn)throws Exception {
         boolean generated=false;
         for(;;){
-            original.check();
+            original.check();requirePlanning(planning,turn);
             if(active!=null&&original.pauseRevision()!=active.pauseRevision){
                 original.check();
                 if(original.isPaused()||!host.scopeCurrent(original))throw new CompactionPlan.Unavailable("native_resume_scope_unavailable");
@@ -62,7 +75,8 @@ public final class ContextCompactor {
                 plan=CompactionPlan.chooseReconstructionStep(raw,visible,sourceMap,tools,selected,summaryBudget.limits,active,summary,projectionId,original);
             }
             if(active!=null&&(plan.endExclusive<=active.plan.endExclusive||!plan.coveredIndexes().containsAll(active.plan.coveredIndexes())||plan.coveredIndexes().size()<=active.plan.coveredIndexes().size()))throw new CompactionPlan.Unavailable("summary_reconstruction_did_not_advance");
-            CompactionJournal.FrozenPrefix frozen=host.freeze(plan,original);frozen.check(original);
+            requirePlanning(planning,turn);
+            CompactionJournal.FrozenPrefix frozen=host.freeze(plan,original);frozen.check(original);requirePlanning(planning,turn);
             // This is a physical, separately attributed SUMMARY invocation. No network under a host/DB monitor.
             InferenceReceipt[] terminal={null};
             InferenceCapture.Target nativeTarget=journal.inferenceTarget(InferenceReceipt.Purpose.SUMMARY,"");
@@ -73,8 +87,10 @@ public final class ContextCompactor {
                 public void started(InferenceReceipt receipt){}
                 public void finished(InferenceReceipt receipt){terminal[0]=receipt;}
             });
+            if(planning!=null)target=InferenceCapture.withAdmission(target,()->requirePlanning(planning,turn));
             JSONArray input=plan.summaryMessages();ModelConfig summarySelection=selected.forPurpose("SUMMARY");original.check();
             JSONObject answer=ModelGateway.completeWithAdmission(summarySelection,input,null,original,target,candidate->budget.request(input,null,candidate));
+            requirePlanning(planning,turn);
             ModelConfig actualSummary=ModelGateway.actualConfigForReceipt(summarySelection,terminal[0]);
             frozen.check(original);SummaryDraft actual=SummaryDraft.completed(frozen,answer,terminal[0],actualSummary);
             JSONArray projected=plan.project(visible,sourceMap,actual.text);
@@ -82,13 +98,18 @@ public final class ContextCompactor {
             RunContextBudget.Projection checked=null;
             try{checked=budget.request(projected,tools,selected);}
             catch(RunContextBudget.Blocked blocked){if(!"budget_exceeded".equals(blocked.status))throw blocked;}
+            requirePlanning(planning,turn);
             CompactionJournal.PublishReceipt receipt=host.publish(frozen,actual,original);
+            requirePlanning(planning,turn);
             if(!receipt.published())throw new CompactionPlan.Unavailable("summary_publish_"+receipt.status);
             active=frozen;summary=actual;projectionId=receipt.projectionId;generated=true;
             if(checked!=null)return withEvidence(checked,true);
             // Finite by strict end/coverage advancement and the original per-physical-call budget.
             // A pause, source change, unknown effect or exhausted reservation stops before another HTTP.
         }
+    }
+    private static void requirePlanning(ExecutionPlanning planning,ExecutionPlanning.Snapshot turn)throws Exception {
+        if(planning!=null)planning.requireCurrent(turn);else if(turn!=null)throw new SecurityException("摘要丢失原任务规划控制器");
     }
     private RunContextBudget.Projection withEvidence(RunContextBudget.Projection projection,boolean generated)throws Exception {
         JSONObject diagnostics=projection.diagnostics().put("summariesGenerated",generated).put("summaryProjectionUsed",true).put("summaryLayers",1).put("summaryDerivationDepth",active.plan.summaryDerivationDepth).put("summaryInputMode",active.plan.incremental()?"published_summary_plus_new_originals":"original_rows")

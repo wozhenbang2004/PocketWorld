@@ -115,6 +115,12 @@ public final class ProjectCapabilityPort implements CapabilityPort {
     }
     @Override public boolean supports(String name){return schemas.containsKey(name)||existing!=null&&existing.supports(name);}
     @Override public boolean sideEffecting(String name){return schemas.containsKey(name)?name.equals(TaskStoreProjectHost.TOOL)||name.equals("project_stop")||name.equals("project_process_input"):existing==null||existing.sideEffecting(name);}
+    @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception {
+        if(!schemas.containsKey(name))return existing==null?dev.pocketengine.core.ExecutionPlanning.Access.DENY:existing.planningAccess(name,arguments);
+        if(closed||!Set.of("project_inspect","project_read_file","project_view_image","project_search","project_list_files","project_plan_manifest","project_status","project_log","project_changes","project_review_file","project_preview_log","project_wait_input").contains(name))return dev.pocketengine.core.ExecutionPlanning.Access.DENY;
+        if(arguments!=null){JSONObject checked=new JSONObject(arguments.toString());checked.remove("_hostOperationId");normalize(name,checked);checkCheckout();}
+        return dev.pocketengine.core.ExecutionPlanning.Access.READ;
+    }
     @Override public void validate(String name,JSONObject args)throws Exception {if(schemas.containsKey(name))normalize(name,args);else{if(existing==null)throw new SecurityException("项目工具未挂载");existing.validate(name,args);}}
     private JSONObject normalize(String name,JSONObject raw)throws Exception {
         JSONObject args=new JSONObject((raw==null?new JSONObject():raw).toString());if(args.toString().length()>30000)throw new IllegalArgumentException("项目方案超过本次参数上限，请缩小项目或修改内容");PluginRules.validateArguments(args,schemas.get(name));

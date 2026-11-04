@@ -37,6 +37,7 @@ public final class TeamBudgetPort implements CapabilityPort {
     @Override public JSONArray tools()throws Exception{JSONArray tools=original.tools();if(allowedRoundTools==null)return tools;JSONArray selected=new JSONArray();for(int i=0;i<tools.length();i++)if(allowed(tools.getJSONObject(i).getJSONObject("function").getString("name")))selected.put(tools.getJSONObject(i));return selected;}
     @Override public boolean supports(String name){return allowed(name)&&original.supports(name);}
     @Override public boolean sideEffecting(String name){return original.sideEffecting(name);}
+    @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{return allowed(name)?original.planningAccess(name,arguments):dev.pocketengine.core.ExecutionPlanning.Access.DENY;}
     @Override public void validate(String name,JSONObject arguments)throws Exception{if(!allowed(name))throw new SecurityException("预算续审不新增工具范围，请在原工具授权另审");original.validate(name,arguments);}
     @Override public JSONObject execute(String name,JSONObject arguments,RunControl control)throws Exception{
         if(!allowed(name))throw new SecurityException("预算续审不新增工具范围，请在原工具授权另审");if(roundParent&&control!=roundControl)throw new SecurityException("不是本次原round父控制器");

@@ -726,6 +726,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         check(!closed)
         return app.tasks.teamParentPlanForOwner(taskId, approvalId)
     }
+    fun readTaskExecutionPlanApproval(taskId: String, approvalId: String): JSONObject {
+        check(!closed)
+        return app.readTaskExecutionPlanApproval(taskId, approvalId)
+    }
     fun openTeamResearchBudgetPage(runId: String): dev.pocketengine.features.teams.TeamResearchHost.Page {
         check(!closed)
         return app.openTeamResearchBudgetPage(runId)
@@ -3192,7 +3196,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val viewerEpoch = inspectionEpoch
         val inlinePreview = phoneInlinePreview.takeIf { action == "observeTask" }
         val targetTask = input.optString("taskId")
-        val taskAction = targetTask.takeIf { it.isNotBlank() && action in setOf("resumeTask", "stopTask", "approveCapability", "confirmResult", "resolveOperation", "updateTask", "reconcileExternalTask", "configureTaskExecutionScope", "answerOwnerQuestion") }
+        val executionPlanOwnerAction = originalOwnerCurrent != null && (action == "enterTaskPlanning" || action == "approveCapability" &&
+            listOf("expectedScopeRevision", "planRevision", "planArtifactRef", "planHash").all(input::has))
+        val taskAction = targetTask.takeIf { it.isNotBlank() && action in setOf("resumeTask", "stopTask", "approveCapability", "confirmResult", "resolveOperation", "updateTask", "reconcileExternalTask", "configureTaskExecutionScope", "enterTaskPlanning", "answerOwnerQuestion") }
         if (taskAction != null) state = state.copy(taskActionErrors = state.taskActionErrors - taskAction)
         val needsGroupOwner = action in setOf("resumeTask", "stopTask", "approveCapability", "confirmResult", "resolveOperation", "updateTask", "reconcileExternalTask") && state.tasks.any { it.id == targetTask && it.raw.optJSONObject("origin")?.optString("kind") == "group" }
         val groupWindow = if (needsGroupOwner && groupTaskId == targetTask) groupTaskWindow else null
@@ -3215,7 +3221,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         null
                     } else if (originalOwnerCurrent != null) synchronized(app) {
                         check(originalOwnerCurrent()) { "原审阅窗口已关闭，未执行排队操作" }
-                        app.dispatchOwnerAction(action, input)
+                        if (executionPlanOwnerAction) {
+                            app.dispatchReviewedOwnerAction(action, input, java.util.function.BooleanSupplier { originalOwnerCurrent() })
+                        } else app.dispatchOwnerAction(action, input)
                     } else app.dispatchOwnerAction(action, input)
                 if (action == "answerOwnerQuestion" && taskAction != null) requireOwnerQuestionAccepted(result)
                 main.post {
@@ -3246,6 +3254,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         closeBackgroundSetup()
                     }
                     if (action == "configureTaskExecutionScope" && result != null) { mergeTask(result); state = state.copy(notice = "原范围已更新，累计用量保留；没有自动继续或重放动作") }
+                    if (action == "enterTaskPlanning") { getTask(input.optString("taskId")); app.sendState() }
                     if (action == "getTask" && result != null) {
                         val task = result.optJSONObject("task") ?: if (result.has("id")) result else null
                         task?.let { mergeTask(it) }
@@ -3253,7 +3262,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     if (action in setOf("confirmResult", "resumeTask", "updateTask", "resolveOperation")) app.sendState()
                     if (action == "resolveOperation" && input.optString("taskId") == state.inspectionTaskId) observeInspection()
                     if (action == "reconcileExternalTask") { getTask(input.optString("taskId")); app.sendState(); state = state.copy(notice = "已记录你核对的结果，未重新执行外部操作") }
-                    if (action == "approveCapability") { state = state.copy(notice = capabilityApprovalNotice(result, input.optBoolean("approved"))); getTask(input.optString("taskId")); app.sendState() }
+                    if (action == "approveCapability") { if (!executionPlanOwnerAction || originalOwnerCurrent?.invoke() == true) state = state.copy(notice = capabilityApprovalNotice(result, input.optBoolean("approved"))); getTask(input.optString("taskId")); app.sendState() }
                     if (action in setOf("resumeTask", "updateTask")) state = state.copy(savedFeedbackRevision = state.savedFeedbackRevision + 1, savedFeedbackTaskId = input.optString("taskId"), savedFeedback = input.optString("feedback"), notice = if (action == "updateTask" && app.activeId() == input.optString("taskId")) "补充已保存，正在结束本次执行；结束后可继续原任务" else if (action == "updateTask") "补充已保存在原任务中" else null)
                     if (action == "startRun" && input.optString("executionMode") == "main_screen" && result != null) moveOriginalPhoneToBackground(result)
                     if (action in setOf("startOwnedPhonePractice", "resumeTask", "resumeRun")) {
@@ -3267,7 +3276,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 }
             } catch (error: Exception) {
                 main.post {
-                    if (!closed) {
+                    if (!closed && executionPlanOwnerAction && originalOwnerCurrent?.invoke() != true && ownerRequestId != null) {
+                        state = state.copy(moduleBusy = state.moduleBusy - ("owner." + action))
+                    }
+                    if (!closed && (!executionPlanOwnerAction || originalOwnerCurrent?.invoke() == true)) {
                         if (ownerRequestId != null) {
                             val key = "owner." + action
                             state = state.copy(moduleBusy = state.moduleBusy - key, moduleErrors = state.moduleErrors + (key to message(error)))

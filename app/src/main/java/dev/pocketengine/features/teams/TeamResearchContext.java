@@ -72,6 +72,7 @@ public final class TeamResearchContext implements AutoCloseable {
         CapabilityPort port=new MeteredSurface(tasks,binding,raw,reader,materials,call,fence,original);
         RunJournal originalJournal=tasks.journal(binding.taskId(),binding.runId(),binding.epoch(),original);
         RunJournal metered=new RunJournal(){
+            public dev.pocketengine.core.ExecutionPlanning planning()throws Exception{return originalJournal.planning();}
             public JSONObject restore()throws Exception{return originalJournal.restore();}
             public void checkpoint(JSONArray history,int steps,JSONObject observation)throws Exception{originalJournal.checkpoint(history,steps,observation);}
             public boolean progressGuardSupported(){return originalJournal.progressGuardSupported();}
@@ -123,6 +124,7 @@ public final class TeamResearchContext implements AutoCloseable {
         public JSONArray tools()throws Exception{return materials.tools().put(peerTool());}
         public boolean supports(String tool){return "team_send_message".equals(tool)||materials.supports(tool);}
         public boolean sideEffecting(String tool){return false;}
+        @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String tool,JSONObject arguments)throws Exception{return "team_send_message".equals(tool)?dev.pocketengine.core.ExecutionPlanning.Access.DENY:materials.planningAccess(tool,arguments);}
         public void validate(String tool,JSONObject args)throws Exception {if(!"team_send_message".equals(tool)){materials.validate(tool,args);return;}if(!TeamMemberEvidenceHost.keys(args).equals(Set.of("targetMemberId","text"))||!args.getString("targetMemberId").matches("[A-Za-z][A-Za-z0-9_-]{0,63}")||args.getString("text").codePoints().allMatch(Character::isWhitespace)||args.getString("text").length()>2000)throw new SecurityException("成员消息只接受同队稳定收件ID与有界文本");call.checkCurrent();}
         public JSONObject execute(String tool,JSONObject args,RunControl original)throws Exception{return materials.execute(tool,args,original);}
         public JSONObject prepareTurn(String query,int round,int steps,RunControl original)throws Exception{return materials.prepareTurn(query,round,steps,original).put("tools",tools());}
@@ -140,6 +142,7 @@ public final class TeamResearchContext implements AutoCloseable {
         public JSONArray tools()throws Exception{return surface(reader.tools());}
         public boolean supports(String tool){return READS.contains(tool)&&reader.supports(tool);}
         public boolean sideEffecting(String tool){return false;}
+        @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String tool,JSONObject arguments)throws Exception{if(!supports(tool))return dev.pocketengine.core.ExecutionPlanning.Access.DENY;if(arguments!=null&&tool.equals(TaskStoreMemoryReader.RAW_QUERY))section(arguments);return reader.planningAccess(tool,arguments);}
         public void validate(String tool,JSONObject args)throws Exception{if(!READS.contains(tool))throw new SecurityException("不是原只读研究工具");if(tool.equals(TaskStoreMemoryReader.RAW_QUERY))section(args);reader.validate(tool,args);}
         public JSONObject execute(String tool,JSONObject args,RunControl live)throws Exception {
             if(live!=original)throw new SecurityException("不能替换原研究控制器");validate(tool,args);fence.metadata();TaskStore.TeamResearchRead operation=tasks.beginTeamResearchRead(binding,tool,args,live);

@@ -56,6 +56,7 @@ public final class PhoneTextTargetCapabilityPort implements CapabilityPort {
     @Override public JSONArray tools()throws Exception{return append(existing.tools());}
     @Override public boolean supports(String name){return own(name)||existing.supports(name);}
     @Override public boolean sideEffecting(String name){return own(name)||existing.sideEffecting(name);}
+    @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{return own(name)?dev.pocketengine.core.ExecutionPlanning.Access.DENY:existing.planningAccess(name,arguments);}
     @Override public void validate(String name,JSONObject args)throws Exception {
         if(!own(name)){existing.validate(name,args);return;}
         if(args==null||args.length()!=2||!(args.opt("observationId") instanceof String)||args.getString("observationId").isEmpty()

@@ -121,6 +121,7 @@ final class ExtensionCapabilityPort implements CapabilityPort {
     @Override public JSONObject contextSnapshot(String query)throws Exception {return existing.contextSnapshot(query);}
     @Override public boolean supports(String name){return !closed&&(discovery!=null&&ScopedToolCatalog.SEARCH_TOOL.equals(name)||admitted.containsKey(name)||runtime!=null&&runtime.supports(name)||existing.supports(name));}
     @Override public boolean sideEffecting(String name){return discovery!=null&&ScopedToolCatalog.SEARCH_TOOL.equals(name)||admitted.containsKey(name)||runtime!=null&&runtime.supports(name)?false:existing.sideEffecting(name);}
+    @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{return closed||discovery!=null&&ScopedToolCatalog.SEARCH_TOOL.equals(name)||admitted.containsKey(name)||runtime!=null&&runtime.supports(name)?dev.pocketengine.core.ExecutionPlanning.Access.DENY:existing.planningAccess(name,arguments);}
     @Override public void validate(String name,JSONObject arguments)throws Exception {
         if(discovery!=null&&ScopedToolCatalog.SEARCH_TOOL.equals(name)){discovery.validateSearch(arguments,original);return;}
         JSONObject schema=admitted.get(name);if(schema!=null)PluginRules.validateArguments(arguments,schema);else existing.validate(name,arguments);

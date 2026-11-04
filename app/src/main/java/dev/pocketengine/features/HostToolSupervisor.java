@@ -379,7 +379,27 @@ public final class HostToolSupervisor implements CapabilityPort {
                     &&admitted.write==!row.optString("effect","write").equals("read")&&TaskStore.capabilityFingerprint(admitted.schema).equals(TaskStore.capabilityFingerprint(row.getJSONObject("schema")));
         }return false;
     }
+    @Override public dev.pocketengine.core.ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{
+        if(name!=null&&name.matches("device_invoke_tool|device_delegate_goal|device_operation_get")&&nativeDeviceRoutes!=null){refreshNativeDeviceRoutes();return nativeDevicePort==null?dev.pocketengine.core.ExecutionPlanning.Access.DENY:nativeDevicePort.planningAccess(name,arguments);}
+        Tool tool=routes.get(name);
+        // Only the actual fixed native route can make this statement. Plugin effect/read hints cannot.
+        if(tool==null||tool!=nativeRoutes.get(name)||tool.preset!=null)return dev.pocketengine.core.ExecutionPlanning.Access.DENY;
+        boolean read=switch(tool.feature){
+            case "memory"->Set.of("search","recall","$memory_draft_sources").contains(tool.command);
+            case "workspace"->Set.of("$projects","list","read","history","diff","listArtifacts","readArtifact","diffArtifact").contains(tool.command);
+            case "remote"->Set.of("$profiles","environments","listJobs","getJob","readFile").contains(tool.command);
+            case "skills"->Set.of("$skills_list","$skills_read","$skills_draft_sources").contains(tool.command);
+            case "automation"->"$schedule_list".equals(tool.command);
+            case "attachments"->Set.of("list","readText").contains(tool.command);
+            case "teams"->"$teams".equals(tool.command);
+            default->false;
+        };
+        if(!read)return dev.pocketengine.core.ExecutionPlanning.Access.DENY;
+        if(arguments!=null){JSONObject checked=new JSONObject(arguments.toString());checked.remove("_hostOperationId");validate(name,checked);}
+        return dev.pocketengine.core.ExecutionPlanning.Access.READ;
+    }
     @Override public JSONObject execute(String name,JSONObject arguments,RunControl control)throws Exception{
+        tasks.requireExecutionPlanningAccess(taskId,runId,epoch,name,arguments,control,planningAccess(name,arguments));
         var profileCheck=workProfile==null?null:workProfile.forTool(name,arguments,control);if(name!=null&&name.matches("device_invoke_tool|device_delegate_goal|device_operation_get")&&nativeDeviceRoutes!=null){refreshNativeDeviceRoutes();if(nativeDevicePort==null||!nativeDevicePort.supports(name))throw new CapabilityPort.Unavailable();return nativeDevicePort.execute(name,arguments,control);}
         Tool tool=routes.get(name);if(tool==null)throw new SecurityException("本任务没有该工具路由");
         java.util.Objects.requireNonNull(control).check();tasks.checkCapability(taskId,runId,epoch,name,control);

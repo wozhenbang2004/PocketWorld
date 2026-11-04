@@ -53,6 +53,15 @@ public final class ProjectImageSourceNativeTest {
         NativeToolObservation.Image read(JSONObject args)throws Exception{String operation=UUID.randomUUID().toString();JSONObject receipt=port.execute("project_view_image",new JSONObject(args.toString()).put("_hostOperationId",operation),control);assertEquals("captured",receipt.getString("status"));assertFalse(receipt.getBoolean("actualImageAttached"));assertFalse(receipt.toString().contains("base64"));return port.takeToolObservation("project_view_image",operation,control).consume("project_view_image",operation,control);}
         @Override public void close()throws Exception{control.cancel();try{port.close();}finally{try{local.close();}finally{workspace.close();var field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);((SQLiteDatabase)field.get(tasks)).close();}}}
     }
+    @Test public void planningClassifiesOriginalReadsAndRejectsProposalAndPreviewWrites()throws Exception{
+        try(F f=new F()){
+            for(String name:new String[]{"project_inspect","project_read_file","project_view_image","project_search","project_list_files","project_plan_manifest","project_status","project_log","project_changes","project_review_file"})assertEquals(name,ExecutionPlanning.Access.READ,f.port.planningAccess(name,null));
+            assertEquals(ExecutionPlanning.Access.READ,f.port.planningAccess("project_view_image",f.args()));
+            assertThrows(SecurityException.class,()->f.port.planningAccess("project_view_image",f.args().put("checkout",UUID.randomUUID().toString())));
+            for(String name:new String[]{"project_plan","project_collect_plan","project_preview","project_live_preview","project_execute","project_stop","project_process_input","project_generated_artifact"})assertEquals(name,ExecutionPlanning.Access.DENY,f.port.planningAccess(name,null));
+            assertEquals(0,f.tasks.get(f.task,false).getJSONArray("operations").length());
+        }
+    }
     @Test public void originalCheckoutAndFixedArtifactDeliverExactPixelsWithoutNewEffect()throws Exception{
         try(F f=new F()){assertEquals(NativeToolObservation.Requirement.IMAGE,f.port.observationRequirement("project_view_image",f.args(),f.control));assertEquals(NativeToolObservation.Requirement.NONE,f.port.observationRequirement("project_preview",new JSONObject(),f.control));assertFalse(f.port.sideEffecting("project_view_image"));
             try(var image=f.read(f.args())){assertArrayEquals(f.pixels,Base64.getDecoder().decode(image.base64(f.control)));assertEquals(3,image.metadata().getInt("imageWidthPx"));assertEquals(2,image.metadata().getInt("imageHeightPx"));}
