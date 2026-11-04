@@ -9,21 +9,20 @@ import time
 
 
 class WindowsDesktopHealth:
-    def resolve_target(self, window_id):
-        """Resolve only an exact owner-granted HWND; a UI-supplied PID is not needed.
-
-        The caller immediately probes the returned pair again and freezes process
-        creation/geometry. This lookup alone is neither a grant nor input authority.
-        """
-        if os.name != "nt" or type(window_id) is not int or window_id <= 0:
-            raise ValueError("A current Windows owner-granted window is required")
+    def resolve_window(self, window_id):
+        """Resolve an owner-granted HWND locally, never accept a remote PID claim."""
+        if os.name != "nt" or type(window_id) is not int or not 1 <= window_id <= 9007199254740991:
+            raise ValueError("An actual Windows window is required")
         from ctypes import wintypes as w
         u = ctypes.WinDLL("user32", use_last_error=True)
         u.GetWindowThreadProcessId.argtypes, u.GetWindowThreadProcessId.restype = [w.HANDLE, ctypes.POINTER(w.DWORD)], w.DWORD
-        owner = w.DWORD()
-        if not u.GetWindowThreadProcessId(window_id, ctypes.byref(owner)) or not owner.value:
-            raise ValueError("The original owner-granted window is no longer present")
-        return {"pid": owner.value, "windowId": window_id}
+        pid = w.DWORD()
+        if not u.GetWindowThreadProcessId(window_id, ctypes.byref(pid)) or not pid.value:
+            raise ValueError("The original window no longer exists")
+        target = {"pid": pid.value, "windowId": window_id}
+        if not self.probe(pid.value, window_id).get("available"):
+            raise ValueError("The original window is not available in this interactive session")
+        return target
 
     def probe(self, pid=None, window_id=None):
         if os.name != "nt":
@@ -141,6 +140,19 @@ class WindowsDesktopHealth:
                                     "processCreated": str((created.dwHighDateTime << 32) | created.dwLowDateTime),
                                     "bounds": [rectangle.left, rectangle.top, rectangle.right, rectangle.bottom],
                                     "dpi": u.GetDpiForWindow(window_id)}
+                # Cua's native PNG can omit the invisible DWM resize border.
+                # Keep both physical rectangles so viewer clicks can map a
+                # full-window video point to an exact native capture, or refuse.
+                try:
+                    dwm = ctypes.WinDLL("dwmapi", use_last_error=True)
+                    dwm.DwmGetWindowAttribute.argtypes = [w.HANDLE, w.DWORD, ctypes.c_void_p, w.DWORD]
+                    dwm.DwmGetWindowAttribute.restype = ctypes.c_long
+                    frame = w.RECT()
+                    if dwm.DwmGetWindowAttribute(window_id, 9, ctypes.byref(frame), ctypes.sizeof(frame)) == 0:
+                        if rectangle.left <= frame.left < frame.right <= rectangle.right and rectangle.top <= frame.top < frame.bottom <= rectangle.bottom:
+                            result["window"]["frameBounds"] = [frame.left, frame.top, frame.right, frame.bottom]
+                except OSError:
+                    pass  # No guessed crop origin; only an exact full-window PNG may be used.
                 if not result["window"]["dpi"]:
                     return {"available": False, "reason": "window_dpi_unknown"}
             finally:

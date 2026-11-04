@@ -113,12 +113,12 @@ public final class PhoneRunService extends Service {
         if(START_DEVICE_RECEIVER.equals(intent.getAction())){startDeviceReceiver(intent,startId);return START_NOT_STICKY;}
         if(STOP_DEVICE_RECEIVER.equals(intent.getAction())){var resource=receiverOnly;if(resource!=null&&resource.resourceId().equals(intent.getStringExtra("deviceReceiverResourceId"))){try{resource.disableByOwner();}catch(Exception notPersisted){app.error("停止接收开关保存尚未确认；已禁止本次新请求并继续关闭原监听");}stopDeviceReceiver(resource,startId);}else settleForegroundOwnership(startId);return START_NOT_STICKY;}
         String id=intent.getStringExtra("taskId");
-        BackgroundPhoneRun background=id==null?null:backgroundRuns.get(id);
-        if(background!=null){
-            if(PhoneNotificationControls.handles(intent.getAction())){PhoneNotificationControls.dispatch(app,intent,background.runningId,background.runningRunId,background.runningEpoch,background.ownerControl);return START_NOT_STICKY;}
-            if(dev.pocketengine.features.devices.DeviceNotificationControls.handles(intent.getAction())){dev.pocketengine.features.devices.DeviceNotificationControls.dispatch(app,intent,background.runningId,background.runningRunId,background.runningEpoch,background.ownerControl);return START_NOT_STICKY;}
-            if(CONTINUE.equals(intent.getAction())||DEVICE_GOAL_CONTINUE.equals(intent.getAction())){background.continueOriginal(intent,startId);return START_NOT_STICKY;}
-            if(DEVICE_GOAL_CLOSE_RESULT.equals(intent.getAction())){background.closeReviewedDeviceResult(intent,startId);return START_NOT_STICKY;}
+        BackgroundPhoneRun backgroundRun=id==null?null:backgroundRuns.get(id);
+        if(backgroundRun!=null){
+            if(PhoneNotificationControls.handles(intent.getAction())){PhoneNotificationControls.dispatch(app,intent,backgroundRun.runningId,backgroundRun.runningRunId,backgroundRun.runningEpoch,backgroundRun.ownerControl);return START_NOT_STICKY;}
+            if(dev.pocketengine.features.devices.DeviceNotificationControls.handles(intent.getAction())){dev.pocketengine.features.devices.DeviceNotificationControls.dispatch(app,intent,backgroundRun.runningId,backgroundRun.runningRunId,backgroundRun.runningEpoch,backgroundRun.ownerControl);return START_NOT_STICKY;}
+            if(CONTINUE.equals(intent.getAction())||DEVICE_GOAL_CONTINUE.equals(intent.getAction())){backgroundRun.continueOriginal(intent,startId);return START_NOT_STICKY;}
+            if(DEVICE_GOAL_CLOSE_RESULT.equals(intent.getAction())){backgroundRun.closeReviewedDeviceResult(intent,startId);return START_NOT_STICKY;}
             if(START.equals(intent.getAction())||DEVICE_GOAL.equals(intent.getAction()))return START_NOT_STICKY;
         }
         if((START.equals(intent.getAction())||DEVICE_GOAL.equals(intent.getAction()))&&app.isBackgroundPhoneRun(id,app.control(id))){startBackgroundRun(intent,startId);return START_NOT_STICKY;}

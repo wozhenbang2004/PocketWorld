@@ -8,6 +8,7 @@ import dev.pocketengine.features.devices.transport.SocketByteChannel;
 import dev.pocketengine.store.TaskStore;
 import dev.pocketengine.store.TaskStoreDesktopViewer;
 import dev.pocketengine.store.TaskStoreDeviceTasks;
+import dev.pocketengine.store.TaskStoreDeviceTrust;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.InetAddress;
@@ -36,6 +37,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
+import org.robolectric.annotation.ConscryptMode;
 import static org.junit.Assert.*;
 
 /** Original TaskStore SQLite, signed outgoing grants and real loopback mutual TLS.
@@ -43,6 +45,7 @@ import static org.junit.Assert.*;
  * Android WebView/WebRTC rendering, or a real user's device credentials. */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35, manifest = Config.NONE, application = Application.class)
+@ConscryptMode(ConscryptMode.Mode.OFF)
 public final class DeviceDesktopViewerNativeTest {
     private static final String META_PREFIX = "desktop_viewer_send:";
     private static final String INPUT_SECRET = "viewer-input-must-not-enter-task-history";
@@ -89,8 +92,11 @@ public final class DeviceDesktopViewerNativeTest {
             assertEquals(DeviceProtocol.canonical(binding), DeviceProtocol.canonical(session.resourceBinding()));
             assertTrue(session.expiresAt() <= grant.deadline());
 
-            var configuration = session.prepare(new JSONObject().put("action", "configuration")
-                    .put("target", new JSONObject().put("pid", 77).put("windowId", 99)));
+            // The signed resource supplies the exact HWND; only the PC resolves
+            // its process. A caller-supplied second target identity is forbidden.
+            assertThrows(DeviceProtocol.ProtocolException.class, () -> session.prepare(new JSONObject().put("action", "configuration")
+                    .put("target", new JSONObject().put("pid", 77).put("windowId", 99))));
+            var configuration = session.prepare(new JSONObject().put("action", "configuration"));
             var negotiation = session.prepare(new JSONObject().put("action", "negotiate")
                     .put("offer", new JSONObject().put("type", "offer").put("sdp", OFFER_SECRET)));
             var input = session.prepare(input());
@@ -153,6 +159,58 @@ public final class DeviceDesktopViewerNativeTest {
             assertEquals(99, valid.resourceBinding().getInt("windowId"));
         }
         assertEquals(0, metadataCount());
+        assertNoExecutionRecords();
+    }
+
+    @Test public void mergedViewerProfileRestoresOnlyItsOriginalSignedSqlScopeAndRejectsOldWire() throws Exception {
+        assertOriginalSignedSqlScopeAndRejectsOldWire(
+                "pwp1_37a2c7990f46ec2f9ea27ac7223cd2a845eb8b7ff491a7ede3f2d31a626e6675");
+    }
+
+    @Test public void mergedAndroidUserProfileRestoresOnlyItsOriginalSignedSqlScopeAndRejectsOldWire() throws Exception {
+        assertOriginalSignedSqlScopeAndRejectsOldWire(PairingCoordinator.PERSISTED_ANDROID_USER_GRANT_PROFILE);
+    }
+
+    private void assertOriginalSignedSqlScopeAndRejectsOldWire(String previous) throws Exception {
+        long now = System.currentTimeMillis();
+        TaskStoreDeviceTrust nativeTrust = new TaskStoreDeviceTrust(sql);
+        JSONObject legacy = nativeTrust.outgoingGrant(remote.deviceId(), grant.grantId()).put("protocolProfile", previous);
+        signFixtureRecord(legacy);
+        // A valid old signature is not accepted on today's live pairing wire.
+        assertEquals("incompatible_profile", assertThrows(DeviceProtocol.ProtocolException.class,
+                () -> pairing.acceptOutgoingGrant(remote, legacy, now)).code);
+        nativeTrust.putOutgoingGrant(remote.deviceId(), grant.grantId(), legacy, now);
+        String originalStoredReceipt = DeviceProtocol.canonical(legacy);
+        var restored = pairing.restoreOutgoingGrant(remote, grant.grantId(), now);
+        assertEquals(DeviceProtocol.canonical(grant.grant()), DeviceProtocol.canonical(restored.grant()));
+        restored.grant().getJSONArray("capabilities").put("tool.invoke");
+        restored.grant().getJSONArray("resources").put(copy(binding).put("windowId", 100));
+        assertEquals(DeviceProtocol.canonical(grant.grant()), DeviceProtocol.canonical(restored.grant()));
+        assertThrows(SecurityException.class, () -> session(restored, copy(binding).put("windowId", 100)));
+        assertEquals(originalStoredReceipt, DeviceProtocol.canonical(nativeTrust.outgoingGrant(remote.deviceId(), grant.grantId())));
+        try (var opened = session(restored, binding)) {
+            var prepared = opened.prepare(new JSONObject().put("action", "configuration"));
+            assertEquals(DeviceProtocol.PROFILE, prepared.request().json().getString("protocolProfile"));
+            JSONObject oldWire = prepared.request().json().put("protocolProfile", previous);
+            oldWire.put("argumentsDigest", DeviceProtocol.argumentsDigest(oldWire));
+            assertEquals("incompatible_profile", assertThrows(DeviceProtocol.ProtocolException.class,
+                    () -> DeviceProtocol.parseRequest(DeviceProtocol.canonicalBytes(oldWire))).code);
+
+            JSONObject outsideFrozenProfile = copy(legacy);
+            outsideFrozenProfile.getJSONObject("body").getJSONObject("grant").put("grantId", "viewer-future-method")
+                    .getJSONArray("capabilities").put("future.desktop.input");
+            signFixtureRecord(outsideFrozenProfile);
+            nativeTrust.putOutgoingGrant(remote.deviceId(), "viewer-future-method", outsideFrozenProfile, now);
+            assertThrows(SecurityException.class, () -> pairing.restoreOutgoingGrant(remote, "viewer-future-method", now));
+
+            // Controlled native SQL successor: neither an old opaque handle nor
+            // restoring the same historic signature may skip its original epoch.
+            sql.execSQL("UPDATE device_peers SET authorization_epoch=authorization_epoch+1 WHERE device_id=?", new Object[]{remote.deviceId()});
+            assertThrows(SecurityException.class, () -> restored.checkCurrent(System.currentTimeMillis()));
+            assertThrows(SecurityException.class, () -> pairing.restoreOutgoingGrant(remote, grant.grantId(), System.currentTimeMillis()));
+            assertThrows(SecurityException.class, () -> tasks.deviceTasks().desktopViewerTicket(prepared).claimForWrite(remote));
+            assertMetadata(prepared, "not_claimed");
+        }
         assertNoExecutionRecords();
     }
 
@@ -263,12 +321,23 @@ public final class DeviceDesktopViewerNativeTest {
             assertMetadata(pending, "not_claimed");
             assertMetadata(cleanup, "receipt");
 
-            var finalClose = tasks.deviceTasks().desktopViewerTicket(session.prepareClose());
+            assertThrows(SecurityException.class, session::prepareClose);
             session.close();
             assertThrows(SecurityException.class, session::prepareClose);
-            assertThrows(SecurityException.class, () -> finalClose.claimForWrite(remote));
             assertNoExecutionRecords();
         }
+    }
+
+    @Test public void fullyReleasedSessionCannotClaimItsPreviouslyPreparedCleanup() throws Exception {
+        var session = session(grant, binding);
+        var cleanup = session.prepareClose();
+        var ticket = tasks.deviceTasks().desktopViewerTicket(cleanup);
+        session.close();
+        assertThrows(SecurityException.class, () -> ticket.claimForWrite(remote));
+        assertThrows(SecurityException.class, session::prepareClose);
+        assertFalse(ticket.isClaimed());
+        assertMetadata(cleanup, "not_claimed");
+        assertNoExecutionRecords();
     }
 
     @Test public void cleanupStillRequiresCurrentGrantAndCannotBypassNativeRevocation() throws Exception {
@@ -295,6 +364,7 @@ public final class DeviceDesktopViewerNativeTest {
             for (String field : new String[]{"requestId", "executorDeviceId", "instanceId"}) {
                 JSONObject substituted = copy(valid).put(field,
                         "executorDeviceId".equals(field) ? local.deviceId() : "another-native-" + field);
+                if ("executorDeviceId".equals(field)) substituted.getJSONObject("result").put("deviceId", local.deviceId());
                 DeviceProtocol.validateMessage(substituted); // A valid message, but not this request's receipt.
                 assertThrows("response substitution: " + field, SecurityException.class,
                         () -> send.accept(remote, substituted));
@@ -303,6 +373,7 @@ public final class DeviceDesktopViewerNativeTest {
             for (String field : new String[]{"viewerSessionId", "operationId"}) {
                 JSONObject substituted = copy(valid);
                 substituted.getJSONObject("result").put(field, "another-native-" + field);
+                if ("viewerSessionId".equals(field)) substituted.getJSONObject("result").put("sessionId", "another-native-" + field);
                 DeviceProtocol.validateMessage(substituted);
                 assertThrows("result substitution: " + field, SecurityException.class,
                         () -> send.accept(remote, substituted));
@@ -390,21 +461,46 @@ public final class DeviceDesktopViewerNativeTest {
         return pairing.acceptOutgoingGrant(remote, receipt, System.currentTimeMillis());
     }
 
+    private void signFixtureRecord(JSONObject record) throws Exception {
+        record.remove("signature");
+        KeyPair keys = (KeyPair) recordValue(remoteMaterial, "keys");
+        Signature signer = Signature.getInstance("SHA256withECDSA");
+        signer.initSign(keys.getPrivate()); signer.update(DeviceProtocol.canonicalBytes(record));
+        record.put("signature", Base64.getEncoder().encodeToString(signer.sign()));
+    }
+
     private static JSONObject input() throws Exception {
+        long captured = System.currentTimeMillis();
         return new JSONObject().put("action", "input").put("streamId", "native-viewer-stream")
                 .put("controlLease", new JSONObject().put("id", "1".repeat(32)).put("fence", 1)
-                        .put("expiresAt", System.currentTimeMillis() + 30000).put("resource", "native-fixture-desktop")
-                        .put("streamId", "native-viewer-stream"))
-                .put("frameRef", new JSONObject().put("id", "fixture-frame").put("geometryRevision", "fixture-geometry"))
+                        .put("expiresAt", captured + 30000).put("resource", "native-fixture-desktop"))
+                .put("frameRef", new JSONObject().put("frameId", "fixture-frame").put("streamId", "native-viewer-stream")
+                        .put("geometryRevision", "fixture-geometry").put("width", 800).put("height", 600)
+                        .put("capturedAt", captured).put("expiresAt", captured + 30000).put("rtpTimestamp", 0))
                 .put("input", new JSONObject().put("kind", "insert_text").put("text", INPUT_SECRET));
     }
 
     private JSONObject response(TaskStoreDesktopViewer.Send send) throws Exception {
+        JSONObject args = send.request().arguments();
+        String id = args.getString("viewerSessionId"), action = args.getString("action");
+        JSONObject result = new JSONObject().put("viewerSessionId", id).put("operationId", send.request().operationId());
+        if ("close".equals(action)) result.put("status", "closed");
+        else {
+            JSONObject control = new JSONObject().put("owner", "input".equals(action) ? "human" : "none")
+                    .put("revision", "input".equals(action) ? 1 : 0).put("needsReconcile", false);
+            if ("input".equals(action)) control.put("lease", args.getJSONObject("controlLease"));
+            result.put("kind", "desktopSession").put("deviceId", remote.deviceId()).put("sessionId", id)
+                    .put("resourceBinding", binding).put("expiresAt", send.request().deadline()).put("width", 800).put("height", 600)
+                    .put("control", control).put("iceServers", new JSONArray());
+            if (args.has("streamId")) result.put("streamId", args.getString("streamId"));
+            if ("negotiate".equals(action)) result.put("streamId", "native-viewer-stream")
+                    .put("answer", new JSONObject().put("type", "answer").put("sdp", ANSWER_SECRET));
+            if ("input".equals(action)) result.put("inputReceipt", new JSONObject().put("status", "completed").put("inputDispatched", true));
+        }
         return new JSONObject().put("protocolVersion", DeviceProtocol.VERSION).put("protocolProfile", DeviceProtocol.PROFILE)
                 .put("messageType", "DeviceResponse").put("requestId", send.request().requestId())
                 .put("method", "desktop.viewer").put("executorDeviceId", remote.deviceId()).put("instanceId", "caller-fixture")
-                .put("result", new JSONObject().put("viewerSessionId", send.request().arguments().getString("viewerSessionId"))
-                        .put("operationId", send.request().operationId()).put("status", "completed"));
+                .put("result", result);
     }
 
     private void assertNoExecutionRecords() {

@@ -11,7 +11,7 @@ import json
 import re
 
 VERSION = "1.0"
-PROFILE = "pwp1_94a3b250d77be4eadd62d184dfa70facfe4e78444f0cd80903d00e339ef25147"
+PROFILE = "pwp1_42dbf55184ca014a356eac1ac5b33a92659e9c09f278e8b30a818ce7ad4ac1ca"
 MAX_CONTROL_BYTES = 65_536
 MAX_PAIRING_BYTES = 16_384
 MAX_DEPTH = 16
@@ -396,26 +396,33 @@ def parse_request(raw):
             import delegation_policy
             delegation_policy.validate_wire_proof(args["delegationAuthorization"])
     elif method == "desktop.viewer":
-        shapes = {"configuration": (set(), {"target"}), "negotiate": ({"offer"}, set()),
-                  "status": ({"streamId"}, set()), "take": ({"streamId", "expectedRevision"}, set()),
-                  "release": ({"streamId", "expectedRevision"}, set()), "input": ({"streamId", "controlLease", "frameRef", "input"}, set()),
-                  "close": (set(), {"streamId"})}
+        required_by_action = {
+            "configuration": set(), "negotiate": {"offer"}, "status": set(), "close": set(),
+            "take": {"streamId", "expectedRevision"}, "release": {"streamId", "expectedRevision"},
+            "input": {"streamId", "controlLease", "frameRef", "input"},
+        }
         action = args.get("action")
-        shape = shapes.get(action) if isinstance(action, str) else None
-        if shape is None: _fail("invalid_request", "Unknown owner desktop action")
-        _keys(args, {"action", "viewerSessionId"} | shape[0], shape[1])
+        if not isinstance(action, str) or action not in required_by_action:
+            _fail("invalid_request", "Unknown owner desktop action")
+        _keys(args, {"action", "viewerSessionId"} | required_by_action[action], {"streamId"} if action in {"status", "close"} else set())
         identifier(args.get("viewerSessionId"), "viewerSessionId")
         if "streamId" in args: identifier(args["streamId"], "streamId")
-        if "expectedRevision" in args: integer(args["expectedRevision"], "expectedRevision", 0, 10000)
-        for field in ("target", "offer", "controlLease", "frameRef", "input"):
-            if field in args and not isinstance(args[field], dict): _fail("invalid_request", "Invalid desktop " + field)
-        if "target" in args:
-            _keys(args["target"], {"pid", "windowId"})
-            for field in ("pid", "windowId"): integer(args["target"][field], field, 1)
+        if "expectedRevision" in args: integer(args["expectedRevision"], "expectedRevision", 0)
+        for name in ("offer", "controlLease", "frameRef", "input"):
+            if name in args and not isinstance(args[name], dict): _fail("invalid_request", "Invalid desktop " + name)
         if "offer" in args:
             _keys(args["offer"], {"type", "sdp"})
             if args["offer"]["type"] != "offer": _fail("invalid_request", "Expected WebRTC offer")
             text(args["offer"]["sdp"], "sdp", 32768)
+        if action == "input":
+            frame = args["frameRef"]
+            _keys(frame, {"streamId", "frameId", "geometryRevision", "width", "height", "capturedAt", "expiresAt", "rtpTimestamp"})
+            if frame["streamId"] != args["streamId"]: _fail("invalid_request", "Desktop frame belongs to another stream")
+            for name in ("frameId", "geometryRevision"): text(frame[name], name, 240)
+            for name in ("width", "height"): integer(frame[name], name, 1, 16384)
+            captured = integer(frame["capturedAt"], "capturedAt", 1, MAX_SAFE_INTEGER - 30000)
+            integer(frame["expiresAt"], "expiresAt", captured + 1, captured + 30000)
+            integer(frame["rtpTimestamp"], "rtpTimestamp", 0, 0xffffffff)
         if value.get("capabilityVersion") != "desktop-v2" or value.get("originDeviceId") != value.get("callerDeviceId") or value.get("delegationChain", []):
             _fail("invalid_request", "Desktop viewer requires a direct owner desktop grant")
         validate_resource_binding("desktop-v2", value.get("resourceBinding"))
@@ -564,6 +571,36 @@ def _grant_receipt_shape(receipt):
     except ValueError:_fail("invalid_request","Invalid canonical owner receipt signature")
 
 
+def validate_desktop_viewer_result(result, executor):
+    if result.get("status") == "closed":
+        _keys(result, {"viewerSessionId", "operationId", "status"})
+        identifier(result["viewerSessionId"], "viewerSessionId")
+        identifier(result["operationId"], "operationId")
+        return
+    _keys(result, set("viewerSessionId operationId kind deviceId sessionId resourceBinding expiresAt width height control iceServers".split()),
+          {"streamId", "answer", "inputReceipt"})
+    for name in ("viewerSessionId", "operationId", "sessionId"): identifier(result[name], name)
+    if result["kind"] != "desktopSession" or result["sessionId"] != result["viewerSessionId"]:
+        _fail("invalid_request", "Desktop response has the wrong session")
+    if result["deviceId"] != executor: _fail("wrong_audience", "Desktop response belongs to another executor")
+    validate_resource_binding("desktop-v2", result["resourceBinding"])
+    integer(result["expiresAt"], "expiresAt", 1)
+    for name in ("width", "height"): integer(result[name], name, 1, 16384)
+    control = result["control"]
+    _keys(control, {"owner", "revision"}, {"lease", "needsReconcile"})
+    if not isinstance(control["owner"], str) or control["owner"] not in {"none", "human", "agent", "other_human"}: _fail("invalid_request", "Unknown desktop control owner")
+    integer(control["revision"], "revision", 0)
+    if "needsReconcile" in control and type(control["needsReconcile"]) is not bool: _fail("invalid_request", "Invalid reconciliation state")
+    if "lease" in control and (control["owner"] != "human" or not isinstance(control["lease"], dict)): _fail("invalid_request", "Another owner cannot expose a lease")
+    if not isinstance(result["iceServers"], list): _fail("invalid_request", "Invalid desktop ICE configuration")
+    if "streamId" in result: identifier(result["streamId"], "streamId")
+    if "answer" in result:
+        _keys(result["answer"], {"type", "sdp"})
+        if result["answer"]["type"] != "answer": _fail("invalid_request", "Expected WebRTC answer")
+        text(result["answer"]["sdp"], "sdp", 32768)
+    if "inputReceipt" in result and not isinstance(result["inputReceipt"], dict): _fail("invalid_request", "Invalid desktop input receipt")
+
+
 def validate_message(value):
     """Validate bounded response records; neither a snapshot nor an event is authority."""
     raw = canonical_bytes(value)
@@ -605,9 +642,7 @@ def validate_message(value):
             validate_message(result)
             if result["deviceId"]!=value["executorDeviceId"] or result["instanceId"]!=value["instanceId"]:_fail("wrong_audience","Description belongs to another native device instance")
         elif method == "desktop.viewer":
-            _keys(result, {"viewerSessionId", "operationId", "status"}, set("expiresAt width height control state streamId answer iceServers bundlePolicy transport lastFrame inputChannel metadataChannel reason transportClosedVerified target frameRef inputReceipt noAutomaticReplay message".split()))
-            identifier(result["viewerSessionId"], "viewerSessionId"); identifier(result["operationId"], "operationId")
-            if result["status"] not in {"completed", "unknown", "failed"}: _fail("invalid_request", "Invalid desktop viewer receipt status")
+            validate_desktop_viewer_result(result, value["executorDeviceId"])
         elif method in ("tool.invoke","task.submitGoal","operation.get","operation.cancel","task.respond","task.pause","task.cancel","task.acquireControl","task.answerQuestion","task.steer","task.requestResume"):
             if result.get("messageType")!="OperationReceipt":_fail("invalid_request","Method requires an original typed operation receipt")
             validate_message(result)

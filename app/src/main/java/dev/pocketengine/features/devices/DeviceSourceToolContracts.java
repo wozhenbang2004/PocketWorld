@@ -64,7 +64,7 @@ final class DeviceSourceToolContracts {
         }return out;
     }
     static String guidance(String name){return switch(name){
-        case "desktop.observe" -> "{discovery:true}只列进程/窗口，不是action-ready。用准确pid+windowId默认取semantic结构和新observationRef，不要求截图。需要坐标/真实键鼠操作时显式observationMode=hybrid或visual，才返回真实capture。{}仅整显示hybrid观察。";
+        case "desktop.observe" -> "{discovery:true}只列进程/窗口，不是action-ready。用准确pid+windowId默认取semantic结构和新observationRef，不要求截图。仅完整且已送入本次模型的结构可授权语义动作；结构缺少完整性证明、被截断或nativeSemanticInput.available=false时，必须重新显式observationMode=hybrid或visual取得真实图像，不能继续用旧ref。需要坐标/真实键鼠操作时也显式选择hybrid或visual，才返回真实capture。{}仅整显示hybrid观察。";
         case "desktop.control" -> "先acquire取得原job的payload.desktopReceipt.lease；每次act传该准确lease。HELD过期不自动转让：只可显式release原lease再acquire；unknown/NEEDS_RECONCILE不可自动释放或重放。";
         case "desktop.act" -> "外层observationRef必须来自最新实际送入当前模型的同窗口结构或frame；semantic只用于支持的元素语义操作，坐标/键鼠需先观察hybrid/visual，arguments.lease来自已结算的desktop.control。set_text用目标UIA ValuePattern完整替换（text空串为清空；固定UIA省略空值/读失败时只可回unknown，不能把缺value当清空成功或重放）；不支持时明确拒绝，不自动按键清空或降为追加。insert_text只插入，不混坐标focus+输入。每次act后改用payload.desktopReceipt.afterObservation的新ref，不复用旧ref。verification仅证明新观察的窗口条件，不证明文件保存；没条件或unknown不得称业务成功。foreground仅准确known-no-input background拒绝后独立新操作+新ref，禁止自动升级。";
         case "workspace.location" -> "只用{}读取该准确已授权workspace的native rootPath/pathStyle，供SaveAs定位；不能猜Documents/cwd或从binding反推。locationOnly=true，guiDirectorySandbox=false；不代表GUI具备OS目录写入沙箱。";

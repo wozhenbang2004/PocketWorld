@@ -29,14 +29,22 @@ PERSISTED_GRANT_METHODS = frozenset({"device.describe", "tool.invoke", "operatio
 # The immediately preceding phone-task profile already supported these 16
 # methods. Only an original SQL receipt may restore them, never an old wire.
 PERSISTED_PHONE_TASK_GRANT_PROFILE = "pwp1_953641fabc7e4316996f69c2c3ac9b74db1a30f3750ee83adbfd95768730ae8b"
-PERSISTED_PRE_VIEWER_GRANT_PROFILE = "pwp1_cdf06c78390cb32246ba396f9ab45ca88a7d6964591fa25f69ccd605d0c8b2a6"
 PERSISTED_PHONE_TASK_GRANT_METHODS = frozenset({"device.describe", "tool.invoke", "operation.get", "operation.cancel", "task.submitGoal",
                                                 "task.get", "task.events", "task.respond", "task.pause", "task.cancel", "task.acquireControl",
                                                 "artifact.describe", "artifact.readChunk", "task.answerQuestion", "task.steer", "task.requestResume"})
 
 
+# Frozen prior SQL receipts keep only those 16 methods, never desktop.viewer.
+PERSISTED_PRE_VIEWER_GRANT_PROFILE = "pwp1_cdf06c78390cb32246ba396f9ab45ca88a7d6964591fa25f69ccd605d0c8b2a6"
+# The first desktop-viewer profile already allowed this exact seventeenth method.
+PERSISTED_DESKTOP_VIEWER_GRANT_PROFILE = "pwp1_37a2c7990f46ec2f9ea27ac7223cd2a845eb8b7ff491a7ede3f2d31a626e6675"
+PERSISTED_DESKTOP_VIEWER_GRANT_METHODS = PERSISTED_PHONE_TASK_GRANT_METHODS | {"desktop.viewer"}
+# Android-user resource support did not add methods or refill the original grant.
+PERSISTED_ANDROID_USER_GRANT_PROFILE = "pwp1_94a3b250d77be4eadd62d184dfa70facfe4e78444f0cd80903d00e339ef25147"
+
+
 def _persisted_grant_epoch_current(known, receipt, grant):
-    return (receipt.get("protocolProfile") not in (PERSISTED_PHONE_TASK_GRANT_PROFILE, PERSISTED_PRE_VIEWER_GRANT_PROFILE)
+    return (receipt.get("protocolProfile") not in (PERSISTED_PHONE_TASK_GRANT_PROFILE, PERSISTED_PRE_VIEWER_GRANT_PROFILE, PERSISTED_DESKTOP_VIEWER_GRANT_PROFILE, PERSISTED_ANDROID_USER_GRANT_PROFILE)
             or known["authorizationEpoch"] == grant["authorizationEpoch"])
 
 
@@ -1427,7 +1435,7 @@ class PairingCoordinator:
         receipt = self.store.outgoing_grant(target.device_id, grant_id)
         _require(known is not None and not known["revoked"] and known["fingerprint"] == target.certificate_fingerprint and receipt is not None,
                  "No paired persisted outgoing route")
-        _require(receipt.get("protocolProfile") in (protocol.PROFILE, PERSISTED_GRANT_PROFILE, PERSISTED_PHONE_TASK_GRANT_PROFILE, PERSISTED_PRE_VIEWER_GRANT_PROFILE), "Unsupported persisted grant profile")
+        _require(receipt.get("protocolProfile") in (protocol.PROFILE, PERSISTED_GRANT_PROFILE, PERSISTED_PHONE_TASK_GRANT_PROFILE, PERSISTED_PRE_VIEWER_GRANT_PROFILE, PERSISTED_DESKTOP_VIEWER_GRANT_PROFILE, PERSISTED_ANDROID_USER_GRANT_PROFILE), "Unsupported persisted grant profile")
         body = _verify_record_signature(target.certificate_der, receipt, "PairGrantReceipt")
         protocol._keys(body, {"grant", "targetInstanceId", "issuedAt"})
         grant = body["grant"]
@@ -1438,6 +1446,10 @@ class PairingCoordinator:
         elif receipt["protocolProfile"] in (PERSISTED_PHONE_TASK_GRANT_PROFILE, PERSISTED_PRE_VIEWER_GRANT_PROFILE):
             _require(set(grant["capabilities"]).issubset(PERSISTED_PHONE_TASK_GRANT_METHODS),
                      "Persisted phone-task grant contains an unsupported capability")
+            _require(_persisted_grant_epoch_current(known, receipt, grant), "Persisted original grant epoch changed")
+        elif receipt["protocolProfile"] in (PERSISTED_DESKTOP_VIEWER_GRANT_PROFILE, PERSISTED_ANDROID_USER_GRANT_PROFILE):
+            _require(set(grant["capabilities"]).issubset(PERSISTED_DESKTOP_VIEWER_GRANT_METHODS),
+                     "Persisted desktop-viewer grant contains an unsupported capability")
             _require(_persisted_grant_epoch_current(known, receipt, grant), "Persisted original grant epoch changed")
         protocol.identifier(body["targetInstanceId"], "targetInstanceId")
         _require(grant["grantId"] == grant_id and not grant.get("revoked",False) and known["instanceId"] == body["targetInstanceId"]

@@ -77,11 +77,12 @@ class DesktopAdapter:
         self.snapshots = {}
         self.refusals = {}  # Bounded process-local evidence, not task authority/retry queue.
         self.paused = False
+        self.viewer_stopper = None
+        self.viewer_cleanup = None
         self.stop_marker = manager.state / "desktop-local-stop"
         worker_binding = driver.recovery_binding() if callable(getattr(driver, "recovery_binding", None)) else {"format": "unavailable", "reason": "no_native_worker_binding"}
         with manager.lock:
             manager.ledger.execute("CREATE TABLE IF NOT EXISTS desktop_resource_leases(resource_key TEXT PRIMARY KEY, owner TEXT NOT NULL, instance_id TEXT NOT NULL, lease_id TEXT NOT NULL, fence INTEGER NOT NULL, expires INTEGER NOT NULL, state TEXT NOT NULL)")
-            manager.ledger.execute("CREATE TABLE IF NOT EXISTS desktop_human_controls(resource_key TEXT PRIMARY KEY, stream_id TEXT NOT NULL, lease_id TEXT NOT NULL, binding_json TEXT NOT NULL, point_json TEXT)")
             # No guessing that an old executor stopped, and no expiration-based
             # handover after restart. A real local recovery review is required.
             manager.ledger.execute("UPDATE desktop_resource_leases SET state='NEEDS_RECONCILE' WHERE state!='RELEASED' AND instance_id!=?", (manager.instance_id,))
@@ -97,18 +98,33 @@ class DesktopAdapter:
             if self.stop_marker.exists():
                 self.local_stop()
                 return
+            if callable(self.viewer_cleanup):
+                try:
+                    self.viewer_cleanup()
+                except Exception:
+                    # Lease cleanup failure stays fenced and must not kill the
+                    # existing independent local-stop watcher.
+                    pass
 
     def local_stop(self):
         # Does not need a phone, token or internet connection. Already queued OS
         # input cannot be retracted; interrupted original actions remain unknown.
         self.paused = True
         proof = self.driver.stop()
+        if callable(self.viewer_stopper):
+            self.viewer_stopper()
         with self.manager.lock:
             self.manager.ledger.execute("UPDATE desktop_resource_leases SET state='PAUSED',fence=fence+1 WHERE instance_id=? AND state!='RELEASED'", (self.instance_id,))
             self.manager.ledger.execute("UPDATE desktop_worker_instances SET cleanup_proof=? WHERE instance_id=?", (json.dumps(proof), self.instance_id))
             self.manager.ledger.commit()
         return {"paused": True, "driverCleanupProof": proof, "priorEffectsVerified": False,
                 "message": "Local stop takes priority; fresh observation and a new owner-reviewed lease are required"}
+
+    def invalidate_observations(self):
+        """Control handoff invalidates the model's retained target authority."""
+        with self.lock:
+            self.snapshots.clear()
+            self.refusals.clear()
 
     def close(self):
         self._watchdog_stop.set()
@@ -151,12 +167,13 @@ class DesktopAdapter:
         driver = self.driver.capabilities()
         resource = "windows-session:" + str(health.get("sessionId")) + ":primary"
         with self.manager.lock:
-            row = self.manager.ledger.execute("SELECT state FROM desktop_resource_leases WHERE resource_key=?", (resource,)).fetchone()
+            row = self.manager.ledger.execute("SELECT state,owner FROM desktop_resource_leases WHERE resource_key=?", (resource,)).fetchone()
         lease_state = row[0] if row else "RELEASED"
         return {"available": bool(health.get("available")) and driver.get("installed", False) and not driver.get("lifecycleBroken", False) and not self.paused and not self.stop_marker.exists() and lease_state not in {"NEEDS_RECONCILE", "PAUSED"},
                 "health": _wire(health), "driver": driver, "capabilityVersion": CAPABILITY_VERSION, "resourceLeaseState": lease_state,
                 "observationModes": ["semantic", "visual", "hybrid"], "defaultWindowObservationMode": "semantic",
-                "humanControl": {"available": lease_state not in {"NEEDS_RECONCILE", "PAUSED"}, "active": lease_state in {"HUMAN", "HUMAN_EXECUTING"},
+                "humanControl": {"available": lease_state not in {"NEEDS_RECONCILE", "PAUSED"},
+                                 "active": bool(row and row[1].startswith("viewer:") and lease_state in {"HELD", "EXECUTING"}),
                                  "ownerOnly": True, "streamBound": True, "leaseMaximumMs": 300000, "automaticResume": False},
                 "deliveryModes": {"default": "background", "foreground": "explicit_new_operation_after_exact_known_pre_dispatch_refusal"},
                 "runtimeProbeRequired": driver.get("runtimeContract") != "verified_against_pinned_process",
@@ -204,226 +221,6 @@ class DesktopAdapter:
         if not row or row[0] != owner or row[1] != self.instance_id or row[2] != lease["id"] or row[3] != lease["fence"] or row[4] != lease["expiresAt"] or lease["resource"] != resource or row[5] not in states or not allow_expired and row[4] <= self.clock():
             raise DesktopError("Desktop lease is stale, expired, busy, fenced or owned by another executor", 409)
         return row
-
-    @staticmethod
-    def _stream_id(stream_id):
-        if not isinstance(stream_id, str) or not re.fullmatch(r"[a-f0-9]{32}", stream_id):
-            raise DesktopError("Exact original desktop viewer stream is required", 400)
-
-    def _human_lease(self, resource, owner, stream_id, lease, binding, *, allow_expired=False):
-        self._stream_id(stream_id)
-        if not isinstance(lease, dict) or set(lease) != {"id", "fence", "expiresAt", "resource", "streamId"} or lease["streamId"] != stream_id:
-            raise DesktopError("Exact stream-bound human control lease is required", 403)
-        row = self._lease(resource, owner, {key: value for key, value in lease.items() if key != "streamId"}, {"HUMAN"}, allow_expired=allow_expired)
-        human = self.manager.ledger.execute("SELECT stream_id,lease_id,binding_json,point_json FROM desktop_human_controls WHERE resource_key=?", (resource,)).fetchone()
-        if not human or human[:2] != (stream_id, lease["id"]) or not resource_equal(json.loads(human[2]), binding):
-            raise DesktopError("Human control belongs to another stream or original resource grant", 403)
-        return row, json.loads(human[3]) if human[3] else None
-
-    def acquire_human(self, binding, owner, stream_id, current):
-        """Explicit viewer takeover, serialized behind the original AI action.
-
-        Expiry never proves an unknown executor stopped. Only this adapter's
-        idle HELD lease can be fenced; an in-flight action owns this same lock.
-        """
-        self._stream_id(stream_id)
-        with self.lock, self.manager.lock:
-            self._current(current)
-            health = self._health()
-            resource = self._scope(binding, health, {"windowId": binding.get("windowId")})
-            row = self.manager.ledger.execute("SELECT owner,instance_id,lease_id,fence,expires,state FROM desktop_resource_leases WHERE resource_key=?", (resource,)).fetchone()
-            if row and row[5] != "RELEASED":
-                if row[0] != owner or row[1] != self.instance_id or row[5] not in {"HELD", "HUMAN"}:
-                    raise DesktopError("Original desktop input is busy, paused, unknown or owned by another executor; takeover cannot force recovery", 409)
-                if row[5] == "HUMAN":
-                    human = self.manager.ledger.execute("SELECT stream_id,binding_json FROM desktop_human_controls WHERE resource_key=?", (resource,)).fetchone()
-                    if not human or human[0] != stream_id or not resource_equal(json.loads(human[1]), binding):
-                        raise DesktopError("Another viewer holds human control; release that original view first", 409)
-            fence, identifier, expires = (row[3] + 1 if row else 1), uuid.uuid4().hex, self.clock() + 300000
-            self._current(current)
-            self.manager.ledger.execute("INSERT OR REPLACE INTO desktop_resource_leases VALUES (?,?,?,?,?,?,?)", (resource, owner, self.instance_id, identifier, fence, expires, "HUMAN"))
-            self.manager.ledger.execute("INSERT OR REPLACE INTO desktop_human_controls VALUES (?,?,?,?,NULL)", (resource, stream_id, identifier, json.dumps(binding, sort_keys=True)))
-            self.manager.ledger.commit()
-            self.snapshots.clear(); self.refusals.clear()
-            return {"status": "completed", "control": "human", "observationsInvalidated": True,
-                    "lease": {"id": identifier, "fence": fence, "expiresAt": expires, "resource": resource, "streamId": stream_id}}
-
-    def release_human(self, binding, owner, stream_id, lease, current):
-        with self.lock, self.manager.lock:
-            self._current(current)
-            # Revoke only the exact durable idle lease, including when lock,
-            # sign-out or a closed window makes GUI inspection unavailable.
-            # This cannot dispatch input or release EXECUTING/unknown state.
-            session = binding.get("sessionId") if isinstance(binding, dict) else None
-            target = {"windowId": binding.get("windowId")} if isinstance(binding, dict) else None
-            resource = self._scope(binding, {"sessionId": session}, target)
-            self._human_lease(resource, owner, stream_id, lease, binding, allow_expired=True)
-            self.manager.ledger.execute("UPDATE desktop_resource_leases SET state='RELEASED',fence=fence+1 WHERE resource_key=?", (resource,))
-            self.manager.ledger.execute("DELETE FROM desktop_human_controls WHERE resource_key=?", (resource,))
-            self.manager.ledger.commit()
-            self.snapshots.clear(); self.refusals.clear()
-            return {"status": "completed", "control": "agent", "released": True, "requiresFreshObservation": True}
-
-    def _human_geometry(self, binding, geometry, current):
-        if not isinstance(geometry, dict) or not isinstance(geometry.get("healthBinding"), dict):
-            raise DesktopError("Trusted recent viewer geometry is required", 409)
-        now, captured, expires = self.clock(), geometry.get("capturedAt"), geometry.get("expiresAt")
-        if type(captured) is not int or type(expires) is not int or not captured <= now < expires <= captured + 2000:
-            raise DesktopError("Viewer frame expired before input; wait for a current frame", 409)
-        _integer(geometry.get("width"), 1, 1200, "viewer width")
-        _integer(geometry.get("height"), 1, 1200, "viewer height")
-        bounds, target = geometry.get("captureBounds"), geometry.get("target")
-        if not isinstance(bounds, list) or len(bounds) != 4 or any(type(v) is not int for v in bounds) or bounds[0] >= bounds[2] or bounds[1] >= bounds[3]:
-            raise DesktopError("Viewer capture bounds are invalid", 409)
-        if target is not None and (not isinstance(target, dict) or set(target) != {"pid", "windowId"}
-                or type(target["pid"]) is not int or type(target["windowId"]) is not int):
-            raise DesktopError("Viewer target is invalid", 409)
-        health = self._health(target)
-        resource = self._scope(binding, health, target)
-        actual_bounds = health["window"]["bounds"] if target else next(item["bounds"] for item in health["displays"] if item["primary"])
-        original = geometry["healthBinding"]
-        if actual_bounds != bounds or health.get("binding") != original.get("binding") or health.get("lastInputTick") != original.get("lastInputTick"):
-            raise DesktopError("Viewer session, window, foreground or input changed before dispatch; use a fresh frame", 409)
-        self._current(current)
-        return resource, health
-
-    def _human_payload(self, input_value, geometry, point):
-        if not isinstance(input_value, dict):
-            raise DesktopError("Invalid viewer input", 400)
-        kind, target = input_value.get("kind"), geometry["target"]
-        fields = {"click": {"kind", "x", "y", "button", "count"}, "scroll": {"kind", "direction", "amount", "by", "x", "y"},
-                  "insert_text": {"kind", "text"}, "hotkey": {"kind", "keys"}, "press_key": {"kind", "key"}}
-        if kind not in fields or set(input_value) - fields[kind]:
-            raise DesktopError("Unsupported viewer input fields", 400)
-        payload = {"scope": "window", "pid": target["pid"], "window_id": target["windowId"]} if target else {"scope": "desktop"}
-        payload["delivery_mode"] = "foreground"
-        if kind == "click":
-            if input_value.get("button", "left") not in {"left", "right"}:
-                raise DesktopError("Viewer click supports left or right button", 400)
-            payload.update(button=input_value.get("button", "left"), count=_integer(input_value.get("count", 1), 1, 2, "count"))
-            px = _coordinate(input_value.get("x"), geometry["width"], "x")
-            py = _coordinate(input_value.get("y"), geometry["height"], "y")
-            _, state, raw = self._capture(target, preflight=True, mode="visual")
-            if target:
-                box = state.get("window_bounds", {})
-                bounds = [box.get("x"), box.get("y"), None, None]
-                if all(type(box.get(key)) is int for key in ("x", "y", "width", "height")):
-                    bounds[2:] = [box["x"] + box["width"], box["y"] + box["height"]]
-                if bounds != geometry["captureBounds"]:
-                    raise DesktopError("Native click capture geometry differs from the displayed window", 409)
-            capture_id = state.get("capture_id")
-            if not isinstance(capture_id, str) or not capture_id:
-                raise DesktopError("Native driver did not return a one-use click capture identity", 409)
-            dimensions = self._png_dimensions(raw)
-            payload.update(x=float(px) * dimensions["width"] / geometry["width"],
-                           y=float(py) * dimensions["height"] / geometry["height"], capture_id=capture_id)
-            bounds = geometry["captureBounds"]
-            next_point = {"bounds": bounds, "target": target, "geometryRevision": geometry.get("geometryRevision"),
-                          "point": [bounds[0] + float(px) * (bounds[2] - bounds[0]) / geometry["width"],
-                                    bounds[1] + float(py) * (bounds[3] - bounds[1]) / geometry["height"]]}
-            return "click", payload, next_point
-        if kind == "scroll":
-            if input_value.get("direction") not in {"up", "down", "left", "right"} or input_value.get("by", "line") != "line":
-                raise DesktopError("Viewer scroll requires an explicit direction and line units", 400)
-            payload.update(direction=input_value["direction"], by="line", amount=_integer(input_value.get("amount", 3), 1, 5, "amount"))
-            if "x" in input_value or "y" in input_value:
-                px = _coordinate(input_value.get("x"), geometry["width"], "x")
-                py = _coordinate(input_value.get("y"), geometry["height"], "y")
-                bounds = geometry["captureBounds"]
-                if target is None:
-                    payload.update(x=bounds[0] + float(px) * (bounds[2] - bounds[0]) / geometry["width"],
-                                   y=bounds[1] + float(py) * (bounds[3] - bounds[1]) / geometry["height"])
-                else:
-                    _, state, raw = self._capture(target, preflight=True, mode="visual")
-                    box = state.get("window_bounds", {})
-                    if (any(type(box.get(key)) is not int for key in ("x", "y", "width", "height"))
-                            or [box["x"], box["y"], box["x"] + box["width"], box["y"] + box["height"]] != bounds):
-                        raise DesktopError("Native scroll capture geometry differs from the displayed window", 409)
-                    dimensions = self._png_dimensions(raw)
-                    payload.update(x=float(px) * dimensions["width"] / geometry["width"],
-                                   y=float(py) * dimensions["height"] / geometry["height"])
-            elif target is None:
-                if (not point or point.get("target") is not None or point.get("bounds") != geometry["captureBounds"]
-                        or not geometry.get("geometryRevision") or point.get("geometryRevision") != geometry["geometryRevision"]):
-                    raise DesktopError("Click the desktop scroll target first, or open a specific window view", 409)
-                payload.update(x=point["point"][0], y=point["point"][1])
-            return "scroll", payload, point
-        if kind == "insert_text":
-            text = input_value.get("text")
-            if not isinstance(text, str) or not text or len(text.encode("utf-8")) > 12000 or "\x00" in text:
-                raise DesktopError("Viewer text must be nonempty, bounded UTF-8", 400)
-            payload.update(text=text, delay_ms=0)
-            return "type_text", payload, point
-        if kind == "press_key":
-            key = input_value.get("key")
-            if key not in {"enter", "escape", "tab"}:
-                raise DesktopError("Viewer single key must be enter, escape or tab", 400)
-            payload["key"] = "return" if key == "enter" else key
-            return "press_key", payload, point
-        keys = input_value.get("keys")
-        if (not isinstance(keys, list) or not 2 <= len(keys) <= 5 or any(not isinstance(k, str) for k in keys)
-                or any(k.upper() not in {"CTRL", "ALT", "SHIFT", "WIN"} for k in keys[:-1])
-                or len({k.upper() for k in keys[:-1]}) != len(keys) - 1
-                or not re.fullmatch(r"[A-Za-z0-9]", keys[-1])):
-            raise DesktopError("Viewer hotkey requires distinct CTRL/ALT/SHIFT/WIN modifiers and one letter or digit", 400)
-        payload["keys"] = [key.lower() for key in keys]
-        return "hotkey", payload, point
-
-    def human_act(self, binding, owner, stream_id, lease, input_value, geometry, current, dispatch_marker):
-        """Only the owner viewer router can call this, after durable deduplication.
-
-        Geometry proves a recent visible viewport, not identical moving pixels.
-        Each call performs exactly one native input; no queued-success receipt.
-        """
-        with self.lock:
-            self._current(current)
-            resource, _ = self._human_geometry(binding, geometry, current)
-            with self.manager.lock:
-                _, point = self._human_lease(resource, owner, stream_id, lease, binding)
-            tool, payload, next_point = self._human_payload(input_value, geometry, point)
-            admit = getattr(self.driver, "validate_call", None)
-            if callable(admit):
-                admit(tool, payload)
-            self._human_geometry(binding, geometry, current)
-            with self.manager.lock:
-                self._human_lease(resource, owner, stream_id, lease, binding)
-                self.manager.ledger.execute("UPDATE desktop_resource_leases SET state='HUMAN_EXECUTING' WHERE resource_key=?", (resource,))
-                self.manager.ledger.commit()
-            self.snapshots.clear(); self.refusals.clear()
-            dispatched = False
-            try:
-                self._current(current)
-                dispatch_marker()
-                dispatched = True
-                result = self.driver.call(tool, payload)
-                outcome = input_outcome(result)
-                self._current(current)
-                refused = outcome["kind"] == "refused_pre_dispatch"
-                settled = refused or outcome["kind"] == "dispatch_reported" and not result.get("isError")
-                status = "failed" if refused else "completed" if settled else "unknown"
-                with self.manager.lock:
-                    updated = self.manager.ledger.execute("UPDATE desktop_resource_leases SET state=? WHERE resource_key=? AND lease_id=? AND fence=? AND state='HUMAN_EXECUTING'",
-                        ("HUMAN" if settled else "NEEDS_RECONCILE", resource, lease["id"], lease["fence"])).rowcount
-                    if settled and not refused and next_point is not None:
-                        self.manager.ledger.execute("UPDATE desktop_human_controls SET point_json=? WHERE resource_key=? AND lease_id=?", (json.dumps(next_point), resource, lease["id"]))
-                    self.manager.ledger.commit()
-                if updated != 1:
-                    raise DesktopError("Original human lease was fenced during input")
-                return {"status": status, "inputDispatched": outcome["inputDispatched"], "inputDispatchAttempted": True,
-                        "actionOutcome": outcome, "deliveryMode": "foreground", "control": "human", "streamId": stream_id,
-                        "driverResult": self._bounded(result.get("structuredContent", {}), maximum=4096),
-                        "verificationScope": "native_input_dispatch_only", "userGoalVerified": False,
-                        "businessResultVerified": False, "noAutomaticReplay": True, "observationsInvalidated": True}
-            except BaseException:
-                with self.manager.lock:
-                    self.manager.ledger.execute("UPDATE desktop_resource_leases SET state=? WHERE resource_key=? AND lease_id=? AND fence=? AND state='HUMAN_EXECUTING'",
-                        ("NEEDS_RECONCILE" if dispatched else "HUMAN", resource, lease["id"], lease["fence"]))
-                    self.manager.ledger.commit()
-                if dispatched:
-                    return {"status": "unknown", "inputDispatched": None, "inputDispatchAttempted": True,
-                            "businessResultVerified": False, "userGoalVerified": False, "noAutomaticReplay": True,
-                            "observationsInvalidated": True, "message": "Original human input may have reached the desktop; inspect this operation and do not replay"}
-                raise
 
     def _image(self, result):
         images = [item for item in result.get("content", []) if item.get("type") == "image" and item.get("mimeType") == "image/png"]
@@ -492,6 +289,8 @@ class DesktopAdapter:
                 raise DesktopError("Semantic observation unexpectedly returned image content; no capture is published")
             if not isinstance(structured.get("elements"), list) or not isinstance(structured.get("snapshot_id"), str):
                 raise DesktopError("Driver did not provide a real structured UIA snapshot")
+            if structured.get("elements_complete") is not True or any(structured.get(key) for key in ("truncated", "adapter_truncated", "identity_unproven", "hasMore")):
+                raise DesktopError("Complete native UIA evidence is unavailable; explicitly observe with observationMode='hybrid' or 'visual' before image-grounded input", 409)
             raw = None
         else:
             raw = self._image(result)
@@ -628,6 +427,8 @@ class DesktopAdapter:
                          "windowId": target["windowId"] if target else None, "binding": after["binding"],
                          "driverGeneration": self.generation, "capturedAt": captured, "expiresAt": captured + 30000}
             state = self._bounded(structured)
+            if mode == "semantic" and state.get("adapter_truncated"):
+                raise DesktopError("Native UIA evidence exceeds the control envelope; explicitly observe with observationMode='hybrid' or 'visual'", 409)
             value = {"observationRef": reference, "target": target, "state": state, "observationMode": mode,
                      "coordinateSpace": "uia_elements", "businessResultVerified": False}
             if raw is not None:
@@ -638,8 +439,6 @@ class DesktopAdapter:
             else:
                 for key in ("screenshot_width", "screenshot_height", "capture_id", "screenshot_frame"):
                     state.pop(key, None)
-                for element in state.get("elements", []):
-                    element.pop("screenshot_frame", None)
             self.snapshots = {key: item for key, item in self.snapshots.items() if item["ref"]["expiresAt"] > captured}
             if len(self.snapshots) >= 16:
                 self.snapshots.pop(next(iter(self.snapshots)))
@@ -773,16 +572,12 @@ class DesktopAdapter:
                            "verificationCondition": self._condition_receipt(arguments.get("verification")), "noAutomaticReplay": True,
                            "message": "Driver refused before input; inspect original operation. Foreground requires a separately approved NEW operation and fresh observation" if refused else "Requested window condition verified by a new observation" if verified else "Input was attempted; user result is not proven. Inspect original operation and new observation, never repeat automatically"}
                 with self.manager.lock:
-                    updated = self.manager.ledger.execute("UPDATE desktop_resource_leases SET state=? WHERE resource_key=? AND lease_id=? AND fence=? AND state='EXECUTING'",
-                        ("HELD" if verified or refused else "NEEDS_RECONCILE", resource, arguments["lease"]["id"], arguments["lease"]["fence"])).rowcount
+                    self.manager.ledger.execute("UPDATE desktop_resource_leases SET state=? WHERE resource_key=?", ("HELD" if verified or refused else "NEEDS_RECONCILE", resource))
                     self.manager.ledger.commit()
-                if updated != 1:
-                    raise DesktopError("Original desktop lease was fenced during input")
                 return receipt
             except BaseException as failure:
                 with self.manager.lock:
-                    self.manager.ledger.execute("UPDATE desktop_resource_leases SET state=? WHERE resource_key=? AND lease_id=? AND fence=? AND state='EXECUTING'",
-                        ("NEEDS_RECONCILE" if dispatched else "HELD", resource, arguments["lease"]["id"], arguments["lease"]["fence"]))
+                    self.manager.ledger.execute("UPDATE desktop_resource_leases SET state=? WHERE resource_key=?", ("NEEDS_RECONCILE" if dispatched else "HELD", resource))
                     self.manager.ledger.commit()
                 if dispatched:
                     return {"status": "unknown", "inputDispatchAttempted": True, "inputDispatched": None,

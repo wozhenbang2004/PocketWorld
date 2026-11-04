@@ -1,30 +1,4 @@
 {
-  "phone-team-sessions": {
-    "class": "dev.pocketengine.BackgroundPhoneRunTest",
-    "additionalClasses": [
-      "dev.pocketengine.core.ExecutionResourcesTest",
-      "dev.pocketengine.store.LocalPhoneLeaseIsolationNativeTest",
-      "dev.pocketengine.PhoneNotificationControlsTest",
-      "dev.pocketengine.PhoneRunServiceTest",
-      "dev.pocketengine.phone.PhoneOwnerControlsTest",
-      "dev.pocketengine.displayhelper.DisplaySessionRegistryTest",
-      "dev.pocketengine.phone.display.DisplayModuleParallelTest",
-      "dev.pocketengine.phone.display.PhoneParallelCapabilitiesTest",
-      "dev.pocketengine.phone.display.DisplayModuleTest",
-      "dev.pocketengine.features.devices.DeviceGoalPhonePortTest",
-      "dev.pocketengine.features.teams.TeamPhoneBudgetTest",
-      "dev.pocketengine.features.devices.DevicePhoneGoalReadinessTest",
-      "dev.pocketengine.features.teams.TeamPhoneOriginalHostJourneyTest",
-      "dev.pocketengine.features.devices.DeviceControlDispatchIsolationTest",
-      "dev.pocketengine.features.devices.DeviceProtocolTest"
-    ],
-    "helpers": [
-      "dev.pocketengine.features.channels.ChannelTaskHostTest",
-      "dev.pocketengine.features.channels.ChannelSecurityTest"
-    ],
-    "robolectric": true,
-    "description": "Bounded original App/Service/TaskStore multi-run lifecycle, per-display routing, exact phone scope, team allocations and previous notification/display regressions. Native frame/model responses are explicit test boundaries; no physical Android, APK, WAN or visual acceptance."
-  },
   "conversation-phone-handoff": {
     "class": "dev.pocketengine.ConversationPhoneStartNativeTest",
     "additionalClasses": [
@@ -1581,6 +1555,24 @@
     "robolectric": true,
     "description": "Original connection/editor/draft/native test identities, strict receipt projection, per-profile compatibility and cache settings CAS. Controlled provider/repository fixtures; no live provider, real cache hit or Android visual acceptance."
   },
+  "device-desktop-owner": {
+    "class": "dev.pocketengine.features.devices.NativeDesktopViewerSqlTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.devices.NativeDesktopOwnerWindowTest",
+      "dev.pocketengine.features.devices.DeviceSemanticObservationsTest",
+      "dev.pocketengine.features.devices.DeviceProtocolTest",
+      "dev.pocketengine.features.devices.DeviceDesktopViewerNativeTest",
+      "dev.pocketengine.features.devices.DeviceSemanticRunnerDeliveryTest",
+      "dev.pocketengine.features.devices.DeviceVisualDeliveryTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.devices.DeviceIngressNativeTest",
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
+    ],
+    "robolectric": true,
+    "description": "Original TaskStore desktop viewer one-shot tickets and signed grants, exact owner window lifecycle, model-delivered semantic references and shared protocol corpus. Native remote-result fixtures after the actual write gate; no physical Windows input, Android device or WAN acceptance."
+  },
   "desktop-hybrid": {
     "class": "dev.pocketengine.features.devices.DeviceDesktopViewerNativeTest",
     "additionalClasses": [
@@ -1588,7 +1580,8 @@
       "dev.pocketengine.features.devices.DeviceProtocolTest",
       "dev.pocketengine.features.devices.DeviceSourceToolContractsTest",
       "dev.pocketengine.features.devices.NativeRelayOwnerWindowTest",
-      "dev.pocketengine.features.devices.NativeDesktopOwnerWindowTest"
+      "dev.pocketengine.features.devices.NativeDesktopOwnerWindowTest",
+      "dev.pocketengine.features.devices.DeviceSemanticRunnerDeliveryTest"
     ],
     "helpers": [
       "dev.pocketengine.features.devices.DeviceIngressNativeTest",
@@ -1597,5 +1590,31 @@
     ],
     "robolectric": true,
     "description": "Original SQLite, native grant and one-use TLS send gates; semantic structure delivery through the real AgentRunner; shared protocol vectors. Explicit loopback peers and UIA receipts, not Windows/Android physical acceptance."
+  },
+  "phone-team-sessions": {
+    "class": "dev.pocketengine.BackgroundPhoneRunTest",
+    "additionalClasses": [
+      "dev.pocketengine.core.ExecutionResourcesTest",
+      "dev.pocketengine.store.LocalPhoneLeaseIsolationNativeTest",
+      "dev.pocketengine.PhoneNotificationControlsTest",
+      "dev.pocketengine.PhoneRunServiceTest",
+      "dev.pocketengine.phone.PhoneOwnerControlsTest",
+      "dev.pocketengine.displayhelper.DisplaySessionRegistryTest",
+      "dev.pocketengine.phone.display.DisplayModuleParallelTest",
+      "dev.pocketengine.phone.display.PhoneParallelCapabilitiesTest",
+      "dev.pocketengine.phone.display.DisplayModuleTest",
+      "dev.pocketengine.features.devices.DeviceGoalPhonePortTest",
+      "dev.pocketengine.features.teams.TeamPhoneBudgetTest",
+      "dev.pocketengine.features.devices.DevicePhoneGoalReadinessTest",
+      "dev.pocketengine.features.teams.TeamPhoneOriginalHostJourneyTest",
+      "dev.pocketengine.features.devices.DeviceControlDispatchIsolationTest",
+      "dev.pocketengine.features.devices.DeviceProtocolTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest"
+    ],
+    "robolectric": true,
+    "description": "Bounded original App/Service/TaskStore multi-run lifecycle, per-display routing, exact phone scope, team allocations and previous notification/display regressions. Native frame/model responses are explicit test boundaries; no physical Android, APK, WAN or visual acceptance."
   }
 }

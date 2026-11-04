@@ -109,11 +109,13 @@ Each manual input is durably deduplicated by the original operation router,
 uses a live frame reference no more than two seconds old and rechecks native
 process/window/display geometry under the same adapter lock. Click coordinates
 are mapped from the encoded viewport to a fresh native capture identity. This
-proves recent geometry, not that changing video pixels are identical. Scroll
-accepts a current pointer; a desktop toolbar scroll without coordinates uses
-only the same lease's last successful click at the same geometry revision.
-There is no screen-center guess. Single keys are Enter/Escape/Tab; hotkeys are
-distinct CTRL/ALT/SHIFT/WIN modifiers plus one letter/digit. Unknown input
+requires an actual transmitted RTP timestamp matching the latest displayed
+video callback; geometry alone cannot authorize input. Cua's native DWM crop
+must map exactly to that window frame; ambiguous/outside-crop clicks are refused.
+The bounded toolbar scroll uses only the shown foreground HWND, whose PID is
+resolved locally, and refuses a changed foreground/local-input state. Single
+keys are Enter/Escape/Tab; hotkeys use the pinned driver's explicit key list.
+Unknown input
 delivery blocks further dispatch and cannot be replayed on reconnect.
 
 ## Verification boundary

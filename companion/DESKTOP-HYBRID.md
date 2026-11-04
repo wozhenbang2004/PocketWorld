@@ -36,21 +36,44 @@ Android 原生桥接和 `desktop.viewer` 设备方法，不另建 Agent 任务�
 | 人工桌面视频 | Companion 内 aiortc/PyAV，浏览器接收单向视频；授权窗口使用原 HWND 捕获 | 向手机用户传送桌面画面。视频不会成为模型图片，也不刷新 Agent 的结构化观察。人工输入仍走原 mTLS、授权、租约与持久操作记录。 |
 
 结构化路径不保证每个应用都有可用 UIA；大型或自绘界面可能需要显式视觉观察。
+默认窗口观察只在原生树明确返回 `elements_complete=true`、且没有截断或身份
+缺失标记时可用于结构化输入。仅安装 Cua、无法证明树完整时会明确拒绝默认
+`semantic` 并提示显式选择 `hybrid` 或 `visual`；不会凭空补出完整性证明。
 结构化点击结果未知时，不会自动改用坐标点击。三路实现的精确契约分别见
 [AGENT-DESKTOP.md](packaging/windows/AGENT-DESKTOP.md) 和
 [DESKTOP-STREAM.md](packaging/windows/DESKTOP-STREAM.md)。
 
 人工接管等待当前有界 AI 操作结束，且不能强行覆盖未知状态或其他所有者的租约。
 人工租约与视频会话最长五分钟；交还后，AI 必须取得新租约和新观察才可继续。
-每次人工输入引用最近的帧元数据，重新核对原进程、窗口、显示器、前台和物理
-几何，再在同一个适配器锁内派发。帧元数据证明的是近期几何状态，不证明手机
-此刻解码出的像素与电脑完全相同，也不证明业务目标已完成。
+每次人工输入引用最近两秒内的真实发送帧。Companion 在原帧最后一个 RTP 包
+完成发送后发布实际 `rtpTimestamp`；手机必须把它与**当前显示帧**的视频回调
+时间戳逐一匹配，才开放输入。媒体与元数据可按任一顺序到达，但旧帧、相同尺寸
+的其他帧、AV PTS 或重传不能代替这条身份对应。浏览器缺少该回调字段、媒体
+实现校验不匹配或帧过期时保留观看并禁用输入。
+
+派发前还会重新核对原进程、窗口、显示器、前台与物理几何，使用原 Cua capture
+身份映射坐标；DWM 窗框裁剪只有可唯一映射时才允许点击。上述对应证明输入
+引用了用户实际显示的编码帧，不证明截帧之后桌面完全没变，也不证明业务目标
+已完成。接管、交还和输入会废弃旧观察与可操作帧，要求后续取得新证据。
+
+最多两个窗口可同时观看，只有一个可持人工控制权；另一个窗口显示“另一窗口
+正在控制”。滚动针对当前前台的授权 HWND，使用原生窗口滚动路径；不接受网页
+自填屏幕指针位置，也不继承旧点击位置。支持有界点击、滚动、文字和有限键盘
+输入；本轮不提供拖拽，也不宣称硬件加速已完成。
 
 **人工输入消耗原 PairGrant 的 `toolBudget`，与 AI 工具共享同一有限次数池。**
-计费点是持久占用并准备派发，结果未知的输入保留占用。观看、查询状态不消耗
+计费点是原操作账本持久占用输入尝试的身份，操作占用和扣次数在同一事务中
+完成；已占用的失败或未知输入保留占用。观看、查询状态不消耗
 这项输入次数；新 viewer、操作 ID、任务或授权代次不会重置原池。重复操作返回
-原回执，不自动再次派发。撤销、到期、锁屏或本地停止终止可用会话；执行结果
-未知时保留待核对状态，不因视频关闭而宣称输入未发生或自动恢复 AI。
+同一运行时保留的原回执，不自动再次派发；回执缓存丢失或重启后明确报告结果
+不可重放。撤销、到期、锁屏或本地停止终止可用会话；只有
+`inputReceipt.status=completed` 且 `inputDispatched=true` 才视为已确认派发。
+
+结果未知时，本人仍可明确交还或关闭页面，但全局 `needsReconcile` 不会因此
+消失，其他窗口也不能借新会话接管或继续输入。关闭只释放本会话已结算的安全
+租约；仍在执行、结果未知或本机暂停的资源栅栏保留。升级旧主干版本时，旧
+操作 ID、查看会话 ID、已消费额度和原资源栅栏同样保留，不能因换了账本入口
+而重新执行；旧记录不被改写为“已确认无后续输入”。
 
 ## 网络与捕获范围
 
@@ -147,24 +170,24 @@ agent-desktop，将显式视觉路径接到既有 Cua Driver。HCU 本身没有�
 
 ## 验证范围
 
-在 `companion` 目录可运行本次相关回归：
+在 `companion` 目录、已准备实际媒体 SDK 的 Python 环境运行：
 
 ```text
-python -B -m unittest -v test_desktop_stream test_desktop_worker_stream test_windows_runtime_build
-python -B -m unittest -v test_desktop_viewer test_desktop_semantic_human test_device_protocol
+python -B -m unittest -v test_desktop_rtp test_desktop_stream test_desktop_worker_stream test_desktop_viewer test_desktop_semantic_human test_desktop_adapter test_agent_desktop_driver test_desktop_jobs test_desktop_recovery test_desktop_pairing test_desktop_runtime test_windows_gui_gate test_windows_runtime_build test_windows_packaging test_windows_installation_entry test_windows_install_recovery
 ```
 
-2026-11-04 本地集成检查：Python 161 项中 159 通过，真实 aiortc/PyAV 回环与编码
-两项因环境缺少运行库跳过；Java 共享协议 17 项及原生 Window 关闭竞态 4 项通过。
-协议、结构观察与原生 Host 核心源码通过 Android SDK 35 javac 检查；TypeScript、
-Vite、18 项 Node 契约及 6 个标明 mock RTC/native host 的真实浏览器界面旅程通过。
-这些界面旅程使用真实 canvas MediaStream/video 解码，不能证明 Windows 传输。
+这批回归保留主干语义观察、双 worker 原生停止证明和显式 hybrid 的 Windows GUI
+用例，并把旧人工控制 API 的场景迁到实际 mTLS 授权、原 SQLite 操作账本和原
+桌面租约。新增证据覆盖共享额度与重启、旧票据保留、真正执行中的 AI 输入与
+人工竞争、两窗口控制状态、锁屏清理、单次派发和严格帧对应。
 
-[PR #42](https://github.com/wozhenbang2004/PocketWorld/pull/42) 已注册完整 AGP
-Java/Kotlin 编译和 Robolectric/真实 loopback mTLS 检查。首轮
-[GitHub Actions](https://github.com/wozhenbang2004/PocketWorld/actions/runs/41823649450)
-在 runner 分配前失败：runner ID 为 0、步骤为空且没有日志，未执行代码编译。
-该环境阻塞的具体原因未从当前 API 获得；完整原生 host 测试仍是未完成的交付门槛。
-Windows 原生 UIA、窗口捕获、物理输入、冻结 EXE/安装器、Android WebView 播放与
-触控，以及跨网络连接仍须在真实设备验收。这里提供的是已接入正式产品路径的
-源码与构建入口，不是已完成这些平台验收的发布包。
+真实媒体用例使用合成图像，实际建立本地 ICE/DTLS/SRTP/SCTP 通道，解码视频，
+把接收 RTP 包时间戳和解码器时间戳映射与元数据核对；独立编码探针实际加载
+aiortc/PyAV 并生成 VP8。缺少媒体 SDK 时只能跳过这些媒体实测，不能据此报告
+媒体通过。RTP 零值、32 位回绕、重传和失配关闭输入另有契约回归。
+
+上述 Linux 契约和回环不代表 Windows 原生 UIA、HWND 捕获、物理输入、冻结
+EXE/安装器、Android WebView 播放与触控或跨网络连接已通过。Windows GUI
+用例保留实际平台 gate，必须在受控真实桌面运行；完整 Android 与发布构建
+也以对应提交的真实 CI/设备结果为准。本文件提供正式源码与构建入口，不能
+代替这些平台验收或签名发布包。

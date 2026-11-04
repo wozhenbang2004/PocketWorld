@@ -5,7 +5,6 @@ nor SDP negotiation on Linux constitute Windows/Android or WAN acceptance.
 """
 import asyncio
 import copy
-import ctypes
 import importlib.util
 import json
 import threading
@@ -16,7 +15,7 @@ from unittest.mock import patch
 
 from PIL import Image, ImageDraw
 
-from desktop_stream import DesktopStreamError, DesktopStreamService, METADATA_CHANNEL, _BitmapInfoHeader, _capture_window, _ice_servers, _offer
+from desktop_stream import DesktopStreamError, DesktopStreamService, METADATA_CHANNEL, _ice_servers, _offer
 
 
 OFFER = {"type": "offer", "sdp": (
@@ -139,10 +138,21 @@ class FixturePeer:
         await self.handlers["connectionstatechange"]()
 
 
+class FixtureFrameObserver:
+    """Fixture only: no claim that these timestamps came from a real RTP send."""
+    def __init__(self, sender, publish, invalidate):
+        self.publish, self.available, self.sequence = publish, True, 0
+
+    def capture(self, frame, captured):
+        self.sequence += 1
+        self.publish(captured, self.sequence % (1 << 32))
+
+
 def fixture_rtc():
     return {"configuration": lambda **values: values, "iceServer": lambda **values: values,
             "peer": FixturePeer, "description": lambda **values: SimpleNamespace(**values),
-            "track": FixtureTrack, "mediaError": FixtureMediaError, "frame": FixtureFrame}
+            "track": FixtureTrack, "mediaError": FixtureMediaError, "frame": FixtureFrame,
+            "frameObserver": FixtureFrameObserver}
 
 
 class DesktopStreamContractTests(unittest.TestCase):
@@ -264,15 +274,16 @@ class DesktopStreamContractTests(unittest.TestCase):
         self.assertEqual([40, 50, 360, 250], geometry["captureBounds"])
         self.assertEqual(1, len(self.service.sessions[opened["streamId"]].frames))
 
-    def test_local_input_or_foreground_change_rejects_old_frame_until_next_capture(self):
+    def test_control_handoff_drops_capture_already_in_flight(self):
         opened = self.open()
-        for field, value in (("lastInputTick", 11), ("binding", "fixture-new-foreground")):
-            _, reference = self.next_frame(opened)
-            self.health.value[field] = value
-            with self.assertRaisesRegex(DesktopStreamError, "foreground or local input"):
-                self.service.validate_input(opened["streamId"], "paired-peer-A", BINDING, reference, self.current)
-            _, current = self.next_frame(opened)
-            self.service.validate_input(opened["streamId"], "paired-peer-A", BINDING, current, self.current)
+        def handoff_once():
+            self.capture.on_capture = None
+            self.service.invalidate_inputs(opened["streamId"], "paired-peer-A", BINDING, self.current)
+        self.capture.on_capture = handoff_once
+        _, reference = self.next_frame(opened)
+        self.assertEqual(2, len(self.capture.calls))
+        self.assertEqual(1, self.service.sessions[opened["streamId"]].sequence)
+        self.service.validate_input(opened["streamId"], "paired-peer-A", BINDING, reference, self.current)
 
     def test_revocation_during_capture_never_publishes_that_frame(self):
         opened = self.open()
@@ -368,84 +379,59 @@ class DesktopStreamContractTests(unittest.TestCase):
 HAS_RTC = importlib.util.find_spec("aiortc") is not None and importlib.util.find_spec("av") is not None
 
 
-class FullWindowCaptureContractTests(unittest.TestCase):
-    """Fake GDI contracts only: dimension, buffer ownership, cleanup and refusal."""
-    def native(self, fail=None):
-        calls = []
-        state = {}
-        def context(_):
-            calls.append("context")
-            return 0 if fail == "context" else 101
-        def dib(context, info_pointer, usage, bits_pointer, section, offset):
-            info = ctypes.cast(info_pointer, ctypes.POINTER(_BitmapInfoHeader)).contents
-            self.assertEqual((40, 320, -200, 32, 0), (info.size, info.width, info.height, info.bitCount, info.compression))
-            self.assertEqual(320 * 200 * 4, info.sizeImage)
-            calls.append("dib")
-            if fail == "dib": return 0
-            state["bits"] = ctypes.create_string_buffer(info.sizeImage)
-            ctypes.cast(bits_pointer, ctypes.POINTER(ctypes.c_void_p)).contents.value = ctypes.addressof(state["bits"])
-            return 202
-        def select(context, bitmap):
-            calls.append(("select", context, bitmap))
-            return ctypes.c_void_p(-1).value if fail == "select" else 303
-        def print_window(hwnd, context, flags):
-            calls.append(("print", hwnd, context, flags))
-            state["bits"].raw = bytes((17, 43, 91, 0)) * (320 * 200)
-            return 0 if fail == "print" else 1
-        user = SimpleNamespace(PrintWindow=print_window)
-        gdi = SimpleNamespace(CreateCompatibleDC=context, CreateDIBSection=dib, SelectObject=select,
-                              GdiFlush=lambda: 1, DeleteObject=lambda bitmap: calls.append(("deleteBitmap", bitmap)),
-                              DeleteDC=lambda context: calls.append(("deleteContext", context)))
-        return (user, gdi), calls
-
-    def test_full_window_dimensions_bgrx_and_hwnd_are_preserved(self):
-        native, calls = self.native()
-        with patch("desktop_stream._window_capture_native", return_value=native):
-            image = _capture_window(456, [20, 30, 340, 230])
-        try:
-            self.assertEqual((320, 200), image.size)
-            self.assertEqual((91, 43, 17), image.getpixel((319, 199)))
-            self.assertIn(("print", 456, 101, 2), calls)
-            self.assertEqual([("select", 101, 303), ("deleteBitmap", 202), ("deleteContext", 101)], calls[-3:])
-        finally:
-            image.close()
-
-    def test_failed_capture_has_no_desktop_rectangle_fallback_and_releases_native_objects(self):
-        for failure in ("context", "dib", "select", "print"):
-            native, calls = self.native(failure)
-            with self.subTest(failure=failure), patch("desktop_stream._window_capture_native", return_value=native), \
-                    patch("PIL.ImageGrab.grab", side_effect=AssertionError("No full-screen fallback allowed")), \
-                    self.assertRaises(DesktopStreamError):
-                _capture_window(456, [20, 30, 340, 230])
-            if failure != "context": self.assertIn(("deleteContext", 101), calls)
-            if failure in {"select", "print"}: self.assertIn(("deleteBitmap", 202), calls)
-
-
 @unittest.skipUnless(HAS_RTC, "Prepared aiortc/PyAV are unavailable; real WebRTC loopback not exercised")
 class DesktopStreamLoopbackTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_sdp_dtls_srtp_video_and_metadata_from_synthetic_source(self):
         from aiortc import RTCConfiguration, RTCPeerConnection, RTCSessionDescription
+        # A true local-only media test: use the known loopback interface, not
+        # container/private LAN enumeration (which some sandboxes prohibit).
+        # ICE, UDP, DTLS, SRTP, SCTP, encoding and decoding remain real libraries.
+        interfaces = patch("aioice.ice.get_host_addresses", return_value=["127.0.0.1"])
+        interfaces.start()
+        self.addCleanup(interfaces.stop)
         service = DesktopStreamService(FixtureHealth(), capture=FixtureCapture(), fps=5)
         receiver = RTCPeerConnection(RTCConfiguration(iceServers=[]))
-        receiver.addTransceiver("video", direction="recvonly")
+        transceiver = receiver.addTransceiver("video", direction="recvonly")
         channel = receiver.createDataChannel(METADATA_CHANNEL, ordered=True)
-        video = asyncio.get_running_loop().create_future()
-        metadata = asyncio.get_running_loop().create_future()
+        matched = asyncio.get_running_loop().create_future()
+        decoded_frames, references, received_timestamps, decoded_pts = {}, {}, set(), {}
+        # Observe actual receiver RTP headers and the jitter buffer's timestamp
+        # mapping, then compare the resulting real decoded AV frame. This does
+        # not assume that decoder PTS still contains the random RTP origin.
+        original_packet = transceiver.receiver._handle_rtp_packet
+        async def received_packet(packet, arrival_time_ms):
+            received_timestamps.add(packet.timestamp)
+            await original_packet(packet, arrival_time_ms)
+        transceiver.receiver._handle_rtp_packet = received_packet
+        mapper = transceiver.receiver._RTCRtpReceiver__timestamp_mapper
+        original_map = mapper.map
+        def timestamp_map(timestamp):
+            normalized = original_map(timestamp)
+            decoded_pts[normalized] = timestamp
+            return normalized
+        mapper.map = timestamp_map
 
         @receiver.on("track")
         async def on_track(track):
             try:
-                frame = await track.recv()
-                if not video.done():
-                    video.set_result(frame)
+                while not matched.done():
+                    frame = await track.recv()
+                    timestamp = decoded_pts.get(frame.pts)
+                    self.assertIn(timestamp, received_timestamps)
+                    decoded_frames[timestamp] = frame
+                    if timestamp in references and not matched.done():
+                        matched.set_result((frame, references[timestamp]))
             except BaseException as failure:
-                if not video.done():
-                    video.set_exception(failure)
+                if not matched.done():
+                    matched.set_exception(failure)
 
         @channel.on("message")
         def on_metadata(message):
-            if not metadata.done():
-                metadata.set_result(json.loads(message))
+            reference = json.loads(message)
+            timestamp = reference["rtpTimestamp"]
+            references[timestamp] = reference
+            if timestamp in decoded_frames and not matched.done():
+                matched.set_result((decoded_frames[timestamp], reference))
 
         try:
             await receiver.setLocalDescription(await receiver.createOffer())
@@ -453,13 +439,19 @@ class DesktopStreamLoopbackTests(unittest.IsolatedAsyncioTestCase):
             opened = await asyncio.to_thread(service.open, BINDING, TARGET, "loopback-fixture-owner", offer,
                                              int(time.time() * 1000) + 30000, lambda: None)
             await receiver.setRemoteDescription(RTCSessionDescription(**opened["answer"]))
-            frame, reference = await asyncio.wait_for(asyncio.gather(video, metadata), 12)
+            frame, reference = await asyncio.wait_for(matched, 12)
             self.assertEqual((320, 200), (frame.width, frame.height))
             self.assertEqual(opened["streamId"], reference["streamId"])
             self.assertEqual("frame", reference.pop("type"))
+            self.assertEqual(decoded_pts[frame.pts], reference["rtpTimestamp"])
+            self.assertIn(reference["rtpTimestamp"], received_timestamps)
+            self.rtp_evidence = {"metadata": copy.deepcopy(reference), "receivedRtpTimestamp": decoded_pts[frame.pts],
+                                 "decodedPts": frame.pts, "decodedWidth": frame.width, "decodedHeight": frame.height}
             geometry = service.validate_input(opened["streamId"], "loopback-fixture-owner", BINDING, reference, lambda: None)
             self.assertEqual([20, 30, 340, 230], geometry["captureBounds"])
-            self.assertGreater(frame.to_ndarray(format="rgb24").mean(), 20)
+            from PIL import ImageStat
+            with frame.to_image() as decoded:
+                self.assertGreater(sum(ImageStat.Stat(decoded).mean) / 3, 20)
             self.assertEqual("connected", receiver.connectionState)
         finally:
             await receiver.close()

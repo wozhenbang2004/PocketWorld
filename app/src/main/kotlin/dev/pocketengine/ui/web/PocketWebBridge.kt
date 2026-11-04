@@ -485,9 +485,12 @@ internal class PocketWebBridge(
             if (action in PocketWebDevices.COMMANDS) {
                 requireSection("devices")
                 devicePages.dispatch(action, args) { result, error ->
-                    result?.optJSONObject("snapshot")?.let { domainSnapshots["devices"] = JSONObject(it.toString()) }
-                    if (error == null) domainErrors.remove("devices") else domainErrors["devices"] = error
-                    complete(id, result, error, "outcome_unknown"); publishState()
+                    if (!action.startsWith("devices.desktop.")) {
+                        result?.optJSONObject("snapshot")?.let { domainSnapshots["devices"] = JSONObject(it.toString()) }
+                        if (error == null) domainErrors.remove("devices") else domainErrors["devices"] = error
+                    }
+                    complete(id, result, error, "outcome_unknown")
+                    if (!action.startsWith("devices.desktop.")) publishState()
                 }
                 return
             }
