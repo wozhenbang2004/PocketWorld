@@ -1,4 +1,13 @@
 {
+  "related-task-cancellation": {
+    "class": "dev.pocketengine.features.RelatedTaskCancellationTest",
+    "additionalClasses": [
+      "dev.pocketengine.RelatedTaskCancellationNativeTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original TaskStore/FeatureHost snapshot and queued child-stop fences, including controlled SQL successors in the actual cancelCapabilityAttempt native entry (invoked reflectively) and its finally chain and a reentrant original-control callback. Same-parent later links, parent/child run or epoch changes and captured descendants cannot select new work. Startup/presentation, team transport and successor admission are controlled fixtures; no model, physical team/remote/MCP settlement or device acceptance."
+  },
   "attachment-legacy-integrity": {
     "class": "dev.pocketengine.features.attachments.LegacyAttachmentIntegrityTest",
     "additionalClasses": [
