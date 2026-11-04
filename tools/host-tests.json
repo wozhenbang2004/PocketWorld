@@ -10,6 +10,15 @@
     "robolectric": true,
     "description": "Bounded read-only owner inventory with explicit incomplete diagnostics, unchanged original bytes and unknown native publications, strict archive/replay scans, physical slot/byte quotas and fail-closed enumeration/read budgets. No mounted UI, Android process-death or device acceptance."
   },
+  "attachment-view-recovery": {
+    "class": "dev.pocketengine.features.attachments.AttachmentViewSnapshotsRecoveryTest",
+    "helpers": [
+      "dev.pocketengine.features.attachments.LegacyAttachmentIntegrityTest"
+    ],
+    "robolectric": true,
+    "linuxPosixFd": true,
+    "description": "Opt-in real-disk preview orphan recovery with controlled JDK17 child-process kills, original TTL, exact quota and unknown-index preservation. Requires Linux and readable /proc/self/fd for the existing POSIX reader fixture. No Android device/process-kill or external URI-grant acceptance."
+  },
   "attachment-legacy-integrity": {
     "class": "dev.pocketengine.features.attachments.LegacyAttachmentIntegrityTest",
     "additionalClasses": [
