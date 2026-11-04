@@ -134,6 +134,19 @@ internal class AttachmentOutcomeCoordinator(
     fun createDocument(draft:JSONObject){if(state.busy||state.team!=null||state.group!=null||state.documentDraft==null||pendingDocumentAction!=null)return;val pin=try{checkedDocumentDraft(draft)}catch(failure:Exception){state=state.copy(error=safe(failure));return};val action=java.util.UUID.randomUUID().toString();pendingDocumentAction=action;state=state.copy(documentDraft=pin,pendingDocumentTask=action);work(onSuccess={actual->if(actual.optBoolean("outputNotPublished")){pendingDocumentAction=null;state=state.copy(pendingDocumentTask=null,error=actual.optString("message"),notice="原可编辑源已保存，可修正当前稿后明确生成新版本。")}else if(actual.optBoolean("found",true)){pendingDocumentAction=null;state=state.copy(documentDraft=null,pendingDocumentTask=null,taskId=actual.optString("hostTaskId",action),file=actual,snapshot=null,notice="已保存实际文档和原可编辑源。可打开原件核对排版，或明确导出/分享。")}}){c,_->val actual=app.features.createDocumentForOwner(pin,c,action);actual to null}}
     fun queryDocument(){val action=state.pendingDocumentTask?:return;if(state.busy||state.group!=null||state.team!=null)return;work(onSuccess={actual->if(actual.optBoolean("found")){pendingDocumentAction=null;state=state.copy(documentDraft=null,pendingDocumentTask=null,taskId=action,file=actual,snapshot=null,notice="已找到原操作的实际固定文档，没有重新生成")}else state=state.copy(notice="原文档尚无完整发布回执。可查看原任务和已保留源，不自动重复生成。")}){c,_->app.features.documentResultForOwner(action,c) to null}}
 
+    fun openDocumentAction(id:String){
+        if(state.busy||state.group!=null||state.team!=null||state.taskId!=null||state.documentDraft!=null)return
+        val actions=state.snapshot?.optJSONObject("documentActions")?.optJSONArray("actions").objects()
+        if(actions.none{it.optString("taskId")==id}){state=state.copy(error="原文档动作不在本页原生记录中，请刷新后明确选择。");return}
+        pendingDocumentAction=id;openTask(id)
+    }
+    fun olderDocumentActions(){
+        if(state.busy||state.group!=null||state.team!=null||state.taskId!=null||state.documentDraft!=null)return
+        val snapshot=state.snapshot?:return;val page=snapshot.optJSONObject("documentActions")?:return
+        val cursor=page.optString("nextCursor");if(!page.optBoolean("hasMore")||cursor.isEmpty())return
+        work(onSuccess={actual->state=state.copy(snapshot=JSONObject(snapshot.toString()).put("documentActions",actual))}){c,_->app.attachmentOutcomes.documentActions(cursor,c) to null}
+    }
+
     fun importSource(){if(state.team==null&&state.group==null)activity.pickAttachments(state.taskId,null)}
     fun imported(){if(state.open&&state.team==null&&state.group==null)refresh()}
     fun read(range:DocumentContent.Request){val file=state.file?:return;val group=state.group;val task=state.taskId

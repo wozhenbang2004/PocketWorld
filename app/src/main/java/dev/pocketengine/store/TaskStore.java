@@ -2473,6 +2473,26 @@ public final class TaskStore {
         if(previous!=null){requirePrivateOwner(previous);JSONObject exact=previous.optJSONObject("externalRefs");exact=exact==null?null:exact.optJSONObject("documentCreation");if(!"attachments".equals(previous.optString("feature"))||!"createDocument".equals(previous.optString("command"))||exact==null||!draft.identity.equals(exact.optString("planDigest")))throw new SecurityException("原动作已经属于另一份实际文档计划，未重新保存");return get(id,false).put("knownOperation",true);}
         db.beginTransaction();try{JSONObject task=beginExternal("attachments","createDocument",id,dev.pocketengine.features.attachments.creation.DocumentDraft.sourceInput(draft.source()).put("_nativeDocumentPlanDigest",draft.identity));task.put("coordinatorEpoch",1);write(task);db.setTransactionSuccessful();return task.put("knownOperation",false);}finally{db.endTransaction();}
     }
+    /** Cold native-owner recovery is a bounded view of the original ledger, never a
+     * restored draft, grant, latest-action guess or instruction to repeat creation. */
+    public synchronized JSONObject ownerDocumentActionsForOwner(String cursor,RunControl control)throws Exception {
+        java.util.Objects.requireNonNull(control).checkpoint();JSONObject page=TaskAuditStore.summaryPage(db,cursor,20);
+        JSONArray headers=page.getJSONArray("tasks"),actions=new JSONArray(),gaps=new JSONArray();long readBytes=0;
+        for(int i=0;i<headers.length();i++){
+            control.checkpoint();JSONObject header=headers.getJSONObject(i);String id=header.optString("id");
+            if(!id.matches("[a-f0-9-]{36}")||!"owner".equals(header.optString("actorId"))||!"private".equals(header.optString("spaceId"))||header.has("origin")||!"attachments".equals(header.optString("feature"))||!"createDocument".equals(header.optString("command"))||!id.equals(header.optString("runId"))||header.optInt("coordinatorEpoch",-1)!=1)continue;
+            JSONObject task;long remaining=Math.min(65536,262144-readBytes);
+            try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<=CAST(? AS INTEGER) THEN document END,length(CAST(document AS BLOB)) FROM tasks WHERE task_id=?",new String[]{Long.toString(remaining),id})){
+                if(!row.moveToFirst()||row.isNull(0)){gaps.put(new JSONObject().put("taskId",id).put("reason","original_document_metadata_read_limited"));continue;}
+                readBytes+=row.getLong(1);task=new JSONObject(row.getString(0));
+            }
+            JSONObject refs=task.optJSONObject("externalRefs"),document=refs==null?null:refs.optJSONObject("documentCreation");
+            if(!id.equals(task.optString("id"))||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||task.has("origin")||!"attachments".equals(task.optString("feature"))||!"createDocument".equals(task.optString("command"))||!id.equals(task.optString("operationId"))||!id.equals(task.optString("runId"))||task.optInt("coordinatorEpoch",-1)!=1)continue;
+            if(document==null||!document.optString("planDigest").matches("[a-f0-9]{64}")||!Set.of("docx","pdf","xlsx","pptx").contains(document.optString("format"))||document.optString("name").isEmpty()||document.optString("name").length()>80){gaps.put(new JSONObject().put("taskId",id).put("reason","original_document_identity_unavailable"));continue;}
+            actions.put(new JSONObject().put("taskId",id).put("operationId",id).put("runId",id).put("coordinatorEpoch",1).put("name",document.getString("name")).put("format",document.getString("format")).put("status",task.optString("status")).put("createdAt",task.optLong("createdAt")).put("updatedAt",task.optLong("updatedAt")).put("replayAllowed",false).put("executionAuthorized",false));
+        }
+        control.checkpoint();return new JSONObject().put("actions",actions).put("gaps",gaps).put("nextCursor",page.getString("nextCursor")).put("hasMore",page.getBoolean("hasMore")).put("headerRowsExamined",headers.length()).put("coreBytesRead",readBytes).put("auditBodyIncluded",false).put("executionAuthorized",false).put("coverage","original_document_actions_in_current_task_header_window_updates_require_refresh");
+    }
     public synchronized JSONObject beginExternal(String feature,String command,String operationId,JSONObject input)throws Exception{
         return beginExternal(feature,command,operationId,input,null);
     }
