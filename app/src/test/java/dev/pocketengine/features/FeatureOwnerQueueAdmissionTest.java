@@ -4,6 +4,7 @@ import static org.junit.Assert.*;
 
 import android.app.Application;
 import dev.pocketengine.features.automation.AutomationModule;
+import dev.pocketengine.features.remote.RemoteModule;
 import dev.pocketengine.store.SecretVault;
 import dev.pocketengine.store.SettingsStore;
 import dev.pocketengine.store.TaskStore;
@@ -75,5 +76,28 @@ public final class FeatureOwnerQueueAdmissionTest {
         }
         JSONObject accepted=receipt("retained-original");assertTrue(accepted.toString(),accepted.getBoolean("ok"));assertEquals(1,checked.get());assertEquals(before+1,commitments());
         JSONObject record=accepted.getJSONObject("result").getJSONObject("commitment");assertFalse(record.getString("id").isEmpty());assertEquals("pending",record.getString("status"));
+    }
+    @Test public void connectionProfileWriteChecksTheQueuedWindowAndAgainBeforeTheRealModule()throws Exception {
+        Application app=RuntimeEnvironment.getApplication();
+        RemoteModule remote=new RemoteModule(new FeatureContext(app,new SettingsStore(app),new SecretVault(app),events::add));host.register(remote);
+        int before=remote.snapshot().getJSONArray("profiles").length();
+        for(int scenario=0;scenario<3;scenario++){
+            // Real module persistence; the supplier models the captured native window, not JSON authority.
+            final int selected=scenario;AtomicBoolean current=new AtomicBoolean(true);AtomicInteger checked=new AtomicInteger();
+            String id="connection-window-"+scenario;
+            try(QueueGate gate=new QueueGate()){
+                JSONObject input=new JSONObject().put("feature","remote").put("command","saveProfile").put("requestId",id)
+                    .put("payload",new JSONObject().put("name",id).put("baseUrl","https://companion.invalid").put("expectedBindingHash",""));
+                host.request(input,()->{int check=checked.incrementAndGet();return current.get()&&(selected!=2||check==1);});
+                assertEquals(0,checked.get());if(scenario==1)current.set(false);
+            }
+            JSONObject actual=receipt(id);
+            if(scenario==0){
+                assertTrue(actual.toString(),actual.getBoolean("ok"));assertEquals(2,checked.get());
+                JSONObject saved=actual.getJSONObject("result");assertEquals(id,saved.getString("name"));assertTrue(saved.getString("bindingHash").matches("[a-f0-9]{64}"));
+                assertEquals(saved.getString("id"),remote.snapshot().getJSONArray("profiles").getJSONObject(before).getString("id"));
+            }else{assertFalse(actual.toString(),actual.getBoolean("ok"));assertEquals(scenario==1?1:2,checked.get());}
+            assertEquals("A revoked queued window must not create another profile",before+1,remote.snapshot().getJSONArray("profiles").length());
+        }
     }
 }

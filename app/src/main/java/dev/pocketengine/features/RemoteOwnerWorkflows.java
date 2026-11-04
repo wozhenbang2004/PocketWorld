@@ -2,6 +2,7 @@ package dev.pocketengine.features;
 
 import dev.pocketengine.core.EventSink;
 import dev.pocketengine.features.remote.RemoteModule;
+import dev.pocketengine.features.remote.HarnessCapabilityObservation;
 import dev.pocketengine.features.teams.TeamsModule;
 import dev.pocketengine.store.TaskStore;
 import java.util.LinkedHashMap;
@@ -193,6 +194,10 @@ public final class RemoteOwnerWorkflows {
     }
     private static boolean sameReadTarget(JSONObject before,JSONObject after,boolean acceptedJob)throws Exception {
         for(String key:new String[]{"taskId","runId","coordinatorEpoch","profileId","serviceBase","jobOperationId"})if(!before.get(key).equals(after.opt(key)))return false;
+        if(before.has("backendSelection")||after.has("backendSelection")){
+            HarnessCapabilityObservation.requireSameBackendSelection(before.optJSONObject("backendSelection"),after.optJSONObject("backendSelection"));
+            for(String key:new String[]{"profileBinding","environmentId","environmentBinding","worker"})if(!before.get(key).equals(after.opt(key)))return false;
+        }
         return before.optString("jobId").equals(after.optString("jobId"))||acceptedJob&&before.optString("jobId").isEmpty();
     }
     private JSONObject refresh(Window window)throws Exception{return refresh(window,false);}
@@ -202,10 +207,12 @@ public final class RemoteOwnerWorkflows {
         long lifecycle,generation;synchronized(this){lifecycle=window.lifecycleRevision;generation=++window.readGeneration;checkReadCurrent(window,lifecycle,generation);window.fresh=false;window.review=null;window.queryStatus="querying";window.lastReadAttemptAt=System.currentTimeMillis();}
         JSONObject target=tasks.remoteOwnerTarget(window.task),payload=new JSONObject().put("profileId",target.getString("profileId")).put("serviceBase",target.getString("serviceBase"));String job=target.optString("jobId");
         String capturedBinding;JSONObject result;try{
-            capturedBinding=module().profileBindingHash(target.getString("profileId"));payload.put("_profileBinding",capturedBinding);
+            capturedBinding=target.has("backendSelection")?target.getString("profileBinding"):module().profileBindingHash(target.getString("profileId"));
+            if(!capturedBinding.equals(module().profileBindingHash(target.getString("profileId"))))throw new SecurityException("原后端连接代次已变化，不能改用新配置查询旧任务");payload.put("_profileBinding",capturedBinding);if(target.has("backendSelection"))payload.put("backendSelection",new JSONObject(target.getJSONObject("backendSelection").toString()));
             checkReadCurrent(window,lifecycle,generation);
             if(!sameReadTarget(target,tasks.remoteOwnerTarget(window.task),false))throw new SecurityException("读取前原task/run/job已变化");
-            if(job.isEmpty())result=module().handle("reconcileOperation",payload.put("operationId",target.getString("jobOperationId")));
+            if(target.has("backendSelection")){if(inspectRecovery)throw new SecurityException("此后端没有冷会话续接协议");result=module().readBackendJob(target,()->checkReadCurrent(window,lifecycle,generation));}
+            else if(job.isEmpty())result=module().handle("reconcileOperation",payload.put("operationId",target.getString("jobOperationId")));
             else result=module().handle(inspectRecovery?"readSessionRecovery":"getJob",payload.put("jobId",job).put("jobOperationId",target.getString("jobOperationId")));
             // The original HTTP timeout remains bounded. A dispatched GET may still finish;
             // leaving this page invalidates its observation, not the remote execution.
@@ -344,16 +351,29 @@ public final class RemoteOwnerWorkflows {
     }
     private JSONObject approve(Window window,JSONObject input)throws Exception{
         if(window.teamWindow!=null)return approveTeam(window,input);
-        JSONObject claim,source;String capturedBinding;TeamMemberInteractionApproval memberApproval;String request=input.getString("requestId"),decision=input.getString("decision");
-        synchronized(this){checkReview(window,input.getString("reviewId"));source=new JSONObject(window.source.toString());capturedBinding=window.profileBinding;checkApprovalContext(source,request);memberApproval=isTeamMember(tasks.get(window.task,false))?new TeamMemberInteractionApproval(this,window,"approval",request,TaskStore.capabilityFingerprint(pendingApproval(source,request))):null;window.fresh=false;window.review=null;claim=tasks.claimRemoteApproval(source,request,decision,memberApproval);}
+        JSONObject claim,source;String capturedBinding;TeamMemberInteractionApproval memberApproval;String request=input.getString("requestId"),decision=input.getString("decision");boolean backend;long lifecycle;
+        synchronized(this){checkReview(window,input.getString("reviewId"));source=new JSONObject(window.source.toString());capturedBinding=window.profileBinding;checkApprovalContext(source,request);backend=source.has("backendSelection");lifecycle=window.lifecycleRevision;
+            if(backend){requirePrivateBackendOwner(window,source);JSONObject permission=HarnessCapabilityObservation.checkedBackendApproval(source,pendingApproval(source,request));if(decision.equals("accept")&&!permission.getBoolean("canAccept"))throw new SecurityException("此原权限请求没有唯一allow_once选项");}
+            memberApproval=isTeamMember(tasks.get(window.task,false))?new TeamMemberInteractionApproval(this,window,"approval",request,TaskStore.capabilityFingerprint(pendingApproval(source,request))):null;window.fresh=false;window.review=null;claim=tasks.claimRemoteApproval(source,request,decision,memberApproval);}
         if(claim.optBoolean("knownDecision"))return refresh(window); // Original GET only; never send a second decision.
         JSONObject payload=new JSONObject().put("profileId",source.getString("profileId")).put("serviceBase",source.getString("serviceBase")).put("jobId",source.getString("jobId")).put("jobOperationId",source.getString("jobOperationId")).put("approvalRequestId",request).put("decision",decision).put("_profileBinding",capturedBinding);
-        try{JSONObject result=memberApproval==null?module().handle("approveJob",payload):module().approveAssignmentJob(payload,()->{memberApproval.checkCoordinatorCurrent();tasks.beforeTeamMemberApprovalDispatch(window.task,claim.getString("operationId"),memberApproval);});tasks.recordRemoteApprovalResult(window.task,claim.getString("operationId"),result);}catch(Exception unknown){/* Durable sending/unknown claim is query-only, including after page exit/restart. */}
+        if(backend){JSONObject permission=pendingApproval(source,request);for(String key:new String[]{"sessionId","promptRequestId","requestHash"})payload.put(key,permission.get(key));for(String key:new String[]{"backendSelection","profileBinding","environmentId","environmentBinding","worker","readOnly"})payload.put(key,source.get(key));payload.put("model",source.getJSONObject("backendSelection").getString("model"));}
+        try{JSONObject result=backend?module().approveBackendJob(payload,()->requireBackendApprovalCurrent(window,lifecycle,source,request)):memberApproval==null?module().handle("approveJob",payload):module().approveAssignmentJob(payload,()->{memberApproval.checkCoordinatorCurrent();tasks.beforeTeamMemberApprovalDispatch(window.task,claim.getString("operationId"),memberApproval);});tasks.recordRemoteApprovalResult(window.task,claim.getString("operationId"),result);}catch(Exception unknown){/* Durable sending/unknown claim is query-only, including after page exit/restart. */}
         emitTask(window.task);return responseIfOpen(window,tasks.remoteOwnerOperation(window.task,claim.getString("operationId")));
+    }
+    private void requirePrivateBackendOwner(Window window,JSONObject source)throws Exception {
+        if(window.nativeOwner==null||foregroundOwner!=window.nativeOwner||window.teamWindow!=null)throw new SecurityException("Gemini权限须由原前台私人任务窗口核对");
+        JSONObject task=tasks.get(window.task,false);if(task==null||task.optJSONObject("origin")!=null||!task.optString("parentTaskId").isEmpty()||task.has("teamReservationPool")||task.has("teamProjectRoundOrigin")||task.has("teamRunId")||task.optBoolean("cancelRequested"))throw new SecurityException("此后端不接受团队、外部来源或已撤回的任务权限");
+        if(!source.getString("profileBinding").equals(module().profileBindingHash(source.getString("profileId"))))throw new SecurityException("原后端连接代次已变化");
+    }
+    private synchronized void requireBackendApprovalCurrent(Window window,long lifecycle,JSONObject source,String request)throws Exception {
+        if(windows.get(window.id)!=window||window.closed||window.lifecycleRevision!=lifecycle)throw new SecurityException("原权限窗口已关闭");requirePrivateBackendOwner(window,source);
+        JSONObject current=tasks.remoteOwnerTarget(window.task);if(!sameReadTarget(source,current,false)||!TaskStore.capabilityFingerprint(pendingApproval(source,request)).equals(TaskStore.capabilityFingerprint(pendingApproval(current,request))))throw new SecurityException("原任务或完整权限请求已变化");
+        HarnessCapabilityObservation.checkedBackendApproval(current,pendingApproval(current,request));
     }
     private JSONObject answerQuestion(Window window,JSONObject input)throws Exception {
         JSONObject claim,source;String binding;long revision;TeamMemberInteractionApproval memberApproval;
-        synchronized(this){checkReview(window,input.getString("reviewId"));if(window.nativeOwner==null||foregroundOwner!=window.nativeOwner||window.teamWindow!=null)throw new SecurityException("正常回答须原生前台窗口；制作assignment不能借普通成员入口继续");source=new JSONObject(window.source.toString());binding=window.profileBinding;revision=window.lifecycleRevision;memberApproval=isTeamMember(tasks.get(window.task,false))?new TeamMemberInteractionApproval(this,window,"question",input.getString("requestId"),input.getString("requestHash")):null;claim=tasks.claimRemoteQuestionAnswer(source,input.getString("requestId"),input.getString("requestHash"),input.getJSONObject("answers"),memberApproval);window.fresh=false;window.review=null;}
+        synchronized(this){checkReview(window,input.getString("reviewId"));if(window.nativeOwner==null||foregroundOwner!=window.nativeOwner||window.teamWindow!=null)throw new SecurityException("正常回答须原生前台窗口；制作assignment不能借普通成员入口继续");source=new JSONObject(window.source.toString());if(source.has("backendSelection")||HarnessCapabilityObservation.GEMINI_PROTOCOL.equals(source.optString("protocol")))throw new SecurityException("此Gemini后端未支持结构化问题，不转换为其它协议");binding=window.profileBinding;revision=window.lifecycleRevision;memberApproval=isTeamMember(tasks.get(window.task,false))?new TeamMemberInteractionApproval(this,window,"question",input.getString("requestId"),input.getString("requestHash")):null;claim=tasks.claimRemoteQuestionAnswer(source,input.getString("requestId"),input.getString("requestHash"),input.getJSONObject("answers"),memberApproval);window.fresh=false;window.review=null;}
         if(claim.optBoolean("knownAnswer"))return refresh(window);String operation=claim.getString("operationId");JSONObject payload=new JSONObject(source.toString());JSONObject body=claim.getJSONObject("request");for(java.util.Iterator<String> keys=body.keys();keys.hasNext();){String key=keys.next();payload.put(key,body.get(key));}payload.put("_profileBinding",binding);
         try{JSONObject actual=module().answerQuestionJob(payload,()->{synchronized(RemoteOwnerWorkflows.this){if(windows.get(window.id)!=window||foregroundOwner!=window.nativeOwner||revision!=window.lifecycleRevision)throw new SecurityException("原正常问答窗口已关闭或切后台");if(memberApproval!=null)memberApproval.checkCoordinatorCurrent();tasks.beforeRemoteQuestionAnswerDispatch(window.task,operation,memberApproval);}});tasks.recordRemoteQuestionAnswerResult(window.task,operation,actual);}catch(Exception unconfirmed){tasks.remoteQuestionAnswerUnconfirmed(window.task,operation);}
         emitTask(window.task);return responseIfOpen(window,tasks.remoteOwnerOperation(window.task,operation));
@@ -485,13 +505,15 @@ public final class RemoteOwnerWorkflows {
     }
     private static JSONObject pendingApproval(JSONObject source,String id)throws Exception {JSONArray pending=source.optJSONArray("pendingApprovals");for(int i=0;pending!=null&&i<pending.length();i++)if(id.equals(pending.getJSONObject(i).optString("requestId")))return pending.getJSONObject(i);throw new SecurityException("原审批请求已消失");}
     private void checkApprovalContext(JSONObject source,String request)throws Exception{
-        JSONObject approval=null;JSONArray entries=source.optJSONArray("pendingApprovals");for(int i=0;entries!=null&&i<entries.length();i++)if(request.equals(entries.getJSONObject(i).optString("requestId")))approval=entries.getJSONObject(i);
+        JSONObject approval=null;JSONArray entries=source.optJSONArray("pendingApprovals");for(int i=0;entries!=null&&i<entries.length();i++)if(request.equals(entries.getJSONObject(i).optString("requestId"))){if(approval!=null&&source.has("backendSelection"))throw new SecurityException("原Gemini权限请求身份重复");approval=entries.getJSONObject(i);}
         if(approval==null||!source.optBoolean("protocolVerified"))throw new SecurityException("未取得原协议的当前审批请求");
         if(source.optString("protocol").equals("claude_stream_json")){
             if(source.optString("sessionId").isEmpty()||source.optString("promptRequestId").isEmpty()||!source.optBoolean("controlProtocolVerified")||!source.optBoolean("sessionIdentityConfirmed")||!source.optString("sessionId").equals(approval.optString("sessionId"))||!source.optString("promptRequestId").equals(approval.optString("promptRequestId"))||approval.optString("toolUseId").isEmpty())throw new SecurityException("Claude本次工具请求身份未确认");
         }else if(source.optString("protocol").equals("codex_app_server")){
             if(source.optString("threadId").isEmpty())throw new SecurityException("Codex原会话身份缺失");
             for(String key:new String[]{"threadId","turnId"})if(approval.has(key)&&!source.optString(key).equals(approval.optString(key)))throw new SecurityException("Codex审批已不属于原thread/turn");
+        }else if(HarnessCapabilityObservation.GEMINI_PROTOCOL.equals(source.optString("protocol"))){
+            HarnessCapabilityObservation.checkedBackendApproval(source,approval);
         }else throw new SecurityException("此执行协议未接入原生审批");
         JSONObject task=tasks.get(source.getString("taskId"),false);if(task!=null&&task.has("parentTaskId")){
             JSONObject parent=tasks.get(task.getString("parentTaskId"),false);if(parent==null)throw new SecurityException("原父任务不存在");

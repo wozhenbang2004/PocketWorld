@@ -45,6 +45,8 @@ import job_events
 import worker_executable_identity
 import team_member_scope
 import pi_driver
+import acp_driver
+import gemini_acp_profile
 from codex_driver import CodexAppServerDriver, DriverError
 from claude_driver import ClaudeStreamDriver, command as claude_command, inspect_cli as inspect_claude_cli, session_uuid
 
@@ -52,7 +54,7 @@ MAX_BODY = 65_536
 MAX_OUTPUT = 196_608
 MAX_ARTIFACT = 262_144
 TERMINAL = {"completed", "failed", "cancelled", "interrupted", "unknown", "blocked"}
-WORKERS = {"codex_app_server": "codex", "codex": "codex", "claude": "claude", "pi": "pi", "kimi": "kimi"}
+WORKERS = {"codex_app_server": "codex", "codex": "codex", "claude": "claude", "pi": "pi", "kimi": "kimi", "gemini_acp": "node"}
 ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
 
 
@@ -67,6 +69,16 @@ def original_job_cancellation_capability():
 
 
 def worker_capabilities(worker):
+    if worker == gemini_acp_profile.WORKER:
+        return {"protocol": gemini_acp_profile.PROTOCOL, "backendId": gemini_acp_profile.BACKEND,
+                "backendVersion": gemini_acp_profile.VERSION, "wireProtocolVersion": 1,
+                "modelSelection": True, "threadResume": False, "interactiveApprovals": True,
+                "turnInterrupt": True, "inputSteering": False, "sessionReattach": False,
+                "readOnlySandbox": False, "structuredUserInput": False,
+                "questionCapability": "unsupported_fixed_acp_backend", "progressSnapshot": True,
+                "liveStreaming": False, "operationReconciliation": True, "protocolVerified": False,
+                "modelInferenceVerified": False, "hostFileSystem": False, "hostTerminal": False,
+                "privateWritableOnly": True, "originalJobEvents": job_events.capability(worker)}
     native = worker == "codex_app_server"
     claude = worker == "claude"
     pi = worker == "pi"
@@ -130,6 +142,7 @@ class JobManager:
         self.native_device_admissions = {}
         self.device_companion = None  # Explicit native startup only, never the legacy HTTP token.
         self.probe_slots = threading.BoundedSemaphore(2)
+        self.backend_observations = {}  # Ephemeral native observations, never another operation ledger.
         self.stopping = set()
         self.resources = set()
         self.resource_changed = threading.Condition(self.lock)
@@ -288,7 +301,7 @@ class JobManager:
             workers = []
             for worker in item.get("workers", ["command"]):
                 executable = WORKERS.get(worker)
-                if item.get("kind") == "ssh":
+                if item.get("kind") == "ssh" or worker == gemini_acp_profile.WORKER:
                     available = None
                 elif worker == "command":
                     installed = [value if os.path.isabs(value) else shutil.which(value) for value in item.get("commands", {}).values()]
@@ -296,7 +309,7 @@ class JobManager:
                 else:
                     resolved = shutil.which(executable)
                     available = bool(resolved) and (os.name != "nt" or Path(resolved).suffix.lower() == ".exe")
-                workers.append({"id": worker, "available": available, "availability": "unverified_remote" if available is None else "installed" if available else "missing", "autonomousTools": worker == "kimi", "capabilities": worker_capabilities(worker), **worker_executable_identity.inspect(item, worker)})
+                workers.append({"id": worker, "available": available, "availability": "requires_fixed_profile_probe" if worker == gemini_acp_profile.WORKER else "unverified_remote" if available is None else "installed" if available else "missing", "autonomousTools": worker == "kimi", "capabilities": worker_capabilities(worker), **worker_executable_identity.inspect(item, worker)})
             entries.append({"id": eid, "label": item.get("label", eid), "kind": item.get("kind", "local"), "workers": workers,
                             "writeAllowed": bool(item.get("writeAllowed", False)), "sandboxed": False,
                             "bindingHash": self.environment_binding(eid), "workspace": item["root"],
@@ -315,7 +328,7 @@ class JobManager:
         # No credential contents or token-derived identity are exposed. A restart invalidates
         # an unsubmitted review; accepted operations still reconcile by their original ID.
         scope = {key: item.get(key) for key in ("kind", "root", "host", "user", "port", "writeAllowed", "workers", "commands", "knownHosts", "identityFile", "sshConfig", "harnesses", "commandOutputEncoding")}
-        scope.update({key: item[key] for key in ("codexHome", "codexProviderVariables") if key in item})
+        scope.update({key: item[key] for key in ("codexHome", "codexProviderVariables", "geminiAcp") if key in item})
         if "ccSwitchSources" in item:
             scope["ccSwitchSourceDefinitions"] = cc_switch_import.source_definitions_identity(item)
         scope.update(instance=self.instance_id, environmentId=eid)
@@ -326,6 +339,8 @@ class JobManager:
         if "environmentBinding" in request and request["environmentBinding"] != self.environment_binding(request["environmentId"]):
             raise RequestError("Environment configuration or Companion instance changed; probe not started", 409)
         worker = request.get("worker")
+        if worker == gemini_acp_profile.WORKER:
+            return self._probe_gemini(request, env)
         if "effort" in request and worker != "codex_app_server":
             raise RequestError("This metadata probe has no native effort catalog for that worker; Claude options come only from an already approved original job initialize", 409)
         group_probe = request.get("inferenceAudience") == "EXTERNAL_GROUP"
@@ -383,6 +398,150 @@ class JobManager:
                         process.close()
             finally:
                 self.probe_slots.release()
+
+    def _probe_gemini(self, request, env):
+        allowed = {"environmentId", "environmentBinding", "worker", "model", "backendId", "modeId", "readOnly"}
+        if (set(request) - allowed or request.get("environmentBinding") != self.environment_binding(env["id"])
+                or request.get("backendId", gemini_acp_profile.BACKEND) != gemini_acp_profile.BACKEND
+                or request.get("modeId", "default") != "default" or "readOnly" in request and request["readOnly"] is not False):
+            raise RequestError("Fixed ACP probe requires the original environment and default writable backend selection", 409)
+        model = request.get("model", "")
+        if not isinstance(model, str) or len(model.encode("utf-16-le")) // 2 > 200 or model != model.strip() or any(ord(c) < 32 for c in model):
+            raise RequestError("Fixed ACP model must be an exact bounded name or explicit executor default")
+        if not self.probe_slots.acquire(blocking=False):
+            raise RequestError("Worker capability probes are busy", 429)
+        now, binding = self.now(), self.environment_binding(env["id"])
+        credential = os.environ.get("GEMINI_API_KEY", "")
+        observation = {"format": "pocketworld.remote-backend-observation.v1", "backendId": gemini_acp_profile.BACKEND,
+            "worker": gemini_acp_profile.WORKER, "backendVersion": gemini_acp_profile.VERSION, "protocolVersion": 1,
+            "environmentId": env["id"], "environmentBinding": binding, "requestedModel": model, "modeId": "default",
+            "available": False, "observedAt": now, "expiresAt": now + 300_000,
+            "installObservation": gemini_acp_profile.missing_install("installation_missing"),
+            "configurationRevision": "", "profileRevision": "", "serviceCapabilityRevision": "",
+            "protocol": {"state": "not_checked", "agentName": "", "agentVersion": "", "wireVersion": 0},
+            "authentication": {"state": "credential_present" if credential.strip() else "credential_missing",
+                               "authenticated": False, "source": "owner_environment_presence_only"},
+            "model": {"state": "not_checked", "requested": model, "current": "", "inferenceVerified": False},
+            "mode": {"state": "not_checked", "requested": "default", "current": ""},
+            "reason": {"code": "not_checked", "message": "尚未完成原固定后端核对。"}}
+        source = process = driver = hello = None
+        resource = None
+        cleanup = None
+        try:
+            if env.get("writeAllowed") is not True or gemini_acp_profile.WORKER not in env.get("workers", []):
+                raise gemini_acp_profile.ProfileError("writable_private_only", "此后端只接受主人明确启用的本机可写环境。")
+            install = gemini_acp_profile.installation(env)
+            observation["installObservation"] = install["observation"]
+            source = gemini_acp_profile.FixedProfile(env, binding, self.state, self.auth_generation_salt, model, install)
+            observation.update(configurationRevision=source.revision, profileRevision=source.revision)
+            with self.resource_changed:
+                if self.closed or self.environment_binding(env["id"]) != binding:
+                    raise gemini_acp_profile.ProfileError("source_changed", "原环境已改变或正在停止。")
+                selected_resource = self.resource_id(env)
+                if selected_resource in self.resources:
+                    raise gemini_acp_profile.ProfileError("workspace_busy", "原工作目录仍有任务或未确认的进程；此次不启动额外探测。")
+                self.resources.add(selected_resource)
+                resource = selected_resource
+            source.check(deep=True)
+            launch, cwd = self._launch(env, source.argv)
+            if launch != source.argv or cwd != env["root"]:
+                raise gemini_acp_profile.ProfileError("source_changed", "实际启动路径与原固定来源不符。")
+            process = self._spawn(env, launch, cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=subprocess.DEVNULL, env=source.child_environment())
+            process._pocket_cleanup_lock = threading.Lock()
+            driver = acp_driver.GeminiAcpDriver(process, cwd, lambda _state: None, lambda: self.closed, 10,
+                lambda: self.lock, current=lambda **kwargs: source.check(deep=kwargs.get("deep", False)))
+            hello = driver.probe()
+            source.check()
+            if self.environment_binding(env["id"]) != binding:
+                raise gemini_acp_profile.ProfileError("source_changed", "原环境在握手期间已经改变。")
+            observation["protocol"] = {"state": "verified", "agentName": "gemini-cli", "agentVersion": gemini_acp_profile.VERSION, "wireVersion": 1}
+            observation.update(available=True, reason={"code": "initialize_observed", "message": "固定来源与握手已核对；只观察到预配置凭据存在，尚未验证认证、当前模型或推理。"})
+        except gemini_acp_profile.ProfileError as error:
+            if observation["installObservation"]["state"] != "observed":
+                observation["installObservation"] = gemini_acp_profile.missing_install(error.code)
+            observation["reason"] = {"code": error.code, "message": str(error)}
+        except DriverError as error:
+            code = str(error).split(":", 1)[0]
+            mismatch = code in {"acp_protocol_mismatch", "acp_version_mismatch", "acp_hello_changed"}
+            observation["protocol"]["state"] = "mismatch" if mismatch else "unknown"
+            observation["reason"] = {"code": code[:120], "message": "实际握手版本不匹配。" if mismatch else "原握手未确认；没有据此判定账号登录失败，也没有发送任务。"}
+        except (OSError, ValueError, PlatformError, RequestError):
+            observation["reason"] = {"code": "backend_observation_unknown", "message": "原后端来源或启动观察未确认；没有发送任务或自动登录。"}
+        finally:
+            if driver is not None:
+                driver.close_steering()
+            if process is not None:
+                cleanup = self._terminate(process, hard=True)
+                if not cleanup.get("processGroupStoppedVerified"):
+                    observation.update(available=False, reason={"code": "probe_cleanup_unconfirmed", "message": "原探测进程组尚未确认停止，工作目录仍保留占用。"})
+                    with self.lock:
+                        self._unsettled_native_starts.append(process)
+                        if source is not None:
+                            source.retain()
+                            process._pocket_gemini_source = source
+                for stream in (process.stdin, process.stdout):
+                    if stream is not None:
+                        stream.close()
+            if resource is not None and (process is None or cleanup and cleanup.get("processGroupStoppedVerified")):
+                with self.resource_changed:
+                    self.resources.discard(resource)
+                    self.resource_changed.notify_all()
+            self.probe_slots.release()
+        if observation["available"]:
+            observation["serviceCapabilityRevision"] = gemini_acp_profile.digest([
+                "pocketworld.gemini-service-capability.v1", gemini_acp_profile.BACKEND, gemini_acp_profile.VERSION, 1,
+                env["id"], binding, observation["installObservation"], source.revision, model, "default", hello])
+            with self.lock:
+                for key, prior in list(self.backend_observations.items()):
+                    if prior["observation"]["expiresAt"] <= self.now() or len(self.backend_observations) >= 16:
+                        self.backend_observations.pop(key)
+                        prior["source"].close()
+                self.backend_observations[observation["serviceCapabilityRevision"]] = {
+                    "source": source, "hello": hello, "observation": json.loads(json.dumps(observation))}
+        elif source is not None:
+            source.close()
+        return {"worker": gemini_acp_profile.WORKER, "environmentId": env["id"], "environmentBinding": binding,
+            "available": observation["available"], "protocolVerified": observation["protocol"]["state"] == "verified",
+            "accountConfigured": None, "modelInferenceVerified": False, "capabilities": worker_capabilities(gemini_acp_profile.WORKER),
+            "backendObservation": observation, "message": observation["reason"]["message"]}
+
+    def _gemini_selection(self, request, env):
+        allowed = {"operationId", "environmentId", "environmentBinding", "worker", "prompt", "model", "readOnly", "timeoutSeconds", "backendSelection"}
+        if (set(request) - allowed or request.get("readOnly") is not False or env.get("writeAllowed") is not True
+                or env.get("kind", "local") != "local" or request.get("environmentBinding") != self.environment_binding(env["id"])):
+            raise RequestError("Fixed ACP only accepts the original private local writable first-create request", 409)
+        selection = request.get("backendSelection")
+        keys = {"format", "backendId", "backendVersion", "protocolVersion", "installObservation", "configurationRevision",
+                "serviceCapabilityRevision", "capabilityRevision", "model", "modeId", "readOnly"}
+        if (not isinstance(selection, dict) or set(selection) != keys
+                or any(not gemini_acp_profile.hex_digest(selection.get(key)) for key in ("capabilityRevision", "configurationRevision", "serviceCapabilityRevision"))):
+            raise RequestError("Fixed ACP requires the complete original native backend selection", 409)
+        with self.lock:
+            entry = self.backend_observations.get(selection.get("serviceCapabilityRevision"))
+        if entry is None:
+            raise RequestError("Original backend observation is missing; re-read it before a new owner review", 409)
+        observed = entry["observation"]
+        expected = {"format": "pocketworld.remote-backend-selection.v1", "backendId": gemini_acp_profile.BACKEND,
+            "backendVersion": gemini_acp_profile.VERSION, "protocolVersion": 1,
+            "installObservation": observed["installObservation"], "configurationRevision": observed["configurationRevision"],
+            "serviceCapabilityRevision": observed["serviceCapabilityRevision"], "capabilityRevision": selection["capabilityRevision"],
+            "model": observed["requestedModel"], "modeId": "default", "readOnly": False}
+        if (gemini_acp_profile.canonical(selection) != gemini_acp_profile.canonical(expected) or type(selection.get("protocolVersion")) is not int or selection.get("readOnly") is not False
+                or request.get("model") != expected["model"] or request["environmentId"] != observed["environmentId"]):
+            raise RequestError("Original backend source, model or mode changed; no replacement was selected", 409)
+        try:
+            self._gemini_current(entry, require_unexpired=True)
+        except (gemini_acp_profile.ProfileError, OSError, ValueError) as error:
+            raise RequestError("Original fixed ACP source is no longer current; review its observation again", 409) from error
+        return entry
+
+    def _gemini_current(self, entry, require_unexpired=False, deep=False):
+        observation, source = entry["observation"], entry["source"]
+        if (self.closed or self.environment_binding(observation["environmentId"]) != observation["environmentBinding"]
+                or require_unexpired and self.now() >= observation["expiresAt"]):
+            raise gemini_acp_profile.ProfileError("source_changed", "原后端观察到期或环境已经改变。")
+        source.check(deep=deep)
 
     def _inspect_pi(self, env):
         if "pi" not in env.get("workers", []) or env.get("kind", "local") != "local" or os.name == "nt":
@@ -499,7 +658,7 @@ class JobManager:
             raise RequestError("Environment is not configured", 404)
         return self.environments[eid]
 
-    def _worker_argv(self, request, env):
+    def _worker_argv(self, request, env, *, gemini_source=None):
         worker = request.get("worker", "command")
         if not isinstance(worker, str):
             raise RequestError("worker must be a string")
@@ -515,6 +674,10 @@ class JobManager:
                 raise RequestError("Command is not in the configured allowlist", 403)
             return [executable, *args[1:]]
         prompt = text(request.get("prompt"), "prompt")
+        if worker == gemini_acp_profile.WORKER:
+            if not isinstance(gemini_source, gemini_acp_profile.FixedProfile):
+                raise RequestError("Fixed ACP launch requires the original native source observation", 409)
+            return gemini_source.argv
         write = bool(env.get("writeAllowed", False))
         if worker == "codex_app_server":
             return ["codex", "app-server"]
@@ -606,8 +769,11 @@ class JobManager:
                     return assignment_projects.public(detail)
             if found[0] in self.jobs:
                 return self._public(self.jobs[found[0]])
-            return {"id": found[0], "operationId": operation, "status": "unknown", "archived": True, "lastKnownStatus": found[1],
-                    "message": "Execution receipt is no longer retained; the operation remains reserved and must not be replayed"}
+            result = {"id": found[0], "operationId": operation, "status": "unknown", "archived": True, "lastKnownStatus": found[1],
+                      "message": "Execution receipt is no longer retained; the operation remains reserved and must not be replayed"}
+            if found[2] and detail.get("protocol") == gemini_acp_profile.PROTOCOL:
+                result.update({key: detail[key] for key in ("protocol", "worker", "environmentId", "environmentBinding", "backendSelection", "model", "readOnly")})
+            return result
 
     def submit(self, request, *, native_device_admission=None):
         operation = identifier(request.get("operationId"), "operationId")
@@ -626,6 +792,11 @@ class JobManager:
                 return self.operation(operation)
         eid = identifier(request.get("environmentId"), "environmentId")
         env = dict(self._environment(eid))
+        gemini = None
+        if request.get("worker") == gemini_acp_profile.WORKER:
+            if native_device_admission is not None:
+                raise RequestError("Fixed ACP does not accept native device or specialized task authority", 409)
+            gemini = self._gemini_selection(request, env)
         try:
             group_input_audience.check(self, request, env)
         except group_input_audience.Unavailable as failure:
@@ -651,9 +822,9 @@ class JobManager:
                 raise RequestError("Forced read-only protocol execution requires codex_app_server", 409)
             env = {**env, "writeAllowed": False}
         for field in ("model", "threadId"):
-            if field in request:
+            if field in request and not (gemini is not None and field == "model" and request[field] == ""):
                 text(request[field], field, 200)
-                if request.get("worker") not in {"codex_app_server", "claude", "pi"}:
+                if request.get("worker") not in {"codex_app_server", "claude", "pi", gemini_acp_profile.WORKER}:
                     raise RequestError(field + " is unsupported by this worker", 409)
         if "effort" in request:
             text(request["effort"], "effort", 80)
@@ -761,11 +932,13 @@ class JobManager:
             self._check_snapshot_continuation(request, prior, env)
             if input_state is not None and request.get("inputContinuationProtocol"):
                 input_files.check_continuation(self, prior, request, RequestError)
-        argv = self._worker_argv({**request, "_piSession": pi_session}, env) if pi_session else self._worker_argv({**request, "_sessionId": session_id}, env) if session_id else self._worker_argv(request, env)
+        argv = self._worker_argv({**request, "_piSession": pi_session}, env) if pi_session else self._worker_argv({**request, "_sessionId": session_id}, env) if session_id else self._worker_argv(request, env, gemini_source=gemini["source"] if gemini else None)
         timeout = request.get("timeoutSeconds", 300)
         if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 3600:
             raise RequestError("timeoutSeconds must be 1–3600")
         launch, cwd = self._launch(env, argv)
+        if gemini is not None and (launch != gemini["source"].argv or cwd != env["root"]):
+            raise RequestError("Fixed ACP actual launch differs from its original native source", 409)
         with self.lock:
             found = self.ledger.execute("SELECT fingerprint FROM operations WHERE operation_id=?", (operation,)).fetchone()
             if found is not None:
@@ -812,6 +985,11 @@ class JobManager:
                 job.update(protocol=pi_driver.PROTOCOL, readOnly=False, noTools=True, model=request.get("model"),
                            sessionId=pi_session["id"], threadId=pi_session["id"], resumeJobId=request.get("resumeJobId"),
                            protocolVerified=False, nativeSettled=False, pendingApprovals=[], _piSession=pi_session)
+            elif gemini is not None:
+                job.update(protocol=gemini_acp_profile.PROTOCOL, readOnly=False, model=request["model"],
+                           protocolVerified=False, pendingApprovals=[], pendingQuestions=[],
+                           environmentBinding=request["environmentBinding"],
+                           backendSelection=json.loads(json.dumps(request["backendSelection"])))
             if request.get("resultSnapshotId"):
                 job.update(resultSnapshotId=request["resultSnapshotId"], resultSnapshotVersion=request["resultSnapshotVersion"], snapshotPrelaunchVerified=False)
             if fork_source is not None:
@@ -840,6 +1018,11 @@ class JobManager:
                 job["budgetClaim"] = native_device_admission.prepare(job)
             else:
                 self.ledger.execute("INSERT INTO operations(operation_id,fingerprint,job_id,last_status,updated_at) VALUES (?, ?, ?, ?, ?)", (operation, fingerprint, job["id"], "queued", job["updatedAt"]))
+                if gemini is not None:
+                    # The original durable operation retains its immutable target even
+                    # if a settled display record is later pruned. This is not a replay.
+                    identity = {key: job[key] for key in ("protocol", "worker", "environmentId", "environmentBinding", "backendSelection", "model", "readOnly")}
+                    self.ledger.execute("UPDATE operations SET details=? WHERE operation_id=?", (json.dumps(identity), operation))
             if assignment_record is not None and request["assignmentWorkspace"].get("mode") == assignment_projects.MODE:
                 assignment_projects.bind_job(self, assignment_record, job)
             self.ledger.commit()
@@ -849,7 +1032,16 @@ class JobManager:
             self._save(job)
             self._prune()
             if input_state is None:
-                self.pool.submit(self._run, job["id"], launch, cwd, timeout, env.get("kind") == "ssh", {"request": request, "environment": env, "sessionId": session_id} if request.get("worker") in {"codex_app_server", "claude", "pi"} else None)
+                context = {"request": request, "environment": env, "sessionId": session_id} if request.get("worker") in {"codex_app_server", "claude", "pi", gemini_acp_profile.WORKER} else None
+                if gemini is not None:
+                    gemini["source"].retain()
+                    context["gemini"] = gemini
+                try:
+                    self.pool.submit(self._run, job["id"], launch, cwd, timeout, env.get("kind") == "ssh", context)
+                except RuntimeError:
+                    if gemini is not None:
+                        gemini["source"].release()
+                    raise
             return self._public(job)
 
     def _prune(self):
@@ -917,6 +1109,8 @@ class JobManager:
 
     def _public(self, job):
         result = {k: v for k, v in job.items() if k not in {"fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding", "projectEnvironmentBinding", "projectEnvironmentConfigHash", "_coldProcess", "_coldOrigin", "_coldConfigHome", "_originalProcessGroup", "_harnessConfigRequest", "_ccSwitchImportRequest", "_nativeProjectManifest", "_nativeInputChunks", "_nativeInputPeer", "_piSession"}}
+        if job.get("worker") == gemini_acp_profile.WORKER:
+            result["backendSelection"] = json.loads(json.dumps(job["backendSelection"]))
         if job.get("worker") == "codex_app_server" and job.get("status") == "interrupted" and any(key in job for key in ("harnessConfigOperationId", "_harnessConfigRequest")):
             result.pop("harnessColdRootRetirement", None)
             try:
@@ -1134,6 +1328,9 @@ class JobManager:
                            message="Original process group is now confirmed stopped; prior effects remain unverified, no command was replayed", updatedAt=self.now())
                 self._save(job)
                 self.processes.pop(jobid, None)
+                if process is not None and getattr(process, "_pocket_gemini_source", None) is not None:
+                    process._pocket_gemini_source.release()
+                    process._pocket_gemini_source = None
                 if not any(other["id"] != jobid and other.get("resourceId") == job["resourceId"] and other.get("resourcesHeld") is True for other in self.jobs.values()):
                     self.resources.discard(job["resourceId"])
                 self.stopping.discard(jobid)
@@ -1233,7 +1430,7 @@ class JobManager:
         if job.get("operationId") != expected:
             raise RequestError("Original cancellation operation does not match this job", 409)
         if (job.get("protocol") == "desktop-v1" or "nativeDeviceOperation" in job
-                or job.get("worker") not in {"command", "codex_app_server", "claude", "pi"}):
+                or job.get("worker") not in {"command", "codex_app_server", "claude", "pi", gemini_acp_profile.WORKER}):
             raise RequestError("Original CLI cancellation does not grant native desktop/device control", 409)
         return job
 
@@ -1298,6 +1495,7 @@ class JobManager:
         wall_expired = threading.Event()
         assignment = False
         group_input = bool(codex and codex["request"].get("inferenceAudience") == "EXTERNAL_GROUP")
+        gemini = codex.get("gemini") if codex else None
         cleanup = None
         start_failure = None
         native_admission = self.native_device_admissions.get(jobid)
@@ -1344,6 +1542,8 @@ class JobManager:
                 self.resources.add(resource)
                 acquired_resource = resource
             # Keep the original resource lease, but never hold its monitor during project IO.
+            if gemini is not None:
+                self._gemini_current(gemini, require_unexpired=True, deep=True)
             if job.get("projectHistoryScope"):
                 project_history.before(self, job, RequestError)
             with self.resource_changed:
@@ -1378,6 +1578,11 @@ class JobManager:
                     child_env = self.cc_switch_imports.child_environment(job, job.get("_ccSwitchImportRequest", {}), actual_env, child_env)
                 except cc_switch_import.ImportErrorState as error:
                     raise RequestError(str(error), error.status) from None
+                if gemini is not None:
+                    self._gemini_current(gemini, require_unexpired=True)
+                    if argv != gemini["source"].argv or cwd != actual_env["root"]:
+                        raise RequestError("Original fixed ACP launch source changed before process dispatch", 409)
+                    child_env = gemini["source"].child_environment()
                 config_pin = cold_session.pin_configuration(self, job, actual_env, argv, cwd, child_env)
                 if config_pin is not None:
                     job["_coldConfigHome"] = config_pin
@@ -1385,6 +1590,8 @@ class JobManager:
                 process = self._spawn(actual_env, argv, cwd, stdin=subprocess.PIPE if codex else subprocess.DEVNULL,
                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL if codex else subprocess.STDOUT, env=child_env)
                 process._pocket_cleanup_lock = threading.Lock()
+                if gemini is not None:
+                    process._pocket_gemini_source = gemini["source"]
                 self.processes[jobid] = process
                 job.update(status="running", processStarted=True, resourcesHeld=True, dispatchFenceFinal=False, message="Remote SSH process started" if remote else "Process started", updatedAt=self.now())
                 identity = cold_session.capture(job, actual_env, process)
@@ -1420,6 +1627,8 @@ class JobManager:
                 last_saved = {"at": 0, "identity": None}
                 def state(value):
                     with self.lock:
+                        if gemini is not None:
+                            value = gemini["source"].redact(acp_driver.safe_state(value))
                         # Raw protocol diagnostics and account credentials never enter receipts.
                         safe = json.loads(self.harness_configs.redact(json.dumps(self.cc_switch_imports.redact_value(value))).replace(self.token, "[token hidden]"))
                         provenance = self.cc_switch_imports.model_provenance(self.jobs[jobid], value.get("reportedModel"))
@@ -1433,7 +1642,13 @@ class JobManager:
                         if identity != last_saved["identity"] or self.now() - last_saved["at"] >= 500:
                             self._save(self.jobs[jobid])
                             last_saved.update(at=self.now(), identity=identity)
-                if job.get("worker") == "claude":
+                if gemini is not None:
+                    driver = acp_driver.GeminiAcpDriver(process, cwd, state, stopped, timeout,
+                        lambda: self.lock, current=lambda **kwargs: self._gemini_current(gemini, **kwargs),
+                        expected_hello=gemini["hello"],
+                        redact=lambda value: json.loads(self.harness_configs.redact(json.dumps(
+                            self.cc_switch_imports.redact_value(gemini["source"].redact(value)))).replace(self.token, "[token hidden]")))
+                elif job.get("worker") == "claude":
                     driver = ClaudeStreamDriver(process, codex["sessionId"], state, stopped, timeout,
                                                 lambda: self.lock, codex["environment"]["root"], bool(codex["environment"].get("writeAllowed")))
                 elif job.get("worker") == "pi":
@@ -1486,6 +1701,8 @@ class JobManager:
                 if codex["request"].get("inferenceAudience") == "EXTERNAL_GROUP":
                     result["externalGroupApiRead"] = dict(driver.group_api_facts)
                 with self.lock:
+                    if gemini is not None:
+                        result = gemini["source"].redact(acp_driver.safe_state(result))
                     safe = json.loads(self.harness_configs.redact(json.dumps(self.cc_switch_imports.redact_value(result))).replace(self.token, "[token hidden]"))
                     provenance = self.cc_switch_imports.model_provenance(self.jobs[jobid], result.get("reportedModel"))
                     if provenance is not None:
@@ -1554,7 +1771,7 @@ class JobManager:
                         status, message = "unknown", "Original process-group stop unconfirmed; original process and workspace resource stay held"
                 job.update(status=status, exitCode=code, message=message, updatedAt=self.now(), timedOut=timed_out)
                 self._save(job)
-        except (OSError, ValueError, sqlite3.Error, DriverError, RequestError, PlatformError) as error:
+        except (OSError, ValueError, sqlite3.Error, DriverError, RequestError, PlatformError, gemini_acp_profile.ProfileError) as error:
             if isinstance(error, NativeProcessStartError):
                 process, start_failure = error.process, error.start_facts
                 cleanup = error.cleanup_proof
@@ -1564,7 +1781,7 @@ class JobManager:
             elif process is not None:
                 cleanup = self._terminate(process, hard=assignment)
             with self.lock:
-                before_dispatch = isinstance(error, RequestError) and process is None or isinstance(error, DriverError) and codex and driver is not None and not driver.turn_dispatched and (not getattr(driver, "fork_dispatched", False) or getattr(driver, "fork_refused", False))
+                before_dispatch = isinstance(error, (RequestError, gemini_acp_profile.ProfileError)) and process is None or isinstance(error, DriverError) and codex and driver is not None and not driver.turn_dispatched and (not getattr(driver, "fork_dispatched", False) or getattr(driver, "fork_refused", False))
                 cancelled = before_dispatch and (jobid in self.stopping or self.closed)
                 blocked = before_dispatch and not cancelled
                 self.jobs[jobid].update(status="cancelled" if cancelled else "blocked" if blocked else "unknown" if process is not None else "failed", pendingApprovals=[], message="Cancelled before prompt/turn dispatch" if cancelled else str(error) + "; no process/turn was dispatched" if blocked and isinstance(error, RequestError) else "Required protocol capabilities were not confirmed; no turn was dispatched" if blocked else "Worker supervision failed; prior effects are unverified" if process is not None else "Unable to start configured worker: " + type(error).__name__, updatedAt=self.now())
@@ -1655,6 +1872,10 @@ class JobManager:
                         job["_piSession"].pop("proof", None)  # Known turn can stay settled, but continuation stays unavailable.
                 self._save(job)
                 if stop_verified:
+                    if gemini is not None:
+                        gemini["source"].release()
+                        if process is not None:
+                            process._pocket_gemini_source = None
                     self.cc_switch_imports.settle_job(job, True)
                     self.processes.pop(jobid, None)
                 self.drivers.pop(jobid, None)
@@ -1731,6 +1952,15 @@ class JobManager:
             if driver is None:
                 raise RequestError("No live protocol approval is pending; inspect the original job", 409)
             job = self.jobs[jobid]
+            if job.get("worker") == gemini_acp_profile.WORKER:
+                keys = {"requestId", "decision", "jobOperationId", "sessionId", "promptRequestId", "requestHash", "backendSelection"}
+                if (set(request) != keys or request.get("jobOperationId") != job.get("operationId")
+                        or gemini_acp_profile.canonical(request.get("backendSelection")) != gemini_acp_profile.canonical(job.get("backendSelection"))
+                        or request.get("sessionId") != job.get("sessionId") or request.get("promptRequestId") != job.get("promptRequestId")):
+                    raise RequestError("ACP approval does not identify the exact original job/backend/session/prompt", 409)
+                pending = next((value for value in job.get("pendingApprovals", []) if value.get("requestId") == request.get("requestId")), None)
+                if pending is None or pending.get("requestHash") != request.get("requestHash"):
+                    raise RequestError("Original ACP permission body changed or is no longer pending", 409)
             if job.get("assignmentWorkspace") and request.get("decision") == "accept":
                 if job["assignmentWorkspace"]["approvalExpiresAt"] <= self.now() or job.get("assignmentEnvironmentBinding") != self.environment_binding(job["environmentId"]):
                     raise RequestError("Original assignment approval/environment generation expired; no decision was sent", 409)
@@ -2080,6 +2310,9 @@ class JobManager:
         for process in unsettled:
             proof = self._terminate(process, hard=True)
             with self.lock:
+                if proof.get("processGroupStoppedVerified") is True and getattr(process, "_pocket_gemini_source", None) is not None:
+                    process._pocket_gemini_source.release()
+                    process._pocket_gemini_source = None
                 for jobid, job in self.jobs.items():
                     if self.processes.get(jobid) is process and job.get("ccSwitchImport"):
                         job["processCleanupProof"] = proof
@@ -2094,6 +2327,9 @@ class JobManager:
         self.harness_configs.close()
         self.cc_switch_imports.close()
         with self.lock:
+            for entry in self.backend_observations.values():
+                entry["source"].close()
+            self.backend_observations.clear()
             self.ledger.close()
 
 

@@ -129,7 +129,7 @@ class AionHostGroups(unittest.TestCase):
     def test_original_successor_observation_and_config_groups_are_exact(self):
         groups = {
             'aion-capability-observations': ({
-                'dev.pocketengine.features.remote.HarnessCapabilityObservationTest': 10,
+                'dev.pocketengine.features.remote.HarnessCapabilityObservationTest': 18,
                 'dev.pocketengine.runtime.usage.ConnectionInferenceObservationsTest': 12,
             }, [], False),
             'aion-team-templates': ({

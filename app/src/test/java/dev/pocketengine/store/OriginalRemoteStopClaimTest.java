@@ -107,4 +107,35 @@ public final class OriginalRemoteStopClaimTest {
             OriginalRemoteStopClaim ticket=f.issue();assertFalse(ticket.canDispatch());assertEquals("receipt",f.state());ticket.beginDispatch();refused(ticket::beginPost);
         }
     }
+    private static JSONObject geminiSelection()throws Exception {
+        JSONObject installation=new JSONObject().put("format","pocketworld.remote-install-observation.v1").put("state","observed").put("identity","a".repeat(64)).put("kind","fixed_node_package_bytes_v1").put("packageVersion","0.66.0").put("nodeContentVerified",true).put("packageContentVerified",true).put("executionChainVerified",false).put("osSandboxVerified",false).put("reason","fixed_bytes_observed");
+        return new JSONObject().put("format","pocketworld.remote-backend-selection.v1").put("backendId","gemini_cli_acp_v1").put("backendVersion","0.66.0").put("protocolVersion",1).put("installObservation",installation).put("configurationRevision","b".repeat(64)).put("serviceCapabilityRevision","c".repeat(64)).put("capabilityRevision","d".repeat(64)).put("model","").put("modeId","default").put("readOnly",false);
+    }
+    private static JSONObject geminiActual(String status)throws Exception {
+        return actual(status).put("worker","gemini_acp").put("environmentId","workspace").put("environmentBinding","f".repeat(64)).put("backendSelection",geminiSelection());
+    }
+    private static void gemini(Fixture f)throws Exception {
+        JSONObject target=new JSONObject().put("profileId","computer").put("profileBinding",BINDING).put("serviceBase","http://127.0.0.1:8911").put("environmentId","workspace").put("environmentBinding","f".repeat(64)).put("worker","gemini_acp");
+        JSONObject args=new JSONObject().put("taskId","original-task").put("runId","original-operation").put("coordinatorEpoch",3).put("target",target).put("backendSelection",geminiSelection());
+        f.db.execSQL("UPDATE operations SET arguments=?,receipt=? WHERE tool='remote_job'",new Object[]{args.toString(),geminiActual("running").toString()});
+        f.task(f.task().put("externalRefs",new JSONObject(target.toString()).put("backendSelection",geminiSelection())).put("evidence",geminiActual("running")));
+    }
+    @Test public void originalBackendCancellationPinsSelectionAndRejectsAnotherProfileOrReceipt()throws Exception {
+        try(Fixture f=new Fixture()){
+            gemini(f);refused(()->OriginalRemoteStopClaim.issue(f.owner,f.db,f::task,actual->{},"original-task","original-operation",3,"b".repeat(64)));
+            OriginalRemoteStopClaim ticket=f.issue();dev.pocketengine.features.remote.HarnessCapabilityObservation.requireSameBackendSelection(geminiSelection(),ticket.target().getJSONObject("backendSelection"));assertEquals(BINDING,ticket.target().getString("profileBinding"));
+            ticket.beginDispatch();ticket.beginPost();JSONObject changed=geminiActual("cancelled").put("dispatchFenceFinal",true).put("resourcesHeld",false);changed.getJSONObject("backendSelection").put("capabilityRevision","e".repeat(64));
+            refused(()->ticket.record(changed));assertEquals("unknown",f.state());assertEquals(0,f.recorded);
+            ticket.record(geminiActual("cancelled").put("dispatchFenceFinal",true).put("resourcesHeld",false));assertEquals("receipt",f.state());assertEquals(1,f.recorded);
+            dev.pocketengine.features.remote.HarnessCapabilityObservation.requireSameBackendSelection(geminiSelection(),f.receipt().getJSONObject("backendSelection"));
+        }
+    }
+    @Test public void changedBackendSqlOrTaskPinsInvalidateAnAlreadyIssuedStopBeforePost()throws Exception {
+        for(boolean sql:new boolean[]{true,false})try(Fixture f=new Fixture()){
+            gemini(f);OriginalRemoteStopClaim ticket=f.issue();ticket.beginDispatch();
+            if(sql){try(Cursor row=f.db.rawQuery("SELECT arguments FROM operations WHERE tool='remote_job'",null)){assertTrue(row.moveToFirst());JSONObject args=new JSONObject(row.getString(0));args.getJSONObject("backendSelection").put("configurationRevision","e".repeat(64));f.db.execSQL("UPDATE operations SET arguments=? WHERE tool='remote_job'",new Object[]{args.toString()});}}
+            else{JSONObject task=f.task();task.getJSONObject("externalRefs").put("profileBinding","e".repeat(64));f.task(task);}
+            refused(ticket::beforeDispatch);refused(ticket::beginPost);assertEquals("prepared",f.state());assertEquals(0,f.recorded);
+        }
+    }
 }

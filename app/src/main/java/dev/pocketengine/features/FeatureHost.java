@@ -673,21 +673,32 @@ public final class FeatureHost implements AutoCloseable {
         return cancelOriginalRemoteTask(id,run,epoch,input.has("_profileBinding")?input.getString("_profileBinding"):null);
     }
     public void request(JSONObject request){
-        request(request,()->true);
+        request(request,()->true,false);
     }
     /** Captured by the local owner UI; JSON cannot mint or replace this queue admission check. */
     public void request(JSONObject request,BooleanSupplier originalOwnerCurrent){
+        request(request,originalOwnerCurrent,true);
+    }
+    private void request(JSONObject request,BooleanSupplier originalOwnerCurrent,boolean nativeOwnerAdmission){
         java.util.Objects.requireNonNull(originalOwnerCurrent);
         String feature=request.optString("feature"),command=request.optString("command"),requestId=request.optString("requestId");
         if(requestId.length()>100||feature.length()>40||command.length()>80){reply(feature,command,requestId,false,null,"请求标识过长");return;}
         Runnable work=()->{
             String tracked=null,trackedRun=null,operation=null,browserTask=null,browserAdmission=null;
+            boolean backendAdmission=false;
             try{if(!originalOwnerCurrent.getAsBoolean())throw new SecurityException("原审阅窗口已关闭，未执行排队操作");EngineModule module=module(feature);if(module==null)throw new IllegalArgumentException("此能力尚未接入");
                 JSONObject payload=request.optJSONObject("payload");JSONObject input=payload==null?new JSONObject():new JSONObject(payload.toString());
                 if(feature.equals("ssh")&&command.equals("doctor"))throw new SecurityException("请使用当前本机私人环境诊断页；通用能力回执不接收诊断正文");
                 if(feature.equals("automation")&&java.util.Set.of("approvePlanExecution","startPlanExecution","setPlanPaused","cancelPlanExecution","editPlanStep","retryPlanStep","preparePlanTask","planTaskRequest","bindPlanTask","refreshPlanTasks","ownerCommand","automationPlan").contains(command))throw new SecurityException("执行计划须从本机目标审阅入口控制，工具参数不能授予执行权限");
                 if(feature.equals("remote")&&command.equals("approveJob"))throw new SecurityException("请在本机原任务页审阅并一次确认本次授权");
                 if(feature.equals("remote")&&command.equals("submitJob")&&(input.has("threadId")||input.has("resumeJobId")||input.has("jobOperationId")||input.has("sourceServiceBase")))throw new SecurityException("会话续接只能从本机原任务审阅页发起，不能新建任务代替");
+                if(feature.equals("remote")&&command.equals("submitJob")&&"gemini_acp".equals(input.optString("worker"))){
+                    if(!nativeOwnerAdmission||tasks==null||!(module instanceof dev.pocketengine.features.remote.RemoteModule))throw new SecurityException("此后端首创仅接受本机私人连接页的当前审阅");
+                    if(input.has("backendSelection")||input.has("serviceBase"))throw new SecurityException("后端和地址只能从本机原探测捕获，不能由请求补造");
+                    JSONObject selection=((dev.pocketengine.features.remote.RemoteModule)module).prepareBackendSelection(input);
+                    if(selection==null)throw new SecurityException("尚无当前原生后端探测");
+                    input.put("backendSelection",selection);backendAdmission=true;
+                }
                 if(feature.equals("remote")&&java.util.Set.of("steerJob","getSteerMessage").contains(command)){
                     JSONObject result=remoteMessageRequest(module,command,input);reply(feature,command,requestId,true,result,null);sendState();return;
                 }
@@ -768,7 +779,14 @@ public final class FeatureHost implements AutoCloseable {
                 String reviewedTeamTask=null;
                 if(tasks!=null&&feature.equals("teams")&&command.matches("resume|continueMessages|reviseAssignment|continueOutcome")&&(input.has("expectedRevision")||input.has("expectedGeneration")))reviewedTeamTask=tasks.requireReviewedTeamControl(input);
                 if(!originalOwnerCurrent.getAsBoolean())throw new SecurityException("原审阅窗口已关闭，未进入原模块操作");
-                JSONObject result=tasks!=null&&feature.equals("remote")&&command.equals("cancelJob")?cancelOriginalRemoteRequest(input):module.handle(command,input);
+                JSONObject result;
+                if(backendAdmission){
+                    String taskId=tracked,runId=trackedRun;
+                    result=((dev.pocketengine.features.remote.RemoteModule)module).submitBackendJob(input,()->{
+                        if(!originalOwnerCurrent.getAsBoolean())throw new SecurityException("原审阅窗口已关闭，未发送本次电脑任务");
+                        tasks.claimRemoteBackendDispatch(taskId,runId,input);
+                    });
+                }else result=tasks!=null&&feature.equals("remote")&&command.equals("cancelJob")?cancelOriginalRemoteRequest(input):module.handle(command,input);
                 if(result==null)result=new JSONObject();
                 if(tracked!=null){JSONObject receipt=new JSONObject(result.toString());if(feature.equals("browser")){if(!trackedRun.equals(result.optString("runId"))||!tracked.equals(result.optString("taskId"))||!result.optBoolean("active")||!resources.ownsBrowser(trackedRun))throw new SecurityException("浏览器没有返回本次执行的有效租约");tasks.requireExternalRun(tracked,trackedRun,feature,false);receipt.put("status","running");}updateTask(tracked,receipt);result.put("hostTaskId",tracked);}
                 if(teamConversation!=null&&tracked!=null)result.put("conversationId",teamConversationId).put("taskId",tracked).put("conversationLinkStatus",appendTeamTaskLink(teamConversation,teamConversationId,tracked));
@@ -796,7 +814,7 @@ public final class FeatureHost implements AutoCloseable {
             }catch(Exception error){
                 if(feature.equals("media")&&tasks!=null){try{JSONObject input=request.optJSONObject("payload");String id=input==null?"":input.optString("taskId");if(id.isEmpty()&&input!=null&&!input.optString("operationId").isEmpty())id=tasks.operationTask("media",input.getString("operationId"));if(id!=null&&!id.isEmpty())emitTask(id);sendState();}catch(Exception unavailable){}}
                 if(browserAdmission!=null)resources.releaseBrowser(browserAdmission);
-                try{if(tracked!=null&&(!feature.equals("browser")||tasks.get(tracked,false).optString("status").matches("queued|running|preparing")))updateTask(tracked,failedAdmission(feature,trackedRun,error));if(operation!=null){tasks.finishCapabilityOperation(browserTask,operation,json("status","unknown","message","能力操作未取得确定回执，请核对实际结果"));emitTask(browserTask);}}catch(Exception persistence){events.emit(json("type","error","message","执行状态保存失败，请核对已有结果后再继续"));}
+                try{if(tracked!=null){if(backendAdmission){tasks.remoteBackendAdmissionUnconfirmed(tracked,trackedRun,safe(error));emitTask(tracked);}else if(!feature.equals("browser")||tasks.get(tracked,false).optString("status").matches("queued|running|preparing"))updateTask(tracked,failedAdmission(feature,trackedRun,error));}if(operation!=null){tasks.finishCapabilityOperation(browserTask,operation,json("status","unknown","message","能力操作未取得确定回执，请核对实际结果"));emitTask(browserTask);}}catch(Exception persistence){events.emit(json("type","error","message","执行状态保存失败，请核对已有结果后再继续"));}
                 reply(feature,command,requestId,false,null,safe(error));
             }
         };
