@@ -313,24 +313,31 @@ python3 tools/ci/verify-web-ui.py target --xml "$PW_CAPTURE_DIR/return.xml" \
 pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/03-workroom-return.png"
 
 PW_STAGE=primary-task-navigation
-pw_tap return '任务' primary-tasks-target
+pw_tap return '全部工作' primary-tasks-menu-target
+pw_scene primary-tasks-menu work-menu
+pw_tap primary-tasks-menu '任务' primary-tasks-target
 pw_scene tasks-root tasks
 pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/11-tasks.png"
 
 PW_STAGE=primary-project-navigation
-pw_tap tasks-root '项目' primary-projects-target
+pw_tap tasks-root '全部工作' primary-projects-menu-target
+pw_scene primary-projects-menu work-menu
+pw_tap primary-projects-menu '项目与文件' primary-projects-target
 pw_scene projects-root projects
 pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/12-projects.png"
 
 PW_STAGE=primary-work-navigation
-pw_tap projects-root '工作' primary-work-target
+pw_tap projects-root '全部工作' primary-work-menu-target
+pw_scene primary-work-menu work-menu
+pw_tap primary-work-menu '对话' primary-work-target
 pw_scene primary-work-return workroom
 
 PW_STAGE=work-input-real-ime
 # UIAutomator may omit a WebView textarea's accessible name. Resolve the unique
 # usable EditText inside the observed named section, never the section center.
 # Focus that actual editor without entering or sending a draft.
-# Native current IME service state and app XML jointly verify the hidden tabs.
+# Native IME service state and app XML verify the focused editor and reachable
+# sidebar opener. The current layout keeps global navigation available.
 pw_tap primary-work-return '工作输入' work-input-target --section-editor
 pw_scene workroom-ime workroom-ime true
 pw_adb exec-out screencap -p > "$PW_CAPTURE_DIR/13-workroom-ime.png"

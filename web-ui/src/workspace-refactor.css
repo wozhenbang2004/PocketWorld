@@ -10,11 +10,11 @@
   border: 0; background: transparent;
 }
 .pw-redesign .pw-current-work { flex-direction: row; align-items: center; gap: 8px; }
-.pw-redesign .pw-current-work .pw-header-model { width: 100%; min-width: 0; min-height: 48px; padding: 4px 0; border: 0; background: transparent; box-shadow: none; text-align: start; }
-.pw-header-model > span { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; }
-.pw-header-model-copy { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
-.pw-header-model-copy b { font-size: 15px; line-height: 21px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pw-header-model-copy small { color: var(--pw-muted); font-size: 11px; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pw-redesign .pw-current-work .pw-header-model { width: 100%; max-width: 100%; min-width: 0; height: auto; min-height: 48px; padding: 4px 0; border: 0; background: transparent; box-shadow: none; text-align: start; }
+.pw-header-model > span { display: flex; flex-shrink: 1; align-items: center; gap: 6px; width: 100%; min-width: 0; white-space: normal; }
+.pw-header-model-copy { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 1px; }
+.pw-header-model-copy b { font-size: 15px; line-height: 21px; font-weight: 600; overflow-wrap: anywhere; white-space: normal; }
+.pw-header-model-copy small { color: var(--pw-muted); font-size: 11px; line-height: 16px; overflow-wrap: anywhere; white-space: normal; }
 .pw-header-model > span > svg { flex: none; }
 .pw-redesign .pw-current-work h1 { font-size: 18px; line-height: 26px; font-weight: 600; }
 .pw-redesign .pw-app-header > button:not(.pw-object-title) {

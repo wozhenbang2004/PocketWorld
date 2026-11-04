@@ -580,23 +580,35 @@ async function capture(page, viewport, name, selectors, options = {}) {
     capturedAt: new Date().toISOString(), ...options.metadata });
 }
 
-async function navigate(page, name) {
-  const roots = { '继续当前工作': '工作', '全部任务': '任务', '项目与文件': '项目' };
-  if (roots[name]) {
-    const nav = page.getByRole('tablist', { name: '主导航', exact: true });
-    const target = nav.getByRole('tab', { name: roots[name], exact: true });
-    await reachable(target, { minSize: 48 }); await target.click();
-    assert.equal(await target.getAttribute('aria-selected'), 'true', 'Root navigation lost its selected page');
-    const controlled = await target.getAttribute('aria-controls');
-    assert(controlled && await page.locator(`[id="${controlled}"][role="tabpanel"]`).count() === 1, 'Root navigation has no actual controlled page');
-    await settle(page); return;
-  }
+const navigationRoutes = { '对话': 'chat', '任务': 'tasks', '项目与文件': 'projects',
+  '团队协作': 'teams', '记忆': 'memory', '任务历史': 'history', '设置与连接': 'settings' };
+
+async function openNavigation(page) {
   const open = page.getByRole('button', { name: '全部工作', exact: true });
-  await reachable(open, { minSize: 44 }); await open.click();
-  const content = page.locator('.pw-work-drawer');
+  await reachable(open, { minSize: 48 }); await open.click();
+  const content = page.locator('.pw-navigation-drawer');
   await content.waitFor({ state: 'visible' });
-  await content.getByRole('link', { name, exact: true }).click();
+  assert.equal(await content.getAttribute('data-vaul-drawer-direction'), 'left', 'Global navigation is not the left sidebar');
+  const selectedLinks = content.locator('a[aria-current="page"]');
+  assert.equal(await selectedLinks.count(), 1, 'Sidebar must identify exactly one current destination');
+  const selectedLabel = await selectedLinks.getAttribute('aria-label');
+  const route = await page.locator('.pw-app').getAttribute('data-route');
+  const secondaryPage = await page.locator('.pw-secondary').count() ? await page.locator('.pw-secondary').getAttribute('data-secondary-page') : null;
+  const currentSection = ['chat', 'tasks', 'projects'].includes(route) ? route
+    : secondaryPage === 'memoryReview' ? 'memory'
+    : ['teams', 'memory', 'history'].includes(secondaryPage) ? secondaryPage : 'settings';
+  assert.equal(navigationRoutes[selectedLabel], currentSection, 'Sidebar selection differs from the actual current page');
+  return content;
+}
+
+async function navigate(page, name) {
+  assert(navigationRoutes[name], `Unknown sidebar destination: ${name}`);
+  const content = await openNavigation(page);
+  const target = content.getByRole('link', { name, exact: true });
+  await reachable(target, { minSize: 48 }); await target.click();
   await content.waitFor({ state: 'hidden' });
+  await page.locator(`.pw-app[data-route="${navigationRoutes[name]}"]`).waitFor({ state: 'visible' });
+  assert.equal(await page.getByRole('button', { name: '全部工作', exact: true }).count(), 1, 'Destination lost its unique global navigation entry');
   await settle(page);
 }
 
@@ -634,7 +646,7 @@ async function runViewport(origin, viewport) {
   try {
     await page.goto(origin + '/', { waitUntil: 'networkidle' });
     await page.waitForFunction(() => document.documentElement.dataset.pocketUi === 'ready');
-    await page.getByRole('heading', { name: '先连接你的模型。', exact: true }).waitFor();
+    await page.getByRole('heading', { name: '开始工作', exact: true }).waitFor();
     const fonts = await page.evaluate(async () => {
       const faces = await Promise.all(['Inter', 'Noto Sans SC', 'JetBrains Mono'].map(family => document.fonts.load(`400 16px "${family}"`, '工作PocketWorld')));
       await document.fonts.ready;
@@ -679,13 +691,20 @@ async function runViewport(origin, viewport) {
     await editor.fill(emptyDraft);
     // Explicit host configuration exercises layout only; the Android gate uses real IME insets.
     await page.evaluate(() => window.PocketWeb.hostConfiguration({ keyboardVisible: true }));
-    await page.getByRole('tablist', { name: '主导航', exact: true }).waitFor({ state: 'hidden' });
     await reachable(editor, { minSize: 30 }); await reachable(send, { minSize: 44 });
+    const keyboardNavigation = await openNavigation(page);
+    await reachable(keyboardNavigation.getByRole('link', { name: '对话', exact: true }), { minSize: 48 });
+    const keyboardBackHandled = await page.evaluate(() => window.PocketWeb.handleBack());
+    assert.equal(keyboardBackHandled, true, 'Host Back did not close the sidebar while the IME was reported visible');
+    await keyboardNavigation.waitFor({ state: 'hidden' });
+    assert.equal(await page.locator('.pw-app').getAttribute('data-route'), 'chat', 'Closing the sidebar changed the active conversation page');
+    assert.equal(await editor.inputValue(), emptyDraft, 'Opening the sidebar with IME visible lost the work draft');
     await page.evaluate(() => window.PocketWeb.hostConfiguration({ fontScale: 1 }));
     assert.equal(await page.locator('html').getAttribute('data-pocket-keyboard'), 'true', 'Unrelated host config cleared IME state');
     await page.evaluate(() => window.PocketWeb.hostConfiguration({ keyboardVisible: false }));
-    await page.getByRole('tablist', { name: '主导航', exact: true }).waitFor({ state: 'visible' });
-    record.checks.push({ stage: 'host-keyboard-layout', nativeSource: false, hiddenWhileReportedVisible: true, restored: true, inputAndSendReachable: true });
+    await reachable(allWork, { minSize: 48 });
+    record.checks.push({ stage: 'host-keyboard-layout', nativeSource: false, sidebarReachable: true,
+      sidebarBackPreservesRouteAndDraft: true, inputAndSendReachable: true });
     const geometry = await reachable(send, { minSize: 44 });
     await page.mouse.move(geometry.x + geometry.width / 2, geometry.y + geometry.height / 2);
     await page.mouse.down();
@@ -712,25 +731,44 @@ async function runViewport(origin, viewport) {
     });
     const sourceReading = await reading();
     await capture(page, viewport, '03-current-work', ['.pw-message-stream', '.pw-linked-task', '.afa-composer']);
-    await allWork.click();
-    await capture(page, viewport, '04-work-menu', ['.pw-work-drawer', '.pw-work-sidebar']);
-    const workMenu = page.locator('.pw-work-drawer');
-    assert.equal(await workMenu.getByRole('link', { name: /^(继续当前工作|全部任务|项目与文件)$/ }).count(), 0, 'The work drawer duplicates persistent root navigation');
+    const workMenu = await openNavigation(page);
+    assert.deepEqual(await workMenu.getByRole('link').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label'))),
+      Object.keys(navigationRoutes), 'Sidebar destinations are missing, duplicated or out of their task groups');
+    const sidebarBounds = await workMenu.boundingBox();
+    assert(sidebarBounds && Math.abs(sidebarBounds.x) <= 1 && sidebarBounds.width < viewport.width && sidebarBounds.height >= viewport.height * 0.85,
+      'The global drawer does not occupy the left edge while leaving the current workspace visible');
+    await capture(page, viewport, '04-work-menu', ['.pw-navigation-drawer', '.pw-work-sidebar']);
     await workMenu.getByRole('button', { name: '关闭全部工作', exact: true }).click();
     await workMenu.waitFor({ state: 'hidden' });
-    await navigate(page, '全部任务');
+    assert.equal(await editor.inputValue(), conversationDraft, 'Closing navigation lost the conversation draft');
+    assert.deepEqual(await reading(), sourceReading, 'Closing navigation lost the conversation reading position');
+    record.checks.push({ stage: 'sidebar-navigation', direction: 'left', destinations: Object.keys(navigationRoutes),
+      bounds: sidebarBounds, selectedPageChecked: true, closesAfterSelection: true, sourceReadingPreserved: true });
+    await navigate(page, '任务');
     const taskDecision = page.locator('.pw-priority-decisions [data-task-id="visual-fixture-task-review"]');
     const taskRow = taskDecision.getByRole('button', { name: '查看任务', exact: true });
     await reachable(taskDecision.getByRole('button', { name: '核对结果', exact: true }), { minSize: 48 });
     assert.equal(await page.locator('.pw-priority-decisions .ui-dic__row').count(), 2, 'Tasks waiting on the user are not grouped together');
     const rowBefore = await reachable(taskRow, { minSize: 44 });
-    await capture(page, viewport, '05-task-list', ['.pw-priority-decisions', '.pw-workspace [role="tablist"][aria-label="主导航"]']);
+    await capture(page, viewport, '05-task-list', ['.pw-priority-decisions', '.pw-app[data-route="tasks"] [data-testid="all_work"]']);
+    const taskCommandsSince = start => page.evaluate(index => window.__POCKET_VISUAL_FIXTURE__.summary().requests.slice(index)
+      .filter(request => ['tasks.open', 'tasks.review'].includes(request.action)), start);
+    const assertOpenedThenReviewed = async start => {
+      const requests = await taskCommandsSince(start);
+      assert.deepEqual(requests.map(request => request.action), ['tasks.open', 'tasks.review'], 'The result view must first open its original host task');
+      assert(requests.every(request => request.taskId === 'visual-fixture-task-review' && request.ok), 'The result view used a different task or failed');
+      assert.equal(requests[0].requestNavigation, false, 'The App-local task open must not echo another navigation request');
+    };
+    const beforeOverview = await page.evaluate(() => window.__POCKET_VISUAL_FIXTURE__.summary().requests.length);
     await taskRow.click();
     const drawer = page.locator('.pw-task-drawer');
-    const primary = page.getByTestId('task-primary-action');
     const outcome = drawer.locator('.pw-task-outcome[aria-label="任务结果依据"]');
+    const resultReading = () => drawer.locator('.pw-task-body').evaluate(node => ({
+      top: node.scrollTop, height: node.clientHeight, scrollHeight: node.scrollHeight,
+    }));
     const assertReadableResult = async (hasFeedback = false) => {
       await outcome.waitFor({ state: 'visible' });
+      assert.equal(await drawer.locator('.pw-task-outcome').count(), 1, 'Reading and deciding duplicate the same task result');
       assert.equal(await outcome.getAttribute('data-result-source'), 'evidence', 'Review did not prefer the original model evidence');
       const document = outcome.locator('.pw-outcome-document');
       assert((await document.textContent()).includes('需求草稿保留为独立文件'), 'The task outcome omitted the original evidence body');
@@ -761,12 +799,22 @@ async function runViewport(origin, viewport) {
       assert.equal(await drawer.locator('.acc-review-queue').count(), 0, 'A single task contains the global review queue');
       assert.equal(await drawer.locator('.pw-scope-editor').count(), 0, 'Scope form is dumped into the task overview');
       assert.equal(await drawer.locator('[role="tree"][aria-label="Agent协作关系"],.afa-handoffagents').count(), 0, 'Ordinary TaskStore fixture unexpectedly mounts synthetic collaboration');
-      await reachable(primary, { minSize: 44 });
+      await reachable(drawer.getByRole('button', { name: '返回原工作', exact: true }), { minSize: 44 });
     };
     await assertOverview();
     await assertReadableResult();
-    await capture(page, viewport, '06-task-overview', ['.pw-task-drawer[data-task-layer="overview"]', '.pw-task-overview', '[data-testid="task-primary-action"]']);
-    await drawer.getByRole('button', { name: '查看执行过程', exact: true }).click();
+    await reachable(drawer.getByRole('button', { name: '确认达到目标', exact: true }), { minSize: 44 });
+    await assertOpenedThenReviewed(beforeOverview);
+    const feedbackDisclosure = drawer.getByRole('button', { name: /^补充说明（可选）/ });
+    assert.equal(await feedbackDisclosure.getAttribute('aria-expanded'), 'false', 'Optional feedback competes with the result by default');
+    await capture(page, viewport, '06-task-overview', ['.pw-task-drawer[data-task-layer="overview"]', '.pw-task-overview', '.pw-task-footer']);
+    const resultDocument = await outcome.elementHandle();
+    const assertResultDocumentRetained = async () => assert(await resultDocument.evaluate(node => node.isConnected
+      && node === document.querySelector('.pw-task-drawer .pw-task-outcome')), 'Reading deeper or refreshing replaced the original result document');
+    const processEntry = drawer.getByRole('button', { name: '查看执行过程', exact: true });
+    await processEntry.scrollIntoViewIfNeeded(); await reachable(processEntry, { minSize: 44 });
+    const beforeProcessReading = await resultReading();
+    await processEntry.click();
     await page.locator('.pw-task-drawer[data-task-layer="process"]').waitFor({ state: 'visible' });
     const expectedEvents = populatedSnapshot().state.tasks[0].raw.historyEventPage.entries;
     const eventSection = drawer.locator('.pw-task-events[aria-label="任务记录"]');
@@ -791,24 +839,33 @@ async function runViewport(origin, viewport) {
     record.checks.push({ stage: 'task-process-event-window', ...eventWindowCheck });
     await capture(page, viewport, '07-task-process', ['.pw-task-drawer[data-task-layer="process"]', '.pw-task-events',
       `.pw-task-event[data-event-position="${firstEvent.position}"] .pw-task-event-copy`], { metadata: { eventWindowCheck } });
-    await drawer.getByRole('button', { name: '返回任务概览', exact: true }).click();
+    await drawer.getByRole('button', { name: '返回任务结果', exact: true }).click();
     await assertOverview();
+    await settle(page);
+    const afterProcessReading = await resultReading();
+    assert(Math.abs(afterProcessReading.top - beforeProcessReading.top) <= 2, 'Returning from the execution process lost the result reading position');
+    await assertResultDocumentRetained();
+    record.checks.push({ stage: 'result-process-return', beforeProcessReading, afterProcessReading, resultDocumentRetained: true,
+      overviewOpenedThenReviewed: true, directFreshDecision: true });
     const reviewFailure = '这次任务暂时无法核对，请重试。';
     await page.evaluate(message => window.__POCKET_VISUAL_FIXTURE__.rejectNextReview(message), reviewFailure);
-    await primary.click();
-    await page.locator('.pw-task-drawer[data-task-layer="review"]').waitFor({ state: 'visible' });
+    await drawer.getByRole('button', { name: '重新核对', exact: true }).click();
+    await page.locator('.pw-task-drawer[data-task-layer="overview"]').waitFor({ state: 'visible' });
     const taskError = drawer.locator('.pw-task-local-error[data-task-id="visual-fixture-task-review"][role="alert"]');
     await taskError.filter({ hasText: reviewFailure }).waitFor({ state: 'visible' });
-    await drawer.getByRole('button', { name: '返回任务概览', exact: true }).click();
+    await assertReadableResult();
+    await assertResultDocumentRetained();
+    assert.equal(await drawer.locator('.pw-task-footer').count(), 0, 'A rejected refresh retained actions from the old review');
     await drawer.getByRole('button', { name: '查看执行过程', exact: true }).click();
     await page.locator('.pw-task-drawer[data-task-layer="process"]').waitFor({ state: 'visible' });
     assert.equal((await taskError.textContent()).trim(), reviewFailure, 'Changing a task layer lost its unresolved command error');
     const errorGeometry = await taskError.boundingBox();
     assert(errorGeometry && errorGeometry.y >= 0 && errorGeometry.y + errorGeometry.height <= viewport.height,
       'The task error is outside the visible drawer');
-    await drawer.getByRole('button', { name: '返回任务概览', exact: true }).click();
-    await primary.click();
-    await page.locator('.pw-task-drawer[data-task-layer="review"]').waitFor({ state: 'visible' });
+    await drawer.getByRole('button', { name: '返回任务结果', exact: true }).click();
+    await drawer.getByRole('button', { name: /^(重新核对|读取可用操作)$/ }).click();
+    await page.locator('.pw-task-drawer[data-task-layer="overview"]').waitFor({ state: 'visible' });
+    await feedbackDisclosure.click();
     const feedback = drawer.getByRole('textbox', { name: '本次结果反馈', exact: true });
     await feedback.waitFor({ state: 'visible' });
     await assertReadableResult(true);
@@ -816,6 +873,16 @@ async function runViewport(origin, viewport) {
     record.checks.push({ stage: 'controlled-review-rejection', expectedMessage: reviewFailure, taskId: 'visual-fixture-task-review',
       reviewErrorVisible: true, processErrorVisible: true, explicitRetryRecovered: true });
     await feedback.fill('分类方向合适，会议记录仍按日期保留。');
+    const relatedAnswer = outcome.getByRole('button', { name: /^对话中的相关答复/ });
+    await relatedAnswer.click();
+    await drawer.getByRole('button', { name: '重新核对', exact: true }).click();
+    await reachable(drawer.getByRole('button', { name: '确认达到目标', exact: true }), { minSize: 44 });
+    await assertResultDocumentRetained();
+    assert.equal(await relatedAnswer.getAttribute('aria-expanded'), 'true', 'Refreshing the review collapsed the result reading context');
+    assert.equal(await feedback.inputValue(), '分类方向合适，会议记录仍按日期保留。', 'Refreshing the review lost the optional feedback draft');
+    await relatedAnswer.click();
+    record.checks.push({ stage: 'review-refresh-context', resultDocumentRetained: true, relatedAnswerExpanded: true,
+      feedbackDraftPreserved: true, submitted: false });
     assert.equal(await drawer.locator('.pw-scope-editor').count(), 0, 'Review opens the scope form before its explicit entry');
     const reviewFooter = {
       notReached: await reachable(drawer.getByRole('button', { name: '目标尚未达到', exact: true }), { minSize: 44 }),
@@ -825,8 +892,11 @@ async function runViewport(origin, viewport) {
     record.checks.push({ stage: 'review-original-result', source: 'raw.evidence.modelSummary', bodyVisible: true,
       linkedAnswerVisible: true, resultBeforeFeedback: true, identity: 'isolated fixture, not real execution evidence' });
     await drawer.locator('.pw-task-body').evaluate(node => { node.scrollTop = 0; });
-    await capture(page, viewport, '08-task-review', ['.pw-task-drawer[data-task-layer="review"]', '.pw-task-outcome', '.pw-protected-actions']);
-    await drawer.getByRole('button', { name: '修订本次范围', exact: true }).click();
+    await capture(page, viewport, '08-task-review', ['.pw-task-drawer[data-task-layer="overview"]', '.pw-task-outcome', '.pw-protected-actions']);
+    const scopeEntry = drawer.getByRole('button', { name: '修订本次范围', exact: true });
+    await scopeEntry.scrollIntoViewIfNeeded(); await reachable(scopeEntry, { minSize: 44 });
+    const beforeScopeReading = await resultReading();
+    await scopeEntry.click();
     await page.locator('.pw-task-drawer[data-task-layer="scope"]').waitFor({ state: 'visible' });
     const tools = drawer.getByRole('textbox', { name: '工具调用总上限', exact: true });
     const models = drawer.getByRole('textbox', { name: '模型调用总上限', exact: true });
@@ -841,8 +911,14 @@ async function runViewport(origin, viewport) {
     assert(await confirmScope.isDisabled(), 'Out-of-range model limit must block submission');
     await models.fill('20'); assert(await confirmScope.isEnabled(), 'Valid reviewed draft should enable its control');
     record.checks.push({ stage: 'scope-deep-view', tools: '36', models: '20', invalidLimitsBlocked: true, submitted: false });
-    await drawer.getByRole('button', { name: '返回当前处理', exact: true }).click();
+    await drawer.getByRole('button', { name: '返回任务结果', exact: true }).click();
     assert.equal(await feedback.inputValue(), '分类方向合适，会议记录仍按日期保留。', 'Deeper scope view lost the review draft');
+    await settle(page);
+    const afterScopeReading = await resultReading();
+    assert(Math.abs(afterScopeReading.top - beforeScopeReading.top) <= 2, 'Returning from task scope lost the result reading position');
+    await assertResultDocumentRetained();
+    record.checks.push({ stage: 'result-scope-return', beforeScopeReading, afterScopeReading, resultDocumentRetained: true,
+      feedbackDraftPreserved: true });
     await drawer.getByRole('button', { name: '修订本次范围', exact: true }).click();
     assert.equal(await tools.inputValue(), '36', 'Returning to the scope discarded its ordinary draft');
     assert.equal(await models.inputValue(), '20', 'Returning to the scope discarded its ordinary draft');
@@ -860,40 +936,39 @@ async function runViewport(origin, viewport) {
     assert.equal(await staleScope.count(), 0, 'Fresh scope review retained a stale refusal');
     record.checks.push({ stage: 'scope-stale-refusal', staleMessageVisible: true, staleControlsRemoved: true,
       freshTools: '42', freshModels: '24', rereadRecovered: true, submitted: false });
-    await drawer.getByRole('button', { name: '返回当前处理', exact: true }).click();
+    await drawer.getByRole('button', { name: '返回任务结果', exact: true }).click();
     assert.equal(await feedback.inputValue(), '分类方向合适，会议记录仍按日期保留。', 'Re-reading scope lost the result feedback draft');
-    await drawer.getByRole('button', { name: '返回任务概览', exact: true }).click();
     await assertOverview();
     await drawer.getByRole('button', { name: '返回原工作', exact: true }).click();
     await drawer.waitFor({ state: 'hidden' });
     const rowAfter = await reachable(taskRow, { minSize: 44 });
     assert(Math.abs(rowAfter.y - rowBefore.y) <= 2, 'Closing a task lost its task-list position');
     record.checks.push({ stage: 'return-to-list', rowBefore, rowAfter });
+    const beforePriorityReview = await page.evaluate(() => window.__POCKET_VISUAL_FIXTURE__.summary().requests.length);
     await taskDecision.getByRole('button', { name: '核对结果', exact: true }).click();
-    await page.locator('.pw-task-drawer[data-task-layer="review"]').waitFor({ state: 'visible' });
+    await page.locator('.pw-task-drawer[data-task-layer="overview"]').waitFor({ state: 'visible' });
+    await feedbackDisclosure.click();
     await feedback.waitFor({ state: 'visible' });
     await assertReadableResult(true);
+    await assertOpenedThenReviewed(beforePriorityReview);
     await drawer.getByRole('button', { name: '返回原工作', exact: true }).click();
     await drawer.waitFor({ state: 'hidden' });
     await reachable(taskRow, { minSize: 48 });
-    record.checks.push({ stage: 'task-priority-direct-review', directEntry: true, returnToOriginalList: true, submitted: false });
+    record.checks.push({ stage: 'task-priority-direct-review', directEntry: true, openBeforeReview: true, returnToOriginalList: true, submitted: false });
 
-    await navigate(page, '继续当前工作');
+    await navigate(page, '对话');
     const returnedReading = await reading();
     assert.equal(returnedReading.anchor, sourceReading.anchor, 'Tasks navigation lost the source message anchor');
     assert(Math.abs(returnedReading.top - sourceReading.top) <= 2, 'Tasks navigation lost the source reading position');
     assert.equal(await editor.inputValue(), conversationDraft, 'Tasks navigation lost the composer draft');
     const beforeDirectReview = await page.evaluate(() => window.__POCKET_VISUAL_FIXTURE__.summary().requests.length);
     await reachable(linkedTask, { minSize: 44 }); await linkedTask.click();
-    await page.locator('.pw-task-drawer[data-task-layer="review"]').waitFor({ state: 'visible' });
+    await page.locator('.pw-task-drawer[data-task-layer="overview"]').waitFor({ state: 'visible' });
+    await feedbackDisclosure.click();
     await feedback.waitFor({ state: 'visible' });
     await assertReadableResult(true);
-    const directRequests = await page.evaluate(start => window.__POCKET_VISUAL_FIXTURE__.summary().requests.slice(start)
-      .filter(request => ['tasks.open', 'tasks.review'].includes(request.action)), beforeDirectReview);
-    assert.deepEqual(directRequests.map(request => request.action), ['tasks.open', 'tasks.review'], 'Direct review must first open its original host task');
-    assert(directRequests.every(request => request.taskId === 'visual-fixture-task-review' && request.ok), 'Direct review used a different task or failed');
-    assert.equal(directRequests[0].requestNavigation, false, 'The App-local task open must not echo another navigation request');
-    assert.equal(await drawer.getByRole('button', { name: '返回任务概览', exact: true }).count(), 0, 'Direct review invented an intermediate overview');
+    await assertOpenedThenReviewed(beforeDirectReview);
+    assert.equal(await drawer.getByRole('button', { name: '返回任务结果', exact: true }).count(), 0, 'The result root invented an intermediate back step');
     await drawer.getByRole('button', { name: '返回原工作', exact: true }).click();
     await drawer.waitFor({ state: 'hidden' });
     const afterTaskReading = await reading();
@@ -907,25 +982,23 @@ async function runViewport(origin, viewport) {
     // A separate isolated missing-result input must stay visibly empty. The
     // controlled host refusal proves the real UI recovery path, not native policy.
     await page.evaluate(() => window.__POCKET_VISUAL_FIXTURE__.setScenario('emptyResult'));
-    await navigate(page, '全部任务');
+    await navigate(page, '任务');
+    const missingResultFailure = '任务结果尚未载入，暂时不能核对结果。';
+    await page.evaluate(message => window.__POCKET_VISUAL_FIXTURE__.rejectNextReview(message), missingResultFailure);
     await taskRow.click();
     await assertOverview();
     assert.equal(await outcome.getAttribute('data-result-source'), 'none');
     await outcome.getByRole('heading', { name: '还没有可读取的结果正文', exact: true }).waitFor();
     assert.equal(await outcome.locator('.pw-outcome-document,.pw-outcome-conversation').count(), 0, 'The missing result fabricated a body or linked answer');
-    const missingResultFailure = '任务结果尚未载入，暂时不能核对结果。';
-    await page.evaluate(message => window.__POCKET_VISUAL_FIXTURE__.rejectNextReview(message), missingResultFailure);
-    await primary.click();
-    await page.locator('.pw-task-drawer[data-task-layer="review"]').waitFor({ state: 'visible' });
+    await page.locator('.pw-task-drawer[data-task-layer="overview"]').waitFor({ state: 'visible' });
     await taskError.filter({ hasText: missingResultFailure }).waitFor({ state: 'visible' });
     assert.equal(await outcome.getAttribute('data-result-source'), 'none');
     assert.equal(await feedback.count(), 0, 'A refused missing-result review exposed the decision form');
     assert.equal(await drawer.locator('.pw-task-footer').count(), 0, 'A refused missing-result review exposed an authority action');
-    await capture(page, viewport, '16-task-without-result', ['.pw-task-drawer[data-task-layer="review"]', '.pw-outcome-empty', '.pw-task-local-error']);
+    await capture(page, viewport, '16-task-without-result', ['.pw-task-drawer[data-task-layer="overview"]', '.pw-outcome-empty', '.pw-task-local-error']);
     record.checks.push({ stage: 'missing-result-refusal', resultSource: 'none', emptyMessageVisible: true,
       expectedMessage: missingResultFailure, decisionFormAbsent: true, submitted: false,
       identity: 'controlled isolated fixture rejection; not Android execution evidence' });
-    await drawer.getByRole('button', { name: '返回任务概览', exact: true }).click();
     await drawer.getByRole('button', { name: '返回原工作', exact: true }).click();
     await drawer.waitFor({ state: 'hidden' });
     await page.evaluate(() => window.__POCKET_VISUAL_FIXTURE__.setScenario('populated'));
@@ -1059,7 +1132,7 @@ async function runViewport(origin, viewport) {
     record.checks.push({ stage: 'settings-model-shortcut', directEntry: true, returnToOriginalRoot: true,
       hostBack: 'window.PocketWeb.handleBack: root → catalogue → root', saved: false });
     await nativeBack();
-    await page.getByRole('tablist', { name: '主导航', exact: true }).waitFor();
+    await page.locator('.pw-app[data-route="chat"] [data-testid="all_work"]').waitFor({ state: 'visible' });
     stage = `${viewport.width}:team-workspace`;
     await navigate(page, '团队协作');
     const teamList = page.locator('.pw-team-workspace[data-team-layer="list"]');

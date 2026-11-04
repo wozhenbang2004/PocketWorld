@@ -34,8 +34,8 @@ WEB_ERROR_PATTERN = r"PocketWebUi.*(?:resource-error|console-error|renderer-exit
 SCENE_LABELS = {
     "workroom": ("全部工作", "工作输入"),
     "workroom-ime": ("全部工作", "工作输入"),
-    "work-menu": ("关闭全部工作", "最近工作", "设置与连接"),
-    "tasks": ("每件事，都有去处", "暂时没有这类任务"),
+    "work-menu": ("PocketWorld", "关闭全部工作", "最近工作", "设置与连接"),
+    "tasks": ("任务", "暂无任务"),
     "projects": ("选择项目继续", "从顶部打开项目，或新建一份项目。"),
     "settings": ("设置", "当前模型", "手机能力", "模型与连接"),
     "model-purpose": ("设置", "选择模型", "ChatGPT 账号"),
@@ -44,7 +44,7 @@ SCENE_LABELS = {
     "model-editor": ("返回连接管理", "接口协议", "接口地址", "模型名称", "API 密钥", "高级设置"),
     "model-advanced": ("返回连接管理", "高级设置", "每次回复的输出上限"),
 }
-PRIMARY_TABS = ("工作", "任务", "项目")
+SIDEBAR_DESTINATIONS = ("对话", "任务", "项目与文件", "团队协作", "记忆", "任务历史", "设置与连接")
 CAPTURE_SCENES = (
     ("01-workroom.png", "entry.xml", "workroom"),
     ("02-all-work.png", "all-work.xml", "work-menu"),
@@ -344,31 +344,44 @@ def section_editor_controls(root, label):
     return {bounds: editor}
 
 
-def navigation_identity(root, visible):
-    if not visible:
-        controls = {label: accessible_controls(root, label) for label in PRIMARY_TABS}
-        assert not any(controls.values()), "The primary navigation remained accessible while the real IME was visible"
-        return {"visible": False, "labels": list(PRIMARY_TABS)}
-    controls = {label: [node for node in root.iter("node")
-                        if node.get("package") == APP_ID and label in accessible_values(node)
-                        and node.get("class") != "android.webkit.WebView"
-                        and all(node.get(attribute) == "true" for attribute in ("enabled", "clickable", "focusable"))]
-                for label in PRIMARY_TABS}
-    assert all(len(items) == 1 for items in controls.values()), "Expected one enabled, clickable, focusable control per primary tab: 工作 / 任务 / 项目"
-    tabs = [items[0] for items in controls.values()]
-    assert len({id(node) for node in tabs}) == len(PRIMARY_TABS), "Primary tabs must be three different controls"
+def navigation_identity(root, drawer_open):
+    """Check actual sidebar controls; IME visibility does not remove navigation."""
+    labels = ("关闭全部工作", *SIDEBAR_DESTINATIONS) if drawer_open else ("全部工作",)
+    controls = {label: accessible_controls(root, label) for label in labels}
+    assert all(len(items) == 1 for items in controls.values()), "Expected one actual app control per sidebar entry: " + " / ".join(labels)
+    nodes = [next(iter(items.values())) for items in controls.values()]
+    assert len({id(node) for node in nodes}) == len(labels), "Sidebar entries must be different controls"
+    assert all(node.get("focusable") == "true" for node in nodes), "Sidebar entries must remain focusable"
     parents = {child: parent for parent in root.iter() for child in parent}
-    tab_widget = parents.get(tabs[0])
-    assert tab_widget is not None and all(parents.get(node) is tab_widget for node in tabs), "Primary tabs must be direct children of one navigation widget"
-    assert tab_widget.get("package") == APP_ID and tab_widget.get("class") == "android.widget.TabWidget" and "主导航" in accessible_values(tab_widget), "Expected the actual app TabWidget named 主导航"
-    bounds = [parse_bounds(node.get("bounds")) for node in tabs]
+    viewports = []
+    for node in nodes:
+        viewport = parents.get(node)
+        while viewport is not None and viewport.get("class") != "android.webkit.WebView":
+            viewport = parents.get(viewport)
+        assert viewport is not None and viewport.get("package") == APP_ID, "Sidebar control is not in the actual app WebView"
+        viewports.append(viewport)
+    assert all(viewport is viewports[0] for viewport in viewports), "Sidebar controls belong to different WebViews"
+    viewport_bounds = parse_bounds(viewports[0].get("bounds"))
+    left, top, right, bottom = viewport_bounds
+    bounds = [parse_bounds(node.get("bounds")) for node in nodes]
     points = [[(item[0] + item[2]) // 2, (item[1] + item[3]) // 2] for item in bounds]
-    assert all(bounds[i][0] < bounds[i + 1][0] and bounds[i][2] < bounds[i + 1][2]
-               and points[i][0] < points[i + 1][0] for i in range(2)), "Primary tab edges and centers must be ordered left to right"
-    common_top, common_bottom = max(item[1] for item in bounds), min(item[3] for item in bounds)
-    assert common_top < common_bottom and all(common_top <= point[1] < common_bottom for point in points), "Primary tab centers do not share one visible row"
-    # Android may report intersecting accessibility edges. Check the same actual
-    # center used by target(), rather than treating zero edge overlap as a row.
+    for item in bounds:
+        assert left <= item[0] < item[2] <= right and top <= item[1] < item[3] <= bottom, "Sidebar control is clipped outside the observed WebView"
+    assert bounds[0][1] < top + (bottom - top) // 3, "The global sidebar control is not in the app header"
+    if drawer_open:
+        entries = bounds[1:]
+        entry_points = points[1:]
+        assert all(entries[i][1] < entries[i + 1][1] and entries[i][3] < entries[i + 1][3]
+                   and entry_points[i][1] < entry_points[i + 1][1] for i in range(len(entries) - 1)), "Sidebar destinations must be vertically ordered"
+        common_left, common_right = max(item[0] for item in entries), min(item[2] for item in entries)
+        assert common_left < common_right and all(common_left <= point[0] < common_right for point in entry_points), "Sidebar destinations do not share one visible column"
+        assert all(item[0] < left + (right - left) // 3 and item[2] < right for item in entries), "Expected destinations in a left sidebar with part of the workspace visible"
+    else:
+        assert not accessible_controls(root, "关闭全部工作"), "The sidebar did not close after returning or selecting a page"
+        assert not any(accessible_controls(root, label) for label in SIDEBAR_DESTINATIONS[:3]), "Closed sidebar destinations remained actionable over the workspace"
+        assert bounds[0][0] < left + (right - left) // 3, "The sidebar opener is not at the leading app-header edge"
+    # As with target(), validate the real center hit rather than inferring
+    # clickability from labels or rejecting harmless intersecting AX edges.
     clickable = []
     for node in root.iter("node"):
         if node.get("package") != APP_ID or node.get("class") == "android.webkit.WebView" or node.get("enabled") != "true" or node.get("clickable") != "true":
@@ -377,21 +390,12 @@ def navigation_identity(root, visible):
             clickable.append((node, parse_bounds(node.get("bounds"))))
         except ValueError:
             continue
-    for tab, (x, y) in zip(tabs, points):
+    for control, (x, y) in zip(nodes, points):
         hits = [node for node, (left, top, right, bottom) in clickable if left <= x < right and top <= y < bottom]
-        assert len(hits) == 1 and hits[0] is tab, "A primary tab center is not a unique actual app hit target"
-    viewport = tab_widget
-    while viewport is not None and viewport.get("class") != "android.webkit.WebView":
-        viewport = parents.get(viewport)
-    assert viewport is not None and viewport.get("package") == APP_ID, "Primary navigation is not in the actual app WebView"
-    left, top, right, bottom = parse_bounds(viewport.get("bounds"))
-    for item in bounds:
-        assert left <= item[0] < item[2] <= right and top <= item[1] < item[3] <= bottom, "Primary navigation is clipped outside the observed WebView"
-        assert item[1] >= (top + bottom) // 2, "Expected the primary tabs in the lower navigation area"
-    return {"visible": True, "labels": list(PRIMARY_TABS), "bounds": [list(item) for item in bounds],
-            "points": points, "adjacent_edge_overlap_px": [max(0, bounds[i][2] - bounds[i + 1][0]) for i in range(2)],
-            "viewport_bounds": [left, top, right, bottom],
-            "method": "actual direct primary tabs, unique center hit targets and observed WebView bounds"}
+        assert len(hits) == 1 and hits[0] is control, "A sidebar control center is not a unique actual app hit target"
+    return {"drawer_open": drawer_open, "labels": list(labels), "bounds": [list(item) for item in bounds],
+            "points": points, "viewport_bounds": list(viewport_bounds),
+            "method": "actual sidebar controls, unique center hit targets and observed WebView bounds; page selection is checked by the next fresh scene"}
 
 
 def ime_identity(xml, dump, visible):
@@ -411,8 +415,9 @@ def ime_identity(xml, dump, visible):
         focused = [node for node in root.iter("node") if node.get("package") == APP_ID
                    and node.get("class") == "android.widget.EditText" and node.get("focused") == "true"]
         assert len(focused) == 1 and focused[0].get("password") != "true", "Expected the actual non-secret work input to retain focus under the IME"
-        parse_bounds(focused[0].get("bounds"))
-    return {"visible": visible, "android_fields": fields, "navigation": navigation_identity(root, not visible),
+        work_inputs = section_editor_controls(root, "工作输入")
+        assert focused[0] is next(iter(work_inputs.values())), "The focused IME field is not the actual work editor"
+    return {"visible": visible, "android_fields": fields, "navigation": navigation_identity(root, False),
             "method": "Android input_method current service visibility plus actual application accessibility hierarchy"}
 
 
@@ -478,14 +483,12 @@ def scene_identity(xml, scene):
         assert secret_inputs[0].get("enabled") == "true" and secret_inputs[0].get("focusable") == "true", "The API password field is not an actual usable input"
     if scene == "model-purpose":
         assert not accessible_controls(root, "管理连接"), "Expected the expanded settings purpose group, not the model directory"
-    if scene == "work-menu":
-        assert not any(accessible_controls(root, label) for label in ("继续当前工作", "全部任务", "项目与文件")), "The history drawer duplicated the primary navigation"
     if scene == "settings":
         assert not accessible_controls(root, "全部设置"), "The settings root still requires an intermediate all-settings card"
     identity = {"scene": scene, "method": "actual Android accessibility hierarchy", "required_labels": required}
-    if scene in ("workroom", "tasks", "projects"):
+    if scene == "work-menu":
         identity["primary_navigation"] = navigation_identity(root, True)
-    elif scene == "workroom-ime":
+    elif scene in ("workroom", "workroom-ime", "tasks", "projects"):
         identity["primary_navigation"] = navigation_identity(root, False)
     if search_input is not None:
         identity["search_input"] = search_input
@@ -689,7 +692,9 @@ def verify_capture(args):
         dimensions.add((width, height))
         files.append({"file": name, "bytes": path.stat().st_size, "sha256": sha256(path), "width": width, "height": height})
     assert len(dimensions) == 1, "Viewport changed during the captured journey"
-    for xml, scene in (("primary-work-return.xml", "workroom"), ("model-connections-return.xml", "model-connections"),
+    for xml, scene in (("primary-tasks-menu.xml", "work-menu"), ("primary-projects-menu.xml", "work-menu"),
+                       ("primary-work-menu.xml", "work-menu"), ("settings-menu.xml", "work-menu"),
+                       ("primary-work-return.xml", "workroom"), ("model-connections-return.xml", "model-connections"),
                        ("model-list-return.xml", "model-list"), ("settings-return.xml", "model-purpose")):
         scenes.append({"xml": xml, **scene_identity(root / xml, scene)})
     ime_checks = []
@@ -701,9 +706,12 @@ def verify_capture(args):
         "open-work-target.json": ("entry.xml", ("全部工作",)),
         "close-work-target.json": ("all-work.xml", ("关闭全部工作",)),
         "return-work-target.json": ("return.xml", ("全部工作",)),
-        "primary-tasks-target.json": ("return.xml", ("任务",)),
-        "primary-projects-target.json": ("tasks-root.xml", ("项目",)),
-        "primary-work-target.json": ("projects-root.xml", ("工作",)),
+        "primary-tasks-menu-target.json": ("return.xml", ("全部工作",)),
+        "primary-tasks-target.json": ("primary-tasks-menu.xml", ("任务",)),
+        "primary-projects-menu-target.json": ("tasks-root.xml", ("全部工作",)),
+        "primary-projects-target.json": ("primary-projects-menu.xml", ("项目与文件",)),
+        "primary-work-menu-target.json": ("projects-root.xml", ("全部工作",)),
+        "primary-work-target.json": ("primary-work-menu.xml", ("对话",)),
         "work-input-target.json": ("primary-work-return.xml", ("工作输入",)),
         "settings-work-target.json": ("workroom-ime-return.xml", ("全部工作",)),
         "settings-target.json": ("settings-menu.xml", ("设置与连接",)),
@@ -743,13 +751,13 @@ def verify_capture(args):
         "source": "formal Android WebView application with transplanted library UI",
         "device": device, "apk": identity, "captures": files, "scenes": scenes, "ime_checks": ime_checks,
         "non_mock": True,
-        "interaction_scope": "fresh app; persistent work/tasks/projects navigation; actual work-input IME hides navigation and Android Back restores it; history drawer; settings purpose accordion; actual model directory; connection management; unsaved API editor/password field; advanced settings; Android Back through management, directory, settings and work; no model save/test or task execution action invoked",
+        "interaction_scope": "fresh app; left sidebar opens, exposes actual destinations and closes after selecting conversation/tasks/projects; actual work-input IME preserves the focused editor and reachable navigation entry; Android Back dismisses the IME; sidebar recent conversations; settings purpose accordion; actual model directory; connection management; unsaved API editor/password field; advanced settings; Android Back through management, directory, settings and work; no model save/test or task execution action invoked",
         "limitations": ["Android 15/API35 emulator capture, not a physical phone",
                        "Minimum supported Android 11/API30 runtime compatibility remains unverified by this capture", "No model or phone-execution task initiated by the capture script",
                        "Does not prove every business journey, touch performance, accessibility or visual acceptance"],
         "status": "capture integrity and startup checks passed; inspect PNG/MP4 for design acceptance",
     })
-    print("Verified", len(CAPTURE_SCENES), "device PNGs, primary navigation, actual IME visibility/return, model purpose layers and one app screen recording")
+    print("Verified", len(CAPTURE_SCENES), "device PNGs, sidebar navigation, actual IME visibility/return, model purpose layers and one app screen recording")
 
 
 def main():
