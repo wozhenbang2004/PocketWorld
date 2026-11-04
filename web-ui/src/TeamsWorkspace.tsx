@@ -5,6 +5,9 @@ import { Accordion, AccordionItem, Button, CheckboxField, IconButton, SearchFiel
 import { AIAnswer, PressButton, ProgressBar } from './library';
 import { teamMessageConfirmed, teamMessageDelivery, teamMessageRecorded } from './team-message';
 import { teamEditorMember, teamPhoneChoice, teamPhoneDevice, teamPhoneScopeLabel, teamPhoneSelections, teamPhoneTargetKey, teamPhoneTargetLabel, type TeamPhoneChoice } from './team-phone';
+import { TeamHarnessFields } from './TeamHarnessFields';
+import { HarnessEvidence } from './HarnessEvidence';
+import { harnessWorkerLabel, isTeamHarness } from './harness-capabilities';
 import './team-continuity.css';
 
 type Data = Record<string, any>;
@@ -37,6 +40,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
   const query = queries[tab], setQuery = (value: string) => setQueries(old => ({ ...old, [tab]: value }));
   const [reading, setReading] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null), [editor, setEditor] = useState<Data | null>(null);
   const [phoneSelection, setPhoneSelection] = useState<Data | null>(null), [phoneChoices, setPhoneChoices] = useState<Record<string, TeamPhoneChoice>>({});
+  const [externalReady, setExternalReady] = useState<Record<string, boolean>>({}), [memberProbes, setMemberProbes] = useState<Record<string, Data>>({});
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState(''), [acknowledged, setAcknowledged] = useState(false);
   const [goal, setGoal] = useState(''), [rounds, setRounds] = useState('1'), [recipient, setRecipient] = useState(''), [replyId, setReplyId] = useState(''), [mode, setMode] = useState('discussion');
   const [drafts, setDrafts] = useState<Record<string, string>>({}), [uncertainByRun, setUncertainByRun] = useState<Record<string, PendingMessage>>({});
@@ -138,7 +142,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
   useEffect(() => {
     const hide = () => {
       backgrounded.current = true; requestGeneration.current++; entered.current = false;
-      setBusy(false); closeReview(); closePhoneSelection();
+      setBusy(false); closeReview(); closePhoneSelection(); setMemberProbes({}); setExternalReady({});
       setReading(value => value ? { ...value, viewHandle: '' } : null);
     };
     const visibility = () => {
@@ -175,9 +179,14 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
       if (result.reading) acceptReading(result.reading); else { setReading(value => value ? { ...value, viewHandle: '' } : null); setNotice('原回答已保存，请刷新原运行查看后续状态。'); }
     }, failure => { if (['not_sent', 'not_accepted'].includes(object(failure).code)) { rememberUncertain(original.runId, null); setNotice('这次输入未提交，草稿保留；请刷新原运行后再操作。'); } });
   };
-  const beginEditor = (team: Data | null) => setEditor(team ? { name: team.name, mode: team.mode, leaderId: team.leaderId, members: rows(team.members).map(teamEditorMember) } : { name: '', mode: 'collaborate', leaderId: 'member-0', members: [blankMember('member-0', 0), blankMember('member-1', 1)] });
-  const updateMember = (id: string, changes: Data) => setEditor(value => value ? { ...value, members: rows(value.members).map(member => member.id === id ? { ...member, ...changes } : member) } : null);
+  const beginEditor = (team: Data | null) => { setExternalReady({}); setEditor(team ? { name: team.name, mode: team.mode, leaderId: team.leaderId, members: rows(team.members).map(teamEditorMember) } : { name: '', mode: 'collaborate', leaderId: 'member-0', members: [blankMember('member-0', 0), blankMember('member-1', 1)] }); };
+  const updateMember = (id: string, changes: Data) => {
+    if (['runner', 'device', 'model', 'modeId'].some(key => Object.hasOwn(changes, key))) setExternalReady(old => ({ ...old, [id]: false }));
+    setEditor(value => value ? { ...value, members: rows(value.members).map(member => member.id === id ? { ...member, ...changes } : member) } : null);
+  };
   const phoneTargets = rows(catalog.phoneTargets);
+  const computerProfiles = rows({ ...object(object(state.features).remote), ...object(object(state.ownerSnapshots).remote) }.profiles);
+  const computerLabel = (member: Data) => `${computerProfiles.find(profile => profile.id === member.device?.profileId)?.name || member.device?.profileId || '原电脑'} · ${member.device?.environmentId || '环境待选择'}`;
   const phoneMembers = rows(phoneSelection?.view?.members);
   const hasPhoneMembers = rows(definition?.members).some(member => member.runner === 'phone_agent');
   const choosePhoneScope = (member: Data, id: string) => setPhoneChoices(value => ({ ...value, [member.memberId]: teamPhoneChoice(rows(member.options).find(option => option.optionId === id)) }));
@@ -191,6 +200,14 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
     } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
   };
   const entries = rows(catalog[tab === 'runs' ? 'runs' : 'teams']).filter(row => `${row.goal || ''} ${row.name || ''} ${row.teamName || ''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const invalidEditorMember = (member: Data): boolean => {
+    if (!member.name.trim() || !member.role.trim()) return true;
+    if (member.runner === 'phone_agent') return !member.assignment?.trim() || !teamPhoneTargetKey(member.device);
+    if (member.runner === 'model') return false;
+    return !isTeamHarness(member.runner) || !member.device?.profileId || !member.device?.environmentId
+      || member.runner !== 'codex_app_server' && member.externalExecutionRiskAcknowledged !== true
+      || !rows(definition?.members).find(original => original.id === member.id)?.remoteProduction && !externalReady[member.id];
+  };
   const refreshReading = <IconButton className="pw-utility-icon" icon={RiRefreshLine} aria-label="刷新团队记录" title="刷新团队记录" disabled={busy} onClick={() => current ? readRun(current.id) : definition ? void invoke('teams.readDefinition', { id: definition.id }, acceptReading) : load()} />;
   return <section ref={root} className="pw-team-workspace" data-team-layer={reading ? 'detail' : 'list'} data-team-view={viewKey}>
     <div className="pw-team-loading">{busy && <ProgressBar aria-label="正在读取原团队回执" isIndeterminate showValueLabel={false} size="sm" />}</div>
@@ -200,7 +217,14 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
       {!entries.length && <p className="pw-secondary-empty">当前读取窗口没有匹配记录。</p>}{tab === 'teams' && <Button variant="secondary" leadingIcon={RiAddLine} disabled={busy} onClick={() => beginEditor(null)}>新建团队</Button>}
     </TabPanel></Tabs>}
     {definition && <article className="pw-team-reading"><header className="pw-object-toolbar"><div><h2 tabIndex={-1}>{definition.name}</h2><p>{definition.mode === 'produce' ? '原项目文件协作' : definition.mode === 'debate' ? '取证与讨论' : hasPhoneMembers ? '手机分工与共同工作' : '共同分析'}</p></div>{refreshReading}</header>
-      <section className="pw-team-members"><h3>成员与职责</h3>{rows(definition.members).map(member => <div key={member.id} className="pw-source-record"><h4>{member.name}{member.id === definition.leaderId ? ' · 负责人' : ''}</h4><p>{member.role}</p><small>{member.runner === 'phone_agent' ? teamPhoneTargetLabel(member.device, phoneTargets) : `${member.model || '沿用实际启动时的主模型'} · ${member.runner === 'model' ? '本机模型连接' : member.runner}`}</small>{member.runner === 'phone_agent' && <p>{member.assignment}</p>}{member.runner !== 'model' && member.runner !== 'phone_agent' && <Button variant="ghost" disabled={busy || !definitionReady} onClick={() => void invoke('teams.probeMember', { viewHandle: reading!.viewHandle, memberId: member.id }, value => setNotice(value.result?.available === true ? '原执行器本次探测可用。' : value.result?.message || '本次未确认执行器可用。'))}>核对原执行器</Button>}</div>)}</section>
+      <section className="pw-team-members"><h3>成员与职责</h3>{rows(definition.members).map(member => <div key={member.id} className="pw-source-record"><h4>{member.name}{member.id === definition.leaderId ? ' · 负责人' : ''}</h4><p>{member.role}</p>
+        {member.runner === 'phone_agent' ? <><small>{teamPhoneTargetLabel(member.device, phoneTargets)}</small><p>{member.assignment}</p></>
+          : member.runner === 'model' || !member.runner ? <small>模型：{member.model || '沿用实际启动时的主模型'} · 本机模型连接</small>
+          : <><small>执行器：{harnessWorkerLabel(undefined, member.runner)} · 模型：{member.model || '执行器默认'}</small><p className="pw-field-hint">电脑：{computerLabel(member)}</p>
+            <p className="pw-field-hint">开始协作前，核对这份已保存配置的实际执行器。</p><Button variant="ghost" disabled={busy || !definitionReady} onClick={() => void invoke('teams.probeMember', { viewHandle: reading!.viewHandle, memberId: member.id }, value => setMemberProbes(old => ({ ...old, [`${definition.id}:${member.id}`]: { definition: JSON.stringify(member), value: object(value.result || value) } })))}>核对原执行器</Button>
+            {memberProbes[`${definition.id}:${member.id}`]?.definition === JSON.stringify(member) && <HarnessEvidence probe={memberProbes[`${definition.id}:${member.id}`].value} id={`saved-member-evidence-${member.id}`} />}
+          </>}
+      </div>)}</section>
       <div className="pw-form-actions"><IconButton className="pw-utility-icon" icon={RiEditLine} aria-label="编辑下次工作的团队" title="编辑下次工作的团队" disabled={busy || !definitionReady} onClick={() => beginEditor(definition)} /><Button variant="ghost" disabled={busy || !definitionReady} onClick={() => void invoke('teams.reviewRemove', { viewHandle: reading!.viewHandle }, reviewResult)}>移除团队配置</Button></div>
       {definition.mode === 'produce' ? <p className="pw-muted">文件团队沿原项目任务的计划、文件范围和预算启动；这里保留其成员与既有工作记录。</p> : <><TextAreaField label="这次共同目标" value={goal} onChange={setGoal} isDisabled={busy} />{!hasPhoneMembers && <SelectField label="讨论轮数" value={rounds} options={[{ id: '1', label: '一轮' }, { id: '2', label: '两轮' }]} onChange={setRounds} isDisabled={busy} hint="结构化证据讨论沿原生协议展开；实际调用与累计预算由原任务控制。" />}{hasPhoneMembers && <p className="pw-field-hint">手机成员按各自分工与前置依赖工作。本机可同时使用至多四个后台屏幕；启动前逐成员核对应用范围与预算。</p>}<PressButton label={hasPhoneMembers ? '选择手机范围并开始' : '核对并开始协作'} disabled={busy || !definitionReady || !goal.trim() || goal.length > 8000 || !!state.modelSelectionBusy} onClick={() => void invoke('teams.reviewStart', { viewHandle: reading!.viewHandle, goal, rounds: hasPhoneMembers ? 1 : Number(rounds) }, reviewResult)} /></>}
     </article>}
@@ -220,6 +244,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
               <div className="pw-team-expanded-copy">
                 <p>{member.assignment || member.role}</p>
                 {member.runner === 'phone_agent' && <p className="pw-muted">{teamPhoneTargetLabel(member.device, phoneTargets)}</p>}
+                {isTeamHarness(member.runner || '') && <><p className="pw-muted">执行器：{harnessWorkerLabel(undefined, member.runner)} · 电脑：{computerLabel(member)}</p>{member.externalSession?.sessionId && <p className="pw-muted">原会话：{member.externalSession.sessionId}</p>}</>}
                 {model && <p className="pw-muted">模型：{model}</p>}
                 {member.acceptance && <p>验收：{member.acceptance}</p>}
                 {!!rows(member.dependsOn).length && <p>前置：{member.dependsOn.map(name).join('、')}</p>}
@@ -279,21 +304,27 @@ export function TeamsWorkspace({ state, run, registerTransientBack, alreadyShown
         return <section className="pw-source-record" key={member.id}>
           <TextField label={`成员 ${index + 1} 名称`} value={member.name} onChange={value => updateMember(member.id, { name: value })} isDisabled={busy} />
           <TextAreaField label="职责" value={member.role} onChange={value => updateMember(member.id, { role: value })} isDisabled={busy} />
-          <SelectField label="成员做什么" value={member.runner || 'model'} options={external ? [{ id: member.runner, label: `原电脑执行器 · ${member.runner}` }] : [{ id: 'model', label: '分析与讨论' }, ...(editor.mode === 'collaborate' ? [{ id: 'phone_agent', label: '操作手机完成分工' }] : [])]} isDisabled={busy || external || !!original?.modelTarget} onChange={runner => updateMember(member.id, runner === 'phone_agent' ? { runner, model: '', device: { kind: 'local_phone', screenMode: 'background' }, assignment: member.assignment || member.role, dependsOn: member.dependsOn || [] } : { runner, device: undefined, assignment: undefined, dependsOn: undefined })} />
+          <SelectField label="成员做什么" value={external ? 'computer' : member.runner || 'model'} options={[{ id: 'model', label: '分析与讨论' }, { id: 'computer', label: '在电脑上使用执行器工作' }, ...(editor.mode === 'collaborate' ? [{ id: 'phone_agent', label: '操作手机完成分工' }] : [])]}
+            isDisabled={busy || !!original?.modelTarget || !!original?.remoteProduction} onChange={runner => updateMember(member.id, runner === 'phone_agent'
+              ? { runner, model: '', modeId: undefined, externalExecutionRiskAcknowledged: undefined, device: { kind: 'local_phone', screenMode: 'background' }, assignment: member.assignment || member.role, dependsOn: member.dependsOn || [] }
+              : runner === 'computer' ? { runner, model: '', modeId: '', device: { profileId: '', environmentId: '' }, externalExecutionRiskAcknowledged: false, assignment: undefined, dependsOn: undefined }
+              : { runner, device: undefined, assignment: undefined, dependsOn: undefined, modeId: undefined, externalExecutionRiskAcknowledged: undefined })} />
           {member.runner === 'phone_agent' ? <>
             <SelectField label="在哪台手机上工作" value={targetKey} options={targetOptions} isDisabled={busy} onChange={key => { const target = phoneTargets.find(value => teamPhoneTargetKey(value) === key); if (target) updateMember(member.id, { device: teamPhoneDevice(target) }); }} hint="应用范围与预算在每次启动前核对。" />
             <TextAreaField label="具体分工" value={member.assignment || ''} onChange={value => updateMember(member.id, { assignment: value })} isDisabled={busy} />
             <Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id={`phone-dependencies-${member.id}`} title="先等待哪些成员完成">{rows(editor.members).filter(row => row.id !== member.id).map(row => <CheckboxField key={row.id} isSelected={(member.dependsOn || []).includes(row.id)} isDisabled={busy} onChange={selected => updateMember(member.id, { dependsOn: selected ? [...(member.dependsOn || []), row.id] : (member.dependsOn || []).filter((id: string) => id !== row.id) })}>{row.name || row.id}</CheckboxField>)}<p className="pw-field-hint">不选择前置成员时，可与其他独立分工同时开始。</p></AccordionItem></Accordion>
-          </> : <TextField label="模型 ID，留空沿用主模型" value={member.model} onChange={value => updateMember(member.id, { model: value })} isDisabled={busy || !!original?.modelTarget} />}
+          </> : external ? original?.remoteProduction ? <><p className="pw-field-hint">原文件分工：{harnessWorkerLabel(undefined, member.runner)} · {computerLabel(member)}。更换执行器或目录时，需在原生团队设置重新核对文件范围。</p><TextField label="原作者模型" value={member.model} isDisabled onChange={() => {}} /></>
+            : <TeamHarnessFields member={member} profiles={computerProfiles} run={run} disabled={busy} onChange={changes => updateMember(member.id, changes)} onReady={ready => setExternalReady(old => old[member.id] === ready ? old : { ...old, [member.id]: ready })} />
+            : <TextField label="模型 ID，留空沿用主模型" value={member.model} onChange={value => updateMember(member.id, { model: value })} isDisabled={busy || !!original?.modelTarget} />}
           {!definition && <Button variant="ghost" disabled={busy || editor.members.length <= 1} onClick={() => { const next = rows(editor.members).filter(row => row.id !== member.id); setEditor({ ...editor, members: next, leaderId: editor.leaderId === member.id ? next[0].id : editor.leaderId }); }}>移除此成员</Button>}
         </section>;
       })}
       {!definition && <Button variant="ghost" disabled={busy || editor.members.length >= 4} onClick={() => setEditor({ ...editor, members: [...editor.members, blankMember(`member-${crypto.randomUUID().slice(0, 8)}`, editor.members.length)] })}>添加成员</Button>}
       <SelectField label="负责人" value={editor.leaderId} options={rows(editor.members).map(member => ({ id: member.id, label: member.name || member.id }))} onChange={value => setEditor({ ...editor, leaderId: value })} isDisabled={busy} />
-      <p className="pw-muted">保存只影响后续新工作；已有运行记录保留。选择手机成员后，每次启动会再次核对它的应用范围。</p><Button disabled={busy || !definitionReady || !editor.name.trim() || rows(editor.members).some(member => !member.name.trim() || !member.role.trim() || member.runner === 'phone_agent' && (!member.assignment?.trim() || !teamPhoneTargetKey(member.device)))} onClick={() => void invoke('teams.reviewDefinition', { ...editor, ...(definition ? { viewHandle: reading!.viewHandle } : {}) }, reviewResult)}>核对本次配置</Button>
+      <p className="pw-muted">职责说明成员要完成什么；模型负责推理，执行器负责工具与会话，电脑或手机决定工作发生在哪里。保存只影响后续新工作。</p><Button disabled={busy || !definitionReady || !editor.name.trim() || rows(editor.members).some(invalidEditorMember)} onClick={() => void invoke('teams.reviewDefinition', { ...editor, ...(definition ? { viewHandle: reading!.viewHandle } : {}) }, reviewResult)}>核对本次配置</Button>
     </>}</SettingsDialog>
     <SettingsDialog isOpen={!!review} title={review?.operation === 'start' ? '开始这次原团队协作' : review?.operation === 'cancel' ? '停止这次协作' : review?.operation === 'remove' ? '移除团队配置' : '保存团队配置'} onClose={() => { if (!busy) closeReview(); }}>
-      {review?.operation === 'start' ? <><p>{review.input?.goal}</p><p>{review.definition?.name} · {rows(review.definition?.members).map(member => member.name).join('、')}</p>{review.phoneScope ? <><p>手机成员将使用下列已核对的范围，模型调用会计入对应任务的额度。</p>{rows(review.phoneScope.members).map(member => <section className="pw-source-record" key={member.memberId}><h3>{member.name || rows(review.definition?.members).find(value => value.id === member.memberId)?.name}</h3><p>{teamPhoneTargetLabel(member.device, phoneTargets)}{teamPhoneScopeLabel(member.resourceBinding) ? ` · ${teamPhoneScopeLabel(member.resourceBinding)}` : ''}</p><p>最多 {member.toolBudget} 次操作 · {member.modelBudget} 次模型调用</p>{member.sourceQueryToolReserve > 0 && <p className="pw-field-hint">另预留 {member.sourceQueryToolReserve} 次目标任务状态查询。</p>}<p className="pw-muted">有效至 {new Date(member.expiresAt).toLocaleString('zh-CN')}</p></section>)}</> : <p>沿原团队与实际启动时的模型配置开始，可能消耗模型额度。文件写入与额外预算继续使用原任务的独立审批。</p>}</> : review?.operation === 'cancel' ? <p>停止这个原运行后续工作，保留消息、证据和已有成果。停止请求不代表未知外部操作已完成清理。</p> : review?.operation === 'remove' ? <p>移除“{review.definition?.name}”的后续启动配置，已有运行和成果保留。</p> : <><p>{review?.input?.name}</p>{rows(review?.input?.members).map(member => <p key={member.id}>{member.name}：{member.role}</p>)}</>}
+      {review?.operation === 'start' ? <><p>{review.input?.goal}</p><p>{review.definition?.name} · {rows(review.definition?.members).map(member => member.name).join('、')}</p>{review.phoneScope ? <><p>手机成员将使用下列已核对的范围，模型调用会计入对应任务的额度。</p>{rows(review.phoneScope.members).map(member => <section className="pw-source-record" key={member.memberId}><h3>{member.name || rows(review.definition?.members).find(value => value.id === member.memberId)?.name}</h3><p>{teamPhoneTargetLabel(member.device, phoneTargets)}{teamPhoneScopeLabel(member.resourceBinding) ? ` · ${teamPhoneScopeLabel(member.resourceBinding)}` : ''}</p><p>最多 {member.toolBudget} 次操作 · {member.modelBudget} 次模型调用</p>{member.sourceQueryToolReserve > 0 && <p className="pw-field-hint">另预留 {member.sourceQueryToolReserve} 次目标任务状态查询。</p>}<p className="pw-muted">有效至 {new Date(member.expiresAt).toLocaleString('zh-CN')}</p></section>)}</> : <p>沿原团队与实际启动时的模型配置开始，可能消耗模型额度。文件写入与额外预算继续使用原任务的独立审批。</p>}</> : review?.operation === 'cancel' ? <p>停止这个原运行后续工作，保留消息、证据和已有成果。停止请求不代表未知外部操作已完成清理。</p> : review?.operation === 'remove' ? <p>移除“{review.definition?.name}”的后续启动配置，已有运行和成果保留。</p> : <><p>{review?.input?.name}</p>{rows(review?.input?.members).map(member => <section className="pw-source-record" key={member.id}><h3>{member.name}</h3><p>{member.role}</p>{member.runner === 'phone_agent' ? <p>{teamPhoneTargetLabel(member.device, phoneTargets)} · {member.assignment}</p> : isTeamHarness(member.runner) ? <><p>执行器：{harnessWorkerLabel(undefined, member.runner)} · 电脑：{computerLabel(member)}</p><p>模型：{member.model || '执行器默认'}{member.modeId ? ` · 模式：${member.modeId}` : ''}</p></> : <p>模型：{member.model || '实际启动时的主模型'} · 本机模型连接</p>}</section>)}</>}
       <CheckboxField isSelected={acknowledged} onChange={setAcknowledged} isDisabled={busy}>已核对这次操作与原目标</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>返回</Button><Button disabled={busy || !acknowledged} onClick={() => {
         const original = review; if (!original) return; setReview(null); setAcknowledged(false);
         void invoke(original.operation === 'cancel' ? 'teams.control' : 'teams.confirm', original.operation === 'cancel' ? { command: 'cancel', viewHandle: original.viewHandle } : { reviewHandle: original.reviewHandle }, result => {

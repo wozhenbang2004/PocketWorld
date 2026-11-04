@@ -157,3 +157,14 @@
   min-width: 0;
   flex-shrink: 1;
 }
+.pw-team-harness-fields {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.pw-team-harness-fields .pw-field-hint,
+.pw-harness-evidence p,
+.pw-harness-evidence dd {
+  overflow-wrap: anywhere;
+}
