@@ -8,7 +8,6 @@
   --pw-mono: "JetBrains Mono", ui-monospace, monospace;
   --pw-canvas: #fff;
   --pw-surface: #fff;
-  --pw-navigation: #fafafa;
   --pw-inset: #f6f6f6;
   --pw-selected: #ededed;
   --pw-edge: transparent;
@@ -22,11 +21,10 @@
   --pw-focus: #626262;
   --pw-radius-control: 10px;
   --pw-radius-popover: 14px;
-  --pw-shadow-input: 0 8px 32px rgb(20 20 20 / .06);
-  --pw-shadow-surface: 0 8px 32px rgb(20 20 20 / .055);
-  --pw-shadow-floating: 0 16px 48px rgb(20 20 20 / .10);
-  --pw-shadow-sheet: 0 -12px 56px rgb(20 20 20 / .09);
-  --pw-shadow-sidebar: 16px 0 56px rgb(20 20 20 / .10);
+  --pw-shadow-input: none;
+  --pw-shadow-surface: 0 10px 36px -14px rgb(0 0 0 / 9%);
+  --pw-shadow-floating: 0 14px 48px -12px rgb(0 0 0 / 12%);
+  --pw-shadow-sheet: 0 16px 64px -16px rgb(0 0 0 / 14%);
 
   /* BoardUI semantic aliases also reach its portaled menus. */
   --font-inter: var(--pw-font);

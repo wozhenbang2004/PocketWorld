@@ -16,7 +16,7 @@ const browser = await chromium.launch({ headless: true });
 const results = [];
 const baseline = process.argv.includes('--baseline');
 async function navigate(page, name) {
-  await page.getByRole('button', { name: '全部工作', exact: true }).click();
+  await page.getByRole('button', { name: '打开导航', exact: true }).click();
   const drawer = page.locator('.pw-work-drawer');
   await drawer.getByRole('link', { name, exact: true }).click();
   await drawer.waitFor({ state: 'hidden' });
@@ -49,7 +49,7 @@ try {
     assert.ok(await page.getByText('图片', { exact: false }).count());
   });
   await check('old-create-receipt-keeps-new-dialog', async page => {
-    await navigate(page, '项目与文件');
+    await navigate(page, '项目');
     await page.getByRole('button', { name: '新项目', exact: true }).click();
     await page.getByRole('textbox', { name: '项目名称', exact: true }).fill('第一次创建');
     await page.getByRole('button', { name: '创建', exact: true }).click();
@@ -132,7 +132,7 @@ try {
     });
     await check('old-newfile-receipt-keeps-new-dialog', async page => {
       await page.evaluate(() => window.modelFixture.publish({ projectId: 'original-project', projects: [{ id: 'original-project', name: '原项目' }], files: [] }));
-      await navigate(page, '项目与文件');
+      await navigate(page, '项目');
       await page.getByRole('button', { name: '新文件', exact: true }).click();
       await page.getByRole('textbox', { name: '文件路径', exact: true }).fill('first.txt');
       await page.getByRole('button', { name: '创建', exact: true }).click();
