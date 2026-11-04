@@ -9,11 +9,20 @@ export type ProjectPreviewState = {
   selecting: boolean;
   visible: boolean;
   error: string | null;
+  packageOperationId?: string;
+  selectionAvailable: boolean;
+  selectionUnavailableReason: string | null;
   metadata: Record<string, unknown>;
 };
 
 export type PreviewWindow = { projectId: string; documentEpoch: number; resumeRevision: number };
 export type PreviewRect = { x: number; y: number; width: number; height: number };
+export type PackagePreviewTarget = { taskId: string; operationId: string };
+export type PackagePreviewChoices = PackagePreviewTarget & {
+  kind: 'package_preview_choices'; conversationId: string; projectId: string; checkoutId: string; sourceDigest: string;
+  artifactId: string; artifactSha256: string; mode: 'web_output' | 'source_project';
+  entryPath: string; entryChoices: string[];
+};
 
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -30,8 +39,55 @@ export function projectPreviewState(value: unknown): ProjectPreviewState | null 
     documentGeneration: Number(source.documentGeneration), ready: source.ready === true && Number(source.documentGeneration) > 0,
     selecting: source.selecting === true && source.ready === true && Number(source.documentGeneration) > 0, visible: source.visible === true,
     error: typeof source.error === 'string' ? source.error : null,
+    ...(typeof source.packageOperationId === 'string' && source.packageOperationId ? { packageOperationId: source.packageOperationId } : {}),
+    selectionAvailable: source.selectionAvailable === true,
+    selectionUnavailableReason: typeof source.selectionUnavailableReason === 'string' ? source.selectionUnavailableReason : null,
     metadata: record(source.metadata),
   };
+}
+
+const identifier = (value: unknown): value is string => typeof value === 'string' && !!value && value.length <= 200;
+const sha256 = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+const uuid = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
+const entry = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 240 &&
+  value === value.trim() && !value.startsWith('/') && !value.includes('\\') && !/[\u0000-\u001f\u007f]/.test(value) &&
+  value.split('/').every(part => part !== '' && part !== '.' && part !== '..');
+
+/** A display candidate from the original bounded operation, never artifact authority. */
+export function packageOperationTarget(taskValue: unknown, operationValue: unknown): PackagePreviewTarget | null {
+  const task = record(taskValue), raw = record(task.raw), development = record(raw.developmentContext), operation = record(operationValue);
+  if (!identifier(task.id) || raw.kind !== 'assistant' || raw.actorId !== 'owner' || raw.spaceId !== 'private' || raw.origin != null ||
+      !identifier(development.projectId) || !identifier(development.checkoutId) || operation.tool !== 'project_execute' || operation.state !== 'receipt' ||
+      operation.readLimited === true || operation.bodyAvailable === false || !identifier(operation.operationId) || !identifier(operation.runId)) return null;
+  const receipt = record(operation.receipt), route = record(receipt.projectExecution), actual = record(receipt.executionReceipt);
+  if (receipt.code !== 'project_file_receipt' || receipt.status !== 'completed' || receipt.accepted !== true ||
+      route.authority !== 'native_host_operation' || route.intent !== 'freeze_package' || route.taskId !== task.id ||
+      route.operationId !== operation.operationId || route.runId !== operation.runId || route.projectId !== development.projectId || route.checkoutId !== development.checkoutId ||
+      actual.status !== 'completed' || actual.artifactReady !== true || actual.receiptReceived !== true || actual.operationId !== operation.operationId) return null;
+  return { taskId: task.id, operationId: operation.operationId };
+}
+
+/** Native-only choices are read as metadata; a later open still rechecks the original SQL and bytes. */
+export function packagePreviewChoices(value: unknown, expected: PackagePreviewTarget): PackagePreviewChoices | null {
+  const source = record(value);
+  if (source.kind !== 'package_preview_choices' || source.taskId !== expected.taskId || source.operationId !== expected.operationId ||
+      !identifier(source.projectId) || !identifier(source.checkoutId) || !identifier(source.conversationId) ||
+      !sha256(source.sourceDigest) || !uuid(source.artifactId) || !sha256(source.artifactSha256) ||
+      !['web_output', 'source_project'].includes(String(source.mode)) || typeof source.entryPath !== 'string' ||
+      !Array.isArray(source.entryChoices) || source.entryChoices.length > 2000 || !source.entryChoices.every(entry) ||
+      new Set(source.entryChoices).size !== source.entryChoices.length || 'sessionId' in source || 'ready' in source) return null;
+  if (source.mode === 'web_output' && (!entry(source.entryPath) || source.entryChoices.length !== 1 || source.entryChoices[0] !== source.entryPath)) return null;
+  if (source.mode === 'source_project' && source.entryPath !== '') return null;
+  return { kind: 'package_preview_choices', ...expected, conversationId: source.conversationId, projectId: source.projectId, checkoutId: source.checkoutId, sourceDigest: source.sourceDigest,
+    artifactId: source.artifactId, artifactSha256: source.artifactSha256, mode: source.mode as PackagePreviewChoices['mode'],
+    entryPath: source.entryPath, entryChoices: [...source.entryChoices] };
+}
+
+export function packagePreviewMatches(view: ProjectPreviewState | null, choices: PackagePreviewChoices, entryPath: string): boolean {
+  return !!view && view.taskId === choices.taskId && view.conversationId === choices.conversationId && view.packageOperationId === choices.operationId &&
+    view.metadata.origin === 'fixed_workspace_project_artifact' && view.metadata.artifactId === choices.artifactId &&
+    view.metadata.artifactSha256 === choices.artifactSha256 && view.metadata.projectId === choices.projectId && view.metadata.checkoutId === choices.checkoutId &&
+    view.metadata.sourceDigest === choices.sourceDigest && view.metadata.entryPath === entryPath && choices.entryChoices.includes(entryPath);
 }
 
 export function samePreviewWindow(original: PreviewWindow, current: PreviewWindow): boolean {

@@ -7597,9 +7597,7 @@ public final class TaskStore {
             if(phone&&previewRefs.length()>0)throw new SecurityException("元素引用只属于原私人项目聊天");
             for(int i=0;i<previewRefs.length();i++){
                 JSONObject ref=previewRefs.getJSONObject(i);if(!id.equals(ref.getString("taskId"))||!conversation.equals(ref.getString("conversationId")))throw new SecurityException("元素引用不能转移到另一任务或会话");
-                JSONObject actual=ownerPreviewSource(id,ref.getString("previewId"));
-                for(String key:new String[]{"projectId","checkoutId","sourceDigest","runId"})if(!java.util.Objects.equals(actual.opt(key),ref.opt(key)))throw new SecurityException("原预览来源身份已变化");
-                if(actual.getInt("epoch")!=ref.getInt("epoch"))throw new SecurityException("原预览产生执行的代次已变化");
+                requireOwnerPreviewReference(ref);
             }
             JSONObject immutableInput=new JSONObject().put("content",content).put("mode",mode).put("attachments",attachments);if(sourceRefs.length()>0)immutableInput.put("ownerSourceRefs",sourceRefs);if(previewRefs.length()>0)immutableInput.put("ownerPreviewRefs",previewRefs);
             String digest=capabilityFingerprint(immutableInput);JSONArray rows=task.optJSONArray("ownerInputs");if(rows==null)rows=new JSONArray();long characters=content.length();
@@ -7843,6 +7841,29 @@ public final class TaskStore {
             return new JSONObject(row.toString()).put("taskId",id).put("conversationId",task.getString("conversationId"));
         }
         throw new SecurityException("原任务没有这份已登记预览，请重新核对项目");
+    }
+    /** Original settled private package facts only. Renderer identity stays in its native Selection. */
+    public synchronized JSONObject ownerPackagePreviewSource(String id,String operationId)throws Exception {
+        JSONObject evidence=projectPackageEvidenceForOwner(id,operationId),task=required(id),selected=task.getJSONObject("developmentContext");
+        if(task.optString("conversationId").isEmpty()||!id.equals(evidence.getString("taskId"))||!operationId.equals(evidence.getString("operationId"))||!selected.getString("projectId").equals(evidence.getString("projectId"))||!selected.getString("checkoutId").equals(evidence.getString("checkoutId")))throw new SecurityException("原固定包不属于此私人项目任务");
+        String run=evidence.getString("runId");int epoch=evidence.getInt("coordinatorEpoch");
+        if(epoch<1)throw new SecurityException("原项目包的产生执行代次无效");
+        try(Cursor produced=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{id,run,Integer.toString(epoch)})){if(!produced.moveToFirst())throw new SecurityException("原项目包的产生执行不可核对");}
+        JSONObject artifact=evidence.getJSONObject("packageArtifact");
+        return new JSONObject(evidence.toString()).put("conversationId",task.getString("conversationId")).put("epoch",epoch)
+            .put("sourceKind","fixed_workspace_project_artifact").put("artifactId",artifact.getString("id"))
+            .put("artifactSha256",evidence.getString("archiveSha256")).put("packageOperationId",operationId);
+    }
+    /** SQL metadata check in the original message transaction; not a replacement for native Selection/source IO. */
+    public synchronized void requireOwnerPreviewReference(JSONObject supplied)throws Exception {
+        JSONObject ref=dev.pocketengine.features.local.preview.PreviewElementRef.checked(supplied);
+        boolean fixed="fixed_workspace_project_artifact".equals(dev.pocketengine.features.local.preview.PreviewElementRef.sourceKind(ref));
+        JSONObject actual=fixed?ownerPackagePreviewSource(ref.getString("taskId"),ref.getString("packageOperationId")):ownerPreviewSource(ref.getString("taskId"),ref.getString("previewId"));
+        for(String key:new String[]{"taskId","conversationId","projectId","checkoutId","sourceDigest","runId"})if(!java.util.Objects.equals(actual.opt(key),ref.opt(key)))throw new SecurityException("原预览来源身份已变化");
+        if(actual.getInt("epoch")!=ref.getInt("epoch"))throw new SecurityException("原预览产生执行的代次已变化");
+        if(fixed){
+            for(String key:new String[]{"sourceKind","artifactId","artifactSha256","packageOperationId"})if(!java.util.Objects.equals(actual.opt(key),ref.opt(key)))throw new SecurityException("元素引用不是这次原操作保存的固定项目包");
+        }else if(!actual.getString("previewId").equals(ref.getString("previewId")))throw new SecurityException("元素引用不是原登记预览");
     }
     /** Real receiving run and existing source-read grant. Producing run metadata is never a receiver grant. */
     public synchronized void requireOwnerPreviewRecipient(String id,String run,int epoch,String conversation,String project,String checkout,RunControl original)throws Exception {

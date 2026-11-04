@@ -10,16 +10,21 @@ import org.json.JSONObject;
 public final class PreviewElementRef {
     public static final int MAX_REFERENCES=4,MAX_SELECTOR=240,MAX_TEXT=1200,MAX_HTML=4000,MAX_TOTAL_CHARS=12000,MAX_UTF8_BYTES=65536;
     private static final Set<String> FIELDS=Set.of("referenceId","taskId","runId","epoch","conversationId","projectId","checkoutId","previewId","sourceDigest","documentId","documentGeneration","path","resourceSha256","selectorHint","text","htmlSnippet","bounds","truncated","untrusted","selectorIsSourceLocation");
+    private static final Set<String> PACKAGE_FIELDS=Set.of("sourceKind","artifactId","artifactSha256","packageOperationId");
+    private static final String ACTIVE_WORKSPACE="active_workspace_observation",FIXED_PACKAGE="fixed_workspace_project_artifact";
     private static final Set<String> OBSERVATION=Set.of("selectorHint","text","htmlSnippet","bounds","truncated");
     private static final String[] OBSERVATION_FIELDS={"selectorHint","text","htmlSnippet","bounds","truncated"};
     private PreviewElementRef(){}
 
     public static JSONObject checked(JSONObject supplied)throws Exception {return checked(new JSONArray().put(supplied)).getJSONObject(0);}
+    /** Shape discriminator only. Old values remain exactly twenty fields, including in saved fingerprints. */
+    public static String sourceKind(JSONObject supplied)throws Exception {JSONObject value=checked(supplied);return value.has("sourceKind")?value.getString("sourceKind"):ACTIVE_WORKSPACE;}
     public static JSONArray checked(JSONArray supplied)throws Exception {
         if(supplied==null||supplied.length()>MAX_REFERENCES)throw new IllegalArgumentException("每条输入最多保留4个预览元素引用");
         JSONArray result=new JSONArray();Set<String> ids=new HashSet<>();int chars=0;
         for(int i=0;i<supplied.length();i++){
-            Object value=supplied.opt(i);if(!(value instanceof JSONObject))throw invalid();JSONObject row=(JSONObject)value;keys(row,FIELDS);
+            Object value=supplied.opt(i);if(!(value instanceof JSONObject))throw invalid();JSONObject row=(JSONObject)value;boolean fixed=row.has("sourceKind");keys(row,FIELDS,fixed?PACKAGE_FIELDS:Set.of());
+            if(fixed&&!FIXED_PACKAGE.equals(row.opt("sourceKind")))throw invalid();
             JSONObject copy=new JSONObject();
             for(String key:new String[]{"referenceId","taskId","runId","conversationId","projectId","checkoutId","documentId"})copy.put(key,string(row,key,2048,false));
             if(!ids.add(copy.getString("referenceId")))throw new IllegalArgumentException("相同预览引用不能重复加入");
@@ -30,6 +35,10 @@ public final class PreviewElementRef {
             JSONObject bounded=checkedObservation(observation);for(String key:OBSERVATION_FIELDS)copy.put(key,bounded.get(key));
             if(!Boolean.TRUE.equals(row.opt("untrusted"))||!Boolean.FALSE.equals(row.opt("selectorIsSourceLocation")))throw invalid();
             copy.put("untrusted",true).put("selectorIsSourceLocation",false);
+            if(fixed){
+                String artifact=packageIdentity(row,"artifactId"),operation=packageIdentity(row,"packageOperationId"),sha=string(row,"artifactSha256",64,false);if(!sha.matches("[a-f0-9]{64}"))throw invalid();
+                copy.put("sourceKind",FIXED_PACKAGE).put("artifactId",artifact).put("artifactSha256",sha).put("packageOperationId",operation);
+            }
             chars+=bounded.getString("selectorHint").length()+bounded.getString("text").length()+bounded.getString("htmlSnippet").length();
             if(chars>MAX_TOTAL_CHARS)throw new IllegalArgumentException("预览引用片段总长度超过12000字符");result.put(copy);
         }
@@ -57,11 +66,13 @@ public final class PreviewElementRef {
         if(text.length()>maximum||text.indexOf('\0')>=0||!StandardCharsets.UTF_8.newEncoder().canEncode(text)||!empty&&(text.isEmpty()||text.codePoints().allMatch(Character::isWhitespace)||text.codePoints().anyMatch(c->c<32)))throw invalid();return text;
     }
     private static long integer(JSONObject row,String key,long maximum){Object raw=row.opt(key);if(!(raw instanceof Integer||raw instanceof Long))throw invalid();long number=((Number)raw).longValue();if(number<1||number>maximum)throw invalid();return number;}
+    private static String packageIdentity(JSONObject row,String key){String value=string(row,key,36,false);if(!value.matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}"))throw invalid();return value;}
     /** Same relative-path value rules as VersionedWorkspace.path; this value type owns no workspace IO. */
     private static String path(String value){
         if(value.startsWith("/")||value.startsWith("\\")||value.contains("\\")||value.contains(":"))throw invalid();
         for(String part:value.split("/",-1))if(part.isEmpty()||part.equals(".")||part.equals("..")||part.chars().anyMatch(c->c<32))throw invalid();return value;
     }
-    private static void keys(JSONObject row,Set<String> allowed){if(row==null||row.length()!=allowed.size())throw invalid();for(var keys=row.keys();keys.hasNext();)if(!allowed.contains(keys.next()))throw invalid();}
+    private static void keys(JSONObject row,Set<String> allowed){keys(row,allowed,Set.of());}
+    private static void keys(JSONObject row,Set<String> allowed,Set<String> extra){if(row==null||row.length()!=allowed.size()+extra.size())throw invalid();for(var keys=row.keys();keys.hasNext();){String key=keys.next();if(!allowed.contains(key)&&!extra.contains(key))throw invalid();}}
     private static IllegalArgumentException invalid(){return new IllegalArgumentException("预览引用不是当前约定的有限原文元数据");}
 }

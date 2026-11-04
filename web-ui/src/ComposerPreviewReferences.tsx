@@ -43,6 +43,7 @@ export function ComposerPreviewReferences({ composer, disabled }: { composer: Da
         {typeof ref.text === 'string' && <p className="pw-preview-quoted-text">{ref.text}</p>}
         <Accordion><AccordionItem id={`preview-source-${index}`} title="查看片段与来源" headingLevel={4}>
           <dl className="pw-preview-source-details"><dt>定位提示</dt><dd>{typeof ref.selectorHint === 'string' ? ref.selectorHint : '无可靠定位'}</dd><dt>采集版本</dt><dd>{String(ref.previewId || '')}</dd><dt>文档代次</dt><dd>{String(ref.documentGeneration ?? '')}</dd><dt>工作副本</dt><dd>{String(ref.checkoutId || '')}</dd><dt>源码摘要</dt><dd>{String(ref.sourceDigest || '')}</dd></dl>
+          {ref.sourceKind === 'fixed_workspace_project_artifact' && <dl className="pw-preview-source-details" aria-label="固定包引用来源"><dt>来源</dt><dd>原任务固定项目包</dd><dt>固定版本</dt><dd>{String(ref.artifactId || '')}</dd><dt>归档摘要</dt><dd>{String(ref.artifactSha256 || '')}</dd><dt>原保存操作</dt><dd>{String(ref.packageOperationId || '')}</dd></dl>}
           {typeof ref.htmlSnippet === 'string' && <pre aria-label={`元素片段 ${index + 1}`}>{ref.htmlSnippet}</pre>}
           {Object.values(ref.truncated || {}).some(value => value === true) && <p className="pw-muted">这处片段已按长度限制截取。</p>}
         </AccordionItem></Accordion>

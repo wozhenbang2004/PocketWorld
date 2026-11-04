@@ -25,17 +25,26 @@ public final class ProjectPreviewReferences implements AutoCloseable {
     public ProjectPreviewReferences(TaskStore tasks,LocalModule local){this.tasks=Objects.requireNonNull(tasks);this.local=Objects.requireNonNull(local);}
 
     public JSONObject register(String taskId,ProjectPreviewDocument.Selection selection)throws Exception {
+        return registerOriginal(taskId,null,selection);
+    }
+    public JSONObject register(String taskId,String packageOperationId,ProjectPreviewDocument.Selection selection)throws Exception {
+        if(packageOperationId==null||packageOperationId.isEmpty())throw new SecurityException("缺少原固定包操作");
+        return registerOriginal(taskId,packageOperationId,selection);
+    }
+    private JSONObject registerOriginal(String taskId,String packageOperationId,ProjectPreviewDocument.Selection selection)throws Exception {
         unlocked();Objects.requireNonNull(selection);open();pruneReleasedDocuments();selection.requireCurrent();
         ProjectPreviewBundle.Verified bundle=selection.bundle();
-        JSONObject source=tasks.ownerPreviewSource(taskId,bundle.identity);requireBundle(source,bundle);
-        local.requireProjectPreviewCurrent(bundle);selection.requireCurrent();
-        requireSameSource(source,tasks.ownerPreviewSource(taskId,bundle.identity));
+        if((packageOperationId==null)!=(bundle.artifactId==null))throw new SecurityException("活动预览与原固定包入口不能互换");
+        JSONObject source=source(taskId,packageOperationId,bundle.identity);requireBundle(source,bundle);
+        requireLocalCurrent(bundle,source);selection.requireCurrent();
+        requireSameSource(source,source(taskId,packageOperationId,bundle.identity));
         JSONObject value=selection.snapshot();
         value.put("referenceId",UUID.randomUUID().toString()).put("taskId",source.getString("taskId"))
                 .put("runId",source.getString("runId")).put("epoch",source.get("epoch"))
                 .put("conversationId",source.getString("conversationId")).put("projectId",bundle.projectId)
                 .put("checkoutId",bundle.checkoutId).put("previewId",bundle.identity).put("sourceDigest",bundle.sourceDigest)
                 .put("untrusted",true).put("selectorIsSourceLocation",false);
+        if(packageOperationId!=null)for(String key:new String[]{"sourceKind","artifactId","artifactSha256","packageOperationId"})value.put(key,source.get(key));
         JSONObject reference=PreviewElementRef.checked(value);String fingerprint=fingerprint(reference);
         selection.requireCurrent();
         synchronized(this){openLocked();while(selections.size()>=MAX_SELECTIONS)selections.remove(selections.keySet().iterator().next());selections.put(reference.getString("referenceId"),new Entry(selection,reference,fingerprint));}
@@ -59,9 +68,9 @@ public final class ProjectPreviewReferences implements AutoCloseable {
             ProjectPreviewBundle.Verified bundle=entry.selection.bundle();
             try{
                 entry.selection.requireCurrent();JSONObject ref=entry.reference;
-                JSONObject before=tasks.ownerPreviewSource(ref.getString("taskId"),ref.getString("previewId"));requireReferenceSource(ref,before);requireBundle(before,bundle);
-                local.requireProjectPreviewCurrent(bundle);entry.selection.requireCurrent();
-                JSONObject after=tasks.ownerPreviewSource(ref.getString("taskId"),ref.getString("previewId"));requireSameSource(before,after);requireReferenceSource(ref,after);
+                JSONObject before=source(ref);requireReferenceSource(ref,before);requireBundle(before,bundle);
+                requireLocalCurrent(bundle,before);entry.selection.requireCurrent();
+                JSONObject after=source(ref);requireSameSource(before,after);requireReferenceSource(ref,after);
                 requireRetained(entry);
             }catch(Exception unavailable){retireBundle(bundle);throw unavailable;}
         }
@@ -115,12 +124,25 @@ public final class ProjectPreviewReferences implements AutoCloseable {
         for(Entry entry:prior)try{entry.selection.requireCurrent();}catch(SecurityException unavailable){synchronized(this){selections.remove(entry.reference.optString("referenceId"),entry);}}
     }
     private void retireBundle(ProjectPreviewBundle.Verified bundle){synchronized(this){selections.values().removeIf(entry->entry.selection.bundle()==bundle);}}
+    private JSONObject source(String task,String operation,String preview)throws Exception {return operation==null?tasks.ownerPreviewSource(task,preview):tasks.ownerPackagePreviewSource(task,operation);}
+    private JSONObject source(JSONObject ref)throws Exception {return source(ref.getString("taskId"),fixed(ref)?ref.getString("packageOperationId"):null,ref.getString("previewId"));}
+    private static boolean fixed(JSONObject source){return "fixed_workspace_project_artifact".equals(source.optString("sourceKind"));}
+    private void requireLocalCurrent(ProjectPreviewBundle.Verified bundle,JSONObject source)throws Exception {
+        if(fixed(source))local.requireProjectPackagePreviewCurrent(bundle,source);else local.requireProjectPreviewCurrent(bundle);
+    }
     private static void requireBundle(JSONObject source,ProjectPreviewBundle.Verified bundle)throws Exception {
-        if(!bundle.identity.equals(source.getString("previewId"))||!bundle.checkoutId.equals(source.getString("checkoutId"))||!bundle.projectId.equals(source.getString("projectId"))||!bundle.sourceDigest.equals(source.getString("sourceDigest"))||bundle.artifactId!=null)throw new SecurityException("原预览资源身份不一致");
+        if(!bundle.checkoutId.equals(source.getString("checkoutId"))||!bundle.projectId.equals(source.getString("projectId"))||!bundle.sourceDigest.equals(source.getString("sourceDigest")))throw new SecurityException("原预览资源身份不一致");
+        if(fixed(source)){
+            if(bundle.artifactId==null||!bundle.artifactId.equals(source.getString("artifactId"))||!bundle.artifactSha256.equals(source.getString("artifactSha256")))throw new SecurityException("原固定包预览不是这个操作保存的字节");
+        }else if(bundle.artifactId!=null||!bundle.identity.equals(source.getString("previewId")))throw new SecurityException("原活动预览资源身份不一致");
     }
     private static void requireReferenceSource(JSONObject ref,JSONObject source)throws Exception {
-        for(String key:new String[]{"taskId","conversationId","runId","projectId","checkoutId","previewId","sourceDigest"})if(!Objects.equals(ref.get(key),source.get(key)))throw new SecurityException("原元素来源的产生执行或项目已变化");
+        if(fixed(ref)!=fixed(source))throw new SecurityException("原元素来源种类已变化");
+        for(String key:new String[]{"taskId","conversationId","runId","projectId","checkoutId","sourceDigest"})if(!Objects.equals(ref.get(key),source.get(key)))throw new SecurityException("原元素来源的产生执行或项目已变化");
         if(positiveInt(ref,"epoch")!=positiveInt(source,"epoch"))throw new SecurityException("原元素来源的产生执行代次已变化");
+        if(fixed(ref)){
+            for(String key:new String[]{"sourceKind","artifactId","artifactSha256","packageOperationId"})if(!Objects.equals(ref.get(key),source.get(key)))throw new SecurityException("原固定包来源操作或字节已变化");
+        }else if(!ref.getString("previewId").equals(source.getString("previewId")))throw new SecurityException("原活动预览身份已变化");
     }
     private static void requireSameSource(JSONObject before,JSONObject after)throws Exception {requireReferenceSource(before,after);}
     private static void currentControl(RunControl control)throws Exception {if(control==null||control.isCancelled()||control.isPaused())throw new SecurityException("原元素接收执行已停止或暂停");control.check();}

@@ -19,7 +19,8 @@ internal class PocketWebProjectPreview(
 ) {
     companion object {
         val COMMANDS = setOf("projects.preview", "projects.preview.mode", "projects.preview.viewport",
-            "projects.preview.reload", "projects.preview.close", "projects.preview.return", "composer.preview.remove")
+            "projects.preview.reload", "projects.preview.close", "projects.preview.return", "composer.preview.remove",
+            "projects.package.preview.inspect", "projects.package.preview.open")
         private fun fields(args: JSONObject, names: Set<String>) {
             require(args.keys().asSequence().toSet() == names) { "预览操作参数不完整或包含未接入字段" }
         }
@@ -44,6 +45,8 @@ internal class PocketWebProjectPreview(
         var target: PocketWorldController.PreviewDraftTarget? = null
         var window: PocketWebWindowTicket? = null
         var viewport: JSONObject? = null
+        var selectionAvailable = original.selectionAvailable
+        var selectionUnavailableReason = original.selectionUnavailableReason
     }
     private var session: Session? = null
     private var closed = false
@@ -58,10 +61,36 @@ internal class PocketWebProjectPreview(
             .put("sessionId", selected.id).put("documentGeneration", selected.document.generation())
             .put("ready", selected.document.ready()).put("selecting", selected.web.isSelectionEnabled)
             .put("visible", selected.visible).put("error", selected.error ?: JSONObject.NULL)
+            .put("selectionAvailable", selected.selectionAvailable)
+            .put("selectionUnavailableReason", selected.selectionUnavailableReason ?: JSONObject.NULL)
+            .also { if (selected.original.packageOperationId != null) it.put("packageOperationId", selected.original.packageOperationId) }
     }
 
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
         check(!closed && foreground && controller.webPrivateOwnerVisible()) { "原私人预览窗口已关闭" }
+        if (action == "projects.package.preview.inspect") {
+            fields(args, setOf("taskId", "operationId")); val task = text(args, "taskId"); val operation = text(args, "operationId")
+            val window = captureWindow(); val request = ++opening
+            controller.inspectProjectPackagePreview(task, operation, { !closed && foreground && opening == request && acceptsWindow(window) }) { choices, error ->
+                if (closed || opening != request || !acceptsWindow(window) || !controller.webPrivateOwnerVisible()) done(null, "原项目包窗口已变化，未接收迟到的入口清单")
+                else done(choices, error)
+                changed()
+            }
+            return
+        }
+        if (action == "projects.package.preview.open") {
+            fields(args, setOf("taskId", "operationId", "entryPath")); val task = text(args, "taskId"); val operation = text(args, "operationId")
+            val entry = args.opt("entryPath") as? String ?: error("原项目包入口必须为路径文字")
+            dev.pocketengine.features.workspace.VersionedWorkspace.path(entry)
+            val window = captureWindow(); val request = ++opening
+            controller.openRegisteredProjectPackagePreview(task, operation, entry, { !closed && foreground && opening == request && acceptsWindow(window) }) { selected, error ->
+                if (selected == null || error != null) { done(null, error ?: "原固定包预览未读取"); return@openRegisteredProjectPackagePreview }
+                if (closed || opening != request || !acceptsWindow(window) || !controller.webPrivateOwnerVisible()) { done(null, "原预览窗口已变化"); return@openRegisteredProjectPackagePreview }
+                try { show(selected); done(snapshot(), null) } catch (failure: Exception) { done(null, failure.message ?: "原固定包预览未能打开") }
+                changed()
+            }
+            return
+        }
         if (action == "projects.preview") {
             fields(args, setOf("projectId")); val project = text(args, "projectId")
             val window = captureWindow(); val request = ++opening
@@ -85,13 +114,25 @@ internal class PocketWebProjectPreview(
         when (action) {
             "projects.preview.mode" -> {
                 fields(args, setOf("sessionId", "enabled")); val enabled = boolean(args, "enabled")
-                selected.selectionEpoch++; selected.target = null; selected.window = null
+                disableSelection(selected)
                 if (enabled) {
                     require(selected.visible && selected.document.ready()) { "请等待原预览显示完成再选择元素" }
                     val target = controller.captureProjectPreviewDraft(selected.original.conversationId)
-                    selected.web.setSelectionEnabled(true)
-                    selected.target = target; selected.window = captureWindow(); selected.error = null
-                } else selected.web.setSelectionEnabled(false)
+                    val window = captureWindow(); val epoch = selected.selectionEpoch; val generation = selected.document.generation()
+                    fun current() = !closed && foreground && session === selected && selected.selectionEpoch == epoch &&
+                        selected.visible && selected.document.ready() && selected.document.generation() == generation && acceptsWindow(window)
+                    controller.checkProjectPreviewSelection(selected.original, ::current) { available, reason ->
+                        if (!current()) { done(null, "原文档或选择窗口已变化，未启用迟到选择"); return@checkProjectPreviewSelection }
+                        selected.selectionAvailable = available; selected.selectionUnavailableReason = reason
+                        if (!available) { selected.error = reason; done(snapshot(), reason ?: "原预览来源暂不可核对") }
+                        else try {
+                            selected.web.setSelectionEnabled(true); selected.target = target; selected.window = window; selected.error = null
+                            done(snapshot(), null)
+                        } catch (failure: Exception) { selected.error = failure.message; done(null, failure.message ?: "原文档尚不能选择") }
+                        changed()
+                    }
+                    return
+                }
                 done(snapshot(), null)
             }
             "projects.preview.viewport" -> {
@@ -105,7 +146,8 @@ internal class PocketWebProjectPreview(
                 layout(selected); done(snapshot(), null)
             }
             "projects.preview.reload" -> {
-                fields(args, setOf("sessionId")); disableSelection(selected); selected.error = null; selected.web.reload(); done(snapshot(), null)
+                fields(args, setOf("sessionId")); disableSelection(selected); selected.error = null; selected.web.reload()
+                refreshSelectionAvailability(selected); done(snapshot(), null)
             }
             "projects.preview.return" -> {
                 fields(args, setOf("sessionId")); hide(selected)
@@ -128,10 +170,10 @@ internal class PocketWebProjectPreview(
         val web = ProjectBundleWebView(controller.webPresentationActivity(), document, object : ProjectBundleWebView.Events {
             override fun error(message: String) {
                 if (session === selected) { selected.error = message.take(1600); changed() }
-                controller.recordProjectPreviewConsole(original.bundle, original.taskId, "RENDER_ERROR", message, original.bundle.entryUrl, 0)
+                if (original.packageOperationId == null) controller.recordProjectPreviewConsole(original.bundle, original.taskId, "RENDER_ERROR", message, original.bundle.entryUrl, 0)
             }
             override fun console(level: String, text: String, source: String, line: Int) {
-                controller.recordProjectPreviewConsole(original.bundle, original.taskId, level, text, source, line)
+                if (original.packageOperationId == null) controller.recordProjectPreviewConsole(original.bundle, original.taskId, level, text, source, line)
             }
         }, object : ProjectBundleWebView.SelectionEvents {
             override fun changed() { if (session === selected) this@PocketWebProjectPreview.changed() }
@@ -149,12 +191,24 @@ internal class PocketWebProjectPreview(
         // End only the mode. The captured native Selection remains live until document/source changes.
         selected.web.setSelectionEnabled(false); selected.target = null; selected.window = null
         try {
-            controller.stageProjectPreviewSelection(selected.original.taskId, target, selection, ::current) { _, error ->
-                if (session === selected && selected.selectionEpoch == epoch) { selected.error = error; changed() }
+            controller.stageProjectPreviewSelection(selected.original.taskId, target, selection, ::current, selected.original.packageOperationId) { receipt, error ->
+                if (session === selected && selected.selectionEpoch == epoch) {
+                    selected.error = error
+                    if (receipt?.opt("selectionAvailable") == false) { selected.selectionAvailable = false; selected.selectionUnavailableReason = error ?: "原选择来源暂不可核对" }
+                    changed()
+                }
             }
         } catch (failure: Exception) { selected.error = failure.message ?: "原元素选择未加入草稿"; changed() }
     }
 
+    private fun refreshSelectionAvailability(selected: Session) {
+        selected.selectionAvailable = false; selected.selectionUnavailableReason = "正在重新核对原预览来源"
+        val window = captureWindow(); val epoch = selected.selectionEpoch
+        fun current() = !closed && foreground && session === selected && selected.selectionEpoch == epoch && acceptsWindow(window)
+        try { controller.checkProjectPreviewSelection(selected.original, ::current) { available, reason ->
+            if (current()) { selected.selectionAvailable = available; selected.selectionUnavailableReason = reason; changed() }
+        } } catch (failure: Exception) { selected.selectionUnavailableReason = failure.message ?: "原预览来源暂不可核对" }
+    }
     private fun disableSelection(selected: Session) {
         selected.selectionEpoch++; selected.target = null; selected.window = null; selected.web.setSelectionEnabled(false)
     }

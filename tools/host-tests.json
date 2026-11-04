@@ -1656,11 +1656,15 @@
       "dev.pocketengine.features.local.preview.ProjectPreviewDocumentTest",
       "dev.pocketengine.features.assistant.OwnerComposerPreviewRefsTest",
       "dev.pocketengine.ui.ChatInputRulesTest",
-      "dev.pocketengine.store.OwnerInputQueueTest"
+      "dev.pocketengine.store.OwnerInputQueueTest",
+      "dev.pocketengine.features.local.project.ProjectPackageNativeDeliveryJourneyTest"
     ],
-    "helpers": [],
+    "helpers": [
+      "dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest"
+    ],
     "robolectric": true,
-    "description": "Original immutable active-workspace preview selection: bounded value, document lifetime, independent composer CAS, original SQL carrier and receiver/source checks before MAIN and SUMMARY requests. Native fixture uses real TaskStore, LocalModule, WorkspaceModule and original request projection. Pure value/queue checks alone do not prove Android touch interception, WebView layout, SQLite, device or real model/file-edit acceptance. Live-service preview, packaged artifacts and ended-project continuation remain separate original requirements."
+    "description": "Original immutable active-workspace and settled private fixed-package preview selection: bounded values, native document lifetime, independent composer CAS, original SQL carrier, exact package operation/producing run/archive identity and receiving run/source checks before MAIN and SUMMARY. Real TaskStore/Local/Workspace/request fixtures; package SQL fixtures reuse the original managed host without npm. Native JNI/SDK dependencies required. Pure value or Web checks do not prove Android touch/WebView, SQL, model/file-CAS or device acceptance. Live-service selection and explicit ended-project continuation remain separate original requirements.",
+    "native": true
   },
   "bedrock-sts-session": {
     "class": "dev.pocketengine.runtime.providers.bedrock.BedrockSigV4Test",

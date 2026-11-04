@@ -10,6 +10,7 @@ public class PreviewElementRefTest {
     static JSONObject reference(String id)throws Exception {
         JSONObject value=observation().put("referenceId",id).put("taskId","original-task").put("runId","original-run").put("epoch",3).put("conversationId","original-conversation").put("projectId","original-project").put("checkoutId","original-checkout").put("previewId","a".repeat(64)).put("sourceDigest","b".repeat(64)).put("documentId","native-document").put("documentGeneration",5).put("path","dist/index.html").put("resourceSha256","c".repeat(64)).put("untrusted",true).put("selectorIsSourceLocation",false);return value;
     }
+    static JSONObject fixedReference(String id)throws Exception {return reference(id).put("sourceKind","fixed_workspace_project_artifact").put("artifactId","6948143a-a5bf-48f8-9f76-e290c7ec0265").put("artifactSha256","d".repeat(64)).put("packageOperationId","2ea1dd8c-749d-4ed0-a7bf-cc86ef8f0876");}
     interface Attempt {void run()throws Exception;}
     static void rejected(Attempt attempt)throws Exception {try{attempt.run();fail("invalid reference accepted");}catch(IllegalArgumentException|SecurityException expected){}}
     @Test public void canonicalCopyPreservesOriginalIdentityAndOwnsNestedValues()throws Exception {
@@ -51,6 +52,45 @@ public class PreviewElementRefTest {
     }
     @Test public void byteBudgetIncludesIdentityAndEscapedMetadata()throws Exception {
         JSONObject one=reference("one"),two=reference("two");for(String key:new String[]{"taskId","runId","conversationId","projectId","checkoutId","documentId"}){one.put(key,"中".repeat(2048));two.put(key,"中".repeat(2048));}
+        PreviewElementRef.checked(one);rejected(()->PreviewElementRef.checked(new JSONArray().put(one).put(two)));
+    }
+    @Test public void legacyKindLookupPreservesTheOriginalTwentyFieldValue()throws Exception {
+        JSONObject legacy=PreviewElementRef.checked(reference("legacy"));String saved=legacy.toString();
+        assertEquals(20,legacy.length());assertEquals("active_workspace_observation",PreviewElementRef.sourceKind(legacy));assertFalse(legacy.has("sourceKind"));
+        assertEquals(saved,legacy.toString());assertEquals(saved,PreviewElementRef.checked(new JSONObject(saved)).toString());
+        rejected(()->PreviewElementRef.sourceKind(reference("legacy").put("sourceKind","active_workspace_observation")));
+    }
+    @Test public void fixedPackageKeepsItsProducingTupleAndOriginalArchiveIdentity()throws Exception {
+        JSONObject input=fixedReference("fixed").put("runId","original-producing-run").put("epoch",9),copy=PreviewElementRef.checked(input);
+        assertEquals(24,copy.length());assertEquals("fixed_workspace_project_artifact",PreviewElementRef.sourceKind(copy));
+        assertEquals("original-producing-run",copy.getString("runId"));assertEquals(9,copy.getInt("epoch"));
+        assertEquals("6948143a-a5bf-48f8-9f76-e290c7ec0265",copy.getString("artifactId"));assertEquals("2ea1dd8c-749d-4ed0-a7bf-cc86ef8f0876",copy.getString("packageOperationId"));assertEquals("d".repeat(64),copy.getString("artifactSha256"));
+        input.put("artifactId","b78a9aa2-1742-4796-8dcb-0edc7494733d");input.getJSONObject("bounds").put("width",999);input.getJSONObject("truncated").put("text",true);
+        assertEquals("6948143a-a5bf-48f8-9f76-e290c7ec0265",copy.getString("artifactId"));assertEquals(40d,copy.getJSONObject("bounds").getDouble("width"),0);assertFalse(copy.getJSONObject("truncated").getBoolean("text"));
+        assertEquals(copy.toString(),PreviewElementRef.checked(new JSONObject(copy.toString())).toString());
+    }
+    @Test public void fixedPackageRequiresEveryExactFieldAndNeverMixesSourceKinds()throws Exception {
+        for(String key:new String[]{"sourceKind","artifactId","artifactSha256","packageOperationId"}){JSONObject missing=fixedReference("fixed");missing.remove(key);rejected(()->PreviewElementRef.checked(missing));}
+        for(Object kind:new Object[]{"active_workspace_observation","package",true,JSONObject.NULL})rejected(()->PreviewElementRef.checked(fixedReference("fixed").put("sourceKind",kind)));
+        rejected(()->PreviewElementRef.checked(reference("legacy").put("artifactId","6948143a-a5bf-48f8-9f76-e290c7ec0265")));
+        rejected(()->PreviewElementRef.checked(fixedReference("fixed").put("packageRunId","replacement")));
+        JSONObject swapped=fixedReference("fixed");swapped.remove("artifactSha256");swapped.put("archiveSha256","d".repeat(64));rejected(()->PreviewElementRef.sourceKind(swapped));
+    }
+    @Test public void fixedPackageIdentityNeverCoercesOrAcceptsMalformedUuidAndSha()throws Exception {
+        for(String key:new String[]{"artifactId","packageOperationId"})for(Object value:new Object[]{"","one","-".repeat(36),"6948143A-A5BF-48F8-9F76-E290C7EC0265",3,JSONObject.NULL})rejected(()->PreviewElementRef.checked(fixedReference("fixed").put(key,value)));
+        for(Object sha:new Object[]{"d".repeat(63),"D".repeat(64),"x".repeat(64),0,JSONObject.NULL})rejected(()->PreviewElementRef.checked(fixedReference("fixed").put("artifactSha256",sha)));
+    }
+    @Test public void activeAndFixedReferencesShareOriginalCollectionAndContentCaps()throws Exception {
+        JSONArray mixed=new JSONArray().put(reference("active")).put(fixedReference("fixed"));JSONArray checked=PreviewElementRef.checked(mixed);
+        assertEquals(20,checked.getJSONObject(0).length());assertEquals(24,checked.getJSONObject(1).length());
+        rejected(()->PreviewElementRef.checked(new JSONArray().put(reference("same")).put(fixedReference("same"))));
+        JSONArray tooMany=new JSONArray();for(int i=0;i<5;i++)tooMany.put(fixedReference("fixed-"+i));rejected(()->PreviewElementRef.checked(tooMany));
+        JSONArray exact=new JSONArray();for(int i=0;i<3;i++)exact.put(fixedReference("fixed-"+i).put("selectorHint","").put("text","").put("htmlSnippet","x".repeat(4000)));assertEquals(3,PreviewElementRef.checked(exact).length());
+        exact.put(reference("active").put("selectorHint","").put("text","x").put("htmlSnippet",""));rejected(()->PreviewElementRef.checked(exact));
+        rejected(()->PreviewElementRef.checked(fixedReference("fixed").put("text","x".repeat(1201))));rejected(()->PreviewElementRef.checked(fixedReference("fixed").put("path","../other.html")));
+    }
+    @Test public void fixedPackageMetadataRemainsInsideTheOriginalUtf8Budget()throws Exception {
+        JSONObject one=fixedReference("one"),two=fixedReference("two");for(String key:new String[]{"taskId","runId","conversationId","projectId","checkoutId","documentId"}){one.put(key,"中".repeat(2048));two.put(key,"中".repeat(2048));}
         PreviewElementRef.checked(one);rejected(()->PreviewElementRef.checked(new JSONArray().put(one).put(two)));
     }
 }
