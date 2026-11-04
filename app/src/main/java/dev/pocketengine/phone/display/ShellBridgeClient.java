@@ -13,6 +13,31 @@ import org.json.JSONObject;
 final class ShellBridgeClient {
     private final String socketName,token;
     ShellBridgeClient(String socketName,String token){this.socketName=socketName;this.token=token;}
+    /** Dedicated read-only wire lane: viewer polling never runs action gates or changes pause state. */
+    JSONObject previewFrame(JSONObject input,RunControl original,
+            dev.pocketengine.phone.observation.NativePhoneEntry.Admission currentOwner)throws Exception {
+        if(original==null||currentOwner==null)throw new SecurityException("观看需要原生主人窗口和原执行");
+        LocalSocket socket=new LocalSocket();Runnable cancel=()->{try{socket.close();}catch(Exception ignored){}};
+        original.onCancel(cancel);
+        try{
+            previewCurrent(original,currentOwner);
+            socket.connect(new LocalSocketAddress(socketName,LocalSocketAddress.Namespace.ABSTRACT));socket.setSoTimeout(3000);
+            int uid=socket.getPeerCredentials().getUid();if(uid!=0&&uid!=2000)throw new SecurityException("后台助手身份无效");
+            String id=UUID.randomUUID().toString();
+            JSONObject request=new JSONObject(input.toString()).put("protocol",1).put("requestId",id).put("token",token).put("command","preview_frame");
+            previewCurrent(original,currentOwner);
+            DisplayWire.write(new DataOutputStream(socket.getOutputStream()),request.toString(),32*1024);
+            JSONObject result=new JSONObject(DisplayWire.read(new DataInputStream(socket.getInputStream()),2*1024*1024));
+            previewCurrent(original,currentOwner);
+            if(!id.equals(result.optString("requestId")))throw new SecurityException("原画面请求回执不匹配");
+            return result;
+        }finally{original.removeCancelAction(cancel);cancel.run();}
+    }
+    private static void previewCurrent(RunControl original,dev.pocketengine.phone.observation.NativePhoneEntry.Admission currentOwner)throws Exception {
+        if(original.isCancelled()||Thread.currentThread().isInterrupted())throw new InterruptedException("原观看执行已停止");
+        currentOwner.check();
+        if(original.isCancelled()||Thread.currentThread().isInterrupted())throw new InterruptedException("原观看执行已停止");
+    }
     JSONObject call(String command,JSONObject input,RunControl control)throws Exception {
         return call(command,input,control,control==null?-1:control.pauseRevision());
     }
