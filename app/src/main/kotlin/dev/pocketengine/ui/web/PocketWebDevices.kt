@@ -34,7 +34,8 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         val COMMANDS = setOf("devices.snapshot", "devices.createInvitation", "devices.inspectInvitation", "devices.reviewPairing", "devices.advancePairing", "devices.reviewPeerGrant",
             "devices.reviewGrant", "devices.reviewConnection", "devices.reviewRelay", "devices.reviewAction", "devices.reviewGoal", "devices.reviewResult", "devices.reviewApproval",
             "devices.confirm", "devices.reject", "devices.discard", "devices.recoveryAddresses", "devices.openRecovery", "devices.recoverPairing", "devices.reviewAbandonment", "devices.openTask", "devices.readTask", "devices.reviewResumeRequest",
-            "devices.openHistory", "devices.queryHistory", "devices.stopHistory")
+            "devices.openHistory", "devices.queryHistory", "devices.stopHistory",
+            "devices.desktop.open", "devices.desktop.negotiate", "devices.desktop.status", "devices.desktop.control", "devices.desktop.input", "devices.desktop.close")
         private fun fields(value: JSONObject, vararg allowed: String) = PocketWebGroupReviews.fields(value, *allowed)
         private fun text(value: JSONObject, key: String, max: Int = 240) = PocketWebGroupReviews.text(value, key, max)
         private fun integer(value: JSONObject, key: String, min: Long, max: Long) = PocketWebGroupReviews.integer(value, key, min, max)
@@ -50,6 +51,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         // race a new review on this same native Window and close its resources.
         generation.incrementAndGet(); review = null; latest = JSONObject()
         runCatching { window()?.discardReview() }
+        runCatching { window()?.closeDesktop() }
     }
     @Synchronized private fun discard(original: Host.Window, handle: String = ""): Boolean {
         if (handle.isNotBlank() && review?.handle != handle) return false
@@ -121,6 +123,11 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
         val original = window() ?: error("原设备窗口已关闭，请重新进入")
         current(original, generation.get())
+        if (action == "devices.desktop.close") {
+            fields(args, "sessionId")
+            val value = original.closeDesktop(text(args, "sessionId", 128))
+            done(JSONObject().put("value", value).put("snapshot", JSONObject.NULL), null); return
+        }
         if (action == "devices.discard") {
             fields(args, "viewHandle")
             val handle = if (args.has("viewHandle")) text(args, "viewHandle") else ""
@@ -144,6 +151,29 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                 current(original, epoch)
                 val before by lazy { captureSnapshot(original, ids) }
                 value = when (action) {
+                    "devices.desktop.open" -> {
+                        fields(args, "deviceId", "grantId", "resourceBinding", "target")
+                        val id = text(args, "deviceId", 128); peer(before, id)
+                        original.openDesktop(id, text(args, "grantId", 128), args.getJSONObject("resourceBinding"), args.optJSONObject("target"))
+                    }
+                    "devices.desktop.negotiate" -> {
+                        fields(args, "sessionId", "offer")
+                        original.desktopCommand(text(args, "sessionId", 128), "negotiate", JSONObject().put("offer", args.getJSONObject("offer")))
+                    }
+                    "devices.desktop.status", "devices.desktop.close" -> {
+                        fields(args, "sessionId")
+                        original.desktopCommand(text(args, "sessionId", 128), action.substringAfterLast('.'), JSONObject())
+                    }
+                    "devices.desktop.control" -> {
+                        fields(args, "sessionId", "action", "expectedRevision")
+                        val control = text(args, "action", 16); require(control in setOf("take", "release"))
+                        original.desktopCommand(text(args, "sessionId", 128), control, JSONObject().put("expectedRevision", integer(args, "expectedRevision", 0, 10000)))
+                    }
+                    "devices.desktop.input" -> {
+                        fields(args, "sessionId", "controlLease", "frameRef", "input")
+                        original.desktopCommand(text(args, "sessionId", 128), "input", JSONObject().put("controlLease", args.getJSONObject("controlLease"))
+                            .put("frameRef", args.getJSONObject("frameRef")).put("input", args.getJSONObject("input")))
+                    }
                     "devices.snapshot" -> { fields(args, "deviceId"); if (args.has("deviceId")) { val id = text(args, "deviceId"); peer(before, id); original.refreshPeerFacts(id) }; JSONObject().put("readOnly", true) }
                     "devices.createInvitation" -> {
                         fields(args, "address"); val address = text(args, "address", 512)

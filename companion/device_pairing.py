@@ -29,13 +29,14 @@ PERSISTED_GRANT_METHODS = frozenset({"device.describe", "tool.invoke", "operatio
 # The immediately preceding phone-task profile already supported these 16
 # methods. Only an original SQL receipt may restore them, never an old wire.
 PERSISTED_PHONE_TASK_GRANT_PROFILE = "pwp1_953641fabc7e4316996f69c2c3ac9b74db1a30f3750ee83adbfd95768730ae8b"
+PERSISTED_PRE_VIEWER_GRANT_PROFILE = "pwp1_cdf06c78390cb32246ba396f9ab45ca88a7d6964591fa25f69ccd605d0c8b2a6"
 PERSISTED_PHONE_TASK_GRANT_METHODS = frozenset({"device.describe", "tool.invoke", "operation.get", "operation.cancel", "task.submitGoal",
                                                 "task.get", "task.events", "task.respond", "task.pause", "task.cancel", "task.acquireControl",
                                                 "artifact.describe", "artifact.readChunk", "task.answerQuestion", "task.steer", "task.requestResume"})
 
 
 def _persisted_grant_epoch_current(known, receipt, grant):
-    return (receipt.get("protocolProfile") != PERSISTED_PHONE_TASK_GRANT_PROFILE
+    return (receipt.get("protocolProfile") not in (PERSISTED_PHONE_TASK_GRANT_PROFILE, PERSISTED_PRE_VIEWER_GRANT_PROFILE)
             or known["authorizationEpoch"] == grant["authorizationEpoch"])
 
 
@@ -1426,7 +1427,7 @@ class PairingCoordinator:
         receipt = self.store.outgoing_grant(target.device_id, grant_id)
         _require(known is not None and not known["revoked"] and known["fingerprint"] == target.certificate_fingerprint and receipt is not None,
                  "No paired persisted outgoing route")
-        _require(receipt.get("protocolProfile") in (protocol.PROFILE, PERSISTED_GRANT_PROFILE, PERSISTED_PHONE_TASK_GRANT_PROFILE), "Unsupported persisted grant profile")
+        _require(receipt.get("protocolProfile") in (protocol.PROFILE, PERSISTED_GRANT_PROFILE, PERSISTED_PHONE_TASK_GRANT_PROFILE, PERSISTED_PRE_VIEWER_GRANT_PROFILE), "Unsupported persisted grant profile")
         body = _verify_record_signature(target.certificate_der, receipt, "PairGrantReceipt")
         protocol._keys(body, {"grant", "targetInstanceId", "issuedAt"})
         grant = body["grant"]
@@ -1434,7 +1435,7 @@ class PairingCoordinator:
         if receipt["protocolProfile"] == PERSISTED_GRANT_PROFILE:
             _require(set(grant["capabilities"]).issubset(PERSISTED_GRANT_METHODS),
                      "Persisted earlier grant contains an unsupported capability")
-        elif receipt["protocolProfile"] == PERSISTED_PHONE_TASK_GRANT_PROFILE:
+        elif receipt["protocolProfile"] in (PERSISTED_PHONE_TASK_GRANT_PROFILE, PERSISTED_PRE_VIEWER_GRANT_PROFILE):
             _require(set(grant["capabilities"]).issubset(PERSISTED_PHONE_TASK_GRANT_METHODS),
                      "Persisted phone-task grant contains an unsupported capability")
             _require(_persisted_grant_epoch_current(known, receipt, grant), "Persisted original grant epoch changed")
@@ -1610,6 +1611,11 @@ class PairingCoordinator:
             delegation_policy.verify(request, grant, now_ms)
         if request.method == "tool.invoke":
             _require(request.arguments["toolName"] in grant["toolNames"], "Device tool not granted")
+        if request.method == "desktop.viewer":
+            _require(request.get("originDeviceId") == peer.device_id and not request.get("delegationChain", []), "Desktop viewer is direct owner only")
+            protocol.validate_resource_binding("desktop-v2", request.get("resourceBinding"))
+            _require(any(protocol.resource_equal(request.get("resourceBinding"), resource) for resource in grant["resources"]), "Desktop viewer resource not granted")
+            _require(request.get("deadline") <= min(grant["expiresAt"], now_ms + 300000), "Desktop viewer lifetime exceeds owner grant")
         if request.method in ("tool.invoke", "task.submitGoal"):
             protocol.validate_resource_binding(request.get("capabilityVersion"), request.get("resourceBinding"))
             _require(any(protocol.resource_equal(request.get("resourceBinding", {}), resource) for resource in grant["resources"]), "Device resource not granted")

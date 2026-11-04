@@ -1444,13 +1444,17 @@
   },
   "attachment-import-recovery": {
     "class": "dev.pocketengine.features.attachments.AttachmentImportRecoveryTest",
-    "additionalClasses": ["dev.pocketengine.features.attachments.AttachmentBookTest"],
+    "additionalClasses": [
+      "dev.pocketengine.features.attachments.AttachmentBookTest"
+    ],
     "helpers": [],
     "description": "Original ordinary attachment import interruption, saved-byte/index reconciliation, unknown/native preservation and cross-Book file-lock exclusion. Pure JVM fixtures; no Android process-death or device acceptance."
   },
   "pocket-web-model-accounts": {
     "class": "dev.pocketengine.ui.web.PocketWebApiModelsTest",
-    "additionalClasses": ["dev.pocketengine.ui.web.PocketWebAccountCommandsTest"],
+    "additionalClasses": [
+      "dev.pocketengine.ui.web.PocketWebAccountCommandsTest"
+    ],
     "helpers": [],
     "description": "Original Web API model identity projection and account command receipts. Pure JVM contracts; no OAuth provider or mounted Android acceptance."
   },
@@ -1550,5 +1554,22 @@
     "helpers": [],
     "robolectric": true,
     "description": "Original connection/editor/draft/native test identities, strict receipt projection, per-profile compatibility and cache settings CAS. Controlled provider/repository fixtures; no live provider, real cache hit or Android visual acceptance."
+  },
+  "desktop-hybrid": {
+    "class": "dev.pocketengine.features.devices.DeviceDesktopViewerNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.devices.DeviceSemanticObservationsTest",
+      "dev.pocketengine.features.devices.DeviceProtocolTest",
+      "dev.pocketengine.features.devices.DeviceSourceToolContractsTest",
+      "dev.pocketengine.features.devices.NativeRelayOwnerWindowTest",
+      "dev.pocketengine.features.devices.NativeDesktopOwnerWindowTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.devices.DeviceIngressNativeTest",
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
+    ],
+    "robolectric": true,
+    "description": "Original SQLite, native grant and one-use TLS send gates; semantic structure delivery through the real AgentRunner; shared protocol vectors. Explicit loopback peers and UIA receipts, not Windows/Android physical acceptance."
   }
 }

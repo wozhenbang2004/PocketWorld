@@ -99,6 +99,10 @@ class WindowsInstalledContext:
         cua = manifest.get("cua", {})
         if cua.get("sourceCommit") != "f595a4fb6f524e555e5e422aab81c3457fe4a713" or cua.get("spacesIncluded") is not False or cua.get("perceptionIncluded") is not False:
             raise PlatformError("Current Driver source/license boundary changed", 409)
+        semantic = manifest.get("agentDesktop", {})
+        if (semantic.get("sourceCommit") != "6660fbac768dc7e7332837b90ed465684859afa3"
+                or semantic.get("contractVersion") != "2.6" or semantic.get("runtime") != "headless-semantic-cli"):
+            raise PlatformError("Current structured desktop driver pin changed", 409)
         declared, folded = {}, set()
         if not isinstance(manifest.get("files"), list) or len(manifest["files"]) > 20000:
             raise PlatformError("Current release file manifest exceeds its bound", 409)
@@ -110,18 +114,22 @@ class WindowsInstalledContext:
             if name.casefold() in folded or not _matches(r"[a-fA-F0-9]{64}", file.get("sha256")) or type(file.get("bytes")) is not int or not 0 <= file["bytes"] <= 512 * 1024 * 1024:
                 raise PlatformError("Current release has duplicate/invalid native file declarations", 409)
             declared[name] = file; folded.add(name.casefold())
-        for name in ("app/PocketWorld-Companion.exe", "driver/cua-driver.exe"):
+        for name in ("app/PocketWorld-Companion.exe", "driver/cua-driver.exe", "driver/agent-desktop.exe"):
             if name not in declared:
                 raise PlatformError("Current embedded runtime or Driver is missing", 409)
         self.binary = ntpath.join(self.release, "driver", "cua-driver.exe")
         self.driver_sha256 = declared["driver/cua-driver.exe"]["sha256"].lower()
         if self.driver_sha256 != cua.get("sha256", "").lower():
             raise PlatformError("Current Driver pin differs from its immutable manifest", 403)
+        self.semantic_binary = ntpath.join(self.release, "driver", "agent-desktop.exe")
+        self.semantic_sha256 = declared["driver/agent-desktop.exe"]["sha256"].lower()
+        if self.semantic_sha256 != semantic.get("sha256", "").lower():
+            raise PlatformError("Current structured Driver pin differs from its immutable manifest", 403)
         if current_executable is not None and not same_path(os.fspath(current_executable), ntpath.join(self.release, "app", "PocketWorld-Companion.exe")):
             raise PlatformError("This installed executable is not the current release; use the fixed launcher", 409)
         # Launcher checks the entire signed package before process start. Also
-        # pin these two original handles for direct executable-entry validation.
-        for name in ("app/PocketWorld-Companion.exe", "driver/cua-driver.exe"):
+        # pin the runtime and both original driver handles for direct entry.
+        for name in ("app/PocketWorld-Companion.exe", "driver/cua-driver.exe", "driver/agent-desktop.exe"):
             actual = hashlib.sha256()
             with self.backend.open_reader(self.release, name, maximum=512 * 1024 * 1024) as stream:
                 if stream.size != declared[name]["bytes"]:
@@ -157,7 +165,9 @@ class WindowsInstalledContext:
         desktop = config.get("desktop", {})
         if not isinstance(desktop, dict) or type(desktop.get("enabled", False)) is not bool:
             raise PlatformError("Installed desktop configuration is invalid", 409)
-        config["desktop"] = {"enabled": desktop.get("enabled", False), "binary": self.binary, "sha256": self.driver_sha256}
+        config["desktop"] = {"enabled": desktop.get("enabled", False), "binary": self.binary, "sha256": self.driver_sha256,
+                             "agentDesktop": {"binary": self.semantic_binary, "sha256": self.semantic_sha256},
+                             "streaming": copy.deepcopy(desktop.get("streaming", {}))}
         return NativeInstalledConfig(_CONFIG, self, config, raw)
 
     def initialize(self, workspace):

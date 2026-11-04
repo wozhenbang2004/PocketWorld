@@ -106,6 +106,7 @@ try {
     $manifest = Get-Content -LiteralPath (Join-Path $stage 'bundle-manifest.json') -Encoding UTF8 -Raw | ConvertFrom-Json
     if ($manifest.schemaVersion -ne 1 -or $manifest.product -ne 'PocketWorld-Companion' -or $manifest.platform -ne 'windows-x64' -or $manifest.version -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') { throw 'Unknown bundle schema/platform/version.' }
     if ($manifest.cua.sourceCommit -ne 'f595a4fb6f524e555e5e422aab81c3457fe4a713' -or $manifest.cua.releaseStatus -ne 'prerelease' -or $manifest.cua.spacesIncluded -or $manifest.cua.perceptionIncluded) { throw 'Driver provenance/license boundary mismatch.' }
+    if ($manifest.agentDesktop.sourceCommit -ne '6660fbac768dc7e7332837b90ed465684859afa3' -or $manifest.agentDesktop.contractVersion -ne '2.6' -or $manifest.agentDesktop.runtime -ne 'headless-semantic-cli') { throw 'Structured desktop driver pin mismatch.' }
     $declared = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     [void]$declared.Add('bundle-manifest.json')
     foreach ($file in $manifest.files) {
@@ -121,7 +122,8 @@ try {
     }
     $exe = Join-Path $stage 'app\PocketWorld-Companion.exe'
     $driver = Join-Path $stage 'driver\cua-driver.exe'
-    foreach ($path in @($exe, $driver)) {
+    $semanticDriver = Join-Path $stage 'driver\agent-desktop.exe'
+    foreach ($path in @($exe, $driver, $semanticDriver)) {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Required bundled runtime missing.' }
         if (-not $AllowUnsignedDevelopment) {
             if (-not $ExpectedSignerThumbprint) { throw 'Release install requires an independently trusted signer thumbprint.' }
@@ -130,6 +132,7 @@ try {
         }
     }
     if ((Get-FileHash -LiteralPath $driver -Algorithm SHA256).Hash -ne $manifest.cua.sha256) { throw 'Actual Driver binary differs from its source/build manifest.' }
+    if ((Get-FileHash -LiteralPath $semanticDriver -Algorithm SHA256).Hash -ne $manifest.agentDesktop.sha256) { throw 'Actual structured Driver differs from its source/build manifest.' }
     foreach ($name in @('Install-Companion.ps1','Manage-Companion.ps1','Launch-Companion.ps1','Companion-InstallState.ps1')) {
         $scriptPath = Join-Path $stage ('tools\' + $name)
         if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw 'Required management entry is missing from bundle.' }

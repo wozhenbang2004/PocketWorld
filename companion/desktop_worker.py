@@ -61,11 +61,25 @@ def main():
     actions.add_argument("--init", action="store_true")
     actions.add_argument("--recover-desktop", action="store_true")
     actions.add_argument("--pairing", action="store_true")
+    actions.add_argument("--stream-self-test", action="store_true", help="Encode one synthetic VP8 frame; no desktop, network, config or identity access")
     parser.add_argument("--identity-dir", type=Path)
     parser.add_argument("--manual-takeover-after-os-restart", action="store_true")
     parser.add_argument("--workspace", default=".")
     parser.add_argument("--development-state", action="store_true", help="Source-tree development only; never allowed by a frozen installed executable")
     args = parser.parse_args()
+    if args.stream_self_test:
+        # This branch runs before installation/config/state/identity initialization.
+        # Build smoke checks must neither register a host nor open a desktop/peer.
+        try:
+            from desktop_stream import runtime_probe
+            result = runtime_probe()
+        except Exception:
+            print(json.dumps({"format": "pocketworld.desktop-stream-probe.v1", "available": False,
+                              "reason": "prepared_stream_runtime_unavailable",
+                              "networkOpened": False, "desktopCaptured": False}))
+            raise SystemExit(2)
+        print(json.dumps(result, sort_keys=True))
+        return
     if args.health:
         print(json.dumps(WindowsDesktopHealth().probe(), ensure_ascii=False))
         return

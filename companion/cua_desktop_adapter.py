@@ -36,6 +36,16 @@ def input_outcome(result):
     effect = result.get("structuredContent", {})
     if not isinstance(effect, dict):
         effect = {}
+    if effect.get("driver") == "agent-desktop":
+        # Actual pinned 2.6 disposition; an ok:false response can still have
+        # delivered input. A fresh readback never erases uncertain delivery.
+        disposition = effect.get("nativeDisposition", {})
+        delivery = disposition.get("delivery") if isinstance(disposition, dict) else None
+        if delivery == "not_delivered" and disposition.get("retry") == "safe":
+            return {"kind": "refused_pre_dispatch", "inputDispatched": False, "foregroundEscalationPermitted": False}
+        if delivery in {"delivered_verified", "delivered_unverified"} and disposition.get("retry") == "unsafe":
+            return {"kind": "dispatch_reported", "inputDispatched": True, "foregroundEscalationPermitted": False}
+        return {"kind": "possible_effect_unknown", "inputDispatched": None, "foregroundEscalationPermitted": False}
     if result.get("isError") is not True:
         return {"kind": "dispatch_reported", "inputDispatched": True, "foregroundEscalationPermitted": False}
     known_refusal = effect.get("effect") == "refused" or effect.get("code") in {"invalid_arguments", "desktop_coordinate_scope_required"}
@@ -241,11 +251,13 @@ class McpCuaDriver:
                 "channelHealthy": self.process is not None and not self._broken,
                 "lifecycleBroken": self._broken,
                 "modelRequired": False, "nativeGuiVerified": False,
+                "observationModes": ["semantic", "visual", "hybrid"], "defaultObservationMode": "semantic",
+                "semanticProvider": "cua-driver", "semanticActions": ["set_text"],
                 "desktopCaptureDisplays": ["primary"], "spacesIncluded": False, "perceptionIncluded": False,
                 "singleKeys": {"admitted": ["Enter", "Escape", "Tab"], "runtimeAvailable": "press_key" in self.tools and not self._broken,
                                "target": "exact_observed_window", "compoundFocusClick": False, "nativeGuiVerified": False},
                 "setText": {"semantics": "replace_entire_uia_value_including_empty", "runtimeAvailable": {"set_value", "verify_state"} <= self.tools.keys() and not self._broken,
-                            "requires": "enabled_exact_text_token_with_set_value_action_and_target_region", "automaticKeystrokeFallback": False,
+                            "requires": "enabled_exact_text_token_with_set_value_action_and_live_semantic_preflight", "automaticKeystrokeFallback": False,
                             "missingValueReadback": "unknown_not_empty; pinned UIA omits empty, whitespace and failed reads; never replay",
                             "nativeGuiVerified": False},
                 "drag": False, "reasonDrag": "Not admitted until the pinned Windows drag contract and physical behavior are separately verified"}

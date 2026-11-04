@@ -51,7 +51,7 @@ public final class DeviceCapabilityPort implements CapabilityPort {
     private final String taskId, runId;
     private final int epoch;
     private final Map<String, NativeRoute> routes = new LinkedHashMap<>();
-    private boolean closed;private final DeviceVisualFrames visual;
+    private boolean closed;private final DeviceVisualFrames visual;private final DeviceSemanticObservations semantic;
     public DeviceCapabilityPort(TaskStore tasks, DeviceTaskCoordinator coordinator, RunControl original, Iterable<NativeRoute> selectedRoutes) {
         this(tasks,coordinator,original,selectedRoutes,null);
     }
@@ -59,7 +59,7 @@ public final class DeviceCapabilityPort implements CapabilityPort {
         this(tasks,coordinator,original,selectedRoutes,actualImages,null);
     }
     public DeviceCapabilityPort(TaskStore tasks,DeviceTaskCoordinator coordinator,RunControl original,Iterable<NativeRoute> selectedRoutes,VerifiedImages actualImages,ReceivedFiles receivedFiles){
-        files=receivedFiles;visual=new DeviceVisualFrames(actualImages,original);this.tasks = java.util.Objects.requireNonNull(tasks); devices = tasks.deviceTasks(); this.coordinator = java.util.Objects.requireNonNull(coordinator);
+        files=receivedFiles;visual=new DeviceVisualFrames(actualImages,original);semantic=new DeviceSemanticObservations(original);this.tasks = java.util.Objects.requireNonNull(tasks); devices = tasks.deviceTasks(); this.coordinator = java.util.Objects.requireNonNull(coordinator);
         this.original = java.util.Objects.requireNonNull(original); RunControl.HostRunIdentity run = original.hostRunIdentity();
         if (run == null) throw new SecurityException("设备调用必须属于原TaskStore执行");
         taskId = run.taskId(); runId = run.runId(); epoch = run.epoch();
@@ -101,7 +101,7 @@ public final class DeviceCapabilityPort implements CapabilityPort {
             JSONObject function = available.getJSONObject(i).getJSONObject("function");
             if (name.equals(function.getString("name"))) {JSONObject localShape=new JSONObject(function.getJSONObject("parameters").toString());localShape.remove("anyOf");dev.pocketengine.features.plugins.PluginRules.validateArguments(args,localShape);}
         }
-        NativeRoute selected=route(args,original);selected.validateArguments(name,args);if(name.equals("device_invoke_tool")&&args.optString("toolName").matches("desktop\\.(observe|act)")&&!visual.installed())throw new SecurityException("没有真实图像接收/原SQL视觉接缝，桌面视觉动作未就绪");
+        NativeRoute selected=route(args,original);selected.validateArguments(name,args);if(name.equals("device_invoke_tool")&&requiresDesktopImage(selected,args.optString("toolName"),args.optJSONObject("arguments"),args.optJSONObject("observationRef"))&&!visual.installed())throw new SecurityException("没有真实图像接收/原SQL视觉接缝，桌面视觉动作未就绪");
     }
     @Override public JSONObject execute(String name,JSONObject input,RunControl control)throws Exception{JSONObject result=invoke(name,input,control);return "OperationReceipt".equals(result.optString("messageType"))?localAgentReceipt(result):result;}
     private static JSONObject localAgentReceipt(JSONObject typed)throws Exception{
@@ -118,7 +118,7 @@ public final class DeviceCapabilityPort implements CapabilityPort {
             DeviceTaskEnvelope query = route.request("operation.get", new JSONObject().put("operationId", operation), operation, 0, 0, null, original);
             try {
                 Reply actual = route.exchange(query, original); JSONObject result = reply(route, actual,query);
-                if (Boolean.TRUE.equals(result.opt("accepted"))){recordAccepted(route, actual, result, operation, result.optString("argumentsDigest"));captureImage(route,actual,operation,name,result);receiveFile(route,actual,operation,result);sendFile(route,actual,operation,result);}
+                if (Boolean.TRUE.equals(result.opt("accepted"))){recordAccepted(route, actual, result, operation, result.optString("argumentsDigest"));captureSemantic(route,operation,result);captureImage(route,actual,operation,name,result);receiveFile(route,actual,operation,result);sendFile(route,actual,operation,result);}
                 JSONObject payload=result.getJSONObject("payload");
                 if (Boolean.TRUE.equals(payload.opt("terminal")) && Boolean.TRUE.equals(payload.opt("stopped"))&&"GoalSubmission".equals(originalWire.optString("messageType"))&&result.has("localTaskId")&&result.has("runId")) {
                     JSONObject allocation = devices.childAllocationForOperation(taskId, operation);
@@ -151,7 +151,7 @@ public final class DeviceCapabilityPort implements CapabilityPort {
         try {
             Reply actual = route.exchange(request,ticket, original); JSONObject result = reply(route, actual,request);
             if (Boolean.TRUE.equals(result.opt("accepted"))) {
-                recordAccepted(route, actual, result, hostOperation, request.argumentsDigest());captureImage(route,actual,hostOperation,name,result);receiveFile(route,actual,hostOperation,result);sendFile(route,actual,hostOperation,result);
+                recordAccepted(route, actual, result, hostOperation, request.argumentsDigest());captureSemantic(route,hostOperation,result);captureImage(route,actual,hostOperation,name,result);receiveFile(route,actual,hostOperation,result);sendFile(route,actual,hostOperation,result);
                 return parentView(result,new JSONObject().put("parentOperationId",hostOperation).put("budgetReserved",true).put("nextAction","device_operation_get"));
             }
             return parentView(result,new JSONObject().put("budgetReserved",true).put("operationId",hostOperation));
@@ -222,15 +222,29 @@ public final class DeviceCapabilityPort implements CapabilityPort {
             visual.capture(route.routeId(),function,devices.deviceImageEvidence(route.reservationApproval(),original,actual.peer(),operation));
         }catch(Exception invalid){visual.invalidate(route.routeId());payload.put("nativeImageInput",new JSONObject().put("available",false).put("imageProvidedToModel",false).put("reason","verified_image_unavailable_or_stale"));}
     }
-    @Override public dev.pocketengine.core.NativeToolObservation.Requirement observationRequirement(String name,JSONObject args,RunControl control)throws Exception{
-        NativeRoute selected=route(args,control);String tool=args.optString("toolName");JSONObject nativeArguments=args.optJSONObject("arguments");if(name.equals("device_operation_get")){JSONObject wire=devices.childAllocationForOperation(taskId,args.getString("operationId")).getJSONObject("boundWire");tool=wire.getJSONObject("arguments").optString("toolName");nativeArguments=wire.getJSONObject("arguments").optJSONObject("arguments");}
-        boolean needs=tool.matches("desktop\\.(observe|act)")||tool.equals("phone_observe")&&nativeArguments!=null&&nativeArguments.optBoolean("includeImage");if(needs&&!visual.installed())throw new SecurityException("真实设备视觉接收器未安装");return needs?dev.pocketengine.core.NativeToolObservation.Requirement.IMAGE:dev.pocketengine.core.NativeToolObservation.Requirement.NONE;
+    private boolean requiresDesktopImage(NativeRoute route,String tool,JSONObject arguments,JSONObject ref)throws Exception{
+        if(tool.equals("desktop.observe"))return arguments==null||!arguments.optBoolean("discovery")&&!"semantic".equals(arguments.optString("observationMode",arguments.has("windowId")?"semantic":"hybrid"));
+        if(tool.equals("desktop.act"))return !semantic.contains(route.routeId(),ref);
+        return false;
     }
-    @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception{NativeRoute selected=route(args,control);if(name.equals("device_invoke_tool")){String tool=args.getString("toolName");if(tool.equals("desktop.act"))visual.requireAction(selected.routeId(),args.optJSONObject("observationRef"));if(tool.equals("desktop.observe")||tool.equals("phone_observe"))visual.invalidate(selected.routeId());}return null;}
+    private void captureSemantic(NativeRoute route,String operation,JSONObject receipt)throws Exception{
+        JSONObject wire=devices.childAllocationForOperation(taskId,operation).getJSONObject("boundWire");
+        if(!"ToolInvocation".equals(wire.optString("messageType"))||!wire.getJSONObject("arguments").optString("toolName").matches("desktop\\.(observe|act)"))return;
+        final String originalWire=DeviceProtocol.canonical(wire);final long pause=original.pauseRevision();
+        try{semantic.capture(route.routeId(),wire,receipt,()->{route.requireCurrent(System.currentTimeMillis());original.check();if(original.isPaused()||pause!=original.pauseRevision()||!originalWire.equals(DeviceProtocol.canonical(devices.childAllocationForOperation(taskId,operation).getJSONObject("boundWire"))))throw new SecurityException("原结构观察任务/范围已变化");});}
+        catch(Exception unavailable){semantic.invalidate(route.routeId());receipt.getJSONObject("payload").put("nativeSemanticInput",new JSONObject().put("available",false).put("reason","verified_structure_unavailable_or_stale"));}
+    }
+    @Override public dev.pocketengine.core.NativeToolObservation.Requirement observationRequirement(String name,JSONObject args,RunControl control)throws Exception{
+        NativeRoute selected=route(args,control);String tool=args.optString("toolName");JSONObject nativeArguments=args.optJSONObject("arguments"),reference=args.optJSONObject("observationRef");if(name.equals("device_operation_get")){JSONObject wire=devices.childAllocationForOperation(taskId,args.getString("operationId")).getJSONObject("boundWire");tool=wire.getJSONObject("arguments").optString("toolName");nativeArguments=wire.getJSONObject("arguments").optJSONObject("arguments");reference=wire.optJSONObject("observationRef");}
+        boolean needs=requiresDesktopImage(selected,tool,nativeArguments,reference)||tool.equals("phone_observe")&&nativeArguments!=null&&nativeArguments.optBoolean("includeImage");if(needs&&!visual.installed())throw new SecurityException("真实设备视觉接收器未安装");return needs?dev.pocketengine.core.NativeToolObservation.Requirement.IMAGE:dev.pocketengine.core.NativeToolObservation.Requirement.NONE;
+    }
+    @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception{
+        NativeRoute selected=route(args,control);String id=selected.routeId();if(name.equals("device_invoke_tool")){String tool=args.getString("toolName");if(tool.equals("desktop.act")){if(semantic.contains(id,args.optJSONObject("observationRef")))semantic.requireAction(id,args.optJSONObject("observationRef"));else visual.requireAction(id,args.optJSONObject("observationRef"));}if(tool.equals("desktop.observe")||tool.equals("phone_observe")){visual.invalidate(id);semantic.invalidate(id);}}return null;
+    }
     @Override public dev.pocketengine.core.NativeToolObservation takeToolObservation(String name,String operation,RunControl control)throws Exception{return visual.take(name,operation,control);}
-    @Override public void beforeModelRequest(String request,JSONArray messages,RunControl control)throws Exception{visual.beforeRequest(request,messages,control);}
-    @Override public JSONObject afterModelResponse(String request,String answer,RunControl control)throws Exception{return visual.afterResponse(request,control);}
-    @Override public void modelRequestAbandoned(String request){visual.abandoned(request);}
+    @Override public void beforeModelRequest(String request,JSONArray messages,RunControl control)throws Exception{visual.beforeRequest(request,messages,control);semantic.beforeRequest(request,messages,control);}
+    @Override public JSONObject afterModelResponse(String request,String answer,RunControl control)throws Exception{JSONObject image=visual.afterResponse(request,control),structure=semantic.afterResponse(request,control);return image==null?structure:structure==null?image:new JSONObject().put("visual",image).put("semantic",structure).put("businessVerified",false);}
+    @Override public void modelRequestAbandoned(String request){visual.abandoned(request);semantic.abandoned(request);}
     @Override public boolean responseCurrent(RunControl control)throws Exception{if(closed||control!=original)return false;for(var route:routes.values())try{route.requireCurrent(System.currentTimeMillis());}catch(SecurityException revoked){return false;}return true;}
-    @Override public void close() { closed = true;visual.close(); }
+    @Override public void close() { closed = true;visual.close();semantic.close(); }
 }

@@ -630,7 +630,8 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
         if (pending.putIfAbsent(id, call) != null) throw new SecurityException("同一原请求仍在等待，不能重复派发");
         try {
             if (!(ticket != null ? exact.connection.sendControl(ticket) : exact.connection.sendControl(DeviceProtocol.canonicalBytes(request.json())))) throw new IOException("发送队列已满，未派发新请求");
-            long until = Math.min(nativeDeadline, Math.min(request.deadline(), System.currentTimeMillis() + 15000));
+            long waitMs = "desktop.viewer".equals(request.method()) && "negotiate".equals(request.arguments().optString("action")) ? 25000 : 15000;
+            long until = Math.min(nativeDeadline, Math.min(request.deadline(), System.currentTimeMillis() + waitMs));
             while (System.currentTimeMillis() < until) {
                 originalCurrent.require(); try { return call.result.get(Math.min(1000, Math.max(1, until - System.currentTimeMillis())), TimeUnit.MILLISECONDS); }
                 catch (java.util.concurrent.TimeoutException waiting) { }

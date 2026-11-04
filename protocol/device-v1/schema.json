@@ -202,7 +202,8 @@
             "operation.cancel",
             "task.answerQuestion",
             "task.steer",
-            "task.requestResume"
+            "task.requestResume",
+            "desktop.viewer"
           ]
         },
         "observationRef": {
@@ -790,6 +791,323 @@
               "argumentsDigest"
             ]
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "desktop.viewer"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "messageType": {
+                "const": "DeviceRequest"
+              },
+              "capabilityVersion": {
+                "const": "desktop-v2"
+              },
+              "resourceBinding": {
+                "$ref": "#/$defs/DesktopResource"
+              },
+              "arguments": {
+                "type": "object",
+                "required": [
+                  "action",
+                  "viewerSessionId"
+                ],
+                "properties": {
+                  "action": {
+                    "enum": [
+                      "configuration",
+                      "negotiate",
+                      "status",
+                      "take",
+                      "release",
+                      "input",
+                      "close"
+                    ]
+                  },
+                  "viewerSessionId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                  },
+                  "streamId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                  },
+                  "target": {
+                    "type": "object",
+                    "required": [
+                      "pid",
+                      "windowId"
+                    ],
+                    "properties": {
+                      "pid": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      "windowId": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "offer": {
+                    "type": "object",
+                    "required": [
+                      "type",
+                      "sdp"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "offer"
+                      },
+                      "sdp": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 32768
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "controlLease": {
+                    "type": "object"
+                  },
+                  "frameRef": {
+                    "type": "object"
+                  },
+                  "input": {
+                    "type": "object"
+                  },
+                  "expectedRevision": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  }
+                },
+                "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "action",
+                      "viewerSessionId"
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "configuration"
+                      },
+                      "viewerSessionId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                      },
+                      "target": {
+                        "type": "object",
+                        "required": [
+                          "pid",
+                          "windowId"
+                        ],
+                        "properties": {
+                          "pid": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "windowId": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "action",
+                      "viewerSessionId",
+                      "offer"
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "negotiate"
+                      },
+                      "viewerSessionId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                      },
+                      "offer": {
+                        "type": "object",
+                        "required": [
+                          "type",
+                          "sdp"
+                        ],
+                        "properties": {
+                          "type": {
+                            "const": "offer"
+                          },
+                          "sdp": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 32768
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "action",
+                      "viewerSessionId",
+                      "streamId"
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "status"
+                      },
+                      "viewerSessionId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                      },
+                      "streamId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "action",
+                      "viewerSessionId",
+                      "streamId",
+                      "expectedRevision"
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "take"
+                      },
+                      "viewerSessionId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                      },
+                      "streamId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                      },
+                      "expectedRevision": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 10000
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "action",
+                      "viewerSessionId",
+                      "streamId",
+                      "expectedRevision"
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "release"
+                      },
+                      "viewerSessionId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                      },
+                      "streamId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                      },
+                      "expectedRevision": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 10000
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "action",
+                      "viewerSessionId",
+                      "streamId",
+                      "controlLease",
+                      "frameRef",
+                      "input"
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "input"
+                      },
+                      "viewerSessionId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                      },
+                      "streamId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                      },
+                      "controlLease": {
+                        "type": "object"
+                      },
+                      "frameRef": {
+                        "type": "object"
+                      },
+                      "input": {
+                        "type": "object"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "action",
+                      "viewerSessionId"
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "close"
+                      },
+                      "viewerSessionId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                      },
+                      "streamId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "required": [
+              "operationId",
+              "argumentsDigest",
+              "resourceBinding",
+              "capabilityVersion"
+            ]
+          }
         }
       ]
     },
@@ -1164,7 +1482,8 @@
             "operation.cancel",
             "task.answerQuestion",
             "task.steer",
-            "task.requestResume"
+            "task.requestResume",
+            "desktop.viewer"
           ]
         },
         "executorDeviceId": {
@@ -1363,6 +1682,22 @@
             "properties": {
               "result": {
                 "$ref": "#/$defs/DeviceDescription"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "desktop.viewer"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "$ref": "#/$defs/DesktopViewerReceipt"
               }
             }
           }
@@ -1742,7 +2077,8 @@
               "artifact.readChunk",
               "task.answerQuestion",
               "task.steer",
-              "task.requestResume"
+              "task.requestResume",
+              "desktop.viewer"
             ]
           },
           "minItems": 1
@@ -2608,6 +2944,53 @@
         "resourceBinding"
       ],
       "additionalProperties": false
+    },
+    "DesktopViewerReceipt": {
+      "type": "object",
+      "required": [
+        "viewerSessionId",
+        "operationId",
+        "status"
+      ],
+      "properties": {
+        "viewerSessionId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "operationId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "unknown",
+            "failed"
+          ]
+        },
+        "expiresAt": {},
+        "width": {},
+        "height": {},
+        "control": {},
+        "state": {},
+        "streamId": {},
+        "answer": {},
+        "iceServers": {},
+        "bundlePolicy": {},
+        "transport": {},
+        "lastFrame": {},
+        "inputChannel": {},
+        "metadataChannel": {},
+        "reason": {},
+        "transportClosedVerified": {},
+        "target": {},
+        "frameRef": {},
+        "inputReceipt": {},
+        "noAutomaticReplay": {},
+        "message": {}
+      },
+      "additionalProperties": false,
+      "description": "Direct owner session receipt; not an Agent task, operation retry instruction or grant. SDP and TURN credentials are transient native UI data only."
     }
   },
   "x-canonicalization": {
@@ -2664,5 +3047,10 @@
     "executionPermissionCreated": false,
     "signedReceiptsOnlyForActualCaller": true,
     "maxGrantReceipts": 16
+  },
+  "desktopViewerPolicy": {
+    "authority": "Direct receiving-owner desktop.viewer grant, exact desktop resource, native owner-window session; never a model tool or fabricated Agent run.",
+    "transport": "Owner actions use TaskStore persistent single-use send tickets; WebRTC media is separate from model observation.",
+    "control": "Human input and Agent leases are mutually exclusive. Input uses recent retained frame geometry, not a claim of exact rendered RTP pixels. Unknown actions are never replayed."
   }
 }

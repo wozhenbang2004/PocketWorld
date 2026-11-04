@@ -30,12 +30,20 @@ class PackagingIntegrityTests(unittest.TestCase):
                                               "spacesIncluded": False, "perceptionIncluded": False, "cargoLockSha256": "1" * 64,
                                               "features": [], "releaseStatus": "prerelease"}))
 
+        self.agent = self.root / "agent-desktop.exe"; self.agent.write_bytes(b"INERT SEMANTIC DRIVER FIXTURE")
+        self.agent_provenance = self.root / "agent-provenance.json"
+        self.agent_provenance.write_text(json.dumps({"sourceCommit": bundle_module.AGENT_DESKTOP_COMMIT, "sourceClean": True,
+            "cargoLockGitBlobSha1": "de3997ec90e91217baa87fefaa3363b7784c9be9", "cargoLockSha256": "3"*64,
+            "platform": "windows-x64", "driverVersion": "1.1.0", "contractVersion": "2.6", "runtime": "headless-semantic-cli",
+            "license": "Apache-2.0", "artifactSha256": bundle_module.file_hash(self.agent)}))
         self.runtime_notices = self.root / "runtime-notices"; self.runtime_notices.mkdir()
         (self.runtime_notices / "fixture-license.txt").write_text("INERT runtime license fixture, not a release")
         self.driver_notices = Path(os.environ.get("PW_TEST_CUA_NOTICES_PATH", str(Path(__file__).parent.parent / "licenses/cua-driver-THIRD-PARTY-NOTICES.md")))
         self.runtime_provenance = self.root / "runtime-provenance.json"
         self.runtime_provenance.write_text(json.dumps({"format": "pocketworld.windows-runtime-build.v1", "sourceCommit": "5"*40,
             "platform": "windows-x64", "pythonVersion": "fixture-only", "pyinstallerVersion": "fixture-only", "cryptographyVersion": "fixture-only",
+            "aiortcVersion": "1.15.0", "pyavVersion": "17.0.1", "runtimeStreamProbeSha256": "a"*64,
+            "runtimeStreamProbe": {"available": True, "codec": "video/VP8", "networkOpened": False, "desktopCaptured": False},
             "toolchainDescription": "INERT fixtures, never used to claim a runnable Windows package", "inputLockSha256": "2"*64,
             "unsignedFiles": {"PocketWorld-Companion.exe": bundle_module.file_hash(self.frozen / "PocketWorld-Companion.exe")},
             "licenseFiles": {"fixture-license.txt": bundle_module.file_hash(self.runtime_notices / "fixture-license.txt")},
@@ -46,7 +54,7 @@ class PackagingIntegrityTests(unittest.TestCase):
 
     def build(self, output="fixture.zip", sha=None, **kwargs):
         return bundle_module.bundle(self.frozen, self.driver, sha or self.sha, "5" * 40, "fixture-dev-1", self.root / output, self.provenance,
-            runtime_provenance=self.runtime_provenance, runtime_notices=self.runtime_notices, driver_notices=self.driver_notices,
+            agent_desktop_binary=self.agent, agent_desktop_provenance=self.agent_provenance, runtime_provenance=self.runtime_provenance, runtime_notices=self.runtime_notices, driver_notices=self.driver_notices,
             allow_unsigned_development=True, **kwargs)
 
     def test_admitted_inputs_replaced_before_copy_are_rejected(self):
@@ -163,7 +171,7 @@ class PackagingIntegrityTests(unittest.TestCase):
         # Stub-only routing test: these inert bytes have no real signatures, and
         # this does not establish Windows or Authenticode acceptance.
         artifacts = {"app/PocketWorld-Companion.exe": self.frozen / "PocketWorld-Companion.exe",
-                     "driver/cua-driver.exe": self.driver}
+                     "driver/cua-driver.exe": self.driver, "driver/agent-desktop.exe": self.agent}
         artifacts.update({"tools/"+name: Path(bundle_module.__file__).parent / name
                           for name in bundle_module.MANAGEMENT_SCRIPTS})
         records = {name: {"unsignedSha256": bundle_module.file_hash(path), "finalSha256": bundle_module.file_hash(path),
@@ -183,14 +191,14 @@ class PackagingIntegrityTests(unittest.TestCase):
         with mock.patch.object(bundle_module, "os", SimpleNamespace(name="nt", walk=os.walk)), \
                 mock.patch.object(bundle_module, "verify_authenticode", side_effect=verify_staged):
             bundle_module.bundle(self.frozen, self.driver, self.sha, "5"*40, "fixture-release-routing", self.root / "routing.zip", self.provenance,
-                runtime_provenance=self.runtime_provenance, runtime_notices=self.runtime_notices, driver_notices=self.driver_notices,
+                agent_desktop_binary=self.agent, agent_desktop_provenance=self.agent_provenance, runtime_provenance=self.runtime_provenance, runtime_notices=self.runtime_notices, driver_notices=self.driver_notices,
                 signing_provenance=signing)
         self.assertCountEqual(artifacts, verified)
         with mock.patch.object(bundle_module, "os", SimpleNamespace(name="nt", walk=os.walk)), \
                 mock.patch.object(bundle_module, "verify_authenticode", side_effect=ValueError("signature rejected")):
             with self.assertRaisesRegex(ValueError, "signature rejected"):
                 bundle_module.bundle(self.frozen, self.driver, self.sha, "5"*40, "fixture-release-routing", self.root / "rejected.zip", self.provenance,
-                    runtime_provenance=self.runtime_provenance, runtime_notices=self.runtime_notices, driver_notices=self.driver_notices,
+                    agent_desktop_binary=self.agent, agent_desktop_provenance=self.agent_provenance, runtime_provenance=self.runtime_provenance, runtime_notices=self.runtime_notices, driver_notices=self.driver_notices,
                     signing_provenance=signing)
         self.assertFalse((self.root / "rejected.zip").exists())
 
@@ -254,7 +262,7 @@ class PackagingIntegrityTests(unittest.TestCase):
             "artifacts": {"driver/cua-driver.exe": {"unsignedSha256": original, "finalSha256": final,
                 "signatureStatus": "Valid", "signerThumbprint": "FIXTURE-NOT-A-TRUSTED-SIGNATURE"}}}))
         result = bundle_module.bundle(self.frozen, self.driver, final, "5"*40, "fixture-sign-link", self.root/"link.zip", self.provenance,
-            runtime_provenance=self.runtime_provenance, runtime_notices=self.runtime_notices, driver_notices=self.driver_notices,
+            agent_desktop_binary=self.agent, agent_desktop_provenance=self.agent_provenance, runtime_provenance=self.runtime_provenance, runtime_notices=self.runtime_notices, driver_notices=self.driver_notices,
             signing_provenance=signing, allow_unsigned_development=True)
         with zipfile.ZipFile(result["path"]) as archive:
             self.assertEqual(original, json.loads(archive.read("driver/cua-build-provenance.json"))["artifactSha256"])
