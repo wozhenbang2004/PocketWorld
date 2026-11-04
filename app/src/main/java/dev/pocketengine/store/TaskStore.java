@@ -8935,8 +8935,11 @@ public final class TaskStore {
         if(required(id).has("sourceLearningJob"))throw new SecurityException("模型批次未知不能确认未发生或退款；请回原逐批学习入口核对/明确跳过");
         if(!outcome.equals("occurred")&&!outcome.equals("not_occurred"))throw new IllegalArgumentException("请根据实际现场确认已发生或未发生");
         JSONObject reconciliation=new JSONObject().put("source","owner_reconciliation").put("outcome",outcome).put("at",System.currentTimeMillis());if(mcp!=null){JSONObject actual=mcp.publicReceiptForHost();actual.put("ownerReconciliation",reconciliation).put("status","owner_reconciled").put("automaticallyVerified",false);reconciliation=actual;}ContentValues value=new ContentValues();value.put("state","resolved");value.put("receipt",reconciliation.toString());
-        if(db.update("operations",value,"operation_id=? AND task_id=? AND state IN ('prepared','unknown')",new String[]{operationId,id})!=1)throw new IllegalArgumentException("没有需要核对的该动作");
-        JSONObject t=required(id);if(!hasUnresolved(id))t.put("status","paused").put("summary","动作结果已核对，可以继续原任务");write(t);return copy(t,false);
+        db.beginTransaction();try{
+            if(db.update("operations",value,"operation_id=? AND task_id=? AND state IN ('prepared','unknown')",new String[]{operationId,id})!=1)throw new IllegalArgumentException("没有需要核对的该动作");
+            JSONObject t=required(id);if(!hasUnresolved(id))t.put("status","paused").put("summary","动作结果已核对，可以继续原任务");write(t);JSONObject result=copy(t,false);
+            db.setTransactionSuccessful();return result;
+        }finally{db.endTransaction();}
     }
     public synchronized JSONObject reconcileExternalTask(String id,String outcome,String note)throws Exception{
         requireNativeMcpProcessSettledForOwner(id,null);
