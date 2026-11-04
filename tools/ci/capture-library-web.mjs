@@ -718,7 +718,7 @@ async function runViewport(origin, viewport) {
     assert.equal(await editor.inputValue(), emptyDraft, 'Cancelled press lost the input');
 
     const conversation = page.locator('.pw-conversation-scroll');
-    const conversationTaskEntry = page.locator('.pw-chat-attention').filter({ hasText: '整理项目资料' });
+    const conversationTaskEntry = page.locator('.pw-chat-attention[data-task-id="visual-fixture-task-review"]').filter({ hasText: '整理项目资料' });
     const sourceMessageIndex = populatedSnapshot().state.messages.findIndex(message => message.taskId === 'visual-fixture-task-review');
     assert(sourceMessageIndex >= 0, 'The task entry must retain a source message in the current conversation');
     await conversation.locator(`[data-message-index="${sourceMessageIndex}"]`).scrollIntoViewIfNeeded();
@@ -733,7 +733,7 @@ async function runViewport(origin, viewport) {
         anchor: first?.getAttribute('data-message-index') ?? null };
     });
     const sourceReading = await reading();
-    await capture(page, viewport, '03-current-work', ['.pw-message-stream', '.pw-chat-attention', '.afa-composer']);
+    await capture(page, viewport, '03-current-work', ['.pw-message-stream', '.pw-chat-attention[data-task-id="visual-fixture-task-review"]', '.afa-composer']);
     const workMenu = await openNavigation(page);
     assert.deepEqual(await workMenu.getByRole('link').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label'))),
       Object.keys(navigationRoutes), 'Sidebar destinations are missing, duplicated or out of their task groups');
@@ -765,6 +765,11 @@ async function runViewport(origin, viewport) {
     const beforeOverview = await page.evaluate(() => window.__POCKET_VISUAL_FIXTURE__.summary().requests.length);
     await taskRow.click();
     const drawer = page.locator('.pw-task-drawer');
+    const expandTaskDetails = async () => {
+      const disclosure = drawer.getByRole('button', { name: '过程与范围', exact: true });
+      if (await disclosure.getAttribute('aria-expanded') === 'false') await disclosure.click();
+      assert.equal(await disclosure.getAttribute('aria-expanded'), 'true', 'The task details disclosure did not expand');
+    };
     const outcome = drawer.locator('.pw-task-outcome[aria-label="任务结果依据"]');
     const resultReading = () => drawer.locator('.pw-task-body').evaluate(node => ({
       top: node.scrollTop, height: node.clientHeight, scrollHeight: node.scrollHeight,
@@ -814,6 +819,7 @@ async function runViewport(origin, viewport) {
     const resultDocument = await outcome.elementHandle();
     const assertResultDocumentRetained = async () => assert(await resultDocument.evaluate(node => node.isConnected
       && node === document.querySelector('.pw-task-drawer .pw-task-outcome')), 'Reading deeper or refreshing replaced the original result document');
+    await expandTaskDetails();
     const processEntry = drawer.getByRole('button', { name: '查看执行过程', exact: true });
     await processEntry.scrollIntoViewIfNeeded(); await reachable(processEntry, { minSize: 44 });
     const beforeProcessReading = await resultReading();
@@ -859,6 +865,7 @@ async function runViewport(origin, viewport) {
     await assertReadableResult();
     await assertResultDocumentRetained();
     assert.equal(await drawer.locator('.pw-task-footer').count(), 0, 'A rejected refresh retained actions from the old review');
+    await expandTaskDetails();
     await drawer.getByRole('button', { name: '查看执行过程', exact: true }).click();
     await page.locator('.pw-task-drawer[data-task-layer="process"]').waitFor({ state: 'visible' });
     assert.equal((await taskError.textContent()).trim(), reviewFailure, 'Changing a task layer lost its unresolved command error');
@@ -896,6 +903,7 @@ async function runViewport(origin, viewport) {
       linkedAnswerVisible: true, resultBeforeFeedback: true, identity: 'isolated fixture, not real execution evidence' });
     await drawer.locator('.pw-task-body').evaluate(node => { node.scrollTop = 0; });
     await capture(page, viewport, '08-task-review', ['.pw-task-drawer[data-task-layer="overview"]', '.pw-task-outcome', '.pw-protected-actions']);
+    await expandTaskDetails();
     const scopeEntry = drawer.getByRole('button', { name: '修订本次范围', exact: true });
     await scopeEntry.scrollIntoViewIfNeeded(); await reachable(scopeEntry, { minSize: 44 });
     const beforeScopeReading = await resultReading();
@@ -922,6 +930,7 @@ async function runViewport(origin, viewport) {
     await assertResultDocumentRetained();
     record.checks.push({ stage: 'result-scope-return', beforeScopeReading, afterScopeReading, resultDocumentRetained: true,
       feedbackDraftPreserved: true });
+    await expandTaskDetails();
     await drawer.getByRole('button', { name: '修订本次范围', exact: true }).click();
     assert.equal(await tools.inputValue(), '36', 'Returning to the scope discarded its ordinary draft');
     assert.equal(await models.inputValue(), '20', 'Returning to the scope discarded its ordinary draft');

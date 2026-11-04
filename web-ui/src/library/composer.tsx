@@ -10,8 +10,8 @@ import {MarkdownBody} from './MarkdownBody';
 function sizeComposerEditor(editor:HTMLTextAreaElement|null){
  if(!editor)return;
  editor.style.height='0px';
- const height=editor.value?editor.scrollHeight:44;
- editor.style.height=`${Math.min(120,Math.max(44,height))}px`;
+ const height=editor.value?editor.scrollHeight:48;
+ editor.style.height=`${Math.min(120,Math.max(48,height))}px`;
  editor.style.overflowY=height>120?'auto':'hidden';
 }
 
@@ -41,7 +41,7 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
      {listening?<div className="afa-recording" role="status"><i aria-hidden="true"/><span>{voiceStatus||'正在听写…'}</span>{onDiscardVoice&&<ToolButton label="取消本次听写" icon="close" onClick={onDiscardVoice}/>}</div>:<textarea ref={editor} rows={1} aria-label={label} placeholder={placeholder} value={value} disabled={disabled} onChange={e=>onChange(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing&&e.nativeEvent.keyCode!==229){e.preventDefault();if(canSend)onSend()}}}/>}
      <div className="afa-toolbar">
       {onVoice&&<ToolButton label={listening?'结束听写':'语音输入'} icon="mic" onClick={onVoice} disabled={submitting}/>}
-      <PressButton compact aria-label={submitting?'正在登记':sendLabel||(busy?'补充给当前工作':'发送')} disabled={!canSend} onClick={onSend}><Icon name="arrow" size={18}/></PressButton>
+      {(!busy||!onStop||!!value.trim())&&<PressButton compact aria-label={submitting?'正在登记':sendLabel||(busy?'补充给当前工作':'发送')} disabled={!canSend} onClick={onSend}><Icon name="arrow" size={18}/></PressButton>}
       {busy&&onStop&&<button type="button" className="afa-stop" onClick={onStop} aria-label="停止当前回复"><span aria-hidden="true">■</span></button>}
      </div>
     </div>

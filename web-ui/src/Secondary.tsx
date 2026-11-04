@@ -157,6 +157,10 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
   const [unknownTest, setUnknownTest] = useState(false);
   const [policyReset, setPolicyReset] = useState(false);
   const stale = !adding && (!connection || connection.id !== original.current?.id || connection.revision !== original.current?.revision);
+  const canRetainApiKey = !adding && !stale && original.current?.hasApiKey === true && form.provider === original.current.provider && form.url.trim() === original.current.baseUrl;
+  const apiKeyHint = stale ? '原连接已更新，请返回核对后再编辑密钥。' : canRetainApiKey
+    ? form.apiKey.trim() ? '保存后更换原密钥；保存前清空输入可取消更换。' : '留空保留原密钥；填写新密钥并保存后更换。'
+    : '请填写这项连接的密钥；新增连接不会借用其他连接的密钥。';
   const currentStale = useRef(stale); currentStale.current = stale;
   const testDraft = (): ConnectionTestDraft => ({ editorId, draftRevision: editRevision.current,
     connectionId: adding ? '' : text(original.current?.id), connectionRevision: adding ? 0 : Number(original.current?.revision) });
@@ -278,7 +282,7 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
       </div></section>
       <section className="pw-model-form-section" aria-label="连接凭据"><h2>凭据</h2><div className="pw-form-grid">
         <TextField label="API 密钥" type="password" value={form.apiKey} onChange={value => change('apiKey', value)} autoComplete="new-password"
-          hint={!adding && original.current?.hasApiKey && form.provider === original.current?.provider && form.url.trim() === original.current?.baseUrl ? '此协议与地址已有密钥；留空继续使用原密钥。' : '请填写这项连接的密钥；新增连接不会借用其他连接的密钥。'} />
+          placeholder={stale ? '先返回核对连接' : canRetainApiKey ? '已保存 · 留空保留' : '输入 API 密钥'} hint={apiKeyHint} />
       </div></section>
       <Accordion className="pw-model-advanced" variant="divided">
         <AccordionItem id="advanced" title="高级设置" description="输出上限、图像输入与截图">

@@ -18,7 +18,7 @@
   align-items: flex-end;
   gap: 2px;
   min-width: 0;
-  min-height: 44px;
+  min-height: 48px;
 }
 
 .pw-composer-host.pw-compact-composer .pw-composer-leading,
@@ -28,7 +28,7 @@
   flex: 0 0 auto;
   flex-wrap: nowrap;
   gap: 0;
-  min-height: 44px;
+  min-height: 48px;
   padding: 0;
 }
 
@@ -37,8 +37,8 @@
   flex: 1 1 0;
   width: 0;
   min-width: 0;
-  height: 44px;
-  min-height: 44px;
+  height: 48px;
+  min-height: 48px;
   max-height: 120px;
   margin: 0;
   padding: 10px 4px;
@@ -56,11 +56,11 @@
 .pw-composer-host.pw-compact-composer .pw-composer-row :is(.afa-iconbtn, .afa-stop),
 .pw-composer-host.pw-compact-composer .pw-composer-leading .pw-composer-intent button {
   box-sizing: border-box;
-  flex: 0 0 44px;
-  width: 44px;
-  min-width: 44px;
-  height: 44px;
-  min-height: 44px;
+  flex: 0 0 48px;
+  width: 48px;
+  min-width: 48px;
+  height: 48px;
+  min-height: 48px;
   margin: 0;
   padding: 10px;
   border: 0;
@@ -69,11 +69,11 @@
 
 .pw-composer-host.pw-compact-composer .pw-composer-row .pw-press {
   box-sizing: border-box;
-  flex: 0 0 44px;
-  width: 44px;
-  min-width: 44px;
-  height: 44px;
-  min-height: 44px;
+  flex: 0 0 48px;
+  width: 48px;
+  min-width: 48px;
+  height: 48px;
+  min-height: 48px;
 }
 
 .pw-composer-host.pw-compact-composer .pw-composer-row .pw-press-front {
@@ -91,7 +91,7 @@
   flex: 1 1 0;
   align-self: center;
   min-width: 0;
-  min-height: 44px;
+  min-height: 48px;
   gap: 6px;
   color: var(--pw-copy, #626262);
   font-size: 14px;
@@ -121,7 +121,7 @@
 
 .pw-composer-host.pw-compact-composer .afa-filechips > span {
   min-width: 0;
-  min-height: 44px;
+  min-height: 48px;
   max-width: 100%;
   padding: 0 0 0 8px;
   border: 0;
@@ -147,9 +147,9 @@
 }
 
 .pw-composer-host.pw-compact-composer .afa-filechips button {
-  flex: 0 0 44px;
-  min-width: 44px;
-  min-height: 44px;
+  flex: 0 0 48px;
+  min-width: 48px;
+  min-height: 48px;
   border: 0;
   border-radius: 12px;
   background: transparent;
@@ -163,7 +163,7 @@
 }
 
 .pw-composer-host.pw-compact-composer .pw-composer-model .pw-model-trigger {
-  min-height: 44px;
+  min-height: 48px;
   max-width: 100%;
   border: 0;
   background: transparent;
