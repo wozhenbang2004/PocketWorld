@@ -1312,5 +1312,14 @@
     "helpers": [],
     "robolectric": true,
     "description": "Actual approved native research start through HostToolSupervisor/FeatureHost/Module/Coordinator/SQLite, delayed original callback versus explicit replacement generation, dynamic original child cancellation, physical-finally retention and existing durable unknown resource-state regression. Controlled research workers only; no model, remote, device or UI acceptance."
+  },
+  "attachment-export-picker-lifecycle": {
+    "class": "dev.pocketengine.ui.AttachmentExportPickerLifecycleTest",
+    "helpers": [],
+    "robolectric": true,
+    "description": "Real Activity launcher, original coordinator and SAF/repository bytes with controlled launch failures, reentry and saved-state fixtures. Does not establish real-device overlapping pickers or mounted UI acceptance.",
+    "additionalClasses": [
+      "dev.pocketengine.ui.AttachmentExportPickerRegistryTest"
+    ]
   }
 }
