@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, RadioOptions } from './forms-library';
+import { Accordion, AccordionItem, Button, RadioOptions } from './forms-library';
 
 type Data = Record<string, unknown>;
 type Props = { state: Data; supported: (action: string) => boolean; run: (action: string, args?: Record<string, unknown>) => Promise<unknown> };
@@ -22,7 +22,6 @@ export function AppearanceSettings({ state, supported, run }: Props) {
           .catch(failure => setError(failure instanceof Error ? failure.message : '外观保存未确认，请重试'))
           .finally(() => setPending(false));
       }} />
-    <p className="pw-field-hint">与原生窗口共用同一偏好，跟随系统时会随设备外观切换。</p>
     {(error || typeof appearance.error === 'string') && <p className="pw-error" role="alert">{error || String(appearance.error)}</p>}
   </>;
 }
@@ -61,7 +60,7 @@ export function SystemSpeechSettings({ state, supported, run }: Props) {
   const needsData = speech.ttsStatus === 'language_data_missing' || speech.ttsStatus === 'language_unsupported';
   return <>
     <p className="pw-field-hint" role="status">{systemSpeechSummary(speech)}。{network}</p>
-    {typeof speech.ttsEnginePackage === 'string' && speech.ttsEnginePackage && <p className="pw-field-hint">系统引擎：{speech.ttsEnginePackage}{typeof speech.ttsVoiceName === 'string' && speech.ttsVoiceName ? ` · ${speech.ttsVoiceName}` : ''}</p>}
+    {typeof speech.ttsEnginePackage === 'string' && speech.ttsEnginePackage && <Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="speech-engine" title="语音引擎"><p className="pw-field-hint">{speech.ttsEnginePackage}{typeof speech.ttsVoiceName === 'string' && speech.ttsVoiceName ? ` · ${speech.ttsVoiceName}` : ''}</p></AccordionItem></Accordion>}
     <div className="pw-form-actions">
       <Button variant="secondary" disabled={pending || speech.ttsStatus === 'initializing' || needsData || !supported('speech.prepare')} onClick={() => { void perform('speech.prepare'); }}>准备中文朗读</Button>
       <Button variant="secondary" disabled={pending || !supported('speech.openSettings')} onClick={() => { void perform('speech.openSettings'); }}>系统语音设置</Button>

@@ -47,7 +47,7 @@ import { ACCOUNT_RECEIPT_ACTIONS, accountActionReceipt, accountLoginArguments } 
 type Data = Record<string, any>;
 type Snapshot = { state?: Data; view?: { resumeRevision?: number; taskId?: string | null }; composer?: Data | null; capabilities?: { commands?: string[] } };
 type BackHandlerRegistration = (handler: (() => boolean) | null) => void;
-type Props = { route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration };
+type Props = { route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration; navigationTrigger?: ReactNode; navigationRevision?: number; onNavigationPageChange?: (page: string) => void };
 type Run = (action: string, args?: Data) => Promise<any>;
 const object = (value: any): Data => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const list = (value: any): Data[] => Array.isArray(value) ? value.filter(x => x && typeof x === 'object' && !Array.isArray(x)) : [];
@@ -111,12 +111,12 @@ function SourceRecord({ item, titleKeys = ['name', 'title', 'goal', 'label', 'id
     {children}
   </article>;
 }
-function CapabilityAction({ action, supported, run, args = {}, children, primary = false, disabled = false }: { action: string; supported: (action: string) => boolean; run: Run; args?: Data; children: ReactNode; primary?: boolean; disabled?: boolean }) {
+function CapabilityAction({ action, supported, run, args = {}, children, primary = false, disabled = false, row = false }: { action: string; supported: (action: string) => boolean; run: Run; args?: Data; children: ReactNode; primary?: boolean; disabled?: boolean; row?: boolean }) {
   const [waiting, setWaiting] = useState(false);
   const click = async () => { setWaiting(true); try { await run(action, args); } catch { /* The page keeps the real error visible. */ } finally { setWaiting(false); } };
   const inactive = disabled || waiting || !supported(action);
   return primary ? <PressButton compact disabled={inactive} onClick={click} title={!supported(action) ? '当前页面尚未开放此操作' : undefined}>{waiting ? '处理中…' : children}</PressButton>
-    : <Button variant="secondary" disabled={inactive} onClick={click} title={!supported(action) ? '当前页面尚未开放此操作' : undefined}>{waiting ? '处理中…' : children}</Button>;
+    : <Button variant={row ? "ghost" : "secondary"} className={row ? "pw-domain-link h-auto whitespace-normal" : undefined} trailingIcon={row ? RiArrowRightSLine : undefined} disabled={inactive} onClick={click} title={!supported(action) ? '当前页面尚未开放此操作' : undefined}>{waiting ? '处理中…' : children}</Button>;
 }
 
 type ModelDraft = { url: string; model: string; provider: string; screenshots: boolean; supportsImageInput: boolean; maxOutputTokens: string; compatibility: CompatibilityDraft };
@@ -157,6 +157,10 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
   const [unknownTest, setUnknownTest] = useState(false);
   const [policyReset, setPolicyReset] = useState(false);
   const stale = !adding && (!connection || connection.id !== original.current?.id || connection.revision !== original.current?.revision);
+  const canRetainApiKey = !adding && !stale && original.current?.hasApiKey === true && form.provider === original.current.provider && form.url.trim() === original.current.baseUrl;
+  const apiKeyHint = stale ? '原连接已更新，请返回核对后再编辑密钥。' : canRetainApiKey
+    ? form.apiKey.trim() ? '保存后更换原密钥；保存前清空输入可取消更换。' : '留空保留原密钥；填写新密钥并保存后更换。'
+    : '请填写这项连接的密钥；新增连接不会借用其他连接的密钥。';
   const currentStale = useRef(stale); currentStale.current = stale;
   const testDraft = (): ConnectionTestDraft => ({ editorId, draftRevision: editRevision.current,
     connectionId: adding ? '' : text(original.current?.id), connectionRevision: adding ? 0 : Number(original.current?.revision) });
@@ -278,7 +282,7 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
       </div></section>
       <section className="pw-model-form-section" aria-label="连接凭据"><h2>凭据</h2><div className="pw-form-grid">
         <TextField label="API 密钥" type="password" value={form.apiKey} onChange={value => change('apiKey', value)} autoComplete="new-password"
-          hint={!adding && original.current?.hasApiKey && form.provider === original.current?.provider && form.url.trim() === original.current?.baseUrl ? '此协议与地址已有密钥；留空继续使用原密钥。' : '请填写这项连接的密钥；新增连接不会借用其他连接的密钥。'} />
+          placeholder={stale ? '先返回核对连接' : canRetainApiKey ? '已保存 · 留空保留' : '输入 API 密钥'} hint={apiKeyHint} />
       </div></section>
       <Accordion className="pw-model-advanced" variant="divided">
         <AccordionItem id="advanced" title="高级设置" description="输出上限、图像输入与截图">
@@ -327,7 +331,6 @@ function ModelConnections({ state, data, supported, run, navigate, open }: { sta
   const account = state.modelRoute === 'account';
   const configured = Boolean(text(state.baseUrl).trim());
   return <section className="pw-model-connections" data-model-layer="connections" aria-label="连接列表">
-      <p className="pw-reading-lead">连接提供模型。选择一项，查看账号或修改 API 配置。</p>
       <div className="pw-settings-links">
         {configured && selectedConnection && <Button variant="ghost" aria-label="编辑当前 API 连接" leadingIcon={RiLink} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => open({ kind: 'edit', id: selectedId })}>
           <span><span>{first(selectedConnection || {}, ['name', 'label'], 'API 连接设置')}</span><small>{account ? '保留的连接' : '当前使用'}{' · '}{state.hasApiKey ? '凭据已保存' : '地址、凭据与能力'}</small></span>
@@ -335,7 +338,7 @@ function ModelConnections({ state, data, supported, run, navigate, open }: { sta
         {profiles.filter(row => recordId(row) !== selectedId || !configured).map((row, index) => <Button key={recordId(row, String(index))} variant="ghost" leadingIcon={RiLink} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => open({ kind: 'connection', id: recordId(row) })}>
           <span><span>{first(row, ['name', 'label', 'id'], '已保存连接')}</span><small>{MODEL_PROVIDERS[text(row.provider)] || first(row, ['provider', 'protocol'], 'API')}{row.enabled === false ? ' · 已停用' : ' · 已保存'}</small></span>
         </Button>)}
-        <Button variant="ghost" leadingIcon={RiKey2Line} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate('accounts')}><span><span>ChatGPT 账号</span><small>授权、账号模型与套餐用量</small></span></Button>
+        <Button variant="ghost" leadingIcon={RiKey2Line} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate('accounts')}><span><span>ChatGPT 账号</span></span></Button>
       </div>
       {account && selectedConnection && <div className="pw-form-actions"><Button variant="secondary" disabled={Boolean(state.modelSaving || state.modelSelectionBusy)} onClick={() => open({ kind: 'connection', id: selectedId })}>核对并使用这项 API 连接</Button></div>}
       {!configured && profiles.length === 0 && <Empty>还没有 API 连接。添加后可以测试并保存。</Empty>}
@@ -429,8 +432,8 @@ function ExecutionControls({ state, supported, run }: { state: Data; supported: 
   const choose = async (enabled: boolean) => { setWaiting(true); try { const value = object(await run('execution.review', { enabled })); if (alive.current) setReview(value); } catch {} finally { if (alive.current) setWaiting(false); } };
   const confirm = async () => { if (!review || busy) return; setWaiting(true); try { await run('execution.confirm', { reviewHandle: review.reviewHandle }); } catch {} finally { if (alive.current) { setWaiting(false); setReview(null); } } };
   const stop = object(policy.lastStop), outcomes = list(stop.tasks), resources = list(stop.resources);
-  return <Card title="PocketWorld 运行开关" description="停用会请求停止当前工作，并持续阻止新执行；重新打开应用也保持停用。">
-    <StretchSwitch label="允许执行与自动任务" checked={policy.enabled === true && policy.acceptingNewWork !== false} disabled={busy || !Number.isSafeInteger(policy.revision) || !supported('execution.review')} description={policy.enabled === false || policy.acceptingNewWork === false ? '已停用。可以查看已有结果与核对未决操作。' : '恢复此开关不会重放旧任务；原任务仍需分别核对。'} onChange={choose} />
+  return <Card className="pw-execution-control">
+    <StretchSwitch label="允许执行与自动任务" checked={policy.enabled === true && policy.acceptingNewWork !== false} disabled={busy || !Number.isSafeInteger(policy.revision) || !supported('execution.review')} description={!Number.isSafeInteger(policy.revision) ? '尚未读取运行状态' : policy.enabled === false || policy.acceptingNewWork === false ? '已停用 · 可查看结果与核对未决操作' : '已开启 · 停用会请求停止并阻止新执行'} onChange={choose} />
     {!Number.isSafeInteger(policy.revision) && <CapabilityAction action="execution.read" supported={supported} run={run}>读取运行状态</CapabilityAction>}
     {stop.requestedAt && <Accordion variant="divided"><AccordionItem id="execution-stop-receipts" title="查看上次停止回执" description="停止请求和实际资源收尾分别记录。"><p>已请求取消 {Number(stop.originalControlsCancelled || 0)} 个原执行控制；仍需按各任务回执核对已发生的效果。</p>{outcomes.map(row => <SourceRecord key={text(row.taskId)} item={{ ...row, title: '原任务 ' + text(row.taskId).slice(0, 8), status: row.cleanup }}><CapabilityAction action="tasks.open" args={{ id: row.taskId }} supported={supported} run={run}>核对原任务</CapabilityAction></SourceRecord>)}{resources.map((row, index) => <Facts key={text(row.resource, String(index))} items={[[text(row.resource, '资源'), row.state || object(row.actual).message || '请核对原资源状态']]} />)}<p className="pw-field-hint">这些回执不表示所有远端进程或系统资源已释放。</p></AccordionItem></Accordion>}
     <SettingsDialog isOpen={review !== null} title={review?.nextEnabled ? '恢复新任务准入？' : '全部停止并停用？'} onClose={() => { if (!busy) setReview(null); }}><p>{review?.nextEnabled ? '只允许之后明确发起的新工作和有效自动计划。不会自动继续旧任务或重放结果未知的操作。' : '先持久保存停用，再请求停止原任务、监听、网关、显示和音频资源。未决效果及清理回执会保留，关闭应用不会撤销停用。'}</p><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setReview(null)}>取消</Button><PressButton compact disabled={busy || review?.revision !== policy.revision} onClick={confirm}>{busy ? '等待原回执…' : review?.nextEnabled ? '允许后续工作' : '确认全部停止并停用'}</PressButton></div>{review && review.revision !== policy.revision && <p className="pw-field-error">原开关状态已变化，请取消后重新核对。</p>}</SettingsDialog>
@@ -441,24 +444,37 @@ function PhoneSettings({ state, supported, run, navigate }: { state: Data; suppo
   const ready = object(state.phoneReadiness);
   const screenshotPolicy = object(state.taskScreenshotPolicy);
   const latestReply = list(state.messages).filter(row => row.role === 'assistant' && typeof row.id === 'string' && row.content).at(-1);
+  const appearance = text(object(state.appearance).mode);
   return <>
-    <Card title="界面外观"><AppearanceSettings state={state} supported={supported} run={run} /></Card>
-    <Card title="手机观察与执行" description="本地取图、OCR 和云端发送分别设置。">
+    <Card title="手机执行">
+      <p className="pw-detail-status">{first(ready, ['message', 'summary', 'status'], '尚未核对执行能力')}</p>
+      <div className="pw-settings-links">
+        {[
+          ['accessibility', '界面读取与主屏控制', state.accessibilityEnabled ? '已连接' : '未连接'],
+          ['notifications', '任务通知', state.notificationsEnabled ? '已开启' : '未开启'],
+          ['wireless', '无线调试', ''],
+        ].map(([section, title, current]) => <CapabilityAction key={section} row action="settings.openSystem" args={{ section }} supported={supported} run={run}><span><span>{title}</span>{current && <small>{current}</small>}</span></CapabilityAction>)}
+        <Button variant="ghost" trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" disabled={!supported('settings.openSystem')} onClick={() => navigate('background')}><span><span>后台连接与授权</span></span></Button>
+      </div>
+    </Card>
+    <Accordion variant="divided" className="pw-settings-groups pw-phone-groups" allowsMultipleExpanded>
+      <AccordionItem id="observation" title="本地观察与截图" description={`取图${state.localCaptureAllowed !== false ? '开启' : '关闭'} · OCR ${state.localOcrAllowed !== false ? '开启' : '关闭'}`} icon={RiShieldCheckLine} headingLevel={2} className="pw-settings-group">
       <StretchSwitch label="允许本地按需取图" description="更改用于后续运行；关闭后不为 OCR 采集像素。" checked={state.localCaptureAllowed !== false} disabled={!supported('settings.saveLocalObservation')} onChange={capture => { void run('settings.saveLocalObservation', { capture, ocr: state.localOcrAllowed !== false }).catch(() => {}); }} />
       <StretchSwitch label="允许本地 OCR" description="像素在本地识字；有来源的识别文字可发送给已选推理服务。" checked={state.localOcrAllowed !== false} disabled={!supported('settings.saveLocalObservation')} onChange={ocr => { void run('settings.saveLocalObservation', { capture: state.localCaptureAllowed !== false, ocr }).catch(() => {}); }} />
       {typeof screenshotPolicy.revision === 'number' ? <RadioOptions label="新结果截图的本机留存" value={text(screenshotPolicy.retentionMillis)} options={[{ id: '0', label: '不保存新截图' }, { id: '86400000', label: '1 天' }, { id: '604800000', label: '7 天' }, { id: '2592000000', label: '30 天' }]} isDisabled={Boolean(state.taskScreenshotSaving) || !supported('privacy.screenshots.save')} onChange={value => { void run('privacy.screenshots.save', { revision: screenshotPolicy.revision, retentionMillis: Number(value) }).catch(() => {}); }} /> : <CapabilityAction action="privacy.screenshots.read" supported={supported} run={run}>读取截图留存设置</CapabilityAction>}
       <p className="pw-field-hint">结果截图使用本机密钥加密。设置只影响之后生成的截图；旧图保留到你主动删除或被同一任务的新结果替换。可从原任务核对中删除本机截图。</p>
-      <Facts items={[[ '当前执行能力', first(ready, ['message', 'summary', 'status']) ], ['无障碍服务', state.accessibilityEnabled ? '已连接' : '未连接'], ['任务通知', state.notificationsEnabled ? '已开启' : '未开启']]} />
-      <div className="pw-form-actions">{[['accessibility', '界面读取与主屏控制'], ['notifications', '任务通知'], ['wireless', '无线调试设置']].map(([section, title]) => <CapabilityAction key={section} action="settings.openSystem" supported={supported} run={run} args={{ section }}>{title}</CapabilityAction>)}<Button variant="secondary" disabled={!supported('settings.openSystem')} onClick={() => navigate('background')}>后台连接与授权</Button></div>
-    </Card>
-    <Card title="浏览器与语音" description="语音识别只填入草稿，仍由你决定发送。">
+      </AccordionItem>
+      <AccordionItem id="appearance" title="界面外观" description={{ system: '跟随系统', light: '浅色', dark: '深色' }[appearance] || undefined} icon={RiSmartphoneLine} headingLevel={2} className="pw-settings-group"><AppearanceSettings state={state} supported={supported} run={run} /></AccordionItem>
+      <AccordionItem id="speech" title="浏览器与语音" description={state.speaking ? '正在朗读' : undefined} icon={RiMicLine} headingLevel={2} className="pw-settings-group">
+        <p className="pw-field-hint">语音识别只填入草稿，由你决定发送。</p>
       <SystemSpeechSettings state={state} supported={supported} run={run} />
       <StretchSwitch label="任务状态语音提示" description="仅前台私有任务的状态提示，不读任务正文；系统语音引擎可能联网。默认关闭。" checked={object(state.taskAnnouncements).enabled === true} disabled={Boolean(state.taskAnnouncementSaving) || !supported('speech.taskAnnouncements')} onChange={enabled => { void run('speech.taskAnnouncements', { enabled }).catch(() => {}); }} />
       {object(object(state.taskAnnouncements).readout).active && <CapabilityAction action="speech.stopTaskAnnouncement" args={{ readoutId: object(object(state.taskAnnouncements).readout).readoutId }} supported={supported} run={run}>停止这次状态提示</CapabilityAction>}
 
       <Facts items={[[ '系统听写', state.speechAvailable ? '可用' : '暂不可用'], ['朗读', state.speaking ? '正在朗读' : '未在朗读']]} />
       <div className="pw-form-actions"><CapabilityAction action="settings.openBrowser" args={{ purpose: 'research' }} supported={supported} run={run}>网页研究工作区</CapabilityAction><CapabilityAction action="settings.openBrowser" args={{ purpose: 'browse' }} supported={supported} run={run}>内置浏览器</CapabilityAction><CapabilityAction action={state.speaking ? 'speech.stop' : 'speech.speak'} args={state.speaking ? {} : { messageId: latestReply?.id }} disabled={!state.speaking && !latestReply} supported={supported} run={run}>{state.speaking ? '停止朗读' : '朗读最近回复'}</CapabilityAction></div>
-    </Card>
+      </AccordionItem>
+    </Accordion>
   </>;
 }
 
@@ -888,12 +904,12 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack }: { 
   </>;
 }
 
-function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate, onOpenModels, onNavigate }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void; onOpenModels: () => void; onNavigate: (domain: 'plugins' | 'pluginCatalog' | 'mcp') => void }) {
+function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate, onOpenModels, onNavigate, alreadyShownError }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void; onOpenModels: () => void; onNavigate: (domain: 'plugins' | 'pluginCatalog' | 'mcp') => void; alreadyShownError?: string }) {
   const title = SECONDARY_DOMAINS.find(x => x.id === domain)?.title || '连接与能力';
   if (domain === 'accounts') return <AccountsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'devices') return <DevicesWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} openModels={onOpenModels} />;
   if (domain === 'remote' || domain === 'ssh') return <ConnectionWorkspace domain={domain} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
-  if (domain === 'memory' || domain === 'memoryReview') return <MemoryWorkspace domain={domain} run={run} registerTransientBack={registerTransientBack} initialCandidate={candidateTarget} />;
+  if (domain === 'memory' || domain === 'memoryReview') return <MemoryWorkspace domain={domain} run={run} registerTransientBack={registerTransientBack} initialCandidate={candidateTarget} alreadyShownError={alreadyShownError} />;
   if (domain === 'learning') return <LearningWorkspace state={state} data={data} run={run} registerTransientBack={registerTransientBack} onReviewCandidate={onReviewCandidate} />;
   if (domain === 'automation') return <ReminderWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'workProfiles') return <WorkProfilesWorkspace state={state} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
@@ -902,7 +918,7 @@ function DomainPage({ domain, state, data, supported, run, registerTransientBack
   if (domain === 'mcp') return <McpWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'skills') return <SkillsWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'plugins' || domain === 'pluginCatalog') return <PluginsWorkspace mode={domain} state={state} supported={supported} run={run} registerTransientBack={registerTransientBack} onNavigate={onNavigate} />;
-  if (domain === 'teams') return <TeamsWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
+  if (domain === 'teams') return <TeamsWorkspace state={state} run={run} registerTransientBack={registerTransientBack} alreadyShownError={alreadyShownError} />;
   if (domain === 'groups') return <GroupsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'media') return <MediaWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'realtime') return <RealtimeWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
@@ -1074,7 +1090,7 @@ const COMMON_SETTINGS = [
   { id: 'storage', title: '项目存储', detail: '占用与清理审阅', icon: RiDatabase2Line },
 ];
 
-export default function Secondary({ route, onBack, snapshot, registerBackHandler }: Props) {
+export default function Secondary({ route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange }: Props) {
   const state: Data = { ...object(snapshot.state), webWorkspaceResumeRevision: Number(snapshot.view?.resumeRevision || 0), webWorkspaceTaskOpen: !!snapshot.view?.taskId };
   const commands = snapshot.capabilities?.commands || [];
   const supported = (action: string) => commands.includes(action);
@@ -1090,7 +1106,8 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const [expandedSettings, setExpandedSettings] = useState<Set<string>>(new Set());
   const trail = useRef<Array<{ page: string; query: string; modelView: ModelView; modelTrail: ModelView[]; candidateTarget: LearningCandidateTarget | null }>>([]), scroll = useRef<HTMLDivElement>(null), scrollPositions = useRef(new Map<string, number>());
   const mounted = useRef(true), generation = useRef(0);
-  useEffect(() => { generation.current++; trail.current = []; modelTrail.current = []; setPage(normalize(route)); setCandidateTarget(null); setModelView({ kind: 'list' }); setNotice(''); setError(''); }, [route]);
+  useEffect(() => { generation.current++; trail.current = []; modelTrail.current = []; setPage(normalize(route)); setCandidateTarget(null); setModelView({ kind: 'list' }); setNotice(''); setError(''); }, [route, navigationRevision]);
+  useEffect(() => { onNavigationPageChange?.(page); }, [page, onNavigationPageChange]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; }; }, []);
   const run: Run = async (action, args = {}) => {
     if (!supported(action)) throw new Error('当前页面尚未开放此操作。');
@@ -1179,10 +1196,10 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
     return () => registerBackHandler?.(null);
   }, [registerBackHandler]);
   const back = () => { if (!consumeBack()) onBack(); };
-  const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof RiKey2Line }>) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate(item.id)}><span><span>{item.title}</span><small>{item.detail}</small></span></Button>)}</div>;
+  const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof RiKey2Line }>, showCurrentModel = false) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate(item.id)}><span><span>{item.title}</span>{showCurrentModel && item.id === 'model-settings' && <small>{text(state.modelName) || '尚未连接'}</small>}</span></Button>)}</div>;
   const refreshAction = page === 'background' ? 'background.refresh' : isModelPage ? 'models.snapshot' : page === 'memory' ? 'memory.list' : 'app.refresh';
   return <section className="pw-secondary pw-secondary-refactor" data-secondary-page={page} aria-label={pageTitle}>
-    <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label={isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} onClick={back} /><div><h1>{pageTitle}</h1></div><IconButton icon={RiRefreshLine} aria-label="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} /></header>
+    <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label={isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} onClick={back} /><div><h1>{pageTitle}</h1></div>{!['memory', 'memoryReview', 'teams'].includes(page) && <IconButton icon={RiRefreshLine} aria-label="刷新当前状态" title="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} />}{navigationTrigger}</header>
     <div className="pw-secondary-scroll" ref={scroll}>
       {notice && <p className="pw-request-notice" role="status">{notice}</p>}
       {(error || domainError) && <p className="pw-field-error" role="alert">{error || domainError}</p>}
@@ -1191,11 +1208,11 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
           <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="搜索设置" placeholder="搜索设置" value={query} onChange={setQuery} shape="rounded" />
           {!query.trim() && <ExecutionControls state={state} supported={supported} run={run} />}
           {query.trim() ? <section className="pw-settings-results" aria-label="匹配的设置">{settingRows(filtered)}{filtered.length === 0 && <Empty>没有匹配的设置。</Empty>}</section>
-            : <><section className="pw-settings-frequent" aria-label="常用设置">{settingRows(frequentSettings)}</section><Accordion variant="divided" className="pw-settings-groups" aria-label="按目的浏览设置" expandedKeys={expandedSettings} onExpandedChange={values => setExpandedSettings(new Set([...values].map(String)))} allowsMultipleExpanded>{SETTINGS_GROUPS.map(group => <AccordionItem id={group.id} key={group.id} title={group.title} description={group.detail} icon={group.icon} headingLevel={2} className="pw-settings-group">{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</AccordionItem>)}</Accordion></>}
+            : <><section className="pw-settings-frequent" aria-label="常用设置">{settingRows(frequentSettings, true)}</section><Accordion variant="divided" className="pw-settings-groups" aria-label="按目的浏览设置" expandedKeys={expandedSettings} onExpandedChange={values => setExpandedSettings(new Set([...values].map(String)))} allowsMultipleExpanded>{SETTINGS_GROUPS.map(group => <AccordionItem id={group.id} key={group.id} title={group.title} icon={group.icon} headingLevel={2} className="pw-settings-group">{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</AccordionItem>)}</Accordion></>}
         </> : settingsGroup ? <section className="pw-settings-group-page">{settingRows(settingsGroup.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</section>
           : isModelPage ? <>
             <div className="pw-model-list" data-model-layer={modelView.kind === 'model' ? 'model' : 'list'} hidden={!modelBrowseActive}>
-              {modelView.kind !== 'model' && <header className="pw-model-current"><div><span className="pw-model-eyebrow">当前模型</span><strong>{text(state.modelName) || '尚未连接'}</strong><span className="pw-model-origin">{state.modelRoute === 'account' ? 'ChatGPT 账号' : MODEL_PROVIDERS[text(state.modelProvider)] || 'API 连接'}</span></div><Button variant="ghost" leadingIcon={RiSettings3Line} onClick={() => openModel({ kind: 'connections' })}>管理连接</Button></header>}
+              {modelView.kind !== 'model' && <header className="pw-model-current"><div><span className="pw-model-eyebrow">当前模型</span><strong>{text(state.modelName) || '尚未连接'}</strong><span className="pw-model-origin">{state.modelRoute === 'account' ? 'ChatGPT 账号' : MODEL_PROVIDERS[text(state.modelProvider)] || 'API 连接'}</span></div><IconButton className="pw-utility-icon" icon={RiSettings3Line} aria-label="管理连接" title="管理连接" onClick={() => openModel({ kind: 'connections' })} /></header>}
               {modelView.kind !== 'model' && state.modelRoute === 'account' && <div className="pw-account-model-entry"><Button variant="secondary" trailingIcon={RiArrowRightSLine} onClick={() => navigate('accounts')}>打开账号模型</Button><p className="pw-field-hint">下面是保留的 API 模型目录。</p></div>}
               <ModelCatalog key={page} state={state} data={data} active={modelBrowseActive} selectedId={modelView.kind === 'model' ? modelView.id : undefined} supported={supported} run={run} open={openModel} registerTransientBack={registerTransientBack} />
             </div>
@@ -1207,7 +1224,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
           : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} navigate={navigate} />
           : page === 'history' || page === 'usage' ? <HistoryPage key={page} usage={page === 'usage'} supported={supported} run={run} />
           : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} registerTransientBack={registerTransientBack} navigate={navigate} />
-          : domain ? <DomainPage key={page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} />
+          : domain ? <DomainPage key={page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} alreadyShownError={error || domainError} />
           : <Empty>此入口未找到，可返回设置。</Empty>}
       </div>
     </div>

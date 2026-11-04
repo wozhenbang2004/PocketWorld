@@ -6,8 +6,8 @@
   --pw-surface: #1b1b1b;
   --pw-inset: #2b2b2b;
   --pw-selected: #353535;
-  --pw-edge: #4b4b4b;
-  --pw-edge-hover: #777;
+  --pw-edge: transparent;
+  --pw-edge-hover: transparent;
   --pw-ink: #e8e8e8;
   --pw-copy: #bdbdbd;
   --pw-muted: #b7b7b7;
@@ -15,6 +15,10 @@
   --pw-strong: #ededed;
   --pw-focus: #ededed;
   --pw-on-strong: #181818;
+  --ovio-on-accent: var(--pw-on-strong);
+  --pw-shadow-surface: 0 12px 36px -12px rgb(0 0 0 / 24%);
+  --pw-shadow-floating: 0 16px 48px -12px rgb(0 0 0 / 32%);
+  --pw-shadow-sheet: 0 18px 64px -16px rgb(0 0 0 / 36%);
   --background: var(--pw-surface);
   --foreground: var(--pw-ink);
   --accent: var(--pw-selected);
@@ -31,17 +35,17 @@
  * here so its children and portaled settings agree with the root preference. */
 :root.dark .pw-redesign {
   --pw-canvas: #121212;
-  --pw-edge: #4b4b4b;
+  --pw-edge: transparent;
   --pw-ink: #e8e8e8;
   --pw-strong: #ededed;
 }
 :root.dark :is(.pw-app, .pw-secondary) { background: var(--pw-canvas); color: var(--pw-ink); }
 :root.dark .pw-library { color: var(--pw-ink); color-scheme: dark; }
-:root.dark .pw-workspace[data-ovio-world] { --ovio-track: var(--pw-surface); }
+:root.dark .pw-navigation-overlay { background: rgb(0 0 0 / 32%); }
 
 /* Original product surfaces with fixed light fills. Geometry, typography,
  * source component animation and their media contents are unchanged. */
-:root.dark :is(.pw-app-header, .pw-secondary-header, .pw-settings-section,
+:root.dark :is(.pw-app-header, .pw-secondary-header,
   .pw-settings-dialog, .pw-drawer, .pw-work-drawer, .pw-task-drawer,
   .pw-task-header, .pw-task-footer, .pw-file-actions) {
   background: var(--pw-surface);
@@ -50,19 +54,18 @@
 }
 :root.dark .pw-redesign .pw-app-header { background: transparent; }
 :root.dark .pw-redesign :is(.pw-chat-workspace, .pw-workspace .pw-page) {
-  background: var(--pw-surface);
-  border-color: var(--pw-edge);
+  background: transparent;
+  border-color: transparent;
 }
 :root.dark .pw-redesign .pw-user-text { background: var(--pw-inset); color: var(--pw-ink); }
-:root.dark .pw-redesign .pw-active-bar { background: var(--pw-inset); }
+:root.dark .pw-redesign .pw-active-bar { background: transparent; }
 :root.dark .pw-redesign .pw-composer-region .pw-composer-host .afa-composer > .afa-card {
-  background: var(--pw-surface);
+  background: var(--pw-inset);
   color: var(--pw-ink);
   border-color: var(--pw-edge);
 }
-:root.dark :is(.pw-error, .pw-banner, .pw-banner-error, .pw-linked-task.button-press-motion,
-  .pw-priority-decisions .ui-dic__card, .pw-project-thumbnail,
-  .pw-work-drawer .pw-work-search > button, .pw-task-review .pw-permission .cb-permission2-request) {
+:root.dark :is(.pw-error, .pw-banner, .pw-banner-error, .pw-project-thumbnail,
+  .pw-work-drawer .pw-work-search > button) {
   background: var(--pw-inset);
   color: var(--pw-ink);
   border-color: var(--pw-edge);
