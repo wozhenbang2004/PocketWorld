@@ -62,6 +62,10 @@ node web-ui/tests/phone-handoff-ui.mjs \
 
 The fixture covers unknown-receipt recovery, explicit rejection, two ended runs,
 saved-but-unadmitted creation, and a reopened conversation using a summary header.
+It also opens both frozen results after clearing the recent-task cache, checks
+that returning keeps their original metadata without another start or resume,
+and preserves an unknown request through the navigation drawer. Review layout
+checks cover separate goal/location text and a wrapping long model name.
 It models native responses and does not prove SQLite, Android admission or device
 execution. Native tests are registered in the `conversation-phone-handoff` host
 group; full Android compilation and a source-matched APK are separate checks.

@@ -7,7 +7,7 @@
 .pw-model-drawer .cb-model2-options { padding: 6px; }
 .pw-model-drawer .cb-model2-options > button { align-items: center; min-width: 0; min-height: 72px; padding: 12px 10px; border-radius: 6px; text-align: start; white-space: normal; }
 .pw-model-drawer .cb-model2-name { display: flex; align-items: center; gap: 10px; min-width: 0; overflow-wrap: anywhere; }
-.pw-model-drawer .cb-model-initial { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 28px; height: 28px; border: 1px solid var(--cb-line); border-radius: 6px; font-size: 13px; line-height: 20px; }
+.pw-model-drawer .cb-model-initial { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 28px; height: 28px; border: 0; border-radius: 6px; background: var(--pw-inset); font-size: 13px; line-height: 20px; }
 .pw-model-drawer .cb-model2-name > span:last-child { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
 .pw-model-drawer .cb-model2-name strong { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 15px; line-height: 22px; }
 .pw-model-drawer .cb-model2-name strong > svg { flex: none; }

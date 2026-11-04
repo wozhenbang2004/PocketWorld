@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { bridge } from './bridge';
-import { Accordion, AccordionItem, Button } from './forms-library';
+import { Accordion, AccordionItem, Button, IconButton } from './forms-library';
+import { RiArrowLeftLine, RiArrowRightLine, RiRefreshLine } from '@remixicon/react';
 import { getTaskEventHistory, getTaskOperations } from './task-presentation';
 import { taskAuditPage, taskHistoryIdentity, type AuditPage, type AuditSection, type TaskHeader } from './task-history';
 
@@ -51,17 +52,19 @@ export function TaskHistory({ task, canRead, renderOperation }: { task: TaskHead
   const navigation = (window: ReturnType<typeof useAuditWindow>, label: string) => <>
     {window.error && <p className="pw-error" role="alert">{window.error}</p>}
     <div className="pw-action-row" aria-label={label + '翻页'}>
-      {window.canGoBack && <Button variant="ghost" size="small" disabled={window.busy || !canRead} onClick={window.newer}>较近记录</Button>}
-      {window.page?.hasMore && <Button variant="ghost" size="small" disabled={window.busy || !canRead} onClick={window.older}>较早记录</Button>}
-      {canRead && <Button variant="ghost" size="small" disabled={window.busy} onClick={window.refresh}>{window.page ? '重读最近记录' : '读取原记录'}</Button>}
+      {window.page && <span className="pw-muted pw-history-window">{window.earlier ? '较早记录' : '最近记录'}{window.page.hasMore ? ' · 尚有更早记录' : ' · 已到当前读取范围末尾'}</span>}
+      <span className="pw-grow"/>
+      {window.canGoBack && <IconButton icon={RiArrowLeftLine} aria-label="较近记录" title="较近记录" disabled={window.busy || !canRead} onClick={window.newer}/>}
+      {window.page?.hasMore && <IconButton icon={RiArrowRightLine} aria-label="较早记录" title="较早记录" disabled={window.busy || !canRead} onClick={window.older}/>}
+      {canRead && (window.page ? <IconButton icon={RiRefreshLine} aria-label="重读最近记录" title="重读最近记录" disabled={window.busy} onClick={window.refresh}/> : <Button variant="ghost" leadingIcon={RiRefreshLine} disabled={window.busy} onClick={window.refresh}>读取原记录</Button>)}
     </div>
     {window.busy && <p className="pw-muted" role="status">正在读取{label}…</p>}
-    {window.page && <p className="pw-muted">{window.earlier ? '当前为较早的记录窗口。' : '当前为最近的记录窗口。'}{window.page.hasMore ? '可继续读取较早记录。' : '已到这次读取范围的末尾。'}{window.page.readLimited === true && '部分正文超出当前读取范围。'}</p>}
+    {window.page?.readLimited === true && <p className="pw-muted">部分正文超出当前读取范围。</p>}
   </>;
   return <section className="pw-task-process" aria-label="执行过程">
     <section className="pw-task-events" aria-label="任务记录"><h3 className="pw-task-history-heading">任务记录</h3>
-      {history.partial && <p className="pw-muted pw-task-history-limit">这里只显示当前已读取的记录窗口，不能据此判断完整过程。</p>}
-      {history.entries.length ? <Accordion variant="divided" className="pw-task-event-list" aria-label="已读取任务记录">{history.entries.map((event, index) => <AccordionItem key={`${event.id}:${index}`} id={`${task.id}:${event.id}:${index}`} className="pw-task-event" data-event-position={event.position} data-read-limited={event.readLimited || undefined} headingLevel={4} title={event.title} description={[event.stateLabel, time(event.at), event.runId && !event.isCurrentRun ? '早先执行记录' : ''].filter(Boolean).join(' · ')}><p className="pw-task-event-copy">{event.detail}</p>{event.partial && event.bodyAvailable && <p className="pw-muted">当前只保留这条记录的已读部分。</p>}</AccordionItem>)}</Accordion> : <p className="pw-muted">当前窗口没有可读取的任务记录。</p>}
+      {history.partial && <p className="pw-muted pw-task-history-limit">当前为部分记录，完整过程尚未载入。</p>}
+      {history.entries.length ? <Accordion variant="divided" className="pw-task-event-list" aria-label="已读取任务记录">{history.entries.map((event, index) => <AccordionItem key={`${event.id}:${index}`} id={`${task.id}:${event.id}:${index}`} className="pw-task-event" data-event-position={event.position} data-read-limited={event.readLimited || undefined} headingLevel={4} title={event.title} description={[event.stateLabel, time(event.at), event.runId && !event.isCurrentRun ? '早先执行记录' : ''].filter(Boolean).join(' · ')}><p className="pw-task-event-copy">{event.detail}</p>{event.partial && event.bodyAvailable && <p className="pw-muted">这条记录仅显示已读取部分。</p>}</AccordionItem>)}</Accordion> : <p className="pw-muted">当前窗口没有可读取的任务记录。</p>}
       {navigation(events, '任务记录')}
     </section>
     <section className="pw-task-operations" aria-label="工具记录"><h3 className="pw-task-history-heading">工具记录</h3>
