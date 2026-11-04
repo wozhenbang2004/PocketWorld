@@ -110,6 +110,7 @@ internal class PocketWebBridge(
     }
     private val profilePages = PocketWebProfiles(controller) { !closed && documentId != null && section == "workProfiles" && controller.webPrivateOwnerVisible() }
     private val localPages = PocketWebLocal(controller)
+    private var projectPreview: PocketWebProjectPreview? = null
     private val commandReceipts = linkedMapOf<String, Pair<String, JSONObject>>()
     private val pendingCommands = mutableMapOf<String, String>()
     private data class PhoneReview(val goal: String, val mode: String, val tools: Int, val models: Int, val minutes: Int,
@@ -162,7 +163,7 @@ internal class PocketWebBridge(
             "memory.list", "memory.search", "memoryReview.list", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource",
             "memoryReview.candidates", "mcp.snapshot", "mcp.pickConfig", "mcp.cancel", "mcp.discoverImport", "mcp.reviewImport", "mcp.installImport", "mcp.reviewEnabled", "mcp.confirmEnabled", "mcp.read", "mcp.reviewGrant", "mcp.confirmGrant", "learning.snapshot", "groups.snapshot",
             "remote.probe", "remote.environments", "local.termuxProbe", "local.inspectRuntime", "local.readReceipts", "local.prepareCheckout", "local.describeCheckout", "local.terminal.review", "local.terminal.confirm", "local.terminal.query", "local.terminal.stop", "local.terminal.open", "local.terminal.read", "local.terminal.input", "local.terminal.inputReceipt", "local.terminal.close", "automation.receipts", "automation.list", "automation.reviewSchedule", "automation.reviewRule", "automation.confirmReview", "automation.prepareOccurrence", "channels.inspect", "skills.read", "plugins.history", "proxy.status", "proxy.stop"
-        ) + PocketWebData.COMMANDS + PocketWebConnections.COMMANDS + PocketWebMemoryDrafts.COMMANDS + setOf("conversation.drafts") + PocketWebKnowledge.COMMANDS + PocketWebMessageQuotes.COMMANDS + PocketWebChannels.COMMANDS + PocketWebExperience.COMMANDS + PocketWebRouteReferences.COMMANDS + PocketWebSkills.COMMANDS + PocketWebPresentation.COMMANDS + PocketWebTeams.COMMANDS + PocketWebGroups.COMMANDS + PocketWebMedia.COMMANDS + PocketWebComposerModels.COMMANDS + PocketWebDevices.COMMANDS + PocketWebPlugins.COMMANDS + PocketWebRealtime.COMMANDS + PocketWebProxy.COMMANDS + PocketWebPlans.COMMANDS + PocketWebCommitments.COMMANDS + PocketWebTokenBudgets.COMMANDS + PocketWebProfiles.COMMANDS
+        ) + PocketWebData.COMMANDS + PocketWebConnections.COMMANDS + PocketWebMemoryDrafts.COMMANDS + setOf("conversation.drafts") + PocketWebKnowledge.COMMANDS + PocketWebMessageQuotes.COMMANDS + PocketWebChannels.COMMANDS + PocketWebExperience.COMMANDS + PocketWebRouteReferences.COMMANDS + PocketWebSkills.COMMANDS + PocketWebPresentation.COMMANDS + PocketWebTeams.COMMANDS + PocketWebGroups.COMMANDS + PocketWebMedia.COMMANDS + PocketWebComposerModels.COMMANDS + PocketWebDevices.COMMANDS + PocketWebPlugins.COMMANDS + PocketWebRealtime.COMMANDS + PocketWebProxy.COMMANDS + PocketWebPlans.COMMANDS + PocketWebCommitments.COMMANDS + PocketWebTokenBudgets.COMMANDS + PocketWebProfiles.COMMANDS + PocketWebProjectPreview.COMMANDS
     }
 
     /** Equivalent to the former Activity saveable presentation state, never an execution grant. */
@@ -200,6 +201,12 @@ internal class PocketWebBridge(
         publishState(true)
     }
 
+    fun attachProjectPreview(container: android.widget.FrameLayout) {
+        check(projectPreview == null && !closed)
+        projectPreview = PocketWebProjectPreview(controller, container, ::captureWindow, ::acceptsWindow) { publishState() }
+    }
+    fun foreground(value: Boolean) { projectPreview?.foreground(value) }
+
     /** Presentation switching must not discard a command or a model selection awaiting a receipt. */
     fun canSwitchPresentation(): Boolean {
         check(Looper.myLooper() == Looper.getMainLooper())
@@ -211,6 +218,7 @@ internal class PocketWebBridge(
         closed = true
         started = false
         presentation.close()
+        projectPreview?.close(); projectPreview = null
         releaseGlobalObserver?.invoke(); releaseGlobalObserver = null
         observer.stop(); observer.clear()
         reviews.clear()
@@ -244,6 +252,7 @@ internal class PocketWebBridge(
     fun invalidatePresentation(documentReplaced: Boolean) {
         check(Looper.myLooper() == Looper.getMainLooper())
         commandFence.invalidate()
+        projectPreview?.invalidatePresentation(documentReplaced)
         taskReviewGeneration++
         domainGeneration++
         taskHistory.clear()
@@ -259,6 +268,7 @@ internal class PocketWebBridge(
         observer.observeReads(this, { _: PocketWebBridge -> publishState() }) {
             controller.modelSelectionRevision
             projection = PocketWebState.snapshot(controller)
+            projection?.getJSONObject("state")?.put("projectPreview", projectPreview?.snapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("appearance", presentation.snapshot())
             projection?.getJSONObject("state")?.put("systemSpeech", presentation.speechInfo())
             projection?.getJSONObject("state")?.put("routeReference", routeReferences.snapshot())
@@ -319,6 +329,10 @@ internal class PocketWebBridge(
             }
             pendingCommands[id] = identity
             ownsRequest = true
+            if (action in PocketWebProjectPreview.COMMANDS) {
+                (projectPreview ?: error("原项目预览宿主尚未接入")).dispatch(action, args) { result, error -> complete(id, result, error); publishState() }
+                return
+            }
             if (action == "quickVoice.save") {
                 checkedPayload(args, setOf("handoffId", "inputId", "text"))
                 controller.saveQuickPanelVoice(requiredString(args, "handoffId"), requiredString(args, "inputId"), requiredString(args, "text")) { result, error -> complete(id, result, error); publishState() }; return

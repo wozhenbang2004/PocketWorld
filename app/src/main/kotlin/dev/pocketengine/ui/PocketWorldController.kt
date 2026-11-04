@@ -381,6 +381,107 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
     }
     fun closeProjectPreview() { ++projectPreviewRequest; projectPreview = null; projectPreviewTaskId = null }
+    internal data class RegisteredProjectPreview(val taskId: String, val conversationId: String,
+        val bundle: dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified)
+    internal data class PreviewDraftTarget(val key: String, val revision: Long, val epoch: Int, val conversationId: String,
+        val ownerWindow: Pair<Triple<Long, Int, Long>, Long>)
+
+    /** Read an already registered original preview. Opening the page never builds or starts a task. */
+    internal fun openRegisteredProjectPreview(project: String, ownerCurrent: () -> Boolean, done: (RegisteredProjectPreview?, String?) -> Unit) {
+        check(webPrivateOwnerVisible() && ownerCurrent() && state.projectId == project) { "请从当前私人项目打开原预览" }
+        val candidates = state.tasks.filter { it.raw.optJSONObject("developmentContext")?.optString("projectId") == project &&
+            it.raw.optString("kind") == "assistant" && it.raw.optString("actorId") == "owner" && it.raw.optString("spaceId") == "private" && it.raw.optJSONObject("origin") == null }
+            .sortedWith(compareByDescending<UiTask> { it.status in ProjectWorkbenchGuard.activeStatuses }.thenByDescending { it.updatedAt }).map { it.id }
+        require(candidates.isNotEmpty()) { "当前项目没有可读取的已登记预览；请先查看原项目任务，没有自动构建或新建任务" }
+        val request = ++projectPreviewRequest
+        try { io.execute {
+            val result = runCatching {
+                check(webPrivateOwnerVisible() && ownerCurrent()) { "原项目预览窗口已关闭" }
+                val local = app.features.module("local") as? dev.pocketengine.features.local.LocalModule ?: error("原项目模块不可用")
+                var selected: RegisteredProjectPreview? = null
+                var lastFailure: Exception? = null
+                search@ for (id in candidates) {
+                    val task = app.tasks.get(id, false) ?: continue
+                    if (task.optJSONObject("developmentContext")?.optString("projectId") != project) continue
+                    for (record in task.optJSONArray("developmentPreviews").objects().asReversed()) {
+                        try {
+                            val source = app.tasks.ownerPreviewSource(id, record.getString("previewId"))
+                            val bundle = local.projectPreviewForOwner(source.getString("previewId"), source.getString("checkoutId"))
+                            local.requireProjectPreviewCurrent(bundle)
+                            val after = app.tasks.ownerPreviewSource(id, bundle.identity)
+                            check(dev.pocketengine.store.TaskStore.capabilityFingerprint(source) == dev.pocketengine.store.TaskStore.capabilityFingerprint(after)) { "原项目预览登记已变化" }
+                            selected = RegisteredProjectPreview(id, source.getString("conversationId"), bundle)
+                            break@search
+                        } catch (failure: Exception) { lastFailure = failure }
+                    }
+                }
+                selected ?: throw IllegalStateException("没有仍可核对的原项目预览；请查看原任务重新生成后再打开", lastFailure)
+            }
+            main.post {
+                if (closed || request != projectPreviewRequest || !ownerCurrent() || !webPrivateOwnerVisible() || state.projectId != project) {
+                    done(null, "原项目窗口已变化，未把迟到预览打开到另一页面")
+                } else result.fold({ selected ->
+                    projectPreview = selected.bundle; projectPreviewTaskId = selected.taskId; done(selected, null)
+                }, { done(null, message(it as? Exception ?: Exception(it))) })
+            }
+        } } catch (_: java.util.concurrent.RejectedExecutionException) { done(null, "原项目页面已关闭") }
+    }
+
+    internal fun returnToProjectPreviewConversation(conversation: String) {
+        check(webPrivateOwnerVisible() && !state.chatSubmitting && conversation.isNotBlank()) { "请先核对原输入回执，再返回项目对话" }
+        if (state.conversationId != conversation || composerDraft?.conversationId != conversation) openConversation(conversation)
+        check(state.conversationId == conversation && composerDraft?.conversationId == conversation) { "原项目对话草稿尚未就绪" }
+    }
+    internal fun captureProjectPreviewDraft(conversation: String): PreviewDraftTarget {
+        returnToProjectPreviewConversation(conversation)
+        val draft = ownerComposer?.active() ?: error("原项目对话草稿尚未读取")
+        return PreviewDraftTarget(draft.key, draft.revision, chatViewEpoch, conversation, webWindowTicket())
+    }
+    private fun previewDraftCurrent(target: PreviewDraftTarget): Boolean {
+        val draft = ownerComposer?.active() ?: return false
+        return webPrivateOwnerVisible() && !state.chatSubmitting && webWindowTicket() == target.ownerWindow &&
+            draft.key == target.key && draft.revision == target.revision && chatViewEpoch == target.epoch &&
+            draft.conversationId == target.conversationId && state.conversationId == target.conversationId
+    }
+    internal fun stageProjectPreviewSelection(task: String, target: PreviewDraftTarget,
+        selection: dev.pocketengine.features.local.preview.ProjectPreviewDocument.Selection, ownerCurrent: () -> Boolean,
+        done: (JSONObject?, String?) -> Unit) {
+        check(ownerCurrent() && previewDraftCurrent(target)) { "原草稿已变化，未加入迟到的元素选择" }
+        selection.requireCurrent()
+        try { io.execute {
+            val result = runCatching {
+                check(ownerCurrent() && previewDraftCurrent(target)) { "原选择窗口已变化" }
+                app.ownerPreviewReferences.register(task, selection)
+            }
+            main.post {
+                if (!ownerCurrent() || !previewDraftCurrent(target)) { done(null, "原草稿或选择窗口已变化，未覆盖输入；请明确重新选择"); return@post }
+                result.fold({ reference ->
+                    try {
+                        selection.requireCurrent()
+                        check(reference.getString("taskId") == task && reference.getString("conversationId") == target.conversationId)
+                        val model = ownerComposer ?: error("原草稿已关闭")
+                        val refs = model.active().previewRefs().put(reference)
+                        model.editPreviewRefs(target.key, target.revision, dev.pocketengine.features.local.preview.PreviewElementRef.checked(refs))
+                        publishComposer(); scheduleComposerSave()
+                        state = state.copy(notice = "元素引用已加入原项目对话草稿，尚未发送；发送时会再次核对来源")
+                        done(JSONObject().put("draftStaged", true).put("referenceId", reference.getString("referenceId")).put("modelCalled", false).put("executionAuthorized", false), null)
+                    } catch (failure: Exception) { done(null, message(failure)) }
+                }, { done(null, message(it as? Exception ?: Exception(it))) })
+            }
+        } } catch (_: java.util.concurrent.RejectedExecutionException) { done(null, "原页面已关闭，未加入引用") }
+    }
+    internal fun removeComposerPreview(index: Int, key: String, viewEpoch: Int, revision: Long) {
+        check(webPrivateOwnerVisible() && !state.chatSubmitting) { "原输入正在提交或不在前台" }
+        val model = ownerComposer ?: error("原草稿未读取"); val draft = model.active()
+        check(draft.key == key && chatViewEpoch == viewEpoch && draft.revision == revision && draft.conversationId == state.conversationId.orEmpty()) { "原草稿版本已变化，未删除其他引用" }
+        val refs = draft.previewRefs(); require(index in 0 until refs.length()) { "原元素引用已变化" }
+        val next = org.json.JSONArray(); for (i in 0 until refs.length()) if (i != index) next.put(refs.getJSONObject(i))
+        model.editPreviewRefs(key, revision, next); publishComposer(); scheduleComposerSave()
+    }
+    internal fun composerPreviewRefsAvailable(): Boolean {
+        val draft = composerDraft ?: return true
+        return runCatching { draft.previewRefs().let { it.length() == 0 || app.ownerPreviewReferences?.available(draft.conversationId, it) == true } }.getOrDefault(false)
+    }
     var projectLivePreview by mutableStateOf<dev.pocketengine.features.local.runtime.ProjectDevSession.Observed?>(null)
         private set
     var projectLivePreviewTaskId by mutableStateOf<String?>(null)
@@ -2048,11 +2149,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val binding=state.chatActiveTurn
         if(state.chatBusy&&(binding==null||binding.optString("conversationId")!=state.conversationId)){state=state.copy(error="原任务绑定仍在准备或收尾，请稍后刷新；没有新建第二任务");return}
         if(state.chatBusy&&try{!app.chatInputModel(binding!!).optBoolean("available")}catch(_:Exception){true}){state=state.copy(error="原任务正在收尾，请核对原消息后再发送");return}
-        val selected=state.selectedChatAttachments.toList();val selectedSources=draft.sourceRefs();val fingerprint=ChatInputRules.fingerprint(text.trim(),state.conversationId,state.chatSendMode,selected,selectedSources)
+        val selected=state.selectedChatAttachments.toList();val selectedSources=draft.sourceRefs();val selectedPreviews=draft.previewRefs()
+        if(selectedPreviews.length()>0&&!composerPreviewRefsAvailable()){state=state.copy(error="原元素引用已不可用，草稿仍保留；请移除或回原预览重新选择");return}
+        val fingerprint=ChatInputRules.fingerprint(text.trim(),state.conversationId,state.chatSendMode,selected,selectedSources,selectedPreviews)
         val unresolved=model.matchingPending(draft.key,fingerprint)
         if(unresolved!=null){if(canRetryLocallyUnsent(unresolved.clientId))state=state.copy(notice="本进程确认这条原输入尚未派发；修复保存问题后，请明确点击原输入下的重新保存并发送")else{queryChatSubmission(unresolved.clientId);state=state.copy(notice="正在查询同一输入的原回执，没有用新消息身份重发")};return}
         val client=try{voiceInput.claimMessageId(voiceTarget(false),voiceOwnerAuthority())?:UUID.randomUUID().toString()}catch(error:Exception){state=state.copy(error=message(error));return}
-        val input=JSONObject().put("message",text.trim()).put("clientMessageId",client).put("mode",draft.mode).put("attachments",org.json.JSONArray().also{a->selected.forEach{a.put(it.selection())}});if(selectedSources.length()>0)input.put("ownerSourceRefs",selectedSources)
+        val input=JSONObject().put("message",text.trim()).put("clientMessageId",client).put("mode",draft.mode).put("attachments",org.json.JSONArray().also{a->selected.forEach{a.put(it.selection())}});if(selectedSources.length()>0)input.put("ownerSourceRefs",selectedSources);if(selectedPreviews.length()>0)input.put("ownerPreviewRefs",selectedPreviews)
         if(!state.chatBusy)input.put("executionScope",newTaskExecutionScope())
         state.conversationId?.let{input.put("conversationId",it)}
         if(state.chatBusy)for(key in listOf("taskId","runId","epoch"))input.put(key,binding!!.get(key))

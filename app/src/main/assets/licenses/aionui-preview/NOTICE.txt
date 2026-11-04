@@ -1,0 +1,12 @@
+PocketWorld project preview element extraction
+
+Adapted from AionUi htmlInspectScript.ts.
+Copyright 2025 AionUi (aionui.com)
+SPDX-License-Identifier: Apache-2.0
+
+Source: https://github.com/iOfficeAI/AionUi/blob/11cd2a9a20d1e033157636efc570b41384c66d85/packages/desktop/src/renderer/pages/conversation/Preview/components/renderers/htmlInspectScript.ts
+Git blob: b9961280ecc8e6b0b1f3232c3b41aa53b9705fb9
+
+PocketWorld modifications: reuse coordinate hit testing and rectangle/tag observation in a bounded read-only extractor. Remove page event listeners, console message bridge, clipboard wording, overlay and toast. Add native coordinate conversion and Unicode-safe limits. The native renderer owns selection input and document lifetime; this script supplies no authority.
+
+The Apache-2.0 LICENSE is included beside this notice. This notice describes the adapted file, not other AionUi packages or dependencies.

@@ -16,10 +16,12 @@ public final class ContextCompactor {
     private final RunJournal journal;
     private final CompactionJournal host;
     private final ContextBudgetPolicy.Source budgets;
+    private final dev.pocketengine.runtime.AgentRunner.RequestProjection sourceProjection;
     private CompactionJournal.FrozenPrefix active;
     private SummaryDraft summary;
     private String projectionId="";
-    public ContextCompactor(RunJournal journal,CompactionJournal host,ContextBudgetPolicy.Source budgets){this.journal=journal;this.host=host;this.budgets=java.util.Objects.requireNonNull(budgets);}
+    public ContextCompactor(RunJournal journal,CompactionJournal host,ContextBudgetPolicy.Source budgets){this(journal,host,budgets,null);}
+    public ContextCompactor(RunJournal journal,CompactionJournal host,ContextBudgetPolicy.Source budgets,dev.pocketengine.runtime.AgentRunner.RequestProjection sourceProjection){this.journal=journal;this.host=host;this.budgets=java.util.Objects.requireNonNull(budgets);this.sourceProjection=sourceProjection;}
     public boolean available(){return journal!=null&&host!=null;}
 
     public RunContextBudget.Projection request(JSONArray raw,JSONArray visible,List<Integer> sourceMap,JSONArray tools,ModelConfig selected,RunControl original,RunContextBudget budget)throws Exception {
@@ -88,6 +90,7 @@ public final class ContextCompactor {
                 public void finished(InferenceReceipt receipt){terminal[0]=receipt;}
             });
             if(planning!=null)target=InferenceCapture.withAdmission(target,()->requirePlanning(planning,turn));
+            if(sourceProjection!=null)target=InferenceCapture.withAdmission(target,()->sourceProjection.derivedPrepared(raw,original));
             JSONArray input=plan.summaryMessages();ModelConfig summarySelection=selected.forPurpose("SUMMARY");original.check();
             JSONObject answer=ModelGateway.completeWithAdmission(summarySelection,input,null,original,target,candidate->budget.request(input,null,candidate));
             requirePlanning(planning,turn);

@@ -15,4 +15,16 @@ class ChatInputRulesTest {
   val refs=org.json.JSONArray().put(source);val with=ChatInputRules.fingerprint("message","c","queue",emptyList(),refs)
   assertNotEquals(legacy,with);source.put("offset",20);assertNotEquals(with,ChatInputRules.fingerprint("message","c","queue",emptyList(),refs))
  }
+ @Test fun previewSlotChangesPendingIdentityWithoutReplacingQuoteOrAttachmentIdentity(){
+  val empty=org.json.JSONArray();val legacy=ChatInputRules.fingerprint("message","c","queue",emptyList(),empty)
+  assertEquals(legacy,ChatInputRules.fingerprint("message","c","queue",emptyList(),empty,empty))
+  val ref=JSONObject().put("referenceId","reference").put("taskId","task").put("runId","run").put("epoch",1).put("conversationId","c").put("projectId","project").put("checkoutId","checkout")
+   .put("previewId","a".repeat(64)).put("sourceDigest","b".repeat(64)).put("documentId","document").put("documentGeneration",1).put("path","index.html").put("resourceSha256","c".repeat(64))
+   .put("selectorHint","button > span").put("text","Selected element").put("htmlSnippet","<span>Selected element</span>")
+   .put("bounds",JSONObject().put("x",1).put("y",2).put("width",100).put("height",20)).put("truncated",JSONObject().put("selectorHint",false).put("text",false).put("htmlSnippet",false)).put("untrusted",true).put("selectorIsSourceLocation",false)
+  val refs=org.json.JSONArray().put(ref);val first=ChatInputRules.fingerprint("message","c","queue",emptyList(),empty,refs)
+  assertNotEquals(legacy,first);ref.put("documentGeneration",2);assertNotEquals(first,ChatInputRules.fingerprint("message","c","queue",emptyList(),empty,refs))
+  val file=UiChatAttachment("11111111-1111-1111-1111-111111111111","d".repeat(64),"file.txt","text/plain",4)
+  assertNotEquals(ChatInputRules.fingerprint("message","c","queue",listOf(file),empty,refs),ChatInputRules.fingerprint("message","c","queue",emptyList(),empty,refs))
+ }
 }

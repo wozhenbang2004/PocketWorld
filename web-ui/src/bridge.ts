@@ -73,7 +73,7 @@ const pending = new Map<string, { action: string; resolve(value: any): void; rej
 // React page cleanup and the next entry can occur in one turn. Native changes its
 // window ticket during navigation, so only send the next command after that receipt.
 // Ordinary reads/writes remain concurrent once the navigation has settled.
-const navigationActions = new Set(['connections.enter', 'connections.leave', 'channels.open', 'channels.close', 'skills.open', 'skills.close', 'routeReference.open', 'routeReference.close', 'tasks.open', 'groups.openTask', 'devices.openTask', 'tasks.close', 'projects.select', 'conversation.new', 'conversation.select', 'archives.open', 'archives.close', 'storage.open', 'storage.close']);
+const navigationActions = new Set(['connections.enter', 'connections.leave', 'channels.open', 'channels.close', 'skills.open', 'skills.close', 'routeReference.open', 'routeReference.close', 'tasks.open', 'groups.openTask', 'devices.openTask', 'tasks.close', 'projects.select', 'projects.preview', 'projects.preview.return', 'projects.preview.close', 'conversation.new', 'conversation.select', 'archives.open', 'archives.close', 'storage.open', 'storage.close']);
 let navigationTail: Promise<void> | null = null;
 acceptHostDocumentToken(window.__pocketDocumentToken);
 

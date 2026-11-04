@@ -181,6 +181,7 @@ internal object PocketWebState {
             .put("scrollIndex", draft?.scrollIndex ?: 0).put("scrollOffset", draft?.scrollOffset ?: 0)
             .put("anchorMessage", draft?.anchorMessage ?: "").put("observedMessage", draft?.observedMessage ?: "")
             .put("newReplies", draft?.newReplies ?: false).put("sourceRefs", publicValue(draft?.sourceRefs()))
+            .put("previewRefs", publicValue(draft?.previewRefs() ?: JSONArray())).put("previewRefsAvailable", controller.composerPreviewRefsAvailable())
             .put("voiceText", draft?.voiceText ?: "").put("voiceInputId", draft?.voiceInputId ?: "")
             .put("pending", JSONArray().also { out -> controller.composerPending.forEach { pending ->
                 out.put(JSONObject().put("clientMessageId", pending.clientId).put("draftKey", pending.draftKey)

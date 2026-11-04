@@ -226,6 +226,13 @@ public final class LocalModule implements EngineModule {
         for(ProjectRuntime selected:runtimes.values())if(selected instanceof ManagedProjectRuntime)((ManagedProjectRuntime)selected).requireCheckoutWritable(checkout);
     }
     public synchronized dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified projectPreviewForOwner(String previewId,String checkoutId){var preview=previews.get(previewId);if(closed||preview==null||!checkoutId.equals(preview.checkoutId))throw new IllegalStateException("此预览资源已释放，请重新核对当前项目");return preview;}
+    /** The original active checkout is re-read; a cached bundle alone is not current source proof. */
+    public synchronized void requireProjectPreviewCurrent(dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified preview)throws Exception {
+        if(preview==null||closed||previews.get(preview.identity)!=preview||preview.artifactId!=null)throw new SecurityException("原活动项目预览已释放或不是当前工作副本");
+        JSONObject source=ProjectSources.describe(export(preview.checkoutId));
+        if(!preview.checkoutId.equals(source.getString("checkoutId"))||!preview.projectId.equals(source.getString("projectId"))||!preview.sourceDigest.equals(source.getString("sourceDigest")))throw new SecurityException("原预览源码已变化，请重新生成并明确选择");
+        if(closed||previews.get(preview.identity)!=preview)throw new SecurityException("原项目预览已释放");
+    }
     private JSONObject preview(JSONObject input)throws Exception {
         String checkoutId=JsonFiles.text(input,"checkoutId",80);JSONObject source=ProjectSources.describe(export(checkoutId));if(!source.getString("sourceDigest").equals(input.getString("expectedSourceDigest")))throw new SecurityException("预览所选源码已变化，请重新核对");
         var bundle=dev.pocketengine.features.local.preview.ProjectPreviewBundle.capture(content(checkoutId),checkoutId,source.getString("projectId"),source.getString("sourceDigest"),input.getString("entryPath"));

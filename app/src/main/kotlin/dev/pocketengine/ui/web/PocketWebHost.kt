@@ -187,6 +187,7 @@ internal class PocketWebHost private constructor(
         listenerRegistered = true
         }
         view.addView(web, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        bridge.attachProjectPreview(view)
         view.setOnApplyWindowInsetsListener { target, insets ->
             val bars = insets.getInsets(WindowInsets.Type.systemBars())
             val keyboard = insets.getInsets(WindowInsets.Type.ime())

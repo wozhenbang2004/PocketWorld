@@ -7592,7 +7592,16 @@ public final class TaskStore {
             if(message.has("ownerSourceRefs")&&message.optJSONArray("ownerSourceRefs")==null)throw new IllegalArgumentException("原文选择必须为固定metadata数组");
             JSONArray sourceRefs=dev.pocketengine.features.assistant.OwnerSourceReferences.checked(message.optJSONArray("ownerSourceRefs")==null?new JSONArray():message.getJSONArray("ownerSourceRefs"));
             if(phone&&sourceRefs.length()>0)throw new SecurityException("主人原文选择只能进入原私人聊天邮箱，不能冒手机或外部调用来源");
-            JSONObject immutableInput=new JSONObject().put("content",content).put("mode",mode).put("attachments",attachments);if(sourceRefs.length()>0)immutableInput.put("ownerSourceRefs",sourceRefs);
+            if(message.has("ownerPreviewRefs")&&message.optJSONArray("ownerPreviewRefs")==null)throw new IllegalArgumentException("元素引用必须为固定数组");
+            JSONArray previewRefs=dev.pocketengine.features.local.preview.PreviewElementRef.checked(message.optJSONArray("ownerPreviewRefs")==null?new JSONArray():message.getJSONArray("ownerPreviewRefs"));
+            if(phone&&previewRefs.length()>0)throw new SecurityException("元素引用只属于原私人项目聊天");
+            for(int i=0;i<previewRefs.length();i++){
+                JSONObject ref=previewRefs.getJSONObject(i);if(!id.equals(ref.getString("taskId"))||!conversation.equals(ref.getString("conversationId")))throw new SecurityException("元素引用不能转移到另一任务或会话");
+                JSONObject actual=ownerPreviewSource(id,ref.getString("previewId"));
+                for(String key:new String[]{"projectId","checkoutId","sourceDigest","runId"})if(!java.util.Objects.equals(actual.opt(key),ref.opt(key)))throw new SecurityException("原预览来源身份已变化");
+                if(actual.getInt("epoch")!=ref.getInt("epoch"))throw new SecurityException("原预览产生执行的代次已变化");
+            }
+            JSONObject immutableInput=new JSONObject().put("content",content).put("mode",mode).put("attachments",attachments);if(sourceRefs.length()>0)immutableInput.put("ownerSourceRefs",sourceRefs);if(previewRefs.length()>0)immutableInput.put("ownerPreviewRefs",previewRefs);
             String digest=capabilityFingerprint(immutableInput);JSONArray rows=task.optJSONArray("ownerInputs");if(rows==null)rows=new JSONArray();long characters=content.length();
             for(int i=0;i<rows.length();i++){
                 JSONObject row=rows.getJSONObject(i);characters+=row.optString("content").length();
@@ -7602,7 +7611,7 @@ public final class TaskStore {
             if(taskGoal&&(rows.length()!=0||!content.equals(task.optString("goal"))))throw new SecurityException("初始输入必须是这次新任务已接收的同一目标");
             if(rows.length()>=64||characters>240000)throw new IllegalStateException("本次原任务的输入留存已达上限，请先结束并核对原任务；未自动新建任务");
             if(sourceRefs.length()>0)try(var inspection=conversationRepository.inspectOwnerSources()){for(int i=0;i<sourceRefs.length();i++)inspection.requireSource(sourceRefs.getJSONObject(i));}
-            JSONObject row=new JSONObject().put("messageId",messageId).put("clientMessageId",client).put("content",content).put("mode",mode).put("attachments",attachments).put("payloadSha256",digest).put("acceptedRunId",run).put("acceptedEpoch",epoch).put("acceptedAt",System.currentTimeMillis());row.put("inputOriginClock",OwnerInputClock.capture(row.getLong("acceptedAt")));if(sourceRefs.length()>0)row.put("ownerSourceRefs",sourceRefs);if(message.has("revision")){Object actual=message.get("revision");if(!(actual instanceof Integer||actual instanceof Long)||((Number)actual).longValue()<1)throw new IllegalArgumentException("原生消息revision必须为实际正整数");row.put("ownerMessageRevision",((Number)actual).longValue());}if(!phone&&message.has("requestFingerprint")){Object fingerprint=message.get("requestFingerprint");if(!(fingerprint instanceof String)||!((String)fingerprint).matches("[a-f0-9]{64}"))throw new IllegalArgumentException("原生提交fingerprint无效");row.put("ownerRequestFingerprint",fingerprint);}if(!phone){row.put("acceptedTaskId",id);OwnerInputQueue.accepted(row,taskGoal);}rows.put(row);task.put("ownerInputs",rows);write(task);db.setTransactionSuccessful();return new JSONObject(row.toString()).put("duplicate",false);
+            JSONObject row=new JSONObject().put("messageId",messageId).put("clientMessageId",client).put("content",content).put("mode",mode).put("attachments",attachments).put("payloadSha256",digest).put("acceptedRunId",run).put("acceptedEpoch",epoch).put("acceptedAt",System.currentTimeMillis());row.put("inputOriginClock",OwnerInputClock.capture(row.getLong("acceptedAt")));if(sourceRefs.length()>0)row.put("ownerSourceRefs",sourceRefs);if(previewRefs.length()>0)row.put("ownerPreviewRefs",previewRefs);if(message.has("revision")){Object actual=message.get("revision");if(!(actual instanceof Integer||actual instanceof Long)||((Number)actual).longValue()<1)throw new IllegalArgumentException("原生消息revision必须为实际正整数");row.put("ownerMessageRevision",((Number)actual).longValue());}if(!phone&&message.has("requestFingerprint")){Object fingerprint=message.get("requestFingerprint");if(!(fingerprint instanceof String)||!((String)fingerprint).matches("[a-f0-9]{64}"))throw new IllegalArgumentException("原生提交fingerprint无效");row.put("ownerRequestFingerprint",fingerprint);}if(!phone){row.put("acceptedTaskId",id);OwnerInputQueue.accepted(row,taskGoal);}rows.put(row);task.put("ownerInputs",rows);write(task);db.setTransactionSuccessful();return new JSONObject(row.toString()).put("duplicate",false);
         }finally{db.endTransaction();}
     }
     private static JSONObject ownerMailbox(JSONObject task,String run,int epoch)throws Exception{
@@ -7615,7 +7624,7 @@ public final class TaskStore {
     /** Opaque pending selection. JSON cannot manufacture a selection or keep it beyond the callback. */
     public static final class QueuedOwnerMessage {
         private final TaskStore issuer;
-        private final JSONArray attachments,sourceRefs;
+        private final JSONArray attachments,sourceRefs,previewRefs;
         private boolean active=true;
         public final String taskId,conversationId,clientMessageId,messageId,acceptedRunId,mode,queueId,content,requestFingerprint;
         public final int acceptedEpoch;
@@ -7627,12 +7636,14 @@ public final class TaskStore {
             queueRevision=OwnerInputQueue.revision(row);currentMessageRevision=OwnerInputQueue.integer(row.opt("ownerMessageRevision"));
             attachments=row.optJSONArray("attachments")==null?new JSONArray():new JSONArray(row.getJSONArray("attachments").toString());
             sourceRefs=row.optJSONArray("ownerSourceRefs")==null?new JSONArray():new JSONArray(row.getJSONArray("ownerSourceRefs").toString());
+            previewRefs=dev.pocketengine.features.local.preview.PreviewElementRef.checked(row.optJSONArray("ownerPreviewRefs")==null?new JSONArray():row.getJSONArray("ownerPreviewRefs"));
         }
         public void requireMutationScope(TaskStore original){
             if(!active||issuer!=original||!Thread.holdsLock(original)||!original.db.inTransaction())throw new SecurityException("队列选择不在原生待处理消息变更事务内");
         }
         public JSONArray attachments()throws Exception{requireMutationScope(issuer);return new JSONArray(attachments.toString());}
         public JSONArray sourceRefs()throws Exception{requireMutationScope(issuer);return new JSONArray(sourceRefs.toString());}
+        public JSONArray previewRefs()throws Exception{requireMutationScope(issuer);return new JSONArray(previewRefs.toString());}
     }
     public interface OwnerReplyMutation {
         JSONObject apply(QueuedOwnerReplySelection selected)throws Exception;
@@ -7728,15 +7739,16 @@ public final class TaskStore {
             if(nativeMessage==null||!messageId.equals(nativeMessage.optString("id"))||!row.getString("clientMessageId").equals(nativeMessage.optString("clientMessageId")))throw new SecurityException("消息变更未返回同一原生消息");
             long revision=OwnerInputQueue.integer(nativeMessage.opt("revision"));if(revision<expectedMessageRevision||!content.equals(row.optString("content"))&&revision<=expectedMessageRevision)throw new SecurityException("消息变更缺少真实当前版本");
             if(!(nativeMessage.opt("content") instanceof String)||nativeMessage.getString("content").length()>12000)throw new SecurityException("消息变更没有有效原生正文");
-            JSONArray actualAttachments=nativeMessage.optJSONArray("attachments"),actualSources=nativeMessage.optJSONArray("ownerSourceRefs");
+            JSONArray actualAttachments=nativeMessage.optJSONArray("attachments"),actualSources=nativeMessage.optJSONArray("ownerSourceRefs"),actualPreviews=nativeMessage.optJSONArray("ownerPreviewRefs");
             if(!canonical(attachments==null?new JSONArray():attachments).equals(canonical(actualAttachments==null?new JSONArray():actualAttachments))
-                    ||!canonical(selected.sourceRefs).equals(canonical(actualSources==null?new JSONArray():actualSources)))throw new SecurityException("编辑排队文字不能替换原附件或原文引用");
+                    ||!canonical(selected.sourceRefs).equals(canonical(actualSources==null?new JSONArray():actualSources))
+                    ||!canonical(selected.previewRefs).equals(canonical(actualPreviews==null?new JSONArray():actualPreviews)))throw new SecurityException("编辑排队文字不能替换原附件、原文或元素引用");
             JSONObject before=new JSONObject().put("messageId",messageId).put("queueRevision",expectedQueueRevision).put("ownerMessageRevision",expectedMessageRevision)
                     .put("content",row.getString("content")).put("mode",row.getString("mode")).put("payloadSha256",row.getString("payloadSha256"));
             String actualContent=nativeMessage.getString("content");if(withdrawn&&!actualContent.equals(row.getString("content")))throw new SecurityException("撤回应保留原消息审计正文");if(!mode.equals(nativeMessage.optString("inputMode")))throw new SecurityException("原生消息的排队方式没有同步");long characters=0;for(int i=0;i<rows.length();i++)characters+=row==rows.getJSONObject(i)?actualContent.length():rows.getJSONObject(i).optString("content").length();
             if(characters>240000)throw new IllegalStateException("本任务输入留存已达上限，未保存修改");
             row.put("content",actualContent).put("mode",mode).put("ownerMessageRevision",revision);
-            JSONObject payload=new JSONObject().put("content",actualContent).put("mode",mode).put("attachments",attachments==null?new JSONArray():attachments);if(selected.sourceRefs.length()>0)payload.put("ownerSourceRefs",selected.sourceRefs);
+            JSONObject payload=new JSONObject().put("content",actualContent).put("mode",mode).put("attachments",attachments==null?new JSONArray():attachments);if(selected.sourceRefs.length()>0)payload.put("ownerSourceRefs",selected.sourceRefs);if(selected.previewRefs.length()>0)payload.put("ownerPreviewRefs",selected.previewRefs);
             row.put("payloadSha256",capabilityFingerprint(payload));OwnerInputQueue.changed(row,withdrawn?"withdrawn":"pending");row.put(withdrawn?"withdrawnAt":"editedAt",System.currentTimeMillis());
             appendEvent(task,new JSONObject().put("type",withdrawn?"owner_input_withdrawn":"owner_input_edited").put("inputBefore",before)
                     .put("messageId",messageId).put("queueRevision",OwnerInputQueue.revision(row)).put("ownerMessageRevision",revision).put("mode",mode).put("payloadSha256",row.getString("payloadSha256")).put("executionAuthorized",false));
@@ -7817,6 +7829,26 @@ public final class TaskStore {
         if(!original.matchesHostRun(id,run,epoch)||!selected.getString("checkoutId").equals(actual.getString("checkoutId"))||!selected.getString("projectId").equals(actual.getString("projectId"))||!actual.getString("previewId").matches("[a-f0-9]{64}"))throw new SecurityException("预览不属于原任务已选项目");
         JSONObject metadata=new JSONObject();for(String key:new String[]{"previewId","checkoutId","projectId","sourceDigest","entryPath","previewRoot","resourceCount","bytes","capturedAt","origin","atomicArtifactFence","businessVerified","persisted"})metadata.put(key,actual.get(key));metadata.put("runId",run).put("epoch",epoch).put("untrusted",true);
         JSONArray prior=task.optJSONArray("developmentPreviews"),next=new JSONArray();if(prior!=null)for(int i=Math.max(0,prior.length()-7);i<prior.length();i++)if(!actual.getString("previewId").equals(prior.getJSONObject(i).optString("previewId")))next.put(prior.getJSONObject(i));next.put(metadata);task.put("developmentPreviews",next);write(task);
+    }
+    /** Original recorded producing source only. No file IO or new preview/permission is performed. */
+    public synchronized JSONObject ownerPreviewSource(String id,String previewId)throws Exception {
+        JSONObject task=required(id);requirePrivateOwner(task);JSONObject selected=task.optJSONObject("developmentContext");
+        if(!"assistant".equals(task.optString("kind"))||task.optJSONObject("origin")!=null||selected==null||task.optString("conversationId").isEmpty())throw new SecurityException("元素引用需要原私人项目任务");
+        JSONArray previews=task.optJSONArray("developmentPreviews");
+        for(int i=0;previews!=null&&i<previews.length();i++){
+            JSONObject row=previews.getJSONObject(i);if(!previewId.equals(row.optString("previewId")))continue;
+            if(!selected.getString("projectId").equals(row.getString("projectId"))||!selected.getString("checkoutId").equals(row.getString("checkoutId"))||!"active_workspace_observation".equals(row.optString("origin"))||row.optBoolean("persisted"))throw new SecurityException("本次元素选择只支持原活动项目的固定预览");
+            String run=row.getString("runId");int epoch=row.getInt("epoch");
+            try(Cursor produced=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{id,run,Integer.toString(epoch)})){if(!produced.moveToFirst())throw new SecurityException("原预览的产生执行不可核对");}
+            return new JSONObject(row.toString()).put("taskId",id).put("conversationId",task.getString("conversationId"));
+        }
+        throw new SecurityException("原任务没有这份已登记预览，请重新核对项目");
+    }
+    /** Real receiving run and existing source-read grant. Producing run metadata is never a receiver grant. */
+    public synchronized void requireOwnerPreviewRecipient(String id,String run,int epoch,String conversation,String project,String checkout,RunControl original)throws Exception {
+        if(original==null||!original.matchesHostRun(id,run,epoch)||original.isCancelled()||original.isPaused())throw new SecurityException("元素引用的原接收执行已停止或暂停");
+        checkCapabilityCurrent(id,run,epoch,"project_read_file");JSONObject task=required(id);requirePrivateOwner(task);JSONObject selected=task.optJSONObject("developmentContext");
+        if(!"assistant".equals(task.optString("kind"))||task.optJSONObject("origin")!=null||selected==null||!conversation.equals(task.optString("conversationId"))||!project.equals(selected.optString("projectId"))||!checkout.equals(selected.optString("checkoutId")))throw new SecurityException("元素引用只能进入原私人项目任务的当前执行");
     }
     /** Callback is from the native no-bridge preview instance, never a model or webpage command. */
     public synchronized void recordDevelopmentPreviewConsole(String id,String checkout,String previewId,String sourceDigest,String level,String text,String source,int line)throws Exception {

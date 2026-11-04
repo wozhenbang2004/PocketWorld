@@ -1649,6 +1649,19 @@
     "robolectric": true,
     "description": "Original connection/editor/draft/native test identities, strict receipt projection, per-profile compatibility and cache settings CAS. Controlled provider/repository fixtures; no live provider, real cache hit or Android visual acceptance."
   },
+  "aion-preview-element-reference": {
+    "class": "dev.pocketengine.features.local.preview.ProjectPreviewReferencesNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.local.preview.PreviewElementRefTest",
+      "dev.pocketengine.features.local.preview.ProjectPreviewDocumentTest",
+      "dev.pocketengine.features.assistant.OwnerComposerPreviewRefsTest",
+      "dev.pocketengine.ui.ChatInputRulesTest",
+      "dev.pocketengine.store.OwnerInputQueueTest"
+    ],
+    "helpers": [],
+    "robolectric": true,
+    "description": "Original immutable active-workspace preview selection: bounded value, document lifetime, independent composer CAS, original SQL carrier and receiver/source checks before MAIN and SUMMARY requests. Native fixture uses real TaskStore, LocalModule, WorkspaceModule and original request projection. Pure value/queue checks alone do not prove Android touch interception, WebView layout, SQLite, device or real model/file-edit acceptance. Live-service preview, packaged artifacts and ended-project continuation remain separate original requirements."
+  },
   "bedrock-sts-session": {
     "class": "dev.pocketengine.runtime.providers.bedrock.BedrockSigV4Test",
     "additionalClasses": [

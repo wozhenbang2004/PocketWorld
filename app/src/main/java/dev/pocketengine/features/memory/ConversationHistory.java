@@ -237,7 +237,7 @@ public final class ConversationHistory {
     public interface ProjectionBatches {ProjectionBatch open(long sourceBytesRemaining)throws Exception;}
     public interface MessageProjection {
         JSONArray project(JSONArray messages,Set<String> delegatedMessageIds)throws Exception;
-        default JSONArray project(JSONArray messages,Set<String> delegatedMessageIds,SourceBytes bytes)throws Exception{for(int i=0;i<messages.length();i++){JSONArray refs=messages.getJSONObject(i).optJSONArray("ownerSourceRefs");if(refs!=null&&refs.length()>0)throw new TaskStoreMemoryReader.RawMessageUnavailable("owner_source_projection_budget_unavailable");}return project(messages,delegatedMessageIds);}
+        default JSONArray project(JSONArray messages,Set<String> delegatedMessageIds,SourceBytes bytes)throws Exception{for(int i=0;i<messages.length();i++)for(String field:new String[]{"ownerSourceRefs","ownerPreviewRefs"}){JSONArray refs=messages.getJSONObject(i).optJSONArray(field);if(refs!=null&&refs.length()>0)throw new TaskStoreMemoryReader.RawMessageUnavailable("owner_source_projection_budget_unavailable");}return project(messages,delegatedMessageIds);}
     }
     /** Native composition shared by the real App mount and focused original-store fixtures. */
     public static TaskStoreMemoryReader.RawMessageCurrentness currentness(HistoryBinding binding,ProjectionBatches batches,MessageProjection assistant){

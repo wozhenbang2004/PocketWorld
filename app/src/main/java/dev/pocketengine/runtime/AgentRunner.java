@@ -51,6 +51,8 @@ public final class AgentRunner {
         JSONArray project(JSONArray history,ModelConfig config,RunControl control)throws Exception;
         /** Native source facts for the final physical MAIN request, after budgeting/compaction. */
         default void prepared(JSONArray nativeProvenance,JSONArray finalRequest,ModelConfig config,RunControl control)throws Exception{}
+        /** Source checks for a physical SUMMARY call; never records full MAIN owner-body exposure. */
+        default void derivedPrepared(JSONArray nativeProvenance,RunControl control)throws Exception{}
     }
     /** The existing task store owns admission, dedup and the atomic terminal/send fence. */
     public interface OwnerInputs {
@@ -341,7 +343,7 @@ public final class AgentRunner {
             if(historyTurnPrepared.get()&&capabilities!=null&&!capabilities.responseCurrent(control))throw new SecurityException("历史画面来源已撤回");
         },()->System.nanoTime()/1_000_000,phone instanceof AdaptivePhonePort&&((AdaptivePhonePort)phone).appPolicyBound()?()->((AdaptivePhonePort)phone).appPolicyRevision():null);
         java.util.List<String> recalledScreens=new java.util.ArrayList<>();
-        ContextCompactor compactor=new ContextCompactor(journal,journal==null?null:journal.compaction(),runBudgets);
+        ContextCompactor compactor=new ContextCompactor(journal,journal==null?null:journal.compaction(),runBudgets,requestProjection);
         long[] pauseSeen = new long[]{control == null ? 0 : control.pauseRevision()};
         try {
             if (control == null || config == null || sink == null) throw new IllegalArgumentException();
@@ -1148,12 +1150,13 @@ public final class AgentRunner {
                 Object revision=row.opt("ownerMessageRevision");if(!(revision instanceof Integer||revision instanceof Long)||((Number)revision).longValue()<1)throw new SecurityException("原任务消息来源版本无效");message.put("ownerMessageRevision",revision);
             }
             if(row.has("ownerSourceRefs"))message.put("ownerSourceRefs",dev.pocketengine.features.assistant.OwnerSourceReferences.checked(row.getJSONArray("ownerSourceRefs")));
+            if(row.has("ownerPreviewRefs"))message.put("ownerPreviewRefs",dev.pocketengine.features.local.preview.PreviewElementRef.checked(row.getJSONArray("ownerPreviewRefs")));
             JSONArray refs=row.optJSONArray("attachments");if(refs!=null&&refs.length()>0)message.put("ownerAttachmentRefs",new JSONArray(refs.toString()));
             history.put(message);
         }
     }
     private static boolean hasOwnerContentReferences(JSONArray history)throws Exception{
-        for(int i=0;i<history.length();i++)for(String key:new String[]{"ownerAttachmentRefs","ownerSourceRefs"}){JSONArray refs=history.getJSONObject(i).optJSONArray(key);if(refs!=null&&refs.length()>0)return true;}return false;
+        for(int i=0;i<history.length();i++)for(String key:new String[]{"ownerAttachmentRefs","ownerSourceRefs","ownerPreviewRefs"}){JSONArray refs=history.getJSONObject(i).optJSONArray(key);if(refs!=null&&refs.length()>0)return true;}return false;
     }
 
     private static JSONObject restore(RunJournal journal) throws JournalFailure, RunControl.ConditionWaitException {
@@ -1361,6 +1364,10 @@ public final class AgentRunner {
         if(original.has("ownerSourceRefs")){
             if(!"user".equals(role))throw new JournalFailure();
             message.put("ownerSourceRefs",dev.pocketengine.features.assistant.OwnerSourceReferences.checked(original.getJSONArray("ownerSourceRefs")));
+        }
+        if(original.has("ownerPreviewRefs")){
+            if(!"user".equals(message.optString("role")))throw new SecurityException("元素引用只能保留在原主人消息中");
+            message.put("ownerPreviewRefs",dev.pocketengine.features.local.preview.PreviewElementRef.checked(original.getJSONArray("ownerPreviewRefs")));
         }
         if(original.has("ownerInputMode")){
             String mode=original.getString("ownerInputMode");if(!"user".equals(role)||!java.util.Set.of("queue","steer").contains(mode))throw new JournalFailure();message.put("ownerInputMode",mode);
@@ -1577,7 +1584,7 @@ public final class AgentRunner {
      */
     private static void markObservationWithoutImage(JSONObject message) throws Exception {
         if (!"user".equals(message.optString("role")) || message.has("ownerMessageId")
-                || message.has("ownerInputMode") || message.has("ownerAttachmentRefs") || message.has("ownerSourceRefs") || message.has("ownerRecallFeedback")) return;
+                || message.has("ownerInputMode") || message.has("ownerAttachmentRefs") || message.has("ownerSourceRefs") || message.has("ownerPreviewRefs") || message.has("ownerRecallFeedback")) return;
         JSONArray parts = message.optJSONArray("content");
         JSONObject first = parts == null ? null : parts.optJSONObject(0);
         if (first == null || first.length() != 2 || !"text".equals(first.optString("type"))

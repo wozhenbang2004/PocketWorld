@@ -61,6 +61,32 @@ public final class ContextCompactorTest {
     }
     private static JSONArray tools()throws Exception{return new JSONArray().put(new JSONObject().put("type","function").put("function",new JSONObject().put("name","read_file").put("description","s".repeat(30000)).put("parameters",new JSONObject().put("type","object"))));}
     private static RunContextBudget.Projection request(ContextCompactor compactor,Journal journal)throws Exception{return compactor.request(journal.raw,new JSONArray(journal.raw.toString()),CompactionPlanTest.indexes(journal.raw),tools(),journal.config,journal.control,new RunContextBudget(journal.budgets()));}
+    @Test public void summaryRechecksOriginalSourcesAtBothPhysicalAdmissionBoundaries()throws Exception {
+        for(int rejectAt:new int[]{1,2})try(Provider provider=new Provider()){
+            Journal journal=new Journal(provider.config());String raw=journal.raw.toString();AtomicInteger checks=new AtomicInteger();
+            var sources=new dev.pocketengine.runtime.AgentRunner.RequestProjection(){
+                public JSONArray project(JSONArray rows,ModelConfig config,RunControl control){throw new AssertionError("summary does not rematerialize owner data");}
+                public void prepared(JSONArray rows,JSONArray wire,ModelConfig config,RunControl control){throw new AssertionError("summary is not full MAIN owner-body exposure");}
+                public void derivedPrepared(JSONArray rows,RunControl original){assertSame(journal.control,original);assertEquals(raw,rows.toString());if(checks.incrementAndGet()==rejectAt)throw new SecurityException("original preview source changed");}
+            };
+            ContextCompactor compactor=new ContextCompactor(journal,journal,journal.budgets(),sources);
+            assertThrows(Exception.class,()->request(compactor,journal));assertEquals(rejectAt,checks.get());assertEquals(0,provider.calls.get());assertEquals(0,journal.publishes);assertNull(journal.published);assertEquals(raw,journal.raw.toString());
+        }
+    }
+    @Test public void currentSummarySourceGatePreservesOneOriginalCallAndReceipt()throws Exception {
+        try(Provider provider=new Provider()){
+            Journal journal=new Journal(provider.config());String raw=journal.raw.toString();AtomicInteger checks=new AtomicInteger();
+            var sources=new dev.pocketengine.runtime.AgentRunner.RequestProjection(){
+                public JSONArray project(JSONArray rows,ModelConfig config,RunControl control){throw new AssertionError("summary uses original frozen rows");}
+                public void prepared(JSONArray rows,JSONArray wire,ModelConfig config,RunControl control){throw new AssertionError("no MAIN proof from a summary");}
+                public void derivedPrepared(JSONArray rows,RunControl original){assertSame(journal.control,original);assertEquals(raw,rows.toString());checks.incrementAndGet();}
+            };
+            request(new ContextCompactor(journal,journal,journal.budgets(),sources),journal);
+            assertEquals(2,checks.get());assertEquals(1,provider.calls.get());assertEquals(1,journal.publishes);assertEquals(raw,journal.raw.toString());
+            assertEquals(InferenceReceipt.Purpose.SUMMARY,journal.receipts.get(0).context.purpose);
+            assertEquals(journal.receipts.get(0).callId,journal.receipts.get(1).callId);
+        }
+    }
     @Test public void oneActualSummaryCallKeepsRawAndAttributesUsageThenReusesOnAppend()throws Exception {
         try(Provider provider=new Provider()){
             Journal journal=new Journal(provider.config());String original=journal.raw.toString();ContextCompactor compactor=new ContextCompactor(journal,journal,journal.budgets());RunContextBudget.Projection result=request(compactor,journal);

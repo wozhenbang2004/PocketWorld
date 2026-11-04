@@ -575,6 +575,7 @@ public final class EngineApplication extends Application implements dev.pocketen
     private final Object assistantAdmissions=new Object();
     private final java.util.concurrent.ConcurrentHashMap<RunControl,AssistantInputBinding> assistantInputs=new java.util.concurrent.ConcurrentHashMap<>();
     private dev.pocketengine.features.local.project.ProjectOwnerWorkflows projectOwnerWorkflows;
+    public dev.pocketengine.features.local.preview.ProjectPreviewReferences ownerPreviewReferences;
     private dev.pocketengine.features.teams.TeamProjectRoundHost teamProjectRounds;
     private volatile dev.pocketengine.features.memory.AutomaticUserLearningHost automaticUserLearning;
     private final java.util.concurrent.atomic.AtomicBoolean automaticLearningIdlePending=new java.util.concurrent.atomic.AtomicBoolean();
@@ -665,7 +666,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(!bootstrapCleanupConfirmed)return false;
         if(hasReachedBusinessReady){
             TaskStore original=tasks;if(original!=null){JSONObject policy=original.ownerExecutionState();changeOwnerExecutionEnabled(policy.getLong("revision"),false);}
-            if(features!=null)features.close();if(deviceWorkspaceOwner!=null)deviceWorkspaceOwner.close();
+            if(ownerPreviewReferences!=null)ownerPreviewReferences.close();if(features!=null)features.close();if(deviceWorkspaceOwner!=null)deviceWorkspaceOwner.close();
             bootstrapCleanupConfirmed=false;return false;
         }
         bootstrapCleanupConfirmed=closeFailedBootstrap();return bootstrapCleanupConfirmed&&tasks==null;
@@ -677,10 +678,11 @@ public final class EngineApplication extends Application implements dev.pocketen
         try{if(groupTaskHost!=null)groupTaskHost.close();}catch(RuntimeException unavailable){closed=false;}
         try{if(skillExecutionHost!=null)skillExecutionHost.close();}catch(RuntimeException unavailable){closed=false;}
         try{if(pluginHost!=null)pluginHost.close();}catch(RuntimeException unavailable){closed=false;}
+        try{if(ownerPreviewReferences!=null)ownerPreviewReferences.close();}catch(RuntimeException unavailable){closed=false;}
         try{if(features!=null)features.close();}catch(RuntimeException unavailable){closed=false;}
         try{if(localOcr!=null)localOcr.close();}catch(RuntimeException unavailable){closed=false;}
         TaskStore original=tasks;if(original!=null){try{original.closeForMaintenance();if(!original.closedForMaintenance())closed=false;}catch(RuntimeException unavailable){closed=false;}if(original.closedForMaintenance())tasks=null;}
-        features=null;deviceWorkspaceOwner=null;deviceWorkspaceHost=null;deviceTaskScopeHost=null;groupOwnerWorkflows=null;groupTaskHost=null;groups=null;skillExecutionHost=null;pluginHost=null;localOcr=null;memorySources=null;nativeOwnerWorkflows=null;remoteOwnerWorkflows=null;remoteAttentionNotifications=null;automaticUserLearning=null;automationHost=null;automationPlans=null;channelTaskHost=null;modelStreams=null;workProfileHost=null;browserTaskHost=null;assistantAttachments=null;projectOwnerWorkflows=null;teamProjectRounds=null;sshOwnerWorkflows=null;sshPreviewWorkflows=null;return closed;
+        features=null;deviceWorkspaceOwner=null;deviceWorkspaceHost=null;deviceTaskScopeHost=null;groupOwnerWorkflows=null;groupTaskHost=null;groups=null;skillExecutionHost=null;pluginHost=null;localOcr=null;memorySources=null;nativeOwnerWorkflows=null;remoteOwnerWorkflows=null;remoteAttentionNotifications=null;automaticUserLearning=null;automationHost=null;automationPlans=null;channelTaskHost=null;modelStreams=null;workProfileHost=null;browserTaskHost=null;assistantAttachments=null;projectOwnerWorkflows=null;ownerPreviewReferences=null;teamProjectRounds=null;sshOwnerWorkflows=null;sshPreviewWorkflows=null;return closed;
     }
     private static String bootstrapFailureCode(Throwable failure){
         String fallback="initialization_failed";
@@ -813,6 +815,8 @@ public final class EngineApplication extends Application implements dev.pocketen
         EngineModule development=addModule("local",()->new dev.pocketengine.features.local.LocalModule(context,workspace));
         if(development instanceof dev.pocketengine.features.local.LocalModule&&assistant instanceof dev.pocketengine.features.assistant.AssistantModule){
             var local=(dev.pocketengine.features.local.LocalModule)development;
+            ownerPreviewReferences=new dev.pocketengine.features.local.preview.ProjectPreviewReferences(tasks,local);
+            ((dev.pocketengine.features.assistant.AssistantModule)assistant).setPreviewReferences(ownerPreviewReferences);
             var host=new dev.pocketengine.features.local.project.TaskStoreProjectHost(tasks,local,this::retainedTaskControl,features::emitApproval);local.setProjectHost(host);features.setProjectHost(host);
             local.setProjectReceiptSink(receipt->{try{host.recordBackendReceipt(receipt);String taskId=receipt.getJSONObject("projectExecution").getString("taskId");features.finishLocalTerminalIfSettled(taskId);pushTask(taskId);RetainedDevelopmentRun held=retainedDevelopmentRuns.get(taskId);if(held!=null)held.nativeReceipt();}catch(Exception failure){error("原项目终态回执保存未确认，请核对原操作");}});
             projectOwnerWorkflows=new dev.pocketengine.features.local.project.ProjectOwnerWorkflows(local,tasks,(dev.pocketengine.features.assistant.AssistantModule)assistant);
@@ -2384,6 +2388,7 @@ public final class EngineApplication extends Application implements dev.pocketen
                 if(hasTaskAttachments(originalTask))attachmentRoutePins.require(id,selected,false);return sourceProjection.project(currentHistory,selected,live);
                 }
                 @Override public void prepared(JSONArray nativeProvenance,JSONArray actualMessages,ModelConfig selected,RunControl live)throws Exception{sourceProjection.prepared(nativeProvenance,actualMessages,selected,live);}
+                @Override public void derivedPrepared(JSONArray nativeProvenance,RunControl live)throws Exception{sourceProjection.derivedPrepared(nativeProvenance,live);}
             }:null;
             final String[] lastOwnerReplyAttempted={null},lastOwnerReplyRecorded={null};
             dev.pocketengine.runtime.AgentRunner.OwnerInputs inputs=ownerMailbox?new dev.pocketengine.runtime.AgentRunner.OwnerInputs(){
