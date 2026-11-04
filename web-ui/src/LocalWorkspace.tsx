@@ -1,21 +1,31 @@
-import { useEffect, useRef, useState } from 'react';
-import { Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ArrowLeft, ChevronRight, Folder, Plus, RefreshCw, Terminal } from 'lucide-react';
+import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import TerminalSurface from './TerminalSurface';
+import './local-workspace.css';
 
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
 const rows = (value: any): Data[] => Array.isArray(value) ? value : [];
 const identity = (task: Data) => ({ taskId: task.taskId || task.id, runId: task.runId || task.raw?.runId, epoch: task.epoch || task.raw?.coordinatorEpoch, executionId: task.executionId || task.id });
+const statusLabel = (value: any) => ({ running: '运行中', completed: '已完成', failed: '已结束，需核对', stopped: '已停止', unknown: '结果待核对', reconciling: '结果待核对', paused: '已暂停', pending: '等待回执', observed: '已取得回执', not_dispatched: '未发送' } as Record<string, string>)[String(value)] || value || '状态待核对';
 
-/** Existing local checkout/PTY workflow composed with the same BoardUI fields and original xterm. */
+/** BoardUI's retained fields, disclosure and navigation-row composition around
+ * the original local checkout/PTY workflow. No replacement terminal or authority. */
 export function LocalWorkspace({ state, data, run, supported, registerTransientBack }: { state: Data; data: Data; run: Run; supported: (name: string) => boolean; registerTransientBack: (handler: (() => boolean) | null) => void }) {
   const [project, setProject] = useState(''), [checkout, setCheckout] = useState(''), [source, setSource] = useState<Data | null>(null);
   const [cwd, setCwd] = useState('.'), [env, setEnv] = useState('{}'), [seconds, setSeconds] = useState('300');
   const [review, setReview] = useState<Data | null>(null), [acknowledged, setAcknowledged] = useState(false), [original, setOriginal] = useState<Data | null>(null), [receipt, setReceipt] = useState<Data | null>(null);
   const [view, setView] = useState<Data | null>(null), [output, setOutput] = useState<Data | null>(null), [input, setInput] = useState(''), [uncertain, setUncertain] = useState(false);
-  const [columns, setColumns] = useState('80'), [height, setHeight] = useState('24'), [stopReview, setStopReview] = useState(false);
+  const [inputReceipt, setInputReceipt] = useState<Data | null>(null), [panel, setPanel] = useState<'setup' | 'session'>('setup');
+  const [columns, setColumns] = useState('80'), [height, setHeight] = useState('24'), [stopReview, setStopReview] = useState(false), [stopRequested, setStopRequested] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [prepareAttempted, setPrepareAttempted] = useState(false);
   const entered = useRef(false), alive = useRef(true), viewHandle = useRef(''), reviewHandle = useRef('');
+  const readingRoot = useRef<HTMLElement>(null), readingPositions = useRef<Record<string, number>>({}), previousPresentation = useRef('setup');
+  const activePanel = useRef(panel); activePanel.current = panel;
+  const presentation = panel === 'setup' ? 'setup' : view ? `screen:${view.handle}` : `session:${original?.executionId || ''}`;
+  const rememberPosition = () => { readingPositions.current[presentation] = readingRoot.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop || 0; };
+  const changePanel = (next: 'setup' | 'session') => { if (busy || review || stopReview || next === panel) return; rememberPosition(); setPanel(next); };
   const invoke = async (name: string, args: Data = {}, accept?: (value: Data) => void) => {
     if (entered.current) return; entered.current = true; setBusy(true); setError('');
     try { const result = await run(name, args); if (alive.current) accept?.(result); return result; }
@@ -23,7 +33,7 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
     finally { entered.current = false; if (alive.current) setBusy(false); }
   };
   const closeViewer = () => {
-    const handle = viewHandle.current; viewHandle.current = ''; setView(null); setOutput(null); setInput('');
+    rememberPosition(); const handle = viewHandle.current; viewHandle.current = ''; setView(null); setOutput(null);
     if (handle) void run('local.terminal.close', { handle }).catch(() => {});
   };
   const closeReview = () => {
@@ -31,66 +41,150 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
     if (handle) void run('local.terminal.close', { handle }).catch(() => {});
   };
   useEffect(() => { alive.current = true; return () => { alive.current = false; const handle = viewHandle.current || reviewHandle.current; if (handle) void run('local.terminal.close', { handle }).catch(() => {}); }; }, []);
-  useEffect(() => { registerTransientBack(review ? () => { if (!busy) closeReview(); return true; } : view ? () => { if (!busy) closeViewer(); return true; } : null); return () => registerTransientBack(null); }, [!!review, !!view, busy, registerTransientBack]);
+  useEffect(() => {
+    registerTransientBack(() => {
+      if (stopReview) { if (!busy) setStopReview(false); return true; }
+      if (review) { if (!busy) closeReview(); return true; }
+      if (panel === 'session' && view) { if (!busy) closeViewer(); return true; }
+      if (panel === 'session') { if (!busy) changePanel('setup'); return true; }
+      return false;
+    });
+    return () => registerTransientBack(null);
+  }, [!!review, !!view, stopReview, panel, busy, registerTransientBack]);
+  useLayoutEffect(() => {
+    if (presentation === previousPresentation.current) return;
+    const scroll = readingRoot.current?.closest<HTMLElement>('.pw-secondary-scroll');
+    if (scroll) scroll.scrollTop = readingPositions.current[presentation] || 0;
+    readingRoot.current?.querySelector<HTMLElement>('[data-local-panel]:not([hidden]) h2')?.focus({ preventScroll: true });
+    previousPresentation.current = presentation;
+  }, [presentation]);
   const open = (target: Data) => {
     if (busy) return;
+    rememberPosition();
     void invoke('local.terminal.open', { taskId: target.taskId, executionId: target.executionId }, result => {
-      viewHandle.current = result.handle; setView(result); setOutput(result.output); setUncertain(result.metadata?.inputUncertain === true); setOriginal(target);
-      setColumns(String(result.metadata?.columns || 80)); setHeight(String(result.metadata?.rows || 24)); setInput('');
+      viewHandle.current = result.handle; setView(result); setOutput(result.output); setUncertain(result.metadata?.inputUncertain === true || result.output?.inputUncertain === true); setOriginal(target); setPanel('session');
+      setColumns(String(result.metadata?.columns || 80)); setHeight(String(result.metadata?.rows || 24)); if (target.taskId !== original?.taskId || target.executionId !== original?.executionId) setInput(''); setInputReceipt(null);
     }).catch(() => {});
   };
   useEffect(() => {
-    if (!view?.handle || busy || error || output?.terminal || document.visibilityState !== 'visible') return;
+    if (panel !== 'session' || !view?.handle || busy || error || output?.terminal || document.visibilityState !== 'visible') return;
     const handle = view.handle;
-    const timer = window.setTimeout(() => { if (viewHandle.current === handle) void invoke('local.terminal.read', { handle }, value => { if (viewHandle.current === handle) { setOutput(value); if (value.inputUncertain) setUncertain(true); } }).catch(() => {}); }, 1200);
+    const timer = window.setTimeout(() => { if (activePanel.current === 'session' && viewHandle.current === handle) void invoke('local.terminal.read', { handle }, value => { if (viewHandle.current === handle) { setOutput(value); if (value.inputUncertain) setUncertain(true); } }).catch(() => {}); }, 1200);
     return () => window.clearTimeout(timer);
-  }, [view?.handle, output, busy, error]);
+  }, [panel, view?.handle, output, busy, error]);
   const selected = rows(data.checkouts).find(row => row.id === checkout && row.projectId === project);
   const checkouts = rows(data.checkouts).filter(row => row.projectId === project && !row.teamProjectCopy);
   const terminals = rows(state.tasks).filter(row => row.raw?.nativeExecutionMode === 'OWNER_LOCAL_TERMINAL' || row.raw?.ownerLocalTerminal);
+  const currentTask = terminals.find(task => identity(task).taskId === original?.taskId && identity(task).executionId === original?.executionId);
   const ready = !!selected && source?.checkoutId === checkout && source?.projectId === project;
-  const canInput = !!view?.handle && !busy && !uncertain && output?.nativeStatus === 'running' && !output?.terminal;
+  const canInput = panel === 'session' && !!view?.handle && !busy && !uncertain && !stopRequested && !view.metadata?.observingOnly && output?.nativeStatus === 'running' && !output?.terminal;
   const send = (payload: Data) => {
-    if (!canInput) return;
+    if (activePanel.current !== 'session' || viewHandle.current !== view?.handle || !canInput) return;
     setUncertain(true); const text = input;
     void invoke('local.terminal.input', { handle: view!.handle, ...payload }, result => {
-      setReceipt(result); setUncertain(result.nativeInputSettled !== true);
+      setInputReceipt(result); setUncertain(result.nativeInputSettled !== true);
       if (payload.action === 'text' && result.nativeInputSettled && result.accepted) setInput(current => current === text ? '' : current);
     }).catch(() => {});
   };
+  const queryInput = () => { if (view) void invoke('local.terminal.inputReceipt', { handle: view.handle }, result => { setInputReceipt(result); if (result.nativeInputSettled === true) setUncertain(false); }).catch(() => {}); };
+  const selectSession = (task: Data) => {
+    if (busy) return;
+    const target = identity(task);
+    if (target.taskId === original?.taskId && target.executionId === original?.executionId) { changePanel('session'); return; }
+    if (resultUnknown || uncertain) return;
+    rememberPosition(); closeViewer(); setOriginal(target); setInput(''); setReceipt(null); setInputReceipt(null); setUncertain(false); setStopRequested(false); setPanel('session');
+    void invoke('local.terminal.query', target, setReceipt).catch(() => {});
+  };
   const knownResults = state.moduleResults || {};
-  return <>
-    <section className="pw-settings-section"><header className="pw-section-heading"><h2>本机开发</h2><p>选定私人工作副本，在原进程中操作并核对回执。</p></header>
+  const runtimes = rows(data.projectRuntimes?.runtimes || data.projectRuntimes);
+  const jobs: Data[] = [...rows(knownResults['local.listJobs']?.jobs).map(row => ({ ...row, backendLabel: '本机' })), ...rows(knownResults['local.listJobs']?.termuxJobs).map(row => ({ ...row, backendLabel: 'Termux' }))];
+  const unresolvedJobs = jobs.filter(row => /unknown|uncertain/.test(String(row.status || row.state || '')));
+  const inputBytes = new TextEncoder().encode(input + '\n').length;
+  const currentStatus = output?.nativeStatus || receipt?.status || currentTask?.status;
+  const resultUnknown = !!original && (!receipt || !/^(running|completed|failed|paused|stopped)$/.test(String(receipt.status)) || /^(unknown|prepared)$/.test(String(receipt.operationState)));
+  const executionMessage = receipt?.message || receipt?.receipt?.message;
+  return <section ref={readingRoot} className="pw-local-workspace pw-settings-section" data-local-view={panel}>
+    <header className="pw-local-heading"><div><h2>本机工作区</h2><p>私人副本与手动终端，在同一个地方继续。</p></div><Terminal size={22} aria-hidden /></header>
+    {error && <p role="alert" className="pw-local-feedback pw-secondary-error">{error}</p>}
+    {knownResults['local.probe']?.message && <p className="pw-local-runtime-message" role="status">{knownResults['local.probe'].message}</p>}
+    {unresolvedJobs.map((row, index) => <p className="pw-local-feedback" key={row.id || row.operationId || index}>{row.backendLabel}原操作 {row.operationId || row.id}：{row.message || row.summary || '结果尚未确认，请读取原运行回执，不要重复执行。'}</p>)}
+    {original && resultUnknown && <div className="pw-local-feedback" role="status"><p>原执行结果待核对。请查询这条记录，不要重复启动。</p><Button variant="ghost" size="small" disabled={busy} onClick={() => { void invoke('local.terminal.query', original, setReceipt).catch(() => {}); }}>查询原执行</Button></div>}
+    {original && stopRequested && <div className="pw-local-feedback" role="status"><p>{output?.terminal ? `原进程已返回终态；资源释放：${output.resourcesReleased ? '已确认' : '尚未确认'}。` : '已请求停止原进程，退出与资源回收仍以真实回执为准。'}</p><Button variant="ghost" size="small" disabled={busy} onClick={() => { void invoke('local.terminal.query', original, setReceipt).catch(() => {}); }}>查询停止结果</Button></div>}
+    {panel === 'setup' && original && !resultUnknown && <p className="pw-local-runtime-message" role="status">原终端：{statusLabel(currentStatus)}{executionMessage ? ` · ${executionMessage}` : ''}</p>}
+    {uncertain && <div className="pw-local-feedback" role="status"><p>上一输入尚未核对，已停止继续输入。不会自动重发。</p>{view ? <Button variant="secondary" size="small" disabled={busy} onClick={queryInput}>核对原输入回执</Button> : original && <Button variant="secondary" size="small" disabled={busy} onClick={() => open(original)}>打开原终端核对</Button>}</div>}
+    <div className="pw-local-layout">
+      <nav className="pw-local-sessions" aria-label="本机终端">
+        <Button variant="ghost" className="pw-local-session-row pw-local-new" leadingIcon={Plus} aria-pressed={panel === 'setup'} disabled={busy} onClick={() => changePanel('setup')}>新建终端</Button>
+        <div className="pw-local-session-label"><span>已有终端</span><small>当前已读取的记录</small></div>
+        {original && !currentTask && <Button variant="ghost" className="pw-local-session-row" leadingIcon={Terminal} aria-pressed={panel === 'session'} disabled={busy} onClick={() => changePanel('session')}><span className="pw-local-session-copy"><strong>本次手动终端</strong><small>{statusLabel(currentStatus)}</small></span></Button>}
+        {terminals.map(task => {
+          const active = identity(task).taskId === original?.taskId && identity(task).executionId === original?.executionId;
+          return <Button variant="ghost" className="pw-local-session-row" leadingIcon={Terminal} key={task.id || task.taskId} aria-pressed={panel === 'session' && active} disabled={busy || (resultUnknown || uncertain) && !active} onClick={() => selectSession(task)}><span className="pw-local-session-copy"><strong>{task.goal || '手动终端'}</strong><small>{active ? statusLabel(currentStatus) : statusLabel(task.status || task.state)}</small></span></Button>;
+        })}
+        {!terminals.length && !original && <p className="pw-local-session-empty">还没有读取到终端记录。先选一个项目，准备你的工作副本。</p>}
+      </nav>
+      <div className="pw-local-main">
+        <section className="pw-local-panel" data-local-panel="setup" hidden={panel !== 'setup'}>
+          <header className="pw-local-panel-heading"><span className="pw-local-eyebrow">私人工作副本</span><h2 tabIndex={-1}>新建手动终端</h2><p>选择项目、核对副本，再审阅启动。不会调用模型。</p></header>
+          <div className="pw-local-setup-step">
+            <h3><Folder size={17} aria-hidden />选择工作副本</h3>
+            <div className="pw-form-grid"><SelectField label="原项目" value={project} isDisabled={busy} options={[{ id: '', label: '选择已有项目' }, ...rows(state.projects).map(row => ({ id: row.id, label: row.name }))]} onChange={value => { if (!busy) { setProject(value); setCheckout(''); setSource(null); setPrepareAttempted(false); } }} />
+              <SelectField label="私人工作副本" value={checkout} isDisabled={busy || !project} options={[{ id: '', label: '选择或准备副本' }, ...checkouts.map(row => ({ id: row.id, label: (row.name || '工作副本') + ' · ' + new Date(row.createdAt || 0).toLocaleString() }))]} onChange={value => { if (!busy) { setCheckout(value); setSource(null); } }} /></div>
+            <div className="pw-form-actions"><Button variant="secondary" disabled={!selected || busy} onClick={() => { void invoke('local.describeCheckout', { projectId: project, checkoutId: checkout }, setSource).catch(() => {}); }}>{ready ? '重新核对副本版本' : '读取这个副本的实际版本'}</Button><Button variant="ghost" disabled={!project || busy || prepareAttempted} onClick={() => { if (activePanel.current !== 'setup' || entered.current || prepareAttempted) return; setPrepareAttempted(true); void invoke('local.prepareCheckout', { projectId: project }, result => { setCheckout(result.id); setSource(null); }).catch(() => {}); }}>准备新的私人副本</Button></div>
+            {prepareAttempted && <p className="pw-local-inline-notice" role="status">本次已请求准备副本。请核对真实副本列表；回执不明时不重复准备。</p>}
+            {ready ? <div className="pw-local-source" role="status"><span>{source.fileCount} 个源码文件 · {source.bytes} 字节</span><small>版本已读取，启动前仍会核对是否变化。</small></div> : <p className="pw-field-hint">{project ? '先读取所选副本的实际版本，才能审阅终端。' : '使用已有项目的私人副本，不直接改动原项目。'}</p>}
+          </div>
+          <div className="pw-local-setup-step" hidden={!ready}>
+            <h3><Terminal size={17} aria-hidden />设置这次终端</h3>
+            <div className="pw-form-grid"><TextField label="副本中的工作目录" value={cwd} onChange={setCwd} isDisabled={busy} /><TextField label="最长运行秒数（1–300）" inputMode="numeric" value={seconds} isDisabled={busy} onChange={value => setSeconds(value.replace(/\D/g, '').slice(0, 3))} /></div>
+            <Accordion className="pw-local-disclosures"><AccordionItem id="environment" title="环境变量" description={env.trim() === '{}' ? '可选，仅限普通配置值' : '已编辑普通环境变量，启动前会核对'}><TextAreaField label="普通环境变量（JSON 对象）" value={env} onChange={setEnv} isDisabled={busy} hint="例如 APP_LABEL；不能设置密钥或覆盖宿主运行环境。" /></AccordionItem></Accordion>
+            <p className="pw-local-safety">终端操作可能修改私人副本，输入和输出会保留在原任务记录中。不支持密码等秘密输入。</p>
+            <Button disabled={busy || resultUnknown || uncertain || !ready || Number(seconds) < 1 || Number(seconds) > 300 || !supported('local.terminal.review')} trailingIcon={ChevronRight} onClick={() => {
+              if (activePanel.current !== 'setup' || entered.current || resultUnknown || uncertain) return;
+              try { const environment = JSON.parse(env); if (!environment || Array.isArray(environment) || typeof environment !== 'object') throw new Error('环境变量需要 JSON 对象。');
+                if (view) closeViewer();
+                void invoke('local.terminal.review', { projectId: project, checkoutId: checkout, expectedSourceDigest: source!.sourceDigest, runtimeId: 'managed_process_v1', cwd, env: environment, timeoutMillis: Number(seconds) * 1000, columns: 80, rows: 24, inputByteLimit: 65536 }, result => { reviewHandle.current = result.handle; setReview(result); setAcknowledged(false); }).catch(() => {});
+              } catch (failure) { setError(failure instanceof Error ? failure.message : '请核对表单'); }
+            }}>核对并准备终端</Button>
+          </div>
+        </section>
+        <section className="pw-local-panel" data-local-panel="session" hidden={panel !== 'session'}>
+          <Button variant="ghost" size="small" className="pw-local-back" leadingIcon={ArrowLeft} disabled={busy} onClick={() => changePanel('setup')}>返回工作副本</Button>
+          <header className="pw-local-panel-heading"><span className="pw-local-eyebrow">{view ? '原终端屏幕' : '原任务记录'}</span><h2 tabIndex={-1}>{currentTask?.goal || '本次手动终端'}</h2>{currentTask?.summary && <p>{currentTask.summary}</p>}</header>
+          {original && <>
+            <div className="pw-local-session-status"><span>{statusLabel(currentStatus)}</span>{executionMessage && <p role="status">{executionMessage}</p>}</div>
+            <div className="pw-form-actions pw-local-session-actions">
+              {!view && <Button disabled={busy} leadingIcon={Terminal} onClick={() => open(original)}>打开原终端</Button>}
+              <Button variant="ghost" disabled={busy} leadingIcon={RefreshCw} onClick={() => { void invoke('local.terminal.query', original, setReceipt).catch(() => {}); }}>查询原执行</Button>
+              <Button variant="ghost" disabled={busy} onClick={() => setStopReview(true)}>停止这个原进程</Button>
+            </div>
+            {view ? <>
+              <div className="pw-local-screen-toolbar"><span>{view.metadata?.workingDirectory || '原工作目录'}</span><div><Button variant="ghost" size="small" disabled={busy} onClick={() => { void invoke('local.terminal.read', { handle: view.handle }, value => { setOutput(value); if (value.inputUncertain) setUncertain(true); }).catch(() => {}); }}>读取原屏幕</Button><Button variant="ghost" size="small" disabled={busy} onClick={closeViewer}>关闭视图</Button></div></div>
+              <div className="pw-local-screen"><TerminalSurface key={view.handle} frame={output?.screen || null} /></div>
+              <p className="pw-field-hint">关闭视图只结束查看，原进程按原时限继续。</p>
+              {output?.terminal && <p className="pw-local-inline-notice" role="status">原进程已返回终态；资源释放：{output.resourcesReleased ? '已确认' : '尚未确认'}。</p>}
+              {view.metadata?.observingOnly && <p className="pw-local-inline-notice">当前为只读观察，不会取得新的输入授权。</p>}
+              <div className="pw-local-input">
+                <TextAreaField label="普通终端输入" value={input} onChange={setInput} hint="发送一行会在末尾加入换行。不要输入密码、令牌等秘密。" />
+                <div className="pw-local-input-actions"><Button disabled={!canInput || !input || inputBytes > 4096} onClick={() => send({ action: 'text', text: input + '\n' })}>发送这一行</Button><Button variant="secondary" disabled={!canInput} onClick={() => send({ action: 'text', text: '\u0003' })}>Ctrl+C</Button><Button variant="secondary" disabled={!canInput} onClick={() => send({ action: 'eof' })}>EOF</Button><small>{input ? `${inputBytes} / 4096 字节（含换行）` : '单次最多 4096 字节'}</small></div>
+                <p className="pw-field-hint">原授权上限：{view.metadata?.inputByteLimit ?? '未提供'} 字节 · {view.metadata?.inputRequestLimit ?? '未提供'} 次动作 · {view.metadata?.timeoutMillis == null ? '时限未提供' : `${view.metadata.timeoutMillis / 1000} 秒`}。仍由原任务核对剩余额度。</p>
+                {inputReceipt && <p className="pw-local-inline-notice" role="status">{inputReceipt.knownInput === false ? '这个视图没有待核输入；原任务记录保留。' : inputReceipt.message || (inputReceipt.nativeInputSettled ? inputReceipt.accepted ? '已取得原输入回执，没有再次发送。' : '已核对原输入回执。' : '输入结果仍待核对，没有重发。')}</p>}
+                {!uncertain && <Button variant="ghost" size="small" disabled={busy} onClick={queryInput}>核对原输入回执</Button>}
+              </div>
+              <Accordion className="pw-local-disclosures"><AccordionItem id="geometry" title="终端尺寸" description={`${columns} 列 × ${height} 行，调整也计入原输入动作`}><div className="pw-form-grid"><TextField label="列数（20–300）" value={columns} onChange={setColumns} inputMode="numeric" isDisabled={busy} /><TextField label="行数（5–120）" value={height} onChange={setHeight} inputMode="numeric" isDisabled={busy} /></div><Button variant="secondary" disabled={!canInput || !/^\d+$/.test(columns) || !/^\d+$/.test(height) || Number(columns) < 20 || Number(columns) > 300 || Number(height) < 5 || Number(height) > 120} onClick={() => send({ action: 'resize', columns: Number(columns), rows: Number(height) })}>调整原终端尺寸</Button></AccordionItem></Accordion>
+            </> : <div className="pw-local-closed"><Terminal size={24} aria-hidden /><p>打开原屏幕，继续查看输出。</p><small>查看不会新建进程，也不会自动发送输入。</small></div>}
+            <Accordion className="pw-local-disclosures"><AccordionItem id="identity" title="原执行身份"><dl className="pw-facts"><div><dt>任务</dt><dd>{original.taskId}</dd></div><div><dt>运行</dt><dd>{original.runId}</dd></div><div><dt>执行</dt><dd>{original.executionId}</dd></div><div><dt>代次</dt><dd>{original.epoch}</dd></div>{view?.metadata?.projectId && <div><dt>项目</dt><dd>{view.metadata.projectId}</dd></div>}{view?.metadata?.checkoutId && <div><dt>工作副本</dt><dd>{view.metadata.checkoutId}</dd></div>}</dl></AccordionItem></Accordion>
+          </>}
+        </section>
+      </div>
+    </div>
+    <Accordion className="pw-local-runtime pw-local-disclosures"><AccordionItem id="runtime" title="运行环境与历史回执" description={runtimes.length ? runtimes.map(row => row.name || row.id || row.runtimeId).join(' · ') : '本机、Termux 与已读取的原运行记录'}>
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy || !supported('local.inspectRuntime')} onClick={() => { void invoke('local.inspectRuntime').catch(() => {}); }}>核对运行时</Button><Button variant="secondary" disabled={busy || !supported('local.readReceipts')} onClick={() => { void invoke('local.readReceipts').catch(() => {}); }}>读取原运行回执</Button><Button variant="ghost" disabled={busy || !supported('local.termuxProbe')} onClick={() => { void invoke('local.termuxProbe').catch(() => {}); }}>核对 Termux</Button></div>
-      {rows(data.projectRuntimes?.runtimes || data.projectRuntimes).map(row => <div className="pw-source-record" key={row.id || row.runtimeId}><h3>{row.name || row.id || row.runtimeId}</h3><p>{row.message || row.status || (row.available ? '当前可用' : '尚未确认可用')}</p></div>)}
-      {knownResults['local.probe']?.message && <p>{knownResults['local.probe'].message}</p>}
+      {runtimes.map(row => <div className="pw-local-runtime-row" key={row.id || row.runtimeId}><h3>{row.name || row.id || row.runtimeId}</h3><p>{row.message || row.status || (row.available ? '当前可用' : '尚未确认可用')}</p></div>)}
       {Array.isArray(knownResults['local.probe']?.tools) && <p className="pw-field-hint">已发现工具：{knownResults['local.probe'].tools.map((tool: any) => typeof tool === 'string' ? tool : tool.name || tool.id).join('、') || '尚无'}</p>}
-      {knownResults['local.listJobs'] && <details><summary>原本机与 Termux 运行回执</summary>{[...rows(knownResults['local.listJobs'].jobs).map(row => ({ ...row, backendLabel: '本机' })), ...rows(knownResults['local.listJobs'].termuxJobs).map(row => ({ ...row, backendLabel: 'Termux' }))].map((row: Data, index) => <div className="pw-source-record" key={row.id || row.operationId || index}><h3>{row.backendLabel} · {row.status || row.state || '状态待核对'}</h3><p>{row.message || row.summary}</p><dl className="pw-facts"><div><dt>原操作</dt><dd>{row.operationId || row.id}</dd></div><div><dt>退出状态</dt><dd>{row.exitCode == null ? '尚未返回' : row.exitCode}</dd></div></dl></div>)}</details>}
-      <div className="pw-form-grid"><SelectField label="原项目" value={project} options={[{ id: '', label: '选择已有项目' }, ...rows(state.projects).map(row => ({ id: row.id, label: row.name }))]} onChange={value => { if (!busy) { closeViewer(); setOriginal(null); setReceipt(null); setProject(value); setCheckout(''); setSource(null); setPrepareAttempted(false); } }} />
-        <SelectField label="私人工作副本" value={checkout} options={[{ id: '', label: '选择或准备副本' }, ...checkouts.map(row => ({ id: row.id, label: (row.name || '工作副本') + ' · ' + new Date(row.createdAt || 0).toLocaleString() }))]} onChange={value => { if (!busy) { closeViewer(); setOriginal(null); setReceipt(null); setCheckout(value); setSource(null); } }} /></div>
-      <div className="pw-form-actions"><Button variant="secondary" disabled={!project || busy || prepareAttempted} onClick={() => { setPrepareAttempted(true); void invoke('local.prepareCheckout', { projectId: project }, result => { setCheckout(result.id); setSource(null); }).catch(() => {}); }}>从当前项目准备私人副本</Button><Button variant="secondary" disabled={!selected || busy} onClick={() => { void invoke('local.describeCheckout', { projectId: project, checkoutId: checkout }, setSource).catch(() => {}); }}>读取这个副本的实际版本</Button></div>
-      {prepareAttempted && <p className="pw-field-hint">本次已请求准备副本。请核对上方真实副本列表；回执不明时不重复准备。</p>}
-    </section>
-    <section className="pw-settings-section"><header className="pw-section-heading"><h2>手动终端</h2><p>在受控本机环境中打开原工作副本；不调用模型。输入和输出会保留在原任务记录中，不支持密码等秘密输入。</p></header>
-      {ready && <p>{source.fileCount} 个源码文件 · 当前副本 {source.bytes} 字节</p>}
-      <div className="pw-form-grid"><TextField label="副本中的工作目录" value={cwd} onChange={setCwd} /><TextField label="最长运行秒数（1–300）" inputMode="numeric" value={seconds} onChange={value => setSeconds(value.replace(/\D/g, '').slice(0, 3))} /><TextAreaField label="普通环境变量（JSON 对象）" value={env} onChange={setEnv} hint="例如 APP_LABEL；不能设置密钥或覆盖宿主运行环境。" /></div>
-      <Button disabled={busy || !ready || Number(seconds) < 1 || Number(seconds) > 300 || !supported('local.terminal.review')} onClick={() => {
-        try { if (view) closeViewer(); const environment = JSON.parse(env); if (!environment || Array.isArray(environment) || typeof environment !== 'object') throw new Error('环境变量需要 JSON 对象。');
-          void invoke('local.terminal.review', { projectId: project, checkoutId: checkout, expectedSourceDigest: source!.sourceDigest, runtimeId: 'managed_process_v1', cwd, env: environment, timeoutMillis: Number(seconds) * 1000, columns: 80, rows: 24, inputByteLimit: 65536 }, result => { reviewHandle.current = result.handle; setReview(result); setAcknowledged(false); }).catch(() => {});
-        } catch (failure) { setError(failure instanceof Error ? failure.message : '请核对表单'); }
-      }}>核对并准备终端</Button>
-      {original && <div className="pw-source-record"><h3>本次原终端</h3><p>{receipt?.status || '启动结果待核对'}{receipt?.message ? ' · ' + receipt.message : ''}</p><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { void invoke('local.terminal.query', original, setReceipt).catch(() => {}); }}>查询原执行</Button><Button variant="secondary" disabled={busy} onClick={() => open(original)}>打开原终端</Button><Button variant="ghost" disabled={busy} onClick={() => setStopReview(true)}>停止这个原进程</Button></div></div>}
-      {terminals.length > 0 && <details><summary>已读取窗口中的手动终端</summary>{terminals.map(task => <div className="pw-source-record" key={task.id}><h3>{task.goal || '手动终端'}</h3><p>{task.summary}</p><Button variant="secondary" disabled={busy} onClick={() => { const target = identity(task); closeViewer(); setOriginal(target); void invoke('local.terminal.query', target, setReceipt).catch(() => {}); }}>核对这条原记录</Button></div>)}</details>}
-      {error && <p role="alert" className="pw-secondary-error">{error}</p>}
-    </section>
-    {view && <section className="pw-settings-section"><header className="pw-section-heading"><h2>原终端屏幕</h2><p>关闭这个视图只结束查看，原进程按原时限继续。</p></header><TerminalSurface key={view.handle} frame={output?.screen || null} />
-      {output?.terminal && <p>原进程已返回终态；资源释放：{output.resourcesReleased ? '已确认' : '尚未确认'}。</p>}
-      <TextAreaField label="普通终端输入" value={input} onChange={setInput} hint="可输入命令；发送一行会在末尾加入换行。不要输入秘密。" />
-      <div className="pw-form-actions"><Button variant="ghost" disabled={busy} onClick={() => { void invoke('local.terminal.read', { handle: view.handle }, setOutput).catch(() => {}); }}>读取原屏幕</Button><Button disabled={!canInput || !input || new TextEncoder().encode(input + '\n').length > 4096} onClick={() => send({ action: 'text', text: input + '\n' })}>发送这一行</Button><Button variant="secondary" disabled={!canInput} onClick={() => send({ action: 'text', text: '\u0003' })}>发送 Ctrl+C</Button><Button variant="secondary" disabled={!canInput} onClick={() => send({ action: 'eof' })}>发送 EOF</Button><Button variant="ghost" disabled={busy} onClick={closeViewer}>关闭视图，保留进程</Button></div>
-      <div className="pw-form-grid"><TextField label="列数（20–300）" value={columns} onChange={setColumns} inputMode="numeric" /><TextField label="行数（5–120）" value={height} onChange={setHeight} inputMode="numeric" /></div><Button variant="ghost" disabled={!canInput || !/^\d+$/.test(columns) || !/^\d+$/.test(height) || Number(columns) < 20 || Number(columns) > 300 || Number(height) < 5 || Number(height) > 120} onClick={() => send({ action: 'resize', columns: Number(columns), rows: Number(height) })}>调整原终端尺寸</Button>
-      {uncertain && <p className="pw-field-hint">上一输入尚未核对，已停止继续输入。</p>}<Button variant="ghost" disabled={busy} onClick={() => { void invoke('local.terminal.inputReceipt', { handle: view.handle }, result => { setReceipt(result); if (result.nativeInputSettled === true) setUncertain(false); }).catch(() => {}); }}>核对原输入回执</Button>
-    </section>}
-    <SettingsDialog isOpen={!!review} title="打开这个手动终端？" onClose={() => { if (!busy) closeReview(); }}>{review && <><dl className="pw-facts"><div><dt>原目录</dt><dd>{review.command?.workingDirectory}</dd></div><div><dt>最长运行时间</dt><dd>{review.command?.timeoutMillis / 1000} 秒</dd></div><div><dt>输入额度</dt><dd>{review.command?.inputByteLimit} 字节，最多 {review.inputRequestLimit} 次</dd></div></dl><p>只打开已登记的 sh -i。终端操作可能修改这个私人副本，是否导回项目另行核对。</p>{rows(review.warnings).map((warning, i) => <p key={i}>{String(warning)}</p>)}<CheckboxField isSelected={acknowledged} onChange={setAcknowledged}>我已核对目录、时限与普通输入范围</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>返回</Button><Button disabled={busy || !acknowledged} onClick={() => { const selected = review; const handle = reviewHandle.current; reviewHandle.current = ''; setReview(null); setOriginal({ taskId: selected.requestId, runId: selected.requestId, epoch: 1, executionId: selected.requestId }); setReceipt(null); void invoke('local.terminal.confirm', { handle }, setReceipt).catch(() => {}); }}>确认打开原终端</Button></div></>}</SettingsDialog>
-    <SettingsDialog isOpen={stopReview} title="停止这个原终端进程？" onClose={() => { if (!busy) setStopReview(false); }}><p>只请求停止所选原进程。已写入的副本内容和原日志保留；退出与资源回收以真实回执为准。</p><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setStopReview(false)}>返回</Button><Button disabled={busy || !original} onClick={() => { setStopReview(false); if (original) void invoke('local.terminal.stop', original, value => { setReceipt(value); setUncertain(true); }).catch(() => {}); }}>停止这个原进程</Button></div></SettingsDialog>
-  </>;
+      {knownResults['local.listJobs'] && <div className="pw-local-job-list"><h3>原本机与 Termux 运行回执</h3>{jobs.length ? jobs.map((row: Data, index) => <div className="pw-local-runtime-row" key={row.id || row.operationId || index}><h4>{row.backendLabel} · {statusLabel(row.status || row.state)}</h4><p>{row.message || row.summary}</p><dl className="pw-facts"><div><dt>原操作</dt><dd>{row.operationId || row.id}</dd></div><div><dt>退出状态</dt><dd>{row.exitCode == null ? '尚未返回' : row.exitCode}</dd></div></dl></div>) : <p className="pw-field-hint">本次读取没有返回运行回执。</p>}</div>}
+    </AccordionItem></Accordion>
+    <SettingsDialog isOpen={!!review} title="打开这个手动终端？" onClose={() => { if (!busy) closeReview(); }}>{review && <div className="pw-local-review"><dl className="pw-facts"><div><dt>原目录</dt><dd>{review.command?.workingDirectory}</dd></div><div><dt>最长运行时间</dt><dd>{review.command?.timeoutMillis / 1000} 秒</dd></div><div><dt>输入额度</dt><dd>{review.command?.inputByteLimit} 字节，最多 {review.inputRequestLimit} 次</dd></div><div><dt>原项目</dt><dd>{review.projectId}</dd></div><div><dt>私人副本</dt><dd>{review.checkoutId}</dd></div><div><dt>源码版本</dt><dd>{review.sourceDigest}</dd></div></dl><p>只打开已登记的 sh -i。终端操作可能修改这个私人副本，是否导回项目另行核对。</p>{rows(review.warnings).map((warning, i) => <p key={i}>{String(warning)}</p>)}<CheckboxField isSelected={acknowledged} onChange={setAcknowledged}>我已核对目录、时限与普通输入范围</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>返回</Button><Button disabled={busy || !acknowledged} onClick={() => { if (activePanel.current !== 'setup' || entered.current || !acknowledged || reviewHandle.current !== review.handle) return; const selected = review; const handle = reviewHandle.current; reviewHandle.current = ''; rememberPosition(); setReview(null); setOriginal({ taskId: selected.requestId, runId: selected.requestId, epoch: 1, executionId: selected.requestId }); setInput(''); setReceipt(null); setInputReceipt(null); setUncertain(false); setStopRequested(false); setPanel('session'); void invoke('local.terminal.confirm', { handle }, setReceipt).catch(() => {}); }}>确认打开原终端</Button></div></div>}</SettingsDialog>
+    <SettingsDialog isOpen={stopReview} title="停止这个原终端进程？" onClose={() => { if (!busy) setStopReview(false); }}><div className="pw-local-review"><p>只请求停止所选原进程。已写入的副本内容和原日志保留；退出与资源回收以真实回执为准。</p><dl className="pw-facts"><div><dt>原任务</dt><dd>{original?.taskId}</dd></div><div><dt>原执行</dt><dd>{original?.executionId}</dd></div></dl><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setStopReview(false)}>返回</Button><Button variant="danger" disabled={busy || !original} onClick={() => { if (activePanel.current !== 'session' || entered.current) return; setStopReview(false); setStopRequested(true); if (original) void invoke('local.terminal.stop', original, setReceipt).catch(() => {}); }}>停止这个原进程</Button></div></div></SettingsDialog>
+  </section>;
 }

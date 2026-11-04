@@ -33,6 +33,7 @@ import {
 import './secondary.css';
 import './secondary-refactor.css';
 import './model-data-settings.css';
+import './phone-workspace.css';
 import { DataOperationHeading, DataOperationRow, useDataSettingsJourney } from './DataSettingsJourney';
 import { backgroundConnection, modelConnectionCommand, wirelessEndpoints, wirelessPort } from './forms-library/host-contracts';
 import { ModelConnectionOptions, ModelConnectionTestFeedback } from './ModelConnectionOptions';
@@ -538,49 +539,70 @@ function ExecutionControls({ state, supported, run }: { state: Data; supported: 
   </Card>;
 }
 
-function PhoneSettings({ state, supported, run, navigate }: { state: Data; supported: (action: string) => boolean; run: Run; navigate: (route: string) => void }) {
-  const ready = object(state.phoneReadiness);
-  const screenshotPolicy = object(state.taskScreenshotPolicy);
+function PhoneSettings({ state, supported, run, navigate, registerTransientBack, initialView = 'list', onViewChange }: { state: Data; supported: (action: string) => boolean; run: Run; navigate: (route: string) => void; registerTransientBack: BackHandlerRegistration; initialView?: string; onViewChange?: (view: string) => void }) {
+  const ready = object(state.phoneReadiness), screenshotPolicy = object(state.taskScreenshotPolicy);
   const latestReply = list(state.messages).filter(row => row.role === 'assistant' && typeof row.id === 'string' && row.content).at(-1);
-  const appearance = text(object(state.appearance).mode);
-  return <>
-    <Card title="手机执行">
-      <p className="pw-detail-status">{first(ready, ['message', 'summary', 'status'], '尚未核对执行能力')}</p>
+  const appearance = text(object(state.appearance).mode), readout = object(object(state.taskAnnouncements).readout);
+  const journey = useDataSettingsJourney(initialView);
+  useEffect(() => { onViewChange?.(journey.view); }, [journey.view, onViewChange]);
+  useEffect(() => { registerTransientBack(() => journey.back()); return () => registerTransientBack(null); }, [journey.view, registerTransientBack]);
+  const flag = (value: unknown, yes = '已开启', no = '未开启') => value === true ? yes : value === false ? no : '尚未核实';
+  const observationKnown = typeof state.localCaptureAllowed === 'boolean' && typeof state.localOcrAllowed === 'boolean';
+  const sections: Record<string, { title: string; description: string }> = {
+    execution: { title: '执行权限与连接', description: '查看这台手机的实际准备状态，再选择系统授权或后台连接。' },
+    observation: { title: '本地观察与截图', description: '分别控制取图、识字和新结果截图的本机留存。' },
+    appearance: { title: '界面外观', description: '使用系统外观，或明确选择浅色与深色。' },
+    speech: { title: '语音与朗读', description: '听写只进入草稿，发送仍由你决定。' },
+    browser: { title: '浏览器', description: '按这次目的打开网页研究或普通浏览窗口。' },
+  };
+  return <div ref={journey.root} tabIndex={-1} className="pw-phone-workspace" data-phone-view={journey.view}>
+    {journey.view === 'list' ? <>
+      <header className="pw-phone-overview"><p className="pw-model-eyebrow">这台手机</p><h2>能力与偏好</h2><p role="status">{first(ready, ['message', 'summary', 'status'], '尚未核对执行能力')}</p></header>
+      <div className="pw-settings-links pw-phone-entries">
+        <DataOperationRow id="execution" title="执行权限与连接" detail={`界面读取 ${flag(state.accessibilityEnabled, '已连接', '未连接')} · 任务通知 ${flag(state.notificationsEnabled)}`} onOpen={journey.open}/>
+        <DataOperationRow id="observation" title="本地观察与截图" detail={`取图 ${flag(state.localCaptureAllowed)} · OCR ${flag(state.localOcrAllowed)}`} onOpen={journey.open}/>
+        <DataOperationRow id="appearance" title="界面外观" detail={({ system: '跟随系统', light: '浅色', dark: '深色' } as Data)[appearance] || '尚未读取当前外观'} onOpen={journey.open}/>
+        <DataOperationRow id="speech" title="语音与朗读" detail={state.speaking ? '正在朗读' : state.speechAvailable === true ? '系统听写可用' : '听写、朗读与任务状态提示'} onOpen={journey.open}/>
+        <DataOperationRow id="browser" title="浏览器" detail="网页研究与内置浏览器" onOpen={journey.open}/>
+      </div>
+      <div className="pw-phone-app-entry"><CapabilityAction row action="settings.openAppUpdates" supported={supported} run={run}><span><span>应用更新</span><small>检查新版本与管理下载</small></span></CapabilityAction></div>
+    </> : <DataOperationHeading title={sections[journey.view]?.title || '手机能力'} parent="手机能力" description={sections[journey.view]?.description || ''} onBack={() => journey.open('list')}/>}
+    {(state.speaking || readout.active) && <section className="pw-phone-live-audio" aria-label="当前朗读"><span role="status">{state.speaking ? '正在朗读回复' : '正在播报任务状态'}</span><div>{state.speaking && <CapabilityAction action="speech.stop" supported={supported} run={run}>停止朗读</CapabilityAction>}{readout.active && <CapabilityAction action="speech.stopTaskAnnouncement" args={{ readoutId: readout.readoutId }} supported={supported} run={run}>停止这次状态提示</CapabilityAction>}</div></section>}
+    {journey.view === 'execution' && <section className="pw-phone-detail" aria-label="执行权限与连接">
+      <p className="pw-detail-status" role="status">{first(ready, ['message', 'summary', 'status'], '尚未核对执行能力')}</p>
       <div className="pw-settings-links">
         {[
-          ['accessibility', '界面读取与主屏控制', state.accessibilityEnabled ? '已连接' : '未连接'],
-          ['notifications', '任务通知', state.notificationsEnabled ? '已开启' : '未开启'],
-          ['wireless', '无线调试', ''],
-        ].map(([section, title, current]) => <CapabilityAction key={section} row action="settings.openSystem" args={{ section }} supported={supported} run={run}><span><span>{title}</span>{current && <small>{current}</small>}</span></CapabilityAction>)}
-        <Button variant="ghost" trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" disabled={!supported('settings.openSystem')} onClick={() => navigate('background')}><span><span>后台连接与授权</span></span></Button>
-        <CapabilityAction row action="settings.openAppUpdates" supported={supported} run={run}><span><span>应用更新</span><small>检查新版本与管理下载</small></span></CapabilityAction>
+          ['accessibility', '界面读取与主屏控制', flag(state.accessibilityEnabled, '已连接', '未连接')],
+          ['notifications', '任务通知', flag(state.notificationsEnabled)],
+          ['wireless', '无线调试系统设置', '打开这台手机的系统页面'],
+        ].map(([section, title, current]) => <CapabilityAction key={section} row action="settings.openSystem" args={{ section }} supported={supported} run={run}><span><span>{title}</span><small>{current}</small></span></CapabilityAction>)}
+        <Button variant="ghost" trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" disabled={!supported('settings.openSystem')} onClick={() => navigate('background')}><span><span>后台连接与授权</span><small>本机配对、连接和实际能力检查</small></span></Button>
       </div>
-    </Card>
-    <Accordion variant="divided" className="pw-settings-groups pw-phone-groups" allowsMultipleExpanded>
-      <AccordionItem id="observation" title="本地观察与截图" description={`取图${state.localCaptureAllowed !== false ? '开启' : '关闭'} · OCR ${state.localOcrAllowed !== false ? '开启' : '关闭'}`} icon={RiShieldCheckLine} headingLevel={2} className="pw-settings-group">
-      <StretchSwitch label="允许本地按需取图" description="更改用于后续运行；关闭后不为 OCR 采集像素。" checked={state.localCaptureAllowed !== false} disabled={!supported('settings.saveLocalObservation')} onChange={capture => { void run('settings.saveLocalObservation', { capture, ocr: state.localOcrAllowed !== false }).catch(() => {}); }} />
-      <StretchSwitch label="允许本地 OCR" description="像素在本地识字；有来源的识别文字可发送给已选推理服务。" checked={state.localOcrAllowed !== false} disabled={!supported('settings.saveLocalObservation')} onChange={ocr => { void run('settings.saveLocalObservation', { capture: state.localCaptureAllowed !== false, ocr }).catch(() => {}); }} />
-      {typeof screenshotPolicy.revision === 'number' ? <RadioOptions label="新结果截图的本机留存" value={text(screenshotPolicy.retentionMillis)} options={[{ id: '0', label: '不保存新截图' }, { id: '86400000', label: '1 天' }, { id: '604800000', label: '7 天' }, { id: '2592000000', label: '30 天' }]} isDisabled={Boolean(state.taskScreenshotSaving) || !supported('privacy.screenshots.save')} onChange={value => { void run('privacy.screenshots.save', { revision: screenshotPolicy.revision, retentionMillis: Number(value) }).catch(() => {}); }} /> : <CapabilityAction action="privacy.screenshots.read" supported={supported} run={run}>读取截图留存设置</CapabilityAction>}
-      <p className="pw-field-hint">结果截图使用本机密钥加密。设置只影响之后生成的截图；旧图保留到你主动删除或被同一任务的新结果替换。可从原任务核对中删除本机截图。</p>
-      </AccordionItem>
-      <AccordionItem id="appearance" title="界面外观" description={{ system: '跟随系统', light: '浅色', dark: '深色' }[appearance] || undefined} icon={RiSmartphoneLine} headingLevel={2} className="pw-settings-group"><AppearanceSettings state={state} supported={supported} run={run} /></AccordionItem>
-      <AccordionItem id="speech" title="浏览器与语音" description={state.speaking ? '正在朗读' : undefined} icon={RiMicLine} headingLevel={2} className="pw-settings-group">
-        <p className="pw-field-hint">语音识别只填入草稿，由你决定发送。</p>
-      <SystemSpeechSettings state={state} supported={supported} run={run} />
-      <StretchSwitch label="任务状态语音提示" description="仅前台私有任务的状态提示，不读任务正文；系统语音引擎可能联网。默认关闭。" checked={object(state.taskAnnouncements).enabled === true} disabled={Boolean(state.taskAnnouncementSaving) || !supported('speech.taskAnnouncements')} onChange={enabled => { void run('speech.taskAnnouncements', { enabled }).catch(() => {}); }} />
-      {object(object(state.taskAnnouncements).readout).active && <CapabilityAction action="speech.stopTaskAnnouncement" args={{ readoutId: object(object(state.taskAnnouncements).readout).readoutId }} supported={supported} run={run}>停止这次状态提示</CapabilityAction>}
-
-      <Facts items={[[ '系统听写', state.speechAvailable ? '可用' : '暂不可用'], ['朗读', state.speaking ? '正在朗读' : '未在朗读']]} />
-      <div className="pw-form-actions"><CapabilityAction action="settings.openBrowser" args={{ purpose: 'research' }} supported={supported} run={run}>网页研究工作区</CapabilityAction><CapabilityAction action="settings.openBrowser" args={{ purpose: 'browse' }} supported={supported} run={run}>内置浏览器</CapabilityAction><CapabilityAction action={state.speaking ? 'speech.stop' : 'speech.speak'} args={state.speaking ? {} : { messageId: latestReply?.id }} disabled={!state.speaking && !latestReply} supported={supported} run={run}>{state.speaking ? '停止朗读' : '朗读最近回复'}</CapabilityAction></div>
-      </AccordionItem>
-    </Accordion>
-  </>;
+      <p className="pw-field-hint">系统授权与连接不会自动开始任务。返回原目标后再核对本次执行范围。</p>
+    </section>}
+    {journey.view === 'observation' && <section className="pw-phone-detail" aria-label="本地观察与截图">
+      {!observationKnown && <p className="pw-field-hint" role="status">尚未读取观察设置，请刷新当前状态后再更改。</p>}
+      <StretchSwitch label="允许本地按需取图" description="更改用于后续运行；关闭后不为 OCR 采集像素。" checked={state.localCaptureAllowed === true} disabled={!observationKnown || !supported('settings.saveLocalObservation')} onChange={capture => { void run('settings.saveLocalObservation', { capture, ocr: state.localOcrAllowed === true }).catch(() => {}); }}/>
+      <StretchSwitch label="允许本地 OCR" description="像素在本地识字；有来源的识别文字可发送给已选推理服务。" checked={state.localOcrAllowed === true} disabled={!observationKnown || !supported('settings.saveLocalObservation')} onChange={ocr => { void run('settings.saveLocalObservation', { capture: state.localCaptureAllowed === true, ocr }).catch(() => {}); }}/>
+      <div className="pw-phone-preference-section"><h3>结果截图</h3>{typeof screenshotPolicy.revision === 'number' ? <RadioOptions label="新结果截图的本机留存" value={text(screenshotPolicy.retentionMillis)} options={[{ id: '0', label: '不保存新截图' }, { id: '86400000', label: '1 天' }, { id: '604800000', label: '7 天' }, { id: '2592000000', label: '30 天' }]} isDisabled={Boolean(state.taskScreenshotSaving) || !supported('privacy.screenshots.save')} onChange={value => { void run('privacy.screenshots.save', { revision: screenshotPolicy.revision, retentionMillis: Number(value) }).catch(() => {}); }}/> : <CapabilityAction action="privacy.screenshots.read" supported={supported} run={run}>读取截图留存设置</CapabilityAction>}
+      <p className="pw-field-hint">结果截图使用本机密钥加密。设置只影响之后生成的截图；旧图保留到你主动删除或被同一任务的新结果替换。可从原任务核对中删除本机截图。</p></div>
+    </section>}
+    <section className="pw-phone-detail" hidden={journey.view !== 'appearance'} inert={journey.view !== 'appearance'}><AppearanceSettings state={state} supported={supported} run={run}/></section>
+    <section className="pw-phone-detail" aria-label="语音与朗读" hidden={journey.view !== 'speech'} inert={journey.view !== 'speech'}>
+      <SystemSpeechSettings state={state} supported={supported} run={run}/>
+      <div className="pw-phone-preference-section"><h3>回复与状态提示</h3><p className="pw-field-hint">系统语音引擎可能联网。听写只填入草稿，由你决定发送。</p>
+      <StretchSwitch label="任务状态语音提示" description="仅前台私有任务的状态提示，不读任务正文；默认关闭。" checked={object(state.taskAnnouncements).enabled === true} disabled={Boolean(state.taskAnnouncementSaving) || !supported('speech.taskAnnouncements')} onChange={enabled => { void run('speech.taskAnnouncements', { enabled }).catch(() => {}); }}/>
+      <Facts items={[[ '系统听写', flag(state.speechAvailable, '可用', '暂不可用') ], ['朗读', state.speaking ? '正在朗读' : '未在朗读'] ]}/>
+      {!state.speaking && <CapabilityAction action="speech.speak" args={{ messageId: latestReply?.id }} disabled={!latestReply} supported={supported} run={run}>朗读最近回复</CapabilityAction>}</div>
+    </section>
+    {journey.view === 'browser' && <section className="pw-phone-detail pw-settings-links" aria-label="浏览器入口"><CapabilityAction row action="settings.openBrowser" args={{ purpose: 'research' }} supported={supported} run={run}><span><span>网页研究工作区</span><small>打开研究面板，查看任务与保留来源</small></span></CapabilityAction><CapabilityAction row action="settings.openBrowser" args={{ purpose: 'browse' }} supported={supported} run={run}><span><span>内置浏览器</span><small>直接浏览网页，由你操作页面</small></span></CapabilityAction></section>}
+  </div>;
 }
 
 /** Original BackgroundPhoneSetup flow composed with the selected BoardUI
  * fields, radio options, accordion and SettingsModal. It reads the existing
  * display state; this page does not create a task or a second connection. */
-function BackgroundSettings({ state, supported, run, navigate }: { state: Data; supported: (action: string) => boolean; run: Run; navigate: (route: string) => void }) {
+function BackgroundSettings({ state, supported, run, onReturn, registerTransientBack }: { state: Data; supported: (action: string) => boolean; run: Run; onReturn: () => void; registerTransientBack: BackHandlerRegistration }) {
   const display = object(object(state.features).display), adb = object(display.adb), discovery = object(adb.discovery);
   const audioRecovery = object(object(object(state.features).phone_setup).audioRecovery), audioPending = audioRecovery.pendingCount;
   const pending = Array.isArray(state.moduleBusy) ? state.moduleBusy.map(String) : [];
@@ -588,6 +610,7 @@ function BackgroundSettings({ state, supported, run, navigate }: { state: Data; 
   const [connecting, setConnecting] = useState(() => connection.requiresConnectionCheck || connection.phase === 'paired' || connection.identityPresent);
   const [manual, setManual] = useState(false), [portText, setPortText] = useState(''), [selected, setSelected] = useState('');
   const [code, setCode] = useState(''), [pairPort, setPairPort] = useState<number | undefined>();
+  const [panel, setPanel] = useState<'setup' | 'checks'>('setup');
   const [mainScreenConsent, setMainScreenConsent] = useState(false), [requesting, setRequesting] = useState(false);
   const [unknownResult, setUnknownResult] = useState(false);
   const [awaiting, setAwaiting] = useState<{ key: string; before: string; busySeen: boolean } | null>(null);
@@ -602,9 +625,11 @@ function BackgroundSettings({ state, supported, run, navigate }: { state: Data; 
   const requiresCheck = connection.requiresConnectionCheck || unknownResult;
   const resultSignature = (key: string) => JSON.stringify([object(state.moduleResults)[key] ?? null, object(state.moduleErrors)[key] ?? null]);
   const closeSecrets = () => setCode('');
+  const selectPanel = (value: 'setup' | 'checks') => { setCode(''); setPanel(value); };
+  useEffect(() => { registerTransientBack(() => { if (mainScreenConsent) { setMainScreenConsent(false); return true; } if (panel === 'checks') { selectPanel('setup'); return true; } return false; }); return () => registerTransientBack(null); }, [panel, mainScreenConsent, registerTransientBack]);
   useEffect(() => {
     if (state.backgroundSetupOpen === true) ownerOpened.current = true;
-    else if (ownerOpened.current) { setCode(''); navigate('phone'); }
+    else if (ownerOpened.current) { setCode(''); onReturn(); }
   }, [state.backgroundSetupOpen]);
   useEffect(() => {
     if (!connection.busy) {
@@ -660,16 +685,25 @@ function BackgroundSettings({ state, supported, run, navigate }: { state: Data; 
   ];
   const locked = connection.taskOwned || connection.busy || requesting || awaiting !== null;
   const connected = connection.helperConnected && connection.backend === 'wireless_adb' && !display.releasePending && !display.recoveryRequired;
-  return <>
-    <Card title={headline} description={connection.screenEstablished ? '宿主已核验当前独立显示会话。' : connection.helperConnected ? '正式开始任务时才建立或核验独立显示会话。' : '完成系统授权与连接后返回原目标；本页不会自动开始任务。'}>
-      <ol className="pw-background-steps">{steps.map((step, index) => <li key={step.title} data-complete={step.done}><span className="pw-background-step-marker" aria-label={step.done ? '已完成' : '步骤 ' + (index + 1)}>{step.done ? <RiCheckLine size={15} aria-hidden /> : index + 1}</span><div><h3>{step.title}</h3><p>{step.detail}</p></div></li>)}</ol>
-      <Facts items={[[ '当前连接方式', ({ wireless_adb: '手机内无线连接', shizuku: 'Shizuku 兼容连接', adb: '受信任电脑 ADB' } as Data)[connection.backend] ], ['连接消息', adb.message ], ['当前执行资源', connection.taskOwned ? '由原手机任务持有' : undefined ]]} />
-      <div className="pw-form-actions"><CapabilityAction action="background.refresh" supported={supported} run={run}>刷新核对状态</CapabilityAction>{connection.taskOwned && state.activeTaskId && <CapabilityAction action="tasks.open" args={{ id: state.activeTaskId }} supported={supported} run={run}>回到原任务</CapabilityAction>}</div>
-      {awaiting && !connection.busy && <p className="pw-field-hint" role="status">请求已登记，正在等待实际连接回执。可刷新核对状态，请勿重复提交。</p>}
-      {errors.map((message, index) => <p className="pw-field-error" role="alert" key={index}>{message}</p>)}
-    </Card>
+  const activeStep = connection.taskOwned || connection.helperConnected && !requiresCheck ? 3 : !connection.loaded || !connection.supported || !permissions ? 0 : connecting || requiresCheck ? 2 : 1;
+  const blockedGroups = list(object(state.phoneReadiness).groups).filter(group => group.state === 'blocked').length;
+  return <div className="pw-background-workspace" data-background-panel={panel}>
+    <header className="pw-background-heading"><p className="pw-model-eyebrow">手机后台助手</p><h2>{headline}</h2><p>{connection.screenEstablished ? '宿主已核验当前独立显示会话。' : connection.helperConnected ? '正式开始任务时才建立或核验独立显示会话。' : '设置只准备连接，不会自动开始原目标。'}</p>
+      <p className="pw-background-backend">{({ wireless_adb: '手机内无线连接', shizuku: 'Shizuku 兼容连接', adb: '受信任电脑 ADB' } as Data)[connection.backend] || '连接方式尚未读取'}{connection.taskOwned ? ' · 原手机任务持有执行资源' : ''}</p>
+    </header>
+    <ol className="pw-background-progress" aria-label="连接准备进度">{steps.map((step, index) => <li key={step.title} data-complete={step.done || undefined} aria-current={activeStep === index ? 'step' : undefined}><span aria-hidden="true">{step.done ? <RiCheckLine size={13}/> : index + 1}</span><span>{step.title}</span><span className="pw-sr-only">{step.done ? '已完成' : activeStep === index ? '当前步骤' : '待核对'}</span></li>)}</ol>
+    <div className="pw-background-status-actions"><CapabilityAction action="background.refresh" supported={supported} run={run}>刷新核对状态</CapabilityAction>{connection.taskOwned && state.activeTaskId && <CapabilityAction action="tasks.open" args={{ id: state.activeTaskId }} supported={supported} run={run}>回到原任务</CapabilityAction>}</div>
+    {text(adb.message) && <p className="pw-background-native-message" role="status">{text(adb.message)}</p>}
+    {requiresCheck && <p className="pw-background-attention" role="status">上次连接结果尚未确认。核对原助手，不要重复提交配对码。</p>}
+    {awaiting && !connection.busy && <p className="pw-field-hint" role="status">请求已登记，正在等待实际连接回执。可刷新核对状态，请勿重复提交。</p>}
+    {errors.map((message, index) => <p className="pw-field-error" role="alert" key={index}>{message}</p>)}
+      {Number.isSafeInteger(audioPending) && audioPending > 0 && <div role="alert"><p className="pw-field-error">还有 {audioPending} 项声音记录待处理，原 App 可能仍静音。请切换到原生工作台，在后台连接设置中处理原声音记录。</p>{audioRecovery.needsOwnerAction === true && <div className="pw-form-actions"><CapabilityAction action="settings.openSystem" args={{ section: 'accessibility' }} supported={supported} run={run}>打开无障碍设置</CapabilityAction></div>}</div>}
+      {!connection.taskOwned && connection.loaded && connection.supported && !alternate && !connected && (connection.busy || connection.recoveryRequired || awaiting) && <div className="pw-form-actions"><Button variant="secondary" disabled={!supported('background.cancel') || pending.includes('display.adb.cancel')} onClick={() => { setCode(''); void run('background.cancel', {}).catch(() => {}); }}>停止本次连接与启动</Button></div>}
+    <Tabs selectedKey={panel} onSelectionChange={key => selectPanel(key as 'setup' | 'checks')} className="pw-background-tabs">
+      <TabList aria-label="后台连接内容"><Tab id="setup">连接设置</Tab><Tab id="checks" count={blockedGroups || undefined}>能力检查</Tab></TabList>
+      <TabPanel id="setup">
+        {!permissions && <section className="pw-background-preparation"><h3>先核对系统准备</h3><p>界面读取与任务通知尚未全部开启。系统设置返回后刷新状态。</p><div className="pw-form-actions">{state.accessibilityEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'accessibility' }} supported={supported} run={run}>设置界面读取权限</CapabilityAction>}{state.notificationsEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'notifications' }} supported={supported} run={run}>允许任务通知</CapabilityAction>}</div></section>}
     {!connection.taskOwned && connection.loaded && connection.supported && !alternate && !connected && <Card title={connecting ? '连接后台助手' : '与这台手机配对'} description={connecting ? '回到系统无线调试主页，读取连接端口。它与配对窗口的端口不同。' : '在开发者选项开启无线调试，打开“使用配对码配对设备”，保持当前窗口可见。'}>
-      {requiresCheck && <p className="pw-background-attention" role="status">上次请求的结果尚未确认。请连接并核对原助手，不要重复提交配对码。</p>}
       {!connection.wirelessAvailable ? <Empty>此安装包尚未提供手机内无线配对能力。</Empty> : <>
         <div className="pw-form-actions"><Button variant="secondary" disabled={locked || !supported('settings.openSystem')} onClick={() => { setCode(''); void run('settings.openSystem', { section: 'wireless' }).catch(() => {}); }}>前往无线调试设置</Button><CapabilityAction action="background.discover" supported={supported} run={run} disabled={connection.taskOwned || pending.includes('display.adb.discover')}>查找本机服务</CapabilityAction></div>
         <div className="pw-background-endpoints">
@@ -685,22 +719,26 @@ function BackgroundSettings({ state, supported, run, navigate }: { state: Data; 
           {!connecting ? <Button variant="ghost" disabled={locked} onClick={() => { setCode(''); setConnecting(true); }}>{connection.identityPresent ? '使用已保存身份连接' : '此前配对过？直接连接'}</Button> : <Button variant="ghost" disabled={locked || !connection.canPair || requiresCheck} onClick={() => { setCode(''); setConnecting(false); }}>重新读取配对窗口</Button>}
         </div>
       </>}
-      {(connection.busy || connection.recoveryRequired || awaiting) && <div className="pw-form-actions"><Button variant="secondary" disabled={!supported('background.cancel') || pending.includes('display.adb.cancel')} onClick={() => { setCode(''); void run('background.cancel', {}).catch(() => {}); }}>停止本次连接与启动</Button></div>}
     </Card>}
     {connection.loaded && !connection.supported && <Card title="此系统使用主屏兼容模式" description="后台独立屏需要 Android 14 或以上；执行主屏任务时会切换应用并占用当前屏幕。"><Button variant="secondary" disabled={connection.taskOwned || connection.busy || !supported('background.selectMainScreen')} onClick={() => setMainScreenConsent(true)}>选择主屏兼容模式</Button></Card>}
-    <Card title="本机能力检查" description="逐项来自当前系统检查。已连接仍需核对输入、取帧和输入法隔离能力；从系统设置返回后刷新。">
-      {Number.isSafeInteger(audioPending) && audioPending > 0 && <div role="alert"><p className="pw-field-error">还有 {audioPending} 项声音记录待处理，原 App 可能仍静音。请切换到原生工作台，在后台连接设置中处理原声音记录。</p>{audioRecovery.needsOwnerAction === true && <div className="pw-form-actions"><CapabilityAction action="settings.openSystem" args={{ section: 'accessibility' }} supported={supported} run={run}>打开无障碍设置</CapabilityAction></div>}</div>}
+
+        {(connected || connection.taskOwned || alternate) && <section className="pw-background-retained"><h3>{connection.taskOwned ? '继续核对原任务' : connected ? '助手连接已保留' : '保留当前兼容连接'}</h3><p>{connection.taskOwned ? '原任务仍持有执行资源，本页不会重建连接或开始另一项任务。' : connected ? '开始任务时还会核对输入、取帧和独立显示能力。' : '当前使用已选的 Shizuku 或电脑 ADB 路线。本页不会自动切换为无线配对。'}</p><Button variant="secondary" onClick={() => selectPanel('checks')}>查看实际能力检查</Button></section>}
+    <Card><Accordion variant="divided"><AccordionItem id="background-advanced" title="高级兼容与原连接状态"><Facts items={[[ '已选方式', connection.backend || '尚未读取' ], ['Shizuku', object(display.shizuku).message ], ['助手连接', connection.loaded ? connection.helperConnected ? '已连接' : '未连接' : '尚未核实' ], ['独立屏会话', connection.screenEstablished ? '宿主已核验' : '尚未建立或核验'], ['会话标识', display.sessionId ], ['连接恢复', requiresCheck ? '需要核对原连接' : undefined ]]} /><p className="pw-field-hint">保留已选择的连接方式。Shizuku、电脑 ADB 的配置及释放、遗忘操作尚未接入此页面。</p></AccordionItem></Accordion></Card>
+
+      </TabPanel>
+      <TabPanel id="checks">    <Card title="本机能力检查" description="逐项来自当前系统检查。已连接仍需核对输入、取帧和输入法隔离能力；从系统设置返回后刷新。">
+
       {list(object(state.phoneReadiness).groups).length === 0 ? <Empty>尚未取得本机能力检查结果。</Empty> : <Accordion variant="divided">{list(object(state.phoneReadiness).groups).map(group => <AccordionItem key={text(group.id)} id={text(group.id)} title={<span className="pw-readiness-title"><span>{text(group.title)}</span><small>{({ ready: '可用', blocked: '需准备', unsupported: '本机不支持', unknown: '尚未核实' } as Data)[text(group.state)] || '尚未核实'}</small></span>}>
         {list(group.checks).length === 0 ? <p className="pw-field-hint">尚未取得实际检查明细。</p> : list(group.checks).map((check, index) => <div key={text(check.id, String(index))} className="pw-readiness-check"><p>{text(check.message, '尚未取得实际状态')}</p>{check.state !== 'ready' && <div className="pw-form-actions">{['accessibility', 'notifications'].includes(check.action) ? <CapabilityAction action="settings.openSystem" args={{ section: check.action }} supported={supported} run={run}>{check.action === 'accessibility' ? '检查界面权限' : '检查任务通知'}</CapabilityAction> : ['background_setup', 'retry'].includes(check.action) ? <CapabilityAction action="background.refresh" supported={supported} run={run}>重新核对</CapabilityAction> : check.action === 'main_screen_choice' ? <Button variant="secondary" disabled={connection.taskOwned || connection.busy || !supported('background.selectMainScreen')} onClick={() => setMainScreenConsent(true)}>选择主屏兼容模式</Button> : null}</div>}</div>)}
       </AccordionItem>)}</Accordion>}
       <div className="pw-form-actions">{state.accessibilityEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'accessibility' }} supported={supported} run={run}>设置界面读取权限</CapabilityAction>}{state.notificationsEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'notifications' }} supported={supported} run={run}>允许任务通知</CapabilityAction>}</div>
     </Card>
-    <Card><Accordion variant="divided"><AccordionItem id="background-advanced" title="高级兼容与原连接状态"><Facts items={[[ '已选方式', connection.backend || '尚未读取' ], ['Shizuku', object(display.shizuku).message ], ['助手连接', connection.loaded ? connection.helperConnected ? '已连接' : '未连接' : '尚未核实' ], ['独立屏会话', connection.screenEstablished ? '宿主已核验' : '尚未建立或核验'], ['会话标识', display.sessionId ], ['连接恢复', requiresCheck ? '需要核对原连接' : undefined ]]} /><p className="pw-field-hint">保留已选择的连接方式。Shizuku、电脑 ADB 的配置及释放、遗忘操作尚未接入此页面。</p></AccordionItem></Accordion></Card>
-    <div className="pw-background-return"><Button variant="secondary" onClick={() => { setCode(''); navigate('phone'); }}>{connection.helperConnected && !requiresCheck ? '连接已完成，返回手机能力' : '返回手机能力'}</Button></div>
+</TabPanel>
+    </Tabs>
+    <div className="pw-background-return"><Button variant={connection.helperConnected && !requiresCheck ? 'primary' : 'ghost'} onClick={() => { setCode(''); onReturn(); }}>{connection.helperConnected && !requiresCheck ? '助手已连接，返回手机能力' : '返回手机能力'}</Button></div>
     <SettingsDialog isOpen={mainScreenConsent} title="改用主屏兼容模式？" onClose={() => setMainScreenConsent(false)}><p>助手执行时会切换应用并占用当前屏幕。请先完成界面读取与任务通知授权；此处只选择模式，不会开始原目标。</p><div className="pw-form-actions"><Button variant="secondary" onClick={() => setMainScreenConsent(false)}>暂不使用</Button><CapabilityAction action="background.selectMainScreen" supported={supported} run={run} disabled={connection.taskOwned || connection.busy} primary>明确选择主屏模式</CapabilityAction></div></SettingsDialog>
-  </>;
+  </div>;
 }
-
 function HistoryPage({ usage, supported, run }: { usage: boolean; supported: (action: string) => boolean; run: Run }) {
   const [items, setItems] = useState<Data[]>([]), [cursor, setCursor] = useState(''), [more, setMore] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [read, setRead] = useState(false);
@@ -1276,6 +1314,7 @@ const COMMON_SETTINGS = [
 ];
 
 export default function Secondary({ route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange }: Props) {
+  const phonePresentation = useRef('list');
   const state: Data = { ...object(snapshot.state), webWorkspaceResumeRevision: Number(snapshot.view?.resumeRevision || 0), webWorkspaceTaskOpen: !!snapshot.view?.taskId };
   const commands = snapshot.capabilities?.commands || [];
   const supported = (action: string) => commands.includes(action);
@@ -1308,6 +1347,18 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   };
   const rememberScroll = () => scrollPositions.current.set(page + ((page === 'models' || page === 'model-settings') ? ':' + modelView.kind + ':' + (modelView.id || '') : ''), scroll.current?.scrollTop || 0);
   const navigate = (next: string, candidate: LearningCandidateTarget | null = null) => { rememberScroll(); generation.current++; trail.current.push({ page, query, modelView, modelTrail: [...modelTrail.current], candidateTarget }); modelTrail.current = []; setNotice(''); setError(''); setQuery(''); setModelView({ kind: 'list' }); setCandidateTarget(candidate); setPage(next); };
+  const returnToPhone = () => {
+    rememberScroll(); generation.current++;
+    // Returning from setup consumes its original phone entry, rather than
+    // pushing background again and reopening it on the next Back.
+    let index = trail.current.length - 1;
+    while (index >= 0 && trail.current[index].page !== 'phone') index--;
+    const previous = index >= 0 ? trail.current.splice(index)[0] : undefined;
+    modelTrail.current = previous?.modelTrail || [];
+    setNotice(''); setError(''); setQuery(previous?.query || '');
+    setModelView(previous?.modelView || { kind: 'list' });
+    setCandidateTarget(previous?.candidateTarget || null); setPage('phone');
+  };
   const openModel = (view: ModelView) => { rememberScroll(); generation.current++; modelTrail.current.push(modelView); setNotice(''); setError(''); setModelView(view); };
   const finishModelEdit = (view: ModelView) => {
     if (modelTrail.current.at(-1)?.kind === view.kind && modelTrail.current.at(-1)?.id === view.id) modelTrail.current.pop();
@@ -1410,8 +1461,8 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
               : modelView.kind === 'edit' || modelView.kind === 'add' ? <ModelSettings key={modelDraftKey} state={state} connection={editConnection} supported={supported} run={run} adding={modelView.kind === 'add'} draft={modelDrafts.current[modelDraftKey]} onDraftChange={value => { if (value) modelDrafts.current[modelDraftKey] = value; else delete modelDrafts.current[modelDraftKey]; }} onInspect={() => { void run('models.snapshot', {}).catch(() => {}); finishModelEdit(modelView.kind === 'add' ? { kind: 'connections' } : { kind: 'connection', id: recordId(editConnection || {}) }); }} onSaved={saved => { const id = modelView.kind === 'add' ? text(object(saved.connections).selectedConnectionId) : recordId(editConnection || {}); finishModelEdit(id ? { kind: 'connection', id } : { kind: 'connections' }); setNotice('已收到原连接保存回执。当前修订可在详情核对；保存不代表测试通过。'); }} registerTransientBack={registerTransientBack} />
               : modelView.kind === 'connection' ? <ModelConnectionDetail connection={connection} data={data} state={state} supported={supported} run={run} open={openModel} busy={Boolean(state.modelSelectionBusy || state.modelSaving || state.modelTesting || state.chatSubmitting || state.phoneSubmitting)} /> : null}
           </>
-          : page === 'phone' ? <PhoneSettings state={state} supported={supported} run={run} navigate={navigate} />
-          : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} navigate={navigate} />
+          : page === 'phone' ? <PhoneSettings state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phonePresentation.current} onViewChange={view => { phonePresentation.current = view; }} />
+          : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} onReturn={returnToPhone} registerTransientBack={registerTransientBack} />
           : page === 'history' || page === 'usage' ? <HistoryPage key={page} usage={page === 'usage'} supported={supported} run={run} />
           : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} registerTransientBack={registerTransientBack} navigate={navigate} />
           : domain ? <DomainPage key={page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} alreadyShownError={error || domainError} />

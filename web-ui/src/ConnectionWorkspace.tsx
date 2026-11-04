@@ -4,6 +4,9 @@ import { bridge } from './bridge';
 import { connectionProfilePayload, wirelessPort } from './forms-library/host-contracts';
 import TerminalSurface from './TerminalSurface';
 import { resumeSshFile } from './workspace-resume';
+import { useDataSettingsJourney } from './DataSettingsJourney';
+import { ArrowLeft, ArrowUp, ChevronRight, FileText, Folder, History, Monitor, Plus, Server, ShieldCheck, Terminal, Wrench } from 'lucide-react';
+import './connection-workspace.css';
 
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
@@ -11,10 +14,9 @@ type Props = { domain: 'remote' | 'ssh'; state: Data; data: Data; supported: (ac
 const object = (value: any): Data => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const list = (value: any): Data[] => Array.isArray(value) ? value.filter(item => item && typeof item === 'object' && !Array.isArray(item)) : [];
 const text = (value: any) => typeof value === 'string' ? value : value == null ? '' : String(value);
-const status = (value: any) => ({ completed: '已完成', failed: '未完成', running: '执行中', queued: '等待执行', unknown: '待核对', awaiting_approval: '等待授权', stopped: '已停止', cancelled: '已取消', stopping: '正在停止' } as Data)[text(value)] || text(value);
+const status = (value: any) => ({ completed: '已完成', failed: '未完成', running: '执行中', queued: '等待执行', unknown: '待核对', submitting: '提交结果待核对', awaiting_approval: '等待授权', stopped: '已停止', cancelled: '已取消', stopping: '正在停止' } as Data)[text(value)] || text(value);
 const originalJob = (job: Data) => ({ profileId: job.profileId, jobId: job.id, jobOperationId: job.operationId, serviceBase: job.serviceBase, _profileBinding: job.profileBinding });
 const binding = (profile: Data) => ({ profileId: profile.id, _profileBinding: profile.bindingHash });
-const section = (title: string, children: ReactNode, description?: string) => <section className="pw-settings-section"><header className="pw-section-heading"><h2>{title}</h2>{description && <p>{description}</p>}</header>{children}</section>;
 const connectionWindow = () => { const view = bridge.getState().view as Data | undefined; return JSON.stringify([view?.section, view?.taskId, view?.resumeRevision, bridge.getDocumentEpoch()]); };
 function Facts({ values }: { values: Array<[string, any]> }) { return <dl className="pw-facts">{values.filter(([, value]) => value !== undefined && value !== null && value !== '').map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{text(value)}</dd></div>)}</dl>; }
 function Receipt({ value, run }: { value: Data | null; run: Run }) {
@@ -25,8 +27,9 @@ function Receipt({ value, run }: { value: Data | null; run: Run }) {
     {['stdout', 'stderr'].map(key => value[key] ? <details key={key}><summary>{key === 'stdout' ? '标准输出' : '错误输出'}</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{value[key]}</pre></details> : null)}
     {task && <Button variant="secondary" onClick={() => { void run('tasks.open', { id: task }).catch(() => {}); }}>打开原任务与回执</Button>}</div>;
 }
-function useRequest(run: Run, state: Data) {
-  const scope = `${state.webWorkspaceResumeRevision || 0}:${!!state.webWorkspaceTaskOpen}`;
+function useRequest(run: Run, state: Data, visible = true) {
+  const scope = `${state.webWorkspaceResumeRevision || 0}:${!!state.webWorkspaceTaskOpen}:${visible}`;
+  const visibleNow = useRef(visible); visibleNow.current = visible;
   const currentScope = useRef(scope), generation = useRef(0), waiting = useRef(false), alive = useRef(true);
   currentScope.current = scope;
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
@@ -41,7 +44,7 @@ function useRequest(run: Run, state: Data) {
     return () => { unsubscribe(); document.removeEventListener('visibilitychange', hidden); window.removeEventListener('pagehide', invalidate); };
   }, []);
   const request = async (action: string, args: Data = {}) => {
-    if (state.webWorkspaceTaskOpen || document.visibilityState !== 'visible') throw new Error('请先返回原连接页面，再读取或操作。');
+    if (!visibleNow.current || currentScope.current !== scope || state.webWorkspaceTaskOpen || document.visibilityState !== 'visible') throw new Error('请先返回原连接页面，再读取或操作。');
     if (waiting.current) throw new Error('请等待原操作回执。');
     const original = ++generation.current, owner = connectionWindow();
     const current = () => alive.current && original === generation.current && currentScope.current === scope && owner === connectionWindow() && document.visibilityState === 'visible';
@@ -53,52 +56,107 @@ function useRequest(run: Run, state: Data) {
   return { request, busy, error, alive };
 }
 
-/** Product composition of the existing BoardUI forms and settings dialog. */
+/** BoardUI controls retain their interaction contract. The compact object rows
+ * and task-specific disclosure follow the inspected OpenMuse mobile LinkRow
+ * (jerelvelarde/openmuse 61796eb2, apps/mobile/src/ui.tsx). */
+function ConnectionRow({ title, detail, icon: Icon, onOpen, disabled = false, entry, children }: { title: string; detail: string; icon: typeof Monitor; onOpen: () => void; disabled?: boolean; entry?: string; children?: ReactNode }) {
+  return <Button variant="ghost" className="pw-connection-row" disabled={disabled} data-operation-entry={entry} onClick={onOpen}>
+    <span className="pw-connection-row-icon"><Icon size={19} aria-hidden /></span>
+    <span className="pw-connection-row-copy"><strong>{title}</strong><small>{detail}</small>{children}</span>
+    <ChevronRight size={16} className="pw-connection-chevron" aria-hidden />
+  </Button>;
+}
+const profileAddress = (profile: Data) => text(profile.baseUrl || `${profile.username}@${profile.host}:${profile.port}`);
+const profileReadiness = (domain: 'remote' | 'ssh', profile: Data) => domain === 'remote'
+  ? profile.hasToken ? '凭据已配置 · 能力待核对' : '待配置连接令牌'
+  : !profile.credentialsConfigured ? '待配置凭据' : profile.hostKeyTrusted ? '已保存主机信任' : '待核对主机指纹';
+
 export default function ConnectionWorkspace({ domain, state, data, supported, run, registerTransientBack }: Props) {
   const profiles = list(data.profiles), [editing, setEditing] = useState<Data | null>(null), [selected, setSelected] = useState<Data | null>(null), [removing, setRemoving] = useState<Data | null>(null);
-  const remoteBack = useRef<(() => boolean) | null>(null);
+  const editorTrigger = useRef<HTMLElement | null>(null);
+  const workBack = useRef<(() => boolean) | null>(null), editorBack = useRef<(() => boolean) | null>(null);
+  const journey = useDataSettingsJourney();
+  const [workOpened, setWorkOpened] = useState(false);
   const [probe, setProbe] = useState<Data | null>(null), [trust, setTrust] = useState<Data | null>(null), [checked, setChecked] = useState(false), [receipt, setReceipt] = useState<Data | null>(null);
   const { request, busy, error } = useRequest(run, state);
   const resume = Number(state.webWorkspaceResumeRevision || 0), previousResume = useRef(resume);
-  useEffect(() => { if (previousResume.current === resume) return; previousResume.current = resume; setProbe(null); setTrust(null); setRemoving(null); setChecked(false); }, [resume]);
-  useEffect(() => { registerTransientBack(() => { if (editing || trust || removing) { if (!busy) { setEditing(null); setTrust(null); setRemoving(null); } return true; } return remoteBack.current?.() || false; }); return () => registerTransientBack(null); }, [editing, trust, removing, busy, registerTransientBack]);
+  const overview = !!selected && journey.view === 'profile:' + selected.id;
+  const working = !!selected && journey.view === 'work:' + selected.id;
+  const showingJobs = journey.view === 'all-jobs' || journey.view.startsWith('jobs:');
   const stale = selected && !profiles.some(profile => profile.id === selected.id && profile.bindingHash === selected.bindingHash);
+  const jobs = list(data.jobs).filter(job => journey.view === 'all-jobs' || job.profileId === selected?.id);
+  const unresolvedOperations = list(data.operations).filter(item => item.profileId === selected?.id && ['unknown', 'submitting'].includes(item.status));
+  const sshTasks = list(state.tasks).filter(task => object(task.raw).feature === 'ssh' && object(object(task.raw).externalRefs).profileId === selected?.id);
+  const goBack = () => {
+    if (busy) return true;
+    if (working && workBack.current?.()) return true;
+    if (selected && (working || showingJobs && journey.view !== 'all-jobs')) { journey.open('profile:' + selected.id); return true; }
+    return journey.back();
+  };
+  useEffect(() => { if (previousResume.current === resume) return; previousResume.current = resume; setProbe(null); setTrust(null); setRemoving(null); setChecked(false); }, [resume]);
+  useEffect(() => {
+    registerTransientBack(() => {
+      if (editing) return editorBack.current?.() ?? true;
+      if (trust || removing) { if (!busy) { setTrust(null); setRemoving(null); } return true; }
+      return goBack();
+    });
+    return () => registerTransientBack(null);
+  }, [editing, trust, removing, busy, journey.view, selected, registerTransientBack]);
   const act = (action: string, args: Data, completed?: (value: Data) => void) => { void request(action, args).then(value => { setReceipt(value); completed?.(value); }).catch(() => {}); };
   const available = (action: string) => supported(domain + '.' + action) && !busy;
-  return <>
-    {section(domain === 'remote' ? 'Companion 环境' : 'SSH 主机', <>
-      {profiles.length === 0 && <p className="pw-secondary-empty">尚未添加连接。保存后核对实际连接与能力。</p>}
-      {profiles.map(profile => <article className="pw-source-record" key={profile.id}><header><h3>{profile.name}</h3></header><Facts values={[[ '地址', profile.baseUrl || `${profile.username}@${profile.host}:${profile.port}` ], ['工作区', profile.workspace ], ['凭据', profile.hasToken || profile.credentialsConfigured ? '已配置' : '未配置' ], ['公钥指纹', profile.hostFingerprint ]]} />
-        <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { setSelected({ ...profile }); setProbe(null); setReceipt(null); }}>使用此连接</Button>
-          <Button variant="secondary" disabled={!available(domain === 'remote' ? 'probe' : 'probeHostKey')} onClick={() => act(domain === 'remote' ? 'remote.probe' : 'ssh.probeHostKey', binding(profile), value => setProbe({ ...value, originalProfile: { ...profile } }))}>{domain === 'remote' ? '探测能力' : '查看主机指纹'}</Button>
-          {domain === 'remote' && <Button variant="secondary" disabled={!available('reconnect')} onClick={() => act('remote.reconnect', binding(profile))}>同步原任务</Button>}
-          <Button variant="secondary" disabled={busy} onClick={() => setEditing({ ...profile })}>编辑连接</Button><Button variant="secondary" disabled={busy} onClick={() => setRemoving({ ...profile })}>移除</Button></div></article>)}
-      <Button variant="secondary" disabled={busy} onClick={() => setEditing({})}>添加{domain === 'remote' ? '电脑环境' : 'SSH 主机'}</Button>
-    </>, domain === 'remote' ? '使用原 Companion 服务、工作环境与任务回执。' : '先核对主机身份。普通 SSH 不保证断线后任务继续。')}
+  const openProfile = (profile: Data) => {
+    if (selected?.id !== profile.id || selected?.bindingHash !== profile.bindingHash) { setSelected({ ...profile }); setWorkOpened(false); setProbe(null); setReceipt(null); }
+    journey.open('profile:' + profile.id);
+  };
+  const openWork = () => { setWorkOpened(true); journey.open('work:' + selected!.id); };
+  const collectionName = domain === 'remote' ? '电脑环境' : 'SSH 主机';
+  const openEditor = (profile: Data) => { editorTrigger.current = document.activeElement as HTMLElement; setEditing(profile); };
+  const closeEditor = () => { setEditing(null); requestAnimationFrame(() => { const trigger = editorTrigger.current; (trigger?.isConnected && trigger.getClientRects().length ? trigger : journey.root.current)?.focus({ preventScroll: true }); }); };
+  return <div className="pw-connection-workspace" ref={journey.root} tabIndex={-1} data-connection-view={journey.view}>
+    <div hidden={journey.view !== 'list'}>
+      <header className="pw-connection-collection-heading"><div><h2>{collectionName}</h2><p>{domain === 'remote' ? '选择一台电脑，继续原任务或开始新工作。' : '选择一台主机，查看文件、运行任务或打开终端。'}</p></div><Button variant="ghost" iconOnly leadingIcon={Plus} aria-label={'添加' + collectionName} disabled={busy} onClick={() => openEditor({})} /></header>
+      {profiles.length === 0 ? <div className="pw-connection-empty"><Monitor size={25} aria-hidden /><h3>{domain === 'remote' ? '连接你的第一台电脑' : '添加你的第一台主机'}</h3><p>{domain === 'remote' ? '填写 Companion 地址与令牌，再读取实际工作环境。' : '保存地址与凭据后，通过可信渠道核对主机指纹。'}</p><Button disabled={busy} onClick={() => openEditor({})}>添加{collectionName}</Button></div> : <div className="pw-connection-list">{profiles.map(profile => <ConnectionRow key={profile.id} title={profile.name} detail={profileAddress(profile)} icon={domain === 'remote' ? Monitor : Server} disabled={busy} entry={'profile:' + profile.id} onOpen={() => openProfile(profile)}><small className="pw-connection-readiness">{profileReadiness(domain, profile)}</small></ConnectionRow>)}</div>}
+      {domain === 'remote' && list(data.jobs).length > 0 && <div className="pw-connection-history-entry"><ConnectionRow title="电脑上的原任务" detail="按原连接读取回执，保留已经发生的工作" icon={History} entry="all-jobs" disabled={busy} onOpen={() => journey.open('all-jobs')} /></div>}
+    </div>
+    {journey.view !== 'list' && <header className="pw-connection-detail-heading">
+      <Button variant="ghost" leadingIcon={ArrowLeft} disabled={busy} onClick={goBack}>{overview || journey.view === 'all-jobs' ? '返回' + collectionName : working ? '返回' : '返回连接概览'}</Button>
+      <div tabIndex={-1} data-operation-heading><p className="pw-connection-eyebrow">{showingJobs ? '原任务' : domain === 'remote' ? 'COMPANION' : 'SSH'}</p><h2>{journey.view === 'all-jobs' ? '电脑上的原任务' : selected?.name}</h2>{selected && journey.view !== 'all-jobs' && <p className="pw-connection-address">{profileAddress(selected)}</p>}</div>
+    </header>}
     {error && <p className="pw-secondary-error" role="alert">{error}</p>}
-    {probe && domain === 'ssh' && section('本次实际主机指纹', <><Facts values={[[ '主机', probe.originalProfile?.name ], ['指纹', probe.fingerprint ], ['密钥类型', probe.keyType ]]} /><p>请与这台主机已有可信渠道提供的指纹核对。探测没有发送登录凭据。</p>
-      {probe.changed ? <><p role="alert">主机密钥已变化，当前连接不会执行。核对原因后，可先移除原信任，再重新探测。</p><Button variant="secondary" disabled={busy} onClick={() => { setTrust({ kind: 'forget', profile: probe.originalProfile }); setChecked(false); }}>核对并移除原信任</Button></> : <Button variant="secondary" disabled={busy || !probe.probeId} onClick={() => { setTrust({ kind: 'approve', ...probe }); setChecked(false); }}>核对并信任这个指纹</Button>}</>)}
-    <Receipt value={receipt} run={run} />
-    {selected && section('当前连接 · ' + selected.name, stale ? <><p role="alert">连接已在另一页面修改。旧目标仍显示在这里，尚未沿用它开始新工作。</p><Button variant="secondary" onClick={() => { setSelected(profiles.find(profile => profile.id === selected.id) || null); }}>重新读取当前连接</Button></> : domain === 'remote' ? <RemoteWork key={selected.id + selected.bindingHash} profile={selected} state={state} data={data} run={run} supported={supported} back={remoteBack} /> : <SshWork key={selected.id + selected.bindingHash} profile={selected} state={state} data={data} run={run} supported={supported} />)}
-    {domain === 'remote' && list(data.jobs).length > 0 && section('电脑上的原任务', list(data.jobs).map(job => <article className="pw-source-record" key={job.id}><header><h3>{job.worker || '电脑任务'}</h3><span>{status(job.status)}</span></header>{job.message && <p>{job.message}</p>}<div className="pw-form-actions">
-      <Button variant="secondary" disabled={busy} onClick={() => act('remote.getJob', originalJob(job))}>读取原回执</Button>
-      {['queued', 'running', 'stopping', 'awaiting_approval', 'awaiting_input'].includes(job.status) && <Button variant="secondary" disabled={busy} onClick={() => act('remote.cancelJob', originalJob(job))}>请求停止原任务</Button>}
-      {list(state.tasks).find(task => object(task.raw).externalId === job.id && object(object(task.raw).externalRefs).profileId === job.profileId)?.id && <Button variant="secondary" onClick={() => { const task = list(state.tasks).find(task => object(task.raw).externalId === job.id && object(object(task.raw).externalRefs).profileId === job.profileId); void run('tasks.open', { id: task!.id }).catch(() => {}); }}>打开本机原任务</Button>}
-    </div></article>))}
-    {editing && <ProfileEditor key={editing.id || 'new'} domain={domain} original={editing} current={profiles.find(profile => profile.id === editing.id)} state={state} run={run} close={() => setEditing(null)} />}
-    <SettingsDialog isOpen={!!removing} title="移除这个连接？" onClose={() => { if (!busy) setRemoving(null); }}><p>只移除本机连接配置。已发生的远端操作请在原任务核对。</p><Facts values={[[ '连接', removing?.name ], ['地址', removing?.baseUrl || removing?.host ]]} /><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setRemoving(null)}>取消</Button><Button disabled={busy} onClick={() => removing && act(domain + '.removeProfile', { profileId: removing.id, expectedBindingHash: removing.bindingHash }, () => { setRemoving(null); setSelected(null); })}>移除这项原连接</Button></div></SettingsDialog>
-    <SettingsDialog isOpen={!!trust} title={trust?.kind === 'forget' ? '移除原主机信任' : '确认主机身份'} onClose={() => { if (!busy) setTrust(null); }}><p>请先通过可信渠道核对这台主机，不仅依赖当前网络探测。</p><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{trust?.kind === 'forget' ? trust?.profile?.hostFingerprint : trust?.fingerprint}</pre><CheckboxField isSelected={checked} onChange={setChecked}>{trust?.kind === 'forget' ? '已核对原因，移除这项原信任' : '已通过可信渠道核对一致'}</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setTrust(null)}>取消</Button><Button disabled={busy || !checked} onClick={() => {
+    {selected && journey.view !== 'list' && journey.view !== 'all-jobs' && stale && <div className="pw-connection-attention"><p role="alert">连接已在另一页面修改。旧目标仍显示在这里，尚未沿用它开始新工作。</p><Button variant="secondary" onClick={() => { const current = profiles.find(profile => profile.id === selected.id); setSelected(current ? { ...current } : null); setWorkOpened(false); setProbe(null); setReceipt(null); if (!current) journey.back(); else journey.open('profile:' + current.id); }}>重新读取当前连接</Button></div>}
+    {selected && overview && !stale && <>
+      <div className="pw-connection-summary"><span className="pw-connection-summary-icon">{domain === 'remote' ? <Monitor size={22} aria-hidden /> : <Server size={22} aria-hidden />}</span><div><h3>{profileReadiness(domain, selected)}</h3><p>{domain === 'remote' ? '能力与账号状态以每次实际核对为准。' : '当前工作区 · ' + (selected.workspace || '尚未设置')}</p></div></div>
+      <div className="pw-connection-list">
+        <ConnectionRow title={domain === 'remote' ? '进入电脑工作区' : '进入主机工作区'} detail={domain === 'remote' ? '继续原工作，或核对后开始下一项' : '任务、文件、命令和终端'} icon={domain === 'remote' ? Monitor : Terminal} disabled={busy} onOpen={openWork} />
+        <ConnectionRow title="查看原任务" detail={domain === 'remote' ? '读取回执、处理审批，继续同一项工作' : '回到原任务，查看执行、审批与结果'} icon={History} disabled={busy} onOpen={() => journey.open('jobs:' + selected.id)} />
+      </div>
+      {domain === 'remote' && unresolvedOperations.length > 0 && <section className="pw-connection-attention" aria-label="待核对的原提交"><h3>有原提交待核对</h3><p>先读取原任务的实际结果，不会重新发送这次工作。</p>{unresolvedOperations.map(item => <ConnectionRow key={item.operationId} title={item.worker || '电脑原操作'} detail={status(item.status) + ' · ' + text(item.operationId)} icon={History} onOpen={() => { void run('tasks.open', { id: item.operationId }).catch(() => {}); }} />)}</section>}
+      <section className="pw-connection-detail-section"><h3>{domain === 'remote' ? '连接能力' : '主机身份'}</h3>
+        {domain === 'ssh' && <><Facts values={[[ '已保存指纹', selected.hostFingerprint || '尚未保存' ]]} /><p className="pw-field-hint">指纹须与这台主机的可信来源一致。普通 SSH 不保证断线后任务继续。</p></>}
+        <div className="pw-form-actions"><Button variant="secondary" disabled={!available(domain === 'remote' ? 'probe' : 'probeHostKey')} onClick={() => act(domain === 'remote' ? 'remote.probe' : 'ssh.probeHostKey', binding(selected), value => setProbe({ ...value, originalProfile: { ...selected } }))}>{domain === 'remote' ? '探测能力' : '查看主机指纹'}</Button>{domain === 'remote' && <Button variant="ghost" disabled={!available('reconnect')} onClick={() => act('remote.reconnect', binding(selected))}>同步原任务</Button>}</div>
+      </section>
+      {probe && domain === 'ssh' && <section className="pw-connection-attention"><h3>本次实际主机指纹</h3><Facts values={[[ '主机', probe.originalProfile?.name ], ['指纹', probe.fingerprint ], ['密钥类型', probe.keyType ]]} /><p>请与这台主机已有可信渠道提供的指纹核对。探测没有发送登录凭据。</p>
+        {probe.changed ? <><p role="alert">主机密钥已变化，当前连接不会执行。核对原因后，可先移除原信任，再重新探测。</p><Button variant="secondary" disabled={busy} onClick={() => { setTrust({ kind: 'forget', profile: probe.originalProfile }); setChecked(false); }}>核对并移除原信任</Button></> : <Button variant="secondary" disabled={busy || !probe.probeId} onClick={() => { setTrust({ kind: 'approve', ...probe }); setChecked(false); }}>核对并信任这个指纹</Button>}</section>}
+      <Receipt value={receipt} run={run} />
+      <Accordion><AccordionItem id="connection-settings" title="连接设置" description="地址、凭据与本机配置"><Facts values={[[ '工作区', selected.workspace ], ['凭据', selected.hasToken || selected.credentialsConfigured ? '已配置' : '未配置' ]]} /><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => openEditor({ ...selected })}>编辑连接</Button><Button variant="ghost" disabled={busy} onClick={() => setRemoving({ ...selected })}>移除</Button></div></AccordionItem></Accordion>
+    </>}
+    {selected && workOpened && !stale && <div hidden={!working} className="pw-connection-work-body">{domain === 'remote' ? <RemoteWork key={selected.id + selected.bindingHash} profile={selected} state={state} data={data} run={run} supported={supported} back={workBack} visible={working} /> : <SshWork key={selected.id + selected.bindingHash} profile={selected} state={state} data={data} run={run} supported={supported} back={workBack} visible={working} />}</div>}
+    {showingJobs && (domain === 'remote' ? <div className="pw-connection-jobs">{jobs.length === 0 && <p className="pw-secondary-empty">这项连接暂时没有已读取的原任务。可返回概览同步。</p>}{jobs.map(job => <article className="pw-connection-job" key={job.id}><header><div><h3>{job.worker || '电脑任务'}</h3><p>{profiles.find(profile => profile.id === job.profileId)?.name || job.serviceBase || '原连接'}</p></div><span>{status(job.status)}</span></header>{job.message && <p>{job.message}</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => act('remote.getJob', originalJob(job))}>读取原回执</Button>{list(state.tasks).find(task => object(task.raw).externalId === job.id && object(object(task.raw).externalRefs).profileId === job.profileId)?.id && <Button variant="ghost" onClick={() => { const task = list(state.tasks).find(task => object(task.raw).externalId === job.id && object(object(task.raw).externalRefs).profileId === job.profileId); void run('tasks.open', { id: task!.id }).catch(() => {}); }}>打开本机原任务</Button>}{['queued', 'running', 'stopping', 'awaiting_approval', 'awaiting_input'].includes(job.status) && <Button variant="ghost" disabled={busy} onClick={() => act('remote.cancelJob', originalJob(job))}>请求停止原任务</Button>}</div></article>)}<Receipt value={receipt} run={run} /></div> : <div className="pw-connection-jobs">{sshTasks.length === 0 && <p className="pw-secondary-empty">这项主机暂时没有已记录的任务。</p>}{sshTasks.map(task => <ConnectionRow key={task.id} title={task.title || task.goal || object(task.raw).command || 'SSH 任务'} detail={status(task.status)} icon={History} onOpen={() => { void run('tasks.open', { id: task.id }).catch(() => {}); }} />)}</div>)}
+    {editing && <ProfileEditor key={editing.id || 'new'} domain={domain} original={editing} current={profiles.find(profile => profile.id === editing.id)} state={state} run={run} back={editorBack} close={closeEditor} />}
+    <SettingsDialog isOpen={!!removing} title="移除这个连接？" onClose={() => { if (!busy) setRemoving(null); }}><p>只移除本机连接配置。已发生的远端操作请在原任务核对。</p><Facts values={[[ '连接', removing?.name ], ['地址', removing?.baseUrl || removing?.host ]]} /><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setRemoving(null)}>取消</Button><Button disabled={busy} onClick={() => removing && act(domain + '.removeProfile', { profileId: removing.id, expectedBindingHash: removing.bindingHash }, () => { setRemoving(null); setSelected(null); setWorkOpened(false); journey.back(); })}>移除这项原连接</Button></div></SettingsDialog>
+    <SettingsDialog isOpen={!!trust} title={trust?.kind === 'forget' ? '移除原主机信任' : '确认主机身份'} onClose={() => { if (!busy) setTrust(null); }}><p>请先通过可信渠道核对这台主机，不仅依赖当前网络探测。</p><pre className="pw-connection-code">{trust?.kind === 'forget' ? trust?.profile?.hostFingerprint : trust?.fingerprint}</pre><CheckboxField isSelected={checked} onChange={setChecked}>{trust?.kind === 'forget' ? '已核对原因，移除这项原信任' : '已通过可信渠道核对一致'}</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setTrust(null)}>取消</Button><Button disabled={busy || !checked} onClick={() => {
       if (!trust) return; const input = trust.kind === 'forget' ? { profileId: trust.profile.id, expectedBindingHash: trust.profile.bindingHash, fingerprint: trust.profile.hostFingerprint } : { profileId: trust.profileId, expectedBindingHash: trust.bindingHash, probeId: trust.probeId, fingerprint: trust.fingerprint };
-      act(trust.kind === 'forget' ? 'ssh.forgetHostKey' : 'ssh.approveHostKey', input, () => { setTrust(null); setProbe(null); setSelected(null); });
+      act(trust.kind === 'forget' ? 'ssh.forgetHostKey' : 'ssh.approveHostKey', input, () => { setTrust(null); setProbe(null); setSelected(null); setWorkOpened(false); journey.back(); });
     }}>确认这项操作</Button></div></SettingsDialog>
-  </>;
+  </div>;
 }
 
-function ProfileEditor({ domain, original, current, state, run, close }: { domain: 'remote' | 'ssh'; original: Data; current?: Data; state: Data; run: Run; close: () => void }) {
+function ProfileEditor({ domain, original, current, state, run, close, back }: { domain: 'remote' | 'ssh'; original: Data; current?: Data; state: Data; run: Run; close: () => void; back: { current: (() => boolean) | null } }) {
   const [form, setForm] = useState<Data>({ name: text(original.name), baseUrl: text(original.baseUrl), host: text(original.host), port: text(original.port || 22), username: text(original.username), workspace: text(original.workspace), authType: original.authType === 'password' ? 'password' : 'key', token: '', privateKey: '', password: '', passphrase: '' });
   const [attempted, setAttempted] = useState(false), { request, busy, error } = useRequest(run, state);
   const clear = () => setForm(previous => ({ ...previous, token: '', privateKey: '', password: '', passphrase: '' }));
   useEffect(() => { const hide = () => { if (document.visibilityState !== 'visible') clear(); }; document.addEventListener('visibilitychange', hide); window.addEventListener('pagehide', clear); return () => { document.removeEventListener('visibilitychange', hide); window.removeEventListener('pagehide', clear); }; }, []);
+  useEffect(() => { back.current = () => { if (!busy) { clear(); close(); } return true; }; return () => { back.current = null; }; }, [busy, back, close]);
   const stale = !!original.id && (!current || current.bindingHash !== original.bindingHash);
   const field = (key: string, value: any) => setForm(previous => ({ ...previous, [key]: value }));
   const canSave = !busy && !attempted && !stale && text(form.name).trim() && (domain === 'remote' ? text(form.baseUrl).trim() : text(form.host).trim() && text(form.username).trim() && text(form.workspace).startsWith('/') && wirelessPort(form.port));
@@ -146,17 +204,19 @@ function GeminiEvidence({ probe }: { probe: Data }) {
     </AccordionItem></Accordion>
   </div>;
 }
-function RemoteWork({ profile, state, data, run, supported, back }: { profile: Data; state: Data; data: Data; run: Run; supported: (action: string) => boolean; back: { current: (() => boolean) | null } }) {
+function RemoteWork({ profile, state, data, run, supported, back, visible }: { profile: Data; state: Data; data: Data; run: Run; supported: (action: string) => boolean; back: { current: (() => boolean) | null }; visible: boolean }) {
   const key = profile.id + ':' + profile.bindingHash, initial = useRef(remoteDrafts.get(key));
   const [environments, setEnvironments] = useState<Data[] | null>(null), [environmentFresh, setEnvironmentFresh] = useState(false);
   const [environmentId, setEnvironment] = useState(initial.current?.environmentId || ''), [worker, setWorker] = useState(initial.current?.worker || 'codex_app_server'), [probe, setProbe] = useState<Data | null>(null);
   const [goal, setGoal] = useState(initial.current?.goal || ''), [argv, setArgv] = useState(initial.current?.argv || '["git","status","--short"]'), [model, setModel] = useState(initial.current?.model || ''), [effort, setEffort] = useState(initial.current?.effort || ''), [readOnly, setReadOnly] = useState(initial.current?.readOnly ?? true), [timeout, setTimeoutValue] = useState(initial.current?.timeout || '300');
   const [writeIntent, setWriteIntent] = useState(false), [draftError, setDraftError] = useState(''), [review, setReview] = useState<Data | null>(null);
-  const [operation, setOperation] = useState<Data | null>(initial.current?.operation || null), [uncertain, setUncertain] = useState(initial.current?.uncertain || false), [receipt, setReceipt] = useState<Data | null>(null), { request, busy, error, alive } = useRequest(run, state);
+  const [operation, setOperation] = useState<Data | null>(initial.current?.operation || null), [uncertain, setUncertain] = useState(initial.current?.uncertain || false), [receipt, setReceipt] = useState<Data | null>(null), { request, busy, error, alive } = useRequest(run, state, visible);
+  const visibleNow = useRef(visible); visibleNow.current = visible;
   const pendingConfirm = useRef<Data | null>(null), currentState = useRef(state);
   currentState.current = state;
-  const nativeActive = () => { const view = bridge.getState().view as Data | undefined; return document.visibilityState === 'visible' && view?.section === 'remote' && !view.taskId && !currentState.current.webWorkspaceTaskOpen; };
+  const nativeActive = () => { const view = bridge.getState().view as Data | undefined; return visibleNow.current && document.visibilityState === 'visible' && view?.section === 'remote' && !view.taskId && !currentState.current.webWorkspaceTaskOpen; };
   const [active, setActive] = useState(nativeActive);
+  useEffect(() => { setActive(nativeActive()); if (!visible) { setReview(null); setWriteIntent(false); } }, [visible]);
   const draft = useRef<RemoteDraft>({ environmentId, worker, goal, argv, model, effort, readOnly, timeout, operation, uncertain });
   draft.current = { environmentId, worker, goal, argv, model, effort, readOnly, timeout, operation, uncertain };
   useEffect(() => { back.current = () => { if (busy) return true; if (review) { setReview(null); return true; } return false; }; return () => { back.current = null; }; }, [busy, review, back]);
@@ -181,11 +241,11 @@ function RemoteWork({ profile, state, data, run, supported, back }: { profile: D
   const environment = environments?.find(item => item.id === environmentId), workers = list(environment?.workers).filter(item => ['codex_app_server', 'claude', 'pi', 'command', 'gemini_acp'].includes(item.id));
   const unresolved = list(data.operations).filter(item => item.profileId === profile.id && ['unknown', 'submitting'].includes(item.status));
   const nativeTask = list(state.tasks).find(task => task.id === operation?.operationId), gemini = worker === 'gemini_acp';
-  const locked = busy || !!operation || !active, geminiReady = currentGeminiProbe(probe, environment, model);
+  const locked = busy || !!operation || !active || !visible, geminiReady = currentGeminiProbe(probe, environment, model);
   const target = () => ({ ...binding(profile), environmentId, environmentBinding: environment?.bindingHash, worker, ...(model.trim() ? { model: model.trim() } : {}), ...(worker === 'codex_app_server' && effort.trim() ? { effort: effort.trim() } : {}) });
   const changed = (change: () => void) => { if (locked) return; setProbe(null); setReview(null); setWriteIntent(false); setDraftError(''); change(); };
   const prepare = async () => {
-    if (locked || !environmentFresh) return;
+    if (locked || !nativeActive() || !environmentFresh) return;
     setDraftError('');
     const input: Data = { profileId: profile.id, bindingHash: profile.bindingHash, environmentId, environmentBinding: environment?.bindingHash, worker, timeoutSeconds: Number(timeout) };
     try {
@@ -197,54 +257,99 @@ function RemoteWork({ profile, state, data, run, supported, back }: { profile: D
     } catch (failure) { if (alive.current) setDraftError(failure instanceof Error ? failure.message : '请核对这次任务参数。'); }
   };
   const readEnvironments = () => {
-    if (locked) return;
+    if (locked || !nativeActive()) return;
     setReview(null); setProbe(null); setWriteIntent(false); setEnvironmentFresh(false); setDraftError('');
     void request('remote.environments', binding(profile)).then(value => { setEnvironments(list(value.environments)); setEnvironmentFresh(true); }).catch(() => {});
   };
   const confirm = () => {
-    if (!review || locked || pendingConfirm.current || !environmentFresh || gemini && (!writeIntent || !geminiReady)) return;
+    if (!review || locked || !nativeActive() || pendingConfirm.current || !environmentFresh || gemini && (!writeIntent || !geminiReady)) return;
     const captured = review; pendingConfirm.current = captured; draft.current = { ...draft.current, operation: captured, uncertain: false }; setOperation(captured); setReview(null); setUncertain(false); setReceipt(null);
     void request('remote.confirmTask', { reviewHandle: captured.reviewHandle }).then(value => {
       if (pendingConfirm.current !== captured) return;
       setReceipt(value); setUncertain(value.status === 'unknown');
     }).catch(() => { if (alive.current && draft.current.operation?.operationId === captured.operationId) { draft.current = { ...draft.current, uncertain: true }; setUncertain(true); } }).finally(() => { if (pendingConfirm.current === captured) pendingConfirm.current = null; });
   };
-  return <div style={{ position: 'relative', minWidth: 0, overflowAnchor: 'none' }}>
-    <p>先读取实际工作环境，再选择执行器。每项新工作保留唯一原操作，未知提交不会重发。</p>
+  return <div className="pw-remote-work">
+    <header className="pw-connection-work-title"><h3>{operation ? '这次电脑工作' : '开始新工作'}</h3><p>{operation ? '结果与后续操作都保留在同一项原任务中。' : '先选择实际环境，再说明这次要完成的事情。'}</p></header>
     {unresolved.map(item => <div className="pw-selected-object" key={item.operationId}><p>此连接有原提交待核对。</p><Button variant="secondary" disabled={busy || !active} onClick={() => { void request('remote.reconcileOperation', { profileId: profile.id, operationId: item.operationId }).then(setReceipt).catch(() => {}); }}>只读核对原提交</Button><Button variant="secondary" onClick={() => { void run('tasks.open', { id: item.operationId }).catch(() => {}); }}>打开原任务</Button></div>)}
-    <Button variant="secondary" disabled={locked || !profile.hasToken} onClick={readEnvironments}>读取当前工作环境</Button>
+    <div hidden={!!operation} className="pw-remote-composer">
+    <section className="pw-connection-environment"><div className="pw-connection-section-toolbar"><h3>工作环境</h3><Button variant="ghost" disabled={locked || !profile.hasToken} onClick={readEnvironments}>读取当前工作环境</Button></div>
+    {!environments && <p className="pw-field-hint">{profile.hasToken ? '读取这台电脑已提供的目录与执行器，不会自动创建或安装。' : '请返回连接概览，在连接设置中补充令牌。'}</p>}
     {!environmentFresh && (environmentId || operation) && <p className="pw-field-hint">草稿与原操作保留；开始另一项工作前，需要重新读取环境与核对执行器。</p>}
     {environments?.length === 0 && <p>未取得可用工作环境；不会自动创建电脑目录或安装执行器。</p>}
     {!!environments?.length && <SelectField label="工作环境" value={environmentId} isDisabled={locked} options={environments.map(item => ({ id: item.id, label: String(item.label || item.id) + ' · ' + String(item.kind || '') }))} onChange={value => changed(() => setEnvironment(value))} />}
-    {environment && <><Facts values={[[ '实际工作区', environment.workspace ], ['允许写入', environment.writeAllowed === true ? '是' : '未启用' ]]} /><SelectField label="执行器" value={worker} isDisabled={locked} options={workers.map(item => ({ id: item.id, label: ({ pi: 'Pi · 无工具对话', command: '明确命令', codex_app_server: 'Codex', claude: 'Claude', gemini_acp: 'Gemini CLI · ACP' } as Data)[item.id] + (item.available === false ? ' · 当前不可用' : ''), disabled: item.available === false && item.id !== 'gemini_acp' }))} onChange={value => changed(() => { setWorker(value); setEffort(''); })} />
+    {environment && <Facts values={[[ '实际工作区', environment.workspace ], ['允许写入', environment.writeAllowed === true ? '是' : '未启用' ]]} />}
+    </section>
+    {environment && <section className="pw-connection-task-composer"><SelectField label="执行器" value={worker} isDisabled={locked} options={workers.map(item => ({ id: item.id, label: ({ pi: 'Pi · 无工具对话', command: '明确命令', codex_app_server: 'Codex', claude: 'Claude', gemini_acp: 'Gemini CLI · ACP' } as Data)[item.id] + (item.available === false ? ' · 当前不可用' : ''), disabled: item.available === false && item.id !== 'gemini_acp' }))} onChange={value => changed(() => { setWorker(value); setEffort(''); })} />
       {worker === 'command' ? <TextAreaField label="明确参数 JSON 数组" value={argv} isDisabled={locked} onChange={value => { setReview(null); setArgv(value); }} hint="只执行电脑 allowlist 中的参数数组，不将拼接文本当 Shell。" /> : <>
-        <TextAreaField label="这次要完成什么" value={goal} isDisabled={locked} onChange={value => { setReview(null); setGoal(value); }} /><TextField label="请求模型 ID（可留空）" value={model} isDisabled={locked} onChange={value => changed(() => { setModel(value); setEffort(''); })} hint={gemini ? '留空使用执行端默认模型；本次探测不证明该模型已登录或已完成推理。' : undefined} />
-        {worker === 'codex_app_server' && <><CheckboxField isSelected={readOnly} isDisabled={locked} onChange={value => { setReview(null); setReadOnly(value); }}>只读分析，不授权修改文件</CheckboxField>{model.trim() && <TextField label="请求推理档位（可留空）" value={effort} isDisabled={locked} onChange={value => changed(() => setEffort(value))} hint="须来自实际 Codex 模型目录；选择变化后重新核对。" />}</>}
+        <TextAreaField label="这次要完成什么" value={goal} isDisabled={locked} onChange={value => { setReview(null); setGoal(value); }} />
+        {worker === 'codex_app_server' && <CheckboxField isSelected={readOnly} isDisabled={locked} onChange={value => { setReview(null); setReadOnly(value); }}>只读分析，不授权修改文件</CheckboxField>}
         {worker === 'pi' && <p className="pw-field-hint">仅无工具对话，不提供项目读写、命令、扩展或 MCP；执行器配置可能重试或压缩，费用与内部调用次数尚未核实。</p>}
         {worker === 'claude' && <p className="pw-field-hint">使用执行端的受限工具配置；此处不声明操作系统只读沙箱。原任务仍需实际验证账号和推理。</p>}
         {gemini && <><p className="pw-field-hint">Gemini ACP 仅支持私人可写工作，不支持只读分析。使用固定版本与默认审批模式，实际工具权限仍在原任务逐次审阅；不会自动安装或登录。</p>
           {environment.writeAllowed !== true && <p role="alert">所选环境尚未允许写入，不能创建 Gemini 工作。可核对能力，或选择支持只读的执行器。</p>}
           <CheckboxField isSelected={writeIntent} isDisabled={locked || environment.writeAllowed !== true} onChange={value => { setReview(null); setWriteIntent(value); }}>我明确要在此环境开展可写工作，已知 Gemini 不提供只读隔离</CheckboxField>
         </>}
+        <Accordion><AccordionItem id="remote-task-options" title="模型与运行选项" description={model.trim() || '使用执行端默认模型'}>
+          <TextField label="请求模型 ID（可留空）" value={model} isDisabled={locked} onChange={value => changed(() => { setModel(value); setEffort(''); })} hint={gemini ? '留空使用执行端默认模型；本次探测不证明该模型已登录或已完成推理。' : undefined} />
+          {worker === 'codex_app_server' && model.trim() && <TextField label="请求推理档位（可留空）" value={effort} isDisabled={locked} onChange={value => changed(() => setEffort(value))} hint="须来自实际 Codex 模型目录；选择变化后重新核对。" />}
+          <TextField label="任务时限（10–3600 秒）" value={timeout} isDisabled={locked} inputMode="numeric" onChange={value => { setReview(null); setTimeoutValue(value.replace(/\D/g, '').slice(0, 4)); }} />
+        </AccordionItem></Accordion>
         <Button variant="secondary" disabled={locked || !environmentFresh || !supported('remote.probeWorker')} onClick={() => { setProbe(null); setReview(null); void request('remote.probeWorker', target()).then(setProbe).catch(() => {}); }}>核对执行器与模型能力</Button>
         {probe && (gemini ? <GeminiEvidence probe={probe} /> : <><p>{probe.message || (probe.available ? '执行器已返回可用声明，尚未发起模型任务。' : '尚未核实可用。')}</p>{list(probe.models).length > 0 && <details><summary>已返回的模型目录</summary>{list(probe.models).map(item => <Button key={item.id} variant="secondary" onClick={() => changed(() => { setModel(item.id); setEffort(''); })}>{item.name || item.id}</Button>)}</details>}</>)}
-      </>}<TextField label="任务时限（10–3600 秒）" value={timeout} isDisabled={locked} inputMode="numeric" onChange={value => { setReview(null); setTimeoutValue(value.replace(/\D/g, '').slice(0, 4)); }} />
+      </>}{worker === 'command' && <TextField label="任务时限（10–3600 秒）" value={timeout} isDisabled={locked} inputMode="numeric" onChange={value => { setReview(null); setTimeoutValue(value.replace(/\D/g, '').slice(0, 4)); }} />}
       <Button disabled={locked || !environmentFresh || !supported('remote.reviewTask') || unresolved.length > 0 || !workers.some(item => item.id === worker && item.available !== false) || (worker !== 'command' && (!goal.trim() || probe?.available !== true)) || gemini && (!geminiReady || !writeIntent || environment.writeAllowed !== true) || Number(timeout) < 10 || Number(timeout) > 3600} onClick={() => { void prepare(); }}>审阅这次新工作</Button>
-    </>}
+    </section>}
+    </div>
     {(error || draftError) && <p role="alert">{error || draftError}</p>}
     {operation && <div className="pw-selected-object"><p role="status">{uncertain ? '这次原提交的结果待核对。草稿与原操作已保留，不会再次确认或重发。' : '已保留这次原操作。离开页面不会重提或停止电脑任务。'}</p><Facts values={[[ '原操作', operation.operationId ]]} />
       <Accordion><AccordionItem id="original-remote-work" title="保留的原工作草稿"><Facts values={[[ '原环境', operation.environmentId ], ['原执行器', operation.worker ], ['请求模型', operation.model || '执行端默认' ]]} /><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{operation.prompt || JSON.stringify(operation.argv)}</pre></AccordionItem></Accordion>
       <Button variant="secondary" disabled={busy || !active} onClick={() => { void request('remote.reconcileOperation', { profileId: profile.id, operationId: operation.operationId }).then(setReceipt).catch(() => {}); }}>查询原操作</Button><Button variant="secondary" onClick={() => { void run('tasks.open', { id: operation.operationId }).catch(() => {}); }}>打开原任务 · 审批、成果与继续</Button>{nativeTask && ['completed', 'failed', 'cancelled'].includes(nativeTask.status) && list(data.operations).some(item => item.operationId === operation.operationId && ['settled', 'rejected'].includes(item.status)) && <Button variant="secondary" disabled={busy || !active} onClick={() => { setOperation(null); setUncertain(false); setReceipt(null); setGoal(''); setProbe(null); setWriteIntent(false); setEnvironmentFresh(false); }}>已核对原任务，新建另一项工作</Button>}</div>}
     <Receipt value={receipt} run={run} />
-    <SettingsDialog isOpen={!!review} title="确认在所选电脑创建工作" onClose={() => { if (!busy) setReview(null); }}><Facts values={[[ '连接', profile.name ], ['地址', profile.baseUrl ], ['工作区', environment?.workspace ], ['执行器', review?.worker === 'gemini_acp' ? 'Gemini CLI 0.66.0 · ACP 1' : review?.worker ], ['请求模型', review?.model || '执行端默认' ], ['审批模式', review?.worker === 'gemini_acp' ? '默认审批 · 仅本次私人可写工作' : null ], ['时限', review?.timeoutSeconds ]]} /><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{review?.prompt || JSON.stringify(review?.argv)}</pre><p>{review?.worker === 'pi' ? '仅进行无工具对话。' : review?.readOnly ? '本次为 Codex 只读分析。' : '本次可能修改所选工作区；工具审批在原任务逐次核对。'}</p>{review?.worker === 'gemini_acp' && <p>已明确选择可写工作；登录、实际模型与会话模式仍须在原任务核对。不支持只读隔离，不自动登录或更换后端。</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setReview(null)}>返回修改</Button><Button disabled={locked || !environmentFresh || gemini && (!writeIntent || !geminiReady)} onClick={confirm}>确认创建一次</Button></div></SettingsDialog>
+    <SettingsDialog isOpen={visible && !!review} title="确认在所选电脑创建工作" onClose={() => { if (!busy) setReview(null); }}><Facts values={[[ '连接', profile.name ], ['地址', profile.baseUrl ], ['工作区', environment?.workspace ], ['执行器', review?.worker === 'gemini_acp' ? 'Gemini CLI 0.66.0 · ACP 1' : review?.worker ], ['请求模型', review?.model || '执行端默认' ], ['审批模式', review?.worker === 'gemini_acp' ? '默认审批 · 仅本次私人可写工作' : null ], ['时限', review?.timeoutSeconds ]]} /><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{review?.prompt || JSON.stringify(review?.argv)}</pre><p>{review?.worker === 'pi' ? '仅进行无工具对话。' : review?.readOnly ? '本次为 Codex 只读分析。' : '本次可能修改所选工作区；工具审批在原任务逐次核对。'}</p>{review?.worker === 'gemini_acp' && <p>已明确选择可写工作；登录、实际模型与会话模式仍须在原任务核对。不支持只读隔离，不自动登录或更换后端。</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setReview(null)}>返回修改</Button><Button disabled={locked || !environmentFresh || gemini && (!writeIntent || !geminiReady)} onClick={confirm}>确认创建一次</Button></div></SettingsDialog>
   </div>;
 }
-function SshWork({ profile, state, data, run, supported }: { profile: Data; state: Data; data: Data; run: Run; supported: (action: string) => boolean }) {
-  const [mode, setMode] = useState('agent'), [goal, setGoal] = useState(''), [client, setClient] = useState<string | null>(null), [command, setCommand] = useState('');
-  const [directory, setDirectory] = useState(''), [files, setFiles] = useState<Data | null>(null), [file, setFile] = useState<Data | null>(null), [content, setContent] = useState(''), [review, setReview] = useState<Data | null>(null), [receipt, setReceipt] = useState<Data | null>(null), [uncertain, setUncertain] = useState(false), [cooperative, setCooperative] = useState(false);
-  const [terminal, setTerminal] = useState<Data | null>(null), [doctor, setDoctor] = useState<Data | null>(null), { request, busy, error } = useRequest(run, state);
-  const [fileNeedsRead, setFileNeedsRead] = useState(false), [fileConflict, setFileConflict] = useState(false);
-  const currentContent = useRef(content); currentContent.current = content;
+type SshDraft = { mode: string; goal: string; client: string | null; command: string; directory: string; files: Data | null; file: Data | null; content: string; fileConflict: boolean; uncertain: boolean; receipt: Data | null; agentReceipt: Data | null };
+const sshDrafts = new Map<string, SshDraft>();
+function SshWork({ profile, state, data, run, supported, back, visible }: { profile: Data; state: Data; data: Data; run: Run; supported: (action: string) => boolean; back: { current: (() => boolean) | null }; visible: boolean }) {
+  const visibleNow = useRef(visible); visibleNow.current = visible;
+  const key = profile.id + ':' + profile.bindingHash, initial = useRef(sshDrafts.get(key));
+  const journey = useDataSettingsJourney(initial.current?.mode || 'list'), mode = journey.view;
+  const [goal, setGoal] = useState(initial.current?.goal || ''), [client, setClient] = useState<string | null>(initial.current?.client || null), [command, setCommand] = useState(initial.current?.command || '');
+  const [directory, setDirectory] = useState(initial.current?.directory || ''), [files, setFiles] = useState<Data | null>(initial.current?.files || null), [file, setFile] = useState<Data | null>(initial.current?.file || null), [content, setContent] = useState(initial.current?.content || '');
+  const [agentReceipt, setAgentReceipt] = useState<Data | null>(initial.current?.agentReceipt || null);
+  const [review, setReview] = useState<Data | null>(null), [receipt, setReceipt] = useState<Data | null>(initial.current?.receipt || null), [uncertain, setUncertain] = useState(initial.current?.uncertain || false), [cooperative, setCooperative] = useState(false);
+  const [terminal, setTerminal] = useState<Data | null>(null), [doctor, setDoctor] = useState<Data | null>(null), { request, busy, error } = useRequest(run, state, visible);
+  const [fileNeedsRead, setFileNeedsRead] = useState(!!initial.current?.file), [fileConflict, setFileConflict] = useState(initial.current?.fileConflict || false);
+  const fileReturn = useRef({ scroll: 0, path: '' }), previousFile = useRef(text(initial.current?.file?.path));
+  const pendingConfirm = useRef(false), currentContent = useRef(content); currentContent.current = content;
+  const draft = useRef<SshDraft>({ mode, goal, client, command, directory, files, file, content, fileConflict, uncertain, receipt, agentReceipt });
+  draft.current = { mode, goal, client, command, directory, files, file, content, fileConflict, uncertain, receipt, agentReceipt };
+  useEffect(() => () => {
+    sshDrafts.delete(key); sshDrafts.set(key, { ...draft.current, uncertain: draft.current.uncertain || pendingConfirm.current });
+    while (sshDrafts.size > 8) sshDrafts.delete(sshDrafts.keys().next().value!);
+  }, [key]);
+  useLayoutEffect(() => {
+    const path = text(file?.path);
+    if (path === previousFile.current) return;
+    previousFile.current = path;
+    const scroller = journey.root.current?.closest('.pw-secondary-scroll');
+    if (scroller) scroller.scrollTop = path ? 0 : fileReturn.current.scroll;
+    const target = path ? journey.root.current?.querySelector<HTMLElement>('[data-file-heading]') : Array.from(journey.root.current?.querySelectorAll<HTMLElement>('[data-operation-entry]') || []).find(row => row.dataset.operationEntry === fileReturn.current.path);
+    target?.focus({ preventScroll: true });
+  }, [file?.path]);
+  const closeFile = () => { if (content === file?.content) setFile(null); else setReview({ operation: 'discardFile' }); };
+  useEffect(() => {
+    back.current = () => {
+      if (busy) return true;
+      if (terminal) { setTerminal(null); return true; }
+      if (review) { setReview(null); return true; }
+      if (mode === 'files' && file) { closeFile(); return true; }
+      return journey.back();
+    };
+    return () => { back.current = null; };
+  }, [busy, terminal, review, mode, file, content, back]);
+  useEffect(() => { if (!visible) { setReview(null); setCooperative(false); } }, [visible]);
   const resume = Number(state.webWorkspaceResumeRevision || 0), previousResume = useRef(resume);
   useEffect(() => {
     if (previousResume.current === resume) return; previousResume.current = resume;
@@ -261,35 +366,48 @@ function SshWork({ profile, state, data, run, supported }: { profile: Data; stat
     return () => { current = false; };
   }, [resume]);
   const trusted = profile.hostKeyTrusted === true && profile.credentialsConfigured === true;
-  const prepare = (operation: string, arguments_: Data) => { void request('ssh.reviewOperation', { command: operation, arguments: { ...binding(profile), ...arguments_ } }).then(value => { setCooperative(false); setReview(value); }).catch(() => {}); };
+  const prepare = (operation: string, arguments_: Data) => { if (!visibleNow.current || busy) return; void request('ssh.reviewOperation', { command: operation, arguments: { ...binding(profile), ...arguments_ } }).then(value => { setCooperative(false); setReview(value); }).catch(() => {}); };
   const selectedTasks = list(state.tasks).filter(task => object(task.raw).feature === 'ssh' && object(object(task.raw).externalRefs).profileId === profile.id);
   const unknown = uncertain || selectedTasks.some(task => ['reconciling', 'unknown'].includes(task.status));
-  const readFile = (path: string) => { void request('ssh.readFile', { ...binding(profile), path }).then(value => { setReceipt(value); if (value.status === 'completed' && typeof value.content === 'string' && /^sha256:[a-f0-9]{64}$/.test(text(value.version))) { setFile(value); setContent(value.content); setFileNeedsRead(false); setFileConflict(false); } }).catch(() => {}); };
+  const readDirectory = (path: string) => { void request('ssh.listFiles', { ...binding(profile), path }).then(value => { setFiles(value); setDirectory(text(value.path)); }).catch(() => {}); };
+  const readFile = (path: string) => { if (!file) fileReturn.current = { scroll: journey.root.current?.closest('.pw-secondary-scroll')?.scrollTop || 0, path }; void request('ssh.readFile', { ...binding(profile), path }).then(value => { setReceipt(value); if (value.status === 'completed' && typeof value.content === 'string' && /^sha256:[a-f0-9]{64}$/.test(text(value.version))) { setFile(value); setContent(value.content); setFileNeedsRead(false); setFileConflict(false); } }).catch(() => {}); };
   const verifyFile = () => { if (!file) return; const original = file; void request('ssh.readFile', { ...binding(profile), path: original.path }).then(value => { const restored = resumeSshFile(original, currentContent.current, value, profile.id, fileConflict); setFile(restored.file); setContent(restored.content); setFileConflict(restored.conflict); setFileNeedsRead(false); }).catch(() => {}); };
-  return <>
-    {!trusted && <p>先核对主机指纹并保存凭据，才可使用此连接。</p>}
-    <SelectField label="工作方式" value={mode} options={[{ id: 'agent', label: '让本 Agent 办事' }, { id: 'command', label: '明确命令' }, { id: 'files', label: '工作区文件' }, { id: 'terminal', label: '交互式终端' }, { id: 'doctor', label: '只读环境诊断' }]} onChange={value => { if (!busy) setMode(value); }} />
-    {mode === 'agent' && <><TextAreaField label="这次要完成什么" value={goal} onChange={value => { if (!client) setGoal(value); }} hint="目标绑定当前主机与目录，写入授权仍在原任务核对。" /><Button disabled={!trusted || busy || !goal.trim() || goal.length > 12000 || !!receipt?.taskId} onClick={() => { const id = client || crypto.randomUUID(); setClient(id); void request('ssh.startTask', { profileId: profile.id, bindingHash: profile.bindingHash, clientMessageId: id, goal }).then(setReceipt).catch(() => {}); }}>{client ? '核对同一输入回执' : '开始这次 SSH 任务'}</Button>{receipt?.taskId && <Button variant="secondary" onClick={() => { setClient(null); setReceipt(null); setGoal(''); }}>新建另一项工作</Button>}</>}
-    {mode === 'command' && <><TextAreaField label="POSIX 命令" value={command} onChange={setCommand} hint="从所选工作目录执行，使用此账号的远端权限；工作目录不是沙箱。" /><Button disabled={!trusted || busy || unknown || !command.trim() || command.length > 12000} onClick={() => prepare('exec', { command, timeoutSeconds: 60 })}>核对并执行这条命令</Button></>}
-    {mode === 'files' && <><TextField label="相对目录，留空为工作区" value={directory} onChange={setDirectory} /><Button variant="secondary" disabled={!trusted || busy} onClick={() => { void request('ssh.listFiles', { ...binding(profile), path: directory.trim() }).then(setFiles).catch(() => {}); }}>读取目录</Button>
-      {files && <><p className="pw-field-hint">当前结果：{files.path || '工作区根目录'}。不跟随符号链接。</p>{list(files.files).map(item => <article className="pw-source-record" key={item.name}><header><h3>{item.name}</h3><span>{item.symlink ? '符号链接' : item.directory ? '目录' : `${item.bytes} 字节`}</span></header><Button variant="secondary" disabled={busy || item.symlink || !safeChild(files.path || '', item.name)} onClick={() => { const path = safeChild(files.path || '', item.name); if (!path) return; if (item.directory) { setDirectory(path); void request('ssh.listFiles', { ...binding(profile), path }).then(setFiles).catch(() => {}); } else readFile(path); }}>{item.directory ? '打开目录' : '读取文本'}</Button></article>)}</>}
-      {file && <div className="pw-selected-object"><h3>{file.path}</h3><TextAreaField label="原文件内容" value={content} onChange={setContent} /><p className="pw-field-hint">按刚读取的文件版本校验。另一写入者仍可能在最后检查后改变文件。</p>{fileNeedsRead && <><p role="status">尚未重新读到原文件，草稿保留，先核对原保存版本。</p><Button variant="secondary" disabled={busy} onClick={verifyFile}>核对原文件，保留草稿</Button></>}{fileConflict && <p role="alert">离开期间原文件已变化，未保存内容保留，没有自动合并或覆盖。请保留需要的草稿，再关闭文件并核对当前版本。</p>}<Button disabled={busy || unknown || fileNeedsRead || fileConflict || content === file.content} onClick={() => prepare('writeFile', { path: file.path, content, expectedVersion: file.version, acceptCooperativeWrite: true })}>审阅本次文件修改</Button><Button variant="secondary" disabled={busy || content !== file.content} onClick={() => readFile(file.path)}>重新读取已保存版本</Button><Button variant="secondary" disabled={busy} onClick={() => { if (content === file.content) setFile(null); else setReview({ operation: 'discardFile' }); }}>关闭文件</Button></div>}
-    </>}
-    {mode === 'terminal' && <><p>交互式 Shell 使用账号的实际远端权限。收起不会关闭连接；关闭连接也不保证远端进程终止。</p><Button disabled={!trusted || busy || unknown} onClick={() => prepare('openPty', { cols: 80, rows: 24, timeoutSeconds: 600, allowInteractiveShell: true })}>核对并打开终端</Button>{list(data.terminals).filter(item => item.profileId === profile.id).map(item => <article className="pw-source-record" key={item.terminalId}><header><h3>原终端</h3><span>{status(item.status)}</span></header><Button variant="secondary" onClick={() => setTerminal({ ...item, hostTaskId: item.hostTaskId || item.taskId })}>查看原终端</Button></article>)}</>}
-    {mode === 'doctor' && <><p>只读诊断原连接的实际环境。详细报告仅在当前私人页面展示。</p><Button disabled={!trusted || busy || !supported('ssh.doctor')} onClick={() => { void request('ssh.doctor', binding(profile)).then(setDoctor).catch(() => {}); }}>开始一次只读诊断</Button>{doctor && <><Receipt value={doctor} run={run} /><Facts values={[[ '系统', doctor.os || object(doctor.doctor).os ], ['架构', doctor.architecture || object(doctor.doctor).architecture ], ['工作区', doctor.workspace || profile.workspace ]]} />{Object.entries(object(object(doctor.doctor).tools)).map(([tool, value]) => <article className="pw-source-record" key={tool}><header><h3>{tool}</h3><span>{status(object(value).status)}</span></header><p>{object(value).version || object(value).message}</p></article>)}</>}</>}
-    {error && <p role="alert">{error}</p>}{unknown && <p>有原操作结果尚待核对，当前不会重放命令、写入或新建终端。</p>}
+  const tools = [
+    { id: 'agent', title: '让 Agent 办事', detail: '说明目标，在原任务中审阅与继续', icon: Monitor },
+    { id: 'files', title: '工作区文件', detail: '浏览目录、读取文本，审阅后保存修改', icon: Folder },
+    { id: 'command', title: '运行一条命令', detail: '核对准确命令与工作目录后执行', icon: Terminal },
+    { id: 'terminal', title: '交互式终端', detail: '连接远端 Shell，保留原终端与回执', icon: Server },
+    { id: 'doctor', title: '环境诊断', detail: '只读检查系统、目录与工具状态', icon: Wrench },
+  ];
+  const tool = tools.find(item => item.id === mode);
+  return <div className="pw-ssh-work" ref={journey.root} tabIndex={-1} data-ssh-view={mode}>
+    {!trusted && <div className="pw-connection-attention"><ShieldCheck size={18} aria-hidden /><p>先返回连接概览，核对主机指纹并保存凭据，才可使用此连接。</p></div>}
+    <div className="pw-connection-list" hidden={mode !== 'list'}>{tools.map(item => <ConnectionRow key={item.id} title={item.title} detail={item.detail} icon={item.icon} disabled={busy} entry={item.id} onOpen={() => journey.open(item.id)} />)}</div>
+    {tool && <header className="pw-connection-work-title" tabIndex={-1} data-operation-heading><h3>{tool.title}</h3><p>{tool.detail}</p></header>}
+    {mode === 'agent' && <section className="pw-connection-task-composer"><TextAreaField label="这次要完成什么" value={goal} isDisabled={busy || !!client} onChange={value => { if (!client) setGoal(value); }} hint="目标绑定当前主机与目录，写入授权仍在原任务核对。" /><Button disabled={!trusted || busy || !goal.trim() || goal.length > 12000 || !!agentReceipt?.taskId} onClick={() => { const id = client || crypto.randomUUID(); draft.current = { ...draft.current, client: id }; setClient(id); void request('ssh.startTask', { profileId: profile.id, bindingHash: profile.bindingHash, clientMessageId: id, goal }).then(value => { setAgentReceipt(value); setReceipt(value); }).catch(() => {}); }}>{client ? '核对同一输入回执' : '开始这次 SSH 任务'}</Button>{agentReceipt?.taskId && <Button variant="ghost" onClick={() => { setClient(null); setAgentReceipt(null); setReceipt(null); setGoal(''); }}>新建另一项工作</Button>}</section>}
+    {mode === 'command' && <section className="pw-connection-task-composer"><TextAreaField label="POSIX 命令" value={command} isDisabled={busy} onChange={setCommand} hint="从所选工作目录执行，使用此账号的远端权限；工作目录不是沙箱。" /><Button disabled={!trusted || busy || unknown || !command.trim() || command.length > 12000} onClick={() => prepare('exec', { command, timeoutSeconds: 60 })}>核对并执行这条命令</Button></section>}
+    {mode === 'files' && <section className="pw-ssh-files">
+      {!file && <><div className="pw-connection-directory-bar"><TextField label="相对目录，留空为工作区" value={directory} isDisabled={busy} onChange={setDirectory} /><Button variant="secondary" disabled={!trusted || busy} onClick={() => readDirectory(directory.trim())}>读取目录</Button></div>
+        {files ? <><div className="pw-connection-file-location"><Folder size={17} aria-hidden /><span>{files.path || '工作区根目录'}</span>{files.path && <Button variant="ghost" iconOnly leadingIcon={ArrowUp} aria-label="返回上级目录" disabled={busy} onClick={() => readDirectory(text(files.path).split('/').slice(0, -1).join('/'))} />}</div><p className="pw-field-hint">已读取的目录内容，不跟随符号链接。</p><div className="pw-connection-file-list">{list(files.files).length === 0 && <p className="pw-secondary-empty">这个目录没有可显示的文件。</p>}{list(files.files).map(item => <ConnectionRow key={item.name} entry={safeChild(files.path || '', item.name) || undefined} title={item.name} detail={item.symlink ? '符号链接 · 不跟随' : item.directory ? '目录' : `${item.bytes} 字节 · 文本读取`} icon={item.directory ? Folder : FileText} disabled={busy || item.symlink || !safeChild(files.path || '', item.name)} onOpen={() => { const path = safeChild(files.path || '', item.name); if (!path) return; if (item.directory) readDirectory(path); else readFile(path); }} />)}</div></> : <p className="pw-secondary-empty">读取目录后，在这里查看文件与子目录。</p>}
+      </>}
+      {file && <div className="pw-connection-file-editor"><div className="pw-connection-file-location" tabIndex={-1} data-file-heading><FileText size={18} aria-hidden /><span>{file.path}</span><small>{content === file.content ? '读取版本' : '未保存修改'}</small></div><TextAreaField label="原文件内容" value={content} isDisabled={busy} onChange={setContent} /><p className="pw-field-hint">按刚读取的文件版本校验。另一写入者仍可能在最后检查后改变文件。</p>{fileNeedsRead && <div className="pw-connection-attention"><p role="status">尚未重新读到原文件，草稿保留，先核对原保存版本。</p><Button variant="secondary" disabled={busy} onClick={verifyFile}>核对原文件，保留草稿</Button></div>}{fileConflict && <p role="alert">离开期间原文件已变化，未保存内容保留，没有自动合并或覆盖。请保留需要的草稿，再关闭文件并核对当前版本。</p>}<div className="pw-form-actions"><Button disabled={busy || unknown || fileNeedsRead || fileConflict || content === file.content} onClick={() => prepare('writeFile', { path: file.path, content, expectedVersion: file.version, acceptCooperativeWrite: true })}>审阅本次文件修改</Button><Button variant="ghost" disabled={busy || content !== file.content} onClick={() => readFile(file.path)}>重新读取已保存版本</Button><Button variant="ghost" disabled={busy} onClick={closeFile}>关闭文件</Button></div></div>}
+    </section>}
+    {mode === 'terminal' && <section className="pw-connection-terminal-entry"><p>交互式 Shell 使用账号的实际远端权限。收起不会关闭连接；关闭连接也不保证远端进程终止。</p><Button disabled={!trusted || busy || unknown} onClick={() => prepare('openPty', { cols: 80, rows: 24, timeoutSeconds: 600, allowInteractiveShell: true })}>核对并打开终端</Button><div className="pw-connection-list">{list(data.terminals).filter(item => item.profileId === profile.id).map(item => <ConnectionRow key={item.terminalId} title="原终端" detail={status(item.status)} icon={Terminal} onOpen={() => setTerminal({ ...item, hostTaskId: item.hostTaskId || item.taskId })} />)}</div></section>}
+    {mode === 'doctor' && <section className="pw-connection-diagnostics"><p>只读诊断原连接的实际环境。详细报告仅在当前私人页面展示。</p><Button disabled={!trusted || busy || !supported('ssh.doctor')} onClick={() => { void request('ssh.doctor', binding(profile)).then(setDoctor).catch(() => {}); }}>开始一次只读诊断</Button>{doctor && <><Receipt value={doctor} run={run} /><Facts values={[[ '系统', doctor.os || object(doctor.doctor).os ], ['架构', doctor.architecture || object(doctor.doctor).architecture ], ['工作区', doctor.workspace || profile.workspace ]]} />{Object.entries(object(object(doctor.doctor).tools)).map(([tool, value]) => <article className="pw-source-record" key={tool}><header><h3>{tool}</h3><span>{status(object(value).status)}</span></header><p>{object(value).version || object(value).message}</p></article>)}</>}</section>}
+    {error && <p role="alert">{error}</p>}{unknown && <div className="pw-connection-attention"><p>有原操作结果尚待核对，当前不会重放命令、写入或新建终端。</p></div>}
     <Receipt value={receipt} run={run} />
-    {selectedTasks.filter(task => ['running', 'reconciling', 'unknown', 'awaiting_approval'].includes(task.status)).map(task => <Button key={task.id} variant="secondary" onClick={() => { void run('tasks.open', { id: task.id }).catch(() => {}); }}>打开原 {object(task.raw).command || 'SSH'} 任务 · {status(task.status)}</Button>)}
-    <SettingsDialog isOpen={!!review} title={review?.operation === 'discardFile' ? '放弃未保存的文件修改？' : '核对这次 SSH 操作'} onClose={() => { if (!busy) setReview(null); }}><Facts values={[[ '连接', profile.name ], ['主机', `${profile.username}@${profile.host}:${profile.port}` ], ['工作区', profile.workspace ]]} /><pre style={{ whiteSpace: 'pre-wrap' }}>{review?.operation === 'exec' ? review.command : review?.operation === 'writeFile' ? review.content : ''}</pre>
+    {selectedTasks.filter(task => ['running', 'reconciling', 'unknown', 'awaiting_approval'].includes(task.status)).map(task => <ConnectionRow key={task.id} title={object(task.raw).command || 'SSH 原任务'} detail={status(task.status) + ' · 打开原任务核对'} icon={History} onOpen={() => { void run('tasks.open', { id: task.id }).catch(() => {}); }} />)}
+    <SettingsDialog isOpen={visible && !!review} title={review?.operation === 'discardFile' ? '放弃未保存的文件修改？' : '核对这次 SSH 操作'} onClose={() => { if (!busy) setReview(null); }}><Facts values={[[ '连接', profile.name ], ['主机', `${profile.username}@${profile.host}:${profile.port}` ], ['工作区', profile.workspace ], ['文件路径', review?.operation === 'writeFile' ? review.path : null ], ['原版本', review?.operation === 'writeFile' ? review.expectedVersion : null ]]} /><pre className="pw-connection-code">{review?.operation === 'exec' ? review.command : review?.operation === 'writeFile' ? review.content : ''}</pre>
       {review?.operation === 'openPty' && <p>将打开拥有此远端账号权限的交互式 Shell，时限 10 分钟。工作目录不是权限沙箱。</p>}
       {review?.operation === 'writeFile' && <><p>只按原路径与版本写入以上内容。合作式校验不能阻止最后检查后的外部写入竞争。</p><CheckboxField isSelected={cooperative} onChange={setCooperative}>已核对修改，接受本次合作式版本校验</CheckboxField></>}
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setReview(null)}>取消</Button><Button disabled={busy || review?.operation === 'writeFile' && !cooperative} onClick={() => {
-        if (!review) return; const captured = review; if (captured.operation === 'discardFile') { setFile(null); setReview(null); return; }
-        setReview(null); void request('ssh.confirmOperation', { reviewHandle: captured.reviewHandle }).then(value => { setReceipt(value); setUncertain(value.status === 'unknown'); if (captured.operation === 'writeFile' && value.contentVerifiedForReview === true) { setFile({ ...value, content: captured.content }); setContent(captured.content); } if (captured.operation === 'openPty' && value.ptyConfirmed && value.terminalId) setTerminal({ ...value, hostTaskId: value.hostTaskId || value.taskId }); }).catch(() => setUncertain(true));
+        if (!review || !visibleNow.current || busy) return; const captured = review; if (captured.operation === 'discardFile') { setFile(null); setReview(null); return; }
+        pendingConfirm.current = true; setReview(null); void request('ssh.confirmOperation', { reviewHandle: captured.reviewHandle }).then(value => { setReceipt(value); setUncertain(value.status === 'unknown'); if (captured.operation === 'writeFile' && value.contentVerifiedForReview === true) { setFile({ ...value, content: captured.content }); setContent(captured.content); } if (captured.operation === 'openPty' && value.ptyConfirmed && value.terminalId) setTerminal({ ...value, hostTaskId: value.hostTaskId || value.taskId }); }).catch(() => setUncertain(true)).finally(() => { pendingConfirm.current = false; });
       }}>{review?.operation === 'discardFile' ? '放弃这些修改' : '确认执行一次'}</Button></div></SettingsDialog>
-    {terminal && <SshTerminal key={terminal.terminalId} original={terminal} state={state} run={run} close={() => setTerminal(null)} />}
-  </>;
+    {terminal && visible && <SshTerminal key={terminal.terminalId} original={terminal} state={state} run={run} close={() => setTerminal(null)} />}
+  </div>;
 }
+
 function safeChild(directory: string, name: string) { if (!name || name === '.' || name === '..' || /[\/\\\x00-\x1f\x7f]/.test(name) || directory.startsWith('/') || directory.includes('\\') || directory.split('/').some(part => part === '.' || part === '..')) return null; return directory ? directory + '/' + name : name; }
 function SshTerminal({ original, state, run, close }: { original: Data; state: Data; run: Run; close: () => void }) {
   const [frame, setFrame] = useState<any>(null), [input, setInput] = useState(''), [automatic, setAutomatic] = useState(true), [uncertain, setUncertain] = useState(false), [closing, setClosing] = useState(false), [receipt, setReceipt] = useState<Data | null>(null), { request, busy, error } = useRequest(run, state);

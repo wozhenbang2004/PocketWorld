@@ -163,7 +163,7 @@ async function connect() {
   await page.getByRole('button', { name: '全部工作', exact: true }).click();
   await page.locator('.pw-work-drawer').getByRole('link', { name: '设置与连接', exact: true }).click();
   await page.getByRole('button', { name: /^设备与执行/ }).click(); await page.getByRole('button', { name: /^电脑与服务器/ }).click();
-  await page.getByRole('button', { name: '使用此连接', exact: true }).click(); await page.getByRole('button', { name: '读取当前工作环境', exact: true }).click();
+  await page.getByRole('button', { name: /^个人 Linux 工作区/ }).click(); await page.getByRole('button', { name: /^进入电脑工作区/ }).click(); await page.getByRole('button', { name: '读取当前工作环境', exact: true }).click();
   await select('工作环境', '个人资料目录 · local');
 }
 async function chooseGemini() {
@@ -207,6 +207,7 @@ try {
   assert.equal(await prepare().isEnabled(), false); assert.equal(await count('remote.confirmTask'), 0);
   await page.getByRole('button', { name: /模型、模式与本次证据范围/ }).click(); await page.getByText('尚未核实；首次原任务再核对实际模型', { exact: true }).waitFor();
   await shot('available-auth-unknown'); check('initialize availability is not presented as login or model success; mode and evidence limits visible');
+  await page.getByRole('button', { name: /^模型与运行选项/ }).click();
   await page.getByLabel('请求模型 ID（可留空）', { exact: true }).fill('gemini-fixture-model');
   assert.equal(await page.getByLabel('Gemini 本次能力证据', { exact: true }).count(), 0); assert.equal(await prepare().isEnabled(), false); assert.equal(await intent().isChecked(), false);
   await probe('available'); await page.getByText('我明确要在此环境开展可写工作，已知 Gemini 不提供只读隔离', { exact: true }).click(); await prepare().click();
@@ -243,8 +244,10 @@ try {
   await page.getByRole('button', { name: '查询原操作', exact: true }).click(); await page.getByText('原操作仍待核对；此读取没有重新提交。', { exact: true }).waitFor();
   const read = await page.evaluate(() => window.__PW_ACP_TEST__.requests.find(request => request.action === 'remote.reconcileOperation').args); assert.equal(read.operationId, originalRequest);
   await page.getByText(unknownText, { exact: true }).waitFor(); assert.equal(await count('remote.confirmTask'), 1); await shot('pending-hidden-unknown');
-  await page.getByRole('region', { name: '电脑与服务器', exact: true }).getByRole('button', { name: '返回', exact: true }).click();
-  await page.getByRole('button', { name: /^电脑与服务器/ }).waitFor(); await page.getByRole('button', { name: /^电脑与服务器/ }).click(); await page.getByRole('button', { name: '使用此连接', exact: true }).click();
+  await page.locator('.pw-secondary-header').getByRole('button', { name: '返回', exact: true }).click();
+  await page.locator('.pw-secondary-header').getByRole('button', { name: '返回', exact: true }).click();
+  await page.locator('.pw-secondary-header').getByRole('button', { name: '返回', exact: true }).click();
+  await page.getByRole('button', { name: /^电脑与服务器/ }).waitFor(); await page.getByRole('button', { name: /^电脑与服务器/ }).click(); await page.getByRole('button', { name: /^个人 Linux 工作区/ }).click(); await page.getByRole('button', { name: /^进入电脑工作区/ }).click();
   await page.getByText(unknownText, { exact: true }).waitFor(); await page.getByRole('button', { name: /保留的原工作草稿/ }).click();
   await page.getByText('只修改这次资料目录里的 README；保留所有原文件，完成后回报差异。', { exact: true }).waitFor(); assert.equal(await count('remote.confirmTask'), 1);
   await shot('unknown-after-back'); check('document-only invalidation clears review; hidden pending keeps original ID and draft; late receipt and read do not unlock/replay; Back leaves and return restores original unknown');

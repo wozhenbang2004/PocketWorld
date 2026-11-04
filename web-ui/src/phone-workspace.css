@@ -1,0 +1,51 @@
+/* Phone capability rows and focused connection setup, composed from retained BoardUI controls. */
+.pw-phone-workspace, .pw-background-workspace { min-width: 0; outline: none; }
+.pw-phone-overview, .pw-background-heading { padding: 2px 2px 14px; }
+.pw-phone-overview h2, .pw-background-heading h2 { font-size: 20px; line-height: 1.4; font-weight: 500; margin: 3px 0 7px; letter-spacing: -.02em; }
+.pw-phone-overview > p:last-child, .pw-background-heading > p:not(.pw-model-eyebrow) { color: var(--pw-copy,#686868); font-size: 12px; line-height: 1.6; margin: 0; }
+.pw-phone-entries { margin-top: 2px; }
+.pw-phone-app-entry { margin-top: 16px; }
+.pw-phone-detail { display: flex; flex-direction: column; gap: 14px; padding: 2px 2px 12px; }
+.pw-phone-detail > .pw-settings-links { width: 100%; }
+.pw-phone-detail .pw-domain-link { min-height: 60px; }
+.pw-phone-detail .pw-detail-status { font-size: 13px; line-height: 1.6; margin: 0; }
+.pw-phone-preference-section { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }
+.pw-phone-preference-section h3 { margin: 0; font-size: 14px; line-height: 1.5; font-weight: 500; }
+.pw-phone-live-audio { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; background: var(--pw-inset,#ededed); border-radius: 12px; padding: 8px 12px; margin: 8px 0 14px; font-size: 12px; }
+.pw-phone-live-audio > div { display: flex; gap: 6px; flex-wrap: wrap; }
+.pw-background-heading .pw-background-backend { margin-top: 5px; font-size: 11px; color: var(--pw-muted,#777); }
+.pw-background-progress { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 8px; list-style: none; padding: 0; margin: 2px 0 12px; }
+.pw-background-progress li { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; font-size: 11px; line-height: 1.5; color: var(--pw-muted,#777); }
+.pw-background-progress li > span:first-child { display: grid; place-items: center; width: 24px; height: 24px; background: var(--pw-inset,#ededed); border-radius: 8px; font-size: 11px; }
+.pw-background-progress li[aria-current="step"] { color: var(--pw-ink,#333); font-weight: 500; }
+.pw-background-progress li[aria-current="step"] > span:first-child { background: var(--pw-panel,#fff); box-shadow: 0 1px 5px #00000008; }
+.pw-background-progress li[data-complete="true"] { color: var(--pw-copy,#555); }
+.pw-background-status-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.pw-background-status-actions button { min-height: 40px; font-size: 12px; }
+.pw-background-workspace > .pw-field-error, .pw-background-workspace > .pw-field-hint { margin-block: 8px; }
+.pw-secondary-refactor .pw-background-tabs { gap: 14px; margin-top: 14px; }
+.pw-secondary-refactor .pw-background-tabs [role="tablist"] { border: 0; gap: 4px; }
+.pw-secondary-refactor .pw-background-tabs [role="tab"] { min-height: 44px; padding: 10px 12px; border-radius: 11px; color: var(--pw-copy,#656565); font-size: 13px; }
+.pw-secondary-refactor .pw-background-tabs [role="tab"][data-selected] { background: var(--pw-panel,#fff); color: var(--pw-ink,#292929); box-shadow: 0 1px 5px #00000007; }
+.pw-secondary-refactor .pw-background-tabs [role="tab"] > span { color: inherit; }
+.pw-secondary-refactor .pw-background-tabs > div:first-child > span[aria-hidden] { display: none; }
+.pw-background-tabs [role="tabpanel"] { min-width: 0; }
+.pw-background-preparation, .pw-background-retained { padding: 14px; margin-bottom: 16px; background: var(--pw-inset,#ededed); border-radius: 12px; }
+.pw-background-preparation h3, .pw-background-retained h3 { font-size: 14px; line-height: 1.5; font-weight: 500; margin: 0 0 6px; }
+.pw-background-preparation p, .pw-background-retained p { color: var(--pw-copy,#666); font-size: 12px; line-height: 1.6; margin: 0 0 10px; }
+.pw-secondary-refactor .pw-background-tabs .pw-settings-section { padding-inline: 0; border: 0; background: transparent; box-shadow: none; }
+.pw-background-tabs .pw-section-heading h2 { font-size: 16px; font-weight: 500; }
+.pw-background-tabs .pw-section-heading p { font-size: 12px; line-height: 1.65; }
+.pw-background-tabs .pw-background-endpoints { margin-top: 12px; }
+.pw-background-workspace .pw-background-return { margin-top: 18px; padding-bottom: 8px; }
+.pw-background-workspace .pw-background-return > button { min-height: 44px; width: 100%; }
+@media (max-width: 360px) {
+  .pw-background-progress { gap: 5px; }
+  .pw-background-progress li { font-size: 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pw-background-tabs * { transition-duration: 0s; }
+}
+.pw-phone-detail[hidden] { display: none; }
+
+.pw-background-native-message { color: var(--pw-copy,#555); font-size: 12px; line-height: 1.6; margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
