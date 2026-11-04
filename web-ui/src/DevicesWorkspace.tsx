@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { DeviceRequestScope, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, type DeviceData as Data } from './devices-workspace';
+import { Monitor } from 'lucide-react';
+import { DesktopViewer } from './DesktopViewer';
+import { desktopScopes } from './desktop-viewer';
 
 type Run = (action: string, args?: Data) => Promise<any>;
 const name = (peer: Data) => peer.label || peer.name || '已配对设备';
@@ -50,6 +53,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const [invitation, setInvitation] = useState(''), [review, setReview] = useState<Data | null>(null), [ack, setAck] = useState(false), [future, setFuture] = useState(false);
   const [workBusy, setWorkBusy] = useState(false), [controlBusy, setControlBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [taskDetails, setTaskDetails] = useState<Record<string, Data>>({}), [historyReceipt, setHistoryReceipt] = useState<Data | null>(null), [historyStopSubmitted, setHistoryStopSubmitted] = useState(false);
+  const [desktopOpen, setDesktopOpen] = useState(false);
   const busy = workBusy || controlBusy;
   const alive = useRef(true), scope = useRef(new DeviceRequestScope()), handle = useRef(''), selectedPeer = useRef(peerId), resumed = useRef(state.webWorkspaceResumeRevision), nativeRevision = useRef(state.deviceWorkspaceRevision);
   selectedPeer.current = peerId;
@@ -82,6 +86,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(''); };
   const clearSensitive = (enabled = false) => {
+    setDesktopOpen(false);
     scope.current.invalidate(enabled); handle.current = ''; setReview(null); setAck(false); setFuture(false); setRaw(''); setInvitation('');
     setForm(''); setAddress(''); setHost(''); setPort(''); setRecoveryAddresses([]); setHistoryReceipt(null); setHistoryStopSubmitted(false); setTaskDetails({}); setSnapshot(null); setError(''); setNotice(''); setWorkBusy(false); setControlBusy(false);
     void run('devices.discard', {}).catch(() => {});
@@ -106,9 +111,10 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     if (review) { closeReview(); return true; }
     if (invitation) { setInvitation(''); return true; }
     if (form) { clearSensitive(true); refresh(); return true; }
+    if (desktopOpen) { setDesktopOpen(false); return true; }
     if (peerId) { setPeerId(''); return true; }
     return false;
-  }); return () => registerTransientBack(null); }, [review, invitation, form, peerId, registerTransientBack]);
+  }); return () => registerTransientBack(null); }, [review, invitation, form, desktopOpen, peerId, registerTransientBack]);
   const peer = rows(snapshot?.peers).find(row => row.deviceId === peerId), local = snapshot?.local || {}, actions = snapshot?.actions || {};
   const tasks = deviceTaskRows(state.tasks, snapshot, peerId);
   const actionReview = (operation: string, extra: Data = {}) => { void invoke('devices.reviewAction', { operation, ...extra }, acceptReview, operation.startsWith('task.') ? 'control' : 'work'); };
@@ -131,7 +137,10 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const originalView = review?.view || {}, exactGrant = originalView.grantReview;
 
   return <>
-    <section className="pw-settings-section"><header className="pw-section-heading"><div><h2>{peer ? name(peer) : '我的设备'}</h2><p>本机接收、双端身份与每项授权分别核对。连接状态不代表任务已经停止或完成。</p></div></header>
+    <section className="pw-settings-section"><header className="pw-section-heading"><div><h2>{desktopOpen ? '电脑桌面' : peer ? name(peer) : '我的设备'}</h2>{!desktopOpen && <p>本机接收、双端身份与每项授权分别核对。连接状态不代表任务已经停止或完成。</p>}</div></header>
+      {desktopOpen && peer && <DesktopViewer key={peer.deviceId} peer={peer} supported={supported} run={run} onClose={() => setDesktopOpen(false)} />}
+      {desktopOpen && !peer && <p role="alert">设备状态已变化。<Button variant="secondary" onClick={() => setDesktopOpen(false)}>返回设备</Button></p>}
+      {!desktopOpen && <>
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={refresh}>刷新原设备状态</Button>{peerId ? <Button variant="ghost" disabled={busy} onClick={() => { setPeerId(''); setForm(''); setRaw(''); }}>返回设备列表</Button> : <Button disabled={busy} onClick={() => { setForm('add'); setRaw(''); setAddress(''); }}>配对设备</Button>}</div>
       {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}{busy && <p role="status" className="pw-muted">正在读取原设备回执…</p>}
       {!snapshot && !busy && <p className="pw-secondary-empty">设备状态尚未完整读取，请刷新核对。</p>}
@@ -144,6 +153,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       </>}
       {peerId && !peer && snapshot && <p role="alert">这台设备不在当前读取页。保留原身份，请返回后刷新核对。</p>}
       {peer && <>
+        {desktopScopes(peer).length > 0 && <div className="pw-form-actions"><Button disabled={busy} onClick={() => setDesktopOpen(true)}><Monitor size={17} aria-hidden="true" />查看桌面</Button></div>}
         <h3>{deviceConnectionLabel(peer)}</h3><p>{peer.connection?.state === 'ONLINE' ? peer.connection?.path === 'RELAY_WSS' ? '当前通过出站 WSS 中继连接。' : peer.connection?.path === 'DIRECT_TLS' ? '当前通过直连 TLS 通道连接。' : '已连接，传输路径仍待核对。' : '未确认的操作仍需查看执行结果，离线不代表停止。'}</p>
         {peer.connection?.unconfirmedTransportWrite === true && <p>有操作结果待确认，请查看原执行结果。</p>}
         <div className="pw-form-actions">{available(peer.actions?.connect) && <Button disabled={busy} onClick={() => actionReview('peer.connect', { deviceId: peer.deviceId })}>核对并连接</Button>}{available(peer.actions?.disconnect) && <Button variant="secondary" disabled={busy} onClick={() => actionReview('peer.disconnect', { deviceId: peer.deviceId })}>停止主动连接</Button>}{!peer.revoked && <><Button variant="secondary" disabled={busy} onClick={() => { setForm('connection'); setRaw(''); setAddress(''); }}>更新连接地址</Button><Button variant="secondary" disabled={busy} onClick={() => { void invoke('devices.reviewPeerGrant', { deviceId: peer.deviceId }, acceptReview); }}>调整本机授予的权限</Button></>}</div>
@@ -174,6 +184,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       })}
       {tasks.length > 40 && <p>当前展示前 40 项原设备任务。</p>}
       {snapshot && <p className="pw-muted">原状态读取于 {time(snapshot.capturedAt)}{snapshot.hasMorePeers || snapshot.hasMorePendingPairings || snapshot.hasMoreTaskActions ? ' · 当前展示有界读取页，更多记录需从原对象继续核对。' : ''}</p>}
+      </>}
     </section>
     <SettingsDialog isOpen={!!form} onClose={() => { clearSensitive(true); refresh(); }} title={form === 'relay' ? '临时中继租约' : form === 'connection' ? '更新原设备连接地址' : form.startsWith('recovery') ? '核对原配对结果' : '配对你的另一台设备'}>
       {['add', 'connection', 'relay'].includes(form) && <><TextAreaField label={form === 'relay' ? '已有临时租约' : '原设备短时邀请'} value={raw} onChange={setRaw} isDisabled={busy} hint="仅在当前窗口核对，离开或进入后台后清除。" /><Button disabled={busy || !raw.trim() || form === 'add' && !available(actions.join)} onClick={() => { void invoke(form === 'relay' ? 'devices.reviewRelay' : form === 'connection' ? 'devices.reviewConnection' : 'devices.inspectInvitation', { raw, ...(form === 'connection' ? { deviceId: peerId } : {}) }, acceptReview); }}>读取原生审阅</Button></>}

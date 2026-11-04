@@ -1,0 +1,4 @@
+<resources>
+    <item name="owner_app_update_download" type="id" />
+    <item name="owner_app_update_install" type="id" />
+</resources>

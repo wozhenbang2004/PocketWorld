@@ -40,7 +40,7 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
     public DeviceWorkspaceNativeOwner(EngineApplication originalApp, TaskStoreDeviceTrust originalSameDatabaseTrust, java.util.concurrent.Executor originalIngressWorker) {
         app = java.util.Objects.requireNonNull(originalApp); tasks = java.util.Objects.requireNonNull(app.tasks);
         trust = java.util.Objects.requireNonNull(originalSameDatabaseTrust); network = new DeviceWorkspaceLanRuntime(this, originalIngressWorker); grants = new DeviceWorkspaceGrantOwner(this);
-        host = new NativeDeviceWorkspaceHost(this::snapshot, new Receiver(), new Pairing(), new Goals(), new Controls());
+        host = new NativeDeviceWorkspaceHost(this::snapshot, new Receiver(), new Pairing(), new Goals(), new Controls(), new DeviceWorkspaceDesktopOwner(this, originalIngressWorker));
         taskScopeHost = new NativeDeviceTaskScopeHost(tasks, new NativeDeviceTaskScopeHost.NativeOptionSource() {
             public Iterable<PairingCoordinator.OutgoingGrant> originalOutgoingGrants() throws Exception { return nativeOutgoingGrants(); }
             public JSONObject authenticatedCapabilities(String id) throws Exception { return DeviceWorkspaceNativeOwner.this.authenticatedCapabilities(id); }

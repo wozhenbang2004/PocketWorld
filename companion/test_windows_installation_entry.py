@@ -51,10 +51,12 @@ class InstalledEntryContracts(unittest.TestCase):
         self.exe = ntpath.join(self.release, "app", "PocketWorld-Companion.exe")
         self.install = {"schemaVersion": 2, "ownerSid": self.backend.sid, "installId": "test-fixture-install", "stateRoot": self.state, "config": self.config,
                         "identityDir": ntpath.join(self.state, "identity-v1"), "jobs": ntpath.join(self.state, "jobs"), "logs": ntpath.join(self.state, "logs")}
-        files = {"app/PocketWorld-Companion.exe": b"INERT EMBEDDED RUNTIME FIXTURE", "driver/cua-driver.exe": b"INERT CUA FIXTURE"}
+        files = {"app/PocketWorld-Companion.exe": b"INERT EMBEDDED RUNTIME FIXTURE", "driver/cua-driver.exe": b"INERT CUA FIXTURE", "driver/agent-desktop.exe": b"INERT SEMANTIC FIXTURE"}
         self.manifest = {"schemaVersion": 1, "product": "PocketWorld-Companion", "version": "inert-fixture-1", "platform": "windows-x64",
                          "cua": {"sourceCommit": "f595a4fb6f524e555e5e422aab81c3457fe4a713", "spacesIncluded": False, "perceptionIncluded": False,
                                  "sha256": hashlib.sha256(files["driver/cua-driver.exe"]).hexdigest()},
+                         "agentDesktop": {"sourceCommit": "6660fbac768dc7e7332837b90ed465684859afa3", "contractVersion": "2.6",
+                                          "runtime": "headless-semantic-cli", "sha256": hashlib.sha256(files["driver/agent-desktop.exe"]).hexdigest()},
                          "files": [{"path": path, "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)} for path, raw in files.items()]}
         manifest_raw = json.dumps(self.manifest).encode()
         self.current = {"schemaVersion": 2, "ownerSid": self.backend.sid, "installId": self.install["installId"], "version": self.manifest["version"],
@@ -79,6 +81,8 @@ class InstalledEntryContracts(unittest.TestCase):
         self.assertEqual(self.install["jobs"], actual["stateDir"])
         self.assertEqual(ntpath.join(self.release, "driver", "cua-driver.exe"), actual["desktop"]["binary"])
         self.assertEqual(self.manifest["cua"]["sha256"], actual["desktop"]["sha256"])
+        self.assertEqual(ntpath.join(self.release, "driver", "agent-desktop.exe"), actual["desktop"]["agentDesktop"]["binary"])
+        self.assertEqual(self.manifest["agentDesktop"]["sha256"], actual["desktop"]["agentDesktop"]["sha256"])
         self.assertEqual(self.settings, json.loads(self.backend.data[self.config]))
         launch.check_current()
         with self.assertRaises(TypeError): NativeInstalledConfig(None, None, None, None)

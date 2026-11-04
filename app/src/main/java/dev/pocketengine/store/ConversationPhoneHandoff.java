@@ -124,11 +124,12 @@ final class ConversationPhoneHandoff {
     static void cursor(String value){if(value==null||!value.isEmpty()&&!value.matches(PENDING_PREFIX+"[0-9]{20}:[a-f0-9-]{36}:[0-9]{10}:[a-f0-9-]{36}"))throw new IllegalArgumentException("原手机结果分页位置无效");}
     private static void uuid(String value){if(value==null||!value.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("原手机关联身份无效");}
     static void nativeId(String value){if(value==null||value.isBlank()||value.length()>240||!StandardCharsets.UTF_8.newEncoder().canEncode(value))throw new IllegalArgumentException("原会话来源身份无效");}
-    private static void fields(JSONObject value,Set<String> allowed){if(value==null||!allowed.containsAll(value.keySet()))throw new SecurityException("原手机审阅包含未允许字段");}
+    private static void fields(JSONObject value,Set<String> allowed){if(value==null||!allowed.containsAll(keys(value)))throw new SecurityException("原手机审阅包含未允许字段");}
+    private static ArrayList<String> keys(JSONObject value){ArrayList<String> result=new ArrayList<>();value.keys().forEachRemaining(result::add);return result;}
     private static void text(JSONObject value,String field,int minimum,int maximum)throws Exception {Object raw=value.get(field);if(!(raw instanceof String)||((String)raw).length()<minimum||((String)raw).length()>maximum||!StandardCharsets.UTF_8.newEncoder().canEncode((String)raw))throw new IllegalArgumentException("原手机审阅文字无效");}
     static String digest(JSONObject value)throws Exception {StringBuilder result=new StringBuilder();for(byte b:MessageDigest.getInstance("SHA-256").digest(canonical(value).getBytes(StandardCharsets.UTF_8)))result.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return result.toString();}
     private static String canonical(Object value)throws Exception {
-        if(value instanceof JSONObject object){ArrayList<String> keys=new ArrayList<>(object.keySet());Collections.sort(keys);StringBuilder out=new StringBuilder("{");for(String key:keys){if(out.length()>1)out.append(',');out.append(JSONObject.quote(key)).append(':').append(canonical(object.get(key)));}return out.append('}').toString();}
+        if(value instanceof JSONObject object){ArrayList<String> keys=keys(object);Collections.sort(keys);StringBuilder out=new StringBuilder("{");for(String key:keys){if(out.length()>1)out.append(',');out.append(JSONObject.quote(key)).append(':').append(canonical(object.get(key)));}return out.append('}').toString();}
         if(value instanceof JSONArray array){StringBuilder out=new StringBuilder("[");for(int i=0;i<array.length();i++){if(i>0)out.append(',');out.append(canonical(array.get(i)));}return out.append(']').toString();}
         return value instanceof String?JSONObject.quote((String)value):String.valueOf(value);
     }

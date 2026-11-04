@@ -1686,5 +1686,22 @@
     ],
     "robolectric": true,
     "description": "Explicit owner STS session on original saved connections: independent AWS SigV4/binary fixtures, actual original Anthropic accumulator and Gateway logical/receipt/presentation boundaries, typed credential projection and original SharedPreferences/vault CAS with controlled test seams. SDK35/full production closure is required for the complete group; separately recorded pure JVM checks do not prove AndroidKeyStore, actual AWS calls, device or whole-task acceptance. No hidden provider retry, metadata/CLI discovery, credential refresh or inferred catalog/pricing."
+  },
+  "desktop-hybrid": {
+    "class": "dev.pocketengine.features.devices.DeviceDesktopViewerNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.devices.DeviceSemanticObservationsTest",
+      "dev.pocketengine.features.devices.DeviceProtocolTest",
+      "dev.pocketengine.features.devices.DeviceSourceToolContractsTest",
+      "dev.pocketengine.features.devices.NativeRelayOwnerWindowTest",
+      "dev.pocketengine.features.devices.NativeDesktopOwnerWindowTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.devices.DeviceIngressNativeTest",
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.testutil.ReadyApplicationFixture"
+    ],
+    "robolectric": true,
+    "description": "Original SQLite, native grant and one-use TLS send gates; semantic structure delivery through the real AgentRunner; shared protocol vectors. Explicit loopback peers and UIA receipts, not Windows/Android physical acceptance."
   }
 }

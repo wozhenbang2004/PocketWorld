@@ -588,6 +588,7 @@ public final class EngineApplication extends Application implements dev.pocketen
     public dev.pocketengine.features.teams.TeamMemberEvidenceHost.Page openTeamMemberMaterialsPage(String run,String member)throws Exception{if(teamMemberEvidence==null||!(features.module("teams") instanceof dev.pocketengine.features.teams.TeamsModule))throw new IllegalStateException("原团队资料宿主未准备好");return ((dev.pocketengine.features.teams.TeamsModule)features.module("teams")).newMemberEvidencePage(teamMemberEvidence,run,member);}
     @Override public void onCreate(){
         super.onCreate();adbBootstrapProcess=(getPackageName()+":adb_bootstrap").equals(Application.getProcessName());if(adbBootstrapProcess)return;
+        try { dev.pocketengine.features.updates.AppUpdateManager.start(this); } catch (RuntimeException ignored) { /* Updates must never block existing app startup. */ }
         // Install the one native admission before opening any business store or constructing modules.
         RunControl.installHostAdmission((original,id,run,epoch)->{requireBusinessReady();TaskStore current=tasks;return current.admitExecutionControl(original,id,run,epoch);});
         dev.pocketengine.runtime.usage.InferenceCapture.installBudgetAttribution((capture,identity)->{requireBusinessReady();tasks.requireTokenBudgetAttribution(capture,identity);});

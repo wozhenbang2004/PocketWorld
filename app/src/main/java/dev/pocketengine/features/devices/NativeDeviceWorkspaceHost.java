@@ -149,6 +149,16 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         /** Carry the original TaskStoreDeviceTasks.GoalModelReview object, never JSON approval. */
         GoalReviewAction review(String originalTaskId) throws Exception;
     }
+    @FunctionalInterface public interface OwnerCurrent { void require() throws Exception; }
+    public interface DesktopOwner {
+        DesktopSession open(String deviceId, String grantId, JSONObject binding, JSONObject target, OwnerCurrent current) throws Exception;
+    }
+    public interface DesktopSession extends AutoCloseable {
+        String id();
+        JSONObject view() throws Exception;
+        JSONObject command(String action, JSONObject arguments) throws Exception;
+        void close();
+    }
     public interface GoalReviewAction {
         /** Native review's safe view(): model/source, exact origin/grant/revision, scope and limits. */
         JSONObject view() throws Exception;
@@ -194,11 +204,17 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
     private final PairingOwner pairing;
     private final GoalOwner goals;
     private final TaskControl control;
+    private final DesktopOwner desktop;
     public NativeDeviceWorkspaceHost(Diagnostics diagnostics, ReceiverOwner receiver, PairingOwner pairing,
             GoalOwner goals, TaskControl control) {
+        this(diagnostics, receiver, pairing, goals, control, null);
+    }
+    public NativeDeviceWorkspaceHost(Diagnostics diagnostics, ReceiverOwner receiver, PairingOwner pairing,
+            GoalOwner goals, TaskControl control, DesktopOwner desktop) {
         this.diagnostics = Objects.requireNonNull(diagnostics); this.receiver = Objects.requireNonNull(receiver);
         this.pairing = Objects.requireNonNull(pairing); this.goals = Objects.requireNonNull(goals);
         this.control = Objects.requireNonNull(control);
+        this.desktop = desktop;
     }
     public synchronized Window openOwnerWindow() { if (closed) throw new IllegalStateException("设备工作区已关闭，请重新打开应用核对"); Window window = new Window(); windows.add(window); return window; }
     @Override public synchronized void close() { if (closed) return; closed = true; for (Window window : new java.util.ArrayList<>(windows)) window.close(); windows.clear(); }
@@ -210,11 +226,37 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         private volatile HistoryWindow history;
         private volatile RecoveryEndpoint recoveryEndpoint;
         private volatile RelayLeaseReview relayReview;
+        private volatile DesktopSession desktopSession;
+        private final java.util.concurrent.atomic.AtomicLong desktopGeneration = new java.util.concurrent.atomic.AtomicLong();
         private final java.util.concurrent.atomic.AtomicLong reviewGeneration = new java.util.concurrent.atomic.AtomicLong();
         private Window() {}
         private long nextReview() { HistoryWindow old = history; history = null; if (old != null) old.close(); RecoveryEndpoint endpoint = recoveryEndpoint; recoveryEndpoint = null; if (endpoint != null) endpoint.close(); RelayLeaseReview relay = relayReview; relayReview = null; if (relay != null) relay.source.close(); return reviewGeneration.incrementAndGet(); }
         private void current() { if (closed || NativeDeviceWorkspaceHost.this.closed) throw new IllegalStateException("原设备页面已关闭，请重新打开并审阅"); }
         public JSONObject snapshot() throws Exception { return snapshot(new String[0]); }
+        public JSONObject openDesktop(String deviceId, String grantId, JSONObject binding, JSONObject target) throws Exception {
+            current(); if (desktop == null) throw new IllegalStateException("桌面查看尚未接线");
+            closeDesktop();
+            long epoch = desktopGeneration.get();
+            OwnerCurrent guard = () -> { current(); if (desktopGeneration.get() != epoch) throw new SecurityException("原桌面窗口已离开或改变"); };
+            DesktopSession opened = desktop.open(deviceId, grantId, copy(binding), target == null ? null : copy(target), guard);
+            try { guard.require(); synchronized (this) { guard.require(); desktopSession = opened; } return copy(opened.view()); }
+            catch (Exception failure) { opened.close(); throw failure; }
+        }
+        public JSONObject desktopCommand(String id, String action, JSONObject arguments) throws Exception {
+            current(); DesktopSession selected = desktopSession;
+            if (selected == null || !selected.id().equals(id)) throw new SecurityException("桌面会话已关闭或不属于当前页面");
+            JSONObject result = selected.command(action, copy(arguments)); current();
+            if ("close".equals(action)) { synchronized (this) { if (desktopSession == selected) desktopSession = null; } selected.close(); }
+            return copy(result);
+        }
+        public synchronized void closeDesktop() { desktopGeneration.incrementAndGet(); DesktopSession previous = desktopSession; desktopSession = null; if (previous != null) previous.close(); }
+        /** Immediate exact-handle authority reduction, independent of a slow input/read lane. */
+        public synchronized JSONObject closeDesktop(String id) throws Exception {
+            current(); DesktopSession previous = desktopSession;
+            if (previous == null || !previous.id().equals(id)) throw new SecurityException("这项桌面会话已经关闭，未关闭其他新会话");
+            desktopGeneration.incrementAndGet(); desktopSession = null; previous.close();
+            return new JSONObject().put("sessionId", id).put("closed", true).put("remoteCloseConfirmed", false);
+        }
         public JSONObject snapshot(String[] originalTaskIds) throws Exception {
             current(); JSONObject value = Objects.requireNonNull(diagnostics.read());
             if (!FORMAT.equals(value.optString("format")) || value.optLong("capturedAt") < 1
@@ -388,7 +430,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         public Availability stopAvailability(String id) throws Exception { current(); return control.stopAvailability(id); }
         public void requestStop(String id) throws Exception { current(); stopAvailability(id).require(); control.requestStop(id); }
         public void discardReview() { if (!closed) nextReview(); }
-        @Override public void close() { closed = true; windows.remove(this); nextReview(); }
+        @Override public void close() { closed = true; closeDesktop(); windows.remove(this); nextReview(); }
     }
     public static final class PairReview {
         private final Window window; private final long generation; private final PairingReviewAction source; private final JSONObject value;

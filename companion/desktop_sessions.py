@@ -9,6 +9,22 @@ import time
 
 
 class WindowsDesktopHealth:
+    def resolve_target(self, window_id):
+        """Resolve only an exact owner-granted HWND; a UI-supplied PID is not needed.
+
+        The caller immediately probes the returned pair again and freezes process
+        creation/geometry. This lookup alone is neither a grant nor input authority.
+        """
+        if os.name != "nt" or type(window_id) is not int or window_id <= 0:
+            raise ValueError("A current Windows owner-granted window is required")
+        from ctypes import wintypes as w
+        u = ctypes.WinDLL("user32", use_last_error=True)
+        u.GetWindowThreadProcessId.argtypes, u.GetWindowThreadProcessId.restype = [w.HANDLE, ctypes.POINTER(w.DWORD)], w.DWORD
+        owner = w.DWORD()
+        if not u.GetWindowThreadProcessId(window_id, ctypes.byref(owner)) or not owner.value:
+            raise ValueError("The original owner-granted window is no longer present")
+        return {"pid": owner.value, "windowId": window_id}
+
     def probe(self, pid=None, window_id=None):
         if os.name != "nt":
             return {"available": False, "reason": "windows_interactive_session_required", "platform": os.name,

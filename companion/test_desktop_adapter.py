@@ -73,6 +73,7 @@ class ContractDriver:
                 self.snapshot += 1
             width, height = struct.unpack(">II", self.raw[16:24])
             state = {"pid": 123, "window_id": 456, "window_title": "Controlled Test Editor", "screenshot_width": width, "screenshot_height": height,
+                     "window_bounds": {"x": 10, "y": 10, "width": 590, "height": 590},
                      "capture_id": "capture-" + str(len(self.calls)), "snapshot_id": "s%08x" % self.snapshot,
                      "elements_complete": True, "elements": [{"element_token": "s%08x:0" % self.snapshot,
                                                                "element_index": 0, "role": "Edit", "label": "Document", "value": self.value,
@@ -83,6 +84,12 @@ class ContractDriver:
             if not arguments.get("include_accessibility_tree", True):
                 state.pop("elements"); state.pop("elements_complete")
                 state["screenshot_refreshed_snapshot"] = True
+            if arguments.get("include_screenshot") is False:
+                for key in ("screenshot_width", "screenshot_height", "capture_id"):
+                    state.pop(key, None)
+                for element in state.get("elements", []):
+                    element.pop("screenshot_frame", None)
+                return {"structuredContent": state, "content": []}
             return {"structuredContent": state, "content": [{"type": "image", "mimeType": "image/png", "data": base64.b64encode(self.raw).decode()}]}
         if tool == "type_text":
             # Pinned f595 Windows UIA type_text appends CurrentValue + text.
@@ -146,7 +153,7 @@ class DesktopContractTests(unittest.TestCase):
         self.temp.cleanup()
 
     def observe(self):
-        return self.adapter.observe(self.binding, {"pid": 123, "windowId": 456}, self.metadata, self.current)
+        return self.adapter.observe(self.binding, {"pid": 123, "windowId": 456, "observationMode": "hybrid"}, self.metadata, self.current)
 
     def lease(self):
         return self.adapter.control("acquire", self.binding, "peer-A", {"action": "acquire"}, self.current)["lease"]

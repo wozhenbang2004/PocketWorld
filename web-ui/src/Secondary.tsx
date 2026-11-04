@@ -534,6 +534,7 @@ function PhoneSettings({ state, supported, run, navigate }: { state: Data; suppo
           ['wireless', '无线调试', ''],
         ].map(([section, title, current]) => <CapabilityAction key={section} row action="settings.openSystem" args={{ section }} supported={supported} run={run}><span><span>{title}</span>{current && <small>{current}</small>}</span></CapabilityAction>)}
         <Button variant="ghost" trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" disabled={!supported('settings.openSystem')} onClick={() => navigate('background')}><span><span>后台连接与授权</span></span></Button>
+        <CapabilityAction row action="settings.openAppUpdates" supported={supported} run={run}><span><span>应用更新</span><small>检查新版本与管理下载</small></span></CapabilityAction>
       </div>
     </Card>
     <Accordion variant="divided" className="pw-settings-groups pw-phone-groups" allowsMultipleExpanded>
