@@ -48,16 +48,27 @@ import static org.robolectric.Shadows.shadowOf;
  * Service worker queue. The physical fixture rejects all observation and effects. These
  * checks are not device, model-provider, notification-delivery or visual acceptance. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=35,manifest=Config.NONE,application=Application.class)
+@Config(sdk=35,manifest=Config.NONE,application=Application.class,shadows=dev.pocketengine.testutil.ReadyApplicationFixture.NoUnrelatedStartup.class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 @LooperMode(LooperMode.Mode.PAUSED)
 public final class OwnerPhoneQuestionsNativeTest {
-    @Before public void nativeKeyFixture(){
+    @Before public void nativeKeyFixture()throws Exception{
         java.security.Security.addProvider(new java.security.Provider("OwnerPhoneQuestionFixtureKeys",1.0d,"Test-only AndroidKeyStore provider"){{
             put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());
         }});
+        // Service methods use the original host composition explicitly. These are
+        // run/notification lifecycle tests, not installed-resource bootstrap tests.
+        // Initialize once per method: one method mounts seven successive Services
+        // on this same Application and must not reuse a terminated host executor.
+        Application application=RuntimeEnvironment.getApplication();
+        if(application instanceof EngineApplication engine)dev.pocketengine.testutil.ReadyApplicationFixture.initializeHost(engine);
     }
-    @After public void removeNativeKeyFixture(){java.security.Security.removeProvider("OwnerPhoneQuestionFixtureKeys");}
+    @After public void removeNativeKeyFixture()throws Exception{
+        try{
+            Application application=RuntimeEnvironment.getApplication();
+            if(application instanceof EngineApplication engine)dev.pocketengine.testutil.ReadyApplicationFixture.closeHost(engine);
+        }finally{java.security.Security.removeProvider("OwnerPhoneQuestionFixtureKeys");}
+    }
 
     @FunctionalInterface private interface Change {void apply(JSONObject value)throws Exception;}
     private static final class NoEffectsPort implements PhonePort {
@@ -127,7 +138,7 @@ public final class OwnerPhoneQuestionsNativeTest {
             history.transaction(()->{history.saveConversation(new JSONObject().put("conversationId",conversation).put("title","Original linked phone conversation").put("updatedAt",System.currentTimeMillis()));return null;});
             changeTask(task->task.put("conversationId",conversation));return conversation;
         }
-        public void close(){physical.assertUnused();if(ownsDatabase)db.close();}
+        public void close(){try{physical.assertUnused();}finally{if(ownsDatabase)db.close();}}
     }
 
     @Test public void savedAnswerUsesOnlyOriginalRunLeaseGrantAndPhoneMailbox()throws Exception{try(Fixture f=new Fixture()){
@@ -322,6 +333,8 @@ public final class OwnerPhoneQuestionsNativeTest {
         final ServiceController<PhoneRunService> controller;final PhoneRunService service;final ExecutorService worker;
         final CountDownLatch workerStarted=new CountDownLatch(1),releaseWorker=new CountDownLatch(1);final JSONObject exact;
         ServiceFixture()throws Exception{
+            assertTrue("The original Application must be ready before creating a phone run",app.businessReady());
+            assertNotNull(app.tasks);assertNotNull(app.settings);
             app.getSharedPreferences("private_settings",0).edit().putString("baseUrl","http://127.0.0.1:1").putString("provider","openai_chat").putString("model","phone-owner-fixture")
                 .putBoolean("supportsImageInput",false).putBoolean("sendScreenshots",false).putInt("maxSteps",8).commit();
             sql=new Fixture(app.tasks,app.settings.get());controller=Robolectric.buildService(PhoneRunService.class).create();service=controller.get();
@@ -337,13 +350,13 @@ public final class OwnerPhoneQuestionsNativeTest {
         void drain()throws Exception{releaseWorker.countDown();worker.submit(()->{}).get(5,TimeUnit.SECONDS);shadowOf(Looper.getMainLooper()).idle();}
         public void close()throws Exception{
             try{releaseWorker.countDown();if(!worker.isShutdown())worker.submit(()->{}).get(5,TimeUnit.SECONDS);}
-            finally{controller.destroy();shadowOf(Looper.getMainLooper()).idle();sql.close();}
+            finally{try{controller.destroy();shadowOf(Looper.getMainLooper()).idle();}finally{sql.close();}}
         }
     }
 
     @Test @Config(application=EngineApplication.class)
     public void actualServiceQueueRechecksPhysicalGenerationPauseLeaseAndCancelBeforeClaim()throws Exception{
-        for(String changed:new String[]{"generation","physical","pause","lease","cancel","source","model"})try(ServiceFixture f=new ServiceFixture()){
+        for(String changed:new String[]{"generation","physical","pause","lease","cancel","source","connection"})try(ServiceFixture f=new ServiceFixture()){
             String grant=f.sql.grant();JSONObject saved=f.answer("Saved while the original worker is occupied");
             assertTrue(changed,saved.getBoolean("accepted"));assertTrue(changed,saved.getBoolean("continuationRequested"));assertTrue(changed,f.sql.original.isPaused());f.sql.requireUnclaimed();
             assertTrue(f.answer("Saved while the original worker is occupied").getBoolean("duplicate"));assertEquals(1,f.sql.savedCount());
@@ -354,7 +367,11 @@ public final class OwnerPhoneQuestionsNativeTest {
                 case "lease" -> f.sql.db.execSQL("UPDATE leases SET expires_at=1 WHERE resource_id='phone.local'");
                 case "cancel" -> f.sql.original.cancel();
                 case "source" -> OwnerSourceRunContext.reserveOutput(f.sql.db,f.sql.id,f.sql.run,UUID.randomUUID().toString());
-                case "model" -> f.app.getSharedPreferences("private_settings",0).edit().putString("model","changed-before-original-worker-dequeue").commit();
+                case "connection" -> {
+                    // A new default model does not revoke an admitted run. Change its original API connection.
+                    f.app.settings.save(new JSONObject().put("baseUrl","http://127.0.0.1:2"));
+                    assertThrows(SecurityException.class,()->f.app.settings.currentForCaptured(f.sql.model));
+                }
                 default -> throw new AssertionError(changed);
             }
             f.drain();assertTrue(changed,f.sql.original.isPaused());assertEquals(grant,f.sql.grant());assertEquals(1,f.sql.savedCount());f.sql.requireUnclaimed();
