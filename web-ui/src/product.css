@@ -6,29 +6,32 @@
 :root {
   --pw-font: "Inter", "Noto Sans SC", system-ui, sans-serif;
   --pw-mono: "JetBrains Mono", ui-monospace, monospace;
-  --pw-canvas: #fff;
+  --pw-canvas: #fafafa;
   --pw-surface: #fff;
   --pw-inset: #f7f7f7;
   --pw-selected: #ededed;
-  --pw-edge: #e5e5e5;
-  --pw-edge-hover: #c9c9c9;
-  --pw-ink: #262626;
-  --pw-copy: #555;
+  --pw-edge: rgb(20 20 20 / .055);
+  --pw-edge-hover: rgb(20 20 20 / .16);
+  --pw-ink: #242424;
+  --pw-copy: #626262;
   --pw-muted: #737373;
   --pw-disabled: #969696;
   --pw-strong: #262626;
+  --pw-on-strong: #fff;
   --pw-focus: #626262;
   --pw-radius-control: 10px;
   --pw-radius-popover: 14px;
-  --pw-shadow-input: 0 1px 2px rgb(0 0 0 / .04);
-  --pw-shadow-floating: 0 2px 6px rgb(0 0 0 / .05), 0 12px 32px rgb(0 0 0 / .12);
-  --pw-shadow-sheet: 0 -2px 8px rgb(0 0 0 / .04), 0 -12px 40px rgb(0 0 0 / .1);
+  --pw-shadow-input: none;
+  --pw-shadow-surface: 0 2px 6px rgb(0 0 0 / .025), 0 8px 24px rgb(0 0 0 / .04);
+  --pw-shadow-floating: 0 2px 6px rgb(0 0 0 / .035), 0 12px 32px rgb(0 0 0 / .08);
+  --pw-shadow-sheet: 0 -2px 8px rgb(0 0 0 / .025), 0 -12px 40px rgb(0 0 0 / .06);
 
   /* BoardUI semantic aliases also reach its portaled menus. */
   --font-inter: var(--pw-font);
   --font-sans: var(--pw-font);
   --font-mono-source: var(--pw-mono);
   --color-text-primary: var(--pw-ink);
+  --color-accent-600: var(--pw-strong);
   --color-text-secondary: var(--pw-copy);
   --color-text-tertiary: var(--pw-muted);
   --color-text-placeholder: var(--pw-muted);
@@ -83,12 +86,14 @@
   --text-caption-1-regular: 12px;
   --text-caption-1-regular--line-height: 18px;
   --ovio-accent: var(--pw-strong);
+  --ovio-on-accent: #fff;
+  --ovio-off-ink: var(--pw-copy);
   --ovio-track: var(--pw-inset);
   --ovio-ink: var(--pw-ink);
   --ovio-font: var(--pw-font);
 }
 
-/* Source frame tokens: ordinary content has an edge, never floating elevation. */
+/* Retained source tokens. Ordinary reading content is an open surface. */
 .afa.pw-library,
 :is(.pw-app, .pw-drawer) .pw-command {
   --afa-bg: var(--pw-surface);
@@ -128,7 +133,7 @@
   --acc-edge: var(--pw-edge);
   --acc-blue: var(--pw-copy);
   --acc-blue-wash: var(--pw-inset);
-  --acc-shadow: 0 0 0 1px var(--pw-edge);
+  --acc-shadow: none;
   font: 14px/22px var(--pw-font);
 }
 .pw-files {
@@ -198,6 +203,27 @@
   min-width: 44px;
   min-height: 44px;
   border-radius: var(--pw-radius-control);
+}
+
+/* Source BoardUI icon buttons keep their focus/press behavior and 48px target;
+ * the icon itself carries the action, without a repeated decorative box. */
+:is(.pw-app, .pw-drawer, .pw-secondary, .pw-settings-dialog, .shadow-dropdown) [data-pw-icon-button] {
+  width: 48px;
+  min-width: 48px;
+  height: 48px;
+  min-height: 48px;
+  padding: 12px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--pw-copy);
+}
+:is(.pw-app, .pw-drawer, .pw-secondary, .pw-settings-dialog, .shadow-dropdown) [data-pw-icon-button]:hover {
+  background: var(--pw-inset);
+}
+:is(.pw-app, .pw-drawer, .pw-secondary, .pw-settings-dialog, .shadow-dropdown) [data-pw-icon-button]:focus-visible {
+  outline: 2px solid var(--pw-focus);
+  outline-offset: -3px;
 }
 
 /* BoardUI InputBase / TextareaBase: same field shell in forms and popups.
@@ -331,11 +357,11 @@
 :is(.pw-app, .pw-drawer) .pw-composer-region .pw-composer-host .afa-composer > .afa-card {
   border-color: var(--pw-edge);
   background: var(--pw-surface);
-  box-shadow: 0 1px 3px rgb(0 0 0 / .04), 0 5px 14px rgb(0 0 0 / .07);
+  box-shadow: var(--pw-shadow-surface);
 }
 :is(.pw-app, .pw-drawer) .pw-composer-region .pw-composer-host .afa-composer > .afa-card:focus-within {
   border-color: var(--pw-focus);
-  box-shadow: 0 0 0 2px var(--pw-selected), 0 5px 14px rgb(0 0 0 / .07);
+  box-shadow: 0 0 0 1px var(--pw-selected), var(--pw-shadow-surface);
 }
 .pw-composer-host .afa-composer textarea {
   color: var(--pw-ink);
@@ -365,7 +391,7 @@
   --ui-tcc-red: var(--pw-ink);
   --ui-tcc-red-bg: var(--pw-inset);
   --ui-tcc-red-line: var(--pw-edge);
-  --ui-tcc-shadow: 0 0 0 1px var(--pw-edge);
+  --ui-tcc-shadow: none;
   --ui-tcc-focus: var(--pw-focus);
   --ui-tcc-mono: var(--pw-mono);
   font-family: var(--pw-font);
@@ -386,8 +412,8 @@
   --ui-dic-solid: var(--pw-strong);
   --ui-dic-solid-hover: #404040;
   --ui-dic-on-solid: #fff;
-  --ui-dic-shadow: 0 0 0 1px var(--pw-edge);
-  --ui-dic-shadow-hover: 0 0 0 1px var(--pw-edge-hover);
+  --ui-dic-shadow: none;
+  --ui-dic-shadow-hover: none;
   --ui-dic-focus: var(--pw-focus);
   font-family: var(--pw-font);
   font-size: 14px;
@@ -503,8 +529,8 @@
 .pw-task-identity .pw-task-state-dot { margin-top: 0; }
 .pw-task-outcome { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .pw-outcome-document, .pw-outcome-conversation {
-  min-width: 0; padding: 18px; border: 1px solid #e1e1e1; border-radius: 16px;
-  background: var(--pw-surface); box-shadow: 0 2px 5px rgb(0 0 0 / .035);
+  min-width: 0; padding: 0; border: 0; border-radius: 0;
+  background: transparent; box-shadow: none;
 }
 .pw-outcome-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .pw-outcome-heading h3 { font-size: 14px; line-height: 22px; font-weight: 600; color: var(--pw-ink); }
@@ -518,7 +544,7 @@
 .pw-outcome-image { margin: 0; border-radius: 14px; overflow: hidden; background: var(--pw-surface); border: 1px solid var(--pw-edge); }
 .pw-outcome-image img { display: block; width: 100%; max-height: 480px; object-fit: contain; }
 .pw-outcome-image figcaption, .pw-outcome-limit { padding: 10px 14px; font-size: 12px; line-height: 20px; color: var(--pw-muted); }
-.pw-outcome-empty { padding: 22px 18px; border: 1px dashed #c9c9c9; border-radius: 14px; }
+.pw-outcome-empty { padding: 12px 0; border: 0; border-radius: 0; }
 .pw-outcome-empty h3 { font-size: 15px; font-weight: 500; line-height: 24px; }
 .pw-outcome-empty p { margin-top: 6px; font-size: 14px; line-height: 23px; color: var(--pw-copy); }
 .pw-task-progress { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; padding: 12px 4px; border-top: 0; }
@@ -552,7 +578,7 @@
   .pw-composer-region .pw-composer-host .pw-model-trigger { max-width: 112px; }
   .pw-linked-task.button-press-motion { padding-inline: 12px; gap: 8px; }
   .pw-linked-task-action { font-size: 12px; }
-  .pw-outcome-document, .pw-outcome-conversation { padding: 16px; }
+  .pw-outcome-document, .pw-outcome-conversation { padding: 0; }
   .pw-task-footer { padding-inline: 12px; }
 }
 @media(min-width:720px) {
@@ -562,3 +588,7 @@
 @media(prefers-reduced-motion:reduce) {
   .pw-linked-task { transition: none; }
 }
+
+/* Text transitions keep content on its existing surface in both themes. */
+.pw-crossfade > .bmx-crossfade-content { background: transparent; border-radius: 0; }
+.pw-permission .cb-permission2-heading { color: var(--pw-ink); }

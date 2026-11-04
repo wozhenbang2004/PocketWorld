@@ -1,20 +1,16 @@
-/* Product composition, 2026-11-03. The approved Ovio LiquidTabs owns both the
+/* Continuous compact product composition, 2026-11-04. The approved Ovio LiquidTabs owns both the
  * persistent root switcher and its real panels. Affect owns the reading/input
  * surfaces, Files art and Decision Inbox; BoardUI owns fields and disclosure;
  * Vaul owns the foreground sheets. No replacement control implementation. */
 .pw-redesign {
-  --pw-canvas: #f2f2f2;
-  --pw-edge: #e2e2e2;
-  --pw-ink: #202020;
-  --pw-strong: #262626;
+  --pw-canvas: #fafafa;
   background: var(--pw-canvas);
 }
 .pw-redesign .pw-app-header {
-  min-height: 76px; padding: 10px 18px 12px; gap: 12px;
+  min-height: 56px; padding: 4px 12px; gap: 8px;
   border: 0; background: transparent;
 }
-.pw-redesign .pw-current-work { flex-direction: column; align-items: flex-start; gap: 2px; }
-.pw-work-eyebrow { color: #767676; font-size: 11px; line-height: 16px; letter-spacing: .025em; }
+.pw-redesign .pw-current-work { flex-direction: row; align-items: center; gap: 8px; }
 .pw-redesign .pw-current-work h1 { font-size: 18px; line-height: 26px; font-weight: 600; }
 .pw-redesign .pw-app-header > button:not(.pw-object-title) {
   border: 0; box-shadow: none; background: transparent; width: 48px; min-width: 48px; height: 48px;
@@ -22,7 +18,7 @@
 .pw-redesign .pw-object-title { justify-content: flex-start; gap: 8px; font-size: 18px; font-weight: 600; }
 .pw-workspace[data-ovio-world] {
   flex: 1; min-height: 0; min-width: 0; width: 100%; align-items: stretch;
-  gap: 0; --ovio-track: #fff;
+  gap: 0; --ovio-track: transparent;
 }
 .pw-workspace > [role="tabpanel"] {
   order: 0; display: flex; flex: 1; min-width: 0; min-height: 0;
@@ -31,147 +27,149 @@
 }
 .pw-workspace > div:first-child {
   order: 1; flex: none; align-self: center; max-width: 460px;
-  width: calc(100% - 32px); margin: 8px 16px 10px;
-  border: 1px solid #dedede; border-radius: 22px !important;
-  box-shadow: 0 2px 4px rgb(0 0 0 / .025), 0 5px 18px rgb(0 0 0 / .04);
+  width: calc(100% - 32px); margin: 4px 16px 8px;
+  border: 0; border-radius: 18px !important; background: transparent; box-shadow: none;
 }
 .pw-workspace > div:first-child [role="tab"],
 .pw-workspace > div:first-child [data-liquid-label] {
   display: flex; align-items: center; justify-content: center;
-  min-height: 48px; padding: 12px 8px; font-size: 14px; line-height: 22px; font-weight: 600;
+  min-height: 48px; padding: 10px 8px; font-size: 14px; line-height: 22px; font-weight: 500;
 }
 html[data-pocket-keyboard="true"] .pw-workspace > div:first-child,
 .pw-redesign[data-route="projects"][data-file-open="true"] .pw-workspace > div:first-child { display: none; }
 .pw-redesign .pw-chat-workspace,
 .pw-redesign .pw-workspace .pw-page {
-  margin: 0 10px; width: calc(100% - 20px); max-width: none;
-  border: 1px solid #e2e2e2; border-radius: 24px; background: #fff;
+  margin: 0; width: 100%; max-width: none;
+  border: 0; border-radius: 0; background: transparent; box-shadow: none;
 }
 .pw-redesign .pw-chat-workspace { overflow: hidden; }
 .pw-redesign .pw-conversation-scroll { scrollbar-gutter: auto; }
-.pw-redesign .pw-message-stream { padding: 26px 20px 22px; gap: 30px; }
-.pw-redesign .pw-message > header { margin-bottom: 8px; }
+.pw-redesign .pw-message-stream { padding: 12px 16px 16px; gap: 20px; }
+.pw-redesign .pw-message > header { margin-bottom: 4px; }
 .pw-redesign .pw-message-user > header { display: none; }
-.pw-redesign .pw-user-text { border-radius: 18px 18px 5px 18px; background: #eeeeee; padding: 11px 15px; }
-.pw-redesign .pw-message-assistant .afa-answerbody :is(p,li) { line-height: 1.75; }
-.pw-redesign .pw-message-assistant .afa-answer > footer { padding-top: 8px; }
-.pw-redesign .pw-start { align-items: flex-start; margin: clamp(30px,8vh,72px) auto 24px; padding-inline: 26px; gap: 18px; }
-.pw-redesign .pw-start h2 { max-width: 300px; font-size: 29px; line-height: 1.35; letter-spacing: -.035em; font-weight: 600; }
-.pw-redesign .pw-start > p { max-width: 290px; font-size: 15px; line-height: 1.7; color: #727272; }
-.pw-redesign .pw-composer-region { padding: 8px 10px 10px; }
+.pw-message-tools { display: flex; justify-content: flex-end; gap: 0; }
+.pw-history-window { flex: 1 1 120px; min-width: 0; font-size: 12px; line-height: 18px; }
+.pw-redesign .pw-user-text { border-radius: 16px 16px 4px 16px; background: var(--pw-selected); padding: 9px 12px; }
+.pw-redesign .pw-message-assistant .afa-answerbody :is(p,li), .pw-redesign .pw-user-text { font-size: 15px; line-height: 1.65; }
+.pw-redesign .pw-message-assistant .afa-answer > footer { padding-top: 4px; }
+.pw-redesign .pw-start { align-items: flex-start; margin: 24px auto 16px; padding-inline: 20px; gap: 12px; }
+.pw-redesign .pw-start h2 { max-width: 100%; font-size: 20px; line-height: 28px; letter-spacing: -.015em; font-weight: 600; }
+.pw-redesign .pw-start > p { max-width: 320px; font-size: 14px; line-height: 22px; color: var(--pw-copy); }
+.pw-redesign .pw-composer-region { padding: 6px 12px 4px; }
 .pw-redesign .pw-composer-region .pw-composer-host .afa-composer > .afa-card {
-  border-radius: 20px; border: 1px solid #cecece; padding: 12px 10px 8px;
-  background: #fff; box-shadow: 0 2px 3px rgb(0 0 0 / .035), 0 6px 16px rgb(0 0 0 / .07);
+  border-radius: 18px; border: 1px solid var(--pw-edge); padding: 8px 8px 4px;
+  background: var(--pw-surface); box-shadow: var(--pw-shadow-surface);
 }
-.pw-redesign .pw-composer-host .afa-composer textarea { padding-inline: 4px; font-size: 16px; line-height: 26px; }
+.pw-redesign .pw-composer-host .afa-composer textarea { padding: 4px 4px 6px; font-size: 15px; line-height: 24px; }
 .pw-redesign .pw-composer-region .pw-composer-host .pw-model-trigger { max-width: min(30vw,144px); }
-.pw-redesign .pw-active-bar { margin: 0 12px 8px; border: 0; border-radius: 12px; background: #e8e8e8; }
+.pw-redesign .pw-active-bar { margin: 0 16px 4px; padding: 6px 0; border: 0; border-radius: 0; background: transparent; }
 .pw-redesign .pw-linked-task.button-press-motion {
-  display: flex; align-items: flex-start; flex-direction: column; gap: 12px;
-  padding: 16px; margin-top: 16px; border-radius: 16px;
-  border: 1px solid #dedede; border-left: 3px solid #555; background: #fafafa; box-shadow: none;
+  display: flex; align-items: center; flex-direction: row; gap: 8px;
+  min-height: 56px; padding: 8px 0; margin-top: 8px; border-radius: 0;
+  border: 0; background: transparent; box-shadow: none;
 }
 .pw-redesign .pw-linked-task.button-press-motion > span {
-  display: flex; flex-direction: column; align-items: flex-start; width: 100%; gap: 12px; padding: 0; white-space: normal;
+  display: flex; align-items: center; justify-content: space-between; width: 100%; min-width: 0; gap: 8px; padding: 0; white-space: normal;
 }
-.pw-redesign .pw-linked-task .pw-linked-task-copy { flex: 1; width: 100%; gap: 5px; }
-.pw-redesign .pw-linked-task-copy b { flex: none; color: var(--pw-ink); font-size: 15px; line-height: 24px; }
+.pw-redesign .pw-linked-task .pw-linked-task-copy { display: flex; flex-direction: column; align-items: flex-start; flex: 1; min-width: 0; gap: 2px; }
+.pw-redesign .pw-linked-task-copy b { color: var(--pw-ink); font-size: 14px; line-height: 22px; font-weight: 500; }
 .pw-redesign .pw-linked-task .pw-linked-task-action {
-  color: #262626; width: 100%; display: flex; justify-content: space-between;
-  font-size: 13px; line-height: 20px; font-weight: 600;
+  color: var(--pw-copy); width: auto; display: flex; flex: none; gap: 4px;
+  font-size: 12px; line-height: 18px; font-weight: 500;
 }
-.pw-redesign .pw-tasks-page { padding: 24px 18px 28px; }
-.pw-page-introduction { margin-bottom: 20px; }
-.pw-page-introduction h2 { font-size: 24px; line-height: 33px; font-weight: 600; letter-spacing: -.025em; }
+.pw-redesign .pw-tasks-page { padding: 4px 16px 20px; }
+.pw-page-introduction { margin-bottom: 12px; }
+.pw-page-introduction h2 { font-size: 20px; line-height: 28px; font-weight: 600; letter-spacing: -.025em; }
 .pw-page-introduction p { margin-top: 8px; max-width: 360px; font-size: 13px; line-height: 22px; color: #777; }
 .pw-redesign .pw-task-list-tools { display: flex; align-items: center; gap: 8px; }
-.pw-redesign .pw-task-tabs { margin-top: 14px; }
-.pw-redesign .pw-task-tabs > [role="tabpanel"] { padding-top: 8px; }
-.pw-priority-decisions { margin-top: 8px; }
+.pw-redesign .pw-task-tabs { margin-top: 4px; }
+.pw-redesign .pw-task-tabs > [role="tabpanel"] { padding-top: 4px; }
+.pw-priority-decisions { margin-top: 12px; }
 .pw-priority-decisions.ui-dic { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-.pw-priority-decisions .ui-dic__head { padding: 8px 2px 12px; border: 0; font-size: 14px; font-weight: 600; color: #444; }
+.pw-priority-decisions .ui-dic__head { padding: 4px 0 8px; border: 0; font-size: 12px; line-height: 18px; font-weight: 500; color: var(--pw-copy); }
 .pw-priority-decisions .ui-dic__head .ui-dic__glyph { width: 14px; height: 14px; }
-.pw-priority-decisions .ui-dic__card { border: 1px solid #ddd; border-radius: 18px; background: #fafafa; overflow: hidden; }
-.pw-priority-decisions .ui-dic__item { padding: 19px 17px 20px; }
-.pw-priority-decisions .ui-dic__title { font-size: 18px; line-height: 28px; font-weight: 600; }
-.pw-priority-decisions .ui-dic__detail { margin-top: 7px; font-size: 13px; line-height: 22px; color: #707070; }
-.pw-priority-decisions .ui-dic__actions { gap: 8px; margin-top: 16px; }
-.pw-priority-decisions .ui-dic__btn { min-height: 48px; padding: 10px 15px; border-radius: 11px; font-size: 13px; line-height: 22px; }
+.pw-priority-decisions .ui-dic__card { border: 0; border-radius: 0; background: transparent; box-shadow: none; overflow: hidden; }
+.pw-priority-decisions .ui-dic__item { padding: 10px 0; }
+.pw-priority-decisions .ui-dic__title { font-size: 15px; line-height: 22px; font-weight: 600; }
+.pw-priority-decisions .ui-dic__detail { margin-top: 2px; font-size: 12px; line-height: 18px; color: var(--pw-copy); }
+.pw-priority-decisions .ui-dic__actions { gap: 4px; margin-top: 4px; }
+.pw-priority-decisions.ui-dic .ui-dic__compact-actions .button-press-motion { min-height: 48px; }
+.pw-priority-decisions .ui-dic__btn { min-height: 48px; padding: 8px 12px; border-radius: 10px; font-size: 13px; line-height: 20px; }
 .pw-priority-decisions .ui-dic__btn:not(.ui-dic__btn--primary) { background: transparent; box-shadow: none; color: #686868; }
-.pw-task-collection { margin-top: 28px; }
-.pw-task-collection > h3 { color: #727272; font-size: 12px; line-height: 20px; font-weight: 500; margin-bottom: 8px; }
+.pw-task-collection { margin-top: 20px; }
+.pw-task-collection > h3 { color: #727272; font-size: 12px; line-height: 18px; font-weight: 500; margin-bottom: 4px; }
 .pw-redesign .pw-task-row.button-press-motion {
-  display: flex; align-items: flex-start; justify-content: flex-start; gap: 12px;
-  padding: 17px 0; border-radius: 0; background: transparent;
-  border-bottom: 1px solid #ebebeb; text-align: start; white-space: normal;
+  display: flex; align-items: center; justify-content: flex-start; gap: 10px;
+  min-height: 64px; padding: 10px 0; border-radius: 0; background: transparent;
+  border: 0; box-shadow: none; text-align: start; white-space: normal;
 }
-.pw-task-row-status { width: 24px; padding-top: 4px; flex: none; color: #777; }
-.pw-redesign .pw-task-row-copy b { font-size: 15px; line-height: 24px; font-weight: 600; }
+.pw-task-row-status { width: 20px; flex: none; color: var(--pw-copy); }
+.pw-redesign .pw-task-row-copy b { font-size: 15px; line-height: 22px; font-weight: 500; }
 .pw-redesign .pw-task-row-copy > small { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.pw-history-link.button-press-motion { margin-top: 20px; width: 100%; justify-content: flex-start; min-height: 48px; color: #777; }
+.pw-history-link.button-press-motion { margin-top: 12px; width: 100%; justify-content: flex-start; min-height: 48px; color: #777; }
 .pw-history-link > svg:last-child { margin-left: auto; }
-.pw-redesign .pw-projects-page { padding: 12px 18px 28px; }
+.pw-redesign .pw-projects-page { padding: 4px 16px 20px; }
 .pw-redesign .pw-project-work { padding: 0; }
-.pw-project-location { display: flex; align-items: center; justify-content: space-between; min-height: 36px; gap: 12px; }
+.pw-project-location { display: flex; align-items: center; justify-content: space-between; min-height: 28px; gap: 8px; }
 .pw-project-location > span { font-size: 12px; line-height: 20px; color: #777; }
-.pw-redesign .pw-project-tools { margin: 6px 0 10px; gap: 8px; }
-.pw-redesign .pw-project-objects .pw-file-object { min-height: 88px; gap: 8px; padding: 10px 0; }
-.pw-redesign .pw-project-objects .pw-file-open { min-height: 68px; padding: 0; gap: 14px; }
-.pw-redesign .pw-project-objects .pw-file-open > span > b { font-size: 15px; line-height: 24px; font-weight: 600; }
+.pw-redesign .pw-project-tools { margin: 4px 0 8px; gap: 4px; }
+.pw-redesign .pw-project-objects .pw-file-object { min-height: 60px; gap: 8px; padding: 4px 0; border: 0; }
+.pw-redesign .pw-project-objects .pw-file-open { min-height: 52px; padding: 0; gap: 10px; }
+.pw-redesign .pw-project-objects .pw-file-open > span > b { font-size: 14px; line-height: 22px; font-weight: 500; }
 .pw-file-open > .pw-file-miniature {
-  position: relative; display: block; flex: none; width: 46px; height: 60px;
-  overflow: hidden; border-radius: 9px; background: #f3f3f3;
+  position: relative; display: block; flex: none; width: 24px; height: 32px;
+  overflow: hidden; border-radius: 0; background: transparent;
 }
-.pw-file-miniature .au-sc-file-art { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%) scale(.44); }
-.pw-redesign .pw-file-tree { margin-top: 10px; font-size: 14px; }
+.pw-file-miniature .au-sc-file-art { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%) scale(.24); }
+.pw-redesign .pw-file-tree { margin-top: 4px; font-size: 14px; }
 .pw-redesign .pw-file-tree button { min-height: 48px; }
 .pw-redesign .pw-file-actions { position: sticky; bottom: -18px; margin-top: 16px; padding: 12px 0; background: #fff; border-top: 1px solid #e5e5e5; }
 .pw-redesign .pw-code-editor textarea { min-height: 45dvh; font-size: 13px !important; line-height: 23px !important; }
-.pw-work-drawer { height: min(88dvh,760px); border-radius: 28px 28px 0 0; background: #fff; }
-.pw-work-drawer .pw-drawer-header { padding: 8px 18px 12px; border-bottom: 0; }
-.pw-work-drawer .pw-drawer-header h2 { font-size: 23px; line-height: 32px; font-weight: 600; }
-.pw-work-drawer .pw-work-search { padding: 8px 18px 12px; }
+.pw-work-drawer { height: min(86dvh,720px); border-radius: 20px 20px 0 0; background: var(--pw-surface); }
+.pw-work-drawer .pw-drawer-header { padding: 4px 12px 4px 16px; border-bottom: 0; }
+.pw-work-drawer .pw-drawer-header h2 { font-size: 18px; line-height: 26px; font-weight: 600; }
+.pw-work-drawer .pw-work-search { padding: 4px 16px 8px; }
 .pw-work-drawer .pw-work-search > button { background: #f1f1f1; border-radius: 13px; padding-inline: 14px; }
 .pw-work-drawer .pw-work-recent { margin: 0; }
 .pw-work-drawer .pw-recent-work { border-top: 0; margin: 0; }
-.pw-work-drawer .pw-recent-work > button { min-height: 66px; padding: 12px; border-radius: 13px; }
+.pw-work-drawer .pw-recent-work > button { min-height: 56px; padding: 8px 4px; border-radius: 10px; }
 .pw-work-drawer .pw-recent-work > button > span { font-size: 15px; line-height: 23px; }
-.pw-work-drawer .pw-work-management { margin-top: 22px; padding-top: 14px; border-top: 1px solid #e7e7e7; }
-.pw-work-drawer .pw-nav-item a { min-height: 52px; padding-inline: 12px; }
-.pw-task-drawer { height: 96dvh; max-height: 96dvh; border-radius: 26px 26px 0 0; border: 1px solid #dedede; background: #fff; box-shadow: var(--pw-shadow-sheet); }
-.pw-task-header { border-bottom: 1px solid #e8e8e8; padding: 14px 16px 12px; background: #fff; }
-.pw-task-header h2 { font-size: 19px; line-height: 28px; font-weight: 600; }
+.pw-work-drawer .pw-work-management { margin-top: 16px; padding-top: 8px; border: 0; }
+.pw-work-drawer .pw-nav-item a { min-height: 48px; padding-inline: 4px; }
+.pw-task-drawer { height: 96dvh; max-height: 96dvh; border-radius: 20px 20px 0 0; border: 1px solid var(--pw-edge); background: var(--pw-surface); box-shadow: var(--pw-shadow-sheet); }
+.pw-task-header { min-height: 56px; border-bottom: 0; padding: 4px 12px; background: var(--pw-surface); }
+.pw-task-header h2 { font-size: 18px; line-height: 26px; font-weight: 600; }
 .pw-task-header .pw-task-context { margin-top: 3px; font-size: 12px; line-height: 19px; color: #777; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.pw-task-body { padding: 20px 22px 26px; }
+.pw-task-body { padding: 12px 16px 20px; }
 .pw-outcome-document { padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-.pw-outcome-heading { margin-bottom: 12px; }
+.pw-outcome-heading { margin-bottom: 8px; }
 .pw-outcome-heading h3 { font-size: 12px; line-height: 20px; color: #777; font-weight: 500; }
 .pw-outcome-heading > span { display: none; }
-.pw-task-outcome .afa-answerbody :is(p,li) { font-size: 15px; line-height: 1.8; }
-.pw-outcome-related { border-top: 1px solid #e8e8e8; border-bottom: 1px solid #e8e8e8; }
+.pw-task-outcome .afa-answerbody :is(p,li) { font-size: 15px; line-height: 1.65; }
+.pw-outcome-related { border: 0; }
 .pw-outcome-conversation { padding: 2px 0 12px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-.pw-task-review > .pw-section-heading { margin-top: 18px; margin-bottom: 12px; }
-.pw-task-review .pw-permission .cb-permission2-request { padding: 18px 16px; border-radius: 16px; background: #f5f5f5; border: 0; box-shadow: none; }
-.pw-task-review .pw-permission .cb-permission2-heading strong { font-size: 18px; line-height: 27px; }
+.pw-task-review > .pw-section-heading { margin-top: 12px; margin-bottom: 8px; }
+.pw-task-review .pw-permission .cb-permission2-request { padding: 0; border-radius: 0; background: transparent; border: 0; box-shadow: none; }
+.pw-task-review .pw-permission .cb-permission2-heading { display: flex; align-items: center; gap: 8px; min-height: 48px; margin-top: 12px; }
+.pw-task-review .pw-permission .cb-permission2-heading > svg { width: 18px; height: 18px; flex: none; }
+.pw-task-review .pw-permission .cb-permission2-heading .cb-grow { flex: 1; min-width: 0; }
+.pw-task-review .pw-permission .cb-permission2-heading strong { display: block; font-size: 15px; line-height: 22px; }
+.pw-task-review .pw-protected-actions { gap: 8px; }
+.pw-task-review .pw-compact-disclosures { margin-top: 0; }
 .pw-task-review .pw-permission blockquote { padding: 0; background: transparent; }
-.pw-task-footer { padding: 14px 18px max(14px,env(safe-area-inset-bottom)); border-top: 1px solid #e4e4e4; background: #fff; }
-.pw-task-footer > button { min-height: 50px; }
-.pw-task-entry-list { margin-top: 12px; padding-top: 8px; border-top: 1px solid #e6e6e6; }
+.pw-task-footer { padding: 8px 16px max(12px,env(safe-area-inset-bottom)); border-top: 1px solid var(--pw-edge); background: var(--pw-surface); }
+.pw-task-footer > button { min-height: 48px; }
+.pw-task-entry-list { margin-top: 12px; padding-top: 4px; border: 0; }
+.pw-task-entry-list > button { min-height: 48px; border: 0; padding-block: 8px; }
 @media(max-width:380px) {
-  .pw-redesign .pw-app-header { padding-inline: 14px; gap: 8px; }
-  .pw-redesign .pw-chat-workspace, .pw-redesign .pw-workspace .pw-page { margin-inline: 7px; width: calc(100% - 14px); border-radius: 20px; }
   .pw-redesign .pw-message-stream { padding-inline: 16px; }
-  .pw-redesign .pw-start { padding-inline: 20px; }
-  .pw-redesign .pw-start h2 { font-size: 27px; }
   .pw-redesign .pw-composer-region .pw-composer-host .pw-model-trigger { max-width: 104px; }
   .pw-redesign .pw-tasks-page, .pw-redesign .pw-projects-page { padding-inline: 16px; }
-  .pw-priority-decisions .ui-dic__item { padding-inline: 14px; }
-  .pw-task-body { padding-inline: 18px; }
 }
 @media(min-width:720px) {
-  .pw-workspace { max-width: 1120px; margin-inline: auto; }
-  .pw-redesign .pw-app-header { padding-inline: max(24px,calc((100vw - 1080px)/2)); }
-  .pw-redesign .pw-tasks-page, .pw-redesign .pw-projects-page { padding: 28px 32px; }
+  .pw-workspace { max-width: 960px; margin-inline: auto; }
+  .pw-redesign .pw-app-header { padding-inline: max(16px,calc((100vw - 960px)/2)); }
+  .pw-redesign .pw-tasks-page, .pw-redesign .pw-projects-page { padding: 12px 24px 24px; }
   .pw-redesign .pw-start { max-width: 640px; padding-inline: 30px; }
   .pw-task-drawer { height: 94dvh; max-height: 94dvh; }
 }
