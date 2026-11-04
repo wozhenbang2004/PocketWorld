@@ -1796,7 +1796,9 @@
     "class": "dev.pocketengine.bootstrap.BootstrapInitializationNativeTest",
     "additionalClasses": [
       "dev.pocketengine.bootstrap.BootstrapDiagnosticsTest",
-      "dev.pocketengine.bootstrap.BootstrapStatusTest"
+      "dev.pocketengine.bootstrap.BootstrapStatusTest",
+      "dev.pocketengine.store.TaskScreenshotStoreTest",
+      "dev.pocketengine.store.TaskScreenshotStorageTest"
     ],
     "helpers": [],
     "robolectric": true,

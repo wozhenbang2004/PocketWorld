@@ -3,6 +3,7 @@ package dev.pocketengine.store;
 import android.app.Application;
 import android.content.ContentValues;
 import android.content.Context;
+import android.content.ContextWrapper;
 import android.database.sqlite.SQLiteDatabase;
 import android.util.Base64;
 import java.io.File;
@@ -29,6 +30,30 @@ public final class TaskScreenshotStoreTest {
         return new TaskScreenshotStorage.Crypto(){public byte[] seal(byte[] plain,byte[] aad)throws Exception{return TaskScreenshotStorage.seal(key,plain,aad);}public byte[] open(byte[] encrypted,byte[] aad)throws Exception{return TaskScreenshotStorage.open(key,encrypted,aad);}};
     }
     private static JSONObject evidence()throws Exception{return new JSONObject().put("imageBase64",Base64.encodeToString(IMAGE,Base64.NO_WRAP)).put("text","original result");}
+    @Test public void frameworkFilesAliasSupportsStartupMaintenanceWithoutReplacingOriginalImages()throws Exception {
+        Context original=RuntimeEnvironment.getApplication();java.nio.file.Path parent=Files.createTempDirectory("screenshot-framework-alias-");
+        java.nio.file.Path alias=Files.createSymbolicLink(parent.resolve("files"),original.getFilesDir().toPath().toRealPath());
+        Context context=new ContextWrapper(original){@Override public File getFilesDir(){return alias.toFile();}};
+        TaskStore store=new TaskStore(context,crypto());
+        try{
+            store.maintainTaskScreenshots();assertEquals(-1,store.nextTaskScreenshotExpiry());
+            String id=store.create("aliased framework files").getString("id");store.finish(id,"completed","original result",evidence());
+            JSONObject image=store.get(id,true).getJSONObject("evidence");assertTrue(image.has("imageDataUrl"));
+            store.maintainTaskScreenshots();assertTrue(store.get(id,true).getJSONObject("evidence").has("imageDataUrl"));
+                }finally{
+            java.lang.reflect.Field db=TaskStore.class.getDeclaredField("db");db.setAccessible(true);((SQLiteDatabase)db.get(store)).close();
+            Files.deleteIfExists(alias);Files.deleteIfExists(parent);
+        }
+    }
+    @Test public void substitutedArtifactLeafIsRejectedBeforeOpeningTheDatabase()throws Exception {
+        Context context=RuntimeEnvironment.getApplication();java.nio.file.Path outside=Files.createTempDirectory("screenshot-outside-");
+        java.nio.file.Path sentinel=Files.write(outside.resolve("owner-export.jpg"),IMAGE);
+        Files.createSymbolicLink(context.getFilesDir().toPath().resolve("artifacts"),outside);
+        TaskScreenshotStorage.Crypto key=crypto();
+        IllegalStateException denied=assertThrows(IllegalStateException.class,()->new TaskStore(context,key));
+        assertTrue(denied.getCause() instanceof java.io.IOException);
+        assertArrayEquals(IMAGE,Files.readAllBytes(sentinel));
+    }
     @Test public void disablingNewCapturesKeepsTheOriginalImageAndStaleDeleteCannotRemoveReplacement()throws Exception {
         Context context=RuntimeEnvironment.getApplication();TaskStore store=new TaskStore(context,crypto());String id=store.create("review image").getString("id");
         store.finish(id,"needs_confirmation","result",evidence());JSONObject first=store.get(id,true).getJSONObject("evidence");String original=first.getJSONObject("screenshot").getString("imageId");
@@ -46,7 +71,7 @@ public final class TaskScreenshotStoreTest {
         Context context=RuntimeEnvironment.getApplication();String id=UUID.randomUUID().toString();File artifacts=new File(context.getFilesDir(),"artifacts");assertTrue(artifacts.mkdirs()||artifacts.isDirectory());
         Files.write(new File(artifacts,id+".jpg.bak").toPath(),IMAGE);Files.write(new File(artifacts,"export.jpg").toPath(),IMAGE);
         JSONObject old=new JSONObject().put("id",id).put("kind","phone").put("actorId","owner").put("spaceId","private").put("status","completed").put("evidence",new JSONObject().put("imageFile",id+".jpg"));
-        Files.writeString(new File(context.getFilesDir(),"tasks.json").toPath(),new JSONArray().put(old).toString());TaskStore store=new TaskStore(context,crypto());
+        Files.write(new File(context.getFilesDir(),"tasks.json").toPath(),new JSONArray().put(old).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));TaskStore store=new TaskStore(context,crypto());
         JSONObject image=store.get(id,true).getJSONObject("evidence");assertTrue(image.has("imageDataUrl"));assertEquals(0,image.getJSONObject("screenshot").getLong("expiresAt"));assertTrue(image.getJSONObject("screenshot").getBoolean("legacyRetained"));
         assertFalse(new File(artifacts,id+".jpg.bak").exists());assertTrue(new File(artifacts,"export.jpg").exists());
     }

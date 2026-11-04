@@ -108,7 +108,9 @@ public final class TaskScreenshotStorage {
         Path file=root.resolve(task+".jpg").normalize();if(!root.equals(file.getParent()))throw new SecurityException("原截图路径无效");return file;
     }
     private void checkRoot()throws Exception {
-        if(Files.isSymbolicLink(root)||!Files.isDirectory(root,LinkOption.NOFOLLOW_LINKS)||!root.equals(root.toRealPath()))throw new SecurityException("原截图私有目录不可用");
+        if(Files.isSymbolicLink(root))throw new SecurityException("原截图私有目录不可用");
+        if(!Files.isDirectory(root,LinkOption.NOFOLLOW_LINKS))throw new SecurityException("原截图私有目录不可用");
+        if(!root.equals(root.toRealPath()))throw new SecurityException("原截图私有目录不可用");
     }
     private static byte[] bounded(Path file,int maximum)throws Exception {
         if(!Files.isRegularFile(file,LinkOption.NOFOLLOW_LINKS)||Files.isSymbolicLink(file))throw new IOException("原截图文件缺失或不可读取");

@@ -80,7 +80,13 @@ public final class TaskStore {
     private TaskStore(Context context,TaskScreenshotStorage.Crypto screenshotCrypto,java.util.function.BooleanSupplier hostReady,OpenObserver observer,TaskDatabaseMaintenance.OriginalReadPermit permit) {
         this.hostReady=Objects.requireNonNull(hostReady);
         TaskDatabaseMaintenance.requireBusinessOpen(context,permit);
-        artifacts=new File(context.getFilesDir(),"artifacts");if(!artifacts.exists())artifacts.mkdirs();
+        // Framework private-files paths may have a system alias. Resolve that trusted parent,
+        // never the artifacts leaf: a substituted screenshot directory must remain rejected.
+        try{
+            artifacts=context.getFilesDir().toPath().toRealPath().resolve("artifacts").toFile();
+            if(!artifacts.mkdir()&&!java.nio.file.Files.isDirectory(artifacts.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))
+                throw new java.io.IOException("原截图私有目录不可用");
+        }catch(java.io.IOException unavailable){throw new IllegalStateException("无法准备原截图私有目录",unavailable);}
         SecretVault screenshotKeys=new SecretVault(context);screenshots=new TaskScreenshotStorage(artifacts.toPath(),screenshotCrypto!=null?screenshotCrypto:new TaskScreenshotStorage.Crypto(){
             public byte[] seal(byte[] plain,byte[] aad)throws Exception{return screenshotKeys.sealTaskScreenshot(plain,aad);}
             public byte[] open(byte[] encrypted,byte[] aad)throws Exception{return screenshotKeys.openTaskScreenshot(encrypted,aad);}

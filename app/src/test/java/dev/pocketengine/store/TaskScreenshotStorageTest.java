@@ -22,6 +22,14 @@ public final class TaskScreenshotStorageTest {
     private interface Attempt{void run()throws Exception;}
     private static void refused(Attempt attempt)throws Exception {try{attempt.run();fail("Expected rejection");}catch(AssertionError failure){throw failure;}catch(Exception expected){}}
 
+    @Test public void aSubstitutedScreenshotDirectoryCannotAuthorizeCleanup()throws Exception {
+        Path parent=Files.createTempDirectory("screenshot-root-substitution-"),outside=Files.createDirectory(parent.resolve("outside"));
+        Path sentinel=Files.write(outside.resolve("owner-export.jpg"),JPEG),alias=Files.createSymbolicLink(parent.resolve("artifacts"),outside);
+        TaskScreenshotStorage files=storage(alias,key());
+        assertThrows(SecurityException.class,()->files.removeExpired(Long.MAX_VALUE));
+        assertThrows(SecurityException.class,files::nextExpiry);
+        assertArrayEquals(JPEG,Files.readAllBytes(sentinel));
+    }
     @Test public void encryptedRoundTripBindsTheExactOriginalMetadata()throws Exception {
         Path root=Files.createTempDirectory("screenshots-test-");SecretKey key=key();TaskScreenshotStorage storage=storage(root,key);
         String image=UUID.randomUUID().toString();JSONObject record=record("task-1",image);byte[] aad=TaskScreenshotPolicy.aad(record);
