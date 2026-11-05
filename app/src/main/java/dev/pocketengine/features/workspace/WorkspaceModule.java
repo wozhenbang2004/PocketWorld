@@ -8,7 +8,18 @@ public final class WorkspaceModule implements EngineModule {
     private final VersionedWorkspace workspace;
     private final WorkspaceArtifacts artifacts;
     private volatile boolean nativeClosed;
-    public WorkspaceModule(FeatureContext context){workspace=new VersionedWorkspace(new File(context.android.getFilesDir(),"workspace"));artifacts=new WorkspaceArtifacts(new File(context.android.getFilesDir(),"workspace-artifacts"),workspace);}
+    public WorkspaceModule(FeatureContext context){this(context.android.getFilesDir(),new android.os.Handler(android.os.Looper.getMainLooper())::post,context::emit);}
+    /** Same real stores; package-local tests control delivery without replacing file IO. */
+    WorkspaceModule(File files,java.util.function.Consumer<Runnable> post,java.util.function.BiConsumer<String,JSONObject> events){
+        java.util.Objects.requireNonNull(post);java.util.Objects.requireNonNull(events);
+        workspace=new VersionedWorkspace(new File(files,"workspace"),JsonFiles::write,metadata->{
+            String frozen=metadata.toString();
+            // EngineApplication.publish enters TaskStore before notifying UI.
+            // Post first, so its event sink never runs under the workspace monitor.
+            post.accept(()->{try{events.accept("workspace",new JSONObject(frozen).put("event","workspace_changed"));}catch(Exception presentationUnavailable){/* Committed source is still authoritative. */}});
+        });
+        artifacts=new WorkspaceArtifacts(new File(files,"workspace-artifacts"),workspace);
+    }
     @Override public String id(){return "workspace";}
     /** Typed native active-file route; generic feature JSON cannot supply a Frozen object or host path. */
     public JSONObject createProjectPackage(dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen,String ownerActionId)throws Exception{return artifacts.createProjectPackage(frozen,ownerActionId);}
