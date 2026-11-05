@@ -501,7 +501,7 @@ export default function App(){
      <Accordion variant="divided" className="pw-task-disclosures" aria-label="更多任务资料">
       <AccordionItem id={`${task.id}:details`} title="过程与范围">
      <div className="pw-task-entry-list">
-      <Button variant="ghost" leadingIcon={RiToolsLine} onClick={()=>showTaskLayer('process')}>查看执行过程<RiArrowRightSLine size={17}/></Button>
+      <Button variant="ghost" leadingIcon={RiToolsLine} onClick={()=>showTaskLayer('process')}>查看执行轨迹<RiArrowRightSLine size={17}/></Button>
       {can('tasks.review')&&<Button variant="ghost" leadingIcon={RiInformationLine} disabled={readingReview||questionPending} onClick={()=>{if(openedTaskId.current!==task.id){openTask(task.id,'scope');return}showTaskLayer('scope');if(!review||reviewStale)refreshReview()}}>{review&&!reviewStale&&actionNames.includes('tasks.scope')?'修订本次范围':'本次范围'}<RiArrowRightSLine size={17}/></Button>}
      </div>
      {openedTaskId.current===task.id&&!taskOpening&&<>
@@ -516,7 +516,7 @@ export default function App(){
    </div>
    {/* Keep settled audit pages and expanded records while returning to the result.
        The original task/run/epoch key still retires a different history window. */}
-   <div className="pw-task-process-layer" hidden={taskLayer!=='process'}><TaskHistory key={`${state.conversationId}:${taskHistoryIdentity(task)}`} task={task} canRead={can('history.read')} renderOperation={renderOperation}/></div>
+   <div className="pw-task-process-layer" hidden={taskLayer!=='process'}><TaskHistory key={`${state.conversationId}:${taskHistoryIdentity(task)}`} task={task} canRead={can('history.read')} canReadTrace={can('trace.read')} active={taskLayer==='process' && taskOpen && !taskOpening && openedTaskId.current===task.id} registerTransientBack={registerTaskBack} renderOperation={renderOperation}/></div>
    {taskLayer==='scope'&&<section className="pw-task-review" aria-label="本次任务范围">
     {reviewStatus}
     {!readingReview&&<><div className="pw-section-heading pw-task-review-tools"><span className="pw-grow"/>{refreshControl}</div>{review&&!reviewStale&&scopeEditor}</>}

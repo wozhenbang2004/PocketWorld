@@ -543,9 +543,9 @@ public final class ModelGateway {
                     String contentType=response.header("Content-Type","").split(";",2)[0].trim();
                     if(config.usesBedrock()){
                         if(!contentType.equalsIgnoreCase("application/vnd.amazon.eventstream"))throw localFailure("Bedrock 未返回所选流操作的二进制事件流；本次未派发工具。",InferenceFailure.Kind.PROTOCOL,response.code());
-                        assistant=ApiTurnStream.readBedrock(input,provider,tools,control,stream::text,capture.usage);
+                        assistant=ApiTurnStream.readBedrock(input,provider,tools,control,value->{capture.observedVisibleText(value);stream.text(value);},capture.usage);
                     }else if(contentType.equalsIgnoreCase("text/event-stream"))
-                        assistant=ApiTurnStream.read(input,config.provider,provider,tools,control,stream::text,capture.usage);
+                        assistant=ApiTurnStream.read(input,config.provider,provider,tools,control,value->{capture.observedVisibleText(value);stream.text(value);},capture.usage);
                     else{
                         ByteArrayOutputStream buffer=new ByteArrayOutputStream();byte[] chunk=new byte[8192];int count;
                         while((count=input.read(chunk))!=-1){stream.check();if(buffer.size()+count>MAX_RESPONSE_BYTES)throw new GatewayException("模型回复过大，未派发工具。");buffer.write(chunk,0,count);}
@@ -661,6 +661,7 @@ public final class ModelGateway {
                 ModelConfig.AccountModelRef expected=binding.current();
                 ResponsesRequest request=AccountResponsesAdapter.request(config.withAccountModel(expected),messages,tools,binding.versions(),port.imageInputSupported(expected));
                 request.admit(accountModelFacts(expected));
+                capture.accountRequestOptions(request.traceOptions());
                 final JSONObject[] completed={null};final ModelConfig.AccountModelRef[] admitted={null};checkRequest(control,requestScope);
                 port.streamWithVersion(expected,request,operation,actualVersion->{
                     operation.check();
@@ -676,7 +677,9 @@ public final class ModelGateway {
                     checkRequest(control,requestScope);operation.check();
                     if(port!=accountInference||admitted[0]==null||!admitted[0].matches(binding.current()))throw new GatewayFailure("STALE_ACCOUNT_VERSION");
                     if(completed[0]!=null)throw new GatewayFailure("INVALID_PROVIDER_STREAM");
-                    if("text_delta".equals(event.optString("type"))&&stream!=null)stream.text(event.getString("delta"));
+                    if("text_delta".equals(event.optString("type"))){
+                        String value=event.getString("delta");capture.observedVisibleText(value);if(stream!=null)stream.text(value);
+                    }
                     if("completed".equals(event.optString("type"))){
                         capture.usage.terminal("completed");
                         capture.usage.observe(event,ProviderUsage.Stage.FINAL);

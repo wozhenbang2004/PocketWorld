@@ -573,20 +573,20 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertFalse(research.get('native', False))
         self.assertEqual(['dev.pocketengine.testutil.HttpServer'], research['helpers'])
         expected = {
-            'dev.pocketengine.features.teams.TeamResearchScopedReadNativeJourneyTest': 4,
-            'dev.pocketengine.features.teams.TeamResearchReadAccessTest': 2,
-            'dev.pocketengine.features.teams.TeamResearchReadScopeTest': 3,
-            'dev.pocketengine.features.teams.TeamResearchSelectionPageTest': 2,
-            'dev.pocketengine.ui.ResearchReadAccessDraftTest': 3,
-            'dev.pocketengine.ui.ResearchReadAccessMountedNativeTest': 5,
-            'dev.pocketengine.features.remote.RemotePiDraftOwnerJourneyTest': 6,
-            'dev.pocketengine.features.remote.RemoteInputDeliveryTest': 11,
-            'dev.pocketengine.features.remote.RemoteTaskDraftsTest': 4,
-            'dev.pocketengine.ui.RemoteDraftDeliveryMountedTest': 10,
-            'dev.pocketengine.features.automation.AutomationIntervalTest': 13,
+            'dev.pocketengine.features.teams.TeamResearchScopedReadNativeJourneyTest': (4, ['aion-team-research-read']),
+            'dev.pocketengine.features.teams.TeamResearchReadAccessTest': (2, ['aion-team-research-read']),
+            'dev.pocketengine.features.teams.TeamResearchReadScopeTest': (3, ['aion-team-research-read']),
+            'dev.pocketengine.features.teams.TeamResearchSelectionPageTest': (2, ['aion-team-research-read']),
+            'dev.pocketengine.ui.ResearchReadAccessDraftTest': (3, ['aion-team-research-read']),
+            'dev.pocketengine.ui.ResearchReadAccessMountedNativeTest': (5, ['aion-team-research-read']),
+            'dev.pocketengine.features.remote.RemotePiDraftOwnerJourneyTest': (6, ['alma-pi-no-tools']),
+            'dev.pocketengine.features.remote.RemoteInputDeliveryTest': (11, ['alma-pi-no-tools', 'harness-native-ui']),
+            'dev.pocketengine.features.remote.RemoteTaskDraftsTest': (4, ['alma-pi-no-tools', 'harness-native-ui']),
+            'dev.pocketengine.ui.RemoteDraftDeliveryMountedTest': (12, ['alma-pi-no-tools', 'harness-native-ui']),
+            'dev.pocketengine.features.automation.AutomationIntervalTest': (13, ['schedule-proposals']),
         }
-        for name, count in expected.items():
-            self.assertEqual(1, len(HOST.select(REGISTRY, [], [name])), name)
+        for name, (count, groups) in expected.items():
+            self.assertEqual(groups, HOST.select(REGISTRY, [], [name]), name)
             relative = name.replace('.', '/')
             source = next((HOST.ROOT / root / (relative + extension)).read_text()
                           for root, extension in (('app/src/hostTest/java', '.java'), ('app/src/test/java', '.java'), ('app/src/test/kotlin', '.kt'))

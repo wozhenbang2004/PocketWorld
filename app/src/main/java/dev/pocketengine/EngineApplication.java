@@ -1004,7 +1004,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             ((dev.pocketengine.features.teams.TeamsModule)teams).setMemberModelCapture((reference,purpose,captured)->{if(modelConnections==null)throw new SecurityException("原模型连接不可用，未切换默认连接");return modelConnections.capturePurpose(reference,null,null,purpose,"APP_OWNER",captured);});
         }
         if(teams instanceof dev.pocketengine.features.teams.TeamsModule)((dev.pocketengine.features.teams.TeamsModule)teams).setInferenceFactory(
-                (call,control)->tasks.teamInferenceTarget(call.nativeRunId,call.purpose,call.memberId,call.site,control,call::checkCurrent));
+                (call,control)->tasks.teamInferenceTarget(call,control));
         if(teams instanceof dev.pocketengine.features.teams.TeamsModule&&remote instanceof dev.pocketengine.features.remote.RemoteModule){
             dev.pocketengine.features.teams.TeamsModule teamModule=(dev.pocketengine.features.teams.TeamsModule)teams;
             teamModule.setExternalMemberFactory(new dev.pocketengine.features.remote.CompanionExternalMemberFactory((dev.pocketengine.features.remote.RemoteModule)remote,new dev.pocketengine.features.remote.ExternalChildJournal(){
@@ -1961,6 +1961,32 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(refs.length()==0)return tasks.readConversationInterrupted(selected); // Body-free unavailable/empty window.
         if(memorySources==null)throw new IllegalStateException("原来源核对暂不可用");
         return memorySources.withCurrentUserSources(refs,()->tasks.readConversationInterrupted(selected));
+    }
+    /** Reads the selected original event under the same forget/current-source fence
+     * as conversation history. The trace itself grants no execution authority. */
+    public JSONObject readOwnerExecutionTraceDetail(String task,String run,String node,RunControl ownerRead)throws Exception {
+        var selected=tasks.prepareOwnerExecutionTraceDetail(task,run,node,ownerRead);
+        JSONArray refs=selected.sources();
+        var materials=selected.materials();
+        var materialHost=teamMemberEvidence;
+        if(!materials.isEmpty()&&materialHost==null)return tasks.unavailableOwnerExecutionTraceDetail(selected,"team_material_check_unavailable");
+        java.util.concurrent.Callable<JSONObject> read=()->{
+            for(var material:materials){ownerRead.check();materialHost.checkTraceMaterialMetadata(material);}
+            JSONObject detail=tasks.readOwnerExecutionTraceDetail(selected);
+            for(var material:materials){ownerRead.check();materialHost.checkTraceMaterialMetadata(material);}
+            ownerRead.check();return detail;
+        };
+        try {
+            if(refs.length()==0)return read.call();
+            if(memorySources==null)return tasks.unavailableOwnerExecutionTraceDetail(selected,"source_check_unavailable");
+            return memorySources.withCurrentUserSources(refs,read);
+        } catch(dev.pocketengine.store.TaskStore.TraceSourceUnavailable failure) {
+            return tasks.unavailableOwnerExecutionTraceDetail(selected,"team_material_source_unavailable");
+        } catch(dev.pocketengine.features.automation.ScheduleSourceState.Invalidated failure) {
+            return tasks.unavailableOwnerExecutionTraceDetail(selected,"source_"+failure.reason.name().toLowerCase(java.util.Locale.ROOT));
+        } catch(dev.pocketengine.features.automation.ScheduleSourceState.Unavailable failure) {
+            return tasks.unavailableOwnerExecutionTraceDetail(selected,"source_check_unavailable");
+        }
     }
     /** Native-only current-task binding; the broad audit UI host is never exposed as a model tool. */
     private CapabilityPort bindRawTaskEvidence(CapabilityPort existing,JSONObject task,dev.pocketengine.runtime.extensions.ExtensionRuntime.Binding identity,RunControl original,ModelConfig capturedInference)throws Exception{

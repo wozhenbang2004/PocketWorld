@@ -176,7 +176,7 @@ public final class CompactionPlan {
     }
     private static boolean sameWireContent(JSONObject stored,JSONObject visible)throws Exception{
         JSONObject wire=dev.pocketengine.features.memory.TaskMemoryHistory.withoutOutputCarrier(stored);
-        for(String key:List.of("memoryContext","memoryReference","memoryContextRetired","ownerMessageRevision","ownerRecallFeedback","hostObservation"))wire.remove(key);
+        for(String key:List.of("nativeTraceCallId","memoryContext","memoryReference","memoryContextRetired","ownerMessageRevision","ownerRecallFeedback","hostObservation"))wire.remove(key);
         return fingerprint(wire).equals(fingerprint(visible));
     }
     public static JSONArray slice(JSONArray input,int start,int end)throws Exception {JSONArray result=new JSONArray();for(int i=start;i<end;i++)result.put(input.get(i));return result;}

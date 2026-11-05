@@ -83,7 +83,7 @@ public final class TaskMemoryHistory {
                 }retired.put("tool_calls",identities);}
                 copy.put(i,retired);row=retired;
             }
-            row.remove("memoryContext");row.remove("memoryReference");row.remove("memoryContextRetired");row.remove("ownerMessageRevision");row.remove("ownerSourceRefs");row.remove("ownerSourceRefsUnavailable");row.remove("ownerPreviewRefs");row.remove("ownerPreviewRefsUnavailable");row.remove("ownerRecallFeedback");row.remove("hostObservation");row.remove("toolOutputCapture");
+            row.remove("nativeTraceCallId");row.remove("memoryContext");row.remove("memoryReference");row.remove("memoryContextRetired");row.remove("ownerMessageRevision");row.remove("ownerSourceRefs");row.remove("ownerSourceRefsUnavailable");row.remove("ownerPreviewRefs");row.remove("ownerPreviewRefsUnavailable");row.remove("ownerRecallFeedback");row.remove("hostObservation");row.remove("toolOutputCapture");
         }return copy;
     }
     /** F012: only a validated private carrier exactly matching its public tool receipt is
