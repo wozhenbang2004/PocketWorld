@@ -39,6 +39,17 @@ Android capture requires the exact verified APK, supported ARM64 execution, and
 an actual WebView provider at least version 111. Unsupported device images fail
 instead of changing the APK or weakening the selected components.
 
+## Task execution traces
+
+The task process view follows the confirmed Whaleness iOS trajectory: an
+Input/Model/Tools overview, event-order or duration-weighted navigation, native
+Turn sections, and separate event, request and tool details. The original
+interval waterfall and call tree remain available. Compact `trace.read` pages
+are accumulated across the selected run; `trace.detail` reads the selected
+original event under the current-source fence. Closing the view ends only its
+read windows. See [the execution trace contract](../protocol/execution-trace-v1.md)
+for timing/usage semantics, source boundaries, reuse decisions and verification.
+
 ## Conversation phone outcomes
 
 Each native phone-result message exposes an immutable `phoneResult` containing
