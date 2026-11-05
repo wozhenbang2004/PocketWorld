@@ -1897,5 +1897,14 @@
     "robolectric": true,
     "description": "Trusted framework parent aliases, fresh/blocked/replaced backup leaves and actual coordinator backup failures/cancelled publication. Linux POSIX host fixtures; no Android device or visual acceptance.",
     "linuxPosixFd": true
+  },
+  "owner-storage-cache-open": {
+    "class": "dev.pocketengine.ui.OwnerStorageCacheOpenTest",
+    "helpers": [
+      "dev.pocketengine.ui.ProjectMemoryReviewUiNativeTest"
+    ],
+    "robolectric": true,
+    "linuxPosixFd": true,
+    "description": "Actual Web adapter/native storage callback verifies listed backup bytes before publishing SHA/preview; corrupt, moved, unknown/unlisted and owner/page guards preserve originals. Linux POSIX/SQLite fixture only; no Android device/visual acceptance."
   }
 }
