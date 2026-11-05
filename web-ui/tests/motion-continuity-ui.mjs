@@ -549,6 +549,8 @@ async function recordNaturalDemo(page) {
   await primaryNav(page).getByRole('link', { name: '对话', exact: true }).click(); await hold(800);
   await page.locator('.pw-conversation-scroll').evaluate(node => { node.scrollTop = node.scrollHeight; });
   await page.evaluate(() => window.motionFixture.setBusy(true)); await hold(550);
+  await page.locator('.pw-conversation-scroll').hover();
+  await page.mouse.wheel(0, 2000); await hold(300);
   await page.evaluate(() => window.motionFixture.append('motion-demo-reply', '我先帮你把安排整理好。')); await hold(700);
   await page.evaluate(() => window.motionFixture.stream('motion-demo-reply', '\n\n有新的资料时，再放到这里一起核对。')); await hold(800);
   await page.getByRole('button', { name: '停止当前回复', exact: true }).click(); await hold(700);
