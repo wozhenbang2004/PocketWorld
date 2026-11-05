@@ -25,6 +25,9 @@ public final class ChatGptProvider implements AutoCloseable {
     public static final String ID="chatgpt_plan";
     public static final String RESOURCE="https://api.openai.com/v1";
     public static final String SCOPES="openid profile email offline_access resource.invoke chatgpt.tokens.use.direct";
+    // Rich provider metadata needs the same bounded single-page budget as CatalogHttpClient.
+    // Token, discovery and identity-key responses retain their smaller independent limits.
+    private static final int MODEL_CATALOG_MAX_BYTES=2*1024*1024;
     private final String issuer,api;
     private final OkHttpClient http;
     public ChatGptProvider(){this("https://auth.openai.com","https://api.openai.com/v1",false);}
@@ -95,7 +98,7 @@ public final class ChatGptProvider implements AutoCloseable {
         catch(GatewayFailure error){throw error;}catch(Exception error){throw new GatewayFailure("REMOTE_REVOCATION_UNCONFIRMED");}
     }
     public JSONArray models(Credentials credentials,GatewayCall operation)throws GatewayFailure {
-        requirePlan(credentials);JSONObject response=getJson(api+"/models",credentials.accessToken(),operation,256*1024);
+        requirePlan(credentials);JSONObject response=getJson(api+"/models",credentials.accessToken(),operation,MODEL_CATALOG_MAX_BYTES);
         try{
             JSONArray models=response.getJSONArray("models"),result=new JSONArray();if(models.length()>512)throw new Exception();
             for(int i=0;i<models.length();i++){JSONObject model=models.getJSONObject(i);if(!"list".equals(model.optString("visibility")))continue;
