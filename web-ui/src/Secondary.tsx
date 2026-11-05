@@ -933,7 +933,8 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack 
   const welcomeAccount = accounts.find(row => row.enabled === true && row.planUsageEnabled === true);
   const loginActive = ['pending', 'exchanging'].includes(text(login.status));
   return <>
-    <Card title="ChatGPT 账号" description="登录后读取这个账号的可用模型，再确认用于新任务的模型。">
+    <Card className="pw-accounts-workspace">
+      <p className="pw-reading-lead">连接账号，读取可用模型后用于新任务。</p>
       <div className="pw-form-actions"><PressButton compact disabled={locked || loginActive || needsAccountRead || !supported('accounts.beginLogin')} onClick={() => { setAccountFeedback(null); setAdding(true); }}>添加账号</PressButton>{act('accounts.refresh', {}, '刷新账号状态')}</div>
       {needsAccountRead && <p className="pw-field-hint">请先刷新账号状态，核对上次操作后再添加账号。</p>}
       {accountFeedback && !adding && <p className={accountFeedback.error ? 'pw-field-error' : 'pw-receipt-copy'} role={accountFeedback.error ? 'alert' : 'status'}>{accountFeedback.message}</p>}

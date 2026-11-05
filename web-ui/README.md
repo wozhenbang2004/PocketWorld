@@ -176,3 +176,31 @@ The UI waits for the matching feature request's real receipt. An accepted bridge
 response is not a save, and an uncertain response is not automatically retried.
 Deleting a rule also deletes its delivery receipts in the original AutomationBook;
 the confirmation discloses this and offers pausing to preserve those records.
+
+## Account hierarchy and workspace recovery
+
+The account page has one page title, followed by a full-width reading lead and
+its primary action. Section descriptions stay below their title. The existing
+BoardUI-derived SettingsDialog owns modal focus after mount and restores the
+opening control on close; its animation and approved controls remain in place.
+The dark close control stays secondary to the login action.
+
+The native workspace entry lives in the existing navigation drawer. A healthy
+Web document occupies the full Activity, including system insets; it has no
+second native toolbar above its modals. If the packaged entry, critical bundled
+script/style, secure bridge, or renderer is unavailable, the host shows a
+separate recovery panel with reopen and native-workspace entries. Both entries
+retain startup and pending-operation guards; they do not repair data or replay
+tasks. Optional font/media failure does not discard a usable workspace.
+
+This implements the user's 2026-11-05 UI repair request, including “修完之后就赶紧去合并提交，
+然后呢你再让这个本地测试的这个去拉代码” (parent delegation; exact room-message ID unavailable).
+It reuses the adopted BoardUI/Vaul/Josh components and DP-05/06/18/27 principles;
+it adds no personal aesthetic-library records or new dependencies.
+
+Run the focused layout/focus/navigation checks with
+node web-ui/tests/account-hierarchy-ui.mjs from the repository root (Edge is
+required). The fixture uses production React components with a synthetic host;
+it does not prove Android, OAuth, IME or device acceptance. For the existing
+account/model regression runner, UI_BROWSER_CHANNEL=msedge selects Edge and
+UI_NO_SCREENSHOTS=1 disables persistent screenshots.

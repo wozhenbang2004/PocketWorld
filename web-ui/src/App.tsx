@@ -562,7 +562,7 @@ export default function App(){
      </section>
     </>}
    </div>
-   {!commandOpen&&<footer className="pw-navigation-footer"><WorkSidebar items={workNav.filter(item=>item.key==='settings')} selected={navigationSelection} onNavigate={navigate}/></footer>}
+   {!commandOpen&&<footer className="pw-navigation-footer"><WorkSidebar items={workNav.filter(item=>item.key==='settings')} selected={navigationSelection} onNavigate={navigate}/>{can('app.openNativeWorkspace')&&<Button variant="ghost" className="pw-native-workspace-entry" onClick={()=>{changeNavigation(false);run('app.openNativeWorkspace')}}>打开原生工作台</Button>}</footer>}
   </Drawer.Content>
  </Drawer.Portal>;
  const renderTaskRow=(t:Task)=><Button variant="ghost" key={t.id} className="pw-task-row" data-task-id={t.id} onClick={()=>openTask(t.id)}><span className="pw-task-row-status">{running(t)?<ProgressCircle aria-label={labelStatus(t.status)} isIndeterminate size="sm"/>:t.status==='completed'?<RiCheckboxCircleLine size={20} aria-hidden="true"/>:t.status==='failed'?<RiErrorWarningLine size={20} aria-hidden="true"/>:['paused','interrupted'].includes(t.status)?<RiPauseCircleLine size={20} aria-hidden="true"/>:<RiTimeLine size={20} aria-hidden="true"/>}</span><span className="pw-task-row-copy"><b title={t.goal}>{t.goal}</b><span>{labelStatus(t.status)}</span></span><RiArrowRightSLine size={18} aria-hidden="true"/></Button>;
