@@ -197,6 +197,42 @@ test('input upload keeps inspect and cancel available without reissuing the orig
   f.unmount(); wait.resolve({ ...view, viewHandle: 'late-confirm', busy: false }); await f.flush(); assert.equal(f.writesAfterUnmount, 0);
 });
 
+test('retired input windows leave captured attachment confirmations inert', async () => {
+  for (const reason of ['hidden', 'window', 'pagehide', 'unmount']) {
+    const view = { taskId: 'task', pageHandle: 'input-window', viewHandle: 'view-1', registered: false,
+      files: [{ attachmentId: 'file-1', bytes: 50 }], availableFiles: [], request: {}, scope: { files: [] },
+      review: { digest: 'review-digest', expiresAt: Date.now() + 60000 } };
+    const f = fixture('RemoteInputFlow', { taskId: 'task', close: () => {} }, { file: 'RemoteTaskInputs', response: view });
+    await f.flush();
+    const confirm = f.find(node => node.type === 'RemoteActionReview').props.onConfirm;
+    if (reason === 'hidden') f.visibility('hidden');
+    else if (reason === 'window') f.rotate({ taskId: 'other-task' });
+    else if (reason === 'pagehide') f.pagehide();
+    else f.unmount();
+    assert.doesNotThrow(() => confirm(), reason);
+    await f.flush();
+    assert.equal(f.calls.some(call => call.action === 'remoteInputs.confirm'), false, reason);
+    assert.equal(f.writesAfterUnmount, 0, reason);
+  }
+});
+
+test('retired task windows leave captured approval decisions inert', async () => {
+  for (const reason of ['hidden', 'window', 'pagehide', 'unmount']) {
+    const view = snapshot({ source: { worker: 'pi', pendingApprovals: [{ requestId: 'request-1', canAccept: true, tool: 'original-command' }] } });
+    const f = fixture('RemoteTaskWorkspace', { taskId: 'task' }, { command: (action: string) => action === 'remoteTask.open' ? { snapshot: view } : { closed: true } });
+    await f.flush();
+    const approve = f.button('只允许这一次').props.onClick;
+    if (reason === 'hidden') f.visibility('hidden');
+    else if (reason === 'window') f.rotate({ taskId: 'other-task' });
+    else if (reason === 'pagehide') f.pagehide();
+    else f.unmount();
+    assert.doesNotThrow(() => approve(), reason);
+    await f.flush();
+    assert.equal(f.calls.some(call => call.action === 'remoteTask.approve'), false, reason);
+    assert.equal(f.writesAfterUnmount, 0, reason);
+  }
+});
+
 test('native preview visibility follows its own top dialog and actual unobscured placeholder', () => {
   const style = { display: 'block', visibility: 'visible', opacity: '1' }, owner: Data = { getClientRects: () => [{}], closest: () => null, style }, other: Data = { ...owner };
   const node: Data = { isConnected: true, parentElement: owner, getBoundingClientRect: () => ({ left: 10, top: 10, right: 300, bottom: 400 }), contains: (hit: any) => hit === node, closest: (selector: string) => selector.includes('[hidden]') ? null : owner };
