@@ -1425,6 +1425,7 @@
       "dev.pocketengine.ui.RuntimeActivityCaptionTest",
       "dev.pocketengine.features.local.project.ProjectCommandSpecTest",
       "dev.pocketengine.ui.TaskExecutionPresentationTest",
+      "dev.pocketengine.ui.TaskReceiptVisibilityTest",
       "dev.pocketengine.store.TaskAuditStoreTest",
       "dev.pocketengine.store.TaskJobProjectionTest"
     ],
@@ -2105,3 +2106,4 @@
     "description": "Existing script/MCP execution review and original receipt/artifact boundaries through the unified adapter; no second execution host, automatic grants or rendered UI claim."
   }
 }
+

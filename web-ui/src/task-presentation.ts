@@ -97,6 +97,8 @@ const excerpt = (value: string, limit = 240): string => {
   return points.length > limit ? points.slice(0, limit).join('') + '…' : value;
 };
 
+const bodyLimited = (value: Row): boolean => value.status === 'read_limited' || value.readLimited === true || value.bodyAvailable === false;
+
 function taskParts(task: unknown) {
   const header = row(task) ?? {};
   const raw = row(header.raw) ?? header;
@@ -162,8 +164,8 @@ export function getTaskEventHistory(task: unknown): TaskEventHistory {
   originalRows.forEach((entry, index) => {
     const position = page ? number(entry.position) : undefined;
     // A limited row's embedded event is never read, even if a malformed snapshot includes one.
-    const readLimited = page ? entry.status === 'read_limited' : false;
-    const event = page ? entry.status === 'available' ? row(entry.event) : undefined : entry;
+    const readLimited = bodyLimited(entry);
+    const event = readLimited ? undefined : page ? entry.status === 'available' ? row(entry.event) : undefined : entry;
     const bodyAvailable = event !== undefined;
     if (!bodyAvailable && !text(entry.eventKey) && position === undefined) return;
     const eventRun = event ? text(event.runId) : '';
@@ -196,14 +198,15 @@ export function presentOperation(input: unknown): OperationPresentation {
   const receiptStatus = text(receipt?.status);
   const code = text(receipt?.code);
   const outcome = op?.bodyAvailable ? nativeOutcome(op.toolOutcome) : undefined;
+  const outcomeContract = op?.bodyAvailable ? row(op.toolOutcome) : undefined;
+  const completion = outcome !== undefined && outcome !== 'invalid' ? text(outcomeContract?.completion) : '';
+  const pendingReceipt = ['accepted','queued','submitting','pending','submitted','dispatched','starting','preparing','running','active','in_progress','pausing','stopping','verifying'].includes(receiptStatus);
   const uncertain = ['unknown', 'uncertain', 'reconciliation_required', 'pending_reconciliation'].includes(state) ||
     state.endsWith('_unknown') || state.endsWith('_unconfirmed') || op?.requiresReconciliation === true || receipt?.requiresReconciliation === true || receipt?.reconciliationRequired === true ||
     receipt !== undefined && (has(receipt, 'accepted') && receipt.accepted === null || receiptStatus === 'unknown' || outcome === undefined && code.includes('unknown'));
   let status: OperationStatus = 'unknown';
   let stateLabel = state ? '原状态：' + excerpt(state, 80) : '记录状态尚不可读取';
   if (uncertain || outcome === 'effect_unknown' || outcome === 'invalid') { status = 'unknown'; stateLabel = '结果待核对'; }
-  else if (state === 'project_running') { status = 'running'; stateLabel = '服务已有启动回执，尚无终态'; }
-  else if (state === 'project_stopping') { status = 'waiting'; stateLabel = '服务正在收尾，尚未确认释放'; }
   else if (code === 'approval_required') { status = 'needs_approval'; stateLabel = '等待本次操作授权'; }
   else if (state === 'resolved' && receipt?.source === 'owner_reconciliation') {
     status = 'returned';
@@ -213,9 +216,14 @@ export function presentOperation(input: unknown): OperationPresentation {
   else if (['cancelled', 'canceled', 'stopped'].includes(receiptStatus)) { status = 'stopped'; stateLabel = '调用已停止，详见原回执'; }
   else if (outcome === 'needs_user') { status = 'waiting'; stateLabel = '需要你处理，已发生的操作仍保留'; }
   else if (outcome === 'correctable_failure') { status = 'error'; stateLabel = '请求可调整，不会自动重放原操作'; }
+  // Older snapshots have no native outcome projection; preserve explicit failure/owner facts.
+  else if (receipt?.ok === false || receiptStatus === 'failed' || number(receipt?.exitCode) !== undefined && receipt?.exitCode !== 0) { status = 'error'; stateLabel = '调用出错，请核对操作结果'; }
+  else if (outcome === undefined && (receipt?.requiresPause === true || receipt?.requiresOwnerReturn === true)) { status = 'waiting'; stateLabel = '需要你处理，已发生的操作仍保留'; }
+  else if (state === 'project_running') { status = 'running'; stateLabel = '服务已有启动回执，尚无终态'; }
+  else if (state === 'project_stopping') { status = 'waiting'; stateLabel = '服务正在收尾，尚未确认释放'; }
+  else if (outcome === 'success' && (completion === 'pending' || pendingReceipt)) { status = 'waiting'; stateLabel = '已受理或仍在执行，尚无终态'; }
   // Compatibility for pre-contract snapshots only. Fresh native pages already
   // classify the original receipt; these display checks never authorize a retry.
-  else if (receipt?.ok === false || receiptStatus === 'failed' || number(receipt?.exitCode) !== undefined && receipt?.exitCode !== 0) { status = 'error'; stateLabel = '调用出错，请核对操作结果'; }
   else if (receipt?.terminal === false) { status = 'waiting'; stateLabel = '已返回部分结果'; }
   else if (receiptValue !== undefined && receiptValue !== null) { status = 'returned'; stateLabel = '已返回，结果可展开查看'; }
   if (op?.readLimited && !uncertain) stateLabel += ' · 正文未在当前读取范围内';
@@ -286,16 +294,16 @@ export function getRecentTaskProgress(task: unknown): TaskProgress {
   const operationPage = pageFor(raw, 'historyOperationPage', id, 'operations');
   const partial = raw.taskCoreReadLimited === true || eventPage?.hasMore === true || eventPage?.readLimited === true ||
     operationPage?.hasMore === true || operationPage?.readLimited === true ||
-    rows(eventPage?.entries).some(entry => entry.status === 'read_limited') ||
-    rows(operationPage?.entries).some(entry => entry.status === 'read_limited');
+    rows(eventPage?.entries).some(bodyLimited) ||
+    rows(operationPage?.entries).some(bodyLimited);
   if (taskNeedsReconciliation(task)) return {title: '有操作结果待核对', detail: '操作可能已经发生，请在原任务核对结果；不会自动重放。',
     status: 'unknown', stateLabel: '结果待核对', source: 'task', runId, partial};
   if (!runId) return taskFallback(header, raw, runId, partial);
   const pageEvents = rows(eventPage?.entries).flatMap(entry => {
     const event = row(entry.event);
-    return event && entry.status === 'available' && text(event.runId) === runId ? [{event, position: number(entry.position)}] : [];
+    return event && !bodyLimited(entry) && entry.status === 'available' && text(event.runId) === runId ? [{event, position: number(entry.position)}] : [];
   });
-  const rawEvents = rows(raw.events).filter(event => text(event.runId) === runId).map(event => ({event, position: undefined as number | undefined}));
+  const rawEvents = rows(raw.events).filter(event => !bodyLimited(event) && text(event.runId) === runId).map(event => ({event, position: undefined as number | undefined}));
   const recentEvent = latest(pageEvents.length ? pageEvents : rawEvents, value => value.position, value => number(value.event.at) ?? number(value.event.timestamp));
   if (recentEvent) {
     const event = recentEvent.event;
@@ -315,3 +323,4 @@ export function getRecentTaskProgress(task: unknown): TaskProgress {
   }
   return taskFallback(header, raw, runId, partial);
 }
+

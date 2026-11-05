@@ -187,3 +187,43 @@ test('event history rejects foreign windows and preserves empty, core and snapsh
   assert.equal(snapshot.completeHistory, false);
   assert.equal(getTaskEventHistory(null).unavailableReason, 'not_loaded');
 });
+
+
+test('accepted and running success receipts remain pending instead of looking completed', () => {
+  const accepted = presentOperation(op({receipt: {ok: true, accepted: true, status: 'accepted'}, toolOutcome: {...outcome('success', 'continue'), completion: 'pending'}}));
+  assert.equal(accepted.status, 'waiting');
+  assert.match(accepted.stateLabel, /尚无终态/);
+  const running = presentOperation(op({receipt: {ok: true, status: 'running', terminal: false}, toolOutcome: {...outcome('success', 'continue'), completion: 'pending'}}));
+  assert.equal(running.status, 'waiting');
+  assert.match(running.stateLabel, /尚无终态/);
+});
+
+test('native running state cannot hide canonical failure or owner intervention', () => {
+  const failed = presentOperation(op({state: 'project_running', receipt: {ok: false, status: 'failed'}, toolOutcome: outcome('correctable_failure', 'revise_request')}));
+  assert.equal(failed.status, 'error');
+  const owner = presentOperation(op({state: 'project_running', receipt: {ok: true, requiresPause: true}, toolOutcome: outcome('needs_user', 'ask_owner')}));
+  assert.equal(owner.status, 'waiting');
+  assert.match(owner.stateLabel, /需要你处理/);
+});
+
+
+ test('legacy running snapshots preserve explicit failure and owner intervention', () => {
+  assert.equal(presentOperation(op({state: 'project_running', receipt: {ok: false, status: 'failed'}})).status, 'error');
+  const shown = presentOperation(op({state: 'project_running', receipt: {ok: true, requiresPause: true}}));
+  assert.equal(shown.status, 'waiting');
+  assert.match(shown.stateLabel, /需要你处理/);
+});
+
+test('explicit unread event flags suppress embedded bodies in pages and snapshots', () => {
+  for (const guard of [{readLimited: true}, {bodyAvailable: false}, {status: 'read_limited'}]) {
+    const event = {type: 'tool', runId: 'run-now', message: 'hidden-event'};
+    const paged = getTaskEventHistory(task({historyEventPage: {taskId: 'task-1', section: 'events', entries: [{position: 1, status: 'available', event, ...guard}]}}));
+    assert.equal(paged.entries[0].bodyAvailable, false);
+    assert.doesNotMatch(paged.entries[0].detail, /hidden-event/);
+    assert.doesNotMatch(getRecentTaskProgress(task({historyEventPage: {taskId: 'task-1', section: 'events', entries: [{position: 1, status: 'available', event, ...guard}]}})).detail, /hidden-event/);
+    const snapshot = getTaskEventHistory(task({events: [{...event, eventKey: 'event-1', ...guard}]}));
+    assert.equal(snapshot.entries[0].bodyAvailable, false);
+    assert.doesNotMatch(snapshot.entries[0].detail, /hidden-event/);
+    assert.doesNotMatch(getRecentTaskProgress(task({events: [{...event, eventKey: 'event-1', ...guard}]})).detail, /hidden-event/);
+  }
+});

@@ -15,9 +15,9 @@ import org.json.JSONObject;
 /** Original operation receipt storage. TaskStore retains its monitor, transaction,
  * native-preservation chain and task/run/epoch authority; this class grants none. */
 final class TaskOperationReceipts {
-    private static final String MIGRATION="tool_outcome_uncertainty_v1";
+    private static final String MIGRATION="tool_outcome_uncertainty_v2";
     private static final int INLINE_BYTES=1024*1024;
-    private static final Set<String> UNCERTAINTY_FIELDS=Set.of("ok","accepted","requiresReconciliation","reconciliationRequired","requiresPause","requiresOwnerReturn","status","state","code","error","nextObservationAction");
+    private static final Set<String> UNCERTAINTY_FIELDS=Set.of("ok","accepted","terminal","requiresReconciliation","reconciliationRequired","requiresPause","requiresOwnerReturn","status","state","code","error","effectStatus","dispatchStatus","exitCode","nextObservationAction");
     private TaskOperationReceipts(){}
 
     static final class Saved {
@@ -47,7 +47,7 @@ final class TaskOperationReceipts {
     static Set<String> restoreLegacyUncertainty(SQLiteDatabase db)throws Exception{
         try(Cursor marker=db.rawQuery("SELECT 1 FROM meta WHERE key=?",new String[]{MIGRATION})){if(marker.moveToFirst())return Set.of();}
         Set<String> affected=new HashSet<>();
-        try(Cursor rows=db.rawQuery("SELECT operation_id,task_id,CASE WHEN length(CAST(receipt AS BLOB))<=? THEN receipt END FROM operations WHERE state='receipt' AND receipt IS NOT NULL",new String[]{Integer.toString(INLINE_BYTES)})){
+        try(Cursor rows=db.rawQuery("SELECT operation_id,task_id,CASE WHEN length(CAST(receipt AS BLOB))<=CAST(? AS INTEGER) THEN receipt END FROM operations WHERE state='receipt' AND receipt IS NOT NULL",new String[]{Integer.toString(INLINE_BYTES)})){
             while(rows.moveToNext()){
                 boolean unknown;
                 try{unknown=ToolOutcome.hasUncertaintyEvidence(rows.isNull(2)?largeReceiptFlags(db,rows.getString(0),rows.getString(1)):new JSONObject(rows.getString(2)));}
@@ -74,6 +74,7 @@ final class TaskOperationReceipts {
                 JsonToken token=reader.peek();
                 if(token==JsonToken.BOOLEAN)flags.put(key,reader.nextBoolean());
                 else if(token==JsonToken.STRING)flags.put(key,reader.nextString());
+                else if(token==JsonToken.NUMBER)flags.put(key,reader.nextDouble());
                 else if(token==JsonToken.NULL){reader.nextNull();flags.put(key,JSONObject.NULL);}
                 else{reader.skipValue();flags.put(key,new org.json.JSONArray());}
             }

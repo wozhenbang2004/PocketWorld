@@ -77,12 +77,12 @@ class TaskExecutionPresentationTest {
     @Test fun nonzeroExitIsNotACompletedGreenStepEvenWhenOuterOkIsTrue() {
         val row = TaskExecutionPresentation.records(page(operation(receipt = JSONObject().put("ok", true).put("exitCode", 3))), "operations").single()
         assertEquals(TaskExecutionPresentation.Tone.ERROR, row.tone)
-        assertTrue(row.label.contains("不等于未执行"))
+        assertTrue(row.label.contains("不会自动重放"))
     }
     @Test fun receiptAcceptedDoesNotClaimBusinessSuccessOrInventDuration() {
         val row = TaskExecutionPresentation.records(page(operation(receipt = JSONObject().put("ok", true).put("accepted", true).put("stdout", "actual response"))), "operations").single()
-        assertEquals(TaskExecutionPresentation.Tone.RETURNED, row.tone)
-        assertTrue(row.label.contains("目标仍需核对"))
+        assertEquals(TaskExecutionPresentation.Tone.WAITING, row.tone)
+        assertTrue(row.label.contains("尚无终态"))
         assertEquals(1234L, row.at)
         assertTrue(row.receipt.contains("actual response"))
     }
@@ -95,7 +95,7 @@ class TaskExecutionPresentationTest {
         assertEquals("", row.receipt)
         assertEquals(100000L, row.bodyBytes)
         assertEquals(TaskExecutionPresentation.Tone.RUNNING, row.tone)
-        assertEquals("original-operation", row.projectExecutionId)
+        assertNull(row.projectExecutionId)
         assertEquals("run-a", row.runId)
     }
     @Test fun ownerReconciliationIsNotRelabelledAsAnAutomaticExecutionReceipt() {
@@ -271,3 +271,4 @@ class TaskExecutionPresentationTest {
     }
 
 }
+
