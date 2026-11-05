@@ -685,11 +685,13 @@ public final class ConversationRepository {
     }
     /** Native owner/UI window, not a retention operation. Import records never become SourceRefs. */
     public JSONObject window(String conversation,String cursor,int limit)throws Exception{
-        if(limit<1||limit>80)throw new IllegalArgumentException("消息窗口最多80条");JSONObject result=header(conversation),pos=decode(cursor);long upper=pos.optLong("before",Long.MAX_VALUE);JSONArray reverse=new JSONArray();long bytes=result.toString().getBytes(StandardCharsets.UTF_8).length,last=-1;boolean more=false;int scanned=0;JSONArray gaps=new JSONArray();
+        if(limit<1||limit>80)throw new IllegalArgumentException("消息窗口最多80条");JSONObject result=header(conversation),pos=decode(cursor);long upper=pos.optLong("before",Long.MAX_VALUE);JSONArray reverse=new JSONArray();long headerBytes=result.toString().getBytes(StandardCharsets.UTF_8).length,bytes=headerBytes,last=-1;boolean more=false;int scanned=0;JSONArray gaps=new JSONArray();
+        // A row that cannot fit even on an otherwise empty page must advance as a gap.
+        // Temporary remaining-budget exhaustion below still leaves the row for the next page.
         String gen=activeGeneration();
         try(Cursor rows=db.rawQuery("SELECT id,n,bytes,kind FROM (SELECT m.source_id id,m.sequence n,length(CAST(m.body AS BLOB))+length(CAST(m.meta_json AS BLOB))+length(CAST(s.source_json AS BLOB)) bytes,'native' kind FROM assistant_messages m JOIN assistant_sources s ON s.generation=m.generation AND s.source_id=m.source_id WHERE m.generation=? AND m.conversation_id=? AND m.body IS NOT NULL UNION ALL SELECT record_id id,sequence n,byte_length bytes,'legacy' kind FROM assistant_import_records WHERE generation=? AND conversation_id=? AND deleted=0) WHERE n<? ORDER BY n DESC LIMIT ?",new String[]{gen,conversation,gen,conversation,Long.toString(upper),Integer.toString(limit+1)})){
             while(rows.moveToNext()){
-                if(scanned>=limit){more=true;break;}long size=rows.getLong(2);if(size>MAX_BYTES){gaps.put(new JSONObject().put("recordId",rows.getString(0)).put("status","read_limited"));last=rows.getLong(1);scanned++;continue;}
+                if(scanned>=limit){more=true;break;}long size=rows.getLong(2);if(size>MAX_BYTES-headerBytes){gaps.put(new JSONObject().put("recordId",rows.getString(0)).put("status","read_limited"));last=rows.getLong(1);scanned++;continue;}
                 if(size>MAX_BYTES-bytes){more=true;break;}
                 boolean imported="legacy".equals(rows.getString(3));JSONObject message=imported?importedMessage(conversation,rows.getString(0)):message(conversation,rows.getString(0));last=rows.getLong(1);scanned++;if(message!=null){
                     // Owner page metadata only. Selection still reads this exact original again;

@@ -116,6 +116,8 @@ public final class InferenceFailure {
     }
     /** Stable original AccountGateway evidence only; no provider body/code guessing or state mutation. */
     public static InferenceFailure account(String code,int status,long retryAt,long observedAt)throws Exception {
+        // Reuse the existing bounded compaction path, not transient inference replay.
+        if("PROVIDER_CONTEXT_LIMIT".equals(code)&&(status==0||status==400||status==413))return local(Kind.CONTEXT_LIMIT,status,observedAt);
         JSONObject retry=emptyRetry(RetryStatus.MISSING,RetryBasis.NONE);
         if(retryAt>0) {
             long delay;try{delay=Math.subtractExact(retryAt,observedAt);}catch(ArithmeticException invalid){delay=-1;}

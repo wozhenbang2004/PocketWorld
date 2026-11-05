@@ -65,8 +65,9 @@ public final class ChatGptProvider implements AutoCloseable {
     public Grant exchange(String clientId,String code,String verifier,String callback,String nonce,GatewayCall operation,long now)throws GatewayFailure {
         JSONObject response=postToken(new FormBody.Builder().add("grant_type","authorization_code").add("client_id",clientId).add("code",code)
             .add("code_verifier",verifier).add("redirect_uri",callback).add("resource",RESOURCE).build(),operation,"exchange");
-        Credentials tokens=tokens(response,null,now);
-        OidcIdentityVerifier.Identity identity=identity(tokens,clientId,nonce,operation,now);
+        // The issuer can mint this identity after a slow token request has started.
+        long receivedAt=System.currentTimeMillis();Credentials tokens=tokens(response,null,receivedAt);
+        OidcIdentityVerifier.Identity identity=identity(tokens,clientId,nonce,operation,receivedAt);
         return new Grant(tokens,identity.issuer,identity.subject,identity.email);
     }
     public Grant refresh(String clientId,Credentials old,String expectedSubject,GatewayCall operation,long now)throws GatewayFailure {

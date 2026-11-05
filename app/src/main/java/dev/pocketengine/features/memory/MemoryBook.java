@@ -1313,6 +1313,13 @@ public final class MemoryBook {
         rows.sort(Comparator.comparingLong((JSONObject value)->value.optLong("updatedAt")).reversed());
         Map<String,String> statuses=MemoryAssertion.statuses(records.values(),sourceEligibleIds(System.currentTimeMillis()),System.currentTimeMillis(),assertionFences);JSONArray result=new JSONArray();for(JSONObject record:rows){JSONObject view=viewRecord(record).put("active",active.contains(record.getString("id")));if(record.has("assertion"))view.put("assertionStatus",statuses.get(record.getString("id")));result.put(view);}return result;
     }
+    /** Pure parameter check shared with the native tool admission boundary. */
+    public static void validateSearchQueryForHost(String query){normalizedSearchQuery(query);}
+    private static String normalizedSearchQuery(String query){
+        String normalized=normalize(query==null?"":query);
+        if(normalized.length()>MemoryQueryPlan.MAX_QUERY_CHARS)throw new IllegalArgumentException("检索词最多500字");
+        return normalized;
+    }
     public synchronized JSONArray search(JSONObject scope,String query,int limit)throws Exception {
         Scope s=Scope.from(scope);return search(s,query,limit,retrievalActiveIds(s,System.currentTimeMillis()));
     }
@@ -1323,8 +1330,7 @@ public final class MemoryBook {
         selected.check();synchronized(this){requireAudienceSnapshotCurrent(identity,new JSONObject().put("records",result),selected);}selected.check();return new JSONArray(result.toString());
     }
     private JSONArray search(Scope s,String query,int limit,Set<String> active)throws Exception {
-        String normalized=normalize(query==null?"":query);
-        if(normalized.length()>500)throw new IllegalArgumentException("检索词最多500字");
+        String normalized=normalizedSearchQuery(query);
         List<MemoryRetrievalBackend.Document> documents=new ArrayList<>();Map<String,Long> eligible=new LinkedHashMap<>();List<JSONObject> admitted=new ArrayList<>();
         for(JSONObject value:records.values()){
             if(!s.matches(value)||!active.contains(value.getString("id")))continue;
