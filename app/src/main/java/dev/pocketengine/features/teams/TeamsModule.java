@@ -79,6 +79,10 @@ public final class TeamsModule implements EngineModule {
         // The original runner owns its worker, never the definitions/control monitor. Pause/cancel must remain reachable.
         if(command.equals("independentReview")){JSONObject result=requireWriteHost().independentlyReview(input.getString("runId"),input.getString("expectedPlanHash"),coordinator.get(input.getString("runId")),context.model());return coordinator.recordIndependentReview(input.getString("runId"),result);}
         if(command.equals("integrateOutputs")){JSONObject result=requireWriteHost().integrate(input.getString("runId"),input.getString("reviewId"),context.model());return coordinator.recordIntegration(input.getString("runId"),result);}
+        // A coordinator publication may synchronously request cancellation while a reader
+        // owns the definitions monitor and waits for that coordinator. Cancel touches no
+        // definitions: keep the original reviewed/run-control path without taking this lock.
+        if(command.equals("cancel"))return handleLocked(command,input);
         synchronized(this){return handleLocked(command,input);}
     }
     private JSONObject handleLocked(String command,JSONObject input)throws Exception {

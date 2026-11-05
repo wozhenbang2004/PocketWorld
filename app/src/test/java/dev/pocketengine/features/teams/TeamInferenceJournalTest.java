@@ -281,6 +281,37 @@ public final class TeamInferenceJournalTest {
             assertFalse("running".equals(rig.tasks.get(rig.operation,false).getString("status")));assertTrue(rig.requests.get()<=2);assertEquals(0,rig.nativeRuns());
         }
     }
+    @Test public void originalCancellationDoesNotWaitForDefinitionMonitor()throws Exception {cancellationDoesNotWaitForDefinitionMonitor(false);}
+    @Test public void reviewedCancellationDoesNotWaitForDefinitionMonitor()throws Exception {cancellationDoesNotWaitForDefinitionMonitor(true);}
+    private void cancellationDoesNotWaitForDefinitionMonitor(boolean reviewed)throws Exception {
+        try(Rig rig=new Rig(true)){
+            rig.mountNativeWrites();rig.arrived=new CountDownLatch(2);rig.release=new CountDownLatch(1);
+            rig.reply=request->{if(!rig.release.await(10,TimeUnit.SECONDS))throw new IllegalStateException("Controlled cancellation fixture was not released");return answer("bounded original reply");};
+            rig.start();assertTrue(rig.arrived.await(2,TimeUnit.SECONDS));
+            JSONObject observed=rig.run();
+            CountDownLatch held=new CountDownLatch(1),releaseDefinitions=new CountDownLatch(1);
+            var workers=java.util.concurrent.Executors.newFixedThreadPool(2);
+            try{
+                var definitions=workers.submit(()->{synchronized(rig.module){held.countDown();try{releaseDefinitions.await(5,TimeUnit.SECONDS);}catch(InterruptedException stopped){Thread.currentThread().interrupt();}}});
+                assertTrue(held.await(2,TimeUnit.SECONDS));
+                JSONObject request=new JSONObject().put("runId",rig.operation);
+                if(reviewed){
+                    JSONObject stale=new JSONObject(request.toString()).put("expectedRevision",observed.getLong("revision")-1).put("expectedGeneration",observed.getInt("generation"));
+                    var rejected=workers.submit(()->{assertThrows(IllegalStateException.class,()->rig.module.handle("cancel",stale));return true;});
+                    assertTrue(rejected.get(2,TimeUnit.SECONDS));
+                    request.put("expectedRevision",observed.getLong("revision")).put("expectedGeneration",observed.getInt("generation"));
+                }
+                var cancellation=workers.submit(()->rig.module.handle("cancel",request));
+                JSONObject cancelled=cancellation.get(2,TimeUnit.SECONDS);
+                assertEquals(rig.operation,cancelled.getString("id"));assertEquals("cancelled",cancelled.getString("status"));
+                assertEquals(observed.getInt("generation")+1,cancelled.getInt("generation"));
+                assertEquals(1L,releaseDefinitions.getCount());
+                releaseDefinitions.countDown();definitions.get(2,TimeUnit.SECONDS);
+                assertEquals("cancelled",rig.done().getString("status"));assertEquals(0,rig.nativeRuns());
+            }finally{releaseDefinitions.countDown();rig.release.countDown();workers.shutdownNow();assertTrue(workers.awaitTermination(3,TimeUnit.SECONDS));}
+        }
+    }
+
     @Test public void externalTraceDetailsWithdrawAfterOriginalMaterialForgetAndScopeRevocation()throws Exception {
         try(Rig rig=new Rig(true)){
             rig.mountNativeWrites();FeatureHost features=new FeatureHost(event->{},rig.tasks,()->false);
