@@ -614,7 +614,7 @@
         "projects.edit",
         "projects.save"
       ],
-      "controlledChanges": "Keep original diff structure; real before/after entire file; remove sample hunks, timed/fake accept/reject/Undo; save guarded by exact original version",
+      "controlledChanges": "Keep adopted diff structure and exact before/after text; jsdiff 9.0.0 supplies bounded real character fragments with explicitly labeled line/unmarked fallbacks; no sample hunks or fake accept/reject/Undo; save guarded by exact original version",
       "status": {
         "sourceCopied": true,
         "adapted": true,

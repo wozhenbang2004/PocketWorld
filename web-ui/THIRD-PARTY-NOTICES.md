@@ -27,6 +27,15 @@ Inter, Noto Sans SC, and JetBrains Mono are obtained unmodified from `google/fon
 
 `scripts/collect-licenses.mjs` records the actual installed production dependency closure and copies original legal files into `public/licenses/`. It records package versions, package-lock integrity, source metadata and file hashes. Missing license declarations or text are explicitly listed rather than assigned an invented license. Explicit build-source packages can be included when their source is emitted into CSS or assets; unrelated development tools are not collected.
 
+## Text comparison algorithm
+
+The existing Affect-derived file comparison surface uses jsdiff (the pinned
+npm package diff@9.0.0) from https://github.com/kpdecker/jsdiff for text
+differencing. Its BSD-3-Clause copyright, conditions and disclaimer are copied
+from the installed package by the existing runtime-dependency license collector
+into the packaged licenses. This algorithm dependency does not replace the
+adopted component's source identity or notices.
+
 ## Affect UI official free source
 
 Source: https://github.com/flohoeller/affectui/tree/37b91fa302dea59e28ce1eb2ba7acd7ce23296be
