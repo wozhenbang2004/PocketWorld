@@ -2,6 +2,8 @@ package dev.pocketengine.runtime;
 
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
+import dev.pocketengine.runtime.usage.InferenceCapture;
+import dev.pocketengine.runtime.usage.InferenceReceipt;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -103,6 +105,12 @@ public final class RuntimeStreamingProtocolTest {
     }
     private JSONObject stream(Fixture server, String protocol, List<ModelGateway.StreamEvent> events) throws Exception {
         return ModelGateway.completeStreaming(config(server, protocol), messages(), tools(), new RunControl(), events::add);
+    }
+    private static InferenceCapture.Target capture(List<InferenceReceipt> receipts) {
+        return new InferenceCapture.Target(InferenceReceipt.Context.unattributed(),new InferenceCapture.Sink(){
+            public void started(InferenceReceipt receipt){receipts.add(receipt);}
+            public void finished(InferenceReceipt receipt){receipts.add(receipt);}
+        });
     }
     private void rejected(String protocol, String body) throws Exception {
         try (Fixture server = new Fixture()) {
@@ -339,9 +347,35 @@ public final class RuntimeStreamingProtocolTest {
                     .put("content", new JSONArray().put(new JSONObject().put("type", "text").put("text", "JSON answer")));
             else reply = new JSONObject().put("candidates", new JSONArray().put(new JSONObject().put("finishReason", "STOP")
                     .put("content", new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text", "JSON answer"))))));
-            server.reply(Reply.json(reply)); List<ModelGateway.StreamEvent> events = new ArrayList<>();
-            assertEquals("JSON answer", stream(server, protocol, events).getString("content"));
+            server.reply(Reply.json(reply)); List<ModelGateway.StreamEvent> events = new ArrayList<>();List<InferenceReceipt> receipts=new ArrayList<>();
+            assertEquals("JSON answer", ModelGateway.completeStreaming(config(server,protocol),messages(),tools(),new RunControl(),events::add,capture(receipts)).getString("content"));
             assertEquals("JSON answer", visible(events)); assertEquals(1, server.requests.size());
+            assertEquals(2,receipts.size());assertTrue(receipts.get(1).toJson().isNull("firstVisibleTextAt"));
+            assertTrue(receipts.get(1).toJson().isNull("firstVisibleTextElapsedNanos"));assertTrue(receipts.get(1).toJson().isNull("timingEvidence"));
+        }
+    }
+
+    @Test public void genuineProviderTextTimingIsRetainedWhenItsStreamFails()throws Exception {
+        try(Fixture server=new Fixture()){
+            server.reply(Reply.sse(chat(new JSONObject().put("content","private partial text"),null)));
+            List<InferenceReceipt> receipts=new ArrayList<>();
+            assertThrows(ModelGateway.GatewayException.class,()->ModelGateway.completeStreaming(config(server,"openai_chat"),messages(),tools(),new RunControl(),event->{},capture(receipts)));
+            assertEquals(2,receipts.size());InferenceReceipt finished=receipts.get(1);
+            assertEquals(InferenceReceipt.Outcome.FAILED,finished.outcome);assertEquals("provider_text_delta",finished.timingEvidence);
+            assertTrue(finished.firstVisibleTextElapsedNanos>=0&&finished.firstVisibleTextElapsedNanos<=finished.elapsedNanos);
+            assertTrue(receipts.get(0).toJson().isNull("timingEvidence"));assertFalse(finished.toJson().toString().contains("private partial text"));
+            assertEquals(1,server.requests.size());
+        }
+    }
+
+    @Test public void reasoningAndToolOnlyStreamsDoNotInventVisibleTextTiming()throws Exception {
+        try(Fixture server=new Fixture()){
+            server.reply(Reply.sse(chat(new JSONObject().put("content","").put("reasoning_content","private reasoning"),null)
+                    +chat(new JSONObject().put("tool_calls",new JSONArray().put(callFragment(0,"call-one","inspect","{}"))),"tool_calls")+done()));
+            List<InferenceReceipt> receipts=new ArrayList<>();
+            JSONObject assistant=ModelGateway.completeStreaming(config(server,"openai_chat"),messages(),tools(),new RunControl(),event->{},capture(receipts));
+            assertEquals(1,assistant.getJSONArray("tool_calls").length());assertEquals(2,receipts.size());
+            assertTrue(receipts.get(1).toJson().isNull("timingEvidence"));assertTrue(receipts.get(1).toJson().isNull("firstVisibleTextAt"));
         }
     }
 
