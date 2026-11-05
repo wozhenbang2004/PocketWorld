@@ -36,7 +36,7 @@ public class AccountGatewayTest {
     }
     @Test public void officialDynamicRegistrationAndNativeTextRequestWorkEndToEndWithFixtures()throws Exception {
         try(Rig rig=new Rig()){
-            JSONObject started=rig.begin("");Map<String,String> params=parameters(started);assertEquals("dynamic_agent_client",params.get("client_id"));assertEquals("Pocket World",params.get("agent_name_hint"));assertEquals("S256",params.get("code_challenge_method"));assertEquals("https://api.openai.com/v1",params.get("resource"));assertTrue(params.get("ext_agent_host_id").startsWith("urn:uuid:"));
+            JSONObject started=rig.begin("");Map<String,String> params=parameters(started);assertEquals("dynamic_agent_client",params.get("client_id"));assertEquals("Pocket World",params.get("agent_name_hint"));assertEquals("S256",params.get("code_challenge_method"));assertEquals("https://api.openai.com/v1",params.get("resource"));assertFalse(params.containsKey("ext_agent_host_id"));assertTrue(rig.book.hostId().startsWith("urn:uuid:"));
             assertTrue(callback(started,params.get("state"),"oaiapp_fixture").startsWith("HTTP/1.1 200"));String id=started.getString("accountId");
             assertEquals("oaiapp_fixture",rig.fake.lastTokenForm.get("client_id"));assertEquals(params.get("redirect_uri"),rig.fake.lastTokenForm.get("redirect_uri"));assertNotNull(rig.fake.lastTokenForm.get("code_verifier"));
             JSONObject snapshot=rig.gateway.snapshot();assertEquals("connected",snapshot.getJSONArray("accounts").getJSONObject(0).getString("status"));assertEquals("complete",snapshot.getJSONObject("login").getString("status"));assertTrue(snapshot.getJSONArray("accounts").getJSONObject(0).getBoolean("planUsageEnabled"));
@@ -58,7 +58,7 @@ public class AccountGatewayTest {
     }
     @Test public void retainedRegistrationSurvivesFailedExchangeAndWrongReauthorizationClientIsRejected()throws Exception {
         try(Rig rig=new Rig()){rig.fake.tokenStatus=400;JSONObject start=rig.begin("");callback(start,parameters(start).get("state"),"oaiapp_fixture");assertEquals("oaiapp_fixture",rig.book.row(start.getString("accountId")).getString("clientId"));
-            JSONObject retry=rig.begin(start.getString("accountId"));assertEquals("oaiapp_fixture",parameters(retry).get("client_id"));assertFalse(parameters(retry).containsKey("agent_name_hint"));callback(retry,parameters(retry).get("state"),"oaiapp_wrong");assertEquals(1,rig.fake.exchanges.get());assertTrue(rig.vault.values.isEmpty());}
+            JSONObject retry=rig.begin(start.getString("accountId"));assertEquals("oaiapp_fixture",parameters(retry).get("client_id"));assertFalse(parameters(retry).containsKey("agent_name_hint"));assertFalse(parameters(retry).containsKey("ext_agent_host_id"));callback(retry,parameters(retry).get("state"),"oaiapp_wrong");assertEquals(1,rig.fake.exchanges.get());assertTrue(rig.vault.values.isEmpty());}
     }
     @Test public void reauthorizationMustKeepTheVerifiedIdentity()throws Exception {
         try(Rig rig=new Rig()){String id=rig.connect();String slot=rig.book.row(id).getString("slot"),before=rig.vault.get(slot);rig.fake.subject="different-subject";JSONObject retry=rig.begin(id);callback(retry,parameters(retry).get("state"),"oaiapp_fixture");assertEquals("ACCOUNT_IDENTITY_MISMATCH",rig.gateway.snapshot().getJSONObject("login").getString("error"));assertEquals(before,rig.vault.get(slot));assertEquals("fixture-subject",rig.book.row(id).getString("subject"));}
