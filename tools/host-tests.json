@@ -1,4 +1,9 @@
 {
+  "project-approval-context": {
+    "class": "dev.pocketengine.features.local.project.ProjectApprovalContextTest",
+    "robolectric": true,
+    "description": "Native SQLite approved proposal continuation context; old run references remain rejected and current source/control checks stay enforced. No live provider or device claim."
+  },
   "account-history-origin": {
     "class": "dev.pocketengine.store.AccountHistoryOriginTest",
     "additionalClasses": ["dev.pocketengine.features.proxy.accounts.AccountInferenceRenewalTest", "dev.pocketengine.features.proxy.accounts.AccountRefreshCheckpointTest"],
