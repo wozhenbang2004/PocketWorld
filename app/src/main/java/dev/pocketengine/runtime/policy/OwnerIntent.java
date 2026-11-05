@@ -10,16 +10,21 @@ public final class OwnerIntent {
     public enum Kind { DISCUSS, READ, ACT, UNSPECIFIED }
     private volatile Kind kind=Kind.UNSPECIFIED;
     private String ownerText="";
+    private boolean reviewedStageRead;
     public OwnerIntent(String goal){update(goal);}
     public Kind kind(){return kind;}
     public boolean deviceReadAllowed(){return kind!=Kind.DISCUSS;}
     public boolean effectsAllowed(){return kind==Kind.ACT||kind==Kind.UNSPECIFIED;}
     /** Same input is evaluated once, without another inference, permission or retry budget. */
     public synchronized void update(String text){
+        if(reviewedStageRead){kind=Kind.READ;reviewedStageRead=false;}
         String next=text==null?"":text.trim();if(next.equals(ownerText))return;ownerText=next;
         Kind classified=classify(next);
         if(classified!=Kind.UNSPECIFIED||kind!=Kind.READ&&kind!=Kind.DISCUSS)kind=classified;
     }
+    /** A current native plan review can consume only the old read-stage hint. No grant is issued.
+     * update restores ordinary narrowing first, including at a later same-text owner boundary. */
+    public synchronized void consumeReviewedStageRead(){if(kind==Kind.READ){kind=Kind.ACT;reviewedStageRead=true;}}
     public static Kind classify(String raw){
         String text=raw==null?"":raw.trim().toLowerCase(Locale.ROOT).replaceAll("\\s+"," ");
         if(text.isEmpty())return Kind.UNSPECIFIED;

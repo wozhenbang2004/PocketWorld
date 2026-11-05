@@ -60,7 +60,10 @@ public final class ExtensionLoopIntegrationTest {
     private static ExtensionProgram program()throws Exception {byte[] source=SOURCE.getBytes(StandardCharsets.UTF_8);return new ExtensionProgram("fixture.extension","1",INSTALL,1,source,ExtensionProgram.sha256(source),2000);}
     private static JSONObject attempt(TaskStore tasks)throws Exception {String id=tasks.createCapabilityTask("calculate with a reviewed extension","").getString("id");return tasks.startAttempt(id,"capabilities",10);}
     private static JSONObject catalogAttempt(TaskStore tasks,boolean planning)throws Exception {
-        String id=tasks.createCapabilityTask("inspect the original authorized tool catalogue","").getString("id");tasks.initializeExecutionScope(id,20);
+        return catalogAttempt(tasks,planning,"");
+    }
+    private static JSONObject catalogAttempt(TaskStore tasks,boolean planning,String conversation)throws Exception {
+        String id=tasks.createCapabilityTask("inspect the original authorized tool catalogue",conversation).getString("id");tasks.initializeExecutionScope(id,20);
         JSONObject attempt=tasks.startAttempt(id,"capabilities",20);if(!planning)return attempt;
         String run=attempt.getString("runId");int epoch=attempt.getInt("coordinatorEpoch");long revision=attempt.getJSONObject("executionScope").getLong("revision");
         assertThrows(SecurityException.class,()->tasks.enterExecutionPlanning(id,run,epoch,revision,()->true));
@@ -413,37 +416,75 @@ public final class ExtensionLoopIntegrationTest {
         }
     }
     @Test public void approvedPlanContinuationPublishesNativeDecisionWithoutForgingOwnerFeedback()throws Exception {
-        TaskStore tasks=store();JSONObject original=catalogAttempt(tasks,true);String id=original.getString("id");RunControl first=control(original);AtomicInteger writes=new AtomicInteger();
-        String ownerFeedback="Continue only the original single-file goal; preserve all native operation approvals.";
+        approvedPlanContinuation(null);
+    }
+    @Test public void newReadOnlyOwnerInputAfterPlanApprovalStillHidesWrite()throws Exception {
+        approvedPlanContinuation("Continue only read-only inspection; do not modify the file.");
+    }
+    @Test public void sameTextNewOwnerInputAfterPlanApprovalRestoresReadOnlyHint()throws Exception {
+        approvedPlanContinuation("Continue the same fixed QA file goal in native read-only planning. Submit exactly the plan JSON from the original owner message; stop for native review.");
+    }
+    private void approvedPlanContinuation(String newOwnerInput)throws Exception {
+        TaskStore tasks=store();String conversation=java.util.UUID.randomUUID().toString();JSONObject original=catalogAttempt(tasks,true,conversation);String id=original.getString("id");RunControl first=control(original);AtomicInteger writes=new AtomicInteger();
+        String ownerFeedback="Continue the same fixed QA file goal in native read-only planning. Submit exactly the plan JSON from the original owner message; stop for native review.";
         String untrustedMarker="UNTRUSTED_EXTENSION_CONTEXT_FIXTURE";
         byte[] referenceSource=("defineExtension({context(input,state){return {text:'"+untrustedMarker+"',state};}});").getBytes(StandardCharsets.UTF_8);
         ExtensionProgram referenceProgram=new ExtensionProgram("fixture.native_context","1",INSTALL,referenceSource,ExtensionProgram.sha256(referenceSource),2000);
         try(FeatureHost features=new FeatureHost(event->{},tasks,()->false);ExtensionHost extensions=new ExtensionHost(catalogue(new AtomicReference<>(List.of(referenceProgram))),tasks,ExtensionRuntimeTest.Node::new)){
+            tasks.feedback(id,ownerFeedback);
             features.register(workspace(writes));CapabilityPort initial=extensions.bind(combined(tasks,features,original,first,null),binding(original),first);JSONObject submitted;
             try{
                 initial.beginRun("original planning scope",first);initial.prepareTurn("inspect",1,0,first);
                 ExecutionPlanning planning=tasks.executionPlanningForRun(id,original.getString("runId"),original.getInt("coordinatorEpoch"),first);
                 JSONObject proposal=new JSONObject().put("format","pocketworld.execution-plan.v1").put("goal","Complete only the original single-file goal").put("steps",new JSONArray().put(new JSONObject().put("id","edit").put("title","Write and read the exact file").put("detail","Keep the original file, version and content constraints; no other effects.")));
                 submitted=planning.submitPlan(planning.capture(),proposal,"native-plan-fixture");
+                String oldCall="historical-plan-submit";
+                JSONArray historical=new JSONArray().put(new JSONObject().put("role","user").put("content",original.getString("goal")))
+                        .put(new JSONObject().put("role","user").put("content","机主对上次结果的反馈：\n"+ownerFeedback).put("ownerRecallFeedback",true))
+                        .put(new JSONObject().put("role","assistant").put("tool_calls",new JSONArray().put(new JSONObject().put("id",oldCall).put("type","function")
+                                .put("function",new JSONObject().put("name",ExecutionPlanning.SUBMIT).put("arguments",new JSONObject().put("plan",proposal).toString())))))
+                        .put(new JSONObject().put("role","tool").put("tool_call_id",oldCall).put("content",submitted.toString()));
+                tasks.journal(id,original.getString("runId"),original.getInt("coordinatorEpoch"),first).checkpoint(historical,1,new JSONObject());
                 tasks.endAttempt(id,original.getString("runId"),"awaiting_user","Await the original plan review",new JSONObject());
                 tasks.decideExecutionPlanApproval(id,submitted.getString("approvalId"),true,original.getString("runId"),original.getInt("coordinatorEpoch"),submitted.getLong("scopeRevision"),submitted.getLong("planRevision"),submitted.getString("planArtifactRef"),submitted.getString("planHash"),()->true);
             }finally{initial.close();first.cancel();}
-            tasks.feedback(id,ownerFeedback);JSONObject resumed=tasks.startAttempt(id,"capabilities",10);RunControl current=control(resumed);
+            JSONObject resumed=tasks.startAttempt(id,"capabilities",10);RunControl current=control(resumed);
             ExecutionPlanning planning=tasks.executionPlanningForRun(id,resumed.getString("runId"),resumed.getInt("coordinatorEpoch"),current);
             JSONObject nativeFacts=planning.reference(planning.capture());
             assertEquals("executing",nativeFacts.getString("executionPhase"));assertTrue(nativeFacts.getBoolean("planApprovalRecorded"));assertFalse(nativeFacts.getBoolean("authorizesExecution"));
             assertEquals(submitted.getString("approvalId"),nativeFacts.getJSONObject("nativePlanApproval").getString("approvalId"));
+            assertEquals(original.getString("runId"),nativeFacts.getJSONObject("nativePlanApproval").getString("runId"));
+            assertEquals(resumed.getString("runId"),nativeFacts.getString("runId"));assertNotEquals(original.getString("runId"),resumed.getString("runId"));
             CapabilityPort port=PlanningCapabilityPort.wrap(extensions.bind(combined(tasks,features,resumed,current,null),binding(resumed),current),planning);
-            try(Server server=new Server((request,index)->new JSONObject().put("content","The current native plan decision is visible; no fixture business operation was requested."))){
-                RunOutcome outcome=new AgentRunner(null,port).run(id,resumed.getString("goal"),server.config(),current,event->{},tasks.journal(id,resumed.getString("runId"),resumed.getInt("coordinatorEpoch"),current));
-                assertEquals(outcome.summary,1,server.requests.size());JSONObject request=server.requests.get(0);assertTrue(hasTool(request,"workspace_read"));assertTrue(hasTool(request,"workspace_write")||hasTool(request,"tools_search"));
-                boolean nativeApproval=false,genuineFeedback=false,untrustedReference=false;
+            AtomicInteger newInputReady=new AtomicInteger(),newInputDelivered=new AtomicInteger();
+            if(newOwnerInput!=null)tasks.openOwnerInputMailbox(id,resumed.getString("runId"),resumed.getInt("coordinatorEpoch"),conversation,current);
+            AgentRunner.OwnerInputs ownerInputs=newOwnerInput==null?null:(included,boundary,close,control)->{
+                if(newInputReady.get()>0&&newInputDelivered.compareAndSet(0,1))tasks.appendOwnerInput(id,resumed.getString("runId"),resumed.getInt("coordinatorEpoch"),conversation,
+                        new JSONObject().put("id",java.util.UUID.randomUUID().toString()).put("clientMessageId",java.util.UUID.randomUUID().toString()).put("content",newOwnerInput).put("attachments",new JSONArray()),"steer",control);
+                return tasks.pollOwnerInputs(id,resumed.getString("runId"),resumed.getInt("coordinatorEpoch"),included,boundary,close,control);
+            };
+            AgentRunner.RequestProjection wireProjection=new dev.pocketengine.features.assistant.AttachmentRequestProjection(
+                    new dev.pocketengine.features.attachments.AttachmentBook(new java.io.File(RuntimeEnvironment.getApplication().getCacheDir(),"approved-plan-projection-"+java.util.UUID.randomUUID())),null);
+            try(Server server=new Server((request,index)->{newInputReady.incrementAndGet();return new JSONObject().put("content","The current native plan decision is visible; no fixture business operation was requested.");})){
+                RunOutcome outcome=new AgentRunner(null,port,dev.pocketengine.runtime.context.ContextBudgetPolicy.currentHostSource(),wireProjection,ownerInputs).run(id,resumed.getString("goal"),server.config(),current,event->{},tasks.journal(id,resumed.getString("runId"),resumed.getInt("coordinatorEpoch"),current));
+                assertEquals(outcome.summary,newOwnerInput==null?1:2,server.requests.size());JSONObject firstRequest=server.requests.get(0);
+                assertTrue("The approved stage resumes before any new owner input",hasTool(firstRequest,"workspace_write")||hasTool(firstRequest,"tools_search"));
+                JSONObject request=server.requests.get(server.requests.size()-1);JSONArray offeredNames=new JSONArray();
+                for(int i=0;i<request.getJSONArray("tools").length();i++)offeredNames.put(request.getJSONArray("tools").getJSONObject(i).getJSONObject("function").getString("name"));
+                assertTrue("Original read must remain published: "+offeredNames,hasTool(request,"workspace_read"));
+                if(newOwnerInput==null)assertTrue("Current approved execution scope must still offer write or discovery; stage-only feedback must not remove both: "+offeredNames,hasTool(request,"workspace_write")||hasTool(request,"tools_search"));
+                else assertFalse("A later real owner input must restore the read-only filter, including identical text: "+offeredNames,hasTool(request,"workspace_write"));
+                boolean nativeApproval=false,genuineFeedback=false,untrustedReference=false,historicalWait=false,currentReviewMeaning=false,newInputPreserved=false;
                 for(int i=0;i<request.getJSONArray("messages").length();i++){
                     JSONObject message=request.getJSONArray("messages").getJSONObject(i);String content=message.optString("content");
-                    if("system".equals(message.optString("role"))){assertFalse(content.contains(untrustedMarker));if(content.contains("nativePlanApproval")&&content.contains(submitted.getString("approvalId")))nativeApproval=true;}
-                    if("user".equals(message.optString("role"))){assertFalse(content.contains(submitted.getString("approvalId")));genuineFeedback|=content.contains(ownerFeedback);untrustedReference|=content.contains(untrustedMarker);}
+                    if("system".equals(message.optString("role"))){assertFalse(content.contains(untrustedMarker));if(content.contains("nativePlanApproval")&&content.contains(submitted.getString("approvalId"))){nativeApproval=true;currentReviewMeaning=content.contains("历史计划待审回执不再表示当前状态")&&content.contains("批准来源run/epoch")&&content.contains("新的主人停止或修改仍然有效");}}
+                    if("tool".equals(message.optString("role"))&&"historical-plan-submit".equals(message.optString("tool_call_id")))historicalWait="execution_plan_awaiting_review".equals(new JSONObject(content).optString("code"));
+                    if("user".equals(message.optString("role"))){assertFalse(message.has("ownerMessageId"));assertFalse(message.has("ownerInputMode"));assertFalse(content.contains(submitted.getString("approvalId")));genuineFeedback|=content.contains(ownerFeedback);untrustedReference|=content.contains(untrustedMarker);newInputPreserved|=newOwnerInput!=null&&content.equals(newOwnerInput);}
                 }
+                if(newOwnerInput!=null){assertEquals(1,newInputDelivered.get());assertTrue("The new owner input remains genuine user content",newInputPreserved);JSONArray admitted=tasks.get(id,false).getJSONArray("ownerInputs");assertEquals(1,admitted.length());assertEquals("materialized",admitted.getJSONObject(0).getString("queueState"));assertEquals(resumed.getString("runId"),admitted.getJSONObject(0).getString("materializedRunId"));}
+                assertTrue("Keep the actual prior awaiting-review receipt; it is historical evidence, not a new current wait",historicalWait);
                 assertTrue("The actual model request must carry the current native plan decision",nativeApproval);assertTrue(genuineFeedback);assertTrue(untrustedReference);
+                assertTrue("The current SQL-validated approval must explain the satisfied old review wait and the original approval-run provenance",currentReviewMeaning);
                 ModelConfig account=new ModelConfig("","","",false,3,10).withAccountModel(ModelConfig.AccountModelRef.fromJson(new JSONObject().put("provider",ModelConfig.ACCOUNT_PROVIDER).put("accountId","44444444-4444-4444-4444-444444444444").put("accountVersion",1L).put("modelId","fixture-model")));
                 var wire=dev.pocketengine.runtime.providers.AccountResponsesAdapter.request(account,request.getJSONArray("messages"),request.getJSONArray("tools"));
                 var bytes=dev.pocketengine.features.proxy.providers.ResponsesRequest.class.getDeclaredField("bytes");bytes.setAccessible(true);JSONObject actual=new JSONObject(new String((byte[])bytes.get(wire),StandardCharsets.UTF_8));
