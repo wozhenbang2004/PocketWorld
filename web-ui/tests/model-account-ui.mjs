@@ -35,7 +35,7 @@ if (bundle) {
   server = await createServer({ root, server: { host: '127.0.0.1', port: 0 }, logLevel: 'error' });
   await server.listen(); origin = server.resolvedUrls.local[0];
 }
-const browser = await chromium.launch({ headless: true, args: ['--disable-background-networking'] });
+const browser = await chromium.launch({ channel: process.env.UI_BROWSER_CHANNEL || undefined, headless: true, args: ['--disable-background-networking'] });
 const results = [];
 const baseline = process.argv.includes('--baseline');
 async function navigate(page, name) {
@@ -59,7 +59,7 @@ async function check(name, work, view = '') {
     if (bundle) assert.deepEqual(await page.evaluate(() => window.modelFixture.errors), []);
     results.push({ name, passed: true });
   } catch (error) { results.push({ name, passed: false, error: String(error.message) }); }
-  finally { await page.screenshot({ path: path.join(output, name + '.png'), fullPage: true }); await page.close(); }
+  finally { if (process.env.UI_NO_SCREENSHOTS !== '1') await page.screenshot({ path: path.join(output, name + '.png'), fullPage: true }); await page.close(); }
 }
 try {
   await check('account-new-label', async page => {

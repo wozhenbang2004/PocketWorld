@@ -202,7 +202,7 @@ internal class PocketWebBridge(
         private val ownerDomains = setOf("memoryReview", "taskMemory", "mcp", "accounts", "learning", "groups", "channelMedia")
         private val connectionSections = setOf("devices", "models", "accounts", "remote", "ssh", "local", "memory", "memoryReview", "automation", "commitments", "channels", "skills", "learning", "plugins", "pluginCatalog", "mcp", "teams", "groups", "media", "realtime", "proxy", "workProfiles")
         val commands: Set<String> = linkedSetOf(
-            "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
+            "app.ready", "app.refresh", "app.openNativeWorkspace", "notice.dismiss", "notice.task.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending",
             "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh",
             "attachments.pick", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
@@ -918,6 +918,11 @@ internal class PocketWebBridge(
                     controller.voiceInputTypeChanged(phoneIntent)
                 }
                 return JSONObject().put("ready", true).put("source", "library-web")
+            }
+            "app.openNativeWorkspace" -> {
+                // Let this command receive its receipt before checking the pending-command guard.
+                val original = captureWindow()
+                main.post { if (acceptsWindow(original) && controller.webUiCanInteract()) controller.webPresentationActivity().requestNativeWorkspace() }
             }
             "app.refresh", "tasks.refresh" -> controller.refresh()
             "notice.dismiss" -> controller.dismissNotice()

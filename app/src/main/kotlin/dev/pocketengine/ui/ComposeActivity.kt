@@ -8,10 +8,6 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import android.app.Activity
 import android.view.View
-import android.graphics.Insets
-import android.view.WindowInsets
-import android.widget.Button
-import android.widget.LinearLayout
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
@@ -245,24 +241,11 @@ class ComposeActivity : ComponentActivity() {
             .show()
     }
 
-    /** Presentation only: both surfaces use the Activity's existing controller and engine. */
-    private fun workspaceLayout(label: String, action: () -> Unit, body: View): LinearLayout =
-        LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            val switchButton = Button(this@ComposeActivity).apply { text = label; setOnClickListener { action() } }
-            val originalPadding = intArrayOf(switchButton.paddingLeft, switchButton.paddingTop, switchButton.paddingRight, switchButton.paddingBottom)
-            addView(switchButton, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-            addView(body, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-            setOnApplyWindowInsetsListener { _, insets ->
-                val bars = insets.getInsets(WindowInsets.Type.systemBars())
-                switchButton.setPadding(originalPadding[0] + bars.left, originalPadding[1] + bars.top,
-                    originalPadding[2] + bars.right, originalPadding[3])
-                val status = insets.getInsets(WindowInsets.Type.statusBars())
-                WindowInsets.Builder(insets)
-                    .setInsets(WindowInsets.Type.statusBars(), Insets.of(status.left, 0, status.right, status.bottom))
-                    .build()
-            }
-        }
+    /** Both entry points retain the same controller, startup and pending-operation guards. */
+    internal fun requestNativeWorkspace() {
+        if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) return
+        confirmWorkspaceSwitch(true, ::webWorkspaceCanSwitch)
+    }
 
     private fun webWorkspaceCanSwitch(): Boolean {
         if (!businessCurrent() || !webHostIsBusiness) return false
@@ -300,7 +283,7 @@ class ComposeActivity : ComponentActivity() {
         nativeWorkspace = false
         webHost = dev.pocketengine.ui.web.PocketWebHost(this, controller, savedWebPresentation)
         webHostIsBusiness = true
-        setContentView(workspaceLayout("打开原生工作台", { confirmWorkspaceSwitch(true, ::webWorkspaceCanSwitch) }, webHost.view))
+        setContentView(webHost.view)
         webHost.start()
         if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) webHost.resume()
     }

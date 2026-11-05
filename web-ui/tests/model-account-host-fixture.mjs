@@ -2,7 +2,7 @@
 export function installModelAccountHost(view) {
   const token = 'model-account-fixture-document';
   window.__pocketDocumentToken = token;
-  const commands = ['app.ready', 'app.refresh', 'composer.reading', 'connections.enter', 'connections.leave',
+  const commands = ['app.openNativeWorkspace', 'app.ready', 'app.refresh', 'composer.reading', 'connections.enter', 'connections.leave',
     'accounts.beginLogin', 'accounts.refresh', 'accounts.openAuthorization', 'accounts.cancelLogin',
     'models.snapshot', 'models.review', 'models.select', 'projects.create', 'projects.newFile', 'projects.refresh', 'projects.select', 'projects.open',
     'models.api.open', 'models.api.close', 'models.api.review', 'models.api.select', 'models.api.favorite',
