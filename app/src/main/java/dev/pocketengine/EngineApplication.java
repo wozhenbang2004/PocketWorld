@@ -1962,6 +1962,21 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(memorySources==null)throw new IllegalStateException("原来源核对暂不可用");
         return memorySources.withCurrentUserSources(refs,()->tasks.readConversationInterrupted(selected));
     }
+    /** Reads the selected original event under the same forget/current-source fence
+     * as conversation history. The trace itself grants no execution authority. */
+    public JSONObject readOwnerExecutionTraceDetail(String task,String run,String node,RunControl ownerRead)throws Exception {
+        var selected=tasks.prepareOwnerExecutionTraceDetail(task,run,node,ownerRead);
+        JSONArray refs=selected.sources();
+        if(refs.length()==0)return tasks.readOwnerExecutionTraceDetail(selected);
+        if(memorySources==null)return tasks.unavailableOwnerExecutionTraceDetail(selected,"source_check_unavailable");
+        try {
+            return memorySources.withCurrentUserSources(refs,()->tasks.readOwnerExecutionTraceDetail(selected));
+        } catch(dev.pocketengine.features.automation.ScheduleSourceState.Invalidated failure) {
+            return tasks.unavailableOwnerExecutionTraceDetail(selected,"source_"+failure.reason.name().toLowerCase(java.util.Locale.ROOT));
+        } catch(dev.pocketengine.features.automation.ScheduleSourceState.Unavailable failure) {
+            return tasks.unavailableOwnerExecutionTraceDetail(selected,"source_check_unavailable");
+        }
+    }
     /** Native-only current-task binding; the broad audit UI host is never exposed as a model tool. */
     private CapabilityPort bindRawTaskEvidence(CapabilityPort existing,JSONObject task,dev.pocketengine.runtime.extensions.ExtensionRuntime.Binding identity,RunControl original,ModelConfig capturedInference)throws Exception{
         JSONObject origin=task.optJSONObject("origin");
