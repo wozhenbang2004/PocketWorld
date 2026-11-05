@@ -20,6 +20,7 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
   const [tab, setTab] = useState(domain === 'memoryReview' ? 'candidates' : 'records'), [query, setQuery] = useState(''), [draft, setDraft] = useState(''), [reason, setReason] = useState('');
   const [draftMeta, setDraftMeta] = useState<Data>({ layer: 'fact', reason: '', applicability: '', confidence: '0.5' });
   const [namespaces, setNamespaces] = useState<Data[]>([]), [namespace, setNamespace] = useState('private'), [history, setHistory] = useState<Data | null>(null), [capacity, setCapacity] = useState<Data | null>(null);
+  const [scopeName, setScopeName] = useState('');
   const [consolidation, setConsolidation] = useState<Data[]>([]), [operation, setOperation] = useState<Data | null>(null), [stopping, setStopping] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState(''), [acknowledged, setAcknowledged] = useState(false), [attempted, setAttempted] = useState(false);
   const selectionPanel = useRef<HTMLElement | null>(null), collectionPanel = useRef<HTMLElement | null>(null);
@@ -35,7 +36,28 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
   const closeReview = () => { closeHandle(reviewHandle.current); reviewHandle.current = ''; setReview(null); setAcknowledged(false); };
   const closeRecord = () => { closeReview(); closeHandle(readHandle.current); readHandle.current = ''; setSelection(null); setSource(null); setAttempted(false); setAssertionOpen(false); };
   const clearConsolidation = () => { selectedHandles.current.forEach(closeHandle); selectedHandles.current = []; setConsolidation([]); };
-  const load = (candidate: LearningCandidateTarget | null = null) => { closeRecord(); clearConsolidation(); void invoke('knowledge.snapshot', {}, value => { setSnapshot(value); setNotice(''); }).then(value => { if (value && alive.current && candidate) { setTab('candidates'); choose({ id: candidate.id }, true, candidate); } }); };
+  const load = (candidate: LearningCandidateTarget | null = null) => {
+    if (entered.current || !alive.current) return;
+    closeRecord(); clearConsolidation(); setSnapshot(null);
+    void invoke('knowledge.snapshot', {}, value => { setSnapshot(value); setScopeName(value.scopeName || ''); setNotice(''); }).then(value => {
+      if (value && alive.current && candidate) { setTab('candidates'); choose({ id: candidate.id }, true, candidate); }
+    });
+  };
+  const changeNamespace = async (value: string) => {
+    if (entered.current || !alive.current) return;
+    closeRecord(); clearConsolidation(); setHistory(null); setCapacity(null); setSelectingConsolidation(false);
+    // Native selection retires the old scope and every choice handle, even if
+    // the new scope fails. Do not present the old rows as a valid fallback.
+    setSnapshot(null); setScopeName(''); setNamespace(''); setNamespaces([]); setNotice('');
+    const result = await invoke('knowledge.namespace', { choiceHandle: value === 'private' ? '' : value }, selected => {
+      setNamespace(value); setScopeName(selected.scopeName || '');
+    });
+    if (!alive.current) return;
+    // invoke releases its single-flight lock in finally. A nested load inside
+    // accept would be discarded while that lock is still held.
+    if (result) load();
+    else setNotice('范围切换未完成，请重新选择范围。');
+  };
   useEffect(() => { alive.current = true; load(initialCandidate); return () => { alive.current = false; closeHandle(readHandle.current); closeHandle(reviewHandle.current); selectedHandles.current.forEach(closeHandle); }; }, []);
   useEffect(() => { registerTransientBack(review || selection ? () => { if (!busy) { if (review) closeReview(); else closeRecord(); } return true; } : null); return () => registerTransientBack(null); }, [review, selection, busy, registerTransientBack]);
   useEffect(() => {
@@ -87,16 +109,16 @@ export function MemoryWorkspace({ domain, run, registerTransientBack, initialCan
       <Tabs selectedKey={tab} onSelectionChange={value => { setTab(String(value)); closeRecord(); }} className="pw-team-tabs">
         <div className="pw-object-toolbar"><TabList aria-label="记忆视图"><Tab id="records" isDisabled={busy}>已保存</Tab><Tab id="candidates" isDisabled={busy}>待审候选</Tab></TabList><IconButton className="pw-utility-icon" icon={RiRefreshLine} aria-label="重新读取记忆" title="重新读取记忆" disabled={busy} onClick={() => load()} /></div>
         <TabPanel id={tab}>
-      <p className="pw-detail-location">{snapshot?.scopeName || '正在核对记忆范围'}</p>
+      <p className="pw-detail-location">{scopeName || (busy ? '正在核对记忆范围' : '记忆范围尚未确认')}</p>
       <Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="memory-scope" title="范围与容量">
         <div className="pw-form-actions"><Button variant="ghost" disabled={busy || running} onClick={() => { void invoke('knowledge.namespaces', {}, value => setNamespaces(rows(value.choices))); }}>读取可用项目范围</Button><Button variant="ghost" disabled={busy} onClick={() => { void invoke('knowledge.capacity', {}, setCapacity); }}>候选容量</Button><Button variant="ghost" disabled={busy} onClick={() => { void invoke('knowledge.history', {}, setHistory); }}>已处理候选历史</Button></div>
-        <SelectField label="本次查看范围" value={namespace} isDisabled={busy || running} options={[{ id: 'private', label: '主人全局 · 私人' }, ...namespaces.map(row => ({ id: row.choiceHandle, label: row.name || row.title || row.projectId }))]} onChange={value => { closeRecord(); clearConsolidation(); setHistory(null); setCapacity(null); void invoke('knowledge.namespace', { choiceHandle: value === 'private' ? '' : value }, result => { setNamespace(value); setSnapshot(null); setNotice(result.scopeName || '范围已切换，请重新读取。'); }); }} />
+        <SelectField label="本次查看范围" value={namespace} isDisabled={busy || running} options={[{ id: 'private', label: '主人全局 · 私人' }, ...(namespace && namespace !== 'private' && !namespaces.some(row => row.choiceHandle === namespace) ? [{ id: namespace, label: scopeName || '当前项目', disabled: true }] : []), ...namespaces.map(row => ({ id: row.choiceHandle, label: row.name || row.title || row.projectId }))]} onChange={value => { void changeNamespace(value); }} />
         {capacity && <p>候选容量：{capacity.candidatesUsed ?? '未知'} / {capacity.candidateLimit ?? '未知'}。清理终态候选只移除候选正文，不删除正式记忆。</p>}
         {history && <Accordion variant="divided">{rows(history.entries).map(row => <AccordionItem key={row.id} id={row.id} title={(row.text || '已清理正文，保留去重标记').split('\n')[0]} description={row.status}><p className="pw-reading-copy">{row.text}</p><p className="pw-muted">保留原处理状态；查看不会再次采用。</p></AccordionItem>)}</Accordion>}
       </AccordionItem></Accordion>
       <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="筛选当前读取的记忆" placeholder="查找记忆" value={query} onChange={setQuery} />
       {snapshot && !list.length && <p className="pw-secondary-empty">当前范围与筛选条件下没有记录。</p>}
-      <div className="pw-memory-list-heading"><p>{snapshot ? `当前读取 ${list.length} 条` : '正在读取原记忆…'}</p>{tab === 'records' && <Button variant="ghost" disabled={busy || running} onClick={() => { if (selectingConsolidation) clearConsolidation(); setSelectingConsolidation(value => !value); }}>{selectingConsolidation ? '退出多选' : '选择记忆归纳'}</Button>}</div>
+      <div className="pw-memory-list-heading"><p>{snapshot ? `当前读取 ${list.length} 条` : busy ? '正在读取原记忆…' : '尚未读取记忆，请重新读取。'}</p>{tab === 'records' && <Button variant="ghost" disabled={busy || running} onClick={() => { if (selectingConsolidation) clearConsolidation(); setSelectingConsolidation(value => !value); }}>{selectingConsolidation ? '退出多选' : '选择记忆归纳'}</Button>}</div>
       <div className="pw-memory-list">{list.map(row => <article className="pw-memory-list-item" key={row.id}>
         <Button variant="ghost" className="pw-memory-row" data-memory-id={row.id} trailingIcon={RiArrowRightSLine} disabled={busy} onClick={() => choose(row, tab === 'candidates')} aria-label={`读取原版本与来源：${(row.text || row.title || '未命名内容').split('\n')[0].slice(0, 100)}`} aria-description={[layer(row.layer), row.core ? '核心记忆' : '', row.status || '', row.active === false ? '已停用' : ''].filter(Boolean).join('；')}>
           <span className="pw-memory-row-copy"><span>{row.text || row.title || '未命名内容'}</span><small>{[layer(row.layer), row.core ? '核心记忆' : '', row.status || '', row.active === false ? '已停用' : ''].filter(Boolean).join(' · ')}</small></span>
