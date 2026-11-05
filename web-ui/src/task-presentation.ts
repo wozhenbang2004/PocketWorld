@@ -18,6 +18,8 @@ export interface TaskOperation {
   bodyAvailable: boolean;
   readLimited: boolean;
   requiresReconciliation?: boolean;
+  /** Display-only classification supplied by the original native audit projection. */
+  toolOutcome?: unknown;
   arguments?: unknown;
   receipt?: unknown;
 }
@@ -81,6 +83,15 @@ const text = (value: unknown): string => typeof value === 'string' ? value : '';
 const number = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 const rows = (value: unknown): Row[] => Array.isArray(value) ? value.map(row).filter((value): value is Row => value !== undefined) : [];
 const has = (value: object, key: string) => Object.prototype.hasOwnProperty.call(value, key);
+type ToolOutcomeKind = 'success' | 'correctable_failure' | 'needs_user' | 'effect_unknown';
+function nativeOutcome(value: unknown): ToolOutcomeKind | 'invalid' | undefined {
+  if (value === undefined) return undefined;
+  const contract = row(value);
+  const next: Record<string, string> = {success: 'continue', correctable_failure: 'revise_request', needs_user: 'ask_owner', effect_unknown: 'reconcile_original'};
+  const kind = text(contract?.kind);
+  return contract?.format === 'pocketworld.tool-outcome.v1' && has(next, kind) && contract.nextAction === next[kind] && contract.automaticReplayAllowed === false
+    ? kind as ToolOutcomeKind : 'invalid';
+}
 const excerpt = (value: string, limit = 240): string => {
   const points = Array.from(value);
   return points.length > limit ? points.slice(0, limit).join('') + '…' : value;
@@ -109,6 +120,7 @@ function operation(value: unknown): TaskOperation | undefined {
     operationId, tool: text(source.tool), state: text(source.state), runId: text(source.runId),
     position: number(source.position), createdAt: number(source.createdAt), bodyBytes: number(source.bodyBytes),
     bodyAvailable, readLimited, requiresReconciliation: source.requiresReconciliation === true,
+    ...(has(source, 'toolOutcome') ? {toolOutcome: source.toolOutcome} : {}),
     ...(bodyAvailable && has(source, 'arguments') ? {arguments: source.arguments} : {}),
     ...(bodyAvailable && has(source, 'receipt') ? {receipt: source.receipt} : {}),
   };
@@ -183,12 +195,13 @@ export function presentOperation(input: unknown): OperationPresentation {
   const state = op?.state ?? '';
   const receiptStatus = text(receipt?.status);
   const code = text(receipt?.code);
+  const outcome = op?.bodyAvailable ? nativeOutcome(op.toolOutcome) : undefined;
   const uncertain = ['unknown', 'uncertain', 'reconciliation_required', 'pending_reconciliation'].includes(state) ||
-    state.endsWith('_unknown') || op?.requiresReconciliation === true || receipt?.requiresReconciliation === true ||
-    receipt !== undefined && (has(receipt, 'accepted') && receipt.accepted === null || receiptStatus === 'unknown' || code.includes('unknown'));
+    state.endsWith('_unknown') || state.endsWith('_unconfirmed') || op?.requiresReconciliation === true || receipt?.requiresReconciliation === true || receipt?.reconciliationRequired === true ||
+    receipt !== undefined && (has(receipt, 'accepted') && receipt.accepted === null || receiptStatus === 'unknown' || outcome === undefined && code.includes('unknown'));
   let status: OperationStatus = 'unknown';
   let stateLabel = state ? '原状态：' + excerpt(state, 80) : '记录状态尚不可读取';
-  if (uncertain) { status = 'unknown'; stateLabel = '结果待核对'; }
+  if (uncertain || outcome === 'effect_unknown' || outcome === 'invalid') { status = 'unknown'; stateLabel = '结果待核对'; }
   else if (state === 'project_running') { status = 'running'; stateLabel = '服务已有启动回执，尚无终态'; }
   else if (state === 'project_stopping') { status = 'waiting'; stateLabel = '服务正在收尾，尚未确认释放'; }
   else if (code === 'approval_required') { status = 'needs_approval'; stateLabel = '等待本次操作授权'; }
@@ -198,6 +211,10 @@ export function presentOperation(input: unknown): OperationPresentation {
   }
   else if (state === 'prepared') { status = 'waiting'; stateLabel = '已登记，等待结果'; }
   else if (['cancelled', 'canceled', 'stopped'].includes(receiptStatus)) { status = 'stopped'; stateLabel = '调用已停止，详见原回执'; }
+  else if (outcome === 'needs_user') { status = 'waiting'; stateLabel = '需要你处理，已发生的操作仍保留'; }
+  else if (outcome === 'correctable_failure') { status = 'error'; stateLabel = '请求可调整，不会自动重放原操作'; }
+  // Compatibility for pre-contract snapshots only. Fresh native pages already
+  // classify the original receipt; these display checks never authorize a retry.
   else if (receipt?.ok === false || receiptStatus === 'failed' || number(receipt?.exitCode) !== undefined && receipt?.exitCode !== 0) { status = 'error'; stateLabel = '调用出错，请核对操作结果'; }
   else if (receipt?.terminal === false) { status = 'waiting'; stateLabel = '已返回部分结果'; }
   else if (receiptValue !== undefined && receiptValue !== null) { status = 'returned'; stateLabel = '已返回，结果可展开查看'; }
@@ -210,6 +227,30 @@ export function presentOperation(input: unknown): OperationPresentation {
     ...(receiptValue !== undefined && receiptValue !== null ? {result: receiptValue} : {}),
     // No durationMs or startedAt is derived from a registration timestamp or an arbitrary receipt field.
   };
+}
+
+/** A whole-journal native warning can refer to operations outside this page.
+ * A recent successful event or a superficially completed task cannot clear it. */
+export function taskNeedsReconciliation(task: unknown): boolean {
+  const {header, raw, runId} = taskParts(task);
+  const state = text(header.status) || text(raw.status);
+  const operations = getTaskOperations(task);
+  if (['reconciling', 'reconciliation_required', 'unknown'].includes(state) || row(raw.evidence)?.requiresReconciliation === true ||
+      operations.some(op => presentOperation(op).status === 'unknown' && (op.bodyAvailable || op.state.includes('unknown') || op.requiresReconciliation))) return true;
+  const unconfirmed = typeof raw.historyHasUnconfirmedOperations === 'boolean' ? raw.historyHasUnconfirmedOperations : raw.hasUnresolvedOperations === true;
+  const active = ['preparing', 'running', 'verifying', 'pausing', 'stopping', 'cancelling'].includes(state);
+  const knownInFlight = operations.some(op => !!runId && op.runId === runId && op.state === 'prepared');
+  return unconfirmed && !(active && knownInFlight);
+}
+
+/** Attention is a reading route, not permission to confirm, resume or replay. */
+export function taskNeedsAttention(task: unknown): boolean {
+  if (taskNeedsReconciliation(task)) return true;
+  const {header, raw} = taskParts(task);
+  const state = text(header.status) || text(raw.status);
+  if (['completed', 'failed', 'cancelled', 'canceled', 'stopped'].includes(state)) return false;
+  return ['needs_confirmation', 'awaiting_user', 'waiting_user', 'waiting_approval', 'awaiting_approval', 'waiting_permission', 'interrupted', 'paused'].includes(state) ||
+    rows(raw.approvals).some(approval => ['pending', 'waiting'].includes(text(approval.state) || text(approval.status)));
 }
 
 function latest<T>(values: T[], position: (value: T) => number | undefined, time: (value: T) => number | undefined): T | undefined {
@@ -247,6 +288,8 @@ export function getRecentTaskProgress(task: unknown): TaskProgress {
     operationPage?.hasMore === true || operationPage?.readLimited === true ||
     rows(eventPage?.entries).some(entry => entry.status === 'read_limited') ||
     rows(operationPage?.entries).some(entry => entry.status === 'read_limited');
+  if (taskNeedsReconciliation(task)) return {title: '有操作结果待核对', detail: '操作可能已经发生，请在原任务核对结果；不会自动重放。',
+    status: 'unknown', stateLabel: '结果待核对', source: 'task', runId, partial};
   if (!runId) return taskFallback(header, raw, runId, partial);
   const pageEvents = rows(eventPage?.entries).flatMap(entry => {
     const event = row(entry.event);

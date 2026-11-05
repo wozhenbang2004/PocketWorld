@@ -21,8 +21,8 @@ public final class ProjectFileQueriesTest {
     }
     @Test public void unicodeRangesNeverReturnHalfSurrogateOrPretendSplitUtf8IsText()throws Exception{
         file("unicode.txt","a🙂中b");JSONObject page=read(new JSONObject().put("path","unicode.txt").put("maxChars",2));assertEquals("a",page.getString("content"));assertEquals(1,page.getInt("nextOffset"));
-        assertThrows(IllegalArgumentException.class,()->read(new JSONObject().put("path","unicode.txt").put("offset",2)));
-        assertThrows(IllegalArgumentException.class,()->read(new JSONObject().put("path","unicode.txt").put("rangeMode","bytes").put("offset",1).put("maxBytes",2)));
+        assertRejected(read(new JSONObject().put("path","unicode.txt").put("offset",2)),"project_read_split_unicode");
+        assertRejected(read(new JSONObject().put("path","unicode.txt").put("rangeMode","bytes").put("offset",1).put("maxBytes",2)),"project_read_split_unicode");
         assertEquals("🙂",read(new JSONObject().put("path","unicode.txt").put("rangeMode","bytes").put("offset",1).put("maxBytes",4)).getString("content"));
     }
     @Test public void binaryMetadataDoesNotMasqueradeAsEmptyText()throws Exception{
@@ -63,7 +63,43 @@ public final class ProjectFileQueriesTest {
         assertFalse(ProjectFileQueries.glob("*a".repeat(100)+"b").matches("a".repeat(200)+"c"));assertTrue(ProjectFileQueries.glob("**a".repeat(70)+"*").matches("a".repeat(220)));file("small.js","needle");assertEquals("bounded_dynamic_programming",search(new JSONObject().put("mode","path").put("query","**/*.js")).getString("pathGlobEngine"));
     }
     @Test public void singleUtf16UnitPageRejectsZeroProgressInsteadOfRepeatingEmojiCursor()throws Exception{
-        file("emoji.txt","🙂x");assertThrows(IllegalArgumentException.class,()->read(new JSONObject().put("path","emoji.txt").put("maxChars",1)));JSONObject page=read(new JSONObject().put("path","emoji.txt").put("maxChars",2));assertEquals("🙂",page.getString("content"));assertEquals(2,page.getInt("nextOffset"));assertEquals("x",read(new JSONObject().put("path","emoji.txt").put("offset",2)).getString("content"));assertThrows(IllegalArgumentException.class,()->read(new JSONObject().put("path","emoji.txt").put("rangeMode","bytes").put("maxBytes",0)));
+        file("emoji.txt","🙂x");assertRejected(read(new JSONObject().put("path","emoji.txt").put("maxChars",1)),"project_read_page_too_small");JSONObject page=read(new JSONObject().put("path","emoji.txt").put("maxChars",2));assertEquals("🙂",page.getString("content"));assertEquals(2,page.getInt("nextOffset"));assertEquals("x",read(new JSONObject().put("path","emoji.txt").put("offset",2)).getString("content"));assertThrows(IllegalArgumentException.class,()->read(new JSONObject().put("path","emoji.txt").put("rangeMode","bytes").put("maxBytes",0)));
+    }
+    @Test public void schemaValidRangesBeyondTheActualSourceReturnCorrectableReceipts()throws Exception{
+        file("short.txt","a🙂中b\n");
+        for(String mode:new String[]{"chars","bytes","hex"})assertRejected(read(new JSONObject().put("path","short.txt").put("rangeMode",mode).put("offset",100)),"project_read_invalid_range");
+        assertRejected(read(new JSONObject().put("path","short.txt").put("rangeMode","lines").put("startLine",100)),"project_read_invalid_range");
+        assertEquals("a🙂中b\n",read(new JSONObject().put("path","short.txt")).getString("content"));
+    }
+    @Test public void correctableRangeReceiptsNeverSwallowAuthorityCancellationOrIoFailures()throws Exception{
+        file("unicode.txt","a🙂中b");JSONObject input=new JSONObject().put("path","unicode.txt").put("rangeMode","bytes").put("offset",1).put("maxBytes",2);
+        AtomicInteger total=new AtomicInteger();assertRejected(ProjectFileQueries.read(root.toFile(),CHECKOUT,input,total::incrementAndGet),"project_read_split_unicode");
+        for(int at=1;at<=total.get();at++){
+            final int boundary=at;AtomicInteger checks=new AtomicInteger();
+            InterruptedException cancelled=new InterruptedException("original cancelled");
+            assertSame(cancelled,assertThrows(InterruptedException.class,()->ProjectFileQueries.read(root.toFile(),CHECKOUT,input,()->{if(checks.incrementAndGet()==boundary)throw cancelled;})));
+            checks.set(0);SecurityException revoked=new SecurityException("original authority withdrawn");
+            assertSame(revoked,assertThrows(SecurityException.class,()->ProjectFileQueries.read(root.toFile(),CHECKOUT,input,()->{if(checks.incrementAndGet()==boundary)throw revoked;})));
+            checks.set(0);java.io.IOException unknown=new java.io.IOException("original read unavailable");
+            assertSame(unknown,assertThrows(java.io.IOException.class,()->ProjectFileQueries.read(root.toFile(),CHECKOUT,input,()->{if(checks.incrementAndGet()==boundary)throw unknown;})));
+        }
+        String oldHash=ProjectSources.sha256("original".getBytes(StandardCharsets.UTF_8));
+        assertThrows(SecurityException.class,()->read(new JSONObject(input.toString()).put("expectedHash",oldHash)));
+    }
+    @Test public void sourceChangeDuringRangeRejectionCannotBecomeARetryHint()throws Exception{
+        JSONObject input=new JSONObject().put("path","changing.txt").put("offset",100);
+        for(boolean removed:new boolean[]{false,true}){
+            file("changing.txt","original");AtomicInteger checks=new AtomicInteger();
+            assertThrows(SecurityException.class,()->ProjectFileQueries.read(root.toFile(),CHECKOUT,input,()->{
+                // This checkpoint follows the original digest/text scan and the range rejection.
+                if(checks.incrementAndGet()==5){if(removed)Files.delete(root.resolve("changing.txt"));else Files.writeString(root.resolve("changing.txt"),"replacement",StandardCharsets.UTF_8);}
+            }));
+        }
+    }
+    private static void assertRejected(JSONObject receipt,String code)throws Exception{
+        assertFalse(receipt.getBoolean("ok"));assertFalse(receipt.getBoolean("accepted"));assertEquals("failed",receipt.getString("status"));assertEquals(code,receipt.getString("code"));
+        assertTrue(receipt.getBoolean("contentOmitted"));assertFalse(receipt.getBoolean("complete"));assertFalse(receipt.getBoolean("authorityAdded"));
+        for(String field:new String[]{"content","hex","ascii","nextOffset","nextByteOffset"})assertFalse(field,receipt.has(field));
     }
     @Test public void multilineLiteralIsExplicitlyRejectedAndEmptyIncludeMeansNoExtraFilter()throws Exception{
         file("src/NAME.js","first needle\nsecond\n");assertThrows(IllegalArgumentException.class,()->search(new JSONObject().put("mode","text").put("query","needle\nsecond")));assertEquals(1,search(new JSONObject().put("mode","text").put("query","needle").put("include","")).getJSONArray("matches").length());assertEquals(1,search(new JSONObject().put("mode","path").put("query","**/name.js").put("caseSensitive",false)).getJSONArray("matches").length());

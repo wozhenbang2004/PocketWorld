@@ -47,7 +47,7 @@ public final class ExecutionPlanningRunnerTest {
         final List<JSONObject> requests=new CopyOnWriteArrayList<>(),replies=new ArrayList<>(),events=new ArrayList<>(),dispatched=new ArrayList<>();
         final NativePlanning planner;
         JSONArray history=new JSONArray();int steps,prepared,effectReceipts,effects,reads,phoneReads,observations,beforeTools,contextReads;
-        boolean withPhone,exposeHandle=true,changeBeforeModel,changeOnResponse,pauseOnResponse,browserReturn,cancelRead,throwRead,unknownRead,nullRead,firstScreenChanged,changeBeforeFinalObservation,changeAfterWait;
+        boolean withPhone,exposeHandle=true,changeBeforeModel,changeOnResponse,pauseOnResponse,browserReturn,cancelRead,lateKnownReadAfterCancel,throwRead,unknownRead,nullRead,firstScreenChanged,changeBeforeFinalObservation,changeAfterWait;
         int unconfirmedObservationAt=-1;String unconfirmedObservationCode="empty_observation";
         Fixture()throws Exception {
             original.bindHostRun("original-task","original-run",1);planner=new NativePlanning(original);
@@ -91,7 +91,12 @@ public final class ExecutionPlanningRunnerTest {
                 else assertEquals(planner.lastRead.operationId,arguments.getString("_hostOperationId"));
                 reads++;if(cancelRead){control.cancel();control.check();}if(throwRead)throw new IllegalStateException("original read interrupted");
                 if(nullRead)return null;
-                JSONObject receipt=new JSONObject().put("ok",true).put("content","Original native source");if(unknownRead)receipt.put("accepted",JSONObject.NULL);return receipt;
+                JSONObject receipt=new JSONObject().put("ok",true).put("content","Original native source");
+                if(lateKnownReadAfterCancel){
+                    receipt.put("nativeReceiptMarker","original-read-after-stop");control.cancel();
+                    throw new CapabilityPort.ReceiptAfterStop(control,receipt,new InterruptedException("Original read completed before cancellation"));
+                }
+                if(unknownRead)receipt.put("accepted",JSONObject.NULL);return receipt;
             }
             public JSONObject contextSnapshot(String query){
                 if(dev.pocketengine.browser.BrowserTaskCapabilityPort.OWNER_RETURN_CONTEXT.equals(query)){contextReads++;throw new AssertionError("Planning owner-return must stop before the unmetered context read");}
@@ -212,6 +217,20 @@ public final class ExecutionPlanningRunnerTest {
     @Test public void cancellationDuringReadKeepsTheOriginalExpenseAndAnUnconfirmedReadWithoutReplay()throws Exception {
         try(Fixture f=new Fixture()){
             f.cancelRead=true;f.replies.add(calls(call("read","fixture_read",new JSONObject())));RunOutcome outcome=f.run();assertEquals("cancelled",outcome.status);assertEquals(1,f.requests.size());assertEquals(1,f.reads);assertEquals(1,f.planner.debits);assertEquals(ExecutionPlanning.ReadOutcome.UNCONFIRMED,f.planner.finished.get(f.planner.lastRead.operationId));assertTrue(f.planner.live.isEmpty());assertEquals(0,f.prepared);
+        }
+    }
+    @Test public void actualReadReceiptAfterCancellationIsSettledOnceWithoutAnotherModelRequestOrDispatch()throws Exception {
+        try(Fixture f=new Fixture()){
+            f.lateKnownReadAfterCancel=true;f.replies.add(calls(call("read","fixture_read",new JSONObject())));
+            RunOutcome outcome=f.run();String operation=f.planner.lastRead.operationId;
+            assertEquals("cancelled",outcome.status);assertEquals(1,f.requests.size());assertEquals(1,f.reads);assertEquals(1,f.planner.debits);
+            assertEquals(ExecutionPlanning.ReadOutcome.RECEIPT,f.planner.finished.get(operation));
+            assertEquals("original-read-after-stop",f.planner.actualReceipts.get(operation).getString("nativeReceiptMarker"));
+            assertTrue(f.planner.actualReceipts.get(operation).getBoolean("ok"));assertEquals(1,f.planner.finished.size());
+            assertTrue(f.planner.live.isEmpty());assertEquals(0,f.prepared);assertEquals(0,f.effectReceipts);
+            assertFalse(f.history.toString().contains("original-read-after-stop"));
+            assertThrows(InterruptedException.class,()->f.planner.beginRead(f.planner.capture(),"fixture_read",new JSONObject(),"must-not-dispatch",ExecutionPlanning.Access.READ));
+            assertEquals(1,f.planner.debits);
         }
     }
     @Test public void thrownUnknownAndEmptyReadResultsRemainUnconfirmedAndDoNotTriggerAnotherModelRequest()throws Exception {

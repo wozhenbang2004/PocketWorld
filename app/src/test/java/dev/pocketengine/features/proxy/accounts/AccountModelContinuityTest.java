@@ -102,10 +102,11 @@ public final class AccountModelContinuityTest {
                 JSONObject evidence=rig.book.row(id).getJSONObject("modelEvidence");
                 evidence.getJSONObject("models").getJSONObject("model-a").put("catalogFacts",AccountCatalogFacts.parse(model("model-a",true,100000),"model-a",at).toJson());
                 rig.book.metadata(id,version,new JSONObject().put("modelEvidence",evidence));
-                assertEquals("STALE_MODEL_CATALOG",assertThrows(GatewayFailure.class,()->send(rig.gateway,id,version,"model-a",false)).code);
+                assertEquals("STALE_MODEL_CATALOG",assertThrows(GatewayFailure.class,()->rig.gateway.modelFacts(id,version,"model-a")).code);
                 assertFalse(rig.gateway.supportsImageInput(id,version,"model-a"));send(rig.gateway,id,version,"model-b",true);
+                send(rig.gateway,id,version,"model-a",false);assertTrue(rig.gateway.supportsImageInput(id,version,"model-a"));
             }
-            assertEquals(2,rig.fake.responses.get());
+            assertEquals(4,rig.fake.responses.get());
         }
     }
     @Test public void legacySingleModelEvidenceSurvivesSelectingASecondModel()throws Exception {

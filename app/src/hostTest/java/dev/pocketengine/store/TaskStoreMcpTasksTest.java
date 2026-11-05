@@ -6,6 +6,7 @@ import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.core.RunJournal;
+import dev.pocketengine.core.ToolOutcome;
 import dev.pocketengine.features.plugins.mcp.McpJson;
 import dev.pocketengine.features.plugins.mcp.McpTaskCoordinator;
 import dev.pocketengine.features.plugins.mcp.McpTaskCoordinator.Access;
@@ -213,6 +214,51 @@ public final class TaskStoreMcpTasksTest {
             assertFalse(full.has("toolResult")); assertTrue(full.getJSONObject("resultSummary").getBoolean("isError"));
             assertEquals(longResult, full.getJSONObject(TaskStoreMcpTasks.KEY).getJSONObject("receipt")
                     .getJSONObject("toolResult").getJSONArray("content").getJSONObject(0).getString("text"));
+        }
+    }
+
+    @Test public void genericJournalReturnsTheCanonicalCompletedMcpResultWithoutReopeningItsUnknownBarrier() throws Exception {
+        for(boolean toolError:new boolean[]{false,true})try(Fixture f=new Fixture()){
+            f.reserve();assertEquals("unknown",f.state());
+            JSONObject actual=completed(f);actual.getJSONObject("toolResult").put("isError",toolError);
+            f.host().save(f.binding,actual);assertEquals("receipt",f.state());
+            String nativeDigest=McpJson.digest(f.store.record(f.task,f.operation).getJSONObject(TaskStoreMcpTasks.KEY));
+            // An ordinary delivery cannot replace the already recorded native result.
+            JSONObject delivered=new JSONObject().put("ok",true).put("status","completed").put("verified",true)
+                    .put(TaskStoreMcpTasks.KEY,new JSONObject().put("binding","forged"));
+            JSONObject canonical=f.tasks.journal(f.task,f.run,f.epoch,f.original).finishOperationReceipt(f.operation,delivered);
+            JSONObject row=f.tasks.get(f.task,false).getJSONArray("operations").getJSONObject(0);
+            assertEquals("receipt",f.state());assertFalse(f.tasks.hasUnresolved(f.task));
+            assertEquals(toolError?ToolOutcome.Kind.CORRECTABLE_FAILURE:ToolOutcome.Kind.SUCCESS,ToolOutcome.classify(canonical).kind());
+            assertEquals(nativeDigest,McpJson.digest(canonical.getJSONObject(TaskStoreMcpTasks.KEY)));
+            assertEquals(McpJson.digest(row.getJSONObject("receipt")),McpJson.digest(canonical));
+            assertEquals(toolError,canonical.getJSONObject(TaskStoreMcpTasks.KEY).getJSONObject("receipt").getJSONObject("toolResult").getBoolean("isError"));
+            assertFalse(canonical.getBoolean("verified"));assertEquals(f.operation,row.getString("operationId"));
+            assertEquals(1,f.tasks.get(f.task,false).getJSONArray("operations").length());
+            assertEquals(1,f.tasks.get(f.task,false).getJSONObject("executionScope").getInt("toolsUsed"));
+        }
+    }
+
+    @Test public void legacyCompletedMcpReceiptAboveOneMiBStaysKnownAcrossColdRecovery() throws Exception {
+        try(Fixture f=new Fixture()){
+            f.reserve();JSONObject actual=completed(f);actual.getJSONObject("toolResult").put("isError",false);
+            String body="r".repeat(1_100_000);
+            actual.getJSONObject("toolResult").getJSONArray("content").getJSONObject(0).put("text",body);
+            f.host().save(f.binding,actual);
+            JSONObject original=f.store.record(f.task,f.operation);
+            int bytes=original.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            assertTrue(bytes>1024*1024);assertTrue(bytes<2*1024*1024);
+            String fingerprint=McpJson.digest(original);assertEquals("receipt",f.state());
+            f.tasks.endAttempt(f.task,f.run,"completed","The original provider result was recorded",new JSONObject());
+            assertEquals("completed",f.tasks.get(f.task,false).getString("status"));
+            f.db.delete("meta","key=?",new String[]{"tool_outcome_uncertainty_v1"});
+            for(int reopen=0;reopen<2;reopen++){
+                f.reopen();assertEquals("receipt",f.state());assertFalse(f.tasks.hasUnresolved(f.task));
+                assertEquals("completed",f.tasks.get(f.task,false).getString("status"));
+                assertEquals(fingerprint,McpJson.digest(f.store.record(f.task,f.operation)));
+                assertTrue("The full original provider result must survive migration",body.equals(f.saved().getJSONObject("toolResult").getJSONArray("content").getJSONObject(0).getString("text")));
+                assertEquals(1,f.tasks.get(f.task,false).getJSONArray("operations").length());
+            }
         }
     }
 

@@ -65,6 +65,9 @@ public final class McpLocalInvocation {
         boolean settled=next.optBoolean("processSettled"),finished=next.optBoolean("protocolFinished"),noChild=next.optBoolean("noChildCreated");String status=settled&&finished?(next.optBoolean("rpcResponseReceived")&&!next.optBoolean("outputUnavailable")?"response_received":noChild||!next.optBoolean("rpcMayHaveDispatched")?"failed":"unknown"):"unknown";
         // Zero RPC bytes never means zero startup effects. Both facts remain independent.
         next.put("serverStartupEffectMayHaveOccurred",!noChild).put("wholeInvocationNotDispatchedConfirmed",noChild).put("rpcEffectStatus",next.optBoolean("rpcResponseReceived")?"response_received":next.optBoolean("rpcMayHaveDispatched")?"unknown":"not_dispatched");
-        JSONObject receipt=new JSONObject().put("operationId",next.getJSONObject("scope").getString("operationId")).put("status",status).put("code","unknown".equals(status)?"mcp_native_original_unknown":"mcp_native_original_receipt").put("verified",false).put("nativeMcp",next).put("dispatched",!noChild).put("rpcMayHaveDispatched",next.optBoolean("rpcMayHaveDispatched")).put("replayAllowed",false);if(next.has("toolResult"))receipt.put("toolResult",next.getJSONObject("toolResult"));return receipt;
+        JSONObject receipt=new JSONObject().put("operationId",next.getJSONObject("scope").getString("operationId")).put("status",status).put("code","unknown".equals(status)?"mcp_native_original_unknown":"mcp_native_original_receipt").put("verified",false).put("nativeMcp",next).put("dispatched",!noChild).put("rpcMayHaveDispatched",next.optBoolean("rpcMayHaveDispatched")).put("replayAllowed",false);if(next.has("toolResult"))receipt.put("toolResult",next.getJSONObject("toolResult"));
+        if("response_received".equals(status))PluginToolReceipts.completedMcp(receipt,next.getJSONObject("toolResult"));
+        else if("failed".equals(status))receipt.put("ok",false);
+        return receipt;
     }
 }

@@ -7,11 +7,12 @@ type Props = { state: Data; supported: (command: string) => boolean };
 const object = (value: any): Data => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const status = (value: string) => ({ passed: '本次通过', unconfirmed: '未证实', failed: '未证实', not_requested: '未测试' }[value] || '未完成');
 
-/** Bounded, explicitly approved synthetic requests through the original model service. */
+/** Local failure evidence and separately approved synthetic requests in the existing settings disclosure. */
 export function ModelDiagnosticsWorkspace({ state, supported }: Props) {
   const data = object(state.modelDiagnostics), probe = object(data.probe);
   const [expanded, setExpanded] = useState(false), [image, setImage] = useState(false), [acknowledge, setAcknowledge] = useState(false);
   const [review, setReview] = useState<Data | null>(null), [pending, setPending] = useState(false), [error, setError] = useState('');
+  const [logs, setLogs] = useState<Data | null>(null), [copyStatus, setCopyStatus] = useState('');
   const windowId = useRef(''), alive = useRef(true), sequence = useRef(0), inFlight = useRef(false);
   const epoch = bridge.getDocumentEpoch(), previousEpoch = useRef(epoch);
   const previousSelection = useRef(data.probeSelectionRevision);
@@ -19,11 +20,11 @@ export function ModelDiagnosticsWorkspace({ state, supported }: Props) {
   const available = supported('modelDiagnostics.open');
   useEffect(() => {
     alive.current = true;
-    const hidden = () => { if (document.visibilityState !== 'visible') { sequence.current++; setReview(null); setAcknowledge(false); setExpanded(false); } };
+    const hidden = () => { if (document.visibilityState !== 'visible') { sequence.current++; setReview(null); setAcknowledge(false); setExpanded(false); setLogs(null); setCopyStatus(''); } };
     document.addEventListener('visibilitychange', hidden);
     return () => { alive.current = false; sequence.current++; document.removeEventListener('visibilitychange', hidden); const id = windowId.current; windowId.current = ''; if (id) void bridge.command('modelDiagnostics.close', { windowId: id }).catch(() => {}); };
   }, []);
-  useEffect(() => { if (previousEpoch.current !== epoch || !active || !data.ready) { previousEpoch.current = epoch; sequence.current++; setReview(null); setAcknowledge(false); if (!active) setExpanded(false); } }, [epoch, active, data.ready, data.probeSelectionRevision]);
+  useEffect(() => { if (previousEpoch.current !== epoch || !active || !data.ready) { previousEpoch.current = epoch; sequence.current++; setReview(null); setAcknowledge(false); setLogs(null); setCopyStatus(''); if (!active) setExpanded(false); } }, [epoch, active, data.ready, data.probeSelectionRevision]);
   useEffect(() => {
     if (previousSelection.current !== undefined && previousSelection.current !== data.probeSelectionRevision) sequence.current++;
     previousSelection.current = data.probeSelectionRevision; setReview(null); setAcknowledge(false);
@@ -42,9 +43,26 @@ export function ModelDiagnosticsWorkspace({ state, supported }: Props) {
   }
   const closeReview = () => { setReview(null); setAcknowledge(false); if (windowId.current) void invoke('modelDiagnostics.discard'); };
   const busy = pending || !!data.busy, ready = active && data.ready === true && data.windowId === windowId.current;
+  const logText = logs ? JSON.stringify(logs, null, 2) : '';
+  async function copyLogs() {
+    if (!ready || !logs) return;
+    const originalWindow = windowId.current, originalEpoch = bridge.getDocumentEpoch(), originalSequence = sequence.current;
+    const current = () => alive.current && windowId.current === originalWindow && bridge.getDocumentEpoch() === originalEpoch && sequence.current === originalSequence && document.visibilityState === 'visible';
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('当前无法直接复制，请选择下方日志文字后复制。');
+      await navigator.clipboard.writeText(logText);
+      if (current()) setCopyStatus('已复制本次读取的运行日志');
+    } catch (failure) { if (current()) setCopyStatus(failure instanceof Error ? failure.message : '复制未完成，请选择日志文字后复制。'); }
+  }
   return <section className="pw-model-diagnostics">
-    <Button variant="ghost" disabled={!available || pending} onClick={() => { if (expanded) { setExpanded(false); setReview(null); void invoke('modelDiagnostics.close'); } else void invoke('modelDiagnostics.open'); }}>文本、工具与合成图片实测</Button>
-    {expanded && <div className="pw-model-diagnostics-body"><h3>{data.model || '原 API 模型'}</h3>
+    <Button variant="ghost" disabled={!available || pending} onClick={() => { if (expanded) { setExpanded(false); setReview(null); setLogs(null); setCopyStatus(''); void invoke('modelDiagnostics.close'); } else void invoke('modelDiagnostics.open'); }}>诊断与运行日志</Button>
+    {expanded && <div className="pw-model-diagnostics-body">
+      <h3>运行日志</h3>
+      <p className="pw-field-hint">读取最近的启动、登录、消息、模型与工具运行记录，包含失败阶段、错误码和耗时。日志保存在本机，不含账号凭据、聊天正文或文件内容。</p>
+      <div className="pw-form-actions"><Button variant="secondary" disabled={!ready || pending || !supported('modelDiagnostics.logs')} onClick={() => { setCopyStatus(''); void invoke('modelDiagnostics.logs').then(result => { if (result && Array.isArray(result.events)) setLogs(result); }); }}>读取最近日志</Button>{logs && <Button variant="secondary" disabled={!ready || pending} onClick={() => { void copyLogs(); }}>复制日志</Button>}</div>
+      {logs && <><p className="pw-field-hint">本次读取 {logs.retainedEvents || 0} 条，最多保留 {logs.maxEvents || 256} 条；本机日志文件总上限 512 KiB。</p>{(logs.fileWriteFailures > 0 || logs.droppedFileWrites > 0) && <p role="status">部分记录未写入文件，可先复制当前日志，并补充 Logcat。</p>}<Accordion variant="divided"><AccordionItem id="runtime-log" title="查看本次日志"><pre className="pw-source-code" tabIndex={0}>{logText}</pre></AccordionItem></Accordion></>}
+      {copyStatus && <p role="status">{copyStatus}</p>}
+      <h3>文本、工具与合成图片实测 · {data.model || '原 API 模型'}</h3>
       <p className="pw-field-hint">测试保留的 API 连接。最多 2 次请求；选择合成图片后最多 3 次，会消耗该连接额度。只发送随机合成内容和一个声明但不执行的函数，不使用聊天历史或手机画面。</p>
       <p className="pw-field-hint">全部阶段共用原连接的 {data.requestTimeoutSeconds || 60} 秒期限。离开此页停止后续探测，已发生的请求用量仍保留。</p>
       <CheckboxField isSelected={image} isDisabled={!ready || busy} onChange={next => { setImage(next); setReview(null); setAcknowledge(false); }}>增加一张合成图片（不读取屏幕）</CheckboxField>

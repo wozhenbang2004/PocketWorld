@@ -332,7 +332,8 @@ public final class TaskStoreMcpTasks {
     private static JSONObject wrap(JSONObject stored) throws Exception {
         JSONObject receipt = stored.getJSONObject("receipt");
         boolean resolved = receipt.optBoolean("resolved");
-        String status = resolved ? ("failed".equals(receipt.getString("status")) ? "failed" : "response_received") : "unknown";
+        String remoteStatus = receipt.getString("status");
+        String status = resolved ? (remoteStatus.matches("failed|cancelled") ? remoteStatus : "response_received") : "unknown";
         JSONObject result = new JSONObject().put("operationId", stored.getJSONObject("binding").getString("operationId"))
                 .put("status", status).put("verified", false).put("automaticReplay", false).put("requiresReconciliation", !resolved)
                 .put("cancelRequested", receipt.optBoolean("cancelRequested")).put("cancelAcknowledged", receipt.optBoolean("cancelAcknowledged"))
@@ -351,6 +352,11 @@ public final class TaskStoreMcpTasks {
         if (receipt.has("message")) {
             String message = receipt.getString("message");
             result.put("message", message.substring(0, Math.min(1000, message.length())));
+        }
+        if(resolved){
+            if(remoteStatus.matches("completed|response_received"))
+                dev.pocketengine.features.plugins.PluginToolReceipts.completedMcp(result,receipt.getJSONObject("toolResult"));
+            else result.put("ok",false);
         }
         return result;
     }

@@ -3,6 +3,7 @@ package dev.pocketengine.features.assistant;
 import android.util.AtomicFile;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
+import dev.pocketengine.core.RuntimeDiagnostics;
 import dev.pocketengine.features.EngineModule;
 import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.features.memory.MemoryBook;
@@ -420,6 +421,15 @@ public final class AssistantModule implements EngineModule {
     }
     private JSONObject sendNative(JSONObject input)throws Exception{return sendNative(input,null);}
     private JSONObject sendNative(JSONObject input,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart)throws Exception {
+        try(RuntimeDiagnostics.Span diagnostic=RuntimeDiagnostics.begin("message_admission",null,input.optString("clientMessageId"))){
+            try{
+                JSONObject result=sendNativeBound(input,projectStart);
+                diagnostic.finish(result.optString("status","unconfirmed"),result.optBoolean("duplicate")?"DUPLICATE_RECEIPT":result.optString("reason","INPUT_RECEIPT"));
+                return result;
+            }catch(Exception failure){diagnostic.failure("INPUT_ADMISSION_FAILED",failure);throw failure;}
+        }
+    }
+    private JSONObject sendNativeBound(JSONObject input,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart)throws Exception {
         if(migrationInProgress)throw new IllegalStateException("原文迁移正在对账，未接收新消息；不会重复新建任务");
         requireLegacyWritable();String text=input.optString("message").trim(),client=input.getString("clientMessageId"),mode=input.optString("mode","queue");
         if(text.isEmpty()||text.length()>12000)throw new IllegalArgumentException("请输入1–12000字的消息");
@@ -501,12 +511,14 @@ public final class AssistantModule implements EngineModule {
                 // Only the native mailbox can prove this input was never admitted. Unknown
                 // exceptions retain the original query-only receipt and must not be replayed.
                 if(!starting&&!resuming&&failure instanceof dev.pocketengine.core.OwnerInputNotAdmittedException){
+                    RuntimeDiagnostics.event("message_admission","rejected",((dev.pocketengine.core.OwnerInputNotAdmittedException)failure).reason(),live,failure);
                     JSONObject rejected=copy(message.getJSONObject("submission")).put("status","rejected").put("notAdmitted",true)
                             .put("reconciliationRequired",false).put("reason",((dev.pocketengine.core.OwnerInputNotAdmittedException)failure).reason());
                     for(String key:new String[]{"taskId","runId","epoch"})rejected.put(key,expected.get(key));
                     commit(()->{findMessage(find(cid),message.getString("id")).put("submission",copy(rejected));source(message.getString("id")).put("submission",copy(rejected));return null;});
                     context.emit(id(),copy(rejected).put("phase","rejected"));return rejected;
                 }
+                RuntimeDiagnostics.event("message_admission","unconfirmed","INPUT_RECEIPT_UNCONFIRMED",live,failure);
                 context.emit(id(),new JSONObject().put("phase","unconfirmed").put("conversationId",cid).put("messageId",message.getString("id")));
                 return copy(message.getJSONObject("submission"));
             }
@@ -530,6 +542,7 @@ public final class AssistantModule implements EngineModule {
                     if(rejected.get())return unconfirmedSubmission(ack);
                 }catch(Exception unavailable){if(!rejected.get())executorRejected(lease,message.getString("id"));throw new IllegalStateException("原任务输入已登记，执行位置尚未接手；请核对原任务，不要自动重发",unavailable);}
             }else context.emit(id(),copy(ack).put("phase","queued"));
+            RuntimeDiagnostics.event("message_admission",starting?"accepted":"queued","INPUT_RECORDED",live,null);
             return ack;
         }
     }
@@ -542,6 +555,7 @@ public final class AssistantModule implements EngineModule {
         finally{turn.control.cancel();liveTurns.discardQueued(lease);}
     }
     private void executorRejected(ConversationTurnSlots.Lease<LiveTurn> lease,String messageId){
+        RuntimeDiagnostics.event("message_admission","rejected","EXECUTOR_REJECTED",lease.original().control,null);
         stopUnstarted(lease);
         synchronized(admission){
             try{
@@ -685,6 +699,7 @@ public final class AssistantModule implements EngineModule {
 
             synchronizeSources();context.emit(id(),copy(turn).put("phase","completed").put("messageId",messageId).put("message",reply));
         }catch(Exception failure){
+            RuntimeDiagnostics.event("run_settlement",control.isCancelled()?"cancelled":"failed","ASSISTANT_TURN_FAILED",control,failure);
             if(!executorEntered)try{cancelOriginal(control,cid);}catch(Exception notStopped){failure.addSuppressed(notStopped);}finally{control.cancel();}
             try{context.emit(id(),copy(turn).put("phase",control.isCancelled()?"cancelled":"failed").put("messageId",messageId).put("message",control.isCancelled()?"已停止后续执行；已有输入保留在原任务":"本轮未完成，请核对原任务；不会自动重发输入或动作"));}catch(Exception ignored){}
         }finally{
@@ -711,7 +726,7 @@ public final class AssistantModule implements EngineModule {
                     }
                 }
             }
-            try{NativeInputHost host=nativeInputHost;if(!retainedResult&&host!=null)host.settled(copy(turn),config,control);}catch(Exception unavailable){/* The original settled wait is retained only in this process; never a new attempt. */}
+            try{NativeInputHost host=nativeInputHost;if(!retainedResult&&host!=null)host.settled(copy(turn),config,control);}catch(Exception unavailable){RuntimeDiagnostics.event("run_settlement","unconfirmed","SETTLEMENT_RECEIPT_UNCONFIRMED",control,unavailable);}
             if(!continueOriginal)try{context.emit(id(),copy(turn).put("phase","idle").put("messageId",messageId));}catch(Exception ignored){}
         }
     }

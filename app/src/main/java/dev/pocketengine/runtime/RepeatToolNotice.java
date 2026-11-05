@@ -66,13 +66,12 @@ public final class RepeatToolNotice {
         if(round==null||round.getInt("processed")>=round.getInt("expected"))throw new IllegalStateException("progress_guard_round_missing");
         round.put("processed",round.getInt("processed")+1);changed();
         String code=failureCode(receipt),status=receipt.optString("status").toLowerCase(Locale.ROOT);
-        if(code.contains("unknown")||code.contains("timeout")||code.contains("running")
-                ||Set.of("unknown","running","pending","queued").contains(status)||receipt.optBoolean("requiresReconciliation")||receipt.optBoolean("requiresPause")
-                ||"reconcile".equals(receipt.optString("nextObservationAction"))||receipt.has("accepted")&&receipt.isNull("accepted")){
+        dev.pocketengine.core.ToolOutcome outcome=dev.pocketengine.core.ToolOutcome.classify(receipt);
+        if(!outcome.mayContinue()||code.contains("timeout")||code.contains("running")||Set.of("running","pending","queued").contains(status)||Boolean.FALSE.equals(receipt.opt("terminal"))){
             round.put("allFailed",false);return;
         }
         String call=callFingerprint(tool,arguments),source=sourceVersion(receipt);
-        if(Boolean.TRUE.equals(receipt.opt("ok"))){
+        if(outcome.successful()){
             round.put("allFailed",false);
             if(nativeNotDispatched)return;
             if(!nativeReadOnly){clearChain();return;}
@@ -95,7 +94,7 @@ public final class RepeatToolNotice {
             if(!seen)clearChain();
             remember(tool,call,source,fingerprint,"read_result");return;
         }
-        if(observationWait(tool)&&!nativeNotDispatched||!Boolean.FALSE.equals(receipt.opt("ok"))||(!nativeReadOnly&&!nativeNotDispatched)||code.isEmpty()){
+        if(observationWait(tool)&&!nativeNotDispatched||!outcome.correctable()||(!nativeReadOnly&&!nativeNotDispatched)||code.isEmpty()){
             round.put("allFailed",false);return;
         }
         // A previously unseen source version is new evidence. Returning to an already

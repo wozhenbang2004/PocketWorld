@@ -44,6 +44,12 @@ public final class NativeOwnerWorkflows {
     public void installAccountInference(){
         dev.pocketengine.runtime.ModelGateway.installAccountInferencePort(new dev.pocketengine.runtime.ModelGateway.AccountInferencePort(){
             @Override public boolean accountIdentityCurrent(dev.pocketengine.core.ModelConfig.AccountModelRef reference){AccountGateway loaded=accounts;return loaded!=null&&loaded.inferenceIdentityCurrent(reference.accountId,reference.accountVersion);}
+            @Override public boolean authorizationCurrent(dev.pocketengine.core.ModelConfig.AccountModelRef reference){AccountGateway loaded=accounts;return loaded!=null&&loaded.authorizationCurrent(reference.accountId,reference.accountVersion);}
+            @Override public dev.pocketengine.runtime.ModelGateway.AccountPreparation prepare(dev.pocketengine.core.ModelConfig.AccountModelRef reference,GatewayCall operation)throws GatewayFailure {
+                AccountGateway.PreparedModel prepared=accounts().prepareForInference(reference.accountId,reference.accountVersion,reference.modelId,operation);
+                try{context.settings.advanceAccountModel(reference,prepared.accountVersion);}catch(Exception failed){throw new GatewayFailure("ACCOUNT_SELECTION_STORE_UNAVAILABLE");}
+                return new dev.pocketengine.runtime.ModelGateway.AccountPreparation(reference.withVersion(prepared.accountVersion),prepared.facts,prepared.supportsImages());
+            }
             @Override public dev.pocketengine.runtime.models.AccountCatalogFacts modelFacts(dev.pocketengine.core.ModelConfig.AccountModelRef reference)throws GatewayFailure {
                 AccountGateway loaded=accounts;if(loaded==null)return null;
                 return loaded.modelFacts(reference.accountId,reference.accountVersion,reference.modelId);

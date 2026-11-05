@@ -105,6 +105,7 @@ final class TeamIntegrationCompaction {
             public void checkpoint(JSONArray messages,int steps,JSONObject observation,JSONObject progressGuard)throws Exception{originalJournal.checkpoint(messages,steps,observation,progressGuard);}
             public String beginOperation(String tool,JSONObject arguments)throws Exception{return originalJournal.beginOperation(tool,arguments);}
             public void finishOperation(String op,JSONObject receipt)throws Exception{originalJournal.finishOperation(op,receipt);}
+            public JSONObject finishOperationReceipt(String op,JSONObject receipt)throws Exception{return originalJournal.finishOperationReceipt(op,receipt);}
             public boolean hasNativeProjectRunningAck(String op,JSONObject receipt)throws Exception{return originalJournal.hasNativeProjectRunningAck(op,receipt);}
             public JSONObject projectServiceExitEvidence(JSONArray operations)throws Exception{return originalJournal.projectServiceExitEvidence(operations);}
             public boolean reserveModelRecovery(String failedCall,long waitMillis)throws Exception{return originalJournal.reserveModelRecovery(failedCall,waitMillis);}

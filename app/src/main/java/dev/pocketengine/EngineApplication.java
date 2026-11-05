@@ -11,6 +11,7 @@ import android.os.Handler;
 import android.os.Looper;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
+import dev.pocketengine.core.RuntimeDiagnostics;
 import dev.pocketengine.core.PhonePort;
 import dev.pocketengine.core.ExecutionResources;
 import dev.pocketengine.core.CapabilityPort;
@@ -681,6 +682,10 @@ public final class EngineApplication extends Application implements dev.pocketen
     public dev.pocketengine.features.teams.TeamMemberEvidenceHost.Page openTeamMemberMaterialsPage(String run,String member)throws Exception{if(teamMemberEvidence==null||!(features.module("teams") instanceof dev.pocketengine.features.teams.TeamsModule))throw new IllegalStateException("原团队资料宿主未准备好");return ((dev.pocketengine.features.teams.TeamsModule)features.module("teams")).newMemberEvidencePage(teamMemberEvidence,run,member);}
     @Override public void onCreate(){
         super.onCreate();adbBootstrapProcess=(getPackageName()+":adb_bootstrap").equals(Application.getProcessName());if(adbBootstrapProcess)return;
+        RuntimeDiagnostics.LineSink logcat=line->android.util.Log.i(RuntimeDiagnostics.TAG,line);
+        try{RuntimeDiagnostics.install(new java.io.File(getFilesDir(),"diagnostics"),logcat);}
+        catch(RuntimeException unavailable){RuntimeDiagnostics.install(null,logcat);RuntimeDiagnostics.event("diagnostics","failed","LOG_DIRECTORY_UNAVAILABLE",null,unavailable);}
+        RuntimeDiagnostics.event("bootstrap","started","APPLICATION_STARTED",null,null);
         try { dev.pocketengine.features.updates.AppUpdateManager.start(this); } catch (RuntimeException ignored) { /* Updates must never block existing app startup. */ }
         // Install the one native admission before opening any business store or constructing modules.
         RunControl.installHostAdmission((original,id,run,epoch)->{requireBusinessReady();TaskStore current=tasks;return current.admitExecutionControl(original,id,run,epoch);});
@@ -691,10 +696,11 @@ public final class EngineApplication extends Application implements dev.pocketen
     private void queueBootstrap(long generation){queueBootstrap(generation,null);}
     private void queueBootstrap(long generation,dev.pocketengine.store.TaskDatabaseMaintenance.OriginalReadPermit permit){
         try{bootstrapWorker.execute(()->initializeOriginalBusiness(generation,permit));}
-        catch(java.util.concurrent.RejectedExecutionException stopped){if(permit!=null)try{databaseMaintenance.failOriginalRetry(permit,"initializer_closed");}catch(Exception unavailable){bootstrapCleanupConfirmed=false;}bootstrap.failed(generation,"initializer_closed","原初始化队列已关闭","重新打开应用后读取原状态",false);}
+        catch(java.util.concurrent.RejectedExecutionException stopped){RuntimeDiagnostics.event("bootstrap","rejected","INITIALIZER_CLOSED",null,stopped);if(permit!=null)try{databaseMaintenance.failOriginalRetry(permit,"initializer_closed");}catch(Exception unavailable){bootstrapCleanupConfirmed=false;}bootstrap.failed(generation,"initializer_closed","原初始化队列已关闭","重新打开应用后读取原状态",false);}
     }
     private void initializeOriginalBusiness(long generation,dev.pocketengine.store.TaskDatabaseMaintenance.OriginalReadPermit permit){
         if(!bootstrap.current(generation))return;Integer observed=null;
+        RuntimeDiagnostics.Span diagnostic=RuntimeDiagnostics.begin("bootstrap",null);
         try{
             if(tasks!=null||!bootstrapCleanupConfirmed)throw new IllegalStateException("原任务库或资源仍存在，不能创建第二任务权威");
             bootstrap.installed(generation,dev.pocketengine.bootstrap.BootstrapChecks.installation(this));
@@ -703,7 +709,7 @@ public final class EngineApplication extends Application implements dev.pocketen
                 public String installedVersion(){try{return bootstrap.snapshot().getString("installedVersion");}catch(Exception unavailable){return "unknown";}}
                 public boolean quiesce()throws Exception{return quiesceOriginalDatabaseForMaintenance();}
             });
-            if(databaseMaintenance.blocksBusinessOpen()&&permit==null){bootstrap.maintenance("database_maintenance","发现原数据库维护记录，未重新打开业务库","只核对同一维护编号和原件；可用时明确请求重新读取原库",databaseMaintenance.originalRetryAvailable()&&bootstrapCleanupConfirmed);return;}
+            if(databaseMaintenance.blocksBusinessOpen()&&permit==null){bootstrap.maintenance("database_maintenance","发现原数据库维护记录，未重新打开业务库","只核对同一维护编号和原件；可用时明确请求重新读取原库",databaseMaintenance.originalRetryAvailable()&&bootstrapCleanupConfirmed);diagnostic.finish("rejected","DATABASE_MAINTENANCE");return;}
             dev.pocketengine.bootstrap.BootstrapChecks.storage(this);
             try{dev.pocketengine.bootstrap.BootstrapChecks.requiredUi(this);}catch(Exception missing){throw new dev.pocketengine.bootstrap.BootstrapChecks.Failure("required_resource_incompatible","当前安装包的必要界面资源未通过核验，请重新安装可信兼容版本");}
             observed=dev.pocketengine.bootstrap.BootstrapChecks.observedSchema(getDatabasePath(TaskStore.DATABASE_NAME));bootstrap.stage(generation,"configured",observed);
@@ -731,6 +737,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             if(permit!=null)databaseMaintenance.completeOriginalRetry(permit,tasks);
             if(!bootstrap.complete(generation))throw new IllegalStateException("原初始化代次已变化，未发布ready");
             hasReachedBusinessReady=true;
+            diagnostic.success();
             try{queueReadyMaintenance(generation);}catch(java.util.concurrent.RejectedExecutionException stopped){error("原启动后的维护队列已关闭，未重新派发");}
         }catch(Exception|LinkageError failure){
             // Feature modules can contain best-effort worker closes; a fresh process must establish their new boundary.
@@ -741,7 +748,8 @@ public final class EngineApplication extends Application implements dev.pocketen
             try{Object actual=bootstrap.snapshot().opt("observedSchema");if(actual instanceof Number)observed=((Number)actual).intValue();}catch(Exception unavailable){/* Keep the earlier header observation; never guess the schema. */}
             try{if(databaseMaintenance!=null){if(permit!=null)databaseMaintenance.failOriginalRetry(permit,code);databaseMaintenance.failure(code,text,observed);}}catch(Exception unavailable){bootstrapCleanupConfirmed=false;code="maintenance_record_unreadable";text="原维护记录无法可靠保存，原库未被清空";next="核对本机存储后重新打开应用，不重建原记录";}
             bootstrap.failed(generation,code,text,next,bootstrapCleanupConfirmed&&!code.equals("newer_schema")&&!code.equals("migration_failed"));
-        }
+            diagnostic.failure(code,failure);
+        }finally{diagnostic.close();}
     }
     private void queueReadyMaintenance(long generation){
         // Existing bounded startup/idle paths keep their original unknown/not-started checks.
@@ -1883,7 +1891,7 @@ public final class EngineApplication extends Application implements dev.pocketen
     public void recordRunEvent(String id,String run,int epoch,RunControl original,JSONObject event){
         if("model_stream".equals(event.optString("type"))){if(modelStreams!=null)modelStreams.accept(id,run,epoch,original,event);return;}
         if("result".equals(event.optString("type"))&&modelStreams!=null)modelStreams.clear(id,original,"run_settled");
-        try{tasks.event(id,run,epoch,event);pushTask(id);}catch(Exception failure){error("任务步骤保存失败，请检查可用空间");}
+        try{tasks.event(id,run,epoch,event);pushTask(id);}catch(Exception failure){RuntimeDiagnostics.event("run_settlement","unconfirmed","TASK_EVENT_PERSISTENCE_FAILED",original,failure);error("任务步骤保存失败，请检查可用空间");}
     }
     private void checkLiveExtensionControl(dev.pocketengine.runtime.extensions.ExtensionRuntime.Binding binding,RunControl original)throws Exception{
         if(original==null||!original.matchesHostRun(binding.taskId,binding.runId,binding.epoch)||original!=retainedTaskControl(binding.taskId)&&original!=capabilityControls.get(binding.taskId))throw new SecurityException("原任务的活动控制器已变化");
@@ -2777,6 +2785,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             if(status.equals("paused")&&control.conditionWait()!=null)tasks.endAutomationConditionWait(id,attempt.getString("runId"),control,result.summary,result.evidence);
             else tasks.finishCapabilityAttempt(id,admittedRun,admittedEpoch,control,result);pushTask(id);
             JSONObject settled=tasks.get(id,false);status=settled.getString("status");
+            RuntimeDiagnostics.event("run_settlement",status,"TASK_COMMITTED_"+status,control,null);
             JSONObject response=json("content",status.matches("cancelled|reconciling")?settled.optString("summary"):result.evidence.optString("modelSummary",result.summary),"taskId",id,"status",status);
             if(lastOwnerReplyRecorded[0]!=null&&lastOwnerReplyRecorded[0].equals(response.optString("content")))response.put("nativeOwnerReplyRecorded",true);
             else if(lastOwnerReplyAttempted[0]!=null&&lastOwnerReplyAttempted[0].equals(response.optString("content"))){response.put("content",result.summary).put("nativeOwnerReplyPersistence","unconfirmed");} // No automatic duplicate write after an uncertain native reply commit.
@@ -2790,6 +2799,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             else if(!tasks.automationConditionWaiting(id)&&tasks.get(id,false).optString("runId").isEmpty())tasks.status(id,"preparing","运行条件暂不满足，已保留原触发身份");
             pushTask(id);return json("content","运行条件暂不满足，原目标与已发生的动作保留","taskId",id,"status",tasks.get(id,false).getString("status"));
         }catch(Exception failure){
+            RuntimeDiagnostics.event("run_settlement",control.isCancelled()?"cancelled":"failed","CAPABILITY_RUN_FAILED",control,failure);
             if(attempt!=null)tasks.endAttempt(id,attempt.getString("runId"),control.isCancelled()?"cancelled":"failed","能力任务未完成，请检查原任务记录",new JSONObject());
             else if(control.hasHostRun()&&id.equals(control.hostRunIdentity().taskId()))
                 closeUnstartedCapabilityReservation(control,"原执行尚未由Runner接手，请核对原任务；已有动作与未知回执保留，没有自动重试");

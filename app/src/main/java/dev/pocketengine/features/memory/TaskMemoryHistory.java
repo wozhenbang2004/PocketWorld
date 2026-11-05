@@ -61,7 +61,7 @@ public final class TaskMemoryHistory {
                 for(int j=0;tools!=null&&j<tools.length();j++){JSONObject call=tools.getJSONObject(j);calls.put(call.getString("id"),call.getJSONObject("function").optString("name"));}
             }
             if(allAssistant&&"tool".equals(role)&&isReference(calls.get(row.optString("tool_call_id")))){
-                String retired=new JSONObject().put("ok",false).put("code","reference_expired").put("message",RETIRED).put("untrustedReference",true).toString();
+                String retired=dev.pocketengine.core.ToolOutcome.project(new JSONObject().put("ok",false).put("code","reference_expired").put("message",RETIRED).put("untrustedReference",true)).toString();
                 if(!retired.equals(row.optString("content"))){row.put("content",retired);row.remove("toolOutputCapture");changed++;}
             }
         }return changed;
