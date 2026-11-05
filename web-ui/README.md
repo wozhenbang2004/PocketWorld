@@ -227,3 +227,27 @@ Run node web-ui/tests/file-diff-ui.mjs for the headless Edge production-componen
 fixture and npm test --prefix web-ui for exact-text and fallback checks.
 The fixture uses a synthetic file session; Android16/WebView/IME acceptance
 belongs to the existing device-testing owner.
+
+## Expired ChatGPT login recovery
+
+The account page labels native authorization states in Chinese. An expired login
+never reopens its old authorization URL or retries automatically. If its account
+still exists, the single recovery action uses that account's current native ID
+and version. If native cleanup removed an unregistered account, recovery opens
+the existing Add ChatGPT account dialog instead. Disabled or unread accounts
+remain blocked; an uncertain receipt or stale version requires an explicit
+refresh before retry.
+
+Run the pure policy/receipt regressions with `npm test --prefix web-ui`. The
+production-component recovery journey uses only synthetic native snapshots:
+
+```sh
+node web-ui/tests/account-login-recovery-ui.mjs
+# For an existing Chromium executable instead of Playwright's installed browser:
+UI_BROWSER_PATH=/path/to/chromium node web-ui/tests/account-login-recovery-ui.mjs
+```
+
+It covers 430 px light and 320 px dark layouts, dismiss/reopen, retained-account
+identity, duplicate-submit guards, new session links, uncertain receipts, stale
+versions and disabled accounts. This fixture does not verify real OAuth,
+Android lifecycle behavior or the system browser.
