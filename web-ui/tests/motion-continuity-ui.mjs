@@ -76,6 +76,7 @@ function installFixture(initial) {
   const commands = ['app.ready', 'app.refresh', 'composer.edit', 'composer.reading', 'composer.intent', 'conversation.select', 'conversation.new', 'chat.cancel', 'tasks.refresh', 'phone.draft.edit', 'phone.prepare', 'phone.start', 'voice.review', 'voice.accept', 'voice.discard'];
   const requests = [], violations = [];
   let phoneReview = null, phoneReviewSerial = 0, voiceReview = null, voiceReviewSerial = 0, unloadedHistory = null;
+  let holdPhoneReview = false, deferredPhoneReview = null;
   const conversations = new Map();
   conversations.set('motion-conversation-b', {
     messages: [{ id: 'motion-other-user', role: 'user', content: '周末想去走走。' }, { id: 'motion-other-answer', role: 'assistant', content: '可以先看看你想去哪里，再慢慢安排。', sourceRevision: 1 }],
@@ -161,8 +162,12 @@ function installFixture(initial) {
           if (!original || ['conversationId', 'taskId', 'runId', 'epoch'].some(key => request.args[key] !== original[key])) throw new Error('Stop did not target the original foreground turn');
           setBusy(false);
         }
-        window.PocketWeb.receive({ v: 1, kind: 'result', id: request.id, ok: true, value });
-        if (request.action !== 'composer.reading') publish();
+        const complete = () => {
+          window.PocketWeb.receive({ v: 1, kind: 'result', id: request.id, ok: true, value });
+          if (request.action !== 'composer.reading') publish();
+        };
+        if (request.action === 'phone.prepare' && holdPhoneReview) { holdPhoneReview = false; deferredPhoneReview = complete; }
+        else complete();
       } catch (error) {
         violations.push(String(error.message));
         window.PocketWeb.receive({ v: 1, kind: 'result', id: request.id, ok: false, error: String(error.message) });
@@ -194,12 +199,17 @@ function installFixture(initial) {
     },
     setAppearance(dark) { snapshot.state.appearance = { dark, mode: dark ? 'dark' : 'light' }; publish(); },
     setVoiceAvailable(value) { snapshot.state.voiceInput = { reviewAvailable: value }; publish(); },
+    holdNextPhoneReview() { holdPhoneReview = true; },
+    releasePhoneReview() {
+      if (!deferredPhoneReview) throw new Error('No deferred phone review');
+      const complete = deferredPhoneReview; deferredPhoneReview = null; complete();
+    },
     setDocumentHidden(hidden) {
       Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
       Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => hidden ? 'hidden' : 'visible' });
       document.dispatchEvent(new Event('visibilitychange'));
     },
-    inspect() { return { revision, requests: clone(requests), violations: [...violations], snapshot: clone(snapshot) }; },
+    inspect() { return { revision, requests: clone(requests), violations: [...violations], snapshot: clone(snapshot), hasDeferredPhoneReview: !!deferredPhoneReview }; },
   };
   document.addEventListener('DOMContentLoaded', () => {
     const label = document.createElement('div');
@@ -434,6 +444,10 @@ async function checkReviewExits(page) {
     await settle(page);
     assert.equal(await page.evaluate(() => window.motionFixture.inspect().requests.filter(request => request.action === 'phone.start').length), 0, 'A stale closing-scope callback started work');
     await page.locator(phoneSelector).waitFor({ state: 'detached' });
+    await settle(page);
+    const returnedFocus = await page.evaluate(() => ({ tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute('aria-label') }));
+    remember('phone-review-return-focus', returnedFocus);
+    assert.equal(returnedFocus.label, '发送', 'Closing phone review did not restore its initiating control');
     assert.equal(await input.inputValue(), phoneGoal, 'Closing review consumed its original phone draft');
   });
 
@@ -448,8 +462,11 @@ async function checkReviewExits(page) {
     await send.evaluate(button => button.click());
     await page.waitForFunction(expected => window.motionFixture.inspect().requests.filter(request => request.action === 'phone.prepare').length === expected, prepares + 1);
     await waitForOpenSheet(page, 'pw-phone-description');
+    const reopenedClose = page.locator(phoneSelector).getByRole('button', { name: '关闭手机任务核对', exact: true });
+    await reopenedClose.focus();
     const reentry = await sampleDuring(page, 'phone-review-reentry-frames', phoneSelector, async () => {}, 650);
     assert(reentry.every(frame => !frame.inert && frame.height > 0), 'The old exit cleanup invalidated a newly opened review');
+    assert.equal(await reopenedClose.evaluate(node => node === document.activeElement), true, 'An old exit stole focus from the reopened phone review');
     for (const text of phoneFields) assert((await page.locator(phoneSelector).textContent()).includes(text));
     await page.evaluate(() => window.motionFixture.setDocumentHidden(true));
     await page.waitForFunction(() => document.documentElement.dataset.pwMotionPaused === 'true');
@@ -484,6 +501,8 @@ async function checkReviewExits(page) {
     assert.equal(closed.text, text, 'Voice exit erased the original dictated text');
     assert.equal(closed.readonly, true); assert.equal(closed.disabled, true);
     await page.locator(voiceSelector).waitFor({ state: 'detached' });
+    await settle(page);
+    assert.equal(await page.getByRole('button', { name: '核对原听写', exact: true }).evaluate(node => node === document.activeElement), true, 'Closing voice review lost its initiating control');
     const reopen = await page.getByRole('button', { name: '核对原听写', exact: true }).elementHandle();
     await page.getByRole('button', { name: '核对原听写', exact: true }).click();
     await waitForOpenSheet(page, 'pw-voice-description');
@@ -500,6 +519,49 @@ async function checkReviewExits(page) {
     await settle(page);
     assert.equal(await input.inputValue(), draft);
     assert.deepEqual(await page.evaluate(() => window.motionFixture.inspect().requests.filter(request => ['voice.accept', 'voice.discard'].includes(request.action))), [], 'Closing or reentering a voice review executed a stale action');
+  });
+
+  await check('review-exits-restore-origin-after-keyboard-entry-delayed-reopen-and-voice-acceptance', async () => {
+    await selectInputIntent(page, '手机后台独立屏');
+    await input.fill(phoneGoal);
+    await page.waitForFunction(text => window.motionFixture.inspect().snapshot.phoneDraft.text === text, phoneGoal);
+    await input.press('Enter');
+    await waitForOpenSheet(page, 'pw-phone-description');
+    await page.locator(phoneSelector).getByRole('button', { name: '关闭手机任务核对', exact: true }).click();
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.locator(phoneSelector).waitFor({ state: 'detached' });
+    await settle(page);
+    assert.equal(await input.evaluate(node => node === document.activeElement), true, 'A keyboard-opened phone review did not return to the original input');
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+
+    const send = await page.getByRole('button', { name: '发送', exact: true }).elementHandle();
+    await page.getByRole('button', { name: '发送', exact: true }).click();
+    await waitForOpenSheet(page, 'pw-phone-description');
+    await page.evaluate(() => window.motionFixture.holdNextPhoneReview());
+    await page.locator(phoneSelector).getByRole('button', { name: '关闭手机任务核对', exact: true }).click();
+    await send.evaluate(button => { button.focus(); button.click(); });
+    await page.waitForFunction(() => window.motionFixture.inspect().hasDeferredPhoneReview);
+    await page.locator(phoneSelector).waitFor({ state: 'detached' });
+    await page.evaluate(() => window.motionFixture.releasePhoneReview());
+    await waitForOpenSheet(page, 'pw-phone-description');
+    await page.locator(phoneSelector).getByRole('button', { name: '关闭手机任务核对', exact: true }).click();
+    await page.locator(phoneSelector).waitFor({ state: 'detached' });
+    await settle(page);
+    assert.equal(await send.evaluate(node => node === document.activeElement), true, 'An older exit consumed the return focus of a delayed new review');
+    await selectInputIntent(page, '与主 Agent 对话');
+
+    await page.evaluate(() => window.motionFixture.setVoiceAvailable(true));
+    await page.getByRole('button', { name: '核对原听写', exact: true }).click();
+    const sheet = await waitForOpenSheet(page, 'pw-voice-description');
+    const text = await sheet.getByRole('textbox', { name: '原听写文字', exact: true }).inputValue();
+    await sheet.getByRole('button', { name: '采用到原输入', exact: true }).click();
+    await page.locator(voiceSelector).waitFor({ state: 'detached' });
+    await settle(page);
+    assert.equal(await page.getByRole('button', { name: '核对原听写', exact: true }).count(), 0, 'Successful voice acceptance did not retire its old review control');
+    assert.equal(await input.inputValue(), text, 'Voice acceptance did not reach the original input');
+    assert.equal(await input.evaluate(node => node === document.activeElement), true, 'A retired voice trigger prevented input focus recovery');
+    await input.fill(draft);
+    await page.waitForFunction(text => window.motionFixture.inspect().snapshot.composer.text === text, draft);
   });
 }
 async function assertOneSurface(page, route) {
