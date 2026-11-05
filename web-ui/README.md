@@ -66,6 +66,9 @@ is driven by the current foreground turn, without synthetic progress or success.
 Closing phone reviews keep display fields until the actual Vaul/Radix content
 unmounts, while live review access ends immediately. Closing phone and dictation
 reviews are inert; reopening cannot be cleared by an older exit callback.
+Phone and dictation reviews restore their initiating control after the actual
+exit, or the original input if that control has retired. Pending review responses
+keep their own focus origin, and exits preserve a newer focus or open sheet.
 Reduced motion applies from first render and responds to preference changes,
 including portalled overlays. CSS loops pause while the document is hidden.
 
