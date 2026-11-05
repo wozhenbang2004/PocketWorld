@@ -42,7 +42,7 @@ public final class InferenceProjection {
             JSONObject context=receipt.getJSONObject("context"),route=receipt.getJSONObject("route"),usage=receipt.getJSONObject("usage");
             JSONObject groupedRoute=new JSONObject(route.toString());groupedRoute.remove("providerResponseId");groupedRoute.remove("providerItemId");
             // Logical control does not fragment or duplicate the original physical route totals.
-            for(String field:new String[]{"logicalRequestId","attemptNo","candidateId","requestedAlias","ingressProtocol","egressProtocol","retryReason","deadlineAt","historyDigest"})groupedRoute.remove(field);
+            for(String field:new String[]{"logicalRequestId","attemptNo","candidateId","requestedAlias","ingressProtocol","egressProtocol","retryReason","deadlineAt","historyDigest","requestOptions","requestOptionsSource"})groupedRoute.remove(field);
             JSONObject identity=new JSONObject().put("route",groupedRoute).put("purpose",context.optString("purpose"))
                     .put("memberId",context.optString("memberId")).put("protocol",usage.optString("protocol"));
             String key=canonical(identity);Group group=byGroup.get(key);
