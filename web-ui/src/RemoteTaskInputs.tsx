@@ -63,7 +63,8 @@ export function RemoteInputFlow({ taskId, continuation = false, prepared, visibl
     {error && <p className="pw-field-error" role="alert">{error}</p>}{unknown && <p className="pw-field-hint">本次效果待核对，请查询原记录；不会自动重复发送原件。</p>}
     <p className="pw-field-hint">输入副本可能保留，取消不等于远端删除。离页或切后台会撤销尚未派发的确认，已发送字节不能撤回。</p>
     {review.digest && confirmClosed !== review.digest && <RemoteActionReview identity={`${view?.pageHandle}:${review.digest}`} title="仅向这个准确目标发送这些原件" active={visible && current()} busy={busy} expiresAt={review.expiresAt} onClose={() => setConfirmClosed(review.digest)} confirmLabel="确认发送本次原件" onConfirm={() => {
-      if (live.current?.review?.digest !== review.digest || continuation && !view?.registered && (live.current.request?.prompt !== input.current.prompt || live.current.request?.timeoutSeconds !== Number(input.current.timeout))) return;
+      const original = live.current;
+      if (!original || original.review?.digest !== review.digest || continuation && !view?.registered && (original.request?.prompt !== input.current.prompt || original.request?.timeoutSeconds !== Number(input.current.timeout))) return;
       void act('confirm', { digest: review.digest, billingAcknowledged: true }); setConfirmClosed(review.digest);
     }}><p>{scope.profileId}<br />{scope.serviceBase}<br />{scope.workspace}/{scope.inputDirectory}</p><p>{scope.request?.worker} · {scope.request?.model || '执行端默认模型'}{scope.request?.effort ? ` · 推理强度 ${scope.request.effort}` : ''} · 本次时限 {scope.request?.timeoutSeconds} 秒</p>
       {scope.continuationSource && <p>原会话 {scope.continuationSource.threadId} · 来源 job {scope.continuationSource.jobId} · 本次新执行不重发旧操作。</p>}

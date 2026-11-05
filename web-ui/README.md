@@ -282,26 +282,38 @@ remain native. Old Android component entry points redirect to this same host.
 
 Validation of this source snapshot:
 
-- The Node test run passed 632 tests. `android-packaging.test.ts` and
-  `file-diff.test.ts` could not load because the environment lacked the locked
-  `vite` and `diff` packages. The complete run therefore exited 1, not a pass.
-  Only the exact existing TypeScript 5.9.3 dependency was resolved from cache;
-  no replacement dependency or test implementation was supplied.
+- The final Node test run passed 641 of 642 tests. The one failure is
+  `android-packaging.test.ts`, which cannot load the missing locked Vite
+  package. The complete command therefore exits 1. Restoring the exact
+  `diff` 9.0.0 cache allowed all seven file-comparison regressions to run and pass.
+  No package versions or lockfile entries were changed.
 - The 68 Python host-registry, navigation and affected contract checks passed.
   All registered host groups resolve their test/helper source paths.
+- The remote-workspace group passed all 21 tests, including captured attachment
+  confirmations and approval callbacks after backgrounding, owner-window
+  replacement, pagehide and unmount. This coverage is part of the Node total,
+  not an additional 21 tests. Both callbacks now explicitly reject null windows.
 - All six retained legacy JavaScript test entry points passed after migration
   to the existing unified frontend regressions. Their executions overlap the
   main suite and must not be counted as additional independent coverage.
 - Syntax parsing found no diagnostics in the 370 Web TypeScript files,
   254 main/test Kotlin files and 2,133 main/test Java files inspected. This is
   syntax evidence only, not TypeScript typechecking or Android compilation.
+- The TypeScript 5.9.3 semantic comparison identified three nullability
+  diagnostics in the two remote callbacks; the same comparison reports none
+  of those diagnostics after the fixes. Other diagnostics from missing
+  dependencies remain, so this is not a successful full typecheck.
 - No production reference remains to the old frontend switch or root HTML
   loader; the root legacy HTML resource is absent. `git diff --check` passed.
 
-Full dependency installation, the production Web build, Android compilation,
-Robolectric and current rendered desktop/mobile acceptance remain unverified.
-Install the pinned dependencies with the normal build commands above, then run
-the affected host groups and real desktop/narrow-screen journeys before release.
+Offline dependency installation stops at missing Vite 7.3.7; the normal
+typecheck stops at missing `vite/client`. The production build prepares its
+fonts but stops while collecting licenses for unavailable required packages.
+The native `unified-workspace --check` preflight exits 2 because its pinned
+Robolectric SDK is missing; no native test bodies execute. Full production
+builds and current rendered desktop/mobile acceptance remain release gates.
+Install the pinned dependencies with the normal build commands above, then
+run the affected host groups and desktop/narrow-screen journeys before release.
 Repository submission uses a commit containing `[skip ci]`; automated Actions
 and APK packaging are not part of this delivery. Do not re-create
 a native frontend to work around an unavailable Web build or failed startup.
