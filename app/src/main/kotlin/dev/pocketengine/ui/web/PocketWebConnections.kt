@@ -13,13 +13,15 @@ import java.util.UUID
 import org.json.JSONObject
 
 /** Presentation only: the existing FeatureHost still owns every original task and receipt. */
-internal class PocketWebConnections(private val controller: PocketWorldController) {
+internal class PocketWebConnections(private val controller: PocketWorldController, private val inputPages: PocketWebRemoteInputs? = null) {
     private data class Review(val domain: String, val command: String, val input: String, val expires: Long, val window: Pair<Triple<Long, Int, Long>, Long>)
     private val reviews = linkedMapOf<String, Review>()
     private val environments = mutableMapOf<String, JSONObject>()
     private val probes = mutableMapOf<String, Pair<String, JSONObject>>()
     private val screens = mutableMapOf<String, SshTerminalScreen>()
     private var doctor: SshOwnerWorkflows.DoctorPage? = null
+    private data class Baseline(val window: String, val task: String, val owner: Pair<Triple<Long, Int, Long>, Long>, var snapshot: JSONObject? = null, var busy: Boolean = false)
+    private var baseline: Baseline? = null
     @Volatile private var generation = 0L
     private val main = Handler(Looper.getMainLooper())
 
@@ -27,12 +29,13 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
         val COMMANDS = setOf(
             "remote.saveProfile", "remote.removeProfile", "remote.probe", "remote.environments", "remote.probeWorker",
             "remote.reconnect", "remote.reconcileOperation", "remote.getJob", "remote.readSessionRecovery", "remote.cancelJob",
-            "remote.reviewTask", "remote.confirmTask", "ssh.saveProfile", "ssh.removeProfile", "ssh.probeHostKey", "ssh.approveHostKey",
+            "remote.reviewTask", "remote.confirmTask", "remote.project.open", "remote.project.review", "remote.project.confirm", "remote.project.close", "remote.inputs.open", "ssh.saveProfile", "ssh.removeProfile", "ssh.probeHostKey", "ssh.approveHostKey",
             "ssh.forgetHostKey", "ssh.listFiles", "ssh.readFile", "ssh.inspectFile", "ssh.getOperation", "ssh.reviewOperation", "ssh.confirmOperation",
             "ssh.readPty", "ssh.writePty", "ssh.resizePty", "ssh.closePty", "ssh.startTask", "ssh.doctor", "ssh.closeDoctor"
         )
     }
-    fun clear() { generation++; reviews.clear(); environments.clear(); probes.clear(); screens.clear(); doctor?.close(); doctor = null }
+    fun clear() { generation++; reviews.clear(); environments.clear(); probes.clear(); screens.clear(); doctor?.close(); doctor = null; closeBaseline() }
+    private fun closeBaseline() { val original = baseline; baseline = null; original?.let { controller.leaveRemoteTask(it.window) } }
     private fun fields(args: JSONObject, vararg allowed: String) { require(args.keys().asSequence().all { it in allowed }) { "原连接操作包含不适用的字段" } }
     private fun string(args: JSONObject, key: String, max: Int = 128, empty: Boolean = false): String {
         val value = args.opt(key); require(value is String && value.length <= max && '\u0000' !in value && (empty || value.isNotBlank())) { "请重新核对$key" }; return value
@@ -53,6 +56,11 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
     }
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
         check(controller.webPrivateOwnerVisible()) { "请在原私人工作台操作" }
+        if (action == "remote.inputs.open") {
+            fields(args, "reviewHandle"); val (task, request) = takeCreateReview(string(args, "reviewHandle"))
+            (inputPages ?: error("原私人附件宿主未接入")).openPrepared(task, request, done); return
+        }
+        if (action.startsWith("remote.project.")) { project(action, args, done); return }
         val domain = action.substringBefore('.'); var command = action.substringAfter('.')
         var input = JSONObject(args.toString())
         val originalGeneration = generation; val window = controller.webWindowTicket()
@@ -69,7 +77,7 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
             }
             "removeProfile" -> { fields(args, "profileId", "expectedBindingHash"); currentProfile(domain, args, "expectedBindingHash") }
             "probe", "environments", "reconnect", "probeHostKey" -> { fields(args, "profileId", "_profileBinding"); currentProfile(domain, args) }
-            "probeWorker" -> { fields(args, "profileId", "_profileBinding", "environmentId", "environmentBinding", "worker", "model", "effort"); currentProfile(domain, args) }
+            "probeWorker" -> { fields(args, "profileId", "_profileBinding", "environmentId", "environmentBinding", "worker", "model", "modeId", "effort"); currentProfile(domain, args) }
             "approveHostKey" -> { fields(args, "profileId", "expectedBindingHash", "probeId", "fingerprint"); currentProfile(domain, args, "expectedBindingHash") }
             "forgetHostKey" -> { fields(args, "profileId", "expectedBindingHash", "fingerprint"); currentProfile(domain, args, "expectedBindingHash") }
             "listFiles", "readFile", "inspectFile" -> { fields(args, "profileId", "_profileBinding", "path"); currentProfile(domain, args); string(args, "path", 1024, command == "listFiles") }
@@ -92,7 +100,7 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
                 if (checked.getString("worker") != "command") {
                     val (target, observedProbe) = probes[checked.getString("profileId")] ?: error("请先核对执行器与模型")
                     val proof = JSONObject(target)
-                    for (key in listOf("profileId", "_profileBinding", "environmentId", "environmentBinding", "worker", "model", "effort")) check(proof.optString(key) == checked.optString(key)) { "执行器核对已变化，请按当前选项重新核对" }
+                    for (key in listOf("profileId", "_profileBinding", "environmentId", "environmentBinding", "worker", "model", "modeId", "effort")) check(proof.optString(key) == checked.optString(key)) { "执行器核对已变化，请按当前选项重新核对" }
                     check(observedProbe.optBoolean("available")) { "尚未核实此执行器可用" }
                     if (checked.getString("worker") == "gemini_acp") {
                         check(environment.opt("writeAllowed") == true) { "此 Gemini 后端只接受原环境已明确允许写入的私人工作；不支持只读分析" }
@@ -169,5 +177,57 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
                 deliver(PocketWebState.publicValue(actual) as JSONObject, null)
             } catch (failure: Exception) { deliver(null, failure.message ?: "原操作回执无法核对") }
         }
+    }
+
+    /** The existing reviewed create request becomes a native project window, never a second task runner. */
+    private fun takeCreateReview(handle: String): Pair<String, JSONObject> {
+        val reviewed = reviews.remove(handle) ?: error("原新工作审阅已关闭或使用")
+        require(reviewed.domain == "remote" && reviewed.command == "submitJob" && reviewed.expires > SystemClock.elapsedRealtime() && reviewed.window == controller.webWindowTicket()) { "原新工作审阅已变化" }
+        val checked = JSONObject(reviewed.input)
+        require(checked.optString("worker") in setOf("codex_app_server", "claude")) { "此原执行器不支持显选文件或项目基线" }
+        currentProfile("remote", checked)
+        val request = JSONObject(checked.toString()); request.remove("operationId"); request.put("bindingHash", request.remove("_profileBinding"))
+        RemoteTaskRequest.first(request)
+        return checked.getString("operationId") to request
+    }
+    private fun project(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
+        if (action == "remote.project.close") {
+            fields(args, "windowHandle"); if (baseline?.window == string(args, "windowHandle")) closeBaseline()
+            done(JSONObject().put("closed", true), null); return
+        }
+        val original: Baseline; val command: String; val input: JSONObject
+        if (action == "remote.project.open") {
+            fields(args, "reviewHandle")
+            val (task, request) = takeCreateReview(string(args, "reviewHandle"))
+            closeBaseline(); original = Baseline(UUID.randomUUID().toString(), task, controller.webWindowTicket()); baseline = original
+            command = "project.open"; input = JSONObject().put("request", request)
+        } else {
+            original = baseline ?: error("原项目基线审阅页已关闭")
+            require(original.window == string(args, "windowHandle") && original.owner == controller.webWindowTicket() && !original.busy) { "原项目基线窗口已变化或仍在处理" }
+            input = JSONObject()
+            when (action) {
+                "remote.project.review" -> { fields(args, "windowHandle", "projectRoot"); input.put("projectRoot", string(args, "projectRoot", 2048, true)); command = "project.reviewStart" }
+                "remote.project.confirm" -> {
+                    fields(args, "windowHandle", "digest", "scopeAcknowledged")
+                    val review = original.snapshot?.optJSONObject("projectHistoryReview") ?: error("请先读取原项目基线范围")
+                    require(args.opt("scopeAcknowledged") == true && review.optString("digest") == string(args, "digest")) { "本次项目基线范围未确认" }
+                    input.put("digest", args.getString("digest")).put("scopeAcknowledged", true); command = "project.confirm"
+                }
+                else -> error("未知原项目基线操作")
+            }
+        }
+        input.put("windowId", original.window).put("taskId", original.task)
+        original.busy = true; val epoch = generation
+        try { controller.requestOwnerDomainReceipt("remoteTask", command, input) { result, error ->
+            original.busy = false
+            if (baseline !== original || epoch != generation || original.owner != controller.webWindowTicket() || !controller.webPrivateOwnerVisible()) {
+                controller.leaveRemoteTask(original.window); done(null, "原项目基线窗口已变化，请查询原任务，不重复提交")
+            } else if (result?.optJSONObject("snapshot") == null || error != null) done(null, error ?: "原项目操作尚无可核对回执")
+            else {
+                val snapshot = result.getJSONObject("snapshot")
+                if (snapshot.optString("windowId") != original.window || snapshot.optString("taskId") != original.task) done(null, "原项目回执身份不符")
+                else { original.snapshot = JSONObject(snapshot.toString()); done((PocketWebState.publicValue(snapshot) as JSONObject).put("windowHandle", original.window), null) }
+            }
+        } } catch (failure: Exception) { original.busy = false; throw failure }
     }
 }

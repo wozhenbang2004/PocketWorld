@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { newProfile, profileAsset, profileModel, profileMutationReceipt, profilePluginTool, profileReferenceKey, profileSaveInput, ProfileRequestGate } from '../src/profile-contract.ts';
+import { newProfile, profileAsset, profileModel, profileMutationReceipt, profilePluginTool, profileReferenceKey, profileSaveInput, profileStartInput, profileStartReceipt, ProfileRequestGate } from '../src/profile-contract.ts';
 
 test('model selections retain exact connection and group revision without selecting a replacement', () => {
   const original = newProfile(), ref = { kind: 'group', groupId: 'owner-group', groupRevision: 7 };
@@ -75,4 +75,22 @@ test('document or section changes invalidate both late reads and a previous ackn
   gate.markUnknown('operation'); gate.inspectOriginal('operation'); gate.invalidate(true);
   assert.equal(gate.acknowledge(), false); assert.equal(gate.begin('replay'), null);
   gate.inspectOriginal('operation'); assert.equal(gate.acknowledge(), true);
+});
+
+
+test('task start carries only the original preflight handle and an explicit goal', () => {
+  const inspection = { preflightHandle: 'original-native-review', runnable: true, project: { projectId: 'original-project' } };
+  assert.deepEqual(profileStartInput(inspection, '  This original task  '), { preflightHandle: 'original-native-review', goal: 'This original task' });
+  for (const value of [null, { ...inspection, runnable: false }, { ...inspection, preflightHandle: '' }]) assert.throws(() => profileStartInput(value, 'Task'));
+  assert.throws(() => profileStartInput(inspection, ' ')); assert.throws(() => profileStartInput(inspection, 'x'.repeat(4001)));
+});
+
+test('task-start receipt must match the original operation and exact saved profile revision', () => {
+  const expected = { command: 'start', operationId: 'original-operation', original: { profileId: 'profile-one', revision: 4 } };
+  const result = { taskId: '12345678-1234-1234-1234-123456789abc', status: 'needs_confirmation' };
+  const receipt = { confirmed: true, command: 'start', operationId: 'original-operation', profileId: 'profile-one', revision: 4, result };
+  assert.equal(profileStartReceipt(receipt, expected), result);
+  assert.throws(() => profileStartReceipt({ accepted: true }, expected));
+  for (const changed of [{ operationId: 'other' }, { profileId: 'other' }, { revision: 5 }, { result: {} }]) assert.throws(() => profileStartReceipt({ ...receipt, ...changed }, expected));
+  assert.equal(result.status, 'needs_confirmation');
 });

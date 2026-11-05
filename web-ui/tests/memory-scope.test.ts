@@ -19,10 +19,12 @@ function fixture(overrides: Data = {}, initialCandidate: Data | null = null) {
   let index = 0, dirty = false, tree: any, scope = 'private';
   const useState = (initial: any) => { const i = index++; slots[i] ??= { value: initial }; return [slots[i].value, (next: any) => { const value = typeof next === 'function' ? next(slots[i].value) : next; if (!Object.is(value, slots[i].value)) { slots[i].value = value; dirty = true; } }]; };
   const useRef = (initial: any) => { const i = index++; return slots[i] ??= { current: initial }; };
-  const useEffect = (callback: () => any, deps?: any[]) => { const i = index++, previous = slots[i]; if (!deps || !previous?.deps || deps.some((v, j) => !Object.is(v, previous.deps[j]))) { const slot = slots[i] = { deps, cleanup: previous?.cleanup }; effects.push(() => { slot.cleanup?.(); slot.cleanup = callback(); }); } };
+  const sameDependencies = (previous?: readonly any[], next?: readonly any[]) => !!previous && !!next && previous.length === next.length && next.every((value, i) => Object.is(value, previous[i]));
+  const useCallback = (callback: (...args: any[]) => any, deps?: any[]) => { const i = index++; if (!sameDependencies(slots[i]?.deps, deps)) slots[i] = { deps, callback }; return slots[i].callback; };
+  const useEffect = (callback: () => any, deps?: any[]) => { const i = index++, previous = slots[i]; if (!sameDependencies(previous?.deps, deps)) { const slot = slots[i] = { deps, cleanup: previous?.cleanup }; effects.push(() => { slot.cleanup?.(); slot.cleanup = callback(); }); } };
   const React = { createElement: (type: any, props: any, ...children: any[]) => ({ type, props: props || {}, children: children.flat(Infinity).filter(v => v !== false && v != null) }) };
-  const dependencies: Data = { React, useState, useRef, useEffect, useLayoutEffect: useEffect, document: { visibilityState: 'visible' } };
-  for (const name of ['RiArrowLeftSLine', 'RiArrowRightSLine', 'RiRefreshLine', 'Tabs', 'TabList', 'Tab', 'TabPanel', 'Accordion', 'AccordionItem', 'Button', 'CheckboxField', 'IconButton', 'SearchField', 'SelectField', 'SettingsDialog', 'TextAreaField', 'TextField', 'MemoryAssertionFields']) dependencies[name] = name;
+  const dependencies: Data = { React, useState, useRef, useCallback, useEffect, useLayoutEffect: useEffect, document: { visibilityState: 'visible' } };
+  for (const name of ['RiArrowLeftSLine', 'RiArrowRightSLine', 'RiRefreshLine', 'Tabs', 'TabList', 'Tab', 'TabPanel', 'Accordion', 'AccordionItem', 'Button', 'CheckboxField', 'IconButton', 'SearchField', 'SelectField', 'SettingsDialog', 'TextAreaField', 'TextField', 'MemoryAssertionFields', 'MemoryHistoryWorkspace']) dependencies[name] = name;
   const Component = new Function(...Object.keys(dependencies), code + '\nreturn MemoryWorkspace;')(...Object.values(dependencies));
   const values: Data = { 'knowledge.snapshot': () => scopeSnapshot(scope), 'knowledge.namespaces': { choices: [{ choiceHandle: 'project-a', name: '项目甲' }] },
     'knowledge.namespace': (args: Data) => { scope = args.choiceHandle || 'private'; return { scopeName: scopeSnapshot(scope).scopeName }; },

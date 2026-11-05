@@ -1,4 +1,6 @@
+import { ModelDiagnosticsWorkspace } from './ModelDiagnosticsWorkspace';
 import SkillsWorkspace from './SkillsWorkspace';
+import { BackgroundAudioSettings, BackgroundOwnerSettings, BackgroundChecks } from './BackgroundOwnerSettings';
 import ChannelsWorkspace from './ChannelsWorkspace';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import {
@@ -615,6 +617,7 @@ function BackgroundSettings({ state, supported, run, onReturn, registerTransient
   const [unknownResult, setUnknownResult] = useState(false);
   const [awaiting, setAwaiting] = useState<{ key: string; before: string; busySeen: boolean } | null>(null);
   const pairGuard = useRef(false);
+  const ownerBack = useRef<Record<string, (() => boolean) | null>>({});
   const ownerOpened = useRef(state.backgroundSetupOpen === true);
   const kind = connecting ? 'connect' : 'pairing';
   const endpoints = wirelessEndpoints(discovery, kind);
@@ -626,7 +629,7 @@ function BackgroundSettings({ state, supported, run, onReturn, registerTransient
   const resultSignature = (key: string) => JSON.stringify([object(state.moduleResults)[key] ?? null, object(state.moduleErrors)[key] ?? null]);
   const closeSecrets = () => setCode('');
   const selectPanel = (value: 'setup' | 'checks') => { setCode(''); setPanel(value); };
-  useEffect(() => { registerTransientBack(() => { if (mainScreenConsent) { setMainScreenConsent(false); return true; } if (panel === 'checks') { selectPanel('setup'); return true; } return false; }); return () => registerTransientBack(null); }, [panel, mainScreenConsent, registerTransientBack]);
+  useEffect(() => { registerTransientBack(() => { if (Object.values(ownerBack.current).some(handler => handler?.())) return true; if (mainScreenConsent) { setMainScreenConsent(false); return true; } if (panel === 'checks') { selectPanel('setup'); return true; } return false; }); return () => registerTransientBack(null); }, [panel, mainScreenConsent, registerTransientBack]);
   useEffect(() => {
     if (state.backgroundSetupOpen === true) ownerOpened.current = true;
     else if (ownerOpened.current) { setCode(''); onReturn(); }
@@ -673,7 +676,7 @@ function BackgroundSettings({ state, supported, run, onReturn, registerTransient
     catch { setUnknownResult(true); setConnecting(true); setAwaiting(null); pairGuard.current = false; }
     finally { setRequesting(false); }
   };
-  const errors = Object.entries(object(state.moduleErrors)).filter(([key]) => key.startsWith('display.')).map(([, value]) => text(value)).filter(Boolean);
+  const errors = Object.entries(object(state.moduleErrors)).filter(([key]) => key.startsWith('display.') || key.startsWith('phone_setup.')).map(([, value]) => text(value)).filter(Boolean);
   const headline = connection.busy || requesting || awaiting ? '正在核对本次连接' : requiresCheck ? '上次连接结果待核对' : connection.screenEstablished ? '独立屏幕已建立' : connection.helperConnected ? '后台助手已连接' : !connection.loaded ? '正在读取后台连接' : !connection.supported ? '后台独立屏需要 Android 14 或以上' : connection.phase === 'paired' ? '配对已确认，还需要连接助手' : '连接手机后台助手';
   const alternate = connection.backend === 'shizuku' || connection.backend === 'adb';
   const permissions = state.accessibilityEnabled === true && state.notificationsEnabled === true;
@@ -697,8 +700,9 @@ function BackgroundSettings({ state, supported, run, onReturn, registerTransient
     {requiresCheck && <p className="pw-background-attention" role="status">上次连接结果尚未确认。核对原助手，不要重复提交配对码。</p>}
     {awaiting && !connection.busy && <p className="pw-field-hint" role="status">请求已登记，正在等待实际连接回执。可刷新核对状态，请勿重复提交。</p>}
     {errors.map((message, index) => <p className="pw-field-error" role="alert" key={index}>{message}</p>)}
-      {Number.isSafeInteger(audioPending) && audioPending > 0 && <div role="alert"><p className="pw-field-error">还有 {audioPending} 项声音记录待处理，原 App 可能仍静音。请切换到原生工作台，在后台连接设置中处理原声音记录。</p>{audioRecovery.needsOwnerAction === true && <div className="pw-form-actions"><CapabilityAction action="settings.openSystem" args={{ section: 'accessibility' }} supported={supported} run={run}>打开无障碍设置</CapabilityAction></div>}</div>}
+      {Number.isSafeInteger(audioPending) && audioPending > 0 && <div role="alert"><p className="pw-field-error">还有 {audioPending} 项声音记录待处理，原 App 可能仍静音。请在下方处理原声音记录。</p>{audioRecovery.needsOwnerAction === true && <div className="pw-form-actions"><CapabilityAction action="settings.openSystem" args={{ section: 'accessibility' }} supported={supported} run={run}>打开无障碍设置</CapabilityAction></div>}</div>}
       {!connection.taskOwned && connection.loaded && connection.supported && !alternate && !connected && (connection.busy || connection.recoveryRequired || awaiting) && <div className="pw-form-actions"><Button variant="secondary" disabled={!supported('background.cancel') || pending.includes('display.adb.cancel')} onClick={() => { setCode(''); void run('background.cancel', {}).catch(() => {}); }}>停止本次连接与启动</Button></div>}
+    <BackgroundAudioSettings state={state} supported={supported} run={run} registerBack={handler => { ownerBack.current.audio = handler; }} />
     <Tabs selectedKey={panel} onSelectionChange={key => selectPanel(key as 'setup' | 'checks')} className="pw-background-tabs">
       <TabList aria-label="后台连接内容"><Tab id="setup">连接设置</Tab><Tab id="checks" count={blockedGroups || undefined}>能力检查</Tab></TabList>
       <TabPanel id="setup">
@@ -714,6 +718,7 @@ function BackgroundSettings({ state, supported, run, onReturn, registerTransient
           <Button variant="ghost" disabled={locked} onClick={() => { setCode(''); setPortText(''); setManual(current => !current); }}>{manual ? '改用自动发现' : '未找到？填写本机端口'}</Button>
         </div>
         {!connecting && <TextField label="系统窗口当前的六位配对码" type="password" inputMode="numeric" autoComplete="off" value={code} isDisabled={locked || !connection.canPair || requiresCheck} onChange={value => setCode(value.replace(/\D/g, '').slice(0, 6))} hint="仅用于本次配对，提交或离开后清空。" />}
+        {!connecting && <div className="pw-form-actions">{object(object(object(state.features).phone_setup).pairing).active === true ? <CapabilityAction action="background.pairing.cancel" supported={supported} run={run}>停止通知输码</CapabilityAction> : <Button variant="ghost" disabled={locked || !connection.canPair || port == null || host !== '127.0.0.1' || state.notificationsEnabled !== true || !supported('background.pairing.begin')} onClick={() => { setCode(''); void run('background.pairing.begin', { host, port }).catch(() => {}); }}>在系统配对页通过通知输码</Button>}</div>}
         {connecting && port != null && port === pairPort && <p className="pw-background-attention">这是刚才的配对端口，请填写无线调试主页的另一连接端口。</p>}
         <div className="pw-form-actions"><PressButton compact disabled={locked || port == null || !supported(connecting ? 'background.connect' : 'background.pair') || (connecting ? !connection.canConnect || port === pairPort : !connection.canPair || requiresCheck || !/^\d{6}$/.test(code))} onClick={() => { void submit(); }}>{connecting ? requiresCheck ? '恢复并核对原连接' : '完成手机连接' : '确认配对并继续'}</PressButton>
           {!connecting ? <Button variant="ghost" disabled={locked} onClick={() => { setCode(''); setConnecting(true); }}>{connection.identityPresent ? '使用已保存身份连接' : '此前配对过？直接连接'}</Button> : <Button variant="ghost" disabled={locked || !connection.canPair || requiresCheck} onClick={() => { setCode(''); setConnecting(false); }}>重新读取配对窗口</Button>}
@@ -723,7 +728,7 @@ function BackgroundSettings({ state, supported, run, onReturn, registerTransient
     {connection.loaded && !connection.supported && <Card title="此系统使用主屏兼容模式" description="后台独立屏需要 Android 14 或以上；执行主屏任务时会切换应用并占用当前屏幕。"><Button variant="secondary" disabled={connection.taskOwned || connection.busy || !supported('background.selectMainScreen')} onClick={() => setMainScreenConsent(true)}>选择主屏兼容模式</Button></Card>}
 
         {(connected || connection.taskOwned || alternate) && <section className="pw-background-retained"><h3>{connection.taskOwned ? '继续核对原任务' : connected ? '助手连接已保留' : '保留当前兼容连接'}</h3><p>{connection.taskOwned ? '原任务仍持有执行资源，本页不会重建连接或开始另一项任务。' : connected ? '开始任务时还会核对输入、取帧和独立显示能力。' : '当前使用已选的 Shizuku 或电脑 ADB 路线。本页不会自动切换为无线配对。'}</p><Button variant="secondary" onClick={() => selectPanel('checks')}>查看实际能力检查</Button></section>}
-    <Card><Accordion variant="divided"><AccordionItem id="background-advanced" title="高级兼容与原连接状态"><Facts items={[[ '已选方式', connection.backend || '尚未读取' ], ['Shizuku', object(display.shizuku).message ], ['助手连接', connection.loaded ? connection.helperConnected ? '已连接' : '未连接' : '尚未核实' ], ['独立屏会话', connection.screenEstablished ? '宿主已核验' : '尚未建立或核验'], ['会话标识', display.sessionId ], ['连接恢复', requiresCheck ? '需要核对原连接' : undefined ]]} /><p className="pw-field-hint">保留已选择的连接方式。Shizuku、电脑 ADB 的配置及释放、遗忘操作尚未接入此页面。</p></AccordionItem></Accordion></Card>
+    <BackgroundOwnerSettings state={state} supported={supported} run={run} registerBack={handler => { ownerBack.current.advanced = handler; }} />
 
       </TabPanel>
       <TabPanel id="checks">    <Card title="本机能力检查" description="逐项来自当前系统检查。已连接仍需核对输入、取帧和输入法隔离能力；从系统设置返回后刷新。">
@@ -733,6 +738,7 @@ function BackgroundSettings({ state, supported, run, onReturn, registerTransient
       </AccordionItem>)}</Accordion>}
       <div className="pw-form-actions">{state.accessibilityEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'accessibility' }} supported={supported} run={run}>设置界面读取权限</CapabilityAction>}{state.notificationsEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'notifications' }} supported={supported} run={run}>允许任务通知</CapabilityAction>}</div>
     </Card>
+    <BackgroundChecks state={state} supported={supported} run={run} registerBack={handler => { ownerBack.current.checks = handler; }} />
 </TabPanel>
     </Tabs>
     <div className="pw-background-return"><Button variant={connection.helperConnected && !requiresCheck ? 'primary' : 'ghost'} onClick={() => { setCode(''); onReturn(); }}>{connection.helperConnected && !requiresCheck ? '助手已连接，返回手机能力' : '返回手机能力'}</Button></div>
@@ -1057,7 +1063,7 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack }: { 
   </>;
 }
 
-function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate, onOpenModels, onNavigate, alreadyShownError }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void; onOpenModels: () => void; onNavigate: (domain: 'plugins' | 'pluginCatalog' | 'mcp') => void; alreadyShownError?: string }) {
+function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate, onOpenModels, onNavigate, alreadyShownError }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void; onOpenModels: () => void; onNavigate: (domain: 'plugins' | 'pluginCatalog' | 'mcp' | 'skills') => void; alreadyShownError?: string }) {
   const title = SECONDARY_DOMAINS.find(x => x.id === domain)?.title || '连接与能力';
   if (domain === 'accounts') return <AccountsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'devices') return <DevicesWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} openModels={onOpenModels} />;
@@ -1476,7 +1482,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
               {state.activeTaskId && modelView.kind !== 'model' && <p className="pw-field-hint pw-model-task-context">进行中的任务保留原模型与连接。这里的选择不会替换原任务身份。</p>}
               <ModelCatalog key={page} state={state} data={data} active={modelBrowseActive} selectedId={modelView.kind === 'model' ? modelView.id : undefined} supported={supported} run={run} open={openModel} registerTransientBack={registerTransientBack} />
             </div>
-            {modelView.kind === 'connections' ? <><ModelConnections state={state} data={data} supported={supported} run={run} navigate={navigate} open={openModel} /><TokenBudgetsWorkspace supported={supported} registerTransientBack={registerTransientBack} /></>
+            {modelView.kind === 'connections' ? <><ModelConnections state={state} data={data} supported={supported} run={run} navigate={navigate} open={openModel} /><TokenBudgetsWorkspace supported={supported} registerTransientBack={registerTransientBack} /><ModelDiagnosticsWorkspace state={state} supported={supported} /></>
               : modelView.kind === 'edit' || modelView.kind === 'add' ? <ModelSettings key={modelDraftKey} state={state} connection={editConnection} supported={supported} run={run} adding={modelView.kind === 'add'} draft={modelDrafts.current[modelDraftKey]} onDraftChange={value => { if (value) modelDrafts.current[modelDraftKey] = value; else delete modelDrafts.current[modelDraftKey]; }} onInspect={() => { void run('models.snapshot', {}).catch(() => {}); finishModelEdit(modelView.kind === 'add' ? { kind: 'connections' } : { kind: 'connection', id: recordId(editConnection || {}) }); }} onSaved={saved => { const id = modelView.kind === 'add' ? text(object(saved.connections).selectedConnectionId) : recordId(editConnection || {}); finishModelEdit(id ? { kind: 'connection', id } : { kind: 'connections' }); setNotice('已收到原连接保存回执。当前修订可在详情核对；保存不代表测试通过。'); }} registerTransientBack={registerTransientBack} />
               : modelView.kind === 'connection' ? <ModelConnectionDetail connection={connection} data={data} state={state} supported={supported} run={run} open={openModel} busy={Boolean(state.modelSelectionBusy || state.modelSaving || state.modelTesting || state.chatSubmitting || state.phoneSubmitting)} /> : null}
           </>

@@ -146,9 +146,15 @@ public final class ModelConnectionService {
         Objects.requireNonNull(tasks);if(ownerTasks!=null&&ownerTasks!=tasks)throw new SecurityException("original_model_probe_store_required");ownerTasks=tasks;
     }
     public JSONObject probe(ModelBinding expected,boolean image,RunControl control)throws Exception {
+        return probe(expected,null,-1,image,control);
+    }
+    /** A reviewed UI start also pins the model and selection revision under the original Settings monitor. */
+    public JSONObject probe(ModelBinding expected,String expectedModel,long expectedSelectionRevision,boolean image,RunControl control)throws Exception {
         dev.pocketengine.store.TaskStore tasks=ownerTasks;if(tasks==null)throw new IllegalStateException("原模型诊断账本尚未挂载");
         final ModelConfig captured;final long selection;
-        synchronized(settings){captured=requireProbeConfig(expected);selection=settings.apiSelectionRevision();synchronized(this){lastProbe=null;}}
+        synchronized(settings){captured=requireProbeConfig(expected);selection=settings.apiSelectionRevision();
+            if(expectedModel!=null&&(!expectedModel.equals(captured.model)||expectedSelectionRevision!=selection))throw new SecurityException("原审阅模型或选择修订已变化，未开始诊断");
+            synchronized(this){lastProbe=null;}}
         try(var usage=tasks.beginModelCapabilityProbe(java.util.UUID.randomUUID().toString(),control,image)){
             var nativeTarget=usage.target();
             dev.pocketengine.runtime.models.InferenceAudiencePolicy.require(captured,NativeInferenceScope.ownerApp("owner","private",nativeTarget.context.taskId,nativeTarget.context.runId,nativeTarget.context.epoch,control),control);

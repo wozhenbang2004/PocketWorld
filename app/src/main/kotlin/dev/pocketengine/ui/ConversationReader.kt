@@ -1,20 +1,7 @@
 package dev.pocketengine.ui
 
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.unit.dp
 import org.json.JSONObject
-import dev.pocketengine.ui.memory.TaskMemoryWorkflowSheet
-import dev.pocketengine.ui.memory.FinalAnswerSourcesSheet
-import dev.pocketengine.ui.memory.finalAnswerSourceSelection
 
-/** Read-only window. The active conversation, draft and original Runner always remain elsewhere. */
 internal data class ConversationReadPage(
     val window: Long, val conversation: String, val title: String, val readingKey: String?,
     val messages: List<UiMessage> = emptyList(), val cursor: String = "", val hasMore: Boolean = false,
@@ -45,54 +32,4 @@ internal data class ConversationReadPage(
             notice = if (page.optBoolean("retentionLimitApplied")) "旧文件当前只提供原保留窗口，未显示成完整历史。" else if ((page.optJSONArray("gaps")?.length() ?: 0) > 0) "部分原件超出本次范围，未用摘要替代。" else if (anchor.isNotBlank() && combined.none { it.id == anchor }) "上次阅读位置不在当前窗口，可继续查看较早消息；当前任务未切换。" else null)
     }
     fun locate(): Int = messages.indexOfFirst { it.id == anchor }.takeIf { it >= 0 } ?: index.coerceIn(0, (messages.size - 1).coerceAtLeast(0))
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun ConversationReader(controller: PocketWorldController) {
-    val page = controller.conversationReader ?: return
-    if (!controller.canReadConversationWindow(page)) { LaunchedEffect(page.window) { controller.closeConversationReader() }; return }
-    val scroll = remember(page.window) { LazyListState(page.index, page.offset) }
-    var reference by remember(page.window) { mutableStateOf<JSONObject?>(null) }
-    reference?.let { TaskMemoryWorkflowSheet(controller,it) { reference=null } }
-    var answerSources by remember(page.window) { mutableStateOf<JSONObject?>(null) }
-    var answerSourceMemory by remember(page.window) { mutableStateOf<JSONObject?>(null) }
-    answerSources?.let { FinalAnswerSourcesSheet(controller, it, answerSourceMemory) { answerSources = null } }
-    var restored by remember(page.window) { mutableStateOf(false) }
-    LaunchedEffect(page.window, page.initialized, page.messages.firstOrNull()?.id) {
-        if (page.initialized && !restored) { scroll.scrollToItem(page.locate(), page.offset); restored = true }
-        else if (restored && page.anchor.isNotBlank()) page.messages.indexOfFirst { it.id == page.anchor }.takeIf { it >= 0 }?.let { scroll.scrollToItem(it, page.offset) }
-    }
-    LaunchedEffect(page.window, restored) {
-        if (restored) snapshotFlow { Pair(scroll.firstVisibleItemIndex, scroll.firstVisibleItemScrollOffset) }.collect { (index, offset) -> controller.saveConversationReading(page.window, index, offset) }
-    }
-    ModalBottomSheet(onDismissRequest = controller::closeConversationReader, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(Modifier.fillMaxWidth().fillMaxHeight(.9f).imePadding().navigationBarsPadding().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(Modifier.fillMaxWidth()) {
-                TextButton(onClick = controller::closeConversationReader) { Text("返回正在进行的对话") }
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = controller::refreshConversationReader, enabled = !page.loading) { Text("刷新") }
-            }
-            Text(page.title.ifBlank { "历史对话" }, style = MaterialTheme.typography.titleLarge)
-            Text("只读查看 · 当前任务和输入位置保持不变", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (page.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-            page.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            page.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            if (page.hasMore) TextButton(onClick = controller::loadEarlierConversationReader, enabled = !page.loading && !page.limited) { Text("查看较早消息") }
-            LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("readonly_conversation_messages"), state = scroll, verticalArrangement = Arrangement.spacedBy(18.dp), contentPadding = PaddingValues(vertical = 12.dp)) {
-                items(page.messages, key = { it.id!! }) { message ->
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(if (message.role == "user") "主人" else if (message.role == "assistant") "助手" else "历史记录", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        RichConversationMessageBody(message.content)
-                        finalAnswerSourceSelection(message)?.let { selection -> TextButton(onClick = { answerSources = selection; answerSourceMemory = message.memoryReference }) { Text("这次回答的来源") } }
-                        message.attachments.forEach { file -> ConversationFileRow(file, controller.state, { controller.openReaderAttachment(page.window, message.id!!, file) }) }
-                        if (message.attachmentCount > message.attachments.size) Text("另有 ${message.attachmentCount - message.attachments.size} 个原附件引用，当前元数据不可读。", style = MaterialTheme.typography.bodySmall)
-                        message.memoryReference?.let { native -> TextButton(onClick = { reference=JSONObject(native.toString()) }) { Text("这次答复的记忆来源") } }
-                        message.submission?.let { receipt -> Text(when (receipt.optString("status")) { "withdrawn" -> "已撤回排队消息 · 保留原文审计"; "consumed" -> "本条已有采用回执"; "queued", "accepted" -> "本条已有接收回执"; else -> "原接收状态待核" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    }
-                }
-            }
-            if (!controller.state.chatBusy && !controller.state.chatSubmitting) TextButton(onClick = { controller.switchFromConversationReader(page.window) }) { Text("切换到这条对话输入") }
-        }
-    }
 }

@@ -5,6 +5,8 @@ import android.content.Intent;
 import android.os.Looper;
 import dev.pocketengine.EngineApplication;
 import dev.pocketengine.MainActivity;
+import dev.pocketengine.media.MediaController;
+import dev.pocketengine.testutil.ReadyApplicationFixture;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.assistant.CompatibilityChatHandoff;
 import dev.pocketengine.features.assistant.OwnerComposerStore;
@@ -20,7 +22,7 @@ import org.robolectric.annotation.SQLiteMode;
 import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class)
+@Config(sdk=35,manifest=Config.NONE,application=EngineApplication.class,shadows=ReadyApplicationFixture.NoUnrelatedStartup.class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 public final class CompatibilityChatHandoffTest {
     @Before public void keys(){java.security.Security.addProvider(new java.security.Provider("CompatibilityKeyStore","1","Test-only AndroidKeyStore"){{put("KeyStore.AndroidKeyStore",dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore.class.getName());}});}
@@ -29,17 +31,19 @@ public final class CompatibilityChatHandoffTest {
     static final class Fixture implements AutoCloseable {
         final EngineApplication app=(EngineApplication)RuntimeEnvironment.getApplication();
         final ComposeActivity activity=Robolectric.buildActivity(ComposeActivity.class).get();
-        final PocketWorldController controller=new PocketWorldController(activity,app);
-        Fixture()throws Exception{var f=ComposeActivity.class.getDeclaredField("controller");f.setAccessible(true);f.set(activity,controller);controller.attach();await(()->controller.getComposerDraft()!=null);}
+        final PocketWorldController controller;
+        final MediaController media;
+        Fixture()throws Exception{ReadyApplicationFixture.initializeHost(app);media=new MediaController(activity,app::publish);controller=new PocketWorldController(activity,app);set("media",media);set("controller",controller);set("businessMounted",true);set("businessGeneration",app.bootstrapState().getLong("generation"));var foreground=PocketWorldController.class.getDeclaredField("voiceForeground");foreground.setAccessible(true);foreground.setBoolean(controller,true);controller.attach();await(()->controller.getComposerDraft()!=null);}
+        void set(String name,Object value)throws Exception{var f=ComposeActivity.class.getDeclaredField(name);f.setAccessible(true);f.set(activity,value);}
         String conversation()throws Exception{String id=UUID.randomUUID().toString();var repo=app.tasks.conversationRepository();repo.transaction(()->{repo.saveConversation(new JSONObject().put("conversationId",id).put("title","原私聊").put("createdAt",1L));return null;});return id;}
         Intent open(String conversation,String text)throws Exception{return CompatibilityChatHandoff.open(app,"fixture-page",new JSONObject().put("conversationId",conversation).put("draft",text));}
         void deliver(Intent intent)throws Exception{var m=ComposeActivity.class.getDeclaredMethod("onNewIntent",Intent.class);m.setAccessible(true);m.invoke(activity,intent);}
         void edit(String text){var d=controller.getComposerDraft();controller.editComposerText(d.key,controller.getComposerViewEpoch(),text);}
-        @Override public void close(){controller.detach();}
+        @Override public void close()throws Exception{try{controller.detach();media.close();}finally{ReadyApplicationFixture.closeHost(app);}}
     }
     @Test public void realNativeEntryTransfersExactConversationDraftOnceWithoutSending()throws Exception{
         try(Fixture f=new Fixture()){
-            String original=f.conversation();var legacy=Robolectric.buildActivity(MainActivity.class).create();try{var m=MainActivity.class.getDeclaredMethod("handle",JSONObject.class);m.setAccessible(true);m.invoke(legacy.get(),new JSONObject().put("action","continueNativeChat").put("conversationId",original).put("draft","未发送的兼容原文"));Intent intent=Shadows.shadowOf(legacy.get()).getNextStartedActivity();assertEquals(ComposeActivity.class.getName(),intent.getComponent().getClassName());assertEquals(1,intent.getExtras().size());assertFalse(intent.getExtras().toString().contains("未发送"));String id=intent.getStringExtra(CompatibilityChatHandoff.EXTRA);f.deliver(intent);await(()->CompatibilityChatHandoff.read(f.app,id).applied());assertEquals(original,f.controller.getState().getConversationId());assertEquals("未发送的兼容原文",f.controller.getComposerDraft().text);assertEquals(0,f.app.tasks.list().length());assertFalse(intent.hasExtra(CompatibilityChatHandoff.EXTRA));
+            String original=f.conversation();Intent issued=f.open(original,"未发送的兼容原文");var legacy=Robolectric.buildActivity(MainActivity.class,new Intent(issued).setClass(f.app,MainActivity.class)).create();try{assertTrue(legacy.get().isFinishing());Intent intent=Shadows.shadowOf(legacy.get()).getNextStartedActivity();assertEquals(ComposeActivity.class.getName(),intent.getComponent().getClassName());assertEquals(1,intent.getExtras().size());assertFalse(intent.getExtras().toString().contains("未发送"));String id=intent.getStringExtra(CompatibilityChatHandoff.EXTRA);f.deliver(intent);await(()->CompatibilityChatHandoff.read(f.app,id).applied());assertEquals(original,f.controller.getState().getConversationId());assertEquals("未发送的兼容原文",f.controller.getComposerDraft().text);assertEquals(0,f.app.tasks.list().length());assertFalse(intent.hasExtra(CompatibilityChatHandoff.EXTRA));
                 var stored=new OwnerComposerStore(f.app.getFilesDir()).load().get();assertEquals(original,stored.active().conversationId);assertEquals("未发送的兼容原文",stored.active().text);f.edit("原生继续编辑");f.controller.continueCompatibilityChat(id);assertEquals("原生继续编辑",f.controller.getComposerDraft().text);assertEquals(0,f.app.tasks.list().length());
             }finally{legacy.destroy();}
         }
@@ -48,7 +52,7 @@ public final class CompatibilityChatHandoffTest {
         try(Fixture f=new Fixture()){
             var server=com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1",0),0);var bodies=new java.util.concurrent.CopyOnWriteArrayList<String>();server.createContext("/",exchange->{try{bodies.add(new String(exchange.getRequestBody().readAllBytes(),java.nio.charset.StandardCharsets.UTF_8));byte[] reply="{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"NATIVE-HANDOFF-ANSWER\"},\"finish_reason\":\"stop\"}]}".getBytes(java.nio.charset.StandardCharsets.UTF_8);exchange.sendResponseHeaders(200,reply.length);exchange.getResponseBody().write(reply);}finally{exchange.close();}});server.start();
             try{
-                f.app.getSharedPreferences("private_settings",0).edit().putString("baseUrl","http://127.0.0.1:"+server.getAddress().getPort()).putString("model","fixture").putString("provider","openai_chat").putInt("maxSteps",1).commit();f.controller.refresh();String conversation=f.conversation();Intent intent=f.open(conversation,"EXACT-COMPATIBILITY-DRAFT");String token=intent.getStringExtra(CompatibilityChatHandoff.EXTRA);f.deliver(intent);await(()->CompatibilityChatHandoff.read(f.app,token).applied());assertEquals(0,bodies.size());assertEquals(0,f.app.tasks.list().length());
+                String endpoint="http://127.0.0.1:"+server.getAddress().getPort();f.app.modelConnections.addAndSelectConnection("Controlled handoff fixture",new JSONObject().put("baseUrl",endpoint).put("model","fixture").put("provider","openai_chat").put("maxSteps",1).put("sendScreenshots",false).put("clearApiKey",true).put("cleartextConsent",dev.pocketengine.core.ModelConfig.cleartextConsentFor("openai_chat",endpoint)));f.controller.refresh();String conversation=f.conversation();Intent intent=f.open(conversation,"EXACT-COMPATIBILITY-DRAFT");String token=intent.getStringExtra(CompatibilityChatHandoff.EXTRA);f.deliver(intent);await(()->CompatibilityChatHandoff.read(f.app,token).applied());assertEquals(0,bodies.size());assertEquals(0,f.app.tasks.list().length());
                 var draft=f.controller.getComposerDraft();f.controller.sendChat(draft.text,draft.key,f.controller.getComposerViewEpoch());await(()->bodies.size()==1&&!f.controller.getState().getChatSubmitting()&&!f.controller.getState().getChatBusy()&&!f.controller.getState().getChatReceipts().isEmpty());JSONObject history=f.app.features.module("assistant").handle("get",new JSONObject().put("conversationId",conversation));assertTrue(history.toString().contains("NATIVE-HANDOFF-ANSWER"));assertTrue(bodies.get(0).contains("EXACT-COMPATIBILITY-DRAFT"));assertEquals(1,f.app.tasks.list().length());assertEquals(conversation,f.app.tasks.list().getJSONObject(0).getString("conversationId"));
             }finally{server.stop(0);}
         }

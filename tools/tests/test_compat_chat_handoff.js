@@ -1,28 +1,8 @@
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-const html = fs.readFileSync(process.argv[2] || path.join(__dirname, '../../app/src/main/assets/index.html'), 'utf8');
-const start = html.includes('function continueNativeChat(') ? html.indexOf('function continueNativeChat(') : html.indexOf('function sendChat(){');
-const source = html.slice(start, html.indexOf('function handleEvent(raw){', start));
-const input = { value: '  原文保留，不自动发送  ' }, native = [], requests = [], notices = [];
-let active = { conversationId: 'original-A', taskId: 'task-A', runId: 'run-A', epoch: 7 };
-const context = vm.createContext({ conversationId: 'original-A', chatBusy: false, chatMessages: [], $: () => input, data: () => ({ activeTurn: active }), native: (action, payload) => native.push({ action, payload }), request: (...args) => { requests.push(args); return Promise.resolve({ status: 'accepted' }); }, notice: (...args) => notices.push(args), renderHomeMode() {}, valueText: () => '' });
-vm.runInContext(source, context);
-context.sendChat();
-assert.equal(requests.length, 0, 'compatibility must not reimplement or send the old ACK protocol');
-assert.equal(input.value, '  原文保留，不自动发送  ');
-assert.equal(context.chatMessages.length, 0);
-assert.equal(native[0].action, 'continueNativeChat');
-assert.equal(native[0].payload.conversationId, 'original-A');
-assert.equal(native[0].payload.draft, input.value);
-context.continueNativeChat(true);
-assert.equal(native.at(-1).payload.originalTurn.runId, 'run-A');
-assert.equal(native.at(-1).payload.originalTurn.epoch, 7);
-context.conversationId = 'other-B';
-context.continueNativeChat(true);
-assert.equal(native.at(-1).payload.conversationId, 'original-A');
-assert.equal(native.at(-1).payload.draft, '', 'B draft must never be attached to the active A stop controls');
-assert.equal(input.value, '  原文保留，不自动发送  ');
-const count = native.length; active = null; context.continueNativeChat(true); assert.equal(native.length, count); assert.equal(notices.length, 1);
-console.log('PASS: native continuation preserves draft/conversation; original stop locator is explicit; no legacy send/cancel or ACK emulation');
+// The old HTML chat sender is retired. Native saved-ticket/draft transfer stays covered by
+// CompatibilityChatHandoffTest; these are the one frontend's original-run cancel and
+// explicit continuation/no-composer-ack regressions, with no automatic send path.
+require('./run-unified-frontend-regressions.cjs')([
+  'tests/chat-cancel.test.ts',
+  'tests/task-continuation.test.ts',
+  'tests/composer-context-journeys.test.ts',
+]);

@@ -9,6 +9,22 @@ internal object ProjectRuntimeHealth {
     private fun identity(value: JSONObject?, key: String): String? = (value?.opt(key) as? String)?.takeIf { it.matches(Regex("[a-f0-9]{64}")) }
     private fun label(value: JSONObject, key: String): String? = (value.opt(key) as? String)?.takeIf { it.isNotBlank() && it.length <= 160 && it.none { ch -> ch.isISOControl() } }
 
+    /** Shared read-only presentation; preparation still requires the original project operation review. */
+    fun presentation(runtime: JSONObject?, task: UiTask? = null, preparationEnabled: Boolean = false): JSONObject {
+        val health = original(runtime)
+        val executable = runtime?.opt("canExecute") == true
+        val available = runtime?.opt("preparationAvailable") == true
+        val progress = if (health?.optJSONObject("preparation")?.opt("current") == false) null
+            else ProjectPreparationProgress.from(runtime?.optJSONObject("preparation")) ?: ProjectPreparationProgress.fromReceipt(ProjectWorkbenchGuard.preparationReceipt(task))
+        return JSONObject().put("headline", if (executable) "手机开发工具可用" else if (progress?.error != null) "开发工具需要处理" else "开发工具尚未就绪")
+            .put("caption", if (executable) "查看当前版本与保留范围" else if (available) "准备完成后即可构建和运行" else "仍可查看和编辑项目文件")
+            .put("executable", executable).put("preparationAvailable", available).put("preparationEnabled", !executable && available && preparationEnabled)
+            .put("preparationRequiresOriginalReview", true).put("readOnly", true).put("details", org.json.JSONArray(details(health)))
+            .put("admissionMessage", if (!executable && available && !preparationEnabled) "请先处理原项目任务中的操作或审批。" else "任务仍使用自己的当前审批。")
+            .put("phase", progress?.phase?.takeIf { it.matches(Regex("[a-z0-9_]{1,100}")) } ?: JSONObject.NULL)
+            .put("fraction", progress?.fraction ?: JSONObject.NULL).put("resumableDownload", progress?.resumableDownload == true)
+    }
+
     fun details(health: JSONObject?): List<String> {
         if (health?.optString("format") != RuntimeHealth.FORMAT) return emptyList()
         val rows = mutableListOf<String>()

@@ -322,6 +322,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         app.confirmPendingDeviceGoalCancellation(review)
     internal fun webUiCanInteract(): Boolean = !closed && voiceForeground && !activity.isFinishing && !activity.isDestroyed
     internal fun webPrivateOwnerVisible(): Boolean = webUiCanInteract() && privateWorkspaceView()
+    internal fun webMemoryScopeTicket(): Any = Pair(ownerEpochs["memoryReview"] ?: 0, memoryReviewScope)
     /** Preview reads never enter the model/action queue or hold the application monitor during helper I/O. */
     internal fun readPhonePreview(input: JSONObject, current: () -> Boolean, done: (JSONObject?, String?, String) -> Unit) {
         check(webPrivateOwnerVisible() && current()) { "请在原私人窗口查看手机画面" }
@@ -608,7 +609,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         livePreviewForeground = visible
         if (!visible) closeProjectLivePreview()
     }
-    fun openProjectLivePreview(taskId: String, checkoutId: String, executionId: String) {
+    fun openProjectLivePreview(taskId: String, checkoutId: String, executionId: String) = openProjectLivePreview(taskId, checkoutId, executionId, true)
+    fun openProjectLivePreview(taskId: String, checkoutId: String, executionId: String, navigateToPreview: Boolean) {
         if (!livePreviewForeground || !privateWorkspaceView()) return
         closeProjectLivePreview()
         val request = ++livePreviewRequest
@@ -622,7 +624,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 val local = app.features.module("local") as? dev.pocketengine.features.local.LocalModule ?: error("原项目模块不可用")
                 val binding = JSONObject().put("taskId", taskId).put("runId", task.getString("runId")).put("coordinatorEpoch", task.getInt("coordinatorEpoch")).put("operationId", executionId)
                 val observed = local.projectLivePreviewForHost(binding, executionId, observation)
-                main.post { if (!closed && livePreviewForeground && request == livePreviewRequest && privateWorkspaceView()) { projectLivePreview = observed; projectLivePreviewTaskId = taskId; projectLivePreviewChecking = false; enterProjectPreviewIfSelected(task, checkoutId, taskId, navigationRevision) } }
+                main.post { if (!closed && livePreviewForeground && request == livePreviewRequest && privateWorkspaceView()) { projectLivePreview = observed; projectLivePreviewTaskId = taskId; projectLivePreviewChecking = false; if (navigateToPreview) enterProjectPreviewIfSelected(task, checkoutId, taskId, navigationRevision) } }
             } catch (failure: Exception) { main.post { if (!closed && request == livePreviewRequest) { projectLivePreviewChecking = false; state = state.copy(error = "活预览未打开：" + message(failure)) } } }
         }
     }
@@ -1274,22 +1276,6 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             state = state.copy(ownerPending = state.ownerPending - pending, ownerSnapshots = state.ownerSnapshots + ("memoryReview" to unavailableMemoryScope("页面已关闭，请重新选择记忆范围")))
         }
     }
-    /** Conservative presentation switch gate; voice authority must remain reachable until released. */
-    internal fun voicePresentationBusy(): Boolean = try {
-        val snapshot = voiceInput.snapshot()
-        nativeVoiceBusy(voiceInput.active(), voiceInput.leaseHeld(), realtimeOwnsAudio(),
-            snapshot.optBoolean("reviewAvailable"), snapshot.optBoolean("staged"),
-            snapshot.optBoolean("resourceReleaseUnknown"), composerDraft?.voiceText?.isNotEmpty() == true)
-    } catch (_: Exception) { true }
-    /** Close presentation-scoped owner windows without stopping or retrying engine tasks. */
-    internal fun closeNativeWorkspacePresentation() {
-        groupTaskPage?.let(::leaveGroupTask)
-        ownerDomain?.let(::leaveOwnerDomain)
-        closeNativeEvaluation()
-        closeNativeInferenceHistory()
-        closeQueuedOwnerInputs()
-        persistOwnerComposer()
-    }
     fun enterOwnerDomain(domain: String) {
         if (domain !in setOf("memoryReview", "taskMemory", "mcp", "accounts", "learning", "groups", "channelMedia")) return
         if (domain == "groups") { closeNativeEvaluation();projectGit.deactivate();projectFileImports.deactivate();projectPackages.leavePrivate(); closeWorkspaceArtifact(); state = state.copy(workspaceArtifactEditorOrigin = null, projectTaskReturn = null) }
@@ -1408,7 +1394,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val modelMutation = if (domain == "accounts" && command == "selectModel") reserveModelMutation() else null
         ownerRequests[key] = request
         state = state.copy(ownerPending = state.ownerPending + key, ownerErrors = state.ownerErrors - domain)
-        val worker = if (command in setOf("cancel", "cancelLogin", "logout", "stopLearningJob", "cancelLocalMcpDiscovery", "cancelMcpTask", "discardLocalMcpReview", "discardLocalMcpInstallReview") || command == "setEnabled" && !payload.optBoolean("enabled")) controls else io
+        val worker = if (command in setOf("cancel", "cancelLogin", "logout", "stopLearningJob", "cancelLocalMcpDiscovery", "cancelMcpTask", "discardLocalMcpReview", "discardLocalMcpInstallReview") || command == "setEnabled" && !payload.optBoolean("enabled") || domain == "remoteTask" && command in setOf("inspectInputs", "cancelInputs")) controls else io
         try { worker.execute {
             var result: JSONObject? = null
             var snapshot: JSONObject? = null
@@ -1531,11 +1517,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (closed || !privateWorkspaceView()) throw SecurityException("请回到私人电脑页打开原任务")
         return (app.remoteOwnerWorkflows ?: throw IllegalStateException("原电脑任务宿主未就绪")).managedSessionTask(activity, task, identity)
     }
-    fun enterRemoteTask(taskId: String): String {
+    fun enterRemoteTask(taskId: String): String = enterRemoteTask(taskId, null)
+    internal fun enterRemoteTask(taskId: String, done: ((JSONObject?, String?) -> Unit)?): String {
         ownerDomain?.let(::leaveOwnerDomain)
         ownerDomain = "remoteTask"; remoteOwnerWindow = UUID.randomUUID().toString(); remoteOwnerTask = taskId
         state = state.copy(ownerSnapshots = state.ownerSnapshots - "remoteTask", ownerResponses = state.ownerResponses - "remoteTask", ownerErrors = state.ownerErrors - "remoteTask")
-        requestRemoteTask("open")
+        if (done == null) requestRemoteTask("open")
+        else requestOwnerDomainReceipt("remoteTask", "open", JSONObject().put("windowId", remoteOwnerWindow).put("taskId", taskId), done)
         return remoteOwnerWindow!!
     }
     fun enterRemoteProject(request: JSONObject): String {
@@ -1851,6 +1839,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun stopSpeaking() { activity.media.stopSpeaking() }
     fun realtimeForeground(visible: Boolean) {
         if (!visible) closeNativeEvaluation()
+        if (voiceForeground != visible) { webWindowEpoch++; phoneViewerWindowEpoch++ }
         voiceForeground=visible;if(!visible)voiceInputModeChanged()
         if (visible) refreshTaskAnnouncementPreference()
         taskAnnouncements.setForeground(visible && privateWorkspaceView())
@@ -2788,19 +2777,18 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun phoneSetup(command: String, input: JSONObject = JSONObject()) {
         if (command !in setOf("status", "pairing.begin", "pairing.cancel", "recovery.consent", "recovery.restore", "recovery.compensate")) return
         if (!privateWorkspaceView() || "phone_setup.$command" in state.moduleBusy) return
-        if (command != "pairing.cancel" && !state.backgroundSetupOpen) return
+        if (command != "pairing.cancel" && (!webPrivateOwnerVisible() || !state.backgroundSetupOpen)) return
         val key = "phone_setup.$command"
         val id = UUID.randomUUID().toString()
-        val view = phoneSetupViewRevision.get()
+        val view = phoneSetupViewRevision.get(); val window = webWindowTicket()
         val captured = JSONObject(input.toString())
         state = state.copy(moduleBusy = state.moduleBusy + key, moduleErrors = state.moduleErrors - key)
         pending[id] = Pair(key, captured)
         // Use the existing owner I/O queue for this small setup surface. FeatureHost's four workers
         // could otherwise execute a queued cancellation before its earlier begin.
-        io.execute {
+        try { io.execute {
             val result = runCatching {
-                if (command != "pairing.cancel") check(privateWorkspaceView()) { "请回到主人私人工作区" }
-                if (command == "pairing.begin") check(state.backgroundSetupOpen && view == phoneSetupViewRevision.get()) { "原通知输码窗口已关闭，未开启新输码" }
+                if (command != "pairing.cancel") check(webPrivateOwnerVisible() && state.backgroundSetupOpen && view == phoneSetupViewRevision.get() && window == webWindowTicket()) { "原手机设置窗口已变化，未执行排队操作" }
                 val module = app.features.module("phone_setup") ?: error("原手机设置模块尚未挂载")
                 module.handle(command, captured)
             }
@@ -2811,6 +2799,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 result.fold({ event.put("result", it) }, { event.put("message", message(it)) })
                 featureResult(event)
             }
+        } } catch (_: java.util.concurrent.RejectedExecutionException) {
+            pending.remove(id)
+            state = state.copy(moduleBusy = state.moduleBusy - key, moduleErrors = state.moduleErrors + (key to "原手机设置窗口已关闭，未开始操作"))
         }
     }
     internal fun beginPairingNotification(host: String, port: Int) {
@@ -2835,12 +2826,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     private fun phoneClipboardCommand(command: String, input: JSONObject) {
         val key = "display.$command"; val id = UUID.randomUUID().toString()
-        val view = phoneSetupViewRevision.get(); val captured = JSONObject(input.toString())
+        val view = phoneSetupViewRevision.get(); val window = webWindowTicket(); val captured = JSONObject(input.toString())
         state = state.copy(moduleBusy = state.moduleBusy + key, moduleErrors = state.moduleErrors - key)
         pending[id] = Pair(key, captured)
-        io.execute {
+        try { io.execute {
             val result = runCatching {
-                check(privateWorkspaceView() && state.backgroundSetupOpen && view == phoneSetupViewRevision.get()) { "原手机设置窗口已关闭，未更改剪贴板设置" }
+                check(webPrivateOwnerVisible() && state.backgroundSetupOpen && view == phoneSetupViewRevision.get() && window == webWindowTicket()) { "原手机设置窗口已关闭，未更改剪贴板设置" }
                 val module = app.features.module("display") as? dev.pocketengine.phone.display.DisplayModule ?: error("原手机模块尚未挂载")
                 // Like the existing audio owner path, the module's live owner fence handles this.
                 // Generic FeatureHost display requests are deliberately blocked while a task owns the display.
@@ -2852,6 +2843,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 val event = JSONObject().put("requestId", id).put("feature", "display").put("command", command).put("ok", result.isSuccess)
                 result.fold({ event.put("result", it) }, { event.put("message", message(it)) }); featureResult(event)
             }
+        } } catch (_: java.util.concurrent.RejectedExecutionException) {
+            pending.remove(id)
+            state = state.copy(moduleBusy = state.moduleBusy - key, moduleErrors = state.moduleErrors + (key to "原手机设置窗口已关闭，未更改剪贴板设置"))
         }
     }
     internal fun loadPhoneOwnerApps() {
@@ -2875,14 +2869,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     internal fun setPhoneAppAccess(selected: dev.pocketengine.phone.setup.OwnerPhoneApps.Selection,
                                     automation: Boolean, ownerShare: Boolean, expectedRevision: Long) {
-        if (!privateWorkspaceView() || !state.backgroundSetupOpen || phoneOwnerPolicyBusy || selected !in phoneOwnerApps) return
-        val view = phoneSetupViewRevision.get()
+        if (!webPrivateOwnerVisible() || !state.backgroundSetupOpen || phoneOwnerPolicyBusy || selected !in phoneOwnerApps) return
+        val view = phoneSetupViewRevision.get(); val window = webWindowTicket()
         phoneOwnerPolicyBusy = true; phoneOwnerPolicyMessage = null
-        io.execute {
+        try { io.execute {
             val actual = runCatching {
                 val module = app.features.module("display") as? dev.pocketengine.phone.display.DisplayModule ?: error("原手机模块尚未挂载")
                 synchronized(module) {
-                    check(privateWorkspaceView() && state.backgroundSetupOpen && view == phoneSetupViewRevision.get()) { "原手机设置窗口已关闭，未保存" }
+                    check(webPrivateOwnerVisible() && state.backgroundSetupOpen && view == phoneSetupViewRevision.get() && window == webWindowTicket()) { "原手机设置窗口已关闭，未保存" }
                     phoneOwnerAppPicker.requireCurrent(selected)
                     module.handle("access.set", JSONObject().put("packageName", selected.packageName()).put("userId", selected.userId())
                         .put("automation", automation).put("ownerShare", ownerShare).put("expectedRevision", expectedRevision))
@@ -2890,8 +2884,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
             runCatching { app.features.sendState() }
             main.post {
-                if (!privateWorkspaceView() || !state.backgroundSetupOpen || view != phoneSetupViewRevision.get()) return@post
+                if (view != phoneSetupViewRevision.get()) return@post
                 phoneOwnerPolicyBusy = false
+                if (!webPrivateOwnerVisible() || !state.backgroundSetupOpen || window != webWindowTicket()) { phoneOwnerPolicyMessage = "原手机设置窗口已变化，请重新核对实际规则"; return@post }
                 actual.fold({ snapshot ->
                     val observedPolicy = snapshot.optJSONObject("appAccess")
                     val currentDisplay = JSONObject(state.feature("display").toString())
@@ -2902,6 +2897,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     phoneOwnerPolicyMessage = "已保存此应用副本的限制；后续读取与动作按当前规则重新核对。"
                 }, { phoneOwnerPolicyMessage = phoneOwnerMessage(it) })
             }
+        } } catch (_: java.util.concurrent.RejectedExecutionException) {
+            phoneOwnerPolicyBusy = false; phoneOwnerPolicyMessage = "原手机设置窗口已关闭，未保存应用限制"
         }
     }
     private fun phoneOwnerMessage(error: Throwable): String = when (error.message) {
@@ -2923,27 +2920,31 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         }
     }
-    internal val backgroundAudioOwnerVisible get() = privateWorkspaceView()
+    internal val backgroundAudioOwnerVisible get() = webPrivateOwnerVisible() && state.backgroundSetupOpen
     @Volatile private var phoneDiagnosticEpoch = 0L
     @Volatile private var phoneDiagnosticReport: dev.pocketengine.phone.diagnostics.PhoneDiagnosticReport.Report? = null
-    internal val phoneDiagnosticsOwnerVisible get() = privateWorkspaceView() && state.backgroundSetupOpen
+    internal val phoneDiagnosticsOwnerVisible get() = webPrivateOwnerVisible() && state.backgroundSetupOpen
     private fun clearPhoneDiagnostics() { phoneDiagnosticEpoch++; phoneDiagnosticReport = null }
     /** Original private native owner setup only; never a generic module/model command. */
     internal fun previewPhoneDiagnostics(done: (dev.pocketengine.phone.diagnostics.PhoneDiagnosticReport.Report?, String?) -> Unit) {
-        if (!phoneDiagnosticsOwnerVisible) return
+        if (!phoneDiagnosticsOwnerVisible) { done(null, "原手机设置窗口已关闭"); return }
         val epoch = ++phoneDiagnosticEpoch
+        val window = webWindowTicket(); val view = phoneSetupViewRevision.get()
+        fun current() = phoneDiagnosticsOwnerVisible && epoch == phoneDiagnosticEpoch && window == webWindowTicket() && view == phoneSetupViewRevision.get()
         phoneDiagnosticReport = null
         try { io.execute {
-            if (!phoneDiagnosticsOwnerVisible || epoch != phoneDiagnosticEpoch) return@execute
+            if (!current()) {
+                main.post { done(null, "原手机设置窗口已关闭") }; return@execute
+            }
             val result = runCatching {
                 val display = app.features.module("display") as? dev.pocketengine.phone.display.DisplayModule
                 dev.pocketengine.phone.diagnostics.AndroidPhoneDiagnostics.preview(app, display)
             }
             main.post {
-                if (!phoneDiagnosticsOwnerVisible || epoch != phoneDiagnosticEpoch) return@post
+                if (!current()) { done(null, "原手机设置窗口已变化，请重新预览"); return@post }
                 result.fold({ report -> phoneDiagnosticReport = report; done(report, null) }, { done(null, "诊断当前不可用，请刷新后重试；没有复制或分享任何内容。") })
             }
-        } } catch (_: java.util.concurrent.RejectedExecutionException) { if (phoneDiagnosticsOwnerVisible) done(null, "原设置页已关闭，请重新打开。") }
+        } } catch (_: java.util.concurrent.RejectedExecutionException) { done(null, "原设置页已关闭，请重新打开。") }
     }
     internal fun copyPhoneDiagnostics(report: dev.pocketengine.phone.diagnostics.PhoneDiagnosticReport.Report): String? {
         if (!phoneDiagnosticsOwnerVisible || phoneDiagnosticReport !== report) return "请在原手机设置页重新预览诊断。"
@@ -2963,30 +2964,33 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     /** Private native owner action, never a generic feature/model command. */
     internal fun setBackgroundAudioSilence(enabled: Boolean, done: (JSONObject?, String?) -> Unit) {
-        if (!privateWorkspaceView()) return
-        io.execute {
-            if (!privateWorkspaceView()) return@execute
+        if (!webPrivateOwnerVisible() || !state.backgroundSetupOpen) { done(null, "原声音设置窗口已关闭"); return }
+        val view = phoneSetupViewRevision.get(); val window = webWindowTicket()
+        fun current() = webPrivateOwnerVisible() && state.backgroundSetupOpen && view == phoneSetupViewRevision.get() && window == webWindowTicket()
+        try { io.execute {
             val result = runCatching {
+                check(current()) { "原声音设置窗口已变化，未更改" }
                 val module = app.features.module("display") as? dev.pocketengine.phone.display.DisplayModule ?: error("原后台手机模块尚未挂载")
                 module.setAudioPolicyForOwner(enabled).also { try { app.features.sendState() } catch (_: Exception) { } }
             }
             main.post {
-                if (!privateWorkspaceView()) return@post
+                if (!current()) { done(null, "原声音窗口已变化，请刷新核对实际策略"); return@post }
                 result.fold({ done(it, null) }, { failure ->
                     val actual = runCatching { JSONObject().put("enabled",dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.silenceEnabled(app)).put("persisted",false) }.getOrNull()
                     done(actual, message(failure))
                 })
             }
-        }
+        } } catch (_: java.util.concurrent.RejectedExecutionException) { done(null, "原声音设置页已关闭，请重新打开") }
     }
     /** Ledger -> short Module command, never Module monitor -> ledger. Explicit owner setting only. */
     internal fun restoreBackgroundAudio(done: (JSONObject?, String?) -> Unit) {
-        if (!privateWorkspaceView() || !state.backgroundSetupOpen) return
-        val view = phoneSetupViewRevision.get()
+        if (!webPrivateOwnerVisible() || !state.backgroundSetupOpen) { done(null, "原声音设置窗口已关闭"); return }
+        val view = phoneSetupViewRevision.get(); val window = webWindowTicket()
+        fun current() = webPrivateOwnerVisible() && state.backgroundSetupOpen && view == phoneSetupViewRevision.get() && window == webWindowTicket()
         fun requireOriginalView() {
-            check(privateWorkspaceView() && state.backgroundSetupOpen && view == phoneSetupViewRevision.get()) { "原声音设置窗口已关闭或变化，请重新核对" }
+            check(current()) { "原声音设置窗口已关闭或变化，请重新核对" }
         }
-        io.execute {
+        try { io.execute {
             val result = runCatching {
                 requireOriginalView()
                 val module = app.features.module("display") as? dev.pocketengine.phone.display.DisplayModule ?: error("原后台手机模块尚未挂载")
@@ -2996,8 +3000,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     dev.pocketengine.phone.setup.AndroidPhoneAudioRecovery.get(app).setAllOriginalForOwner()
                 }.also { try { app.features.sendState() } catch (_: Exception) { } }
             }
-            main.post { if (privateWorkspaceView() && state.backgroundSetupOpen && view == phoneSetupViewRevision.get()) result.fold({ done(it, null) }, { done(null, message(it)) }) }
-        }
+            main.post {
+                if (current()) result.fold({ done(it, null) }, { done(null, message(it)) })
+                else done(null, "原声音窗口已变化，请刷新核对实际结果")
+            }
+        } } catch (_: java.util.concurrent.RejectedExecutionException) { done(null, "原声音设置页已关闭，请重新打开") }
     }
     fun openBackgroundSetup() {
         if (!privateWorkspaceView()) return
@@ -3991,18 +3998,25 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         return dev.pocketengine.features.conversation.ConversationHistory.Item(row.id, row.title, row.updatedAt, original?.optLong("pinOrder", 0) ?: 0, original?.optLong("organizationRevision", -1) ?: -1)
     }
     internal fun organizeConversation(id: String, revision: Long, title: String?, pinned: Boolean?, done: (JSONObject?, String?) -> Unit) {
-        if (!privateWorkspaceView() || revision < 0) { done(null, "请在原私人会话列表刷新后重新打开。"); return }
+        organizeConversationChecked(id, revision, title, pinned, null, done)
+    }
+    internal fun organizeWebConversation(id: String, revision: Long, title: String?, pinned: Boolean?, owner: Pair<Triple<Long, Int, Long>, Long>, done: (JSONObject?, String?) -> Unit) {
+        organizeConversationChecked(id, revision, title, pinned, owner, done)
+    }
+    private fun organizeConversationChecked(id: String, revision: Long, title: String?, pinned: Boolean?, owner: Pair<Triple<Long, Int, Long>, Long>?, done: (JSONObject?, String?) -> Unit) {
+        fun current() = privateWorkspaceView() && (owner == null || webPrivateOwnerVisible() && webWindowTicket() == owner)
+        if (!current() || revision < 0) { done(null, "请在原私人会话列表刷新后重新打开。"); return }
         val key = "assistant.organization:" + id
-        if (key in state.moduleBusy) return
+        if (key in state.moduleBusy) { done(null, "原会话正在保存，请等待实际回执。"); return }
         val changes = JSONObject(); if (title != null) changes.put("title", title); if (pinned != null) changes.put("pinOrder", if (pinned) 1 else 0)
-        if (changes.length() == 0) return
+        if (changes.length() == 0) { done(null, "本次没有需要保存的修改。"); return }
         state = state.copy(moduleBusy = state.moduleBusy + key)
         try { io.execute {
-            if (!privateWorkspaceView()) { main.post { state = state.copy(moduleBusy = state.moduleBusy - key); done(null, "原私人界面已切换，尚未保存。") }; return@execute }
+            if (!current()) { main.post { state = state.copy(moduleBusy = state.moduleBusy - key); done(null, "原私人界面已切换，尚未保存。") }; return@execute }
             val result = runCatching { app.features.ownerConversationWorkbench("updateOrganization", JSONObject().put("conversationId", id).put("expectedRevision", revision).put("changes", changes)) }
             main.post {
                 state = state.copy(moduleBusy = state.moduleBusy - key)
-                if (!privateWorkspaceView()) return@post
+                if (!current()) { done(null, "原会话保存回执尚未在当前窗口确认，请重新核对原会话。"); return@post }
                 result.fold({ done(it, null) }, { done(null, "会话元数据已变化或保存结果未确认；请刷新后重新打开，不会自动重试。") })
                 native("getFeatures")
             }

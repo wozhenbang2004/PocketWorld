@@ -1,7 +1,6 @@
 package dev.pocketengine.ui
 
 import android.content.Context
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -20,8 +19,6 @@ internal class ProjectWorkbenchSession(context: Context) : ViewModel() {
     private val change = mutableIntStateOf(0)
     val fileDrafts = sharedFileDrafts(context.applicationContext)
     private val agents = mutableMapOf<String, ProjectAgentDraftSession>()
-    private val fileTrees = mutableMapOf<String, ProjectTreeUiState>()
-    private val pages = mutableMapOf<Pair<String, Int>, LazyListState>()
     private val codeReturns = mutableMapOf<String, java.util.ArrayDeque<Triple<String,Int,Int>>>()
     private var navigationRevision = 0L
     fun navigationRevision(): Long = navigationRevision
@@ -34,8 +31,6 @@ internal class ProjectWorkbenchSession(context: Context) : ViewModel() {
     }
     fun view(projectId: String): Int { change.intValue; return preferences.getInt("project.$projectId.view", 0).coerceIn(0, 3) }
     fun selectView(projectId: String, view: Int) { navigationRevision++; preferences.edit().putInt("project.$projectId.view", view.coerceIn(0, 3)).apply(); change.intValue++ }
-    fun page(projectId: String, view: Int): LazyListState = pages.getOrPut(projectId to view.coerceIn(0, 3)) { LazyListState() }
-    fun fileTree(checkoutId: String): ProjectTreeUiState = fileTrees.getOrPut(checkoutId) { ProjectTreeUiState() }
     fun editorPosition(checkoutId: String, path: String): Pair<Int, Int> {
         val key = "editor.$checkoutId.$path"
         return preferences.getInt("$key.start", 0).coerceAtLeast(0) to preferences.getInt("$key.end", 0).coerceAtLeast(0)
@@ -152,14 +147,6 @@ internal class ProjectAgentDraftSession {
     val liveInputRequest = mutableStateOf<String?>(null)
     val liveInputSaving = mutableStateOf(false)
     val liveInputError = mutableStateOf<String?>(null)
-}
-
-/** Presentation only; no file body, approval, grant or execution identity is held here. */
-internal class ProjectTreeUiState {
-    val query = mutableStateOf("")
-    val filter = mutableIntStateOf(0)
-    val expanded = mutableStateOf<Set<String>>(emptySet())
-    val list = LazyListState()
 }
 
 internal enum class ProjectWorkbenchFacet(val index: Int) { Agent(0), Files(1), Run(2), Preview(3) }

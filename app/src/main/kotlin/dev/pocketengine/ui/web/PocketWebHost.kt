@@ -62,6 +62,9 @@ internal class PocketWebHost private constructor(
         fun browserChrome(activity: dev.pocketengine.BrowserActivity,
             endpoint: ((JSONObject) -> Unit) -> PocketWebEndpoint, failed: () -> Unit) =
             PocketWebHost(activity, endpoint, readerFailure = failed, ownsSystemInsets = false)
+        fun browserWorkspace(activity: dev.pocketengine.BrowserActivity,
+            endpoint: ((JSONObject) -> Unit) -> PocketWebEndpoint, failed: () -> Unit) =
+            PocketWebHost(activity, endpoint, readerFailure = failed, ownsSystemInsets = false)
     }
 
     val view = FrameLayout(activity).apply { setBackgroundColor(Color.rgb(245, 245, 245)) }
@@ -101,12 +104,13 @@ internal class PocketWebHost private constructor(
 
     @SuppressLint("SetJavaScriptEnabled")
     fun start() {
+        // Keep saved input available to the same workspace's retry even if its bundle cannot load.
+        bridge.restorePresentationState(savedPresentation)
         bundle = try {
             activity.assets.open("pocket-ui/build-identity.json").use { PocketWebBundle.read(it) }
         } catch (_: Exception) {
             if (failReader()) return
-            // No trusted document can show maintenance feedback when the packaged identity is invalid.
-            // Business gets a guarded recovery entry; bootstrap/readers retain their own exit boundaries.
+            // The renderer cannot report an invalid packaged identity; retry reopens this same UI.
             Log.e(TAG, "bundle-identity-unavailable; install a complete compatible package")
             showReopenPrompt()
             return
@@ -147,7 +151,7 @@ internal class PocketWebHost private constructor(
                 return !trusted(Uri.parse(url))
             }
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse =
-                response(request.url, request.method)
+                response(request.url, request.method, request.requestHeaders)
             override fun shouldInterceptRequest(view: WebView, url: String): WebResourceResponse = response(Uri.parse(url), "GET")
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                 if (closed || documentFence.isRejected()) return
@@ -183,7 +187,7 @@ internal class PocketWebHost private constructor(
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
                 Log.e(TAG, "renderer-exit crashed=${detail.didCrash()}")
                 if (failReader()) return true
-                // Keep a guarded recovery entry outside the failed renderer.
+                // Reopen the same workspace after the renderer exits.
                 // The controller and all submitted tasks retain their original identities.
                 showReopenPrompt()
                 return true
@@ -214,7 +218,6 @@ internal class PocketWebHost private constructor(
             override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean { callback.onReceiveValue(null); return true }
         }
         web.setDownloadListener { _, _, _, _, _ -> Log.w(TAG, "blocked-page-download") }
-        bridge.restorePresentationState(savedPresentation)
         if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
         WebViewCompat.addWebMessageListener(web, "PocketNative", setOf("https://$HOST")) { _, message, origin, isMainFrame, _ ->
             val raw = runCatching { message.data }.getOrNull() ?: return@addWebMessageListener
@@ -258,8 +261,6 @@ internal class PocketWebHost private constructor(
     private fun showReopenPrompt() {
         if (closed || reopenShown) return
         if (failReader()) return
-        // Maintenance never falls through to an invented native repair surface.
-        if (bridge.surface == "bootstrap") { close(); activity.finish(); return }
         reopenShown = true
         documentFence.close(); documentToken = null; documentLoaded = false
         bridge.invalidatePresentation(documentReplaced = true)
@@ -280,12 +281,9 @@ internal class PocketWebHost private constructor(
             }
             addView(android.widget.TextView(activity).apply {
                 setTextColor(ink)
-                text = "工作台页面已变化，请重新打开。未提交的输入可能丢失；已提交的任务不会因此重试。"
+                text = "工作台暂时无法显示，请重新打开。未保存的输入可能丢失；已提交的任务不会重复执行。"
             })
             addView(recoveryButton("重新打开工作台") { activity.recreate() })
-            (activity as? ComposeActivity)?.let { owner ->
-                addView(recoveryButton("打开原生工作台") { owner.requestNativeWorkspace() })
-            }
         }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
     }
 
@@ -297,7 +295,8 @@ internal class PocketWebHost private constructor(
 
     private fun trusted(uri: Uri): Boolean = bundle?.allows(uri.toString()) == true
 
-    private fun response(uri: Uri, method: String): WebResourceResponse {
+    private fun response(uri: Uri, method: String, headers: Map<String, String> = emptyMap()): WebResourceResponse {
+        bridge.resource(uri, method, headers)?.let { return it }
         if (trusted(uri) && method == "GET") loader.shouldInterceptRequest(uri)?.let { return it }
         return WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", mapOf("Cache-Control" to "no-store"), ByteArrayInputStream(ByteArray(0)))
     }
@@ -313,7 +312,11 @@ internal class PocketWebHost private constructor(
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post { send(message) }; return }
         if (message.optString("kind") == "state") applyWorkspaceBackground()
         if (readerFailure != null && message.optString("kind") == "state") {
-            val stateKey = if (bridge.surface == "browser_chrome") "browserChrome" else "browserSources"
+            val stateKey = when (bridge.surface) {
+                "browser_chrome" -> "browserChrome"
+                "browser_workspace" -> "browserWorkspace"
+                else -> "browserSources"
+            }
             readerBound = message.optJSONObject("snapshot")?.optJSONObject(stateKey)?.optBoolean("ready") == true
             if (readerBound) main.removeCallbacks(readerStartupTimeout)
         }
@@ -322,7 +325,10 @@ internal class PocketWebHost private constructor(
             return
         }
         val encoded = JSONObject.quote(message.toString())
-        web.evaluateJavascript("window.PocketWeb&&window.PocketWeb.receive($encoded)", null)
+        try { web.evaluateJavascript("window.PocketWeb&&window.PocketWeb.receive($encoded)", null) }
+        catch (_: RuntimeException) {
+            if (readerFailure != null) failReader() else showReopenPrompt()
+        }
     }
 
     private fun sendConfiguration(insets: WindowInsets? = null) {
@@ -380,7 +386,6 @@ internal class PocketWebHost private constructor(
         readerBackTimeout?.let(main::removeCallbacks); readerBackTimeout = null; readerBackPending = false
         documentFence.pause(); documentToken = null; bridge.foreground(false); bridge.invalidatePresentation(documentReplaced = false); if (!webDestroyed) web.onPause()
     } }
-    fun canSwitchPresentation(): Boolean = !closed && bridge.canSwitchPresentation()
     fun savePresentationState(): String = bridge.savePresentationState().toString()
     fun close() {
         if (closed) return

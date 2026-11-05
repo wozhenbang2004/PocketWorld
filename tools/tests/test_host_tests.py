@@ -109,12 +109,15 @@ class HostTestEntrypointTest(unittest.TestCase):
         terminal = (HOST.ROOT / 'app/src/main/java/dev/pocketengine/features/local/project/ProjectOwnerTerminal.java').read_text()
         self.assertIn('automaticProjectLogPolicyForHost', terminal)
         self.assertIn('cursor,pageBytes', terminal)
-        ui = (HOST.ROOT / 'app/src/main/kotlin/dev/pocketengine/ui/ProjectTerminalSection.kt').read_text()
-        self.assertIn('key(taskId, execution, metadata)', ui)
-        self.assertIn('NativeProjectExecutionObservation(task.id, execution)', ui)
-        self.assertIn('app.features.openProjectExecutionForOwner(taskId, execution, observation)', ui)
-        self.assertIn('logPolicy = page.optJSONObject("logObservationPolicy")', ui)
-        self.assertNotIn('metadata = page', ui)
+        ui = (HOST.ROOT / 'web-ui/src/ProjectExecutionWorkspace.tsx').read_text()
+        native = (HOST.ROOT / 'app/src/main/kotlin/dev/pocketengine/ui/web/PocketWebLocal.kt').read_text()
+        self.assertIn('key={view.handle}', ui)
+        self.assertIn('executionId: originalExecution, observingOnly: args.observingOnly', ui)
+        self.assertIn('controller.localTerminalHost().openProjectExecutionForOwner(input.getString("taskId"), input.getString("executionId"), observation)', native)
+        self.assertIn('logPolicy = output.logObservationPolicy || {}', ui)
+        self.assertIn('painted !== frameId', ui)
+        self.assertIn('originalViewer!!.session.metadata()', native)
+        self.assertIn('originalViewer.session.readScreen()', native)
 
     def test_development_continuity_selects_only_its_original_native_journeys(self):
         entry = REGISTRY['runtime-development-continuity']
@@ -124,8 +127,7 @@ class HostTestEntrypointTest(unittest.TestCase):
                           'dev.pocketengine.features.local.project.ProjectCommandSpecTest',
                           'dev.pocketengine.ui.TaskExecutionPresentationTest',
                           'dev.pocketengine.store.TaskAuditStoreTest',
-                          'dev.pocketengine.store.TaskJobProjectionTest',
-                          'dev.pocketengine.ui.TaskJobMountedTest'], entry.get('additionalClasses', []))
+                          'dev.pocketengine.store.TaskJobProjectionTest'], entry.get('additionalClasses', []))
         self.assertEqual(['dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest',
                           'dev.pocketengine.testutil.HttpServer'], entry['helpers'])
         self.assertEqual(['runtime-development-continuity'], HOST.select(REGISTRY, [], [entry['class']]))
@@ -150,17 +152,20 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertIn('AndroidPhoneDiagnostics.preview(context,null)', source)
         self.assertIn('report.readiness()', source)
         self.assertNotIn('AndroidPhoneReadiness', source)
-        ui = (HOST.ROOT / 'app/src/main/kotlin/dev/pocketengine/ui/ProjectStorageSection.kt').read_text()
-        self.assertIn('ActivityResultContracts.CreateDocument("application/json")', ui)
-        self.assertIn('flow.diagnosticExportResult(original, uri)', ui)
-        self.assertIn('state.diagnosticReviewed && !state.busy', ui)
+        ui = (HOST.ROOT / 'web-ui/src/Secondary.tsx').read_text()
+        activity = (HOST.ROOT / 'app/src/main/kotlin/dev/pocketengine/ui/ComposeActivity.kt').read_text()
+        bridge = (HOST.ROOT / 'app/src/main/kotlin/dev/pocketengine/ui/web/PocketWebData.kt').read_text()
+        self.assertIn('ActivityResultContracts.CreateDocument("application/json")', activity)
+        self.assertIn('controller.projectStorage.diagnosticExportResult(original, uri)', activity)
+        self.assertIn('!data.diagnosticReviewed || data.diagnosticPickerPending || data.diagnosticExportEntered', ui)
+        self.assertIn('storage.diagnostics.export', bridge)
         coordinator = (HOST.ROOT / 'app/src/main/kotlin/dev/pocketengine/ui/ProjectStorageCoordinator.kt').read_text()
         self.assertIn('ticket !== diagnosticTicket', coordinator)
         self.assertIn('diagnosticWindow.write(ticket', coordinator)
         self.assertIn('openOutputStream(uri, "wt")', coordinator)
         self.assertIn('diagnosticWindow.foreground(visible)', coordinator)
         self.assertIn('state.diagnosticPickerPending || state.diagnosticExportEntered) return null', coordinator)
-        self.assertIn('flow.diagnosticPickerUnavailable(ticket)', ui)
+        self.assertIn('controller.projectStorage.diagnosticPickerUnavailable(ticket)', activity)
 
     def test_legacy_receipt_recovery_keeps_original_bytes_and_does_not_add_a_runtime(self):
         entry = REGISTRY['legacy-command-receipt-recovery']
@@ -193,9 +198,11 @@ class HostTestEntrypointTest(unittest.TestCase):
         self.assertIn('new String(tail.toCharArray())', source)
         self.assertNotIn('public synchronized JSONObject get(', source)
         self.assertIn('Do not hold the supervisor/cancel monitor during filesystem IO.', source)
-        ui = (HOST.ROOT / 'app/src/main/kotlin/dev/pocketengine/ui/LocalWorkbench.kt').read_text()
-        self.assertIn('local.optJSONObject("legacyReceiptRecovery")', ui)
-        self.assertIn('!LocalWorkbenchGuard.pollable(', ui)
+        ui = (HOST.ROOT / 'web-ui/src/LocalWorkspace.tsx').read_text()
+        self.assertIn('inventory.legacyReceiptRecovery', ui)
+        self.assertIn('!localReceiptPollable(', ui)
+        self.assertIn('legacyReceiptRecovery.originalInventoryUnconfirmed', ui)
+        self.assertIn('legacyReceiptRecovery.coldUnconfirmedRecords', ui)
 
     def test_registered_real_sources_and_helpers_exist(self):
         for entry in REGISTRY.values():
@@ -578,15 +585,20 @@ class HostTestEntrypointTest(unittest.TestCase):
             'dev.pocketengine.features.teams.TeamResearchReadScopeTest': 3,
             'dev.pocketengine.features.teams.TeamResearchSelectionPageTest': 2,
             'dev.pocketengine.ui.ResearchReadAccessDraftTest': 3,
-            'dev.pocketengine.ui.ResearchReadAccessMountedNativeTest': 5,
+            'dev.pocketengine.ui.ResearchReadAccessMountedNativeTest': 7,
             'dev.pocketengine.features.remote.RemotePiDraftOwnerJourneyTest': 6,
             'dev.pocketengine.features.remote.RemoteInputDeliveryTest': 11,
             'dev.pocketengine.features.remote.RemoteTaskDraftsTest': 4,
-            'dev.pocketengine.ui.RemoteDraftDeliveryMountedTest': 10,
+            'dev.pocketengine.ui.RemoteDraftDeliveryMountedTest': 9,
             'dev.pocketengine.features.automation.AutomationIntervalTest': 13,
         }
         for name, count in expected.items():
-            self.assertEqual(1, len(HOST.select(REGISTRY, [], [name])), name)
+            selected = HOST.select(REGISTRY, [], [name])
+            shared = {'dev.pocketengine.features.remote.RemoteInputDeliveryTest', 'dev.pocketengine.features.remote.RemoteTaskDraftsTest', 'dev.pocketengine.ui.RemoteDraftDeliveryMountedTest'}
+            if name in shared:
+                self.assertEqual(['alma-pi-no-tools', 'harness-native-ui'], selected, name)
+            else:
+                self.assertEqual(1, len(selected), name)
             relative = name.replace('.', '/')
             source = next((HOST.ROOT / root / (relative + extension)).read_text()
                           for root, extension in (('app/src/hostTest/java', '.java'), ('app/src/test/java', '.java'), ('app/src/test/kotlin', '.kt'))
@@ -601,7 +613,11 @@ class HostTestEntrypointTest(unittest.TestCase):
         name = 'dev.pocketengine.ui.AttachmentOutcomeNativeControllerTest'
         self.assertEqual(name, entry['class'])
         self.assertTrue(entry['robolectric'])
-        self.assertEqual([], entry['helpers'])
+        self.assertEqual(['dev.pocketengine.testutil.ReadyApplicationFixture',
+                          'dev.pocketengine.features.channels.ChannelTaskHostTest',
+                          'dev.pocketengine.features.channels.ChannelSecurityTest',
+                          'dev.pocketengine.ui.OwnerWebTestFixture',
+                          'dev.pocketengine.features.attachments.documents.DocumentFixtures'], entry['helpers'])
         self.assertEqual(['aion-office-mounted'], HOST.select(REGISTRY, [], [name]))
         source = (HOST.ROOT / 'app/src/test/java/dev/pocketengine/ui/AttachmentOutcomeNativeControllerTest.java').read_text()
         self.assertEqual(4, len(re.findall(r'@Test\b', source)))

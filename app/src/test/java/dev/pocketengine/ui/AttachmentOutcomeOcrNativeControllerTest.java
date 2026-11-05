@@ -71,7 +71,7 @@ public final class AttachmentOutcomeOcrNativeControllerTest {
             await(()->!f.flow.getState().getBusy()&&f.flow.getState().getDocument()!=null);
             JSONObject result=f.flow.getState().getDocument();assertNull(f.flow.getState().getError());assertEquals(1,calls.get());assertEquals("ocr",result.getString("extraction"));assertEquals("ocr",result.getString("coverage"));
             assertEquals(file.getString("id"),result.getString("attachmentId"));assertEquals(file.getString("sha256"),result.getString("sha256"));assertEquals("ocr_text",result.getJSONArray("chunks").getJSONObject(0).getString("kind"));assertEquals("explicit-ocr-test-port",result.getString("engineVersion"));
-            capture(f.screen.get(),"native-image-explicit-ocr-test-port.png");f.flow.backFromDocument();assertEquals(file.getString("id"),f.flow.getState().getFile().getString("id"));
+            f.flow.backFromDocument();assertEquals(file.getString("id"),f.flow.getState().getFile().getString("id"));
             assertArrayEquals(image,Files.readAllBytes(f.repository.book.file(file.getString("id")).toPath()));assertEquals(1,f.app.tasks.list().length());assertEquals(0,f.app.tasks.get(f.task,false).getJSONArray("operations").length());
         }
     }

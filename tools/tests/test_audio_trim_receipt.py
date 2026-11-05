@@ -16,9 +16,13 @@ class AudioTrimReceiptWiringTest(unittest.TestCase):
             self.assertNotIn('.put("startAlignment","previous_video_sync_sample")', path)
 
     def test_composer_uses_the_alignment_of_each_original_inspection_and_review(self):
-        source = (ROOT / 'app/src/main/kotlin/dev/pocketengine/ui/outcomes/NativeFileProcessComposer.kt').read_text()
-        self.assertIn('NativeMediaTrim.startAlignmentLabel(info)', source)
-        self.assertIn('NativeMediaTrim.startAlignmentLabel(actual)', source)
+        source = (ROOT / 'app/src/main/kotlin/dev/pocketengine/ui/web/PocketWebAttachments.kt').read_text()
+        self.assertEqual(2, source.count('NativeMediaTrim.startAlignmentLabel(metadata)'))
+        self.assertIn('state.processingInfo?.let', source)
+        self.assertIn('originalReview?.let', source)
+        editor = (ROOT / 'web-ui/src/AttachmentDocumentEditor.tsx').read_text()
+        self.assertIn('info.startAlignmentLabel', editor)
+        self.assertIn('review.startAlignmentLabel', editor)
         self.assertNotIn('对齐实际同步帧', source)
         self.assertNotIn('"实际同步帧起点', source)
 

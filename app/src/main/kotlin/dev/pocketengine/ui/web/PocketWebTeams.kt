@@ -21,7 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** Owner presentation for the original TeamsModule. No worker, grant or execution state lives here. */
 internal class PocketWebTeams(private val controller: PocketWorldController) {
     private data class Reading(val kind: String, val original: String, val expires: Long)
-    private data class Review(val command: String, val input: String, val expires: Long, val phonePage: TeamPhoneHost.Page? = null, val phoneReview: TeamPhoneHost.Review? = null)
+    private data class Review(val command: String, val input: String, val expires: Long, val phonePage: TeamPhoneHost.Page? = null, val phoneReview: TeamPhoneHost.Review? = null, val productionSources: String? = null)
     private data class PhonePage(val original: TeamPhoneHost.Page, val definition: String, val input: String, val expires: Long)
     @Volatile private var generation = 0L
     private var snapshot = JSONObject()
@@ -54,6 +54,9 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     }
     private fun known(id: String, key: String): JSONObject = snapshot.optJSONArray(key).objects().singleOrNull { it.optString("id") == id }
         ?: error("这项原团队记录不在已读取窗口，请刷新")
+    private fun productionSources(): JSONObject = PocketWebTeamProduction.sources(controller.state.feature("workspace").optJSONArray("artifacts"),
+        controller.state.tasks.map { task -> JSONObject(task.raw.toString()).put("id", task.id).put("goal", task.goal) })
+    private fun captureSnapshot(value: JSONObject): JSONObject = JSONObject(value.toString()).put("productionSources", productionSources())
     private fun reading(handle: String, kind: String, consume: Boolean = false): JSONObject {
         val original = if (consume) readings.remove(handle) else readings[handle]
         check(original != null && original.kind == kind && original.expires > SystemClock.elapsedRealtime()) { "原团队读取已关闭或过期，请重新读取" }
@@ -77,7 +80,8 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         reviews.entries.removeAll { entry -> (entry.value.expires <= SystemClock.elapsedRealtime()).also { if (it) runCatching { entry.value.phonePage?.close() } } }
         check(reviews.size < 8) { "请先关闭已有团队操作审阅" }
         val handle = UUID.randomUUID().toString()
-        reviews[handle] = Review(command, input.toString(), SystemClock.elapsedRealtime() + 120_000)
+        reviews[handle] = Review(command, input.toString(), SystemClock.elapsedRealtime() + 120_000,
+            productionSources = if (command == "save" && input.optString("mode") == "produce") snapshot.getJSONObject("productionSources").toString() else null)
         return JSONObject().put("reviewHandle", handle).put("operation", command)
             .put("input", PocketWebState.publicValue(JSONObject(input.toString()).also { it.remove("expectedDefinition") }))
     }
@@ -159,8 +163,8 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 fields(args)
                 controller.readWebTeamSnapshot { value, error ->
                     if (originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()) {
-                        if (value != null && error == null) snapshot = JSONObject(value.toString())
-                        deliver(value?.let { PocketWebState.publicValue(it) as JSONObject }, error)
+                        if (value != null && error == null) { snapshot = captureSnapshot(value); deliver(PocketWebState.publicValue(snapshot) as JSONObject, null) }
+                        else deliver(null, error ?: "原团队目录尚未读取")
                     }
                 }
             }
@@ -170,7 +174,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 controller.readWebTeamSnapshot { value, error ->
                     if (originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()) {
                         if (value == null || error != null) deliver(null, error ?: "原团队配置尚未读取")
-                        else try { snapshot = JSONObject(value.toString()); deliver(view("definition", known(id, "teams")), null) }
+                        else try { snapshot = captureSnapshot(value); deliver(view("definition", known(id, "teams")), null) }
                         catch (failure: Exception) { deliver(null, failure.message ?: "原团队配置已变化") }
                     }
                 }
@@ -185,12 +189,12 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 fields(args, "viewHandle", "name", "mode", "leaderId", "members")
                 val old = if (args.has("viewHandle")) reading(text(args, "viewHandle"), "definition") else null
                 val mode = text(args, "mode", 24)
-                require(mode in setOf("collaborate", "debate") || old?.optString("mode") == "produce" && mode == "produce") { "文件协作须沿原项目范围配置" }
+                require(mode in setOf("collaborate", "debate", "produce")) { "请选择已接入的团队协作方式" }
                 val supplied = args.getJSONArray("members"); require(supplied.length() in 1..4) { "请选择一至四名真实成员" }
                 require(supplied.objects().size == supplied.length()) { "成员必须是完整的原对象" }
                 val members = JSONArray(); val ids = mutableSetOf<String>()
                 supplied.objects().forEachIndexed { index, member ->
-                    fields(member, "id", "name", "role", "model", "modeId", "runner", "device", "assignment", "dependsOn", "externalExecutionRiskAcknowledged")
+                    fields(member, "id", "name", "role", "model", "modeId", "runner", "device", "assignment", "dependsOn", "externalExecutionRiskAcknowledged", "writeFiles", "remoteProduction")
                     val id = text(member, "id", 64); require(ids.add(id)) { "成员身份不能重复" }
                     val previous = old?.optJSONArray("members").objects().singleOrNull { it.optString("id") == id }
                     val captured = previous?.let { JSONObject(it.toString()) } ?: JSONObject().put("id", id).put("runner", "model").put("device", "phone")
@@ -201,24 +205,22 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     val runner = if (member.has("runner")) text(member, "runner", 80) else previous?.optString("runner", "model") ?: "model"
                     val external = dev.pocketengine.features.remote.RemoteHarnessSelection.isTeamWorker(runner)
                     require(runner in setOf("model", "phone_agent") || external || runner == previous?.optString("runner")) { "请选择当前已接入的成员执行器" }
-                    if (previous?.has("remoteProduction") == true) require(runner == previous.optString("runner") && model == previous.optString("model")) { "制作成员执行器与模型变更须重新审阅原项目范围" }
                     captured.put("runner", runner)
                     if (external) {
                         val device = member.optJSONObject("device") ?: previous?.optJSONObject("device") ?: error("请选择实际电脑连接和环境")
                         fields(device, "profileId", "environmentId")
                         val selected = JSONObject().put("profileId", text(device, "profileId", 80)).put("environmentId", text(device, "environmentId", 80))
-                        if (previous?.has("remoteProduction") == true) require(listOf("profileId", "environmentId").all { previous.optJSONObject("device")?.optString(it) == selected.optString(it) }) { "制作成员设备变更须重新审阅原项目范围" }
                         captured.put("device", selected)
                         if (runner != "codex_app_server") {
                             require(member.opt("externalExecutionRiskAcknowledged") == true) { "请确认所选电脑 Harness 的实际权限、同用户执行与账号费用边界" }
                             captured.put("externalExecutionRiskAcknowledged", true)
                         } else captured.remove("externalExecutionRiskAcknowledged")
                         val selectedMode = if (member.has("modeId")) text(member, "modeId", 200, true).trim() else if (runner == previous?.optString("runner")) previous.optString("modeId") else ""
-                        if (previous?.has("remoteProduction") == true) require(selectedMode == previous.optString("modeId")) { "制作成员模式变更须重新审阅原项目范围" }
                         if (selectedMode.isNotEmpty()) captured.put("modeId", selectedMode) else captured.remove("modeId")
                         captured.remove("phoneScope"); captured.remove("modelTarget"); captured.remove("memberModelSelection")
                     } else if (runner == "phone_agent") {
                         require(mode == "collaborate") { "手机成员请使用共同工作方式" }
+                        require(previous?.has("writeFiles") != true) { "原文件作者转为手机分工时，请移除此成员后新建手机成员" }
                         val device = member.getJSONObject("device"); fields(device, "kind", "screenMode", "targetDeviceId")
                         val local = device.optString("kind") == "local_phone"
                         require(local && device.optString("screenMode") == "background" && !device.has("targetDeviceId")
@@ -234,10 +236,21 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     } else if (previous?.optString("runner") != "model") {
                         captured.put("device", "phone"); captured.remove("phoneScope"); captured.remove("assignment"); captured.remove("modeId"); captured.remove("externalExecutionRiskAcknowledged"); captured.put("dependsOn", JSONArray())
                     }
+                    captured.remove("writeFiles"); captured.remove("remoteProduction")
+                    if (mode == "produce") {
+                        require(runner != "phone_agent") { "手机操作成员不能承担项目文件分工" }
+                        val files = member.getJSONArray("writeFiles")
+                        require((0 until files.length()).all { files.opt(it) is String }) { "负责文件必须为项目相对路径" }
+                        captured.put("writeFiles", JSONArray(files.toString()))
+                        if (external) captured.put("remoteProduction", JSONObject(member.getJSONObject("remoteProduction").toString()))
+                        else require(!member.has("remoteProduction")) { "本机模型不能继承电脑制作范围" }
+                    } else require(!member.has("writeFiles") && !member.has("remoteProduction")) { "只有项目文件协作可设置文件制作范围" }
                     members.put(AgentSlot.normalize(captured, index))
                 }
                 val leader = text(args, "leaderId", 64); require(leader in ids)
                 TeamsModule.validateDefinitionMembers(members)
+                if (mode == "produce") PocketWebTeamProduction.validateDefinition(members, snapshot,
+                    snapshot.optJSONObject("productionSources") ?: error("请先读取原文件来源目录"), productionSources())
                 val input = JSONObject().put("id", old?.getString("id") ?: UUID.randomUUID().toString()).put("name", text(args, "name", 80).trim())
                     .put("mode", mode).put("leaderId", leader).put("members", members).put("expectedDefinition", old?.toString() ?: "")
                 input.put("discussionFormat", if (mode == "debate") old?.optString("discussionFormat")?.takeIf { it.isNotBlank() } ?: TeamEvidenceDiscussion.FORMAT else "classic")
@@ -291,7 +304,12 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 fields(args, "reviewHandle")
                 val captured = reviews.remove(text(args, "reviewHandle")) ?: error("原操作审阅已使用或关闭，请先核对原回执")
                 if (captured.expires <= SystemClock.elapsedRealtime()) { captured.phonePage?.close(); error("原操作审阅已过期") }
-                if (captured.phonePage == null) feature(captured.command, JSONObject(captured.input))
+                if (captured.phonePage == null) {
+                    val input = JSONObject(captured.input)
+                    if (captured.command == "save" && input.optString("mode") == "produce") PocketWebTeamProduction.validateDefinition(input.getJSONArray("members"), snapshot,
+                        JSONObject(captured.productionSources ?: error("原文件来源审阅缺失")), productionSources())
+                    feature(captured.command, input)
+                }
                 else phoneWork(captured.phonePage, work = { captured.phonePage.confirm(captured.phoneReview ?: error("原手机范围审阅缺失")) }, accept = { result ->
                     captured.phonePage.close(); check(result.optString("id").isNotBlank()) { "团队启动尚未取得原运行身份" }
                     snapshot.put("runs", (snapshot.optJSONArray("runs") ?: JSONArray()).put(JSONObject(result.toString())))

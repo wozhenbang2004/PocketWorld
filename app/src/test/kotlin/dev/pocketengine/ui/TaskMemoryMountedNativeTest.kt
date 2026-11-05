@@ -1,127 +1,173 @@
 package dev.pocketengine.ui
 
-import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.os.Looper
-import android.os.Handler
-import android.view.PixelCopy
-import android.view.View
-import android.view.ViewGroup
-import android.view.inspector.WindowInspector
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.semantics.*
-import androidx.compose.ui.text.AnnotatedString
+import com.sun.net.httpserver.HttpServer
 import dev.pocketengine.EngineApplication
-import dev.pocketengine.ui.memory.TaskMemorySearchSheet
-import dev.pocketengine.ui.memory.TaskMemoryWorkflowSheet
-import java.io.File
-import java.time.Duration
+import dev.pocketengine.features.assistant.AssistantModule
+import dev.pocketengine.features.memory.MemoryBook
+import dev.pocketengine.features.memory.MemoryModule
+import dev.pocketengine.features.memory.SourceRef
+import dev.pocketengine.media.MediaController
+import dev.pocketengine.testutil.ReadyApplicationFixture
+import dev.pocketengine.ui.web.PocketWebMemoryHistory
+import java.net.InetSocketAddress
+import java.nio.charset.StandardCharsets
+import java.security.Provider
+import java.security.Security
 import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import org.json.JSONArray
 import org.json.JSONObject
+import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.robolectric.*
+import org.robolectric.Robolectric
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows
 import org.robolectric.annotation.*
-import org.robolectric.shadows.ShadowDialog
 
-class TaskMemoryMountedFixtureActivity : ComponentActivity()
-
-/** Current native leaves -> real Controller -> Application -> actual request journal, no supplied proof DTO. */
+/** Actual Web adapter -> Controller -> Application -> real request journal and loopback model.
+ * Browser rendering is covered separately; no supplied proof DTO replaces the original journal. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk=[35],manifest=Config.NONE,application=EngineApplication::class,qualifiers="w320dp-h800dp-xxhdpi")
-@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [35], manifest = Config.NONE, application = EngineApplication::class, shadows = [ReadyApplicationFixture.NoUnrelatedStartup::class])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 @LooperMode(LooperMode.Mode.PAUSED)
 class TaskMemoryMountedNativeTest {
-    @Before fun keys() { TaskMemoryNativeWorkflowTest().keys() }
-    internal class Screen(val host: TaskMemoryNativeWorkflowTest.Fixture) : AutoCloseable {
-        val activityController=Robolectric.buildActivity(TaskMemoryMountedFixtureActivity::class.java).setup().visible()
-        val activity=activityController.get()
-        var mode by mutableStateOf(0)
-        var reference by mutableStateOf(JSONObject())
-        var sourceTask by mutableStateOf(host.sourceTask)
-        val width=(activity.resources.configuration.screenWidthDp*activity.resources.displayMetrics.density).toInt()
-        val height=(activity.resources.configuration.screenHeightDp*activity.resources.displayMetrics.density).toInt()
-        private val colors=Class.forName("dev.pocketengine.ui.PocketWorldAppKt").getDeclaredField("AppColors").let{it.isAccessible=true;it.get(null) as ColorScheme}
-        init { activity.setContent { MaterialTheme(colorScheme=colors) { when(mode) {
-            0 -> TaskMemorySearchSheet(host.controller) { mode=2 }
-            1 -> TaskMemoryWorkflowSheet(host.controller,reference) { mode=2 }
-            3 -> SourceMemoryControl("task",sourceTask,"This UI prose must never become authoritative source",host.controller.state,host.controller)
-            else -> Text("原任务与回答保持在同一应用")
-        } } }; advance() }
-        fun compose(view:View):View? {
-            if(view.javaClass.name=="androidx.compose.ui.platform.AndroidComposeView")return view
-            if(view is ViewGroup)for(i in 0 until view.childCount)compose(view.getChildAt(i))?.let{return it};return null
-        }
-        fun nodes():List<SemanticsNode> {
-            val result=mutableListOf<SemanticsNode>();fun collect(node:SemanticsNode){result+=node;node.children.forEach(::collect)}
-            WindowInspector.getGlobalWindowViews().filter{it.isAttachedToWindow&&it.visibility==View.VISIBLE}.forEach{root->compose(root)?.let{collect((it.javaClass.getMethod("getSemanticsOwner").invoke(it) as SemanticsOwner).rootSemanticsNode)}};return result
-        }
-        fun text(node:SemanticsNode)=node.config.getOrNull(SemanticsProperties.Text)?.joinToString(" "){it.text}.orEmpty()
-        fun advance() { repeat(8) {
-            Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(32))
-            activity.window.decorView.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY))
-            activity.window.decorView.layout(0,0,width,height);Thread.sleep(5)
-        }
-            repeat(2){
-                val windows=mutableListOf(activity.window);ShadowDialog.getLatestDialog()?.takeIf{it.isShowing}?.window?.let{windows+=it}
-                windows.forEach{window->
-                    compose(window.decorView)?.let{it.javaClass.getMethod("invalidateDescendants").invoke(it)};window.decorView.invalidate()
-                    val bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);var result=-1
-                    PixelCopy.request(window,bitmap,{result=it},Handler(Looper.getMainLooper()));Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals(PixelCopy.SUCCESS,result);bitmap.recycle()
-                }
-            }
-        }
-        fun await(label:String){repeat(35){if(nodes().any{text(it).contains(label)})return;advance()};error("Missing $label; ${nodes().map(::text)}")}
-        fun click(label:String){val node=nodes().firstOrNull{text(it)==label&&it.config.getOrNull(SemanticsActions.OnClick)?.action!=null}?:error("Missing click $label; ${nodes().map(::text)}");assertTrue(node.config[SemanticsActions.OnClick].action!!.invoke());advance()}
-        fun edit(value:String){val node=nodes().first{it.config.getOrNull(SemanticsActions.SetText)?.action!=null};assertTrue(node.config[SemanticsActions.SetText].action!!.invoke(AnnotatedString(value)));advance()}
-        fun save(name:String){
-            advance();val root=WindowInspector.getGlobalWindowViews().last{it.isAttachedToWindow&&it.visibility==View.VISIBLE&&compose(it)!=null}
-            compose(root)?.let{it.javaClass.getMethod("invalidateDescendants").invoke(it)};root.invalidate()
-            val bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);bitmap.eraseColor(android.graphics.Color.WHITE);root.draw(Canvas(bitmap))
-            var ink=0;for(y in 0 until height step 4)for(x in 0 until width step 4)if(android.graphics.Color.red(bitmap.getPixel(x,y))<160)ink++
-            assertTrue("Native mounted tree must render visible text/control pixels",ink>100)
-            val out=File(System.getProperty("b1.memory.renders"));out.mkdirs();File(out,"$name.png").outputStream().use{bitmap.compress(Bitmap.CompressFormat.PNG,100,it)};bitmap.recycle()
-            val semantics=JSONArray();nodes().forEach{semantics.put(JSONObject().put("text",text(it)).put("bounds",it.boundsInRoot.toString()))}
-            File(out,"$name.json").writeText(JSONObject().put("viewportDp","320x800").put("host","actual Controller/Application/TaskStore/Runner/Gateway").put("providedLookup","native operations journal").put("nodes",semantics).toString(2))
-        }
-        override fun close(){activityController.pause().stop().destroy();Shadows.shadowOf(Looper.getMainLooper()).idle()}
-    }
-    @Test fun searchOldTaskOpenOriginalThenReviewActualRequestSourceAndCorrectNextRequest() {
-        TaskMemoryNativeWorkflowTest.Fixture().use { f ->
-            repeat(205){f.app.tasks.beginExternal("memory_history_fixture","inspect",UUID.randomUUID().toString(),JSONObject().put("goal","较新的原任务 $it"))}
-            Screen(f).use { ui ->
-                ui.edit("早期项目验收");ui.click("搜索任务记录");ui.await("主人曾确认结果");ui.save("01-native-full-task-search")
-                ui.click("打开这条原任务");assertEquals(f.sourceTask,f.controller.state.requestedTaskId)
-                val first=f.completed(f.send("按项目约定回答"));ui.reference=f.binding(first);ui.mode=1;ui.advance();ui.await("本次提供给模型的记忆来源");ui.save("02-native-provided-reference")
-                ui.click("查看本次选择与省略");ui.await("当时提供核心参考 1 条");ui.save("02a-native-selection-budget");ui.click("收起选择与省略说明")
-                ui.click("查看这个版本的来源");ui.await("主人核对时的原结果");ui.save("03-native-exact-source")
-                ui.click("返回本次来源");ui.click("纠正或遗忘");ui.click("改写这条记忆");ui.edit("项目约定 B1_CORRECTED_REFERENCE_952");ui.click("保存纠正并停用旧版本")
-                ui.await("已保存你的纠正并清理本次旧参考");ui.save("04-native-corrected-reference-retired")
-                assertFalse(ui.nodes().any{ui.text(it).contains("B1_OLD_REFERENCE_741")})
-                f.answer="当前约定已纠正";val second=f.completed(f.send("再核对当前项目约定"));assertFalse(f.requests[1].toString().contains("B1_OLD_REFERENCE_741"));assertTrue(f.requests[1].toString().contains("B1_CORRECTED_REFERENCE_952"))
-                ui.mode=2;ui.advance();ui.reference=f.binding(second);ui.mode=1;ui.advance();ui.await("本次提供给模型的记忆来源");ui.click("查看这个版本的来源");ui.await("确认时的结果摘要")
-                f.app.dispatchOwnerAction("confirmResult",JSONObject().put("taskId",f.sourceTask).put("completed",false));ui.await("部分来源已失效");ui.save("05-native-source-revoked-live")
-                assertFalse(ui.nodes().any{ui.text(it).contains("B1_OLD_REFERENCE_741")});assertFalse(ui.nodes().any{ui.text(it).contains("B1_CORRECTED_REFERENCE_952")})
-            }
+    private val keys = MemoryWorkflowWebFixture.testKeys()
+    @Before fun keys() { assertTrue(Security.insertProviderAt(keys, 1) > 0) }
+    @After fun removeKeys() { Security.removeProvider(keys.name) }
+
+    @Test fun searchOldTaskOpenOriginalThenCorrectTheExactRequestAndRetireRevokedSources() {
+        MemoryWorkflowWebFixture().use { f ->
+            repeat(205) { f.app.tasks.beginExternal("memory_history_fixture", "inspect", UUID.randomUUID().toString(), JSONObject().put("goal", "较新的原任务 $it")) }
+            assertFalse(f.app.tasks.list().toString().contains(f.sourceTask))
+            val session = f.session()
+            val found = f.web("taskMemory.search", JSONObject().put("sessionHandle", session).put("query", "早期项目验收").put("cursor", ""))
+            assertEquals("full_task_store", found.getString("coverage")); assertEquals(f.sourceTask, found.getJSONArray("tasks").getJSONObject(0).getString("taskId")); assertFalse(found.getJSONArray("tasks").getJSONObject(0).getBoolean("formalMemory"))
+            val sourceTask = f.task(session, f.sourceTask)
+            f.web("taskMemory.focus", JSONObject().put("taskHandle", sourceTask.getString("taskHandle")))
+            assertEquals(f.sourceTask, f.controller.state.requestedTaskId)
+            val first = f.completed(f.send("按项目约定回答")); val task = f.task(f.session(), first.getString("id"))
+            val receipt = f.receipt(task); val row = f.row(receipt, f.old.getString("id"))
+            assertEquals("provided_to_request", receipt.getString("phase")); assertFalse(receipt.getBoolean("modelUseVerified")); assertEquals(1, receipt.getJSONObject("selectionDiagnostics").getInt("coreSelected"))
+            val source = f.web("taskMemory.source", JSONObject().put("readHandle", row.getString("readHandle")).put("index", 0).put("offset", 0))
+            assertTrue(source.getString("text").contains("主人核对时的原结果")); assertEquals(f.source.toJson().toString(), source.getJSONObject("sourceRef").toString())
+            val review = f.web("taskMemory.review", JSONObject().put("readHandle", row.getString("readHandle")).put("operation", "correct").put("text", "项目约定 B1_CORRECTED_REFERENCE_952"))
+            val payload = JSONObject().put("reviewHandle", review.getString("reviewHandle"))
+            val saved = f.web("taskMemory.confirm", payload); assertTrue(saved.getBoolean("contextInvalidated")); assertTrue(saved.getBoolean("futureRecallBlocked")); assertTrue(saved.getString("feedback").contains("清理本次旧参考"))
+            f.reject("taskMemory.confirm", payload); f.reject("taskMemory.source", JSONObject().put("readHandle", row.getString("readHandle")).put("index", 0).put("offset", 0))
+            f.answer = "当前约定已纠正"; val second = f.completed(f.send("再核对当前项目约定"))
+            assertFalse(f.requests[1].toString().contains("B1_OLD_REFERENCE_741")); assertTrue(f.requests[1].toString().contains("B1_CORRECTED_REFERENCE_952"))
+            val nextTask = f.task(f.session(), second.getString("id")); val nextReceipt = f.receipt(nextTask); val next = f.row(nextReceipt, f.old.getString("id"))
+            assertEquals("current", f.web("taskMemory.source", JSONObject().put("readHandle", next.getString("readHandle")).put("index", 0).put("offset", 0)).getString("status"))
+            f.app.tasks.finish(f.sourceTask, "needs_confirmation", "主人撤回原结果确认", JSONObject())
+            f.confirm(f.sourceTask, false)
+            val revoked = f.receipt(nextTask)
+            assertEquals("invalidated", revoked.getString("status")); assertFalse(revoked.toString().contains("B1_OLD_REFERENCE_741")); assertFalse(revoked.toString().contains("B1_CORRECTED_REFERENCE_952"))
+            f.reject("taskMemory.review", JSONObject().put("readHandle", next.getString("readHandle")).put("operation", "forget"))
         }
     }
-    @Test fun actualRequestBudgetInspectorShowsOmittedCoreIdentityWithoutOldBodies() {
-        TaskMemoryNativeWorkflowTest.Fixture().use { f ->
-            repeat(15){f.memory.handle("save",JSONObject().put("scope",TaskMemoryNativeWorkflowTest.scope()).put("record",JSONObject().put("text","稳定主人偏好 $it").put("core",true)))}
-            f.memory.handle("save",JSONObject().put("scope",TaskMemoryNativeWorkflowTest.scope()).put("record",JSONObject().put("text","DELTA_TICKET 当前任务的明确约定")))
-            val task=f.completed(f.send("DELTA_TICKET"))
-            Screen(f).use { ui ->
-                ui.reference=f.binding(task);ui.mode=1;ui.advance();ui.await("本次提供给模型的记忆来源")
-                ui.click("查看本次选择与省略");ui.await("条数预算已满：1 条");ui.await("任务匹配 1 条");ui.save("06-native-budget-omission")
-                assertTrue(ui.nodes().any{ui.text(it).contains("省略版本（仅标识，不保留旧正文）")})
-            }
+    @Test fun originalRequestBudgetShowsOmittedCoreIdentityWithoutOldBodies() {
+        MemoryWorkflowWebFixture().use { f ->
+            repeat(15) { f.memory.handle("save", JSONObject().put("scope", f.scope()).put("record", JSONObject().put("text", "稳定主人偏好 $it").put("core", true))) }
+            f.memory.handle("save", JSONObject().put("scope", f.scope()).put("record", JSONObject().put("text", "DELTA_TICKET 当前任务的明确约定")))
+            val task = f.completed(f.send("DELTA_TICKET")); val receipt = f.receipt(f.task(f.session(), task.getString("id")))
+            val details = receipt.getJSONObject("selectionDiagnostics")
+            assertTrue(receipt.getBoolean("selectionDiagnosticsAvailable")); assertEquals(1, details.getJSONObject("omissionCounts").getInt("record_limit")); assertEquals(1, details.getInt("retrievedSelected"))
+            val omitted = details.getJSONArray("omitted"); assertTrue(omitted.length() > 0)
+            repeat(omitted.length()) { assertTrue(omitted.getJSONObject(it).getLong("revision") > 0); assertFalse(omitted.getJSONObject(it).has("text")) }
         }
     }
+}
+
+/** Shared native workflow fixture for the migrated memory/source tests. Explicit Ready bootstrap. */
+internal class MemoryWorkflowWebFixture : AutoCloseable {
+    companion object {
+        fun testKeys() = object : Provider("MemoryWeb-${UUID.randomUUID()}", 1.0, "Explicit test-only AndroidKeyStore") {
+            init { put("KeyStore.AndroidKeyStore", dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore::class.java.name) }
+        }
+        fun await(check: () -> Boolean) {
+            val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
+            while (!check() && System.nanoTime() < until) { Shadows.shadowOf(Looper.getMainLooper()).idle(); Thread.sleep(10) }
+            Shadows.shadowOf(Looper.getMainLooper()).idle(); assertTrue("Original native workflow did not settle", check())
+        }
+    }
+    val app = RuntimeEnvironment.getApplication() as EngineApplication
+    private val owner: org.robolectric.android.controller.ActivityController<ComposeActivity>
+    private val media: MediaController
+    val controller: PocketWorldController
+    val memory: MemoryModule
+    private val assistant: AssistantModule
+    private val server: HttpServer
+    val requests = CopyOnWriteArrayList<JSONObject>(); val calls = AtomicInteger()
+    val blocked = CountDownLatch(1); val release = CountDownLatch(1)
+    @Volatile var blockCall = -1
+    @Volatile var answer = "本轮参考：B1_OLD_REFERENCE_741"
+    val sourceTask: String; val source: SourceRef; val old: JSONObject
+    val history: PocketWebMemoryHistory
+    private var conversation: String? = null
+    init {
+        ReadyApplicationFixture.initializeHost(app)
+        owner = Robolectric.buildActivity(ComposeActivity::class.java)
+        val activity = owner.get(); media = MediaController(activity, app::publish)
+        ComposeActivity::class.java.getDeclaredField("media").apply { isAccessible = true }.set(activity, media)
+        controller = PocketWorldController(activity, app)
+        PocketWorldController::class.java.getDeclaredField("voiceForeground").apply { isAccessible = true }.setBoolean(controller, true)
+        memory = app.features.module("memory") as MemoryModule; assistant = app.features.module("assistant") as AssistantModule
+        server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/") { exchange ->
+            try {
+                val call = calls.incrementAndGet(); requests += JSONObject(String(exchange.requestBody.readBytes(), StandardCharsets.UTF_8))
+                if (call == blockCall) { blocked.countDown(); release.await(10, TimeUnit.SECONDS) }
+                val body = JSONObject().put("choices", JSONArray().put(JSONObject().put("message", JSONObject().put("role", "assistant").put("content", answer)).put("finish_reason", "stop"))).toString().toByteArray(StandardCharsets.UTF_8)
+                exchange.responseHeaders.add("Content-Type", "application/json"); exchange.sendResponseHeaders(200, body.size.toLong()); exchange.responseBody.write(body)
+            } finally { exchange.close() }
+        }
+        server.start()
+        app.getSharedPreferences("private_settings", 0).edit().putString("baseUrl", "http://127.0.0.1:${server.address.port}").putString("provider", "openai_chat").putString("model", "native-memory-flow").putInt("maxOutputTokens", 1024).putInt("maxSteps", 8).putBoolean("sendScreenshots", false).commit()
+        sourceTask = app.tasks.createCapabilityTask("早期项目验收原任务证据", "").getString("id")
+        app.tasks.finish(sourceTask, "needs_confirmation", "主人核对时的原结果 B1_OLD_REFERENCE_741", JSONObject()); confirm(sourceTask, true)
+        source = app.tasks.resolveMemorySource(MemoryBook.Scope.from(scope()), "task_evidence", "task:$sourceTask:verified_result").ref
+        val saved = memory.importFromSources(scope(), JSONObject().put("text", "项目约定 B1_OLD_REFERENCE_741").put("sourceRefs", JSONArray().put(source.toJson()))).getJSONObject("record")
+        old = memory.handle("setCore", JSONObject().put("scope", scope()).put("id", saved.getString("id")).put("revision", saved.getLong("revision")).put("core", true)).getJSONObject("record")
+        history = PocketWebMemoryHistory(controller); controller.attach(); controller.enterOwnerDomain("taskMemory"); drain()
+    }
+    fun scope() = JSONObject().put("ownerId", "owner").put("spaceId", "private")
+    fun confirm(id: String, completed: Boolean) = app.dispatchOwnerAction("confirmResult", JSONObject().put("taskId", id).put("resultReviewDigest", app.tasks.get(id, false).getString("resultReviewDigest")).put("completed", completed))
+    fun send(text: String): JSONObject {
+        val args = JSONObject().put("message", text).put("clientMessageId", UUID.randomUUID().toString()); conversation?.let { args.put("conversationId", it) }
+        return assistant.handle("send", args).also { conversation = it.getString("conversationId") }
+    }
+    fun completed(ack: JSONObject): JSONObject {
+        await { !assistant.snapshot().getBoolean("running") && app.tasks.get(ack.getString("taskId"), false).optString("status") in setOf("completed", "failed", "needs_confirmation", "cancelled") }; drain()
+        return app.tasks.get(ack.getString("taskId"), false)
+    }
+    fun drain() { val io = PocketWorldController::class.java.getDeclaredField("io").apply { isAccessible = true }.get(controller) as ExecutorService; repeat(3) { io.submit {}.get(10, TimeUnit.SECONDS); Shadows.shadowOf(Looper.getMainLooper()).idle() } }
+    fun web(action: String, args: JSONObject): JSONObject {
+        var calls = 0; var result: JSONObject? = null; var error: String? = null
+        history.dispatch(action, args) { value, failure -> calls++; result = value; error = failure }
+        await { calls > 0 }; assertEquals(1, calls); assertNull(error, error); return result ?: throw IllegalStateException("No original Web result")
+    }
+    fun reject(action: String, args: JSONObject) {
+        var calls = 0; var result: JSONObject? = null; var error: String? = null
+        try { history.dispatch(action, args) { value, failure -> calls++; result = value; error = failure } } catch (failure: Exception) { calls++; error = failure.message }
+        await { calls > 0 }; assertEquals(1, calls); assertNull(result); assertFalse(error.isNullOrBlank())
+    }
+    fun command(domain: String, command: String, args: JSONObject): JSONObject {
+        var calls = 0; var result: JSONObject? = null; var error: String? = null
+        controller.requestOwnerDomainReceipt(domain, command, args) { value, failure -> calls++; result = value; error = failure }
+        await { calls > 0 }; assertEquals(1, calls); assertNull(error, error); return result ?: throw IllegalStateException("No original native result")
+    }
+    fun session() = web("memoryHistory.open", JSONObject().put("view", "tasks")).getString("sessionHandle")
+    fun task(session: String, id: String) = web("taskMemory.task", JSONObject().put("sessionHandle", session).put("taskId", id))
+    fun receipt(task: JSONObject) = web("taskMemory.receipt", JSONObject().put("taskHandle", task.getString("taskHandle")))
+    fun row(receipt: JSONObject, id: String): JSONObject = receipt.getJSONArray("records").let { rows -> (0 until rows.length()).map { rows.getJSONObject(it) }.single { it.getString("id") == id } }
+    override fun close() { release.countDown(); history.clear(); controller.detach(); media.close(); owner.close(); server.stop(0); app.features.close() }
 }

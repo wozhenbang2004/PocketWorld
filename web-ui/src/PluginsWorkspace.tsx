@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { Tab, TabList, TabPanel, Tabs } from './shell-library';
+import { FunctionalPacksWorkspace } from './FunctionalPacksWorkspace';
 import { acceptPluginReview, acceptPluginView, catalogReceiptResult, catalogReview, catalogUnknown, confirmedPluginResult, confirmedSourceConfiguration, jsPluginIdentity, pluginIdentity, pluginRows, samePluginIdentity, sourceConfiguration, sourceDraft, type PluginData as Data } from './plugins-workspace';
 import './plugins-workspace.css';
 
 type Run = (action: string, args?: Data) => Promise<any>;
-type Props = { mode: 'plugins' | 'pluginCatalog'; state: Data; run: Run; supported: (action: string) => boolean; registerTransientBack: (handler: (() => boolean) | null) => void; onNavigate?: (domain: 'plugins' | 'pluginCatalog' | 'mcp') => void };
+type Props = { mode: 'plugins' | 'pluginCatalog'; state: Data; run: Run; supported: (action: string) => boolean; registerTransientBack: (handler: (() => boolean) | null) => void; onNavigate?: (domain: 'plugins' | 'pluginCatalog' | 'mcp' | 'skills') => void };
 const json = (value: unknown) => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 const copy = (value: Data) => JSON.parse(JSON.stringify(value));
 const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter(item => typeof item === 'string') : [];
@@ -55,6 +56,7 @@ export function PluginsWorkspace({ mode, state, run, supported, registerTransien
   const [followup, setFollowup] = useState<'plugins' | 'mcp' | 'js' | null>(null);
   const [runtime, setRuntime] = useState<Data>({}), [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState(''), [needsQuery, setNeedsQuery] = useState(false), [foreground, setForeground] = useState(true);
   const alive = useRef(true), entered = useRef(false), generation = useRef(0), latest = useRef<Data | null>(null), activeReview = useRef<Data | null>(null), resumed = useRef(state.webWorkspaceResumeRevision), backgrounded = useRef(false);
+  const functionalPackBack = useRef<(() => boolean) | null>(null);
   const installed = pluginRows(snapshot?.installed?.plugins), extensions = pluginRows(snapshot?.jsInstalled?.plugins), sources = pluginRows(snapshot?.config?.sources);
   const selected = installed.find(row => row.id === selectedId), source = sources.find(row => row.id === sourceId);
   const unresolved = catalogUnknown(snapshot), locked = busy || needsQuery || unresolved || !foreground;
@@ -133,6 +135,7 @@ export function PluginsWorkspace({ mode, state, run, supported, registerTransien
   }, [mode]);
   useEffect(() => {
     registerTransientBack(() => {
+      if (tab === 'packs') return functionalPackBack.current?.() ?? false;
       if (busy) return true;
       if (review) { discardReview(); return true; }
       if (editor) { setEditor(null); setToken(''); return true; }
@@ -141,7 +144,7 @@ export function PluginsWorkspace({ mode, state, run, supported, registerTransien
       return false;
     });
     return () => registerTransientBack(null);
-  }, [busy, review, editor, history, jsHistory, selectedId, registerTransientBack]);
+  }, [busy, review, editor, history, jsHistory, selectedId, tab, registerTransientBack]);
   useEffect(() => {
     if (review && !review.catalog && ['enabled', 'grant', 'remove'].includes(review.kind) && !samePluginIdentity(review.data, installed.find(row => row.id === review.data.id))) {
       discardReview(); setError('这个安装的启停或授权已变化，请重新审阅。');
@@ -238,7 +241,7 @@ export function PluginsWorkspace({ mode, state, run, supported, registerTransien
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy || !snapshot} onClick={queryInstalled}>{needsQuery || unresolved ? '查询当前实际安装' : '刷新安装状态'}</Button>{mode === 'plugins' && <Button disabled={locked || !snapshot} onClick={() => { setEditor('manifest'); setError(''); }}>添加插件声明</Button>}{onNavigate && <Button variant="ghost" disabled={busy} onClick={() => onNavigate(mode === 'plugins' ? 'pluginCatalog' : 'plugins')}>{mode === 'plugins' ? '打开我的插件目录' : '前往插件管理'}</Button>}{!snapshot && <Button variant="ghost" disabled={busy || !foreground} onClick={open}>重新读取</Button>}</div>
       {busy && <p className="pw-field-hint" role="status">正在读取原生结果，请稍候…</p>}
       {needsQuery && !unresolved && <p className="pw-field-hint">上次操作已提交或审阅已失效。先读取当前安装，再继续新的操作。</p>}
-      {snapshot && <Tabs selectedKey={tab} onSelectionChange={key => { if (!busy) { discardReview(); setTab(String(key)); } }}><TabList aria-label="插件工作区">{mode === 'plugins' ? <Tab id="declaration">声明插件 · {installed.length}</Tab> : <Tab id="catalog">选择版本</Tab>}<Tab id="js">JS 扩展 · {extensions.length}</Tab></TabList>{mode === 'plugins' ? <TabPanel id="declaration">{installedContent}</TabPanel> : <TabPanel id="catalog">{catalogContent}</TabPanel>}<TabPanel id="js">{jsContent}</TabPanel></Tabs>}
+      {snapshot && <Tabs selectedKey={tab} onSelectionChange={key => { if (!busy) { discardReview(); setTab(String(key)); } }}><TabList aria-label="插件工作区">{mode === 'plugins' ? <Tab id="declaration">声明插件 · {installed.length}</Tab> : <Tab id="catalog">选择版本</Tab>}<Tab id="js">JS 扩展 · {extensions.length}</Tab><Tab id="packs">完整功能包</Tab></TabList>{mode === 'plugins' ? <TabPanel id="declaration">{installedContent}</TabPanel> : <TabPanel id="catalog">{catalogContent}</TabPanel>}<TabPanel id="js">{jsContent}</TabPanel><TabPanel id="packs">{tab === 'packs' && <FunctionalPacksWorkspace state={state} run={run} supported={supported} registerTransientBack={handler => { functionalPackBack.current = handler; }} onNavigate={onNavigate} />}</TabPanel></Tabs>}
     </section>
     <SettingsDialog isOpen={!!review || !!editor} title={review ? operationTitle(review) : editor === 'source' ? editingSource ? '编辑目录来源' : '添加目录来源' : '添加插件声明'} onClose={() => { if (busy) return; if (review) discardReview(); else { setEditor(null); setToken(''); } }}>
       <div className="pw-plugins-workspace pw-plugin-dialog-body">
