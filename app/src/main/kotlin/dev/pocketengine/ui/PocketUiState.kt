@@ -35,6 +35,7 @@ internal data class PocketUiState(
     val accountModelAvailable: Boolean = false,
     val modelCatalogEnabled: Boolean = false,
     val maxOutputTokens: Int = 4096,
+    val modelMaxSteps: Int = 20,
     val cleartextConsent: String = "",
     val accessibilityEnabled: Boolean = false,
     val notificationsEnabled: Boolean = false,
