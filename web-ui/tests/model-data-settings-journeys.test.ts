@@ -171,3 +171,13 @@ test('unread and successfully empty backup lists have different messages', () =>
   empty.entry('caches'); assert.ok(empty.visibleText.includes('尚无可读取的本机备份缓存'));
   assert.equal(empty.visibleText.includes('读取失败'), false);
 });
+
+
+test('unverified storage cache rows open using only their current locator', async () => {
+  const id = '11111111-1111-1111-1111-111111111111';
+  const calls: Data[] = [];
+  const f = fixture('StorageWorkspace', { data: { ...storageData(), caches: [{ selectionId: id, archiveBytes: 4096, modifiedAt: 123, verification: 'verify_all_bytes_on_explicit_open' }] }, run: async (action: string, args: Data) => { calls.push({ action, args }); return { navigate: 'archives' }; } });
+  f.entry('caches'); await f.action('storage.backupCache');
+  assert.deepEqual(calls, [{ action: 'storage.backupCache', args: { selectionId: id } }]);
+  assert.deepEqual(f.opened, [{ page: 'archives' }]);
+});

@@ -108,8 +108,9 @@ internal class PocketWebData(private val controller: PocketWorldController) {
                 storage.savePolicy(number(args, "generations", 0, 5).toInt(), number(args, "backups", 0, 5).toInt(), bool(args, "generated"))
             }
             "storage.backupCache" -> {
-                fields(args, "selectionId", "sha256"); val id = string(args, "selectionId")
-                check(storage.state.caches?.any { it.optString("selectionId") == id && it.optString("archiveSha256") == string(args, "sha256") } == true) { "原备份缓存已变化" }
+                fields(args, "selectionId"); val id = identifier(args, "selectionId")
+                // Listed rows are locators; the original open verifies all bytes before issuing a SHA-bound selection.
+                check(storage.state.caches?.any { it.optString("selectionId") == id } == true) { "原备份缓存已变化" }
                 storage.backupCache(id); return json("status" to "requested", "navigate" to "archives")
             }
             "storage.diagnostics.read" -> { fields(args); storage.readDiagnostics() }
