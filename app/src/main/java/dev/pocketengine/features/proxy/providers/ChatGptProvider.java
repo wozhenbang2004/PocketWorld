@@ -203,9 +203,22 @@ public final class ChatGptProvider implements AutoCloseable {
             if(response.body()!=null){byte[] bytes=readLimited(response.body().byteStream(),16*1024,operation);
                 if(bytes.length>0){shape="non_json";body=new JSONObject(new String(bytes,StandardCharsets.UTF_8));shape=body.has("error")?"json_error":body.has("detail")?"json_detail":"json_other";}}
         }catch(Exception ignored){operation.check();}
-        long seconds=60;try{seconds=Long.parseLong(response.header("Retry-After","60"));}catch(Exception ignored){}
         throw ChatGptRecovery.failure(status,body,shape,response.header("x-request-id",""),context,
-            System.currentTimeMillis()+Math.max(1,Math.min(seconds,86400))*1000);
+            retryAt(response,System.currentTimeMillis()));
+    }
+    private static long retryAt(Response response,long receivedAt){
+        long delay=60_000;java.util.List<String> values=response.headers("Retry-After");
+        try{
+            // Use the same strict HTTP-date and duplicate-header rules as native API requests.
+            JSONObject retry=dev.pocketengine.runtime.usage.InferenceFailure.http(response.code(),values,response.headers("Date"),receivedAt).retry();
+            if("VALID".equals(retry.optString("status")))delay=retry.getLong("estimatedNotBefore")-receivedAt;
+            else if(values.size()==1&&values.get(0).trim().matches("[0-9]{1,19}")){
+                // Preserve the existing bounded cooldown for numeric values beyond the
+                // receipt parser's one-year evidence range; signed values are not seconds.
+                long seconds=Long.parseLong(values.get(0).trim());delay=Math.min(seconds,86400)*1000;
+            }
+        }catch(Exception invalid){/* Missing, malformed or ambiguous hints keep local backoff. */}
+        return receivedAt+Math.max(1000,Math.min(delay,86_400_000));
     }
     static byte[] readLimited(InputStream input,int limit,GatewayCall operation)throws Exception {
         ByteArrayOutputStream bytes=new ByteArrayOutputStream();byte[] block=new byte[4096];int count;

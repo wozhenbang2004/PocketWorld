@@ -458,6 +458,8 @@ public final class HostToolSupervisor implements CapabilityPort {
         // Keep host transport keys private and the full identity/routing gate on native tools.
         java.util.Iterator<String> keys=args.keys();while(keys.hasNext()){String key=keys.next();if(key.startsWith("_")||tool.preset==null&&key.matches("taskId|runId|principalId|spaceId|ownerId|scope|epoch|coordinatorEpoch|feature|command"))throw new SecurityException("工具参数不能覆盖宿主身份或执行路由");}
         PluginRules.validateArguments(args,tool.schema);
+        if(tool==nativeRoutes.get(name)&&tool.feature.equals("workspace")&&Set.of("read","write","history","diff","createArtifact").contains(tool.command))
+            dev.pocketengine.features.workspace.VersionedWorkspace.path(args.getString("path"));
         if(tool.command.equals("$skills_propose"))dev.pocketengine.features.skills.NativeConversationSkillDraftHost.checkedDraft(args);
         if(tool.command.equals("$memory_propose"))dev.pocketengine.features.memory.NativeConversationMemoryDraftHost.checkedDraft(args);
         if(tool.feature.equals("memory")&&Set.of("search","recall").contains(tool.command)&&projectMemory==null
@@ -466,7 +468,14 @@ public final class HostToolSupervisor implements CapabilityPort {
         if(tool.feature.equals("memory")&&Set.of("search","recall").contains(tool.command)&&(args.has("queries")||args.has("constraints")))
             dev.pocketengine.features.memory.MemoryQueryPlan.agentSuggested(args.getString("query"),args.has("queries")?args.getJSONArray("queries"):new JSONArray(),args.has("constraints")?args.getJSONObject("constraints"):new JSONObject());
         if(workProfile!=null&&tool.feature.equals("skills")&&Set.of("$skills_read","$skill_reference_decision","$skill_execute").contains(tool.command)){if(profileCheck==null)workProfile.requireSkillRequest(args);else workProfile.requireSkillRequest(args,profileCheck);}
+        if(tool.feature.equals("skills")&&tool.command.equals("$skills_list"))skillListMode(args);
         if(tool.feature.equals("teams")&&name.startsWith("teams_"))dev.pocketengine.features.teams.TeamParentTools.validate(name,args);
+    }
+    /** One pure cross-field policy for both admission and actual catalogue execution. */
+    private static String skillListMode(JSONObject args){
+        String mode=args.optString("mode","query");
+        if(!"catalogue".equals(mode)&&(args.has("cursor")||args.has("pageSize")))throw new IllegalArgumentException("查询模式不接收目录cursor或pageSize");
+        return mode;
     }
     /** Withdraw or changed-install metadata can never repoint an old model decision. */
     private boolean pluginCurrent(String name,Tool admitted)throws Exception {
@@ -593,8 +602,9 @@ public final class HostToolSupervisor implements CapabilityPort {
         else if(tool.command.equals("$profiles"))result=new JSONObject().put("profiles",module.snapshot().getJSONArray("profiles"));
         else if(tool.command.equals("$skills_list")){
             if(!(module instanceof SkillsModule selected))throw new IllegalStateException("技能模块不支持宿主验证");
+            String mode=skillListMode(args);
             host.synchronizeMemory(privateScope());JSONObject scope=skillScope(selected),assetScope=skillAssetScope(scope,profileCheck);
-            if("catalogue".equals(args.optString("mode","query"))){
+            if("catalogue".equals(mode)){
                 Set<String> capabilities=skillCapabilityNames(),selection=null;
                 if(workProfile!=null){
                     profileCheck.checkCurrent();selection=new java.util.HashSet<>();JSONArray current=selected.catalogueForHost(assetScope).getJSONArray("skills");
@@ -603,7 +613,6 @@ public final class HostToolSupervisor implements CapabilityPort {
                 result=selected.cataloguePageForHost(assetScope,capabilities,args.optJSONObject("cursor"),args.optInt("pageSize",8),selection);
                 if(workProfile!=null){profileCheck.checkCurrent();result.put("workProfileSelection",true);}
             }else{
-                if(args.has("cursor")||args.has("pageSize"))throw new IllegalArgumentException("查询模式不接收目录cursor或pageSize");
                 JSONObject task=tasks.get(taskId,false);result=discoverSkills(selected,task.optString("goal")+"\n"+task.optString("feedback"),profileCheck,scope);
             }
             selected.requireTaskScopeForHost(tasks.get(taskId,false),scope);
