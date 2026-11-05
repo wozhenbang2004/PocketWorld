@@ -1,6 +1,9 @@
 {
   "chatgpt-provider-catalog": {
     "class": "dev.pocketengine.features.proxy.providers.ChatGptProviderTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.proxy.providers.ResponsesStreamTest"
+    ],
     "helpers": [
       "dev.pocketengine.features.proxy.providers.FakeChatGpt",
       "dev.pocketengine.features.proxy.providers.ResponsesFixtures",

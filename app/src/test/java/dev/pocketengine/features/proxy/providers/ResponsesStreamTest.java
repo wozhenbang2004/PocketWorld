@@ -13,6 +13,36 @@ import static dev.pocketengine.features.proxy.providers.ResponsesFixtures.*;
 public class ResponsesStreamTest {
     static JSONArray read(String stream,String... secrets)throws Exception{JSONArray events=new JSONArray();ResponsesStream.read(new ByteArrayInputStream(stream.getBytes(StandardCharsets.UTF_8)){@Override public synchronized int read(byte[] b,int off,int len){return super.read(b,off,Math.min(1,len));}},request(),new GatewayCall(5000),events::put,secrets);return events;}
     static void reject(String stream,String expected)throws Exception{JSONArray events=new JSONArray();try{ResponsesStream.read(new ByteArrayInputStream(stream.getBytes(StandardCharsets.UTF_8)),request(),new GatewayCall(5000),events::put);fail();}catch(GatewayFailure failure){assertEquals(expected,failure.code);}for(int i=0;i<events.length();i++)assertNotEquals("completed",events.getJSONObject(i).getString("type"));}
+    @Test public void responseMetadataIsNotModelOutputOrACompletionReceipt()throws Exception {
+        JSONObject metadata=new JSONObject().put("type","response.metadata").put("response_id","resp_fixture")
+                .put("metadata",new JSONObject().put("diagnostic","fixture-not-for-output").put("status","completed").put("tool","delete_everything"));
+        JSONObject done=message("m","OK",false,true);
+        ResponsesFixtures stream=new ResponsesFixtures().add(metadata).item(0,message("m","",false,false),false)
+                .text(0,"m","OK",false).item(0,done,true).complete(new JSONArray().put(done));
+        JSONArray events=read(stream.toString());assertEquals(2,events.length());
+        assertEquals("OK",events.getJSONObject(0).getString("delta"));assertEquals("completed",events.getJSONObject(1).getString("type"));
+        assertFalse(events.toString().contains("fixture-not-for-output"));assertFalse(events.toString().contains("delete_everything"));
+        reject(new ResponsesFixtures().add(metadata).toString(),"PROVIDER_STREAM_INTERRUPTED");
+    }
+    @Test public void metadataNeverHidesTheOriginalFailureOrReleasesPendingFunctions()throws Exception {
+        String pending=oneCall();pending=pending.substring(0,pending.indexOf("event: response.completed"));
+        JSONObject metadata=new JSONObject().put("type","response.metadata").put("sequence_number",100).put("response_id","resp_fixture").put("metadata",new JSONObject().put("status","completed"));
+        JSONObject failed=new JSONObject().put("type","response.failed").put("sequence_number",101).put("response",new JSONObject().put("id","resp_fixture").put("status","failed").put("error",new JSONObject().put("code","unknown-fixture-code")));
+        reject(pending+"data: "+metadata+"\n\ndata: "+failed+"\n\n","PROVIDER_RESPONSE_FAILED");
+    }
+    @Test public void metadataKeepsIdentitySequenceAndUnknownEventChecks()throws Exception {
+        reject(new ResponsesFixtures().add(new JSONObject().put("type","response.metadata").put("response_id","other")).toString(),"INVALID_PROVIDER_STREAM");
+        String metadata=new ResponsesFixtures().add(new JSONObject().put("type","response.metadata")).toString();
+        reject(metadata.replace("\"sequence_number\":1","\"sequence_number\":0"),"INVALID_PROVIDER_STREAM");
+        reject(new ResponsesFixtures().add(new JSONObject().put("type","response.unknown_metadata")).toString(),"UNSUPPORTED_PROVIDER_OUTPUT");
+    }
+    @Test public void legacyTextMetadataDoesNotEmitTextOrReplaceCompletion()throws Exception {
+        String metadata="data: {\"type\":\"response.metadata\",\"sequence_number\":0,\"metadata\":{\"diagnostic\":\"fixture-not-for-output\"}}\n\n";
+        String stream=metadata+"data: {\"type\":\"response.output_text.delta\",\"sequence_number\":1,\"delta\":\"OK\"}\n\ndata: {\"type\":\"response.completed\",\"sequence_number\":2,\"response\":{\"status\":\"completed\"}}\n\n";
+        JSONArray events=new JSONArray();ResponsesTextStream.read(new ByteArrayInputStream(stream.getBytes(StandardCharsets.UTF_8)),new GatewayCall(5000),events::put);
+        assertEquals(2,events.length());assertEquals("OK",events.getJSONObject(0).getString("delta"));assertEquals("completed",events.getJSONObject(1).getString("type"));
+        assertFalse(events.toString().contains("fixture-not-for-output"));
+    }
     @Test public void interleavedFunctionsTextAndUnicodeUseAllThreeIdentities()throws Exception {
         String first="{\"城市\":\"杭州🙂\"}",second="{\"x\":2}";String id="调用_🙂",callId="关联_一";
         JSONObject a=function(id,callId,"observe",first,true),b=function("fc_2","call_2","tap",second,true),m=message("msg_1","你好🙂",false,true).put("phase","commentary");

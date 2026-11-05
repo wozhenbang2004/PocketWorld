@@ -38,7 +38,7 @@ final class ResponsesTextStream {
                 case "response.content_part.added":case "response.content_part.done":{
                     JSONObject part=event.optJSONObject("part");if(part==null||(!"output_text".equals(part.optString("type"))&&!"refusal".equals(part.optString("type"))))throw new GatewayFailure("UNSUPPORTED_PROVIDER_OUTPUT");break;
                 }
-                case "response.created":case "response.in_progress":case "response.output_text.done":break;
+                case "response.created":case "response.in_progress":case "response.output_text.done":case "response.metadata":break;
                 case "response.completed":{
                     JSONObject response=event.optJSONObject("response");if(response==null||!"completed".equals(response.optString("status")))throw new GatewayFailure("INVALID_PROVIDER_STREAM");
                     filter.finish();refusal.finish();JSONObject safe=new JSONObject().put("type","completed");JSONObject usage=response.optJSONObject("usage");
