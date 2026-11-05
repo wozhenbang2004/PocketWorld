@@ -1230,6 +1230,8 @@ function StorageWorkspace({ data, supported, run, registerTransientBack, navigat
   const inventory = object(data.inventory), policy = object(inventory.retentionPolicy), review = object(data.review), original = object(data.original), result = object(data.result);
   const selected: string[] = Array.isArray(data.selected) ? data.selected : [], busy = Boolean(data.busy), locked = busy || Boolean(data.review);
   const rows = list(inventory.groups).filter(row => showProtected || row.cleanable && object(row.usage).logicalBytes !== 0 || object(row.usage).complete !== true);
+  const cacheRows = list(data.caches), cachesKnown = Array.isArray(data.caches) && !data.backupError;
+  const cacheSummary = data.backupError ? '读取失败，数量未知' : !cachesKnown ? '尚未读取本机备份缓存' : cacheRows.length ? `${cacheRows.length} 份 · 先核对内容` : '尚无可读取的本机缓存';
   const act = (action: string, args: Data, label: string, disabled = false, primary = false) => <CapabilityAction action={action} args={args} supported={supported} run={run} disabled={busy || disabled} primary={primary}>{label}</CapabilityAction>;
   const cancel = () => { void run('storage.cancelReview', { actionId: review.actionId }).catch(() => {}); };
   useEffect(() => setConfirmed(false), [review.actionId]);
@@ -1246,7 +1248,7 @@ function StorageWorkspace({ data, supported, run, registerTransientBack, navigat
       <div className="pw-storage-capacity"><span>当前文件系统可用</span><strong>{bytesText(inventory.filesystemUsableBytes)}</strong><small>这是系统可用空间，不是可清理容量。</small></div>
       <div className="pw-settings-links pw-data-purpose-list">
         <DataOperationRow id="cleanup" title="查看占用与清理" detail={data.inventory ? '按目录选择，审阅后才删除' : '尚未读取实际目录占用'} onOpen={journey.open} />
-        <DataOperationRow id="caches" title="本机备份缓存" detail={list(data.caches).length ? `${list(data.caches).length} 份 · 先核对内容` : '尚无可读取的本机缓存'} onOpen={journey.open} />
+        <DataOperationRow id="caches" title="本机备份缓存" detail={cacheSummary} onOpen={journey.open} />
         <DataOperationRow id="diagnostics" title="导出诊断快照" detail="先看完整内容，不会自动上传" onOpen={journey.open} />
       </div>
       <Accordion variant="divided"><AccordionItem id="storage-records" title="原清理记录" description="按原动作读取，保留结果未知状态"><DataOperationRow id="result" title="核对原清理结果" detail="恢复查看，不重放旧动作" onOpen={journey.open} /></AccordionItem></Accordion>
@@ -1254,6 +1256,7 @@ function StorageWorkspace({ data, supported, run, registerTransientBack, navigat
     {journey.view !== 'list' && <DataOperationHeading title={operationNames[journey.view][0]} parent="存储操作" description={operationNames[journey.view][1]} onBack={journey.back} />}
     {data.notice && <p className="pw-receipt-copy" role="status">{text(data.notice)}</p>}{data.error && <p className="pw-field-error" role="alert">{text(data.error)}</p>}
     {busy && <p className="pw-data-progress" role="status">正在等待原数据操作回执，请勿重复提交。</p>}
+    {data.backupError && <p className="pw-field-error" role="alert">{text(data.backupError)}</p>}
     {data.originalAction && journey.view !== 'result' && <section className="pw-data-action-notice" aria-label="原清理状态"><p>原清理 · {statusText(original.status || 'unknown')}</p><p className="pw-field-hint">已删除的缓存不能回滚。结果不明时先核对原动作，不重复清理。</p><Button variant="secondary" onClick={() => journey.open('result')}>查看原清理结果</Button></section>}
     {journey.view === 'cleanup' && <Card className="pw-data-operation-body">
       <Facts items={[[ '当前文件系统可用', bytesText(inventory.filesystemUsableBytes) ]]} />
@@ -1271,7 +1274,7 @@ function StorageWorkspace({ data, supported, run, registerTransientBack, navigat
       <div className="pw-form-actions">{act('storage.reviewSelected', { selection: selected }, '核对清理影响', locked || selected.length === 0, true)}</div>
       <Accordion><AccordionItem title="计量和保留规则说明"><p>分组可能重叠，不能把逻辑大小直接相加为可回收空间。清理会重新核对原运行和固定目录；当前运行环境、原项目、用户 HOME 和固定成果保留。</p><p>规则只生成建议，不会定时或自动删除。中断后的原动作只能核对，已删除缓存不能回滚。</p></AccordionItem></Accordion>
     </Card>}
-    {journey.view === 'caches' && <Card className="pw-data-operation-body">{list(data.caches).length === 0 && <Empty>尚无可读取的本机备份缓存。</Empty>}{list(data.caches).map(row => <div key={text(row.selectionId)} className="pw-storage-cache-row"><Facts items={[[ '原备份编号', row.selectionId ], ['大小', bytesText(row.archiveBytes)], ['内容 SHA-256', row.archiveSha256]]} /><CapabilityAction action="storage.backupCache" args={{ selectionId: row.selectionId, sha256: row.archiveSha256 }} supported={supported} run={async (action, args) => { const result = await run(action, args); if (result?.navigate === 'archives') navigate('archives'); return result; }} disabled={locked}>核对备份 · {bytesText(row.archiveBytes)}</CapabilityAction></div>)}</Card>}
+    {journey.view === 'caches' && <Card className="pw-data-operation-body">{!data.backupError && cacheRows.length === 0 && <Empty>{cachesKnown ? '尚无可读取的本机备份缓存。' : '尚未读取本机备份缓存，请重新计量。'}</Empty>}{cachesKnown && cacheRows.map(row => <div key={text(row.selectionId)} className="pw-storage-cache-row"><Facts items={[[ '原备份编号', row.selectionId ], ['大小', bytesText(row.archiveBytes)], ['内容 SHA-256', row.archiveSha256]]} /><CapabilityAction action="storage.backupCache" args={{ selectionId: row.selectionId, sha256: row.archiveSha256 }} supported={supported} run={async (action, args) => { const result = await run(action, args); if (result?.navigate === 'archives') navigate('archives'); return result; }} disabled={locked}>核对备份 · {bytesText(row.archiveBytes)}</CapabilityAction></div>)}</Card>}
     {journey.view === 'result' && <Card className="pw-data-operation-body">
       {data.originalAction && <><Facts items={[[ '原动作', data.originalAction ], ['状态', statusText(original.status || 'unknown') ], ['结果', result.message || result.notice ]]} /><div className="pw-form-actions">{act('storage.query', { actionId: data.originalAction }, '只读核对原结果')}{['running', 'queued', 'stopping'].includes(original.status) && act('storage.stop', { actionId: data.originalAction }, '请求停止后续删除')}</div></>}
       <Accordion><AccordionItem title="按原编号恢复查看"><TextField label="原清理任务编号" value={originalId} onChange={value => setOriginalId(value.slice(0, 36))} /><div className="pw-form-actions">{act('storage.readOriginal', { actionId: originalId }, '读取原清理记录', !/^[a-f0-9-]{36}$/.test(originalId))}</div></AccordionItem></Accordion>
