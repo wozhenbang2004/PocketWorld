@@ -1,4 +1,9 @@
 {
+  "runner-recovery-guidance": {
+    "class": "dev.pocketengine.runtime.RecoveryProjectionRunnerTest",
+    "helpers": ["dev.pocketengine.runtime.RecoveryProjectionTest", "dev.pocketengine.testutil.HttpServer"],
+    "description": "Actual Runner/Gateway loopback: restored history preserves the latest owner input and never replays historical tool calls. Synthetic provider only."
+  },
   "chatgpt-provider-catalog": {
     "class": "dev.pocketengine.features.proxy.providers.ChatGptProviderTest",
     "additionalClasses": [
