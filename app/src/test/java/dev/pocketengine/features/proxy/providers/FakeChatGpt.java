@@ -27,6 +27,7 @@ public final class FakeChatGpt implements AutoCloseable {
     public volatile String nonce="",subject="fixture-subject",clientId="oaiapp_fixture",scope="openid profile email offline_access resource.invoke chatgpt.tokens.use.direct";
     public volatile long expiresIn=3600;
     public volatile int tokenStatus=200,responseStatus=200,revokeStatus=200;
+    public volatile String responseContentType="text/event-stream";
     public volatile java.util.function.IntUnaryOperator responseStatusForCall;
     public volatile String tokenErrorBody="{\"error\":\"fixture-access-secret\"}",responseErrorBody="{\"secret\":\"fixture-access-secret\"}",modelsBody="{\"models\":[{\"slug\":\"fixture-model\",\"display_name\":\"Fixture model\",\"visibility\":\"list\"},{\"slug\":\"hidden\",\"display_name\":\"Hidden\",\"visibility\":\"hide\"}]}";
     public volatile String stream="data: {\"type\":\"response.output_text.delta\",\"delta\":\"你好🙂\",\"sequence_number\":0}\n\ndata: {\"type\":\"response.completed\",\"sequence_number\":1,\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":2,\"output_tokens\":3,\"total_tokens\":5}}}\n\n";
@@ -58,7 +59,7 @@ public final class FakeChatGpt implements AutoCloseable {
                 int requestNumber=responses.incrementAndGet();lastAuthorization=call.getRequestHeaders().getFirst("Authorization");lastRequest=new JSONObject(new String(bytes,StandardCharsets.UTF_8));responseEntered.countDown();allowResponse.await(10,TimeUnit.SECONDS);
                 int status=responseStatusForCall==null?responseStatus:responseStatusForCall.applyAsInt(requestNumber);
                 if(status!=200){call.getResponseHeaders().add("Retry-After","0");json(call,status,responseErrorBody);}
-                else {call.getResponseHeaders().add("Content-Type","text/event-stream");byte[] streamBytes=stream.getBytes(StandardCharsets.UTF_8);call.sendResponseHeaders(200,streamBytes.length);for(byte b:streamBytes){call.getResponseBody().write(b);call.getResponseBody().flush();}}
+                else {if(responseContentType!=null)call.getResponseHeaders().add("Content-Type",responseContentType);byte[] streamBytes=stream.getBytes(StandardCharsets.UTF_8);call.sendResponseHeaders(200,streamBytes.length);for(byte b:streamBytes){call.getResponseBody().write(b);call.getResponseBody().flush();}}
             }else json(call,404,"{}");
         }catch(Exception ignored){}finally{call.close();}
     }
