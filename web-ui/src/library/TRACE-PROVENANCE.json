@@ -1,7 +1,7 @@
 {
   "component": "PocketWorld execution trajectory: Whaleness overview and event details with retained interval/tree view",
-  "sourceIdentity": "Approved personal library independent reproduction v3 0e69029b; not official Affect UI Pro source",
-  "approvalScope": "Previously approved library visual and interaction reference; production behavior is separately verified by the execution-trace tests",
+  "sourceIdentity": "Default overview and detail structure adapted from pinned Whaleness iOS MIT source; auxiliary waterfall from approved personal library independent reproduction v3 0e69029b, not official Affect UI Pro source",
+  "approvalScope": "User-confirmed Whaleness iOS reference and previously approved auxiliary library component. Production behavior and visual acceptance are verified separately.",
   "archive": "references/uiux/assets/affectui-interactive-family-20261031/interactive-components-source.zip",
   "upstreamFiles": [
     {
@@ -18,9 +18,16 @@
         ".acc-timeline"
       ],
       "sha256": "f55222203718089e6fdd3be2905dae3ddc2e173380f6416b1bba493be99562d3"
+    },
+    {
+      "path": "upstream/whaleness/TrajectoryView.swift",
+      "symbol": "TrajectoryView",
+      "sha256": "ee10b93da8ce8de138c9b5034f6af92811a77d0ae669427aeecc3c06c53ea93b"
     }
   ],
   "adaptedFiles": [
+    "adapted/trace-overview.tsx",
+    "adapted/trace-event-list.tsx",
     "adapted/trace-waterfall.tsx",
     "../execution-trace.css",
     "../TaskTrajectory.tsx",
