@@ -405,9 +405,54 @@ public final class ExtensionLoopIntegrationTest {
                 JSONObject submitted=planning.submitPlan(planning.capture(),proposal,"native-plan-fixture");
                 SecurityException planChanged=assertThrows(SecurityException.class,()->port.afterTool("workspace_read",new JSONObject(),new JSONObject().put("ok",true),control));assertFalse(planChanged instanceof ExecutionPlanning.ScopeRevisionChanged);
                 port.prepareTurn("reviewed plan",2,1,control);
+                ExecutionPlanning.Snapshot beforeApproval=planning.capture();
                 tasks.decideExecutionPlanApproval(task.getString("id"),submitted.getString("approvalId"),true,task.getString("runId"),task.getInt("coordinatorEpoch"),submitted.getLong("scopeRevision"),submitted.getLong("planRevision"),submitted.getString("planArtifactRef"),submitted.getString("planHash"),()->true);
+                assertThrows(SecurityException.class,()->planning.reference(beforeApproval));
                 SecurityException phaseChanged=assertThrows(SecurityException.class,()->port.afterTool("workspace_read",new JSONObject(),new JSONObject().put("ok",true),control));assertFalse(phaseChanged instanceof ExecutionPlanning.ScopeRevisionChanged);assertEquals(0,dispatches.get());
             }finally{port.close();}
+        }
+    }
+    @Test public void approvedPlanContinuationPublishesNativeDecisionWithoutForgingOwnerFeedback()throws Exception {
+        TaskStore tasks=store();JSONObject original=catalogAttempt(tasks,true);String id=original.getString("id");RunControl first=control(original);AtomicInteger writes=new AtomicInteger();
+        String ownerFeedback="Continue only the original single-file goal; preserve all native operation approvals.";
+        String untrustedMarker="UNTRUSTED_EXTENSION_CONTEXT_FIXTURE";
+        byte[] referenceSource=("defineExtension({context(input,state){return {text:'"+untrustedMarker+"',state};}});").getBytes(StandardCharsets.UTF_8);
+        ExtensionProgram referenceProgram=new ExtensionProgram("fixture.native_context","1",INSTALL,referenceSource,ExtensionProgram.sha256(referenceSource),2000);
+        try(FeatureHost features=new FeatureHost(event->{},tasks,()->false);ExtensionHost extensions=new ExtensionHost(catalogue(new AtomicReference<>(List.of(referenceProgram))),tasks,ExtensionRuntimeTest.Node::new)){
+            features.register(workspace(writes));CapabilityPort initial=extensions.bind(combined(tasks,features,original,first,null),binding(original),first);JSONObject submitted;
+            try{
+                initial.beginRun("original planning scope",first);initial.prepareTurn("inspect",1,0,first);
+                ExecutionPlanning planning=tasks.executionPlanningForRun(id,original.getString("runId"),original.getInt("coordinatorEpoch"),first);
+                JSONObject proposal=new JSONObject().put("format","pocketworld.execution-plan.v1").put("goal","Complete only the original single-file goal").put("steps",new JSONArray().put(new JSONObject().put("id","edit").put("title","Write and read the exact file").put("detail","Keep the original file, version and content constraints; no other effects.")));
+                submitted=planning.submitPlan(planning.capture(),proposal,"native-plan-fixture");
+                tasks.endAttempt(id,original.getString("runId"),"awaiting_user","Await the original plan review",new JSONObject());
+                tasks.decideExecutionPlanApproval(id,submitted.getString("approvalId"),true,original.getString("runId"),original.getInt("coordinatorEpoch"),submitted.getLong("scopeRevision"),submitted.getLong("planRevision"),submitted.getString("planArtifactRef"),submitted.getString("planHash"),()->true);
+            }finally{initial.close();first.cancel();}
+            tasks.feedback(id,ownerFeedback);JSONObject resumed=tasks.startAttempt(id,"capabilities",10);RunControl current=control(resumed);
+            ExecutionPlanning planning=tasks.executionPlanningForRun(id,resumed.getString("runId"),resumed.getInt("coordinatorEpoch"),current);
+            JSONObject nativeFacts=planning.reference(planning.capture());
+            assertEquals("executing",nativeFacts.getString("executionPhase"));assertTrue(nativeFacts.getBoolean("planApprovalRecorded"));assertFalse(nativeFacts.getBoolean("authorizesExecution"));
+            assertEquals(submitted.getString("approvalId"),nativeFacts.getJSONObject("nativePlanApproval").getString("approvalId"));
+            CapabilityPort port=PlanningCapabilityPort.wrap(extensions.bind(combined(tasks,features,resumed,current,null),binding(resumed),current),planning);
+            try(Server server=new Server((request,index)->new JSONObject().put("content","The current native plan decision is visible; no fixture business operation was requested."))){
+                RunOutcome outcome=new AgentRunner(null,port).run(id,resumed.getString("goal"),server.config(),current,event->{},tasks.journal(id,resumed.getString("runId"),resumed.getInt("coordinatorEpoch"),current));
+                assertEquals(outcome.summary,1,server.requests.size());JSONObject request=server.requests.get(0);assertTrue(hasTool(request,"workspace_read"));assertTrue(hasTool(request,"workspace_write")||hasTool(request,"tools_search"));
+                boolean nativeApproval=false,genuineFeedback=false,untrustedReference=false;
+                for(int i=0;i<request.getJSONArray("messages").length();i++){
+                    JSONObject message=request.getJSONArray("messages").getJSONObject(i);String content=message.optString("content");
+                    if("system".equals(message.optString("role"))){assertFalse(content.contains(untrustedMarker));if(content.contains("nativePlanApproval")&&content.contains(submitted.getString("approvalId")))nativeApproval=true;}
+                    if("user".equals(message.optString("role"))){assertFalse(content.contains(submitted.getString("approvalId")));genuineFeedback|=content.contains(ownerFeedback);untrustedReference|=content.contains(untrustedMarker);}
+                }
+                assertTrue("The actual model request must carry the current native plan decision",nativeApproval);assertTrue(genuineFeedback);assertTrue(untrustedReference);
+                ModelConfig account=new ModelConfig("","","",false,3,10).withAccountModel(ModelConfig.AccountModelRef.fromJson(new JSONObject().put("provider",ModelConfig.ACCOUNT_PROVIDER).put("accountId","44444444-4444-4444-4444-444444444444").put("accountVersion",1L).put("modelId","fixture-model")));
+                var wire=dev.pocketengine.runtime.providers.AccountResponsesAdapter.request(account,request.getJSONArray("messages"),request.getJSONArray("tools"));
+                var bytes=dev.pocketengine.features.proxy.providers.ResponsesRequest.class.getDeclaredField("bytes");bytes.setAccessible(true);JSONObject actual=new JSONObject(new String((byte[])bytes.get(wire),StandardCharsets.UTF_8));
+                boolean accountNative=false,accountRead=false;JSONArray input=actual.getJSONArray("input"),functions=actual.getJSONArray("tools").getJSONObject(0).getJSONArray("tools");
+                for(int i=0;i<functions.length();i++)accountRead|="workspace_read".equals(functions.getJSONObject(i).optString("name"));
+                for(int i=0;i<input.length();i++){JSONObject message=input.getJSONObject(i);String content=message.optString("content");if("developer".equals(message.optString("role"))){assertFalse(content.contains(untrustedMarker));accountNative|=content.contains("nativePlanApproval")&&content.contains(submitted.getString("approvalId"));}if("user".equals(message.optString("role")))assertFalse(content.contains(submitted.getString("approvalId")));}
+                assertTrue(accountNative);assertTrue(accountRead);
+                assertEquals(0,writes.get());assertEquals(ownerFeedback,tasks.get(id,false).getString("feedback"));
+            }finally{port.close();current.cancel();}
         }
     }
 

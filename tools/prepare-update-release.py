@@ -30,9 +30,26 @@ def origin(value: str) -> str:
     return value.rstrip("/")
 
 
+def configured_manifest_url() -> str:
+    values = []
+    for line in (ROOT / "gradle.properties").read_text(encoding="utf-8-sig").splitlines():
+        name, separator, value = line.partition("=")
+        if separator and name.strip() == "pocketworldUpdateManifestUrl":
+            values.append(value.strip())
+    if len(values) != 1 or not values[0]:
+        raise ValueError("Configure exactly one App update manifest URL in gradle.properties")
+    value = values[0]
+    parsed = urlsplit(value)
+    if parsed.query or parsed.fragment:
+        raise ValueError("App update manifest URL must not contain query tokens or fragments")
+    origin(parsed._replace(path="", query="", fragment="").geturl())
+    return value
+
+
 def prepare(evidence: dict, old: Path, new: Path, patch: Path | None, base_url: str,
             output: Path, notes: str, now: int, valid_hours: int) -> dict:
     base_url = origin(base_url)
+    manifest_url = configured_manifest_url()
     if not 1 <= valid_hours <= 168 or len(notes) > 4000 or "\0" in notes:
         raise ValueError("Validity must be 1-168 hours and release notes at most 4000 characters")
     if evidence.get("kind") != "pocketworld-update-artifact-evidence" \
@@ -76,11 +93,10 @@ def prepare(evidence: dict, old: Path, new: Path, patch: Path | None, base_url: 
                              "application/gzip")
             payload["deltas"].append(artifact | {"format": "bsdiff43-gzip-v1", "baseVersionCode": base["versionCode"],
                                                 "baseSha256": base["sha256"]})
-        manifest_url = base_url + "/releases/stable/release.json"
         plan = {"kind": "pocketworld-unsigned-update-upload-plan", "readyForPublication": False,
                 "manifestUrl": manifest_url, "artifactUploads": files,
                 "inefficientDeltaOmitted": patch is not None and not use_delta,
-                "manifestUpload": {"file": "release.json", "exists": False, "uploadLast": True,
+                "manifestUpload": {"file": "release.json", "url": manifest_url, "exists": False, "uploadLast": True,
                                    "cacheControl": "no-store, max-age=0", "contentType": "application/json",
                                    "signatureRequired": "SHA256withRSA over exact decoded payload bytes"},
                 "requiredBeforePublication": [

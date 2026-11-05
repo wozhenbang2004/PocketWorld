@@ -137,21 +137,29 @@ python3 tools/prepare-update-release.py --origin https://YOUR-SITE.chatgpt.site 
   --output-dir /path/to/new-local-bundle
 ```
 
+The manifest upload URL and bootstrap template use
+`pocketworldUpdateManifestUrl` from the existing `gradle.properties`. `--origin`
+sets the immutable APK/delta artifact origin; it does not select another update
+channel. If a build uses an explicit manifest URL override, align the project
+configuration with that actual APK before preparing its release.
+
 Hosting contract:
 - `/artifacts/<whole-file-sha256>/<filename>`: immutable exact bytes, no HTTP
   content encoding, direct 200/206 responses, exact Content-Length/Content-Range,
   `Accept-Ranges: bytes`. Long-lived immutable caching is appropriate here.
-- `/releases/stable/release.json`: only the verified signed envelope, uploaded
+- `/releases/ed896/release.json`: the current configured channel's verified signed envelope, uploaded
   **last**, with `Cache-Control: no-store, max-age=0`. Never place the unsigned
   payload or an example signature at this URL. Do not depend on a redirect.
 
-Before activation, supply or approve the separate persistent manifest signing
-key, pin only its RSA SPKI public key and the final stable URL in a same-Android-
-signer bootstrap APK newer than every distributed build (currently at least
-version 247 after 246). Verify the packaged resource values before delivery.
-The existing 246 APK has empty update configuration and cannot be activated by
-uploading files to a server. A downloaded v3-to-v246 patch is byte-valid, but is
-not a substitute for this first configured manual bootstrap installation.
+Keep the old `/releases/stable/release.json` v248 envelope and its immutable
+objects unchanged. It belongs to the previous manifest trust root. The current
+ed896 channel uses the existing pinned RSA public key and Android signer; a
+later release must preserve those identities and increase the version code
+above every distributed build. Verify the packaged resource values before delivery.
+Public v250 still has the previous RSA pin and needs a same-Android-signer full
+bootstrap before it can discover this new channel. A valid delta alone cannot
+change that trust root. Historical v246 and v3-to-v246 evidence above does not
+establish discovery or installation on the current channel.
 
 `tools/verify-update-host.py` is an explicit read-only network probe using the
 production `UpdateDownloads` implementation and existing locked JVM dependencies.

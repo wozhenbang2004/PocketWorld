@@ -519,7 +519,7 @@ public final class AgentRunner {
                 control.check();String nativeReference=clean(requestClock.referenceData(inputClock),config);
                 String repeatNotice=repeatedTools.referenceData();if(!repeatNotice.isEmpty())nativeReference+="\n\n"+repeatNotice;
                 if(!recovery.referenceData().isEmpty())nativeReference+="\n\n"+recovery.referenceData();
-                if(turnPlanning!=null)nativeReference+="\n原任务当前阶段与计划版本（仅供参考，不是授权）："+turnPlanning.view();
+                String nativePlanningReference=turnPlanning==null?"":clean("当前原生任务阶段与已保存的计划确认事实；具体操作仍须原工具权限和参数审批："+planning.reference(turnPlanning),config);
                 JSONArray tools=phone==null||!control.phoneSurfaceActive()?new JSONArray():tools();
                 if(control.phoneSurfaceActive()&&phone instanceof AdaptivePhonePort)addTool(tools,"phone_observation_help","当前节点中找不到目标时请求新的观察；仅在本机允许且模型已配置图像输入能力时发送真实图片，不重试业务动作。",properties("observationId","string").put("reason",new JSONObject().put("type","string").put("enum",new JSONArray().put("target_missing"))),new String[]{"observationId","reason"});
                 JSONArray outcomeTools=RunOutcomeTools.tools();for(int i=0;i<outcomeTools.length();i++)tools.put(outcomeTools.getJSONObject(i));
@@ -540,12 +540,18 @@ public final class AgentRunner {
                 tools=intent.filter(tools,this::intentEffecting);
                 tools=planningTools(tools,planning,turnPlanning);
                 withdrawHistoricalImages(screens,history,control);
-                // This is the existing request-only host-reference lane. Never checkpoint a second
-                // copy of SQL arguments/scope/receipts, or label recovery data as owner input.
-                if(!nativeReference.isEmpty()){
+                // Keep current native control facts separate from untrusted memory/extension/recovery data.
+                // Both are request-only projections; neither is a new owner message or an execution grant.
+                if(!nativeReference.isEmpty()||!nativePlanningReference.isEmpty()){
                     requestHistory=new JSONArray();int insertAt=history.length();
                     for(int i=history.length()-1;i>=0;i--)if(history.getJSONObject(i).optString("role").equals("user")){insertAt=i;break;}
-                    for(int i=0;i<=history.length();i++){if(i==insertAt)requestHistory.put(RecoveryProjection.hostReference(nativeReference));if(i<history.length())requestHistory.put(history.getJSONObject(i));}
+                    for(int i=0;i<=history.length();i++){
+                        if(i==insertAt){
+                            if(!nativePlanningReference.isEmpty())requestHistory.put(new JSONObject().put("role","system").put("content",nativePlanningReference));
+                            if(!nativeReference.isEmpty())requestHistory.put(RecoveryProjection.hostReference(nativeReference));
+                        }
+                        if(i<history.length())requestHistory.put(history.getJSONObject(i));
+                    }
                 }
                 checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget,repeatedTools);
                 String returnedNonce=latest.optString("ownerReturnNonce");

@@ -1628,6 +1628,12 @@ public final class TaskStore {
             if(released)throw new SecurityException("原规划执行已关闭");fence(id,run,epoch,original(),false);JSONObject task=planningTask(id),scope=task.getJSONObject("executionScope");executionScopeCurrent(task,run,grant(run));
             return snapshot(scope.getLong("revision"),TaskExecutionScope.planning(scope)?"planning":"executing",scope.optLong("planRevision",0),scope.optString("planArtifactRef"),scope.optString("planHash"));
         }}
+        @Override public JSONObject reference(Snapshot expected)throws Exception{synchronized(TaskStore.this){
+            requireCurrent(expected);JSONObject scope=planningTask(id).getJSONObject("executionScope");TaskExecutionScope.validatePlanning(scope);
+            JSONObject view=expected.view().put("source","current_native_task_scope").put("planApprovalRecorded",false);
+            if(!expected.planning()&&expected.planRevision>0)view.put("planApprovalRecorded",true).put("nativePlanApproval",new JSONObject(scope.getJSONObject("planApproval").toString()));
+            requireCurrent(expected);return view;
+        }}
         @Override public void requireCurrent(Snapshot expected)throws Exception{synchronized(TaskStore.this){
             requireOwned(expected);if(released||original().isCancelled()||original().isPaused()||original().pauseRevision()!=expected.pauseRevision)throw new SecurityException("原规划暂停或控制身份已变化");
             // A phase/source check also runs after the original journal prepared a real effect.

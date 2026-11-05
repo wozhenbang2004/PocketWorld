@@ -57,6 +57,8 @@ public abstract class ExecutionPlanning implements AutoCloseable {
 
     public abstract Snapshot capture()throws Exception;
     public abstract void requireCurrent(Snapshot expected)throws Exception;
+    /** Current native facts only. This projection does not authorize a tool or replace its original approval. */
+    public JSONObject reference(Snapshot expected)throws Exception {requireOwned(expected);requireCurrent(expected);return expected.view();}
     /** nativeAccess is supplied by the actual native route, never by tool arguments. */
     public abstract ReadClaim beginRead(Snapshot expected,String tool,JSONObject originalArguments,String runnerCallId,Access nativeAccess)throws Exception;
     public abstract void finishRead(ReadClaim original,JSONObject actualReceipt,ReadOutcome outcome)throws Exception;

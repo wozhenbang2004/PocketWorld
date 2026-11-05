@@ -28,6 +28,14 @@ class ReleaseBundleTest(unittest.TestCase):
         self.old.write_bytes(b"old"); self.new.write_bytes(b"new target"); self.patch.write_bytes(b"zip")
         self.output = self.root / "bundle"
         self.origin = "https://example.chatgpt.site"
+        self.config_root = self.root / "source"
+        self.config_root.mkdir()
+        self.manifest_url = "https://feed.example.chatgpt.site/releases/app/release.json"
+        (self.config_root / "gradle.properties").write_text(
+            "pocketworldUpdateManifestUrl=" + self.manifest_url + "\n", encoding="utf-8")
+        configured_root = mock.patch.object(BUNDLE, "ROOT", self.config_root)
+        configured_root.start()
+        self.addCleanup(configured_root.stop)
         self.evidence = {"kind": "pocketworld-update-artifact-evidence", "sameSignerSet": True, "strictlyNewerVersion": True,
                          "base": BUNDLE.PREFLIGHT.artifact(self.old, 100) | {"versionCode": 3},
                          "target": BUNDLE.PREFLIGHT.artifact(self.new, 100) | {
@@ -45,7 +53,7 @@ class ReleaseBundleTest(unittest.TestCase):
     def test_hash_addressed_bundle_is_unsigned_and_manifest_last(self):
         plan = self.prepare()
         payload = json.loads((self.output / "unsigned-payload.json").read_text())
-        self.assertEqual(self.origin + "/releases/stable/release.json", plan["manifestUrl"])
+        self.assertEqual(self.manifest_url, plan["manifestUrl"])
         self.assertFalse(plan["readyForPublication"])
         self.assertFalse(plan["persistentKeyCreated"])
         self.assertFalse(plan["deviceInstallationVerified"])
@@ -61,6 +69,23 @@ class ReleaseBundleTest(unittest.TestCase):
         self.assertEqual("no-store, max-age=0", plan["manifestUpload"]["cacheControl"])
         self.assertEqual(3, payload["deltas"][0]["baseVersionCode"])
         self.assertIn("# pocketworldUpdatePublicKey=", (self.output / "bootstrap-config.template.properties").read_text())
+
+    def test_app_configured_feed_drives_plan_and_bootstrap_instead_of_artifact_origin(self):
+        plan = self.prepare(patch=False)
+        self.assertEqual(self.manifest_url, plan["manifestUrl"])
+        self.assertEqual(self.manifest_url, plan["manifestUpload"]["url"])
+        bootstrap = (self.output / "bootstrap-config.template.properties").read_text()
+        self.assertIn("pocketworldUpdateManifestUrl=" + self.manifest_url + "\n", bootstrap)
+        self.assertTrue(plan["artifactUploads"][0]["url"].startswith(self.origin + "/artifacts/"))
+
+    def test_missing_or_ambiguous_app_feed_fails_before_creating_a_bundle(self):
+        for settings in ("# no configured feed\n", "pocketworldUpdateManifestUrl=\n",
+                         "pocketworldUpdateManifestUrl=" + self.manifest_url + "\n" +
+                         "pocketworldUpdateManifestUrl=" + self.manifest_url + "\n"):
+            with self.subTest(settings=settings):
+                (self.config_root / "gradle.properties").write_text(settings, encoding="utf-8")
+                with self.assertRaises(ValueError): self.prepare(patch=False)
+                self.assertFalse(self.output.exists())
 
     def test_full_only_and_inefficient_delta_are_not_advertised(self):
         del self.evidence["delta"]

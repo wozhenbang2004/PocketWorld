@@ -3319,7 +3319,8 @@ public final class EngineApplication extends Application implements dev.pocketen
                 if(approved){
                     if(continuation!=null)task.put("approvalDecisionSaved",true).put("approvalRunId",continuation.runId).put("approvalEpoch",continuation.epoch).put("continuedOriginalRun",false).put("continuationScheduled",false);
                     try{
-                        if(continuation!=null)synchronized(tasks){continuation.requireCurrent(tasks);tasks.feedback(id,"主人已在本机批准审批 "+approvalId+"，仅按宿主已批准的原参数继续。");}
+                        // Native approval is retained in its original task/scope records, never as owner-authored feedback.
+                        if(continuation!=null)synchronized(tasks){continuation.requireCurrent(tasks);}
                         if(tasks.nativeTeamRoundBudget(id,task.getString("runId"),task.getInt("coordinatorEpoch")))return task.put("requiresNativeRoundBudgetContinuation",true).put("message","原准确审批已保存；请在项目前台明确续接原剩余预算，不自动启动新run");
                         if("phone".equals(task.optString("kind"))){
                             if(continuation!=null)return continueApprovedPhone(task,continuation,originalPhone);
