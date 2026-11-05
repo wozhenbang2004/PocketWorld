@@ -304,7 +304,7 @@ internal fun PocketWorldApp(controller: PocketWorldController, requestWebWorkspa
             if (controller.hasChannelPhoneOrigin) Text("此目标来自已认证主人私聊；接收时与当前都须已开启原渠道主人任务授权。本次仍需单独确认屏幕使用，任务状态与结果摘要将返回原私聊。", color = SecondaryInk)
             Text(if (executionMode == "background") "需要已连接的后台助手。无法建立独立屏幕时会停止等待。" else "会切换手机应用并占用当前屏幕。暂停后再自行操作，停止不会撤回已发生的动作。", color = SecondaryInk)
             Text("任务中的可见文字会发给你配置的模型；启用视觉后也会发送截图。", color = SecondaryInk, fontSize = 12.sp)
-            Text("原目标内累计 ${controller.newTaskToolBudget} 次工具、${controller.newTaskModelBudget} 次模型；" + if(controller.newTaskScopeMinutes==0) "持续至完成、主人停止或预算耗尽。" else "${controller.newTaskScopeMinutes}分钟后停止新派发。",color=SecondaryInk,fontSize=12.sp)
+            Text("原目标内累计 ${controller.displayNewTaskToolBudget} 次工具、${controller.displayNewTaskModelBudget} 次模型；" + if(controller.newTaskScopeMinutes==0) "持续至完成、主人停止或预算耗尽。" else "${controller.newTaskScopeMinutes}分钟后停止新派发。",color=SecondaryInk,fontSize=12.sp)
         } }, confirmButton = { Button(onClick = { if (controller.startPhone(goal, executionMode)) consentGoal = null }) { Text("开始任务") } }, dismissButton = { TextButton(onClick = { controller.cancelChannelPhone(); consentGoal = null }) { Text("取消") } }) }
         BackHandler(enabled = !settings && !connections && !teamLaunch && state.teamRunId == null && state.inspectionTaskId == null && !state.backgroundSetupOpen && selectedTaskId == null && !conversationPicker && state.filePath == null && tab != 0) { tab = 0 }
         NativeInferenceHistory(controller)
@@ -431,7 +431,7 @@ private fun ChatScreen(state: PocketUiState, draft: String, onDraft: (String) ->
                 TextButton(onClick = { onMode(if (mode == "background") "main_screen" else "background") }, contentPadding = PaddingValues(horizontal = 2.dp)) { Text(if (mode == "background") "后台独立屏 ▾" else "主屏操作 ▾", fontSize = 12.sp) }
                 Spacer(Modifier.weight(1f)); TextButton(onClick = { if (mode == "background") controller.openBackgroundSetup() else settings() }) { Text(if (mode == "background" && !state.feature("display").optBoolean("helperConnected")) "启用手机控制" else "执行设置", fontSize = 12.sp) }
             }
-            if(phone||!state.chatBusy)ExecutionScopeStartControls(phone,controller.newTaskToolBudget,controller.newTaskModelBudget,controller.newTaskScopeMinutes,controller::selectNewTaskDeadline)
+            if(phone||!state.chatBusy)ExecutionScopeStartControls(phone,controller.displayNewTaskToolBudget,controller.displayNewTaskModelBudget,controller.newTaskScopeMinutes,controller::selectNewTaskDeadline)
             if(!phone&&state.chatBusy)Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                 FilterChip(selected=state.chatSendMode=="queue",onClick={controller.setChatSendMode("queue",ownerKey,ownerEpoch)},label={Text("本轮结束后处理",fontSize=11.sp)})
                 FilterChip(selected=state.chatSendMode=="steer",onClick={controller.setChatSendMode("steer",ownerKey,ownerEpoch)},label={Text("下个安全步骤加入",fontSize=11.sp)})

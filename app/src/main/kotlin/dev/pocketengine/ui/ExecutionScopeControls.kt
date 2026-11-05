@@ -41,8 +41,8 @@ import java.util.Date
     val scope = task.raw.optJSONObject("executionScope")
     val revision = scope?.optLong("revision") ?: 0L
     var open by rememberSaveable(task.id) { mutableStateOf(false) }
-    var tools by rememberSaveable(task.id, revision) { mutableStateOf((scope?.optInt("toolLimit") ?: controller.newTaskToolBudget).toString()) }
-    var models by rememberSaveable(task.id, revision) { mutableStateOf((scope?.optInt("modelCallLimit") ?: controller.newTaskModelBudget).toString()) }
+    var tools by rememberSaveable(task.id, revision) { mutableStateOf((scope?.optInt("toolLimit") ?: controller.displayNewTaskToolBudget).toString()) }
+    var models by rememberSaveable(task.id, revision) { mutableStateOf((scope?.optInt("modelCallLimit") ?: controller.displayNewTaskModelBudget).toString()) }
     var minutes by rememberSaveable(task.id, revision) { mutableStateOf(if (scope == null) 0 else -1) }
     val deadline = scope?.optLong("deadlineAt") ?: -1L
     Column(Modifier.fillMaxWidth().testTag("task_execution_scope")) {
