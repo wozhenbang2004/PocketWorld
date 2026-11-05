@@ -70,19 +70,44 @@ export function useMessageArrivals(root:RefObject<HTMLElement|null>,conversation
  },[root,conversation,signature,active,reduce]);
 }
 
+/** Controlled reviews open after a host response, without a Radix Trigger.
+ * Capture their origin before that request; restore on the real exit only. */
+export function useReviewFocus(open:boolean){
+ const current=useRef(open),generation=useRef(0);
+ const requested=useRef<{origin:HTMLElement|null;fallback:HTMLElement|null}|null>(null);
+ const presented=useRef<typeof requested.current>(null);
+ if(open&&!current.current){generation.current++;presented.current=requested.current;requested.current=null}
+ current.current=open;
+ const token=generation.current;
+ const captureReturnFocus=(input:HTMLElement|null)=>{
+  const active=document.activeElement;
+  const origin=active instanceof HTMLElement&&active!==document.body&&active!==document.documentElement&&!active.closest('[inert]')?active:requested.current?.origin||presented.current?.origin||null;
+  requested.current={origin,fallback:input};
+ };
+ const onCloseAutoFocus=(event:Event)=>{
+  event.preventDefault();
+  if(current.current||generation.current!==token)return false;
+  // The next host response can arrive after this portal exits. Its captured
+  // origin belongs to that pending request, not to the sheet being removed.
+  const targets=[presented.current?.origin,presented.current?.fallback];presented.current=null;
+  const active=document.activeElement;
+  // Another live sheet or a deliberate focus change owns the next interaction.
+  if(document.querySelector('[role="dialog"][data-state="open"]')||
+   active instanceof HTMLElement&&active!==document.body&&active!==document.documentElement&&active.isConnected&&!active.closest('[inert]'))return true;
+  const target=targets.find(node=>node?.isConnected&&!node.matches(':disabled')&&!node.closest('[inert]')&&node.getClientRects().length);
+  target?.focus({preventScroll:true});
+  return true;
+ };
+ return {generation:token,captureReturnFocus,onCloseAutoFocus};
+}
+
 /** Keep display fields until Radix actually unmounts the closing Vaul content.
  * The caller clears live authority immediately and makes closing content inert.
  * No animation timer can clear a new review or restore focus over a reopened one. */
 export function useClosingSnapshot<T>(value:T|null){
  const [snapshot,setSnapshot]=useState<T|null>(value);
- const current=useRef(value),generation=useRef(0);
- if(value!==null&&current.current===null)generation.current++;
- current.current=value;
- const token=generation.current;
+ const focus=useReviewFocus(value!==null);
  useLayoutEffect(()=>{if(value!==null)setSnapshot(value)},[value]);
- const onCloseAutoFocus=(event:Event)=>{
-  if(current.current!==null||generation.current!==token){event.preventDefault();return;}
-  setSnapshot(null);
- };
- return {display:value??snapshot,generation:token,onCloseAutoFocus};
+ const onCloseAutoFocus=(event:Event)=>{if(focus.onCloseAutoFocus(event))setSnapshot(null)};
+ return {display:value??snapshot,generation:focus.generation,captureReturnFocus:focus.captureReturnFocus,onCloseAutoFocus};
 }
