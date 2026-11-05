@@ -43,6 +43,15 @@ public final class ToolDiscoverySessionTest {
         first.afterTool(ScopedToolCatalog.SEARCH_TOOL,issued,control);assertThrows(SecurityException.class,()->first.afterTool(ScopedToolCatalog.SEARCH_TOOL,issued,control));
         ToolDiscoverySession uncommitted=session();JSONObject notCommitted=search(uncommitted);begin(uncommitted,"installation-1");assertThrows(SecurityException.class,()->uncommitted.afterTool(ScopedToolCatalog.SEARCH_TOOL,notCommitted,control));assertThrows(SecurityException.class,()->uncommitted.requirePublished("rare_write",control));
     }
+    @Test public void findingAPublishedReadDoesNotActivateAnUnpublishedWrite()throws Exception {
+        ToolDiscoverySession session=session();Set<String> granted=scope().current("task","run",1,control);session.requirePublished("core_read",control);
+        JSONObject result=session.search(new JSONObject().put("query","core_read"),control);
+        assertEquals("already_available",result.getString("status"));assertEquals("core_read",result.getJSONArray("alreadyPublishedToolNames").getString(0));
+        assertEquals(0,result.getJSONArray("tools").length());assertFalse(result.getBoolean("executionAuthorized"));assertFalse(result.getBoolean("scopeExpanded"));
+        assertThrows(SecurityException.class,()->session.requirePublished("rare_write",control));session.afterTool(ScopedToolCatalog.SEARCH_TOOL,result,control);
+        begin(session,"installation-1");session.requirePublished("core_read",control);assertThrows(SecurityException.class,()->session.requirePublished("rare_write",control));
+        assertEquals(granted,scope().current("task","run",1,control));assertFalse(granted.contains(ScopedToolCatalog.SEARCH_TOOL));
+    }
     @Test public void installationReplacementWithSameNameAndSchemaWithdrawsPreviouslyDiscoveredDefinition()throws Exception {
         ToolDiscoverySession session=session();JSONObject receipt=search(session);session.afterTool(ScopedToolCatalog.SEARCH_TOOL,receipt,control);begin(session,"installation-1");session.requirePublished("rare_write",control);
         begin(session,"installation-2");assertThrows(SecurityException.class,()->session.requirePublished("rare_write",control));JSONObject replacement=search(session);assertNotEquals(receipt.getString("catalogRevision"),replacement.getString("catalogRevision"));assertNotEquals(receipt.getJSONArray("tools").getJSONObject(0).getString("identity"),replacement.getJSONArray("tools").getJSONObject(0).getString("identity"));

@@ -105,19 +105,23 @@ public final class ScopedToolCatalog {
         JSONObject out=new JSONObject().put("format","pocketworld.tool-catalog-summary.v1").put("catalogRevision",revision).put("tools",rows).put("hiddenCount",hidden).put("listedCount",rows.length()).put("truncated",hidden>rows.length()).put("executionAuthorized",false);check();return out;
     }
     public Page search(SearchRequest request)throws Exception {
-        check();String query=request.query.toLowerCase(Locale.ROOT);List<Entry> matches=new ArrayList<>();
-        for(Entry row:ordered())if(!row.resident&&(row.name.toLowerCase(Locale.ROOT).contains(query)||row.description.toLowerCase(Locale.ROOT).contains(query)))matches.add(row);
+        check();String query=request.query.toLowerCase(Locale.ROOT);List<Entry> matches=new ArrayList<>();JSONArray publishedMatches=new JSONArray();int publishedCount=0;
+        for(Entry row:ordered())if(row.name.toLowerCase(Locale.ROOT).contains(query)||row.description.toLowerCase(Locale.ROOT).contains(query)){
+            if(row.resident){publishedCount++;if(publishedMatches.length()<MAX_PAGE_TOOLS)publishedMatches.put(row.name);}
+            else matches.add(row);
+        }
         int offset=cursorOffset(request,matches.size());JSONArray rows=new JSONArray();Set<String> found=new HashSet<>();int next=offset;
         while(next<matches.size()&&rows.length()<request.limit){Entry row=matches.get(next);JSONObject result=new JSONObject(row.metadata).put("definition",new JSONObject(row.definition));
-            JSONArray candidate=new JSONArray(rows.toString()).put(result);if(utf8(pageValue(request,candidate,matches.size(),next+1).toString()).length>MAX_PAGE_BYTES)break;
+            JSONArray candidate=new JSONArray(rows.toString()).put(result);if(utf8(pageValue(request,candidate,matches.size(),next+1,publishedMatches,publishedCount).toString()).length>MAX_PAGE_BYTES)break;
             rows.put(result);found.add(row.identity);next++;
         }
         if(next==offset&&next<matches.size())throw new IllegalStateException("tool_schema_exceeds_discovery_transport");
-        JSONObject value=pageValue(request,rows,matches.size(),next);check();return new Page(value,found);
+        JSONObject value=pageValue(request,rows,matches.size(),next,publishedMatches,publishedCount);check();return new Page(value,found);
     }
-    private JSONObject pageValue(SearchRequest request,JSONArray rows,int total,int next)throws Exception {
-        boolean more=next<total;String status=total==0?"no_match":rows.length()==0?"end_of_results":"matched";
+    private JSONObject pageValue(SearchRequest request,JSONArray rows,int total,int next,JSONArray publishedMatches,int publishedCount)throws Exception {
+        boolean more=next<total;String status=total==0?(publishedCount>0?"already_available":"no_match"):rows.length()==0?"end_of_results":"matched";
         return new JSONObject().put("format","pocketworld.tool-discovery.v1").put("catalogRevision",revision).put("query",request.query).put("status",status).put("tools",rows)
+                .put("alreadyPublishedToolNames",publishedMatches).put("alreadyPublishedCount",publishedCount).put("alreadyPublishedTruncated",publishedCount>publishedMatches.length())
                 .put("matchedCount",total).put("returnedCount",rows.length()).put("truncated",more).put("nextCursor",more?cursor(request,next):JSONObject.NULL).put("executionAuthorized",false).put("scopeExpanded",false);
     }
     private String cursor(SearchRequest request,int offset)throws Exception {
@@ -139,7 +143,7 @@ public final class ScopedToolCatalog {
     public static JSONObject searchDefinition()throws Exception {
         JSONObject properties=new JSONObject().put("query",new JSONObject().put("type","string").put("minLength",1).put("maxLength",500))
                 .put("limit",new JSONObject().put("type","integer").put("minimum",1).put("maximum",MAX_PAGE_TOOLS)).put("cursor",new JSONObject().put("type","string").put("maxLength",1600));
-        return new JSONObject().put("type","function").put("function",new JSONObject().put("name",SEARCH_TOOL).put("description","Search the current native scope's deferred tool names/descriptions and return their exact schemas. Discovery is metadata, never permission. Use the returned cursor for remaining matches; new schemas are available on the next model request after the original receipt checkpoint.")
+        return new JSONObject().put("type","function").put("function",new JSONObject().put("name",SEARCH_TOOL).put("description","Search the current native scope using one literal tool name or substring, not a multi-keyword sentence. tools returns exact deferred schemas; alreadyPublishedToolNames identifies matching tools already present in this request, which can be called with their existing schemas. already_available does not mean missing. Discovery is metadata, never permission. Use the cursor for remaining deferred matches; new schemas are available on the next model request after the original receipt checkpoint.")
                 .put("parameters",new JSONObject().put("type","object").put("properties",properties).put("required",new JSONArray().put("query")).put("additionalProperties",false)));
     }
     private static boolean requiresOriginalTransport(Object value)throws Exception {
