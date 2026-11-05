@@ -48,6 +48,49 @@ class PocketWebBridgeObservationTest {
         return entries.take(size).map { requireNotNull(it) }
     }
 
+    @Test fun modelMutationKeepsBudgetPresentationReadableWithoutAdmittingNewTasks() {
+        val app = RuntimeEnvironment.getApplication() as EngineApplication
+        ReadyApplicationFixture.initializeHost(app)
+        val activityOwner = Robolectric.buildActivity(ComposeActivity::class.java)
+        val activity = activityOwner.get()
+        val media = MediaController(activity, app::publish)
+        ComposeActivity::class.java.getDeclaredField("media").apply { isAccessible = true }.set(activity, media)
+        val controller = PocketWorldController(activity, app)
+        val events = mutableListOf<JSONObject>()
+        val bridge = PocketWebBridge(controller) { events += JSONObject(it.toString()) }
+        val receive = PocketWorldController::class.java.getDeclaredMethod("receive", JSONObject::class.java).apply { isAccessible = true }
+        fun nativeConfig(steps: Int) = receive.invoke(controller, JSONObject().put("type", "state")
+            .put("payload", JSONObject().put("config", JSONObject().put("maxSteps", steps))))
+        try {
+            val admittedBudget = controller.newTaskToolBudget
+            nativeConfig(37)
+            bridge.start()
+            val mutation = app.settings.modelSelection().beginMutation()
+            try {
+                assertThrows(IllegalStateException::class.java) { app.settings.get() }
+                assertThrows(IllegalStateException::class.java) { controller.newTaskToolBudget }
+                assertThrows(IllegalStateException::class.java) { controller.newTaskModelBudget }
+                val state = PocketWebState.snapshot(controller).getJSONObject("state")
+                assertEquals(37, state.getInt("newTaskToolBudget"))
+                assertEquals(dev.pocketengine.store.TaskExecutionScope.defaultModelBudget(37), state.getInt("newTaskModelBudget"))
+                val publish = PocketWebBridge::class.java.getDeclaredMethod("publishState", Boolean::class.javaPrimitiveType).apply { isAccessible = true }
+                publish.invoke(bridge, false)
+                assertTrue(events.last().getJSONObject("snapshot").getJSONObject("state").getBoolean("modelSelectionBusy"))
+            } finally { mutation.close() }
+            nativeConfig(41)
+            val settled = PocketWebState.snapshot(controller).getJSONObject("state")
+            assertEquals(41, settled.getInt("newTaskToolBudget"))
+            assertEquals(dev.pocketengine.store.TaskExecutionScope.defaultModelBudget(41), settled.getInt("newTaskModelBudget"))
+            assertEquals("Public display state must not replace actual admission settings", admittedBudget, controller.newTaskToolBudget)
+        } finally {
+            try { bridge.close() } finally {
+                try { controller.detach() } finally {
+                    try { media.close(); activityOwner.close() } finally { ReadyApplicationFixture.closeHost(app) }
+                }
+            }
+        }
+    }
+
     @Test fun repeatedPublicationKeepsOneObservationGroupAndCloseRetiresPendingUpdates() {
         val app = RuntimeEnvironment.getApplication() as EngineApplication
         ReadyApplicationFixture.initializeHost(app)

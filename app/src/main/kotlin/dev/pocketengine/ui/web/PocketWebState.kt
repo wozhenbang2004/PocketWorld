@@ -141,7 +141,7 @@ internal object PocketWebState {
             .put("modelSaving", state.modelSaving).put("modelTesting", state.modelTesting).put("modelSavedRevision", state.modelSavedRevision)
             .put("error", state.error ?: JSONObject.NULL).put("notice", state.notice ?: JSONObject.NULL)
             .put("newTaskScopeMinutes", controller.newTaskScopeMinutes)
-            .put("newTaskToolBudget", controller.newTaskToolBudget).put("newTaskModelBudget", controller.newTaskModelBudget)
+            .put("newTaskToolBudget", controller.displayNewTaskToolBudget).put("newTaskModelBudget", controller.displayNewTaskModelBudget)
         data.put("phoneReadiness", JSONObject().put("checkedAtUptimeMs", state.phoneReadiness.checkedAtUptimeMs)
             .put("groups", JSONArray().also { groups -> state.phoneReadiness.groups.forEach { group ->
                 groups.put(JSONObject().put("id", group.id).put("title", group.title).put("state", group.state.name.lowercase())
