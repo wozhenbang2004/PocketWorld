@@ -55,7 +55,7 @@ class ApkWorkflowPathsTest(unittest.TestCase):
         self.assertNotIn('pass:$', signing)
         self.assertIn('unset POCKETWORLD_SIGNING_PASSWORD', signing)
         self.assertIn('signer_digests == [certificate_sha256]', workflow)
-        self.assertIn('b58e014e2a2e49b2e85ebd5b47a034a28cb0d313d71f379a5208d21afe388e58', workflow)
+        self.assertIn('ed896ec1199f5be4e591a3222ddd60486ea1fce6853f1bb850aa5b699f8b01a0', workflow)
         self.assertNotIn('Temporary debug signing only', workflow)
 
     def test_production_single_file_changes_trigger(self):
