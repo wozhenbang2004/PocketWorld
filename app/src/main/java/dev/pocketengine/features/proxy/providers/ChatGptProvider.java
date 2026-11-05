@@ -40,8 +40,10 @@ public final class ChatGptProvider implements AutoCloseable {
     public String authorizationUrl(String hostId,String clientId,String callback,String state,String nonce,String challenge)throws GatewayFailure {
         HttpUrl uri=HttpUrl.parse(callback);
         if(uri==null||!"http".equals(uri.scheme())||!"127.0.0.1".equals(uri.host())||!"/auth/callback".equals(uri.encodedPath())||uri.query()!=null||uri.fragment()!=null||!uri.username().isEmpty()||!uri.password().isEmpty())throw new GatewayFailure("INVALID_CALLBACK");
+        // Keep the persisted host ID local, matching the official devkit's sendHostId=false default.
+        // https://github.com/openai/sign-in-with-chatgpt-devkit/blob/0a36fefeb913055c8c7a1a29b63d82b96b2e841a/packages/local/src/types.ts#L63-L67
         HttpUrl.Builder url=HttpUrl.get(issuer+"/api/accounts/authorize").newBuilder().addQueryParameter("client_id",clientId.isEmpty()?"dynamic_agent_client":clientId)
-            .addQueryParameter("ext_agent_host_id",hostId).addQueryParameter("response_type","code").addQueryParameter("redirect_uri",callback)
+            .addQueryParameter("response_type","code").addQueryParameter("redirect_uri",callback)
             .addQueryParameter("scope",SCOPES).addQueryParameter("resource",RESOURCE).addQueryParameter("state",state).addQueryParameter("nonce",nonce)
             .addQueryParameter("code_challenge_method","S256").addQueryParameter("code_challenge",challenge);
         if(clientId.isEmpty())url.addQueryParameter("agent_name_hint","Pocket World");
