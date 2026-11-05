@@ -1,10 +1,15 @@
 /* PW-16: actual BoardUI DashboardSidebar MIT source adaptation.
  * Original file is retained in upstream/boardui. Keep its pinned icon/label and NavItem
  * structure; remove sample team/profile/support, fake counts and theme controls.
+ * Combine that structure with the approved tabs-01 continuous selection surface.
+ * Only its background moves; 440/30/.8 adds mobile damping to the approved jelly spring.
  */
-import type {ComponentType,ReactNode} from 'react';
+import {useId,type ComponentType,type ReactNode} from 'react';
+import {LayoutGroup,motion} from 'motion/react';
+import {useReducedMotion} from '../library/core';
 import {useTemplateCopy} from './adapted/boardui/components/foundations/template-copy/template-copy';
 import {cx} from './adapted/boardui/utils/cx';
+import './navigation-motion.css';
 type IconComponent=ComponentType<{className?:string;'aria-hidden'?:boolean|'true'|'false'}>;
 function Collapsible({ collapsed, children, className }: { collapsed: boolean; children: ReactNode; className?: string }) {
   const localize = useTemplateCopy();
@@ -31,6 +36,7 @@ function NavItem({
   collapsed = false,
   href = "#",
   onClick,
+  reduceMotion,
 }: {
   icon: IconComponent;
   label: string;
@@ -40,6 +46,7 @@ function NavItem({
   href?: string;
   /** Action rows (e.g. Settings → modal) intercept the navigation. */
   onClick?: () => void;
+  reduceMotion: boolean;
 }) {
   const localize = useTemplateCopy();
   return localize((
@@ -65,7 +72,16 @@ function NavItem({
           : "hover:bg-background-secondary-hover",
       )}
     >
-      <span className="flex min-w-0 items-center gap-2">
+      {isSelected && (
+        <motion.span
+          className="pw-nav-selection"
+          layoutId="pw-nav-selection"
+          initial={false}
+          transition={reduceMotion ? {duration: 0} : {type: "spring", stiffness: 440, damping: 30, mass: .8}}
+          aria-hidden="true"
+        />
+      )}
+      <span className="pw-nav-content flex min-w-0 items-center gap-2">
         <Icon
           className={cx("size-5 shrink-0", isSelected ? "text-white" : "text-foreground-icon-secondary")}
           aria-hidden
@@ -81,7 +97,7 @@ function NavItem({
           </span>
         </Collapsible>
       </span>
-      {badge && <Collapsible collapsed={collapsed}>{badge}</Collapsible>}
+      {badge && <Collapsible collapsed={collapsed} className="pw-nav-content">{badge}</Collapsible>}
     </a>
   ));
 }
@@ -90,6 +106,24 @@ function NavItem({
 
 export type WorkNavItem={key:string;label:string;icon:IconComponent;count?:number;group?:string;description?:string;disabled?:boolean};
 export function WorkSidebar({items,selected,onNavigate,header,footer,label='工作与功能',hideGroupLabels=false}:{items:WorkNavItem[];selected:string;onNavigate:(key:string)=>void;header?:ReactNode;footer?:ReactNode;label?:string;hideGroupLabels?:boolean}) {
+ const navigationId=useId();
+ const reduceMotion=useReducedMotion();
  const groups=Array.from(new Set(items.map(x=>x.group||'工作')));
- return <div className="pw-work-sidebar">{header}<nav aria-label={label}>{groups.map(group=><section key={group}><h3 className={hideGroupLabels?'pw-sr-only':undefined}>{group}</h3>{items.filter(x=>(x.group||'工作')===group).map(item=><div className="pw-nav-item" key={item.key}><NavItem icon={item.icon} label={item.label} isSelected={selected===item.key} badge={item.count!=null?<span className="pw-nav-count">{item.count}</span>:undefined} onClick={()=>{if(!item.disabled)onNavigate(item.key)}}/>{item.description&&<small>{item.description}</small>}</div>)}</section>)}</nav>{footer}</div>
+ return (
+  <LayoutGroup id={navigationId}>
+   <div className="pw-work-sidebar" data-motion-nav="">
+    {header}
+    <nav aria-label={label}>
+     {groups.map(group=><section key={group}>
+      <h3 className={hideGroupLabels?'pw-sr-only':undefined}>{group}</h3>
+      {items.filter(x=>(x.group||'工作')===group).map(item=><div className="pw-nav-item" key={item.key}>
+       <NavItem icon={item.icon} label={item.label} isSelected={selected===item.key} reduceMotion={reduceMotion} badge={item.count!=null?<span className="pw-nav-count">{item.count}</span>:undefined} onClick={()=>{if(!item.disabled)onNavigate(item.key)}}/>
+       {item.description&&<small>{item.description}</small>}
+      </div>)}
+     </section>)}
+    </nav>
+    {footer}
+   </div>
+  </LayoutGroup>
+ )
 }
