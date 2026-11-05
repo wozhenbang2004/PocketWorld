@@ -32,7 +32,9 @@ public final class InferenceRouteContinuity {
                 &&capturedInference.maxOutputTokens==selectedSettings.maxOutputTokens
                 &&capturedInference.requestTimeoutSeconds==selectedSettings.requestTimeoutSeconds
                 &&capturedInference.sendScreenshots==selectedSettings.sendScreenshots
-                &&capturedInference.supportsImageInput==selectedSettings.supportsImageInput
+                // Account image support is refreshed provider evidence, not an owner choice.
+                // Owner screenshot consent/reserves still match; dispatch checks fresh facts.
+                &&(capturedInference.usesAccount()||capturedInference.supportsImageInput==selectedSettings.supportsImageInput)
                 &&capturedInference.imageTokenReserve==selectedSettings.imageTokenReserve;
         // maxSteps is the original task's allocation, not a different connection. It remains
         // enforced by TaskStore/Runner and is deliberately not compared with a new default.

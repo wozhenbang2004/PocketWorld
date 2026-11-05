@@ -2,6 +2,7 @@ package dev.pocketengine.features.proxy.accounts;
 
 import dev.pocketengine.features.proxy.providers.ChatGptProvider;
 import dev.pocketengine.features.proxy.providers.ResponsesRequest;
+import dev.pocketengine.core.RuntimeDiagnostics;
 import java.io.File;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -20,11 +21,17 @@ public final class AccountGateway implements AutoCloseable {
     private final Semaphore networkSlots=new Semaphore(2);
     private final Map<String,Flight> refreshes=new HashMap<>();
     private final Map<String,JSONObject> catalogs=new HashMap<>();
+    private final Map<CatalogKey,CatalogFlight> catalogFlights=new HashMap<>();
+    private final java.util.concurrent.ThreadPoolExecutor catalogWorkers=new java.util.concurrent.ThreadPoolExecutor(2,2,0,TimeUnit.MILLISECONDS,
+            new java.util.concurrent.ArrayBlockingQueue<>(16),work->{Thread thread=new Thread(work,"account-catalog");thread.setDaemon(true);return thread;},new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
     private final Map<String,Set<GatewayCall>> operations=new HashMap<>();
     private LoopbackAuthorization login;
     private volatile boolean closed;
+    synchronized int catalogWaiterCount(String id){int count=0;for(var entry:catalogFlights.entrySet())if(entry.getKey().id.equals(id))count+=entry.getValue().waiters;return count;}
     /** Lock-free last-commit projection; no credential getter or inference/refresh admission. */
     public boolean inferenceIdentityCurrent(String accountId,long accountVersion){return !closed&&book.inferenceIdentityCurrent(accountId,accountVersion);}
+    /** Revocation check for an original run or admitted response, not admission for another request. */
+    public boolean authorizationCurrent(String accountId,long accountVersion){return !closed&&book.authorizationCurrent(accountId,accountVersion);}
     /** Lock-free capability projection from this same native metadata commit, never an inference grant. */
     public dev.pocketengine.runtime.models.AccountCatalogFacts modelFacts(String id,long version,String model)throws GatewayFailure {
         if(closed)throw new GatewayFailure("GATEWAY_CLOSED");return book.modelFacts(id,version,model);
@@ -51,6 +58,8 @@ public final class AccountGateway implements AutoCloseable {
         return beginLogin(label,accountId);
     }
     synchronized JSONObject beginLogin(String label,String accountId,long ttlMillis)throws GatewayFailure {
+        RuntimeDiagnostics.Span diagnostic=RuntimeDiagnostics.begin("login",null,accountId);
+        try{
         open();if(login!=null&&("pending".equals(login.status)||"exchanging".equals(login.status)))throw new GatewayFailure("LOGIN_ALREADY_PENDING");
         if(login!=null){login.close();login=null;}
         JSONObject row=accountId==null||accountId.isEmpty()?book.create(label):book.row(accountId);String id=row.optString("id");
@@ -64,10 +73,13 @@ public final class AccountGateway implements AutoCloseable {
             row=book.update(id,row.optLong("version"),AccountBook.json("status","authorizing","error","","cooldownUntil",0));next.accountVersion=row.optLong("version");
             String url=provider.authorizationUrl(book.hostId(),row.optString("clientId"),next.callback,next.state,next.nonce,next.challenge());
             login=next;book.login(loginView(next));next.start();
+            diagnostic.finish("accepted","AUTHORIZATION_PENDING");
             return AccountBook.json("sessionId",next.id,"accountId",id,"status","pending","expiresAt",next.expiresAt,"authorizationUrl",url);
         }catch(GatewayFailure error){next.status="failed";next.error=error.code;next.close();if(login==next)login=null;try{book.finishAuthorization(id,next.accountVersion,loginView(next),error.code);}catch(GatewayFailure ignored){}throw error;}
+        }catch(GatewayFailure failure){diagnostic.failure(failure.code,failure);throw failure;}finally{diagnostic.close();}
     }
     private void completeLogin(LoopbackAuthorization session,Map<String,String> callback)throws GatewayFailure {
+        RuntimeDiagnostics.Span diagnostic=RuntimeDiagnostics.begin("login",null,session.accountId);
         boolean admitted=false;
         try{
             String client;
@@ -92,7 +104,9 @@ public final class AccountGateway implements AutoCloseable {
                 book.publish(session.accountId,session.accountVersion,grant.credentials,grant.issuer,grant.subject,grant.email,completed);
                 session.status="complete";
             }
+            diagnostic.success();
         }catch(GatewayFailure error){
+            diagnostic.failure(error.code,error);
             synchronized(this){
                 if(login==session&&("pending".equals(session.status)||"exchanging".equals(session.status))){
                     session.status="failed";session.error=error.code;
@@ -103,6 +117,7 @@ public final class AccountGateway implements AutoCloseable {
         }finally{
             synchronized(this){if(session.operation!=null)untrack(session.accountId,session.operation);}
             if(admitted)networkSlots.release();
+            diagnostic.close();
         }
     }
     public synchronized JSONObject cancelLogin(String sessionId)throws GatewayFailure {
@@ -171,18 +186,50 @@ public final class AccountGateway implements AutoCloseable {
     /** Catalog identity is the actual request identity, never a later snapshot stamped onto an old response. */
     public JSONObject modelsReviewed(String accountId,long expectedVersion,GatewayCall operation)throws GatewayFailure {
         Authorized tokens=validCredentials(accountId,operation,false,expectedVersion);
-        beginRequest(accountId,operation,tokens.version);
-        try{
-            JSONArray models=provider.models(tokens.tokens,operation);
-            synchronized(this){checkStreamFence(accountId,tokens.version,operation);
-                catalogs.put(accountId,AccountBook.json("accountId",accountId,"version",tokens.version,"models",models));refreshPinnedEvidence(accountId,tokens.version,models);return AccountBook.json("accountId",accountId,"version",tokens.version,"models",copyArray(models));}
-        }catch(GatewayFailure failure){recordFailure(accountId,tokens.version,failure);throw failure;}finally{endRequest(accountId,operation);}
+        JSONArray models=readCatalog(accountId,tokens,operation);
+        synchronized(this){checkStreamFence(accountId,tokens.version,operation);return AccountBook.json("accountId",accountId,"version",tokens.version,"models",models);}
     }
     public JSONArray models(String accountId,GatewayCall operation)throws GatewayFailure {
         String id=resolve(accountId);Authorized tokens=validCredentials(id,operation,false);
-        beginRequest(id,operation,tokens.version);
-        try{JSONArray models=provider.models(tokens.tokens,operation);synchronized(this){checkStreamFence(id,tokens.version,operation);
-            catalogs.put(id,AccountBook.json("accountId",id,"version",tokens.version,"models",copyArray(models)));refreshPinnedEvidence(id,tokens.version,models);return models;}}catch(GatewayFailure failure){recordFailure(id,tokens.version,failure);throw failure;}finally{endRequest(id,operation);}
+        return readCatalog(id,tokens,operation);
+    }
+    /** One bounded metadata request per exact credential generation. Each waiter owns its cancellation. */
+    private JSONArray readCatalog(String id,Authorized authorized,GatewayCall caller)throws GatewayFailure {
+        CatalogFlight flight;CatalogKey key;
+        synchronized(this){open();caller.check();JSONObject row=book.row(id);checkFence(row,authorized.version);usable(row);
+            key=new CatalogKey(id,row.optLong("authorizationEpoch",authorized.version),authorized.version);
+            flight=catalogFlights.get(key);
+            if(flight==null){flight=new CatalogFlight(key,authorized);catalogFlights.put(key,flight);}
+            if(flight.waiters>=8)throw new GatewayFailure("GATEWAY_BUSY");
+            flight.waiters++;
+            if(!flight.started){
+                flight.started=true;CatalogFlight start=flight;flight.work=()->loadCatalog(start);
+                try{catalogWorkers.execute(flight.work);}
+                catch(java.util.concurrent.RejectedExecutionException full){
+                    flight.failure=new GatewayFailure(closed?"GATEWAY_CLOSED":"GATEWAY_BUSY");flight.done.countDown();catalogFlights.remove(key,flight);flight.operation.close();
+                    RuntimeDiagnostics.event("model_catalog","rejected",flight.failure.code,null,null);
+                }
+            }
+        }
+        try{
+            while(!flight.done.await(50,TimeUnit.MILLISECONDS)){caller.check();if(closed)throw new GatewayFailure("GATEWAY_CLOSED");}caller.check();
+            if(flight.failure!=null)throw flight.failure;
+            synchronized(this){checkStreamFence(id,authorized.version,caller);return copyArray(flight.models);}
+        }catch(InterruptedException stopped){Thread.currentThread().interrupt();throw new GatewayFailure("CANCELLED");}
+        finally{synchronized(this){if(--flight.waiters==0){catalogFlights.remove(key,flight);if(flight.done.getCount()!=0){flight.operation.cancel();if(catalogWorkers.remove(flight.work)){flight.failure=new GatewayFailure("CANCELLED");flight.done.countDown();}}}}}
+    }
+    private void loadCatalog(CatalogFlight flight){
+        boolean admitted=false;String id=flight.key.id;long version=flight.key.version;
+        RuntimeDiagnostics.Span diagnostic=RuntimeDiagnostics.begin("model_catalog",null,id);
+        try{
+            beginRequest(id,flight.operation,version);admitted=true;
+            JSONArray models=provider.models(flight.authorized.tokens,flight.operation);
+            synchronized(this){checkStreamFence(id,version,flight.operation);
+                catalogs.put(id,AccountBook.json("accountId",id,"version",version,"observedAt",System.currentTimeMillis(),"models",copyArray(models)));
+                refreshPinnedEvidence(id,version,models);flight.models=copyArray(models);}diagnostic.success();
+        }catch(GatewayFailure failure){flight.failure=failure;diagnostic.failure(failure.code,failure);recordFailure(id,version,failure);}
+        catch(RuntimeException failure){flight.failure=new GatewayFailure("INVALID_MODEL_CATALOG");diagnostic.failure(flight.failure.code,failure);}
+        finally{if(admitted)endRequest(id,flight.operation);synchronized(this){flight.done.countDown();if(flight.waiters==0)catalogFlights.remove(flight.key,flight);}flight.operation.close();diagnostic.close();}
     }
     /** Pin only facts from this gateway's completed same-token catalog; UI cannot supply capability booleans. */
     public synchronized JSONObject selectModelReviewed(String accountId,long version,String modelId)throws GatewayFailure {
@@ -236,22 +283,52 @@ public final class AccountGateway implements AutoCloseable {
     private void requireImageEvidence(String id,long version,ResponsesRequest request)throws GatewayFailure {
         if(request.hasImages()&&!supportsImageInput(id,version,request.modelId()))throw new GatewayFailure("ACCOUNT_IMAGE_CAPABILITY_REQUIRED");
     }
-    /** A renewed token needs its own observed model facts before POST/receipt dispatch, not just old image flags. */
-    private void renewCatalogEvidence(String id,long originalVersion,Authorized actual,ResponsesRequest request,GatewayCall operation)throws GatewayFailure {
-        boolean observed;
-        synchronized(this){observed=book.row(id).optJSONObject("modelEvidence")!=null;
-            if(actual.version==originalVersion){requireImageEvidence(id,actual.version,request);request.admit(modelFacts(id,actual.version,request.modelId()));return;}}
-        if(!request.hasImages()&&!observed&&!request.hasExplicitReasoning())return;
-        beginRequest(id,operation,actual.version);
-        try{JSONArray models=provider.models(actual.tokens,operation);synchronized(this){checkStreamFence(id,actual.version,operation);
-                pinCatalogEvidence(id,actual.version,request.modelId(),models);requireImageEvidence(id,actual.version,request);request.admit(modelFacts(id,actual.version,request.modelId()));}}
-        finally{endRequest(id,operation);}
+    /** Public native preparation metadata only. Credentials and the dispatch lease remain private. */
+    public static final class PreparedModel {
+        public final long accountVersion;
+        public final dev.pocketengine.runtime.models.AccountCatalogFacts facts;
+        private PreparedModel(long version,dev.pocketengine.runtime.models.AccountCatalogFacts facts){accountVersion=version;this.facts=facts;}
+        public boolean supportsImages(){return facts!=null&&facts.facts.imageInput().known&&Boolean.TRUE.equals(facts.facts.imageInput().value);}
+    }
+    /** Explicit worker-side preparation. No POST, model substitution, or I/O in a metadata getter. */
+    public PreparedModel prepareForInference(String id,long expectedVersion,String model,GatewayCall operation)throws GatewayFailure {
+        return prepareForInference(id,expectedVersion,model,operation,true);
+    }
+    private PreparedModel prepareForInference(String id,long expectedVersion,String model,GatewayCall operation,boolean requireCatalog)throws GatewayFailure {
+        if(operation==null||model==null||!model.matches("[A-Za-z0-9_.:-]{1,160}"))throw new GatewayFailure("UNSUPPORTED_OR_OVERSIZED_INPUT");
+        for(int attempt=0;attempt<2;attempt++){
+            operation.check();
+            try{
+                Authorized actual=validCredentials(id,operation,false,expectedVersion,true);
+                synchronized(this){checkStreamFence(id,actual.version,operation);
+                    if(actual.tokens.expiresAt<=System.currentTimeMillis()+60_000)throw new GatewayFailure("ACCOUNT_REFRESH_REQUIRED");
+                    try{var facts=book.modelFacts(id,actual.version,model);if(facts!=null)return new PreparedModel(actual.version,facts);}
+                    catch(GatewayFailure stale){if(!"STALE_MODEL_CATALOG".equals(stale.code))throw stale;}
+                    // Preserve the original unobserved, default text-only compatibility seam.
+                    // Native selected-model preparation always requires the catalog; observed
+                    // evidence, images and explicit reasoning can never fall back to unknown.
+                    if(!requireCatalog&&book.row(id).optJSONObject("modelEvidence")==null)return new PreparedModel(actual.version,null);
+                    JSONObject cached=catalogs.get(id);long now=System.currentTimeMillis(),at=cached==null?0:cached.optLong("observedAt");
+                    if(cached!=null&&cached.optLong("version",-1)==actual.version&&at>0&&at<=now&&now-at<=dev.pocketengine.runtime.models.ModelConnectionService.MAX_CATALOG_AGE_MILLIS){
+                        pinCatalogEvidence(id,actual.version,model,cached.optJSONArray("models"));return new PreparedModel(actual.version,book.modelFacts(id,actual.version,model));}
+                }
+                JSONArray models=readCatalog(id,actual,operation);
+                synchronized(this){checkStreamFence(id,actual.version,operation);pinCatalogEvidence(id,actual.version,model,models);return new PreparedModel(actual.version,book.modelFacts(id,actual.version,model));}
+            }catch(GatewayFailure failure){
+                // A concurrent same-grant rotation can obsolete a read. Rebuild only preparation,
+                // at most once, while the caller's original deadline and cancellation remain active.
+                if(attempt==0&&(failure.code.equals("STALE_ACCOUNT_VERSION")||failure.code.equals("ACCOUNT_REFRESH_REQUIRED"))&&authorizationCurrent(id,expectedVersion))continue;
+                throw failure;
+            }
+        }
+        throw new GatewayFailure("STALE_ACCOUNT_VERSION");
     }
     public void streamText(String accountId,String model,String instructions,JSONArray input,GatewayCall operation,ChatGptProvider.EventSink sink)throws GatewayFailure {
         String id=resolve(accountId);Authorized tokens=validCredentials(id,operation,false);
         beginRequest(id,operation,tokens.version);
         try{new ResponsesRequest(model,instructions,input,new JSONArray()).admit(modelFacts(id,tokens.version,model));
-            provider.stream(tokens.tokens,model,instructions,input,operation,event->{checkStreamFence(id,tokens.version,operation);sink.event(event);});}
+            ResponseLease lease=responseLease(id,tokens.version,operation);
+            provider.stream(tokens.tokens,model,instructions,input,operation,event->{checkResponseLease(lease,operation);sink.event(event);});}
         catch(GatewayFailure failure){recordFailure(id,tokens.version,failure);throw failure;}finally{endRequest(id,operation);}
     }
     /** Completed output describes a model turn, not a completed user task or a tool execution grant. */
@@ -259,7 +336,7 @@ public final class AccountGateway implements AutoCloseable {
         if(request==null)throw new GatewayFailure("UNSUPPORTED_OR_OVERSIZED_INPUT");
         String id=resolve(accountId);Authorized tokens=validCredentials(id,operation,false);
         beginRequest(id,operation,tokens.version);
-        try{synchronized(this){requireImageEvidence(id,tokens.version,request);request.admit(modelFacts(id,tokens.version,request.modelId()));}provider.streamResponses(tokens.tokens,request,operation,fencedSink(id,tokens.version,request,operation,sink));}
+        try{ResponseLease lease;synchronized(this){requireImageEvidence(id,tokens.version,request);request.admit(modelFacts(id,tokens.version,request.modelId()));lease=responseLease(id,tokens.version,operation);}provider.streamResponses(tokens.tokens,request,operation,fencedSink(lease,operation,sink));}
         catch(GatewayFailure failure){recordFailure(id,tokens.version,failure);throw failure;}finally{endRequest(id,operation);}
     }
     /**
@@ -269,18 +346,19 @@ public final class AccountGateway implements AutoCloseable {
      */
     public void streamResponsesReviewed(String accountId,long expectedVersion,ResponsesRequest request,GatewayCall operation,ChatGptProvider.EventSink sink)throws GatewayFailure {
         if(request==null||operation==null||sink==null)throw new GatewayFailure("UNSUPPORTED_OR_OVERSIZED_INPUT");
-        Credentials tokens;
+        Credentials tokens;ResponseLease lease;
         synchronized(this){
             open();operation.check();JSONObject row=reviewedRow(accountId,expectedVersion);usable(row);
             if(refreshes.containsKey(accountId)||"refreshing".equals(row.optString("status"))||row.optJSONObject("pendingRefresh")!=null)throw new GatewayFailure("ACCOUNT_REFRESH_REQUIRED");
             tokens=book.credentials(accountId,expectedVersion);
             if(tokens.expiresAt<=System.currentTimeMillis()+60_000)throw new GatewayFailure("ACCOUNT_REFRESH_REQUIRED");
             requireImageEvidence(accountId,expectedVersion,request);request.admit(modelFacts(accountId,expectedVersion,request.modelId()));
+            lease=responseLease(accountId,expectedVersion,operation);
             beginRequest(accountId,operation,expectedVersion);
         }
         try{
-            provider.streamResponses(tokens,request,operation,fencedSink(accountId,expectedVersion,request,operation,sink));
-            synchronized(this){checkStreamFence(accountId,expectedVersion,operation);requireImageEvidence(accountId,expectedVersion,request);}
+            provider.streamResponses(tokens,request,operation,fencedSink(lease,operation,sink));
+            checkResponseLease(lease,operation);
         }catch(GatewayFailure failure){recordFailure(accountId,expectedVersion,failure);throw failure;}
         finally{endRequest(accountId,operation);}
     }
@@ -290,29 +368,42 @@ public final class AccountGateway implements AutoCloseable {
     public void streamResponsesReviewed(String accountId,long expectedVersion,ResponsesRequest request,GatewayCall operation,
                                         InferenceVersionSink versions,ChatGptProvider.EventSink sink)throws GatewayFailure {
         if(request==null||operation==null||versions==null||sink==null)throw new GatewayFailure("UNSUPPORTED_OR_OVERSIZED_INPUT");
-        Authorized authorized=validCredentials(accountId,operation,false,expectedVersion,true);
-        renewCatalogEvidence(accountId,expectedVersion,authorized,request,operation);
-        synchronized(this){
-            checkStreamFence(accountId,authorized.version,operation);
-            if(authorized.tokens.expiresAt<=System.currentTimeMillis()+60_000)throw new GatewayFailure("ACCOUNT_REFRESH_REQUIRED");
-            requireImageEvidence(accountId,authorized.version,request);request.admit(modelFacts(accountId,authorized.version,request.modelId()));
-            // Persist/update the trusted selection before any possibly charged model request.
-            versions.authorized(authorized.version);
-            beginRequest(accountId,operation,authorized.version);
+        Credentials tokens=null;ResponseLease lease=null;
+        for(int attempt=0;attempt<2&&lease==null;attempt++){
+            PreparedModel prepared=prepareForInference(accountId,expectedVersion,request.modelId(),operation,request.hasImages()||request.hasExplicitReasoning());
+            synchronized(this){
+                JSONObject row=book.row(accountId);
+                if(row.optLong("version")!=prepared.accountVersion&&authorizationCurrent(accountId,expectedVersion)&&attempt==0)continue;
+                checkStreamFence(accountId,prepared.accountVersion,operation);tokens=book.credentials(accountId,prepared.accountVersion);
+                if(tokens.expiresAt<=System.currentTimeMillis()+60_000)throw new GatewayFailure("ACCOUNT_REFRESH_REQUIRED");
+                requireImageEvidence(accountId,prepared.accountVersion,request);request.admit(prepared.facts);
+                // Persist/update the trusted selection before any possibly charged model request.
+                versions.authorized(prepared.accountVersion);
+                lease=responseLease(accountId,prepared.accountVersion,operation);
+                beginRequest(accountId,operation,prepared.accountVersion);
+            }
         }
+        if(lease==null)throw new GatewayFailure("STALE_ACCOUNT_VERSION");
         try{
-            provider.streamResponses(authorized.tokens,request,operation,fencedSink(accountId,authorized.version,request,operation,sink));
-            synchronized(this){checkStreamFence(accountId,authorized.version,operation);requireImageEvidence(accountId,authorized.version,request);}
-        }catch(GatewayFailure failure){recordFailure(accountId,authorized.version,failure);throw failure;}
+            provider.streamResponses(tokens,request,operation,fencedSink(lease,operation,sink));
+            checkResponseLease(lease,operation);
+        }catch(GatewayFailure failure){recordFailure(accountId,lease.version,failure);throw failure;}
         finally{endRequest(accountId,operation);}
     }
-    private ChatGptProvider.EventSink fencedSink(String id,long version,ResponsesRequest request,GatewayCall operation,ChatGptProvider.EventSink sink){
+    private ChatGptProvider.EventSink fencedSink(ResponseLease lease,GatewayCall operation,ChatGptProvider.EventSink sink){
         return new ChatGptProvider.EventSink(){
-            @Override public void event(JSONObject event)throws Exception{synchronized(AccountGateway.this){checkStreamFence(id,version,operation);requireImageEvidence(id,version,request);sink.event(event);}}
+            @Override public void event(JSONObject event)throws Exception{synchronized(AccountGateway.this){checkResponseLease(lease,operation);sink.event(event);}}
             // Already parsed counters remain evidence about this exact old request after revocation.
             // They bypass no response/action fence and can never grant execution.
             @Override public void usage(JSONObject counters)throws Exception{sink.usage(counters);}
         };
+    }
+    private record ResponseLease(String id,long version,long authorizationEpoch){}
+    private synchronized ResponseLease responseLease(String id,long version,GatewayCall operation)throws GatewayFailure {
+        checkStreamFence(id,version,operation);JSONObject row=book.row(id);return new ResponseLease(id,version,row.optLong("authorizationEpoch",version));
+    }
+    private synchronized void checkResponseLease(ResponseLease lease,GatewayCall operation)throws GatewayFailure {
+        open();operation.check();if(!book.authorizationEpochCurrent(lease.id,lease.authorizationEpoch))throw new GatewayFailure("STALE_ACCOUNT_VERSION");
     }
     private synchronized void checkStreamFence(String id,long version,GatewayCall operation)throws GatewayFailure {
         open();operation.check();JSONObject row=book.row(id);checkFence(row,version);usable(row);
@@ -333,11 +424,11 @@ public final class AccountGateway implements AutoCloseable {
             if(expectedVersion==null)row=book.row(id);
             else if(joinReviewedInference){
                 if(id==null||id.isEmpty()||expectedVersion<0)throw new GatewayFailure("STALE_ACCOUNT_VERSION");
-                row=book.row(id);Flight admitted=refreshes.get(id);
-                if(row.optLong("version")!=expectedVersion&&!(admitted!=null&&admitted.admittedVersion==expectedVersion
-                        &&row.optLong("version")==admitted.row.optLong("version")))throw new GatewayFailure("STALE_ACCOUNT_VERSION");
+                row=book.row(id);
+                if(row.optLong("version")!=expectedVersion&&!book.authorizationCurrent(id,expectedVersion))throw new GatewayFailure("STALE_ACCOUNT_VERSION");
             }else row=reviewedRow(id,expectedVersion);
             usable(row);flight=refreshes.get(id);
+            if(joinReviewedInference&&!row.optBoolean("planUsageEnabled"))throw new GatewayFailure("PLAN_USAGE_PERMISSION_REQUIRED");
             if(flight==null&&"refreshing".equals(row.optString("status")))throw new GatewayFailure("REAUTHORIZATION_REQUIRED");
             if(flight!=null){if(flight.waiters>=8)throw new GatewayFailure("REFRESH_QUEUE_FULL");flight.waiters++;}
             else{
@@ -346,7 +437,7 @@ public final class AccountGateway implements AutoCloseable {
                 if(!networkSlots.tryAcquire())throw new GatewayFailure("GATEWAY_BUSY");
                 try{
                     long admittedVersion=row.optLong("version");
-                    row=book.update(id,admittedVersion,AccountBook.json("status","refreshing","error",""));
+                    book.metadata(id,admittedVersion,AccountBook.json("status","refreshing","error",""));row=book.row(id);
                     flight=new Flight(row,old,operation,admittedVersion,pending);refreshes.put(id,flight);track(id,operation);leader=true;
                 }catch(GatewayFailure failure){networkSlots.release();throw failure;}
             }
@@ -360,6 +451,7 @@ public final class AccountGateway implements AutoCloseable {
             catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new GatewayFailure("CANCELLED");}
             finally{synchronized(this){flight.waiters--;}}
         }
+        RuntimeDiagnostics.Span refreshDiagnostic=RuntimeDiagnostics.begin("account_refresh",null,id);
         try{
             Flight original=flight;String account=id;AccountBook.PendingRefresh pending=flight.pending;
             ChatGptProvider.Grant fresh=pending==null?provider.refresh(flight.row.optString("clientId"),flight.prior,flight.row.optString("subject"),operation,System.currentTimeMillis(),(tokens,at,identityRequired)->{
@@ -368,20 +460,20 @@ public final class AccountGateway implements AutoCloseable {
                 synchronized(this){JSONObject row=book.row(account);checkFence(row,original.row.optLong("version"));enabled(row);book.checkpointRefresh(account,original.row.optLong("version"),tokens,at,identityRequired);}
             }):provider.resumeRefresh(flight.row.optString("clientId"),pending.credentials(),flight.row.optString("subject"),pending.identityRequired(),pending.receivedAt(),operation);
             synchronized(this){open();operation.check();String email=fresh.email.isEmpty()?flight.row.optString("email"):fresh.email;
-                JSONObject saved=book.publish(id,flight.row.optLong("version"),fresh.credentials,fresh.issuer,fresh.subject,email);
+                JSONObject saved=book.publishRenewal(id,flight.row.optLong("version"),fresh.credentials,fresh.issuer,fresh.subject,email);
                 // A long verification outage may outlive the checkpoint's access token.
                 // Retain its verified rotated refresh token, but never dispatch expired access.
                 if(fresh.credentials.expiresAt<=System.currentTimeMillis()+60_000)throw new GatewayFailure("ACCOUNT_REFRESH_REQUIRED");
-                flight.result=new Authorized(fresh.credentials,saved.optLong("version"));return flight.result;}
+                flight.result=new Authorized(fresh.credentials,saved.optLong("version"));refreshDiagnostic.success();return flight.result;}
         }catch(GatewayFailure failure){
             synchronized(this){flight.failure=failure;try{
                 JSONObject row=book.row(id);if(row.optLong("version")==flight.row.optLong("version")){
                     if(Set.of("REAUTHORIZATION_REQUIRED","INVALID_IDENTITY_TOKEN","ACCOUNT_IDENTITY_MISMATCH","INVALID_TOKEN_RESPONSE","REFRESH_CHECKPOINT_UNAVAILABLE").contains(failure.code))book.invalidateCredentials(id,row.optLong("version"),failure.code);
-                    else book.update(id,row.optLong("version"),AccountBook.json("status",failure.retryAt>0?"cooldown":"connected","error",failure.code,"cooldownUntil",failure.retryAt,"diagnostics",failure.diagnostics()));
+                    else book.metadata(id,row.optLong("version"),AccountBook.json("status",failure.retryAt>0?"cooldown":"connected","error",failure.code,"cooldownUntil",failure.retryAt,"diagnostics",failure.diagnostics()));
                 }
             }catch(GatewayFailure storage){flight.failure=storage;}}
-            throw flight.failure;
-        }finally{synchronized(this){refreshes.remove(id);untrack(id,operation);flight.done.countDown();}networkSlots.release();}
+            refreshDiagnostic.failure(flight.failure.code,flight.failure);throw flight.failure;
+        }finally{synchronized(this){refreshes.remove(id);untrack(id,operation);flight.done.countDown();}networkSlots.release();refreshDiagnostic.close();}
     }
     private synchronized void beginRequest(String id,GatewayCall operation,long version)throws GatewayFailure {
         open();operation.check();JSONObject row=book.row(id);checkFence(row,version);usable(row);if(!networkSlots.tryAcquire())throw new GatewayFailure("GATEWAY_BUSY");track(id,operation);
@@ -413,7 +505,17 @@ public final class AccountGateway implements AutoCloseable {
     @Override public synchronized void close(){
         if(closed)return;closed=true;
         if(login!=null&&("pending".equals(login.status)||"exchanging".equals(login.status)))try{endLogin(login,"interrupted","PROCESS_INTERRUPTED");}catch(GatewayFailure ignored){login.close();}
-        for(Set<GatewayCall> calls:operations.values())for(GatewayCall call:calls)call.cancel();provider.close();book.cleanupAll();
+        for(Set<GatewayCall> calls:operations.values())for(GatewayCall call:calls)call.cancel();
+        for(CatalogFlight flight:catalogFlights.values()){
+            flight.operation.cancel();if(flight.done.getCount()!=0){flight.failure=new GatewayFailure("GATEWAY_CLOSED");flight.done.countDown();}
+        }
+        catalogFlights.clear();catalogWorkers.shutdownNow();provider.close();book.cleanupAll();
+    }
+    private record CatalogKey(String id,long authorizationEpoch,long version){}
+    private static final class CatalogFlight {
+        final CatalogKey key;final Authorized authorized;final GatewayCall operation=new GatewayCall(60_000);final CountDownLatch done=new CountDownLatch(1);
+        int waiters;boolean started;Runnable work;volatile GatewayFailure failure;volatile JSONArray models;
+        CatalogFlight(CatalogKey key,Authorized authorized){this.key=key;this.authorized=authorized;}
     }
     private static final class Authorized {
         final Credentials tokens;final long version;Authorized(Credentials tokens,long version){this.tokens=tokens;this.version=version;}

@@ -1,11 +1,16 @@
 package dev.pocketengine.ui;
 
 import dev.pocketengine.EngineApplication;
+import dev.pocketengine.core.RunControl;
+import dev.pocketengine.core.RuntimeDiagnostics;
 import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.testutil.ReadyApplicationFixture;
+import dev.pocketengine.ui.web.PocketWebWindowTicket;
 import java.net.InetSocketAddress;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -86,6 +91,95 @@ public final class ModelDiagnosticsMountedNativeTest {
         }
         @Override public void close()throws Exception {release.countDown();server.stop(0);owner.close();}
     }
+    private static String diagnosticEvent() {
+        RuntimeDiagnostics.install(null,null);
+        String task=UUID.randomUUID().toString();
+        RunControl original=RunControl.forOriginalRecovery(task,UUID.randomUUID().toString(),3);
+        RuntimeDiagnostics.event("model_request","failed","PROVIDER_UNAVAILABLE",original,
+                new IllegalStateException("Bearer private-token; prompt-private-body"));
+        return task;
+    }
+    @SuppressWarnings("unchecked")
+    private static JSONObject replayLogs(Fixture f,JSONObject first,JSONObject args)throws Exception {
+        // Read only the fixture's captured transport, then resend the original request through
+        // the real bridge. Do not fabricate a receipt or alter native window/command guards.
+        Field document=OwnerWebTestFixture.class.getDeclaredField("document");document.setAccessible(true);
+        Field captured=OwnerWebTestFixture.class.getDeclaredField("events");captured.setAccessible(true);
+        List<JSONObject> events=(List<JSONObject>)captured.get(f.owner);
+        int before=events.size();String id=first.getString("id");
+        JSONObject request=new JSONObject().put("v",1).put("id",id).put("documentId",document.get(f.owner))
+                .put("action","modelDiagnostics.logs").put("args",args);
+        PocketWebWindowTicket ticket=(PocketWebWindowTicket)OwnerWebTestFixture.invoke(f.owner.bridge,"captureWindow");
+        f.owner.bridge.postMessage(request.toString(),ticket,()->{throw new AssertionError("Replay transport unexpectedly stale");});
+        f.owner.await(()->{
+            for(int i=before;i<events.size();i++)if(id.equals(events.get(i).optString("id"))&&"result".equals(events.get(i).optString("kind")))return true;
+            return false;
+        });
+        for(int i=before;i<events.size();i++)if(id.equals(events.get(i).optString("id"))&&"result".equals(events.get(i).optString("kind")))return events.get(i);
+        throw new AssertionError("No actual replay response");
+    }
+
+    @Test public void runtimeLogsReadOriginalMetadataWithoutStartingAProbeOrTask()throws Exception {
+        try(Fixture f=new Fixture(false)){
+            String task=diagnosticEvent();f.open();
+            JSONObject logs=f.owner.call("modelDiagnostics.logs",new JSONObject().put("windowId",f.window));
+            assertEquals("pocketworld.runtime-log.v1",logs.getString("format"));
+            assertFalse(logs.getBoolean("bodyIncluded"));assertFalse(logs.getBoolean("automaticExport"));
+            JSONArray events=logs.getJSONArray("events");assertTrue(events.length()<=RuntimeDiagnostics.MAX_EVENTS);
+            JSONObject failure=null;
+            for(int i=0;i<events.length();i++)if(task.equals(events.getJSONObject(i).optString("taskId")))failure=events.getJSONObject(i);
+            assertNotNull("Original runtime event must reach the actual Web response",failure);
+            assertEquals("model_request",failure.getString("stage"));assertEquals("PROVIDER_UNAVAILABLE",failure.getString("code"));
+            assertEquals(3,failure.getInt("epoch"));assertFalse(logs.toString().contains("private-token"));assertFalse(logs.toString().contains("prompt-private-body"));
+            assertEquals(0,f.posts.get());assertEquals(0,f.app.tasks.list().length());
+            assertNull(f.app.modelConnections.snapshot().optJSONObject("capabilityProbe"));
+        }
+    }
+
+    @Test public void runtimeLogsRejectClosedReplacedAndDepartedOwnerWindows()throws Exception {
+        try(Fixture f=new Fixture(false)){
+            diagnosticEvent();f.open();String original=f.window;
+            f.owner.call("modelDiagnostics.close",new JSONObject().put("windowId",original));
+            assertFalse(f.owner.envelope("modelDiagnostics.logs",new JSONObject().put("windowId",original)).getBoolean("ok"));
+            f.open();assertNotEquals(original,f.window);
+            assertFalse(f.owner.envelope("modelDiagnostics.logs",new JSONObject().put("windowId",original)).getBoolean("ok"));
+            assertTrue(f.owner.call("modelDiagnostics.logs",new JSONObject().put("windowId",f.window)).has("events"));
+            f.owner.call("connections.leave",new JSONObject().put("section","models"));
+            JSONObject departed=f.owner.envelope("modelDiagnostics.logs",new JSONObject().put("windowId",f.window));
+            assertFalse(departed.getBoolean("ok"));assertFalse(departed.has("value"));
+            assertEquals(0,f.posts.get());
+        }
+    }
+
+    @Test public void runtimeLogsNeedForegroundAndAReopenedWindowAfterBackgrounding()throws Exception {
+        try(Fixture f=new Fixture(false)){
+            diagnosticEvent();f.open();String original=f.window;
+            Field foreground=PocketWorldController.class.getDeclaredField("voiceForeground");foreground.setAccessible(true);
+            try{
+                foreground.setBoolean(f.owner.controller,false);f.owner.bridge.invalidatePresentation(false);
+                JSONObject hidden=f.owner.envelope("modelDiagnostics.logs",new JSONObject().put("windowId",original));
+                assertFalse(hidden.getBoolean("ok"));assertFalse(hidden.has("value"));
+            }finally{foreground.setBoolean(f.owner.controller,true);}
+            assertFalse(f.owner.envelope("modelDiagnostics.logs",new JSONObject().put("windowId",original)).getBoolean("ok"));
+            f.open();assertTrue(f.owner.call("modelDiagnostics.logs",new JSONObject().put("windowId",f.window)).has("events"));
+            assertEquals(0,f.posts.get());assertEquals(0,f.app.tasks.list().length());
+        }
+    }
+
+    @Test public void replayedLogRequestDoesNotRetainOrReturnAnEarlierSnapshot()throws Exception {
+        try(Fixture f=new Fixture(false)){
+            diagnosticEvent();f.open();JSONObject original=new JSONObject().put("windowId",f.window);
+            JSONObject first=f.owner.envelope("modelDiagnostics.logs",original);
+            assertTrue(first.getBoolean("ok"));assertTrue(first.getJSONObject("value").getJSONArray("events").length()>0);
+            f.open(); // Retire the reader window while preserving the command receipt cache.
+            JSONObject repeated=replayLogs(f,first,original);
+            assertFalse(repeated.getBoolean("ok"));assertFalse(repeated.has("value"));
+            assertFalse(repeated.toString().contains("PROVIDER_UNAVAILABLE"));
+            assertTrue(f.owner.call("modelDiagnostics.logs",new JSONObject().put("windowId",f.window)).has("events"));
+            assertEquals(0,f.posts.get());assertEquals(0,f.app.tasks.list().length());
+        }
+    }
+
     @Test public void reviewDoesNotSendRequestsAndExplicitStartShowsIndependentObservedResults()throws Exception {
         try(Fixture f=new Fixture(false)){
             JSONObject opened=f.open();assertEquals("fixture-ui-model",opened.getString("model"));assertEquals(0,f.posts.get());

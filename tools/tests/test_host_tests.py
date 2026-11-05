@@ -543,9 +543,15 @@ class HostTestEntrypointTest(unittest.TestCase):
                         contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                     self.assertEqual(0 if write_xml else 2, HOST.main(['--group', 'gateway-continuation', '--output', str(output)]))
                 results = list(output.glob('run-*/result.json'))
-                self.assertEqual(1 if write_xml else 0, len(results))
+                self.assertEqual(1, len(results))
+                recorded = json.loads(results[0].read_text())
+                self.assertEqual('passed' if write_xml else 'failed', recorded['status'])
+                self.assertEqual(write_xml, recorded['executionVerified'])
+                self.assertEqual(0 if write_xml else 2, recorded['exitCode'])
                 if write_xml:
-                    self.assertEqual({name: 1}, json.loads(results[0].read_text())['executed'])
+                    self.assertEqual({name: 1}, recorded['executed'])
+                else:
+                    self.assertIsNone(recorded['executed'])
 
     def test_missing_offline_wrapper_is_reported_before_gradle_can_download(self):
         with tempfile.TemporaryDirectory() as tmp:

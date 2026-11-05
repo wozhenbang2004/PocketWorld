@@ -27,6 +27,12 @@ public final class AccountInferenceRenewalTest {
     private void bind(AccountGatewayTest.Rig rig,AtomicLong persisted){
         ModelGateway.installAccountInferencePort(new ModelGateway.AccountInferencePort(){
             public boolean accountIdentityCurrent(ModelConfig.AccountModelRef ref){return rig.gateway.inferenceIdentityCurrent(ref.accountId,ref.accountVersion);}
+            public boolean authorizationCurrent(ModelConfig.AccountModelRef ref){return rig.gateway.authorizationCurrent(ref.accountId,ref.accountVersion);}
+            public ModelGateway.AccountPreparation prepare(ModelConfig.AccountModelRef ref,GatewayCall operation)throws GatewayFailure {
+                AccountGateway.PreparedModel ready=rig.gateway.prepareForInference(ref.accountId,ref.accountVersion,ref.modelId,operation);
+                persisted.compareAndSet(ref.accountVersion,ready.accountVersion);
+                return new ModelGateway.AccountPreparation(ref.withVersion(ready.accountVersion),ready.facts,ready.supportsImages());
+            }
             public void stream(ModelConfig.AccountModelRef ref,ResponsesRequest request,GatewayCall op,ChatGptProvider.EventSink sink)throws GatewayFailure{rig.gateway.streamResponsesReviewed(ref.accountId,ref.accountVersion,request,op,sink);}
             public void streamWithVersion(ModelConfig.AccountModelRef ref,ResponsesRequest request,GatewayCall op,ModelGateway.AccountVersionSink versions,ChatGptProvider.EventSink sink)throws GatewayFailure {
                 rig.gateway.streamResponsesReviewed(ref.accountId,ref.accountVersion,request,op,actual->{persisted.compareAndSet(ref.accountVersion,actual);versions.authorized(actual);},sink);
@@ -45,8 +51,8 @@ public final class AccountInferenceRenewalTest {
     @Test public void nearExpiryRenewsOnceBeforeInferenceAndImmutableConfigContinuesWithinSameRun()throws Exception {
         try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
             rig.fake.expiresIn=1;String id=rig.connect();ModelConfig config=config(rig,id);long initial=config.accountModel.accountVersion;AtomicLong persisted=new AtomicLong(initial);bind(rig,persisted);rig.fake.expiresIn=3600;rig.fake.stream=textStream();RunControl control=new RunControl();
-            JSONObject first=ModelGateway.complete(config,messages(),null,control);assertEquals("verified",first.getString("content"));assertEquals(initial+2,persisted.get());assertEquals(initial,config.accountModel.accountVersion);
-            assertEquals(initial+2,first.getJSONObject("provider_data").getJSONObject("nativeRef").getLong("accountVersion"));
+            JSONObject first=ModelGateway.complete(config,messages(),null,control);assertEquals("verified",first.getString("content"));assertEquals(initial+1,persisted.get());assertEquals(initial,config.accountModel.accountVersion);
+            assertEquals(initial+1,first.getJSONObject("provider_data").getJSONObject("nativeRef").getLong("accountVersion"));
             assertEquals("verified",ModelGateway.complete(config,messages().put(first),null,control).getString("content"));assertEquals(1,rig.fake.refreshes.get());assertEquals(2,rig.fake.responses.get());
             assertEquals("Bearer fixture-access-secret-1",rig.fake.lastAuthorization);
         }
@@ -61,7 +67,7 @@ public final class AccountInferenceRenewalTest {
             ModelConfig restored=config(rig,id);try{ModelGateway.complete(restored,history,tools(),new RunControl());fail("History granted its own renewal authority");}catch(ModelGateway.GatewayException expected){assertTrue(expected.getMessage().contains("历史"));}assertEquals(3,rig.fake.responses.get());
         }
     }
-    @Test public void reviewedInferenceWaitersShareOnlyTheAdmittedRefreshFlight()throws Exception {
+    @Test public void reviewedInferenceWaitersShareRefreshAndOldSelectionRecoversWithinSameAuthorization()throws Exception {
         try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
             rig.fake.expiresIn=1;String id=rig.connect();ModelConfig config=config(rig,id);AtomicLong persisted=new AtomicLong(config.accountModel.accountVersion);bind(rig,persisted);rig.fake.expiresIn=3600;rig.fake.stream=textStream();rig.fake.allowRefresh=new CountDownLatch(1);
             ExecutorService workers=Executors.newFixedThreadPool(2);CountDownLatch waiting=new CountDownLatch(1);
@@ -69,7 +75,7 @@ public final class AccountInferenceRenewalTest {
                 Future<JSONObject> first=workers.submit(()->ModelGateway.complete(config,messages(),null,new RunControl()));assertTrue(rig.fake.refreshEntered.await(2,TimeUnit.SECONDS));
                 Future<JSONObject> second=workers.submit(()->{waiting.countDown();return ModelGateway.complete(config,messages(),null,new RunControl());});assertTrue(waiting.await(1,TimeUnit.SECONDS));Thread.sleep(100);rig.fake.allowRefresh.countDown();
                 assertEquals("verified",first.get(3,TimeUnit.SECONDS).getString("content"));assertEquals("verified",second.get(3,TimeUnit.SECONDS).getString("content"));assertEquals(1,rig.fake.refreshes.get());assertEquals(2,rig.fake.responses.get());
-                try{ModelGateway.complete(config,messages(),null,new RunControl());fail("Old selection aliased to a completed refresh");}catch(ModelGateway.GatewayException expected){assertTrue(expected.getMessage().contains("版本"));}assertEquals(2,rig.fake.responses.get());
+                assertEquals("verified",ModelGateway.complete(config,messages(),null,new RunControl()).getString("content"));assertEquals(3,rig.fake.responses.get());assertEquals(1,rig.fake.refreshes.get());
             }finally{rig.fake.allowRefresh.countDown();workers.shutdownNow();}
         }
     }
@@ -107,7 +113,7 @@ public final class AccountInferenceRenewalTest {
         try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
             rig.fake.expiresIn=1;String id=rig.connect();ModelConfig config=config(rig,id);long initial=config.accountModel.accountVersion;AtomicLong persisted=new AtomicLong(initial);bind(rig,persisted);rig.fake.expiresIn=3600;rig.fake.stream=textStream();rig.fake.allowResponse=new CountDownLatch(1);ExecutorService worker=Executors.newSingleThreadExecutor();
             try{
-                Future<JSONObject> pending=worker.submit(()->ModelGateway.complete(config,messages(),null,new RunControl()));assertTrue(rig.fake.responseEntered.await(2,TimeUnit.SECONDS));assertEquals(initial+2,persisted.get());
+                Future<JSONObject> pending=worker.submit(()->ModelGateway.complete(config,messages(),null,new RunControl()));assertTrue(rig.fake.responseEntered.await(2,TimeUnit.SECONDS));assertEquals(initial+1,persisted.get());
                 rig.gateway.setEnabledReviewed(id,persisted.get(),false);rig.fake.allowResponse.countDown();
                 try{pending.get(3,TimeUnit.SECONDS);fail("Renewed but revoked decision escaped");}catch(java.util.concurrent.ExecutionException expected){assertTrue(expected.getCause() instanceof ModelGateway.GatewayException);}
                 assertEquals(1,rig.fake.refreshes.get());assertEquals(1,rig.fake.responses.get());assertFalse(rig.book.row(id).getBoolean("enabled"));
@@ -119,15 +125,46 @@ public final class AccountInferenceRenewalTest {
             rig.fake.expiresIn=1;String id=rig.connect();ModelConfig captured=config(rig,id);long initial=captured.accountModel.accountVersion;AtomicLong persisted=new AtomicLong(initial);bind(rig,persisted);
             rig.fake.expiresIn=3600;rig.fake.stream=textStream();RunControl original=new RunControl();
             dev.pocketengine.runtime.models.InferenceRouteContinuity.requireCurrent(captured.withStepCeiling(10),captured,original);
-            ModelGateway.complete(captured,messages(),null,original);ModelConfig renewed=config(rig,id);assertEquals(initial+2,renewed.accountModel.accountVersion);
+            ModelGateway.complete(captured,messages(),null,original);ModelConfig renewed=config(rig,id);assertEquals(initial+1,renewed.accountModel.accountVersion);
             dev.pocketengine.runtime.models.InferenceRouteContinuity.requireCurrent(captured,renewed,original);
             assertFalse(ModelGateway.accountSelectionContinues(new RunControl(),captured.accountModel,renewed.accountModel));
-            assertFalse(ModelGateway.accountSelectionContinues(original,captured.accountModel,captured.accountModel));
+            assertTrue(ModelGateway.accountSelectionContinues(original,captured.accountModel,captured.accountModel));
             assertFalse(ModelGateway.accountSelectionContinues(original,captured.accountModel,renewed.accountModel.withVersion(renewed.accountModel.accountVersion+1)));
             rig.gateway.setEnabledReviewed(id,renewed.accountModel.accountVersion,false);
             assertThrows(SecurityException.class,()->dev.pocketengine.runtime.models.InferenceRouteContinuity.requireCurrent(captured,renewed,original));
             assertFalse(rig.gateway.inferenceIdentityCurrent(id,renewed.accountModel.accountVersion));assertEquals(1,rig.fake.responses.get());assertEquals(1,rig.fake.refreshes.get());
             rig.gateway.logout(id,new GatewayCall(3000));assertFalse(ModelGateway.accountSelectionContinues(original,captured.accountModel,renewed.accountModel));assertEquals(1,rig.fake.responses.get());
+        }
+    }
+
+    @Test public void refreshedImageFactsContinueButOwnerConsentModelAndRevocationStillFenceTheRun()throws Exception {
+        try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
+            String id=rig.connect();ModelConfig base=config(rig,id);bind(rig,new AtomicLong(base.accountModel.accountVersion));
+            rig.fake.modelsBody="{\"models\":[{\"slug\":\"fixture-model\",\"display_name\":\"Fixture\",\"visibility\":\"list\",\"input_modalities\":[\"text\",\"image\"]}]}";
+            ModelConfig captured=new ModelConfig("","","",true,3,10).withAccountModel(base.accountModel).withAccountImageInput(false);RunControl original=new RunControl();
+            ModelConfig ready=ModelGateway.prepareAccount(captured,original);assertTrue(ready.supportsImageInput);assertTrue(ready.sendScreenshots);assertFalse(captured.supportsImageInput);
+            dev.pocketengine.runtime.models.InferenceRouteContinuity.requireCurrent(captured,ready,original);
+            ModelConfig consentOff=new ModelConfig("","","",false,3,10).withAccountModel(ready.accountModel).withAccountImageInput(true);
+            assertThrows(SecurityException.class,()->dev.pocketengine.runtime.models.InferenceRouteContinuity.requireCurrent(captured,consentOff,original));
+            JSONObject otherRef=ready.accountModel.toJson().put("modelId","another-model");ModelConfig other=ready.withAccountModel(ModelConfig.AccountModelRef.fromJson(otherRef));
+            assertThrows(SecurityException.class,()->dev.pocketengine.runtime.models.InferenceRouteContinuity.requireCurrent(captured,other,original));
+            rig.gateway.setEnabledReviewed(id,ready.accountModel.accountVersion,false);
+            assertThrows(SecurityException.class,()->dev.pocketengine.runtime.models.InferenceRouteContinuity.requireCurrent(captured,ready,original));assertEquals(0,rig.fake.responses.get());
+        }
+    }
+
+    @Test public void responseKeepsItsAdmittedVersionAcrossRenewalAndNextRequestAdvances()throws Exception {
+        try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
+            String id=rig.connect();ModelConfig captured=config(rig,id);AtomicLong persisted=new AtomicLong(captured.accountModel.accountVersion);bind(rig,persisted);
+            ModelGateway.prepareAccount(captured,new RunControl());assertEquals(0,rig.fake.responses.get());
+            rig.fake.stream=textStream();rig.fake.allowResponse=new CountDownLatch(1);RunControl original=new RunControl();var worker=Executors.newSingleThreadExecutor();
+            try{var result=worker.submit(()->ModelGateway.complete(captured,messages(),null,original));assertTrue(rig.fake.responseEntered.await(2,TimeUnit.SECONDS));
+                rig.gateway.refreshReviewed(id,captured.accountModel.accountVersion,new GatewayCall(5000));rig.fake.allowResponse.countDown();JSONObject completed=result.get(3,TimeUnit.SECONDS);
+                assertEquals(captured.accountModel.accountVersion,completed.getJSONObject("provider_data").getJSONObject("nativeRef").getLong("accountVersion"));
+                assertEquals("verified",ModelGateway.complete(captured,messages().put(completed),null,original).getString("content"));assertEquals(2,rig.fake.responses.get());assertEquals(1,rig.fake.refreshes.get());
+                JSONObject changed=captured.accountModel.toJson().put("modelId","another-model");ModelConfig other=captured.withAccountModel(ModelConfig.AccountModelRef.fromJson(changed));
+                assertThrows(ModelGateway.GatewayException.class,()->ModelGateway.complete(other,messages(),null,original));assertEquals(2,rig.fake.responses.get());
+            }finally{rig.fake.allowResponse.countDown();worker.shutdownNow();}
         }
     }
 

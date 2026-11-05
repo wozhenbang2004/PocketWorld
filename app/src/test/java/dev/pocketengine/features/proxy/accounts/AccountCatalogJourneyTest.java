@@ -42,6 +42,11 @@ public final class AccountCatalogJourneyTest {
     private void bind(AccountGatewayTest.Rig rig,AtomicLong persisted){
         ModelGateway.installAccountInferencePort(new ModelGateway.AccountInferencePort(){
             public boolean accountIdentityCurrent(ModelConfig.AccountModelRef ref){return rig.gateway.inferenceIdentityCurrent(ref.accountId,ref.accountVersion);}
+            public boolean authorizationCurrent(ModelConfig.AccountModelRef ref){return rig.gateway.authorizationCurrent(ref.accountId,ref.accountVersion);}
+            public ModelGateway.AccountPreparation prepare(ModelConfig.AccountModelRef ref,GatewayCall operation)throws GatewayFailure {
+                AccountGateway.PreparedModel ready=rig.gateway.prepareForInference(ref.accountId,ref.accountVersion,ref.modelId,operation);persisted.compareAndSet(ref.accountVersion,ready.accountVersion);
+                return new ModelGateway.AccountPreparation(ref.withVersion(ready.accountVersion),ready.facts,ready.supportsImages());
+            }
             public AccountCatalogFacts modelFacts(ModelConfig.AccountModelRef ref)throws GatewayFailure{return rig.gateway.modelFacts(ref.accountId,ref.accountVersion,ref.modelId);}
             public void stream(ModelConfig.AccountModelRef ref,ResponsesRequest request,GatewayCall call,ChatGptProvider.EventSink sink)throws GatewayFailure{rig.gateway.streamResponsesReviewed(ref.accountId,ref.accountVersion,request,call,sink);}
             public void streamWithVersion(ModelConfig.AccountModelRef ref,ResponsesRequest request,GatewayCall call,ModelGateway.AccountVersionSink versions,ChatGptProvider.EventSink sink)throws GatewayFailure{
@@ -58,6 +63,42 @@ public final class AccountCatalogJourneyTest {
         long until=rig.book.credentials(id,version).expiresAt-59950;
         while(System.currentTimeMillis()<until)Thread.sleep(Math.max(1,Math.min(30,until-System.currentTimeMillis())));
         rig.fake.expiresIn=3600;
+    }
+    private static final class SummaryAuthority implements dev.pocketengine.runtime.usage.LogicalInferenceAuthority {
+        public JSONObject begin(String id,String digest,JSONObject route,long deadline)throws Exception{return new JSONObject().put("deadlineAt",deadline).put("control",new JSONObject().put("maxAttempts",route.getInt("maxAttempts")));}
+        public boolean matchesHistoryOrigin(String call,ModelConfig config,JSONObject data){return false;}
+        public boolean reserveRetry(String id,String call,long wait){throw new AssertionError("account inference is never replayed");}
+        public void reserve(String id,String call,int attempt,String candidate,String reason){assertEquals(1,attempt);}
+        public void commit(String id,String call,long sequence){}
+        public void attemptEnded(String id,String call,boolean dispatched,String state){}
+        public void finish(String id,String state,String completion,String stream){}
+    }
+    @Test public void defaultSummaryCandidatePreparesBeforeBudgetAfterInitialTokenRenewal()throws Exception {
+        try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
+            rig.fake.expiresIn=61;String id=rig.connect();catalog(rig,row(12000));ModelConfig selected=pin(rig,id);long initial=selected.accountModel.accountVersion;
+            var summaryPlan=dev.pocketengine.runtime.models.ModelRoutePlan.exact(selected,"SUMMARY","APP_OWNER");
+            ModelConfig captured=selected.withPurposePlans(java.util.Map.of("SUMMARY",summaryPlan));bind(rig,new AtomicLong(initial));reachRenewalWindow(rig,id,initial);
+            RunControl original=new RunControl();original.bindHostRun("summary-task","summary-run",1);
+            ModelConfig prepared=ModelGateway.prepareAccount(captured,original);assertEquals(initial+1,prepared.accountModel.accountVersion);
+            assertSame(summaryPlan,prepared.purposePlans.get("SUMMARY"));assertEquals(initial,prepared.forPurpose("SUMMARY").accountModel.accountVersion);assertEquals(0,rig.fake.responses.get());
+            var budgets=ContextBudgetPolicy.forRun(candidate->rig.gateway.modelFacts(candidate.accountModel.accountId,candidate.accountModel.accountVersion,candidate.model).budget(candidate),original);
+            RunContextBudget budget=new RunContextBudget(budgets);java.util.List<Long> admittedVersions=new java.util.ArrayList<>();JSONArray messages=input("Summarize the original evidence.");
+            var target=new dev.pocketengine.runtime.usage.InferenceCapture.Target(new dev.pocketengine.runtime.usage.InferenceReceipt.Context("summary-task","summary-run",1,dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.SUMMARY,""),new dev.pocketengine.runtime.usage.InferenceCapture.Sink(){public void started(dev.pocketengine.runtime.usage.InferenceReceipt r){}public void finished(dev.pocketengine.runtime.usage.InferenceReceipt r){}},()->{},new SummaryAuthority());
+            rig.fake.stream=answer();JSONObject completed=ModelGateway.completeWithAdmission(prepared.forPurpose("SUMMARY"),messages,null,original,target,candidate->{admittedVersions.add(candidate.accountModel.accountVersion);budget.request(messages,null,candidate);},System.currentTimeMillis()+5000);
+            assertEquals(java.util.List.of(initial+1,initial+1),admittedVersions);assertEquals("verified",completed.getString("content"));
+            assertEquals(initial+1,completed.getJSONObject("provider_data").getJSONObject("nativeRef").getLong("accountVersion"));assertEquals(1,rig.fake.refreshes.get());assertEquals(1,rig.fake.responses.get());
+            assertEquals("STALE_ACCOUNT_VERSION",assertThrows(GatewayFailure.class,()->rig.gateway.modelFacts(id,initial,selected.model)).code);
+        }
+    }
+    @Test public void preparingMainMetadataDoesNotBindAnotherActualCandidateBeforeItsFirstRequest()throws Exception {
+        try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
+            String id=rig.connect();catalog(rig,row(12000),row(12000).put("slug","summary-model"));ModelConfig main=pin(rig,id);bind(rig,new AtomicLong(main.accountModel.accountVersion));RunControl original=new RunControl();
+            ModelGateway.prepareAccount(main,original);assertEquals(0,rig.fake.responses.get());
+            ModelConfig actual=main.withAccountModel(ModelConfig.AccountModelRef.fromJson(main.accountModel.toJson().put("modelId","summary-model")));rig.fake.stream=answer();
+            assertEquals("verified",ModelGateway.completeWithAdmission(actual,input("summary"),null,original,dev.pocketengine.runtime.usage.InferenceCapture.unattributed(),candidate->assertEquals("summary-model",candidate.model)).getString("content"));
+            assertEquals("summary-model",rig.fake.lastRequest.getString("model"));assertEquals(1,rig.fake.responses.get());
+            assertThrows(ModelGateway.GatewayException.class,()->ModelGateway.complete(main,input("owner model changed"),null,original));assertEquals(1,rig.fake.responses.get());
+        }
     }
     @Test public void CatalogKeepsServerOrderAndPerModelFactsFromTheActualToken()throws Exception {
         try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
@@ -130,7 +171,7 @@ public final class AccountCatalogJourneyTest {
             assertEquals(12000,budget.request(input("hello"),null,captured).diagnostics().getLong("modelContextTokens"));
             reachRenewalWindow(rig,id,captured.accountModel.accountVersion);catalog(rig,row(9000,"low"));rig.fake.stream=answer();
             assertEquals("verified",ModelGateway.complete(captured,input("hello"),null,original).getString("content"));
-            assertEquals(captured.accountModel.accountVersion+2,persisted.get());assertEquals(1,rig.fake.refreshes.get());
+            assertEquals(captured.accountModel.accountVersion+1,persisted.get());assertEquals(1,rig.fake.refreshes.get());
             assertEquals(9000,budget.request(input("hello"),null,captured).diagnostics().getLong("modelContextTokens"));
             try{new RunContextBudget(ContextBudgetPolicy.forRun(live,new RunControl())).request(input("hello"),null,captured);fail();}
             catch(RunContextBudget.Blocked expected){assertEquals("context_budget_unavailable",expected.status);}

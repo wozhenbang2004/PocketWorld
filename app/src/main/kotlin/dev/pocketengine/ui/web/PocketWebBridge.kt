@@ -417,7 +417,7 @@ internal class PocketWebBridge(
                 return
             }
             if (action in PocketWebModelDiagnostics.COMMANDS) {
-                requireSection("models"); modelDiagnostics.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
+                requireSection("models"); modelDiagnostics.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action != "modelDiagnostics.logs"); publishState() }; return
             }
             if (action in PocketWebTaskCapabilities.COMMANDS) {
                 if (action == "taskCapabilities.open") {
@@ -825,9 +825,9 @@ internal class PocketWebBridge(
         val identity = pendingCommands.remove(id) ?: return
         val response = JSONObject().put("v", 1).put("kind", "result").put("id", id).put("ok", error == null)
         if (error == null) response.put("value", value ?: JSONObject()) else response.put("error", JSONObject().put("code", errorCode).put("message", error))
-        // A rolling frame is not a durable command receipt. Keep only a small replay rejection.
+        // Transient reads are not durable command receipts. Keep only a small replay rejection.
         val replay = if (retainValue || error != null) response else JSONObject().put("v", 1).put("kind", "result").put("id", id).put("ok", false)
-            .put("error", JSONObject().put("code", "preview_expired").put("message", "请读取最新画面"))
+            .put("error", JSONObject().put("code", "preview_expired").put("message", "原读取结果已过期，请重新读取"))
         commandReceipts[id] = identity to replay
         while (commandReceipts.size > 128) commandReceipts.remove(commandReceipts.keys.first())
         emit(response)
