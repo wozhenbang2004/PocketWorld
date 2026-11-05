@@ -51,3 +51,12 @@
   .pw-redesign .pw-project-tabs *, .pw-redesign .pw-file-tabs * { transition-duration: 0s; }
 }
 .pw-redesign .pw-project-tabs [role="tab"] > span, .pw-redesign .pw-file-tabs [role="tab"] > span { color: inherit; }
+
+/* Preserve the adopted comparison surface; only changed source fragments carry marks. */
+.pw-redesign .pw-file-tabs .pw-inline-diff { background: var(--pw-surface,#fff); color: var(--pw-ink,#242424); }
+.pw-inline-diff .pw-diff-columns > section + section { background: var(--pw-inset,#f6f6f6); }
+.pw-inline-diff .pw-diff-columns del { color: var(--pw-copy,#555); text-decoration: line-through; }
+.pw-inline-diff .pw-diff-columns ins { color: var(--pw-ink,#242424); text-decoration: underline; }
+.pw-inline-diff .pw-diff-note { margin: 0; padding: 4px 12px 8px; color: var(--pw-copy,#555); font-size: 12px; line-height: 1.7; }
+
+:root.dark .pw-redesign .pw-file-workspace { --pw-panel: var(--pw-surface); --pw-bg: var(--pw-canvas); }

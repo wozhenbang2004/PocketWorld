@@ -204,3 +204,26 @@ required). The fixture uses production React components with a synthetic host;
 it does not prove Android, OAuth, IME or device acceptance. For the existing
 account/model regression runner, UI_BROWSER_CHANNEL=msedge selects Edge and
 UI_NO_SCREENSHOTS=1 disables persistent screenshots.
+
+## File comparison fragments
+
+The adopted Affect PW-24 surface keeps exact original-version and current-draft
+text in its two existing columns. Unchanged context stays ordinary text;
+only removed fragments use del and added fragments use ins. Empty-file labels
+are presentation text, never a removed or added fragment. Whitespace-only
+changes remain exact and receive a short notice.
+
+The pinned jsdiff 9.0.0 algorithm is adapted behind this existing surface.
+Character search has a 40ms search budget and edit-distance limit; larger
+comparisons use a bounded line comparison with an explicit precision notice.
+If token-allocation or search limits are reached, both complete source texts
+remain visible without invented change marks. This affects display only:
+file content, original revision, save, adoption and host commands are unchanged.
+
+This completes the parent's 2026-11-05 follow-up request to fix the confirmed
+whole-file-highlighting defect under the user's existing review/fix/merge
+authorization. No new aesthetic-library record or design component is added.
+Run node web-ui/tests/file-diff-ui.mjs for the headless Edge production-component
+fixture and npm test --prefix web-ui for exact-text and fallback checks.
+The fixture uses a synthetic file session; Android16/WebView/IME acceptance
+belongs to the existing device-testing owner.
