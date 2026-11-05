@@ -339,7 +339,7 @@ public final class ModelGateway {
             try{
                 JSONObject result=physical.run(selected,capture,commit);checkRequest(control,request);commit.beforeFlush(capture.callId,1);
                 capture.returnedHistory(result);capture.finish(InferenceReceipt.Outcome.COMPLETED);physical.afterPersist(capture);checkRequest(control,request);
-                if(authority!=null){authority.attemptEnded(logical,capture.callId,capture.wasDispatched(),"complete");authority.finish(logical,"SUCCEEDED","complete","complete");JSONObject metadata=result.optJSONObject("provider_data");if(metadata!=null&&!selected.usesAccount())metadata.put("originCallId",capture.callId);}
+                if(authority!=null){authority.attemptEnded(logical,capture.callId,capture.wasDispatched(),"complete");authority.finish(logical,"SUCCEEDED","complete","complete");JSONObject metadata=result.optJSONObject("provider_data");if(metadata!=null)metadata.put("originCallId",capture.callId);}
                 return result;
             }catch(Exception failure){
                 permit.close();anyDispatched|=capture.wasDispatched();
@@ -659,7 +659,8 @@ public final class ModelGateway {
             try{
                 AccountBinding binding=binding(control,config.accountModel,port);
                 ModelConfig.AccountModelRef expected=binding.current();
-                ResponsesRequest request=AccountResponsesAdapter.request(config.withAccountModel(expected),messages,tools,binding.versions(),port.imageInputSupported(expected));
+                ModelConfig currentAccount=config.withAccountModel(expected);
+                ResponsesRequest request=AccountResponsesAdapter.request(currentAccount,messages,tools,binding.versions(),port.imageInputSupported(expected),data->capture.matchesHistoryOrigin(currentAccount,data));
                 request.admit(accountModelFacts(expected));
                 final JSONObject[] completed={null};final ModelConfig.AccountModelRef[] admitted={null};checkRequest(control,requestScope);
                 port.streamWithVersion(expected,request,operation,actualVersion->{

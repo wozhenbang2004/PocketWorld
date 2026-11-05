@@ -162,6 +162,21 @@ public final class TaskAuditStore {
     public static JSONObject call(SQLiteDatabase db,String task,String call)throws Exception{
         JSONObject result=null;try(Cursor rows=db.rawQuery("SELECT event_order,body_bytes FROM task_events WHERE task_id=? AND event_type='inference_receipt' AND call_id=? ORDER BY event_order",new String[]{task,call})){while(rows.moveToNext()){if(result!=null)throw new IllegalStateException("原调用计量出现重复身份");result=nativeEvent(db,task,rows.getLong(0),rows.getLong(1));}}return result;
     }
+    /** Older account histories predate originCallId. Resolve only an unambiguous completed
+     * native receipt in this task. SQL narrows by digest; parsed fields remain authoritative. */
+    public static JSONObject callByHistoryDigest(SQLiteDatabase db,String task,String digest)throws Exception {
+        if(digest==null||!digest.matches("[a-f0-9]{64}"))return null;
+        JSONObject found=null;
+        try(Cursor rows=db.rawQuery("SELECT event_order,body_bytes FROM task_events WHERE task_id=? AND event_type='inference_receipt' AND instr(event_json,?)>0 ORDER BY event_order DESC LIMIT 2",new String[]{task,digest})){
+            while(rows.moveToNext()){
+                long bytes=rows.getLong(1);if(bytes<0||bytes>MAX_NATIVE_EVENT_BYTES)return null;
+                JSONObject receipt=nativeEvent(db,task,rows.getLong(0),bytes),route=receipt.optJSONObject("route");
+                if(!"COMPLETED".equals(receipt.optString("outcome"))||route==null||!digest.equals(route.optString("historyDigest")))continue;
+                if(found!=null)throw new IllegalStateException("历史上下文的原完成回执身份不唯一");found=receipt;
+            }
+        }
+        return found==null?null:call(db,task,found.getString("callId"));
+    }
     private static JSONObject nativeEvent(SQLiteDatabase db,String task,long position,long bytes)throws Exception{
         if(bytes<0)throw new IllegalStateException("原事件字节数不可核对");
         // Preserve legacy native get/list semantics. Only explicit native complete-audit consumers

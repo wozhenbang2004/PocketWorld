@@ -10,6 +10,7 @@ import org.json.JSONObject;
 
 /** Canonical host history <-> SIWC Responses. No credentials, execution, permissions, or retries. */
 public final class AccountResponsesAdapter {
+    @FunctionalInterface public interface HistoryOrigin {boolean accepts(JSONObject metadata)throws Exception;}
     private static final String NAMESPACE="pocketworld";
     private AccountResponsesAdapter(){}
 
@@ -23,6 +24,11 @@ public final class AccountResponsesAdapter {
     }
     /** Image permission comes from the native gateway, never from history or a model config declaration. */
     public static ResponsesRequest request(ModelConfig config,JSONArray messages,JSONArray tools,Set<Long> acceptedVersions,boolean imageInputSupported)throws Exception {
+        return request(config,messages,tools,acceptedVersions,imageInputSupported,data->false);
+    }
+    /** A historical item may be proven by this original task's completed native receipt.
+     * This proves input provenance only; it never authorizes an old credential generation. */
+    public static ResponsesRequest request(ModelConfig config,JSONArray messages,JSONArray tools,Set<Long> acceptedVersions,boolean imageInputSupported,HistoryOrigin historyOrigin)throws Exception {
         if(!config.usesAccount()||messages==null)throw invalid();
         JSONArray input=new JSONArray(),functions=new JSONArray(),namespaces=new JSONArray();
         if(tools!=null)for(int i=0;i<tools.length();i++){
@@ -49,10 +55,10 @@ public final class AccountResponsesAdapter {
             if(message.has("provider_data")&&metadata==null)throw invalid();
             if(metadata!=null){
                 if(!role.equals("assistant"))throw invalid();
-                keys(metadata,"provider","nativeRef","items");
+                keys(metadata,"provider","nativeRef","items","originCallId");
                 ModelConfig.AccountModelRef prior=ModelConfig.AccountModelRef.fromJson(metadata.getJSONObject("nativeRef"));
                 if(!ModelConfig.ACCOUNT_PROVIDER.equals(metadata.optString("provider"))||
-                        !config.accountModel.sameModel(prior)||!acceptedVersions.contains(prior.accountVersion))
+                        !config.accountModel.sameModel(prior)||(!acceptedVersions.contains(prior.accountVersion)&&!historyOrigin.accepts(metadata)))
                     throw new GatewayException("历史模型上下文属于另一个账号、版本或模型；请在原连接恢复，或新建对话，不能自动重放。");
                 JSONArray raw=metadata.getJSONArray("items");
                 for(int j=0;j<raw.length();j++)input.put(copy(raw.getJSONObject(j)));

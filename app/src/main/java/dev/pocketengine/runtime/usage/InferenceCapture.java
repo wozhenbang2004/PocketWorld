@@ -106,6 +106,11 @@ public final class InferenceCapture {
         route.put("tokenReservation",InferenceTokenReservation.prepare(pricingConfig,messages,tools));
     }
     public void returnedHistory(JSONObject assistant)throws Exception {if(finished)throw new SecurityException("receipt_already_finished");JSONObject metadata=assistant.optJSONObject("provider_data");if(metadata!=null)route.put("historyDigest",historyDigest(metadata));}
+    /** Original native target only. Bare provider_data cannot authorize its own history. */
+    public boolean matchesHistoryOrigin(ModelConfig current,JSONObject metadata)throws Exception {
+        target.admission.check();
+        return target.logical!=null&&target.logical.matchesHistoryOrigin(metadata.optString("originCallId"),current,metadata);
+    }
     public static String historyDigest(JSONObject metadata)throws Exception {JSONObject copy=new JSONObject(metadata.toString());copy.remove("originCallId");byte[] bytes=java.security.MessageDigest.getInstance("SHA-256").digest(canonical(copy).getBytes(java.nio.charset.StandardCharsets.UTF_8));StringBuilder out=new StringBuilder();for(byte b:bytes)out.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return out.toString();}
     private static String canonical(Object value)throws Exception {if(value instanceof JSONObject j){java.util.List<String> keys=new java.util.ArrayList<>();j.keys().forEachRemaining(keys::add);java.util.Collections.sort(keys);StringBuilder out=new StringBuilder("{");for(String key:keys){if(out.length()>1)out.append(',');out.append(JSONObject.quote(key)).append(':').append(canonical(j.get(key)));}return out.append('}').toString();}if(value instanceof org.json.JSONArray a){StringBuilder out=new StringBuilder("[");for(int i=0;i<a.length();i++){if(i>0)out.append(',');out.append(canonical(a.get(i)));}return out.append(']').toString();}return value instanceof String?JSONObject.quote((String)value):String.valueOf(value);}
     public long remainingMillis(ModelConfig config)throws Exception{long remaining=Math.min(config.requestTimeoutSeconds*1000L,deadlineAt-System.currentTimeMillis());if(remaining<=0)throw new java.net.SocketTimeoutException("logical_deadline_exceeded");return remaining;}

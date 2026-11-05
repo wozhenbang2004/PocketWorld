@@ -1,4 +1,11 @@
 {
+  "account-history-origin": {
+    "class": "dev.pocketengine.store.AccountHistoryOriginTest",
+    "additionalClasses": ["dev.pocketengine.features.proxy.accounts.AccountInferenceRenewalTest"],
+    "helpers": ["dev.pocketengine.features.proxy.accounts.AccountGatewayTest", "dev.pocketengine.features.proxy.providers.FakeChatGpt", "dev.pocketengine.features.proxy.providers.ResponsesFixtures", "dev.pocketengine.testutil.HttpServer"],
+    "robolectric": true,
+    "description": "Native SQL completed-receipt provenance for same-task ChatGPT history after renewal; no live account or tool effects."
+  },
   "project-final-review": {
     "class": "dev.pocketengine.store.ProjectFinalAnswerReviewTest",
     "helpers": [],

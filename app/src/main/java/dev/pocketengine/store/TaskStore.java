@@ -10290,11 +10290,17 @@ public final class TaskStore {
                     if(resources!=null)admitted.put("modelResourceScope",resources);db.setTransactionSuccessful();return admitted;
                 }finally{db.endTransaction();}}
             }
-            public boolean matchesHistoryOrigin(String call,dev.pocketengine.core.ModelConfig config,JSONObject providerData)throws Exception {synchronized(TaskStore.this){
-                if(call==null||!call.matches("[a-fA-F0-9-]{36}"))return false;JSONObject receipt=TaskAuditStore.call(db,context.taskId,call);if(receipt==null||!"COMPLETED".equals(receipt.optString("outcome")))return false;JSONObject originalContext=receipt.getJSONObject("context");if(!context.memberId.equals(originalContext.optString("memberId"))||!context.purpose.name().equals(originalContext.optString("purpose")))return false;JSONObject route=receipt.getJSONObject("route");
+            public boolean matchesHistoryOrigin(String call,dev.pocketengine.core.ModelConfig config,JSONObject providerData)throws Exception {admission.check();synchronized(TaskStore.this){
+                boolean legacyAccount=config.usesAccount()&&(call==null||call.isEmpty());
+                if(!legacyAccount&&(call==null||!call.matches("[a-fA-F0-9-]{36}")))return false;
+                JSONObject receipt=legacyAccount?TaskAuditStore.callByHistoryDigest(db,context.taskId,InferenceCapture.historyDigest(providerData)):TaskAuditStore.call(db,context.taskId,call);
+                if(receipt==null||!"COMPLETED".equals(receipt.optString("outcome")))return false;JSONObject originalContext=receipt.getJSONObject("context");if(!context.taskId.equals(originalContext.optString("taskId"))||!context.memberId.equals(originalContext.optString("memberId"))||!context.purpose.name().equals(originalContext.optString("purpose")))return false;JSONObject route=receipt.getJSONObject("route");
                 if(!InferenceCapture.historyDigest(providerData).equals(route.optString("historyDigest")))return false;
                 if(!config.model.equals(route.optString("requestedModel"))||!(config.usesAccount()?"openai_responses":config.provider).equals(route.optString("protocol")))return false;
-                if(config.usesAccount())return config.accountModel.accountId.equals(route.optString("accountId"))&&config.accountModel.accountVersion==route.optLong("accountVersion");
+                if(config.usesAccount()){
+                    dev.pocketengine.core.ModelConfig.AccountModelRef prior=dev.pocketengine.core.ModelConfig.AccountModelRef.fromJson(providerData.getJSONObject("nativeRef"));
+                    return dev.pocketengine.core.ModelConfig.ACCOUNT_PROVIDER.equals(providerData.optString("provider"))&&config.accountModel.sameModel(prior)&&config.accountModel.accountId.equals(route.optString("accountId"))&&prior.accountVersion==route.optLong("accountVersion");
+                }
                 var binding=config.capabilityBinding;return binding!=null&&binding.connectionId().equals(route.optString("connectionId"))&&binding.credentialId().equals(route.optString("credentialId"))&&binding.credentialRevision()==route.optLong("credentialRevision")&&binding.installationId().equals(route.optString("installationId"))&&binding.installationRevision()==route.optLong("installationRevision");
             }}
             public boolean reserveRetry(String id,String call,long waitMillis)throws Exception {admission.check();synchronized(TaskStore.this){db.beginTransaction();try{
