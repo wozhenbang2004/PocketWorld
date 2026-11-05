@@ -29,7 +29,7 @@ public final class ChatGptProvider implements AutoCloseable {
     // Token, discovery and identity-key responses retain their smaller independent limits.
     private static final int MODEL_CATALOG_MAX_BYTES=2*1024*1024;
     private final String issuer,api;
-    private final OkHttpClient http;
+    private final OkHttpClient http,streamHttp;
     public ChatGptProvider(){this("https://auth.openai.com","https://api.openai.com/v1",false);}
     // Package-private: a test may use a local fake server, never a user-supplied gateway or arbitrary HTTPS host.
     ChatGptProvider(String issuer,String api,boolean fixture){
@@ -38,6 +38,9 @@ public final class ChatGptProvider implements AutoCloseable {
         this.issuer=issuer;this.api=api;
         http=new OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
             .connectTimeout(10,TimeUnit.SECONDS).readTimeout(30,TimeUnit.SECONDS).writeTimeout(30,TimeUnit.SECONDS).cache(null).build();
+        // Quiet reasoning is bounded by GatewayCall's original whole-call deadline,
+        // not an unrelated 30-second socket idle timer. Metadata keeps its existing limit.
+        streamHttp=http.newBuilder().readTimeout(0,TimeUnit.MILLISECONDS).build();
     }
     private static boolean isFixture(String value){HttpUrl url=HttpUrl.parse(value);return url!=null&&url.scheme().equals("http")&&url.host().equals("127.0.0.1")&&url.username().isEmpty()&&url.password().isEmpty();}
     public String authorizationUrl(String hostId,String clientId,String callback,String state,String nonce,String challenge)throws GatewayFailure {
@@ -143,7 +146,7 @@ public final class ChatGptProvider implements AutoCloseable {
     private void streamRequest(Credentials credentials,byte[] bytes,ResponsesRequest context,GatewayCall operation,EventSink sink)throws GatewayFailure {
         Request request=new Request.Builder().url(api+"/responses").header("Authorization","Bearer "+credentials.accessToken()).header("Accept","text/event-stream").header("Accept-Encoding","identity")
             .post(oneShot(RequestBody.create(bytes,MediaType.get("application/json; charset=utf-8")))).build();
-        try(Exchange exchange=execute(request,operation)){
+        try(Exchange exchange=execute(request,operation,streamHttp)){
             Response response=exchange.response;checkStatus(response,operation);
             String contentType=response.header("Content-Type","").split(";",2)[0].trim();
             // The official route can omit this header. The bounded SSE state machine still
@@ -173,7 +176,10 @@ public final class ChatGptProvider implements AutoCloseable {
     // Operation owns one network Call at a time. Its binding remains through body consumption, not just headers.
     private final java.util.Map<GatewayCall,Call> bound=new java.util.concurrent.ConcurrentHashMap<>();
     private Exchange execute(Request request,GatewayCall operation)throws Exception {
-        operation.check();Call call=http.newCall(request);operation.attach(call);bound.put(operation,call);
+        return execute(request,operation,http);
+    }
+    private Exchange execute(Request request,GatewayCall operation,OkHttpClient client)throws Exception {
+        operation.check();Call call=client.newCall(request);operation.attach(call);bound.put(operation,call);
         try{return new Exchange(operation,call,call.execute());}
         catch(Exception error){bound.remove(operation,call);operation.detach(call);throw error;}
     }

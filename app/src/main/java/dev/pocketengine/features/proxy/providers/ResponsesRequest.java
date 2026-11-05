@@ -118,7 +118,10 @@ public final class ResponsesRequest {
         if(!role.equals("user")&&!role.equals("assistant")&&!role.equals("developer"))throw invalid();
         completedIfPresent(item);phase(item);if(item.has("phase")&&!role.equals("assistant"))throw invalid();
         Object content=item.opt("content");if(content instanceof String){if(((String)content).length()>128*1024)throw invalid();textInput|=!((String)content).isEmpty();return;}
-        if(!(content instanceof JSONArray))throw invalid();JSONArray parts=(JSONArray)content;if(parts.length()==0||parts.length()>32)throw invalid();
+        if(!(content instanceof JSONArray))throw invalid();JSONArray parts=(JSONArray)content;
+        // A verified completed assistant may be an empty placeholder beside separate calls.
+        // Keep that item's identity/phase for replay; owner input still requires content.
+        if(parts.length()>32||parts.length()==0&&!(role.equals("assistant")&&"completed".equals(item.optString("status"))))throw invalid();
         for(int i=0;i<parts.length();i++){
             JSONObject part=parts.getJSONObject(i);String type=string(part,"type",32,true);
             if(type.equals("input_text")){keys(part,"type","text");textInput|=!string(part,"text",128*1024,false).isEmpty();}

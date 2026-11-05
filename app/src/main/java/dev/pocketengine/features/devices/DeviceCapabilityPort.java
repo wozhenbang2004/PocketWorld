@@ -110,6 +110,13 @@ public final class DeviceCapabilityPort implements CapabilityPort {
     }
     @Override public JSONObject execute(String name,JSONObject input,RunControl control)throws Exception{JSONObject result=invoke(name,input,control);return "OperationReceipt".equals(result.optString("messageType"))?localAgentReceipt(result):result;}
     private static JSONObject localAgentReceipt(JSONObject typed)throws Exception{
+        // Missing original ledger evidence is unknown, not proof of no dispatch. Preserve
+        // the receiver's explicit reconciliation state before considering nested success.
+        String status=typed.getString("status");
+        if(status.equals("not_found")||status.equals("needs_reconcile"))return new JSONObject().put("ok",false).put("accepted",typed.getBoolean("accepted"))
+                .put("status",status).put("effectState",typed.getString("effectState")).put("operationId",typed.get("operationId")).put("deviceReceipt",typed)
+                .put("code","device_original_state_unknown").put("requiresReconciliation",true).put("nextAction","device_operation_get").put("retrySubmitted",false)
+                .put("message","原设备操作仍需核对，或原记录已不可确认；保留原ID，不换ID重提。").put("businessVerified",false);
         JSONObject body=typed.getJSONObject("payload"),actual=body.optJSONObject("receipt");if("awaiting_import_review".equals(body.optString("phase")))return new JSONObject().put("ok",false).put("code","needs_user").put("message","项目包已暂存，尚未导入；请打开原任务的设备协作范围，核对原包清单和新目录后确认，再继续原任务。").put("deviceReceipt",typed).put("operationId",typed.get("operationId")).put("businessVerified",false);boolean ok=typed.optBoolean("accepted")&&"reported".equals(typed.optString("effectState"))&&(typed.optString("status").equals("succeeded")||actual!=null&&Boolean.TRUE.equals(actual.opt("ok"))||Boolean.TRUE.equals(body.opt("ok")));
         return new JSONObject().put("ok",ok).put("accepted",typed.getBoolean("accepted")).put("operationId",typed.get("operationId")).put("status",typed.getString("status")).put("code",ok?"device_operation_reported":typed.optBoolean("accepted")?"device_request_accepted_waiting_result":"device_original_not_found").put("message",ok?"已取得原目标准确操作回执；不等于业务目标已验证":"原请求接受/执行状态请查原ID，不换ID重提").put("deviceReceipt",typed).put("businessVerified",false);
     }

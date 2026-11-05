@@ -75,4 +75,29 @@ public final class ReferenceHistoryTest {
   JSONArray unknown=history("memory_recall",new JSONObject().put("ok",false).put("code","custom_failure").put("message","stale-body"));
   AgentRunner.refreshReferenceHistory(unknown,live());assertEquals("reference_expired",new JSONObject(unknown.getJSONObject(1).getString("content")).getString("code"));assertFalse(unknown.toString().contains("stale-body"));
  }
+ @Test public void currentFiveFieldNativeRefusalSurvivesWithoutItsOriginalProse()throws Exception{
+  java.lang.reflect.Method durable=AgentRunner.class.getDeclaredMethod("durableHistory",JSONArray.class,dev.pocketengine.core.ModelConfig.class);durable.setAccessible(true);
+  for(String tool:new String[]{"memory_search","memory_recall","skills_read","skills_list"})for(String code:new String[]{"invalid_arguments","tool_withdrawn","owner_intent_read_only"}){
+   JSONArray history=history(tool,new JSONObject().put("ok",false).put("code",code).put("message","DO_NOT_KEEP_SOURCE_TEXT").put("accepted",false).put("nativeDispatched",false));
+   AgentRunner.refreshReferenceHistory(history,null);JSONObject actual=new JSONObject(history.getJSONObject(1).getString("content"));
+   assertEquals(code,actual.getString("code"));assertFalse(actual.getBoolean("accepted"));assertFalse(actual.getBoolean("nativeDispatched"));assertFalse(history.toString().contains("DO_NOT_KEEP_SOURCE_TEXT"));
+   JSONArray saved=(JSONArray)durable.invoke(null,history,new dev.pocketengine.core.ModelConfig("","","fixture",false,3,10));
+   assertEquals(code,new JSONObject(saved.getJSONObject(saved.length()-1).getString("content")).getString("code"));
+  }
+ }
+ @Test public void exactBodyFreeTailDenialRetainsOnlyTheKnownNonDispatchBoundary()throws Exception{
+  java.lang.reflect.Method durable=AgentRunner.class.getDeclaredMethod("durableHistory",JSONArray.class,dev.pocketengine.core.ModelConfig.class);durable.setAccessible(true);
+  for(String tool:new String[]{"memory_search","memory_recall","skills_read","skills_list"}){
+   JSONArray history=history(tool,new JSONObject().put("ok",false).put("code","batch_tail_not_dispatched").put("message","DO_NOT_KEEP_SOURCE_TEXT").put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched"));
+   AgentRunner.refreshReferenceHistory(history,null);JSONObject actual=new JSONObject(history.getJSONObject(1).getString("content"));assertEquals("batch_tail_not_dispatched",actual.getString("code"));assertFalse(actual.getBoolean("nativeDispatched"));assertFalse(history.toString().contains("DO_NOT_KEEP_SOURCE_TEXT"));
+   JSONArray saved=(JSONArray)durable.invoke(null,history,new dev.pocketengine.core.ModelConfig("","","fixture",false,3,10));assertEquals("batch_tail_not_dispatched",new JSONObject(saved.getJSONObject(saved.length()-1).getString("content")).getString("code"));
+  }
+ }
+ @Test public void denialMarkersNeverAllowExtraBodyFieldsOrClaimsOfDispatch()throws Exception{
+  JSONObject denial=new JSONObject().put("ok",false).put("code","invalid_arguments").put("message","DO_NOT_KEEP_SOURCE_TEXT").put("accepted",false).put("nativeDispatched",false);
+  for(JSONObject unsafe:new JSONObject[]{new JSONObject(denial.toString()).put("content","DO_NOT_KEEP_SOURCE_TEXT"),new JSONObject(denial.toString()).put("accepted",true),new JSONObject(denial.toString()).put("nativeDispatched",true),new JSONObject(denial.toString()).put("accepted",JSONObject.NULL),new JSONObject(denial.toString()).put("code","unknown_result")}){
+   JSONArray history=history("skills_read",unsafe);AgentRunner.refreshReferenceHistory(history,null);assertEquals("reference_expired",new JSONObject(history.getJSONObject(1).getString("content")).getString("code"));assertFalse(history.toString().contains("DO_NOT_KEEP_SOURCE_TEXT"));
+  }
+ }
+
 }

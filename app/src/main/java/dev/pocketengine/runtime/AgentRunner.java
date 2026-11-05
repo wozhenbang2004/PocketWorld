@@ -894,6 +894,7 @@ public final class AgentRunner {
                         receipt = new JSONObject().put("ok", true).put("message", reason).put("code", "awaiting_user");
                         if(planningRead!=null){completePlanningRead(planning,planningRead,receipt,config);planningRead=null;}
                         history.put(toolResult(call, receipt, config));
+                        for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("batch_tail_not_dispatched","本批前项已要求停止或核对；此后续调用尚未派发，未开始准备或执行，原已完成回执保留。").put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched"),config));
                         checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget,repeatedTools);
                         emit(taskId, "tool", "awaiting_user", reason, name, receipt, config, sink);
                         return finish(taskId, "awaiting_user", reason, evidence, steps, config, sink);
@@ -952,6 +953,16 @@ public final class AgentRunner {
                     repeatedTools.afterTool(name,args,receipt,planningReadIssued||!sideEffecting(name)&&(capabilities==null||!capabilities.supports(name)||!capabilities.sideEffecting(name)),false);
                     JSONObject committedToolMessage=toolResult(call,receipt,config,true);history.put(committedToolMessage);
                     if(nativeOwnerRequired!=null)for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("sensitive_handoff_tail_not_dispatched","主人接管前，本批余下旧决定均未派发；交还后重新观察规划。").put("accepted",false).put("nativeDispatched",false),config));
+                    boolean receiptNeedsOwner=receiptCode.equals("approval_required")||receiptCode.equals("needs_user");
+                    boolean receiptNeedsReconciliation=planningReadIssued&&planningReadOutcome(receipt)==ExecutionPlanning.ReadOutcome.UNCONFIRMED||receipt.optBoolean("requiresReconciliation")||receiptCode.contains("unknown")||receiptCode.equals("action_timeout")||receipt.optString("status").equals("unknown")||receipt.has("accepted")&&receipt.isNull("accepted");
+                    boolean unverifiedProjectRunning=projectRunning&&!nativeRunning;
+                    boolean receiptNeedsPause=receipt.optBoolean("requiresPause")||"reconcile".equals(receipt.optString("nextObservationAction"));
+                    boolean accessibilityUnavailable="accessibility_unavailable".equals(receipt.optString("code",receipt.optString("error")));
+                    // The current call keeps its actual approval/unknown receipt. Later calls
+                    // have not entered argument admission or dispatch; retain that known fact
+                    // instead of letting checkpoint recovery invent an ambiguous missing reply.
+                    if(nativeOwnerRequired==null&&(receiptNeedsOwner||receiptNeedsReconciliation||unverifiedProjectRunning||receiptNeedsPause||accessibilityUnavailable))
+                        for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("batch_tail_not_dispatched","本批已暂停等待主人处理或核对，余下此调用尚未派发；请从原任务当前范围重新规划，不会自动重放。").put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched"),config));
                     checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget,repeatedTools);
                     String toolStatus=projectRunning?nativeRunning?"running":"awaiting_user":receipt.optBoolean("ok",false)?"completed":"failed";
                     String toolMessage=projectRunning?nativeRunning?"原开发服务已启动且仍归此原执行；这不是程序结束或服务就绪，后续仅允许原授权的只读核对。":"运行中回执未能与原生已启动服务及原操作核对，未继续模型请求或新工具。"
@@ -961,21 +972,21 @@ public final class AgentRunner {
                         evidence.put("nativeSensitiveStep",receipt).put("originalEffectsRetained",true).put("automaticReplayAllowed",false);
                         return finish(taskId,"awaiting_user",nativeOwnerRequired.getMessage(),evidence,steps,config,sink);
                     }
-                    if(projectRunning&&!nativeRunning){
+                    if(unverifiedProjectRunning){
                         evidence.put("requiresReconciliation",true).put("unverifiedProjectRunningAck",true);
                         return finish(taskId,"awaiting_user",toolMessage+"请核对原任务，不会凭JSON字段把未知效果改成已知运行。",evidence,steps,config,sink);
                     }
-                    if(receiptCode.equals("approval_required")||receiptCode.equals("needs_user"))return finish(taskId,"awaiting_user",receipt.optString("message","需要主人处理后继续原任务"),evidence,steps,config,sink);
-                    if(planningReadIssued&&planningReadOutcome(receipt)==ExecutionPlanning.ReadOutcome.UNCONFIRMED||receipt.optBoolean("requiresReconciliation")||receiptCode.contains("unknown")||receiptCode.equals("action_timeout")||receipt.optString("status").equals("unknown")||receipt.has("accepted")&&receipt.isNull("accepted")){
+                    if(receiptNeedsOwner)return finish(taskId,"awaiting_user",receipt.optString("message","需要主人处理后继续原任务"),evidence,steps,config,sink);
+                    if(receiptNeedsReconciliation){
                         if(planningReadIssued){evidence.put("planningReadUnconfirmed",recordedOperation).put("executionAuthorized",false);return finish(taskId,"awaiting_user","规划读取尚无可核对的完整结果；原读取编号和已用预算保留，没有自动重读或批准执行。",evidence,steps,config,sink);}
                         evidence.put("requiresReconciliation",true);
                         return finish(taskId,"awaiting_user","动作可能已经发生，但没有确定回执。请核对实际结果后继续原任务；不会自动重试。",evidence,steps,config,sink);
                     }
-                    if(receipt.optBoolean("requiresPause")||"reconcile".equals(receipt.optString("nextObservationAction"))){
+                    if(receiptNeedsPause){
                         evidence=new JSONObject(receipt.toString());if("reconcile".equals(receipt.optString("nextObservationAction")))evidence.put("requiresReconciliation",true);
                         return finish(taskId,"awaiting_user",receipt.optString("message","本次观察或显示权限已阻断，请由主人核对后继续原任务；不会自动重试。"),evidence,steps,config,sink);
                     }
-                    if ("accessibility_unavailable".equals(receipt.optString("code", receipt.optString("error")))) {
+                    if (accessibilityUnavailable) {
                         return finish(taskId, "awaiting_user", "手机操作权限已断开，请重新开启后继续。", evidence, steps, config, sink);
                     }
                     if(repeatedTools.stopRequired())return stopForProgressGuard(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);
@@ -1011,7 +1022,11 @@ public final class AgentRunner {
                         latest = observe(taskId, config, control, sink,planning,turnPlanning);
                         evidence = latest;
                         observed = true;
-                        if (!latest.optBoolean("ok", true)) return finish(taskId, "awaiting_user", "操作后无法重新观察，请检查手机权限并接管。", evidence, steps, config, sink);
+                        if (!latest.optBoolean("ok", true)) {
+                            for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("batch_tail_not_dispatched","本批前项已要求停止或核对；此后续调用尚未派发，未开始准备或执行，原已完成回执保留。").put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched"),config));
+                            checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);
+                            return finish(taskId, "awaiting_user", "操作后无法重新观察，请检查手机权限并接管。", evidence, steps, config, sink);
+                        }
                     }
                     if(routes!=null){
                         try{routes.after(name,args,receipt,routeBefore,latest,recordedOperation,control);}catch(PhoneRouteSession.SourceUnavailable unavailable){throw unavailable;}catch(InterruptedException stopped){throw stopped;}catch(Exception ineligible){routes.disableLearning();}
@@ -1320,11 +1335,22 @@ public final class AgentRunner {
     private static JSONObject retiredReferenceReceipt(String body)throws Exception{
         try{
             JSONObject result=new JSONObject(body);
-            if(result.length()==3&&Boolean.FALSE.equals(result.opt("ok"))&&result.opt("message") instanceof String){
+            if(Boolean.FALSE.equals(result.opt("ok"))&&result.opt("message") instanceof String){
                 String code=result.optString("code");
-                if(code.equals("invalid_arguments"))return failure(code,"此能力工具的参数不符合当前合同，尚未执行。请核对该工具的字段与范围。");
-                if(code.equals("owner_intent_read_only"))return failure(code,"本次主人意图只允许读取；此调用尚未派发。");
-                if(code.equals("tool_withdrawn"))return failure(code,"本轮工具已撤销或安装改变，旧决定尚未执行，请重新取得当前工具清单。");
+                boolean notDispatched=Boolean.FALSE.equals(result.opt("accepted"))&&Boolean.FALSE.equals(result.opt("nativeDispatched"));
+                // The current Runner adds two native denial flags to its original
+                // three-field refusal. Accept no other field or provider prose.
+                if(result.length()==3||result.length()==5&&notDispatched){
+                    String message=switch(code){
+                        case "invalid_arguments"->"此能力工具的参数不符合当前合同，尚未执行。请核对该工具的字段与范围。";
+                        case "owner_intent_read_only"->"本次主人意图只允许读取；此调用尚未派发。";
+                        case "tool_withdrawn"->"本轮工具已撤销或安装改变，旧决定尚未执行，请重新取得当前工具清单。";
+                        default->null;
+                    };
+                    if(message!=null){JSONObject retained=failure(code,message);return notDispatched?retained.put("accepted",false).put("nativeDispatched",false):retained;}
+                }
+                if(result.length()==6&&notDispatched&&code.equals("batch_tail_not_dispatched")&&"not_dispatched".equals(result.optString("effectStatus")))
+                    return failure(code,"本批已暂停，余下此调用尚未派发；请从原任务当前范围重新规划，不会自动重放。").put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched");
             }
         }catch(Exception invalid){/* Unknown or malformed receipts still lose every body. */}
         return referenceRetired();

@@ -184,7 +184,27 @@ public final class ProtocolCodec {
     }
     private static JSONArray stops(Object value)throws Exception {JSONArray result=value instanceof String?new JSONArray().put(value):array(value);if(result.length()>4)throw reject("stop_count");for(int i=0;i<result.length();i++)if(!(result.get(i) instanceof String))throw reject("stop_type");return result;}
     private static JSONArray internalTools(Canonical c)throws Exception{JSONArray out=new JSONArray();for(Tool t:c.tools){JSONObject f=new JSONObject().put("name",t.name).put("description",t.description).put("parameters",t.schema);if(t.strict!=Strict.UNSPECIFIED)f.put("strict",t.strict==Strict.TRUE);out.put(new JSONObject().put("type","function").put("function",f));}return out;}
-    private static JSONArray budgetMessages(Canonical c,JSONObject wire)throws Exception{JSONArray out=new JSONArray();for(Message m:c.messages){for(Part p:m.parts){if(p.kind==Kind.TOOL_CALL)out.put(new JSONObject().put("role","assistant").put("content","").put("tool_calls",new JSONArray().put(new JSONObject().put("type","function").put("id",p.id).put("function",new JSONObject().put("name",p.name).put("arguments",p.arguments.toString())))));else if(p.kind==Kind.TOOL_RESULT)out.put(new JSONObject().put("role","tool").put("tool_call_id",p.id).put("content",p.text));else out.put(new JSONObject().put("role",m.role).put("content",p.text));}}out.put(new JSONObject().put("role","user").put("content",wire.toString()));return out;}
+    private static JSONArray budgetMessages(Canonical c,JSONObject wire)throws Exception{
+        JSONArray out=new JSONArray();
+        for(Message m:c.messages){
+            if(m.parts.stream().anyMatch(p->p.kind==Kind.TOOL_CALL)){
+                // All calls in one assistant turn form one protocol unit followed by
+                // their results. Splitting them invents unanswered intermediate turns.
+                // This is accounting only; the original wire keeps every part in order.
+                JSONArray calls=new JSONArray(),text=new JSONArray();
+                for(Part p:m.parts){
+                    if(p.kind==Kind.TOOL_CALL)calls.put(new JSONObject().put("type","function").put("id",p.id).put("function",new JSONObject().put("name",p.name).put("arguments",p.arguments.toString())));
+                    else if(p.kind==Kind.TEXT)text.put(new JSONObject().put("type","text").put("text",p.text));
+                    else throw reject("tool_result_wrong_role");
+                }
+                out.put(new JSONObject().put("role",m.role).put("content",text.length()==0?"":text).put("tool_calls",calls));
+            }else for(Part p:m.parts){
+                if(p.kind==Kind.TOOL_RESULT)out.put(new JSONObject().put("role","tool").put("tool_call_id",p.id).put("content",p.text));
+                else out.put(new JSONObject().put("role",m.role).put("content",p.text));
+            }
+        }
+        out.put(new JSONObject().put("role","user").put("content",wire.toString()));return out;
+    }
     public static void rejectOpaque(Object value)throws Exception {
         // Client-asserted origin cannot bind vendor-native history. These require an existing
         // protected receipt/reference store; until that exists, same-protocol input also rejects.
