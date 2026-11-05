@@ -8,6 +8,10 @@ import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.features.capabilities.ModelCapabilityAdapters;
 import dev.pocketengine.features.capabilities.TaskStoreCapabilityAuthority;
 import dev.pocketengine.features.local.LocalModule;
+import dev.pocketengine.features.local.runtime.ProjectRuntime;
+import dev.pocketengine.features.local.runtime.RuntimeInvocation;
+import dev.pocketengine.features.local.runtime.RuntimeExecutionRef;
+import dev.pocketengine.features.local.runtime.RuntimeReceipt;
 import dev.pocketengine.features.workspace.WorkspaceModule;
 import dev.pocketengine.store.TaskStore;
 import java.util.UUID;
@@ -28,11 +32,20 @@ import static org.junit.Assert.*;
 @Config(sdk=35,manifest=Config.NONE,application=Application.class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 public final class ProjectApprovalContextTest {
+    private static final String RUNTIME="managed_process_v1";
+    /** This reference-only fixture never starts a process; file approval remains native. */
+    private static final class ReferenceRuntime implements ProjectRuntime {
+        public JSONObject describe()throws Exception{return new JSONObject().put("runtimeId",RUNTIME).put("identity","a".repeat(64)).put("canExecute",false).put("installed",false);}
+        public RuntimeReceipt dispatch(RuntimeInvocation ignored){throw new AssertionError("No process may be dispatched by this reference fixture");}
+        public RuntimeReceipt query(RuntimeExecutionRef ignored){throw new AssertionError("No process exists in this reference fixture");}
+        public RuntimeReceipt requestCancel(RuntimeExecutionRef ignored){throw new AssertionError("No process exists in this reference fixture");}
+    }
     private TaskStore tasks; private LocalModule local; private ProjectCapabilityPort port;
     private RunControl control; private String id,run,project,checkout; private int epoch;
     @Before public void create()throws Exception {
         var android=RuntimeEnvironment.getApplication();var context=new FeatureContext(android,null,null,event->{});
-        var workspace=new WorkspaceModule(context);local=new LocalModule(context,workspace);tasks=new TaskStore(android);
+        var workspace=new WorkspaceModule(context);local=new LocalModule(context,workspace,new ReferenceRuntime());tasks=new TaskStore(android);
+        local.setProjectHost(new TaskStoreProjectHost(tasks,local,key->key.equals(id)?control:null,event->{}));
         project=workspace.handle("create",new JSONObject().put("name","Original approved proposal context")).getString("id");
         checkout=local.handle("prepare",new JSONObject().put("projectId",project)).getString("id");
         id=tasks.createCapabilityTask("Create only approved.txt and read it back","").getString("id");
@@ -41,9 +54,9 @@ public final class ProjectApprovalContextTest {
     private void start(boolean bind)throws Exception {
         JSONObject task=tasks.startAttempt(id,"capabilities",20);run=task.getString("runId");epoch=task.getInt("coordinatorEpoch");
         control=new RunControl();control.bindHostRun(id,run,epoch);
-        if(bind)tasks.bindDevelopmentContext(id,run,epoch,control,new JSONObject().put("format","pocketworld.development-context.v1").put("projectId",project).put("checkoutId",checkout).put("runtime","termux").put("initialSourceDigest",ProjectSources.describe(local.handle("export",new JSONObject().put("checkoutId",checkout))).getString("sourceDigest")).put("clientMessageId",UUID.randomUUID().toString()));
+        if(bind)tasks.bindDevelopmentContext(id,run,epoch,control,new JSONObject().put("format","pocketworld.development-context.v1").put("projectId",project).put("checkoutId",checkout).put("runtime",RUNTIME).put("initialSourceDigest",ProjectSources.describe(local.handle("export",new JSONObject().put("checkoutId",checkout))).getString("sourceDigest")).put("clientMessageId",UUID.randomUUID().toString()));
         var binding=new ModelCapabilityAdapters.Binding(id,run,epoch,control,true,project);
-        port=new ProjectCapabilityPort(binding,new TaskStoreCapabilityAuthority(tasks,binding,event->{}),control,null,local,tasks,checkout,"termux");
+        port=new ProjectCapabilityPort(binding,new TaskStoreCapabilityAuthority(tasks,binding,event->{}),control,null,local,tasks,checkout,RUNTIME);
         JSONArray names=new JSONArray(),tools=port.tools();for(int i=0;i<tools.length();i++)names.put(tools.getJSONObject(i).getJSONObject("function").getString("name"));tasks.authorizeTools(id,run,names);
     }
     private JSONObject approvedInPriorRun()throws Exception {
