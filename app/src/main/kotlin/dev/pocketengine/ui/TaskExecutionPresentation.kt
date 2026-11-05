@@ -72,7 +72,7 @@ internal object TaskExecutionPresentation {
         if (status == "completed")
             return Current("任务已完成", "成果与执行记录已保留，可随时回看。", Tone.RETURNED, Target.RESULT, "查看成果")
         if (status == "queued") return Current("等待执行", "任务已加入队列，开始后会显示执行动态。", Tone.WAITING)
-        val latest = objects(task.optJSONArray("events")).lastOrNull { it.optString("type") in setOf("run", "model", "tool", "observation", "verification", "owner_input", "capability_changed", "context_budget") }
+        val latest = objects(task.optJSONArray("events")).filterNot(::bodyLimited).lastOrNull { it.optString("type") in setOf("run", "model", "tool", "observation", "verification", "owner_input", "capability_changed", "context_budget") }
         if (active) {
             val description = latest?.takeIf { it.optString("status") == "running" }?.optString("message")?.let { excerpt(it, 240) }
             val title = when {
@@ -90,12 +90,12 @@ internal object TaskExecutionPresentation {
 
     fun records(page: JSONObject, section: String): List<Record> = objects(page.optJSONArray("entries")).mapNotNull { row ->
         if (section == "jobs") job(row)
-        else if (section == "events") row.optJSONObject("event")?.let { event ->
+        else if (section == "events") (if (bodyLimited(row)) null else row.optJSONObject("event"))?.let { event ->
             val tool = event.optString("tool")
             val projectLog = tool in setOf("project_execute", "project_status", "project_stop")
             val notes = if (event.optString("type") == "tool" && (projectLog || tool == "ssh_exec")) outputNotes(event.optJSONObject("receipt"), projectLog) else emptyList()
             Record("event:" + row.optLong("position"), eventTitle(event.optString("type")), event.optString("status").let(::eventLabel), eventTone(event.optString("status")), event.optLong("at", event.optLong("timestamp")), event.optString("runId"), "", event.toString(), false, row.optLong("bodyBytes"), outputNotes = notes)
-        } ?: if (row.optString("status") == "read_limited") Record("event:" + row.optLong("position"), eventTitle(row.optString("type")), "原正文未在本页展开", Tone.NEUTRAL, 0, "", "", "", true, row.optLong("bodyBytes")) else null
+        } ?: if (bodyLimited(row)) Record("event:" + row.optLong("position"), eventTitle(row.optString("type")), "原正文未在本页展开", Tone.NEUTRAL, 0, "", "", "", true, row.optLong("bodyBytes")) else null
         else operation(row)
     }
 
@@ -132,28 +132,31 @@ internal object TaskExecutionPresentation {
         return Record("job:" + row.optString("jobKey"), title, label, tone, row.optLong("createdAt"), run, "", facts.toString(), limited, row.optLong("bodyBytes"), log, notes, task, operation, epoch, identity("relatedTaskId"))
     }
 
+    private fun bodyLimited(row: JSONObject): Boolean = row.optString("status") == "read_limited" || row.opt("readLimited") == true || row.opt("bodyAvailable") == false
+
     private fun operation(row: JSONObject): Record {
-        val receipt = row.optJSONObject("receipt")
+        val limited = bodyLimited(row)
+        val receipt = if (limited) null else row.optJSONObject("receipt")
         val state = row.optString("state")
         val outcome = ToolOutcome.operationOutcome(row)
         val tone: Tone
         val label: String
         when {
             uncertain(row) -> { tone = Tone.UNCERTAIN; label = "结果待核对" }
-            state == "project_running" -> { tone = Tone.RUNNING; label = "服务已有启动回执 · 尚无终态回执" }
-            state == "project_stopping" -> { tone = Tone.WAITING; label = "服务正在收尾 · 尚无资源释放确认" }
             receipt?.optString("code") == "approval_required" -> { tone = Tone.WAITING; label = "等待本次操作授权" }
             state == "resolved" && receipt?.optString("source") == "owner_reconciliation" -> { tone = Tone.NEUTRAL; label = when (receipt.optString("outcome")) { "occurred" -> "主人已核对发生 · 非自动验证"; "not_occurred" -> "主人已核对未发生 · 不会自动重试"; else -> "主人已记录核对结论" } }
             state == "prepared" -> { tone = Tone.WAITING; label = "已登记，等待结果" }
             receipt?.optString("status") in setOf("cancelled", "canceled", "stopped") -> { tone = Tone.STOPPED; label = "调用已停止 · 详见原回执" }
             outcome?.requiresUser() == true -> { tone = Tone.WAITING; label = "需要你处理 · 已发生的操作仍保留" }
             outcome?.correctable() == true -> { tone = Tone.ERROR; label = "请求可调整 · 不会自动重放原操作" }
+            state == "project_running" -> { tone = Tone.RUNNING; label = "服务已有启动回执 · 尚无终态回执" }
+            state == "project_stopping" -> { tone = Tone.WAITING; label = "服务正在收尾 · 尚无资源释放确认" }
             outcome?.successful() == true && outcome.completion() == "pending" -> { tone = Tone.WAITING; label = "已受理或仍在执行 · 尚无终态" }
             receipt?.optBoolean("terminal", true) == false -> { tone = Tone.WAITING; label = "已返回部分结果" }
             receipt != null -> { tone = Tone.RETURNED; label = "已返回 · 目标仍需核对，结果可展开查看" }
             else -> { tone = Tone.NEUTRAL; label = "原状态：" + excerpt(state.ifBlank { "未报告" }, 80) }
         }
-        return Record("operation:" + row.optString("operationId", row.optString("position")), excerpt(row.optString("tool").ifBlank { "原工具调用" }, 120), label, tone, row.optLong("createdAt"), row.optString("runId"), row.optJSONObject("arguments")?.toString().orEmpty(), receipt?.toString().orEmpty(), row.optString("status") == "read_limited", row.optLong("bodyBytes"), projectExecutionObservationId(row), outputNotes(receipt, row.optString("tool") in setOf("project_execute", "project_status", "project_stop")))
+        return Record("operation:" + row.optString("operationId", row.optString("position")), excerpt(row.optString("tool").ifBlank { "原工具调用" }, 120), label, tone, row.optLong("createdAt"), row.optString("runId"), (if (limited) null else row.optJSONObject("arguments"))?.toString().orEmpty(), receipt?.toString().orEmpty(), limited, row.optLong("bodyBytes"), if (limited) null else projectExecutionObservationId(row), outputNotes(receipt, row.optString("tool") in setOf("project_execute", "project_status", "project_stop")))
     }
 
     /** Read-only output facts, independent of process success or permission to read a source. */
@@ -208,3 +211,4 @@ internal object TaskExecutionPresentation {
     private fun objects(array: JSONArray?): List<JSONObject> = if (array == null) emptyList() else (0 until minOf(array.length(), 40)).mapNotNull { array.optJSONObject(it) }
     fun excerpt(value: String, maxPoints: Int): String = if (value.codePointCount(0, value.length) <= maxPoints) value else value.substring(0, value.offsetByCodePoints(0, maxPoints)) + "\n…此处仅展示部分，原记录未改写。"
 }
+
