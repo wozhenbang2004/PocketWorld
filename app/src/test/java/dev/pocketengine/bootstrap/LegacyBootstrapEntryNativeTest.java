@@ -12,7 +12,6 @@ import dev.pocketengine.ui.ComposeActivity;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -88,14 +87,17 @@ public final class LegacyBootstrapEntryNativeTest {
         Intent redirected=shadowOf(activity).getNextStartedActivity();assertNotNull(redirected);
         assertEquals(ComposeActivity.class.getName(),redirected.getComponent().getClassName());
         assertNotEquals(0,redirected.getFlags()&Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        assertNull(field(activity,"web"));assertNull(field(activity,"media"));
-        assertNull(field(activity,"modelSelectionObserver"));assertNull(app.settings);
+        assertEquals("settings",redirected.getStringExtra("openPanel"));
+        assertFalse(activity.getIntent().hasExtra("openPanel"));
+        assertTrue(java.util.Arrays.stream(MainActivity.class.getDeclaredFields()).noneMatch(value ->
+                android.webkit.WebView.class.isAssignableFrom(value.getType()) ||
+                java.util.concurrent.ExecutorService.class.isAssignableFrom(value.getType()) ||
+                dev.pocketengine.media.MediaController.class.isAssignableFrom(value.getType())));
+        assertNull(app.settings);
         owner.start().resume();
         assertNull("A finishing legacy entry must not redirect twice",shadowOf(activity).getNextStartedActivity());
         activity.onRequestPermissionsResult(41,new String[0],new int[0]);
         owner.pause().stop().destroy();
-        assertTrue(((ExecutorService)field(activity,"io")).isShutdown());
-        assertTrue(((ExecutorService)field(activity,"controls")).isShutdown());
         assertNull(app.tasks);assertNull(app.features);
     }
 

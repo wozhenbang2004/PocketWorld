@@ -1,8 +1,15 @@
-# PocketWorld library Web UI
+# PocketWorld Web UI
 
 The bundled React interface owns the app's business screens. Android retains
 task execution, storage, OS permissions, document selection, and the existing
 controller's ownership and receipt rules.
+
+The former Compose business workspaces and root `assets/index.html` frontend
+are retired. `MainActivity` keeps only the old Android component identity and
+redirects approved navigation to `ComposeActivity` and the same `PocketWebHost`.
+The browser workspace also loads this bundle. Native startup/permission screens,
+project previews, external pages and terminal rendering remain platform surfaces;
+none provides a second set of business routes or a frontend switch.
 
 ## Build
 
@@ -185,18 +192,24 @@ BoardUI-derived SettingsDialog owns modal focus after mount and restores the
 opening control on close; its animation and approved controls remain in place.
 The dark close control stays secondary to the login action.
 
-The native workspace entry lives in the existing navigation drawer. A healthy
-Web document occupies the full Activity, including system insets; it has no
-second native toolbar above its modals. If the packaged entry, critical bundled
-script/style, secure bridge, or renderer is unavailable, the host shows a
-separate recovery panel with reopen and native-workspace entries. Both entries
-retain startup and pending-operation guards; they do not repair data or replay
-tasks. Optional font/media failure does not discard a usable workspace.
+PocketWorld has one business frontend. The same navigation content appears in a
+permanent side bar on wide screens and the adopted Vaul side drawer on narrow
+screens. Its three primary routes are 对话, 任务 and 项目. Team, memory and task
+history live in the secondary 更多工具 disclosure; Settings remains at the foot
+of the sidebar. Conversation search, recent work and the original route handlers
+are shared across both layouts. There is no bottom navigation or entry into a
+second native workspace.
 
-This implements the user's 2026-11-05 UI repair request, including “修完之后就赶紧去合并提交，
-然后呢你再让这个本地测试的这个去拉代码” (parent delegation; exact room-message ID unavailable).
-It reuses the adopted BoardUI/Vaul/Josh components and DP-05/06/18/27 principles;
-it adds no personal aesthetic-library records or new dependencies.
+A healthy Web document occupies the full Activity, including system insets. The
+native host owns platform services and recovery of that same workspace; it does
+not provide a second business frontend. Startup and pending-operation guards
+remain in force. Optional font/media failure does not discard a usable workspace.
+
+The current 2026-11-05 requirement is one frontend with three side-navigation
+routes, retaining the existing desktop workspace styling and original business
+capabilities. Do not restore bottom primary tabs, a presentation switch, or a
+parallel native/legacy business renderer. It reuses the adopted BoardUI/Vaul/Josh
+components and adds no new dependencies.
 
 Run the focused layout/focus/navigation checks with
 node web-ui/tests/account-hierarchy-ui.mjs from the repository root (Edge is
@@ -251,3 +264,44 @@ It covers 430 px light and 320 px dark layouts, dismiss/reopen, retained-account
 identity, duplicate-submit guards, new session links, uncertain receipts, stale
 versions and disabled accounts. This fixture does not verify real OAuth,
 Android lifecycle behavior or the system browser.
+
+## Unified frontend checkpoint — 2026-11-05
+
+The consolidation started from upstream main
+`279625488d573df3430ca78b22d70c1ad197ee85` and was integrated with
+`251b4dc02e1fd4ed3d361edad48cc1b1715dd3cd` before submission. The upstream
+snapshot was checked against its exact Git tree, including executable modes.
+Its input-admission, stream, recovery and project-review fixes are retained.
+The single business bundle and side
+navigation are implemented in source. The removed Compose screens' business
+entry points now use the existing controller, native stores and exact review
+handles through this bundle, including attachments, task capabilities, team
+evidence, memory history, background settings, remote tasks, model diagnostics
+and project execution/preview. Native services and original execution authority
+remain native. Old Android component entry points redirect to this same host.
+
+Validation of this source snapshot:
+
+- The Node test run passed 632 tests. `android-packaging.test.ts` and
+  `file-diff.test.ts` could not load because the environment lacked the locked
+  `vite` and `diff` packages. The complete run therefore exited 1, not a pass.
+  Only the exact existing TypeScript 5.9.3 dependency was resolved from cache;
+  no replacement dependency or test implementation was supplied.
+- The 68 Python host-registry, navigation and affected contract checks passed.
+  All registered host groups resolve their test/helper source paths.
+- All six retained legacy JavaScript test entry points passed after migration
+  to the existing unified frontend regressions. Their executions overlap the
+  main suite and must not be counted as additional independent coverage.
+- Syntax parsing found no diagnostics in the 370 Web TypeScript files,
+  254 main/test Kotlin files and 2,133 main/test Java files inspected. This is
+  syntax evidence only, not TypeScript typechecking or Android compilation.
+- No production reference remains to the old frontend switch or root HTML
+  loader; the root legacy HTML resource is absent. `git diff --check` passed.
+
+Full dependency installation, the production Web build, Android compilation,
+Robolectric and current rendered desktop/mobile acceptance remain unverified.
+Install the pinned dependencies with the normal build commands above, then run
+the affected host groups and real desktop/narrow-screen journeys before release.
+Repository submission uses a commit containing `[skip ci]`; automated Actions
+and APK packaging are not part of this delivery. Do not re-create
+a native frontend to work around an unavailable Web build or failed startup.

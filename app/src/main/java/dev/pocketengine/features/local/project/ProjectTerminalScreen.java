@@ -12,7 +12,8 @@ public final class ProjectTerminalScreen {
     private long cursor;private int columns,rows;private boolean truncated,incomplete;
     public ProjectTerminalScreen(String execution,int columns,int rows){this.execution=java.util.Objects.requireNonNull(execution);resize(columns,rows);}
     public static void requireDimensions(int columns,int rows){if(columns<20||columns>300||rows<5||rows>120)throw new IllegalArgumentException("此终端视图支持20至300列、5至120行");}
-    public synchronized void resize(int columns,int rows){requireDimensions(columns,rows);this.columns=columns;this.rows=rows;}
+    public static void requireProjectDimensions(int columns,int rows){if(columns<4||columns>400||rows<2||rows>200)throw new IllegalArgumentException("原项目终端支持4至400列、2至200行");}
+    public synchronized void resize(int columns,int rows){requireProjectDimensions(columns,rows);this.columns=columns;this.rows=rows;}
     public synchronized long cursor(){return cursor;}
     public synchronized JSONObject append(JSONObject page)throws Exception {
         if(!execution.equals(page.getString("operationId")))throw new SecurityException("日志不是原手动终端");JSONArray chunks=page.getJSONArray("chunks");if(chunks.length()>32768)throw new SecurityException("原终端页超出范围");
@@ -23,7 +24,7 @@ public final class ProjectTerminalScreen {
         }
         if(integer(page,"nextCursor")!=next)throw new SecurityException("原终端页cursor不对应实际日志");
         byte[] actual=bytes.toByteArray();screen.append(Base64.getEncoder().encodeToString(actual),screen.cursor(),screen.cursor()+actual.length,gap);cursor=next;truncated|=page.optBoolean("outputTruncated");incomplete=page.optBoolean("logIncompleteTail");
-        return new JSONObject().put("executionId",execution).put("outputCursor",cursor).put("screen",screen.view(columns,rows)).put("outputTruncated",truncated).put("logIncompleteTail",incomplete).put("hasMore",page.optBoolean("hasMore"));
+        return new JSONObject().put("executionId",execution).put("outputCursor",cursor).put("screen",screen.projectView(columns,rows)).put("outputTruncated",truncated).put("logIncompleteTail",incomplete).put("hasMore",page.optBoolean("hasMore"));
     }
     private static long integer(JSONObject row,String key)throws Exception{Object raw=row.get(key);if(!(raw instanceof Integer||raw instanceof Long)||((Number)raw).longValue()<0)throw new SecurityException("原终端日志数字无效");return ((Number)raw).longValue();}
 }

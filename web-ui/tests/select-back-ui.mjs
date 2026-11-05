@@ -36,6 +36,8 @@ try {
   const memory = page.locator('.pw-memory-workspace');
   async function enterMemory() {
     await page.getByRole('button', { name: '打开导航', exact: true }).click();
+    const tools = page.getByRole('button', { name: '更多工具', exact: true });
+    if (await tools.getAttribute('aria-expanded') !== 'true') await tools.click();
     await page.getByRole('link', { name: '记忆', exact: true }).click();
     await memory.waitFor();
     await page.getByRole('button', { name: '范围与容量', exact: true }).click();

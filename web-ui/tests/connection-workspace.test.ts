@@ -41,7 +41,7 @@ function fixture(component = 'ConnectionWorkspace', supplied: any = {}) {
     if (action === 'ssh.confirmOperation') return new Promise(resolve => deferred.push(resolve));
     return Promise.resolve({ status: 'completed' });
   };
-  const names = ['Accordion', 'AccordionItem', 'Button', 'CheckboxField', 'SelectField', 'SettingsDialog', 'TextAreaField', 'TextField', 'TerminalSurface', 'HarnessEvidence', 'ArrowLeft', 'ArrowUp', 'ChevronRight', 'FileText', 'Folder', 'History', 'Monitor', 'Plus', 'Server', 'ShieldCheck', 'Terminal', 'Wrench'];
+  const names = ['Accordion', 'AccordionItem', 'Button', 'CheckboxField', 'SelectField', 'SettingsDialog', 'TextAreaField', 'TextField', 'TerminalSurface', 'RemoteProjectBaseline', 'RemoteInputFlow', 'HarnessEvidence', 'ArrowLeft', 'ArrowUp', 'ChevronRight', 'FileText', 'Folder', 'History', 'Monitor', 'Plus', 'Server', 'ShieldCheck', 'Terminal', 'Wrench'];
   const components = new Function('h', 'Fragment', 'useState', 'useRef', 'useEffect', 'useLayoutEffect', 'useDataSettingsJourney', 'bridge', 'document', 'window', ...Object.keys(harnessCapabilities), ...names, code + ';return { ConnectionWorkspace, SshWork, RemoteWork };')(
     h, 'Fragment', useState, useRef, useEffect, useEffect, useDataSettingsJourney, bridge, document, window, ...Object.values(harnessCapabilities), ...names,
   );
@@ -180,4 +180,43 @@ test('configured harnesses come from the computer and submit the exact verified 
   assert.deepEqual(request.harnessSelection, { protocol: 'pocketworld.harness-selection.v1', workerId: worker.id, configurationRevision: worker.configurationRevision, capabilityRevision: '2'.repeat(64), ownerManagedExecution: true });
   assert.equal(request.readOnly, false); assert.equal(request.externalExecutionRiskAcknowledged, true);
   assert.equal(request.environmentBinding, environment.bindingHash);
+});
+
+async function currentCodexCreate() {
+  const digest = 'd'.repeat(64);
+  const f = fixture('RemoteWork', { respond(action: string) {
+    if (action === 'remote.environments') return { environments: [{ id: 'environment-a', label: 'Original environment', kind: 'local', workspace: '/original', bindingHash: 'e'.repeat(64), workers: [{ id: 'codex_app_server', available: true }], projectHistoryCapabilities: { supported: true }, privateInputCapabilities: { supported: true } }] };
+    if (action === 'remote.probeWorker') return { available: true, modelOptions: { digest, models: [{ id: 'current-model', efforts: ['high'] }] } };
+  } });
+  const field = (label: string, value: any, commit = true) => { f.find(node => ['SelectField', 'TextField', 'TextAreaField'].includes(node.type) && node.props.label === label).props.onChange(value); if (commit) f.render(); };
+  f.button('读取当前工作环境').props.onClick(); await f.flush(); field('工作环境', 'environment-a'); field('执行器', 'codex_app_server'); field('这次要完成什么', 'Original owner goal'); field('请求模型 ID（可留空）', 'current-model'); field('请求推理档位（可留空）', 'high'); field('任务时限（10–3600 秒）', '240');
+  f.button('核对执行器与模型能力').props.onClick(); await f.flush(); return { f, field, digest };
+}
+
+test('ordinary, baseline and private-input create entries capture the same current selection into the original native review', async () => {
+  for (const [label, child] of [['审阅这次新工作', ''], ['先保留项目基线，再创建这次工作', 'RemoteProjectBaseline'], ['选择私人原件，再审阅这次工作', 'RemoteInputFlow']]) {
+    const { f, digest } = await currentCodexCreate(); assert.equal(f.button(label).props.disabled, false); f.button(label).props.onClick(); await f.flush();
+    const captured = f.calls.filter(call => call.action === 'remote.reviewTask'); assert.equal(captured.length, 1);
+    assert.deepEqual(captured[0].args, { profileId: profile.id, bindingHash: profile.bindingHash, environmentId: 'environment-a', environmentBinding: 'e'.repeat(64), worker: 'codex_app_server', timeoutSeconds: 240, prompt: 'Original owner goal', readOnly: true, model: 'current-model', effort: 'high', modelOptionsDigest: digest });
+    if (child) { const prepared = f.find(node => node.type === child).props.prepared; assert.equal(prepared.reviewHandle, 'remote-review'); assert.equal(prepared.model, 'current-model'); assert.equal(prepared.effort, 'high'); }
+    else { const facts = nodes(f.tree, node => node.type === 'Facts').at(-1)!; assert.ok(facts.props.values.some(([key, value]: any) => key === '推理强度' && value === 'high')); }
+    assert.equal(f.calls.some(call => /confirmTask|remoteInputs.confirm|remote.project.confirm/.test(call.action)), false, 'preparing a review never starts work');
+  }
+});
+
+test('model and effort edits synchronously invalidate all three captured new-work callbacks before React renders', async () => {
+  for (const [label, fieldLabel, newValue] of [['审阅这次新工作', '请求模型 ID（可留空）', 'new-model'], ['先保留项目基线，再创建这次工作', '请求推理档位（可留空）', 'low'], ['选择私人原件，再审阅这次工作', '这次要完成什么', 'changed goal']]) {
+    const { f, field } = await currentCodexCreate(); const captured = f.button(label).props.onClick, before = f.calls.length;
+    field(fieldLabel, newValue, false); captured(); await f.flush(); assert.equal(f.calls.length, before, 'old rendered selection cannot obtain a fresh native review');
+  }
+});
+
+test('a changed or dismissed native create review cannot dispatch its captured confirmation', async () => {
+  for (const retire of ['edit', 'close', 'hidden']) {
+    const { f, field } = await currentCodexCreate(); f.button('审阅这次新工作').props.onClick(); await f.flush(); const captured = f.button('确认创建一次').props.onClick, before = f.calls.length;
+    if (retire === 'edit') field('任务时限（10–3600 秒）', '200', false);
+    else if (retire === 'close') f.button('返回修改').props.onClick();
+    else { f.props.visible = false; f.render(); f.props.visible = true; f.render(); }
+    captured(); await f.flush(); assert.equal(f.calls.length, before); assert.equal(f.calls.some(call => call.action === 'remote.confirmTask'), false);
+  }
 });

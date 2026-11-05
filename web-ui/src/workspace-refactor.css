@@ -237,9 +237,9 @@
 .pw-navigation-drawer .pw-work-recent { margin-top: 18px; }
 .pw-navigation-drawer .pw-work-recent .pw-section-heading { padding-inline: 12px; margin-bottom: 6px; }
 .pw-navigation-drawer .pw-work-recent h3 { font-size: 11px; line-height: 18px; font-weight: 500; color: var(--pw-muted); }
-.pw-navigation-drawer .pw-recent-work > .button-press-motion { min-height: 44px; padding: 10px 12px; border-radius: 12px; justify-content: flex-start; }
-.pw-navigation-drawer .pw-recent-work > .button-press-motion > span { display: block; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; font-size: 13px; line-height: 22px; }
-.pw-navigation-drawer .pw-recent-work > .is-current { background: var(--pw-selected); }
+.pw-navigation-drawer .pw-recent-work .pw-conversation-row > .button-press-motion:first-child { min-height: 44px; padding: 10px 12px; border-radius: 12px; justify-content: flex-start; }
+.pw-navigation-drawer .pw-recent-work .pw-conversation-row > .button-press-motion:first-child > span { display: block; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; font-size: 13px; line-height: 22px; }
+.pw-navigation-drawer .pw-recent-work .pw-conversation-row > .is-current { background: var(--pw-selected); }
 .pw-navigation-drawer .pw-all-conversations { width: 100%; padding: 10px 12px; justify-content: flex-start; gap: 8px; color: var(--pw-copy); font-size: 12px; }
 .pw-all-conversations > svg:last-child { margin-left: auto; }
 .pw-navigation-footer { flex: none; padding: 8px 14px max(12px,env(safe-area-inset-bottom)); }
@@ -259,6 +259,40 @@
 @media(min-width:720px) {
   .pw-route-workspace { max-width: 820px; margin-inline: auto; }
   .pw-redesign .pw-app-header { padding-inline: max(16px,calc((100vw - 820px)/2)); }
+}
+
+/* One workspace and one navigation tree: the same content lives in the wide
+ * sidebar or the narrow Vaul drawer. Route and reading state stay in App. */
+.pw-main-workspace {
+  display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0;
+  overflow: hidden;
+}
+.pw-main-workspace > .pw-secondary { flex: 1; height: auto; min-height: 0; }
+.pw-app[data-navigation="sidebar"] { flex-direction: row; }
+.pw-desktop-navigation {
+  display: flex; flex: 0 0 248px; flex-direction: column;
+  width: 248px; min-width: 0; min-height: 0; overflow: hidden;
+  background: var(--pw-inset); color: var(--pw-ink);
+}
+.pw-desktop-navigation .pw-drawer-header { padding-left: 26px; border: 0; }
+.pw-desktop-navigation .pw-search-header { padding-left: 12px; }
+.pw-desktop-navigation .pw-navigation-actions { padding-inline: 16px; }
+.pw-navigation-footer { max-height: 50%; overflow: auto; overscroll-behavior: contain; }
+.pw-navigation-tools { border: 0; margin-bottom: 2px; }
+.pw-navigation-tools > div { border: 0; }
+.pw-navigation-tools h3 > button {
+  min-height: 48px; padding: 11px 12px; gap: 8px; border: 0; border-radius: 12px;
+  background: transparent; color: var(--pw-copy); box-shadow: none;
+}
+.pw-navigation-tools h3 > button:hover { background: var(--pw-selected); }
+.pw-navigation-tools h3 > button > svg { width: 19px; height: 19px; }
+.pw-navigation-tools h3 > button > span > span { font-size: 14px; font-weight: 400; color: var(--pw-copy); }
+.pw-navigation-tools [role="region"] > div { padding-bottom: 4px; }
+.pw-navigation-tools .pw-work-sidebar { padding-left: 8px; }
+.pw-navigation-tools .pw-work-sidebar nav section { margin: 0; }
+.pw-navigation-tools .pw-nav-item a { min-height: 44px; }
+@media(min-width:1024px) {
+  .pw-redesign .pw-main-workspace .pw-app-header { padding-inline: max(16px,calc((100% - 820px)/2)); }
 }
 
 /* Keep task decisions primary; reveal search and older results on demand. */
@@ -416,3 +450,5 @@
   .pw-priority-decisions .ui-dic__compact-item { grid-template-columns: minmax(0,1fr) minmax(72px,106px); gap: 0 4px; }
   .pw-priority-decisions .ui-dic__compact-actions .ui-dic__next { width: 100%; padding-inline: 6px; }
 }
+
+.pw-conversation-row{display:flex;align-items:center;min-width:0;gap:4px}.pw-conversation-row>button:first-child{flex:1;min-width:0}.pw-conversation-row>button:first-child>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pw-conversation-row small{font-size:11px;color:var(--pw-muted);flex-shrink:0}.pw-conversation-row>button:last-child{flex-shrink:0}.pw-conversation-organization{display:flex;flex-direction:column;gap:20px}

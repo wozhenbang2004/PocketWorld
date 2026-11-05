@@ -3,19 +3,6 @@ package dev.pocketengine.ui
 import android.app.Application
 import android.database.sqlite.SQLiteDatabase
 import android.os.Looper
-import android.view.View
-import android.view.ViewGroup
-import android.view.inspector.WindowInspector
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Column
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.ui.semantics.SemanticsActions
-import androidx.compose.ui.semantics.SemanticsNode
-import androidx.compose.ui.semantics.SemanticsOwner
-import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.semantics.getOrNull
-import androidx.compose.ui.text.AnnotatedString
 import dev.pocketengine.core.ModelConfig
 import dev.pocketengine.features.FeatureContext
 import dev.pocketengine.features.FeatureHost
@@ -24,144 +11,133 @@ import dev.pocketengine.features.workspace.WorkspaceModule
 import dev.pocketengine.store.SecretVault
 import dev.pocketengine.store.SettingsStore
 import dev.pocketengine.store.TaskStore
+import dev.pocketengine.ui.web.PocketWebTeamEvidence
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
-import org.robolectric.annotation.Config
-import org.robolectric.annotation.ConscryptMode
-import org.robolectric.annotation.GraphicsMode
-import org.robolectric.annotation.SQLiteMode
-import org.robolectric.annotation.LooperMode
+import org.robolectric.annotation.*
 
-/** Actual original Compose controls and native owner/SQL review. No screenshot,
- * vendor inference, public HTTP, full App, or visual acceptance is claimed. */
+/** Actual Web presentation adapter -> original member Page -> native SQL scope review.
+ * The controlled coordinator never reads public HTTP or calls a model. React consent has pure tests. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], manifest = Config.NONE, application = Application::class, qualifiers = "w400dp-h1000dp-xxhdpi")
+@Config(sdk = [35], manifest = Config.NONE, application = Application::class)
 @ConscryptMode(ConscryptMode.Mode.OFF)
-@GraphicsMode(GraphicsMode.Mode.NATIVE)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 @LooperMode(LooperMode.Mode.PAUSED)
 class ResearchReadAccessMountedNativeTest {
-    private fun compose(view: View): View? {
-        if (view.javaClass.name == "androidx.compose.ui.platform.AndroidComposeView") return view
-        if (view is ViewGroup) repeat(view.childCount) { compose(view.getChildAt(it))?.let { found -> return found } }
-        return null
+    private class Reply {
+        var calls = 0; var value: JSONObject? = null; var error: String? = null
+        val done: (JSONObject?, String?) -> Unit = { value, error -> calls++; this.value = value; this.error = error }
     }
-    private fun nodes(): List<SemanticsNode> {
-        val result = mutableListOf<SemanticsNode>()
-        fun visit(node: SemanticsNode) { result += node; node.children.forEach(::visit) }
-        WindowInspector.getGlobalWindowViews().filter { it.isAttachedToWindow && it.visibility == View.VISIBLE }.forEach { root -> compose(root)?.let { visit((it.javaClass.getMethod("getSemanticsOwner").invoke(it) as SemanticsOwner).rootSemanticsNode) } }
-        return result
-    }
-    private fun text(node: SemanticsNode) = node.config.getOrNull(SemanticsProperties.Text)?.joinToString(" ") { it.text }.orEmpty()
-
-    private inner class Fixture : AutoCloseable {
+    private class Fixture : AutoCloseable {
         val app = RuntimeEnvironment.getApplication() as Application
-        lateinit var tasks: TaskStore
-        lateinit var features: FeatureHost
-        lateinit var workspace: WorkspaceModule
-        lateinit var coordinator: TeamCoordinator
-        lateinit var host: TeamMemberEvidenceHost
-        val run = UUID.randomUUID().toString()
-        lateinit var project: String
-        val release = CountDownLatch(1)
-        val owner = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        val tasks: TaskStore; val features: FeatureHost; val workspace: WorkspaceModule; val coordinator: TeamCoordinator
+        val host: TeamMemberEvidenceHost; val bridge: PocketWebTeamEvidence
+        val run = UUID.randomUUID().toString(); val project: String
+        val release = CountDownLatch(1); val io = Executors.newSingleThreadExecutor()
+        @Volatile var ownerWindow = 0
+        @Volatile var foreground = true
         init {
-          try {
             app.deleteDatabase("pocket-world.db"); tasks = TaskStore(app); features = FeatureHost({}, tasks) { false }
             workspace = WorkspaceModule(FeatureContext(app, SettingsStore(app), SecretVault(app)) {}); features.register(workspace)
-            project = workspace.handle("create", JSONObject().put("name", "原项目 UI scope")).getString("id")
-            workspace.handle("write", JSONObject().put("projectId", project).put("path", "notes.txt").put("expectedVersion", 0).put("content", "UI_NATIVE_SELECTED_FILE"))
+            project = workspace.handle("create", JSONObject().put("name", "原项目 Web scope")).getString("id")
+            workspace.handle("write", JSONObject().put("projectId", project).put("path", "notes.txt").put("expectedVersion", 0).put("content", "WEB_NATIVE_SELECTED_FILE"))
             host = TeamMemberEvidenceHost(features, tasks, { error("no private source was selected") }) { error("no private source metadata was selected") }
             val entered = CountDownLatch(1)
-            coordinator = TeamCoordinator(File(app.filesDir, "research-ui-${UUID.randomUUID()}.json"), TeamCoordinator.ToolGateway { _, _, _, _ -> error("no model in an owner-selection test") }) {}
+            coordinator = TeamCoordinator(File(app.filesDir, "research-web-${UUID.randomUUID()}.json"), TeamCoordinator.ToolGateway { _, _, _, _ -> error("no model in an owner-selection test") }) {}
             coordinator.setBudgetHost(TaskStoreTeamWriteHost(tasks, TeamWorkspaceAccess(workspace)) {})
-            coordinator.setResearchFactory { _, _, _, _ -> entered.countDown(); release.await(60, TimeUnit.SECONDS); JSONObject().put("status", "interrupted").put("message", "owner UI metadata fixture only") }
+            coordinator.setResearchFactory { _, _, _, _ -> entered.countDown(); release.await(60, TimeUnit.SECONDS); JSONObject().put("status", "interrupted").put("message", "owner metadata fixture only") }
             tasks.beginExternal("teams", "start", run, JSONObject().put("goal", "显选研究范围"))
-            val definition = JSONObject().put("id", UUID.randomUUID().toString()).put("name", "原研究 UI").put("mode", "collaborate").put("leaderId", "a").put("members", JSONArray().put(JSONObject().put("id", "a").put("name", "原成员").put("role", "只读").put("model", "fixture")))
+            val definition = JSONObject().put("id", UUID.randomUUID().toString()).put("name", "原研究 Web").put("mode", "collaborate").put("leaderId", "a").put("members", JSONArray().put(JSONObject().put("id", "a").put("name", "原成员").put("role", "只读").put("model", "fixture")))
             coordinator.start(definition, "不自动执行或分享", 1, ModelConfig("https://fixture.invalid/v1", "", "fixture", false, 8, 10), run, host, null)
             assertTrue(entered.await(5, TimeUnit.SECONDS))
-            owner.get().setContent { MaterialTheme { Column { TeamMemberMaterialControls(coordinator.get(run), { r, m -> host.open(coordinator, r, m) }, { it.run() }) } } }
-            frame()
-          } catch (failure: Throwable) { try { close() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }; throw failure }
+            bridge = PocketWebTeamEvidence({ ownerWindow }, { foreground }, { r, m -> host.open(coordinator, r, m) }, io::execute)
         }
-        // Popup position polling can keep Robolectric's immediate queue nonempty.
-        // Drive bounded real main-loop tasks instead of draining that queue forever.
-        fun frame() { repeat(48) {
-            shadowOf(Looper.getMainLooper()).runOneTask()
-            WindowInspector.getGlobalWindowViews().filter { it.isAttachedToWindow }.forEach { view ->
-                view.measure(View.MeasureSpec.makeMeasureSpec(1200, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(3000, View.MeasureSpec.AT_MOST))
-                view.layout(0, 0, view.measuredWidth, view.measuredHeight)
-            }
-        } }
-        fun action(label: String): () -> Boolean = nodes().firstOrNull { text(it) == label && it.config.getOrNull(SemanticsActions.OnClick)?.action != null }?.config?.get(SemanticsActions.OnClick)?.action ?: error("Missing original UI action $label; text=${nodes().map(::text)}")
-        fun click(label: String) { assertTrue(action(label).invoke()); frame() }
-        fun site(value: String) { val editor = nodes().first { it.config.getOrNull(SemanticsProperties.EditableText) != null && it.config.getOrNull(SemanticsActions.SetText)?.action != null }; assertTrue(editor.config[SemanticsActions.SetText].action!!.invoke(AnnotatedString(value))); frame() }
-        fun toggleLastCheckbox() { val box = nodes().last { it.config.getOrNull(SemanticsProperties.ToggleableState) != null }; assertTrue(box.config[SemanticsActions.OnClick].action!!.invoke()); frame() }
-        fun prepareReview(shared: Boolean = false) {
-            click("成员能读哪些资料"); click("从原项目选择文件"); click("原项目 UI scope"); toggleLastCheckbox(); site("https://example.org")
-            assertEquals(0, tasks.teamMemberMaterialScope(run, "a").getLong("revision"))
-            click(if (shared) "一次审阅给本次当前成员共享" else "审阅本成员的精确版本与范围")
-            assertTrue(nodes().any { text(it).contains("notes.txt") && text(it).contains("版本 1") })
-            toggleLastCheckbox()
+        fun start(action: String, args: JSONObject): Reply = Reply().also { try { bridge.dispatch(action, args, it.done) } catch (failure: Exception) { it.done(null, failure.message) } }
+        fun finish(reply: Reply): Reply {
+            val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (reply.calls == 0 && System.nanoTime() < until) { shadowOf(Looper.getMainLooper()).idle(); Thread.sleep(5) }
+            shadowOf(Looper.getMainLooper()).idle(); assertEquals(1, reply.calls); return reply
         }
+        fun request(action: String, args: JSONObject): JSONObject { val reply = finish(start(action, args)); assertNull(reply.error, reply.error); return reply.value ?: error("Missing original receipt") }
+        fun reject(action: String, args: JSONObject) { val reply = finish(start(action, args)); assertNull(reply.value); assertNotNull(reply.error) }
+        fun page() = request("teamEvidence.open", JSONObject().put("runId", run).put("memberId", "a"))
+        fun review(shared: Boolean = false): JSONObject {
+            val page = page(); val projects = page.getJSONObject("catalogue").getJSONArray("researchProjects")
+            val choice = (0 until projects.length()).map { projects.getJSONObject(it) }.single { it.getString("id") == project }
+            val files = request("teamEvidence.files", JSONObject().put("pageHandle", page.getString("pageHandle")).put("projectHandle", choice.getString("choiceHandle")))
+            val file = files.getJSONArray("files").getJSONObject(0)
+            val input = JSONObject().put("pageHandle", page.getString("pageHandle")).put("scope", if (shared) "current_members" else "member")
+                .put("records", JSONArray()).put("sources", JSONArray()).put("skills", JSONArray()).put("resources", JSONArray())
+                .put("webOrigins", JSONArray().put("https://example.org")).put("projectFiles", JSONArray().put(file.getString("choiceHandle")))
+            assertEquals(0L, tasks.teamMemberMaterialScope(run, "a").getLong("revision"))
+            val review = request("teamEvidence.review", input)
+            val scope = if (shared) review.getJSONObject("review").getJSONArray("members").getJSONObject(0).getJSONObject("review") else review.getJSONObject("review")
+            val original = scope.getJSONObject("researchReadAccess").getJSONArray("projectFiles").getJSONObject(0)
+            assertEquals("notes.txt", original.getString("path")); assertEquals(1, original.getInt("version"))
+            request("teamEvidence.consent", JSONObject().put("reviewHandle", review.getString("reviewHandle")).put("accepted", true))
+            return review
+        }
+        fun confirm(review: JSONObject) = JSONObject().put("reviewHandle", review.getString("reviewHandle"))
+        fun unchanged() { assertEquals(0L, tasks.teamMemberMaterialScope(run, "a").getLong("revision")); assertEquals(0, tasks.teamBudgetSnapshot(run).getInt("toolOperationsReservedOrUsed")) }
+        fun hold(): CountDownLatch { val entered = CountDownLatch(1); val release = CountDownLatch(1); io.execute { entered.countDown(); release.await(5, TimeUnit.SECONDS) }; assertTrue(entered.await(5, TimeUnit.SECONDS)); return release }
         override fun close() {
-            owner.pause().stop().destroy(); repeat(8) { shadowOf(Looper.getMainLooper()).runOneTask() }; release.countDown(); if (::coordinator.isInitialized) coordinator.close()
-            if (::coordinator.isInitialized) for (name in listOf("coordinator", "members")) { val f = TeamCoordinator::class.java.getDeclaredField(name).also { it.isAccessible = true }; assertTrue((f.get(coordinator) as ExecutorService).awaitTermination(5, TimeUnit.SECONDS)) }
-            if (::features.isInitialized) features.close(); if (::tasks.isInitialized) (TaskStore::class.java.getDeclaredField("db").also { it.isAccessible = true }.get(tasks) as SQLiteDatabase).close()
+            bridge.clear(); io.shutdownNow(); release.countDown(); coordinator.close()
+            for (name in listOf("coordinator", "members")) assertTrue((TeamCoordinator::class.java.getDeclaredField(name).apply { isAccessible = true }.get(coordinator) as ExecutorService).awaitTermination(5, TimeUnit.SECONDS))
+            features.close(); (TaskStore::class.java.getDeclaredField("db").apply { isAccessible = true }.get(tasks) as SQLiteDatabase).close()
         }
     }
-    @Test fun changedResearchDraftRejectsAnAlreadyCapturedOldConfirmCallback() {
-        Fixture().use { f ->
-            f.prepareReview(); val oldConfirm = f.action("确认本成员读取范围"); f.site("https://docs.example.org")
-            assertFalse(nodes().any { text(it) == "确认本成员读取范围" })
-            oldConfirm.invoke(); f.frame()
-            assertEquals("old queued UI callback cannot share removed or superseded scope", 0, f.tasks.teamMemberMaterialScope(f.run, "a").getLong("revision"))
-            assertEquals(0, f.tasks.teamBudgetSnapshot(f.run).getInt("toolOperationsReservedOrUsed"))
-        }
+    @Test fun changedDraftRetiresTheOldMemberConfirmation() {
+        Fixture().use { f -> val original = f.review(); f.request("teamEvidence.cancelReview", f.confirm(original)); f.reject("teamEvidence.confirm", f.confirm(original)); f.unchanged() }
     }
-    @Test fun actualOriginalUiConfirmsOnlyTheReviewedNativeFileAndSiteWithoutStartingARead() {
+    @Test fun realNativeReviewConfirmsOnlyTheExactSelectedFileAndSiteWithoutStartingARead() {
         Fixture().use { f ->
-            f.prepareReview(); f.click("确认本成员读取范围")
-            val saved = f.tasks.teamMemberMaterialScope(f.run, "a"); assertEquals(1, saved.getLong("revision"))
+            val review = f.review(); val result = f.request("teamEvidence.confirm", f.confirm(review)); assertTrue(result.getBoolean("scopeSaved")); assertFalse(result.getBoolean("executionAuthorized"))
+            val saved = f.tasks.teamMemberMaterialScope(f.run, "a"); assertEquals(1L, saved.getLong("revision"))
             val scope = saved.getJSONObject("researchReadAccess"); assertEquals("https://example.org", scope.getJSONArray("webOrigins").getString(0))
             val file = scope.getJSONArray("projectFiles").getJSONObject(0); assertEquals(f.project, file.getString("projectId")); assertEquals("notes.txt", file.getString("path")); assertEquals(1, file.getInt("version")); assertEquals(64, file.getString("sha256").length)
-            assertEquals(0, f.tasks.teamBudgetSnapshot(f.run).getInt("toolOperationsReservedOrUsed"))
+            assertEquals(0, f.tasks.teamBudgetSnapshot(f.run).getInt("toolOperationsReservedOrUsed")); f.reject("teamEvidence.confirm", f.confirm(review)); assertEquals(1L, f.tasks.teamMemberMaterialScope(f.run, "a").getLong("revision"))
         }
     }
-    @Test fun changedSharedResearchDraftRejectsAnAlreadyCapturedOldConfirmCallback() {
+    @Test fun changedSharedDraftRetiresTheOldCurrentMembersConfirmation() {
+        Fixture().use { f -> val original = f.review(shared = true); assertFalse(original.getJSONObject("review").getBoolean("newMembersInherit")); f.request("teamEvidence.cancelReview", f.confirm(original)); f.reject("teamEvidence.confirm", f.confirm(original)); f.unchanged() }
+    }
+    @Test fun withdrawingMemberConsentRejectsAnAlreadyQueuedConfirm() {
         Fixture().use { f ->
-            f.prepareReview(shared = true); val oldConfirm = f.action("一次确认以上成员共享"); f.site("https://docs.example.org")
-            assertFalse(nodes().any { text(it) == "一次确认以上成员共享" })
-            oldConfirm.invoke(); f.frame()
-            assertEquals("queued shared confirmation cannot restore superseded scope", 0, f.tasks.teamMemberMaterialScope(f.run, "a").getLong("revision"))
-            assertEquals(0, f.tasks.teamBudgetSnapshot(f.run).getInt("toolOperationsReservedOrUsed"))
+            val review = f.review(); val release = f.hold(); val queued = f.start("teamEvidence.confirm", f.confirm(review))
+            f.request("teamEvidence.consent", f.confirm(review).put("accepted", false)); release.countDown()
+            assertNull(f.finish(queued).value); assertNotNull(queued.error); f.unchanged()
         }
     }
-    @Test fun withdrawnConsentRejectsAnAlreadyCapturedMemberConfirmCallback() {
+    @Test fun withdrawingAndRestoringSharedConsentCannotReviveTheCapturedOldConfirm() {
         Fixture().use { f ->
-            f.prepareReview(); val oldConfirm = f.action("确认本成员读取范围"); f.toggleLastCheckbox()
-            oldConfirm.invoke(); f.frame()
-            assertEquals("queued confirmation must recheck current consent", 0, f.tasks.teamMemberMaterialScope(f.run, "a").getLong("revision"))
+            val review = f.review(shared = true); val release = f.hold(); val queued = f.start("teamEvidence.confirm", f.confirm(review))
+            f.request("teamEvidence.consent", f.confirm(review).put("accepted", false)); f.request("teamEvidence.consent", f.confirm(review).put("accepted", true)); release.countDown()
+            assertNull(f.finish(queued).value); assertNotNull(queued.error); f.unchanged()
         }
     }
-    @Test fun withdrawnConsentRejectsAnAlreadyCapturedSharedConfirmCallback() {
+    @Test fun changedFileVersionCannotBeSilentlySubstitutedDuringConfirmation() {
         Fixture().use { f ->
-            f.prepareReview(shared = true); val oldConfirm = f.action("一次确认以上成员共享"); f.toggleLastCheckbox()
-            oldConfirm.invoke(); f.frame()
-            assertEquals("queued shared confirmation must recheck current consent", 0, f.tasks.teamMemberMaterialScope(f.run, "a").getLong("revision"))
+            val review = f.review(); f.workspace.handle("write", JSONObject().put("projectId", f.project).put("path", "notes.txt").put("expectedVersion", 1).put("content", "CHANGED_FILE_AFTER_REVIEW"))
+            f.reject("teamEvidence.confirm", f.confirm(review)); f.unchanged()
         }
     }
-
+    @Test fun losingAndRestoringForegroundDoesNotReviveAQueuedApproval() {
+        Fixture().use { f ->
+            val review = f.review(); val release = f.hold(); val queued = f.start("teamEvidence.confirm", f.confirm(review))
+            f.foreground = false; f.bridge.clear(); f.ownerWindow++; f.foreground = true; release.countDown()
+            assertNull(f.finish(queued).value); assertNotNull(queued.error); f.unchanged(); f.reject("teamEvidence.confirm", f.confirm(review))
+        }
+    }
 }

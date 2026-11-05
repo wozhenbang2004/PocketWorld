@@ -61,6 +61,21 @@ export function profileMutationReceipt(value: ProfileData, expected: ProfileData
   return record;
 }
 
+export function profileStartInput(inspection: ProfileData | null, goal: string): ProfileData {
+  const wanted = goal.trim();
+  if (!inspection?.preflightHandle || inspection.runnable !== true) throw new Error('请重新预检这份已保存修订，并核对准确项目范围。');
+  if (!wanted || wanted.length > 4000 || wanted.includes('\u0000')) throw new Error('请填写 1–4000 字的本次任务目标。');
+  return { preflightHandle: inspection.preflightHandle, goal: wanted };
+}
+export function profileStartReceipt(value: ProfileData, expected: ProfileData): ProfileData {
+  if (value?.confirmed !== true || value.command !== 'start' || expected.command !== 'start' || value.operationId !== expected.operationId ||
+      value.profileId !== expected.original?.profileId || value.revision !== expected.original?.revision ||
+      !value.result || typeof value.result.taskId !== 'string' || !/^[a-f0-9-]{36}$/.test(value.result.taskId)) {
+    throw new Error('本次原任务身份尚未确认，请核对原回执；不会重新启动。');
+  }
+  return value.result;
+}
+
 /** A lost foreground mutation remains unknown across later reads until the owner acknowledges its original result. */
 export class ProfileRequestGate {
   private revision = 0;

@@ -9,13 +9,16 @@ import dev.pocketengine.features.plugins.PluginRevisions
 import dev.pocketengine.features.plugins.PluginsModule
 import dev.pocketengine.features.plugins.catalog.PluginCatalogSession
 import dev.pocketengine.ui.PocketWorldController
+import dev.pocketengine.ui.ComposeActivity
 import dev.pocketengine.ui.objects
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
 /** Presentation handles around the existing native catalog page and reviewed plugin writes. */
-internal class PocketWebPlugins(private val controller: PocketWorldController, private val featureHost: FeatureHost) {
+internal class PocketWebPlugins(private val controller: PocketWorldController, private val featureHost: FeatureHost, activity: ComposeActivity) {
+    private val functionalPacks = PocketWebFunctionalPacks({ controller.pluginExecutionHost().newFunctionalPackPage() },
+        controller::runPluginCatalogWork, controller::webPrivateOwnerVisible, activity.functionalPackDocuments)
     private data class Window(val generation: Long, val ticket: Pair<Triple<Long, Int, Long>, Long>)
     private data class Review(val kind: String, val input: String, val shown: String, val expires: Long, val window: Window)
     private data class CatalogReview(val handle: String, val view: PluginCatalogSession.View, val expires: Long, val window: Window)
@@ -34,10 +37,11 @@ internal class PocketWebPlugins(private val controller: PocketWorldController, p
             "pluginCatalog.open", "pluginCatalog.read", "pluginCatalog.configure", "pluginCatalog.refresh",
             "pluginCatalog.prepare", "pluginCatalog.readInstalled", "pluginCatalog.history", "pluginCatalog.reviewRestore",
             "pluginCatalog.confirm", "pluginCatalog.cancel", "pluginCatalog.queryInstalled",
-            "pluginCatalog.runtime", "pluginCatalog.prepareRuntime")
+            "pluginCatalog.runtime", "pluginCatalog.prepareRuntime") + PocketWebFunctionalPacks.COMMANDS
     }
 
     fun clear() {
+        functionalPacks.clear()
         generation++; catalogReview = null; catalogReceipt = null; reviews.clear(); histories.clear(); installed = JSONArray()
         page?.let(controller::closePluginCatalogPage); page = null
     }
@@ -229,6 +233,7 @@ internal class PocketWebPlugins(private val controller: PocketWorldController, p
     private fun sameJs(original: JSONObject, actual: JSONObject?) = actual != null && original.getString("id") == actual.optString("id") &&
         original.getString("installationId") == actual.optString("installationId") && original.getLong("approvalRevision") == actual.optLong("approvalRevision", -1) && original.getString("sourceSha256") == actual.optString("sourceSha256")
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
+        if (action in PocketWebFunctionalPacks.COMMANDS) { functionalPacks.dispatch(action, args, done); return }
         check(controller.webPrivateOwnerVisible()) { "请回到前台私人插件页面" }
         if (action !in setOf("plugins.open", "pluginCatalog.open", "plugins.close")) nativePage()
         when (action) {

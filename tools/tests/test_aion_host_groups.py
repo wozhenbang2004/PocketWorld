@@ -59,7 +59,7 @@ class AionHostGroups(unittest.TestCase):
             'dev.pocketengine.store.DeviceV8MigrationNativeTest': 2,
             'dev.pocketengine.features.assistant.ConversationOwnerTitleNativeTest': 4,
             'dev.pocketengine.features.conversation.ConversationPinnedHistoryTest': 3,
-            'dev.pocketengine.ui.ConversationOrganizationUiNativeTest': 3,
+            'dev.pocketengine.ui.ConversationOrganizationUiNativeTest': 4,
             'dev.pocketengine.features.conversation.InterruptedAttemptsTest': 3,
             'dev.pocketengine.features.assistant.notifications.OwnerQuestionReferenceTest': 1,
             'dev.pocketengine.features.assistant.OwnerQuestionInputsNativeTest': 5,
@@ -71,9 +71,11 @@ class AionHostGroups(unittest.TestCase):
         entry = REGISTRY['aion-conversations']
         self.assertEqual(list(expected), [entry['class']] + entry['additionalClasses'])
         self.assertEqual([
+            'dev.pocketengine.testutil.ReadyApplicationFixture',
             'dev.pocketengine.testutil.HttpServer',
             'dev.pocketengine.features.channels.ChannelTaskHostTest',
             'dev.pocketengine.features.channels.ChannelSecurityTest',
+            'dev.pocketengine.ui.OwnerWebTestFixture',
         ], entry['helpers'])
         self.assertTrue(entry['robolectric'])
         for name, count in expected.items():

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { bridge } from './bridge';
-import { Accordion, AccordionItem, Button, CheckboxField, ObjectTable, SelectField, SettingsDialog, TextField } from './forms-library';
+import { Accordion, AccordionItem, Button, CheckboxField, ObjectTable, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { PressButton } from './library';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import { ArrowLeft, ChevronRight, FileSliders, RefreshCw } from 'lucide-react';
 import './work-profiles-workspace.css';
-import { newProfile, profileAsset, profileModel, profileMutationReceipt, profilePluginTool, profileReferenceKey, profileRows, profileSaveInput, ProfileRequestGate, type ProfileData as Data } from './profile-contract';
+import { newProfile, profileAsset, profileModel, profileMutationReceipt, profilePluginTool, profileReferenceKey, profileRows, profileSaveInput, profileStartInput, profileStartReceipt, ProfileRequestGate, type ProfileData as Data } from './profile-contract';
 
 type Props = { state: Data; supported: (action: string) => boolean; run: (action: string, args?: Data) => Promise<any>; registerTransientBack: (handler: (() => boolean) | null) => void };
 type Editor = { original: Data | null; definition: Data; viewHandle: string; useCurrentProject: boolean };
@@ -13,7 +13,7 @@ const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 const profileFormLayout = { gridTemplateColumns: 'minmax(0, 1fr)', minWidth: 0, overflowWrap: 'anywhere' as const };
 let retained: { editor: Editor | null; unknown: Data | null } = { editor: null, unknown: null };
 const sourceLabel: Data = { instructionRefs: '指令资料', skillRefs: '技能', pluginRefs: '插件工具', extensionRefs: '扩展', targetBindings: '执行目标', teamTemplateRef: '团队模板' };
-const actionLabel: Data = { create: '新建工作配置', save: '保存引用修改', remove: '删除工作配置', rebind: '保存重新绑定的配置' };
+const actionLabel: Data = { create: '新建工作配置', save: '保存引用修改', remove: '删除工作配置', rebind: '保存重新绑定的配置', start: '开始这次原任务' };
 const modelLabel = (purpose: string) => ({ MAIN: '主任务模型', SUMMARY: '摘要模型', RELAY: '外部网关模型', MEMBER: '成员默认模型' } as Data)[purpose] || `成员 ${purpose.slice(7)} 的模型`;
 const referenceText = (ref: Data | null | undefined): string => !ref ? '未限定' : ref.kind === 'exact' ? `${ref.modelId} · ${ref.connectionId}` : ref.kind === 'group' ? `模型组 ${ref.groupId} · 修订 ${ref.groupRevision}` : `${ref.id || ref.profileId || ref.packageId || '原引用'}${ref.revision ? ` · 修订 ${ref.revision}` : ''}${ref.worker ? ` · ${ref.worker}` : ''}${ref.tools?.length ? ` · ${ref.tools.join('、')}` : ''}`;
 
@@ -37,6 +37,7 @@ export function WorkProfilesWorkspace({ state, supported, run, registerTransient
   const [choices, setChoices] = useState<Data>({}), [review, setReview] = useState<Data | null>(null), [inspection, setInspection] = useState<Data | null>(null), [conflict, setConflict] = useState<Data | null>(null);
   const [unknown, setUnknown] = useState<Data | null>(() => retained.unknown), [unknownRead, setUnknownRead] = useState<Data | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState(''), [ack, setAck] = useState(false), [restoreAck, setRestoreAck] = useState(false), [member, setMember] = useState(''), [memberModel, setMemberModel] = useState('');
+  const [goal, setGoal] = useState(''), [startedTask, setStartedTask] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(() => !!retained.editor), [panel, setPanel] = useState('models');
   const editorVisible = useRef(editorOpen), editorEpoch = useRef(0);
   editorVisible.current = editorOpen;
@@ -48,6 +49,7 @@ export function WorkProfilesWorkspace({ state, supported, run, registerTransient
   const editorCurrent = () => editorVisible.current && editorEpoch.current === renderEpoch && !!currentEditor.current && nativeActive();
   const ownerTicket = () => { const view = bridge.getState().view as Data | undefined; return JSON.stringify([view?.section, view?.taskId, view?.resumeRevision, bridge.getDocumentEpoch()]); };
   const release = (key: string, value?: string) => { if (value) void bridge.command('profiles.discard', { [key]: value }).catch(() => {}); };
+  const closeInspection = () => { release('preflightHandle', inspection?.preflightHandle); setInspection(null); };
   const closeReview = () => { release('reviewHandle', currentReview.current?.reviewHandle); currentReview.current = null; setReview(null); setAck(false); };
   const acceptSnapshot = (value: Data) => { if (!Array.isArray(value?.profiles)) throw new Error('原工作配置清单未完整返回。'); setSnapshot(value); };
   const invoke = async (action: string, input: Data, accept: (value: Data) => void, originalMutation: Data | null = null) => {
@@ -58,7 +60,7 @@ export function WorkProfilesWorkspace({ state, supported, run, registerTransient
       if (!supported(action)) throw new Error('当前宿主尚未接通这项工作配置操作。');
       const value = await run(action, input);
       if (alive.current && gate.current.owns(ticket)) { accept(value); return true; }
-      for (const key of ['viewHandle', 'choicesHandle', 'reviewHandle']) release(key, value?.[key]);
+      for (const key of ['viewHandle', 'choicesHandle', 'reviewHandle', 'preflightHandle']) release(key, value?.[key]);
     } catch (failure) {
       if (alive.current && gate.current.owns(ticket)) {
         setError(failure instanceof Error ? failure.message : String(failure));
@@ -68,7 +70,7 @@ export function WorkProfilesWorkspace({ state, supported, run, registerTransient
     return false;
   };
   const refresh = () => { void invoke('profiles.snapshot', {}, acceptSnapshot); };
-  const loadChoices = (project: boolean) => { if (!editorCurrent()) return; void invoke('profiles.choices', { useCurrentProject: project }, value => {
+  const loadChoices = (project: boolean) => { if (!editorCurrent()) return; closeInspection(); closeReview(); void invoke('profiles.choices', { useCurrentProject: project }, value => {
     if (!value?.choicesHandle || !value.sections || value.useCurrentProject !== project) throw new Error('未取得所选范围的原生来源窗口。');
     release('choicesHandle', choices.choicesHandle); setChoices(value);
   }); };
@@ -97,7 +99,7 @@ export function WorkProfilesWorkspace({ state, supported, run, registerTransient
     return () => { unsubscribe(); document.removeEventListener('visibilitychange', changed); window.removeEventListener('pagehide', hidden); };
   }, []);
   useEffect(() => { registerTransientBack(() => {
-    if (busy) return true; if (review) { closeReview(); return true; } if (inspection) { setInspection(null); return true; }
+    if (busy) return true; if (review) { closeReview(); return true; } if (inspection) { closeInspection(); return true; }
     if (editor && editorOpen) { pauseEditor(); return true; } return false;
   }); return () => registerTransientBack(null); }, [busy, review, inspection, editor, editorOpen, registerTransientBack]);
   const safely = (work: () => void) => { try { work(); setError(''); } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); } };
@@ -135,7 +137,8 @@ export function WorkProfilesWorkspace({ state, supported, run, registerTransient
   });
   const confirm = () => {
     if (!review || currentReview.current !== review || !ack || busy || currentUnknown.current || !editorCurrent()) return; const original = review; currentReview.current = null; setReview(null); setAck(false);
-    void invoke('profiles.confirm', { reviewHandle: original.reviewHandle }, value => {
+    void invoke('profiles.confirm', { reviewHandle: original.reviewHandle, ...(original.command === 'start' ? { consent: true } : {}) }, value => {
+      if (original.command === 'start') { const result = profileStartReceipt(value, original); setStartedTask(result.taskId); setGoal(''); setNotice('原任务已返回：' + (result.status || '请查看原回执') + '。'); return; }
       const record = profileMutationReceipt(value, original); if (value.snapshot) acceptSnapshot(value.snapshot);
       if (original.command === 'remove') { setEditor(null); setEditorOpen(false); }
       else setEditor(old => old ? { ...old, original: record, definition: clone(record), viewHandle: '' } : null);
@@ -146,22 +149,24 @@ export function WorkProfilesWorkspace({ state, supported, run, registerTransient
     const expected = currentUnknown.current; if (!expected) return;
     void invoke('profiles.result', { operationId: expected.operationId }, value => {
       if (value.operationId !== expected.operationId || value.readOnly !== true || value.replayAllowed !== false) throw new Error('尚未取得原操作的只读核对。');
-      acceptSnapshot(value.snapshot); if (value.status === 'completed') profileMutationReceipt(value.receipt, expected);
+      acceptSnapshot(value.snapshot); if (value.status === 'completed') { if (expected.command === 'start') profileStartReceipt(value.receipt, expected); else profileMutationReceipt(value.receipt, expected); }
       gate.current.inspectOriginal(expected.operationId); setUnknownRead(value);
     });
   };
   const acknowledgeUnknown = () => {
     if (!unknownRead || !gate.current.acknowledge()) return;
-    if (unknownRead.status === 'completed' && unknown) {
+    if (unknownRead.status === 'completed' && unknown?.command === 'start') { setStartedTask(profileStartReceipt(unknownRead.receipt, unknown).taskId); setGoal(''); }
+    else if (unknownRead.status === 'completed' && unknown) {
       const record = profileMutationReceipt(unknownRead.receipt, unknown);
       if (unknown.command === 'remove') { setEditor(null); setEditorOpen(false); }
       else setEditor(old => old ? { ...old, original: record, definition: { ...old.definition, profileId: record.profileId, revision: record.revision, ...(record.restoredReferences ? { restoredReferences: record.restoredReferences, restoredPendingReview: record.restoredPendingReview } : {}) }, viewHandle: '' } : null);
     }
     currentUnknown.current = null; setUnknown(null); setUnknownRead(null); setNotice('已核对原操作。草稿保留；下一次保存需要重新读取与审阅。');
   };
-  const unknownControls = unknown && <div className="pw-profile-attention" data-profile-state="unknown"><p role="status">“{actionLabel[unknown.command]}”的原回执待核对。草稿保留，不能重复确认。{unknown.original ? `原修订 ${unknown.original.revision}。` : '请核对清单是否已经产生新配置。'}</p>
-    {unknownRead && <p>{unknownRead.status === 'completed' ? '已找到这次原操作的完成回执。' : unknownRead.status === 'not_entered' ? '原窗口关闭前请求尚未进入保存。' : '仍未确认原操作结果，请对照当前清单；此读取没有重试保存。'}</p>}
+  const unknownControls = unknown && <div className="pw-profile-attention" data-profile-state="unknown"><p role="status">“{actionLabel[unknown.command]}”的原回执待核对。草稿保留，不能重复确认。{unknown.original ? `原修订 ${unknown.original.revision}。` : '请核对清单是否已经产生新配置。'}{unknown.command === 'start' && '已进入的原任务可能仍在执行，请先核对，勿重复启动。'}</p>
+    {unknownRead && <p>{unknownRead.status === 'completed' ? '已找到这次原操作的完成回执。' : unknownRead.status === 'not_entered' ? '原窗口关闭前请求尚未进入。' : '仍未确认原操作结果，请核对当前记录；此读取没有重复执行。'}</p>}
     <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={readUnknown}>核对原操作与当前清单</Button><Button variant="secondary" disabled={busy || !unknownRead} onClick={acknowledgeUnknown}>我已核对，允许重新准备</Button></div>
+    {unknownRead?.taskId && <Button variant="secondary" onClick={() => { void run('tasks.open', { id: unknownRead.taskId }); }}>打开这次原任务</Button>}{unknownRead?.error && <p role="alert">{unknownRead.error}</p>}
     {unknownRead && <p className="pw-muted">当前记录：{profileRows(snapshot.profiles).map(row => `${row.name}（修订 ${row.revision}）`).join('；') || '无已保存记录'}</p>}</div>;
   const draft = editor?.definition, sections = choices.sections || {}, sourcesReady = !!choices.choicesHandle && choices.useCurrentProject === editor?.useCurrentProject, locked = busy || !!unknown;
   const selectedRefs = (field: string, row: Data) => profileRows(draft?.[field]).find(ref => ref.id === row.id);
@@ -183,6 +188,7 @@ export function WorkProfilesWorkspace({ state, supported, run, registerTransient
     </div></header>
     <p className="pw-profile-policy">原技能、插件与设备权限仍由各自来源管理；保存配置不会启动任务。</p>
     {editor && <div className="pw-profile-draft" aria-label="保留的工作配置草稿"><FileSliders size={20} aria-hidden /><div><strong>{draft?.name || '未命名配置'}</strong><p>{dirty ? '有未保存修改' : '编辑内容已保留'} · {editor.original ? `原修订 ${editor.original.revision}` : '新建草稿'}{draft?.restoredPendingReview ? ' · 恢复后待重新绑定' : ''}</p></div><Button variant="ghost" trailingIcon={ChevronRight} disabled={busy} onClick={resumeEditor}>继续编辑草稿</Button></div>}
+    {startedTask && <Button variant="secondary" disabled={busy || !supported('tasks.open')} onClick={() => { void run('tasks.open', { id: startedTask }); }}>查看这次原任务与回执</Button>}{busy && mutation.current?.command === 'start' && <Button variant="secondary" onClick={() => { const operationId = mutation.current?.operationId; if (operationId) void run('profiles.stop', { operationId }).then(() => setNotice('已请求停止这次原任务，等待原结果。')).catch(failure => setError(String(failure))); }}>请求停止这次原任务</Button>}
     {unknownControls}{error && <p className="pw-profile-feedback" role="alert">{error}</p>}{notice && <p className="pw-profile-feedback" role="status">{notice}</p>}
     <ObjectTable label="已保存工作配置" rows={profileRows(snapshot.profiles)} getRowId={row => row.profileId} columns={[
       { id: 'name', label: '已保存配置', render: row => <div className="pw-object-title"><strong>{row.name}</strong><small>修订 {row.revision} · {row.restoredPendingReview ? '恢复后待重新绑定，不能执行' : `${Object.keys(row.modelPolicies || {}).length} 项模型用途`}</small></div>, sortValue: row => row.name },
@@ -195,7 +201,7 @@ export function WorkProfilesWorkspace({ state, supported, run, registerTransient
         <div className="pw-profile-editor-scroll">
           {unknownControls}
           <TextField label="配置名称" value={draft.name} onChange={name => change({ ...draft, name })} isDisabled={locked} />
-          <div className="pw-profile-scope"><CheckboxField isSelected={editor.useCurrentProject} isDisabled={locked} onChange={useCurrentProject => { if (!editorCurrent()) return; release('choicesHandle', choices.choicesHandle); setChoices({}); setEditor({ ...editor, useCurrentProject }); setRestoreAck(false); setMemberModel(''); }}>使用当前已选项目的资料范围</CheckboxField>
+          <div className="pw-profile-scope"><CheckboxField isSelected={editor.useCurrentProject} isDisabled={locked} onChange={useCurrentProject => { if (!editorCurrent()) return; release('choicesHandle', choices.choicesHandle); closeInspection(); closeReview(); setChoices({}); setEditor({ ...editor, useCurrentProject }); setRestoreAck(false); setMemberModel(''); }}>使用当前已选项目的资料范围</CheckboxField>
             {!sourcesReady ? <p className="pw-profile-caption">来源窗口尚未读取或已关闭。原引用和编辑内容保留；重新选择来源前请先读取。</p> : <p className="pw-profile-caption" role="status">{unavailableSources.length ? `尚未成功读取：${unavailableSources.join('、')}。已保存引用仍保留。` : '指令与技能、插件、扩展和团队模板均已读取。仍按各自原权限选择。'}</p>}
           </div>
           {draft.restoredPendingReview && <div className="pw-profile-attention" data-profile-state="restored"><strong>恢复后待重新绑定，当前不能执行</strong><p>旧设备授权未恢复。先读取本机来源、核对原引用，再明确审阅重新绑定。</p><ProfileContents value={draft} /><CheckboxField isSelected={restoreAck} isDisabled={locked} onChange={setRestoreAck}>我已核对旧引用清单，明确选择了新设备的模型与保留的资料；未重新选择的旧权限和目标继续排除</CheckboxField></div>}
@@ -226,8 +232,9 @@ export function WorkProfilesWorkspace({ state, supported, run, registerTransient
             </TabPanel>
           </Tabs>
           {error && <p className="pw-profile-feedback" role="alert">{error}</p>}{notice && <p className="pw-profile-feedback" role="status">{notice}</p>}
+          {editor.original && !draft.restoredPendingReview && <section className="pw-profile-start"><h3>用这份配置开始任务</h3><p>先核对已保存修订、模型与已有权限。含成员模型、团队或项目资料时，使用上方明确选择的原项目副本。</p>{choices.project && <p className="pw-reading-copy">原项目 {choices.project.projectId} · 副本 {choices.project.checkoutId} · {choices.project.runtime}</p>}<Button variant="secondary" disabled={busy || !!unknown || dirty || !editor.viewHandle || !sourcesReady} onClick={() => { if (editorCurrent()) void invoke('profiles.preflight', { viewHandle: editor.viewHandle, choicesHandle: choices.choicesHandle }, value => { if (!value?.preflightHandle) throw new Error('原预检身份未返回。'); setInspection(value); }); }}>预检已保存修订</Button>{dirty && <p className="pw-profile-caption">保存并核对当前修改后，才能按新修订开始。</p>}</section>}
           <Accordion className="pw-profile-disclosures pw-profile-management"><AccordionItem id="profile-management" title="配置管理" description="预检已保存修订、删除配置或舍弃草稿"><div className="pw-form-actions">
-            {editor.original && !draft.restoredPendingReview && <Button variant="secondary" disabled={busy || !!unknown || dirty || !editor.viewHandle || !sourcesReady} onClick={() => { if (editorCurrent()) void invoke('profiles.preflight', { viewHandle: editor.viewHandle, choicesHandle: choices.choicesHandle }, setInspection); }}>预检已保存修订</Button>}
+
             {editor.original && <Button variant="ghost" disabled={busy || !!unknown || !editor.viewHandle} onClick={() => prepare('profiles.reviewRemove')}>删除此配置</Button>}
             <Button variant="ghost" disabled={busy || !!unknown} onClick={() => { if (!editorCurrent()) return; pauseEditor(); currentEditor.current = null; setEditor(null); retained.editor = null; setNotice('已舍弃这份编辑草稿，已保存配置未改变。'); }}>舍弃此编辑草稿</Button>
           </div></AccordionItem></Accordion>
@@ -243,9 +250,9 @@ export function WorkProfilesWorkspace({ state, supported, run, registerTransient
       </div>}
     </SettingsDialog>
     <SettingsDialog isOpen={!!review} title={actionLabel[review?.command || ''] || '核对工作配置'} onClose={() => { if (!busy) closeReview(); }}>{review && <div className="pw-profile-review pw-form-grid" style={profileFormLayout}><ProfileContents value={review.definition} />
-      {review.command === 'remove' ? <p>只删除这份可复用定义；已有任务的原配置快照与记录继续保留。</p> : review.command === 'rebind' ? <p>原生已对本次新引用检查当前模型与来源。确认只保存重绑后的定义，不启动任务，也不恢复旧设备授权。</p> : <p>本次保存引用定义；实际执行仍需检查原模型、内容修订与已有权限。恢复后的待审阅状态由原生保留。</p>}
+      {review.command === 'start' ? <><h3>本次原任务目标</h3><p className="pw-reading-copy">{review.goal}</p><p>{review.project ? `原项目 ${review.project.projectId} · 副本 ${review.project.checkoutId} · ${review.project.runtime}` : '本次不关联项目副本。'}</p><p>按已核对的准确模型与来源创建这一次任务；外部效果仍逐项使用原授权。离开页面不会停止已经开始的原任务。</p></> : review.command === 'remove' ? <p>只删除这份可复用定义；已有任务的原配置快照与记录继续保留。</p> : review.command === 'rebind' ? <p>原生已对本次新引用检查当前模型与来源。确认只保存重绑后的定义，不启动任务，也不恢复旧设备授权。</p> : <p>本次保存引用定义；实际执行仍需检查原模型、内容修订与已有权限。恢复后的待审阅状态由原生保留。</p>}
       {review.nativeReview && <p>本次核对：{profileRows(review.nativeReview.review?.items).filter(item => item.included).length} 项来源可用；明确省略 {profileRows(review.nativeReview.review?.items).filter(item => !item.included).length} 项。</p>}
       <CheckboxField isSelected={ack} isDisabled={locked} onChange={setAck}>我已核对上方配置、来源与本次操作</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>返回编辑</Button><PressButton compact disabled={busy || !ack || !!unknown} onClick={confirm}>确认{actionLabel[review.command]}</PressButton></div></div>}</SettingsDialog>
-    <SettingsDialog isOpen={!!inspection} title="原工作配置预检" onClose={() => setInspection(null)}>{inspection && <div className="pw-profile-review pw-form-grid" style={profileFormLayout}><p>{inspection.ready ? '这次原生预检来源可用。尚未启动任务。' : '存在尚未满足的来源；原引用保留，未替换成其他模型或设备。'}</p>{profileRows(inspection.items).map((item, at) => <p className="pw-reading-copy" key={at}>{item.kind === 'model' ? modelLabel(item.id) : item.kind} · {item.id}：{item.included ? '可用' : item.optional ? '明确可选，当前省略' : '尚不可用'}{!item.included ? `（${item.status}）` : ''}</p>)}<Button variant="secondary" onClick={() => setInspection(null)}>返回原配置</Button></div>}</SettingsDialog>
+    <SettingsDialog isOpen={!!inspection} title="原工作配置预检" onClose={() => { if (!busy) closeInspection(); }}>{inspection && <div className="pw-profile-review pw-form-grid" style={profileFormLayout}><p>{inspection.ready ? '这次原生预检来源可用。尚未启动任务。' : '存在尚未满足的来源；原引用保留，未替换成其他模型或设备。'}</p>{profileRows(inspection.items).map((item, at) => <p className="pw-reading-copy" key={at}>{item.kind === 'model' ? modelLabel(item.id) : item.kind} · {item.id}：{item.included ? '可用' : item.optional ? '明确可选，当前省略' : '尚不可用'}{!item.included ? `（${item.status}）` : ''}</p>)}<p>{inspection.project ? `原项目 ${inspection.project.projectId} · 副本 ${inspection.project.checkoutId} · ${inspection.project.runtime}` : '未关联项目副本。'}</p>{!inspection.runnable && <p role="alert">本入口需要准确的主任务与摘要模型；成员模型、团队与项目资料还需要原项目副本。执行目标仍在各自原任务中核对。</p>}<TextAreaField label="本次原任务目标" value={goal} onChange={setGoal} isDisabled={locked} /><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeInspection}>返回原配置</Button><PressButton compact disabled={locked || !inspection.runnable || !goal.trim()} onClick={() => safely(() => { if (!editorCurrent()) return; const input = profileStartInput(inspection, goal); void invoke('profiles.reviewStart', input, value => { if (value?.command !== 'start' || !value.reviewHandle || !value.operationId) throw new Error('原任务审阅未返回。'); setInspection(null); setReview(value); setAck(false); }); })}>核对这次任务</PressButton></div>{error && <p role="alert">{error}</p>}</div>}</SettingsDialog>
   </section>;
 }

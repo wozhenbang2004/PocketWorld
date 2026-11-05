@@ -89,7 +89,7 @@ function NavItem({
 /** A primary navigation row. Rows without an `href` are decoration only. */
 
 export type WorkNavItem={key:string;label:string;icon:IconComponent;count?:number;group?:string;description?:string;disabled?:boolean};
-export function WorkSidebar({items,selected,onNavigate,header,footer}:{items:WorkNavItem[];selected:string;onNavigate:(key:string)=>void;header?:ReactNode;footer?:ReactNode}) {
+export function WorkSidebar({items,selected,onNavigate,header,footer,label='工作与功能',hideGroupLabels=false}:{items:WorkNavItem[];selected:string;onNavigate:(key:string)=>void;header?:ReactNode;footer?:ReactNode;label?:string;hideGroupLabels?:boolean}) {
  const groups=Array.from(new Set(items.map(x=>x.group||'工作')));
- return <aside className="pw-work-sidebar" aria-label="工作与功能">{header}<nav>{groups.map(group=><section key={group}><h3>{group}</h3>{items.filter(x=>(x.group||'工作')===group).map(item=><div className="pw-nav-item" key={item.key}><NavItem icon={item.icon} label={item.label} isSelected={selected===item.key} badge={item.count!=null?<span className="pw-nav-count">{item.count}</span>:undefined} onClick={()=>{if(!item.disabled)onNavigate(item.key)}}/>{item.description&&<small>{item.description}</small>}</div>)}</section>)}</nav>{footer}</aside>
+ return <div className="pw-work-sidebar">{header}<nav aria-label={label}>{groups.map(group=><section key={group}><h3 className={hideGroupLabels?'pw-sr-only':undefined}>{group}</h3>{items.filter(x=>(x.group||'工作')===group).map(item=><div className="pw-nav-item" key={item.key}><NavItem icon={item.icon} label={item.label} isSelected={selected===item.key} badge={item.count!=null?<span className="pw-nav-count">{item.count}</span>:undefined} onClick={()=>{if(!item.disabled)onNavigate(item.key)}}/>{item.description&&<small>{item.description}</small>}</div>)}</section>)}</nav>{footer}</div>
 }

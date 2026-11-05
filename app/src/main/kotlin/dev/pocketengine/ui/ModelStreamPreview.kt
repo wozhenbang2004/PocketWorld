@@ -1,17 +1,12 @@
 package dev.pocketengine.ui
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+
 import org.json.JSONObject
+
 internal data class InterruptedModelAttempt(val requestId:String,val text:String)
+
 internal data class UiModelDraft(val taskId:String,val runId:String,val epoch:Int,val requestId:String,val generation:Long,val sequence:Long,val pauseRevision:Long,val provider:String,val text:String="",val turnEnded:Boolean=false,val truncated:Boolean=false,val failed:Boolean=false,val interrupted:List<InterruptedModelAttempt> = emptyList())
 /** Presentation reducer only; no task/message/history state can be completed or persisted here. */
+
 internal object ModelStreamDrafts {
  const val MAX_CHARS=32768
  fun accept(drafts:Map<String,UiModelDraft>,event:JSONObject,tasks:List<UiTask>):Map<String,UiModelDraft>{
@@ -34,16 +29,4 @@ internal object ModelStreamDrafts {
   return drafts+(id to old.copy(sequence=sequence,text=joined.substring(0,end),truncated=old.truncated||end<joined.length))
  }
  fun retain(drafts:Map<String,UiModelDraft>,tasks:List<UiTask>):Map<String,UiModelDraft> = drafts.filterValues{draft->tasks.any{it.id==draft.taskId&&it.raw.optString("runId")==draft.runId&&it.raw.optInt("coordinatorEpoch")==draft.epoch&&it.status in setOf("preparing","running")}}
-}
-@Composable internal fun ModelStreamPreview(draft:UiModelDraft){
- if(draft.text.isBlank()&&draft.interrupted.isEmpty())return
- Column(Modifier.fillMaxWidth().padding(vertical=8.dp)){
-  draft.interrupted.filter{it.text.isNotBlank()}.forEach{attempt ->
-   Text("此前推理 ${attempt.requestId.takeLast(8)} · 中断草稿，未作为答复或工具结果",fontSize=11.sp,color=SecondaryInk)
-   SelectionContainer{Text(attempt.text,fontSize=13.sp,lineHeight=21.sp,color=SecondaryInk,modifier=Modifier.heightIn(max=100.dp).verticalScroll(rememberScrollState()))}
-  }
-  Text(if(draft.failed)"本次推理中断 · 已显示片段保留在原步骤记录" else if(draft.turnEnded)"模型草稿 · 本轮尚待任务核对" else "模型正在生成 · 临时草稿",fontSize=11.sp,color=SecondaryInk)
-  SelectionContainer{Text(draft.text,fontSize=14.sp,lineHeight=23.sp,color=SecondaryInk,modifier=Modifier.padding(top=5.dp).heightIn(max=160.dp).verticalScroll(rememberScrollState()))}
-  if(draft.truncated)Text("仅预览前32768字；正式回复和真实操作回执以任务记录为准。",fontSize=11.sp,color=SecondaryInk)
- }
 }

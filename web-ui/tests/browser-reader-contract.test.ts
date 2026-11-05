@@ -86,16 +86,21 @@ test('wide-table return restores both axes only for the same original source ide
 
 test('real native entries replace the old nested readers while preserving the original recipe chain', () => {
   const panel = readFileSync(new URL('../../app/src/main/kotlin/dev/pocketengine/browser/BrowserTaskOwnerPanel.kt', import.meta.url), 'utf8');
+  const endpoint = readFileSync(new URL('../../app/src/main/kotlin/dev/pocketengine/browser/BrowserWorkspaceEndpoint.kt', import.meta.url), 'utf8');
+  const workspace = readFileSync(new URL('../src/BrowserWorkspace.tsx', import.meta.url), 'utf8');
   assert.match(panel, /fun obscuresPage\(\): Boolean = expanded \|\| sourceReader != null/);
   assert.match(panel, /sourceReader = reader\s+reader\.open\(\)/);
   assert.match(panel, /onDismissed = \{[\s\S]*?sourceReader === reader[\s\S]*?sourceReader = null/);
   assert.match(panel, /sourceReader\?\.let \{ it\.handleBack\(\); return true \}/);
-  assert.match(panel, /c\.openSavedSource\(source\.getString\("taskId"\), source\.getString\("sourceId"\)\)/);
-  assert.match(panel, /c\.openSavedField\(result\.taskId, ref\)/);
+  assert.match(endpoint, /owner\.openSavedSource\(source\.getString\("taskId"\), source\.getString\("sourceId"\)\)/);
+  assert.match(endpoint, /owner\.openSavedField\(taskId, field\)/);
+  assert.match(endpoint, /source\(frame, taskId, BrowserStructuredSource\.sourceId\(taskId, field\)\)/);
   assert.doesNotMatch(panel, /sourceDetails\?\.let|fieldDetails\?\.let|SavedStructuredSource/);
-  assert.match(panel, /Text\("制作网站只读配方…"\)/);
-  assert.match(panel, /c\.host\.prepareRecipeForOwner\(source\.getString\("taskId"\), source\.getString\("sourceId"\), query\)/);
-  assert.match(panel, /c\.host\.saveRecipeForOwner\(source\.getString\("taskId"\), source\.getString\("sourceId"\), query, expected, enable\)/);
+  assert.match(workspace, /prepareRecipe/);
+  assert.match(panel, /PocketWebHost\.browserWorkspace/);
+  assert.doesNotMatch(panel, /ComposeView|@Composable/);
+  assert.match(endpoint, /owner\.host\.prepareRecipeForOwner\(source\.getString\("taskId"\), source\.getString\("sourceId"\), query\)/);
+  assert.match(endpoint, /owner\.host\.saveRecipeForOwner\(display\.getString\("taskId"\), display\.getString\("sourceId"\), display\.getString\("query"\), display\.getString\("fingerprint"\), enabled\)/);
 });
 test('reader host is an explicit fixed-origin factory with reader-only failure exits', () => {
   const host = readFileSync(new URL('../../app/src/main/kotlin/dev/pocketengine/ui/web/PocketWebHost.kt', import.meta.url), 'utf8');
@@ -104,7 +109,7 @@ test('reader host is an explicit fixed-origin factory with reader-only failure e
   assert.match(host, /class PocketWebHost private constructor/);
   assert.match(host, /fun browserSourceReader\(activity: dev\.pocketengine\.BrowserActivity/);
   assert.match(host, /if \(readerFailure != null\) \{ if \(request\.isForMainFrame\) failReader\(\); return true \}/);
-  assert.match(host, /onRenderProcessGone[\s\S]*?if \(failReader\(\)\) return true[\s\S]*?activity\.finish\(\)/);
+  assert.match(host, /onRenderProcessGone[\s\S]*?if \(failReader\(\)\) return true[\s\S]*?showReopenPrompt\(\)/);
   assert.match(host, /private fun showReopenPrompt\(\) \{\s+if \(closed \|\| reopenShown\) return\s+if \(failReader\(\)\) return/);
   assert.match(host, /documentFence\.accepts\(ticket, token, bridge\.canInteract\(\)\)/);
   assert.match(window, /ComponentDialog\(activity/);

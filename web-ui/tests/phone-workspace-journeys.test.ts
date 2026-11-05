@@ -36,7 +36,7 @@ function fixture(name: 'PhoneSettings' | 'BackgroundSettings', initial: Data = {
   const listen = { addEventListener: (name: string, callback: () => void) => { if (!events.has(name)) events.set(name, new Set()); events.get(name)!.add(callback); }, removeEventListener: (name: string, callback: () => void) => events.get(name)?.delete(callback) };
   const document = { visibilityState: 'visible', ...listen };
   const dependencies: Data = { React, useState, useRef, useEffect, useLayoutEffect: useEffect, backgroundConnection, wirelessEndpoints, wirelessPort, document, window: listen };
-  for (const key of ['Accordion', 'AccordionItem', 'Button', 'CheckboxField', 'StretchSwitch', 'TextField', 'RadioOptions', 'SettingsDialog', 'PressButton', 'CapabilityAction', 'Tabs', 'TabList', 'Tab', 'TabPanel', 'RiArrowLeftLine', 'RiArrowRightSLine', 'RiCheckLine', 'AppearanceSettings', 'SystemSpeechSettings']) dependencies[key] = key;
+  for (const key of ['Accordion', 'AccordionItem', 'Button', 'CheckboxField', 'StretchSwitch', 'TextField', 'RadioOptions', 'SettingsDialog', 'PressButton', 'CapabilityAction', 'Tabs', 'TabList', 'Tab', 'TabPanel', 'RiArrowLeftLine', 'RiArrowRightSLine', 'RiCheckLine', 'AppearanceSettings', 'SystemSpeechSettings', 'BackgroundAudioSettings', 'BackgroundOwnerSettings', 'BackgroundChecks']) dependencies[key] = key;
   const Component = new Function(...Object.keys(dependencies), code + '\nreturn ' + name + ';')(...Object.values(dependencies));
   const props: Data = { state: {}, supported: () => true, run: async (action: string, args: Data = {}) => { calls.push({ action, args }); return { accepted: true }; }, navigate: (value: string) => navigated.push(value), onReturn: () => navigated.push('phone'), registerTransientBack: (value: any) => { back = value; }, onViewChange: (value: string) => views.push(value), ...initial };
   const render = () => { let count = 0; do { assert.ok(count++ < 30, 'production effects settle'); dirty = false; index = 0; tree = Component(props); effects.splice(0).forEach(effect => effect()); } while (dirty); };
@@ -90,6 +90,22 @@ test('background setup leads with one current connection stage and hides audit d
   assert.match(f.visibleText, /与这台手机配对/); assert.equal(f.visibleText.includes('本机能力检查'), false);
   const steps = f.all.filter(node => node.props['aria-current'] === 'step'); assert.equal(steps.length, 1);
   f.panel('checks'); assert.equal(f.view, 'checks'); assert.match(f.visibleText, /本机能力检查/); assert.equal(f.back(), true); assert.equal(f.view, 'setup');
+});
+test('owner child dialogs consume their registered Back before leaving the setup panel', () => {
+  const f = fixture('BackgroundSettings', { state: background() });
+  f.panel('checks');
+  const audio = f.find(node => node.type === 'BackgroundAudioSettings', false);
+  const advanced = f.find(node => node.type === 'BackgroundOwnerSettings', false);
+  const checks = f.find(node => node.type === 'BackgroundChecks', false);
+  let closed = 0;
+  checks.props.registerBack(() => { closed++; checks.props.registerBack(null); return true; });
+  audio.props.registerBack(null); advanced.props.registerBack(null);
+  assert.equal(f.back(), true); assert.equal(closed, 1); assert.equal(f.view, 'checks');
+  assert.equal(f.back(), true); assert.equal(f.view, 'setup');
+  audio.props.registerBack(() => { closed++; audio.props.registerBack(null); return true; });
+  checks.props.registerBack(null);
+  assert.equal(f.back(), true); assert.equal(closed, 2); assert.equal(f.view, 'setup');
+  assert.equal(f.calls.length, 0, 'dismissing a dialog never dispatches its protected action');
 });
 test('changing setup panels or leaving the app clears pairing codes without submitting', () => {
   for (const leave of ['panel', 'hide']) {

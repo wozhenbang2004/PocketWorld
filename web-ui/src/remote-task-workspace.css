@@ -1,0 +1,24 @@
+.pw-remote-workspace,.pw-remote-drafts,.pw-remote-progress,.pw-remote-question,.pw-remote-sessions{display:grid;gap:12px;min-width:0}
+.pw-remote-workspace{padding-block:12px}
+.pw-remote-workspace h3,.pw-remote-workspace h4,.pw-remote-sessions h3{margin:0;font-size:14px;font-weight:600}
+.pw-remote-workspace p,.pw-remote-sessions p{margin:0;font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+.pw-remote-drafts,.pw-remote-question{padding:16px;background:var(--color-bg-secondary,#f7f7f7);border-radius:16px}
+.pw-remote-events{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.pw-remote-events li{display:grid;gap:5px;padding:12px 14px;background:var(--color-bg-secondary,#f7f7f7);border-radius:12px}
+.pw-remote-events strong{font-size:13px;font-weight:550}
+.pw-remote-events small,.pw-remote-session small{font-size:11px;color:var(--color-fg-quaternary,#777);overflow-wrap:anywhere}
+.pw-remote-events p{white-space:pre-wrap}
+.pw-remote-question pre{max-height:240px;margin:0;padding:12px;border-radius:10px;overflow:auto;font-size:12px;background:var(--color-bg-primary,#fff);white-space:pre-wrap;overflow-wrap:anywhere}
+.pw-remote-session-list{display:grid;gap:4px}
+.pw-remote-session{width:100%;height:auto!important;justify-content:space-between!important;padding:10px 12px!important;gap:12px!important;text-align:left!important}
+.pw-remote-session>span:first-child{display:grid;gap:4px;min-width:0}
+.pw-remote-session strong{font-size:13px;white-space:normal;overflow-wrap:anywhere}
+.pw-remote-session>span:last-child{font-size:11px;flex-shrink:0}
+.pw-remote-section,.pw-remote-review,.pw-remote-frozen{display:grid;gap:12px;min-width:0}
+.pw-remote-section pre,.pw-remote-review pre{margin:0;max-height:320px;overflow:auto;padding:12px;border-radius:12px;background:var(--color-bg-secondary,#f7f7f7);font-size:12px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
+.pw-remote-file{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0;font-size:13px}
+.pw-remote-file>div:first-child{display:grid;gap:4px;min-width:0;overflow-wrap:anywhere}
+.pw-remote-file small{color:var(--color-fg-quaternary,#777);font-size:11px}
+.pw-remote-frozen{padding:12px;background:var(--color-bg-secondary,#f7f7f7);border-radius:12px}
+.pw-remote-preview-viewport{height:min(60vh,620px);min-height:240px;border-radius:12px;background:var(--color-bg-secondary,#f7f7f7)}
+@media(max-width:480px){.pw-remote-drafts,.pw-remote-question{padding:12px}.pw-remote-workspace .pw-form-actions>*{white-space:normal;height:auto;min-height:36px}.pw-remote-session{align-items:flex-start!important}}
