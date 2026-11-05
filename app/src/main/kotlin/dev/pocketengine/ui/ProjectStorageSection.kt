@@ -77,10 +77,12 @@ import dev.pocketengine.features.local.runtime.NativeDiagnosticWindow
                     }
                     HorizontalDivider()
                 }
-                if (state.caches.size > backups) item {
+                state.backupError?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) } }
+                val caches = state.caches
+                if (caches != null && caches.size > backups) item {
                     Text("超过建议保留数的本机备份", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                     StorageCaption("这里只给建议，不删除。逐份核对固定字节后，从原备份页明确移除本机缓存；未决恢复依赖的副本会拒绝删除。")
-                    state.caches.drop(backups).forEach { cache -> TextButton(onClick = { flow.backupCache(cache.getString("selectionId")) }, enabled = !state.busy) { Text("核对本机备份 · ${size(cache.optLong("archiveBytes"))}") } }
+                    caches.drop(backups).forEach { cache -> TextButton(onClick = { flow.backupCache(cache.getString("selectionId")) }, enabled = !state.busy) { Text("核对本机备份 · ${size(cache.optLong("archiveBytes"))}") } }
                 }
                 state.review?.let { review -> item {
                     Text("确认清理 ${review.optJSONArray("targets")?.length() ?: 0} 个固定范围", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)

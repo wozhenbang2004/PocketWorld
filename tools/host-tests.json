@@ -1896,5 +1896,18 @@
     "helpers": [],
     "robolectric": true,
     "description": "Actual background initializer with empty native SQLite storage and injected required-module failure. UI resource integrity and platform FTS are substituted boundaries, not Android device acceptance; verifies closed admission and message/path-free diagnostics."
+  },
+  "android-private-storage-roots": {
+    "class": "dev.pocketengine.features.workspace.OwnerArchivePrivateRootTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.workspace.ProjectStorageRefreshTest",
+      "dev.pocketengine.features.workspace.LocalStoragePrivateRootTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.workspace.OwnerDataArchiveFixture"
+    ],
+    "robolectric": true,
+    "description": "Trusted framework parent aliases, fresh/blocked/replaced backup leaves and actual coordinator backup failures/cancelled publication. Linux POSIX host fixtures; no Android device or visual acceptance.",
+    "linuxPosixFd": true
   }
 }

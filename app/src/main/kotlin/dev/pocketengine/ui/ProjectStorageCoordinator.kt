@@ -18,7 +18,7 @@ import org.json.JSONObject
 internal data class ProjectStorageState(
     val open: Boolean = false, val busy: Boolean = false, val inventory: JSONObject? = null,
     val selected: Set<String> = emptySet(), val review: JSONObject? = null, val originalAction: String? = null,
-    val original: JSONObject? = null, val result: JSONObject? = null, val caches: List<JSONObject> = emptyList(),
+    val original: JSONObject? = null, val result: JSONObject? = null, val caches: List<JSONObject>? = null, val backupError: String? = null,
     val notice: String? = null, val error: String? = null,
     val diagnosticText: String? = null, val diagnosticSha: String? = null, val diagnosticBytes: Int = 0,
     val diagnosticReviewed: Boolean = false, val diagnosticPickerPending: Boolean = false, val diagnosticExportEntered: Boolean = false
@@ -85,8 +85,15 @@ internal class ProjectStorageCoordinator(
     }
     fun refresh() = work { c ->
         val data = local().ownerStorageInventoryForHost(c)
-        val caches = app.features.ownerDataArchives(app).localCachesForOwner(c).rows()
-        return@work { state = state.copy(inventory = data, caches = caches, selected = emptySet()) }
+        var backupError: String? = null
+        val caches = try { app.features.ownerDataArchives(app).localCachesForOwner(c).rows() }
+        catch (cancelled: InterruptedException) { throw cancelled }
+        catch (failed: Exception) {
+            c.check()
+            backupError = "本机备份列表未能读取：" + (failed.message?.take(300) ?: "请重新读取核对")
+            null
+        }
+        return@work { state = state.copy(inventory = data, caches = caches, backupError = backupError, selected = emptySet()) }
     }
     fun select(id: String, yes: Boolean) {
         owner(); if (state.busy || state.review != null) return
