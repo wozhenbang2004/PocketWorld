@@ -26,7 +26,11 @@ public final class ToolBatchTailReceiptTest {
         throw new AssertionError("Missing receipt "+id);
     }
     private void run(JSONObject stop)throws Exception {
+        run(stop,false);
+    }
+    private void run(JSONObject stop,boolean beforeDispatch)throws Exception {
         List<JSONObject> requests=new CopyOnWriteArrayList<>();List<String> dispatched=new ArrayList<>();
+        List<JSONObject> events=new ArrayList<>();
         HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         server.createContext("/",exchange->{try{
             requests.add(new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8)));
@@ -41,22 +45,25 @@ public final class ToolBatchTailReceiptTest {
                 public JSONArray tools()throws Exception{JSONArray all=new JSONArray();for(String name:new String[]{"first_read","second_read"})all.put(new JSONObject().put("type","function").put("function",new JSONObject().put("name",name).put("description","Read fixture result").put("parameters",new JSONObject().put("type","object").put("properties",new JSONObject()).put("required",new JSONArray()).put("additionalProperties",false))));return all;}
                 public boolean supports(String name){return name.equals("first_read")||name.equals("second_read");}
                 public boolean sideEffecting(String name){return false;}
+                public JSONObject beforeTool(String name,JSONObject args,RunControl original)throws Exception{return beforeDispatch?new JSONObject(stop.toString()):null;}
                 public JSONObject execute(String name,JSONObject args,RunControl original)throws Exception{dispatched.add(name);if(!name.equals("first_read"))throw new AssertionError("Tail must not enter dispatch");return new JSONObject(stop.toString());}
             };
             String endpoint="http://127.0.0.1:"+server.getAddress().getPort()+"/v1";
             ModelConfig config=new ModelConfig(endpoint,"fixture-key","fixture-model",false,8,10,"openai_chat",1000).withCleartextConsent(ModelConfig.cleartextConsentFor("openai_chat",endpoint));
             ContextBudgetPolicy.Source budget=selected->ContextBudgetPolicy.RouteBudget.forRoute(selected,new ContextWindow.Budget(128000,1000,1000,2L*1024*1024,64,0),ContextBudgetPolicy.SourceKind.OWNER_OVERRIDE,1,1);
             Journal journal=new Journal();RunControl control=new RunControl();control.bindHostRun("task","run",1);
-            RunOutcome stopped=new AgentRunner(null,port,budget).run("task","只读取当前记录，不做任何修改",config,control,event->{},journal);
-            assertEquals("awaiting_user",stopped.status);assertEquals(1,requests.size());assertEquals(List.of("first_read"),dispatched);assertEquals(1,journal.steps);
+            RunOutcome stopped=new AgentRunner(null,port,budget).run("task","只读取当前记录，不做任何修改",config,control,events::add,journal);
+            assertEquals("awaiting_user",stopped.status);assertEquals(1,requests.size());assertEquals(beforeDispatch?List.of():List.of("first_read"),dispatched);assertEquals(1,journal.steps);
             JSONObject first=receipt(journal.messages,"call_first_read"),tail=receipt(journal.messages,"call_second_read");
             assertEquals(stop.getString("code"),first.getString("code"));
+            assertEquals(ToolOutcome.classify(stop).kind().value,first.getJSONObject(ToolOutcome.KEY).getString("kind"));
+            if(beforeDispatch){assertFalse(first.getBoolean("nativeDispatched"));assertTrue(events.stream().anyMatch(event->"tool".equals(event.optString("type"))&&ToolOutcome.classify(stop).eventStatus().equals(event.optString("status"))));}
             if(stop.has("requiresReconciliation"))assertTrue(first.getBoolean("requiresReconciliation"));
             assertEquals("batch_tail_not_dispatched",tail.getString("code"));assertFalse(tail.getBoolean("accepted"));assertFalse(tail.getBoolean("nativeDispatched"));
             // A separately requested recovery retains the known boundary, without replay.
             RunControl resumed=new RunControl();resumed.bindHostRun("task","next-run",2);
             new AgentRunner(null,port,budget).run("task","只读取当前记录，不做任何修改",config,resumed,event->{},journal);
-            assertEquals(2,requests.size());assertEquals(List.of("first_read"),dispatched);
+            assertEquals(2,requests.size());assertEquals(beforeDispatch?List.of():List.of("first_read"),dispatched);
             JSONObject recovered=receipt(requests.get(1).getJSONArray("messages"),"call_second_read");
             assertEquals("batch_tail_not_dispatched",recovered.getString("code"));assertFalse(recovered.getBoolean("nativeDispatched"));
         }finally{server.stop(0);}
@@ -68,6 +75,8 @@ public final class ToolBatchTailReceiptTest {
     @Test public void nativePauseRetainsTheUndispatchedTail()throws Exception{run(new JSONObject().put("ok",false).put("code","fixture_native_pause").put("requiresPause",true));}
     @Test public void observationReconciliationRetainsTheUndispatchedTail()throws Exception{run(new JSONObject().put("ok",false).put("code","fixture_observation").put("nextObservationAction","reconcile"));}
     @Test public void lostAccessibilityRetainsTheUndispatchedTail()throws Exception{run(new JSONObject().put("ok",false).put("code","accessibility_unavailable"));}
+    @Test public void beforeToolNeedsUserStopsTheWholeBatchWithoutDispatch()throws Exception{run(new JSONObject().put("ok",false).put("accepted",false).put("code","needs_user"),true);}
+    @Test public void beforeToolNativePauseStopsTheWholeBatchWithoutDispatch()throws Exception{run(new JSONObject().put("ok",false).put("accepted",false).put("code","fixture_owner_return").put("requiresPause",true),true);}
 
     private void phoneStop(boolean failedPostObservation)throws Exception {
         List<JSONObject> requests=new CopyOnWriteArrayList<>();List<String> dispatched=new ArrayList<>();

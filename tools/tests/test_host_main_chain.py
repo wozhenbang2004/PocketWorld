@@ -52,6 +52,15 @@ class MainChainEntrypointTest(unittest.TestCase):
             'dev.pocketengine.runtime.ReferenceRefusalRunnerTest',
             'dev.pocketengine.runtime.ToolBatchTailReceiptTest',
             'dev.pocketengine.runtime.providers.ProtocolHistoryBudgetTest',
+            'dev.pocketengine.core.ToolOutcomeTest',
+            'dev.pocketengine.core.CapabilityPortReceiptAfterStopTest',
+            'dev.pocketengine.features.plugins.PluginToolReceiptsTest',
+            'dev.pocketengine.store.TaskRecoveryTest',
+            'dev.pocketengine.store.TaskStoreMcpTasksTest',
+            'dev.pocketengine.features.plugins.McpLocalInvocationNativeTest',
+            'dev.pocketengine.features.FeatureHostStateTest',
+            'dev.pocketengine.runtime.ExecutionPlanningRunnerTest',
+            'dev.pocketengine.ui.web.PocketWebTaskActionsTest',
         }
         selections = []
         for branch in ('main', 'fix/new-unlisted-reliability-branch'):

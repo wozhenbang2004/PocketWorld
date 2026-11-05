@@ -34,6 +34,7 @@ public interface RunJournal {
             public void checkpoint(JSONArray messages,int steps,JSONObject observation,JSONObject progressGuard)throws Exception{host.checkpoint(original,messages,steps,observation,progressGuard);}
             public String beginOperation(String tool,JSONObject arguments)throws Exception{return original.beginOperation(tool,arguments);}
             public void finishOperation(String operationId,JSONObject receipt)throws Exception{original.finishOperation(operationId,receipt);}
+            public JSONObject finishOperationReceipt(String operationId,JSONObject receipt)throws Exception{return original.finishOperationReceipt(operationId,receipt);}
             public boolean hasNativeProjectRunningAck(String operationId,JSONObject deliveredReceipt)throws Exception{return original.hasNativeProjectRunningAck(operationId,deliveredReceipt);}
             public JSONObject projectServiceExitEvidence(JSONArray provenLaunchOperationIds)throws Exception{return original.projectServiceExitEvidence(provenLaunchOperationIds);}
             public InferenceCapture.Target inferenceTarget(InferenceReceipt.Purpose purpose,String memberId)throws Exception{return original.inferenceTarget(purpose,memberId);}
@@ -56,6 +57,12 @@ public interface RunJournal {
     }
     String beginOperation(String tool, JSONObject arguments) throws Exception;
     void finishOperation(String operationId, JSONObject receipt) throws Exception;
+    /** Settle first, then deliver the actual saved native receipt. A host may retain
+     * a newer callback instead of this synchronous return. Isolated journals keep
+     * their existing behavior; production decorators must forward this result. */
+    default JSONObject finishOperationReceipt(String operationId,JSONObject receipt)throws Exception{
+        finishOperation(operationId,receipt);return new JSONObject(receipt.toString());
+    }
     /** Native original-row proof only; JSON running/accepted fields never grant continued dispatch. */
     default boolean hasNativeProjectRunningAck(String operationId,JSONObject deliveredReceipt)throws Exception{return false;}
     /** Original operation audit only; null means no terminal/group/lease proof, never another grant. */

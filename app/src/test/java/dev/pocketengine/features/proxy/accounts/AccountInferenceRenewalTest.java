@@ -168,4 +168,50 @@ public final class AccountInferenceRenewalTest {
         }
     }
 
+    @Test public void preparedRenewalKeepsTheOriginalAuthorityCallbackThroughFirstStreamingRequest()throws Exception {
+        try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
+            rig.fake.expiresIn=1;String id=rig.connect();ModelConfig captured=config(rig,id);
+            AtomicLong persisted=new AtomicLong(captured.accountModel.accountVersion);bind(rig,persisted);
+            rig.fake.expiresIn=3600;rig.fake.stream=textStream();RunControl original=new RunControl();
+            original.setAuthorityCheck(()->dev.pocketengine.runtime.models.InferenceRouteContinuity.requireCurrentFromAuthorityCheck(
+                    captured,captured.withAccountModel(captured.accountModel.withVersion(persisted.get())),original));
+            ModelConfig prepared=ModelGateway.prepareAccount(captured,original);
+            assertEquals(captured.accountModel.accountVersion+1,prepared.accountModel.accountVersion);
+            JSONObject response=ModelGateway.completeStreaming(prepared,messages(),null,original,event->{});
+            assertEquals("verified",response.getString("content"));assertEquals(1,rig.fake.responses.get());assertEquals(1,rig.fake.refreshes.get());
+            assertEquals(prepared.accountModel.accountVersion,response.getJSONObject("provider_data").getJSONObject("nativeRef").getLong("accountVersion"));
+            original.check();
+            assertEquals("verified",ModelGateway.complete(captured,messages().put(response),null,original).getString("content"));
+            assertEquals(2,rig.fake.responses.get());
+            rig.gateway.setEnabledReviewed(id,persisted.get(),false);
+            assertThrows(InterruptedException.class,original::check);assertEquals(2,rig.fake.responses.get());
+        }
+    }
+
+    @Test public void preparationOfTheMainModelDoesNotBindTheActualExecutionModel()throws Exception {
+        try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
+            rig.fake.modelsBody="{\"models\":[{\"slug\":\"fixture-model\",\"display_name\":\"Fixture\",\"visibility\":\"list\"},{\"slug\":\"light-model\",\"display_name\":\"Light\",\"visibility\":\"list\"}]}";
+            rig.fake.expiresIn=1;String id=rig.connect();ModelConfig captured=config(rig,id);
+            bind(rig,new AtomicLong(captured.accountModel.accountVersion));rig.fake.expiresIn=3600;rig.fake.stream=textStream();RunControl original=new RunControl();
+            ModelGateway.prepareAccount(captured,original);
+            ModelConfig light=captured.withAccountModel(ModelConfig.AccountModelRef.fromJson(captured.accountModel.toJson().put("modelId","light-model")));
+            ModelConfig preparedLight=ModelGateway.prepareAccount(light,original);
+            assertEquals("verified",ModelGateway.complete(preparedLight,messages(),null,original).getString("content"));
+            assertEquals("light-model",rig.fake.lastRequest.getString("model"));assertEquals(1,rig.fake.responses.get());assertEquals(1,rig.fake.refreshes.get());
+        }
+    }
+
+    @Test public void preparingAnOlderVersionDoesNotAuthorizeOpaqueHistoryFromThatVersion()throws Exception {
+        try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
+            rig.fake.expiresIn=1;String id=rig.connect();ModelConfig captured=config(rig,id);
+            bind(rig,new AtomicLong(captured.accountModel.accountVersion));rig.fake.expiresIn=3600;rig.fake.stream=textStream();RunControl original=new RunControl();
+            ModelConfig prepared=ModelGateway.prepareAccount(captured,original);
+            JSONObject response=ModelGateway.complete(prepared,messages(),null,original);
+            response.getJSONObject("provider_data").getJSONObject("nativeRef").put("accountVersion",captured.accountModel.accountVersion);
+            ModelGateway.GatewayException rejected=assertThrows(ModelGateway.GatewayException.class,
+                    ()->ModelGateway.complete(prepared,messages().put(response),null,original));
+            assertTrue(rejected.getMessage().contains("历史"));assertEquals(1,rig.fake.responses.get());
+        }
+    }
+
 }

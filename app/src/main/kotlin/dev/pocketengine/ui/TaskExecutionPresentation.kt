@@ -1,5 +1,6 @@
 package dev.pocketengine.ui
 
+import dev.pocketengine.core.ToolOutcome
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -134,6 +135,7 @@ internal object TaskExecutionPresentation {
     private fun operation(row: JSONObject): Record {
         val receipt = row.optJSONObject("receipt")
         val state = row.optString("state")
+        val outcome = ToolOutcome.operationOutcome(row)
         val tone: Tone
         val label: String
         when {
@@ -144,7 +146,8 @@ internal object TaskExecutionPresentation {
             state == "resolved" && receipt?.optString("source") == "owner_reconciliation" -> { tone = Tone.NEUTRAL; label = when (receipt.optString("outcome")) { "occurred" -> "主人已核对发生 · 非自动验证"; "not_occurred" -> "主人已核对未发生 · 不会自动重试"; else -> "主人已记录核对结论" } }
             state == "prepared" -> { tone = Tone.WAITING; label = "已登记，等待结果" }
             receipt?.optString("status") in setOf("cancelled", "canceled", "stopped") -> { tone = Tone.STOPPED; label = "调用已停止 · 详见原回执" }
-            receipt != null && (receipt.has("ok") && !receipt.optBoolean("ok") || receipt.optString("status") == "failed" || receipt.opt("exitCode") is Number && receipt.optInt("exitCode") != 0) -> { tone = Tone.ERROR; label = "调用出错 · 不等于未执行，请核对操作结果" }
+            outcome?.requiresUser() == true -> { tone = Tone.WAITING; label = "需要你处理 · 已发生的操作仍保留" }
+            outcome?.correctable() == true -> { tone = Tone.ERROR; label = "请求可调整 · 不会自动重放原操作" }
             receipt?.optBoolean("terminal", true) == false -> { tone = Tone.WAITING; label = "已返回部分结果" }
             receipt != null -> { tone = Tone.RETURNED; label = "已返回 · 目标仍需核对，结果可展开查看" }
             else -> { tone = Tone.NEUTRAL; label = "原状态：" + excerpt(state.ifBlank { "未报告" }, 80) }
@@ -196,8 +199,7 @@ internal object TaskExecutionPresentation {
     }
 
     private fun uncertain(operation: JSONObject): Boolean {
-        val receipt = operation.optJSONObject("receipt")
-        return operation.optString("state") in setOf("unknown", "uncertain", "reconciliation_required", "pending_reconciliation", "remote_job_unknown", "remote_approval_unknown", "remote_question_unknown") || operation.optBoolean("requiresReconciliation") || receipt != null && (receipt.has("accepted") && receipt.isNull("accepted") || receipt.optString("status") == "unknown" || receipt.optString("code").contains("unknown") || receipt.optBoolean("requiresReconciliation"))
+        return ToolOutcome.operationOutcome(operation)?.requiresReconciliation() == true
     }
     private fun eventTitle(type: String): String = when (type) { "model" -> "模型决定下一步"; "tool" -> "工具调用"; "observation" -> "观察现场"; "verification", "user_verification" -> "结果核对"; "run" -> "执行状态"; "result" -> "任务结果"; "owner_input" -> "收到主人补充"; "capability_changed" -> "能力状态更新"; "context_budget" -> "上下文整理"; "inference_receipt" -> "模型调用用量"; else -> excerpt(type.ifBlank { "原步骤记录" }, 120) }
     private fun eventLabel(status: String): String = when (status) { "running" -> "执行记录"; "completed" -> "已有该步骤记录"; "failed" -> "该步骤返回错误"; "unknown" -> "结果未核实"; "awaiting_user" -> "需要你处理"; "paused" -> "已暂停"; "cancelled", "canceled", "stopped" -> "已停止"; else -> excerpt(status.ifBlank { "原记录" }, 80) }

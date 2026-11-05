@@ -379,7 +379,8 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
         int visited = 0;
         for (ResolveInfo info : found) {
             control.checkpoint();
-            if (++visited > 600 || apps.length() >= 200) break;
+            if (visited >= 600 || apps.length() >= 200) break;
+            visited++;
             if (info.activityInfo == null || !info.activityInfo.enabled || !info.activityInfo.exported) continue;
             String packageName = info.activityInfo.packageName;
             if (!seen.add(packageName)) continue;

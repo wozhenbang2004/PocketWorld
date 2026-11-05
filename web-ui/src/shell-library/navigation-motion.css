@@ -1,0 +1,46 @@
+/* The shared surface moves beneath the retained BoardUI labels and hit areas. */
+.pw-work-sidebar[data-motion-nav] nav {
+  position: relative;
+  isolation: isolate;
+}
+
+.pw-work-sidebar[data-motion-nav] .pw-nav-item > a {
+  position: relative;
+  overflow: visible;
+}
+
+/* Scope the override to motion rows: legacy selected backgrounds must not obscure
+ * the surface while it travels between anchors. Keep the existing focus outline. */
+.pw-work-sidebar[data-motion-nav] .pw-nav-item > a[aria-current="page"] {
+  background: transparent !important;
+  box-shadow: none;
+  color: var(--pw-ink, #242424);
+}
+
+.pw-work-sidebar[data-motion-nav] .pw-nav-item > a[aria-current="page"] :is(svg, span) {
+  color: var(--pw-ink, #242424);
+}
+
+.pw-work-sidebar[data-motion-nav] .pw-nav-selection {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  background: var(--pw-selected, #e7e7e7);
+  pointer-events: none;
+}
+
+.pw-work-sidebar[data-motion-nav] .pw-nav-content,
+.pw-work-sidebar[data-motion-nav] nav h3:not(.pw-sr-only),
+.pw-work-sidebar[data-motion-nav] .pw-nav-item > small {
+  position: relative;
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pw-work-sidebar[data-motion-nav] .pw-nav-item > a,
+  .pw-work-sidebar[data-motion-nav] .pw-nav-content,
+  .pw-work-sidebar[data-motion-nav] .pw-nav-content span {
+    transition: none;
+  }
+}

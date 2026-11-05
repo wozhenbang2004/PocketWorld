@@ -185,15 +185,15 @@ public final class RemoteModule implements EngineModule {
     public JSONObject handleForTask(String command,JSONObject input,dev.pocketengine.core.RunControl original)throws Exception {
         java.util.Objects.requireNonNull(original).check();if(closed)throw new IllegalStateException("电脑连接模块已关闭");
         switch(command){
-            case "environments":return request(input,"/v1/environments",null,15,original);
+            case "environments":return new JSONObject(request(input,"/v1/environments",null,15,original).toString()).put("ok",true);
             case "probeWorker":{
                 String worker=required(input,"worker",80),binding=required(input,"bindingHash",64);
                 if(!RemoteHarnessSelection.isTeamWorker(worker)||!binding.matches("[a-f0-9]{64}")||input.has("modeId")&&!RemoteHarnessSelection.isGenericWorker(worker))throw new SecurityException("请使用原已配置执行器与准确电脑绑定探测");
                 JSONObject checked=new JSONObject(input.toString());checked.remove("bindingHash");checked.put("_profileBinding",binding);
                 JSONObject result=observeBackendProbe(checked,original);original.check();return result;
             }
-            case "listJobs":return request(input,"/v1/jobs",null,15,original);
-            case "readFile":return request(input,workspacePath(input,"file")+"?path="+URLEncoder.encode(required(input,"path",2048),"UTF-8"),null,20,original);
+            case "listJobs":return new JSONObject(request(input,"/v1/jobs",null,15,original).toString()).put("ok",true);
+            case "readFile":return new JSONObject(request(input,workspacePath(input,"file")+"?path="+URLEncoder.encode(required(input,"path",2048),"UTF-8"),null,20,original).toString()).put("ok",true);
             case "getJob":{
                 JSONObject result=requestJob(input,"/v1/jobs/"+identifier(input,"jobId"),null,15,original);
                 original.check();result.put("profileId",required(input,"profileId",80));acceptReceipt(result);return result;

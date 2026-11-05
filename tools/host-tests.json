@@ -1042,7 +1042,12 @@
       "dev.pocketengine.runtime.ReferenceRefusalRunnerTest",
       "dev.pocketengine.runtime.ToolBatchTailReceiptTest",
       "dev.pocketengine.runtime.providers.ProtocolHistoryBudgetTest",
-      "dev.pocketengine.core.RuntimeDiagnosticsTest"
+      "dev.pocketengine.core.RuntimeDiagnosticsTest",
+      "dev.pocketengine.core.ToolOutcomeTest",
+      "dev.pocketengine.core.CapabilityPortReceiptAfterStopTest",
+      "dev.pocketengine.features.plugins.PluginToolReceiptsTest",
+      "dev.pocketengine.runtime.RepeatToolNoticeTest",
+      "dev.pocketengine.runtime.ExecutionPlanningRunnerTest"
     ],
     "helpers": [
       "dev.pocketengine.testutil.HttpServer"
@@ -1638,12 +1643,19 @@
       "dev.pocketengine.features.assistant.AssistantParallelConversationsTest",
       "dev.pocketengine.NativeModelStreamPresentationTest",
       "dev.pocketengine.ui.OwnerChatCancelGuardTest",
-      "dev.pocketengine.features.assistant.OwnerComposerPendingIdentityTest"
+      "dev.pocketengine.features.assistant.OwnerComposerPendingIdentityTest",
+      "dev.pocketengine.store.TaskRecoveryTest",
+      "dev.pocketengine.store.TaskStoreMcpTasksTest",
+      "dev.pocketengine.features.plugins.McpLocalInvocationNativeTest",
+      "dev.pocketengine.features.FeatureHostStateTest",
+      "dev.pocketengine.features.memory.TaskMemoryHistoryTest",
+      "dev.pocketengine.ui.web.PocketWebTaskActionsTest"
     ],
     "helpers": [
       "dev.pocketengine.testutil.ReadyApplicationFixture"
     ],
     "robolectric": true,
+    "native": true,
     "description": "Original private phone/assistant task/run/epoch validation, stream presentation and cancel guards, exact controller matching, native assistant reservation and delayed real worker pickup after a successor run. Actual Engine/SQLite/RunControl with controlled startup/presentation/executor pickup; no live model/tool execution, mounted UI or device acceptance. Specialized group/team/channel/approval routes remain separate.",
     "suites": [
       "main-chain"

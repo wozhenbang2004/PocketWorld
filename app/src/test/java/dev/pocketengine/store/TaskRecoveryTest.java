@@ -1,7 +1,9 @@
 package dev.pocketengine.store;
 
 import android.app.Application;
+import android.content.ContentValues;
 import android.content.Context;
+import android.database.sqlite.SQLiteDatabase;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.core.RunJournal;
 import org.json.JSONArray;
@@ -18,6 +20,9 @@ import static org.junit.Assert.*;
 public final class TaskRecoveryTest {
     private Context context(){return RuntimeEnvironment.getApplication();}
     private RunJournal journal(TaskStore store,JSONObject task,RunControl control)throws Exception{return store.journal(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),control);}
+    private static SQLiteDatabase database(TaskStore store)throws Exception{
+        java.lang.reflect.Field field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);return (SQLiteDatabase)field.get(store);
+    }
     @Test public void restartPreservesContextAndContinuesTheSameTaskWithANewEpoch()throws Exception{
         TaskStore first=new TaskStore(context());String id=first.create("继续原项目","background").getString("id");
         JSONObject attempt=first.startAttempt(id,"background",20);RunJournal old=journal(first,attempt,new RunControl());
@@ -49,6 +54,55 @@ public final class TaskRecoveryTest {
         assertFalse(store.hasUnresolved(id));assertThrows(InterruptedException.class,()->journal.beginOperation("phone_tap",new JSONObject()));
         store.endAttempt(id,attempt.getString("runId"),"cancelled","已停止",new JSONObject());
         assertEquals("receipt",store.get(id,false).getJSONArray("operations").getJSONObject(0).getString("state"));
+    }
+    @Test public void originalLateKnownReceiptCanSettleUnknownAfterStopWithoutAuthorizingAnotherDispatch()throws Exception{
+        TaskStore store=new TaskStore(context());String id=store.create("保留原操作的真实晚回执").getString("id");
+        JSONObject attempt=store.startAttempt(id,"main_screen",20);RunControl control=new RunControl();RunJournal original=journal(store,attempt,control);
+        String operation=original.beginOperation("phone_tap",new JSONObject());
+        original.finishOperationReceipt(operation,new JSONObject().put("status","unknown").put("requiresReconciliation",true));
+        assertTrue(store.hasUnresolved(id));
+        store.requestCancel(id,attempt.getString("runId"));control.cancel();
+        JSONObject saved=original.finishOperationReceipt(operation,new JSONObject().put("ok",true).put("accepted",true).put("receiptMarker","late-original"));
+        JSONObject task=store.get(id,false),row=task.getJSONArray("operations").getJSONObject(0);
+        assertEquals("receipt",row.getString("state"));assertFalse(store.hasUnresolved(id));
+        assertEquals("late-original",saved.getString("receiptMarker"));
+        assertEquals(TaskStore.capabilityFingerprint(row.getJSONObject("receipt")),TaskStore.capabilityFingerprint(saved));
+        assertEquals(operation,row.getString("operationId"));assertEquals(attempt.getString("runId"),row.getString("runId"));
+        assertEquals(1,task.getJSONArray("operations").length());
+        assertThrows(InterruptedException.class,()->original.beginOperation("phone_tap",new JSONObject()));
+        store.endAttempt(id,attempt.getString("runId"),"cancelled","原回执已保留，停止后续执行",new JSONObject());
+        assertEquals("cancelled",store.get(id,false).getString("status"));
+    }
+    @Test public void legacyUncertaintyReopensTerminalTasksWithoutRewritingTheReceiptOrReplayingIt()throws Exception{
+        for(String terminal:new String[]{"completed","failed","cancelled"}){
+            TaskStore store=new TaskStore(context());String id=store.create("恢复旧未知结果屏障 "+terminal).getString("id");
+            JSONObject attempt=store.startAttempt(id,"main_screen",20);RunJournal original=journal(store,attempt,new RunControl());
+            String operation=original.beginOperation("phone_tap",new JSONObject());
+            original.finishOperationReceipt(operation,new JSONObject().put("ok",true));
+            store.endAttempt(id,attempt.getString("runId"),terminal,"旧版终态",new JSONObject());
+            assertEquals(terminal,store.get(id,false).getString("status"));
+            JSONObject legacy=new JSONObject().put("ok",true).put("accepted",true).put("receiptMarker","original-legacy-"+terminal)
+                    .put(terminal.equals("failed")?"reconciliationRequired":"requiresReconciliation",true);
+            // Old sanitized array strings could exceed 1 MiB. A bounded migration must
+            // still find explicit uncertainty without changing the original body.
+            if(terminal.equals("completed"))legacy.put("providerData",new JSONArray().put("x".repeat(1_100_000)));
+            String encoded=legacy.toString(),fingerprint=TaskStore.capabilityFingerprint(legacy);
+            ContentValues old=new ContentValues();old.put("state","receipt");old.put("receipt",encoded);
+            SQLiteDatabase db=database(store);assertEquals(1,db.update("operations",old,"task_id=? AND run_id=? AND operation_id=?",new String[]{id,attempt.getString("runId"),operation}));
+            // A new Fixture already ran recovery; deleting its marker models an old database.
+            db.delete("meta","key=?",new String[]{"tool_outcome_uncertainty_v1"});db.close();
+            TaskStore recovered=new TaskStore(context());
+            for(int reopen=0;reopen<2;reopen++){
+                JSONObject task=recovered.get(id,false),row=task.getJSONArray("operations").getJSONObject(0);
+                assertEquals("reconciling",task.getString("status"));assertTrue(recovered.hasUnresolved(id));
+                assertEquals("unknown",row.getString("state"));assertEquals(operation,row.getString("operationId"));
+                assertEquals(attempt.getString("runId"),row.getString("runId"));assertEquals(1,task.getJSONArray("operations").length());
+                assertEquals(fingerprint,TaskStore.capabilityFingerprint(row.getJSONObject("receipt")));
+                TaskStore current=recovered;assertThrows(IllegalStateException.class,()->current.startAttempt(id,"main_screen",20));
+                if(reopen==0){database(recovered).close();recovered=new TaskStore(context());}
+            }
+            database(recovered).close();
+        }
     }
     @Test public void unknownReceiptFencesFurtherDispatchAndFinishesAsReconciling()throws Exception{
         TaskStore store=new TaskStore(context());String id=store.create("只提交一次").getString("id");JSONObject attempt=store.startAttempt(id,"main_screen",20);

@@ -40,6 +40,7 @@ public final class TaskStoreTeamAssignments implements TeamAssignmentHost.Tasks 
             public void checkpoint(JSONArray messages,int steps,JSONObject observation,JSONObject progressGuard)throws Exception{journal.checkpoint(messages,steps,observation,progressGuard);}
             public String beginOperation(String tool,JSONObject args)throws Exception{return journal.beginOperation(tool,args);}
             public void finishOperation(String operation,JSONObject receipt)throws Exception{journal.finishOperation(operation,receipt);}
+            public JSONObject finishOperationReceipt(String operation,JSONObject receipt)throws Exception{return journal.finishOperationReceipt(operation,receipt);}
             public boolean hasNativeProjectRunningAck(String operation,JSONObject receipt)throws Exception{return journal.hasNativeProjectRunningAck(operation,receipt);}
             public JSONObject projectServiceExitEvidence(JSONArray operations)throws Exception{return journal.projectServiceExitEvidence(operations);}
             public boolean reserveModelRecovery(String call,long wait)throws Exception{return journal.reserveModelRecovery(call,wait);}

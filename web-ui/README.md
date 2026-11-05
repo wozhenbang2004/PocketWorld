@@ -46,6 +46,41 @@ Android capture requires the exact verified APK, supported ARM64 execution, and
 an actual WebView provider at least version 111. Unsupported device images fail
 instead of changing the APK or weakening the selected components.
 
+## Motion and continuity
+
+The existing BoardUI sidebar uses a shared selection surface adapted from the
+approved `uiux-doc-component-tabs-fluid` / `tabs-01` library reference. Labels,
+icons and hit areas stay fixed while the neutral surface moves with a damped
+spring. The reference is a library-maintained implementation, not newly licensed
+vendor source. The retained Ovio stage easing supplies the 200 ms workspace and
+message arrivals; Affect's disclosure pattern supplies the task-filter reveal.
+The existing Josh tactile controls, Vaul drag/exit behavior and BoardUI activity
+ring remain the underlying components. No new animation dependency is added.
+
+Page entry animates only the current workspace; it never retains a second live
+editor or host owner. A new tail message enters once by stable ID. Streaming
+updates, history prepends and restored conversations do not replay the message
+entrance or take over the existing reading-position logic. The stop-button ring
+is driven by the current foreground turn, without synthetic progress or success.
+
+Closing phone reviews keep display fields until the actual Vaul/Radix content
+unmounts, while live review access ends immediately. Closing phone and dictation
+reviews are inert; reopening cannot be cleared by an older exit callback.
+Reduced motion applies from first render and responds to preference changes,
+including portalled overlays. CSS loops pause while the document is hidden.
+
+After a production Web build, run the isolated Chromium regression:
+
+```sh
+node web-ui/tests/motion-continuity-ui.mjs
+```
+
+`MOTION_UI_EVIDENCE` selects the screenshot/result directory. The test records
+actual intermediate animation frames and checks navigation, message identities,
+draft/reading continuity, disclosure, review exits and reduced motion. Its host
+responses and displayed records are labelled synthetic; it does not establish
+Android frame rate, IME behavior, device power use or physical-device acceptance.
+
 ## Conversation phone outcomes
 
 Each native phone-result message exposes an immutable `phoneResult` containing

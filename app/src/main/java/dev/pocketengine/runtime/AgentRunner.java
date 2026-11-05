@@ -12,6 +12,7 @@ import dev.pocketengine.core.RunControl;
 import dev.pocketengine.core.RunOutcome;
 import dev.pocketengine.core.RunJournal;
 import dev.pocketengine.core.RuntimeDiagnostics;
+import dev.pocketengine.core.ToolOutcome;
 import dev.pocketengine.core.CapabilityPort;
 import dev.pocketengine.core.ExecutionPlan;
 import dev.pocketengine.core.ExecutionPlanning;
@@ -225,8 +226,10 @@ public final class AgentRunner {
 
     /** Receipts remain in the journal. Diagnostics retain only a native bounded vocabulary. */
     private static void diagnosticToolReceipt(RuntimeDiagnostics.Span diagnostic,JSONObject receipt){
-        if(planningReadOutcome(receipt)==ExecutionPlanning.ReadOutcome.UNCONFIRMED){diagnostic.finish("unconfirmed","TOOL_RESULT_UNCONFIRMED");return;}
-        if(receipt.optBoolean("ok",false)&&!"failed".equals(receipt.optString("status"))){diagnostic.success();return;}
+        ToolOutcome outcome=ToolOutcome.classify(receipt);
+        if(outcome.requiresReconciliation()){diagnostic.finish(outcome.diagnosticStatus(),"TOOL_RESULT_UNCONFIRMED");return;}
+        if(outcome.requiresUser()){diagnostic.finish(outcome.diagnosticStatus(),"OWNER_INPUT_REQUIRED");return;}
+        if(outcome.successful()){diagnostic.success();return;}
         String code=switch(receipt.optString("code",receipt.optString("error"))){
             case "project_file_not_found" -> "PROJECT_FILE_NOT_FOUND";
             case "project_file_not_regular" -> "PROJECT_FILE_NOT_REGULAR";
@@ -285,10 +288,8 @@ public final class AgentRunner {
         return result;
     }
     private static ExecutionPlanning.ReadOutcome planningReadOutcome(JSONObject receipt){
-        if(receipt==null||receipt.optBoolean("requiresReconciliation")||receipt.has("accepted")&&receipt.isNull("accepted"))return ExecutionPlanning.ReadOutcome.UNCONFIRMED;
-        String code=receipt.optString("code",receipt.optString("error")),status=receipt.optString("status");
-        if(code.contains("unknown")||code.equals("action_timeout")||code.equals("empty_receipt")||code.equals("empty_observation")||status.equals("unknown"))return ExecutionPlanning.ReadOutcome.UNCONFIRMED;
-        return !receipt.optBoolean("ok",true)||status.equals("failed")?ExecutionPlanning.ReadOutcome.FAILED:ExecutionPlanning.ReadOutcome.RECEIPT;
+        ToolOutcome outcome=ToolOutcome.classify(receipt);
+        return outcome.requiresReconciliation()?ExecutionPlanning.ReadOutcome.UNCONFIRMED:outcome.successful()?ExecutionPlanning.ReadOutcome.RECEIPT:ExecutionPlanning.ReadOutcome.FAILED;
     }
     private static void completePlanningRead(ExecutionPlanning planning,ExecutionPlanning.ReadClaim read,JSONObject receipt,ModelConfig config)throws Exception {
         requirePlanningCurrent(planning,read.snapshot);planning.finishRead(read,safeReceipt(receipt,config),planningReadOutcome(receipt));
@@ -330,17 +331,20 @@ public final class AgentRunner {
             if(control.isPaused()||pause!=control.pauseRevision())throw new UncertainOperation();
             selected.requireRun(taskId,control);emit(taskId,"tool","running","正在为主人所选脚本准备原任务审阅，尚未批准执行。",name,null,config,sink);
             requirePlanningCurrent(planning,selectedPlanning);
-            dispatchEntered=true;JSONObject receipt=capabilities.execute(name,new JSONObject(arguments.toString()).put("_hostOperationId",operation),control);
-            if(receipt==null)throw new UncertainOperation();completeOperation(journal,operation,receipt,config);recordedOperation=operation;operation=null;confirmedReceipt=new JSONObject(receipt.toString());
+            dispatchEntered=true;JSONObject receipt;
+            try{receipt=capabilities.execute(name,new JSONObject(arguments.toString()).put("_hostOperationId",operation),control);}
+            catch(CapabilityPort.ReceiptAfterStop stopped){confirmedReceipt=completeOperation(journal,operation,stopped.receipt(control),config);recordedOperation=operation;operation=null;throw stopped.failure(control);}
+            if(receipt==null)throw new UncertainOperation();receipt=completeOperation(journal,operation,receipt,config);recordedOperation=operation;operation=null;confirmedReceipt=new JSONObject(receipt.toString());
             evidence=new JSONObject(receipt.toString()).put("ownerSelectedSkill",true).put("businessVerified",false).put("automaticReplayAllowed",false).put("operationId",recordedOperation);
             appendObservation(history,evidence,config,budget);checkpoint(taskId,journal,history,steps,evidence,config,sink,budget);
             diagnosticToolReceipt(toolDiagnostic,receipt);
-            capabilities.afterTool(name,arguments,receipt,control);
-            boolean unknown=receipt.optString("status").equals("unknown")||receipt.optString("code").contains("unknown")||receipt.has("accepted")&&receipt.isNull("accepted");
+            ToolOutcome outcome=ToolOutcome.classify(receipt);
+            if(outcome.mayContinue()&&!control.isCancelled()&&!control.isPaused())capabilities.afterTool(name,arguments,receipt,control);
+            boolean unknown=outcome.requiresReconciliation();
             if(unknown)evidence.put("requiresReconciliation",true);
             String summary=unknown?"原脚本效果仍待核对，请读取原操作回执；不会重跑。":receipt.optBoolean("ok")?"主人所选脚本已返回执行回执，请在原任务核对实际成果；任务目标尚未确认完成。":receipt.optString("message","本次脚本未完成，请核对原任务回执和执行准备，再明确选择下一步。");
-            emit(taskId,"tool",receipt.optBoolean("ok")?"completed":"awaiting_user",summary,name,receipt,config,sink,recordedOperation);
-            return finish(taskId,receipt.optBoolean("ok")&&!receipt.optBoolean("requiresPause")?"needs_confirmation":"awaiting_user",summary,evidence,steps,config,sink);
+            emit(taskId,"tool",outcome.eventStatus(),summary,name,receipt,config,sink,recordedOperation);
+            return finish(taskId,outcome.successful()?"needs_confirmation":"awaiting_user",summary,evidence,steps,config,sink);
         }catch(Exception failure){
             if(toolDiagnostic!=null)toolDiagnostic.failure("OWNER_SKILL_EXCEPTION",failure);
             RuntimeDiagnostics.event("run_settlement",control!=null&&control.isCancelled()?"cancelled":"unconfirmed","OWNER_SKILL_EXCEPTION",control,failure);
@@ -881,6 +885,7 @@ public final class AgentRunner {
                         if((ExecutionPlan.supports(name)||turnPlanning!=null&&turnPlanning.planning())
                                 &&!CompactionPlan.fingerprint(args).equals(CompactionPlan.fingerprint(safeJson(args,config,false))))throw new ToolArgumentException("planning_private_text");
                     } catch(PhoneRouteSession.SourceUnavailable unavailable){throw unavailable;} catch (Exception badArguments) {
+                        if(!(badArguments instanceof IllegalArgumentException||badArguments instanceof org.json.JSONException||badArguments instanceof ToolArgumentException||badArguments instanceof CapabilityPort.Unavailable))throw badArguments;
                         stepRouting.reset("tool_arguments_or_authority_rejected");
                         boolean correctableArguments=badArguments instanceof IllegalArgumentException||badArguments instanceof org.json.JSONException;
                         String code = badArguments instanceof CapabilityPort.Unavailable?"tool_withdrawn":badArguments instanceof ToolArgumentException ? ((ToolArgumentException) badArguments).code : "invalid_arguments";
@@ -921,9 +926,13 @@ public final class AgentRunner {
                             stepRouting.reset("native_tool_gate_rejected");
                             if(gate.optBoolean("ok",true)||!(gate.opt("accepted") instanceof Boolean)||gate.getBoolean("accepted")||gate.optString("code").isEmpty())throw new SecurityException("工具前置回调只能返回明确的未派发拒绝");
                             receipt=safeJson(gate,config,false).put("nativeDispatched",false);repeatedTools.afterTool(name,args,receipt,false,true);history.put(toolResult(call,receipt,config));
+                            ToolOutcome gateOutcome=ToolOutcome.classify(receipt);
+                            boolean needsStop=!gateOutcome.mayContinue();
                             boolean stale=receipt.optString("code").equals("stale_extension_context");
-                            if(stale)for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("stale_capability_batch","能力参考已改变，本批剩余旧决定没有派发。"),config));
-                            checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);toolDiagnostic.finish("failed","TOOL_GATE_REJECTED");emit(taskId,"tool","failed",receipt.optString("message","工具被原生前置策略拒绝，尚未执行。"),name,receipt,config,sink);
+                            if(needsStop)for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("batch_tail_not_dispatched","本批已暂停，余下此调用尚未派发；请从原任务当前范围重新规划，不会自动重放。").put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched"),config));
+                            else if(stale)for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("stale_capability_batch","能力参考已改变，本批剩余旧决定没有派发。"),config));
+                            checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);diagnosticToolReceipt(toolDiagnostic,receipt);emit(taskId,"tool",gateOutcome.eventStatus(),receipt.optString("message","工具被原生前置策略拒绝，尚未执行。"),name,receipt,config,sink);
+                            if(needsStop){evidence=new JSONObject(receipt.toString());if(gateOutcome.requiresReconciliation())evidence.put("requiresReconciliation",true);return finish(taskId,"awaiting_user",receipt.optString("message","原任务需要主人处理或核对；本批余下调用没有派发。"),evidence,steps,config,sink);}
                             sequenceMayContinue=false;observationsMayContinue=false;if(stale||activeStep!=null)break;continue;
                         }
                     }
@@ -1011,6 +1020,24 @@ public final class AgentRunner {
                         if(activeStep!=null&&activePlan!=null)nativeSequenceProgress.get(activePlan).put("dispatchEnteredSteps",activeStep.index+1);
                         long dispatchRevision=control.pauseRevision();
                         try { receipt = capabilities!=null&&capabilities.supports(name)?capabilities.execute(name,dispatched,control):phone.execute(name,args,control); }
+                        catch(CapabilityPort.ReceiptAfterStop stopped) {
+                            JSONObject actual=stopped.receipt(control);
+                            if(openOperation!=null){
+                                actual=completeOperation(journal,openOperation,actual,config);
+                                evidence.put("operationId",openOperation).put("receiptRecorded",true);openOperation=null;
+                            }
+                            if(planningRead!=null){
+                                // Save only the already obtained original read. Cancellation
+                                // forbids new admission, not settlement of this issued claim.
+                                planning.finishRead(planningRead,safeReceipt(actual,config),planningReadOutcome(actual));
+                                evidence.put("planningReadOperationId",planningRead.operationId).put("receiptRecorded",true);planningRead=null;
+                            }
+                            ToolOutcome stoppedOutcome=ToolOutcome.classify(actual);
+                            evidence.put(ToolOutcome.KEY,stoppedOutcome.view()).put("continuationStopped",true);
+                            if(stoppedOutcome.requiresReconciliation())evidence.put("requiresReconciliation",true);
+                            diagnosticToolReceipt(toolDiagnostic,actual);
+                            throw stopped.failure(control);
+                        }
                         catch(dev.pocketengine.phone.observation.NativeSensitiveStep.OwnerRequired owner) {
                             // A native, original-control-bound refusal BEFORE this child effect, not JSON permission.
                             if(!java.util.Set.of("phone_click_node","phone_type","phone_tap","phone_swipe","phone_click_text","phone_scroll_node").contains(name)||!owner.belongsTo(control,dispatchRevision))throw owner;
@@ -1023,7 +1050,7 @@ public final class AgentRunner {
                         }
                         if (openOperation != null) {
                             if (receipt == null) throw new UncertainOperation();
-                            completeOperation(journal, openOperation, receipt, config);
+                            receipt=completeOperation(journal, openOperation, receipt, config);
                             recordedOperation=openOperation;
                             openOperation = null;
                         }
@@ -1034,25 +1061,25 @@ public final class AgentRunner {
                     } finally {
                         if(planningRead!=null){evidence.put("planningReadUnconfirmed",planningRead.operationId);unconfirmedPlanningRead(planning,planningRead);}
                     }
+                    ToolOutcome toolOutcome=ToolOutcome.classify(receipt);
                     String receiptCode=receipt.optString("code",receipt.optString("error"));
                     boolean projectRunning="project_running".equals(receiptCode),nativeRunning=projectRunning&&nativeProjectRunning(journal,recordedOperation,receipt);
                     if(nativeRunning&&!ownedServiceOperations.contains(recordedOperation))ownedServiceOperations.add(recordedOperation);
                     repeatedTools.afterTool(name,args,receipt,planningReadIssued||!sideEffecting(name)&&(capabilities==null||!capabilities.supports(name)||!capabilities.sideEffecting(name)),false);
                     JSONObject committedToolMessage=toolResult(call,receipt,config,true);history.put(committedToolMessage);
                     if(nativeOwnerRequired!=null)for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("sensitive_handoff_tail_not_dispatched","主人接管前，本批余下旧决定均未派发；交还后重新观察规划。").put("accepted",false).put("nativeDispatched",false),config));
-                    boolean receiptNeedsOwner=receiptCode.equals("approval_required")||receiptCode.equals("needs_user");
-                    boolean receiptNeedsReconciliation=planningReadIssued&&planningReadOutcome(receipt)==ExecutionPlanning.ReadOutcome.UNCONFIRMED||receipt.optBoolean("requiresReconciliation")||receiptCode.contains("unknown")||receiptCode.equals("action_timeout")||receipt.optString("status").equals("unknown")||receipt.has("accepted")&&receipt.isNull("accepted");
+                    boolean receiptNeedsOwner=toolOutcome.requiresUser();
+                    boolean receiptNeedsReconciliation=toolOutcome.requiresReconciliation();
                     boolean unverifiedProjectRunning=projectRunning&&!nativeRunning;
-                    boolean receiptNeedsPause=receipt.optBoolean("requiresPause")||"reconcile".equals(receipt.optString("nextObservationAction"));
                     boolean accessibilityUnavailable="accessibility_unavailable".equals(receipt.optString("code",receipt.optString("error")));
                     // The current call keeps its actual approval/unknown receipt. Later calls
                     // have not entered argument admission or dispatch; retain that known fact
                     // instead of letting checkpoint recovery invent an ambiguous missing reply.
-                    if(nativeOwnerRequired==null&&(receiptNeedsOwner||receiptNeedsReconciliation||unverifiedProjectRunning||receiptNeedsPause||accessibilityUnavailable))
+                    if(nativeOwnerRequired==null&&(receiptNeedsOwner||receiptNeedsReconciliation||unverifiedProjectRunning))
                         for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("batch_tail_not_dispatched","本批已暂停等待主人处理或核对，余下此调用尚未派发；请从原任务当前范围重新规划，不会自动重放。").put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched"),config));
                     checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget,repeatedTools);
                     diagnosticToolReceipt(toolDiagnostic,receipt);
-                    String toolStatus=projectRunning?nativeRunning?"running":"awaiting_user":receipt.optBoolean("ok",false)?"completed":"failed";
+                    String toolStatus=projectRunning?nativeRunning?"running":"awaiting_user":toolOutcome.eventStatus();
                     String toolMessage=projectRunning?nativeRunning?"原开发服务已启动且仍归此原执行；这不是程序结束或服务就绪，后续仅允许原授权的只读核对。":"运行中回执未能与原生已启动服务及原操作核对，未继续模型请求或新工具。"
                             :receipt.optString("message",receipt.optBoolean("ok",false)?"操作回执已收到。":"操作未成功，请检查当前页面。");
                     emit(taskId,"tool",toolStatus,toolMessage,name,receipt,config,sink,recordedOperation);
@@ -1064,19 +1091,15 @@ public final class AgentRunner {
                         evidence.put("requiresReconciliation",true).put("unverifiedProjectRunningAck",true);
                         return finish(taskId,"awaiting_user",toolMessage+"请核对原任务，不会凭JSON字段把未知效果改成已知运行。",evidence,steps,config,sink);
                     }
-                    if(receiptNeedsOwner)return finish(taskId,"awaiting_user",receipt.optString("message","需要主人处理后继续原任务"),evidence,steps,config,sink);
                     if(receiptNeedsReconciliation){
                         if(planningReadIssued){evidence.put("planningReadUnconfirmed",recordedOperation).put("executionAuthorized",false);return finish(taskId,"awaiting_user","规划读取尚无可核对的完整结果；原读取编号和已用预算保留，没有自动重读或批准执行。",evidence,steps,config,sink);}
                         evidence.put("requiresReconciliation",true);
                         return finish(taskId,"awaiting_user","动作可能已经发生，但没有确定回执。请核对实际结果后继续原任务；不会自动重试。",evidence,steps,config,sink);
                     }
-                    if(receiptNeedsPause){
-                        evidence=new JSONObject(receipt.toString());if("reconcile".equals(receipt.optString("nextObservationAction")))evidence.put("requiresReconciliation",true);
-                        return finish(taskId,"awaiting_user",receipt.optString("message","本次观察或显示权限已阻断，请由主人核对后继续原任务；不会自动重试。"),evidence,steps,config,sink);
-                    }
                     if (accessibilityUnavailable) {
                         return finish(taskId, "awaiting_user", "手机操作权限已断开，请重新开启后继续。", evidence, steps, config, sink);
                     }
+                    if(receiptNeedsOwner)return finish(taskId,"awaiting_user",receipt.optString("message","需要主人处理后继续原任务；不会自动重放。"),evidence,steps,config,sink);
                     if(repeatedTools.stopRequired())return stopForProgressGuard(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);
                     // The real operation receipt and text checkpoint already committed above.
                     // Unknown/approval/pause outcomes stop before any extension code is invoked.
@@ -1086,13 +1109,13 @@ public final class AgentRunner {
                     // A successful read can still time out with an unmet predicate. Only this
                     // native plan step uses matched as a prerequisite; standalone WAIT is unchanged.
                     String conditionKey=activeStep!=null&&activeStep.tool==dev.pocketengine.core.NativeToolPlan.Tool.BROWSER_WAIT?"conditionMet":"matched";
-                    if(!receipt.optBoolean("ok",false)||activeStep!=null&&activeStep.tool.requiresMatched()&&!Boolean.TRUE.equals(receipt.opt(conditionKey))){
+                    if(!toolOutcome.successful()||activeStep!=null&&activeStep.tool.requiresMatched()&&!Boolean.TRUE.equals(receipt.opt(conditionKey))){
                         sequenceMayContinue=false;
                         // A failed independent read cannot invalidate another tool's successful
                         // observation. Native sequence, source and budget gates remain separate.
                         if(activeStep!=null||activePlan!=null||!independentRead(name))observationsMayContinue=false;
                     }
-                    if((capabilities!=null||routes!=null&&PhoneRouteSession.REPLAY.equals(name))&&receipt.optBoolean("ok",false)&&!control.isPaused()&&!control.isCancelled()&&pauseSeen[0]==control.pauseRevision()){
+                    if((capabilities!=null||routes!=null&&PhoneRouteSession.REPLAY.equals(name))&&toolOutcome.successful()&&!control.isPaused()&&!control.isCancelled()&&pauseSeen[0]==control.pauseRevision()){
                         String nativeOperation=recordedOperation==null?call.getString("id"):recordedOperation;
                         if(imageRequired){dev.pocketengine.core.NativeToolObservation observation=capabilities.takeToolObservation(name,nativeOperation,control);
                             if(observation!=null)try{nativeImages.add(observation.consume(name,nativeOperation,control));}catch(Exception stale){observation.close();RuntimeDiagnostics.event("tool_execution",control.isCancelled()?"cancelled":"rejected","IMAGE_SOURCE_INVALIDATED",control,stale);control.check();emit(taskId,"tool_observation","failed","图片已失效，没有作为本轮模型视觉输入。",name,null,config,sink);}
@@ -1310,7 +1333,7 @@ public final class AgentRunner {
             JSONObject saved = journal.restore();
             return saved == null ? new JSONObject() : saved;
         } catch (RunControl.ConditionWaitException waiting) { throw waiting; }
-        catch (Exception error) { throw new JournalFailure(); }
+        catch (Exception error) { throw new JournalFailure(error); }
     }
 
     /** Persist only protocol-complete text; image data remains transient to the active model request. */
@@ -1341,7 +1364,7 @@ public final class AgentRunner {
         } catch (RunContextBudget.Blocked blocked) { throw blocked; }
         catch (CompactionPlan.Unavailable unavailable) { throw unavailable; }
         catch (RunControl.ConditionWaitException waiting) { throw waiting; }
-        catch (Exception error) { throw new JournalFailure(); }
+        catch (Exception error) { throw new JournalFailure(error); }
     }
 
     /** This is the original terminal handoff; no extra model request, tool, budget or executor. */
@@ -1363,13 +1386,13 @@ public final class AgentRunner {
             if (id == null || id.trim().isEmpty()) throw new JournalFailure();
             return id;
         } catch (RunControl.ConditionWaitException waiting) { throw waiting; }
-        catch (Exception error) { throw new JournalFailure(); }
+        catch (Exception error) { throw new JournalFailure(error); }
     }
 
-    private static void completeOperation(RunJournal journal, String id, JSONObject receipt, ModelConfig config) throws JournalFailure, RunControl.ConditionWaitException {
-        try { journal.finishOperation(id, safeReceipt(receipt, config)); }
+    private static JSONObject completeOperation(RunJournal journal, String id, JSONObject receipt, ModelConfig config) throws JournalFailure, RunControl.ConditionWaitException {
+        try { JSONObject saved=journal.finishOperationReceipt(id,safeReceipt(receipt,config));if(saved==null)throw new IllegalStateException("Native journal returned no settled receipt");return saved; }
         catch (RunControl.ConditionWaitException waiting) { throw waiting; }
-        catch (Exception error) { throw new JournalFailure(); }
+        catch (Exception error) { throw new JournalFailure(error); }
     }
 
     /** Wire shape is non-terminal; only the original native journal can prove ownership/liveness. */
@@ -1452,7 +1475,7 @@ public final class AgentRunner {
      * from constants: neither error prose nor extra fields may retain withdrawn source text. */
     private static JSONObject retiredReferenceReceipt(String body)throws Exception{
         try{
-            JSONObject result=new JSONObject(body);
+            JSONObject result=new JSONObject(body);result.remove(ToolOutcome.KEY);
             if(Boolean.FALSE.equals(result.opt("ok"))&&result.opt("message") instanceof String){
                 String code=result.optString("code");
                 boolean notDispatched=Boolean.FALSE.equals(result.opt("accepted"))&&Boolean.FALSE.equals(result.opt("nativeDispatched"));
@@ -1465,13 +1488,13 @@ public final class AgentRunner {
                         case "tool_withdrawn"->"本轮工具已撤销或安装改变，旧决定尚未执行，请重新取得当前工具清单。";
                         default->null;
                     };
-                    if(message!=null){JSONObject retained=failure(code,message);return notDispatched?retained.put("accepted",false).put("nativeDispatched",false):retained;}
+                    if(message!=null){JSONObject retained=failure(code,message);return ToolOutcome.project(notDispatched?retained.put("accepted",false).put("nativeDispatched",false):retained);}
                 }
                 if(result.length()==6&&notDispatched&&code.equals("batch_tail_not_dispatched")&&"not_dispatched".equals(result.optString("effectStatus")))
-                    return failure(code,"本批已暂停，余下此调用尚未派发；请从原任务当前范围重新规划，不会自动重放。").put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched");
+                    return ToolOutcome.project(failure(code,"本批已暂停，余下此调用尚未派发；请从原任务当前范围重新规划，不会自动重放。").put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched"));
             }
         }catch(Exception invalid){/* Unknown or malformed receipts still lose every body. */}
-        return referenceRetired();
+        return ToolOutcome.project(referenceRetired());
     }
     /** Revalidate only host reference-read receipts; never rewrite user input or effect receipts. */
     static void refreshReferenceHistory(JSONArray history,JSONObject validation)throws Exception{
@@ -1487,7 +1510,7 @@ public final class AgentRunner {
     }
     private static boolean currentReferenceReceipt(String name,String body,JSONObject validation){
         try{
-            if(validation==null)return false;JSONObject result=new JSONObject(body);
+            if(validation==null)return false;JSONObject result=new JSONObject(body);result.remove(ToolOutcome.KEY);
             if(name.equals("owner_work_get")){
                 JSONObject selected=result.optJSONObject("result");JSONArray live=validation.optJSONArray("ownerWorkResults");
                 if(selected==null||!Boolean.TRUE.equals(selected.opt("available"))||live==null||selected.optString("taskId").isEmpty()||selected.optString("deliveryId").isEmpty()||!selected.optString("resultDigest").matches("[a-f0-9]{64}"))return false;
@@ -1621,7 +1644,7 @@ public final class AgentRunner {
                 return prefixed;
             }
             return result;
-        } catch (Exception error) { throw new JournalFailure(); }
+        } catch (Exception error) { throw new JournalFailure(error); }
     }
 
     private static void closePending(JSONArray history, Set<String> pending) throws Exception {
@@ -1643,7 +1666,7 @@ public final class AgentRunner {
         }
     }
 
-    private static final class JournalFailure extends Exception { }
+    private static final class JournalFailure extends Exception {JournalFailure(){}JournalFailure(Throwable cause){super("Original journal could not settle the operation",cause);} }
     private static final class UncertainOperation extends Exception { }
 
     private JSONObject afterPause(String taskId, ModelConfig config, RunControl control, EventSink sink, long[] pauseSeen,
@@ -1740,7 +1763,7 @@ public final class AgentRunner {
 
     private static JSONObject toolResult(JSONObject call,JSONObject receipt,ModelConfig config)throws Exception{return toolResult(call,receipt,config,false);}
     private static JSONObject toolResult(JSONObject call,JSONObject receipt,ModelConfig config,boolean actualNativeResult)throws Exception {
-        JSONObject clean=actualNativeResult?safeToolReceipt(call.getJSONObject("function").getString("name"),receipt,config):safeReceipt(receipt,config),row=new JSONObject().put("role", "tool").put("tool_call_id", call.getString("id")).put("content",clean.toString());
+        JSONObject clean=actualNativeResult?safeToolReceipt(call.getJSONObject("function").getString("name"),receipt,config):safeReceipt(receipt,config);clean.put(ToolOutcome.KEY,ToolOutcome.classify(receipt).view());JSONObject row=new JSONObject().put("role", "tool").put("tool_call_id", call.getString("id")).put("content",clean.toString());
         if(clean.has("outputCapture"))row.put("toolOutputCapture",dev.pocketengine.features.memory.ToolOutputCapture.checkedMetadata(clean.getJSONObject("outputCapture")));return row;
     }
 

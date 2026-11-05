@@ -458,6 +458,8 @@ public final class HostToolSupervisor implements CapabilityPort {
         // Keep host transport keys private and the full identity/routing gate on native tools.
         java.util.Iterator<String> keys=args.keys();while(keys.hasNext()){String key=keys.next();if(key.startsWith("_")||tool.preset==null&&key.matches("taskId|runId|principalId|spaceId|ownerId|scope|epoch|coordinatorEpoch|feature|command"))throw new SecurityException("工具参数不能覆盖宿主身份或执行路由");}
         PluginRules.validateArguments(args,tool.schema);
+        if(tool==nativeRoutes.get(name)&&tool.feature.equals("workspace")&&Set.of("read","write","history","diff","createArtifact").contains(tool.command))
+            dev.pocketengine.features.workspace.VersionedWorkspace.path(args.getString("path"));
         if(tool.command.equals("$skills_propose"))dev.pocketengine.features.skills.NativeConversationSkillDraftHost.checkedDraft(args);
         if(tool.command.equals("$memory_propose"))dev.pocketengine.features.memory.NativeConversationMemoryDraftHost.checkedDraft(args);
         if(tool.feature.equals("memory")&&Set.of("search","recall").contains(tool.command)&&projectMemory==null
@@ -466,7 +468,14 @@ public final class HostToolSupervisor implements CapabilityPort {
         if(tool.feature.equals("memory")&&Set.of("search","recall").contains(tool.command)&&(args.has("queries")||args.has("constraints")))
             dev.pocketengine.features.memory.MemoryQueryPlan.agentSuggested(args.getString("query"),args.has("queries")?args.getJSONArray("queries"):new JSONArray(),args.has("constraints")?args.getJSONObject("constraints"):new JSONObject());
         if(workProfile!=null&&tool.feature.equals("skills")&&Set.of("$skills_read","$skill_reference_decision","$skill_execute").contains(tool.command)){if(profileCheck==null)workProfile.requireSkillRequest(args);else workProfile.requireSkillRequest(args,profileCheck);}
+        if(tool.feature.equals("skills")&&tool.command.equals("$skills_list"))skillListMode(args);
         if(tool.feature.equals("teams")&&name.startsWith("teams_"))dev.pocketengine.features.teams.TeamParentTools.validate(name,args);
+    }
+    /** One pure cross-field policy for both admission and actual catalogue execution. */
+    private static String skillListMode(JSONObject args){
+        String mode=args.optString("mode","query");
+        if(!"catalogue".equals(mode)&&(args.has("cursor")||args.has("pageSize")))throw new IllegalArgumentException("查询模式不接收目录cursor或pageSize");
+        return mode;
     }
     /** Withdraw or changed-install metadata can never repoint an old model decision. */
     private boolean pluginCurrent(String name,Tool admitted)throws Exception {
@@ -509,7 +518,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         if(tool.feature.equals("assistant")&&tool.command.startsWith("$owner_work_")){
             if(tool.write&&!allowWrites)throw new SecurityException("只读任务不能派发或控制私人工作");
             if(name.equals("owner_work_get")&&ownerWorkReads.size()>=16&&!ownerWorkReads.containsKey(args.optString("deliveryId")))throw new IllegalStateException("本轮已读取16份工作结果，请先处理已取得的结果");
-            JSONObject result=host.ownerWorkCall(taskId,runId,epoch,name,operationId,args,control);control.check();tasks.checkCapability(taskId,runId,epoch,name,control);
+            JSONObject result=deliverReceipt(name,host.ownerWorkCall(taskId,runId,epoch,name,operationId,args,control),control);
             JSONObject frozen=name.equals("owner_work_get")?result.optJSONObject("result"):null;
             if(frozen!=null&&frozen.optBoolean("available"))ownerWorkReads.put(frozen.getString("deliveryId"),new JSONObject().put("taskId",frozen.getString("taskId")).put("deliveryId",frozen.getString("deliveryId")).put("resultDigest",frozen.getString("resultDigest")));
             return result;
@@ -550,7 +559,7 @@ public final class HostToolSupervisor implements CapabilityPort {
             // entry. Revocation cannot race this entry into an unreviewed later dispatch.
             synchronized(tasks){tasks.checkOwnerEditScopePermit(ownerEditPermit,control);final JSONObject[] saved=new JSONObject[1];final var expected=ownerEditFile;
                 control.dispatchAtPauseRevision(ownerEditPermit.getLong("pauseRevision"),()->saved[0]=workspace.writeBytesForHost(expected,dev.pocketengine.features.local.project.ProjectExactPatch.encode(args.getString("content"))).json().put("content",args.getString("content")));
-                result=saved[0].put("ownerEditScopePermit",ownerEditPermit);
+                result=saved[0].put("ok",true).put("ownerEditScopePermit",ownerEditPermit);
             }
         }
         else if(tool.command.equals("$method_decision")){
@@ -587,14 +596,15 @@ public final class HostToolSupervisor implements CapabilityPort {
             });
         }
         else if(tool.command.equals("$projects"))result=new JSONObject().put("ok",true).put("projects",module.snapshot().getJSONArray("projects"));
-        else if(tool.command.equals("$teams"))result=new JSONObject().put("teams",module.snapshot().getJSONArray("teams"));
+        else if(tool.command.equals("$teams"))result=new JSONObject().put("ok",true).put("teams",module.snapshot().getJSONArray("teams"));
         else if(tool.feature.equals("teams")&&tool.command.equals("start"))result=host.startTeamForTask(taskId,runId,operationId.isEmpty()?UUID.randomUUID().toString():operationId,args,approvalCapability.getJSONObject("teamDefinition"),control,consumedApprovalId);
         else if(tool.feature.equals("teams")&&tool.command.equals("get"))result=host.readTeamForTask(taskId,runId,epoch,args,control);
-        else if(tool.command.equals("$profiles"))result=new JSONObject().put("profiles",module.snapshot().getJSONArray("profiles"));
+        else if(tool.command.equals("$profiles"))result=new JSONObject().put("ok",true).put("profiles",module.snapshot().getJSONArray("profiles"));
         else if(tool.command.equals("$skills_list")){
             if(!(module instanceof SkillsModule selected))throw new IllegalStateException("技能模块不支持宿主验证");
+            String mode=skillListMode(args);
             host.synchronizeMemory(privateScope());JSONObject scope=skillScope(selected),assetScope=skillAssetScope(scope,profileCheck);
-            if("catalogue".equals(args.optString("mode","query"))){
+            if("catalogue".equals(mode)){
                 Set<String> capabilities=skillCapabilityNames(),selection=null;
                 if(workProfile!=null){
                     profileCheck.checkCurrent();selection=new java.util.HashSet<>();JSONArray current=selected.catalogueForHost(assetScope).getJSONArray("skills");
@@ -603,7 +613,6 @@ public final class HostToolSupervisor implements CapabilityPort {
                 result=selected.cataloguePageForHost(assetScope,capabilities,args.optJSONObject("cursor"),args.optInt("pageSize",8),selection);
                 if(workProfile!=null){profileCheck.checkCurrent();result.put("workProfileSelection",true);}
             }else{
-                if(args.has("cursor")||args.has("pageSize"))throw new IllegalArgumentException("查询模式不接收目录cursor或pageSize");
                 JSONObject task=tasks.get(taskId,false);result=discoverSkills(selected,task.optString("goal")+"\n"+task.optString("feedback"),profileCheck,scope);
             }
             selected.requireTaskScopeForHost(tasks.get(taskId,false),scope);
@@ -611,17 +620,17 @@ public final class HostToolSupervisor implements CapabilityPort {
         else if(tool.command.equals("$skills_read")){if(!(module instanceof SkillsModule))throw new IllegalStateException("技能模块不支持宿主验证");host.synchronizeMemory(privateScope());
             SkillsModule reading=(SkillsModule)module;JSONObject scope=skillScope(reading),assetScope=skillAssetScope(scope,profileCheck);
             result=args.has("revision")?reading.readForHost(assetScope,args.getString("id"),args.optString("path","SKILL.md"),args.optInt("offset",0),args.optInt("length",8000),args.getInt("revision"),args.getString("digest"),skillCapabilityNames()):reading.readForHost(assetScope,args.getString("id"),args.optString("path","SKILL.md"),args.optInt("offset",0),args.optInt("length",8000),args.getString("digest"),skillCapabilityNames());
-            reading.requireTaskScopeForHost(tasks.get(taskId,false),scope);var selected=reading.selectReferenceForHost(assetScope,result.getString("id"),result.getInt("revision"),result.getString("digest"),skillCapabilityNames());tasks.recordSkillReferenceRead(taskId,runId,epoch,selected,result.getString("path"),args.optInt("offset",0),result.getInt("nextOffset"),control);reading.requireTaskScopeForHost(tasks.get(taskId,false),scope);}
+            reading.requireTaskScopeForHost(tasks.get(taskId,false),scope);var selected=reading.selectReferenceForHost(assetScope,result.getString("id"),result.getInt("revision"),result.getString("digest"),skillCapabilityNames());tasks.recordSkillReferenceRead(taskId,runId,epoch,selected,result.getString("path"),args.optInt("offset",0),result.getInt("nextOffset"),control);reading.requireTaskScopeForHost(tasks.get(taskId,false),scope);result.put("ok",true);}
         else if(tool.command.equals("$skill_reference_decision")){
             if(!allowWrites||operationId.isEmpty()||!(module instanceof SkillsModule)||control!=workingControl)throw new SecurityException("参考采用必须沿原任务审计操作");
             host.synchronizeMemory(privateScope());SkillsModule reading=(SkillsModule)module;JSONObject scope=skillScope(reading),assetScope=skillAssetScope(scope,profileCheck);var selected=reading.selectReferenceForHost(assetScope,args.getString("id"),args.getInt("revision"),args.getString("digest"),skillCapabilityNames());reading.requireTaskScopeForHost(tasks.get(taskId,false),scope);result=tasks.recordSkillReferenceDecision(taskId,runId,epoch,operationId,selected,control);reading.requireTaskScopeForHost(tasks.get(taskId,false),scope);
         }
-        else if(tool.command.equals("$schedule_propose")){if(!allowWrites||operationId.isEmpty())throw new SecurityException("惰性计划草案也须原可写任务prepared操作");result=host.proposeScheduleForTask(taskId,runId,epoch,operationId,args,control);}
-        else if(tool.command.equals("$skills_draft_sources"))result=host.conversationSkillSourcesForTask(taskId,runId,epoch,control);
+        else if(tool.command.equals("$schedule_propose")){if(!allowWrites||operationId.isEmpty())throw new SecurityException("惰性计划草案也须原可写任务prepared操作");result=host.proposeScheduleForTask(taskId,runId,epoch,operationId,args,control).put("ok",true);}
+        else if(tool.command.equals("$skills_draft_sources"))result=host.conversationSkillSourcesForTask(taskId,runId,epoch,control).put("ok",true);
         else if(tool.command.equals("$skills_propose")){if(!allowWrites||operationId.isEmpty())throw new SecurityException("技能草稿也须原可写私人任务prepared操作");result=host.proposeConversationSkillForTask(taskId,runId,epoch,operationId,args,control);}
-        else if(tool.command.equals("$memory_draft_sources"))result=host.conversationMemorySourcesForTask(taskId,runId,epoch,control);
+        else if(tool.command.equals("$memory_draft_sources"))result=host.conversationMemorySourcesForTask(taskId,runId,epoch,control).put("ok",true);
         else if(tool.command.equals("$memory_propose")){if(!allowWrites||operationId.isEmpty())throw new SecurityException("记忆草稿也须原可写私人任务prepared操作");result=host.proposeConversationMemoryForTask(taskId,runId,epoch,operationId,args,control);}
-        else if(tool.command.equals("$schedule_list"))result=host.scheduleProposalsForTask(taskId,runId,epoch,control);
+        else if(tool.command.equals("$schedule_list"))result=host.scheduleProposalsForTask(taskId,runId,epoch,control).put("ok",true);
         else if(tool.command.equals("$post_notice")){if(!allowWrites||operationId.isEmpty())throw new SecurityException("任务通知须沿原写入操作与具体参数审批");result=host.postTaskNotice(taskId,runId,epoch,operationId,args,consumedApprovalId,control);}
         else if(tool.command.equals("$skill_execute")){
             if(!allowWrites||operationId.isEmpty())throw new SecurityException("脚本必须由原任务Runner先登记具体动作意图");
@@ -640,7 +649,13 @@ public final class HostToolSupervisor implements CapabilityPort {
                 finally{control.removeCancelAction(cancel);}
             }else result=module instanceof dev.pocketengine.features.remote.RemoteModule?((dev.pocketengine.features.remote.RemoteModule)module).handleForTask(tool.command,input,control):module.handle(tool.command,input);
         }
-        control.check();tasks.checkCapability(taskId,runId,epoch,name,control);if(result==null)throw new IllegalStateException("工具没有返回真实结果");return result;
+        return deliverReceipt(name,result,control);
+    }
+    /** Do not lose a known native result at the post-dispatch cancellation fence. */
+    private JSONObject deliverReceipt(String name,JSONObject result,RunControl original)throws Exception{
+        if(result==null)throw new IllegalStateException("工具没有返回真实结果");
+        try{original.check();tasks.checkCapability(taskId,runId,epoch,name,original);return result;}
+        catch(Exception stopped){throw new dev.pocketengine.core.CapabilityPort.ReceiptAfterStop(original,result,stopped);}
     }
     @Override public JSONObject beforeTool(String name,JSONObject arguments,RunControl original)throws Exception{if(workProfile!=null)try{workProfile.checkCurrent();}catch(Exception withdrawn){original.check();return new JSONObject().put("ok",false).put("accepted",false).put("status","not_dispatched").put("code","work_profile_source_changed").put("message","原工作配置或来源已变化；本次尚未派发，请回原任务审阅。").put("replayAllowed",false);}return nativeDevicePort!=null&&nativeDevicePort.supports(name)?nativeDevicePort.beforeTool(name,arguments,original):null;}
     @Override public dev.pocketengine.core.NativeToolObservation.Requirement observationRequirement(String name,JSONObject arguments,RunControl original)throws Exception{return nativeDevicePort!=null&&nativeDevicePort.supports(name)?nativeDevicePort.observationRequirement(name,arguments,original):dev.pocketengine.core.NativeToolObservation.Requirement.NONE;}
@@ -656,7 +671,7 @@ public final class HostToolSupervisor implements CapabilityPort {
     private JSONObject discoverSkills(SkillsModule module,String query,dev.pocketengine.features.controlplane.WorkProfileToolSelection.PreparedTool profileCheck,JSONObject scope)throws Exception{
         String source=query==null?"":query;StringBuilder text=new StringBuilder();boolean meaningful=false;
         for(int offset=0;offset<source.length()&&text.length()<512;){int point=source.codePointAt(offset);offset+=Character.charCount(point);if(point>=0xD800&&point<=0xDFFF||Character.isISOControl(point)&&point!='\n'&&point!='\r'&&point!='\t')continue;if(text.length()+Character.charCount(point)>512)break;text.appendCodePoint(point);meaningful|=Character.isLetterOrDigit(point);}
-        JSONObject assetScope=skillAssetScope(scope,profileCheck);Set<String> capabilities=skillCapabilityNames();JSONObject discovery=meaningful?module.discoverForHost(assetScope,text.toString(),capabilities,8,6000):new JSONObject().put("skills",new JSONArray()).put("metadataOnly",true).put("grantsAdded",new JSONArray()).put("untrustedReference",true).put("executable",false).put("status","no_query_terms");
+        JSONObject assetScope=skillAssetScope(scope,profileCheck);Set<String> capabilities=skillCapabilityNames();JSONObject discovery=meaningful?module.discoverForHost(assetScope,text.toString(),capabilities,8,6000):new JSONObject().put("skills",new JSONArray()).put("metadataOnly",true).put("grantsAdded",new JSONArray()).put("untrustedReference",true).put("executable",false).put("ok",true).put("status","no_query_terms");
         JSONObject result=workProfile==null?discovery:profileCheck==null?workProfile.filterSkillDiscovery(discovery,module.catalogueForHost(assetScope).getJSONArray("skills"),capabilities):workProfile.filterSkillDiscovery(discovery,module.catalogueForHost(assetScope).getJSONArray("skills"),capabilities,profileCheck);
         module.requireTaskScopeForHost(tasks.get(taskId,false),scope);return result.put("skillScopeFingerprint",dev.pocketengine.features.skills.SkillSourcePolicy.scopeFingerprint(assetScope));
     }

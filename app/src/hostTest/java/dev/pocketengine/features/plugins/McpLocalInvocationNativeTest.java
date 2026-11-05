@@ -8,6 +8,7 @@ import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.core.RunJournal;
 import dev.pocketengine.core.RunOutcome;
+import dev.pocketengine.core.ToolOutcome;
 import dev.pocketengine.EngineApplication;
 import dev.pocketengine.features.*;
 import dev.pocketengine.features.memory.TaskMemoryTrace;
@@ -60,7 +61,37 @@ public final class McpLocalInvocationNativeTest {
         TaskStore.LocalMcpInvocationRecord record()throws Exception{return owner.f.tasks.localMcpInvocationsForOwner(task).get(0);}
         public void close(){control.cancel();supervisor.close();}
     }
-    @Test public void actualPythonCallUsesOneApprovedDebitedOriginalOperationAndCompletesOnlyWithRealCleanup()throws Exception{try(Fixture x=new Fixture();Call call=x.call()){JSONObject result=call.invoke();assertEquals(result.toString(),"response_received",result.getString("status"));assertFalse(result.getBoolean("verified"));assertTrue(result.getJSONObject("toolResult").getJSONArray("content").getJSONObject(0).getString("text").contains("Actual local result🙂"));assertTrue(result.getJSONObject("nativeMcp").getBoolean("processSettled"));assertTrue(result.getJSONObject("nativeMcp").getBoolean("rpcResponseReceived"));assertFalse(result.getJSONObject("nativeMcp").getBoolean("wholeInvocationNotDispatchedConfirmed"));assertTrue(Files.exists(x.copy(call.operation).resolve("RPC_EFFECT")));assertEquals("Owner explicit call",new JSONObject(new String(Files.readAllBytes(x.copy(call.operation).resolve("RPC_EFFECT")),StandardCharsets.UTF_8)).getString("text"));assertEquals(1,x.f.tasks.get(call.task,false).getJSONArray("operations").length());assertEquals(2,x.f.tasks.list().length());assertEquals(1,x.f.tasks.get(call.task,false).getJSONObject("executionScope").getInt("toolsUsed"));assertEquals(0,x.f.tasks.get(call.task,false).getJSONObject("executionScope").getInt("modelCallsUsed"));assertEquals(0,x.f.tasks.get(call.task,false).getJSONObject("executionScope").getLong("deadlineAt"));assertFalse(x.f.tasks.hasUnresolved(call.task));assertEquals(0,x.f.runtime.environmentManager().describe(x.f.pack).getInt("activeLeases"));String stderr=x.f.runtime.query(call.record().referenceForHost()).json().getString("stderr");assertEquals(1,stderr.split("ACTUAL_METHOD:initialize\n",-1).length-1);assertEquals(1,stderr.split("ACTUAL_METHOD:tools/call\n",-1).length-1);try(Cursor row=x.db().rawQuery("SELECT grant_json FROM runs WHERE run_id=?",new String[]{call.run})){assertTrue(row.moveToFirst());assertEquals(7,new JSONObject(row.getString(0)).getInt("remainingOperations"));}}}
+    @Test public void actualPythonCallUsesOneApprovedDebitedOriginalOperationAndCompletesOnlyWithRealCleanup()throws Exception{
+        try(Fixture x=new Fixture();Call call=x.call()){
+            JSONObject result=call.invoke();assertEquals(result.toString(),"response_received",result.getString("status"));
+            assertFalse(result.getBoolean("verified"));
+            assertTrue(result.getJSONObject("toolResult").getJSONArray("content").getJSONObject(0).getString("text").contains("Actual local result🙂"));
+            assertTrue(result.getJSONObject("nativeMcp").getBoolean("processSettled"));
+            assertTrue(result.getJSONObject("nativeMcp").getBoolean("rpcResponseReceived"));
+            assertFalse(result.getJSONObject("nativeMcp").getBoolean("wholeInvocationNotDispatchedConfirmed"));
+            String nativeDigest=TaskStore.capabilityFingerprint(result.getJSONObject("nativeMcp"));
+            // The Runner's final generic settlement must preserve the real process/RPC
+            // result, not reopen an unknown barrier on status=response_received.
+            JSONObject canonical=call.journal.finishOperationReceipt(call.operation,result);
+            JSONObject saved=x.f.tasks.get(call.task,false).getJSONArray("operations").getJSONObject(0);
+            assertEquals("receipt",saved.getString("state"));assertEquals(ToolOutcome.Kind.SUCCESS,ToolOutcome.classify(canonical).kind());
+            assertEquals(nativeDigest,TaskStore.capabilityFingerprint(canonical.getJSONObject("nativeMcp")));
+            assertEquals(TaskStore.capabilityFingerprint(saved.getJSONObject("receipt")),TaskStore.capabilityFingerprint(canonical));
+            assertEquals(call.operation,saved.getString("operationId"));
+            assertTrue(Files.exists(x.copy(call.operation).resolve("RPC_EFFECT")));
+            assertEquals("Owner explicit call",new JSONObject(new String(Files.readAllBytes(x.copy(call.operation).resolve("RPC_EFFECT")),StandardCharsets.UTF_8)).getString("text"));
+            assertEquals(1,x.f.tasks.get(call.task,false).getJSONArray("operations").length());assertEquals(2,x.f.tasks.list().length());
+            assertEquals(1,x.f.tasks.get(call.task,false).getJSONObject("executionScope").getInt("toolsUsed"));
+            assertEquals(0,x.f.tasks.get(call.task,false).getJSONObject("executionScope").getInt("modelCallsUsed"));
+            assertEquals(0,x.f.tasks.get(call.task,false).getJSONObject("executionScope").getLong("deadlineAt"));
+            assertFalse(x.f.tasks.hasUnresolved(call.task));assertEquals(0,x.f.runtime.environmentManager().describe(x.f.pack).getInt("activeLeases"));
+            String stderr=x.f.runtime.query(call.record().referenceForHost()).json().getString("stderr");
+            assertEquals(1,stderr.split("ACTUAL_METHOD:initialize\n",-1).length-1);assertEquals(1,stderr.split("ACTUAL_METHOD:tools/call\n",-1).length-1);
+            try(Cursor row=x.db().rawQuery("SELECT grant_json FROM runs WHERE run_id=?",new String[]{call.run})){
+                assertTrue(row.moveToFirst());assertEquals(7,new JSONObject(row.getString(0)).getInt("remainingOperations"));
+            }
+        }
+    }
     @Test public void actualNodeProgramUsesTheSameOriginalPipeApprovalAndRealSourceCopy()throws Exception{String source="const fs=require('node:fs'),r=require('node:readline').createInterface({input:process.stdin});fs.writeFileSync('START_EFFECT','startup');r.on('line',line=>{const q=JSON.parse(line);let result;if(q.method==='initialize')result={protocolVersion:'2025-11-25',capabilities:{tools:{}},serverInfo:{name:'Owned Node tool',version:'1'}};else if(q.method==='tools/list')result={tools:[{name:'lookup',inputSchema:{type:'object',properties:{text:{type:'string'}},required:['text'],additionalProperties:false}}]};else if(q.method==='tools/call'){fs.writeFileSync('RPC_EFFECT',JSON.stringify(q.params.arguments));result={content:[{type:'text',text:'Actual Node result'}]};}else return;process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:q.id,result})+'\\n');});";try(Fixture x=new Fixture("node","server.js",source);Call call=x.call()){JSONObject result=call.invoke();assertEquals(result.toString(),"response_received",result.getString("status"));assertEquals("node",result.getJSONObject("nativeMcp").getJSONObject("scope").getJSONObject("program").getString("executable"));assertTrue(Files.exists(x.copy(call.operation).resolve("RPC_EFFECT")));assertEquals("pipes",x.f.runtime.query(call.record().referenceForHost()).json().getString("terminalMode"));assertEquals(0,x.f.runtime.environmentManager().describe(x.f.pack).getInt("activeLeases"));}}
     @Test public void approvalRequiredStartsNeitherAProgramNorAnOperationAndCannotBorrowInstallationJsonAsProof()throws Exception{try(Fixture x=new Fixture();Call call=x.call()){JSONObject pending=call.supervisor.execute(x.tool,new JSONObject(call.arguments.toString()),call.control);assertEquals("approval_required",pending.getString("code"));assertEquals(0,x.f.tasks.get(call.task,false).getJSONArray("operations").length());assertEquals(0,x.f.tasks.localMcpInvocationsForOwner(call.task).size());assertEquals(0,x.f.runtime.environmentManager().describe(x.f.pack).getInt("activeLeases"));assertTrue(pending.has("approvalId"));}}
     @Test public void aNativeProgramObjectStillCannotReplaceTheOriginalConsumedApprovalAndLosslessPreparedRow()throws Exception{try(Fixture x=new Fixture();Call call=x.call()){call.approve();call.operation=call.journal.beginOperation(x.tool,new JSONObject(call.arguments.toString()));JSONObject capability=call.capability();try(var program=x.f.plugins.localMcpProgramForTask(call.nativeInput(),x.tool,call.control)){assertThrows(SecurityException.class,()->x.f.tasks.admitLocalMcpInvocationForHost(call.task,call.run,call.epoch,x.tool,call.operation,call.arguments,capability,java.util.UUID.randomUUID().toString(),program,call.control));assertEquals(0,x.f.runtime.environmentManager().describe(x.f.pack).getInt("activeLeases"));assertEquals(0,x.f.tasks.localMcpInvocationsForOwner(call.task).size());assertTrue(x.f.tasks.hasUnresolved(call.task));}}}

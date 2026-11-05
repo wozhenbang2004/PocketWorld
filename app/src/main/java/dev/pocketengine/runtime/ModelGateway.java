@@ -88,7 +88,7 @@ public final class ModelGateway {
     private static final java.util.Map<RunControl,AccountBinding> accountBindings=new java.util.WeakHashMap<>();
     public static void installAccountInferencePort(AccountInferencePort port){synchronized(accountBindings){accountInference=port;accountBindings.clear();}}
     public static boolean accountInferenceInstalled(){return accountInference!=null;}
-    /** Same original run's actually accepted renewal lineage plus current native revocation state.
+    /** Same original run/model plus current native authorization continuity.
      * This does not authorize a POST; AccountGateway still rechecks credentials/scope before dispatch.
      * Safe under TaskStore's monitor: no gateway/account-book monitor or network is entered.
      */
@@ -96,7 +96,12 @@ public final class ModelGateway {
         AccountInferencePort port=accountInference;if(port==null||original==null||original.isCancelled()||captured==null||selected==null||!captured.sameModel(selected))return false;
         boolean lineage;synchronized(accountBindings){AccountBinding bound=accountBindings.get(original);lineage=bound==null?captured.matches(selected):bound.selectionContinues(captured,selected);}
         if(!lineage)return false;
-        try{return port.authorizationCurrent(captured)&&port.authorizationCurrent(selected)&&port==accountInference&&!original.isCancelled();}catch(RuntimeException unavailable){return false;}
+        return sameAccountAuthorization(port,captured,selected)&&!original.isCancelled();
+    }
+    /** Metadata continuity must not add a prepared-only version to provider history. */
+    private static boolean sameAccountAuthorization(AccountInferencePort port,ModelConfig.AccountModelRef captured,ModelConfig.AccountModelRef current){
+        if(port==null||captured==null||current==null||!captured.sameModel(current))return false;
+        try{return port.authorizationCurrent(captured)&&port.authorizationCurrent(current)&&port==accountInference;}catch(RuntimeException unavailable){return false;}
     }
     /** Before account budget/image checks. Never changes account, model, owner options, or sends inference. */
     public static ModelConfig prepareAccount(ModelConfig captured,RunControl original)throws Exception {
@@ -154,13 +159,15 @@ public final class ModelGateway {
             return port==accountInference&&port.accountIdentityCurrent(reference);
         }catch(GatewayFailure|RuntimeException unavailable){return false;}
     }
-    /** Only this actual Run's accepted native renewal lineage may advance a captured budget identity. */
+    /** Advance the original captured budget reference only within this run/model's live authorization. */
     public static ModelConfig accountBudgetConfig(ModelConfig captured,RunControl original)throws GatewayException {
         if(!captured.usesAccount())return captured;
         if(original==null||original.isCancelled())throw new GatewayException("原任务已停止，不能读取新账号能力。");
         synchronized(accountBindings){AccountBinding bound=accountBindings.get(original);
             if(bound==null)return captured;
-            if(!bound.accepts(captured.accountModel))throw new GatewayException("原任务账号模型身份已变化，请核对原连接。");
+            // The first execution can bind a newer version returned by public preparation.
+            // Its older native authority callback remains valid without admitting old history.
+            if(!bound.accepts(captured.accountModel)&&!sameAccountAuthorization(accountInference,captured.accountModel,bound.current()))throw new GatewayException("原任务账号模型身份已变化，请核对原连接。");
             return captured.withAccountModel(bound.current());
         }
     }
@@ -774,7 +781,7 @@ public final class ModelGateway {
             if(port!=accountInference)throw new GatewayException("账号推理宿主已变化，请重新确认连接。");
             AccountBinding binding=accountBindings.get(control);
             if(binding==null){binding=new AccountBinding(reference);accountBindings.put(control,binding);}
-            if(!binding.accepts(reference))throw new GatewayException("同一次任务的账号模型选择已变化，不能自动换号或重放，请先停止并核对原任务。");
+            if(!binding.accepts(reference)&&!sameAccountAuthorization(port,reference,binding.current()))throw new GatewayException("同一次任务的账号模型选择已变化，不能自动换号或重放，请先停止并核对原任务。");
             return binding;
         }
     }
@@ -785,7 +792,7 @@ public final class ModelGateway {
         synchronized boolean accepts(ModelConfig.AccountModelRef ref){return original.sameModel(ref)&&versions.contains(ref.accountVersion);}
         synchronized ModelConfig.AccountModelRef current(){return current;}
         synchronized java.util.Set<Long> versions(){return new java.util.HashSet<>(versions);}
-        synchronized boolean selectionContinues(ModelConfig.AccountModelRef captured,ModelConfig.AccountModelRef selected){return original.sameModel(captured)&&versions.contains(captured.accountVersion)&&original.sameModel(selected);}
+        synchronized boolean selectionContinues(ModelConfig.AccountModelRef captured,ModelConfig.AccountModelRef selected){return original.sameModel(captured)&&original.sameModel(selected);}
         synchronized ModelConfig.AccountModelRef advance(ModelConfig.AccountModelRef expected,long actual)throws GatewayFailure {
             if(!current.sameModel(expected)||actual<expected.accountVersion||!versions.contains(expected.accountVersion))throw new GatewayFailure("STALE_ACCOUNT_VERSION");
             ModelConfig.AccountModelRef accepted=expected.withVersion(actual);versions.add(actual);

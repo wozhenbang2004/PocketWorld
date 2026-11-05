@@ -36,6 +36,7 @@ public final class TeamParentResearchHistory {
             public void checkpoint(JSONArray messages,int steps,JSONObject observation,JSONObject progressGuard)throws Exception{original.checkpoint(messages,steps,observation,progressGuard);}
             public String beginOperation(String tool,JSONObject args)throws Exception{return original.beginOperation(tool,args);}
             public void finishOperation(String op,JSONObject receipt)throws Exception{original.finishOperation(op,receipt);}
+            public JSONObject finishOperationReceipt(String op,JSONObject receipt)throws Exception{return original.finishOperationReceipt(op,receipt);}
             public boolean hasNativeProjectRunningAck(String op,JSONObject receipt)throws Exception{return original.hasNativeProjectRunningAck(op,receipt);}
             public JSONObject projectServiceExitEvidence(JSONArray operations)throws Exception{return original.projectServiceExitEvidence(operations);}
             public boolean reserveModelRecovery(String call,long wait)throws Exception{return original.reserveModelRecovery(call,wait);}
