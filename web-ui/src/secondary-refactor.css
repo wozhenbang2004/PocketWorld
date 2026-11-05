@@ -487,4 +487,3 @@
 /* Settings descriptions belong below their local title, never in a narrow flex column. */
 .pw-secondary-refactor .pw-settings-section > .pw-section-heading { display: block; }
 .pw-secondary-refactor .pw-accounts-workspace > .pw-reading-lead { margin: 4px 0 16px; }
-.pw-navigation-footer .pw-native-workspace-entry { width: 100%; justify-content: flex-start; color: var(--pw-muted); }

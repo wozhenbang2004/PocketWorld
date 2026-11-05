@@ -123,7 +123,7 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
             "plans.reviewAction" -> {
                 fields(args, "viewHandle", "operation", "stepId")
                 val plan = read(text(args, "viewHandle")); val operation = text(args, "operation", 16)
-                require(operation in setOf("start", "pause", "resume", "cancel", "retry"))
+                require(operation in setOf("start", "pause", "resume", "cancel", "retry", "refresh"))
                 val input = reference(plan)
                 if (operation == "retry") {
                     val id = text(args, "stepId"); val step = plan.getJSONArray("steps").objects().singleOrNull { it.optString("id") == id } ?: error("原步骤已不存在")
@@ -163,9 +163,12 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
                 fields(args, "reviewHandle")
                 val original = reviews.remove(text(args, "reviewHandle")) ?: error("原计划审阅已使用或关闭，请先核对原记录")
                 check(original.expires > SystemClock.elapsedRealtime()) { "原计划审阅已过期" }
-                request(original.command, JSONObject(original.input)) { value ->
+                val input = JSONObject(original.input)
+                request(original.command, input) { value ->
                     JSONObject().put("confirmed", true).put("command", original.command).put("result", public(value)).also { output ->
-                        value.optJSONObject("plan")?.let { output.put("reading", view(it)) }; output.put("snapshot", public(snapshot))
+                        (value.optJSONObject("plan") ?: if (original.command == "refresh") known(input.getString("id")) else null)
+                            ?.let { output.put("reading", view(it)) }
+                        output.put("snapshot", public(snapshot))
                     }
                 }
             }

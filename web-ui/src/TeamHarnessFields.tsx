@@ -2,14 +2,16 @@ import { useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, TextField } from './forms-library';
 import { HarnessEvidence } from './HarnessEvidence';
 import { harnessOptions, harnessProbeReady, harnessReason, harnessWorkerLabel, isConfiguredHarness, isTeamHarness } from './harness-capabilities';
+import { teamProductionHarnessReady, type TeamProductionMode } from './team-production';
 
 type Data = Record<string, any>;
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const object = (value: unknown): Data => value && typeof value === 'object' && !Array.isArray(value) ? value as Data : {};
 
 /** A member stores a computer/environment/worker binding, never a probe token or execution authority. */
-export function TeamHarnessFields({ member, profiles, run, disabled, onChange, onReady }: {
+export function TeamHarnessFields({ member, profiles, run, disabled, productionMode, onChange, onReady }: {
   member: Data; profiles: Data[]; run: (action: string, args?: Data) => Promise<any>; disabled: boolean;
+  productionMode?: TeamProductionMode;
   onChange: (changes: Data) => void; onReady: (ready: boolean) => void;
 }) {
   const profile = profiles.find(value => value.id === member.device?.profileId);
@@ -23,10 +25,11 @@ export function TeamHarnessFields({ member, profiles, run, disabled, onChange, o
   const requestKey = JSON.stringify([bindingKey, member.model || '', member.modeId || '']);
   const currentKey = useRef(requestKey); currentKey.current = requestKey;
   const currentProbe = probe?.requestKey === requestKey ? probe.value as Data : null;
+  const productionCapability = !productionMode || teamProductionHarnessReady(worker, productionMode);
   const ready = !!worker && worker.available !== false && currentProbe?.available === true
-    && (!isConfiguredHarness(member.runner) || harnessProbeReady(currentProbe, worker));
+    && (!isConfiguredHarness(member.runner) || harnessProbeReady(currentProbe, worker)) && productionCapability;
   const locked = disabled || busy;
-  useEffect(() => { onReady(ready); }, [ready, requestKey]);
+  useEffect(() => { onReady(ready); }, [ready, requestKey, productionMode]);
   useEffect(() => { alive.current = true; return () => { alive.current = false; generation.current++; }; }, []);
   useEffect(() => { setProbe(null); setOptions(null); setError(''); }, [bindingKey]);
   useEffect(() => {
@@ -92,6 +95,7 @@ export function TeamHarnessFields({ member, profiles, run, disabled, onChange, o
       {member.runner !== 'codex_app_server' && <CheckboxField isSelected={member.externalExecutionRiskAcknowledged === true} isDisabled={locked} onChange={externalExecutionRiskAcknowledged => onChange({ externalExecutionRiskAcknowledged })}>我了解此成员使用电脑端已配置的工具权限；工作目录不是隔离沙箱，内部模型费用不能硬限</CheckboxField>}
       <Button variant="secondary" disabled={locked} onClick={check}>核对这名成员的执行器</Button>
       {currentProbe ? <HarnessEvidence probe={currentProbe} id={`member-evidence-${member.id}`} /> : <p className="pw-field-hint">先核对当前电脑、执行器和模型；保存后，每次启动仍会重新检查实际能力。</p>}
+      {!productionCapability && <p role="status">此执行器没有报告支持{productionMode === 'project' ? '完整项目制作' : '所选文件制作'}，请更换执行器或源码范围。</p>}
     </>}
     {error && <p className="pw-field-error" role="alert">{error}</p>}
   </div>;

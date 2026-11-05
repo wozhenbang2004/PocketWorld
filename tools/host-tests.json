@@ -351,7 +351,8 @@
       "dev.pocketengine.features.memory.MemorySourceLifecycleTest"
     ],
     "helpers": [
-      "dev.pocketengine.ui.ProjectMemoryReviewUiNativeTest"
+      "dev.pocketengine.ui.ProjectMemoryReviewUiNativeTest",
+      "dev.pocketengine.ui.OwnerMemoryWebFixture"
     ],
     "robolectric": true,
     "description": "Typed-field/native SQLite/lexical fusion, private/project retained history and original owner Controller/Compose paths. Explicit stable person/entity/relation review keeps exact identity donor dependencies distinct from ordinary consolidation parents, with plan/time, source/revision/cursor/forget, bounded retention and stale callback gates. Native correction/conflict priority and unverified candidate explanations remain traceable. Default model recall remains current-only. No new member/group grant, live provider, screenshots, visual or device acceptance."
@@ -610,9 +611,20 @@
   },
   "aion-office-mounted": {
     "class": "dev.pocketengine.ui.AttachmentOutcomeNativeControllerTest",
-    "helpers": [],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture",
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest",
+      "dev.pocketengine.ui.OwnerWebTestFixture",
+      "dev.pocketengine.features.attachments.documents.DocumentFixtures"
+    ],
     "robolectric": true,
-    "description": "Four original mounted native owner journeys including PPTX source-pinned edit, restore, export and unknown-result fences. Robolectric semantics and structural readback, not visual layout or device acceptance."
+    "description": "Original attachment coordinator and unified Web bridge journeys preserve source-pinned PPTX edits, OCR, cold recovery, export and unknown-result fences. Real retained bytes/SQLite and structural readback; Android host execution and visual layout require their own run.",
+    "additionalClasses": [
+      "dev.pocketengine.ui.AttachmentOutcomeColdRecoveryNativeTest",
+      "dev.pocketengine.ui.AttachmentOutcomeOcrNativeControllerTest",
+      "dev.pocketengine.ui.PocketWebAttachmentsNativeTest"
+    ]
   },
   "aion-conversations": {
     "class": "dev.pocketengine.features.assistant.ConversationWorkbenchNativeJourneyTest",
@@ -636,7 +648,8 @@
       "dev.pocketengine.testutil.ReadyApplicationFixture",
       "dev.pocketengine.testutil.HttpServer",
       "dev.pocketengine.features.channels.ChannelTaskHostTest",
-      "dev.pocketengine.features.channels.ChannelSecurityTest"
+      "dev.pocketengine.features.channels.ChannelSecurityTest",
+      "dev.pocketengine.ui.OwnerWebTestFixture"
     ],
     "robolectric": true,
     "description": "Original owner conversation storage/migrations/transfer and native title/pin organization. Includes mounted Compose owner rename/cancel/pin/unpin and pinned-history refresh; no physical device or visual-design acceptance. Includes interrupted output history and original private-owner question/notification replies with SQL, controlled HTTP model, one-time answer, old notices, cancellation and canonical forgetting. Includes ordinary phone questions retained by the original physical port/service worker, exact same-run continuation, source/lease/expiry/queue race guards, and existing notification routing. The successful phone journey uses actual App admission, Service START, Runner HTTP, posted RemoteInput/PendingIntent and production receiver, with explicit model/tree fixtures; original call audit, lease and once-only input stay checked. Physical Android/device/visual acceptance remains unverified."
@@ -688,7 +701,10 @@
       "dev.pocketengine.testutil.HttpServer",
       "dev.pocketengine.features.proxy.accounts.AccountGatewayTest",
       "dev.pocketengine.features.proxy.providers.FakeChatGpt",
-      "dev.pocketengine.features.proxy.providers.ResponsesFixtures"
+      "dev.pocketengine.features.proxy.providers.ResponsesFixtures",
+      "dev.pocketengine.testutil.ReadyApplicationFixture",
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest"
     ],
     "robolectric": true,
     "description": "Original SettingsStore/CAS, opaque native owner selection, original SQL run metadata and same-task scope/budget recovery; actual original HostToolSupervisor/ExtensionHost/AgentRunner loopback Profile filtering, exact prepared tool/args/source checks and source withdrawal. Exact SkillBook instruction bodies use only the existing bounded request-only lower-priority lane, never executable selection. Frozen task-only model concurrency, original AccountGateway/FakeChatGpt cancellation/release, and active/cold typed original Profile RELAY retain their original authority. Native project selection -> immutable TeamPlan/planHash -> exact owner approval -> original Coordinator/local member Runner uses saved-slot Ref before named MEMBER purpose/default and the independently frozen startup global; actual sibling physical calls inherit the original parent resource ceiling through the existing gate. No new Runner, team or budget ledger, no remote MEMBER/target configuration application, live provider, device or visual acceptance. Includes mounted existing WorkProfilesPage semantics: exact original project and fresh owner consent before typed App admission; old callbacks after project withdrawal/background cannot start. No pixels or screen capture."
@@ -746,7 +762,7 @@
     ],
     "helpers": [],
     "robolectric": true,
-    "description": "Original catalog/seal/body-free health projection, corrupt progress recovery, archive/lease/control-boundary regressions with real temporary files. Actual existing Compose owner preparation details consume the production health DTO with synthetic seal inputs, including executable runtime, stale failure and original disabled prepare action. Synthetic tool seals are fixtures, not ARM64 probes, Android device, pixel or plugin safe-mode acceptance. Active-pointer unknown/stale storage protection and pair-aware final deletion fence preserve all recoverable generation/backing versions; both legitimate pair cleanup orders covered."
+    "description": "Original catalog/seal/body-free health projection, corrupt progress recovery, archive/lease/control-boundary regressions with real temporary files. Unified owner preparation details consume the production health DTO with synthetic seal inputs, including executable runtime, stale failure and unchanged preparation admission. Synthetic tool seals are fixtures, not ARM64 probes, Android device, pixel or plugin safe-mode acceptance. Active-pointer unknown/stale storage protection and pair-aware final deletion fence preserve all recoverable generation/backing versions; both legitimate pair cleanup orders covered."
   },
   "managed-skills": {
     "class": "dev.pocketengine.features.skills.ManagedSkillNativeJourneyTest",
@@ -857,15 +873,24 @@
       "dev.pocketengine.phone.PhoneDiagnosticReportTest",
       "dev.pocketengine.phone.AndroidPhoneDiagnosticsNativeTest",
       "dev.pocketengine.ui.PhoneDiagnosticsOwnerNativeTest",
-      "dev.pocketengine.phone.display.OwnerTaskAudioTest"
+      "dev.pocketengine.phone.display.OwnerTaskAudioTest",
+      "dev.pocketengine.ui.web.PocketWebBackgroundTest"
     ],
-    "helpers": [],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture",
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest"
+    ],
     "robolectric": true,
     "description": "Original native bridge/ledger/private owner opt-in fixtures; not physical appops, atomic CAS or PH020 keep-close acceptance."
   },
   "schedule-proposals": {
     "class": "dev.pocketengine.features.automation.AutomationScheduleProposalTest",
-    "helpers": [],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture",
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest"
+    ],
     "description": "Original ordinary schedule Book/source/owner review/Alarm and same-conversation result journeys: proven withdrawal versus retryable source failure, original SQL publication/claim receipts, and actual App idle keyset recovery; no automatic phone execution or semantic watcher acceptance. Four exact fixed-epoch interval arithmetic contracts; no polling, missed-occurrence replay or additional grant. Existing five-type reminder editor draft and mounted native save/cancel cases; no visual or device timing claim.",
     "additionalClasses": [
       "dev.pocketengine.features.OrdinaryScheduleNativeJourneyTest",
@@ -1017,7 +1042,7 @@
     "helpers": [],
     "robolectric": true,
     "python": true,
-    "description": "Pinned Pi no-tools owner/session continuation through original SQL and Companion; synthetic vendor peer, not real account or coding capability acceptance. Original queued next-turn drafts add four actual owner SQL/Companion fixture journeys, eleven pure dispatch/draft contracts and eight mounted Compose semantics methods, including visible editor/cursor changes. No live Pi steering, implicit send, model adoption, real vendor or visual acceptance."
+    "description": "Pinned Pi no-tools owner/session continuation through original SQL and Companion; synthetic vendor peer, not real account or coding capability acceptance. Original queued next-turn drafts add four actual owner SQL/Companion fixture journeys, eleven pure dispatch/draft contracts and eight mounted unified Web semantics methods, including visible editor/cursor changes. No live Pi steering, implicit send, model adoption, real vendor or visual acceptance."
   },
   "native-normal-cleanup": {
     "class": "dev.pocketengine.features.local.runtime.NativeNormalCleanupTest",
@@ -1089,10 +1114,14 @@
       "dev.pocketengine.ui.ModelDiagnosticsMountedNativeTest"
     ],
     "helpers": [
-      "dev.pocketengine.testutil.HttpServer"
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.testutil.ReadyApplicationFixture",
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest",
+      "dev.pocketengine.ui.OwnerWebTestFixture"
     ],
     "robolectric": true,
-    "description": "Exact native original-store synthetic API model diagnostics: independently observed text/basic echo-tool/optional synthetic PNG, bounded original 2/3 physical receipts, ordinary CONNECTION_TEST remains 1, no operations/device tools/history, strict native-only purpose/current binding/revision, catalog facts unchanged and temporary failures unconfirmed. Includes actual EngineApplication store mounting and original ModelConnectionsPage Compose-semantics owner start/stop journeys with real loopback HTTP; no screen or pixel capture; excludes live provider, device, vision quality or full JSON-schema acceptance."
+    "description": "Exact native original-store synthetic API model diagnostics: independently observed text/basic echo-tool/optional synthetic PNG, bounded original 2/3 physical receipts, ordinary CONNECTION_TEST remains 1, no operations/device tools/history, strict native-only purpose/current binding/revision, catalog facts unchanged and temporary failures unconfirmed. Includes actual EngineApplication store mounting and original ModelConnectionsPage unified Web-semantics owner start/stop journeys with real loopback HTTP; no screen or pixel capture; excludes live provider, device, vision quality or full JSON-schema acceptance."
   },
   "runtime-recovery-admission": {
     "class": "dev.pocketengine.features.local.runtime.RuntimePreparationRecoveryAdmissionTest",
@@ -1116,7 +1145,7 @@
       "dev.pocketengine.testutil.HttpServer"
     ],
     "robolectric": true,
-    "description": "Nineteen exact original owner/read-scope/native SQLite/Runner and mounted Compose semantics methods in six classes. Original parent pool, native worker scope and stale approval boundaries; explicit HTTP/model/project fixtures, not real provider, network, visual or device acceptance. Kotlin sources are exact registered includes, not the ordinary test matrix."
+    "description": "Nineteen exact original owner/read-scope/native SQLite/Runner and mounted unified Web semantics methods in six classes. Original parent pool, native worker scope and stale approval boundaries; explicit HTTP/model/project fixtures, not real provider, network, visual or device acceptance. Kotlin sources are exact registered includes, not the ordinary test matrix."
   },
   "model-quality-routing": {
     "class": "dev.pocketengine.store.StepModelRoutingNativeJourneyTest",
@@ -1347,8 +1376,7 @@
       "dev.pocketengine.features.local.project.ProjectCommandSpecTest",
       "dev.pocketengine.ui.TaskExecutionPresentationTest",
       "dev.pocketengine.store.TaskAuditStoreTest",
-      "dev.pocketengine.store.TaskJobProjectionTest",
-      "dev.pocketengine.ui.TaskJobMountedTest"
+      "dev.pocketengine.store.TaskJobProjectionTest"
     ],
     "helpers": [
       "dev.pocketengine.features.local.project.ProjectManagedRunnerJourneyTest",
@@ -1443,10 +1471,12 @@
     "helpers": [
       "dev.pocketengine.testutil.ReadyApplicationFixture",
       "dev.pocketengine.features.remote.HarnessCapabilityObservationTest",
-      "dev.pocketengine.testutil.HttpServer"
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest"
     ],
     "robolectric": true,
-    "description": "Original compatibility bridge and FeatureHost queue fences for old task/run/epoch, shared model selection, closed owner pages, and realtime/proxy reviewed owner CAS. Original TaskStore planning and catalogue reads, unchanged 100-tool SQL grants, one original expense, prepared-effect currentness, exact immutable proposal approvals, legacy new-task initialization, stale scope/window rejection, cold retention and queued continuation boundaries; existing Web review handles require the full original plan. Fixed Gemini private first-create persists its exact native selection before one POST, with original SQL-only recovery, one-use approval and typed cancellation through the actual native modules and controlled HTTP peer. Controlled native fixtures and pure review contracts; no actual device, platform service, vendor or network-provider acceptance."
+    "description": "Unified controller and original FeatureHost queue fences for old task/run/epoch, shared model selection, closed owner pages, and realtime/proxy reviewed owner CAS. Original TaskStore planning and catalogue reads, unchanged 100-tool SQL grants, one original expense, prepared-effect currentness, exact immutable proposal approvals, legacy new-task initialization, stale scope/window rejection, cold retention and queued continuation boundaries; existing Web review handles require the full original plan. Fixed Gemini private first-create persists its exact native selection before one POST, with original SQL-only recovery, one-use approval and typed cancellation through the actual native modules and controlled HTTP peer. Controlled native fixtures and pure review contracts; no actual device, platform service, vendor or network-provider acceptance."
   },
   "native-token-budgets": {
     "class": "dev.pocketengine.store.NativeTokenBudgetJourneyTest",
@@ -1817,7 +1847,7 @@
     ],
     "helpers": [],
     "robolectric": true,
-    "description": "Mounted original Compose draft controls and native team state for observed generic harnesses, plus original Pi/Codex/Claude delivery/draft/session projection regressions. Synthetic protocol receipts are boundaries; no device screenshots, visual acceptance or live vendor accounts."
+    "description": "Mounted original unified Web draft controls and native team state for observed generic harnesses, plus original Pi/Codex/Claude delivery/draft/session projection regressions. Synthetic protocol receipts are boundaries; no device screenshots, visual acceptance or live vendor accounts."
   },
   "private-butler-journey": {
     "class": "dev.pocketengine.PrivateButlerNativeJourneyTest",
@@ -1877,7 +1907,8 @@
     "helpers": [
       "dev.pocketengine.testutil.ReadyApplicationFixture",
       "dev.pocketengine.features.channels.ChannelTaskHostTest",
-      "dev.pocketengine.features.channels.ChannelSecurityTest"
+      "dev.pocketengine.features.channels.ChannelSecurityTest",
+      "dev.pocketengine.ui.OwnerWebTestFixture"
     ],
     "robolectric": true,
     "description": "Focused existing conversation history/menu/name-dialog integration through the real Controller and original SQLite, with an explicit ready business host; no packaged App bootstrap or physical-device claim."
@@ -1929,5 +1960,77 @@
     "robolectric": true,
     "linuxPosixFd": true,
     "description": "Actual Web adapter/native storage callback verifies listed backup bytes before publishing SHA/preview; corrupt, moved, unknown/unlisted and owner/page guards preserve originals. Linux POSIX/SQLite fixture only; no Android device/visual acceptance."
+  },
+  "unified-workspace": {
+    "class": "dev.pocketengine.ui.web.UnifiedWorkspaceHostTest",
+    "additionalClasses": [
+      "dev.pocketengine.ui.web.PocketWebTeamProductionTest",
+      "dev.pocketengine.ui.VoiceDraftComposerRenderTest",
+      "dev.pocketengine.ui.TeamChildTaskSheetUiTest",
+      "dev.pocketengine.ui.ProjectLivePreviewLifecycleTest",
+      "dev.pocketengine.ui.AdvancedPanelRouteTest",
+      "dev.pocketengine.ui.CompatibilityChatHandoffTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture",
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest",
+      "dev.pocketengine.ui.OwnerWebTestFixture"
+    ],
+    "robolectric": true,
+    "description": "Single bundled frontend restoration, original voice/composer transaction, team child identity, production fields and original local preview cancellation. Original controller/store/bridge hosts with explicit fixture providers; no browser pixels or Android-device claim. Legacy Activity components redirect into the same host; allowlisted panel navigation and saved handoff tokens retain their original controller authority."
+  },
+  "unified-task-memory": {
+    "class": "dev.pocketengine.ui.TaskMemoryMountedNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.ui.SourceLearningMountedNativeTest",
+      "dev.pocketengine.ui.memory.TaskMemoryEvidenceNativeTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture",
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest",
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.ui.memory.TaskMemoryNativeFixture"
+    ],
+    "robolectric": true,
+    "description": "Original task memory and single-source learning journals through the unified adapter/controller, including exact source revisions and retained evidence. Explicit real SQLite/loopback request fixtures; no rendered UI claim."
+  },
+  "unified-continuous-plans": {
+    "class": "dev.pocketengine.ui.ContinuousPlanMountedNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.ui.ContinuousPlanDagMountedNativeTest",
+      "dev.pocketengine.ui.ContinuousPlanWaitMountedNativeTest",
+      "dev.pocketengine.ui.ContinuousPlanRemoteWaitMountedNativeTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.ReadyApplicationFixture",
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest",
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.features.remote.B2CommandWaitFixture"
+    ],
+    "robolectric": true,
+    "description": "Existing continuous-plan host, Runner/Companion, waiting and DAG business journeys via the unified Web bridge. The original Python Companion fixture remains required; no new executor or automatic replay.",
+    "python": true
+  },
+  "unified-functional-packs": {
+    "class": "dev.pocketengine.ui.FunctionalPackControlsSelectionTest",
+    "additionalClasses": [],
+    "helpers": [
+      "dev.pocketengine.features.plugins.distribution.FunctionalPackNativeJourneyTest"
+    ],
+    "robolectric": true,
+    "description": "Original functional-pack host and OS picker selection through the unified adapter, including stale package/selection and foreground fences. No rendered UI or real external package service claim."
+  },
+  "unified-task-capabilities": {
+    "class": "dev.pocketengine.ui.TaskCapabilityNativeTest",
+    "additionalClasses": [],
+    "helpers": [
+      "dev.pocketengine.features.skills.NativeSkillExecutionHostTest",
+      "dev.pocketengine.features.plugins.TaskMcpPreparationTest"
+    ],
+    "robolectric": true,
+    "description": "Existing script/MCP execution review and original receipt/artifact boundaries through the unified adapter; no second execution host, automatic grants or rendered UI claim."
   }
 }

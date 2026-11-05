@@ -10,7 +10,7 @@ import org.json.JSONObject
 
 /** Presentation handles refer to existing owner records and learning jobs, never a second store. */
 internal class PocketWebKnowledge(private val controller: PocketWorldController) {
-    private data class Pin(val body: String, val owner: Any, val expires: Long)
+    private data class Pin(val body: String, val owner: Any, val scope: Any, val expires: Long)
     private val reads = linkedMapOf<String, Pin>()
     private val reviews = linkedMapOf<String, Pin>()
     private val sources = linkedMapOf<String, Pin>()
@@ -26,12 +26,12 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController)
     private fun fields(value: JSONObject, vararg keys: String) { require(value.keys().asSequence().all { it in keys }) { "原审核参数含不适用字段" } }
     private fun text(value: JSONObject, key: String, max: Int = 128): String { val s = value.opt(key); require(s is String && s.isNotBlank() && s.length <= max && '\u0000' !in s) { "请重新选择原记录" }; return s }
     private fun number(value: JSONObject, key: String): Long { val n = value.opt(key); require((n is Int || n is Long) && (n as Number).toLong() > 0) { "原修订无效" }; return (n as Number).toLong() }
-    private fun pin(book: MutableMap<String, Pin>, value: JSONObject): String { while (book.size >= 24) book.remove(book.keys.first()); val id = UUID.randomUUID().toString(); book[id] = Pin(value.toString(), controller.webWindowTicket(), System.currentTimeMillis() + 600_000); return id }
-    private fun selected(book: MutableMap<String, Pin>, id: String, consume: Boolean = false): JSONObject { val value = book[id] ?: error("原审核窗口已关闭，请重新读取"); check(controller.webPrivateOwnerVisible() && value.owner == controller.webWindowTicket() && value.expires >= System.currentTimeMillis()) { "原审核窗口已变化或过期" }; if (consume) book.remove(id); return JSONObject(value.body) }
+    private fun pin(book: MutableMap<String, Pin>, value: JSONObject): String { while (book.size >= 24) book.remove(book.keys.first()); val id = UUID.randomUUID().toString(); book[id] = Pin(value.toString(), controller.webWindowTicket(), controller.webMemoryScopeTicket(), System.currentTimeMillis() + 600_000); return id }
+    private fun selected(book: MutableMap<String, Pin>, id: String, consume: Boolean = false): JSONObject { val value = book[id] ?: error("原审核窗口已关闭，请重新读取"); check(controller.webPrivateOwnerVisible() && value.owner == controller.webWindowTicket() && value.scope == controller.webMemoryScopeTicket() && value.expires >= System.currentTimeMillis()) { "原审核窗口已变化或过期" }; if (consume) book.remove(id); return JSONObject(value.body) }
     private fun call(domain: String, command: String, args: JSONObject, done: (JSONObject?, String?) -> Unit, project: (JSONObject) -> JSONObject = { it }) {
-        val request = generation
+        val request = generation; val scope = controller.webMemoryScopeTicket()
         controller.requestOwnerDomainReceipt(domain, command, args) { result, error ->
-            if (request != generation) done(null, "原页面已变化，请查询原结果")
+            if (request != generation || domain == "memoryReview" && scope != controller.webMemoryScopeTicket()) done(null, "原页面已变化，请查询原结果")
             else if (result == null || error != null) done(null, error ?: "原操作没有确定回执")
             else runCatching { project(result) }.fold({ done(PocketWebState.publicValue(it) as JSONObject, null) }, { done(null, it.message ?: "原回执不可核对") })
         }
@@ -39,9 +39,9 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController)
     private fun row(value: JSONObject) = value.getJSONObject(if (value.getBoolean("candidate")) "candidateRecord" else "record")
     private fun target(value: JSONObject) = JSONObject().put("id", row(value).getString("id"))
     private fun current(value: JSONObject, done: (JSONObject?, String?) -> Unit, continuation: (JSONObject) -> Unit) {
-        val request = generation
+        val request = generation; val scope = controller.webMemoryScopeTicket()
         controller.requestOwnerDomainReceipt("memoryReview", if (value.getBoolean("candidate")) "getCandidate" else "get", target(value)) { result, error ->
-            if (request != generation) done(null, "原页面已变化，请重新读取")
+            if (request != generation || scope != controller.webMemoryScopeTicket()) done(null, "原页面已变化，请重新读取")
             else if (result == null) done(null, error) else try {
                 check(MemoryLearningReviewGuard.sameReview(row(value), result.getJSONObject(if (value.getBoolean("candidate")) "candidate" else "record"))) { "原记忆或候选已变化，请重新读取" }
                 continuation(result)

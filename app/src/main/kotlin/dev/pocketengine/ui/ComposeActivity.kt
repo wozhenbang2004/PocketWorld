@@ -7,10 +7,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import android.app.Activity
-import android.view.View
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.ViewCompositionStrategy
 import dev.pocketengine.EngineApplication
 import dev.pocketengine.media.MediaController
 import dev.pocketengine.features.attachments.OwnerAttachmentImport
@@ -30,6 +26,8 @@ class ComposeActivity : ComponentActivity() {
     private var freshBootstrapContent: Intent? = null
     private var bootstrapPresentation: org.json.JSONObject? = null
     private val pickerOwners = mutableMapOf<String, Long>()
+    private val functionalPackDocumentSlot = lazy { FunctionalPackDocumentPicker(activityResultRegistry, contentResolver, ::businessCurrent) { businessGeneration } }
+    internal val functionalPackDocuments: FunctionalPackDocumentPicker get() = functionalPackDocumentSlot.value
     private fun businessCurrent(): Boolean = businessMounted && ::controller.isInitialized &&
         !isFinishing && !isDestroyed && (application as EngineApplication).businessReady() &&
         runCatching { (application as EngineApplication).bootstrapState().optLong("generation", -2L) == businessGeneration }.getOrDefault(false)
@@ -38,9 +36,6 @@ class ComposeActivity : ComponentActivity() {
         val owner = key?.let { pickerOwners.remove(it) }
         return (businessCurrent() && (key == null || !crossedBootstrap || owner == businessGeneration)).also { if (!it) ignoredBusinessResult = true }
     }
-    private var nativeWorkspace = false
-    private var nativeWorkspaceView: ComposeView? = null
-    private var savedWebPresentation: org.json.JSONObject? = null
     internal lateinit var media: MediaController
         private set
     private var legacyImportTarget: OwnerAttachmentImport.Target? = null
@@ -144,7 +139,7 @@ class ComposeActivity : ComponentActivity() {
         bootstrapPresentation = savedInstanceState?.getString("bootstrapPresentation")?.let { runCatching { org.json.JSONObject(it) }.getOrNull() }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (!nativeWorkspace && ::webHost.isInitialized) webHost.handleBack { moveTaskToBack(true) }
+                if (::webHost.isInitialized) webHost.handleBack { moveTaskToBack(true) }
                 else if (!businessMounted) moveTaskToBack(true)
             }
         })
@@ -153,7 +148,6 @@ class ComposeActivity : ComponentActivity() {
     }
     private fun showBootstrap() {
         crossedBootstrap = true
-        nativeWorkspace = false
         webHostIsBusiness = false
         webHost = dev.pocketengine.ui.web.PocketWebHost.bootstrap(this, application as EngineApplication, bootstrapPresentation) {
             if (!isFinishing && !isDestroyed && !businessMounted) mountBusiness(null)
@@ -186,9 +180,8 @@ class ComposeActivity : ComponentActivity() {
         if (!attachmentPicker.restore(savedInstanceState)) controller.attachmentImportContextUnavailable()
         exportPath = savedInstanceState?.getString("ownerExportPath")
         if (exportPath != null) controller.exportRestored()
-        savedWebPresentation = savedInstanceState?.getString("libraryWebPresentation")?.let { runCatching { org.json.JSONObject(it) }.getOrNull() }
-        if (savedInstanceState?.getBoolean("nativeWorkspace") == true) showNativeWorkspace()
-        else showWebWorkspace()
+        val presentation = savedInstanceState?.getString("libraryWebPresentation")?.let { runCatching { org.json.JSONObject(it) }.getOrNull() }
+        showWorkspace(presentation)
         controller.attach()
         engine.publish(media.state())
         if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) resumeBusiness()
@@ -209,7 +202,7 @@ class ComposeActivity : ComponentActivity() {
                 pending?.removeExtra(dev.pocketengine.features.assistant.CompatibilityChatHandoff.EXTRA)
             }
             if (needsNewRequest) engine.error("此前文件选择、听写或继续请求没有重放。请回原入口核对后重新选择；原操作结果仍需查询。")
-            deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverAccountEntry(intent)
+            deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverAccountEntry(intent); deliverLegacyPanel(intent)
             // Original content-only import/inspection paths; no old task target, grant or continue token.
             deliverSharedFiles(freshContent); deliverSkillDocument(freshContent)
             startupSaved?.getString("channelPhoneEventId")?.let { controller.prepareChannelPhone(it) }
@@ -222,66 +215,13 @@ class ComposeActivity : ComponentActivity() {
         deliverSharedFiles(intent)
         deliverSkillDocument(intent)
         deliverAccountEntry(intent)
+        deliverLegacyPanel(intent)
         deliverCompatibilityChat(intent)
     }
-    private fun confirmWorkspaceSwitch(toNative: Boolean, stillSafe: () -> Boolean = { true }) {
-        if (!businessCurrent() || toNative == nativeWorkspace) return
-        if (!stillSafe()) {
-            android.widget.Toast.makeText(this, "当前工作正在处理，请结束当前页面后重试。", android.widget.Toast.LENGTH_SHORT).show()
-            return
-        }
-        android.app.AlertDialog.Builder(this)
-            .setTitle(if (toNative) "切换到原生工作台？" else "返回网页工作台？")
-            .setMessage("切换会关闭临时审阅，未提交或未保存的输入可能丢失；进行中的界面读取、登录或工具发现可能取消。执行中的任务不会停止或重新运行。")
-            .setNegativeButton("留在当前界面", null)
-            .setPositiveButton("切换") { _, _ ->
-                if (stillSafe()) { if (toNative) showNativeWorkspace() else showWebWorkspace() }
-                else android.widget.Toast.makeText(this, "当前工作正在处理，请结束当前页面后重试。", android.widget.Toast.LENGTH_SHORT).show()
-            }
-            .show()
-    }
-
-    /** Both entry points retain the same controller, startup and pending-operation guards. */
-    internal fun requestNativeWorkspace() {
-        if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) return
-        confirmWorkspaceSwitch(true, ::webWorkspaceCanSwitch)
-    }
-
-    private fun webWorkspaceCanSwitch(): Boolean {
-        if (!businessCurrent() || !webHostIsBusiness) return false
-        val state = controller.state
-        return ::webHost.isInitialized && webHost.canSwitchPresentation() && state.ownerPending.isEmpty() && state.moduleBusy.isEmpty() && !state.chatSubmitting &&
-            !state.phoneSubmitting && !state.fileSaving && !state.modelSaving && !state.modelTesting && !controller.modelSelectionPending() &&
-            !state.agentPreferencesSaving && !state.inspectionBusy && !state.exportPending &&
-            !controller.attachmentOutcomes.state.open && !controller.composerSaving && !controller.voicePresentationBusy()
-    }
-
-    private fun showNativeWorkspace() {
+    private fun showWorkspace(presentation: org.json.JSONObject?) {
         if (!businessCurrent()) return
-        if (nativeWorkspace && nativeWorkspaceView != null) return
-        if (::webHost.isInitialized) {
-            savedWebPresentation = org.json.JSONObject(webHost.savePresentationState())
-            webHost.close()
-        }
-        nativeWorkspace = true
-        val compose = ComposeView(this).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
-            setContent { MaterialTheme { PocketWorldApp(controller) { stillSafe -> confirmWorkspaceSwitch(false, stillSafe) } } }
-        }
-        nativeWorkspaceView = compose
-        setContentView(compose)
-    }
-
-    private fun showWebWorkspace() {
-        if (!businessCurrent()) return
-        if (!nativeWorkspace && ::webHost.isInitialized && webHostIsBusiness) return
-        nativeWorkspaceView?.disposeComposition()
-        nativeWorkspaceView = null
-        if (nativeWorkspace) {
-            controller.closeNativeWorkspacePresentation()
-        }
-        nativeWorkspace = false
-        webHost = dev.pocketengine.ui.web.PocketWebHost(this, controller, savedWebPresentation)
+        if (::webHost.isInitialized && webHostIsBusiness) return
+        webHost = dev.pocketengine.ui.web.PocketWebHost(this, controller, presentation)
         webHostIsBusiness = true
         setContentView(webHost.view)
         webHost.start()
@@ -307,11 +247,11 @@ class ComposeActivity : ComponentActivity() {
             // A retired business Controller is never rebound to another database generation.
             recreate(); return
         }
-        if (!nativeWorkspace && ::webHost.isInitialized) webHost.resume()
+        if (::webHost.isInitialized) webHost.resume()
         resumeBusiness()
     }
     override fun onPause() {
-        if (!nativeWorkspace && ::webHost.isInitialized) webHost.pause()
+        if (::webHost.isInitialized) webHost.pause()
         if (::controller.isInitialized) {
             // Revoke every owner window even when persistence is no longer available.
             listOf<() -> Unit>(
@@ -331,7 +271,7 @@ class ComposeActivity : ComponentActivity() {
         super.onNewIntent(intent); setIntent(intent)
         if (!businessCurrent()) { retainFreshBootstrapContent(intent); return }
         deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverSharedFiles(intent)
-        deliverSkillDocument(intent); deliverAccountEntry(intent); deliverCompatibilityChat(intent)
+        deliverSkillDocument(intent); deliverAccountEntry(intent); deliverLegacyPanel(intent); deliverCompatibilityChat(intent)
     }
     private fun retainFreshBootstrapContent(incoming: Intent?) {
         val content = incoming?.action in setOf(Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE) ||
@@ -350,6 +290,16 @@ class ComposeActivity : ComponentActivity() {
         if (intent?.getBooleanExtra("openChatGptAccounts", false) != true) return
         intent.removeExtra("openChatGptAccounts")
         controller.openConnection("accounts")
+    }
+    private fun deliverLegacyPanel(intent: Intent?) {
+        if (intent?.hasExtra("openPanel") != true) return
+        val panel = runCatching { intent.getStringExtra("openPanel") }.getOrNull()
+        intent.removeExtra("openPanel")
+        val section = runCatching { dev.pocketengine.MainActivity.sectionForPanel(panel) }.getOrElse {
+            (application as EngineApplication).error("不支持的设置页面")
+            return
+        }
+        controller.openConnection(section)
     }
     private fun deliverPhoneTask(intent: Intent?) {
         val app = application as EngineApplication
@@ -395,12 +345,17 @@ class ComposeActivity : ComponentActivity() {
             return
         }
         if (intent?.hasExtra("automationRuleId") == true || intent?.data?.host == "automation") {
-            intent?.removeExtra("automationGoal")
+            intent?.removeExtra("automationGoal"); intent?.removeExtra("automationRuleId")
+            if (intent?.data?.host == "automation") intent.data = null
+            controller.openConnection("automation")
             return
         }
         // Old/foreign PendingIntent body is not source authority. Only the original
         // occurrence route above may retrieve a current, still-authorized goal.
-        intent?.removeExtra("automationGoal")
+        if (intent?.hasExtra("automationGoal") == true) {
+            intent.removeExtra("automationGoal")
+            controller.openConnection("automation")
+        }
     }
     internal fun pickMcpConfig(requestId: String) {
         check(businessCurrent())
@@ -448,9 +403,7 @@ class ComposeActivity : ComponentActivity() {
         }
         controller.persistOwnerComposer()
         outState.putString("channelPhoneEventId", controller.channelPhoneEventId)
-        outState.putBoolean("nativeWorkspace", nativeWorkspace)
-        val presentation = if (!nativeWorkspace && ::webHost.isInitialized) webHost.savePresentationState() else savedWebPresentation?.toString()
-        presentation?.let { outState.putString("libraryWebPresentation", it) }
+        if (::webHost.isInitialized) outState.putString("libraryWebPresentation", webHost.savePresentationState())
         outState.putString("ownerImportTask", legacyImportTarget?.taskId); outState.putString("ownerImportProject", legacyImportTarget?.projectId); outState.putString("ownerExportPath", exportPath)
         attachmentPicker.save(outState)
         controller.attachmentOutcomes.save(outState)
@@ -460,5 +413,5 @@ class ComposeActivity : ComponentActivity() {
         controller.projectGitImports.save(outState)
         super.onSaveInstanceState(outState)
     }
-    override fun onDestroy() { nativeWorkspaceView?.disposeComposition(); nativeWorkspaceView = null; if (::webHost.isInitialized) webHost.close(); attachmentPicker.close(); outcomeExportPicker.close();workingFilePickers.values.toList().forEach { it.unregister() };workingFilePickers.clear();if (::controller.isInitialized) runCatching { controller.detach() }; businessMounted=false; if (::media.isInitialized) media.close(); super.onDestroy() }
+    override fun onDestroy() { if (::webHost.isInitialized) webHost.close(); attachmentPicker.close(); outcomeExportPicker.close(); if (functionalPackDocumentSlot.isInitialized()) functionalPackDocuments.close(); workingFilePickers.values.toList().forEach { it.unregister() };workingFilePickers.clear();if (::controller.isInitialized) runCatching { controller.detach() }; businessMounted=false; if (::media.isInitialized) media.close(); super.onDestroy() }
 }

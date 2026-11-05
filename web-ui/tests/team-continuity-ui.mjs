@@ -234,6 +234,8 @@ try {
     };
     await page.goto(origin); await page.waitForFunction(() => document.documentElement.dataset.pocketUi === 'ready');
     await page.getByTestId('all_work').click();
+    const tools = page.locator('.pw-work-drawer').getByRole('button', { name: '更多工具', exact: true });
+    if (await tools.getAttribute('aria-expanded') !== 'true') await tools.click();
     await page.locator('.pw-work-drawer').getByRole('link', { name: '团队', exact: true }).click();
     await page.locator('.pw-work-drawer').waitFor({ state: 'hidden' }); await settle(page);
     await expect(workspace).toHaveAttribute('data-team-view', 'list:runs');

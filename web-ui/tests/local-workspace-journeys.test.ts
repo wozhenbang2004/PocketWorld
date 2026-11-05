@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
+import { localReceiptPollable } from '../src/project-execution.ts';
 
 // Production JSX/handlers with lifecycle and control doubles. This is not DOM,
 // xterm, Android, real input-delivery or visual verification.
@@ -24,7 +25,7 @@ function fixture(options: Data = {}) {
   const useRef = (initial: any) => { const i = index++; return slots[i] ??= { current: initial }; };
   const useEffect = (effect: () => any, deps: any[]) => { const i = index++, prior = slots[i]; if (!prior || deps.some((value, j) => !Object.is(value, prior.deps[j]))) { const slot = slots[i] = { deps, cleanup: prior?.cleanup }; effects.push(() => { slot.cleanup?.(); slot.cleanup = effect(); }); } };
   const React = { Fragment: 'Fragment', createElement: (type: any, props: any, ...children: any[]) => { if (props?.ref && props.className?.includes('pw-local-workspace')) props.ref.current = root; return { type, props: props || {}, children: children.flat(Infinity).filter(child => child !== null && child !== undefined && child !== false) }; } };
-  const dependencies: Data = { React, useState, useRef, useEffect, useLayoutEffect: useEffect, document: { visibilityState: 'visible' }, window: { setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId; }, clearTimeout: (id: number) => timers.delete(id) } };
+  const dependencies: Data = { React, useState, useRef, useEffect, useLayoutEffect: useEffect, localReceiptPollable, document: { visibilityState: 'visible' }, window: { setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId; }, clearTimeout: (id: number) => timers.delete(id) } };
   for (const key of ['ArrowLeft', 'ChevronRight', 'Folder', 'Plus', 'RefreshCw', 'Terminal', 'Accordion', 'AccordionItem', 'Button', 'CheckboxField', 'SelectField', 'SettingsDialog', 'TextAreaField', 'TextField', 'TerminalSurface']) dependencies[key] = key;
   const Component = new Function(...Object.keys(dependencies), code + '\nreturn LocalWorkspace;')(...Object.values(dependencies));
   const props = { state: { projects: [{ id: 'project-a', name: '原项目 A' }], tasks: [task], ...options.state }, data: { checkouts: [{ id: 'checkout-a', projectId: 'project-a', name: '私人副本' }], ...options.data }, supported: () => true, registerTransientBack: (handler: any) => { back = handler; }, run: async (action: string, args: Data = {}) => { calls.push({ action, args }); const response = responses[action]; return typeof response === 'function' ? response(args) : response || {}; } };
@@ -92,4 +93,10 @@ test('pending preparation cannot change selection and late completion cannot upd
   const f = fixture({ responses: { 'local.prepareCheckout': () => new Promise(done => { resolve = done; }) } }); f.field('原项目', 'project-a'); f.click('准备新的私人副本');
   assert.equal(f.find(node => node.type === 'SelectField' && node.props.label === '原项目').props.isDisabled, true); assert.equal(f.button('准备新的私人副本').props.disabled, true);
   f.unmount(); resolve({ id: 'late-checkout' }); await f.flush(); assert.equal(f.value('私人工作副本'), ''); assert.equal(f.calls.filter(call => call.action === 'local.prepareCheckout').length, 1);
+});
+test('cold original receipt inventory stays read-only and unknown native status cannot restart polling', async () => {
+  const f = fixture({ data: { legacyReceiptRecovery: { scope: 'legacy_readonly_command_receipts', readableOriginalRecords: 2, coldUnconfirmedRecords: 1, unreadableOriginalRecordsRetained: 1, originalInventoryUnconfirmed: true, blockingScope: 'all_checkouts', message: '原清单尚未完整核对' }, jobs: [{ id: 'original-cold', status: 'unknown', originalPersistedStatus: 'running', phase: 'original-cold-observation', coldProcessUnconfirmed: true, exitCode: null }] }, responses: { 'local.terminal.open': { ...opened, output: { ...opened.output, nativeStatus: 'unknown' } } } });
+  assert.match(f.visibleText, /原清单尚未完整核对/); assert.match(f.visibleText, /可读原记录 2 条 · 冷恢复待核 1 条/); assert.equal(f.calls.length, 0);
+  f.expand('runtime'); assert.match(f.visibleText, /original-cold/); assert.match(f.visibleText, /原持久化阶段running/); assert.match(f.visibleText, /original-cold-observation/); assert.match(f.visibleText, /当前状态不自动轮询/);
+  await view(f); assert.equal(f.timers.size, 0); assert.equal(f.button('发送这一行').props.disabled, true); assert.equal(f.calls.some(call => /confirm|prepare|cancel/.test(call.action)), false);
 });

@@ -4,33 +4,22 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.os.Looper
-import android.view.View
-import android.view.ViewGroup
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Column
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.semantics.SemanticsActions
-import androidx.compose.ui.semantics.SemanticsNode
-import androidx.compose.ui.semantics.SemanticsOwner
-import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.semantics.getOrNull
+import android.widget.FrameLayout
 import dev.pocketengine.EngineApplication
 import dev.pocketengine.core.RunControl
-import dev.pocketengine.features.FeatureContext
-import dev.pocketengine.features.FeatureHost
 import dev.pocketengine.features.local.LocalModule
 import dev.pocketengine.features.local.preview.ProjectLiveWebView
 import dev.pocketengine.features.local.project.ProjectSources
 import dev.pocketengine.features.local.runtime.ProjectDevSession
-import dev.pocketengine.features.local.runtime.ProjectRuntime
 import dev.pocketengine.features.local.runtime.RuntimeExecutionRef
-import dev.pocketengine.store.TaskStore
-import java.lang.reflect.Proxy
+import dev.pocketengine.media.MediaController
+import dev.pocketengine.testutil.ReadyApplicationFixture
+import dev.pocketengine.ui.web.PocketWebProjectLivePreview
+import dev.pocketengine.ui.web.PocketWebWindowTicket
+import java.security.Provider
+import java.security.Security
 import java.time.Duration
+import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
@@ -38,6 +27,8 @@ import java.util.concurrent.atomic.AtomicInteger
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -45,21 +36,22 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.*
-import org.robolectric.shadows.ShadowApplication
 
-/** Mounted Section and production live-preview Controller scheduling. The probe/provider are explicit fixtures:
- * no service authorization, HTTP/WS proof, background WebView or JavaScript execution is claimed. */
+/** Production Web presentation + original Controller probe scheduling. The probe/provider and task
+ * metadata are explicit fixtures: no service grant, HTTP/WS, sandbox or page execution is claimed. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], manifest = Config.NONE, application = EngineApplication::class,
-    shadows = [ProjectLivePreviewLifecycleTest.NoStartup::class, ProjectLivePreviewLifecycleTest.Probe::class, ProjectLivePreviewLifecycleTest.PageFactory::class])
+    shadows = [ReadyApplicationFixture.NoUnrelatedStartup::class, ProjectLivePreviewLifecycleTest.Probe::class, ProjectLivePreviewLifecycleTest.PageFactory::class])
 @ConscryptMode(ConscryptMode.Mode.OFF)
 @GraphicsMode(GraphicsMode.Mode.LEGACY)
-@SQLiteMode(SQLiteMode.Mode.LEGACY)
+@SQLiteMode(SQLiteMode.Mode.NATIVE)
 @LooperMode(LooperMode.Mode.PAUSED)
 class ProjectLivePreviewLifecycleTest {
-    @Implements(EngineApplication::class)
-    class NoStartup : ShadowApplication() { @Implementation fun onCreate() {} }
-
+    private val keys = object : Provider("PocketLivePreview-${UUID.randomUUID()}", 1.0, "Explicit test-only AndroidKeyStore") {
+        init { put("KeyStore.AndroidKeyStore", dev.pocketengine.features.channels.ChannelTaskHostTest.FixtureKeyStore::class.java.name) }
+    }
+    @Before fun installKeys() { assertTrue(Security.insertProviderAt(keys, 1) > 0) }
+    @After fun removeKeys() { Security.removeProvider(keys.name) }
     private class Pending(val result: ProjectDevSession.Observed) {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
@@ -111,97 +103,87 @@ class ProjectLivePreviewLifecycleTest {
     }
     private class Screen : AutoCloseable {
         val app = RuntimeEnvironment.getApplication() as EngineApplication
-        val owner = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         val controller: PocketWorldController
+        val native: PocketWebProjectLivePreview
         val task: JSONObject
-        var mounted by mutableStateOf(true)
+        private val media: MediaController
         private val io: ExecutorService
+        private var window = 0L
+        private var page: JSONObject? = null
         init {
-            probes.set(0); pageAttempts.set(0)
-            app.tasks = TaskStore(app)
-            dev.pocketengine.testutil.ReadyApplicationFixture.complete(app)
-            app.features = FeatureHost { }
-            val runtime = Proxy.newProxyInstance(ProjectRuntime::class.java.classLoader, arrayOf(ProjectRuntime::class.java)) { _, method, _ ->
-                if (method.name == "describe") JSONObject().put("runtimeId", "fixture-runtime") else null
-            } as ProjectRuntime
-            app.features.register(LocalModule(FeatureContext(app, null, null) { }, null, runtime))
+            probes.set(0); pageAttempts.set(0); ReadyApplicationFixture.initializeHost(app)
+            val activity = Robolectric.buildActivity(ComposeActivity::class.java).get()
+            media = MediaController(activity, app::publish); set(activity, "media", media)
             task = app.tasks.createCapabilityTask("Controlled lifecycle fixture", "fixture-conversation")
                 .put("runId", "fixture-run").put("coordinatorEpoch", 1).put("status", "running")
-                .put("developmentContext", JSONObject().put("projectId", "fixture-project").put("checkoutId", CHECKOUT))
-            // Fixture document only. No run, operation, grant, process or approved service is created.
-            val values = ContentValues().apply { put("document", task.toString()) }
-            database().update("tasks", values, "task_id=?", arrayOf(task.getString("id")))
+                .put("developmentContext", JSONObject().put("projectId", "fixture-project").put("checkoutId", CHECKOUT).put("runtime", "managed_process_v1"))
+            // Exact same synthetic source task as the former mounted test. It grants no execution.
+            database().update("tasks", ContentValues().apply { put("document", task.toString()) }, "task_id=?", arrayOf(task.getString("id")))
             val receipt = JSONObject().put("projectExecution", JSONObject().put("coordinatorEpoch", 1).put("checkoutId", CHECKOUT))
                 .put("executionReceipt", JSONObject().put("status", "running").put("devWatch", JSONObject().put("nativeSessionCreated", true)))
             task.put("operations", JSONArray().put(JSONObject().put("operationId", "fixture-service").put("runId", "fixture-run").put("state", "project_running").put("receipt", receipt)))
-            controller = PocketWorldController(ComposeActivity(), app)
-            set(controller, "projectWorkbench\$delegate", lazyOf(ProjectWorkbenchSession(app)))
+            controller = PocketWorldController(activity, app); set(controller, "projectWorkbench\$delegate", lazyOf(ProjectWorkbenchSession(app))); set(controller, "voiceForeground", true)
             io = field(controller, "io").get(controller) as ExecutorService
-            controller.projectLivePreviewForeground(true)
-            pending = Pending(observed(task, "first"))
-            owner.get().setContent { MaterialTheme { Column { if (mounted) ProjectLivePreviewSection(UiTask(task.getString("id"), "fixture", "running", "", "capabilities", 0, task), CHECKOUT, controller) } } }
-            frame()
+            native = PocketWebProjectLivePreview(controller, FrameLayout(activity),
+                { PocketWebWindowTicket(window, controller.webWindowTicket()) }, { ticket -> ticket.accepts(window, controller.webWindowTicket()) }, {},
+                { id, done -> assertEquals(task.getString("id"), id); done(UiTask(id, "fixture", "running", "", "capabilities", 0, JSONObject(task.toString())), null) })
+            native.foreground(true); pending = Pending(observed(task, "first")); open()
         }
         private fun database() = field(app.tasks, "db").get(app.tasks) as SQLiteDatabase
-        private fun compose(view: View): View? {
-            if (view.javaClass.name == "androidx.compose.ui.platform.AndroidComposeView") return view
-            if (view is ViewGroup) repeat(view.childCount) { compose(view.getChildAt(it))?.let { found -> return found } }
-            return null
+        fun command(action: String, input: JSONObject): JSONObject {
+            var value: JSONObject? = null; var failure: String? = null; var calls = 0
+            native.dispatch(action, input) { result, error -> value = result; failure = error; calls++ }
+            assertEquals(1, calls); assertNull(failure); return checkNotNull(value)
         }
-        private fun nodes(): List<SemanticsNode> {
-            val result = mutableListOf<SemanticsNode>()
-            fun visit(node: SemanticsNode) { result += node; node.children.forEach(::visit) }
-            compose(owner.get().window.decorView)?.let { visit((it.javaClass.getMethod("getSemanticsOwner").invoke(it) as SemanticsOwner).rootSemanticsNode) }
-            return result
-        }
-        fun frame() { repeat(6) {
-            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(32))
-            owner.get().window.decorView.apply { measure(View.MeasureSpec.makeMeasureSpec(1200, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(2400, View.MeasureSpec.EXACTLY)); layout(0, 0, measuredWidth, measuredHeight) }
-        } }
+        fun open() { val before = probes.get(); page = command("projectLive.open", JSONObject().put("taskId", task.getString("id"))); assertEquals(1, page!!.getJSONArray("services").length()); assertFalse(page!!.getBoolean("starting")); assertEquals(before, probes.get()) }
+        fun frame() { repeat(3) { shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(32)) } }
         fun click() {
-            val button = nodes().first { it.config.getOrNull(SemanticsProperties.TestTag) == "project_open_live_preview" }
-            assertNull(button.config.getOrNull(SemanticsProperties.Disabled)); assertTrue(button.config[SemanticsActions.OnClick].action!!.invoke())
-            assertTrue(pending.entered.await(5, TimeUnit.SECONDS)); assertTrue(controller.projectLivePreviewChecking)
+            val selected = checkNotNull(page); val result = command("projectLive.show", JSONObject().put("pageHandle", selected.getString("pageHandle")).put("serviceHandle", selected.getJSONArray("services").getJSONObject(0).getString("serviceHandle")))
+            assertTrue(result.getBoolean("starting")); assertTrue(pending.entered.await(5, TimeUnit.SECONDS)); assertTrue(controller.projectLivePreviewChecking)
         }
         fun complete() { pending.release.countDown(); io.submit {}.get(5, TimeUnit.SECONDS) }
-        fun freshClick() { pending = Pending(observed(task, "fresh")); click(); complete(); frame(); assertSame(pending.result, controller.projectLivePreview); assertEquals(1, pageAttempts.get()) }
-        fun assertClosed() { assertNull(controller.projectLivePreview); assertNull(controller.projectLivePreviewTaskId); assertFalse(controller.projectLivePreviewChecking) }
+        fun stop() { native.foreground(false); window++; set(controller, "voiceForeground", false) }
+        fun resume() { set(controller, "voiceForeground", true); native.foreground(true) }
+        fun freshClick() { open(); pending = Pending(observed(task, "fresh")); click(); complete(); frame(); assertSame(pending.result, controller.projectLivePreview); assertEquals(1, pageAttempts.get()) }
+        fun assertClosed() { assertNull(controller.projectLivePreview); assertNull(controller.projectLivePreviewTaskId); assertFalse(controller.projectLivePreviewChecking); assertNull(native.snapshot()) }
         override fun close() {
-            pending.release.countDown(); controller.closeProjectLivePreview(); io.submit {}.get(5, TimeUnit.SECONDS)
-            owner.pause().stop().destroy(); controller.detach(); shadowOf(Looper.getMainLooper()).idle()
-            app.features.close(); database().close()
+            pending.release.countDown(); native.close(); io.submit {}.get(5, TimeUnit.SECONDS); controller.detach(); media.close(); shadowOf(Looper.getMainLooper()).idle(); ReadyApplicationFixture.closeHost(app)
         }
     }
     @Test fun delayedProbeAfterStopAndResumeRequiresAnotherClick() {
         Screen().use { ui ->
-            ui.click(); ui.owner.pause().stop()
-            assertTrue(pending.observation.isCancelled); ui.assertClosed()
+            ui.click(); ui.stop(); assertTrue(pending.observation.isCancelled); ui.assertClosed()
             ui.complete(); shadowOf(Looper.getMainLooper()).idle(); ui.assertClosed()
-            ui.owner.start().resume(); ui.frame(); ui.assertClosed(); assertEquals(0, pageAttempts.get()); assertEquals(1, probes.get())
+            ui.resume(); ui.frame(); ui.assertClosed(); assertEquals(0, pageAttempts.get()); assertEquals(1, probes.get())
             ui.freshClick(); assertEquals(2, probes.get())
         }
     }
     @Test fun foregroundLossRejectsAlreadyQueuedCompletionEvenAfterResume() {
         Screen().use { ui ->
-            ui.click(); ui.complete() // Original success is now queued on the main handler.
-            ui.controller.projectLivePreviewForeground(false); ui.controller.projectLivePreviewForeground(true)
-            ui.frame(); ui.assertClosed(); assertEquals(0, pageAttempts.get()); assertTrue(pending.observation.isCancelled)
+            ui.click(); ui.complete() // Original success is now queued on the native main handler.
+            ui.stop(); ui.resume(); ui.frame(); ui.assertClosed(); assertEquals(0, pageAttempts.get()); assertTrue(pending.observation.isCancelled)
             ui.freshClick()
         }
     }
     @Test fun publishedPreviewClosesOnStopAndNeverReopensOnResume() {
         Screen().use { ui ->
             ui.click(); ui.complete(); ui.frame(); assertSame(pending.result, ui.controller.projectLivePreview); assertEquals(1, pageAttempts.get())
-            ui.owner.pause().stop(); ui.assertClosed(); ui.owner.start().resume(); ui.frame(); ui.assertClosed(); assertEquals(1, pageAttempts.get()); assertEquals(1, probes.get())
+            ui.stop(); ui.assertClosed(); ui.resume(); ui.frame(); ui.assertClosed(); assertEquals(1, pageAttempts.get()); assertEquals(1, probes.get())
         }
     }
     @Test fun disposalCancelsPendingProbeAndBackgroundOpenDoesNotQueueAnother() {
         Screen().use { ui ->
-            ui.click(); ui.mounted = false; ui.frame(); assertTrue(pending.observation.isCancelled); ui.assertClosed()
+            ui.click(); ui.native.clear(); ui.frame(); assertTrue(pending.observation.isCancelled); ui.assertClosed()
             ui.complete(); ui.frame(); ui.assertClosed(); assertEquals(0, pageAttempts.get())
-            ui.controller.projectLivePreviewForeground(false)
-            ui.controller.openProjectLivePreview(ui.task.getString("id"), CHECKOUT, "fixture-service")
+            ui.stop(); ui.controller.openProjectLivePreview(ui.task.getString("id"), CHECKOUT, "fixture-service")
             ui.assertClosed(); assertEquals(1, probes.get())
+        }
+    }
+    @Test fun closedNativePageCannotBeReopenedWithItsRetainedReactServiceHandle() {
+        Screen().use { ui ->
+            val original = ui.native.snapshot()!!; ui.native.clear()
+            assertThrows(IllegalStateException::class.java) { ui.command("projectLive.show", JSONObject().put("pageHandle", original.getString("pageHandle")).put("serviceHandle", original.getJSONArray("services").getJSONObject(0).getString("serviceHandle"))) }
+            assertEquals(0, probes.get()); ui.assertClosed()
         }
     }
 }

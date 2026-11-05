@@ -88,8 +88,11 @@ internal object PocketWebState {
                 it.raw.optString("executionRole") == "owner_work" && it.raw.optString("actorId") == "owner" && it.raw.optString("spaceId") == "private"
             }.forEach { out.put(task(it)) } })
             .put("taskListNextCursor", controller.taskListNextCursor)
-            .put("conversations", JSONArray().also { out -> state.conversations.forEach { out.put(JSONObject()
-                .put("id", it.id).put("title", it.title).put("updatedAt", it.updatedAt)) } })
+            .put("conversations", JSONArray().also { out -> state.conversations.forEach { row ->
+                val original = controller.conversationOrganizationItem(row)
+                out.put(JSONObject().put("id", row.id).put("title", row.title).put("updatedAt", row.updatedAt)
+                    .put("pinOrder", original.pinOrder).put("organizationRevision", original.organizationRevision))
+            } })
             .put("conversationId", state.conversationId ?: JSONObject.NULL)
             .put("messages", JSONArray().also { out -> state.messages.forEach { out.put(message(it)) } })
             .put("chatBusy", state.chatBusy).put("chatSubmitting", state.chatSubmitting)

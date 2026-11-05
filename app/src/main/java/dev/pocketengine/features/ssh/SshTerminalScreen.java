@@ -20,6 +20,15 @@ public final class SshTerminalScreen {
     }
     public synchronized JSONObject view(int cols,int rows)throws Exception {
         if(cols<20||cols>300||rows<5||rows>120)throw new IllegalArgumentException("终端屏幕尺寸无效");
+        return frame(cols,rows);
+    }
+    /** The same byte renderer, within the original local project PTY dimensions.
+     * SSH admission remains governed by view() and its original bounds. */
+    public synchronized JSONObject projectView(int cols,int rows)throws Exception {
+        if(cols<4||cols>400||rows<2||rows>200)throw new IllegalArgumentException("原项目终端屏幕尺寸无效");
+        return frame(cols,rows);
+    }
+    private JSONObject frame(int cols,int rows)throws Exception {
         JSONArray encoded=new JSONArray();for(byte[] packet:packets)encoded.put(Base64.getEncoder().encodeToString(packet));
         return new JSONObject().put("revision",revision).put("generation",generation).put("cols",cols).put("rows",rows).put("packets",encoded).put("retainedBytes",bytes).put("gap",gap)
                 .put("screenState",gap?"reconstructed_from_retained_prefix_after_gap":"parsed_actual_pty_bytes");

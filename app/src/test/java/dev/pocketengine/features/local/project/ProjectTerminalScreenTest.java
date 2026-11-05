@@ -24,6 +24,10 @@ public final class ProjectTerminalScreenTest {
     }
     @Test public void legitimateManySmallNativeChunksAreAcceptedWithinTheRealPageByteLimit()throws Exception {
         ProjectTerminalScreen screen=new ProjectTerminalScreen("original",80,24);JSONObject many=page(256);JSONArray chunks=many.getJSONArray("chunks");for(int i=1;i<=256;i++)chunks.put(chunk(i,new byte[]{(byte)i}));JSONObject result=screen.append(many);assertEquals(256,retained(result).length);assertFalse(result.getJSONObject("screen").getBoolean("gap"));
-        assertThrows(IllegalArgumentException.class,()->screen.resize(301,24));assertThrows(IllegalArgumentException.class,()->screen.resize(80,4));assertEquals(256,screen.cursor());
+        assertThrows(IllegalArgumentException.class,()->screen.resize(401,24));assertThrows(IllegalArgumentException.class,()->screen.resize(80,1));assertEquals(256,screen.cursor());
+    }
+    @Test public void originalProjectDimensionsDoNotExpandSshOrManualEntryBounds()throws Exception {
+        ProjectTerminalScreen screen=new ProjectTerminalScreen("original",4,2);assertEquals(4,screen.append(page(0)).getJSONObject("screen").getInt("cols"));screen.resize(400,200);JSONObject frame=screen.append(page(0)).getJSONObject("screen");assertEquals(400,frame.getInt("cols"));assertEquals(200,frame.getInt("rows"));
+        assertThrows(IllegalArgumentException.class,()->ProjectTerminalScreen.requireDimensions(400,200));assertThrows(IllegalArgumentException.class,()->new dev.pocketengine.features.ssh.SshTerminalScreen().view(400,200));
     }
 }
