@@ -74,6 +74,8 @@ public final class ContextCompactor {
             if(active==null&&!forced)try{return budget.request(visible,tools,selected);}
             catch(RunContextBudget.Blocked blocked){if(!available()||!"budget_exceeded".equals(blocked.status))throw blocked;}
             ContextBudgetPolicy.Resolved resolved=ContextBudgetPolicy.resolve(budgets,selected,ContextBudgetPolicy.REQUEST_BYTES);
+            ModelConfig summarySelection=selected.forPurpose("SUMMARY");
+            long summaryDeadline=System.currentTimeMillis()+summarySelection.requestTimeoutSeconds*1000L;
             CompactionPlan plan;
             try{plan=active==null?CompactionPlan.choose(raw,visible,sourceMap,tools,selected,resolved.limits):CompactionPlan.chooseIncremental(raw,visible,sourceMap,tools,selected,resolved.limits,active,summary,projectionId,original);}
             catch(CompactionPlan.Unavailable unavailable){
@@ -81,7 +83,8 @@ public final class ContextCompactor {
                 // Cold raw can be larger than one SUMMARY request. Each intermediate prefix is
                 // published under this CURRENT native run and advances original coverage. It is
                 // not permission to issue MAIN, and uses a real separately charged SUMMARY below.
-                var summaryBudget=ContextBudgetPolicy.resolve(budgets,selected.forPurpose("SUMMARY"),ContextBudgetPolicy.REQUEST_BYTES);
+                ModelConfig preparedSummary=ModelGateway.prepareAccount(summarySelection,original,summaryDeadline);
+                var summaryBudget=ContextBudgetPolicy.resolve(budgets,preparedSummary,ContextBudgetPolicy.REQUEST_BYTES);
                 plan=CompactionPlan.chooseReconstructionStep(raw,visible,sourceMap,tools,selected,summaryBudget.limits,active,summary,projectionId,original);
             }
             if(active!=null&&(plan.endExclusive<=active.plan.endExclusive||!plan.coveredIndexes().containsAll(active.plan.coveredIndexes())||plan.coveredIndexes().size()<=active.plan.coveredIndexes().size()))throw new CompactionPlan.Unavailable("summary_reconstruction_did_not_advance");
@@ -99,8 +102,8 @@ public final class ContextCompactor {
             });
             if(planning!=null)target=InferenceCapture.withAdmission(target,()->requirePlanning(planning,turn));
             if(sourceProjection!=null)target=InferenceCapture.withAdmission(target,()->sourceProjection.derivedPrepared(raw,original));
-            JSONArray input=plan.summaryMessages();ModelConfig summarySelection=selected.forPurpose("SUMMARY");original.check();
-            JSONObject answer=ModelGateway.completeWithAdmission(summarySelection,input,null,original,target,candidate->budget.request(input,null,candidate));
+            JSONArray input=plan.summaryMessages();original.check();
+            JSONObject answer=ModelGateway.completeWithAdmission(summarySelection,input,null,original,target,candidate->budget.request(input,null,candidate),summaryDeadline);
             requirePlanning(planning,turn);
             ModelConfig actualSummary=ModelGateway.actualConfigForReceipt(summarySelection,terminal[0]);
             frozen.check(original);SummaryDraft actual=SummaryDraft.completed(frozen,answer,terminal[0],actualSummary);

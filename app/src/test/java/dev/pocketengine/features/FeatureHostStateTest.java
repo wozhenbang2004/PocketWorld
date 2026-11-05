@@ -30,6 +30,31 @@ public final class FeatureHostStateTest {
             String persisted=tasks.get(id,false).toString();assertFalse(persisted.contains(privateBytes));assertFalse(persisted.contains("secret-password"));assertFalse(persisted.contains("dataBase64"));assertTrue(persisted.contains("inputSubmitted"));
         }
     }
+    @Test public void taskEventFailureAfterReceiptSaveCannotReplaceAKnownCapabilityResultWithUnknown()throws Exception {
+        TaskStore tasks=new TaskStore(RuntimeEnvironment.getApplication());String id="ssh-known-before-event";
+        tasks.beginExternal("ssh","openPty",id,new JSONObject().put("_resourceId","original-account"));
+        tasks.updateExternal(id,new JSONObject().put("status","running"));
+        AtomicInteger calls=new AtomicInteger(),taskEvents=new AtomicInteger();CountDownLatch reply=new CountDownLatch(1);
+        try(FeatureHost host=new FeatureHost(event->{
+            if(event.optString("type").equals("task")&&taskEvents.getAndIncrement()==0)throw new IllegalStateException("Original task event delivery failed after receipt save");
+            if(event.optString("type").equals("feature_result"))reply.countDown();
+        },tasks,()->false)){
+            host.register(new EngineModule(){
+                public String id(){return "ssh";}
+                public JSONObject snapshot(){return new JSONObject();}
+                public JSONObject handle(String command,JSONObject input)throws Exception{
+                    calls.incrementAndGet();return new JSONObject().put("ok",true).put("accepted",true).put("status","completed").put("receiptMarker","native-known");
+                }
+            });
+            host.request(new JSONObject().put("feature","ssh").put("command","writePty").put("payload",new JSONObject()
+                    .put("hostTaskId",id).put("runId",id).put("terminalId",id).put("dataBase64","eA==")));
+            assertTrue(reply.await(2,TimeUnit.SECONDS));assertEquals(1,calls.get());assertTrue(taskEvents.get()>0);
+            JSONObject task=tasks.get(id,false);assertEquals(1,task.getJSONArray("operations").length());
+            JSONObject operation=task.getJSONArray("operations").getJSONObject(0);
+            assertEquals("receipt",operation.getString("state"));assertEquals("native-known",operation.getJSONObject("receipt").getString("receiptMarker"));
+            assertFalse(tasks.hasUnresolved(id));assertEquals("running",task.getString("status"));
+        }
+    }
     @Test public void nestedTeamResultCommitsBeforeQueuedAdmissionAndPublishesTaskEvents()throws Exception {
         TaskStore tasks=new TaskStore(RuntimeEnvironment.getApplication());CopyOnWriteArrayList<JSONObject> events=new CopyOnWriteArrayList<>();CountDownLatch reply=new CountDownLatch(1);FeatureHost[] owner=new FeatureHost[1];
         try(FeatureHost host=new FeatureHost(event->{events.add(event);if(event.optString("type").equals("feature_result"))reply.countDown();},tasks,()->false)){

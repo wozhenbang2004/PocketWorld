@@ -354,7 +354,7 @@ public final class PluginsModule implements EngineModule {
                 result=output==null?mcp.call(tool,args,invocation.control):mcp.call(tool,args,invocation.control,output::result);
             }else result=HttpToolClient.invoke(tool.getString("endpoint"),token,name,args,operationId,invocation.control);
             synchronized(this){invocation.control.check();
-                JSONObject receipt=new JSONObject().put("operationId",operationId).put("status","response_received").put("verified",false).put("toolResult",result);
+                JSONObject receipt=PluginToolReceipts.received(operationId,result,mcp!=null);
                 if(mcp==null)receipt.put("outputProjection",McpData.outputProjection());
                 return withOutputCapture(receipt,output);}
         }catch(McpResultCapture.AdmissionRefused refused){

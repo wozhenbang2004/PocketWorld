@@ -51,6 +51,8 @@ public final class RecoveryProjection {
                 if("resolved".equals(original.optString("state"))&&"owner_reconciliation".equals(receipt.optString("source"))&&Set.of("occurred","not_occurred").contains(receipt.optString("outcome")))returned.put("ownerReconciliation",receipt.getString("outcome")).put("independentlyVerified",false);
                 if(returned.length()>0)fact.put("receiptFacts",returned);
             }
+            dev.pocketengine.core.ToolOutcome outcome=dev.pocketengine.core.ToolOutcome.operationOutcome(original);
+            if(outcome!=null)fact.put(dev.pocketengine.core.ToolOutcome.KEY,outcome.view());
             rows.put(fact);counts(metadata,source.length(),scanned,skipped,redacted);
             if(messageBytes(metadata)>MAX_MESSAGE_BYTES){rows.remove(rows.length()-1);break;}
         }

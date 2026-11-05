@@ -31,8 +31,13 @@ def executable(value, label):
     return str(Path(found).resolve())
 
 
-def select(registry, groups, classes):
+def select(registry, groups, classes, suites=()):
     chosen = list(dict.fromkeys(groups))
+    for suite in suites:
+        found = [group for group, entry in registry.items() if suite in entry.get('suites', [])]
+        if not found:
+            raise PrerequisiteError('Unknown host-test suite: ' + suite + '; use --list')
+        chosen.extend(found)
     for name in classes:
         found = [group for group, entry in registry.items() if name in [entry['class']] + entry.get('additionalClasses', [])]
         if not found:
@@ -40,7 +45,7 @@ def select(registry, groups, classes):
         chosen.extend(found)
     chosen = list(dict.fromkeys(chosen))
     if not chosen:
-        raise PrerequisiteError('Select at least one --group or exact --test; use --list (no implicit all-tests run)')
+        raise PrerequisiteError('Select at least one --suite, --group or exact --test; use --list (no implicit all-tests run)')
     unknown = [group for group in chosen if group not in registry]
     if unknown:
         raise PrerequisiteError('Unknown host-test group: ' + ', '.join(unknown))
@@ -163,27 +168,69 @@ def junit_results(directory, selected):
 def run(args):
     registry = json.loads(REGISTRY.read_text())
     if args.list:
+        suites = sorted({suite for entry in registry.values() for suite in entry.get('suites', [])})
+        print('Suites: ' + ', '.join(suites))
         for group, entry in registry.items():
-            print(group + '\t' + entry['class'] + '\n  ' + entry['description'])
+            membership = ' [suite: ' + ', '.join(entry['suites']) + ']' if entry.get('suites') else ''
+            print(group + membership + '\t' + entry['class'] + '\n  ' + entry['description'])
         return 0
-    groups = select(registry, args.group, args.test)
+    groups = select(registry, args.group, args.test, args.suite)
     selected = list(dict.fromkeys(name for group in groups for name in [registry[group]['class']] + registry[group].get('additionalClasses', [])))
-    print('Selected: ' + ', '.join(selected), flush=True)
+    print('Selected groups: ' + ', '.join(groups) + '; exact test classes: ' + str(len(selected)), flush=True)
     print('Scope: host integration only; Android packaging/device/WAN tests are not performed.', flush=True)
-    java_home, sdk, gradle, props = preflight(args, registry, groups)
-    if args.check:
-        print('Prerequisites available (check only; no tests executed).')
-        return 0
     report_root = Path(args.output).resolve() if args.output else ROOT / 'app/build/reports/host-tests'
     report_root.mkdir(parents=True, exist_ok=True)
     # Unique run directories prevent stale XML or an interrupted previous run becoming green.
     report = Path(tempfile.mkdtemp(prefix='run-', dir=report_root))
+    result = {
+        'schemaVersion': 1, 'status': 'not_run', 'stage': 'preflight',
+        'reason': 'preflight_incomplete', 'checkOnly': args.check,
+        'suites': list(dict.fromkeys(args.suite)), 'groups': groups, 'classes': selected,
+        'gradleAttempted': False, 'executionVerified': False, 'executed': {},
+        'deviceTest': False, 'exitCode': None,
+    }
+    print('Reports: ' + str(report), flush=True)
+    write_result(report, result)
+    try:
+        code = run_selected(args, registry, groups, selected, report, result)
+    except (PrerequisiteError, OSError, subprocess.CalledProcessError, ET.ParseError) as error:
+        result.update(status='failed' if result['gradleAttempted'] else 'not_run',
+                      reason=result['stage'] + '_failed', error=str(error))
+        print('Host test error: ' + str(error), file=sys.stderr)
+        code = 2
+    except KeyboardInterrupt:
+        result.update(status='failed' if result['gradleAttempted'] else 'not_run',
+                      reason='interrupted', error='Host test invocation was interrupted')
+        code = 130
+    result['exitCode'] = code
+    write_result(report, result)
+    print('Result: ' + result['status'] + '; stage: ' + result['stage']
+          + '; execution verified: ' + str(result['executionVerified']).lower()
+          + '; report: ' + str(report / 'result.json'), flush=True)
+    return code
+
+
+def write_result(report, result):
+    # A reader sees either the previous complete state or the next complete state.
+    temporary = report / 'result.json.tmp'
+    temporary.write_text(json.dumps(result, indent=2) + '\n')
+    temporary.replace(report / 'result.json')
+
+
+def run_selected(args, registry, groups, selected, report, result):
+    java_home, sdk, gradle, props = preflight(args, registry, groups)
+    if args.check:
+        result.update(reason='check_only', dependencyResolution='not_checked')
+        print('Preflight complete; result: not_run. No tests executed; Gradle dependencies were not resolved.')
+        return 0
     props.update(pocketworldHostTests=','.join(groups), pocketworldHostReport=str(report))
     env = os.environ.copy()
     env.update(JAVA_HOME=str(java_home), ANDROID_HOME=str(sdk), ANDROID_SDK_ROOT=str(sdk))
     env.setdefault('ANDROID_USER_HOME', str(report / 'android-user-home'))
     Path(env['ANDROID_USER_HOME']).mkdir(parents=True, exist_ok=True)
     if any(registry[group].get('native') for group in groups):
+        result.update(stage='native_build', reason='native_build_incomplete')
+        write_result(report, result)
         native = report / 'native'
         native.mkdir()
         source = ROOT / 'app/src/main/java/dev/pocketengine/features/local/runtime/native'
@@ -224,16 +271,21 @@ def run(args):
     command += ['-P' + key + '=' + value for key, value in sorted(props.items())]
     # These generate APK payloads, not Java/Kotlin or Android resources. No task replacement.
     command += ['-x', ':app:buildAndroidRuntime', '-x', ':app:buildDisplayHelper', ':app:testDebugUnitTest']
-    (report / 'invocation.json').write_text(json.dumps({'groups': groups, 'classes': selected, 'command': command, 'deviceTest': False}, indent=2) + '\n')
-    print('Reports: ' + str(report), flush=True)
+    (report / 'invocation.json').write_text(json.dumps({'suites': result['suites'], 'groups': groups, 'classes': selected, 'command': command, 'deviceTest': False}, indent=2) + '\n')
+    result.update(status='unverified', stage='gradle', reason='awaiting_junit_verification',
+                  gradleAttempted=True, executed=None)
+    write_result(report, result)
     code = subprocess.run(command, cwd=ROOT, env=env).returncode
     if code:
-        print('Host Gradle run failed (exit ' + str(code) + '). Offline runs require the existing locked dependencies in GRADLE_USER_HOME; no dependency or test was skipped.', file=sys.stderr)
-        return code
+        result.update(status='failed', reason='gradle_failed', processExitCode=code)
+        print('Host Gradle run failed (exit ' + str(code) + '). No test pass recorded. Offline runs require the existing locked dependencies in GRADLE_USER_HOME.', file=sys.stderr)
+        return code if code > 0 else 128 - code
+    result['stage'] = 'junit_verification'
     xml = junit_directory(report)
     counts = junit_results(xml, selected)
-    (report / 'result.json').write_text(json.dumps({'status': 'passed', 'executed': counts, 'skipped': [], 'junitDirectory': str(xml), 'deviceTest': False}, indent=2) + '\n')
-    print('Executed: ' + json.dumps(counts, sort_keys=True) + '; skipped: []; result: ' + str(report / 'result.json'))
+    result.update(status='passed', stage='complete', reason='verified_junit', executionVerified=True,
+                  executed=counts, skipped=[], junitDirectory=str(xml))
+    print('Executed: ' + json.dumps(counts, sort_keys=True) + '; skipped: []')
     return 0
 
 
@@ -246,10 +298,12 @@ def main(argv=None):
         'Robolectric offline groups need the pinned SDK 35 jar. '
         'See --list for exact registered classes and scope. Results: a unique run directory '
         'with invocation/selection, exact locked classpath, JUnit XML and result.json; '
-        'zero/failed/skipped tests fail. --check does not resolve Gradle dependencies or run tests. '
+        'zero/failed/skipped tests fail. --suite main-chain selects the fixed registered login/model/message/tool '
+        'regressions regardless of branch name. --check reports not_run and does not resolve Gradle dependencies or run tests. '
         'GitHub: existing build-apk.yml manual target=host-tests, host_group=<one listed group>; '
         'no APK, signing secrets, Release, device test or full matrix.'))
     parser.add_argument('--list', action='store_true')
+    parser.add_argument('--suite', action='append', default=[], help='fixed suite from the registry, e.g. main-chain; repeat to combine suites')
     parser.add_argument('--group', action='append', default=[], help='registered group; repeat to select multiple groups')
     parser.add_argument('--test', action='append', default=[], help='exact registered fully qualified class; no wildcards')
     parser.add_argument('--check', action='store_true', help='check prerequisites only, not a test pass')
@@ -263,7 +317,7 @@ def main(argv=None):
     parser.add_argument('--cxx', default=os.environ.get('CXX', 'c++'))
     parser.add_argument('--output', help='report parent directory; default app/build/reports/host-tests')
     args = parser.parse_args(argv)
-    if args.list and (args.group or args.test or args.check):
+    if args.list and (args.suite or args.group or args.test or args.check):
         parser.error('--list cannot be combined with test selection or --check')
     try:
         return run(args)

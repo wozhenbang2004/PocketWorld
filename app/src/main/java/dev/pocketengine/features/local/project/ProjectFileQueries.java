@@ -44,11 +44,12 @@ public final class ProjectFileQueries {
     private static BufferedReader reader(Path path)throws Exception {
         return new BufferedReader(new InputStreamReader(Channels.newInputStream(open(path)),StandardCharsets.UTF_8.newDecoder()),4096);
     }
-    /** Only a native, deterministic target absence/type rejection is recoverable by the model.
+    /** Only a native, deterministic target or source-checked range rejection is recoverable.
      * Permission, cancellation, source changes and other IO failures are never converted. */
     private static final class ReadUnavailable extends IllegalArgumentException {
-        final String code;
-        ReadUnavailable(String code,String message){super(message);this.code=code;}
+        final String code;final FileInfo source;
+        ReadUnavailable(String code,String message){this(code,message,null);}
+        ReadUnavailable(String code,String message,FileInfo source){super(message);this.code=code;this.source=source;}
     }
     private static Path target(File root,String relative)throws Exception {
         Path path=NativeCommandExecutor.within(root,VersionedWorkspace.path(relative)).toPath();
@@ -80,6 +81,13 @@ public final class ProjectFileQueries {
         try{JSONObject result=readFile(root,checkout,input,current);current.check();return result.put("ok",true);}
         catch(ReadUnavailable unavailable){
             current.check();
+            // A decoding/range rejection is only definite while the same native bytes
+            // still exist. A changed or vanished source must not become a retry hint.
+            if(unavailable.source!=null){
+                try{unchanged(root,unavailable.source,current);}
+                catch(ReadUnavailable changed){throw new SecurityException("文件在范围核对期间变化，请重新核对原来源",changed);}
+                current.check();
+            }
             return new JSONObject().put("ok",false).put("accepted",false).put("status","failed").put("code",unavailable.code).put("message",unavailable.getMessage())
                     .put("checkoutId",checkout).put("path",VersionedWorkspace.path(input.getString("path"))).put("contentOmitted",true).put("complete",false).put("untrusted",true).put("authorityAdded",false);
         }
@@ -96,21 +104,21 @@ public final class ProjectFileQueries {
         String mode=input.optString("rangeMode","chars");if(!java.util.Set.of("chars","lines","bytes").contains(mode))throw new IllegalArgumentException("读取范围模式无效");
         int limit=Math.min(PAGE_CHARS,input.optInt("maxChars",PAGE_CHARS));if(limit<1)throw new IllegalArgumentException("读取长度无效");long start=input.optLong("offset",0),end;StringBuilder text=new StringBuilder();
         if(mode.equals("bytes")){
-            if(start<0||start>info.bytes)throw new IllegalArgumentException("字节范围越界");int requestedBytes=input.optInt("maxBytes",limit);if(requestedBytes<1)throw new IllegalArgumentException("字节长度至少为1");int count=(int)Math.min(Math.min(limit,requestedBytes),info.bytes-start);if(count<0)throw new IllegalArgumentException("字节长度无效");
+            if(start<0)throw new IllegalArgumentException("字节范围越界");if(start>info.bytes)throw new ReadUnavailable("project_read_invalid_range","字节范围超过实际文件长度，请使用当前文件范围。",info);int requestedBytes=input.optInt("maxBytes",limit);if(requestedBytes<1)throw new IllegalArgumentException("字节长度至少为1");int count=(int)Math.min(Math.min(limit,requestedBytes),info.bytes-start);if(count<0)throw new IllegalArgumentException("字节长度无效");
             ByteBuffer bytes=ByteBuffer.allocate(count);try(var channel=open(target(root,relative))){channel.position(start);while(bytes.hasRemaining()&&channel.read(bytes)>=0)current.check();}bytes.flip();
-            try{text.append(StandardCharsets.UTF_8.newDecoder().decode(bytes));}catch(CharacterCodingException split){throw new IllegalArgumentException("字节范围切断UTF-8字符，请使用字符/行范围，或选择完整字符边界",split);}end=start+count;
+            try{text.append(StandardCharsets.UTF_8.newDecoder().decode(bytes));}catch(CharacterCodingException split){throw new ReadUnavailable("project_read_split_unicode","字节范围切断UTF-8字符，请使用字符/行范围，或选择完整字符边界。",info);}end=start+count;
             result.put("byteOffset",start).put("nextByteOffset",end<info.bytes?end:JSONObject.NULL).put("complete",end==info.bytes);
         }else{
-            if(start<0||start>info.chars)throw new IllegalArgumentException("字符范围越界");int requestedLine=input.optInt("startLine",1),maxLines=input.optInt("maxLines",200);if(requestedLine<1||maxLines<1||maxLines>400)throw new IllegalArgumentException("行范围无效");
+            if(start<0)throw new IllegalArgumentException("字符范围越界");if(start>info.chars)throw new ReadUnavailable("project_read_invalid_range","字符范围超过实际文件长度，请使用当前文件范围。",info);int requestedLine=input.optInt("startLine",1),maxLines=input.optInt("maxLines",200);if(requestedLine<1||maxLines<1||maxLines>400)throw new IllegalArgumentException("行范围无效");
             long position=0,line=1;int seenLines=0,previous=-1;boolean collecting=!mode.equals("lines");
             try(BufferedReader inputReader=reader(target(root,relative))){int value;while((value=inputReader.read())!=-1){if((position&4095)==0)current.check();
                 if(mode.equals("lines")&&!collecting&&line>=requestedLine){start=position;collecting=true;}
-                if(collecting&&position>=start){if(position==start&&Character.isLowSurrogate((char)value)&&previous>=0&&Character.isHighSurrogate((char)previous))throw new IllegalArgumentException("字符范围切断Unicode字符，请退回一个字符位置");
+                if(collecting&&position>=start){if(position==start&&Character.isLowSurrogate((char)value)&&previous>=0&&Character.isHighSurrogate((char)previous))throw new ReadUnavailable("project_read_split_unicode","字符范围切断Unicode字符，请退回一个字符位置。",info);
                     if(text.length()>=limit||mode.equals("lines")&&seenLines>=maxLines)break;text.append((char)value);if(value=='\n')seenLines++;}
                 previous=value;position++;if(value=='\n')line++;
             }}
-            if(mode.equals("lines")&&!collecting){if(requestedLine>info.lines+1)throw new IllegalArgumentException("起始行超过文件范围");start=info.chars;}
-            if(text.length()>0&&Character.isHighSurrogate(text.charAt(text.length()-1))){text.setLength(text.length()-1);if(text.length()==0)throw new IllegalArgumentException("此页长度容不下完整Unicode字符，请将maxChars至少设为2；未返回零进度cursor");}
+            if(mode.equals("lines")&&!collecting){if(requestedLine>info.lines+1)throw new ReadUnavailable("project_read_invalid_range","起始行超过实际文件范围，请使用当前文件行数。",info);start=info.chars;}
+            if(text.length()>0&&Character.isHighSurrogate(text.charAt(text.length()-1))){text.setLength(text.length()-1);if(text.length()==0)throw new ReadUnavailable("project_read_page_too_small","此页长度容不下完整Unicode字符，请将maxChars至少设为2；未返回零进度cursor。",info);}
             end=start+text.length();result.put("offset",start).put("nextOffset",end<info.chars?end:JSONObject.NULL).put("complete",end==info.chars).put("rangeMode",mode);if(mode.equals("lines"))result.put("startLine",requestedLine).put("returnedLineBreaks",seenLines);
         }
         unchanged(root,info,current);return result.put("content",text.toString()).put("rangeMode",mode).put("returnedChars",text.length());
@@ -120,7 +128,7 @@ public final class ProjectFileQueries {
     private static JSONObject hexWindow(File root,FileInfo info,JSONObject input,JSONObject result,Current current)throws Exception {
         for(String text:new String[]{"maxChars","startLine","maxLines"})if(input.has(text))throw new IllegalArgumentException("hex仅接受字节offset/maxBytes，不能混合字符或行范围");
         long start=input.has("offset")?hexInteger(input.get("offset"),"offset"):0,requested=input.has("maxBytes")?hexInteger(input.get("maxBytes"),"maxBytes"):MAX_HEX_WINDOW_BYTES;
-        if(start<0||start>info.bytes||requested<1)throw new IllegalArgumentException("hex字节范围或长度无效");int count=(int)Math.min(Math.min((long)MAX_HEX_WINDOW_BYTES,requested),info.bytes-start);ByteBuffer buffer=ByteBuffer.allocate(count);
+        if(start<0||requested<1)throw new IllegalArgumentException("hex字节范围或长度无效");if(start>info.bytes)throw new ReadUnavailable("project_read_invalid_range","hex字节范围超过实际文件长度，请使用当前文件范围。",info);int count=(int)Math.min(Math.min((long)MAX_HEX_WINDOW_BYTES,requested),info.bytes-start);ByteBuffer buffer=ByteBuffer.allocate(count);
         try(var channel=open(target(root,info.path))){channel.position(start);while(buffer.hasRemaining()){current.check();if(channel.read(buffer)<0)throw new java.io.EOFException("原文件在完整字节窗口前结束，未返回半份内容");}}
         StringBuilder ascii=new StringBuilder(count);byte[] bytes=buffer.array();for(byte value:bytes){int unsigned=value&255;ascii.append(unsigned>=32&&unsigned<=126?(char)unsigned:'.');}unchanged(root,info,current);long end=start+count;
         return result.put("rangeMode","hex").put("byteOffset",start).put("returnedBytes",count).put("maxWindowBytes",MAX_HEX_WINDOW_BYTES).put("byteLimitApplied",requested>MAX_HEX_WINDOW_BYTES).put("nextByteOffset",end<info.bytes?end:JSONObject.NULL).put("complete",end==info.bytes)

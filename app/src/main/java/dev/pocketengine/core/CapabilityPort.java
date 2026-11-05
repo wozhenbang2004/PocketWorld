@@ -47,6 +47,20 @@ public interface CapabilityPort extends AutoCloseable {
     final class Unavailable extends SecurityException {
         public Unavailable(){super("本轮工具已撤销或安装身份改变，请重新取得当前工具清单");}
     }
+    /** A real result already exists, but the same native host rejected continued
+     * execution. Runner may settle this original receipt, never expose its body to
+     * a new model request or use it to restore authority after withdrawal. */
+    final class ReceiptAfterStop extends Exception {
+        private final RunControl original;
+        private final String actual;
+        private final Exception failure;
+        public ReceiptAfterStop(RunControl original,JSONObject actual,Exception failure){
+            super("Native receipt retained after continuation stopped",java.util.Objects.requireNonNull(failure));
+            this.original=java.util.Objects.requireNonNull(original);this.actual=java.util.Objects.requireNonNull(actual).toString();this.failure=failure;
+        }
+        public JSONObject receipt(RunControl control)throws Exception{if(control!=original)throw new SecurityException("Receipt belongs to another native run");return new JSONObject(actual);}
+        public Exception failure(RunControl control){if(control!=original)throw new SecurityException("Receipt belongs to another native run");return failure;}
+    }
     JSONArray tools() throws Exception;
     boolean supports(String name);
     boolean sideEffecting(String name);
@@ -54,5 +68,9 @@ public interface CapabilityPort extends AutoCloseable {
      * must recheck any dynamic read restriction. Effect declarations never establish read authority. */
     default ExecutionPlanning.Access planningAccess(String name,JSONObject arguments)throws Exception{return ExecutionPlanning.Access.DENY;}
     default void validate(String name,JSONObject arguments)throws Exception { }
+    /** Return a native receipt classified by ToolOutcome. Keep dispatch/effect and
+     * terminal facts separate; never use arbitrary provider data as host metadata.
+     * Expected correctable refusals are receipts. Cancellation, lost source/authority
+     * and storage failures retain their exception paths. */
     JSONObject execute(String name,JSONObject arguments,RunControl control)throws Exception;
 }

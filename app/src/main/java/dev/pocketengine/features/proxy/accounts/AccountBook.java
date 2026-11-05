@@ -18,7 +18,7 @@ final class AccountBook {
     private JSONObject data;
     /** Immutable read-only projection of this authority's last successful commit, never credentials. */
     private volatile java.util.Map<String,InferenceIdentity> inferenceIdentities=java.util.Map.of();
-    private record InferenceIdentity(long version,boolean eligible,long cooldownUntil,
+    private record InferenceIdentity(long version,long authorizationEpoch,boolean authorized,boolean eligible,long cooldownUntil,
             java.util.Map<String,dev.pocketengine.runtime.models.AccountCatalogFacts> facts,boolean catalogObserved){}
     /** One immutable commit projection; no Gateway/Book monitor, vault access, or I/O. */
     dev.pocketengine.runtime.models.AccountCatalogFacts modelFacts(String id,long version,String model)throws GatewayFailure {
@@ -31,6 +31,9 @@ final class AccountBook {
         return facts;
     }
     boolean inferenceIdentityCurrent(String id,long version){InferenceIdentity value=inferenceIdentities.get(id);return value!=null&&value.version==version&&value.eligible&&value.cooldownUntil<=System.currentTimeMillis();}
+    /** Native authorization continuity only. This never authorizes a new POST or exposes credentials. */
+    boolean authorizationCurrent(String id,long version){InferenceIdentity value=inferenceIdentities.get(id);return value!=null&&value.authorized&&version>=value.authorizationEpoch&&version<=value.version;}
+    boolean authorizationEpochCurrent(String id,long epoch){InferenceIdentity value=inferenceIdentities.get(id);return value!=null&&value.authorized&&value.authorizationEpoch==epoch;}
     private boolean cleanupRequired;
     AccountBook(File file,CredentialVault vault,String owner)throws GatewayFailure {this(file,vault,owner,AccountBook::atomicWrite);}
     AccountBook(File file,CredentialVault vault,String owner,Writer writer)throws GatewayFailure {
@@ -45,10 +48,13 @@ final class AccountBook {
                 java.util.List<String> ids=new java.util.ArrayList<>();rows.keys().forEachRemaining(ids::add);
                 for(String id:ids){
                     JSONObject row=rows.getJSONObject(id);validate(id,row);
+                    // Older stores prove only their current version. Never infer an earlier grant lineage.
+                    if(!row.has("authorizationEpoch"))row.put("authorizationEpoch",row.getLong("version"));
                     if("authorizing".equals(row.getString("status"))&&unregistered(row)){rows.remove(id);cleanup(id,"");continue;}
                     if("refreshing".equals(row.getString("status"))||"authorizing".equals(row.getString("status"))){
                         boolean resumable="refreshing".equals(row.getString("status"))&&row.optJSONObject("pendingRefresh")!=null;
-                        row.put("status",resumable?"connected":"reauthorization_required").put("error",resumable?"REFRESH_VERIFICATION_PENDING":"PROCESS_INTERRUPTED").put("version",row.getLong("version")+1);}
+                        row.put("status",resumable?"connected":"reauthorization_required").put("error",resumable?"REFRESH_VERIFICATION_PENDING":"PROCESS_INTERRUPTED");
+                        if(!resumable){long nextVersion=row.getLong("version")+1;row.put("version",nextVersion).put("authorizationEpoch",nextVersion);}}
                     cleanup(id,row.optString("slot"),pendingSlot(row));
                 }
                 JSONObject login=next.optJSONObject("login");
@@ -90,14 +96,14 @@ final class AccountBook {
         try{
             JSONObject next=copy(data);JSONObject rows=next.getJSONObject("accounts");if(rows.length()>=16)throw new GatewayFailure("ACCOUNT_LIMIT");
             String id=UUID.randomUUID().toString();JSONObject row=new JSONObject().put("id",id).put("label",label.trim()).put("enabled",true)
-                .put("status","signed_out").put("version",0L).put("clientId","").put("issuer","").put("subject","").put("slot","");
+                .put("status","signed_out").put("version",0L).put("authorizationEpoch",0L).put("clientId","").put("issuer","").put("subject","").put("slot","");
             rows.put(id,row);commit(next);return copy(row);
         }catch(GatewayFailure error){throw error;}catch(Exception error){throw new GatewayFailure("ACCOUNT_STORE_UNAVAILABLE");}
     }
     synchronized JSONObject update(String id,long expected,JSONObject changes)throws GatewayFailure {
         try{
             JSONObject row=row(id);fence(row,expected);
-            for(java.util.Iterator<String> keys=changes.keys();keys.hasNext();){String key=keys.next();row.put(key,changes.get(key));}row.put("version",expected+1);
+            for(java.util.Iterator<String> keys=changes.keys();keys.hasNext();){String key=keys.next();row.put(key,changes.get(key));}row.put("version",expected+1).put("authorizationEpoch",expected+1);
             JSONObject next=copy(data);next.getJSONObject("accounts").put(id,row);commit(next);return copy(row);
         }catch(GatewayFailure error){throw error;}catch(Exception error){throw new GatewayFailure("ACCOUNT_STORE_UNAVAILABLE");}
     }
@@ -124,7 +130,7 @@ final class AccountBook {
             JSONObject next=copy(data),rows=next.getJSONObject("accounts"),row=rows.optJSONObject(id);
             if(row!=null&&row.optLong("version")==expected){
                 if(unregistered(row)){rows.remove(id);if(id.equals(next.optString("selected")))next.put("selected","");}
-                else row.put("version",expected+1).put("status","reauthorization_required").put("error",error);
+                else row.put("version",expected+1).put("authorizationEpoch",expected+1).put("status","reauthorization_required").put("error",error);
             }
             next.put("login",copy(login));commit(next);
         }catch(GatewayFailure failure){throw failure;}catch(Exception failure){throw new GatewayFailure("ACCOUNT_STORE_UNAVAILABLE");}
@@ -156,9 +162,15 @@ final class AccountBook {
         finally{if(!saved)remove(candidate);}
     }
     synchronized JSONObject publish(String id,long expected,Credentials tokens,String issuer,String subject,String email)throws GatewayFailure {
-        return publish(id,expected,tokens,issuer,subject,email,null);
+        return publish(id,expected,tokens,issuer,subject,email,null,false);
     }
     synchronized JSONObject publish(String id,long expected,Credentials tokens,String issuer,String subject,String email,JSONObject finalLogin)throws GatewayFailure {
+        return publish(id,expected,tokens,issuer,subject,email,finalLogin,false);
+    }
+    synchronized JSONObject publishRenewal(String id,long expected,Credentials tokens,String issuer,String subject,String email)throws GatewayFailure {
+        return publish(id,expected,tokens,issuer,subject,email,null,true);
+    }
+    private JSONObject publish(String id,long expected,Credentials tokens,String issuer,String subject,String email,JSONObject finalLogin,boolean renewal)throws GatewayFailure {
         JSONObject row=row(id);fence(row,expected);
         if(!row.optBoolean("enabled"))throw new GatewayFailure("ACCOUNT_DISABLED");
         if(!row.optString("subject").isEmpty()&&(!row.optString("subject").equals(subject)||!row.optString("issuer").equals(issuer)))throw new GatewayFailure("ACCOUNT_IDENTITY_MISMATCH");
@@ -170,6 +182,8 @@ final class AccountBook {
             JSONObject next=copy(data);JSONObject changed=copy(row).put("version",expected+1).put("slot",candidate)
                 .put("issuer",issuer).put("subject",subject).put("email",email).put("expiresAt",tokens.expiresAt)
                 .put("planUsageEnabled",tokens.permitsInference()).put("status","connected").put("cooldownUntil",0).put("error","").put("remoteRevocationConfirmed",false).put("usageLimited",false).put("diagnostics",new JSONObject());
+            boolean sameGrant=renewal&&!row.optString("subject").isEmpty()&&row.optBoolean("planUsageEnabled")==tokens.permitsInference();
+            changed.put("authorizationEpoch",sameGrant?row.optLong("authorizationEpoch",expected):expected+1);
             changed.remove("pendingRefresh");
             next.getJSONObject("accounts").put(id,changed);
             if(next.optString("selected").isEmpty())next.put("selected",id);
@@ -195,9 +209,10 @@ final class AccountBook {
     private static java.util.Map<String,InferenceIdentity> inferenceIdentities(JSONObject source)throws Exception {
         java.util.Map<String,InferenceIdentity> result=new java.util.HashMap<>();JSONObject rows=source.optJSONObject("accounts");
         if(rows!=null)for(java.util.Iterator<String> ids=rows.keys();ids.hasNext();){String id=ids.next();JSONObject row=rows.optJSONObject(id);if(row==null)continue;
-            boolean eligible=row.optBoolean("enabled")&&row.optBoolean("planUsageEnabled")&&!row.optBoolean("usageLimited")&&row.optJSONObject("pendingRefresh")==null
-                    &&row.optString("status").matches("connected|cooldown")
+            boolean authorized=row.optBoolean("enabled")&&row.optBoolean("planUsageEnabled")
+                    &&row.optString("status").matches("connected|cooldown|refreshing")
                     &&!row.optString("clientId").isEmpty()&&!row.optString("issuer").isEmpty()&&!row.optString("subject").isEmpty()&&!row.optString("slot").isEmpty();
+            boolean eligible=authorized&&!row.optBoolean("usageLimited")&&row.optJSONObject("pendingRefresh")==null&&row.optString("status").matches("connected|cooldown");
             JSONObject evidence=modelEvidence(row,row.optLong("version",-2));
             java.util.Map<String,dev.pocketengine.runtime.models.AccountCatalogFacts> facts=new java.util.HashMap<>();
             if(evidence!=null)for(java.util.Iterator<String> models=evidence.keys();models.hasNext();){String model=models.next();JSONObject entry=evidence.getJSONObject(model);
@@ -205,7 +220,7 @@ final class AccountBook {
                 if(!entry.optBoolean("unavailable")){dev.pocketengine.runtime.models.AccountCatalogFacts fact=dev.pocketengine.runtime.models.AccountCatalogFacts.fromJson(entry.getJSONObject("catalogFacts"));
                     if(!model.equals(fact.modelId))throw new IllegalArgumentException("invalid_account_catalog_facts");facts.put(model,fact);}
             }
-            result.put(id,new InferenceIdentity(row.optLong("version",-1),eligible,row.optLong("cooldownUntil"),java.util.Map.copyOf(facts),evidence!=null));
+            result.put(id,new InferenceIdentity(row.optLong("version",-1),row.optLong("authorizationEpoch",row.optLong("version",-1)),authorized,eligible,row.optLong("cooldownUntil"),java.util.Map.copyOf(facts),evidence!=null));
         }return java.util.Map.copyOf(result);
     }
     /** Per-model evidence for one credential generation; also reads the original single-model format. */
@@ -221,6 +236,7 @@ final class AccountBook {
     }
     private static void validate(String id,JSONObject row)throws Exception {
         if(!id.matches("[0-9a-f-]{36}")||!id.equals(row.getString("id"))||row.getLong("version")<0||!(row.get("enabled") instanceof Boolean)||row.getString("label").length()>80)throw new GatewayFailure("ACCOUNT_STORE_INVALID");
+        if(row.has("authorizationEpoch")){Object epoch=row.get("authorizationEpoch");if(!(epoch instanceof Integer||epoch instanceof Long)||((Number)epoch).longValue()<0||((Number)epoch).longValue()>row.getLong("version"))throw new GatewayFailure("ACCOUNT_STORE_INVALID");}
         String slot=row.getString("slot");if(!slot.isEmpty()&&!slot.equals(slot(id,0))&&!slot.equals(slot(id,1)))throw new GatewayFailure("ACCOUNT_STORE_INVALID");
         JSONObject pending=row.optJSONObject("pendingRefresh");if(pending!=null){String candidate=pending.getString("slot");
             if(slot.isEmpty()||candidate.equals(slot)||!candidate.equals(slot(id,0))&&!candidate.equals(slot(id,1))||pending.getLong("receivedAt")<1||!(pending.get("identityRequired") instanceof Boolean))throw new GatewayFailure("ACCOUNT_STORE_INVALID");}

@@ -38,6 +38,7 @@ public final class ReferenceRefusalRunnerTest {
    assertEquals(3,requests.size());assertEquals(List.of("fixed"),dispatched);
    JSONObject correctedInput=receipt(requests.get(1),"read_1");
    assertEquals("invalid_arguments",correctedInput.getString("code"));assertFalse(correctedInput.getBoolean("accepted"));assertFalse(correctedInput.getBoolean("nativeDispatched"));
+   assertEquals("correctable_failure",correctedInput.getJSONObject(ToolOutcome.KEY).getString("kind"));
    assertFalse(correctedInput.toString().contains("fixture: missing required query"));
    assertTrue(receipt(requests.get(2),"read_2").getBoolean("ok"));
   }finally{server.stop(0);}

@@ -36,6 +36,7 @@ public final class ContextCompactorTest {
     }
     private static final class Journal implements RunJournal,CompactionJournal {
         final ModelConfig config;final RunControl control=new RunControl();final List<InferenceReceipt> receipts=new ArrayList<>();final AtomicInteger inputs=new AtomicInteger(),barrier=new AtomicInteger();
+        dev.pocketengine.runtime.usage.LogicalInferenceAuthority logical;
         JSONArray raw;JSONObject published;int publishes;int summaryLimit=Integer.MAX_VALUE,summaryTargets;boolean revokeAfterFirstPublication;
         Journal(ModelConfig config)throws Exception{this.config=config;raw=CompactionPlanTest.history();control.bindHostRun("task","run",1);}
         ContextBudgetPolicy.Source budgets(){return selected->ContextBudgetPolicy.RouteBudget.forRoute(selected,CompactionPlanTest.budget(),ContextBudgetPolicy.SourceKind.OWNER_OVERRIDE,1,1);}
@@ -57,10 +58,45 @@ public final class ContextCompactorTest {
         public void checkpoint(JSONArray messages,int steps,JSONObject observation){raw=messages;}
         public String beginOperation(String tool,JSONObject args){throw new AssertionError("summary never executes a tool");}
         public void finishOperation(String id,JSONObject receipt){throw new AssertionError("summary never manufactures a tool receipt");}
-        public InferenceCapture.Target inferenceTarget(InferenceReceipt.Purpose purpose,String member)throws Exception{if(purpose==InferenceReceipt.Purpose.SUMMARY){if(summaryTargets>=summaryLimit)throw new RunJournal.NativeBudgetPaused("task","run",1,"task","run","SUMMARY",summaryTargets,summaryLimit);summaryTargets++;}return new InferenceCapture.Target(new InferenceReceipt.Context("task","run",1,purpose,""),new InferenceCapture.Sink(){public void started(InferenceReceipt r){receipts.add(r);}public void finished(InferenceReceipt r){receipts.add(r);}});}
+        public InferenceCapture.Target inferenceTarget(InferenceReceipt.Purpose purpose,String member)throws Exception{if(purpose==InferenceReceipt.Purpose.SUMMARY){if(summaryTargets>=summaryLimit)throw new RunJournal.NativeBudgetPaused("task","run",1,"task","run","SUMMARY",summaryTargets,summaryLimit);summaryTargets++;}return new InferenceCapture.Target(new InferenceReceipt.Context("task","run",1,purpose,""),new InferenceCapture.Sink(){public void started(InferenceReceipt r){receipts.add(r);}public void finished(InferenceReceipt r){receipts.add(r);}},()->{},logical);}
     }
     private static JSONArray tools()throws Exception{return new JSONArray().put(new JSONObject().put("type","function").put("function",new JSONObject().put("name","read_file").put("description","s".repeat(30000)).put("parameters",new JSONObject().put("type","object"))));}
     private static RunContextBudget.Projection request(ContextCompactor compactor,Journal journal)throws Exception{return compactor.request(journal.raw,new JSONArray(journal.raw.toString()),CompactionPlanTest.indexes(journal.raw),tools(),journal.config,journal.control,new RunContextBudget(journal.budgets()));}
+    @Test public void coldSummaryReconstructionPreparesOldPurposeCandidateBeforeReadingBudget()throws Exception {
+        var ref=ModelConfig.AccountModelRef.fromJson(new JSONObject().put("provider","chatgpt_plan").put("accountId","11111111-1111-1111-1111-111111111111").put("accountVersion",1).put("modelId","fixture-model"));
+        ModelConfig old=new ModelConfig("","","",false,3,10,"openai_chat",1000).withAccountModel(ref);
+        var summaryPlan=dev.pocketengine.runtime.models.ModelRoutePlan.exact(old,"SUMMARY","APP_OWNER");
+        Journal journal=new Journal(old.withAccountModel(ref.withVersion(2)).withPurposePlans(java.util.Map.of("SUMMARY",summaryPlan)));
+        coldHuge(journal);
+        String raw=journal.raw.toString();AtomicInteger preparations=new AtomicInteger(),responses=new AtomicInteger();List<Long> summaryBudgetVersions=new ArrayList<>();
+        var facts=dev.pocketengine.runtime.models.AccountCatalogFacts.parse(new JSONObject().put("context_window",70000).put("max_output_tokens",1000),"fixture-model",System.currentTimeMillis());
+        journal.logical=new dev.pocketengine.runtime.usage.LogicalInferenceAuthority(){
+            public JSONObject begin(String id,String digest,JSONObject route,long deadline)throws Exception{return new JSONObject().put("deadlineAt",deadline).put("control",new JSONObject().put("maxAttempts",route.getInt("maxAttempts")));}
+            public boolean matchesHistoryOrigin(String call,ModelConfig config,JSONObject data){return false;}
+            public boolean reserveRetry(String id,String call,long wait){throw new AssertionError("summary must not replay account inference");}
+            public void reserve(String id,String call,int attempt,String candidate,String reason){assertEquals(1,attempt);}
+            public void commit(String id,String call,long sequence){}public void attemptEnded(String id,String call,boolean dispatched,String state){}public void finish(String id,String state,String completion,String stream){}
+        };
+        dev.pocketengine.runtime.ModelGateway.installAccountInferencePort(new dev.pocketengine.runtime.ModelGateway.AccountInferencePort(){
+            public boolean authorizationCurrent(ModelConfig.AccountModelRef selected){return ref.sameModel(selected)&&selected.accountVersion>=1&&selected.accountVersion<=2;}
+            public dev.pocketengine.runtime.ModelGateway.AccountPreparation prepare(ModelConfig.AccountModelRef selected,dev.pocketengine.features.proxy.accounts.GatewayCall operation)throws dev.pocketengine.features.proxy.accounts.GatewayFailure{operation.check();preparations.incrementAndGet();return new dev.pocketengine.runtime.ModelGateway.AccountPreparation(selected.withVersion(2),facts,false);}
+            public dev.pocketengine.runtime.models.AccountCatalogFacts modelFacts(ModelConfig.AccountModelRef selected)throws dev.pocketengine.features.proxy.accounts.GatewayFailure{if(selected.accountVersion!=2)throw new dev.pocketengine.features.proxy.accounts.GatewayFailure("STALE_ACCOUNT_VERSION");return facts;}
+            public void stream(ModelConfig.AccountModelRef selected,dev.pocketengine.features.proxy.providers.ResponsesRequest request,dev.pocketengine.features.proxy.accounts.GatewayCall operation,dev.pocketengine.features.proxy.providers.ChatGptProvider.EventSink sink){throw new AssertionError("version admission required");}
+            public void streamWithVersion(ModelConfig.AccountModelRef selected,dev.pocketengine.features.proxy.providers.ResponsesRequest request,dev.pocketengine.features.proxy.accounts.GatewayCall operation,dev.pocketengine.runtime.ModelGateway.AccountVersionSink versions,dev.pocketengine.features.proxy.providers.ChatGptProvider.EventSink sink)throws dev.pocketengine.features.proxy.accounts.GatewayFailure{
+                operation.check();assertEquals(2,selected.accountVersion);versions.authorized(2);responses.incrementAndGet();
+                try{sink.event(new JSONObject().put("type","completed").put("output",new JSONArray().put(new JSONObject().put("type","message").put("role","assistant").put("status","completed").put("content",new JSONArray().put(new JSONObject().put("type","output_text").put("text","Original source rows remain available; this is a derived summary."))))));}
+                catch(Exception failure){throw new dev.pocketengine.features.proxy.accounts.GatewayFailure("FIXTURE_RESPONSE_FAILED");}
+            }
+        });
+        try{
+            assertEquals("no_bounded_summary_fit",assertThrows(CompactionPlan.Unavailable.class,()->CompactionPlan.choose(journal.raw,journal.raw,CompactionPlanTest.indexes(journal.raw),tools(),journal.config,facts.budget(journal.config).limits)).code);
+            var budgets=ContextBudgetPolicy.forRun(selected->{if(selected.routePlan!=null&&"SUMMARY".equals(selected.routePlan.purpose))summaryBudgetVersions.add(selected.accountModel.accountVersion);return dev.pocketengine.runtime.ModelGateway.accountModelFacts(selected.accountModel).budget(selected);},journal.control);
+            ContextCompactor compactor=new ContextCompactor(journal,journal,budgets);
+            var result=compactor.request(journal.raw,new JSONArray(journal.raw.toString()),CompactionPlanTest.indexes(journal.raw),tools(),journal.config,journal.control,new RunContextBudget(budgets));
+            assertTrue(result.plan().canSend());assertTrue(preparations.get()>0);assertFalse(summaryBudgetVersions.isEmpty());assertTrue(summaryBudgetVersions.stream().allMatch(version->version==2));
+            assertEquals(journal.publishes,responses.get());assertTrue(journal.publishes>0);assertEquals(raw,journal.raw.toString());assertEquals(1,summaryPlan.primary().accountModel.accountVersion);
+        }finally{dev.pocketengine.runtime.ModelGateway.installAccountInferencePort(null);}
+    }
     @Test public void summaryRechecksOriginalSourcesAtBothPhysicalAdmissionBoundaries()throws Exception {
         for(int rejectAt:new int[]{1,2})try(Provider provider=new Provider()){
             Journal journal=new Journal(provider.config());String raw=journal.raw.toString();AtomicInteger checks=new AtomicInteger();

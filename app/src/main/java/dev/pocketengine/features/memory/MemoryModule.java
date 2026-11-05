@@ -88,9 +88,9 @@ public final class MemoryModule implements EngineModule {
         switch(command){
             case "cognitionProjection":return book.cognitionProjection(scope,input.getString("subjectId"),System.currentTimeMillis());
             case "list":return new JSONObject().put("records",book.list(scope));
-            case "search":return new JSONObject().put("records",book.search(scope,input.optString("query"),Math.max(1,Math.min(100,input.optInt("limit",20)))));
+            case "search":return new JSONObject().put("ok",true).put("records",book.search(scope,input.optString("query"),Math.max(1,Math.min(100,input.optInt("limit",20)))));
             case "get":return new JSONObject().put("record",book.get(scope,input.getString("id")));
-            case "recall":return book.recall(scope,input.optString("query"),input.optInt("limit",6));
+            case "recall":return new JSONObject(book.recall(scope,input.optString("query"),input.optInt("limit",6)).toString()).put("ok",true);
             case "contextSnapshot":return contextSnapshot(scope,optionalQuery(input),optionalBudget(input,"limit",MemoryBook.MAX_CONTEXT_RECORDS),optionalBudget(input,"maxChars",MemoryBook.MAX_CONTEXT_CHARS));
             case "listCandidates":return new JSONObject().put("candidates",book.listCandidates(scope));
             case "getCandidate":return new JSONObject().put("candidate",book.getCandidate(scope,input.getString("id")));

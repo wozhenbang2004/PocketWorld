@@ -118,7 +118,7 @@ public class AccountLoopbackRelayTest {
     @Test public void renewalUsesExistingSingleflightAndPersistsVersionBeforeRequest()throws Exception {
         try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
             rig.fake.expiresIn=1;String id=rig.connect();AtomicReference<ModelConfig> selected=new AtomicReference<>(config(rig,id));long initial=selected.get().accountModel.accountVersion;rig.fake.expiresIn=3600;rig.fake.stream=text("renewed");
-            for(int i=0;i<2;i++)try(AppAccountResponsesFixture owner=new AppAccountResponsesFixture(selected::get,new Route(rig.gateway,selected))){assertEquals("completed",owner.response(request(false)).getString("status"));assertEquals(initial+2,selected.get().accountModel.accountVersion);assertEquals(1,rig.fake.refreshes.get());assertEquals("Bearer "+FakeChatGpt.access(1),rig.fake.lastAuthorization);}
+            for(int i=0;i<2;i++)try(AppAccountResponsesFixture owner=new AppAccountResponsesFixture(selected::get,new Route(rig.gateway,selected))){assertEquals("completed",owner.response(request(false)).getString("status"));assertEquals(initial+1,selected.get().accountModel.accountVersion);assertEquals(1,rig.fake.refreshes.get());assertEquals("Bearer "+FakeChatGpt.access(1),rig.fake.lastAuthorization);}
             assertEquals(2,rig.fake.responses.get());
         }
     }

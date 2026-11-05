@@ -1,9 +1,52 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {getTaskOperations, presentOperation, getRecentTaskProgress, getTaskEventHistory} from '../src/task-presentation.ts';
+import {getTaskOperations, presentOperation, getRecentTaskProgress, getTaskEventHistory, taskNeedsAttention, taskNeedsReconciliation} from '../src/task-presentation.ts';
 
 const op = (extra: Record<string, unknown> = {}) => ({operationId: 'op-1', tool: 'project_list', state: 'receipt', runId: 'run-now', createdAt: 100, position: 8, arguments: {}, receipt: {ok: true}, ...extra});
 const task = (raw: Record<string, unknown> = {}) => ({id: 'task-1', goal: '整理项目资料', status: 'running', summary: '保留原目标', raw: {runId: 'run-now', ...raw}});
+const outcome = (kind: string, nextAction: string) => ({format: 'pocketworld.tool-outcome.v1', kind, nextAction, automaticReplayAllowed: false});
+
+test('native tool outcomes preserve effects while explaining who must act next', () => {
+  const created = op({receipt: {ok: true, status: 'created', id: 'actual-artifact', requiresPause: true}, toolOutcome: outcome('needs_user', 'ask_owner')});
+  const shown = presentOperation(created);
+  assert.equal(shown.status, 'waiting');
+  assert.match(shown.stateLabel, /需要你处理/);
+  assert.deepEqual(shown.result, created.receipt);
+  assert.equal(presentOperation(op({receipt: {ok: true}, toolOutcome: outcome('effect_unknown', 'reconcile_original')})).status, 'unknown');
+});
+
+test('unknown operations outside the window override a completed task and a newer successful event', () => {
+  const input = {id: 'task-1', status: 'completed', raw: {runId: 'run-now', historyHasUnconfirmedOperations: true, operations: [], events: [{type: 'tool', runId: 'run-now', status: 'completed', message: '后来读取已返回'}]}};
+  const shown = getRecentTaskProgress(input);
+  assert.equal(shown.status, 'unknown');
+  assert.equal(shown.source, 'task');
+  assert.match(shown.title, /待核对/);
+});
+
+test('native lifecycle and unread rows cannot be promoted by a forged outcome projection', () => {
+  assert.equal(presentOperation(op({state: 'unknown', toolOutcome: outcome('success', 'continue')})).status, 'unknown');
+  assert.equal(presentOperation(op({toolOutcome: {...outcome('success', 'continue'), automaticReplayAllowed: true}})).status, 'unknown');
+  const limited = presentOperation(op({status: 'read_limited', toolOutcome: outcome('success', 'continue')}));
+  assert.notEqual(limited.status, 'returned');
+  assert.equal(limited.result, undefined);
+});
+
+test('native admission failure does not become an unknown effect because its code contains unknown', () => {
+  const admission = op({receipt: {ok: false, code: 'unknown_tool', accepted: false, nativeDispatched: false}, toolOutcome: outcome('correctable_failure', 'revise_request')});
+  assert.equal(presentOperation(admission).status, 'error');
+  assert.equal(taskNeedsReconciliation(task({operations: [admission], historyHasUnconfirmedOperations: false})), false);
+  assert.equal(presentOperation({...admission, receipt: {...admission.receipt as Record<string, unknown>, requiresReconciliation: true}}).status, 'unknown');
+});
+
+test('attention keeps terminal unknowns visible and respects native running facts', () => {
+  for (const status of ['completed', 'failed', 'cancelled']) {
+    assert.equal(taskNeedsAttention({id: 'task-1', status, raw: {historyHasUnconfirmedOperations: true}}), true);
+    assert.equal(taskNeedsAttention({id: 'task-1', status, raw: {historyHasUnconfirmedOperations: false}}), false);
+  }
+  assert.equal(taskNeedsAttention(task({hasUnresolvedOperations: true, historyHasUnconfirmedOperations: false, operations: [op({state: 'project_running', receipt: {ok: true, status: 'running', terminal: false}})]})), false);
+  assert.equal(taskNeedsReconciliation(task({historyHasUnconfirmedOperations: true, operations: [op({state: 'prepared', receipt: undefined})]})), false);
+  assert.equal(taskNeedsReconciliation(task({historyHasUnconfirmedOperations: false, operations: [op({state: 'unknown'})]})), true);
+});
 
 test('bounded operation pages preserve limited rows and earlier runs without leaking their bodies', () => {
   const input = task({

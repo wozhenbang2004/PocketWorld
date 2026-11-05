@@ -197,13 +197,11 @@ public final class StepModelRouting {
         }
     }
     private static boolean successful(JSONObject receipt) {
-        if (receipt == null || !Boolean.TRUE.equals(receipt.opt("ok"))
+        if (receipt == null || !dev.pocketengine.core.ToolOutcome.classify(receipt).successful()
                 || receipt.has("accepted") && !Boolean.TRUE.equals(receipt.opt("accepted"))) return false;
-        for (String key : List.of("requiresPause", "requiresReconciliation", "reconciliationRequired", "requiresOwnerReturn"))
-            if (receipt.optBoolean(key)) return false;
         if (receipt.has("error") && !receipt.isNull("error") && !receipt.optString("error").isEmpty()) return false;
         String state = receipt.optString("status", receipt.optString("state"));
-        return state.matches("|completed|success|ok|observed|read|receipt") && !receipt.optString("code").contains("unknown");
+        return state.matches("|completed|success|ok|observed|read|receipt");
     }
     private static JSONObject observation(JSONObject value) {
         if (value == null) return null;

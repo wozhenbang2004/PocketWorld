@@ -25,19 +25,35 @@
   "chatgpt-provider-catalog": {
     "class": "dev.pocketengine.features.proxy.providers.ChatGptProviderTest",
     "additionalClasses": [
-      "dev.pocketengine.features.proxy.providers.ResponsesStreamTest"
+      "dev.pocketengine.features.proxy.providers.ResponsesStreamTest",
+      "dev.pocketengine.features.proxy.providers.ChatGptReadDeadlineTest",
+      "dev.pocketengine.features.proxy.providers.ResponsesEmptyAssistantTest",
+      "dev.pocketengine.features.proxy.providers.ChatGptTokenReceiptTimeTest",
+      "dev.pocketengine.features.proxy.providers.ResponsesIncompleteItemTest",
+      "dev.pocketengine.runtime.AccountContextLimitRecoveryTest",
+      "dev.pocketengine.features.proxy.accounts.AccountGatewayTest",
+      "dev.pocketengine.features.proxy.accounts.ChatGptLoginLifetimeTest",
+      "dev.pocketengine.features.proxy.accounts.AccountInferenceRenewalTest",
+      "dev.pocketengine.features.proxy.accounts.AccountRefreshCheckpointTest",
+      "dev.pocketengine.features.proxy.accounts.AccountMainStreamTest",
+      "dev.pocketengine.features.proxy.accounts.AccountGatewayResponsesTest",
+      "dev.pocketengine.features.proxy.accounts.AccountModelContinuityTest",
+      "dev.pocketengine.features.proxy.accounts.AccountCatalogJourneyTest",
+      "dev.pocketengine.features.proxy.accounts.AccountLoopbackRelayTest",
+      "dev.pocketengine.features.proxy.accounts.AccountInferenceRecoveryJourneyTest",
+      "dev.pocketengine.features.proxy.NativeRelayRedactorTest"
     ],
     "helpers": [
       "dev.pocketengine.features.proxy.providers.FakeChatGpt",
       "dev.pocketengine.features.proxy.providers.ResponsesFixtures",
-      "dev.pocketengine.testutil.HttpServer"
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.features.proxy.AppAccountResponsesFixture",
+      "dev.pocketengine.features.proxy.providers.RelayDelayedFixture"
     ],
-    "description": "Bounded loopback ChatGPT provider catalog, OAuth and streaming regression tests. Rich catalog metadata, exact two-MiB boundary, independent row and token-response limits; synthetic credentials only, not live model or Android acceptance."
-  },
-  "native-relay-redaction": {
-    "class": "dev.pocketengine.features.proxy.NativeRelayRedactorTest",
-    "helpers": [],
-    "description": "Native relay credential redaction across validated Responses text, content, item and completion boundaries. In-memory SSE producer; per-path credential isolation and unchanged pending-buffer limit. No live provider, Android or device acceptance."
+    "description": "Original account login lifetime, renewal, catalog continuity and main/relay Responses streaming through bounded loopback providers; rich catalog metadata and exact byte/token limits. Synthetic credentials and explicit provider replies; no live account, Android UI or device acceptance. Native SSE redaction preserves producer credential isolation.",
+    "suites": [
+      "main-chain"
+    ]
   },
   "phone-team-sessions": {
     "class": "dev.pocketengine.BackgroundPhoneRunTest",
@@ -137,11 +153,15 @@
       "dev.pocketengine.runtime.models.ModelMetadataSuggestionsTest",
       "dev.pocketengine.runtime.models.ModelProbeDeadlineTest",
       "dev.pocketengine.runtime.models.ModelSelectionPreferencesTest",
-      "dev.pocketengine.store.ModelPreferencesNativeJourneyTest"
+      "dev.pocketengine.store.ModelPreferencesNativeJourneyTest",
+      "dev.pocketengine.runtime.models.ModelSelectionCoordinatorTest"
     ],
     "helpers": [],
     "robolectric": true,
-    "description": "Exact original-source targeted tests; no complete Android, physical device, external service or UI acceptance."
+    "description": "Exact original-source targeted tests; no complete Android, physical device, external service or UI acceptance.",
+    "suites": [
+      "main-chain"
+    ]
   },
   "capability-approval-run-boundary": {
     "class": "dev.pocketengine.store.CapabilityApprovalRunBoundaryTest",
@@ -280,7 +300,10 @@
       "dev.pocketengine.features.local.project.ProjectDirectoryQueryTest"
     ],
     "helpers": [],
-    "description": "Actual selected checkout reads, SHA-pinned native literal/glob search and bounded merged context windows; no Android filesystem/provider/SAF/SSH/device acceptance. Explicit source-file hex/ASCII read windows keep byte offsets and whole-file SHA, at most2KiB per page; no binary write authority or decoder claim. Exact-source binary pattern search uses bounded streaming KMP, overlap-safe byte cursors and explicit scan/result budgets, not AST/text decoding or file writes. Explicit exclude glob filters relative file paths before content/hash read, consumes the original2000-entry enumeration bound and is cursor-bound; omitted/empty masks preserve legacy query identity. No hidden/cache/provider permission changes. Direct physical source directory metadata listing includes empty directories and ordinary files, no body/hash read or recursive walk. Two bounded <=2000-entry scans pin metadata digest/cursor, <=40 entries and12KiB/page; hidden/dependency/build exclusions spend enumeration budget, links/specials never followed and omissions explicit. No cross-provider or atomic content-version claim."
+    "description": "Actual selected checkout reads, SHA-pinned native literal/glob search and bounded merged context windows; no Android filesystem/provider/SAF/SSH/device acceptance. Explicit source-file hex/ASCII read windows keep byte offsets and whole-file SHA, at most2KiB per page; no binary write authority or decoder claim. Exact-source binary pattern search uses bounded streaming KMP, overlap-safe byte cursors and explicit scan/result budgets, not AST/text decoding or file writes. Explicit exclude glob filters relative file paths before content/hash read, consumes the original2000-entry enumeration bound and is cursor-bound; omitted/empty masks preserve legacy query identity. No hidden/cache/provider permission changes. Direct physical source directory metadata listing includes empty directories and ordinary files, no body/hash read or recursive walk. Two bounded <=2000-entry scans pin metadata digest/cursor, <=40 entries and12KiB/page; hidden/dependency/build exclusions spend enumeration budget, links/specials never followed and omissions explicit. No cross-provider or atomic content-version claim.",
+    "suites": [
+      "main-chain"
+    ]
   },
   "browser-owner-admission": {
     "class": "dev.pocketengine.browser.BrowserTaskHostAdmissionTest",
@@ -304,13 +327,16 @@
   },
   "device-receiver": {
     "class": "dev.pocketengine.features.devices.DeviceReceiverLifecycleTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.devices.DeviceTypedReconciliationTest"
+    ],
     "helpers": [
       "dev.pocketengine.features.devices.DeviceIngressNativeTest",
       "dev.pocketengine.testutil.HttpServer",
       "dev.pocketengine.testutil.ReadyApplicationFixture"
     ],
     "robolectric": true,
-    "description": "Original Android Service/SQLite lifecycle on Robolectric, synthetic loopback TLS; not a device test."
+    "description": "Original Android Service/SQLite lifecycle on Robolectric, synthetic loopback TLS, and typed device reconciliation receipts through the original Runner; not a device test."
   },
   "managed-runtime": {
     "class": "dev.pocketengine.features.local.runtime.ManagedRuntimeFlowTest",
@@ -1021,12 +1047,27 @@
       "dev.pocketengine.runtime.CommittedReadBatchRunnerTest",
       "dev.pocketengine.runtime.StructuredRunOutcomeRunnerTest",
       "dev.pocketengine.runtime.policy.OwnerQuestionChoicesTest",
-      "dev.pocketengine.runtime.context.ProviderUsageCompatibilityTest"
+      "dev.pocketengine.runtime.context.ProviderUsageCompatibilityTest",
+      "dev.pocketengine.runtime.ProjectReadReceiptRunnerTest",
+      "dev.pocketengine.runtime.ProviderProtocolTest",
+      "dev.pocketengine.runtime.RuntimeProtocolTest",
+      "dev.pocketengine.runtime.ReferenceRefusalRunnerTest",
+      "dev.pocketengine.runtime.ToolBatchTailReceiptTest",
+      "dev.pocketengine.runtime.providers.ProtocolHistoryBudgetTest",
+      "dev.pocketengine.core.RuntimeDiagnosticsTest",
+      "dev.pocketengine.core.ToolOutcomeTest",
+      "dev.pocketengine.core.CapabilityPortReceiptAfterStopTest",
+      "dev.pocketengine.features.plugins.PluginToolReceiptsTest",
+      "dev.pocketengine.runtime.RepeatToolNoticeTest",
+      "dev.pocketengine.runtime.ExecutionPlanningRunnerTest"
     ],
     "helpers": [
       "dev.pocketengine.testutil.HttpServer"
     ],
-    "description": "Original Runner/Gateway budget and streaming boundaries, native owner intent narrowing and exact completed provider-input anchors; actual loopback, unchanged hard byte caps and original receipts. No implicit grant, replay, cost certainty or device acceptance."
+    "description": "Original Runner/Gateway budget and streaming boundaries, native owner intent narrowing and exact completed provider-input anchors; actual loopback, unchanged hard byte caps and original receipts. No implicit grant, replay, cost certainty or device acceptance.",
+    "suites": [
+      "main-chain"
+    ]
   },
   "alma-child-sources": {
     "class": "dev.pocketengine.features.remote.RemoteJobEventsTest",
@@ -1138,7 +1179,10 @@
       "dev.pocketengine.ui.OwnerWebTestFixture"
     ],
     "robolectric": true,
-    "description": "Exact native original-store synthetic API model diagnostics: independently observed text/basic echo-tool/optional synthetic PNG, bounded original 2/3 physical receipts, ordinary CONNECTION_TEST remains 1, no operations/device tools/history, strict native-only purpose/current binding/revision, catalog facts unchanged and temporary failures unconfirmed. Includes actual EngineApplication store mounting and original ModelConnectionsPage unified Web-semantics owner start/stop journeys with real loopback HTTP; no screen or pixel capture; excludes live provider, device, vision quality or full JSON-schema acceptance."
+    "description": "Exact native original-store synthetic API model diagnostics: independently observed text/basic echo-tool/optional synthetic PNG, bounded original 2/3 physical receipts, ordinary CONNECTION_TEST remains 1, no operations/device tools/history, strict native-only purpose/current binding/revision, catalog facts unchanged and temporary failures unconfirmed. Includes actual EngineApplication store mounting and original ModelConnectionsPage unified Web-semantics owner start/stop journeys with real loopback HTTP, plus bounded local diagnostic log reads and old-window/background/replay rejection; no screen or pixel capture; excludes live provider, device, vision quality or full JSON-schema acceptance.",
+    "suites": [
+      "main-chain"
+    ]
   },
   "runtime-recovery-admission": {
     "class": "dev.pocketengine.features.local.runtime.RuntimePreparationRecoveryAdmissionTest",
@@ -1280,7 +1324,8 @@
       "dev.pocketengine.features.memory.MemoryReadAudienceTest",
       "dev.pocketengine.features.memory.MemoryQueryPlanTest",
       "dev.pocketengine.features.memory.MemoryRecallAgentCorpusNativeTest",
-      "dev.pocketengine.runtime.ReferenceHistoryTest"
+      "dev.pocketengine.runtime.ReferenceHistoryTest",
+      "dev.pocketengine.features.HostMemoryQueryLimitTest"
     ],
     "helpers": [
       "dev.pocketengine.testutil.HttpServer"
@@ -1607,13 +1652,26 @@
     "class": "dev.pocketengine.PrivateTaskRunControlNativeTest",
     "additionalClasses": [
       "dev.pocketengine.OwnerWorkDispatchCancellationNativeTest",
-      "dev.pocketengine.features.assistant.AssistantParallelConversationsTest"
+      "dev.pocketengine.features.assistant.AssistantParallelConversationsTest",
+      "dev.pocketengine.NativeModelStreamPresentationTest",
+      "dev.pocketengine.ui.OwnerChatCancelGuardTest",
+      "dev.pocketengine.features.assistant.OwnerComposerPendingIdentityTest",
+      "dev.pocketengine.store.TaskRecoveryTest",
+      "dev.pocketengine.store.TaskStoreMcpTasksTest",
+      "dev.pocketengine.features.plugins.McpLocalInvocationNativeTest",
+      "dev.pocketengine.features.FeatureHostStateTest",
+      "dev.pocketengine.features.memory.TaskMemoryHistoryTest",
+      "dev.pocketengine.ui.web.PocketWebTaskActionsTest"
     ],
     "helpers": [
       "dev.pocketengine.testutil.ReadyApplicationFixture"
     ],
     "robolectric": true,
-    "description": "Original private phone/assistant task/run/epoch validation, exact controller matching, native assistant reservation and delayed real worker pickup after a successor run. Actual Engine/SQLite/RunControl with controlled startup/presentation/executor pickup; no model/tool execution, mounted UI or device acceptance. Specialized group/team/channel/approval routes remain separate."
+    "native": true,
+    "description": "Original private phone/assistant task/run/epoch validation, stream presentation and cancel guards, exact controller matching, native assistant reservation and delayed real worker pickup after a successor run. Actual Engine/SQLite/RunControl with controlled startup/presentation/executor pickup; no live model/tool execution, mounted UI or device acceptance. Specialized group/team/channel/approval routes remain separate.",
+    "suites": [
+      "main-chain"
+    ]
   },
   "capability-approval-consumption": {
     "class": "dev.pocketengine.CapabilityApprovalConsumptionNativeTest",
@@ -1699,7 +1757,10 @@
     ],
     "robolectric": true,
     "description": "Original selected checkout or same-private-task artifact image bytes through magic/MIME/SHA validation, native one-use observation and original Runner image request budget. Current source/grant/run/epoch/cancel/pause checks repeat at actual inference admission; metadata and preview are not model vision, team artifacts cannot borrow private scope. Max two images, source withdrawal and late delivery regression. Native fixtures require Android SDK35; pure carrier checks are separately evidenced.",
-    "native": true
+    "native": true,
+    "suites": [
+      "main-chain"
+    ]
   },
   "attachment-import-recovery": {
     "class": "dev.pocketengine.features.attachments.AttachmentImportRecoveryTest",
@@ -1937,6 +1998,7 @@
   "aion-conversations-native": {
     "class": "dev.pocketengine.features.assistant.ConversationWorkbenchNativeJourneyTest",
     "additionalClasses": [
+      "dev.pocketengine.features.assistant.ConversationWindowBudgetTest",
       "dev.pocketengine.features.assistant.ConversationOrganizationTest",
       "dev.pocketengine.features.assistant.ConversationTransferTest",
       "dev.pocketengine.store.ConversationV9MigrationNativeTest",

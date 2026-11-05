@@ -151,7 +151,7 @@ public class AccountGatewayTest {
             rig.fake.expiresIn=1;String id=rig.connect();long reviewed=rig.book.row(id).getLong("version");rig.fake.expiresIn=3600;
             JSONObject catalog=rig.gateway.modelsReviewed(id,reviewed,new GatewayCall(5000));
             assertEquals(1,rig.fake.refreshes.get());assertEquals(1,rig.fake.models.get());
-            assertEquals(rig.book.row(id).getLong("version"),catalog.getLong("version"));assertEquals(reviewed+2,catalog.getLong("version"));
+            assertEquals(rig.book.row(id).getLong("version"),catalog.getLong("version"));assertEquals(reviewed+1,catalog.getLong("version"));
         }
     }
     @Test public void reviewedCatalogNeverPublishesOldModelsUnderANewAuthorizationVersion()throws Exception {
@@ -199,7 +199,7 @@ public class AccountGatewayTest {
                 assertTrue(rig.fake.refreshEntered.await(2,TimeUnit.SECONDS));long refreshing=rig.book.row(id).getLong("version");
                 Future<JSONObject> catalog=workers.submit(()->rig.gateway.modelsReviewed(id,refreshing,new GatewayCall(5000)));
                 Thread.sleep(80);rig.fake.allowRefresh.countDown();leader.get(3,TimeUnit.SECONDS);
-                assertEquals(version+2,catalog.get(3,TimeUnit.SECONDS).getLong("version"));assertEquals(1,rig.fake.refreshes.get());
+                assertEquals(version+1,catalog.get(3,TimeUnit.SECONDS).getLong("version"));assertEquals(1,rig.fake.refreshes.get());
             }finally{rig.fake.allowRefresh.countDown();workers.shutdownNow();}
         }
     }

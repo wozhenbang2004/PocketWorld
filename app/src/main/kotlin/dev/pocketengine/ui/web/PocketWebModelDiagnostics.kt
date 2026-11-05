@@ -3,6 +3,7 @@ package dev.pocketengine.ui.web
 import android.os.Handler
 import android.os.Looper
 import dev.pocketengine.core.RunControl
+import dev.pocketengine.core.RuntimeDiagnostics
 import dev.pocketengine.runtime.models.ModelBinding
 import dev.pocketengine.runtime.models.ModelProbeDeadline
 import dev.pocketengine.ui.PocketWorldController
@@ -10,7 +11,7 @@ import java.util.UUID
 import java.util.concurrent.Executors
 import org.json.JSONObject
 
-/** The existing bounded synthetic probe, owned by one visible model-settings window. */
+/** Local runtime metadata and the bounded synthetic probe share one visible owner window. */
 internal class PocketWebModelDiagnostics(
     private val controller: PocketWorldController,
     private val capture: () -> PocketWebWindowTicket,
@@ -29,7 +30,7 @@ internal class PocketWebModelDiagnostics(
     @Volatile private var closed = false
 
     companion object {
-        val COMMANDS = setOf("modelDiagnostics.open", "modelDiagnostics.read", "modelDiagnostics.review", "modelDiagnostics.start", "modelDiagnostics.stop", "modelDiagnostics.close", "modelDiagnostics.discard")
+        val COMMANDS = setOf("modelDiagnostics.open", "modelDiagnostics.read", "modelDiagnostics.logs", "modelDiagnostics.review", "modelDiagnostics.start", "modelDiagnostics.stop", "modelDiagnostics.close", "modelDiagnostics.discard")
     }
 
     private fun current(original: Window): Boolean = !closed && window === original && ownerCurrent() && controller.webPrivateOwnerVisible() && accepts(original.owner)
@@ -41,9 +42,12 @@ internal class PocketWebModelDiagnostics(
     fun snapshot(): JSONObject {
         val original = window ?: return JSONObject()
         if (!current(original)) { clear(); return JSONObject() }
-        val native = service().snapshot()
-        val api = native.getJSONObject("api")
-        return JSONObject().put("windowId", original.id).put("ready", true).put("busy", control != null).put("error", error)
+        // A broken model configuration must not prevent the owner from reading its failure log.
+        val modelState = runCatching { controller.nativeModelConnections()?.snapshot() }
+        val native = modelState.getOrNull() ?: JSONObject()
+        val api = native.optJSONObject("api") ?: JSONObject()
+        return JSONObject().put("windowId", original.id).put("ready", true).put("busy", control != null)
+            .put("error", error ?: if (modelState.isFailure) "原模型配置暂不可核对，可先读取运行日志。" else null)
             .put("model", api.optString("model")).put("provider", api.optString("provider"))
             .put("canProbe", api.optJSONObject("capabilityBinding") != null)
             .put("requestTimeoutSeconds", api.optInt("requestTimeoutSeconds", 60))
@@ -63,6 +67,7 @@ internal class PocketWebModelDiagnostics(
             "modelDiagnostics.close" -> { fields(args, "windowId"); clear(); done(JSONObject().put("closed", true), null) }
             "modelDiagnostics.discard" -> { fields(args, "windowId"); review = null; done(JSONObject().put("discarded", true), null) }
             "modelDiagnostics.read" -> { fields(args, "windowId"); done(snapshot(), null) }
+            "modelDiagnostics.logs" -> { fields(args, "windowId"); done(RuntimeDiagnostics.snapshot(), null) }
             "modelDiagnostics.stop" -> { fields(args, "windowId"); control?.cancel(); review = null; done(JSONObject().put("stopRequested", true), null) }
             "modelDiagnostics.review" -> {
                 fields(args, "windowId", "includeImage"); check(control == null) { "请先等待原诊断结束" }
