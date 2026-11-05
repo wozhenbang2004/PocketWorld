@@ -18,7 +18,8 @@ retry, approve, pause or cancel a task.
   paths. The coordinator's native `coordinator_read` path records the same
   observation schema through its existing begin/finish operations.
 - `TaskTraceQuery` projects the existing SQLite `task_events`, `runs` and
-  `operations` tables. It does not create a second task store or execution loop.
+  `operations` tables, plus retained original coordinator checkpoints. It does
+  not create a second task store or execution loop.
 - Model node IDs are `model:<physical-call-id>`. Tool node IDs use a separate
   native UUID as `tool:<native-trace-call-id>`. Provider-supplied tool IDs are
   retained only as correlation metadata.
@@ -30,7 +31,9 @@ retry, approve, pause or cancel a task.
   journal binds its original run and round to the receipt's native call site;
   retries remain in that Turn. `turnId`, `turnIndex`, `stepId` and `stepIndex`
   describe observed execution sites. Team calls retain their existing native
-  turn identity. Epochs and timestamps are never substituted for a Turn.
+  turn identity and use the actual request ordinal for the displayed Turn;
+  the discussion round remains a separate fact. Epochs and timestamps are never
+  substituted for a Turn.
 - Input events come from actually consumed owner messages; recovery prompts and
   observation messages are not relabelled as new user input. Context/assistant
   events retain source identities and message fingerprints, rather than a second
@@ -41,6 +44,42 @@ retry, approve, pause or cancel a task.
 - External team runs retain their real epoch zero. Native owner/private team
   child tasks can be read through their own original task. This view does not
   flatten unrelated child tasks into a fabricated common execution.
+
+## Team coordinator and retained context
+
+The production `TeamsModule` uses the typed `TeamCoordinator.InferenceCall`
+factory to observe the same admitted MEMBER and SUMMARY calls. Its original
+goal and actually claimed owner inbox messages form Input events; composed
+instructions and prior outputs remain Context. Peer tools, material reads and
+summary `team_read_output` capture the tool schema offered to that request,
+provider call ID, original operation identity, result and observed timing at
+their real invocation sites. The existing admission, operation and budget
+hosts remain authoritative. Reading a trace does not dispatch another request
+or consume a coordinator budget.
+
+Coordinator messages previously existed only in the live coordinator's
+message array. Database schema 11 adds `team_coordinator_checkpoints` as the
+original durable context for newly observed coordinator requests and accepted
+responses. It is keyed by the original task/run/checkpoint identities; it never
+creates a HostRun or changes the team's external epoch zero. Content-free
+trace events retain references and fingerprints into those originals. The
+checkpoint records the request's material scope, original parent sources and
+the source dependencies of prior member/research outputs. Missing ancestor
+provenance makes the affected body unavailable, rather than treating it as
+source-independent.
+
+Research child HostRuns freeze their own content-free
+`execution_trace_sources` plan in the actual physical STARTED transaction.
+Historical details use that execution-time plan; a later review or material
+scope renewal cannot replace the old run's source identity. Older records
+without retained coordinator context or a required original source plan keep
+their available metadata and report that the body was not retained.
+
+The native upgrade creates the new table without synthesizing historical
+requests. Migration coverage exercises schema versions 1 through 10 upgrading
+to 11. Maintenance staging includes the table in its existing empty-staging
+checks. Recovery copies continue to require an exact schema match; this change
+does not silently upgrade a read-only older recovery copy.
 
 ## Timing and outcomes
 
@@ -110,6 +149,17 @@ or operations under those checks. Edited, forgotten, withdrawn or no-longer-
 retained sources return metadata with an explicit unavailable reason. Reading
 an audit event does not restore removed content or grant execution authority.
 Large retained bodies use the existing bounded sanitization and report limits.
+
+Team material metadata is checked outside the TaskStore monitor both before
+and after reading a selected body. The owner read window, original source
+plan and memory forget fence are checked as part of the same read journey.
+Unavailable source checks return fresh metadata and an explicit reason, never
+a cached body. Source mutations also invalidate an already-open detail:
+memory/attachment removal, skill changes, committed workspace changes and
+successful team material approval or withdrawal advance the native source
+revision. The Web view clears the body immediately and rejects late responses
+from the old revision. Workspace notifications are queued after the original
+commit, avoiding a workspace-to-TaskStore lock inversion.
 
 ## Web bridge
 
@@ -238,7 +288,9 @@ python3 tools/host-tests.py --group execution-trace \
 ```
 
 The registered native group exercises original SQLite/Runner/Gateway paths,
-physical attempts, tool outcomes, timing, retained-run reads and the existing
+epoch-zero MEMBER/SUMMARY coordinator requests and tools, database reopen,
+source forget and material withdrawal, schema migration, workspace source
+notifications, physical attempts, timing, retained-run reads and the existing
 OTLP path using controlled local HTTP fixtures. Web interaction fixtures are
 confined to `web-ui/tests`. These checks do not establish physical Android
 WebView, live provider or live external-collector acceptance.
