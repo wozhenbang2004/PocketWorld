@@ -1,6 +1,7 @@
 "use client";
 
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useLayoutEffect, useState } from "react";
+import { registerOverlayBack } from "../../../../../overlay-back";
 import type { ReactNode, Ref } from "react";
 import {
   Button as AriaButton,
@@ -78,6 +79,9 @@ export function Select<T extends object>({
   // so a queued form-scroll event cannot close it immediately after a pointer
   // opens it. React Aria owns outside dismissal, focus and scroll locking.
   const [isOpen, setIsOpen] = useState(false);
+  useLayoutEffect(() => {
+    if (isOpen) return registerOverlayBack(() => setIsOpen(false));
+  }, [isOpen]);
 
   return (
     <AriaSelect

@@ -1884,5 +1884,18 @@
     ],
     "robolectric": true,
     "description": "Focused native conversation, durable history, original owner-question continuation and migration regression. The original aion-conversations group still includes its UI tests; its focused UI companion is conversation-organization-ui."
+  },
+  "android-private-storage-roots": {
+    "class": "dev.pocketengine.features.workspace.OwnerArchivePrivateRootTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.workspace.ProjectStorageRefreshTest",
+      "dev.pocketengine.features.workspace.LocalStoragePrivateRootTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.workspace.OwnerDataArchiveFixture"
+    ],
+    "robolectric": true,
+    "description": "Trusted framework parent aliases, fresh/blocked/replaced backup leaves and actual coordinator backup failures/cancelled publication. Linux POSIX host fixtures; no Android device or visual acceptance.",
+    "linuxPosixFd": true
   }
 }

@@ -1,3 +1,5 @@
+import { consumeOverlayBack } from './overlay-back.ts';
+
 export type PocketSnapshot = {
   revision?: number;
   state: Record<string, any>;
@@ -197,7 +199,7 @@ export const bridge = {
 
 window.PocketWeb = {
   receive,
-  handleBack() { return Boolean(backHandler?.()); },
+  handleBack() { return consumeOverlayBack() || Boolean(backHandler?.()); },
   hostConfiguration(value) {
     acceptHostDocumentToken(value.documentToken);
     const { documentToken: _documentToken, ...presentation } = value;

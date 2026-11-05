@@ -23,7 +23,7 @@ internal class PocketWebData(private val controller: PocketWorldController) {
     fun storageSnapshot(): JSONObject = storage.state.let { s -> json(
         "open" to s.open, "busy" to s.busy, "inventory" to s.inventory, "selected" to JSONArray(s.selected.toList()),
         "review" to s.review, "originalAction" to s.originalAction, "original" to s.original,
-        "result" to s.result, "caches" to JSONArray(s.caches), "notice" to s.notice, "error" to s.error,
+        "result" to s.result, "caches" to s.caches?.let { JSONArray(it) }, "backupError" to s.backupError, "notice" to s.notice, "error" to s.error,
         "diagnosticText" to s.diagnosticText, "diagnosticSha" to s.diagnosticSha, "diagnosticBytes" to s.diagnosticBytes,
         "diagnosticReviewed" to s.diagnosticReviewed, "diagnosticPickerPending" to s.diagnosticPickerPending,
         "diagnosticExportEntered" to s.diagnosticExportEntered
@@ -109,7 +109,7 @@ internal class PocketWebData(private val controller: PocketWorldController) {
             }
             "storage.backupCache" -> {
                 fields(args, "selectionId", "sha256"); val id = string(args, "selectionId")
-                check(storage.state.caches.any { it.optString("selectionId") == id && it.optString("archiveSha256") == string(args, "sha256") }) { "原备份缓存已变化" }
+                check(storage.state.caches?.any { it.optString("selectionId") == id && it.optString("archiveSha256") == string(args, "sha256") } == true) { "原备份缓存已变化" }
                 storage.backupCache(id); return json("status" to "requested", "navigate" to "archives")
             }
             "storage.diagnostics.read" -> { fields(args); storage.readDiagnostics() }
