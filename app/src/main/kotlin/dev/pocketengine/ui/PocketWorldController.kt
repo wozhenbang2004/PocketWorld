@@ -3761,6 +3761,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             "feature_event" -> {
                 val payload = event.optJSONObject("payload") ?: return
                 if (event.optString("feature") in setOf("memory", "assistant", "attachments")) ++conversationSourceRevision
+                if (event.optString("feature") == "skills" && payload.optString("event") == "skills_changed" ||
+                    event.optString("feature") == "workspace" && payload.optString("event") == "workspace_changed" ||
+                    event.optString("feature") == "teams" && payload.optString("event") == "material_scope_changed") ++conversationSourceRevision
                 if (event.optString("feature") == "notifications") ++notificationPreviewsSourceRevision
                 if (event.optString("feature") == "memory" && payload.optString("event") == "memory_changed") { invalidateTaskMemoryReadings(); invalidateCognitionReadings(); ownerArchives.invalidateExperienceReadings() }
                 if (event.optString("feature") in setOf("assistant", "attachments")) { ownerArchives.invalidateExperienceReadings(); invalidateCognitionReadings() }
