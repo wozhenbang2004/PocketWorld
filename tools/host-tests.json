@@ -22,6 +22,11 @@
     ],
     "description": "Bounded loopback ChatGPT provider catalog, OAuth and streaming regression tests. Rich catalog metadata, exact two-MiB boundary, independent row and token-response limits; synthetic credentials only, not live model or Android acceptance."
   },
+  "native-relay-redaction": {
+    "class": "dev.pocketengine.features.proxy.NativeRelayRedactorTest",
+    "helpers": [],
+    "description": "Native relay credential redaction across validated Responses text, content, item and completion boundaries. In-memory SSE producer; per-path credential isolation and unchanged pending-buffer limit. No live provider, Android or device acceptance."
+  },
   "phone-team-sessions": {
     "class": "dev.pocketengine.BackgroundPhoneRunTest",
     "additionalClasses": [
@@ -1588,6 +1593,10 @@
   },
   "private-task-run-control": {
     "class": "dev.pocketengine.PrivateTaskRunControlNativeTest",
+    "additionalClasses": [
+      "dev.pocketengine.OwnerWorkDispatchCancellationNativeTest",
+      "dev.pocketengine.features.assistant.AssistantParallelConversationsTest"
+    ],
     "helpers": [
       "dev.pocketengine.testutil.ReadyApplicationFixture"
     ],

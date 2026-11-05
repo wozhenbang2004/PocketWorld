@@ -39,10 +39,12 @@ public final class RelatedTaskCancellationNativeTest {
     @Before @SuppressWarnings("unchecked") public void prepare()throws Exception{
         app=(EngineApplication)RuntimeEnvironment.getApplication();app.deleteDatabase("pocket-world.db");app.tasks=new TaskStore(app);dev.pocketengine.testutil.ReadyApplicationFixture.complete(app);app.features=new FeatureHost(ignored->{},app.tasks,()->false);
         app.features.register(new EngineModule(){public String id(){return "teams";}public JSONObject snapshot(){return new JSONObject();}public JSONObject handle(String command,JSONObject input)throws Exception{assertEquals("cancel",command);String run=input.getString("runId");stopped.add(run);return new JSONObject().put("id",run).put("status","cancelled");}});
+        reserveParent();successorChild=UUID.randomUUID().toString();
+    }
+    @SuppressWarnings("unchecked") private void reserveParent()throws Exception{
         parent=app.tasks.startAttempt(app.tasks.createCapabilityTask("original owner parent","").getString("id"),"capabilities",8);
         original=new RunControl();original.bindHostRun(parent.getString("id"),parent.getString("runId"),parent.getInt("coordinatorEpoch"));
         Field controls=EngineApplication.class.getDeclaredField("capabilityControls");controls.setAccessible(true);((ConcurrentMap<String,RunControl>)controls.get(app)).put(parent.getString("id"),original);
-        successorChild=UUID.randomUUID().toString();
     }
     @After public void close()throws Exception{app.features.close();Field workers=EngineApplication.class.getDeclaredField("capabilityWorkers");workers.setAccessible(true);((java.util.concurrent.ExecutorService)workers.get(app)).shutdownNow();Field db=TaskStore.class.getDeclaredField("db");db.setAccessible(true);((android.database.sqlite.SQLiteDatabase)db.get(app.tasks)).close();}
     private void replaceParent()throws Exception{
@@ -80,5 +82,41 @@ public final class RelatedTaskCancellationNativeTest {
         String child=UUID.randomUUID().toString();app.tasks.beginRelatedExternal(parent.getString("id"),parent.getString("runId"),"teams","start",child,new JSONObject().put("goal","original child"));
         app.setOriginalDeviceChildStops((task,control)->{assertSame(original,control);assertTrue(control.isCancelled());assertTrue(app.tasks.get(task,false).getBoolean("cancelRequested"));});
         app.dispatchOwnerAction("stopTask",new JSONObject().put("taskId",parent.getString("id")).put("runId",parent.getString("runId")).put("epoch",parent.getInt("coordinatorEpoch")));drain();assertEquals(List.of(child),stopped);assertTrue(app.tasks.get(child,false).getBoolean("cancelRequested"));
+    }
+    @Test public void chatStopBetweenSettlementAndControllerReleaseCannotReopenTerminalResult()throws Exception{
+        app.setOriginalDeviceChildStops((task,control)->assertSame(original,control));
+        for(String status:List.of("completed","failed","cancelled")){
+            if(!"completed".equals(status))reserveParent();
+            app.tasks.endAttempt(parent.getString("id"),parent.getString("runId"),status,"original settled result",new JSONObject().put("originalEvidence",status));
+            String before=TaskStore.capabilityFingerprint(app.tasks.get(parent.getString("id"),false));
+            stop();drain();
+            assertEquals(before,TaskStore.capabilityFingerprint(app.tasks.get(parent.getString("id"),false)));
+            assertEquals(status,app.tasks.get(parent.getString("id"),false).getString("status"));
+        }
+    }
+    @Test public void endedOwnerWaitsAreCancelledWithoutCreatingAnOrphanStoppingState()throws Exception{
+        app.setOriginalDeviceChildStops((task,control)->{});
+        app.tasks.endAttempt(parent.getString("id"),parent.getString("runId"),"awaiting_user","waiting for owner",new JSONObject().put("kept",true));
+        stop();drain();assertEquals("cancelled",app.tasks.get(parent.getString("id"),false).getString("status"));
+        assertTrue(app.tasks.get(parent.getString("id"),false).getJSONObject("evidence").getBoolean("kept"));
+
+        JSONObject confirmation=app.tasks.startAttempt(app.tasks.createCapabilityTask("confirm original result","").getString("id"),"capabilities",8);
+        app.tasks.endAttempt(confirmation.getString("id"),confirmation.getString("runId"),"needs_confirmation","waiting for confirmation",new JSONObject());
+        app.tasks.requestCancel(confirmation.getString("id"),confirmation.getString("runId"));
+        assertEquals("cancelled",app.tasks.get(confirmation.getString("id"),false).getString("status"));
+    }
+    @Test public void activeOwnerWaitStillWaitsForItsOriginalRunnerToStop()throws Exception{
+        app.setOriginalDeviceChildStops((task,control)->{});
+        app.tasks.status(parent.getString("id"),"awaiting_user","live original question");
+        stop();drain();assertEquals("stopping",app.tasks.get(parent.getString("id"),false).getString("status"));
+        app.tasks.endAttempt(parent.getString("id"),parent.getString("runId"),"cancelled","original runner exited",new JSONObject());
+        assertEquals("cancelled",app.tasks.get(parent.getString("id"),false).getString("status"));
+    }
+    @Test public void aCancelCommittedAfterRunnerOutcomeWinsAtCapabilitySettlement()throws Exception{
+        var prepared=new dev.pocketengine.core.RunOutcome("completed","prepared model answer",new JSONObject().put("modelSummary","prepared model answer"));
+        app.tasks.requestCancel(parent.getString("id"),parent.getString("runId"));original.cancel();
+        app.tasks.finishCapabilityAttempt(parent.getString("id"),parent.getString("runId"),parent.getInt("coordinatorEpoch"),original,prepared);
+        JSONObject settled=app.tasks.get(parent.getString("id"),false);assertEquals("cancelled",settled.getString("status"));
+        assertEquals("prepared model answer",settled.getJSONObject("evidence").getString("modelSummary"));
     }
 }

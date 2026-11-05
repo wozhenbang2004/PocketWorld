@@ -2174,15 +2174,16 @@ public final class EngineApplication extends Application implements dev.pocketen
         finally{assistantInputs.remove(binding.control,binding);capabilityControls.remove(binding.task,binding.control);}
     }
     private void closeReservedAssistantAttempt(RunControl original,String reason){
+        closeUnstartedCapabilityReservation(original,reason);
+    }
+    private void closeUnstartedCapabilityReservation(RunControl original,String reason){
         RunControl.HostRunIdentity expected=original.hostRunIdentity();
         try{
             if(expected!=null)synchronized(tasks){
-                JSONObject task=tasks.get(expected.taskId(),false);
-                if(task!=null&&original.matchesHostRun(expected.taskId(),task.optString("runId"),task.optInt("coordinatorEpoch"))
-                        &&task.optString("status").matches("preparing|running|stopping"))
-                    tasks.endAttempt(expected.taskId(),expected.runId(),original.isCancelled()?"cancelled":"failed",reason,new JSONObject());
+                RunControl current=capabilityControls.get(expected.taskId());
+                if(current==null||current==original)tasks.endUnstartedCapabilityAttempt(expected.taskId(),original,reason);
             }
-        }catch(Exception unavailable){error("原聊天执行停止记录未确认，请核对原任务；未新建或重试");}
+        }catch(Exception unavailable){error("原预留执行停止记录未确认，请核对原任务；未新建或重试");}
         finally{original.cancel();if(expected!=null){capabilityControls.remove(expected.taskId(),original);pushTask(expected.taskId());}}
     }
     private static JSONObject optionalOwnerExecutionScope(JSONObject input)throws Exception {
@@ -2263,11 +2264,24 @@ public final class EngineApplication extends Application implements dev.pocketen
         String id=admitted.getString("id"),run=admitted.getString("runId");int epoch=admitted.getInt("coordinatorEpoch");
         if(!original.matchesHostRun(id,run,epoch))throw new SecurityException("私人工作没有原生执行绑定");
         RunControl prior=capabilityControls.putIfAbsent(id,original);if(prior!=null&&prior!=original)throw new SecurityException("私人工作已有执行器");capabilityInferenceModels.put(original,selected);
-        try{tasks.openOwnerInputMailbox(id,run,epoch,admitted.getString("conversationId"),original);retainOwnerWorkService(admitted);capabilityWorkers.execute(()->{
+        java.util.concurrent.atomic.AtomicBoolean claimed=new java.util.concurrent.atomic.AtomicBoolean();
+        Runnable cancelBeforePickup=()->{
+            if(!claimed.compareAndSet(false,true))return;
+            closeUnstartedCapabilityReservation(original,"私人工作尚未由执行器接手，已停止；原输入和已有记录保留");
+            releaseCapabilityOwner(id,original,null);queueOwnerWorkResults();
+        };
+        original.onCancel(cancelBeforePickup);
+        try{original.check();tasks.openOwnerInputMailbox(id,run,epoch,admitted.getString("conversationId"),original);retainOwnerWorkService(admitted);capabilityWorkers.execute(()->{
+            if(!claimed.compareAndSet(false,true))return;
+            original.removeCancelAction(cancelBeforePickup);
             try{runCapabilityAttempt(id,initial,selected,original);}
             catch(Exception failed){error("私人工作未完成，请在原工作查看原因；没有重新执行已发生的动作");}
             finally{releaseCapabilityOwner(id,original,null);pushTask(id);queueOwnerWorkResults();}
-        });}catch(Exception closed){tasks.endAttempt(id,run,"interrupted","后台执行位置尚未接手，请在原工作继续",new JSONObject());releaseCapabilityOwner(id,original,null);pushTask(id);throw closed;}
+        });}catch(Exception closed){
+            original.removeCancelAction(cancelBeforePickup);
+            if(claimed.compareAndSet(false,true))closeUnstartedCapabilityReservation(original,"后台执行位置尚未接手，请核对原工作；没有自动重试");
+            releaseCapabilityOwner(id,original,null);pushTask(id);throw closed;
+        }
     }
     /** A service keeps an already admitted work process visible; it never creates a
      * control, task, budget or execution. Its exact tuple cannot follow a later run. */
@@ -2775,7 +2789,12 @@ public final class EngineApplication extends Application implements dev.pocketen
             if(attempt!=null)tasks.endAutomationConditionWait(id,attempt.getString("runId"),control,"运行条件暂不满足，已保留原任务与预算",new JSONObject());
             else if(!tasks.automationConditionWaiting(id)&&tasks.get(id,false).optString("runId").isEmpty())tasks.status(id,"preparing","运行条件暂不满足，已保留原触发身份");
             pushTask(id);return json("content","运行条件暂不满足，原目标与已发生的动作保留","taskId",id,"status",tasks.get(id,false).getString("status"));
-        }catch(Exception failure){if(attempt!=null)tasks.endAttempt(id,attempt.getString("runId"),control.isCancelled()?"cancelled":"failed","能力任务未完成，请检查原任务记录",new JSONObject());throw failure;}
+        }catch(Exception failure){
+            if(attempt!=null)tasks.endAttempt(id,attempt.getString("runId"),control.isCancelled()?"cancelled":"failed","能力任务未完成，请检查原任务记录",new JSONObject());
+            else if(control.hasHostRun()&&id.equals(control.hostRunIdentity().taskId()))
+                closeUnstartedCapabilityReservation(control,"原执行尚未由Runner接手，请核对原任务；已有动作与未知回执保留，没有自动重试");
+            throw failure;
+        }
         finally{if(ownerSkill!=null)ownerSkill.close();if(!retainedDevelopmentRuns.containsKey(id)){releaseCapabilityOwner(id,control,ownerSources);retainOwnerQuestionAfterSettlement(id,control,config);queueOwnerWorkResults();}}
     }
     /** Native foreground owner selection only. Reuses this original task, allowance, controls and Runner. */
