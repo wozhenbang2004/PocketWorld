@@ -52,6 +52,10 @@ final class ResponsesStream {
         }
         if(responseId==null)throw invalid();
         switch(type){
+            case "response.metadata":
+                // Advisory data is neither model output, a completion nor a host tool grant.
+                if(event.has("response_id")&&!responseId.equals(safeId(event,"response_id")))throw invalid();
+                break;
             case "response.in_progress":checkResponse(event.getJSONObject("response"),"in_progress");break;
             case "response.output_item.added":add(event);break;
             case "response.function_call_arguments.delta":{
