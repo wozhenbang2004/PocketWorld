@@ -65,6 +65,12 @@ public final class ResponsesRequest {
     }
     public boolean hasImages(){return imageCount>0;}
     public String modelId(){return modelId;}
+    /** Exact non-content options from this frozen wire object; never exposes its private body. */
+    public JSONObject traceOptions()throws org.json.JSONException {
+        JSONObject options=new JSONObject().put("store",false).put("stream",true);
+        if(hasExplicitReasoning())options.put("reasoning",new JSONObject().put("effort",reasoning.level()));
+        return options;
+    }
     byte[] body(){return bytes.clone();}
     boolean declares(String namespace,String name){return functions.contains(namespace+"/"+name);}
     @Override public String toString(){return "ResponsesRequest[private context]";}
