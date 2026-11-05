@@ -1,4 +1,10 @@
 {
+  "project-final-review": {
+    "class": "dev.pocketengine.store.ProjectFinalAnswerReviewTest",
+    "helpers": [],
+    "robolectric": true,
+    "description": "Native SQLite project final answers retain original owner review; ordinary chat still completes. No live-model acceptance."
+  },
   "runner-recovery-guidance": {
     "class": "dev.pocketengine.runtime.RecoveryProjectionRunnerTest",
     "helpers": ["dev.pocketengine.runtime.RecoveryProjectionTest", "dev.pocketengine.testutil.HttpServer"],

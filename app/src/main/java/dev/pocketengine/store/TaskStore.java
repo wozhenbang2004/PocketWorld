@@ -9711,7 +9711,7 @@ public final class TaskStore {
         if("needs_confirmation".equals(status)){
             JSONObject origin=task.optJSONObject("origin");boolean effectRecorded;
             try(Cursor operations=db.rawQuery("SELECT 1 FROM operations WHERE task_id=? AND tool<>? LIMIT 1",new String[]{id,dev.pocketengine.features.memory.TaskMemoryJournal.TOOL})){effectRecorded=operations.moveToFirst();}
-            if(!original.isCancelled()&&!task.optBoolean("cancelRequested")&&(origin==null||!"channel".equals(origin.optString("kind")))&&!effectRecorded&&!hasUnreadOwnerDocumentReference(id,runId)&&nativeFinalAnswerContent(id,runId,epoch,outcome.evidence)!=null)status="completed";
+            if(!original.isCancelled()&&!task.optBoolean("cancelRequested")&&(origin==null||!"channel".equals(origin.optString("kind")))&&!task.has("developmentContext")&&!effectRecorded&&!hasUnreadOwnerDocumentReference(id,runId)&&nativeFinalAnswerContent(id,runId,epoch,outcome.evidence)!=null)status="completed";
         }
         endAttempt(id,runId,status,outcome.summary,outcome.evidence);
     }
