@@ -31,7 +31,7 @@ public final class RuntimeDiagnostics {
     private static final String FORMAT = "pocketworld.runtime-log.v1";
     private static final Object FILE_LOCK = new Object();
     private static final Set<String> STAGES = Set.of("bootstrap", "login", "account_refresh", "model_catalog",
-            "model_prepare", "message_admission", "model_request", "tool_execution", "run_settlement", "diagnostics");
+            "model_prepare", "message_admission", "model_request", "tool_execution", "run_settlement", "webview", "diagnostics");
     private static final Set<String> OUTCOMES = Set.of("started", "succeeded", "failed", "rejected", "cancelled",
             "unconfirmed", "accepted", "queued", "completed", "awaiting_user", "paused", "skipped");
     private static volatile Recorder recorder = new Recorder(null, null);
@@ -49,6 +49,29 @@ public final class RuntimeDiagnostics {
         } catch (RuntimeException unavailable) {
             previous.record("diagnostics", "failed", "LOG_WRITER_UNAVAILABLE", null, null,
                     UUID.randomUUID().toString(), 0, unavailable);
+        }
+    }
+
+    @FunctionalInterface public interface Operation<T> { T run() throws Exception; }
+
+    /**
+     * Synchronous observation boundary. Return values and exceptions pass through unchanged.
+     * A normal return means only that the callback returned, never that a business write committed.
+     * Do not wrap asynchronous scheduling: keep its Span until the actual receipt arrives instead.
+     * Stage and failureCode must be static metadata, never request bodies or exception messages.
+     * The original RunControl links spans to the same task/run/epoch without thread-local state.
+     */
+    public static <T> T observe(String stage, RunControl control, String failureCode,
+                                Operation<T> operation) throws Exception {
+        try (Span span = begin(stage, control)) {
+            try {
+                T result = operation.run();
+                span.success();
+                return result;
+            } catch (Exception | Error failure) {
+                span.failure(failureCode, failure);
+                throw failure;
+            }
         }
     }
 

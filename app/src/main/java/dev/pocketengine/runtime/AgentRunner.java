@@ -139,8 +139,17 @@ public final class AgentRunner {
                                    dev.pocketengine.features.skills.NativeSkillExecutionHost.OwnerInvocation selected) {
         return runOriginal(taskId,goal,config,control,sink,journal,java.util.Objects.requireNonNull(selected));
     }
-    private RunOutcome runOriginal(String taskId,String goal,ModelConfig config,RunControl control,EventSink sink,RunJournal journal,
+    private RunOutcome runOriginal(String taskId,String goal,ModelConfig config,RunControl control,EventSink originalSink,RunJournal journal,
                                    dev.pocketengine.features.skills.NativeSkillExecutionHost.OwnerInvocation ownerSkill) {
+        // Bind new observation events to the actual original run. Older unbound events are not
+        // retroactively assigned to whichever run happens to be current when a page is opened.
+        EventSink sink=originalSink==null?null:event->{
+            RunControl.HostRunIdentity identity=control==null?null:control.hostRunIdentity();
+            if(identity!=null&&taskId.equals(identity.taskId())&&!event.has("runId"))try{
+                event=new JSONObject(event.toString()).put("runId",identity.runId()).put("coordinatorEpoch",identity.epoch());
+            }catch(Exception unavailable){/* Keep the original event if optional observation metadata is unavailable. */}
+            originalSink.emit(event);
+        };
         try(RuntimeDiagnostics.Span diagnostic=RuntimeDiagnostics.begin("run_settlement",control)){
             try{
                 RunOutcome outcome=runWithLifecycle(taskId,goal,config,control,sink,journal,ownerSkill);
@@ -299,9 +308,11 @@ public final class AgentRunner {
                 .put("readCompleted",false).put("automaticReplay",false).put("executionAuthorized",false),ExecutionPlanning.ReadOutcome.UNCONFIRMED);
     }
 
-    private RunOutcome runOwnerSkillBound(String taskId,String goal,ModelConfig config,RunControl control,EventSink sink,RunJournal journal,
+    private RunOutcome runOwnerSkillBound(String taskId,String goal,ModelConfig config,RunControl control,EventSink originalSink,RunJournal journal,
                                          dev.pocketengine.features.skills.NativeSkillExecutionHost.OwnerInvocation selected) {
-        JSONObject evidence=new JSONObject(),confirmedReceipt=null;String operation=null,recordedOperation=null;boolean dispatchEntered=false;int steps=0;
+        JSONObject evidence=new JSONObject(),confirmedReceipt=null,traceReceipt=null;String operation=null,recordedOperation=null;boolean dispatchEntered=false;int steps=0;
+        final dev.pocketengine.runtime.usage.ToolTraceCapture[] trace={null};Exception traceFailure=null;
+        EventSink sink=originalSink==null?null:event->originalSink.emit(trace[0]==null?event:trace[0].link(event));
         RuntimeDiagnostics.Span toolDiagnostic=null;
         try{
             if(capabilities==null||journal==null||control==null||config==null||sink==null)throw new SecurityException("主人技能请求缺少原能力执行链");
@@ -319,10 +330,13 @@ public final class AgentRunner {
             capabilities.prepareTurn(clean(goal,config),0,steps,control);
             JSONObject arguments=selected.input();String name="skills_execute";
             toolDiagnostic=RuntimeDiagnostics.begin("tool_execution",control);
+            trace[0]=new dev.pocketengine.runtime.usage.ToolTraceCapture(taskId,control,null,"","",name,"","",arguments,
+                    dev.pocketengine.runtime.usage.ToolTraceCapture.schema(capabilities.tools(),name),steps+1,
+                    event->originalSink.emit(dev.pocketengine.runtime.usage.ToolTraceCapture.bounded(safeJson(event,config,false))));
             if(!capabilities.supports(name)||!capabilities.sideEffecting(name))throw new SecurityException("原任务没有技能执行能力");
             capabilities.validate(name,arguments);selected.requireRun(taskId,control);
             JSONObject refused=capabilities.beforeTool(name,safeJson(arguments,config,false),control);
-            if(refused!=null){if(refused.optBoolean("ok",true)||!Boolean.FALSE.equals(refused.opt("accepted"))||refused.optString("code").isEmpty())throw new SecurityException("前置策略没有给出明确未派发回执");toolDiagnostic.finish("failed","TOOL_GATE_REJECTED");return finish(taskId,"awaiting_user",refused.optString("message","原任务当前不能执行所选技能，请核对后重新选择。"),refused,steps,config,sink);}
+            if(refused!=null){traceReceipt=refused;if(refused.optBoolean("ok",true)||!Boolean.FALSE.equals(refused.opt("accepted"))||refused.optString("code").isEmpty())throw new SecurityException("前置策略没有给出明确未派发回执");toolDiagnostic.finish("failed","TOOL_GATE_REJECTED");return finish(taskId,"awaiting_user",refused.optString("message","原任务当前不能执行所选技能，请核对后重新选择。"),refused,steps,config,sink);}
             selected.requireRun(taskId,control);long pause=control.pauseRevision();steps++;
             JSONObject chosen=new JSONObject().put("kind","owner_skill_selection").put("selection",selected.view()).put("executionAuthorized",false);
             appendObservation(history,chosen,config,budget);checkpoint(taskId,journal,history,steps,chosen,config,sink,budget);
@@ -331,12 +345,13 @@ public final class AgentRunner {
             if(control.isPaused()||pause!=control.pauseRevision())throw new UncertainOperation();
             selected.requireRun(taskId,control);emit(taskId,"tool","running","正在为主人所选脚本准备原任务审阅，尚未批准执行。",name,null,config,sink);
             requirePlanningCurrent(planning,selectedPlanning);
-            dispatchEntered=true;JSONObject receipt;
+            dispatchEntered=true;trace[0].dispatchEntered();JSONObject receipt;
             try{receipt=capabilities.execute(name,new JSONObject(arguments.toString()).put("_hostOperationId",operation),control);}
-            catch(CapabilityPort.ReceiptAfterStop stopped){confirmedReceipt=completeOperation(journal,operation,stopped.receipt(control),config);recordedOperation=operation;operation=null;throw stopped.failure(control);}
-            if(receipt==null)throw new UncertainOperation();receipt=completeOperation(journal,operation,receipt,config);recordedOperation=operation;operation=null;confirmedReceipt=new JSONObject(receipt.toString());
+            catch(CapabilityPort.ReceiptAfterStop stopped){confirmedReceipt=completeOperation(journal,operation,stopped.receipt(control),config);traceReceipt=confirmedReceipt;recordedOperation=operation;operation=null;throw stopped.failure(control);}
+            if(receipt==null)throw new UncertainOperation();receipt=completeOperation(journal,operation,receipt,config);recordedOperation=operation;operation=null;confirmedReceipt=new JSONObject(receipt.toString());traceReceipt=confirmedReceipt;
             evidence=new JSONObject(receipt.toString()).put("ownerSelectedSkill",true).put("businessVerified",false).put("automaticReplayAllowed",false).put("operationId",recordedOperation);
             appendObservation(history,evidence,config,budget);checkpoint(taskId,journal,history,steps,evidence,config,sink,budget);
+            trace[0].finish(receipt,recordedOperation,null,control);
             diagnosticToolReceipt(toolDiagnostic,receipt);
             ToolOutcome outcome=ToolOutcome.classify(receipt);
             if(outcome.mayContinue()&&!control.isCancelled()&&!control.isPaused())capabilities.afterTool(name,arguments,receipt,control);
@@ -348,6 +363,7 @@ public final class AgentRunner {
         }catch(Exception failure){
             if(toolDiagnostic!=null)toolDiagnostic.failure("OWNER_SKILL_EXCEPTION",failure);
             RuntimeDiagnostics.event("run_settlement",control!=null&&control.isCancelled()?"cancelled":"unconfirmed","OWNER_SKILL_EXCEPTION",control,failure);
+            traceFailure=failure;
             if(recordedOperation!=null){
                 try{if(confirmedReceipt!=null)evidence=new JSONObject(confirmedReceipt.toString());evidence.put("operationId",recordedOperation).put("ownerSelectedSkill",true).put("receiptRecorded",true).put("postProcessingIncomplete",true).put("businessVerified",false).put("automaticReplayAllowed",false);}catch(Exception retained){/* The journal already owns the original receipt. */}
                 return finishOwnerSkillFailure(taskId,control!=null&&control.isCancelled()?"cancelled":"awaiting_user","原脚本已取得并保存回执，但历史或后续处理未完成。请在原任务核对这一次操作和成果；不会重新执行。",evidence,steps,config,sink);
@@ -355,7 +371,7 @@ public final class AgentRunner {
             if(operation!=null){try{evidence.put("operationId",operation).put("status",dispatchEntered?"unknown":"rejected").put("accepted",dispatchEntered?JSONObject.NULL:false).put("nativeDispatchEntered",dispatchEntered).put("requiresReconciliation",dispatchEntered).put("automaticReplayAllowed",false);completeOperation(journal,operation,evidence,config);}catch(Exception retained){/* The original prepared/native receipt stays query-only. */}}
             String message=operation!=null?dispatchEntered?"所选脚本的原操作需要核对；保留既有回执，不会自动重试。":"所选脚本没有进入派发；请在原任务核对已登记的操作，不会自动重试。":"主人所选技能或原任务条件已变化，尚未派发；请核对后重新选择。";
             return finishOwnerSkillFailure(taskId,control!=null&&control.isCancelled()?"cancelled":"awaiting_user",message,evidence,steps,config,sink);
-        }finally{if(toolDiagnostic!=null)toolDiagnostic.close();}
+        }finally{if(trace[0]!=null)trace[0].finish(traceReceipt,recordedOperation==null?operation:recordedOperation,traceFailure,control);if(toolDiagnostic!=null)toolDiagnostic.close();}
     }
 
     /** Finalization failure must not erase which original native operation needs checking. */
@@ -405,6 +421,7 @@ public final class AgentRunner {
         java.util.List<dev.pocketengine.core.NativeToolObservation.Image> nativeImages=new java.util.ArrayList<>();
         java.util.List<dev.pocketengine.core.NativeToolObservation.ProjectRequestPin> projectImages=new java.util.ArrayList<>();
         int steps = 0;
+        dev.pocketengine.runtime.usage.ExecutionTraceCapture executionTrace = new dev.pocketengine.runtime.usage.ExecutionTraceCapture(taskId,control,event->{if(sink!=null)sink.emit(event);});
         RepeatToolNotice repeatedTools=new RepeatToolNotice();
         ContextBudgetPolicy.Source runBudgets=ContextBudgetPolicy.forRun(contextBudgets,control);
         RunContextBudget contextBudget = new RunContextBudget(runBudgets);
@@ -448,6 +465,7 @@ public final class AgentRunner {
                     ? new JSONArray().put(new JSONObject().put("role", "system").put("content", instructionProfile.instructions()))
                     .put(new JSONObject().put("role", "user").put("content", clean(goal, initialConfig)))
                     : durableHistory(storedMessages, initialConfig,null,null,instructionProfile);
+            if (storedMessages == null || storedMessages.length() == 0) executionTrace.initialGoal(history.getJSONObject(1));
             Object feedback = saved.opt("feedback");
             if (feedback != null && feedback != JSONObject.NULL && !(feedback instanceof String)) throw new JournalFailure();
             if (feedback instanceof String && !((String) feedback).trim().isEmpty()&&!hasRecallFeedback(history,clean((String)feedback,initialConfig))) history.put(new JSONObject()
@@ -481,6 +499,9 @@ public final class AgentRunner {
             modelTurns: for (int round = firstRound; round <= executionStepCeiling(initialConfig,journal); round++) {
                 final ModelConfig config=prepareRunModel(initialConfig,control);
                 originalModelRounds=round+1;
+                final dev.pocketengine.runtime.usage.InferenceReceipt.CallSite runnerTraceSite = new dev.pocketengine.runtime.usage.InferenceReceipt.CallSite(
+                        "turn:"+java.util.UUID.randomUUID(),round,control.hostRunIdentity()==null?0:control.hostRunIdentity().epoch(),0);
+                final dev.pocketengine.runtime.usage.InferenceReceipt.CallSite[] nativeTraceSite={runnerTraceSite};
                 // Retire old uploads against the old admission before prepareTurn replaces it.
                 withdrawHistoricalImages(screens,history,control);
                 historyTurnPrepared.set(false);
@@ -602,7 +623,7 @@ public final class AgentRunner {
                 emit(taskId,"context_budget","running",projection.plan().removed.isEmpty()
                         ? projection.diagnostics().optBoolean("summaryProjectionUsed")?"已使用原任务有界历史整理；主人原话、未决项和最新尾部保留，原件可按内容指纹回读。":"已检查当前请求的上下文安全上限。" : "已按预算移除本轮可证明内容相同的重复旧观察；目标、审批和工具回执保持不变。",
                         null,projection.diagnostics(),config,sink);
-                final String[] nativeRequest={""};JSONObject response;
+                final String[] nativeRequest={""}, nativeTraceMember={""}, nativeTraceTurn={""};JSONObject response;
                 int turnRetries=0;boolean contextRecoveryUsed=false;
                 while(true){
                     if(turnRetries>0||contextRecoveryUsed){
@@ -628,7 +649,9 @@ public final class AgentRunner {
                     final java.util.List<dev.pocketengine.core.NativeToolObservation.ProjectRequestPin> requestProjectImages=new java.util.ArrayList<>();
                     for(var image:projectImages)if(image.presentIn(actualModelMessages))requestProjectImages.add(image);
                     final PhoneRouteSession currentRoutes=routes;
-                    dev.pocketengine.runtime.usage.InferenceCapture.Target originalMain=journal==null?dev.pocketengine.runtime.usage.InferenceCapture.unattributed():journal.inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN,"");
+                    dev.pocketengine.runtime.usage.InferenceCapture.Target originalMain=journal==null?dev.pocketengine.runtime.usage.InferenceCapture.unattributed():journal.inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN,"",runnerTraceSite);
+                    nativeTraceSite[0]=originalMain.context.callSite==null?runnerTraceSite:originalMain.context.callSite;
+                    nativeTraceMember[0]=originalMain.context.memberId;nativeTraceTurn[0]=nativeTraceSite[0].turnId;
                     if(planning!=null)originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,()->requirePlanningCurrent(planning,turnPlanning));
                     if(!requestProjectImages.isEmpty())originalMain=dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(originalMain,()->{
                         contextBudget.requireImageInput(requestConfig);
@@ -644,7 +667,11 @@ public final class AgentRunner {
                         if(!historyTurnPrepared.get())throw new ModelGateway.RequestRefreshRequired();
                         try{screens.requireUploads(nativeProvenance,control);}catch(SecurityException withdrawn){throw new ModelGateway.RequestRefreshRequired();}
                     });
-                    final JSONArray originalHistory=history,retryProjection=requestHistory;final JSONArray[] retryOwnerInputs={null};final boolean retryAfterContextRepair=!contextRecoveryUsed;
+                    final JSONArray originalHistory=history,retryProjection=requestHistory;final JSONArray[] retryOwnerInputs={null};final boolean retryAfterContextRepair=!contextRecoveryUsed;final int traceSteps=steps;
+                    originalMain=dev.pocketengine.runtime.usage.InferenceCapture.observe(originalMain,new dev.pocketengine.runtime.usage.InferenceCapture.Sink(){
+                        public void started(dev.pocketengine.runtime.usage.InferenceReceipt receipt){executionTrace.request(receipt.callId,nativeTraceSite[0],originalHistory,traceSteps);}
+                        public void finished(dev.pocketengine.runtime.usage.InferenceReceipt receipt){}
+                    });
                     // Each physical call gets a fresh target/receipt and rechecks the original native
                     // task/epoch/scope. No tool has been admitted from this incomplete response.
                     try{response=ModelGateway.completeStreaming(requestConfig,actualModelMessages,tools,control,event->{
@@ -774,10 +801,11 @@ public final class AgentRunner {
                     evidence = phone==null||!intent.deviceReadAllowed()?new JSONObject().put("noDeviceObservation",true):observe(taskId, config, control, sink,planning,turnPlanning);
                     requirePlanningCurrent(planning,turnPlanning);
                     evidence.put("modelSummary", clean(answer, config));
-                    int finalAnswerIndex=history.length();JSONObject finalMessage=new JSONObject().put("role","assistant").put("content",clean(answer,config));if(response.optJSONObject("provider_data")!=null)finalMessage.put("provider_data",safeJson(response.getJSONObject("provider_data"),config,false));history.put(finalMessage);
+                    int finalAnswerIndex=history.length();JSONObject finalMessage=new JSONObject().put("role","assistant").put("content",clean(answer,config)).put("nativeTraceCallId",nativeRequest[0]);if(response.optJSONObject("provider_data")!=null)finalMessage.put("provider_data",safeJson(response.getJSONObject("provider_data"),config,false));history.put(finalMessage);
                     if(memoryDependency!=null){finalMessage.put("memoryContext",memoryDependency);evidence.put("memoryContext",memoryDependency);}if(memoryReference!=null){finalMessage.put("memoryReference",memoryReference);evidence.put("memoryReference",memoryReference);}
                     appendCapturedObservation(history, evidence, config, contextBudget,screens,control);
                     checkpoint(taskId, journal, history, steps, evidence, config, sink, contextBudget,repeatedTools);
+                    executionTrace.assistant(nativeRequest[0],nativeTraceSite[0],finalMessage,steps);
                     if(turnPlanning!=null&&turnPlanning.planning()){
                         requirePlanningCurrent(planning,turnPlanning);
                         evidence.put("executionPlanning",turnPlanning.view()).put("planApprovalRequired",true).put("executionAuthorized",false);
@@ -814,13 +842,14 @@ public final class AgentRunner {
                 if (calls.length() > 8) throw new ModelGateway.GatewayException("模型一次请求了过多手机动作，请更换模型或缩短目标。");
                 validateCalls(calls);
                 int preparedPlans=0;for(int i=0;i<calls.length();i++)if(java.util.Set.of("phone_prepare_sequence","browser_task_prepare_sequence",PhoneRouteSession.REPLAY).contains(calls.getJSONObject(i).getJSONObject("function").optString("name"))&&++preparedPlans>1)throw new ModelGateway.GatewayException("每批只能准备一个原生短序列；尚未执行本批动作。");
-                JSONObject assistant = new JSONObject().put("role", "assistant").put("tool_calls", safeArray(calls, config, false));
+                JSONObject assistant = new JSONObject().put("role", "assistant").put("tool_calls", safeArray(calls, config, false)).put("nativeTraceCallId",nativeRequest[0]);
                 if(memoryDependency!=null)assistant.put("memoryContext",memoryDependency);if(memoryReference!=null)assistant.put("memoryReference",memoryReference);
                 if(response.optJSONObject("provider_data")!=null)assistant.put("provider_data",safeJson(response.getJSONObject("provider_data"),config,false));
                 if (!answer.isEmpty()) assistant.put("content", clean(answer, config));
                 history.put(assistant);
                 repeatedTools.beginRound(calls.length());
                 checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget,repeatedTools);
+                executionTrace.assistant(nativeRequest[0],nativeTraceSite[0],assistant,steps);
                 boolean observed = false;
                 long batchSurfaceRevision=control.surfaceRevision();
                 dev.pocketengine.core.NativeToolPlan activePlan=null;dev.pocketengine.core.NativeToolPlan.Step activeStep=null;
@@ -861,14 +890,24 @@ public final class AgentRunner {
                         throw new ModelGateway.GatewayException("模型返回的工具调用格式无效，请换用支持 JSON tools 的模型。");
                     }
                     String name = call.getJSONObject("function").optString("name");
-                    try(RuntimeDiagnostics.Span toolDiagnostic=RuntimeDiagnostics.begin("tool_execution",control,call.getString("id"))){
-                    try{
                     steps++;
                     JSONObject args;
-                    JSONObject receipt;
+                    JSONObject receipt=null;
                     String recordedOperation=null;
+                    String traceOperationId=null;
                     dev.pocketengine.phone.observation.NativeSensitiveStep.OwnerRequired nativeOwnerRequired=null;
                     JSONObject routeBefore=latest;
+                    String traceParent=activePlan==null?null:nativeSequenceProgress.get(activePlan).optString("traceParentCallId",null);
+                    String traceParentId=traceParent==null?(nativeRequest[0].isEmpty()?null:"model:"+nativeRequest[0]):"tool:"+traceParent;
+                    dev.pocketengine.runtime.usage.ToolTraceCapture toolTrace=new dev.pocketengine.runtime.usage.ToolTraceCapture(
+                            taskId,control,traceParentId,nativeRequest[0],call.getString("id"),name,nativeTraceMember[0],nativeTraceTurn[0],
+                            call.getJSONObject("function").opt("arguments"),dev.pocketengine.runtime.usage.ToolTraceCapture.schema(tools,name),steps,
+                            event->sink.emit(dev.pocketengine.runtime.usage.ToolTraceCapture.bounded(safeJson(event,config,false))));
+                    EventSink toolSink=event->sink.emit(toolTrace.link(event));
+                    Exception traceFailure=null;
+                    try {
+                    try(RuntimeDiagnostics.Span toolDiagnostic=RuntimeDiagnostics.begin("tool_execution",control,call.getString("id"))){
+                    try{
                     try {
                         Object raw = call.getJSONObject("function").opt("arguments");
                         if (!(raw instanceof String)) throw new IllegalArgumentException();
@@ -902,27 +941,27 @@ public final class AgentRunner {
                         receipt.put("accepted",false).put("nativeDispatched",false);
                         repeatedTools.afterTool(name,call.getJSONObject("function").opt("arguments"),receipt,false,true);
                         history.put(toolResult(call, receipt, config));
-                        checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget,repeatedTools);
+                        checkpoint(taskId, journal, history, steps, latest, config, toolSink, contextBudget,repeatedTools);
                         if(correctableArguments||badArguments instanceof ToolArgumentException||badArguments instanceof CapabilityPort.Unavailable)diagnosticToolReceipt(toolDiagnostic,receipt);
                         else toolDiagnostic.failure("TOOL_ARGUMENT_CHECK_FAILED",badArguments);
-                        emit(taskId, "tool", "failed", receipt.optString("message"), name, receipt, config, sink);
+                        emit(taskId, "tool", "failed", receipt.optString("message"), name, receipt, config, toolSink);
                         sequenceMayContinue=false;
                         if(activeStep!=null||activePlan!=null||!correctableArguments||!independentRead(name))observationsMayContinue=false;
                         if(activeStep!=null)break;continue;
                     }
                     boolean imageRequired=capabilities!=null&&capabilities.supports(name)&&capabilities.observationRequirement(name,args,control)==dev.pocketengine.core.NativeToolObservation.Requirement.IMAGE;
                     if(imageRequired)try{contextBudget.requireImageInput(config);if(nativeImages.size()>=MAX_IMAGES)throw new IllegalStateException("native_visual_batch_limit");}
-                    catch(Exception unavailable){stepRouting.reset("image_input_unavailable");control.check();receipt=failure("image_input_unavailable","当前运行没有允许的图片输入设置、图片预算或本批图片余量；尚未采集或发送图片，请改用文字观察或先核对模型设置。").put("accepted",false).put("nativeDispatched",false);repeatedTools.afterTool(name,args,receipt,false,true);history.put(toolResult(call,receipt,config));checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);diagnosticToolReceipt(toolDiagnostic,receipt);emit(taskId,"tool","failed",receipt.getString("message"),name,receipt,config,sink);sequenceMayContinue=false;observationsMayContinue=false;if(activeStep!=null)break;continue;}
-                    emit(taskId, "tool", "running", capabilities!=null&&capabilities.supports(name)?"正在调用已授权的能力工具。":toolLabel(name), name, null, config, sink);
-                    resumed = afterPause(taskId, config, control, sink, pauseSeen, intent, history, journal, goal,planning);
+                    catch(Exception unavailable){stepRouting.reset("image_input_unavailable");control.check();receipt=failure("image_input_unavailable","当前运行没有允许的图片输入设置、图片预算或本批图片余量；尚未采集或发送图片，请改用文字观察或先核对模型设置。").put("accepted",false).put("nativeDispatched",false);repeatedTools.afterTool(name,args,receipt,false,true);history.put(toolResult(call,receipt,config));checkpoint(taskId,journal,history,steps,latest,config,toolSink,contextBudget,repeatedTools);diagnosticToolReceipt(toolDiagnostic,receipt);emit(taskId,"tool","failed",receipt.getString("message"),name,receipt,config,toolSink);sequenceMayContinue=false;observationsMayContinue=false;if(activeStep!=null)break;continue;}
+                    emit(taskId, "tool", "running", capabilities!=null&&capabilities.supports(name)?"正在调用已授权的能力工具。":toolLabel(name), name, null, config, toolSink);
+                    resumed = afterPause(taskId, config, control, toolSink, pauseSeen, intent, history, journal, goal,planning);
                     if (resumed != null) {
                         withdrawHistoricalImages(screens,history,control);historyTurnPrepared.set(false);
                         latest = resumed; evidence = resumed; observed = true;sequenceMayContinue=false;observationsMayContinue=false;
                         receipt = failure("stale_observation", "暂停后页面已重新观察，这批尚未派发的旧决定已全部丢弃。");
                         for(int stale=index;stale<calls.length();stale++)history.put(toolResult(calls.getJSONObject(stale),receipt,config));
-                        checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget,repeatedTools);
+                        checkpoint(taskId, journal, history, steps, latest, config, toolSink, contextBudget,repeatedTools);
                         toolDiagnostic.finish("skipped","STALE_OBSERVATION");
-                        emit(taskId, "tool", "failed", receipt.optString("message"), name, receipt, config, sink);
+                        emit(taskId, "tool", "failed", receipt.optString("message"), name, receipt, config, toolSink);
                         break;
                     }
                     control.check();if(routes!=null)routes.requireCurrentSources(control);if(activeStep!=null)activeStep.requireCurrent(control);
@@ -937,13 +976,14 @@ public final class AgentRunner {
                             boolean stale=receipt.optString("code").equals("stale_extension_context");
                             if(needsStop)for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("batch_tail_not_dispatched","本批已暂停，余下此调用尚未派发；请从原任务当前范围重新规划，不会自动重放。").put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched"),config));
                             else if(stale)for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("stale_capability_batch","能力参考已改变，本批剩余旧决定没有派发。"),config));
-                            checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);diagnosticToolReceipt(toolDiagnostic,receipt);emit(taskId,"tool",gateOutcome.eventStatus(),receipt.optString("message","工具被原生前置策略拒绝，尚未执行。"),name,receipt,config,sink);
-                            if(needsStop){evidence=new JSONObject(receipt.toString());if(gateOutcome.requiresReconciliation())evidence.put("requiresReconciliation",true);return finish(taskId,"awaiting_user",receipt.optString("message","原任务需要主人处理或核对；本批余下调用没有派发。"),evidence,steps,config,sink);}
+                            checkpoint(taskId,journal,history,steps,latest,config,toolSink,contextBudget,repeatedTools);diagnosticToolReceipt(toolDiagnostic,receipt);emit(taskId,"tool",gateOutcome.eventStatus(),receipt.optString("message","工具被原生前置策略拒绝，尚未执行。"),name,receipt,config,toolSink);
+                            if(needsStop){evidence=new JSONObject(receipt.toString());if(gateOutcome.requiresReconciliation())evidence.put("requiresReconciliation",true);return finish(taskId,"awaiting_user",receipt.optString("message","原任务需要主人处理或核对；本批余下调用没有派发。"),evidence,steps,config,toolSink);}
                             sequenceMayContinue=false;observationsMayContinue=false;if(stale||activeStep!=null)break;continue;
                         }
                     }
                     if(ExecutionPlan.supports(name)){
                         requirePlanningCurrent(planning,turnPlanning);
+                        toolTrace.dispatchEntered();
                         receipt=ExecutionPlanning.SUBMIT.equals(name)
                                 ?planning.submitPlan(turnPlanning,ExecutionPlan.checked(args.getJSONObject("plan")),call.getString("id"))
                                 :planning.requestPhase(turnPlanning,args.getString("phase"),args.getString("reason"),call.getString("id"));
@@ -951,10 +991,10 @@ public final class AgentRunner {
                         repeatedTools.afterTool(name,args,receipt,false,false);history.put(toolResult(call,receipt,config,true));
                         for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("planning_review_required","规划请求已保存，本批余下旧决定没有派发，请等待主人审阅准确版本。").put("accepted",false).put("nativeDispatched",false),config));
                         evidence=new JSONObject(receipt.toString()).put("executionAuthorized",false).put("automaticReplayAllowed",false);
-                        checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);
+                        checkpoint(taskId,journal,history,steps,latest,config,toolSink,contextBudget,repeatedTools);
                         toolDiagnostic.finish("awaiting_user","PLAN_REVIEW_REQUIRED");
-                        emit(taskId,"tool","awaiting_user",receipt.optString("message","规划请求已保存，等待主人审阅；尚未切换执行授权。"),name,receipt,config,sink);
-                        return finish(taskId,"awaiting_user",receipt.optString("message","规划请求已保存，等待主人审阅准确版本；没有追加预算或派发效果。"),evidence,steps,config,sink);
+                        emit(taskId,"tool","awaiting_user",receipt.optString("message","规划请求已保存，等待主人审阅；尚未切换执行授权。"),name,receipt,config,toolSink);
+                        return finish(taskId,"awaiting_user",receipt.optString("message","规划请求已保存，等待主人审阅准确版本；没有追加预算或派发效果。"),evidence,steps,config,toolSink);
                     }
                     boolean planningReadIssued=turnPlanning!=null&&turnPlanning.planning();
                     ExecutionPlanning.ReadClaim planningRead=planningReadIssued
@@ -967,21 +1007,23 @@ public final class AgentRunner {
                         receipt=new JSONObject().put("ok",true).put("code","model_declared_waiting").put("effectsDispatched",false);history.put(toolResult(call,receipt,config));
                         if(planningRead!=null){completePlanningRead(planning,planningRead,receipt,config);planningRead=null;}
                         for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("terminal_not_dispatched","本批已声明停止，其余调用尚未派发。").put("accepted",false).put("nativeDispatched",false),config));
-                        checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);
+                        checkpoint(taskId,journal,history,steps,latest,config,toolSink,contextBudget,repeatedTools);
                         toolDiagnostic.finish("completed","OWNER_HANDOFF_RECORDED");
                         JSONArray newer=pollOwnerInputs(history,true,true,control);
-                        if(newer.length()>0){stepRouting.ownerBoundary();appendOwnerInputs(history,newer,config);recallIntent=latestOwnerRecallQuery(history,recallIntent);checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);if(round>=executionStepCeiling(config,journal))return finish(taskId,"awaiting_user","主人新补充已保存到原任务；当前模型预算已用完，请核对后从原任务继续。",evidence,steps,config,sink);continue modelTurns;}
+                        if(newer.length()>0){stepRouting.ownerBoundary();appendOwnerInputs(history,newer,config);recallIntent=latestOwnerRecallQuery(history,recallIntent);checkpoint(taskId,journal,history,steps,latest,config,toolSink,contextBudget,repeatedTools);if(round>=executionStepCeiling(config,journal))return finish(taskId,"awaiting_user","主人新补充已保存到原任务；当前模型预算已用完，请核对后从原任务继续。",evidence,steps,config,toolSink);continue modelTurns;}
                         if(RunOutcomeTools.ASK.equals(name)){
                             RunControl.HostRunIdentity identity=control.hostRunIdentity();String question=clean(args.getString("question"),config);
                             JSONObject waiting=new JSONObject().put("format","pocketworld.owner-question.v1").put("question",question).put("requestId",java.util.UUID.randomUUID().toString()).put("waitRevision",history.length()).put("taskId",taskId).put("runId",identity==null?"":identity.runId()).put("coordinatorEpoch",identity==null?0:identity.epoch()).put("replyKind","answer").put("approval",false).put("takeover",false);
                             if(args.has("options"))waiting.put("options",dev.pocketengine.runtime.policy.OwnerQuestionChoices.options(safeJson(args,config,false)));
                             evidence.put("ownerQuestion",waiting);
-                            return finish(taskId,"awaiting_user",question,evidence,steps,config,sink);
+                            return finish(taskId,"awaiting_user",question,evidence,steps,config,toolSink);
                         }
-                        evidence.put("blocked",safeJson(RunOutcomeTools.declaration(args),config,false));return finish(taskId,args.getBoolean("recoverable")?"awaiting_user":"failed",clean(RunOutcomeTools.summary(args),config),evidence,steps,config,sink);
+                        evidence.put("blocked",safeJson(RunOutcomeTools.declaration(args),config,false));return finish(taskId,args.getBoolean("recoverable")?"awaiting_user":"failed",clean(RunOutcomeTools.summary(args),config),evidence,steps,config,toolSink);
                     }else if(routes!=null&&PhoneRouteSession.supports(name)){
+                        toolTrace.dispatchEntered();
                         receipt=routes.execute(name,args,latest,call.getString("id"),control);
                     }else if(RecentScreenHistory.supports(name)){
+                        toolTrace.dispatchEntered();
                         if(RecentScreenHistory.LIST.equals(name))receipt=new JSONObject().put("ok",true).put("screens",screens.index(control)).put("historicalOnly",true).put("coordinateAuthority",false);
                         else if(RecentScreenHistory.FORGET.equals(name))receipt=new JSONObject().put("ok",true).put("removed",screens.forget(args.getString("screenId"),control)).put("screenId",args.getString("screenId"));
                         else{contextBudget.requireImageInput(config);String screenId=args.getString("screenId");JSONObject recalled=screens.recall(screenId,control);
@@ -996,26 +1038,30 @@ public final class AgentRunner {
                         if(planningRead!=null){completePlanningRead(planning,planningRead,receipt,config);planningRead=null;}
                         history.put(toolResult(call, receipt, config));
                         for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("batch_tail_not_dispatched","本批前项已要求停止或核对；此后续调用尚未派发，未开始准备或执行，原已完成回执保留。").put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched"),config));
-                        checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget,repeatedTools);
+                        checkpoint(taskId, journal, history, steps, latest, config, toolSink, contextBudget,repeatedTools);
                         toolDiagnostic.finish("awaiting_user","OWNER_INPUT_REQUIRED");
-                        emit(taskId, "tool", "awaiting_user", reason, name, receipt, config, sink);
-                        return finish(taskId, "awaiting_user", reason, evidence, steps, config, sink);
+                        emit(taskId, "tool", "awaiting_user", reason, name, receipt, config, toolSink);
+                        return finish(taskId, "awaiting_user", reason, evidence, steps, config, toolSink);
                     } else if ("phone_observe".equals(name)) {
-                        receipt = observe(taskId, config, control, sink,planning,turnPlanning,planningRead);
+                        toolTrace.dispatchEntered();
+                        receipt = observe(taskId, config, control, toolSink,planning,turnPlanning,planningRead);
                         latest = receipt;
                         evidence = receipt;
                         observed = true;
                     } else if ("phone_observation_help".equals(name)) {
+                        toolTrace.dispatchEntered();
                         receipt=((AdaptivePhonePort)phone).requestUpgrade(args.getString("observationId"),AdaptiveObservationPolicy.Need.TARGET_MISSING,control);
                         latest=receipt;evidence=receipt;observed=true;
                     } else if ("phone_wait".equals(name)) {
+                        toolTrace.dispatchEntered();
                         control.sleep(args.getInt("ms"));
                         receipt = new JSONObject().put("ok", true).put("message", "等待结束。");
                     } else {
                         if (planningRead==null&&journal != null && (sideEffecting(name)||capabilities!=null&&capabilities.sideEffecting(name))) {
-                            checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget,repeatedTools);
+                            checkpoint(taskId, journal, history, steps, latest, config, toolSink, contextBudget,repeatedTools);
                             long revision = control.pauseRevision();
                             openOperation = begin(journal, name, args, config);
+                            traceOperationId=openOperation;
                             control.check();
                             if (control.isPaused() || revision != control.pauseRevision()) throw new UncertainOperation();
                         }
@@ -1025,6 +1071,7 @@ public final class AgentRunner {
                         // This is only progress over this native plan, never a tool grant or a new receipt.
                         if(activeStep!=null&&activePlan!=null)nativeSequenceProgress.get(activePlan).put("dispatchEnteredSteps",activeStep.index+1);
                         long dispatchRevision=control.pauseRevision();
+                        toolTrace.dispatchEntered();
                         try { receipt = capabilities!=null&&capabilities.supports(name)?capabilities.execute(name,dispatched,control):phone.execute(name,args,control); }
                         catch(CapabilityPort.ReceiptAfterStop stopped) {
                             JSONObject actual=stopped.receipt(control);
@@ -1041,6 +1088,8 @@ public final class AgentRunner {
                             ToolOutcome stoppedOutcome=ToolOutcome.classify(actual);
                             evidence.put(ToolOutcome.KEY,stoppedOutcome.view()).put("continuationStopped",true);
                             if(stoppedOutcome.requiresReconciliation())evidence.put("requiresReconciliation",true);
+                            receipt=actual;
+                            toolTrace.finish(actual,recordedOperation==null?traceOperationId:recordedOperation,null,control);
                             diagnosticToolReceipt(toolDiagnostic,actual);
                             throw stopped.failure(control);
                         }
@@ -1083,30 +1132,31 @@ public final class AgentRunner {
                     // instead of letting checkpoint recovery invent an ambiguous missing reply.
                     if(nativeOwnerRequired==null&&(receiptNeedsOwner||receiptNeedsReconciliation||unverifiedProjectRunning))
                         for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("batch_tail_not_dispatched","本批已暂停等待主人处理或核对，余下此调用尚未派发；请从原任务当前范围重新规划，不会自动重放。").put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched"),config));
-                    checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget,repeatedTools);
+                    checkpoint(taskId, journal, history, steps, latest, config, toolSink, contextBudget,repeatedTools);
                     diagnosticToolReceipt(toolDiagnostic,receipt);
                     String toolStatus=projectRunning?nativeRunning?"running":"awaiting_user":toolOutcome.eventStatus();
                     String toolMessage=projectRunning?nativeRunning?"原开发服务已启动且仍归此原执行；这不是程序结束或服务就绪，后续仅允许原授权的只读核对。":"运行中回执未能与原生已启动服务及原操作核对，未继续模型请求或新工具。"
                             :receipt.optString("message",receipt.optBoolean("ok",false)?"操作回执已收到。":"操作未成功，请检查当前页面。");
-                    emit(taskId,"tool",toolStatus,toolMessage,name,receipt,config,sink,recordedOperation);
+                    emit(taskId,"tool",toolStatus,toolMessage,name,receipt,config,toolSink,recordedOperation);
+                    toolTrace.finish(receipt,recordedOperation,null,control);
                     if(nativeOwnerRequired!=null){
                         evidence.put("nativeSensitiveStep",receipt).put("originalEffectsRetained",true).put("automaticReplayAllowed",false);
-                        return finish(taskId,"awaiting_user",nativeOwnerRequired.getMessage(),evidence,steps,config,sink);
+                        return finish(taskId,"awaiting_user",nativeOwnerRequired.getMessage(),evidence,steps,config,toolSink);
                     }
                     if(unverifiedProjectRunning){
                         evidence.put("requiresReconciliation",true).put("unverifiedProjectRunningAck",true);
-                        return finish(taskId,"awaiting_user",toolMessage+"请核对原任务，不会凭JSON字段把未知效果改成已知运行。",evidence,steps,config,sink);
+                        return finish(taskId,"awaiting_user",toolMessage+"请核对原任务，不会凭JSON字段把未知效果改成已知运行。",evidence,steps,config,toolSink);
                     }
                     if(receiptNeedsReconciliation){
-                        if(planningReadIssued){evidence.put("planningReadUnconfirmed",recordedOperation).put("executionAuthorized",false);return finish(taskId,"awaiting_user","规划读取尚无可核对的完整结果；原读取编号和已用预算保留，没有自动重读或批准执行。",evidence,steps,config,sink);}
+                        if(planningReadIssued){evidence.put("planningReadUnconfirmed",recordedOperation).put("executionAuthorized",false);return finish(taskId,"awaiting_user","规划读取尚无可核对的完整结果；原读取编号和已用预算保留，没有自动重读或批准执行。",evidence,steps,config,toolSink);}
                         evidence.put("requiresReconciliation",true);
-                        return finish(taskId,"awaiting_user","动作可能已经发生，但没有确定回执。请核对实际结果后继续原任务；不会自动重试。",evidence,steps,config,sink);
+                        return finish(taskId,"awaiting_user","动作可能已经发生，但没有确定回执。请核对实际结果后继续原任务；不会自动重试。",evidence,steps,config,toolSink);
                     }
                     if (accessibilityUnavailable) {
-                        return finish(taskId, "awaiting_user", "手机操作权限已断开，请重新开启后继续。", evidence, steps, config, sink);
+                        return finish(taskId, "awaiting_user", "手机操作权限已断开，请重新开启后继续。", evidence, steps, config, toolSink);
                     }
-                    if(receiptNeedsOwner)return finish(taskId,"awaiting_user",receipt.optString("message","需要主人处理后继续原任务；不会自动重放。"),evidence,steps,config,sink);
-                    if(repeatedTools.stopRequired())return stopForProgressGuard(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);
+                    if(receiptNeedsOwner)return finish(taskId,"awaiting_user",receipt.optString("message","需要主人处理后继续原任务；不会自动重放。"),evidence,steps,config,toolSink);
+                    if(repeatedTools.stopRequired())return stopForProgressGuard(taskId,journal,history,steps,latest,config,toolSink,contextBudget,repeatedTools);
                     // The real operation receipt and text checkpoint already committed above.
                     // Unknown/approval/pause outcomes stop before any extension code is invoked.
                     if(capabilities!=null&&!control.isPaused()&&pauseSeen[0]==control.pauseRevision())capabilities.afterTool(name,safeJson(args,config,false),safeToolReceipt(name,receipt,config),control);
@@ -1124,38 +1174,40 @@ public final class AgentRunner {
                     if((capabilities!=null||routes!=null&&PhoneRouteSession.REPLAY.equals(name))&&toolOutcome.successful()&&!control.isPaused()&&!control.isCancelled()&&pauseSeen[0]==control.pauseRevision()){
                         String nativeOperation=recordedOperation==null?call.getString("id"):recordedOperation;
                         if(imageRequired){dev.pocketengine.core.NativeToolObservation observation=capabilities.takeToolObservation(name,nativeOperation,control);
-                            if(observation!=null)try{nativeImages.add(observation.consume(name,nativeOperation,control));}catch(Exception stale){observation.close();RuntimeDiagnostics.event("tool_execution",control.isCancelled()?"cancelled":"rejected","IMAGE_SOURCE_INVALIDATED",control,stale);control.check();emit(taskId,"tool_observation","failed","图片已失效，没有作为本轮模型视觉输入。",name,null,config,sink);}
-                            else{RuntimeDiagnostics.event("tool_execution","unconfirmed","IMAGE_OBSERVATION_MISSING",control,null);emit(taskId,"tool_observation","failed","未取得可交付的实际图片，本轮没有附图。",name,null,config,sink);}
+                            if(observation!=null)try{nativeImages.add(observation.consume(name,nativeOperation,control));}catch(Exception stale){observation.close();RuntimeDiagnostics.event("tool_execution",control.isCancelled()?"cancelled":"rejected","IMAGE_SOURCE_INVALIDATED",control,stale);control.check();emit(taskId,"tool_observation","failed","图片已失效，没有作为本轮模型视觉输入。",name,null,config,toolSink);}
+                            else{RuntimeDiagnostics.event("tool_execution","unconfirmed","IMAGE_OBSERVATION_MISSING",control,null);emit(taskId,"tool_observation","failed","未取得可交付的实际图片，本轮没有附图。",name,null,config,toolSink);}
                         }
                         dev.pocketengine.core.NativeToolPlan proposed=routes!=null&&PhoneRouteSession.REPLAY.equals(name)?routes.take(nativeOperation,control):capabilities==null?null:capabilities.takeToolPlan(name,nativeOperation,control);
-                        if(proposed!=null){nativePlans.add(proposed);nativeSequenceProgress.put(proposed,new JSONObject().put("parentOperationId",nativeOperation).put("totalSteps",proposed.size()).put("dispatchEnteredSteps",0));if(activePlan!=null)throw new SecurityException("native_sequence_nested_plan_forbidden");try{proposed.consume(name,nativeOperation,control);activePlan=proposed;}catch(Exception stale){proposed.close();control.check();sequenceMayContinue=false;observationsMayContinue=false;emit(taskId,"native_sequence","failed","短序列的现场已改变，未派发其中动作。",name,failure("native_sequence_not_dispatched","请按当前现场重新规划。").put("accepted",false),config,sink);}}
+                        if(proposed!=null){nativePlans.add(proposed);nativeSequenceProgress.put(proposed,new JSONObject().put("parentOperationId",nativeOperation).put("traceParentCallId",toolTrace.id()).put("totalSteps",proposed.size()).put("dispatchEnteredSteps",0));if(activePlan!=null)throw new SecurityException("native_sequence_nested_plan_forbidden");try{proposed.consume(name,nativeOperation,control);activePlan=proposed;}catch(Exception stale){proposed.close();control.check();sequenceMayContinue=false;observationsMayContinue=false;emit(taskId,"native_sequence","failed","短序列的现场已改变，未派发其中动作。",name,failure("native_sequence_not_dispatched","请按当前现场重新规划。").put("accepted",false),config,toolSink);}}
                     }
                     if (phone!=null&&control.phoneSurfaceActive()&&(changesScreen(name) || "phone_wait".equals(name))) {
                         control.checkpoint();
                         if(control.pauseRevision()!=pauseSeen[0]){
                             withdrawHistoricalImages(screens,history,control);historyTurnPrepared.set(false);
-                            resumed=afterPause(taskId,config,control,sink,pauseSeen,intent,history,journal,goal,planning);
+                            resumed=afterPause(taskId,config,control,toolSink,pauseSeen,intent,history,journal,goal,planning);
                             if(resumed==null)throw new SecurityException("原手机恢复观察缺失");
                             latest=resumed;evidence=resumed;observed=true;sequenceMayContinue=false;observationsMayContinue=false;
                             for(int stale=index+1;stale<calls.length();stale++)history.put(toolResult(calls.getJSONObject(stale),failure("stale_observation","原动作回执已保留；暂停后的旧批次余项未派发，请依据新现场重新规划。"),config));
                             if(routes!=null)routes.disableLearning();
                             break;
                         }
-                        latest = observe(taskId, config, control, sink,planning,turnPlanning);
+                        latest = observe(taskId, config, control, toolSink,planning,turnPlanning);
                         evidence = latest;
                         observed = true;
                         if (!latest.optBoolean("ok", true)) {
                             for(int rest=index+1;rest<calls.length();rest++)history.put(toolResult(calls.getJSONObject(rest),failure("batch_tail_not_dispatched","本批前项已要求停止或核对；此后续调用尚未派发，未开始准备或执行，原已完成回执保留。").put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched"),config));
-                            checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);
-                            return finish(taskId, "awaiting_user", "操作后无法重新观察，请检查手机权限并接管。", evidence, steps, config, sink);
+                            checkpoint(taskId,journal,history,steps,latest,config,toolSink,contextBudget,repeatedTools);
+                            return finish(taskId, "awaiting_user", "操作后无法重新观察，请检查手机权限并接管。", evidence, steps, config, toolSink);
                         }
                     }
                     if(routes!=null){
                         try{routes.after(name,args,receipt,routeBefore,latest,recordedOperation,control);}catch(PhoneRouteSession.SourceUnavailable unavailable){throw unavailable;}catch(InterruptedException stopped){throw stopped;}catch(Exception ineligible){routes.disableLearning();}
-                        if(!routes.replayPostcondition(name,receipt,latest)){sequenceMayContinue=false;observationsMayContinue=false;emit(taskId,"native_route","diverged","本步实际回执保留，但回读页面与成功路线锚点不同；余下步骤未派发，交回原模型。",name,new JSONObject().put("executedReceiptRetained",true).put("remainingNotDispatched",true).put("automaticReplay",false),config,sink);}
+                        if(!routes.replayPostcondition(name,receipt,latest)){sequenceMayContinue=false;observationsMayContinue=false;emit(taskId,"native_route","diverged","本步实际回执保留，但回读页面与成功路线锚点不同；余下步骤未派发，交回原模型。",name,new JSONObject().put("executedReceiptRetained",true).put("remainingNotDispatched",true).put("automaticReplay",false),config,toolSink);}
                     }
                     }catch(Exception failure){toolDiagnostic.failure("TOOL_EXECUTION_EXCEPTION",failure);throw failure;}
                     }
+                    } catch(Exception failure) { traceFailure=failure;throw failure; }
+                    finally { toolTrace.finish(receipt,recordedOperation==null?traceOperationId:recordedOperation,traceFailure,control); }
                 }
                 repeatedTools.finishRound();
                 if(repeatedTools.stopRequired())return stopForProgressGuard(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);

@@ -101,4 +101,50 @@ public final class RuntimeDiagnosticsTest {
         assertEquals("failed", rows.getJSONObject(1).getString("outcome"));
         assertTrue(rows.getJSONObject(1).getLong("durationMs") >= 0);
     }
+    @Test public void observedOperationsKeepResultsAndRunCorrelationWithoutReadingBodies() throws Exception {
+        RuntimeDiagnostics.install(null, null);
+        RunControl control = RunControl.forOriginalRecovery(UUID.randomUUID().toString(), UUID.randomUUID().toString(), 3);
+        Object privateResult = new Object() { @Override public String toString() { throw new AssertionError("must not serialize"); } };
+        assertSame(privateResult, RuntimeDiagnostics.observe("tool_execution", control, "TOOL_FAILED", () -> privateResult));
+        JSONArray rows = RuntimeDiagnostics.snapshot().getJSONArray("events");
+        assertEquals(2, rows.length());
+        assertEquals("started", rows.getJSONObject(0).getString("outcome"));
+        assertEquals("succeeded", rows.getJSONObject(1).getString("outcome"));
+        for (String key : new String[]{"operationId", "taskId", "runId", "epoch"})
+            assertEquals(rows.getJSONObject(0).get(key), rows.getJSONObject(1).get(key));
+    }
+
+    @Test public void observedFailuresRethrowTheOriginalEvenWhenTheSinkFails() throws Exception {
+        RuntimeDiagnostics.install(null, line -> { throw new IllegalStateException("sink-private"); });
+        Exception original = new java.io.IOException("prompt-private credential-private");
+        try {
+            RuntimeDiagnostics.observe("model_request", null, "MODEL_FAILED", () -> { throw original; });
+            fail("must rethrow");
+        } catch (Exception actual) { assertSame(original, actual); }
+        JSONArray rows = RuntimeDiagnostics.snapshot().getJSONArray("events");
+        assertEquals(2, rows.length());
+        assertEquals("failed", rows.getJSONObject(1).getString("outcome"));
+        assertFalse(rows.toString().contains("private"));
+    }
+
+    @Test public void observationPreservesCancellationAuthorityAndErrors() throws Exception {
+        RuntimeDiagnostics.install(null, null);
+        RunControl control = new RunControl(); control.cancel();
+        InterruptedException cancelled = new InterruptedException("private");
+        try {
+            RuntimeDiagnostics.observe("tool_execution", control, "TOOL_STOPPED", () -> { throw cancelled; });
+            fail("must rethrow");
+        } catch (InterruptedException actual) { assertSame(cancelled, actual); }
+        assertEquals("cancelled", RuntimeDiagnostics.snapshot().getJSONArray("events").getJSONObject(1).getString("outcome"));
+        RuntimeDiagnostics.install(null, null);
+        AssertionError original = new AssertionError("private");
+        try {
+            RuntimeDiagnostics.observe("webview", null, "BUNDLE_IDENTITY_UNAVAILABLE", () -> { throw original; });
+            fail("must rethrow");
+        } catch (AssertionError actual) { assertSame(original, actual); }
+        JSONArray rows = RuntimeDiagnostics.snapshot().getJSONArray("events");
+        assertEquals(2, rows.length());
+        assertEquals("webview", rows.getJSONObject(1).getString("stage"));
+        assertEquals("failed", rows.getJSONObject(1).getString("outcome"));
+    }
 }

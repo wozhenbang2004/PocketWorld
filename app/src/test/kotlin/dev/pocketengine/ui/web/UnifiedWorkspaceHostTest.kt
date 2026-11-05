@@ -71,4 +71,30 @@ class UnifiedWorkspaceHostTest {
             try { owner.close() } finally { ReadyApplicationFixture.closeHost(app) }
         }
     }
+    @Test fun workspaceConsoleNeverExportsPrivateBodiesOrSourceUrls() {
+        val app = RuntimeEnvironment.getApplication() as EngineApplication
+        ReadyApplicationFixture.initializeHost(app)
+        val owner = Robolectric.buildActivity(ComposeActivity::class.java)
+        val diagnostics = mutableListOf<String>()
+        try {
+            val activity = owner.create().get()
+            val host = ComposeActivity::class.java.getDeclaredField("webHost").apply { isAccessible = true }.get(activity) as PocketWebHost
+            val web = PocketWebHost::class.java.getDeclaredField("web").apply { isAccessible = true }.get(host) as android.webkit.WebView
+            val client = requireNotNull(web.webChromeClient)
+            dev.pocketengine.core.RuntimeDiagnostics.install(null) { diagnostics.add(it) }
+            org.robolectric.shadows.ShadowLog.clear()
+            val secret = "prompt-private Bearer sk-private https://private.example/account"
+            assertTrue(client.onConsoleMessage(android.webkit.ConsoleMessage(secret, secret, 42, android.webkit.ConsoleMessage.MessageLevel.ERROR)))
+            assertTrue(client.onConsoleMessage(android.webkit.ConsoleMessage("PocketWebUi $secret", secret, 43, android.webkit.ConsoleMessage.MessageLevel.LOG)))
+            val encoded = diagnostics.joinToString() + org.robolectric.shadows.ShadowLog.getLogs().joinToString { it.msg }
+            assertFalse(encoded.contains("prompt-private"))
+            assertFalse(encoded.contains("sk-private"))
+            assertFalse(encoded.contains("private.example"))
+            assertEquals(1, diagnostics.size)
+            assertEquals("CONSOLE_ERROR", JSONObject(diagnostics.single()).getString("code"))
+        } finally {
+            dev.pocketengine.core.RuntimeDiagnostics.install(null, null)
+            try { owner.close() } finally { ReadyApplicationFixture.closeHost(app) }
+        }
+    }
 }

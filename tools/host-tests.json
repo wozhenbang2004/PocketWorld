@@ -1,5 +1,6 @@
 {
   "project-approval-context": {
+    "helpers": [],
     "class": "dev.pocketengine.features.local.project.ProjectApprovalContextTest",
     "robolectric": true,
     "description": "Native SQLite approved proposal continuation context; old run references remain rejected and current source/control checks stay enforced. No live provider or device claim."
@@ -19,7 +20,10 @@
   },
   "runner-recovery-guidance": {
     "class": "dev.pocketengine.runtime.RecoveryProjectionRunnerTest",
-    "helpers": ["dev.pocketengine.runtime.RecoveryProjectionTest", "dev.pocketengine.testutil.HttpServer"],
+    "helpers": [
+      "dev.pocketengine.runtime.RecoveryProjectionTest",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
     "description": "Actual Runner/Gateway loopback: restored history preserves the latest owner input and never replays historical tool calls. Synthetic provider only."
   },
   "chatgpt-provider-catalog": {
@@ -1651,6 +1655,7 @@
   "private-task-run-control": {
     "class": "dev.pocketengine.PrivateTaskRunControlNativeTest",
     "additionalClasses": [
+      "dev.pocketengine.AssistantInputCancellationNativeTest",
       "dev.pocketengine.OwnerWorkDispatchCancellationNativeTest",
       "dev.pocketengine.features.assistant.AssistantParallelConversationsTest",
       "dev.pocketengine.NativeModelStreamPresentationTest",
@@ -1984,7 +1989,8 @@
   "conversation-organization-ui": {
     "class": "dev.pocketengine.ui.ConversationOrganizationUiNativeTest",
     "additionalClasses": [
-      "dev.pocketengine.ui.web.PocketWebBridgeObservationTest"
+      "dev.pocketengine.ui.web.PocketWebBridgeObservationTest",
+      "dev.pocketengine.ui.web.PocketWebSnapshotObserverTest"
     ],
     "helpers": [
       "dev.pocketengine.testutil.ReadyApplicationFixture",
@@ -2127,5 +2133,31 @@
     ],
     "robolectric": true,
     "description": "Existing script/MCP execution review and original receipt/artifact boundaries through the unified adapter; no second execution host, automatic grants or rendered UI claim."
+  },
+  "execution-trace": {
+    "class": "dev.pocketengine.store.ExecutionTraceJourneyTest",
+    "additionalClasses": [
+      "dev.pocketengine.runtime.usage.ExecutionTraceProjectionTest",
+      "dev.pocketengine.runtime.usage.InferenceVisibleTextTimingTest",
+      "dev.pocketengine.runtime.NativeOperationEventTest",
+      "dev.pocketengine.store.NativeDiagnosticsJourneyTest",
+      "dev.pocketengine.runtime.usage.UsageTrendProjectionTest",
+      "dev.pocketengine.ui.web.PocketWebTraceTest",
+      "dev.pocketengine.runtime.RuntimeStreamingProtocolTest",
+      "dev.pocketengine.features.proxy.accounts.AccountMainStreamTest",
+      "dev.pocketengine.features.teams.TeamInferenceJournalTest",
+      "dev.pocketengine.features.workspace.WorkspaceHeadProjectionTest",
+      "dev.pocketengine.store.ConversationV9MigrationNativeTest",
+      "dev.pocketengine.runtime.usage.ToolTraceOutcomeIntegrationTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.features.proxy.accounts.AccountGatewayTest",
+      "dev.pocketengine.features.proxy.providers.FakeChatGpt",
+      "dev.pocketengine.features.proxy.providers.ResponsesFixtures",
+      "dev.pocketengine.features.teams.TeamBudgetPersistentApplication"
+    ],
+    "robolectric": true,
+    "description": "Original TaskStore/Runner/Gateway and epoch-zero TeamCoordinator trajectories, native turns and physical retries, source-current lazy details and historical run paging, schema-11 migration, measured model/tool/visible-text timing, raw provider usage, native operation authority, and redacted OTLP delivery. Loopback HTTP/native SQLite fixtures; physical Android, live provider and cloud collector acceptance remain separate."
   }
 }

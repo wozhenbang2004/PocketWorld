@@ -555,6 +555,8 @@ public final class EngineApplication extends Application implements dev.pocketen
 
     // Keep only failed/not-yet-accepted stop deliveries; never a replacement execution control.
     private final java.util.concurrent.ConcurrentHashMap<String,RunControl> pendingCapabilityStops=new java.util.concurrent.ConcurrentHashMap<>();
+    // Retain only an unconsumed original child ticket after private-stop delivery fails.
+    private final java.util.Map<RunControl,FeatureHost.RelatedTaskCancellation> pendingPrivateRelatedStops=new java.util.IdentityHashMap<>();
     private final java.util.concurrent.ConcurrentHashMap<String,RunControl> capabilityControls=new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentHashMap<String,GatewayParentRun> gatewayParentRuns=new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentHashMap<RunControl,dev.pocketengine.features.memory.TaskStoreMemoryReader.RawBinding> rawMemoryBindings=new java.util.concurrent.ConcurrentHashMap<>();
@@ -1013,7 +1015,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             ((dev.pocketengine.features.teams.TeamsModule)teams).setMemberModelCapture((reference,purpose,captured)->{if(modelConnections==null)throw new SecurityException("原模型连接不可用，未切换默认连接");return modelConnections.capturePurpose(reference,null,null,purpose,"APP_OWNER",captured);});
         }
         if(teams instanceof dev.pocketengine.features.teams.TeamsModule)((dev.pocketengine.features.teams.TeamsModule)teams).setInferenceFactory(
-                (call,control)->tasks.teamInferenceTarget(call.nativeRunId,call.purpose,call.memberId,call.site,control,call::checkCurrent));
+                (call,control)->tasks.teamInferenceTarget(call,control));
         if(teams instanceof dev.pocketengine.features.teams.TeamsModule&&remote instanceof dev.pocketengine.features.remote.RemoteModule){
             dev.pocketengine.features.teams.TeamsModule teamModule=(dev.pocketengine.features.teams.TeamsModule)teams;
             teamModule.setExternalMemberFactory(new dev.pocketengine.features.remote.CompanionExternalMemberFactory((dev.pocketengine.features.remote.RemoteModule)remote,new dev.pocketengine.features.remote.ExternalChildJournal(){
@@ -1971,6 +1973,32 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(refs.length()==0)return tasks.readConversationInterrupted(selected); // Body-free unavailable/empty window.
         if(memorySources==null)throw new IllegalStateException("原来源核对暂不可用");
         return memorySources.withCurrentUserSources(refs,()->tasks.readConversationInterrupted(selected));
+    }
+    /** Reads the selected original event under the same forget/current-source fence
+     * as conversation history. The trace itself grants no execution authority. */
+    public JSONObject readOwnerExecutionTraceDetail(String task,String run,String node,RunControl ownerRead)throws Exception {
+        var selected=tasks.prepareOwnerExecutionTraceDetail(task,run,node,ownerRead);
+        JSONArray refs=selected.sources();
+        var materials=selected.materials();
+        var materialHost=teamMemberEvidence;
+        if(!materials.isEmpty()&&materialHost==null)return tasks.unavailableOwnerExecutionTraceDetail(selected,"team_material_check_unavailable");
+        java.util.concurrent.Callable<JSONObject> read=()->{
+            for(var material:materials){ownerRead.check();materialHost.checkTraceMaterialMetadata(material);}
+            JSONObject detail=tasks.readOwnerExecutionTraceDetail(selected);
+            for(var material:materials){ownerRead.check();materialHost.checkTraceMaterialMetadata(material);}
+            ownerRead.check();return detail;
+        };
+        try {
+            if(refs.length()==0)return read.call();
+            if(memorySources==null)return tasks.unavailableOwnerExecutionTraceDetail(selected,"source_check_unavailable");
+            return memorySources.withCurrentUserSources(refs,read);
+        } catch(dev.pocketengine.store.TaskStore.TraceSourceUnavailable failure) {
+            return tasks.unavailableOwnerExecutionTraceDetail(selected,"team_material_source_unavailable");
+        } catch(dev.pocketengine.features.automation.ScheduleSourceState.Invalidated failure) {
+            return tasks.unavailableOwnerExecutionTraceDetail(selected,"source_"+failure.reason.name().toLowerCase(java.util.Locale.ROOT));
+        } catch(dev.pocketengine.features.automation.ScheduleSourceState.Unavailable failure) {
+            return tasks.unavailableOwnerExecutionTraceDetail(selected,"source_check_unavailable");
+        }
     }
     /** Native-only current-task binding; the broad audit UI host is never exposed as a model tool. */
     private CapabilityPort bindRawTaskEvidence(CapabilityPort existing,JSONObject task,dev.pocketengine.runtime.extensions.ExtensionRuntime.Binding identity,RunControl original,ModelConfig capturedInference)throws Exception{
@@ -3182,27 +3210,58 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(capability){RunControl live=capabilityControls.get(id);if(live!=original&&(live!=null||pendingCapabilityStops.get(id)!=original))throw new SecurityException("原能力控制器已变化，未停止后继执行");}
         else if(control(id)!=original)throw new SecurityException("原手机控制器已变化，未停止后继执行");
     }
-    private synchronized void stopReviewedPrivateTask(JSONObject input)throws Exception{
+    /** A process-local selection of the reviewed attempt, never a replacement control. */
+    private record ReviewedPrivateStop(JSONObject input,String taskId,RunControl original,boolean capability,
+                                       FeatureHost.RelatedTaskCancellation related) { }
+    private ReviewedPrivateStop prepareReviewedPrivateStop(JSONObject input)throws Exception{
         JSONObject reviewed=tasks.requireReviewedPrivateTaskAttempt(input);String id=reviewed.getString("id"),run=reviewed.getString("runId");int epoch=reviewed.getInt("coordinatorEpoch");
         RunControl original=capabilityControls.get(id);if(original==null)original=pendingCapabilityStops.get(id);boolean capability=original!=null;if(original==null)original=control(id);
         if(original==null||!original.hasHostRun()||!original.matchesHostRun(id,run,epoch))throw new SecurityException("没有属于原执行的本机控制器，未按任务编号停止其他执行");
-        var related=original.isCancelled()?null:captureOriginalRelatedStops(id,run,epoch);
-        synchronized(tasks){
-            JSONObject task=tasks.requireReviewedPrivateTaskAttempt(input);requireReviewedPrivateControl(input,original,capability);
-            if(task.optBoolean("cancelRequested")||original.isCancelled())related=null;
-            if(related==null)error("原子任务清场范围未确认；没有重取已取消父任务的团队执行代次");
-            boolean retry=capability&&pendingCapabilityStops.get(id)==original;if(capability&&original.isCancelled()&&!retry)return;
-            // Cancellation actions are synchronous and may reenter native admission on this thread.
-            original.cancel();JSONObject cancelled=tasks.requireReviewedPrivateTaskAttempt(input);
-            if(capability&&task.optString("status").equals("preparing")&&cancelled.optString("status").equals("cancelled")&&capabilityControls.get(id)==null&&pendingCapabilityStops.get(id)!=original)return;
-            requireReviewedPrivateControl(input,original,capability);
-            if(!cancelled.optBoolean("cancelRequested")&&!cancelled.optString("status").matches("completed|failed|cancelled|interrupted|needs_confirmation|reconciling")){tasks.requestCancel(id,run);tasks.status(id,"stopping","正在停止后续操作；已发生的动作不会被撤回");}
-            features.cancelRelatedTasks(related);requireReviewedPrivateControl(input,original,capability);
-            OriginalDeviceChildStops stops=originalDeviceChildStops;
-            if(capability){pendingCapabilityStops.put(id,original);if(stops==null)throw new IllegalStateException("下游止损宿主尚未就绪；原执行仍需核对");}
-            if(stops!=null)try{stops.enqueue(id,original);if(capability)pendingCapabilityStops.remove(id,original);}catch(Exception notQueued){throw new IllegalStateException("下游止损尚未入队；原预留仍保留，不能视为远端已停止",notQueued);}
+        // Capture child owners before taking the store monitor, and never recapture a cancelled parent.
+        var related=pendingPrivateRelatedStops.get(original);
+        if(related==null&&!original.isCancelled())related=captureOriginalRelatedStops(id,run,epoch);
+        return new ReviewedPrivateStop(input,id,original,capability,related);
+    }
+    private void enqueueReviewedPrivateChildStops(ReviewedPrivateStop stop)throws Exception{
+        OriginalDeviceChildStops stops=originalDeviceChildStops;
+        if(stop.capability()){
+            pendingCapabilityStops.put(stop.taskId(),stop.original());
+            if(stops==null)throw new IllegalStateException("下游止损宿主尚未就绪；原执行仍需核对");
         }
-        pushTask(input.getString("taskId"));
+        if(stops!=null)try{
+            stops.enqueue(stop.taskId(),stop.original());
+            if(stop.capability())pendingCapabilityStops.remove(stop.taskId(),stop.original());
+        }catch(Exception notQueued){throw new IllegalStateException("下游止损尚未入队；原预留仍保留，不能视为远端已停止",notQueued);}
+    }
+    private synchronized void stopReviewedPrivateTask(JSONObject input)throws Exception{
+        ReviewedPrivateStop stop=prepareReviewedPrivateStop(input);String id=stop.taskId();RunControl original=stop.original();boolean capability=stop.capability();
+        synchronized(tasks){
+            JSONObject task=tasks.requireReviewedPrivateTaskAttempt(stop.input());requireReviewedPrivateControl(stop.input(),original,capability);
+            var related=pendingPrivateRelatedStops.get(original);
+            if(related==null&&!task.optBoolean("cancelRequested")&&!original.isCancelled())related=stop.related();
+            if(related==null)error("原子任务清场范围未确认；没有重取已取消父任务的团队执行代次");
+            RunControl pendingAtEntry=pendingCapabilityStops.get(id);boolean retry=capability&&pendingAtEntry==original;if(capability&&original.isCancelled()&&!retry)return;
+            // Cancellation actions are synchronous and may reenter native admission on this thread.
+            try{
+            original.cancel();JSONObject cancelled=tasks.requireReviewedPrivateTaskAttempt(stop.input());
+            if(capability&&task.optString("status").equals("preparing")&&cancelled.optString("status").equals("cancelled")&&capabilityControls.get(id)==null&&pendingCapabilityStops.get(id)!=original)return;
+            requireReviewedPrivateControl(stop.input(),original,capability);
+            tasks.requestReviewedPrivateTaskStop(stop.input(),original);
+            features.cancelRelatedTasks(related);pendingPrivateRelatedStops.remove(original);related=null;
+            requireReviewedPrivateControl(stop.input(),original,capability);
+            enqueueReviewedPrivateChildStops(stop);
+            }catch(Exception failed){
+                // Do not read a possibly failing database here, or replace a reentrant successor.
+                // The retry revalidates the original task/run/epoch before consuming this ticket.
+                RunControl live=capabilityControls.get(id);
+                if(capability&&original.isCancelled()&&(live==null||live==original)){
+                    pendingCapabilityStops.compute(id,(key,pending)->pending==null||pending==pendingAtEntry?original:pending);
+                    if(pendingCapabilityStops.get(id)==original&&related!=null)pendingPrivateRelatedStops.put(original,related);
+                }
+                throw failed;
+            }
+        }
+        pushTask(id);
     }
     public JSONObject readTaskExecutionPlanApproval(String taskId,String approvalId)throws Exception{
         if(!businessReady())throw new SecurityException("原存储尚未完成启动核对");return tasks.readTaskExecutionPlanApproval(taskId,approvalId);

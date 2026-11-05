@@ -20,7 +20,7 @@ public final class AccountGateway implements AutoCloseable {
     private final ChatGptProvider provider;
     private final Semaphore networkSlots=new Semaphore(2);
     private final Map<String,Flight> refreshes=new HashMap<>();
-    private final Map<String,JSONObject> catalogs=new HashMap<>();
+    private final AccountModelCatalog modelCatalog;
     private final Map<CatalogKey,CatalogFlight> catalogFlights=new HashMap<>();
     private final java.util.concurrent.ThreadPoolExecutor catalogWorkers=new java.util.concurrent.ThreadPoolExecutor(2,2,0,TimeUnit.MILLISECONDS,
             new java.util.concurrent.ArrayBlockingQueue<>(16),work->{Thread thread=new Thread(work,"account-catalog");thread.setDaemon(true);return thread;},new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
@@ -40,7 +40,7 @@ public final class AccountGateway implements AutoCloseable {
         this(new AccountBook(metadata,vault,hostOwnerScope),new ChatGptProvider());
     }
     // Internal fixture seam. Production callers cannot select provider endpoints or inject host identity in a request.
-    AccountGateway(AccountBook book,ChatGptProvider provider){this.book=book;this.provider=provider;}
+    AccountGateway(AccountBook book,ChatGptProvider provider){this.book=book;this.provider=provider;this.modelCatalog=new AccountModelCatalog(book);}
     public synchronized JSONObject snapshot()throws GatewayFailure {
         JSONObject snapshot=book.snapshot();
         try{return snapshot.put("provider",ChatGptProvider.ID).put("authorizationMethod","system_browser_pkce_loopback")
@@ -214,7 +214,7 @@ public final class AccountGateway implements AutoCloseable {
         try{
             while(!flight.done.await(50,TimeUnit.MILLISECONDS)){caller.check();if(closed)throw new GatewayFailure("GATEWAY_CLOSED");}caller.check();
             if(flight.failure!=null)throw flight.failure;
-            synchronized(this){checkStreamFence(id,authorized.version,caller);return copyArray(flight.models);}
+            synchronized(this){checkStreamFence(id,authorized.version,caller);return AccountModelCatalog.copyArray(flight.models);}
         }catch(InterruptedException stopped){Thread.currentThread().interrupt();throw new GatewayFailure("CANCELLED");}
         finally{synchronized(this){if(--flight.waiters==0){catalogFlights.remove(key,flight);if(flight.done.getCount()!=0){flight.operation.cancel();if(catalogWorkers.remove(flight.work)){flight.failure=new GatewayFailure("CANCELLED");flight.done.countDown();}}}}}
     }
@@ -225,17 +225,16 @@ public final class AccountGateway implements AutoCloseable {
             beginRequest(id,flight.operation,version);admitted=true;
             JSONArray models=provider.models(flight.authorized.tokens,flight.operation);
             synchronized(this){checkStreamFence(id,version,flight.operation);
-                catalogs.put(id,AccountBook.json("accountId",id,"version",version,"observedAt",System.currentTimeMillis(),"models",copyArray(models)));
-                refreshPinnedEvidence(id,version,models);flight.models=copyArray(models);}diagnostic.success();
+                modelCatalog.observed(id,version,models,System.currentTimeMillis());
+                flight.models=AccountModelCatalog.copyArray(models);}diagnostic.success();
         }catch(GatewayFailure failure){flight.failure=failure;diagnostic.failure(failure.code,failure);recordFailure(id,version,failure);}
         catch(RuntimeException failure){flight.failure=new GatewayFailure("INVALID_MODEL_CATALOG");diagnostic.failure(flight.failure.code,failure);}
         finally{if(admitted)endRequest(id,flight.operation);synchronized(this){flight.done.countDown();if(flight.waiters==0)catalogFlights.remove(flight.key,flight);}flight.operation.close();diagnostic.close();}
     }
     /** Pin only facts from this gateway's completed same-token catalog; UI cannot supply capability booleans. */
     public synchronized JSONObject selectModelReviewed(String accountId,long version,String modelId)throws GatewayFailure {
-        open();JSONObject row=reviewedRow(accountId,version);usable(row);JSONObject catalog=catalogs.get(accountId);
-        if(catalog==null||catalog.optLong("version",-1)!=version)throw new GatewayFailure("STALE_MODEL_CATALOG");
-        pinCatalogEvidence(accountId,version,modelId,catalog.optJSONArray("models"));book.select(accountId);return snapshot();
+        open();JSONObject row=reviewedRow(accountId,version);usable(row);
+        modelCatalog.pinReviewed(accountId,version,modelId);book.select(accountId);return snapshot();
     }
     public synchronized boolean supportsImageInput(String accountId,long version,String modelId){
         try{open();JSONObject row=reviewedRow(accountId,version);usable(row);
@@ -251,35 +250,6 @@ public final class AccountGateway implements AutoCloseable {
         try{open();JSONObject row=reviewedRow(accountId,version);return row.optBoolean("enabled")&&row.optBoolean("planUsageEnabled")&&row.optBoolean("usageLimited");}
         catch(GatewayFailure unavailable){return false;}
     }
-    private void refreshPinnedEvidence(String id,long version,JSONArray models)throws GatewayFailure {
-        JSONObject row=book.row(id),prior=AccountBook.modelEvidence(row,version);
-        if(prior==null){JSONObject image=row.optJSONObject("imageEvidence");if(image==null||image.optLong("accountVersion",-1)!=version)return;prior=AccountBook.json(image.optString("modelId"),new JSONObject());}
-        JSONObject refreshed=new JSONObject();
-        for(java.util.Iterator<String> names=prior.keys();names.hasNext();){String model=names.next();JSONObject entry=catalogEntry(model,models);
-            try{refreshed.put(model,entry==null?AccountBook.json("unavailable",true):entry);}catch(org.json.JSONException invalid){throw new GatewayFailure("INVALID_MODEL_CATALOG");}}
-        saveCatalogEvidence(id,version,refreshed);
-    }
-    private void pinCatalogEvidence(String id,long version,String model,JSONArray models)throws GatewayFailure {
-        JSONObject entry=catalogEntry(model,models);if(entry==null)throw new GatewayFailure("STALE_MODEL_CATALOG");
-        JSONObject pinned=AccountBook.modelEvidence(book.row(id),version);if(pinned==null)pinned=new JSONObject();
-        try{pinned.put(model,entry);}catch(org.json.JSONException invalid){throw new GatewayFailure("INVALID_MODEL_CATALOG");}
-        saveCatalogEvidence(id,version,pinned);
-    }
-    private void saveCatalogEvidence(String id,long version,JSONObject models)throws GatewayFailure {
-        // The default selection is not the identity of other tasks using this account/version.
-        book.metadata(id,version,AccountBook.json("imageEvidence",new JSONObject(),"modelEvidence",AccountBook.json("accountVersion",version,"models",models)));
-    }
-    private static JSONObject catalogEntry(String model,JSONArray models)throws GatewayFailure {
-        JSONObject found=null;
-        if(models!=null)for(int i=0;i<models.length();i++){JSONObject item=models.optJSONObject(i);if(item!=null&&model.equals(item.optString("id"))){if(found!=null)throw new GatewayFailure("INVALID_MODEL_CATALOG");found=item;}}
-        if(found==null)return null;JSONObject fact=found.optJSONObject("imageInput");
-        if(fact==null)throw new GatewayFailure("INVALID_MODEL_CATALOG");
-        JSONObject modelEvidence=AccountBook.json("catalogFacts",found.optJSONObject("catalogFacts"),"imageEvidence",fact);
-        try{dev.pocketengine.runtime.models.AccountCatalogFacts.fromJson(modelEvidence.getJSONObject("catalogFacts"));}
-        catch(Exception invalid){throw new GatewayFailure("INVALID_MODEL_CATALOG");}
-        return modelEvidence;
-    }
-    private static JSONArray copyArray(JSONArray array)throws GatewayFailure {try{return new JSONArray(array.toString());}catch(Exception invalid){throw new GatewayFailure("INVALID_MODEL_CATALOG");}}
     private void requireImageEvidence(String id,long version,ResponsesRequest request)throws GatewayFailure {
         if(request.hasImages()&&!supportsImageInput(id,version,request.modelId()))throw new GatewayFailure("ACCOUNT_IMAGE_CAPABILITY_REQUIRED");
     }
@@ -308,12 +278,11 @@ public final class AccountGateway implements AutoCloseable {
                     // Native selected-model preparation always requires the catalog; observed
                     // evidence, images and explicit reasoning can never fall back to unknown.
                     if(!requireCatalog&&book.row(id).optJSONObject("modelEvidence")==null)return new PreparedModel(actual.version,null);
-                    JSONObject cached=catalogs.get(id);long now=System.currentTimeMillis(),at=cached==null?0:cached.optLong("observedAt");
-                    if(cached!=null&&cached.optLong("version",-1)==actual.version&&at>0&&at<=now&&now-at<=dev.pocketengine.runtime.models.ModelConnectionService.MAX_CATALOG_AGE_MILLIS){
-                        pinCatalogEvidence(id,actual.version,model,cached.optJSONArray("models"));return new PreparedModel(actual.version,book.modelFacts(id,actual.version,model));}
+                    if(modelCatalog.pinFresh(id,actual.version,model,System.currentTimeMillis()))
+                        return new PreparedModel(actual.version,book.modelFacts(id,actual.version,model));
                 }
                 JSONArray models=readCatalog(id,actual,operation);
-                synchronized(this){checkStreamFence(id,actual.version,operation);pinCatalogEvidence(id,actual.version,model,models);return new PreparedModel(actual.version,book.modelFacts(id,actual.version,model));}
+                synchronized(this){checkStreamFence(id,actual.version,operation);modelCatalog.pin(id,actual.version,model,models);return new PreparedModel(actual.version,book.modelFacts(id,actual.version,model));}
             }catch(GatewayFailure failure){
                 // A concurrent same-grant rotation can obsolete a read. Rebuild only preparation,
                 // at most once, while the caller's original deadline and cancellation remain active.

@@ -33,6 +33,7 @@ import androidx.activity.ComponentActivity
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import dev.pocketengine.core.RuntimeDiagnostics
 import dev.pocketengine.ui.ComposeActivity
 import dev.pocketengine.ui.PocketWorldController
 import java.io.ByteArrayInputStream
@@ -107,7 +108,9 @@ internal class PocketWebHost private constructor(
         // Keep saved input available to the same workspace's retry even if its bundle cannot load.
         bridge.restorePresentationState(savedPresentation)
         bundle = try {
-            activity.assets.open("pocket-ui/build-identity.json").use { PocketWebBundle.read(it) }
+            RuntimeDiagnostics.observe("webview", null, "BUNDLE_IDENTITY_UNAVAILABLE") {
+                activity.assets.open("pocket-ui/build-identity.json").use { PocketWebBundle.read(it) }
+            }
         } catch (_: Exception) {
             if (failReader()) return
             // The renderer cannot report an invalid packaged identity; retry reopens this same UI.
@@ -172,13 +175,13 @@ internal class PocketWebHost private constructor(
                 sendConfiguration()
             }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                Log.e(TAG, "resource-error code=${error.errorCode} path=${request.url.path}")
+                RuntimeDiagnostics.event("webview", "failed", "RESOURCE_LOAD_FAILED", null, null)
                 if (readerFailure != null) failReader()
                 else if (criticalWorkspaceResource(request)) showReopenPrompt()
             }
             override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, error: WebResourceResponse) {
                 if (error.statusCode >= 400) {
-                    Log.e(TAG, "resource-error status=${error.statusCode} path=${request.url.path}")
+                    RuntimeDiagnostics.event("webview", "failed", "RESOURCE_HTTP_FAILED", null, null)
                     if (readerFailure != null) failReader()
                     else if (criticalWorkspaceResource(request)) showReopenPrompt()
                 }
@@ -195,16 +198,14 @@ internal class PocketWebHost private constructor(
         }
         web.webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(message: ConsoleMessage): Boolean {
-                val text = message.message().take(1600)
-                // The trusted address surface can contain private URLs. Never copy its
-                // console text into Android logs, including startup exception messages.
-                if (bridge.surface != "browser_chrome") {
-                    if (message.messageLevel() == ConsoleMessage.MessageLevel.ERROR) Log.e(TAG, "console-error $text")
-                    else if (text.contains("PocketWebUi")) Log.i(TAG, text)
-                } else if (message.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
-                    Log.e(TAG, "browser-chrome-console-error")
+                // Every surface can render private model, account or document data.
+                // Inspect only the recovery marker; never export console bodies/source URLs.
+                val startupFailed = message.message().startsWith("PocketWebUi startup-error")
+                if (startupFailed || message.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                    RuntimeDiagnostics.event("webview", "failed",
+                        if (startupFailed) "WORKSPACE_STARTUP_FAILED" else "CONSOLE_ERROR", null, null)
                 }
-                if (text.startsWith("PocketWebUi startup-error")) {
+                if (startupFailed) {
                     if (readerFailure != null) failReader() else showReopenPrompt()
                 }
                 return true

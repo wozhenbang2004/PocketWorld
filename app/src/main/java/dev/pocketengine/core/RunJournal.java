@@ -38,6 +38,7 @@ public interface RunJournal {
             public boolean hasNativeProjectRunningAck(String operationId,JSONObject deliveredReceipt)throws Exception{return original.hasNativeProjectRunningAck(operationId,deliveredReceipt);}
             public JSONObject projectServiceExitEvidence(JSONArray provenLaunchOperationIds)throws Exception{return original.projectServiceExitEvidence(provenLaunchOperationIds);}
             public InferenceCapture.Target inferenceTarget(InferenceReceipt.Purpose purpose,String memberId)throws Exception{return original.inferenceTarget(purpose,memberId);}
+            public InferenceCapture.Target inferenceTarget(InferenceReceipt.Purpose purpose,String memberId,InferenceReceipt.CallSite site)throws Exception{return original.inferenceTarget(purpose,memberId,site);}
             public boolean reserveModelRecovery(String failedCall,long waitMillis)throws Exception{return original.reserveModelRecovery(failedCall,waitMillis);}
             public int executionStepCeiling(int captured)throws Exception{return original.executionStepCeiling(captured);}
         };
@@ -70,5 +71,9 @@ public interface RunJournal {
     /** Native accounting evidence only. Older/isolated journals provide no attributed sink. */
     default InferenceCapture.Target inferenceTarget(InferenceReceipt.Purpose purpose,String memberId)throws Exception{
         return InferenceCapture.unattributed();
+    }
+    /** Original Runner cycle identity, carried through the same native accounting admission. */
+    default InferenceCapture.Target inferenceTarget(InferenceReceipt.Purpose purpose,String memberId,InferenceReceipt.CallSite site)throws Exception{
+        return inferenceTarget(purpose,memberId);
     }
 }

@@ -84,7 +84,7 @@ final class TaskUsageQuery {
         }
         if(!privateHeader(header))throw new SecurityException("诊断只读取本机主人私人任务，渠道及群任务不在此范围");
         String run=header.optString("runId");int epoch=header.optInt("coordinatorEpoch",-1);
-        if(!run.matches("[a-fA-F0-9-]{36}")||epoch<0)throw new SecurityException("原执行身份未知");
+        if(run.isEmpty()||run.length()>200||!run.matches("[A-Za-z0-9_.:-]+")||epoch<0)throw new SecurityException("原执行身份未知");
         JSONArray receipts=new JSONArray(),operations=new JSONArray();boolean limited=false;int bytes=0;
         StringBuilder source=new StringBuilder(task).append(':').append(run).append(':').append(epoch).append(':').append(revision);
         int examinedCalls=0;
@@ -118,9 +118,10 @@ final class TaskUsageQuery {
                 operations.put(value.put("outcome",terminal).put("terminalReceiptObserved",finalReceipt).put("finishedAt",JSONObject.NULL));
             }
         }
+        JSONObject tools=TaskTraceQuery.toolSource(db,task,run,epoch,control);source.append(tools.getString("revision"));limited|=tools.optBoolean("limited");
         control.check();return new JSONObject().put("format","pocketworld.trace-source.v1").put("taskId",task).put("runId",run)
                 .put("epoch",epoch).put("sourceRevision",digest(source.toString())).put("capturedAt",System.currentTimeMillis())
-                .put("receipts",receipts).put("operations",operations).put("limited",limited).put("scope","owner/private_supported_local_origins_only")
+                .put("receipts",receipts).put("operations",operations).put("toolCalls",tools.getJSONArray("toolCalls")).put("limited",limited).put("scope","owner/private_supported_local_origins_only")
                 .put("readOnly",true).put("executionAuthorized",false);
     }
     private static String digest(String value)throws Exception{StringBuilder out=new StringBuilder();for(byte b:MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)))out.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return out.toString();}
