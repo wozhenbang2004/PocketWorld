@@ -2,8 +2,15 @@ package dev.pocketengine.runtime.extensions;
 
 import static org.junit.Assert.*;
 import dev.pocketengine.core.RunControl;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import org.json.JSONArray;
@@ -103,19 +110,53 @@ public final class ExtensionRuntimeTest {
         String source="const method=JSON.parse(pocket.resources['extension-request.json']).method;defineExtension({tools:[{name:method==='describe'?'first':'changed',description:'Dynamic fixture',parameters:{type:'object'},execute(){return {value:'not admitted'};}}],context(){return {text:'not admitted'};}});";
         try{runtime.mount(program(source),control);assertThrows(IllegalArgumentException.class,()->runtime.context(new JSONObject(),control));}finally{runtime.close();}
     }
+    @Test public void nodeFixtureDrainsLargeOutputBeforeWaitingForExit()throws Exception {
+        Node evaluator=new Node();RunControl control=control();java.util.concurrent.atomic.AtomicReference<Process> owned=new java.util.concurrent.atomic.AtomicReference<>();
+        try{
+            String output=evaluator.evaluate("JSON.stringify({value:'x'.repeat(60000)})".getBytes(StandardCharsets.UTF_8),new JSONObject(),2000,control,()->{if(evaluator.active!=null)owned.set(evaluator.active);});
+            assertEquals("x".repeat(60000),new JSONObject(output).getString("value"));assertNotNull(owned.get());assertFalse(owned.get().isAlive());assertNoNodeReaders(owned.get());
+        }finally{evaluator.close();}
+    }
+    @Test public void nodeFixtureCancellationAndTimeoutReapOnlyTheirOwnedProcessAndReaders()throws Exception {
+        for(boolean cancel:new boolean[]{true,false}){
+            Node evaluator=new Node();RunControl control=control();ExecutorService caller=Executors.newSingleThreadExecutor();
+            try{
+                Future<String> result=caller.submit(()->evaluator.evaluate("Promise.resolve().then(()=>{while(true){}})".getBytes(StandardCharsets.UTF_8),new JSONObject(),200,control,()->{}));
+                long ready=System.nanoTime()+TimeUnit.SECONDS.toNanos(1);while(evaluator.active==null&&System.nanoTime()<ready)Thread.sleep(5);Process owned=evaluator.active;assertNotNull(owned);
+                if(cancel)control.cancel();ExecutionException failure=assertThrows(ExecutionException.class,()->result.get(3,TimeUnit.SECONDS));
+                if(cancel)assertTrue(failure.getCause() instanceof InterruptedException);else assertEquals("Node fixture timeout",failure.getCause().getMessage());
+                assertFalse(owned.isAlive());assertNull(evaluator.active);assertNoNodeReaders(owned);
+            }finally{control.cancel();evaluator.close();caller.shutdownNow();assertTrue(caller.awaitTermination(1,TimeUnit.SECONDS));}
+        }
+    }
+    private static void assertNoNodeReaders(Process owned){String name="extension-node-drain-"+owned.pid();assertFalse(Thread.getAllStackTraces().keySet().stream().anyMatch(thread->thread.isAlive()&&thread.getName().equals(name)));}
 
     static final class Node implements ExtensionRuntime.Evaluator {
-        private Process active;
+        private volatile Process active;
         Node(){try{Process check=new ProcessBuilder("node","--version").start();Assume.assumeTrue("Node fixture unavailable",check.waitFor(5,TimeUnit.SECONDS)&&check.exitValue()==0);}catch(Exception absent){Assume.assumeNoException(absent);}}
         @Override public String evaluate(byte[] script,JSONObject request,int maxMillis,RunControl control,ExtensionRuntime.CurrentCheck current)throws Exception {
             current.check();String runner="const vm=require('node:vm');let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>s+=x);process.stdin.on('end',async()=>{try{const p=JSON.parse(s);const pocket=Object.freeze({args:Object.freeze([]),resources:Object.freeze({'extension-request.json':JSON.stringify(p.request)})});const value=await vm.runInNewContext(p.script,{pocket},{timeout:p.timeout});process.stdout.write(value);}catch(e){process.exitCode=1;}});";
             active=new ProcessBuilder("node","-e",runner).start();Process process=active;Runnable cancel=process::destroyForcibly;control.onCancel(cancel);
+            long deadline=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(maxMillis+1000L);
+            ExecutorService readers=Executors.newFixedThreadPool(2,task->{Thread thread=new Thread(task,"extension-node-drain-"+process.pid());thread.setDaemon(true);return thread;});
+            Future<byte[]> stdout=readers.submit(()->drain(process.getInputStream(),262144,process)),stderr=readers.submit(()->drain(process.getErrorStream(),65536,process));
             try{
                 JSONObject input=new JSONObject().put("script",new String(script,StandardCharsets.UTF_8)).put("request",request).put("timeout",maxMillis);
                 process.getOutputStream().write(input.toString().getBytes(StandardCharsets.UTF_8));process.getOutputStream().close();
-                if(!process.waitFor(maxMillis+1000L,TimeUnit.MILLISECONDS))throw new IllegalStateException("Node fixture timeout");control.check();current.check();
-                if(process.exitValue()!=0)throw new IllegalStateException("JS fixture failed");return new String(process.getInputStream().readAllBytes(),StandardCharsets.UTF_8);
-            }finally{control.removeCancelAction(cancel);process.destroyForcibly();active=null;}
+                if(!process.waitFor(Math.max(1,deadline-System.nanoTime()),TimeUnit.NANOSECONDS))throw new IllegalStateException("Node fixture timeout");control.check();current.check();
+                byte[] output=completed(stdout,deadline);completed(stderr,deadline);if(process.exitValue()!=0)throw new IllegalStateException("JS fixture failed");return new String(output,StandardCharsets.UTF_8);
+            }finally{
+                control.removeCancelAction(cancel);process.destroyForcibly();stdout.cancel(true);stderr.cancel(true);readers.shutdownNow();
+                try{process.waitFor(1,TimeUnit.SECONDS);readers.awaitTermination(1,TimeUnit.SECONDS);}catch(InterruptedException interrupted){Thread.currentThread().interrupt();}finally{active=null;}
+            }
+        }
+        private static byte[] drain(InputStream stream,int limit,Process process)throws Exception {
+            try(InputStream input=stream;ByteArrayOutputStream bytes=new ByteArrayOutputStream()){
+                byte[] buffer=new byte[8192];for(int count;(count=input.read(buffer))!=-1;){if(bytes.size()+count>limit)throw new IllegalStateException("Node fixture output exceeds bound");bytes.write(buffer,0,count);}return bytes.toByteArray();
+            }catch(Exception failure){process.destroyForcibly();throw failure;}
+        }
+        private static byte[] completed(Future<byte[]> read,long deadline)throws Exception {
+            try{return read.get(Math.max(1,deadline-System.nanoTime()),TimeUnit.NANOSECONDS);}catch(TimeoutException timeout){throw new IllegalStateException("Node fixture timeout",timeout);}catch(ExecutionException failed){if(failed.getCause() instanceof Exception cause)throw cause;throw failed;}
         }
         @Override public void close(){if(active!=null)active.destroyForcibly();}
     }
