@@ -75,6 +75,7 @@ test('namespace failure never reloads or restores an unconfirmed scope; private 
   const f = fixture(); await ready(f); f.values['knowledge.namespace'] = () => { throw new Error('范围选择失败'); };
   f.change('project-a'); await f.flush();
   assert.equal(count(f, 'knowledge.snapshot'), 1); assert.match(f.text, /范围选择失败/); assert.doesNotMatch(f.text, /正在读取原记忆|private 原记忆/);
+  assert.match(f.text, /请先重新选择范围/);
   assert.equal(f.select().props.value, ''); assert.equal(f.select().props.isDisabled, false);
   f.values['knowledge.namespace'] = () => ({ scopeName: '主人全局 · 私人' }); f.change('private'); await f.flush(); assert.match(f.text, /private 原记忆/);
 });
