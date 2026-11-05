@@ -38,7 +38,7 @@ import { DataOperationHeading, DataOperationRow, useDataSettingsJourney } from '
 import { backgroundConnection, modelConnectionCommand, wirelessEndpoints, wirelessPort } from './forms-library/host-contracts';
 import { ModelConnectionOptions, ModelConnectionTestFeedback } from './ModelConnectionOptions';
 import { compatibilityDraft, compatibilityNeedsSave, compatibilityOptions, connectionTestResult, type CompatibilityDraft, type ConnectionTestDraft } from './model-connection-policy';
-import { ACCOUNT_RECEIPT_ACTIONS, accountActionReceipt, accountLoginArguments } from './account-actions';
+import { ACCOUNT_RECEIPT_ACTIONS, accountActionReceipt, accountLoginArguments, accountLoginRecovery, accountStatusText, accountActionFailure } from './account-actions';
 
 /**
  * Product composition of the selected BoardUI SettingsModal/settings rows,
@@ -105,11 +105,11 @@ function Facts({ items }: { items: Array<[string, any]> }) {
   if (!visible.length) return null;
   return <dl className="pw-facts">{visible.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{text(value)}</dd></div>)}</dl>;
 }
-function SourceRecord({ item, titleKeys = ['name', 'title', 'goal', 'label', 'id'], children }: { item: Data; titleKeys?: string[]; children?: ReactNode }) {
+function SourceRecord({ item, titleKeys = ['name', 'title', 'goal', 'label', 'id'], children, formatStatus = statusText }: { item: Data; titleKeys?: string[]; children?: ReactNode; formatStatus?: (value: any) => string }) {
   const title = first(item, titleKeys, '未命名记录');
   const summary = first(item, ['description', 'summary', 'message', 'text']);
   const status = text(item.status || item.state || (typeof item.enabled === 'boolean' ? item.enabled ? 'enabled' : 'disabled' : ''));
-  return <article className="pw-source-record"><header><h3>{title}</h3>{status && <span>{statusText(status)}</span>}</header>
+  return <article className="pw-source-record"><header><h3>{title}</h3>{status && <span>{formatStatus(status)}</span>}</header>
     {summary && summary !== title && <p>{summary}</p>}
     {children}
   </article>;
@@ -771,9 +771,9 @@ function HistoryPage({ usage, supported, run }: { usage: boolean; supported: (ac
   </Card>;
 }
 
-function Collection({ data, keys, label, children, titleKeys }: { data: Data; keys: string[]; label: string; children?: (item: Data) => ReactNode; titleKeys?: string[] }) {
+function Collection({ data, keys, label, children, titleKeys, formatStatus }: { data: Data; keys: string[]; label: string; children?: (item: Data) => ReactNode; titleKeys?: string[]; formatStatus?: (value: any) => string }) {
   const loaded = hasRows(data, keys), records = list(rowsAt(data, keys));
-  return <>{!loaded ? <Empty>{'尚未读取' + label + '。'}</Empty> : records.length === 0 ? <Empty>{'当前读取窗口没有' + label + '。'}</Empty> : records.map((row, index) => <SourceRecord key={recordId(row, String(index))} item={row} titleKeys={titleKeys}>{children?.(row)}</SourceRecord>)}</>;
+  return <>{!loaded ? <Empty>{'尚未读取' + label + '。'}</Empty> : records.length === 0 ? <Empty>{'当前读取窗口没有' + label + '。'}</Empty> : records.map((row, index) => <SourceRecord key={recordId(row, String(index))} item={row} titleKeys={titleKeys} formatStatus={formatStatus}>{children?.(row)}</SourceRecord>)}</>;
 }
 
 /** BoardUI disclosures keep the record itself primary and its review actions local. */
@@ -870,6 +870,8 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack 
   const pending = Array.isArray(state.ownerPending) ? state.ownerPending : [];
   const locked = busy || Boolean(state.modelSelectionBusy) || pending.some((key: string) => key.startsWith('accounts.'));
   const accounts = list(data.accounts), login = object(data.login), selected = object(data.selectedModelRef);
+  const loginRecovery = accountLoginRecovery(login, data.accounts);
+  const loginAccount = accounts.find(row => row.id === login.accountId);
   const catalogBody = object(catalog?.catalog), catalogAccount = accounts.find(row => row.id === catalogBody.accountId);
   const catalogCurrent = Boolean(catalog && catalog.selectionRevision === state.modelSelectionRevision && catalogAccount?.version === catalogBody.accountVersion);
   const reviewCurrent = Boolean(review && review.selectionRevision === state.modelSelectionRevision && accounts.some(row => row.id === review.accountId && row.version === review.accountVersion));
@@ -877,6 +879,7 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack 
   const runAccount: Run = async (action, args = {}) => {
     if (!ACCOUNT_RECEIPT_ACTIONS.has(action)) return run(action, args);
     if (operationPending.current) throw new Error('请先等待本次账号操作的回执。');
+    if (needsAccountRead && ['accounts.beginLogin', 'accounts.reauthorize'].includes(action)) throw new Error('请先刷新账号状态，核对原授权后再继续。');
     const original = ++generation.current; operationPending.current = true; setBusy(true); setAccountFeedback(null); setCatalog(null); setReview(null);
     try {
       const value = await run(action, args), message = accountActionReceipt(action, args, value);
@@ -888,13 +891,14 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack 
       return value;
     } catch (failure) {
       if (alive.current && original === generation.current) {
-        setAccountFeedback({ message: failure instanceof Error ? failure.message : String(failure), error: true });
-        if ((failure as { code?: string })?.code !== 'native_failure' && action !== 'accounts.refresh') setNeedsAccountRead(true);
+        const feedback = accountActionFailure(failure);
+        setAccountFeedback({ message: feedback.message, error: true });
+        if (feedback.needsAccountRead && action !== 'accounts.refresh') setNeedsAccountRead(true);
       }
       throw failure;
     } finally { if (alive.current && original === generation.current) { operationPending.current = false; setBusy(false); } }
   };
-  const act = (action: string, args: Data, label: string, primary = false) => <CapabilityAction action={action} args={args} supported={supported} run={runAccount} disabled={locked} primary={primary}>{label}</CapabilityAction>;
+  const act = (action: string, args: Data, label: string, primary = false) => <CapabilityAction action={action} args={args} supported={supported} run={runAccount} disabled={locked || needsAccountRead && action === 'accounts.reauthorize'} primary={primary}>{label}</CapabilityAction>;
   const readModels = async (row: Data) => {
     if (operationPending.current || locked) return;
     const original = ++generation.current; operationPending.current = true; setBusy(true); setCatalog(null); setReview(null); setReceipt(null); setQuery('');
@@ -940,22 +944,33 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack 
       {accountFeedback && !adding && <p className={accountFeedback.error ? 'pw-field-error' : 'pw-receipt-copy'} role={accountFeedback.error ? 'alert' : 'status'}>{accountFeedback.message}</p>}
       {state.modelRoute === 'account' && data.selectedModelRef && <div className="pw-selected-object"><h3>当前账号模型</h3><Facts items={[[ '模型', selected.modelId ], ['账号', accounts.find(row => row.id === selected.accountId)?.label ], ['可用状态', data.selectedModelUsable ? '当前引用可用' : '需要重新读取目录并选择' ]]} /></div>}
       {data.planWelcomeRequired === true && welcomeAccount && <div className="pw-receipt-copy"><h3>已通过 ChatGPT 登录</h3><p>在本应用选择账号模型后，推理使用你的 ChatGPT 套餐，并受套餐和此应用的使用限制。登录不授予手机操作权限；图片仍需任务授权和目录支持。</p><div className="pw-form-actions">{act('accounts.acknowledgePlanWelcome', {accountId: welcomeAccount.id, expectedVersion: welcomeAccount.version}, '知道了')}{act('accounts.manageUsage', {}, '管理用量')}</div></div>}
-      <Collection data={data} keys={['accounts']} label="账号">{row => <>
-        <Facts items={[[ '套餐', row.plan || row.planName ], ['套餐使用权限', row.planUsageEnabled ? '已授予' : '尚未授予'], ['状态', statusText(row.status)], ['冷却至', timeText(row.cooldownUntil)], ['本机选择', data.selectedAccountId === row.id ? '当前账号' : undefined]]} />
+      <Collection data={data} keys={['accounts']} label="账号" formatStatus={accountStatusText}>{row => <>
+        <Facts items={[[ '套餐', row.plan || row.planName ], ['套餐使用权限', row.planUsageEnabled ? '已授予' : '尚未授予'], ['状态', accountStatusText(row.status)], ['冷却至', timeText(row.cooldownUntil)], ['本机选择', data.selectedAccountId === row.id ? '当前账号' : undefined]]} />
         {row.usageLimited && <p className="pw-field-hint">套餐请求已暂停。明确允许再试后，仍需回到原任务继续；不会自动发送请求。</p>}
         <StretchSwitch label="启用此账号" description="关闭会停止新的账号请求；已发生的远端操作仍需按原回执核对。" checked={row.enabled === true} disabled={locked || !supported('accounts.setEnabled')} onChange={enabled => { void runAccount('accounts.setEnabled', {accountId: row.id, expectedVersion: row.version, enabled}).catch(() => {}); }} />
-        {row.error && <p className="pw-field-error" role="alert">{text(row.error)}</p>}
+        {row.error && <p className="pw-field-error" role="alert">{row.error === 'LOGIN_EXPIRED' ? '上次登录授权已过期，请重新登录。' : text(row.error)}</p>}
         <div className="pw-form-actions">
           {act('accounts.select', { accountId: row.id, expectedVersion: row.version }, '选择此账号')}
           <Button variant="secondary" disabled={locked || !supported('accounts.models') || !row.enabled || !row.planUsageEnabled || row.usageLimited} onClick={() => readModels(row)}>读取模型目录</Button>
           {row.usageLimited && act('accounts.retryPlanUsage', { accountId: row.id, expectedVersion: row.version }, '允许手动再试')}
           {row.planUsageEnabled && act('accounts.manageUsage', {}, '管理套餐用量')}
           {row.enabled && !loginActive && row.status === 'connected' && act('accounts.refreshAuthorization', {accountId: row.id, expectedVersion: row.version}, '刷新授权')}
-          {row.enabled && !loginActive && (['signed_out', 'reauthorization_required'].includes(text(row.status)) || !row.planUsageEnabled) && act('accounts.reauthorize', {accountId: row.id, expectedVersion: row.version}, '重新登录此账号')}
+          {row.enabled && !loginActive && !(login.status === 'expired' && login.accountId === row.id) && (['signed_out', 'reauthorization_required'].includes(text(row.status)) || !row.planUsageEnabled) && act('accounts.reauthorize', {accountId: row.id, expectedVersion: row.version}, '重新登录此账号')}
           <Button variant="secondary" disabled={locked || !supported('accounts.logout.review')} onClick={() => prepare('logout', { accountId: row.id, expectedVersion: row.version })}>核对并退出</Button>
         </div>
       </>}</Collection>
-      {login.sessionId && <div className="pw-selected-object"><h3>本次授权</h3><Facts items={[[ '状态', statusText(login.status) ], ['到期时间', timeText(login.expiresAt) ]]} />{login.status === 'pending' && <div className="pw-form-actions">{act('accounts.openAuthorization', { sessionId: login.sessionId }, '打开原授权页面')}{act('accounts.cancelLogin', { sessionId: login.sessionId }, '取消本次授权')}</div>}</div>}
+      {login.sessionId && <section className="pw-selected-object" aria-label="本次授权"><h3>本次授权</h3><Facts items={[[ '账号', loginAccount?.label ], [ '状态', accountStatusText(login.status) ], ['到期时间', timeText(login.expiresAt) ]]} />
+        {login.status === 'pending' && <div className="pw-form-actions">{act('accounts.openAuthorization', { sessionId: login.sessionId }, '打开原授权页面')}{act('accounts.cancelLogin', { sessionId: login.sessionId }, '取消本次授权')}</div>}
+        {loginRecovery.kind !== 'none' && <>
+          <p className="pw-field-hint" role="status">这次登录授权已过期，原授权页面不能继续使用。{loginRecovery.kind === 'existing' ? '重新登录会为此账号准备新的授权。' : loginRecovery.kind === 'new' ? '重新开始登录，完成后再选择账号模型。' : loginRecovery.kind === 'disabled' ? '此账号已停用，请先在上方启用，再重新登录。' : '请刷新账号状态，核对原账号后再继续。'}</p>
+          {needsAccountRead && <p className="pw-field-hint">上次操作结果尚未确认，请先刷新账号状态。</p>}
+          <div className="pw-form-actions">
+            {loginRecovery.kind === 'existing' && act('accounts.reauthorize', { accountId: loginRecovery.accountId, expectedVersion: loginRecovery.expectedVersion }, '重新登录此账号', true)}
+            {loginRecovery.kind === 'new' && <PressButton compact disabled={locked || needsAccountRead || !supported('accounts.beginLogin')} onClick={() => { setAccountFeedback(null); setAdding(true); }}>重新开始登录</PressButton>}
+            {(needsAccountRead || loginRecovery.kind === 'unavailable') && act('accounts.refresh', {}, '核对原授权状态')}
+          </div>
+        </>}
+      </section>}
       {receipt && <div className="pw-receipt-copy" role="status">{receipt.status !== 'saved' ? '原操作结果待核对。请刷新账号状态；不会自动重试。' : receipt.kind === 'model' ? '模型选择已保存。当前使用状态以上方统一模型状态为准；已有任务保留原模型。' : actualReceipt.signedOutLocally ? '已在本机退出，账号记录保留。' + (actualReceipt.credentialCleanupRequired ? ' 本机凭据仍需清理。' : '') + (actualReceipt.remoteRevocationConfirmed ? ' 服务商确认撤销授权。' : ' 远端撤销尚未确认。') : '收到原退出回执，请刷新并核对本机状态。'}</div>}
     </Card>
     <SettingsDialog isOpen={adding} title="添加 ChatGPT 账号" onClose={() => { if (!busy) setAdding(false); }}>
