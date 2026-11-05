@@ -110,7 +110,17 @@ public final class ContextCompactor {
             try{checked=budget.request(projected,tools,selected);}
             catch(RunContextBudget.Blocked blocked){if(!"budget_exceeded".equals(blocked.status))throw blocked;}
             requirePlanning(planning,turn);
-            CompactionJournal.PublishReceipt receipt=host.publish(frozen,actual,original);
+            CompactionJournal.PublishReceipt receipt;
+            try{receipt=host.publish(frozen,actual,original);}
+            catch(CompactionPlan.Unavailable unavailable){
+                if("owner_input_not_materialized".equals(unavailable.code)&&host.canRebuildAfterOwnerInput(frozen,original)){
+                    // A new native steer is not a stale-source recovery grant. Discard this
+                    // candidate and let Runner claim/checkpoint the real input before replanning.
+                    active=null;summary=null;projectionId="";
+                    throw new CompactionPlan.Unavailable("summary_owner_input_changed");
+                }
+                throw unavailable;
+            }
             requirePlanning(planning,turn);
             if(!receipt.published())throw new CompactionPlan.Unavailable("summary_publish_"+receipt.status);
             active=frozen;summary=actual;projectionId=receipt.projectionId;generated=true;

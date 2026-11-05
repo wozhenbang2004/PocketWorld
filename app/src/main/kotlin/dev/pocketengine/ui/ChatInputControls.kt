@@ -19,7 +19,7 @@ internal object ChatInputRules {
  fun mergeReceipt(old:JSONObject?,incoming:JSONObject):JSONObject?{
   val client=incoming.optString("clientMessageId");val status=incoming.optString("status");if(client.isBlank()||status !in setOf("accepted","queued","unconfirmed","consumed","withdrawn","rejected"))return null
   if(status!="unconfirmed"&&(incoming.optString("messageId").isBlank()||incoming.optString("conversationId").isBlank()||incoming.optString("taskId").isBlank()||incoming.optString("runId").isBlank()||incoming.optInt("epoch")<1))return null
-  if(status=="rejected"&&(incoming.opt("notAdmitted")!=true||incoming.opt("reconciliationRequired")!=false||incoming.optString("reason")!="mailbox_closed"))return null
+  if(status=="rejected"&&(incoming.opt("notAdmitted")!=true||incoming.opt("reconciliationRequired")!=false||incoming.optString("reason") !in setOf("mailbox_closed","capacity_reached")))return null
   if(status=="consumed"&&(incoming.optString("replyMessageId").isBlank()||incoming.optLong("consumedAt")<=0))return null
   val queueVersion=incoming.opt("queueRevision");if(incoming.has("queueRevision")&&(queueVersion !is Int&&queueVersion !is Long||incoming.optLong("queueRevision")<1))return null
   val messageVersion=incoming.opt("ownerMessageRevision");if(status=="withdrawn"&&(incoming.optLong("queueRevision")<1||messageVersion !is Int&&messageVersion !is Long||incoming.optLong("ownerMessageRevision")<1))return null

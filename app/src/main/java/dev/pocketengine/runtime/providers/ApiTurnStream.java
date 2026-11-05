@@ -328,7 +328,7 @@ public final class ApiTurnStream {
                     if (function != null) {
                         if (function.has("name")) {
                             String name = text(function, "name", 256);
-                            String assembled=call.name==null?name:call.name.equals(name)?call.name:call.name+name;
+                            String assembled=call.name==null?name:call.name+name;
                             boolean prefix=false;for(String offered:names)if(offered.startsWith(assembled)){prefix=true;break;}
                             if(!prefix)throw invalid();call.name=assembled;
                             if (call.name.length() > 256) throw invalid();

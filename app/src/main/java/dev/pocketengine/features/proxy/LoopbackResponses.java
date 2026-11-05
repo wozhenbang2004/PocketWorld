@@ -183,9 +183,17 @@ final class LoopbackResponses {
             .put("error",JSONObject.NULL).put("incomplete_details",JSONObject.NULL).put("model",model).put("store",false).put("output",items);
         if(usage==null)result.put("usage",JSONObject.NULL);
         else{
-            keys(usage,"input_tokens","output_tokens","total_tokens");JSONObject counts=new JSONObject();
+            keys(usage,"input_tokens","output_tokens","total_tokens","input_tokens_details","output_tokens_details");JSONObject counts=new JSONObject();
             for(String key:new String[]{"input_tokens","output_tokens","total_tokens"})if(usage.has(key)){
                 Object raw=usage.get(key);if(!(raw instanceof Integer||raw instanceof Long)||((Number)raw).longValue()<0)throw protocol();counts.put(key,raw);
+            }
+            for(String parent:new String[]{"input_tokens_details","output_tokens_details"})if(usage.has(parent)){
+                JSONObject details=usage.optJSONObject(parent);if(details==null)throw protocol();
+                String key=parent.equals("input_tokens_details")?"cached_tokens":"reasoning_tokens";keys(details,key);
+                JSONObject safe=new JSONObject();if(details.has(key)){
+                    Object raw=details.get(key);if(!(raw instanceof Integer||raw instanceof Long)||((Number)raw).longValue()<0)throw protocol();safe.put(key,raw);
+                }
+                counts.put(parent,safe);
             }
             // Missing counters/details stay missing; never manufacture token accounting.
             result.put("usage",counts);

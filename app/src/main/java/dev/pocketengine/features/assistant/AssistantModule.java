@@ -502,7 +502,7 @@ public final class AssistantModule implements EngineModule {
                 // exceptions retain the original query-only receipt and must not be replayed.
                 if(!starting&&!resuming&&failure instanceof dev.pocketengine.core.OwnerInputNotAdmittedException){
                     JSONObject rejected=copy(message.getJSONObject("submission")).put("status","rejected").put("notAdmitted",true)
-                            .put("reconciliationRequired",false).put("reason","mailbox_closed");
+                            .put("reconciliationRequired",false).put("reason",((dev.pocketengine.core.OwnerInputNotAdmittedException)failure).reason());
                     for(String key:new String[]{"taskId","runId","epoch"})rejected.put(key,expected.get(key));
                     commit(()->{findMessage(find(cid),message.getString("id")).put("submission",copy(rejected));source(message.getString("id")).put("submission",copy(rejected));return null;});
                     context.emit(id(),copy(rejected).put("phase","rejected"));return rejected;

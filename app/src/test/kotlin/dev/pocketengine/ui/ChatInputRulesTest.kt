@@ -45,4 +45,10 @@ class ChatInputRulesTest {
   assertSame(rejected,ChatInputRules.mergeReceipt(rejected,receipt("accepted")))
   assertFalse(ChatInputRules.receiptMatchesOriginal(rejected,"conversation",JSONObject().put("taskId","task").put("runId","successor").put("epoch",1)))
  }
+ @Test fun capacityRejectionUsesTheSameProofWithoutTreatingAnUnknownFailureAsRetryable(){
+  val rejected=receipt("rejected").put("notAdmitted",true).put("reconciliationRequired",false).put("reason","capacity_reached")
+  assertNotNull(ChatInputRules.mergeReceipt(receipt("unconfirmed"),rejected))
+  assertNull(ChatInputRules.mergeReceipt(null,JSONObject(rejected.toString()).put("reason","transport_failed")))
+  assertNull(ChatInputRules.mergeReceipt(receipt("accepted"),rejected))
+ }
 }

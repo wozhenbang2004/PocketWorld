@@ -67,12 +67,22 @@ public final class ChatGptProvider implements AutoCloseable {
         return new Grant(tokens,identity.issuer,identity.subject,identity.email);
     }
     public Grant refresh(String clientId,Credentials old,String expectedSubject,GatewayCall operation,long now)throws GatewayFailure {
+        return refresh(clientId,old,expectedSubject,operation,now,(tokens,receivedAt,identityRequired)->{});
+    }
+    /** Persist a rotated bundle before an identity-key lookup can fail; it is not yet usable. */
+    public interface RefreshCheckpoint {void save(Credentials tokens,long receivedAt,boolean identityRequired)throws GatewayFailure;}
+    public Grant refresh(String clientId,Credentials old,String expectedSubject,GatewayCall operation,long now,RefreshCheckpoint checkpoint)throws GatewayFailure {
         if(old.refreshToken().isEmpty())throw new GatewayFailure("REAUTHORIZATION_REQUIRED");
         JSONObject response=postToken(new FormBody.Builder().add("grant_type","refresh_token").add("client_id",clientId).add("refresh_token",old.refreshToken()).add("resource",RESOURCE).build(),operation,"refresh");
-        Credentials tokens=tokens(response,old,now);
+        long receivedAt=System.currentTimeMillis();Credentials tokens=tokens(response,old,receivedAt);boolean identityRequired=response.has("id_token");
+        checkpoint.save(tokens,receivedAt,identityRequired);
+        return resumeRefresh(clientId,tokens,expectedSubject,identityRequired,receivedAt,operation);
+    }
+    /** Resume only verification of an encrypted checkpoint, never replay the consumed refresh grant. */
+    public Grant resumeRefresh(String clientId,Credentials tokens,String expectedSubject,boolean identityRequired,long receivedAt,GatewayCall operation)throws GatewayFailure {
         String email="",subject=expectedSubject;
-        if(response.has("id_token")){
-            OidcIdentityVerifier.Identity identity=identity(tokens,clientId,null,operation,now);
+        if(identityRequired){
+            OidcIdentityVerifier.Identity identity=identity(tokens,clientId,null,operation,receivedAt);
             if(!identity.subject.equals(expectedSubject))throw new GatewayFailure("ACCOUNT_IDENTITY_MISMATCH");email=identity.email;subject=identity.subject;
         }
         return new Grant(tokens,issuer,subject,email);

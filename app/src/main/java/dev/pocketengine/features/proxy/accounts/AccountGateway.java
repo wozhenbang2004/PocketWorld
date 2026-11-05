@@ -152,7 +152,7 @@ public final class AccountGateway implements AutoCloseable {
         synchronized(this){
             open();JSONObject row=expectedVersion==null?book.row(accountId):reviewedRow(accountId,expectedVersion);
             if(expectedVersion!=null)operation.check();client=row.optString("clientId");
-            try{prior=book.credentials(accountId,row.optLong("version"));}catch(GatewayFailure unavailable){}
+            try{AccountBook.PendingRefresh pending=book.pendingRefresh(accountId,row.optLong("version"));prior=pending==null?book.credentials(accountId,row.optLong("version")):pending.credentials();}catch(GatewayFailure unavailable){}
             JSONObject signedOut=book.signOut(accountId);version=signedOut.optLong("version");cancelOperations(accountId);
             if(login!=null&&login.accountId.equals(accountId)&&("pending".equals(login.status)||"exchanging".equals(login.status)))endLogin(login,"cancelled","SIGNED_OUT");
         }
@@ -272,7 +272,7 @@ public final class AccountGateway implements AutoCloseable {
         Credentials tokens;
         synchronized(this){
             open();operation.check();JSONObject row=reviewedRow(accountId,expectedVersion);usable(row);
-            if(refreshes.containsKey(accountId)||"refreshing".equals(row.optString("status")))throw new GatewayFailure("ACCOUNT_REFRESH_REQUIRED");
+            if(refreshes.containsKey(accountId)||"refreshing".equals(row.optString("status"))||row.optJSONObject("pendingRefresh")!=null)throw new GatewayFailure("ACCOUNT_REFRESH_REQUIRED");
             tokens=book.credentials(accountId,expectedVersion);
             if(tokens.expiresAt<=System.currentTimeMillis()+60_000)throw new GatewayFailure("ACCOUNT_REFRESH_REQUIRED");
             requireImageEvidence(accountId,expectedVersion,request);request.admit(modelFacts(accountId,expectedVersion,request.modelId()));
@@ -341,13 +341,13 @@ public final class AccountGateway implements AutoCloseable {
             if(flight==null&&"refreshing".equals(row.optString("status")))throw new GatewayFailure("REAUTHORIZATION_REQUIRED");
             if(flight!=null){if(flight.waiters>=8)throw new GatewayFailure("REFRESH_QUEUE_FULL");flight.waiters++;}
             else{
-                Credentials old=book.credentials(id,row.optLong("version"));
-                if(!force&&old.expiresAt>System.currentTimeMillis()+60_000)return new Authorized(old,row.optLong("version"));
+                Credentials old=book.credentials(id,row.optLong("version"));AccountBook.PendingRefresh pending=book.pendingRefresh(id,row.optLong("version"));
+                if(pending==null&&!force&&old.expiresAt>System.currentTimeMillis()+60_000)return new Authorized(old,row.optLong("version"));
                 if(!networkSlots.tryAcquire())throw new GatewayFailure("GATEWAY_BUSY");
                 try{
                     long admittedVersion=row.optLong("version");
                     row=book.update(id,admittedVersion,AccountBook.json("status","refreshing","error",""));
-                    flight=new Flight(row,old,operation,admittedVersion);refreshes.put(id,flight);track(id,operation);leader=true;
+                    flight=new Flight(row,old,operation,admittedVersion,pending);refreshes.put(id,flight);track(id,operation);leader=true;
                 }catch(GatewayFailure failure){networkSlots.release();throw failure;}
             }
         }
@@ -361,14 +361,22 @@ public final class AccountGateway implements AutoCloseable {
             finally{synchronized(this){flight.waiters--;}}
         }
         try{
-            ChatGptProvider.Grant fresh=provider.refresh(flight.row.optString("clientId"),flight.prior,flight.row.optString("subject"),operation,System.currentTimeMillis());
+            Flight original=flight;String account=id;AccountBook.PendingRefresh pending=flight.pending;
+            ChatGptProvider.Grant fresh=pending==null?provider.refresh(flight.row.optString("clientId"),flight.prior,flight.row.optString("subject"),operation,System.currentTimeMillis(),(tokens,at,identityRequired)->{
+                // The token response already consumed the old grant. Cancellation may stop
+                // verification, but must not discard this bundle while its exact account still exists.
+                synchronized(this){JSONObject row=book.row(account);checkFence(row,original.row.optLong("version"));enabled(row);book.checkpointRefresh(account,original.row.optLong("version"),tokens,at,identityRequired);}
+            }):provider.resumeRefresh(flight.row.optString("clientId"),pending.credentials(),flight.row.optString("subject"),pending.identityRequired(),pending.receivedAt(),operation);
             synchronized(this){open();operation.check();String email=fresh.email.isEmpty()?flight.row.optString("email"):fresh.email;
                 JSONObject saved=book.publish(id,flight.row.optLong("version"),fresh.credentials,fresh.issuer,fresh.subject,email);
+                // A long verification outage may outlive the checkpoint's access token.
+                // Retain its verified rotated refresh token, but never dispatch expired access.
+                if(fresh.credentials.expiresAt<=System.currentTimeMillis()+60_000)throw new GatewayFailure("ACCOUNT_REFRESH_REQUIRED");
                 flight.result=new Authorized(fresh.credentials,saved.optLong("version"));return flight.result;}
         }catch(GatewayFailure failure){
             synchronized(this){flight.failure=failure;try{
                 JSONObject row=book.row(id);if(row.optLong("version")==flight.row.optLong("version")){
-                    if(failure.code.equals("REAUTHORIZATION_REQUIRED"))book.invalidateCredentials(id,row.optLong("version"),failure.code);
+                    if(Set.of("REAUTHORIZATION_REQUIRED","INVALID_IDENTITY_TOKEN","ACCOUNT_IDENTITY_MISMATCH","INVALID_TOKEN_RESPONSE","REFRESH_CHECKPOINT_UNAVAILABLE").contains(failure.code))book.invalidateCredentials(id,row.optLong("version"),failure.code);
                     else book.update(id,row.optLong("version"),AccountBook.json("status",failure.retryAt>0?"cooldown":"connected","error",failure.code,"cooldownUntil",failure.retryAt,"diagnostics",failure.diagnostics()));
                 }
             }catch(GatewayFailure storage){flight.failure=storage;}}
@@ -411,7 +419,7 @@ public final class AccountGateway implements AutoCloseable {
         final Credentials tokens;final long version;Authorized(Credentials tokens,long version){this.tokens=tokens;this.version=version;}
     }
     private static final class Flight {
-        final JSONObject row;final Credentials prior;final GatewayCall owner;final long admittedVersion;final CountDownLatch done=new CountDownLatch(1);int waiters;GatewayFailure failure;Authorized result;
-        Flight(JSONObject row,Credentials prior,GatewayCall owner,long admittedVersion){this.row=row;this.prior=prior;this.owner=owner;this.admittedVersion=admittedVersion;}
+        final JSONObject row;final Credentials prior;final GatewayCall owner;final long admittedVersion;final AccountBook.PendingRefresh pending;final CountDownLatch done=new CountDownLatch(1);int waiters;GatewayFailure failure;Authorized result;
+        Flight(JSONObject row,Credentials prior,GatewayCall owner,long admittedVersion,AccountBook.PendingRefresh pending){this.row=row;this.prior=prior;this.owner=owner;this.admittedVersion=admittedVersion;this.pending=pending;}
     }
 }
