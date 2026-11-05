@@ -64,6 +64,25 @@ public class ChatGptProviderTest {
             try{provider.stream(credentials(),"fixture-model","",new JSONArray().put(new JSONObject().put("role","system").put("content","x")),new GatewayCall(5000),event->fail());fail();}catch(GatewayFailure expected){assertEquals("UNSUPPORTED_OR_OVERSIZED_INPUT",expected.code);}assertEquals(1,fake.responses.get());
         }
     }
+    @Test public void authorizationOmitsHostIdForNewAndRetainedClientsWithoutChangingSecurityParameters()throws Exception {
+        String hostId="urn:uuid:00000000-0000-4000-8000-000000000000",callback="http://127.0.0.1:12345/auth/callback";
+        try(ChatGptProvider provider=new ChatGptProvider()){
+            for(String clientId:new String[]{"","oaiapp_retained"}){
+                okhttp3.HttpUrl url=okhttp3.HttpUrl.get(provider.authorizationUrl(hostId,clientId,callback,"state-value","nonce-value","challenge-value"));
+                java.util.Set<String> expected=new java.util.HashSet<>(java.util.Arrays.asList("client_id","response_type","redirect_uri","scope","resource","state","nonce","code_challenge_method","code_challenge"));
+                if(clientId.isEmpty())expected.add("agent_name_hint");
+                assertEquals(expected,url.queryParameterNames());assertEquals(expected.size(),url.querySize());
+                assertNull(url.queryParameter("ext_agent_host_id"));assertFalse(url.toString().contains(hostId));
+                assertEquals("https",url.scheme());assertEquals("auth.openai.com",url.host());assertEquals("/api/accounts/authorize",url.encodedPath());
+                assertEquals(clientId.isEmpty()?"dynamic_agent_client":clientId,url.queryParameter("client_id"));
+                assertEquals("code",url.queryParameter("response_type"));assertEquals(callback,url.queryParameter("redirect_uri"));
+                assertEquals(ChatGptProvider.SCOPES,url.queryParameter("scope"));assertEquals(ChatGptProvider.RESOURCE,url.queryParameter("resource"));
+                assertEquals("state-value",url.queryParameter("state"));assertEquals("nonce-value",url.queryParameter("nonce"));
+                assertEquals("S256",url.queryParameter("code_challenge_method"));assertEquals("challenge-value",url.queryParameter("code_challenge"));
+                assertEquals(clientId.isEmpty()?"Pocket World":null,url.queryParameter("agent_name_hint"));
+            }
+        }
+    }
     @Test public void productionAuthorizationUsesOnlyFixedOriginsAndNoArbitraryRedirect()throws Exception {
         try(ChatGptProvider provider=new ChatGptProvider()){
             String url=provider.authorizationUrl("urn:uuid:00000000-0000-4000-8000-000000000000","","http://127.0.0.1:12345/auth/callback","state","nonce","challenge");assertTrue(url.startsWith("https://auth.openai.com/api/accounts/authorize?"));assertFalse(url.contains("backend-api"));assertFalse(url.contains("id_token_hint"));

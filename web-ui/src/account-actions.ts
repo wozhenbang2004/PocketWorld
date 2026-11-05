@@ -24,3 +24,33 @@ export function accountActionReceipt(action: string, args: RecordValue, value: R
   if (action === 'accounts.refresh') return '已重新读取账号状态。';
   return '已收到本次账号操作回执，当前状态见账号记录。';
 }
+
+type LoginRecovery = { kind: 'none' | 'new' | 'disabled' | 'unavailable' } | { kind: 'existing'; accountId: string; expectedVersion: number };
+
+export function accountStatusText(value: unknown): string {
+  const labels: Record<string, string> = { pending: '等待浏览器授权', exchanging: '正在完成授权', complete: '授权已完成', expired: '授权已过期',
+    cancelled: '已取消授权', interrupted: '授权已中断', failed: '授权未完成', authorizing: '等待授权',
+    refreshing: '正在刷新授权', signed_out: '已退出', reauthorization_required: '需要重新登录',
+    connected: '已连接', disconnected: '未连接', cooldown: '暂时冷却' };
+  return typeof value === 'string' && Object.hasOwn(labels, value) ? labels[value] : '状态待核对';
+}
+
+/** The native snapshot may remove an unregistered account after expiry. Never reuse its old session. */
+export function accountLoginRecovery(login: RecordValue, accounts: unknown): LoginRecovery {
+  if (!login.sessionId || login.status !== 'expired') return { kind: 'none' };
+  if (typeof login.accountId !== 'string' || !login.accountId.trim() || !Array.isArray(accounts)) return { kind: 'unavailable' };
+  const account = accounts.find(row => row && row.id === login.accountId);
+  if (!account) return { kind: 'new' };
+  if (account.enabled === false) return { kind: 'disabled' };
+  if (account.enabled !== true || !Number.isSafeInteger(account.version) || account.version < 0) return { kind: 'unavailable' };
+  return { kind: 'existing', accountId: account.id, expectedVersion: account.version };
+}
+
+export function accountActionFailure(failure: unknown): { message: string; needsAccountRead: boolean } {
+  const message = failure instanceof Error ? failure.message : String(failure);
+  const stale = message.includes('STALE_ACCOUNT_VERSION');
+  return {
+    message: stale ? '账号状态已变化。请先刷新账号状态，再重新登录；本次没有沿用旧授权。' : message,
+    needsAccountRead: stale || (failure as { code?: string } | null)?.code !== 'native_failure',
+  };
+}

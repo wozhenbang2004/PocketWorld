@@ -12,7 +12,7 @@ import '../src/product.css';
 import '../src/workspace-refactor.css';
 import '../src/presentation-theme.css';
 
-const commands = ['app.openNativeWorkspace', 'connections.enter', 'connections.leave', 'accounts.beginLogin', 'accounts.refresh', 'accounts.openAuthorization', 'accounts.cancelLogin', 'models.snapshot', 'models.review', 'models.select', 'projects.create', 'projects.newFile', 'projects.refresh', 'projects.select', 'projects.open', 'models.api.open', 'models.api.close', 'models.api.review', 'models.api.select', 'models.api.favorite', 'models.accounts.open', 'models.accounts.close', 'models.accounts.models', 'models.accounts.review', 'models.accounts.select', 'attachments.toggle', 'attachments.closePicker', 'settings.openSystem'];
+const commands = ['app.openNativeWorkspace', 'connections.enter', 'connections.leave', 'accounts.beginLogin', 'accounts.reauthorize', 'accounts.refresh', 'accounts.openAuthorization', 'accounts.cancelLogin', 'models.snapshot', 'models.review', 'models.select', 'projects.create', 'projects.newFile', 'projects.refresh', 'projects.select', 'projects.open', 'models.api.open', 'models.api.close', 'models.api.review', 'models.api.select', 'models.api.favorite', 'models.accounts.open', 'models.accounts.close', 'models.accounts.models', 'models.accounts.review', 'models.accounts.select', 'attachments.toggle', 'attachments.closePicker', 'settings.openSystem'];
 const listeners = new Set<() => void>();
 const calls: Array<{ action: string; args: any }> = [];
 const pending: Array<{ action: string; resolve: (value: any) => void; reject: (error: Error) => void }> = [];
