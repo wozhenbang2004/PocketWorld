@@ -65,6 +65,45 @@ public final class PrivateTaskRunControlNativeTest {
     private RunControl phoneControl(JSONObject task)throws Exception{RunControl control=new RunControl();control.bindHostRun(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"));control.pause();set(app,"activeTaskId",task.getString("id"));set(app,"activeControl",control);app.tasks.status(task.getString("id"),"paused","original phone paused");return control;}
     @SuppressWarnings("unchecked") private RunControl capabilityControl(JSONObject task)throws Exception{RunControl control=new RunControl();control.bindHostRun(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"));((java.util.concurrent.ConcurrentHashMap<String,RunControl>)get(app,"capabilityControls")).put(task.getString("id"),control);return control;}
     private void assertIdentity(JSONObject expected)throws Exception{JSONObject actual=app.tasks.get(expected.getString("id"),false);assertEquals(expected.getString("runId"),actual.getString("runId"));assertEquals(expected.getInt("coordinatorEpoch"),actual.getInt("coordinatorEpoch"));}
+    private void runReserved(JSONObject task,RunControl original)throws Exception{
+        var run=EngineApplication.class.getDeclaredMethod("runCapabilityAttempt",String.class,org.json.JSONArray.class,dev.pocketengine.core.ModelConfig.class,RunControl.class);run.setAccessible(true);
+        try{run.invoke(app,task.getString("id"),null,app.settings.get(),original);}
+        catch(java.lang.reflect.InvocationTargetException failed){if(failed.getCause() instanceof Exception cause)throw cause;if(failed.getCause() instanceof Error cause)throw cause;throw failed;}
+    }
+    private void assertReservedRunSettled(JSONObject task,String status)throws Exception{
+        assertIdentity(task);assertEquals(status,app.tasks.get(task.getString("id"),false).getString("status"));
+        Field field=TaskStore.class.getDeclaredField("db");field.setAccessible(true);var db=(android.database.sqlite.SQLiteDatabase)field.get(app.tasks);
+        try(var rows=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=?",new String[]{task.getString("id"),task.getString("runId")})){assertTrue(rows.moveToFirst());assertEquals(status,rows.getString(0));}
+        try(var leases=db.rawQuery("SELECT COUNT(*) FROM leases WHERE run_id=?",new String[]{task.getString("runId")})){assertTrue(leases.moveToFirst());assertEquals(0,leases.getInt(0));}
+        assertNull(((java.util.Map<?,?>)get(app,"capabilityControls")).get(task.getString("id")));
+    }
+
+    @Test public void cancellationBeforeRunnerAdmissionSettlesTheAlreadyReservedRun()throws Exception{
+        JSONObject task=start(false);RunControl original=capabilityControl(task);app.tasks.requestCancel(task.getString("id"),task.getString("runId"));original.cancel();
+        assertThrows(InterruptedException.class,()->runReserved(task,original));
+        assertReservedRunSettled(task,"cancelled");assertEquals(0,app.tasks.inferenceUsage(task.getString("id")).getJSONArray("receipts").length());
+    }
+    @Test public void revokedAuthorityBeforeRunnerCannotLeaveAnOrphanPreparingRun()throws Exception{
+        JSONObject task=start(false);RunControl original=capabilityControl(task);original.setAuthorityCheck(()->{throw new SecurityException("fixture original admission revoked");});
+        assertThrows(InterruptedException.class,()->runReserved(task,original));
+        assertReservedRunSettled(task,"cancelled");assertEquals(0,app.tasks.inferenceUsage(task.getString("id")).getJSONArray("receipts").length());
+    }
+    @Test public void preRunnerCleanupPreservesUnknownEffectsForReconciliation()throws Exception{
+        JSONObject task=start(false);String id=task.getString("id"),run=task.getString("runId");RunControl original=capabilityControl(task);
+        app.tasks.authorizeTools(id,run,new org.json.JSONArray().put("workspace_write"));
+        String operation=app.tasks.journal(id,run,task.getInt("coordinatorEpoch"),original).beginOperation("workspace_write",new JSONObject().put("path","unconfirmed.txt"));
+        original.cancel();assertThrows(InterruptedException.class,()->runReserved(task,original));
+        assertReservedRunSettled(task,"reconciling");assertTrue(app.tasks.hasUnresolved(id));
+        assertEquals(operation,app.tasks.get(id,false).getJSONArray("operations").getJSONObject(0).getString("operationId"));
+    }
+    @Test public void lateReservationCleanupCannotSettleOrCancelItsSuccessor()throws Exception{
+        JSONObject task=start(false);RunControl original=capabilityControl(task);JSONObject next=successor(task,false);RunControl replacement=capabilityControl(next);
+        String before=TaskStore.capabilityFingerprint(app.tasks.get(next.getString("id"),false));
+        var close=EngineApplication.class.getDeclaredMethod("closeReservedAssistantAttempt",RunControl.class,String.class);close.setAccessible(true);close.invoke(app,original,"late original cleanup");
+        assertTrue(original.isCancelled());assertFalse(replacement.isCancelled());assertIdentity(next);
+        assertSame(replacement,((java.util.Map<?,?>)get(app,"capabilityControls")).get(next.getString("id")));
+        assertEquals(before,TaskStore.capabilityFingerprint(app.tasks.get(next.getString("id"),false)));
+    }
 
     @Test public void stalePrivatePhoneStopCannotCancelTheSuccessor()throws Exception{
         JSONObject original=start(true),input=review(original);JSONObject next=successor(original,true);RunControl replacement=phoneControl(next);String before=TaskStore.capabilityFingerprint(app.tasks.get(next.getString("id"),false));
