@@ -164,12 +164,13 @@ public final class OwnerComposerState {
         Draft collision=drafts.get(target);
         if(migrate&&collision!=null&&collision.hasInput()&&remaining.hasInput())throw new IllegalStateException("输入已受理，但原对话另有未发送草稿；两份均保留，请回原输入核对");
         Draft next=migrate&&collision!=null&&collision.hasInput()?new Draft(target,conversation,increment(Math.max(collision.revision,remaining.revision)),collision.text,collision.mode,collision.attachments(),collision.scrollIndex,collision.scrollOffset,collision.anchorMessage,collision.observedMessage,collision.newReplies,collision.voiceText,collision.voiceInputId,collision.sourceRefs(),collision.previewRefs()):new Draft(target,conversation,remaining.revision,remaining.text,remaining.mode,remaining.attachments(),remaining.scrollIndex,remaining.scrollOffset,remaining.anchorMessage,remaining.observedMessage,remaining.newReplies,remaining.voiceText,remaining.voiceInputId,remaining.sourceRefs(),remaining.previewRefs());
-        drafts.remove(prior.key);drafts.put(target,next);pending.remove(client);
+        // Separate first sends from an unbound editor may have created different
+        // conversations. One receipt cannot bind another uncertain input to its target.
+        boolean keepOriginal=migrate&&pending.values().stream().anyMatch(other->!other.clientId.equals(client)&&other.draftKey.equals(prior.key));
+        if(keepOriginal&&collision==null)makeRoom();
+        if(keepOriginal)drafts.put(prior.key,remaining);else drafts.remove(prior.key);
+        drafts.put(target,next);pending.remove(client);
         if(activeKey.equals(prior.key))activeKey=target;
-        // Another pending input retains its original revision, but follows this same native conversation identity.
-        for(Map.Entry<String,Pending> e:new ArrayList<>(pending.entrySet()))if(e.getValue().draftKey.equals(prior.key)){
-            Pending old=e.getValue();pending.put(e.getKey(),new Pending(old.clientId,target,old.draftRevision,old.fingerprint,conversation,old.mode,old.originalTarget()));
-        }
         revision=increment(revision);return new Acknowledgement(true,clear,migrate,prior.key,target);
     }
     public synchronized JSONObject toJson()throws Exception{

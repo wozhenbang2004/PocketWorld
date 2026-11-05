@@ -22,6 +22,7 @@ final class ResponsesStream {
     private String responseId;
     private long sequence=-1;
     private int chars,functionCount;
+    private boolean incompleteItem;
 
     private ResponsesStream(ResponsesRequest request,GatewayCall call,ChatGptProvider.EventSink sink,String[] secrets){this.request=request;this.call=call;this.sink=sink;this.secrets=secrets;}
     static void read(InputStream input,ResponsesRequest request,GatewayCall call,ChatGptProvider.EventSink sink,String... secrets)throws Exception {
@@ -64,7 +65,9 @@ final class ResponsesStream {
             }
             case "response.function_call_arguments.done":{
                 Item item=locate(event,"function_call");if(item.argumentsDone||!item.arguments.toString().equals(text(event,"arguments",MAX_ARGUMENT_CHARS)))throw invalid();
-                ResponsesRequest.arguments(item.arguments.toString());item.argumentsDone=true;break;
+                // A token-limited call can finish with partial JSON. Validate executable
+                // arguments only when its item is actually marked completed.
+                item.argumentsDone=true;break;
             }
             case "response.content_part.added":addPart(event);break;
             case "response.reasoning_summary_part.added":addSummary(event);break;
@@ -94,8 +97,16 @@ final class ResponsesStream {
                 Part part=part(event);if(!part.valueDone||part.done)throw invalid();checkPart(event.getJSONObject("part"),part);part.done=true;break;
             }
             case "response.output_item.done":{
-                Item item=byIndex(event);if(item.done)throw invalid();JSONObject raw=event.getJSONObject("item");checkItem(raw,item);
-                item.doneJson=raw.toString();if(item.doneJson==null)throw invalid();item.done=true;break;
+                Item item=byIndex(event);if(item.done)throw invalid();JSONObject raw=event.getJSONObject("item");
+                if("incomplete".equals(raw.optString("status"))){
+                    if(!item.id.equals(safeId(raw,"id"))||!item.type.equals(raw.optString("type")))throw invalid();
+                    // Never publish this payload. Read the bounded failure terminal for
+                    // its real outcome and usage rather than misclassifying it as corruption.
+                    incompleteItem=true;
+                }else{
+                    checkItem(raw,item);item.doneJson=raw.toString();if(item.doneJson==null)throw invalid();
+                }
+                item.done=true;break;
             }
             case "response.completed":complete(event.getJSONObject("response"));return true;
             default:throw new GatewayFailure("UNSUPPORTED_PROVIDER_OUTPUT");
@@ -171,6 +182,7 @@ final class ResponsesStream {
         if(item.type.equals("function_call")){
             functionFields(raw);
             if(!item.argumentsDone||!item.callId.equals(safeId(raw,"call_id"))||!item.name.equals(raw.getString("name"))||!item.namespace.equals(raw.getString("namespace"))||!item.arguments.toString().equals(text(raw,"arguments",MAX_ARGUMENT_CHARS)))throw invalid();
+            ResponsesRequest.arguments(item.arguments.toString());
         }else{
             messageFields(raw);JSONArray content=raw.getJSONArray("content");if(content.length()!=item.parts.size())throw invalid();
             for(int i=0;i<content.length();i++){Part part=item.parts.get(i);if(part==null||!part.done)throw invalid();checkPart(content.getJSONObject(i),part);}
@@ -196,6 +208,7 @@ final class ResponsesStream {
         // Counter evidence survives an invalid output or a later native presentation revocation.
         if(responseId==null||!responseId.equals(safeId(response,"id")))throw invalid();
         reportUsage(response);
+        if(incompleteItem)throw invalid();
         checkResponse(response,"completed");if(!response.isNull("error")||!response.isNull("incomplete_details"))throw invalid();
         JSONArray output=response.getJSONArray("output");boolean hasAggregate=output.length()>0;
         // Some terminals contain only status/usage. Empty output relies on verified

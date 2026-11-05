@@ -10,7 +10,8 @@ public final class ChatGptRecovery {
         "refresh_token_invalidated","refresh_token_reused","invalid_client","subscription_sharing_user_not_eligible",
         "subscription_sharing_usage_limit_exceeded","subscription_sharing_usage_unavailable","subscription_sharing_unsupported_capability",
         "subscription_sharing_route_not_supported","subscription_sharing_invalid_user","subscription_sharing_user_unavailable",
-        "chatpass_v2_scope_not_authorized","chatpass_v2_invalid_authorization_context");
+        "chatpass_v2_scope_not_authorized","chatpass_v2_invalid_authorization_context",
+        "context_length_exceeded","context_window_exceeded","prompt_too_long");
     private ChatGptRecovery(){}
     /** tokenContext is empty, exchange, or refresh; the caller supplies its own fixed route context. */
     public static GatewayFailure failure(int status,JSONObject body,String shape,String requestId,String tokenContext,long retryAt) {
@@ -22,7 +23,9 @@ public final class ChatGptRecovery {
         if(!param.matches("(?:input|model|tools|service_tier|include|store|stream|instructions)(?:\\[[0-9]{1,3}\\]|\\.(?:content|type|image_url|detail|name|parameters|tools|supported|text|function|arguments))*"))param="";
         String id=requestId!=null&&requestId.matches("req_[A-Za-z0-9_-]{1,120}")?requestId:"";
         String code;long delay=0;
-        switch(provider){
+        // Match the API-key route's exact context errors, never provider prose or an auth failure.
+        if(tokenContext.isEmpty()&&(status==0||status==400||status==413)&&Set.of("context_length_exceeded","context_window_exceeded","prompt_too_long").contains(provider))code="PROVIDER_CONTEXT_LIMIT";
+        else switch(provider){
             case "subscription_sharing_usage_limit_exceeded":code="CHATGPT_USAGE_LIMIT_REACHED";break;
             case "subscription_sharing_user_not_eligible":code="CHATGPT_PLAN_NOT_ELIGIBLE";break;
             case "subscription_sharing_unsupported_capability":code="CHATGPT_UNSUPPORTED_CAPABILITY";break;
@@ -50,6 +53,7 @@ public final class ChatGptRecovery {
     /** Empty means the older host-specific messages should handle this code. */
     public static String message(String code) {
         switch(code){
+            case "PROVIDER_CONTEXT_LIMIT":return "ChatGPT 明确报告上下文超限，尚未派发工具；请整理上下文后再继续。";
             case "CHATGPT_USAGE_LIMIT_REACHED":return "ChatGPT 套餐或此应用的用量限制已到达。已暂停套餐请求，请在 Manage usage 查看；这里没有余额或重置时间。";
             case "CHATGPT_PLAN_NOT_ELIGIBLE":return "当前 ChatGPT 账号暂不具备用套餐连接此应用的资格。请查看套餐设置，或明确选择 API key 连接；重复登录不会解除限制。";
             case "CHATGPT_POLICY_RESTRICTED":return "ChatGPT 的地区或政策限制阻止了此次请求。请检查官方使用条件；重复登录不会解除限制。";
