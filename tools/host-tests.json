@@ -1,8 +1,12 @@
 {
   "chatgpt-provider-catalog": {
     "class": "dev.pocketengine.features.proxy.providers.ChatGptProviderTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.proxy.providers.ResponsesStreamTest"
+    ],
     "helpers": [
       "dev.pocketengine.features.proxy.providers.FakeChatGpt",
+      "dev.pocketengine.features.proxy.providers.ResponsesFixtures",
       "dev.pocketengine.testutil.HttpServer"
     ],
     "description": "Bounded loopback ChatGPT provider catalog, OAuth and streaming regression tests. Rich catalog metadata, exact two-MiB boundary, independent row and token-response limits; synthetic credentials only, not live model or Android acceptance."

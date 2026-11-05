@@ -20,6 +20,46 @@ import static org.junit.Assert.*;
 public class ChatGptProviderTest {
     static Credentials credentials()throws Exception{return new Credentials(FakeChatGpt.access(0),FakeChatGpt.refresh(0),"fixture-id-secret","chatgpt.tokens.use.direct",System.currentTimeMillis()+3600000);}
     static JSONArray input()throws Exception{return new JSONArray().put(new JSONObject().put("role","user").put("content","Hello"));}
+    @Test public void missingContentTypeStillRequiresACompleteStructuredEventStream()throws Exception {
+        try(FakeChatGpt fake=new FakeChatGpt();ChatGptProvider provider=fake.provider()){
+            fake.responseContentType=null;fake.stream=ResponsesFixtures.oneCall();JSONArray events=new JSONArray();
+            provider.streamResponses(credentials(),ResponsesFixtures.request(),new GatewayCall(5000),events::put);
+            assertEquals("completed",events.getJSONObject(events.length()-1).getString("type"));
+            JSONObject call=events.getJSONObject(events.length()-1).getJSONArray("output").getJSONObject(0);
+            assertEquals("phone",call.getString("namespace"));assertEquals("observe",call.getString("name"));
+            assertEquals(1,fake.responses.get());
+        }
+    }
+    @Test public void missingContentTypeKeepsIncrementalTextAndTheTerminalReceipt()throws Exception {
+        try(FakeChatGpt fake=new FakeChatGpt();ChatGptProvider provider=fake.provider()){
+            fake.responseContentType=null;JSONArray events=new JSONArray();
+            provider.stream(credentials(),"fixture-model","",input(),new GatewayCall(5000),events::put);
+            assertEquals("你好🙂",events.getJSONObject(0).getString("delta"));
+            assertEquals("completed",events.getJSONObject(events.length()-1).getString("type"));
+            assertEquals(1,fake.responses.get());
+        }
+    }
+    @Test public void missingContentTypeDoesNotAcceptJsonHtmlOrAnUnfinishedFunction()throws Exception {
+        for(String body:new String[]{"{\"output\":[]}","<html>fixture-only</html>",ResponsesFixtures.oneCall().replaceAll("event: response.completed[\\s\\S]*","")}){
+            try(FakeChatGpt fake=new FakeChatGpt();ChatGptProvider provider=fake.provider()){
+                fake.responseContentType=null;fake.stream=body;JSONArray events=new JSONArray();
+                try{provider.streamResponses(credentials(),ResponsesFixtures.request(),new GatewayCall(5000),events::put);fail("Expected stream validation to reject incomplete or non-SSE output");}
+                catch(GatewayFailure expected){assertTrue(java.util.Set.of("INVALID_PROVIDER_STREAM","PROVIDER_STREAM_INTERRUPTED").contains(expected.code));}
+                for(int i=0;i<events.length();i++)assertNotEquals("completed",events.getJSONObject(i).optString("type"));
+                assertEquals(1,fake.responses.get());
+            }
+        }
+    }
+    @Test public void anExplicitWrongContentTypeRemainsRejectedEvenForValidSse()throws Exception {
+        for(String mime:new String[]{"application/json","text/html","application/octet-stream"}){
+            try(FakeChatGpt fake=new FakeChatGpt();ChatGptProvider provider=fake.provider()){
+                fake.responseContentType=mime;fake.stream=ResponsesFixtures.oneCall();JSONArray events=new JSONArray();
+                try{provider.streamResponses(credentials(),ResponsesFixtures.request(),new GatewayCall(5000),events::put);fail("Expected explicit wrong media type to fail");}
+                catch(GatewayFailure expected){assertEquals("INVALID_PROVIDER_STREAM",expected.code);}
+                assertEquals(0,events.length());assertEquals(1,fake.responses.get());
+            }
+        }
+    }
     @Test public void richModelCatalogAboveLegacyQuarterMiBBudgetKeepsOnlySupportedFacts()throws Exception {
         try(FakeChatGpt fake=new FakeChatGpt();ChatGptProvider provider=fake.provider()){
             JSONObject body=new JSONObject(fake.modelsBody).put("provider_metadata","目录说明".repeat(30*1024));

@@ -134,7 +134,11 @@ public final class ChatGptProvider implements AutoCloseable {
         Request request=new Request.Builder().url(api+"/responses").header("Authorization","Bearer "+credentials.accessToken()).header("Accept","text/event-stream").header("Accept-Encoding","identity")
             .post(oneShot(RequestBody.create(bytes,MediaType.get("application/json; charset=utf-8")))).build();
         try(Exchange exchange=execute(request,operation)){
-            Response response=exchange.response;checkStatus(response,operation);if(response.body()==null||!response.header("Content-Type","").split(";",2)[0].trim().equalsIgnoreCase("text/event-stream"))throw new GatewayFailure("INVALID_PROVIDER_STREAM");
+            Response response=exchange.response;checkStatus(response,operation);
+            String contentType=response.header("Content-Type","").split(";",2)[0].trim();
+            // The official route can omit this header. The bounded SSE state machine still
+            // validates every event and completion; an explicit conflicting type is rejected.
+            if(response.body()==null||!contentType.isEmpty()&&!contentType.equalsIgnoreCase("text/event-stream"))throw new GatewayFailure("INVALID_PROVIDER_STREAM");
             if(context==null)ResponsesTextStream.read(response.body().byteStream(),operation,sink,credentials.accessToken(),credentials.refreshToken(),credentials.idToken());
             else ResponsesStream.read(response.body().byteStream(),context,operation,sink,credentials.accessToken(),credentials.refreshToken(),credentials.idToken());
         }catch(GatewayFailure error){throw error;}catch(Exception error){operation.check();throw new GatewayFailure(error instanceof java.io.IOException&&!(error instanceof javax.net.ssl.SSLException)?"PROVIDER_STREAM_INTERRUPTED":"INVALID_PROVIDER_STREAM");}
