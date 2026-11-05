@@ -1,4 +1,12 @@
 {
+  "chatgpt-provider-catalog": {
+    "class": "dev.pocketengine.features.proxy.providers.ChatGptProviderTest",
+    "helpers": [
+      "dev.pocketengine.features.proxy.providers.FakeChatGpt",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
+    "description": "Bounded loopback ChatGPT provider catalog, OAuth and streaming regression tests. Rich catalog metadata, exact two-MiB boundary, independent row and token-response limits; synthetic credentials only, not live model or Android acceptance."
+  },
   "phone-team-sessions": {
     "class": "dev.pocketengine.BackgroundPhoneRunTest",
     "additionalClasses": [
@@ -1906,5 +1914,30 @@
     "robolectric": true,
     "linuxPosixFd": true,
     "description": "Actual Web adapter/native storage callback verifies listed backup bytes before publishing SHA/preview; corrupt, moved, unknown/unlisted and owner/page guards preserve originals. Linux POSIX/SQLite fixture only; no Android device/visual acceptance."
+  },
+  "execution-trace": {
+    "class": "dev.pocketengine.store.ExecutionTraceJourneyTest",
+    "additionalClasses": [
+      "dev.pocketengine.runtime.usage.ExecutionTraceProjectionTest",
+      "dev.pocketengine.runtime.usage.InferenceVisibleTextTimingTest",
+      "dev.pocketengine.runtime.NativeOperationEventTest",
+      "dev.pocketengine.store.NativeDiagnosticsJourneyTest",
+      "dev.pocketengine.runtime.usage.UsageTrendProjectionTest",
+      "dev.pocketengine.ui.web.PocketWebTraceTest",
+      "dev.pocketengine.runtime.RuntimeStreamingProtocolTest",
+      "dev.pocketengine.features.proxy.accounts.AccountMainStreamTest",
+      "dev.pocketengine.features.teams.TeamInferenceJournalTest",
+      "dev.pocketengine.features.workspace.WorkspaceHeadProjectionTest",
+      "dev.pocketengine.store.ConversationV9MigrationNativeTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.features.proxy.accounts.AccountGatewayTest",
+      "dev.pocketengine.features.proxy.providers.FakeChatGpt",
+      "dev.pocketengine.features.proxy.providers.ResponsesFixtures",
+      "dev.pocketengine.features.teams.TeamBudgetPersistentApplication"
+    ],
+    "robolectric": true,
+    "description": "Original TaskStore/Runner/Gateway and epoch-zero TeamCoordinator trajectories, native turns and physical retries, source-current lazy details and historical run paging, schema-11 migration, measured model/tool/visible-text timing, raw provider usage, native operation authority, and redacted OTLP delivery. Loopback HTTP/native SQLite fixtures; physical Android, live provider and cloud collector acceptance remain separate."
   }
 }
