@@ -242,7 +242,7 @@ jobs:
                       assert data[:4] == b'\x7fELF' and data[4] == 2 and int.from_bytes(data[18:20], 'little') == 183, 'Not AArch64 ELF: ' + path
               with zipfile.ZipFile(io.BytesIO(z.read('assets/pocketengine-display-helper.jar'))) as helper:
                   assert helper.testzip() is None and 'classes.dex' in helper.namelist(), 'Display helper DEX missing'
-          certificate_sha256 = 'b58e014e2a2e49b2e85ebd5b47a034a28cb0d313d71f379a5208d21afe388e58'
+          certificate_sha256 = 'ed896ec1199f5be4e591a3222ddd60486ea1fce6853f1bb850aa5b699f8b01a0'
           signature = pathlib.Path('build-artifacts/signature.txt').read_text()
           signer_digests = [line.split(':', 1)[1].strip().lower().replace(':', '') for line in signature.splitlines() if 'certificate SHA-256 digest:' in line]
           assert signer_digests == [certificate_sha256], 'APK signer differs from the pinned project certificate'
