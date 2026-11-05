@@ -1,6 +1,6 @@
 package dev.pocketengine.runtime;
 
-import com.sun.net.httpserver.HttpServer;
+import dev.pocketengine.testutil.HttpServer;
 import dev.pocketengine.core.CapabilityPort;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
@@ -12,9 +12,6 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.ArrayList;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
@@ -23,7 +20,7 @@ import static org.junit.Assert.*;
 /** Real Gateway HTTP/Runner with a native journal fixture; the original SQL V2 journey is separate. */
 public final class RecoveryProjectionRunnerTest {
     @Test public void twoRestoresUseBoundedTransientFactsAndPreserveLegacyOwnerTextSourceMetadataAndToolResults()throws Exception{
-        List<JSONObject> requests=java.util.Collections.synchronizedList(new ArrayList<>());ExecutorService threads=Executors.newCachedThreadPool();HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);server.setExecutor(threads);
+        List<JSONObject> requests=java.util.Collections.synchronizedList(new ArrayList<>());HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         server.createContext("/",exchange->{try{
             requests.add(new JSONObject(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8)));
             byte[] body=new JSONObject().put("id","fixture-response").put("object","chat.completion").put("model","recovery-fixture").put("choices",new JSONArray().put(new JSONObject().put("index",0).put("message",new JSONObject().put("role","assistant").put("content","已查看实际记录，不会重放旧调用。")).put("finish_reason","stop"))).put("usage",new JSONObject().put("prompt_tokens",13).put("completion_tokens",5).put("total_tokens",18)).toString().getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,body.length);exchange.getResponseBody().write(body);
@@ -52,7 +49,18 @@ public final class RecoveryProjectionRunnerTest {
                 String saved=checkpoint[0].getJSONArray("messages").toString();assertFalse(saved.contains("<native_recovery_facts>"));assertFalse(saved.contains("PRIVATE-CLAIM"));assertTrue(saved.contains(legacy.substring(0,30)));assertTrue(saved.contains("ACTUAL-OLD-ARTIFACT"));assertTrue(saved.contains("ownerMessageRevision"));assertTrue(saved.contains("ownerSourceRefs"));assertTrue(saved.getBytes(StandardCharsets.UTF_8).length<20000);
             }
             assertEquals(2,requests.size());for(JSONObject request:requests){String wire=request.getJSONArray("messages").toString();assertFalse(wire.contains("PRIVATE-CLAIM"));assertFalse(wire.contains("PRIVATE-CONTEXT"));assertFalse(wire.contains("ownerSourceRefs"));assertTrue(wire.contains("pocketworld.native-recovery-facts.v1"));assertEquals(1,wire.split("<native_recovery_facts>",-1).length-1);assertTrue(wire.contains("ACTUAL-OLD-ARTIFACT"));}
+            for(JSONObject request:requests){
+                JSONArray wire=request.getJSONArray("messages");String latestOwner="";
+                for(int i=0;i<wire.length();i++){
+                    JSONObject message=wire.getJSONObject(i);String content=message.optString("content");
+                    if("user".equals(message.optString("role"))&&!content.contains("<host_reference_data>"))latestOwner=content;
+                }
+                assertEquals("Recovery guidance must not replace the latest actual owner input",legacy,latestOwner);
+                JSONObject policy=wire.getJSONObject(0);
+                assertEquals("system",policy.getString("role"));
+                assertTrue(policy.getString("content").contains("历史工具调用仅作记录，禁止自动重放"));
+            }
             assertEquals(fullAudit,sql.toString());assertEquals(9,sql.length());
-        }finally{server.stop(0);threads.shutdownNow();assertTrue(threads.awaitTermination(5,TimeUnit.SECONDS));}
+        }finally{server.stop(0);}
     }
 }
