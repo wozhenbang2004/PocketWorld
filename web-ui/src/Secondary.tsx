@@ -1331,7 +1331,7 @@ const SETTINGS_GROUPS = [
 ];
 const COMMON_SETTINGS = [
   { id: 'model-settings', title: '选择模型', detail: '模型能力、API 与账号连接', icon: RiKey2Line },
-  { id: 'phone', title: '手机能力', detail: '观察、执行、后台与通知', icon: RiSmartphoneLine },
+  { id: 'phone', title: '手机能力', detail: '观察、执行、后台、通知与应用更新', icon: RiSmartphoneLine },
   { id: 'history', title: '任务历史', detail: '查看原任务与结果', icon: RiFileList3Line },
   { id: 'usage', title: '模型调用记录', detail: '查看实际调用与用量', icon: RiFileList3Line },
   { id: 'archives', title: '备份与迁移', detail: '导出或恢复原数据', icon: RiDatabase2Line },
