@@ -383,6 +383,9 @@ public final class ProjectCapabilityPort implements CapabilityPort {
     private static JSONObject view(String tool,JSONObject source)throws Exception {
         if("pocketworld.project-plan.v1".equals(source.optString("format")))return new JSONObject().put("plan",source).put("untrusted",true).put("businessVerified",false);
         JSONObject copy=new JSONObject(source.toString());copy.remove("log");copy.put("untrusted",true).put("businessVerified",false);
+        // These native read producers return data only after their read succeeds. Do not
+        // infer success for execution/status receipts, or overwrite an explicit failure.
+        if(java.util.Set.of("project_inspect","project_read_file","project_search","project_list_files","project_plan_manifest","project_changes","project_review_file","project_preview_log").contains(tool)&&!copy.has("ok"))copy.put("ok",true);
         if(copy.optJSONArray("resources")!=null&&copy.getJSONArray("resources").length()>16){JSONArray first=new JSONArray();for(int i=0;i<16;i++)first.put(copy.getJSONArray("resources").get(i));copy.put("resources",first).put("resourceManifestOmitted",true);}
         if(java.util.Set.of("project_execute","project_status","project_stop").contains(tool)){
             java.util.List<JSONObject> owners=new java.util.ArrayList<>();owners.add(copy);JSONObject observation=copy.optJSONObject("observation");if(observation!=null){observation.remove("log");owners.add(observation);}

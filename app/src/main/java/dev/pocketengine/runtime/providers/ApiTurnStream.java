@@ -732,7 +732,10 @@ public final class ApiTurnStream {
         if (part.has("text")) {
             if (part.has("functionCall")) throw invalid(); text(part, "text", MAX_TEXT_CHARS);
         } else if (part.has("functionCall")) {
-            JSONObject call = part.getJSONObject("functionCall"); identity(call, "name"); call.getJSONObject("args");
+            JSONObject call = part.getJSONObject("functionCall"); identity(call, "name");
+            // Gemini omits args for no-argument functions. The native adapter normalizes
+            // that absence to {}; an explicitly supplied value must still be an object.
+            if (call.has("args")) call.getJSONObject("args");
             if (call.has("id") && !call.isNull("id")) identity(call, "id");
             if (call.has("partialArgs") || call.has("willContinue")
                     && (!(call.opt("willContinue") instanceof Boolean) || call.getBoolean("willContinue"))) throw invalid();

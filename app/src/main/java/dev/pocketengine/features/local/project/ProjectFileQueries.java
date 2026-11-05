@@ -44,9 +44,19 @@ public final class ProjectFileQueries {
     private static BufferedReader reader(Path path)throws Exception {
         return new BufferedReader(new InputStreamReader(Channels.newInputStream(open(path)),StandardCharsets.UTF_8.newDecoder()),4096);
     }
+    /** Only a native, deterministic target absence/type rejection is recoverable by the model.
+     * Permission, cancellation, source changes and other IO failures are never converted. */
+    private static final class ReadUnavailable extends IllegalArgumentException {
+        final String code;
+        ReadUnavailable(String code,String message){super(message);this.code=code;}
+    }
     private static Path target(File root,String relative)throws Exception {
         Path path=NativeCommandExecutor.within(root,VersionedWorkspace.path(relative)).toPath();
-        if(!Files.isRegularFile(path,LinkOption.NOFOLLOW_LINKS))throw new IllegalArgumentException("原项目文件不存在或不是普通文件");return path;
+        BasicFileAttributes attributes;
+        try{attributes=Files.readAttributes(path,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);}
+        catch(java.nio.file.NoSuchFileException absent){throw new ReadUnavailable("project_file_not_found","原项目文件不存在，请先列出目录并使用实际文件路径。");}
+        if(attributes.isSymbolicLink())throw new SecurityException("原项目读取不跟随符号链接");
+        if(!attributes.isRegularFile())throw new ReadUnavailable("project_file_not_regular","原项目路径不是普通文件，请选择实际文件路径。");return path;
     }
     private static FileInfo describe(File root,String relative,Current current)throws Exception {
         Path path=target(root,relative);BasicFileAttributes before=Files.readAttributes(path,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
@@ -66,6 +76,15 @@ public final class ProjectFileQueries {
         FileInfo after=describe(root,info.path,current);if(!info.sha.equals(after.sha)||info.bytes!=after.bytes)throw new SecurityException("读取期间文件SHA变化，未返回跨版本内容");
     }
     public static JSONObject read(File root,String checkout,JSONObject input,Current current)throws Exception {
+        current.check();
+        try{JSONObject result=readFile(root,checkout,input,current);current.check();return result.put("ok",true);}
+        catch(ReadUnavailable unavailable){
+            current.check();
+            return new JSONObject().put("ok",false).put("accepted",false).put("status","failed").put("code",unavailable.code).put("message",unavailable.getMessage())
+                    .put("checkoutId",checkout).put("path",VersionedWorkspace.path(input.getString("path"))).put("contentOmitted",true).put("complete",false).put("untrusted",true).put("authorityAdded",false);
+        }
+    }
+    private static JSONObject readFile(File root,String checkout,JSONObject input,Current current)throws Exception {
         String relative=VersionedWorkspace.path(input.getString("path"));current.check();
         if(input.has("metadataOnly")&&!(input.opt("metadataOnly") instanceof Boolean))throw new IllegalArgumentException("metadataOnly需明确布尔值");
         if(input.optBoolean("metadataOnly"))return metadata(root,checkout,relative,input,current);

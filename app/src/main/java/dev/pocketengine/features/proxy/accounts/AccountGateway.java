@@ -193,6 +193,9 @@ public final class AccountGateway implements AutoCloseable {
     public synchronized boolean supportsImageInput(String accountId,long version,String modelId){
         try{open();JSONObject row=reviewedRow(accountId,version);usable(row);
             if(!row.optBoolean("planUsageEnabled"))return false;
+            JSONObject models=AccountBook.modelEvidence(row,version);
+            if(models!=null){JSONObject entry=models.optJSONObject(modelId);if(entry==null||entry.optBoolean("unavailable"))return false;
+                book.modelFacts(accountId,version,modelId);return dev.pocketengine.features.proxy.providers.AccountImageCapability.supported(entry.optJSONObject("imageEvidence"));}
             JSONObject fact=row.optJSONObject("imageEvidence");return fact!=null&&fact.optLong("accountVersion",-1)==version&&modelId.equals(fact.optString("modelId"))&&
                 dev.pocketengine.features.proxy.providers.AccountImageCapability.supported(fact);
         }catch(GatewayFailure unavailable){return false;}
@@ -202,20 +205,32 @@ public final class AccountGateway implements AutoCloseable {
         catch(GatewayFailure unavailable){return false;}
     }
     private void refreshPinnedEvidence(String id,long version,JSONArray models)throws GatewayFailure {
-        JSONObject fact=book.row(id).optJSONObject("modelEvidence");if(fact==null)fact=book.row(id).optJSONObject("imageEvidence");if(fact==null||fact.optLong("accountVersion",-1)!=version)return;
-        try{pinCatalogEvidence(id,version,fact.optString("modelId"),models);}
-        catch(GatewayFailure missing){if(!missing.code.equals("STALE_MODEL_CATALOG"))throw missing;book.metadata(id,version,AccountBook.json("imageEvidence",new JSONObject(),"modelEvidence",AccountBook.json("accountVersion",version,"modelId",fact.optString("modelId"),"unavailable",true)));}
+        JSONObject row=book.row(id),prior=AccountBook.modelEvidence(row,version);
+        if(prior==null){JSONObject image=row.optJSONObject("imageEvidence");if(image==null||image.optLong("accountVersion",-1)!=version)return;prior=AccountBook.json(image.optString("modelId"),new JSONObject());}
+        JSONObject refreshed=new JSONObject();
+        for(java.util.Iterator<String> names=prior.keys();names.hasNext();){String model=names.next();JSONObject entry=catalogEntry(model,models);
+            try{refreshed.put(model,entry==null?AccountBook.json("unavailable",true):entry);}catch(org.json.JSONException invalid){throw new GatewayFailure("INVALID_MODEL_CATALOG");}}
+        saveCatalogEvidence(id,version,refreshed);
     }
     private void pinCatalogEvidence(String id,long version,String model,JSONArray models)throws GatewayFailure {
+        JSONObject entry=catalogEntry(model,models);if(entry==null)throw new GatewayFailure("STALE_MODEL_CATALOG");
+        JSONObject pinned=AccountBook.modelEvidence(book.row(id),version);if(pinned==null)pinned=new JSONObject();
+        try{pinned.put(model,entry);}catch(org.json.JSONException invalid){throw new GatewayFailure("INVALID_MODEL_CATALOG");}
+        saveCatalogEvidence(id,version,pinned);
+    }
+    private void saveCatalogEvidence(String id,long version,JSONObject models)throws GatewayFailure {
+        // The default selection is not the identity of other tasks using this account/version.
+        book.metadata(id,version,AccountBook.json("imageEvidence",new JSONObject(),"modelEvidence",AccountBook.json("accountVersion",version,"models",models)));
+    }
+    private static JSONObject catalogEntry(String model,JSONArray models)throws GatewayFailure {
         JSONObject found=null;
         if(models!=null)for(int i=0;i<models.length();i++){JSONObject item=models.optJSONObject(i);if(item!=null&&model.equals(item.optString("id"))){if(found!=null)throw new GatewayFailure("INVALID_MODEL_CATALOG");found=item;}}
-        if(found==null)throw new GatewayFailure("STALE_MODEL_CATALOG");JSONObject fact=found.optJSONObject("imageInput");
+        if(found==null)return null;JSONObject fact=found.optJSONObject("imageInput");
         if(fact==null)throw new GatewayFailure("INVALID_MODEL_CATALOG");
-        JSONObject modelEvidence=AccountBook.json("accountVersion",version,"modelId",model,"catalogFacts",found.optJSONObject("catalogFacts"));
+        JSONObject modelEvidence=AccountBook.json("catalogFacts",found.optJSONObject("catalogFacts"),"imageEvidence",fact);
         try{dev.pocketengine.runtime.models.AccountCatalogFacts.fromJson(modelEvidence.getJSONObject("catalogFacts"));}
         catch(Exception invalid){throw new GatewayFailure("INVALID_MODEL_CATALOG");}
-        book.metadata(id,version,AccountBook.json("imageEvidence",AccountBook.json("accountVersion",version,"modelId",model,
-            "known",fact.optBoolean("known"),"value",fact.opt("value")==null?JSONObject.NULL:fact.opt("value"),"source",fact.optString("source"),"observedAt",fact.optLong("observedAt")),"modelEvidence",modelEvidence));
+        return modelEvidence;
     }
     private static JSONArray copyArray(JSONArray array)throws GatewayFailure {try{return new JSONArray(array.toString());}catch(Exception invalid){throw new GatewayFailure("INVALID_MODEL_CATALOG");}}
     private void requireImageEvidence(String id,long version,ResponsesRequest request)throws GatewayFailure {

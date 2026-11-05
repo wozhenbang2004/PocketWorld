@@ -146,6 +146,14 @@ public final class OwnerComposerState {
         if(pending.containsKey(client)||pending.size()>=MAX_PENDING)throw new IllegalStateException("待核对输入已达本机上限，请先查询原回执；未发送新输入");
         Pending next=new Pending(client,key,draft.revision,fingerprint,draft.conversationId,draft.mode,target);pending.put(client,next);revision=increment(revision);return next;
     }
+    /** Caller has validated an exact native not-admitted receipt. Keep every draft byte;
+     * only a later explicit owner Send may prepare a new identity. */
+    public synchronized boolean rejectNotAdmitted(String client,String conversation)throws Exception {
+        Pending p=pending.get(client);if(p==null)return false;
+        if(!conversationId(conversation)||!p.conversationId.equals(conversation))throw new SecurityException("拒收回执不属于原输入对话");
+        if(!drafts.containsKey(p.draftKey))throw new IllegalStateException("原草稿不可核对，未移除待核对身份");
+        pending.remove(client);revision=increment(revision);return true;
+    }
     /** Caller supplies an already validated native ACK, never an LLM/tool self-reported success. */
     public synchronized Acknowledgement acknowledge(String client,String conversation)throws Exception {
         Pending p=pending.get(client);if(p==null)return new Acknowledgement(false,false,false,activeKey,activeKey);

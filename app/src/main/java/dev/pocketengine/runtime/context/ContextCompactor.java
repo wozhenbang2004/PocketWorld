@@ -45,7 +45,7 @@ public final class ContextCompactor {
     }
     private RunContextBudget.Projection request(JSONArray raw,JSONArray visible,List<Integer> sourceMap,JSONArray tools,ModelConfig selected,RunControl original,RunContextBudget budget,boolean forced,
                                                ExecutionPlanning planning,ExecutionPlanning.Snapshot turn)throws Exception {
-        boolean generated=false;
+        boolean generated=false,ownerInputRebuilt=false;
         for(;;){
             original.check();requirePlanning(planning,turn);
             if(active!=null&&original.pauseRevision()!=active.pauseRevision){
@@ -58,7 +58,15 @@ public final class ContextCompactor {
             if(active!=null){
                 active.check(original);
                 boolean current;try{current=host.current(active,original)&&active.plan.matchesPrefix(raw,visible,sourceMap);}catch(Exception changed){current=false;}
-                if(!current){active=null;summary=null;projectionId="";throw new CompactionPlan.Unavailable("published_summary_source_changed");}
+                if(!current){
+                    boolean rebuild=!ownerInputRebuilt&&active.plan.matchesPrefix(raw,visible,sourceMap)
+                            &&host.canRebuildAfterOwnerInput(active,original);
+                    active=null;summary=null;projectionId="";
+                    if(!rebuild)throw new CompactionPlan.Unavailable("published_summary_source_changed");
+                    // Never reuse the old summary. The new input boundary must freeze and
+                    // validate fresh originals before any separately charged SUMMARY call.
+                    ownerInputRebuilt=true;continue;
+                }
                 before=active.plan.project(visible,sourceMap,summary.text);
                 try{return withEvidence(budget.request(before,tools,selected),generated);}
                 catch(RunContextBudget.Blocked full){if(!"budget_exceeded".equals(full.status))throw full;}

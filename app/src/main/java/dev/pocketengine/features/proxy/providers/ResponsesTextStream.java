@@ -12,7 +12,9 @@ import org.json.JSONObject;
 
 /** Bounded native Responses text events; no relay buffering, model execution, tools or automatic replay. */
 final class ResponsesTextStream {
-    static final int MAX_EVENT_BYTES=64*1024,MAX_STREAM_BYTES=2*1024*1024,MAX_TEXT_CHARS=256*1024;
+    // Done/completed events repeat accumulated text and output items in one frame.
+    // Bound that frame by the unchanged whole-stream budget, not by a small delta budget.
+    static final int MAX_STREAM_BYTES=2*1024*1024,MAX_EVENT_BYTES=MAX_STREAM_BYTES,MAX_TEXT_CHARS=256*1024;
     static void read(InputStream input,GatewayCall call,ChatGptProvider.EventSink sink,String... secrets)throws Exception {
         Parser parser=new Parser(input,call);TextFilter filter=new TextFilter(sink,secrets);TextFilter refusal=new TextFilter(event->{event.put("type","refusal_delta");sink.event(event);},secrets);int textChars=0;long sequence=-1;
         while(true){

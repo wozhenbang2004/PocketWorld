@@ -583,7 +583,7 @@ public final class HostToolSupervisor implements CapabilityPort {
                 retainToolMemorySelection(selected);tasks.prepareMemoryToolReference(name,selected,control);return snapshot.put("ok",true);
             });
         }
-        else if(tool.command.equals("$projects"))result=new JSONObject().put("projects",module.snapshot().getJSONArray("projects"));
+        else if(tool.command.equals("$projects"))result=new JSONObject().put("ok",true).put("projects",module.snapshot().getJSONArray("projects"));
         else if(tool.command.equals("$teams"))result=new JSONObject().put("teams",module.snapshot().getJSONArray("teams"));
         else if(tool.feature.equals("teams")&&tool.command.equals("start"))result=host.startTeamForTask(taskId,runId,operationId.isEmpty()?UUID.randomUUID().toString():operationId,args,approvalCapability.getJSONObject("teamDefinition"),control,consumedApprovalId);
         else if(tool.feature.equals("teams")&&tool.command.equals("get"))result=host.readTeamForTask(taskId,runId,epoch,args,control);

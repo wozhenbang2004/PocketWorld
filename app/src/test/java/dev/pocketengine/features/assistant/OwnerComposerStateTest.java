@@ -55,4 +55,21 @@ public final class OwnerComposerStateTest {
     @Test public void nativeImportedConversationIdentityIsOpaqueNotGuessedIntoUuid()throws Exception{
         var state=OwnerComposerState.empty();String original="import-conversation:"+"d".repeat(64)+":428";state.selectConversation(original);text(state,"只属于已审核导入的原对话");var p=prepared(state);var restored=OwnerComposerState.fromJson(state.toJson());assertEquals(original,restored.active().conversationId);assertEquals(original,restored.pending(p.clientId).conversationId);assertTrue(restored.acknowledge(p.clientId,original).cleared);
     }
+    @Test public void definitiveRejectionReleasesOnlyPendingIdentityAndPreservesExactDraft()throws Exception{
+        var state=OwnerComposerState.empty();String cid=id();state.selectConversation(cid);var d=text(state,"未入队，仍需主人明确发送");
+        state.edit(d.key,d.revision,d.text,"steer",file());d=state.active();var p=prepared(state);String draft=state.toJson().getJSONArray("drafts").toString();
+        assertTrue(state.rejectNotAdmitted(p.clientId,cid));assertEquals(draft,state.toJson().getJSONArray("drafts").toString());assertTrue(state.pending().isEmpty());
+        var restored=OwnerComposerState.fromJson(new JSONObject(state.toJson().toString()));assertEquals(draft,restored.toJson().getJSONArray("drafts").toString());
+        assertNull(restored.matchingPending(d.key,p.fingerprint));assertFalse(restored.rejectNotAdmitted(p.clientId,cid));
+        assertNotEquals(p.clientId,prepared(restored).clientId);
+    }
+    @Test public void lateRejectionCannotClearEditedDraftOrAnotherConversation()throws Exception{
+        var state=OwnerComposerState.empty();String a=id(),b=id();state.selectConversation(a);text(state,"原消息");var p=prepared(state);text(state,"后来编辑的原草稿");
+        state.selectConversation(b);text(state,"另一对话");assertTrue(state.rejectNotAdmitted(p.clientId,a));assertEquals(b,state.active().conversationId);assertEquals("另一对话",state.active().text);
+        assertEquals("后来编辑的原草稿",state.selectConversation(a).text);
+    }
+    @Test public void foreignRejectionCannotReleasePendingIdentity()throws Exception{
+        var state=OwnerComposerState.empty();String cid=id();state.selectConversation(cid);text(state,"仍待核对");var p=prepared(state);String before=state.toJson().toString();
+        assertThrows(SecurityException.class,()->state.rejectNotAdmitted(p.clientId,id()));assertEquals(before,state.toJson().toString());
+    }
 }

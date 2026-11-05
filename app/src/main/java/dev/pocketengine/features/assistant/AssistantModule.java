@@ -498,6 +498,15 @@ public final class AssistantModule implements EngineModule {
                 if(!live.matchesHostRun(binding.getString("taskId"),binding.getString("runId"),binding.getInt("epoch")))throw new SecurityException("宿主未返回原任务控制绑定");
             }catch(Exception failure){
                 if(starting||resuming){stopUnstarted(lease);}
+                // Only the native mailbox can prove this input was never admitted. Unknown
+                // exceptions retain the original query-only receipt and must not be replayed.
+                if(!starting&&!resuming&&failure instanceof dev.pocketengine.core.OwnerInputNotAdmittedException){
+                    JSONObject rejected=copy(message.getJSONObject("submission")).put("status","rejected").put("notAdmitted",true)
+                            .put("reconciliationRequired",false).put("reason","mailbox_closed");
+                    for(String key:new String[]{"taskId","runId","epoch"})rejected.put(key,expected.get(key));
+                    commit(()->{findMessage(find(cid),message.getString("id")).put("submission",copy(rejected));source(message.getString("id")).put("submission",copy(rejected));return null;});
+                    context.emit(id(),copy(rejected).put("phase","rejected"));return rejected;
+                }
                 context.emit(id(),new JSONObject().put("phase","unconfirmed").put("conversationId",cid).put("messageId",message.getString("id")));
                 return copy(message.getJSONObject("submission"));
             }

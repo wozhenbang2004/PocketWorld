@@ -24,16 +24,19 @@ internal object ChatInputRules {
   return TaskStore.capabilityFingerprint(input)
  }
  fun mergeReceipt(old:JSONObject?,incoming:JSONObject):JSONObject?{
-  val client=incoming.optString("clientMessageId");val status=incoming.optString("status");if(client.isBlank()||status !in setOf("accepted","queued","unconfirmed","consumed","withdrawn"))return null
+  val client=incoming.optString("clientMessageId");val status=incoming.optString("status");if(client.isBlank()||status !in setOf("accepted","queued","unconfirmed","consumed","withdrawn","rejected"))return null
   if(status!="unconfirmed"&&(incoming.optString("messageId").isBlank()||incoming.optString("conversationId").isBlank()||incoming.optString("taskId").isBlank()||incoming.optString("runId").isBlank()||incoming.optInt("epoch")<1))return null
+  if(status=="rejected"&&(incoming.opt("notAdmitted")!=true||incoming.opt("reconciliationRequired")!=false||incoming.optString("reason")!="mailbox_closed"))return null
   if(status=="consumed"&&(incoming.optString("replyMessageId").isBlank()||incoming.optLong("consumedAt")<=0))return null
   val queueVersion=incoming.opt("queueRevision");if(incoming.has("queueRevision")&&(queueVersion !is Int&&queueVersion !is Long||incoming.optLong("queueRevision")<1))return null
   val messageVersion=incoming.opt("ownerMessageRevision");if(status=="withdrawn"&&(incoming.optLong("queueRevision")<1||messageVersion !is Int&&messageVersion !is Long||incoming.optLong("ownerMessageRevision")<1))return null
   if(old!=null){
    if(old.optString("clientMessageId")!=client)return null
-   if(old.optString("status") in setOf("accepted","queued","consumed","withdrawn")){
+   if(old.optString("status") in setOf("accepted","queued","consumed","withdrawn","rejected")){
     if(status=="unconfirmed")return old
     for(k in listOf("messageId","conversationId","taskId","runId","epoch"))if(old.opt(k)!=incoming.opt(k))return null
+    if(old.optString("status")=="rejected")return old
+    if(status=="rejected")return null
     if(old.optString("status")=="consumed"&&status!="consumed"||old.optString("status")=="withdrawn"&&status!="withdrawn")return old
     if(old.optLong("queueRevision")>0&&incoming.optLong("queueRevision")<old.optLong("queueRevision"))return old
    }
@@ -65,9 +68,9 @@ internal object ChatInputRules {
  }},confirmButton={TextButton(onClick=controller::closeChatAttachmentPicker){Text("保留选择")}},dismissButton={TextButton(onClick={controller.pickAttachments()},enabled=!state.attachmentImporting){Text(if(state.attachmentImporting)"导入中" else "导入新附件")}})
 }
 @Composable internal fun ChatInputReceipt(receipt:JSONObject,controller:PocketWorldController){
- val status=receipt.optString("status");if(status !in setOf("accepted","queued","unconfirmed","consumed","withdrawn"))return
+ val status=receipt.optString("status");if(status !in setOf("accepted","queued","unconfirmed","consumed","withdrawn","rejected"))return
  Column(Modifier.fillMaxWidth()) {
-  Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Text(when(status){"consumed"->"本轮已采用 · 答复已保存";"withdrawn"->"已撤回 · 不再加入后续请求";"queued"->if(receipt.optString("mode")=="steer")"已收到 · 等待下一安全边界" else "排队中 · 本轮结束后处理";"accepted"->"输入已收到";else->"发送状态待核对 · 请勿重复发送"},fontSize=12.sp,color=SecondaryInk,modifier=Modifier.weight(1f));if(status=="unconfirmed")TextButton(onClick={controller.queryChatSubmission(receipt.optString("clientMessageId"))}){Text("查询原回执",fontSize=12.sp)}}
+  Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Text(when(status){"rejected"->"本条未入队 · 草稿已保留，请明确重新发送";"consumed"->"本轮已采用 · 答复已保存";"withdrawn"->"已撤回 · 不再加入后续请求";"queued"->if(receipt.optString("mode")=="steer")"已收到 · 等待下一安全边界" else "排队中 · 本轮结束后处理";"accepted"->"输入已收到";else->"发送状态待核对 · 请勿重复发送"},fontSize=12.sp,color=SecondaryInk,modifier=Modifier.weight(1f));if(status=="unconfirmed")TextButton(onClick={controller.queryChatSubmission(receipt.optString("clientMessageId"))}){Text("查询原回执",fontSize=12.sp)}}
   if(status in setOf("accepted","queued","withdrawn")&&receipt.optString("taskId").isNotBlank()&&receipt.optString("conversationId").isNotBlank())TextButton(onClick={controller.openQueuedOwnerInputs(receipt.getString("taskId"),receipt.getString("conversationId"))},contentPadding=PaddingValues(0.dp)){Text("查看待处理输入",fontSize=12.sp)}
  }
 }

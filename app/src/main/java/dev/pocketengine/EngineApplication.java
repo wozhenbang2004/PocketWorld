@@ -2158,22 +2158,22 @@ public final class EngineApplication extends Application implements dev.pocketen
                 requireProjectContinuationWindow(currentOwnerWindow);control.check();return binding.json();
             }catch(Exception failure){
                 if(binding!=null)closeUnstartedProjectContinuation(binding,"原项目续接已登记，但会话接入未完成；没有自动重试");
-                else closeUnstartedProjectReservation(control,"原项目续接已登记，但会话绑定未完成；没有自动重试");
+                else closeReservedAssistantAttempt(control,"原项目续接已登记，但会话绑定未完成；没有自动重试");
                 throw failure;
             }
         }
     }
     private void closeUnstartedProjectContinuation(AssistantInputBinding binding,String reason){
         if(!binding.phase.compareAndSet(0,2))return;
-        closeProjectContinuationReservation(binding,reason);
+        closeAssistantInputReservation(binding,reason);
     }
-    private void closeProjectContinuationReservation(AssistantInputBinding binding,String reason){
+    private void closeAssistantInputReservation(AssistantInputBinding binding,String reason){
         binding.phase.set(2);
         binding.control.removeCancelAction(binding.admissionCancel);
-        try{closeUnstartedProjectReservation(binding.control,reason);}
+        try{closeReservedAssistantAttempt(binding.control,reason);}
         finally{assistantInputs.remove(binding.control,binding);capabilityControls.remove(binding.task,binding.control);}
     }
-    private void closeUnstartedProjectReservation(RunControl original,String reason){
+    private void closeReservedAssistantAttempt(RunControl original,String reason){
         RunControl.HostRunIdentity expected=original.hostRunIdentity();
         try{
             if(expected!=null)synchronized(tasks){
@@ -2182,7 +2182,7 @@ public final class EngineApplication extends Application implements dev.pocketen
                         &&task.optString("status").matches("preparing|running|stopping"))
                     tasks.endAttempt(expected.taskId(),expected.runId(),original.isCancelled()?"cancelled":"failed",reason,new JSONObject());
             }
-        }catch(Exception unavailable){error("原项目续接停止记录未确认，请核对原任务；未新建或重试");}
+        }catch(Exception unavailable){error("原聊天执行停止记录未确认，请核对原任务；未新建或重试");}
         finally{original.cancel();if(expected!=null){capabilityControls.remove(expected.taskId(),original);pushTask(expected.taskId());}}
     }
     private static JSONObject optionalOwnerExecutionScope(JSONObject input)throws Exception {
@@ -2388,10 +2388,13 @@ public final class EngineApplication extends Application implements dev.pocketen
                 // Only the worker that claimed phase 1 enters here. The runner's finally
                 // may already have released its binding before assigning attempt; still
                 // settle the captured reservation if that exact run is left active.
-                catch(Exception failure){closeProjectContinuationReservation(binding,"原项目续接未完成，请核对原记录；没有自动重试");throw failure;}
+                catch(Exception failure){closeAssistantInputReservation(binding,"原项目续接未完成，请核对原记录；没有自动重试");throw failure;}
             }
             if(binding==null||!conversation.equals(binding.conversation)||!binding.phase.compareAndSet(0,1)||capabilityControls.get(binding.task)!=control)throw new SecurityException("聊天执行器不能更换或重复领取原输入任务");
-            return runCapabilityAttempt(binding.task,history,config,control);
+            try{return runCapabilityAttempt(binding.task,history,config,control);}
+            // Preflight can throw before runCapabilityAttempt assigns its local attempt.
+            // Settle only this captured reservation, even if its finally released the binding.
+            catch(Exception failure){closeAssistantInputReservation(binding,"原聊天执行未完成，请核对原记录；没有自动重试");throw failure;}
         }
         JSONObject task=tasks.createCapabilityTask(goal,conversation);initializeOwnerExecutionScope(task.getString("id"),config,null);return runCapabilityAttempt(task.getString("id"),history,config,control);
     }

@@ -18,15 +18,17 @@ final class AccountBook {
     private JSONObject data;
     /** Immutable read-only projection of this authority's last successful commit, never credentials. */
     private volatile java.util.Map<String,InferenceIdentity> inferenceIdentities=java.util.Map.of();
-    private record InferenceIdentity(long version,boolean eligible,long cooldownUntil,dev.pocketengine.runtime.models.AccountCatalogFacts facts,boolean modelUnavailable){}
+    private record InferenceIdentity(long version,boolean eligible,long cooldownUntil,
+            java.util.Map<String,dev.pocketengine.runtime.models.AccountCatalogFacts> facts,boolean catalogObserved){}
     /** One immutable commit projection; no Gateway/Book monitor, vault access, or I/O. */
     dev.pocketengine.runtime.models.AccountCatalogFacts modelFacts(String id,long version,String model)throws GatewayFailure {
         InferenceIdentity current=inferenceIdentities.get(id);
         if(current==null||current.version!=version)throw new GatewayFailure("STALE_ACCOUNT_VERSION");
         // Facts are not eligibility: leave quota/cooldown recovery to the existing native admission.
-        if(current.modelUnavailable||current.facts!=null&&!model.equals(current.facts.modelId))throw new GatewayFailure("STALE_MODEL_CATALOG");
-        if(current.facts!=null&&(current.facts.observedAtMillis>System.currentTimeMillis()||System.currentTimeMillis()-current.facts.observedAtMillis>dev.pocketengine.runtime.models.ModelConnectionService.MAX_CATALOG_AGE_MILLIS))throw new GatewayFailure("STALE_MODEL_CATALOG");
-        return current.facts;
+        dev.pocketengine.runtime.models.AccountCatalogFacts facts=current.facts.get(model);
+        if(current.catalogObserved&&facts==null)throw new GatewayFailure("STALE_MODEL_CATALOG");
+        if(facts!=null&&(facts.observedAtMillis>System.currentTimeMillis()||System.currentTimeMillis()-facts.observedAtMillis>dev.pocketengine.runtime.models.ModelConnectionService.MAX_CATALOG_AGE_MILLIS))throw new GatewayFailure("STALE_MODEL_CATALOG");
+        return facts;
     }
     boolean inferenceIdentityCurrent(String id,long version){InferenceIdentity value=inferenceIdentities.get(id);return value!=null&&value.version==version&&value.eligible&&value.cooldownUntil<=System.currentTimeMillis();}
     private boolean cleanupRequired;
@@ -174,14 +176,26 @@ final class AccountBook {
             boolean eligible=row.optBoolean("enabled")&&row.optBoolean("planUsageEnabled")&&!row.optBoolean("usageLimited")
                     &&row.optString("status").matches("connected|cooldown")
                     &&!row.optString("clientId").isEmpty()&&!row.optString("issuer").isEmpty()&&!row.optString("subject").isEmpty()&&!row.optString("slot").isEmpty();
-            JSONObject evidence=row.optJSONObject("modelEvidence");dev.pocketengine.runtime.models.AccountCatalogFacts facts=null;boolean unavailable=false;
-            if(evidence!=null&&evidence.optLong("accountVersion",-1)==row.optLong("version",-2)){
-                unavailable=evidence.optBoolean("unavailable");
-                if(!unavailable){facts=dev.pocketengine.runtime.models.AccountCatalogFacts.fromJson(evidence.getJSONObject("catalogFacts"));
-                    if(!facts.modelId.equals(evidence.getString("modelId")))throw new IllegalArgumentException("invalid_account_catalog_facts");}
+            JSONObject evidence=modelEvidence(row,row.optLong("version",-2));
+            java.util.Map<String,dev.pocketengine.runtime.models.AccountCatalogFacts> facts=new java.util.HashMap<>();
+            if(evidence!=null)for(java.util.Iterator<String> models=evidence.keys();models.hasNext();){String model=models.next();JSONObject entry=evidence.getJSONObject(model);
+                if(!model.matches("[A-Za-z0-9_.:-]{1,160}"))throw new IllegalArgumentException("invalid_account_catalog_facts");
+                if(!entry.optBoolean("unavailable")){dev.pocketengine.runtime.models.AccountCatalogFacts fact=dev.pocketengine.runtime.models.AccountCatalogFacts.fromJson(entry.getJSONObject("catalogFacts"));
+                    if(!model.equals(fact.modelId))throw new IllegalArgumentException("invalid_account_catalog_facts");facts.put(model,fact);}
             }
-            result.put(id,new InferenceIdentity(row.optLong("version",-1),eligible,row.optLong("cooldownUntil"),facts,unavailable));
+            result.put(id,new InferenceIdentity(row.optLong("version",-1),eligible,row.optLong("cooldownUntil"),java.util.Map.copyOf(facts),evidence!=null));
         }return java.util.Map.copyOf(result);
+    }
+    /** Per-model evidence for one credential generation; also reads the original single-model format. */
+    static JSONObject modelEvidence(JSONObject row,long version)throws GatewayFailure {
+        JSONObject evidence=row.optJSONObject("modelEvidence");
+        if(evidence==null||evidence.optLong("accountVersion",-1)!=version)return null;
+        try{
+            if(evidence.has("models")){JSONObject models=evidence.getJSONObject("models");if(models.length()>512)throw new IllegalArgumentException();return models;}
+            String model=evidence.getString("modelId");JSONObject image=row.optJSONObject("imageEvidence"),entry=copy(evidence);
+            entry.put("imageEvidence",image!=null&&image.optLong("accountVersion",-1)==version&&model.equals(image.optString("modelId"))?image:null);
+            return new JSONObject().put(model,entry);
+        }catch(Exception invalid){throw new GatewayFailure("ACCOUNT_STORE_UNAVAILABLE");}
     }
     private static void validate(String id,JSONObject row)throws Exception {
         if(!id.matches("[0-9a-f-]{36}")||!id.equals(row.getString("id"))||row.getLong("version")<0||!(row.get("enabled") instanceof Boolean)||row.getString("label").length()>80)throw new GatewayFailure("ACCOUNT_STORE_INVALID");
