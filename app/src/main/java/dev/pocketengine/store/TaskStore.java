@@ -2557,6 +2557,23 @@ public final class TaskStore {
         try(Cursor cursor=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{id,run,String.valueOf(epoch)})){if(!cursor.moveToFirst()||!cursor.getString(0).equals("running"))throw new SecurityException("预留执行尝试已结束");}
         return copy(task,false);
     }
+    /** Close an already reserved native run when its worker fails before Runner admission.
+     * This never grants execution or replaces a settled/replacement run; unresolved effects
+     * still pass through endAttempt's reconciliation boundary. */
+    public synchronized boolean endUnstartedCapabilityAttempt(String id,RunControl original,String reason)throws Exception{
+        RunControl.HostRunIdentity expected=original==null?null:original.hostRunIdentity();
+        if(expected==null||!id.equals(expected.taskId()))return false;
+        JSONObject task=required(id);
+        if(!"assistant".equals(task.optString("kind"))||!"capabilities".equals(task.optString("executionMode"))
+                ||!original.matchesHostRun(id,task.optString("runId"),task.optInt("coordinatorEpoch"))
+                ||!task.optString("status").matches("preparing|queued|running|stopping"))return false;
+        try(Cursor run=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{id,expected.runId(),Integer.toString(expected.epoch())})){
+            if(!run.moveToFirst()||!"running".equals(run.getString(0)))return false;
+        }
+        endAttempt(id,expected.runId(),original.isCancelled()||task.optBoolean("cancelRequested")?"cancelled":"failed",reason,
+                task.optJSONObject("evidence")==null?new JSONObject():task.getJSONObject("evidence"));
+        return true;
+    }
     /** Pair validation and cancelling that exact in-memory controller share the TaskStore lock/transaction. */
     public synchronized JSONObject cancelChannelTask(String id,JSONObject origin,String runId,int epoch,RunControl control)throws Exception{
         db.beginTransaction();try{
@@ -8612,7 +8629,26 @@ public final class TaskStore {
             db.setTransactionSuccessful();return new PhoneStopBatch(this,batch,true,original);
         }finally{db.endTransaction();}
     }
-    public synchronized void requestCancel(String id,String runId)throws Exception{JSONObject t=required(id);if(runId!=null&&!runId.equals(t.optString("runId")))return;t.put("cancelRequested",true).put("status","stopping");write(t);}
+    public synchronized void requestCancel(String id,String runId)throws Exception{
+        db.beginTransaction();try{
+            JSONObject task=required(id);String run=task.optString("runId");
+            if(runId!=null&&!runId.equals(run)){db.setTransactionSuccessful();return;}
+            // A late stop can arrive after settlement but before its controller is released.
+            if(task.optString("status").matches("completed|failed|cancelled")){db.setTransactionSuccessful();return;}
+            boolean settled=false;
+            if(!run.isEmpty())try(Cursor row=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{id,run,Integer.toString(task.optInt("coordinatorEpoch"))})){
+                settled=row.moveToFirst()&&!"running".equals(row.getString(0));
+            }
+            task.put("cancelRequested",true);task.remove("automationConditionWaitId");
+            if(settled){
+                // Awaiting input/confirmation is still cancellable, but has no worker left
+                // to turn a new 'stopping' state into a terminal receipt.
+                write(task);endAttempt(id,run,"cancelled","主人已停止原等待任务；已发生的动作与未知回执保留",
+                        task.optJSONObject("evidence")==null?new JSONObject():task.getJSONObject("evidence"));
+            }else{task.put("status","stopping");write(task);}
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
     /** Native-only issuance from the existing original task/run/operation rows, not caller JSON. */
     public synchronized OriginalRemoteStopClaim claimOriginalRemoteStop(String id,String run,int epoch,String profileBinding)throws Exception {
         db.beginTransaction();try{
@@ -9707,6 +9743,9 @@ public final class TaskStore {
     public synchronized void finishCapabilityAttempt(String id,String runId,int epoch,RunControl original,dev.pocketengine.core.RunOutcome outcome)throws Exception {
         JSONObject task=required(id);
         if(original==null||!original.matchesHostRun(id,runId,epoch)||!runId.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("完成回执不是当前原能力执行");
+        if(original.isCancelled()||task.optBoolean("cancelRequested")){
+            endAttempt(id,runId,"cancelled","已停止后续操作；已有动作和结果保留，停止不代表撤销已发生的效果",outcome.evidence);return;
+        }
         String status=outcome.status;
         if("needs_confirmation".equals(status)){
             JSONObject origin=task.optJSONObject("origin");boolean effectRecorded;

@@ -520,13 +520,15 @@ public final class AssistantModule implements EngineModule {
                 throw new IllegalStateException("主人输入已登记，但聊天回执保存未确认；请按clientMessageId核对原任务，不要重发",failure);
             }
             if(starting||resuming){
+                java.util.concurrent.atomic.AtomicBoolean rejected=new java.util.concurrent.atomic.AtomicBoolean();
                 try{
                     developmentTurns.remove(cid);lease.original().binding=copy(binding).put("conversationId",cid);
                     final JSONObject turn=copy(lease.original().binding);final JSONArray history=copy(findConversation(cid)).getJSONArray("messages");final String messageId=message.getString("id");
                     context.emit(id(),copy(ack).put("phase",starting?"accepted":"queued"));
                     resourceState(turn,live,"queued");
-                    liveTurns.submit(lease,()->executeNativeTurn(lease,turn,safe,history,config,live,messageId),()->executorRejected(lease,messageId));
-                }catch(Exception unavailable){stopUnstarted(lease);throw new IllegalStateException("原任务输入已登记，执行位置尚未接手；请核对原任务，不要自动重发",unavailable);}
+                    liveTurns.submit(lease,()->executeNativeTurn(lease,turn,safe,history,config,live,messageId),()->{rejected.set(true);executorRejected(lease,messageId);});
+                    if(rejected.get())return unconfirmedSubmission(ack);
+                }catch(Exception unavailable){if(!rejected.get())executorRejected(lease,message.getString("id"));throw new IllegalStateException("原任务输入已登记，执行位置尚未接手；请核对原任务，不要自动重发",unavailable);}
             }else context.emit(id(),copy(ack).put("phase","queued"));
             return ack;
         }
@@ -541,9 +543,50 @@ public final class AssistantModule implements EngineModule {
     }
     private void executorRejected(ConversationTurnSlots.Lease<LiveTurn> lease,String messageId){
         stopUnstarted(lease);
-        try{context.emit(id(),new JSONObject().put("phase","unconfirmed").put("conversationId",lease.conversationId()).put("messageId",messageId)
-                .put("message","原任务已登记但执行器未接手，请核对原任务，不要自动重发。"));}catch(Exception ignored){}
+        synchronized(admission){
+            try{
+                LiveTurn turn=lease.original();JSONObject event=turn.binding==null?new JSONObject():copy(turn.binding);
+                String phase=messageId==null?"unconfirmed":"resource_state";
+                event.put("conversationId",lease.conversationId()).put("resourceType","assistant_text").put("resourceState","released").put("reconciliationRequired",true);
+                try{
+                    JSONArray saved=markOriginalSubmissionsUnconfirmed(lease);
+                    if(saved.length()>0){
+                        for(int i=0;i<saved.length();i++)try{context.emit(id(),saved.getJSONObject(i).put("phase","unconfirmed")
+                                .put("message","原任务已登记但执行器未接手，请核对原任务，不要自动重发。"));}catch(Exception ignored){}
+                        return;
+                    }
+                }catch(Exception receiptUnavailable){event.put("receiptSave","unconfirmed");}
+                // A refused retained continuation must not regress an already consumed input.
+                if("resource_state".equals(phase))event.remove("reconciliationRequired");
+                context.emit(id(),event.put("phase",phase).put("message","原任务已登记但执行器未接手，请核对原任务，不要自动重发。"));
+            }catch(Exception ignored){}
+        }
     }
+    private JSONArray markOriginalSubmissionsUnconfirmed(ConversationTurnSlots.Lease<LiveTurn> lease)throws Exception{
+        return commit(()->{
+            LiveTurn turn=lease.original();RunControl.HostRunIdentity original=turn.control.hostRunIdentity();JSONArray saved=new JSONArray();
+            if(original==null)return saved;
+            java.util.Set<String> candidates=new java.util.LinkedHashSet<>();
+            if(durable()){
+                JSONArray inputs=historyTasks.queuedOwnerInputs(original.taskId(),lease.conversationId()).getJSONArray("items");
+                for(int i=0;i<inputs.length();i++){JSONObject row=inputs.getJSONObject(i);
+                    if(!"withdrawn".equals(row.optString("queueState"))&&turn.control.matchesHostRun(row.optString("acceptedTaskId"),row.optString("acceptedRunId"),row.optInt("acceptedEpoch")))candidates.add(row.getString("messageId"));
+                }
+            }else for(int i=0;i<sources.length();i++)candidates.add(sources.getJSONObject(i).getString("sourceId"));
+            for(String candidate:candidates){
+                JSONObject state=source(candidate),prior=state==null?null:state.optJSONObject("submission");
+                if(prior==null||!"user".equals(state.optString("role"))||!lease.conversationId().equals(state.optString("conversationId"))
+                        ||!lease.conversationId().equals(prior.optString("conversationId"))||!candidate.equals(prior.optString("messageId"))
+                        ||!Set.of("accepted","queued","unconfirmed").contains(prior.optString("status"))||"withdrawn".equals(prior.optString("queueState"))
+                        ||!turn.control.matchesHostRun(prior.optString("taskId"),prior.optString("runId"),prior.optInt("epoch")))continue;
+                JSONObject unconfirmed=unconfirmedSubmission(prior);state.put("submission",copy(unconfirmed));
+                if(!state.optBoolean("deleted"))findMessage(find(lease.conversationId()),candidate).put("submission",copy(unconfirmed));
+                saved.put(unconfirmed);
+            }
+            return saved;
+        });
+    }
+    private static JSONObject unconfirmedSubmission(JSONObject ack)throws Exception{return copy(ack).put("status","unconfirmed").put("reconciliationRequired",true).put("resourceState","released");}
     private JSONObject findConversation(String id)throws Exception{return sourceRead(()->durable()?historyRepository.window(id,"",80):copy(find(id)));}
     /** Native completed-turn receipt only; no generic command can assert input consumption. */
     public void acceptNativeReply(String conversationId,JSONObject expected,dev.pocketengine.runtime.AgentRunner.OwnerReply completed,RunControl original)throws Exception{

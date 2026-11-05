@@ -69,6 +69,16 @@ public final class NativeRelayStream {
                     if(type.endsWith(".delta")&&original.opt("delta") instanceof String)text(frame,frame.json,"delta",original.getString("delta"),path+type);
                     else if(type.equals("response.output_item.added")){JSONObject item=original.getJSONObject("item"),target=frame.json.getJSONObject("item");if(item.opt("arguments") instanceof String)text(frame,target,"arguments",item.getString("arguments"),"responses/"+original.optInt("output_index",-1)+"/-1/response.function_call_arguments.delta");}
                     else if(type.equals("response.content_part.added")){JSONObject part=original.getJSONObject("part"),target=frame.json.getJSONObject("part");if(part.opt("text") instanceof String)text(frame,target,"text",part.getString("text"),path+"response.output_text.delta");}
+                    // Callers validate lifecycle and identity before passing a frame here. A closed
+                    // text path cannot complete a credential prefix; unrelated paths stay held.
+                    else if(type.equals("response.output_text.done")||type.equals("response.content_part.done"))release(path+"response.output_text.delta");
+                    else if(type.equals("response.function_call_arguments.done"))release("responses/"+original.getInt("output_index")+"/-1/response.function_call_arguments.delta");
+                    else if(type.equals("response.output_item.done")){
+                        JSONObject item=original.getJSONObject("item");String prefix="responses/"+original.getInt("output_index")+"/";
+                        if("function_call".equals(item.optString("type")))release(prefix+"-1/response.function_call_arguments.delta");
+                        else if("message".equals(item.optString("type"))){JSONArray content=item.optJSONArray("content");for(int i=0;content!=null&&i<content.length();i++)release(prefix+i+"/response.output_text.delta");}
+                    }
+                    else if(type.equals("response.completed"))releaseAll();
                     break;
                 }
                 case "anthropic":{
@@ -95,8 +105,10 @@ public final class NativeRelayStream {
             combined.setLength(0);for(Text fragment:fragments)combined.append(fragment.value());int suffix=Math.min(secret.length()-1,combined.length());while(suffix>0&&!combined.substring(combined.length()-suffix).equals(secret.substring(0,suffix)))suffix--;
             if(suffix>0){List<Text> held=new ArrayList<>();int remaining=suffix;for(int i=fragments.size()-1;i>=0&&remaining>0;i--){Text fragment=fragments.get(i);if(!fragment.value().isEmpty()){held.add(0,fragment);fragment.frame.blocked++;remaining-=fragment.value().length();}}tails.put(path,held);}
         }
+        void release(String path){List<Text> held=tails.remove(path);if(held!=null)for(Text fragment:held)fragment.frame.blocked--;}
+        void releaseAll(){for(List<Text> held:tails.values())for(Text fragment:held)fragment.frame.blocked--;tails.clear();}
         void drain()throws Exception{while(!pending.isEmpty()&&pending.peek().blocked==0){Frame frame=pending.remove();bytes-=frame.bytes;sink.frame(frame.event,frame.json);}}
-        public void finish()throws Exception{for(List<Text> held:tails.values())for(Text fragment:held)fragment.frame.blocked--;tails.clear();drain();}
+        public void finish()throws Exception{releaseAll();drain();}
     }
     private NativeRelayStream(){}
 }
