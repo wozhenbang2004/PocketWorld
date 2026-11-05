@@ -229,7 +229,7 @@ public final class AgentRunner {
         ToolOutcome outcome=ToolOutcome.classify(receipt);
         if(outcome.requiresReconciliation()){diagnostic.finish(outcome.diagnosticStatus(),"TOOL_RESULT_UNCONFIRMED");return;}
         if(outcome.requiresUser()){diagnostic.finish(outcome.diagnosticStatus(),"OWNER_INPUT_REQUIRED");return;}
-        if(outcome.successful()){diagnostic.success();return;}
+        if(outcome.successful()){diagnostic.finish(outcome.diagnosticStatus(),outcome.eventStatus().equals("running")?"TOOL_REQUEST_ACCEPTED":"OK");return;}
         String code=switch(receipt.optString("code",receipt.optString("error"))){
             case "project_file_not_found" -> "PROJECT_FILE_NOT_FOUND";
             case "project_file_not_regular" -> "PROJECT_FILE_NOT_REGULAR";
@@ -1103,7 +1103,7 @@ public final class AgentRunner {
                     if(repeatedTools.stopRequired())return stopForProgressGuard(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);
                     // The real operation receipt and text checkpoint already committed above.
                     // Unknown/approval/pause outcomes stop before any extension code is invoked.
-                    if(capabilities!=null&&!control.isPaused()&&pauseSeen[0]==control.pauseRevision())capabilities.afterTool(name,safeJson(args,config,false),safeToolReceipt(name,receipt,config),control);
+                    if(capabilities!=null&&!control.isCancelled()&&!control.isPaused()&&pauseSeen[0]==control.pauseRevision())capabilities.afterTool(name,safeJson(args,config,false),safeToolReceipt(name,receipt,config),control);
                     stepRouting.completedRead(name,receipt,latest,StepModelRouting.knownRead(name,capabilities));
                     try{contextBudget.completedRead(call,committedToolMessage);}catch(Exception unavailable){/* Optional request projection never replaces a committed receipt. */}
                     // A successful read can still time out with an unmet predicate. Only this

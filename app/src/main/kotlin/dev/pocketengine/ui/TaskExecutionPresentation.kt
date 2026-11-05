@@ -148,6 +148,7 @@ internal object TaskExecutionPresentation {
             receipt?.optString("status") in setOf("cancelled", "canceled", "stopped") -> { tone = Tone.STOPPED; label = "调用已停止 · 详见原回执" }
             outcome?.requiresUser() == true -> { tone = Tone.WAITING; label = "需要你处理 · 已发生的操作仍保留" }
             outcome?.correctable() == true -> { tone = Tone.ERROR; label = "请求可调整 · 不会自动重放原操作" }
+            outcome?.successful() == true && outcome.completion() == "pending" -> { tone = Tone.WAITING; label = "已受理或仍在执行 · 尚无终态" }
             receipt?.optBoolean("terminal", true) == false -> { tone = Tone.WAITING; label = "已返回部分结果" }
             receipt != null -> { tone = Tone.RETURNED; label = "已返回 · 目标仍需核对，结果可展开查看" }
             else -> { tone = Tone.NEUTRAL; label = "原状态：" + excerpt(state.ifBlank { "未报告" }, 80) }

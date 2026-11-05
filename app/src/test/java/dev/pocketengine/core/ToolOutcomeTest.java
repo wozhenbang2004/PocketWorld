@@ -74,4 +74,29 @@ public final class ToolOutcomeTest {
             assertEquals("occurred",ToolOutcome.projectOperation(operation).getJSONObject("receipt").getString("outcome"));
         }
     }
+    @Test public void acceptedAndRunningReceiptsAreSuccessfulButNotTerminal()throws Exception{
+        for(JSONObject receipt:new JSONObject[]{
+                new JSONObject().put("accepted",true).put("status","accepted"),
+                new JSONObject().put("ok",true).put("status","running").put("terminal",false)}){
+            ToolOutcome outcome=ToolOutcome.classify(receipt);
+            assertTrue(outcome.successful());assertEquals("pending",outcome.completion());
+            assertEquals("running",outcome.eventStatus());assertEquals("running",outcome.diagnosticStatus());
+            assertEquals("pending",outcome.view().getString("completion"));
+        }
+    }
+    @Test public void explicitTerminalSuccessRemainsTerminal()throws Exception{
+        ToolOutcome outcome=ToolOutcome.classify(new JSONObject().put("ok",true).put("status","completed").put("terminal",true));
+        assertTrue(outcome.successful());assertEquals("terminal",outcome.completion());
+        assertEquals("completed",outcome.eventStatus());assertEquals("succeeded",outcome.diagnosticStatus());
+    }
+    @Test public void nativeRunningOperationKeepsPendingCompletion()throws Exception{
+        JSONObject operation=new JSONObject().put("state","project_running").put("receipt",new JSONObject().put("ok",true).put("status","running"));
+        ToolOutcome outcome=ToolOutcome.operationOutcome(operation);
+        assertNotNull(outcome);assertTrue(outcome.successful());assertEquals("pending",outcome.completion());
+    }
+    @Test public void malformedTerminalOrExitCodeCannotBecomeSuccess()throws Exception{
+        assertTrue(ToolOutcome.classify(new JSONObject().put("ok",true).put("terminal","false")).requiresReconciliation());
+        assertTrue(ToolOutcome.classify(new JSONObject().put("ok",true).put("exitCode","0")).requiresReconciliation());
+    }
+
 }

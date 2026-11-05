@@ -196,6 +196,9 @@ export function presentOperation(input: unknown): OperationPresentation {
   const receiptStatus = text(receipt?.status);
   const code = text(receipt?.code);
   const outcome = op?.bodyAvailable ? nativeOutcome(op.toolOutcome) : undefined;
+  const outcomeContract = op?.bodyAvailable ? row(op.toolOutcome) : undefined;
+  const completion = outcome !== undefined && outcome !== 'invalid' ? text(outcomeContract?.completion) : '';
+  const pendingReceipt = ['accepted','queued','submitting','pending','submitted','dispatched','starting','preparing','running','active','in_progress','pausing','stopping','verifying'].includes(receiptStatus);
   const uncertain = ['unknown', 'uncertain', 'reconciliation_required', 'pending_reconciliation'].includes(state) ||
     state.endsWith('_unknown') || state.endsWith('_unconfirmed') || op?.requiresReconciliation === true || receipt?.requiresReconciliation === true || receipt?.reconciliationRequired === true ||
     receipt !== undefined && (has(receipt, 'accepted') && receipt.accepted === null || receiptStatus === 'unknown' || outcome === undefined && code.includes('unknown'));
@@ -213,6 +216,7 @@ export function presentOperation(input: unknown): OperationPresentation {
   else if (['cancelled', 'canceled', 'stopped'].includes(receiptStatus)) { status = 'stopped'; stateLabel = '调用已停止，详见原回执'; }
   else if (outcome === 'needs_user') { status = 'waiting'; stateLabel = '需要你处理，已发生的操作仍保留'; }
   else if (outcome === 'correctable_failure') { status = 'error'; stateLabel = '请求可调整，不会自动重放原操作'; }
+  else if (outcome === 'success' && (completion === 'pending' || pendingReceipt)) { status = 'waiting'; stateLabel = '已受理或仍在执行，尚无终态'; }
   // Compatibility for pre-contract snapshots only. Fresh native pages already
   // classify the original receipt; these display checks never authorize a retry.
   else if (receipt?.ok === false || receiptStatus === 'failed' || number(receipt?.exitCode) !== undefined && receipt?.exitCode !== 0) { status = 'error'; stateLabel = '调用出错，请核对操作结果'; }

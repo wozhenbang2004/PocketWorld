@@ -187,3 +187,13 @@ test('event history rejects foreign windows and preserves empty, core and snapsh
   assert.equal(snapshot.completeHistory, false);
   assert.equal(getTaskEventHistory(null).unavailableReason, 'not_loaded');
 });
+
+
+test('accepted and running success receipts remain pending instead of looking completed', () => {
+  const accepted = presentOperation(op({receipt: {ok: true, accepted: true, status: 'accepted'}, toolOutcome: {...outcome('success', 'continue'), completion: 'pending'}}));
+  assert.equal(accepted.status, 'waiting');
+  assert.match(accepted.stateLabel, /尚无终态/);
+  const running = presentOperation(op({receipt: {ok: true, status: 'running', terminal: false}, toolOutcome: {...outcome('success', 'continue'), completion: 'pending'}}));
+  assert.equal(running.status, 'waiting');
+  assert.match(running.stateLabel, /尚无终态/);
+});
