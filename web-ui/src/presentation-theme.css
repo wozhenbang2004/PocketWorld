@@ -100,3 +100,9 @@
 }
 :root.dark :is(button, a, input, textarea):focus-visible { outline-color: var(--pw-focus); }
 :root.dark .pw-radio-option .bg-control-indicator-background { background-color: var(--pw-on-strong); }
+
+/* A modal close affordance stays secondary to its primary action in the dark palette. */
+:root.dark .pw-settings-dialog > header .pw-icon-action {
+  background: var(--pw-inset);
+  color: var(--pw-copy);
+}

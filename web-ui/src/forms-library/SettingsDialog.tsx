@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { RiCloseLine } from '@remixicon/react';
 
@@ -14,21 +14,26 @@ export function SettingsDialog({ isOpen, title, onClose, children }: {
   const [mounted, setMounted] = useState(isOpen);
   const [visible, setVisible] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
-  const previousFocus = useRef<HTMLElement | null>(null);
   useEffect(() => {
     let frame1 = 0, frame2 = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     if (isOpen) {
-      previousFocus.current = document.activeElement as HTMLElement;
       setMounted(true);
-      frame1 = requestAnimationFrame(() => { frame2 = requestAnimationFrame(() => { setVisible(true); panel.current?.focus(); }); });
+      frame1 = requestAnimationFrame(() => { frame2 = requestAnimationFrame(() => { setVisible(true); }); });
     } else {
       setVisible(false);
       timer = setTimeout(() => setMounted(false), 320);
-      previousFocus.current?.focus();
     }
     return () => { cancelAnimationFrame(frame1); cancelAnimationFrame(frame2); if (timer) clearTimeout(timer); };
   }, [isOpen]);
+  // Focus after React has actually mounted the panel; animation frames can run
+  // before the deferred mount commits, especially on a busy WebView.
+  useLayoutEffect(() => {
+    if (!isOpen || !mounted || !panel.current) return;
+    const origin = document.activeElement as HTMLElement | null;
+    panel.current.focus({ preventScroll: true });
+    return () => { if (origin?.isConnected) origin.focus({ preventScroll: true }); };
+  }, [isOpen, mounted]);
   useEffect(() => {
     if (!isOpen) return;
     const key = (event: KeyboardEvent) => {

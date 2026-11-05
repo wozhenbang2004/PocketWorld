@@ -483,3 +483,8 @@
 .pw-secondary-refactor .pw-settings-index .pw-reading-lead { margin: 8px 2px 14px; font-size: 13px; line-height: 21px; }
 .pw-secondary-refactor .pw-settings-group > h2 > button { min-height: 58px; }
 .pw-secondary-refactor .pw-settings-group .pw-settings-links { padding-left: 12px; }
+
+/* Settings descriptions belong below their local title, never in a narrow flex column. */
+.pw-secondary-refactor .pw-settings-section > .pw-section-heading { display: block; }
+.pw-secondary-refactor .pw-accounts-workspace > .pw-reading-lead { margin: 4px 0 16px; }
+.pw-navigation-footer .pw-native-workspace-entry { width: 100%; justify-content: flex-start; color: var(--pw-muted); }

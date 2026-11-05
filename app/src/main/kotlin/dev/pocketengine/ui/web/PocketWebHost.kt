@@ -68,6 +68,7 @@ internal class PocketWebHost private constructor(
     private val main = Handler(Looper.getMainLooper())
     private val web = WebView(activity)
     private var closed = false
+    private var webDestroyed = false
     private var listenerRegistered = false
     private val documentFence = PocketWebDocumentFence()
     private var documentToken: String? = null
@@ -85,6 +86,19 @@ internal class PocketWebHost private constructor(
     private val loader = WebViewAssetLoader.Builder().setDomain(HOST)
         .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(activity)).build()
 
+    init {
+        applyWorkspaceBackground()
+        view.setOnApplyWindowInsetsListener { target, insets ->
+            val bars = insets.getInsets(WindowInsets.Type.systemBars())
+            val keyboard = insets.getInsets(WindowInsets.Type.ime())
+            // An embedded browser toolbar shares the BrowserActivity root's inset owner.
+            // Applying bars or IME padding again would consume its narrow content band.
+            if (ownsSystemInsets) target.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, keyboard.bottom))
+            if (keyboardVisible != insets.isVisible(WindowInsets.Type.ime())) sendConfiguration(insets)
+            insets
+        }
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     fun start() {
         bundle = try {
@@ -92,10 +106,9 @@ internal class PocketWebHost private constructor(
         } catch (_: Exception) {
             if (failReader()) return
             // No trusted document can show maintenance feedback when the packaged identity is invalid.
-            // Workspace/bootstrap keep their existing closed-host exit. Isolated readers close only themselves.
+            // Business gets a guarded recovery entry; bootstrap/readers retain their own exit boundaries.
             Log.e(TAG, "bundle-identity-unavailable; install a complete compatible package")
-            close()
-            activity.finish()
+            showReopenPrompt()
             return
         }
         with(web.settings) {
@@ -115,7 +128,7 @@ internal class PocketWebHost private constructor(
             displayZoomControls = false
         }
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, false)
-        web.setBackgroundColor(Color.rgb(245, 245, 245))
+        applyWorkspaceBackground()
         web.overScrollMode = View.OVER_SCROLL_NEVER
         web.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         web.webViewClient = object : WebViewClient() {
@@ -157,20 +170,22 @@ internal class PocketWebHost private constructor(
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 Log.e(TAG, "resource-error code=${error.errorCode} path=${request.url.path}")
                 if (readerFailure != null) failReader()
+                else if (criticalWorkspaceResource(request)) showReopenPrompt()
             }
             override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, error: WebResourceResponse) {
                 if (error.statusCode >= 400) {
                     Log.e(TAG, "resource-error status=${error.statusCode} path=${request.url.path}")
                     if (readerFailure != null) failReader()
+                    else if (criticalWorkspaceResource(request)) showReopenPrompt()
                 }
             }
             override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) { handler.cancel(); if (readerFailure != null) failReader() }
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
                 Log.e(TAG, "renderer-exit crashed=${detail.didCrash()}")
                 if (failReader()) return true
-                close()
-                // Closing the view does not stop, retry or resume any engine task.
-                activity.finish()
+                // Keep a guarded recovery entry outside the failed renderer.
+                // The controller and all submitted tasks retain their original identities.
+                showReopenPrompt()
                 return true
             }
         }
@@ -185,7 +200,9 @@ internal class PocketWebHost private constructor(
                 } else if (message.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
                     Log.e(TAG, "browser-chrome-console-error")
                 }
-                if (readerFailure != null && text.startsWith("PocketWebUi startup-error")) failReader()
+                if (text.startsWith("PocketWebUi startup-error")) {
+                    if (readerFailure != null) failReader() else showReopenPrompt()
+                }
                 return true
             }
             override fun onPermissionRequest(request: PermissionRequest) { request.deny() }
@@ -218,18 +235,9 @@ internal class PocketWebHost private constructor(
         }
         listenerRegistered = true
         }
-        if (!listenerRegistered && failReader()) return
+        if (!listenerRegistered) { if (!failReader()) showReopenPrompt(); return }
         view.addView(web, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         bridge.attachProjectPreview(view)
-        view.setOnApplyWindowInsetsListener { target, insets ->
-            val bars = insets.getInsets(WindowInsets.Type.systemBars())
-            val keyboard = insets.getInsets(WindowInsets.Type.ime())
-            // An embedded browser toolbar shares the BrowserActivity root's inset owner.
-            // Applying bars or IME padding again would consume its narrow content band.
-            if (ownsSystemInsets) target.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, keyboard.bottom))
-            if (keyboardVisible != insets.isVisible(WindowInsets.Type.ime())) sendConfiguration(insets)
-            insets
-        }
         view.requestApplyInsets()
         bridge.start()
         web.loadUrl(ENTRY)
@@ -255,18 +263,37 @@ internal class PocketWebHost private constructor(
         reopenShown = true
         documentFence.close(); documentToken = null; documentLoaded = false
         bridge.invalidatePresentation(documentReplaced = true)
-        web.stopLoading(); web.visibility = View.GONE
+        destroyWeb()
         view.addView(android.widget.LinearLayout(activity).apply {
             orientation = android.widget.LinearLayout.VERTICAL
+            val dark = dev.pocketengine.ui.UiAppearance.dark(activity)
+            val ink = if (dark) Color.rgb(232, 232, 232) else Color.rgb(36, 36, 36)
+            setBackgroundColor(if (dark) Color.rgb(18, 18, 18) else Color.rgb(245, 245, 245))
+            val space = (20 * activity.resources.displayMetrics.density).toInt()
+            setPadding(space, space, space, space)
+            fun recoveryButton(label: String, action: () -> Unit) = android.widget.Button(activity).apply {
+                text = label
+                isAllCaps = false
+                setTextColor(ink)
+                backgroundTintList = android.content.res.ColorStateList.valueOf(if (dark) Color.rgb(43, 43, 43) else Color.rgb(235, 235, 235))
+                setOnClickListener { action() }
+            }
             addView(android.widget.TextView(activity).apply {
+                setTextColor(ink)
                 text = "工作台页面已变化，请重新打开。未提交的输入可能丢失；已提交的任务不会因此重试。"
             })
-            addView(android.widget.Button(activity).apply {
-                text = "重新打开工作台"
-                setOnClickListener { activity.recreate() }
-            })
+            addView(recoveryButton("重新打开工作台") { activity.recreate() })
+            (activity as? ComposeActivity)?.let { owner ->
+                addView(recoveryButton("打开原生工作台") { owner.requestNativeWorkspace() })
+            }
         }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
     }
+
+    // Font or optional media failure must not discard an otherwise usable workspace.
+    private fun criticalWorkspaceResource(request: WebResourceRequest): Boolean =
+        request.isForMainFrame || request.url.path.orEmpty().let { path ->
+            path.startsWith(PREFIX + "assets/") && (path.endsWith(".js") || path.endsWith(".css"))
+        }
 
     private fun trusted(uri: Uri): Boolean = bundle?.allows(uri.toString()) == true
 
@@ -275,9 +302,16 @@ internal class PocketWebHost private constructor(
         return WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", mapOf("Cache-Control" to "no-store"), ByteArrayInputStream(ByteArray(0)))
     }
 
+    private fun applyWorkspaceBackground() {
+        val color = if (dev.pocketengine.ui.UiAppearance.dark(activity)) Color.rgb(18, 18, 18) else Color.rgb(245, 245, 245)
+        view.setBackgroundColor(color)
+        if (!webDestroyed) web.setBackgroundColor(color)
+    }
+
     private fun send(message: JSONObject) {
         if (closed) return
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post { send(message) }; return }
+        if (message.optString("kind") == "state") applyWorkspaceBackground()
         if (readerFailure != null && message.optString("kind") == "state") {
             val stateKey = if (bridge.surface == "browser_chrome") "browserChrome" else "browserSources"
             readerBound = message.optJSONObject("snapshot")?.optJSONObject(stateKey)?.optBoolean("ready") == true
@@ -334,7 +368,7 @@ internal class PocketWebHost private constructor(
         }
     }
 
-    fun resume() { if (!closed) { bridge.foreground(true); web.onResume(); view.requestApplyInsets(); main.post {
+    fun resume() { if (!closed) { bridge.foreground(true); if (!webDestroyed) web.onResume(); view.requestApplyInsets(); main.post {
         if (!closed && !documentFence.isRejected()) {
             if (documentLoaded) documentToken = documentFence.loaded()
             sendConfiguration()
@@ -344,7 +378,7 @@ internal class PocketWebHost private constructor(
     fun pause() { if (!closed) {
         main.removeCallbacks(readerStartupTimeout)
         readerBackTimeout?.let(main::removeCallbacks); readerBackTimeout = null; readerBackPending = false
-        documentFence.pause(); documentToken = null; bridge.foreground(false); bridge.invalidatePresentation(documentReplaced = false); web.onPause()
+        documentFence.pause(); documentToken = null; bridge.foreground(false); bridge.invalidatePresentation(documentReplaced = false); if (!webDestroyed) web.onPause()
     } }
     fun canSwitchPresentation(): Boolean = !closed && bridge.canSwitchPresentation()
     fun savePresentationState(): String = bridge.savePresentationState().toString()
@@ -357,6 +391,11 @@ internal class PocketWebHost private constructor(
         documentToken = null
         pendingState = null
         bridge.close()
+        destroyWeb()
+    }
+    private fun destroyWeb() {
+        if (webDestroyed) return
+        webDestroyed = true
         if (listenerRegistered) { WebViewCompat.removeWebMessageListener(web, "PocketNative"); listenerRegistered = false }
         web.stopLoading()
         view.removeView(web)
