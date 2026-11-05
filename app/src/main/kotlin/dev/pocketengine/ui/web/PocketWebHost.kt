@@ -87,6 +87,7 @@ internal class PocketWebHost private constructor(
         .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(activity)).build()
 
     init {
+        applyWorkspaceBackground()
         view.setOnApplyWindowInsetsListener { target, insets ->
             val bars = insets.getInsets(WindowInsets.Type.systemBars())
             val keyboard = insets.getInsets(WindowInsets.Type.ime())
@@ -127,7 +128,7 @@ internal class PocketWebHost private constructor(
             displayZoomControls = false
         }
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, false)
-        web.setBackgroundColor(Color.rgb(245, 245, 245))
+        applyWorkspaceBackground()
         web.overScrollMode = View.OVER_SCROLL_NEVER
         web.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         web.webViewClient = object : WebViewClient() {
@@ -301,9 +302,16 @@ internal class PocketWebHost private constructor(
         return WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", mapOf("Cache-Control" to "no-store"), ByteArrayInputStream(ByteArray(0)))
     }
 
+    private fun applyWorkspaceBackground() {
+        val color = if (dev.pocketengine.ui.UiAppearance.dark(activity)) Color.rgb(18, 18, 18) else Color.rgb(245, 245, 245)
+        view.setBackgroundColor(color)
+        if (!webDestroyed) web.setBackgroundColor(color)
+    }
+
     private fun send(message: JSONObject) {
         if (closed) return
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post { send(message) }; return }
+        if (message.optString("kind") == "state") applyWorkspaceBackground()
         if (readerFailure != null && message.optString("kind") == "state") {
             val stateKey = if (bridge.surface == "browser_chrome") "browserChrome" else "browserSources"
             readerBound = message.optJSONObject("snapshot")?.optJSONObject(stateKey)?.optBoolean("ready") == true
