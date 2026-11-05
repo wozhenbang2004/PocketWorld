@@ -135,8 +135,13 @@ public final class VersionedWorkspace {
         if(files!=null){Arrays.sort(files);for(File file:files){JSONObject head=JsonFiles.read(file);if(head.optBoolean("deleted"))continue;result.put(metadata(head));}}
         return result;
     }
+    /** Exact absence/deletion of an admitted snapshot, not a generic storage or authority error. */
+    public static final class FileUnavailable extends IllegalStateException {
+        public final String code;
+        private FileUnavailable(boolean deleted){super(deleted?"此版本已删除文件":"文件不存在");code=deleted?"workspace_file_deleted":"workspace_file_not_found";}
+    }
     public synchronized JSONObject read(String projectId,String path,int revision)throws Exception {
-        FileSnapshot actual=snapshot(projectId,path,revision);if(actual.tombstone)throw new IllegalStateException(actual.version==0?"文件不存在":"此版本已删除文件");
+        FileSnapshot actual=snapshot(projectId,path,revision);if(actual.tombstone)throw new FileUnavailable(actual.version!=0);
         JSONObject out=actual.json().put("deleted",false);
         if(!"text".equals(actual.kind))return out.put("contentAvailable",false).put("requiresNativeByteRead",true).put("message","这是原二进制版本；未解码成文字或改用其他文件");
         String content=StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(actual.bytes())).toString();

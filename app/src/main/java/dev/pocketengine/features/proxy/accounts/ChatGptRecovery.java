@@ -61,6 +61,8 @@ public final class ChatGptRecovery {
             case "AUTHORIZATION_CODE_EXPIRED":case "LOGIN_EXPIRED":return "ChatGPT 登录已过期。请主动重新开始登录；旧授权码不会重试。";
             case "AUTHORIZATION_DECLINED":return "你已拒绝 ChatGPT 登录。可保留 API key 连接，或稍后主动重新登录。";
             case "PROVIDER_UNAVAILABLE":case "PROVIDER_NETWORK_ERROR":return "ChatGPT 暂时不可用或网络中断。登录信息已保留，请稍后手动再试。";
+            case "REFRESH_VERIFICATION_PENDING":return "ChatGPT 续期凭据已安全保存，身份核对尚未完成。请稍后在账号页刷新授权；不会重复使用旧的续期凭据。";
+            case "REFRESH_CHECKPOINT_UNAVAILABLE":return "ChatGPT 已返回新的续期凭据，但本机未能安全保存。已停止使用旧凭据，请检查存储后重新登录。";
             default:return "";
         }
     }

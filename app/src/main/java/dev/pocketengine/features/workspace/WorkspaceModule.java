@@ -63,7 +63,9 @@ public final class WorkspaceModule implements EngineModule {
         String path=JsonFiles.text(input,"path",240);
         switch(command){
             case "createArtifact":return artifacts.create(project,path,input.optInt("version",0),input);
-            case "read":return readReceipt(workspace.read(project,path,input.optInt("version",0)));
+            case "read":
+                try{return readReceipt(workspace.read(project,path,input.optInt("version",0)));}
+                catch(VersionedWorkspace.FileUnavailable unavailable){return new JSONObject().put("ok",false).put("accepted",false).put("status","failed").put("code",unavailable.code).put("message",unavailable.getMessage()).put("projectId",project).put("path",path).put("contentAvailable",false).put("authorityAdded",false);}
             case "write":if(!(input.opt("content") instanceof String))throw new IllegalArgumentException("content需为文字");return workspace.write(project,path,input.getString("content"),input.optInt("expectedVersion",0),false);
             case "removeFile":return workspace.write(project,path,"",input.getInt("expectedVersion"),true);
             case "history":return new JSONObject().put("ok",true).put("history",workspace.history(project,path));

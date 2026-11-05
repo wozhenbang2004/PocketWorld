@@ -938,7 +938,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             try {
                 if(ownerComposer?.rejectNotAdmitted(client,receipt.getString("conversationId"))==true){publishComposer();scheduleComposerSave()}
                 refreshCurrentConversationTurn()
-                state=state.copy(notice="原任务已关闭输入，本条确定未入队；草稿已保留，请在原任务结束后明确重新发送")
+                state=state.copy(notice=if(receipt.optString("reason")=="capacity_reached")"原任务输入留存已满，本条确定未入队；草稿已保留，请先结束并核对原任务后明确重新发送" else "原任务已关闭输入，本条确定未入队；草稿已保留，请在原任务结束后明确重新发送")
             }catch(error:Exception){state=state.copy(notice=message(error))}
         } else state=state.copy(notice="输入登记尚未确认；请查询原回执或核对任务，不要重复发送同一输入")
     }

@@ -36,7 +36,7 @@ public final class TaskStoreCompactionJournalTest {
     private static final class Fixture implements AutoCloseable {
         final TaskStore tasks;final SQLiteDatabase db;final HttpServer provider;final AtomicInteger posts=new AtomicInteger();
         final RunControl control=new RunControl();final AtomicLong sourceRevision=new AtomicLong();
-        final AtomicReference<ModelConfig> selected=new AtomicReference<>();final String id,run;final int epoch;
+        final AtomicReference<ModelConfig> selected=new AtomicReference<>();final AtomicReference<String> lastRequest=new AtomicReference<>("");final String id,run;final int epoch;
         final TaskStoreMemoryReader.RawBinding binding;final RunJournal base,journal;final ContextCompactor compactor;
         final ContextBudgetPolicy.Source budgets;volatile boolean initialContextLimit,repeatContextLimit;volatile String finishReason="stop",summaryText="source-0.java: ERR_IMPORT_0。已结算历史摘要，原件保留。";volatile Action during=()->{};volatile Throwable handlerFailure;JSONArray raw;
         Fixture()throws Exception {
@@ -46,7 +46,7 @@ public final class TaskStoreCompactionJournalTest {
             tasks.openOwnerInputMailbox(id,run,epoch,"fixture-conversation",control);
             db=SQLiteDatabase.openDatabase(app.getDatabasePath("pocket-world.db").getPath(),null,SQLiteDatabase.OPEN_READWRITE);
             provider=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);provider.createContext("/v1/chat/completions",exchange->{
-                try{int post=posts.incrementAndGet();exchange.getRequestBody().readAllBytes();during.run();
+                try{int post=posts.incrementAndGet();lastRequest.set(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));during.run();
                     if(initialContextLimit&&(post==1||repeatContextLimit&&post==3)){byte[] error="{\"error\":{\"code\":\"context_length_exceeded\"}}".getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(400,error.length);exchange.getResponseBody().write(error);return;}
                     byte[] body=new JSONObject().put("choices",new JSONArray().put(new JSONObject().put("finish_reason",finishReason).put("message",new JSONObject().put("role","assistant").put("content",summaryText))))
                             .put("usage",new JSONObject().put("prompt_tokens",20).put("completion_tokens",8).put("total_tokens",28)).toString().getBytes(StandardCharsets.UTF_8);
@@ -139,6 +139,25 @@ public final class TaskStoreCompactionJournalTest {
             assertTrue(next.plan().canSend());assertEquals(2,fixture.posts.get());
             assertTrue(next.plan().messages().toString().contains("owner correction arrived"));
             assertEquals(fixture.raw.toString(),fixture.stored().getJSONArray("messages").toString());
+        }
+    }
+    @Test public void steerDuringSummaryReplansOnlyWhileEveryOriginalSourceRemainsCurrent()throws Exception {
+        for(boolean afterContextLimit:new boolean[]{false,true})for(boolean sourceChanged:new boolean[]{false,true})try(Fixture f=new Fixture()){
+            f.initialContextLimit=afterContextLimit;
+            f.during=()->{if(f.posts.get()!=(afterContextLimit?2:1))return;f.appendSteer();if(sourceChanged){
+                JSONArray changed=new JSONArray(f.raw.toString());changed.getJSONObject(3).put("content","changed original source");f.base.checkpoint(changed,0,new JSONObject());
+            }};
+            dev.pocketengine.core.CapabilityPort port=new dev.pocketengine.core.CapabilityPort(){
+                public JSONArray tools(){try{return f.tools();}catch(Exception failed){throw new IllegalStateException(failed);}}
+                public boolean supports(String name){return false;}public boolean sideEffecting(String name){return false;}
+                public JSONObject execute(String name,JSONObject args,RunControl control){throw new AssertionError("no tool replay");}
+            };
+            dev.pocketengine.runtime.AgentRunner.OwnerInputs inputs=(included,boundary,close,control)->f.tasks.pollOwnerInputs(f.id,f.run,f.epoch,included,boundary,close,control);
+            ContextBudgetPolicy.Source budgets=afterContextLimit?config->ContextBudgetPolicy.RouteBudget.forRoute(config,new ContextWindow.Budget(200000,1000,1000,500000,64,0),ContextBudgetPolicy.SourceKind.OWNER_OVERRIDE,1,1):f.budgets;
+            var outcome=new dev.pocketengine.runtime.AgentRunner(null,port,budgets,null,inputs).run(f.id,"real fixture original owner task",f.selected.get(),f.control,event->{},f.journal);
+            f.assertHandler();assertEquals(sourceChanged?"awaiting_user":"needs_confirmation",outcome.status);assertEquals(sourceChanged?(afterContextLimit?2:1):3,f.posts.get());
+            if(sourceChanged){assertFalse(f.stored().has("contextCompaction"));assertTrue(f.stored().getJSONArray("messages").toString().contains("changed original source"));}
+            else{assertTrue(f.lastRequest.get().contains("owner correction arrived"));assertTrue(f.stored().getJSONArray("messages").toString().contains("owner correction arrived"));}
         }
     }
     @Test public void cumulativeCoverageUsesBoundedNativeSessionsPastOneHundredOriginals()throws Exception {

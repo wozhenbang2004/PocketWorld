@@ -136,6 +136,15 @@ public final class AssistantInputIntegrationTest {
         IllegalStateException failure=assertThrows(IllegalStateException.class,()->tasks.appendOwnerInput(id,run,epoch,cid,input,"queue",control));assertFalse(failure instanceof OwnerInputNotAdmittedException);
         assertEquals(1,tasks.get(id,false).getJSONArray("ownerInputs").length());
     }
+    @Test public void fullMailboxDefinitivelyRejectsOnlyANewIdentity()throws Exception{
+        TaskStore tasks=new TaskStore(android());String cid=UUID.randomUUID().toString();JSONObject task=tasks.createCapabilityTask("原任务",cid),attempt=tasks.startAttempt(task.getString("id"),"capabilities",8);
+        String id=task.getString("id"),run=attempt.getString("runId");int epoch=attempt.getInt("coordinatorEpoch");RunControl control=new RunControl();control.bindHostRun(id,run,epoch);tasks.openOwnerInputMailbox(id,run,epoch,cid,control);
+        JSONObject first=null;for(int i=0;i<64;i++){JSONObject row=j("id",UUID.randomUUID().toString(),"clientMessageId",UUID.randomUUID().toString(),"content","已登记 "+i,"attachments",new JSONArray());if(first==null)first=row;tasks.appendOwnerInput(id,run,epoch,cid,row,"queue",control);}
+        assertTrue(tasks.appendOwnerInput(id,run,epoch,cid,first,"queue",control).getBoolean("duplicate"));
+        JSONObject extra=j("id",UUID.randomUUID().toString(),"clientMessageId",UUID.randomUUID().toString(),"content","超过留存上限","attachments",new JSONArray());
+        OwnerInputNotAdmittedException rejected=assertThrows(OwnerInputNotAdmittedException.class,()->tasks.appendOwnerInput(id,run,epoch,cid,extra,"queue",control));
+        assertEquals("capacity_reached",rejected.reason());assertEquals(64,tasks.get(id,false).getJSONArray("ownerInputs").length());
+    }
     @Test public void imageRequiresExplicitModelCapabilityAndCurrentDigestBeforeAnyAdmission()throws Exception{
         Host host=new Host();try(Server server=new Server(response("not reached"));AssistantModule assistant=assistant(server,host,false)){
             JSONObject image=image(),input=send("图片").put("attachments",new JSONArray().put(selected(image)));assertThrows(IllegalArgumentException.class,()->assistant.handle("send",input));assertEquals(0,host.starts.get());assertEquals(0,server.bodies.size());

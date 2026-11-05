@@ -490,7 +490,16 @@ public final class AgentRunner {
                 if(compactor.available()){
                     JSONArray raw=journal.restore().getJSONArray("messages");
                     java.util.List<Integer> sourceMap=CompactionPlan.sourceMap(raw,history,nativeProvenance);
-                    projection=compactor.request(raw,requestHistory,sourceMap,tools,config,control,contextBudget,planning,turnPlanning);
+                    try{projection=compactor.request(raw,requestHistory,sourceMap,tools,config,control,contextBudget,planning,turnPlanning);}
+                    catch(CompactionPlan.Unavailable changed){
+                        if(!"summary_owner_input_changed".equals(changed.code))throw changed;
+                        JSONArray intervening=pollOwnerInputs(history,false,false,control);
+                        if(intervening.length()==0)throw changed;
+                        stepRouting.ownerBoundary();appendOwnerInputs(history,intervening,config);
+                        recallIntent=latestOwnerRecallQuery(history,recallIntent);
+                        checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);
+                        continue modelTurns;
+                    }
                 }else projection=contextBudget.request(requestHistory, tools, config);
                 JSONArray finalRequestMessages=projection.plan().messages();
                 final dev.pocketengine.core.NativeReadContextRepair nativeRepair=capabilities==null?null:capabilities.nativeReadContextRepair(new JSONArray(finalRequestMessages.toString()),control);
@@ -605,7 +614,16 @@ public final class AgentRunner {
                                 &&nativeRepair==null&&projection.plan().removed.isEmpty()&&!projection.diagnostics().optBoolean("summaryProjectionUsed")){
                             contextRecoveryUsed=true;
                             JSONArray raw=journal.restore().getJSONArray("messages");
-                            projection=compactor.afterContextLimit(raw,requestHistory,CompactionPlan.sourceMap(raw,history,nativeProvenance),tools,config,control,contextBudget,planning,turnPlanning);
+                            try{projection=compactor.afterContextLimit(raw,requestHistory,CompactionPlan.sourceMap(raw,history,nativeProvenance),tools,config,control,contextBudget,planning,turnPlanning);}
+                            catch(CompactionPlan.Unavailable changed){
+                                if(!"summary_owner_input_changed".equals(changed.code))throw changed;
+                                JSONArray intervening=pollOwnerInputs(history,false,false,control);
+                                if(intervening.length()==0)throw changed;
+                                stepRouting.ownerBoundary();appendOwnerInputs(history,intervening,config);
+                                recallIntent=latestOwnerRecallQuery(history,recallIntent);
+                                checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);
+                                continue modelTurns;
+                            }
                             finalRequestMessages=projection.plan().messages();
                             emit(taskId,"model_recovery","running","接口报告上下文超限；已用原任务整理器保留原件整理一次，仅再请求一次。",null,projection.diagnostics(),config,sink);
                             continue;

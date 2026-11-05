@@ -46,8 +46,10 @@ final class AccountBook {
                 for(String id:ids){
                     JSONObject row=rows.getJSONObject(id);validate(id,row);
                     if("authorizing".equals(row.getString("status"))&&unregistered(row)){rows.remove(id);cleanup(id,"");continue;}
-                    if("refreshing".equals(row.getString("status"))||"authorizing".equals(row.getString("status")))row.put("status","reauthorization_required").put("error","PROCESS_INTERRUPTED").put("version",row.getLong("version")+1);
-                    cleanup(id,row.optString("slot"));
+                    if("refreshing".equals(row.getString("status"))||"authorizing".equals(row.getString("status"))){
+                        boolean resumable="refreshing".equals(row.getString("status"))&&row.optJSONObject("pendingRefresh")!=null;
+                        row.put("status",resumable?"connected":"reauthorization_required").put("error",resumable?"REFRESH_VERIFICATION_PENDING":"PROCESS_INTERRUPTED").put("version",row.getLong("version")+1);}
+                    cleanup(id,row.optString("slot"),pendingSlot(row));
                 }
                 JSONObject login=next.optJSONObject("login");
                 if(login!=null&&("pending".equals(login.optString("status"))||"exchanging".equals(login.optString("status"))))login.put("status","interrupted").put("error","PROCESS_INTERRUPTED");
@@ -112,7 +114,7 @@ final class AccountBook {
     }
     private boolean hasPlanConnection(){JSONObject rows=data.optJSONObject("accounts");for(java.util.Iterator<String> keys=rows.keys();keys.hasNext();)if(rows.optJSONObject(keys.next()).optBoolean("planUsageEnabled"))return true;return false;}
     synchronized void invalidateCredentials(String id,long expected,String error)throws GatewayFailure {
-        update(id,expected,json("status","reauthorization_required","error",error,"slot","","expiresAt",0,"planUsageEnabled",false,"cooldownUntil",0));cleanup(id,"");
+        update(id,expected,json("status","reauthorization_required","error",error,"slot","","expiresAt",0,"planUsageEnabled",false,"cooldownUntil",0,"pendingRefresh",JSONObject.NULL));cleanup(id,"");
     }
     synchronized void login(JSONObject state)throws GatewayFailure {
         try{JSONObject next=copy(data);next.put("login",copy(state));commit(next);}catch(GatewayFailure error){throw error;}catch(Exception error){throw new GatewayFailure("ACCOUNT_STORE_UNAVAILABLE");}
@@ -136,6 +138,23 @@ final class AccountBook {
         JSONObject row=row(id);fence(row,expected);String slot=row.optString("slot");if(slot.isEmpty())throw new GatewayFailure("REAUTHORIZATION_REQUIRED");
         try{return Credentials.decode(vault.get(slot));}catch(Exception error){throw new GatewayFailure("CREDENTIALS_UNAVAILABLE");}
     }
+    record PendingRefresh(Credentials credentials,long receivedAt,boolean identityRequired){}
+    synchronized PendingRefresh pendingRefresh(String id,long expected)throws GatewayFailure {
+        JSONObject row=row(id);fence(row,expected);JSONObject pending=row.optJSONObject("pendingRefresh");if(pending==null)return null;
+        try{return new PendingRefresh(Credentials.decode(vault.get(pending.getString("slot"))),pending.getLong("receivedAt"),pending.getBoolean("identityRequired"));}
+        catch(Exception invalid){throw new GatewayFailure("CREDENTIALS_UNAVAILABLE");}
+    }
+    synchronized void checkpointRefresh(String id,long expected,Credentials tokens,long receivedAt,boolean identityRequired)throws GatewayFailure {
+        JSONObject row=row(id);fence(row,expected);
+        if(!row.optBoolean("enabled")||!"refreshing".equals(row.optString("status")))throw new GatewayFailure("STALE_ACCOUNT_VERSION");
+        String candidate=slot(id,0).equals(row.optString("slot"))?slot(id,1):slot(id,0);boolean saved=false;
+        try{
+            vault.put(candidate,tokens.encode());JSONObject next=copy(data);
+            next.getJSONObject("accounts").getJSONObject(id).put("pendingRefresh",json("slot",candidate,"receivedAt",receivedAt,"identityRequired",identityRequired));
+            commit(next);saved=true;
+        }catch(Exception unavailable){throw new GatewayFailure("REFRESH_CHECKPOINT_UNAVAILABLE");}
+        finally{if(!saved)remove(candidate);}
+    }
     synchronized JSONObject publish(String id,long expected,Credentials tokens,String issuer,String subject,String email)throws GatewayFailure {
         return publish(id,expected,tokens,issuer,subject,email,null);
     }
@@ -144,26 +163,29 @@ final class AccountBook {
         if(!row.optBoolean("enabled"))throw new GatewayFailure("ACCOUNT_DISABLED");
         if(!row.optString("subject").isEmpty()&&(!row.optString("subject").equals(subject)||!row.optString("issuer").equals(issuer)))throw new GatewayFailure("ACCOUNT_IDENTITY_MISMATCH");
         String old=row.optString("slot"),candidate=slot(id,0).equals(old)?slot(id,1):slot(id,0);
-        boolean published=false;
+        boolean published=false,checkpointed=candidate.equals(pendingSlot(row));
         try{
-            // Two bounded alternating slots: restart can delete the inactive slot, even after a crash before publication.
+            // A pending rotation owns the inactive slot until identity verification and publication finish.
             vault.put(candidate,tokens.encode());
             JSONObject next=copy(data);JSONObject changed=copy(row).put("version",expected+1).put("slot",candidate)
                 .put("issuer",issuer).put("subject",subject).put("email",email).put("expiresAt",tokens.expiresAt)
                 .put("planUsageEnabled",tokens.permitsInference()).put("status","connected").put("cooldownUntil",0).put("error","").put("remoteRevocationConfirmed",false).put("usageLimited",false).put("diagnostics",new JSONObject());
+            changed.remove("pendingRefresh");
             next.getJSONObject("accounts").put(id,changed);
             if(next.optString("selected").isEmpty())next.put("selected",id);
             if(finalLogin!=null)next.put("login",copy(finalLogin));
             commit(next);published=true;cleanup(id,candidate);return copy(changed);
-        }catch(GatewayFailure error){if(!published)remove(candidate);throw error;}catch(Exception error){if(!published)remove(candidate);throw new GatewayFailure("CREDENTIAL_COMMIT_FAILED");}
+        }catch(GatewayFailure error){if(!published&&!checkpointed)remove(candidate);throw error;}catch(Exception error){if(!published&&!checkpointed)remove(candidate);throw new GatewayFailure("CREDENTIAL_COMMIT_FAILED");}
     }
     synchronized JSONObject signOut(String id)throws GatewayFailure {
         JSONObject row=row(id);
-        JSONObject changed=update(id,row.optLong("version"),json("status","signed_out","slot","","expiresAt",0,"planUsageEnabled",false,"cooldownUntil",0,"error","","remoteRevocationConfirmed",false));
+        JSONObject changed=update(id,row.optLong("version"),json("status","signed_out","slot","","expiresAt",0,"planUsageEnabled",false,"cooldownUntil",0,"error","","remoteRevocationConfirmed",false,"pendingRefresh",JSONObject.NULL));
         cleanup(id,"");return changed;
     }
-    synchronized void cleanupAll(){cleanupRequired=false;JSONObject rows=data.optJSONObject("accounts");for(java.util.Iterator<String> ids=rows.keys();ids.hasNext();){String id=ids.next();cleanup(id,rows.optJSONObject(id).optString("slot"));}}
-    private void cleanup(String id,String active){for(int n=0;n<2;n++){String name=slot(id,n);if(!name.equals(active))remove(name);}}
+    synchronized void cleanupAll(){cleanupRequired=false;JSONObject rows=data.optJSONObject("accounts");for(java.util.Iterator<String> ids=rows.keys();ids.hasNext();){String id=ids.next();JSONObject row=rows.optJSONObject(id);cleanup(id,row.optString("slot"),pendingSlot(row));}}
+    private static String pendingSlot(JSONObject row){JSONObject pending=row.optJSONObject("pendingRefresh");return pending==null?"":pending.optString("slot");}
+    private void cleanup(String id,String active){cleanup(id,active,"");}
+    private void cleanup(String id,String active,String pending){for(int n=0;n<2;n++){String name=slot(id,n);if(!name.equals(active)&&!name.equals(pending))remove(name);}}
     private void remove(String slot){try{vault.remove(slot);}catch(Exception error){cleanupRequired=true;}}
     private static String slot(String id,int n){return "proxy.account."+id+"."+n;}
     private static void fence(JSONObject row,long expected)throws GatewayFailure {if(row.optLong("version",-1)!=expected)throw new GatewayFailure("STALE_ACCOUNT_VERSION");}
@@ -173,7 +195,7 @@ final class AccountBook {
     private static java.util.Map<String,InferenceIdentity> inferenceIdentities(JSONObject source)throws Exception {
         java.util.Map<String,InferenceIdentity> result=new java.util.HashMap<>();JSONObject rows=source.optJSONObject("accounts");
         if(rows!=null)for(java.util.Iterator<String> ids=rows.keys();ids.hasNext();){String id=ids.next();JSONObject row=rows.optJSONObject(id);if(row==null)continue;
-            boolean eligible=row.optBoolean("enabled")&&row.optBoolean("planUsageEnabled")&&!row.optBoolean("usageLimited")
+            boolean eligible=row.optBoolean("enabled")&&row.optBoolean("planUsageEnabled")&&!row.optBoolean("usageLimited")&&row.optJSONObject("pendingRefresh")==null
                     &&row.optString("status").matches("connected|cooldown")
                     &&!row.optString("clientId").isEmpty()&&!row.optString("issuer").isEmpty()&&!row.optString("subject").isEmpty()&&!row.optString("slot").isEmpty();
             JSONObject evidence=modelEvidence(row,row.optLong("version",-2));
@@ -200,6 +222,8 @@ final class AccountBook {
     private static void validate(String id,JSONObject row)throws Exception {
         if(!id.matches("[0-9a-f-]{36}")||!id.equals(row.getString("id"))||row.getLong("version")<0||!(row.get("enabled") instanceof Boolean)||row.getString("label").length()>80)throw new GatewayFailure("ACCOUNT_STORE_INVALID");
         String slot=row.getString("slot");if(!slot.isEmpty()&&!slot.equals(slot(id,0))&&!slot.equals(slot(id,1)))throw new GatewayFailure("ACCOUNT_STORE_INVALID");
+        JSONObject pending=row.optJSONObject("pendingRefresh");if(pending!=null){String candidate=pending.getString("slot");
+            if(slot.isEmpty()||candidate.equals(slot)||!candidate.equals(slot(id,0))&&!candidate.equals(slot(id,1))||pending.getLong("receivedAt")<1||!(pending.get("identityRequired") instanceof Boolean))throw new GatewayFailure("ACCOUNT_STORE_INVALID");}
         row.getString("status");
     }
     static JSONObject json(Object... pairs)throws GatewayFailure {

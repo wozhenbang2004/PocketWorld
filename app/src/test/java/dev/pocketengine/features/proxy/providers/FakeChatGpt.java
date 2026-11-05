@@ -26,14 +26,17 @@ public final class FakeChatGpt implements AutoCloseable {
     public final AtomicInteger exchanges=new AtomicInteger(),refreshes=new AtomicInteger(),responses=new AtomicInteger(),models=new AtomicInteger(),revocations=new AtomicInteger();
     public volatile String nonce="",subject="fixture-subject",clientId="oaiapp_fixture",scope="openid profile email offline_access resource.invoke chatgpt.tokens.use.direct";
     public volatile long expiresIn=3600;
-    public volatile int tokenStatus=200,responseStatus=200,revokeStatus=200;
+    public volatile int tokenStatus=200,responseStatus=200,revokeStatus=200,jwksStatus=200;
     public volatile String responseContentType="text/event-stream";
+    public volatile boolean enforceRefreshRotation;
+    private volatile int currentRefreshGeneration;
     public volatile java.util.function.IntUnaryOperator responseStatusForCall;
     public volatile String tokenErrorBody="{\"error\":\"fixture-access-secret\"}",responseErrorBody="{\"secret\":\"fixture-access-secret\"}",modelsBody="{\"models\":[{\"slug\":\"fixture-model\",\"display_name\":\"Fixture model\",\"visibility\":\"list\"},{\"slug\":\"hidden\",\"display_name\":\"Hidden\",\"visibility\":\"hide\"}]}";
     public volatile String stream="data: {\"type\":\"response.output_text.delta\",\"delta\":\"你好🙂\",\"sequence_number\":0}\n\ndata: {\"type\":\"response.completed\",\"sequence_number\":1,\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":2,\"output_tokens\":3,\"total_tokens\":5}}}\n\n";
     public volatile Map<String,String> lastTokenForm=Map.of();
     public volatile JSONObject lastRequest;
-    public volatile String lastAuthorization="";
+    public volatile String lastAuthorization="",lastRevokedToken="";
+    public volatile CountDownLatch jwksEntered=new CountDownLatch(1),allowJwks=new CountDownLatch(0);
     public volatile CountDownLatch modelsEntered=new CountDownLatch(1),allowModels=new CountDownLatch(0),refreshEntered=new CountDownLatch(1),allowRefresh=new CountDownLatch(0),exchangeEntered=new CountDownLatch(1),allowExchange=new CountDownLatch(0),responseEntered=new CountDownLatch(1),allowResponse=new CountDownLatch(0);
     public FakeChatGpt()throws Exception {
         server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),4);base="http://127.0.0.1:"+server.getAddress().getPort();
@@ -44,16 +47,17 @@ public final class FakeChatGpt implements AutoCloseable {
         try{
             String path=call.getRequestURI().getPath();byte[] bytes=call.getRequestBody().readAllBytes();
             if(path.equals("/.well-known/openid-configuration")){json(call,200,new JSONObject().put("issuer",base).put("token_endpoint",base+"/api/accounts/oauth/token").put("jwks_uri",base+"/jwks").put("revocation_endpoint",base+"/revoke").toString());}
-            else if(path.equals("/jwks"))json(call,200,jwks().toString());
+            else if(path.equals("/jwks")){jwksEntered.countDown();allowJwks.await(10,TimeUnit.SECONDS);call.getResponseHeaders().add("Retry-After","0");json(call,jwksStatus,jwksStatus==200?jwks().toString():"{}");}
             else if(path.equals("/api/accounts/oauth/token")){
                 Map<String,String> form=parse(new String(bytes,StandardCharsets.UTF_8));lastTokenForm=form;boolean refresh="refresh_token".equals(form.get("grant_type"));
                 int generation;
-                if(refresh){generation=refreshes.incrementAndGet();refreshEntered.countDown();allowRefresh.await(10,TimeUnit.SECONDS);}
+                if(refresh){generation=refreshes.incrementAndGet();refreshEntered.countDown();allowRefresh.await(10,TimeUnit.SECONDS);
+                    if(enforceRefreshRotation&&!refresh(currentRefreshGeneration).equals(form.get("refresh_token"))){json(call,400,"{\"error\":\"invalid_grant\"}");return;}}
                 else{generation=exchanges.incrementAndGet()-1;exchangeEntered.countDown();allowExchange.await(10,TimeUnit.SECONDS);}
                 if(tokenStatus!=200){call.getResponseHeaders().add("Retry-After","0");json(call,tokenStatus,tokenErrorBody);}
-                else json(call,200,new JSONObject().put("access_token",access(generation)).put("refresh_token",refresh(generation)).put("id_token",jwt(base,subject,clientId,nonce,System.currentTimeMillis()/1000+3600))
-                    .put("token_type","Bearer").put("scope",scope).put("expires_in",expiresIn).toString());
-            }else if(path.equals("/revoke")){revocations.incrementAndGet();call.sendResponseHeaders(revokeStatus,-1);}
+                else {currentRefreshGeneration=generation;json(call,200,new JSONObject().put("access_token",access(generation)).put("refresh_token",refresh(generation)).put("id_token",jwt(base,subject,clientId,nonce,System.currentTimeMillis()/1000+3600))
+                    .put("token_type","Bearer").put("scope",scope).put("expires_in",expiresIn).toString());}
+            }else if(path.equals("/revoke")){revocations.incrementAndGet();lastRevokedToken=parse(new String(bytes,StandardCharsets.UTF_8)).getOrDefault("token","");call.sendResponseHeaders(revokeStatus,-1);}
             else if(path.equals("/v1/models")){models.incrementAndGet();modelsEntered.countDown();allowModels.await(10,TimeUnit.SECONDS);lastAuthorization=call.getRequestHeaders().getFirst("Authorization");json(call,200,modelsBody);}
             else if(path.equals("/v1/responses")){
                 int requestNumber=responses.incrementAndGet();lastAuthorization=call.getRequestHeaders().getFirst("Authorization");lastRequest=new JSONObject(new String(bytes,StandardCharsets.UTF_8));responseEntered.countDown();allowResponse.await(10,TimeUnit.SECONDS);
@@ -76,5 +80,5 @@ public final class FakeChatGpt implements AutoCloseable {
     private static String unsigned(byte[] bytes){return encode(bytes[0]==0?java.util.Arrays.copyOfRange(bytes,1,bytes.length):bytes);}
     static String encode(byte[] value){return Base64.getUrlEncoder().withoutPadding().encodeToString(value);}
     private static KeyPair key(){try{KeyPairGenerator generator=KeyPairGenerator.getInstance("RSA");generator.initialize(2048);return generator.generateKeyPair();}catch(Exception error){throw new AssertionError(error);}}
-    @Override public void close(){allowModels.countDown();allowRefresh.countDown();allowExchange.countDown();allowResponse.countDown();server.stop(0);}
+    @Override public void close(){allowJwks.countDown();allowModels.countDown();allowRefresh.countDown();allowExchange.countDown();allowResponse.countDown();server.stop(0);}
 }
