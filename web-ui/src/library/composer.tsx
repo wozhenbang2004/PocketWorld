@@ -7,6 +7,7 @@ import {PressButton} from './press';
 import {MessageActions} from './message';
 import {CitedAnswer} from './context';
 import {MarkdownBody} from './MarkdownBody';
+import {ProgressCircle} from './adapted/boardui-progress';
 function sizeComposerEditor(editor:HTMLTextAreaElement|null){
  if(!editor)return;
  editor.style.height='0px';
@@ -42,7 +43,7 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
      <div className="afa-toolbar">
       {onVoice&&<ToolButton label={listening?'结束听写':'语音输入'} icon="mic" onClick={onVoice} disabled={submitting}/>}
       {(!busy||!onStop||!!value.trim())&&<PressButton compact aria-label={submitting?'正在登记':sendLabel||(busy?'补充给当前工作':'发送')} disabled={!canSend} onClick={onSend}><Icon name="arrow" size={18}/></PressButton>}
-      {busy&&onStop&&<button type="button" className="afa-stop" onClick={onStop} aria-label="停止当前回复"><span aria-hidden="true">■</span></button>}
+      {busy&&onStop&&<button type="button" className="afa-stop pw-stop-motion" onClick={onStop} aria-label="停止当前回复"><span className="pw-stop-ring" aria-hidden="true"><ProgressCircle isIndeterminate size="md" aria-label="当前回复状态"/></span><span className="pw-stop-mark" aria-hidden="true">■</span></button>}
      </div>
     </div>
    </div>
