@@ -129,7 +129,7 @@ public final class ExtensionRuntimeTest {
             }finally{control.cancel();evaluator.close();caller.shutdownNow();assertTrue(caller.awaitTermination(1,TimeUnit.SECONDS));}
         }
     }
-    private static void assertNoNodeReaders(Process owned){String name="extension-node-drain-"+owned.pid();assertFalse(Thread.getAllStackTraces().keySet().stream().anyMatch(thread->thread.isAlive()&&thread.getName().equals(name)));}
+    private static void assertNoNodeReaders(Process owned){String name="extension-node-drain-"+System.identityHashCode(owned);assertFalse(Thread.getAllStackTraces().keySet().stream().anyMatch(thread->thread.isAlive()&&thread.getName().equals(name)));}
 
     static final class Node implements ExtensionRuntime.Evaluator {
         private volatile Process active;
@@ -138,7 +138,7 @@ public final class ExtensionRuntimeTest {
             current.check();String runner="const vm=require('node:vm');let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>s+=x);process.stdin.on('end',async()=>{try{const p=JSON.parse(s);const pocket=Object.freeze({args:Object.freeze([]),resources:Object.freeze({'extension-request.json':JSON.stringify(p.request)})});const value=await vm.runInNewContext(p.script,{pocket},{timeout:p.timeout});process.stdout.write(value);}catch(e){process.exitCode=1;}});";
             active=new ProcessBuilder("node","-e",runner).start();Process process=active;Runnable cancel=process::destroyForcibly;control.onCancel(cancel);
             long deadline=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(maxMillis+1000L);
-            ExecutorService readers=Executors.newFixedThreadPool(2,task->{Thread thread=new Thread(task,"extension-node-drain-"+process.pid());thread.setDaemon(true);return thread;});
+            ExecutorService readers=Executors.newFixedThreadPool(2,task->{Thread thread=new Thread(task,"extension-node-drain-"+System.identityHashCode(process));thread.setDaemon(true);return thread;});
             Future<byte[]> stdout=readers.submit(()->drain(process.getInputStream(),262144,process)),stderr=readers.submit(()->drain(process.getErrorStream(),65536,process));
             try{
                 JSONObject input=new JSONObject().put("script",new String(script,StandardCharsets.UTF_8)).put("request",request).put("timeout",maxMillis);

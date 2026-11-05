@@ -14,7 +14,7 @@ public class CapabilityPortReceiptAfterStopTest {
         JSONObject actual = new JSONObject().put("ok", true).put("operationId", "original-operation");
         CapabilityPort.ReceiptAfterStop retained = new CapabilityPort.ReceiptAfterStop(original, actual, stopped);
 
-        assertTrue(actual.similar(retained.receipt(original)));
+        assertEquals(ScopedToolCatalog.fingerprint(actual), ScopedToolCatalog.fingerprint(retained.receipt(original)));
         assertSame(stopped, retained.failure(original));
         assertSame(stopped, retained.getCause());
         assertTrue(original.isCancelled());
@@ -65,7 +65,7 @@ public class CapabilityPortReceiptAfterStopTest {
         JSONObject second = retained.receipt(original);
 
         assertNotSame(first, second);
-        assertTrue(actual.similar(second));
+        assertEquals(ScopedToolCatalog.fingerprint(actual), ScopedToolCatalog.fingerprint(second));
         assertSame(failure, retained.failure(original));
         assertSame(failure, retained.getCause());
     }

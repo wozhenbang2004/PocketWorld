@@ -1,6 +1,7 @@
 package dev.pocketengine.features.plugins;
 
 import dev.pocketengine.core.ToolOutcome;
+import dev.pocketengine.core.ScopedToolCatalog;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
@@ -17,7 +18,7 @@ public class PluginToolReceiptsTest {
         assertFalse(receipt.getBoolean("ok"));
         assertEquals("mcp_tool_error", receipt.getString("code"));
         assertEquals("original-operation", receipt.getString("operationId"));
-        assertTrue(result.similar(receipt.getJSONObject("toolResult")));
+        assertEquals(ScopedToolCatalog.fingerprint(result), ScopedToolCatalog.fingerprint(receipt.getJSONObject("toolResult")));
         assertUnverifiedAndNoReplay(receipt);
     }
 
@@ -33,7 +34,7 @@ public class PluginToolReceiptsTest {
             assertEquals("input_required", receipt.getString("code"));
             assertTrue(receipt.getBoolean("requiresPause"));
             assertFalse(receipt.getBoolean("ok"));
-            assertTrue(result.similar(receipt.getJSONObject("toolResult")));
+            assertEquals(ScopedToolCatalog.fingerprint(result), ScopedToolCatalog.fingerprint(receipt.getJSONObject("toolResult")));
             assertUnverifiedAndNoReplay(receipt);
         }
     }
@@ -85,7 +86,7 @@ public class PluginToolReceiptsTest {
         assertFalse(receipt.has("requiresReconciliation"));
         assertFalse(receipt.has("code"));
         assertFalse(receipt.has(ToolOutcome.KEY));
-        assertTrue(result.similar(receipt.getJSONObject("toolResult")));
+        assertEquals(ScopedToolCatalog.fingerprint(result), ScopedToolCatalog.fingerprint(receipt.getJSONObject("toolResult")));
         assertUnverifiedAndNoReplay(receipt);
     }
 
@@ -125,7 +126,7 @@ public class PluginToolReceiptsTest {
             assertEquals(expected[i], ToolOutcome.classify(completed).kind());
             assertEquals(ToolOutcome.classify(PluginToolReceipts.received("original-operation", actual, true)).kind(),
                     ToolOutcome.classify(completed).kind());
-            assertTrue(actual.similar(completed.getJSONObject("toolResult")));
+            assertEquals(ScopedToolCatalog.fingerprint(actual), ScopedToolCatalog.fingerprint(completed.getJSONObject("toolResult")));
             assertFalse(ToolOutcome.classify(completed).view().getBoolean("automaticReplayAllowed"));
         }
     }
