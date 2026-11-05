@@ -20,6 +20,43 @@ import static org.junit.Assert.*;
 public class ChatGptProviderTest {
     static Credentials credentials()throws Exception{return new Credentials(FakeChatGpt.access(0),FakeChatGpt.refresh(0),"fixture-id-secret","chatgpt.tokens.use.direct",System.currentTimeMillis()+3600000);}
     static JSONArray input()throws Exception{return new JSONArray().put(new JSONObject().put("role","user").put("content","Hello"));}
+    @Test public void richModelCatalogAboveLegacyQuarterMiBBudgetKeepsOnlySupportedFacts()throws Exception {
+        try(FakeChatGpt fake=new FakeChatGpt();ChatGptProvider provider=fake.provider()){
+            JSONObject body=new JSONObject(fake.modelsBody).put("provider_metadata","目录说明".repeat(30*1024));
+            fake.modelsBody=body.toString();assertTrue(fake.modelsBody.getBytes(StandardCharsets.UTF_8).length>256*1024);
+            JSONArray models=provider.models(credentials(),new GatewayCall(10000));
+            assertEquals(1,models.length());assertEquals("fixture-model",models.getJSONObject(0).getString("id"));
+            assertEquals("Fixture model",models.getJSONObject(0).getString("displayName"));
+            assertFalse(models.toString().contains("provider_metadata"));assertEquals(1,fake.models.get());
+        }
+    }
+    @Test public void modelCatalogAcceptsTwoMiBExactlyAndRejectsTheNextByte()throws Exception {
+        try(FakeChatGpt fake=new FakeChatGpt();ChatGptProvider provider=fake.provider()){
+            String body=fake.modelsBody;int budget=2*1024*1024;
+            fake.modelsBody=body+" ".repeat(budget-body.getBytes(StandardCharsets.UTF_8).length);
+            assertEquals(1,provider.models(credentials(),new GatewayCall(10000)).length());
+            fake.modelsBody+=" ";
+            try{provider.models(credentials(),new GatewayCall(10000));fail("Expected a bounded catalog read");}
+            catch(GatewayFailure expected){assertEquals("PROVIDER_RESPONSE_TOO_LARGE",expected.code);assertFalse(expected.toString().contains(FakeChatGpt.access(0)));}
+            assertEquals(2,fake.models.get());
+        }
+    }
+    @Test public void largerCatalogByteBudgetRetainsTheModelCountLimit()throws Exception {
+        try(FakeChatGpt fake=new FakeChatGpt();ChatGptProvider provider=fake.provider()){
+            JSONArray rows=new JSONArray();for(int i=0;i<513;i++)rows.put(new JSONObject().put("slug","model-"+i).put("display_name","Model "+i).put("visibility","list"));
+            fake.modelsBody=new JSONObject().put("models",rows).toString();
+            try{provider.models(credentials(),new GatewayCall(10000));fail("Expected the independent model-count limit");}
+            catch(GatewayFailure expected){assertEquals("INVALID_MODEL_CATALOG",expected.code);}
+        }
+    }
+    @Test public void catalogBudgetDoesNotExpandTheTokenResponseBudget()throws Exception {
+        try(FakeChatGpt fake=new FakeChatGpt();ChatGptProvider provider=fake.provider()){
+            fake.scope+=" "+"fixture-padding".repeat(6000);
+            try{provider.exchange(fake.clientId,"fixture-code","fixture-verifier",fake.base+"/auth/callback",fake.nonce,new GatewayCall(10000),System.currentTimeMillis());fail("Expected the original token-response limit");}
+            catch(GatewayFailure expected){assertEquals("PROVIDER_RESPONSE_TOO_LARGE",expected.code);assertFalse(expected.toString().contains("fixture-padding"));}
+            assertEquals(1,fake.exchanges.get());
+        }
+    }
     @Test public void idTokenRequiresSignatureIssuerAudienceNonceAndExpiry()throws Exception {
         long now=System.currentTimeMillis();String valid=FakeChatGpt.jwt("issuer","subject","oaiapp_test","nonce",now/1000+3600);
         assertEquals("subject",OidcIdentityVerifier.verify(valid,FakeChatGpt.jwks(),"issuer","oaiapp_test","nonce","access",now).subject);
