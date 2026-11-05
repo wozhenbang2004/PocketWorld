@@ -143,7 +143,11 @@ public final class ApiTurnStream {
         for (int count = 0; count < MAX_EVENTS; count++) {
             control.check();
             Frame frame = parser.next();
-            if (frame == null) throw GatewayException.incompleteStream();
+            if (frame == null) {
+                // An observed unfinished call is a protocol failure, not new replay authority.
+                if (state instanceof Responses response && (response.incompleteItem || response.incompleteArguments)) throw interrupted();
+                throw GatewayException.incompleteStream();
+            }
             if (state.accept(frame)) {
                 control.check();
                 JSONObject result=normalize(protocol, adapter, state.result(), tools);
@@ -379,6 +383,7 @@ public final class ApiTurnStream {
         private Boolean numbered;
         private final Set<String> itemIds = new HashSet<>();
         private JSONObject completed;
+        private boolean incompleteItem, incompleteArguments;
         Responses(TextSink sink,ProviderUsage.Observer usage) { this.sink = sink;this.usage=usage; }
         public boolean accept(Frame frame) throws Exception {
             JSONObject event = eventObject(frame.data);
@@ -426,7 +431,10 @@ public final class ApiTurnStream {
                 case "response.function_call_arguments.done": {
                     ResponseItem item = item(event, "function_call");
                     if (item.argumentsDone || item.done != null) throw invalid();
-                    String args = text(event, "arguments", MAX_ARGUMENT_CHARS); object(args);
+                    // A token-limited call may end with partial JSON. Only a completed
+                    // output item can become executable and must pass object validation.
+                    String args = text(event, "arguments", MAX_ARGUMENT_CHARS);
+                    try { object(args); } catch (GatewayException unfinished) { incompleteArguments = true; }
                     if ((item.argumentDeltas || item.arguments.length() > 0) && !item.arguments.toString().equals(args)) throw invalid();
                     item.arguments.setLength(0); item.arguments.append(args); item.argumentsDone = true; break;
                 }
@@ -459,13 +467,16 @@ public final class ApiTurnStream {
                 case "response.output_item.done": {
                     ResponseItem item = item(event, null);
                     if (item.done != null) throw invalid();
-                    JSONObject raw = event.getJSONObject("item"); checkItem(item, raw); item.done = copy(raw); break;
+                    JSONObject raw = event.getJSONObject("item");
+                    boolean incomplete="incomplete".equals(raw.optString("status"));
+                    checkItem(item,raw,!incomplete);item.done=copy(raw);incompleteItem|=incomplete;break;
                 }
                 case "response.completed": {
                     JSONObject raw = event.getJSONObject("response");
                     if (!responseId.equals(identity(raw, "id")) || !"completed".equals(raw.optString("status"))) throw invalid();
                     usage.observe(raw,ProviderUsage.Stage.FINAL);
                     usage.terminal("completed");
+                    if(incompleteItem)throw invalid(); // An incomplete item never becomes a successful turn.
                     JSONArray output = raw.getJSONArray("output");
                     if (output.length() > MAX_ITEMS) throw tooLarge();
                     Set<String> finalIds = new HashSet<>();
@@ -473,7 +484,7 @@ public final class ApiTurnStream {
                     for (Map.Entry<Integer, ResponseItem> entry : items.entrySet()) {
                         if (entry.getKey() >= output.length()) throw invalid();
                         JSONObject finalItem = output.getJSONObject(entry.getKey());
-                        checkItem(entry.getValue(), finalItem);
+                        checkItem(entry.getValue(), finalItem,true);
                         if (entry.getValue().done != null && !same(entry.getValue().done, finalItem)) throw invalid();
                     }
                     completed = copy(raw); return true;
@@ -497,13 +508,13 @@ public final class ApiTurnStream {
             TextPart part = item.parts.get(integer(event, "content_index", MAX_ITEMS));
             if (part == null || item.done != null) throw invalid(); return part;
         }
-        private void checkItem(ResponseItem item, JSONObject raw) throws Exception {
+        private void checkItem(ResponseItem item, JSONObject raw,boolean complete) throws Exception {
             if (!item.raw.getString("id").equals(identity(raw, "id")) || !item.raw.getString("type").equals(raw.optString("type")))
                 throw invalid();
             if ("function_call".equals(raw.optString("type"))) {
                 for (String key : new String[]{"call_id", "name"})
                     if (!item.raw.getString(key).equals(identity(raw, key))) throw invalid();
-                String args = text(raw, "arguments", MAX_ARGUMENT_CHARS); object(args);
+                String args = text(raw, "arguments", MAX_ARGUMENT_CHARS);if(complete)object(args);
                 if ((item.argumentDeltas || item.argumentsDone || item.arguments.length() > 0) && !item.arguments.toString().equals(args)) throw invalid();
             }
             if (!item.parts.isEmpty()) {
