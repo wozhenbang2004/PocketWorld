@@ -145,3 +145,29 @@ test('bridge accepts exactly the native nine archive sections without weakening 
   assert.match(bridge, /controller\.webPrivateOwnerVisible\(\)/); assert.match(bridge, /same\(string\(args, "sha256"\), selected\.optString\("archiveSha256"\)/);
   assert.match(archive, /file\.length\(\)>MAX_BYTES/); assert.match(bridge, /archives\.confirmPhase" -> \{ fields\(args, "actionId"\); review\(args, archives\.state\.review\)/);
 });
+
+
+test('backup failure remains unknown while completed storage ranges stay usable', async () => {
+  const data = { ...storageData(), caches: null, backupError: '本机备份列表未能读取：目录不可用' };
+  const f = fixture('StorageWorkspace', { data });
+  assert.ok(f.visibleText.includes('读取失败，数量未知'));
+  assert.ok(f.visibleText.includes(data.backupError));
+  assert.equal(f.visibleText.includes('尚无可读取的本机缓存'), false);
+  f.entry('caches');
+  assert.equal(f.visibleText.includes('尚无可读取的本机备份缓存'), false);
+  assert.equal(f.all.some(node => node.props.action === 'storage.backupCache'), false);
+  f.back(); f.entry('cleanup');
+  assert.ok(f.visibleText.includes('依赖缓存'));
+  await f.action('storage.reviewSelected');
+  assert.deepEqual(f.calls[0], { action: 'storage.reviewSelected', args: { selection: ['cache-a'] } });
+});
+
+test('unread and successfully empty backup lists have different messages', () => {
+  const unread = fixture('StorageWorkspace', { data: { ...storageData(), caches: null } });
+  assert.ok(unread.visibleText.includes('尚未读取本机备份缓存'));
+  unread.entry('caches'); assert.ok(unread.visibleText.includes('请重新计量'));
+  const empty = fixture('StorageWorkspace', { data: { ...storageData(), caches: [] } });
+  assert.ok(empty.visibleText.includes('尚无可读取的本机缓存'));
+  empty.entry('caches'); assert.ok(empty.visibleText.includes('尚无可读取的本机备份缓存'));
+  assert.equal(empty.visibleText.includes('读取失败'), false);
+});
