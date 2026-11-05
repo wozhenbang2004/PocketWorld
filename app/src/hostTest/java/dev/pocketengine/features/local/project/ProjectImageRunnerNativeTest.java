@@ -67,7 +67,7 @@ public final class ProjectImageRunnerNativeTest {
     }
     private void journey(Mode mode)throws Exception{
         try(ProjectImageSourceNativeTest.F f=new ProjectImageSourceNativeTest.F()){
-            if(mode.repairRange)Files.writeString(f.files.resolve("unicode.txt"),"a🙂中b",StandardCharsets.UTF_8);
+            if(mode.repairRange)Files.write(f.files.resolve("unicode.txt"),"a🙂中b".getBytes(StandardCharsets.UTF_8));
             JSONObject selected=mode==Mode.ARTIFACT?f.artifact():null;JSONObject args=selected==null?f.args():new JSONObject().put("artifactId",selected.getString("id")).put("sourceSha",selected.getString("sha256"));
             AtomicReference<Throwable> failure=new AtomicReference<>();AtomicInteger requests=new AtomicInteger(),physicalStarts=new AtomicInteger(),delivered=new AtomicInteger();byte[] changed=ProjectImageSourceNativeTest.png(Color.BLUE);
             HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);ExecutorService workers=Executors.newSingleThreadExecutor();

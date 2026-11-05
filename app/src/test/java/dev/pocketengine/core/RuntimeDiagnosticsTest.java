@@ -62,7 +62,7 @@ public final class RuntimeDiagnosticsTest {
         assertTrue(current.length() <= RuntimeDiagnostics.FILE_CAP_BYTES); assertTrue(previous.length() <= RuntimeDiagnostics.FILE_CAP_BYTES);
         JSONObject last = new JSONObject(Files.readAllLines(current.toPath(), StandardCharsets.UTF_8).get(0));
         last.put("message", "must-not-be-restored");
-        Files.writeString(current.toPath(), last + "\n", StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.APPEND);
+        Files.write(current.toPath(), (last + "\n").getBytes(StandardCharsets.UTF_8), java.nio.file.StandardOpenOption.APPEND);
         RuntimeDiagnostics.Recorder restored = new RuntimeDiagnostics.Recorder(directory, null);
         restored.close(); assertTrue(restored.awaitWrites(10000));
         JSONObject snapshot = restored.snapshot();

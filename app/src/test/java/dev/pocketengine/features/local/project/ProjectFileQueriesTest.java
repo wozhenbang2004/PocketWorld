@@ -92,7 +92,7 @@ public final class ProjectFileQueriesTest {
             file("changing.txt","original");AtomicInteger checks=new AtomicInteger();
             assertThrows(SecurityException.class,()->ProjectFileQueries.read(root.toFile(),CHECKOUT,input,()->{
                 // This checkpoint follows the original digest/text scan and the range rejection.
-                if(checks.incrementAndGet()==5){if(removed)Files.delete(root.resolve("changing.txt"));else Files.writeString(root.resolve("changing.txt"),"replacement",StandardCharsets.UTF_8);}
+                if(checks.incrementAndGet()==5){if(removed)Files.delete(root.resolve("changing.txt"));else Files.write(root.resolve("changing.txt"),"replacement".getBytes(StandardCharsets.UTF_8));}
             }));
         }
     }

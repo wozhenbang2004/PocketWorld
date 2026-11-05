@@ -109,7 +109,7 @@ public final class AccountInferenceRecoveryJourneyTest {
     @Test public void oldStoreMigrationDoesNotInventContinuityBeforeItsCurrentVersion()throws Exception {
         try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
             String id=rig.connect();long before=rig.book.row(id).getLong("version");rig.gateway.refresh(id,new GatewayCall(5000));long current=rig.book.row(id).getLong("version");rig.gateway.close();
-            JSONObject disk=new JSONObject(java.nio.file.Files.readString(rig.file.toPath()));disk.getJSONObject("accounts").getJSONObject(id).remove("authorizationEpoch");AccountBook.atomicWrite(rig.file,disk);
+            JSONObject disk=new JSONObject(new String(java.nio.file.Files.readAllBytes(rig.file.toPath()),java.nio.charset.StandardCharsets.UTF_8));disk.getJSONObject("accounts").getJSONObject(id).remove("authorizationEpoch");AccountBook.atomicWrite(rig.file,disk);
             AccountBook restored=new AccountBook(rig.file,rig.vault,"host-owner");assertFalse(restored.authorizationCurrent(id,before));assertTrue(restored.authorizationCurrent(id,current));
         }
     }

@@ -137,7 +137,7 @@ public final class AccountCatalogJourneyTest {
             String id=rig.connect();catalog(rig,row(12000,"low"));ModelConfig config=pin(rig,id);long version=config.accountModel.accountVersion;
             AccountBook restored=new AccountBook(rig.file,rig.vault,"host-owner");
             assertEquals(12000,restored.modelFacts(id,version,"fixture-model").facts.contextWindow().value.tokens());
-            String disk=java.nio.file.Files.readString(rig.file.toPath());assertFalse(disk.contains("fixture-access-secret"));assertFalse(disk.contains("fixture-refresh-secret"));
+            String disk=new String(java.nio.file.Files.readAllBytes(rig.file.toPath()),java.nio.charset.StandardCharsets.UTF_8);assertFalse(disk.contains("fixture-access-secret"));assertFalse(disk.contains("fixture-refresh-secret"));
             rig.gateway.logout(id,new GatewayCall(5000));try{rig.gateway.modelFacts(id,version,"fixture-model");fail();}catch(GatewayFailure expected){assertEquals("STALE_ACCOUNT_VERSION",expected.code);}
         }
     }
