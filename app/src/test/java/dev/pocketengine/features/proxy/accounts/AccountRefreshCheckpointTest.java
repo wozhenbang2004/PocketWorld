@@ -3,6 +3,7 @@ package dev.pocketengine.features.proxy.accounts;
 import dev.pocketengine.features.proxy.providers.FakeChatGpt;
 import dev.pocketengine.features.proxy.providers.ResponsesRequest;
 import java.nio.file.Files;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -20,7 +21,7 @@ public final class AccountRefreshCheckpointTest {
         assertEquals(1,rig.fake.refreshes.get());long version=rig.book.row(id).getLong("version");
         assertNotNull(rig.book.pendingRefresh(id,version));assertFalse(rig.gateway.inferenceIdentityCurrent(id,version));
         assertEquals(FakeChatGpt.refresh(0),rig.book.credentials(id,version).refreshToken());
-        String disk=Files.readString(rig.file.toPath());assertFalse(disk.contains(FakeChatGpt.refresh(1)));assertFalse(disk.contains(FakeChatGpt.access(1)));
+        String disk=new String(Files.readAllBytes(rig.file.toPath()),StandardCharsets.UTF_8);assertFalse(disk.contains(FakeChatGpt.refresh(1)));assertFalse(disk.contains(FakeChatGpt.access(1)));
         assertEquals(0,rig.fake.responses.get());
     }
     private void awaitRetry(AccountBook book,String id)throws Exception {
