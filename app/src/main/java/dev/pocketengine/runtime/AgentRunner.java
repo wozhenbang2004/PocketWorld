@@ -374,9 +374,6 @@ public final class AgentRunner {
                     ? new JSONArray().put(new JSONObject().put("role", "system").put("content", instructionProfile.instructions()))
                     .put(new JSONObject().put("role", "user").put("content", clean(goal, config)))
                     : durableHistory(storedMessages, config,null,null,instructionProfile);
-            if (storedMessages != null && storedMessages.length() > 0) {
-                history.put(new JSONObject().put("role", "user").put("content", "正在恢复同一个任务。历史工具调用仅作记录，禁止自动重放；历史观察与节点引用全部失效，必须依据接下来的新观察重新规划。"));
-            }
             Object feedback = saved.opt("feedback");
             if (feedback != null && feedback != JSONObject.NULL && !(feedback instanceof String)) throw new JournalFailure();
             if (feedback instanceof String && !((String) feedback).trim().isEmpty()&&!hasRecallFeedback(history,clean((String)feedback,config))) history.put(new JSONObject()
