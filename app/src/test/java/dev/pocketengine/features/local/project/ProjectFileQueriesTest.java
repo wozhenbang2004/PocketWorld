@@ -69,6 +69,15 @@ public final class ProjectFileQueriesTest {
         file("src/NAME.js","first needle\nsecond\n");assertThrows(IllegalArgumentException.class,()->search(new JSONObject().put("mode","text").put("query","needle\nsecond")));assertEquals(1,search(new JSONObject().put("mode","text").put("query","needle").put("include","")).getJSONArray("matches").length());assertEquals(1,search(new JSONObject().put("mode","path").put("query","**/name.js").put("caseSensitive",false)).getJSONArray("matches").length());
     }
 
+    @Test public void successAndMissingFileHaveExplicitModelReceipts()throws Exception{
+        file("present.txt","actual bytes");assertTrue(read(new JSONObject().put("path","present.txt")).getBoolean("ok"));
+        JSONObject missing=read(new JSONObject().put("path","missing.txt"));assertFalse(missing.getBoolean("ok"));assertEquals("project_file_not_found",missing.getString("code"));assertFalse(missing.has("content"));assertFalse(missing.getBoolean("authorityAdded"));
+        Files.createDirectory(root.resolve("folder"));assertEquals("project_file_not_regular",read(new JSONObject().put("path","folder")).getString("code"));
+    }
+    @Test public void missingFileDoesNotSwallowCancellationOrInvalidAuthority()throws Exception{
+        AtomicInteger checks=new AtomicInteger();assertThrows(InterruptedException.class,()->ProjectFileQueries.read(root.toFile(),CHECKOUT,new JSONObject().put("path","missing.txt"),()->{if(checks.incrementAndGet()>2)throw new InterruptedException("cancelled before receipt");}));
+        assertThrows(SecurityException.class,()->ProjectFileQueries.read(root.toFile(),CHECKOUT,new JSONObject().put("path","missing.txt"),()->{throw new SecurityException("original authority withdrawn");}));
+    }
     private static java.nio.file.Path writeUtf8(java.nio.file.Path path,String text)throws java.io.IOException{return Files.write(path,text.getBytes(java.nio.charset.StandardCharsets.UTF_8));}
 
 }

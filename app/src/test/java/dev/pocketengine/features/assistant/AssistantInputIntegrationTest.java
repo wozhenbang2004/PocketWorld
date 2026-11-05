@@ -43,13 +43,13 @@ public final class AssistantInputIntegrationTest {
     }
     private final class Host implements AssistantModule.NativeInputHost,AgentRunner.OwnerInputs {
         final TaskStore tasks=new TaskStore(android());final List<JSONObject> inputs=new ArrayList<>();final AtomicInteger starts=new AtomicInteger(),appends=new AtomicInteger(),effects=new AtomicInteger();
-        volatile JSONObject binding;volatile RunControl live;volatile boolean open=true,unknownAppend;volatile RunJournal journal;volatile RunOutcome outcome;volatile AssistantModule assistant;
+        volatile JSONObject binding;volatile RunControl live;volatile boolean open=true,unknownAppend,holdEndRun;final CountDownLatch ending=new CountDownLatch(1),releaseEnd=new CountDownLatch(1);volatile RunJournal journal;volatile RunOutcome outcome;volatile AssistantModule assistant;
         public synchronized JSONObject start(String cid,String goal,JSONObject message,ModelConfig config,RunControl control)throws Exception{
             starts.incrementAndGet();String id=tasks.createCapabilityTask(goal,cid).getString("id");JSONObject attempt=tasks.startAttempt(id,"capabilities",config.maxSteps);control.bindHostRun(id,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"));live=control;
             binding=j("taskId",id,"runId",attempt.getString("runId"),"epoch",attempt.getInt("coordinatorEpoch"));journal=tasks.journal(id,binding.getString("runId"),binding.getInt("epoch"),control);return new JSONObject(binding.toString());
         }
         public synchronized JSONObject append(String cid,JSONObject message,String mode,JSONObject expected,RunControl control)throws Exception{
-            appends.incrementAndGet();control.check();assertSame(live,control);assertTrue(control.matchesHostRun(expected.getString("taskId"),expected.getString("runId"),expected.getInt("epoch")));if(!open)throw new IllegalStateException("mailbox closed");if(unknownAppend)throw new java.io.IOException("unknown fixture admission");
+            appends.incrementAndGet();control.check();assertSame(live,control);assertTrue(control.matchesHostRun(expected.getString("taskId"),expected.getString("runId"),expected.getInt("epoch")));if(!open)throw new OwnerInputNotAdmittedException("mailbox closed");if(unknownAppend)throw new java.io.IOException("unknown fixture admission");
             inputs.add(j("messageId",message.getString("id"),"clientMessageId",message.getString("clientMessageId"),"content",message.getString("content"),"mode",mode,"attachments",message.getJSONArray("attachments")));return new JSONObject(binding.toString());
         }
         public synchronized JSONArray poll(JSONArray ids,boolean turnBoundary,boolean closeIfEmpty,RunControl control)throws Exception{
@@ -60,7 +60,7 @@ public final class AssistantInputIntegrationTest {
         }
         JSONObject execute(String cid,String goal,JSONArray initial,ModelConfig config,RunControl control,AttachmentRequestProjection projection)throws Exception{
             journal.checkpoint(initial,0,new JSONObject());
-            CapabilityPort port=new CapabilityPort(){public JSONArray tools()throws Exception{return new JSONArray().put(j("type","function","function",j("name","fixture_effect","parameters",j("type","object","properties",new JSONObject()))));}public boolean supports(String n){return n.equals("fixture_effect");}public boolean sideEffecting(String n){return false;}public JSONObject execute(String n,JSONObject a,RunControl c)throws Exception{effects.incrementAndGet();return j("ok",true,"accepted",true,"verified",false);}};
+            CapabilityPort port=new CapabilityPort(){public void endRun(RunControl c)throws Exception{if(holdEndRun){ending.countDown();if(!releaseEnd.await(5,TimeUnit.SECONDS))throw new AssertionError("end-run gate timeout");}}public JSONArray tools()throws Exception{return new JSONArray().put(j("type","function","function",j("name","fixture_effect","parameters",j("type","object","properties",new JSONObject()))));}public boolean supports(String n){return n.equals("fixture_effect");}public boolean sideEffecting(String n){return false;}public JSONObject execute(String n,JSONObject a,RunControl c)throws Exception{effects.incrementAndGet();return j("ok",true,"accepted",true,"verified",false);}};
             outcome=new AgentRunner(null,port,ContextBudgetPolicy.currentHostSource(),projection,this).run(binding.getString("taskId"),goal,config,control,event->{try{tasks.event(binding.optString("taskId"),binding.optString("runId"),binding.optInt("epoch"),event);}catch(Exception failure){throw new IllegalStateException(failure);}},journal);
             tasks.endAttempt(binding.getString("taskId"),binding.getString("runId"),outcome.status,outcome.summary,outcome.evidence);return j("taskId",binding.getString("taskId"),"content",outcome.evidence.optString("modelSummary",outcome.summary));
         }
@@ -104,6 +104,37 @@ public final class AssistantInputIntegrationTest {
         Host host=new Host();try(Server server=new Server(response("完成"));AssistantModule assistant=assistant(server,host,false)){
             JSONObject first=assistant.handle("send",send("原任务"));assertTrue(server.entered.await(3,TimeUnit.SECONDS));host.unknownAppend=true;JSONObject input=follow(first,"未知补充","queue"),ack=assistant.handle("send",input);assertEquals("unconfirmed",ack.getString("status"));assertTrue(assistant.handle("send",input).getBoolean("duplicate"));assertEquals("unconfirmed",assistant.handle("getSubmission",j("clientMessageId",input.getString("clientMessageId"))).getString("status"));assertEquals(1,host.appends.get());server.release.countDown();awaitIdle(assistant);
         }
+    }
+    @Test public void mailboxCloseBeforeTurnReleaseIsDefinitivelyRejectedWithoutReplay()throws Exception{
+        Host host=new Host();host.holdEndRun=true;
+        try(Server server=new Server(response("完成"));AssistantModule assistant=assistant(server,host,false)){
+            JSONObject first=assistant.handle("send",send("原任务"));assertTrue(server.entered.await(3,TimeUnit.SECONDS));server.release.countDown();
+            try{
+                assertTrue(host.ending.await(3,TimeUnit.SECONDS));assertFalse(host.open);assertTrue(assistant.snapshot().getBoolean("running"));
+                JSONObject input=follow(first,"未入队的补充","queue"),ack=assistant.handle("send",input);
+                assertEquals("rejected",ack.getString("status"));assertTrue(ack.getBoolean("notAdmitted"));assertFalse(ack.getBoolean("reconciliationRequired"));
+                assertEquals(first.getString("runId"),ack.getString("runId"));assertTrue(assistant.handle("send",input).getBoolean("duplicate"));
+                assertEquals("rejected",assistant.handle("getSubmission",j("clientMessageId",input.getString("clientMessageId"))).getString("status"));
+                assertEquals(1,host.appends.get());assertTrue(host.inputs.isEmpty());
+            }finally{host.releaseEnd.countDown();}
+            awaitIdle(assistant);assertEquals(1,host.starts.get());assertEquals(1,server.bodies.size());
+        }
+    }
+    @Test public void realClosedMailboxRejectsBeforeWritingAnInputRow()throws Exception{
+        TaskStore tasks=new TaskStore(android());String cid=UUID.randomUUID().toString();JSONObject task=tasks.createCapabilityTask("原任务",cid),attempt=tasks.startAttempt(task.getString("id"),"capabilities",8);
+        String id=task.getString("id"),run=attempt.getString("runId");int epoch=attempt.getInt("coordinatorEpoch");RunControl control=new RunControl();control.bindHostRun(id,run,epoch);
+        tasks.openOwnerInputMailbox(id,run,epoch,cid,control);assertEquals(0,tasks.pollOwnerInputs(id,run,epoch,new JSONArray(),true,true,control).length());
+        JSONObject input=j("id",UUID.randomUUID().toString(),"clientMessageId",UUID.randomUUID().toString(),"content","未入队","attachments",new JSONArray());
+        assertThrows(OwnerInputNotAdmittedException.class,()->tasks.appendOwnerInput(id,run,epoch,cid,input,"queue",control));
+        assertEquals(0,tasks.get(id,false).getJSONArray("ownerInputs").length());
+    }
+    @Test public void closedMailboxNeverClaimsAnEarlierAdmittedIdentityWasRejected()throws Exception{
+        TaskStore tasks=new TaskStore(android());String cid=UUID.randomUUID().toString();JSONObject task=tasks.createCapabilityTask("原任务",cid),attempt=tasks.startAttempt(task.getString("id"),"capabilities",8);
+        String id=task.getString("id"),run=attempt.getString("runId");int epoch=attempt.getInt("coordinatorEpoch");RunControl control=new RunControl();control.bindHostRun(id,run,epoch);
+        tasks.openOwnerInputMailbox(id,run,epoch,cid,control);JSONObject input=j("id",UUID.randomUUID().toString(),"clientMessageId",UUID.randomUUID().toString(),"content","已登记","attachments",new JSONArray());
+        tasks.appendOwnerInput(id,run,epoch,cid,input,"queue",control);tasks.pollOwnerInputs(id,run,epoch,new JSONArray().put(input.getString("id")),true,true,control);
+        IllegalStateException failure=assertThrows(IllegalStateException.class,()->tasks.appendOwnerInput(id,run,epoch,cid,input,"queue",control));assertFalse(failure instanceof OwnerInputNotAdmittedException);
+        assertEquals(1,tasks.get(id,false).getJSONArray("ownerInputs").length());
     }
     @Test public void imageRequiresExplicitModelCapabilityAndCurrentDigestBeforeAnyAdmission()throws Exception{
         Host host=new Host();try(Server server=new Server(response("not reached"));AssistantModule assistant=assistant(server,host,false)){

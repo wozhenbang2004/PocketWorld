@@ -8138,7 +8138,13 @@ public final class TaskStore {
     private JSONObject appendNativeOwnerInput(String id,String run,int epoch,String conversation,JSONObject message,String mode,RunControl control,boolean phone,boolean taskGoal)throws Exception{
         db.beginTransaction();try{
             JSONObject task=nativeOwnerInputTask(id,run,epoch,conversation,control,phone),mailbox=ownerMailbox(task,run,epoch);
-            if(!mailbox.getBoolean("open"))throw new IllegalStateException("原任务已关闭输入，请查询原消息回执后另行开始；没有自动重发");
+            if(!mailbox.getBoolean("open")){
+                // A closed mailbox alone cannot prove that an earlier attempt of this
+                // exact input was not accepted. Such identities remain query-only.
+                JSONArray admitted=task.optJSONArray("ownerInputs");
+                for(int i=0;admitted!=null&&i<admitted.length();i++){JSONObject row=admitted.getJSONObject(i);if(message.getString("clientMessageId").equals(row.optString("clientMessageId"))||message.getString("id").equals(row.optString("messageId")))throw new IllegalStateException("原输入已有登记，请查询原回执；没有自动重发");}
+                throw new dev.pocketengine.core.OwnerInputNotAdmittedException("原任务已关闭输入，本条未入队；草稿保留，请在原任务结束后明确重新发送");
+            }
             if(!mode.matches("queue|steer")||message.has("inputMode")&&!mode.equals(message.optString("inputMode")))throw new IllegalArgumentException("输入排队方式无效");
             String client=message.getString("clientMessageId"),messageId=message.getString("id");
             if(!client.matches("[a-fA-F0-9-]{36}")||!messageId.matches("[a-fA-F0-9-]{36}")||!(message.opt("content") instanceof String))throw new IllegalArgumentException("原生消息身份无效");
@@ -9959,15 +9965,38 @@ public final class TaskStore {
                         .put("tailFingerprint",CompactionPlan.fingerprint(CompactionPlan.slice(messages,Math.min(plan.endExclusive,messages.length()),messages.length())));
             }
             /** Reuses C4's exact native projection check, never a second retirement/projection rule. */
-            private TaskStoreMemoryReader.RawBinding.RawMessageSession currentOriginals(JSONArray messages,java.util.List<Integer> indexes)throws Exception{
-                long started=System.nanoTime();if(indexes.size()>CompactionPlan.MAX_COVERED_ROWS)throw new CompactionPlan.Unavailable("source_currentness_read_limited");
-                // The original SQL read materialized the whole envelope, not messages alone.
-                var session=binding.openMessageCurrentness(messages,sourceCheckpointBytes());
-                try{
-                    for(int index:indexes){original.check();if(System.nanoTime()-started>500_000_000L)throw new CompactionPlan.Unavailable("source_currentness_deadline");
-                        session.requireCurrentOriginalMessage(index,messages.getJSONObject(index));}
-                    return session;
-                }catch(Exception failed){try{session.close();}catch(Exception closing){failed.addSuppressed(closing);}throw failed;}
+            private AutoCloseable currentOriginals(JSONArray messages,java.util.List<Integer> indexes)throws Exception{
+                long started=System.nanoTime();
+                if(indexes.size()<=CompactionPlan.MAX_COVERED_ROWS){
+                    var session=binding.openMessageCurrentness(messages,sourceCheckpointBytes());
+                    try{
+                        for(int index:indexes){original.check();if(System.nanoTime()-started>500_000_000L)throw new CompactionPlan.Unavailable("source_currentness_deadline");
+                            session.requireCurrentOriginalMessage(index,messages.getJSONObject(index));}
+                        return session;
+                    }catch(Exception failed){try{session.close();}catch(Exception closing){failed.addSuppressed(closing);}throw failed;}
+                }
+                long[] sourceBytes={sourceCheckpointBytes(),0}; // source payload, separate authority metadata
+                checkOriginalBatches(messages,indexes,started,sourceBytes);
+                // Recheck every covered source again at publication/close. Each native
+                // reader keeps its 100-row cap; the whole pass retains its byte/deadline caps.
+                boolean[] closed={false};return ()->{if(!closed[0])try{checkOriginalBatches(messages,indexes,started,sourceBytes);}finally{closed[0]=true;}};
+            }
+            private void checkOriginalBatches(JSONArray messages,java.util.List<Integer> indexes,long started,long[] sourceBytes)throws Exception{
+                // Charge the whole SQL envelope once, plus every native source read in
+                // every batch and both passes. Closing also reprojects and can read sources.
+                for(int start=0;start<indexes.size();start+=CompactionPlan.MAX_COVERED_ROWS){
+                    var session=binding.openMessageCurrentness(messages,sourceBytes[0]);
+                    try(session){
+                        int end=Math.min(indexes.size(),start+CompactionPlan.MAX_COVERED_ROWS);
+                        for(int i=start;i<end;i++){original.check();if(System.nanoTime()-started>500_000_000L)throw new CompactionPlan.Unavailable("source_currentness_deadline");
+                            int index=indexes.get(i);session.requireCurrentOriginalMessage(index,messages.getJSONObject(index));}
+                    }
+                    JSONObject readBudget=session.readBudget();
+                    long additional=readBudget.optLong("guardSourceUtf8Bytes",0),authority=readBudget.optLong("guardAuthorityUtf8Bytes",0);
+                    if(additional<0||additional>1_048_576L-sourceBytes[0]||authority<0||authority>1_048_576L-sourceBytes[1])throw new CompactionPlan.Unavailable("source_currentness_read_limited");
+                    sourceBytes[0]+=additional;sourceBytes[1]+=authority;
+                }
+                original.check();if(System.nanoTime()-started>500_000_000L)throw new CompactionPlan.Unavailable("source_currentness_deadline");
             }
             private JSONArray sourceRefs(CompactionPlan plan,JSONArray messages)throws Exception{
                 JSONArray refs=new JSONArray();long started=System.nanoTime();
@@ -9990,13 +10019,16 @@ public final class TaskStore {
                 if(System.nanoTime()-started>500_000_000L)throw new CompactionPlan.Unavailable("source_freeze_deadline");return refs;
             }
             private boolean currentProjection(JSONObject projection,JSONObject checkpoint)throws Exception{
+                return currentProjection(projection,checkpoint,true);
+            }
+            private boolean currentProjection(JSONObject projection,JSONObject checkpoint,boolean requireSameInputs)throws Exception{
                 if(projection==null||!CompactionCheckpoint.sourcesCurrent(projection,checkpoint.optJSONArray("messages")))return false;
                 JSONObject saved=projection.getJSONObject("guard"),task=privateTask();
                 if(!id.equals(saved.optString("taskId"))||!runId.equals(saved.optString("runId"))||epoch!=saved.optInt("epoch")
                         ||binding.sourceRevision!=saved.optLong("sourceBarrier",-1)||original.pauseRevision()!=saved.optLong("pauseRevision",-1)
                         ||!CompactionPlan.routeFingerprint(currentRoute.call()).equals(saved.optString("routeFingerprint")))return false;
                 JSONObject inputs=new JSONObject().put("ownerInputs",task.optJSONArray("ownerInputs")==null?new JSONArray():task.getJSONArray("ownerInputs")).put("feedback",task.optString("feedback"));
-                if(!CompactionPlan.fingerprint(inputs).equals(saved.optString("inputsFingerprint"))||!approvalSourcesCurrent(saved,approvals(task,checkpoint.getJSONArray("messages"),projection.getJSONObject("coverage")),task,checkpoint.getJSONArray("messages"),projection.getJSONObject("coverage")))return false;
+                if((requireSameInputs&&!CompactionPlan.fingerprint(inputs).equals(saved.optString("inputsFingerprint")))||!approvalSourcesCurrent(saved,approvals(task,checkpoint.getJSONArray("messages"),projection.getJSONObject("coverage")),task,checkpoint.getJSONArray("messages"),projection.getJSONObject("coverage")))return false;
                 JSONArray actual=operations(),previous=saved.optJSONArray("operationSources");if(previous==null)return false;
                 java.util.Map<String,String> now=new java.util.HashMap<>();for(int i=0;i<actual.length();i++)now.put(actual.getJSONObject(i).getString("operationId"),CompactionPlan.fingerprint(actual.getJSONObject(i)));
                 for(int i=0;i<previous.length();i++){JSONObject row=previous.getJSONObject(i);if(!CompactionPlan.fingerprint(row).equals(now.get(row.getString("operationId"))))return false;}
@@ -10042,6 +10074,17 @@ public final class TaskStore {
             public boolean current(FrozenPrefix published,RunControl control)throws Exception{
                 if(control!=original)return false;boolean[] result={false};binding.admit(()->{synchronized(TaskStore.this){published.check(original);JSONObject checkpoint=sourceCheckpoint(),projection=checkpoint.optJSONObject("contextCompaction");
                     result[0]=projection!=null&&published.plan.rawPrefixFingerprint.equals(projection.getJSONObject("coverage").optString("rawPrefixFingerprint"))&&currentProjection(projection,checkpoint);return new JSONObject();}});return result[0];
+            }
+            @Override public boolean canRebuildAfterOwnerInput(FrozenPrefix published,RunControl control)throws Exception{
+                if(control!=original)return false;boolean[] result={false};
+                binding.admit(()->{synchronized(TaskStore.this){published.check(original);JSONObject checkpoint=sourceCheckpoint(),task=privateTask();
+                    JSONObject inputs=new JSONObject().put("ownerInputs",task.optJSONArray("ownerInputs")==null?new JSONArray():task.getJSONArray("ownerInputs")).put("feedback",task.optString("feedback"));
+                    JSONObject guard=published.guard();
+                    if(!CompactionPlan.fingerprint(inputs).equals(guard.optString("inputsFingerprint"))){
+                        JSONObject oldSources=new JSONObject().put("coverage",published.plan.metadata()).put("guard",guard).put("sources",published.sources());
+                        result[0]=currentProjection(oldSources,checkpoint,false);
+                    }
+                    return new JSONObject();}});return result[0];
             }
             @Override public boolean scopeCurrent(RunControl control)throws Exception{
                 if(control!=original)return false;binding.admit(()->{synchronized(TaskStore.this){privateTask();return new JSONObject();}});return true;

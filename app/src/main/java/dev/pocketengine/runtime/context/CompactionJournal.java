@@ -11,6 +11,9 @@ public interface CompactionJournal {
     PublishReceipt publish(FrozenPrefix expected,SummaryDraft actual,RunControl original)throws Exception;
     /** Recheck the published source prefix, current authority/route/forget and relevant input/approval barriers. */
     boolean current(FrozenPrefix published,RunControl original)throws Exception;
+    /** A changed owner-input boundary may rebuild from raw only after every other native
+     * source/route/approval/operation barrier of the old prefix has been revalidated. */
+    default boolean canRebuildAfterOwnerInput(FrozenPrefix published,RunControl original)throws Exception{return false;}
     /** Only a freshly re-admitted native source scope may discard an old pause-bound projection and continue from raw. */
     default boolean scopeCurrent(RunControl original)throws Exception{return false;}
     /** Same checkpoint owner, preserving only a currently valid derived field while raw rows append. */

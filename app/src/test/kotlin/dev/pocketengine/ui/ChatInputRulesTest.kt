@@ -36,4 +36,13 @@ class ChatInputRulesTest {
   val file=UiChatAttachment("11111111-1111-1111-1111-111111111111","d".repeat(64),"file.txt","text/plain",4)
   assertNotEquals(ChatInputRules.fingerprint("message","c","queue",listOf(file),empty,refs),ChatInputRules.fingerprint("message","c","queue",emptyList(),empty,refs))
  }
+ @Test fun definitiveRejectionNeedsNativeProofAndCannotReplaceAcceptedOrUnknownIdentity(){
+  val rejected=receipt("rejected").put("notAdmitted",true).put("reconciliationRequired",false).put("reason","mailbox_closed")
+  assertNotNull(ChatInputRules.mergeReceipt(receipt("unconfirmed"),rejected))
+  assertNull(ChatInputRules.mergeReceipt(null,receipt("rejected")))
+  assertNull(ChatInputRules.mergeReceipt(receipt("queued"),rejected))
+  assertSame(rejected,ChatInputRules.mergeReceipt(rejected,receipt("unconfirmed")))
+  assertSame(rejected,ChatInputRules.mergeReceipt(rejected,receipt("accepted")))
+  assertFalse(ChatInputRules.receiptMatchesOriginal(rejected,"conversation",JSONObject().put("taskId","task").put("runId","successor").put("epoch",1)))
+ }
 }

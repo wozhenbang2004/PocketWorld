@@ -105,7 +105,11 @@ public final class CompactionPlan {
             for(int i=0;i<cut;i++){
                 if(retain[i])kept.add(i);else covered.add(i);
             }
-            if(covered.isEmpty()||covered.size()>MAX_COVERED_ROWS||previous!=null&&(cut<=previous.endExclusive||!covered.containsAll(previous.covered)||covered.size()==previous.covered.size()))continue;
+            if(covered.isEmpty()||previous!=null&&(cut<=previous.endExclusive||!covered.containsAll(previous.covered)||covered.size()==previous.covered.size()))continue;
+            // Bound this physical SUMMARY's new originals, not the lifetime coverage of
+            // a published prefix. Old coverage is carried by the validated prior summary.
+            int newOriginalRows=covered.size()-(previous==null?0:previous.covered.size());
+            if(newOriginalRows>MAX_COVERED_ROWS)continue;
             CompactionPlan candidate=new CompactionPlan(raw,visible,sourceMap,cut,covered,kept,config,previous,previousSummary,projectionId);
             // A summary must itself fit without truncation; reserve the real output ceiling.
             if(!ContextWindow.plan(candidate.summaryMessages(),null,budget,ContextWindow.Retention.preserveAll()).canSend())continue;

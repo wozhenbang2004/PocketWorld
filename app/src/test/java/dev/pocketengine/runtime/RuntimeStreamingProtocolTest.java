@@ -500,12 +500,12 @@ public final class RuntimeStreamingProtocolTest {
     @Test public void jsonNegotiationHasTheSameToolCompletenessRulesAsTheSsePath() throws Exception {
         JSONObject partial = new JSONObject().put("name", "inspect").put("args", new JSONObject())
                 .put("partialArgs", new JSONArray().put("partial")).put("willContinue", true);
-        JSONObject missing = new JSONObject().put("name", "inspect");
+        JSONObject invalidArgs = new JSONObject().put("name", "inspect").put("args", JSONObject.NULL);
         JSONObject chatCall = new JSONObject().put("id", "c").put("type", "function")
                 .put("function", new JSONObject().put("name", "inspect").put("arguments", "{}"));
         JSONObject claudeCall = new JSONObject().put("type", "tool_use").put("id", "c").put("name", "inspect").put("input", new JSONObject());
         List<String> protocols = new ArrayList<>(); List<JSONObject> replies = new ArrayList<>();
-        for (JSONObject call : new JSONObject[]{partial, missing}) {
+        for (JSONObject call : new JSONObject[]{partial, invalidArgs}) {
             protocols.add("gemini"); replies.add(new JSONObject().put("candidates", new JSONArray().put(new JSONObject().put("finishReason", "STOP")
                     .put("content", new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("functionCall", call)))))));
         }

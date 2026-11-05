@@ -170,6 +170,20 @@ public final class ContextCompactorTest {
             assertNotNull(failure);assertEquals("incremental_summary_original_publication_changed",failure.code);assertEquals(first,journal.publishes);assertEquals(2,provider.calls.get());assertEquals(InferenceReceipt.Outcome.COMPLETED,journal.receipts.get(journal.receipts.size()-1).outcome);
         }
     }
+    @Test public void incrementalCoverageCanPassOneHundredWithoutIncreasingOneSummaryInputBound()throws Exception {
+        try(Provider provider=new Provider()){
+            Journal journal=new Journal(provider.config());ContextCompactor compactor=new ContextCompactor(journal,journal,journal.budgets());
+            request(compactor,journal);
+            for(int i=0;i<56;i++){
+                appendNewOriginalBatch(journal,i);
+                assertTrue(request(compactor,journal).plan().canSend());
+            }
+            JSONObject coverage=journal.published.getJSONObject("coverage");
+            assertTrue(coverage.getJSONArray("coveredIndexes").length()>100);
+            assertTrue(coverage.getJSONArray("summaryInputOriginalIndexes").length()<=CompactionPlan.MAX_COVERED_ROWS);
+            assertTrue(CompactionCheckpoint.sourcesCurrent(journal.published,journal.raw));
+        }
+    }
 
     private static void coldHuge(Journal journal)throws Exception {for(int i=0;i<14;i++)appendNewOriginalBatch(journal,i);}
     @Test public void hugeColdRawPublishesStrictlyAdvancingCurrentNativeChunksBeforeFirstMain()throws Exception {

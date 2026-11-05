@@ -117,7 +117,38 @@ public class ResponsesStreamTest {
     @Test public void argumentAndAggregateOutputBudgetsAreBounded()throws Exception {
         ResponsesFixtures stream=new ResponsesFixtures().item(0,function("fc","call","observe","",false),false);for(int i=0;i<4;i++)stream.argument(0,"fc","x".repeat(20*1024),false);reject(stream.toString(),"PROVIDER_RESPONSE_TOO_LARGE");
         ResponsesFixtures total=new ResponsesFixtures();for(int i=0;i<5;i++){total.item(i,function("fc"+i,"call"+i,"observe","",false),false);for(int j=0;j<3;j++)total.argument(i,"fc"+i,"x".repeat(20*1024),false);}reject(total.toString(),"PROVIDER_RESPONSE_TOO_LARGE");
-        reject("data: "+"x".repeat(64*1024)+"\n\n","PROVIDER_RESPONSE_TOO_LARGE");
+        reject("data: "+"x".repeat(ResponsesTextStream.MAX_EVENT_BYTES)+"\n\n","PROVIDER_RESPONSE_TOO_LARGE");
+    }
+    @Test public void longUnicodeTextDoneFramesFitWithinTheTotalStreamBudget()throws Exception {
+        String text="界".repeat(22000);JSONObject done=message("m",text,false,true);
+        ResponsesFixtures stream=new ResponsesFixtures().item(0,message("m","",false,false),false);
+        stream.add(new JSONObject().put("type","response.content_part.added").put("item_id","m").put("output_index",0).put("content_index",0).put("part",new JSONObject().put("type","output_text").put("text","")));
+        for(int offset=0;offset<text.length();offset+=1000)stream.add(new JSONObject().put("type","response.output_text.delta").put("item_id","m").put("output_index",0).put("content_index",0).put("delta",text.substring(offset,Math.min(text.length(),offset+1000))));
+        stream.add(new JSONObject().put("type","response.output_text.done").put("item_id","m").put("output_index",0).put("content_index",0).put("text",text));
+        stream.add(new JSONObject().put("type","response.content_part.done").put("item_id","m").put("output_index",0).put("content_index",0).put("part",new JSONObject().put("type","output_text").put("text",text)));
+        stream.item(0,done,true).complete(new JSONArray().put(done));
+        assertCompletedText(stream.toString(),text,1);
+    }
+    @Test public void completedFrameCanCarryMultipleIndividuallyBoundedItems()throws Exception {
+        String first="a".repeat(40000),second="b".repeat(40000);
+        JSONObject a=message("a",first,false,true),b=message("b",second,false,true);
+        ResponsesFixtures stream=new ResponsesFixtures().item(0,message("a","",false,false),false).text(0,"a",first,false).item(0,a,true)
+            .item(1,message("b","",false,false),false).text(1,"b",second,false).item(1,b,true).complete(new JSONArray().put(a).put(b));
+        assertCompletedText(stream.toString(),first+second,2);
+    }
+    private static void assertCompletedText(String wire,String expected,int itemCount)throws Exception {
+        assertTrue(wire.getBytes(StandardCharsets.UTF_8).length<ResponsesTextStream.MAX_STREAM_BYTES);
+        JSONArray events=read(wire);StringBuilder deltas=new StringBuilder();int completed=0;
+        for(int i=0;i<events.length();i++){
+            JSONObject event=events.getJSONObject(i);
+            if("text_delta".equals(event.getString("type")))deltas.append(event.getString("delta"));
+            if("completed".equals(event.getString("type"))){
+                completed++;JSONArray output=event.getJSONArray("output");assertEquals(itemCount,output.length());StringBuilder finalText=new StringBuilder();
+                for(int j=0;j<output.length();j++)finalText.append(output.getJSONObject(j).getJSONArray("content").getJSONObject(0).getString("text"));
+                assertEquals(expected,finalText.toString());
+            }
+        }
+        assertEquals(expected,deltas.toString());assertEquals(1,completed);
     }
     @Test public void sequenceNumbersMustBeIntegerMonotonicAndEventNamesAgree()throws Exception {
         String good=oneCall();reject(good.replace("\"sequence_number\":1","\"sequence_number\":0"),"INVALID_PROVIDER_STREAM");reject(good.replace("\"sequence_number\":1","\"sequence_number\":1.5"),"INVALID_PROVIDER_STREAM");reject(good.replace("event: response.function_call_arguments.delta","event: response.output_text.delta"),"INVALID_PROVIDER_STREAM");
@@ -140,7 +171,7 @@ public class ResponsesStreamTest {
     }
     @Test public void functionCountAndWireBudgetAreHardLimits()throws Exception {
         ResponsesFixtures count=new ResponsesFixtures();for(int i=0;i<ResponsesRequest.MAX_FUNCTIONS+1;i++)count.item(i,function("f"+i,"c"+i,"observe","",false),false);reject(count.toString(),"PROVIDER_RESPONSE_TOO_LARGE");
-        reject(":"+"x".repeat(64*1024)+"\n\n","PROVIDER_RESPONSE_TOO_LARGE");
+        reject(":"+"x".repeat(ResponsesTextStream.MAX_EVENT_BYTES)+"\n\n","PROVIDER_RESPONSE_TOO_LARGE");
         reject(": heartbeat\n\n".repeat(170000),"PROVIDER_RESPONSE_TOO_LARGE");
     }
     @Test public void malformedUtf8AndExcessiveJsonNestingFailSafely()throws Exception {

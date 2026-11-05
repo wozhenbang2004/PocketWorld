@@ -125,6 +125,56 @@ public final class TaskStoreCompactionJournalTest {
             assertEquals(0,fixture.posts.get());assertEquals(0,fixture.tasks.inferenceUsage(fixture.id).getInt("attempts"));assertFalse(fixture.stored().has("contextCompaction"));
         }
     }
+    @Test public void acceptedSteerAfterPublishedSummaryRebuildsFromCurrentRawAndContinues()throws Exception {
+        try(Fixture fixture=new Fixture()){
+            fixture.request();assertEquals(1,fixture.posts.get());
+            fixture.appendSteer();
+            JSONArray incoming=fixture.tasks.pollOwnerInputs(fixture.id,fixture.run,fixture.epoch,new JSONArray(),false,false,fixture.control);
+            assertEquals(1,incoming.length());JSONObject input=incoming.getJSONObject(0);
+            fixture.raw.put(new JSONObject().put("role","user").put("content",input.getString("content"))
+                    .put("ownerMessageId",input.getString("messageId")).put("ownerInputMode",input.getString("mode")));
+            fixture.journal.checkpoint(fixture.raw,1,new JSONObject());
+            assertFalse(fixture.stored().has("contextCompaction"));
+            RunContextBudget.Projection next=fixture.request();
+            assertTrue(next.plan().canSend());assertEquals(2,fixture.posts.get());
+            assertTrue(next.plan().messages().toString().contains("owner correction arrived"));
+            assertEquals(fixture.raw.toString(),fixture.stored().getJSONArray("messages").toString());
+        }
+    }
+    @Test public void cumulativeCoverageUsesBoundedNativeSessionsPastOneHundredOriginals()throws Exception {
+        for(boolean authorityCharge:new boolean[]{false,true})try(Fixture f=new Fixture()){
+            AtomicInteger opened=new AtomicInteger(),closed=new AtomicInteger();AtomicLong extraReadBytes=new AtomicLong();
+            f.binding.bindMessageCurrentness((originals,bytes)->{
+                if(!authorityCharge&&bytes+extraReadBytes.get()>1_048_576L)throw new TaskStoreMemoryReader.RawMessageUnavailable("fixture_cumulative_source_byte_budget");
+                opened.incrementAndGet();return new TaskStoreMemoryReader.RawMessageCheck(){
+                    int rows;boolean ended;
+                    public void requireCurrentOriginalMessage(int index,JSONObject original){assertTrue(++rows<=CompactionPlan.MAX_COVERED_ROWS);}
+                    public JSONObject readBudget()throws Exception{assertTrue(ended);return new JSONObject().put(authorityCharge?"guardAuthorityUtf8Bytes":"guardSourceUtf8Bytes",extraReadBytes.get());}
+                    public void close(){ended=true;closed.incrementAndGet();}
+                };
+            });
+            ContextBudgetPolicy.Source budgets=config->ContextBudgetPolicy.RouteBudget.forRoute(config,new ContextWindow.Budget(50000,1000,1000,100000,64,0),ContextBudgetPolicy.SourceKind.OWNER_OVERRIDE,1,1);
+            ContextCompactor compactor=new ContextCompactor(f.journal,f.journal.compaction(),budgets);
+            f.raw=new JSONArray().put(CompactionPlanTest.message("system","native invariant")).put(CompactionPlanTest.message("user","Owner goal remains original."));
+            for(int i=0;i<64;i++){
+                if(i==52){
+                    f.journal.checkpoint(f.raw,0,new JSONObject());
+                    assertTrue(compactor.request(f.raw,new JSONArray(f.raw.toString()),CompactionPlanTest.indexes(f.raw),f.tools(),f.selected.get(),f.control,new RunContextBudget(budgets)).plan().canSend());
+                }
+                f.raw.put(new JSONObject().put("role","assistant").put("tool_calls",new JSONArray().put(new JSONObject().put("id","small-"+i).put("type","function").put("function",new JSONObject().put("name","read_file").put("arguments","{}")))))
+                        .put(new JSONObject().put("role","tool").put("tool_call_id","small-"+i).put("content",new JSONObject().put("ok",true).put("text","x".repeat(i<52?500:2000)).toString()));
+            }
+            f.journal.checkpoint(f.raw,1,new JSONObject());
+            assertTrue(compactor.request(f.raw,new JSONArray(f.raw.toString()),CompactionPlanTest.indexes(f.raw),f.tools(),f.selected.get(),f.control,new RunContextBudget(budgets)).plan().canSend());
+            assertTrue(f.stored().getJSONObject("contextCompaction").getJSONObject("coverage").getJSONArray("coveredIndexes").length()>100);
+            assertEquals(opened.get(),closed.get());assertEquals(f.raw.toString(),f.stored().getJSONArray("messages").toString());
+            // Each individual batch fits, but four batches across both passes do not.
+            // The close-time read charge must carry into the next batch AND second pass.
+            int posts=f.posts.get();extraReadBytes.set(300000);
+            assertEquals("published_summary_source_changed",assertThrows(CompactionPlan.Unavailable.class,()->compactor.request(f.raw,new JSONArray(f.raw.toString()),CompactionPlanTest.indexes(f.raw),f.tools(),f.selected.get(),f.control,new RunContextBudget(budgets))).code);
+            assertEquals(posts,f.posts.get());assertEquals(opened.get(),closed.get());
+        }
+    }
     @Test public void changedRealCheckpointDuringNetworkCannotPublishTheOldSourceVersion()throws Exception {
         try(Fixture fixture=new Fixture()){
             fixture.during=()->{JSONArray changed=new JSONArray(fixture.raw.toString());changed.getJSONObject(3).put("content","new original source body");fixture.base.checkpoint(changed,0,new JSONObject());};
