@@ -73,8 +73,35 @@ public class ResponsesStreamTest {
     @Test public void terminalOutputCannotInventOrChangeCalls()throws Exception {
         JSONObject call=function("fc_0","call_0","observe","{}",true);
         ResponsesFixtures base=new ResponsesFixtures().item(0,function("fc_0","call_0","observe","",false),false).argument(0,"fc_0","{}",false).argument(0,"fc_0","{}",true).item(0,call,true);
-        reject(base.complete(new JSONArray()).toString(),"INVALID_PROVIDER_STREAM");
+        reject(base.complete(new JSONArray().put(new JSONObject(call.toString()).put("arguments","{\"changed\":true}"))).toString(),"INVALID_PROVIDER_STREAM");
         reject(new ResponsesFixtures().complete(new JSONArray().put(call)).toString(),"INVALID_PROVIDER_STREAM");
+    }
+    @Test public void emptyTerminalAggregateUsesOnlyFullyVerifiedStreamedMessages()throws Exception {
+        JSONObject done=message("m","PW-CORE-1105",false,true);
+        String stream=new ResponsesFixtures().item(0,message("m","",false,false),false).text(0,"m","PW-CORE-1105",false).item(0,done,true).complete(new JSONArray()).toString();
+        JSONArray events=read(stream);JSONObject result=events.getJSONObject(events.length()-1);
+        assertEquals("completed",result.getString("type"));assertEquals(1,result.getJSONArray("output").length());
+        assertEquals("PW-CORE-1105",result.getJSONArray("output").getJSONObject(0).getJSONArray("content").getJSONObject(0).getString("text"));
+    }
+    @Test public void emptyTerminalAggregatePreservesVerifiedDirectFunctionFields()throws Exception {
+        JSONObject done=function("fc","call","observe","{}",true).put("caller",new JSONObject().put("type","direct")).put("async",false);
+        String stream=new ResponsesFixtures().item(0,function("fc","call","observe","",false),false).argument(0,"fc","{}",false).argument(0,"fc","{}",true).item(0,done,true).complete(new JSONArray()).toString();
+        JSONArray events=read(stream);assertEquals(1,events.length());JSONObject call=events.getJSONObject(0).getJSONArray("output").getJSONObject(0);
+        assertEquals("call",call.getString("call_id"));assertEquals("phone",call.getString("namespace"));assertEquals("observe",call.getString("name"));assertEquals("{}",call.getString("arguments"));
+        assertEquals("direct",call.getJSONObject("caller").getString("type"));assertFalse(call.getBoolean("async"));
+    }
+    @Test public void emptyTerminalAggregateCannotReleaseUnfinishedOrSparseItems()throws Exception {
+        reject(new ResponsesFixtures().item(0,message("m","",false,false),false).complete(new JSONArray()).toString(),"INVALID_PROVIDER_STREAM");
+        JSONObject done=function("fc","call","observe","{}",true);
+        reject(new ResponsesFixtures().item(0,function("fc","call","observe","",false),false).argument(0,"fc","{}",false).item(0,done,true).complete(new JSONArray()).toString(),"INVALID_PROVIDER_STREAM");
+        reject(new ResponsesFixtures().item(0,function("fc","call","observe","",false),false).argument(0,"fc","{}",false).argument(0,"fc","{}",true).complete(new JSONArray()).toString(),"INVALID_PROVIDER_STREAM");
+        reject(new ResponsesFixtures().item(1,message("m","",false,false),false).text(1,"m","OK",false).item(1,message("m","OK",false,true),true).complete(new JSONArray()).toString(),"INVALID_PROVIDER_STREAM");
+    }
+    @Test public void nonemptyTerminalAggregateStillCannotOmitStreamedItems()throws Exception {
+        JSONObject first=message("a","one",false,true),second=message("b","two",false,true);
+        String stream=new ResponsesFixtures().item(0,message("a","",false,false),false).text(0,"a","one",false).item(0,first,true)
+                .item(1,message("b","",false,false),false).text(1,"b","two",false).item(1,second,true).complete(new JSONArray().put(first)).toString();
+        reject(stream,"INVALID_PROVIDER_STREAM");
     }
     @Test public void refusalIsNormalSeparateModelOutputAndRoundTrips()throws Exception {
         JSONObject refusal=message("msg_ref","不能协助该请求",true,true).put("phase","final_answer");

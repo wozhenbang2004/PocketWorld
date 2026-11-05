@@ -94,7 +94,8 @@ final class ResponsesStream {
                 Part part=part(event);if(!part.valueDone||part.done)throw invalid();checkPart(event.getJSONObject("part"),part);part.done=true;break;
             }
             case "response.output_item.done":{
-                Item item=byIndex(event);if(item.done)throw invalid();checkItem(event.getJSONObject("item"),item);item.done=true;break;
+                Item item=byIndex(event);if(item.done)throw invalid();JSONObject raw=event.getJSONObject("item");checkItem(raw,item);
+                item.doneJson=raw.toString();if(item.doneJson==null)throw invalid();item.done=true;break;
             }
             case "response.completed":complete(event.getJSONObject("response"));return true;
             default:throw new GatewayFailure("UNSUPPORTED_PROVIDER_OUTPUT");
@@ -196,9 +197,13 @@ final class ResponsesStream {
         if(responseId==null||!responseId.equals(safeId(response,"id")))throw invalid();
         reportUsage(response);
         checkResponse(response,"completed");if(!response.isNull("error")||!response.isNull("incomplete_details"))throw invalid();
-        JSONArray output=response.getJSONArray("output");if(output.length()!=items.size())throw invalid();JSONArray safeOutput=new JSONArray();
-        for(int i=0;i<output.length();i++){
-            Item item=items.get(i);if(item==null||!item.done)throw invalid();checkItem(output.getJSONObject(i),item);
+        JSONArray output=response.getJSONArray("output");boolean hasAggregate=output.length()>0;
+        // Some terminals contain only status/usage. Empty output relies on verified
+        // item.done snapshots; a nonempty aggregate must still agree in full.
+        if(hasAggregate&&output.length()!=items.size())throw invalid();JSONArray safeOutput=new JSONArray();
+        for(int i=0;i<items.size();i++){
+            Item item=items.get(i);if(item==null||!item.done||item.doneJson==null)throw invalid();
+            JSONObject original=hasAggregate?output.getJSONObject(i):new JSONObject(item.doneJson);checkItem(original,item);
             JSONObject safe=new JSONObject().put("id",item.id).put("type",item.type).put("status","completed");
             if(item.type.equals("reasoning")){
                 // Publish only after the whole response terminal agrees with output_item.done.
@@ -206,7 +211,7 @@ final class ResponsesStream {
             }else if(item.type.equals("function_call")){
                 String arguments=item.arguments.toString();noSecret(arguments);noSecret(item.name);noSecret(item.namespace);
                 safe.put("call_id",item.callId).put("namespace",item.namespace).put("name",item.name).put("arguments",arguments);
-                JSONObject original=output.getJSONObject(i);if(original.has("async"))safe.put("async",false);
+                if(original.has("async"))safe.put("async",false);
                 if(original.has("caller"))safe.put("caller",original.isNull("caller")?JSONObject.NULL:new JSONObject().put("type","direct"));
             }else{
                 JSONArray content=new JSONArray();for(Part part:item.parts.values())content.put(new JSONObject().put("type",part.type).put(part.type.equals("refusal")?"refusal":"text",redact(part.raw.toString())));
@@ -263,7 +268,7 @@ final class ResponsesStream {
     private static GatewayFailure tooLarge(){return new GatewayFailure("PROVIDER_RESPONSE_TOO_LARGE");}
     private static final class Item {
         final int index;final String id,type;final StringBuilder arguments=new StringBuilder();final Map<Integer,Part> parts=new TreeMap<>();
-        String callId,name,namespace,reasoning;Object phase;boolean argumentsDone,done;
+        String callId,name,namespace,reasoning,doneJson;Object phase;boolean argumentsDone,done;
         Item(int index,String id,String type){this.index=index;this.id=id;this.type=type;}
     }
     private static final class Part {final String type;final StringBuilder raw=new StringBuilder();ResponsesTextStream.TextFilter filter;boolean valueDone,done;Part(String type){this.type=type;}}
