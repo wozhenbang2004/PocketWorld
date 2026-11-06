@@ -31,16 +31,79 @@
 }
 
 .pw-work-sidebar[data-motion-nav] .pw-nav-content,
+.pw-work-sidebar[data-motion-nav] .pw-nav-label,
 .pw-work-sidebar[data-motion-nav] nav h3:not(.pw-sr-only),
 .pw-work-sidebar[data-motion-nav] .pw-nav-item > small {
   position: relative;
   z-index: 1;
 }
 
+/* The retained BoardUI Collapsible reveals copy; neither its icon nor its hit
+ * target is scaled. These caps are also used outside the desktop shell. */
+.pw-work-sidebar[data-motion-nav] .pw-nav-item > a {
+  width: 100%;
+  min-width: 44px;
+  min-height: 48px;
+}
+.pw-work-sidebar[data-motion-nav] .pw-nav-label {
+  transition: max-width 280ms cubic-bezier(.22,.68,0,1.02), opacity 180ms ease, filter 180ms ease;
+}
+.pw-work-sidebar[data-motion-nav][data-compact="true"] .pw-nav-label,
+.pw-work-sidebar[data-motion-nav][data-compact="true"] .pw-nav-badge {
+  max-width: 0;
+  opacity: 0;
+  filter: blur(3px);
+}
+.pw-work-sidebar[data-motion-nav] .pw-nav-item > a[aria-disabled="true"] {
+  color: var(--pw-disabled, #949494);
+  cursor: default;
+}
+.pw-work-sidebar[data-motion-nav] .pw-nav-item > a[aria-disabled="true"] :is(svg, span) {
+  color: inherit;
+}
+.pw-nav-compact-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 44px;
+  min-height: 48px;
+  padding: 11px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--pw-copy, #646464);
+  text-align: start;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.pw-nav-compact-icon { width: 19px; height: 19px; flex: none; }
+.pw-nav-compact-icon.is-expanded { transform: scaleX(-1); }
+.pw-nav-compact-toggle:focus-visible,
+.pw-work-sidebar[data-motion-nav] .pw-nav-item > a:focus-visible {
+  outline: 2px solid var(--pw-focus, #626262);
+  outline-offset: -3px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .pw-nav-compact-toggle:hover { background: var(--pw-selected, #eaeaea); }
+}
+/* A narrow layout uses the existing full Vaul drawer, not a second icon rail. */
+@media (max-width: 1023px) {
+  .pw-nav-compact-toggle { display: none; }
+}
+
+:root[data-pw-motion-paused="true"] .pw-work-sidebar[data-motion-nav] *,
+:root[data-pw-motion-paused="true"] .pw-desktop-navigation {
+  transition: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pw-work-sidebar[data-motion-nav] .pw-nav-item > a,
   .pw-work-sidebar[data-motion-nav] .pw-nav-content,
-  .pw-work-sidebar[data-motion-nav] .pw-nav-content span {
+  .pw-work-sidebar[data-motion-nav] .pw-nav-content span,
+  .pw-work-sidebar[data-motion-nav] .pw-nav-label,
+  .pw-nav-compact-toggle {
     transition: none;
   }
 }

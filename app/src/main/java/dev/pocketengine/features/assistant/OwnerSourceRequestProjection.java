@@ -24,7 +24,7 @@ public final class OwnerSourceRequestProjection implements AgentRunner.RequestPr
     private final AssistantModule originals;private final RunControl original;private final String conversation;private final AttachmentRequestProjection attachments;private AutoCloseable retained;
     public OwnerSourceRequestProjection(AssistantModule originals,RunControl original,String nativeConversationId){this(originals,original,nativeConversationId,null);}
     public OwnerSourceRequestProjection(AssistantModule originals,RunControl original,String nativeConversationId,AttachmentRequestProjection attachments){this(originals,original,nativeConversationId,attachments,null);}
-    public OwnerSourceRequestProjection(AssistantModule originals,RunControl original,String nativeConversationId,AttachmentRequestProjection attachments,ExposureRecorder exposure){this.exposure=exposure;this.originals=java.util.Objects.requireNonNull(originals);this.original=java.util.Objects.requireNonNull(original);conversation=java.util.Objects.requireNonNull(nativeConversationId);if(conversation.isEmpty()||conversation.length()>2048)throw new IllegalArgumentException("原文投影缺少原生当前会话");this.attachments=attachments;}
+    public OwnerSourceRequestProjection(AssistantModule originals,RunControl original,String nativeConversationId,AttachmentRequestProjection attachments,ExposureRecorder exposure){this.exposure=exposure;this.originals=java.util.Objects.requireNonNull(originals);this.original=java.util.Objects.requireNonNull(original);conversation=java.util.Objects.requireNonNull(nativeConversationId);if(conversation.isEmpty()||conversation.length()>2048)throw new IllegalArgumentException("原文投影缺少原生当前会话");this.attachments=attachments==null?null:attachments.forRequest();}
     private static void current(RunControl control,long pause)throws Exception {control.check();if(control.isPaused()||control.pauseRevision()!=pause)throw new InterruptedException("原文引用读取跨过暂停，未发布旧正文");}
     /** Native input admission, before the original message/ACK is committed. No body is returned. */
     static JSONArray admit(AssistantModule originals,JSONArray supplied,RunControl original)throws Exception {
@@ -119,7 +119,7 @@ public final class OwnerSourceRequestProjection implements AgentRunner.RequestPr
      * Only unchanged full native rows in this exact final MAIN request become selectable proof.
      * Duplicate equal bodies with ambiguous eviction and summary-only/readback data stay unknown. */
     @Override public void prepared(JSONArray nativeProvenance,JSONArray finalRequest,ModelConfig config,RunControl control)throws Exception {
-        if(control!=original||!control.hasHostRun())throw new SecurityException("来源准备只能属于原私人任务");requirePreparedPreviews(nativeProvenance,finalRequest,control);NativeUserProjection projection=nativeUsers;if(projection==null)return;current(control,projection.pause());
+        if(control!=original||!control.hasHostRun())throw new SecurityException("来源准备只能属于原私人任务");if(attachments!=null)attachments.prepared(nativeProvenance,finalRequest,config,control);requirePreparedPreviews(nativeProvenance,finalRequest,control);NativeUserProjection projection=nativeUsers;if(projection==null)return;current(control,projection.pause());
         java.util.Map<String,Long> origins=new java.util.HashMap<>();for(int i=0;i<nativeProvenance.length();i++){
             JSONObject row=nativeProvenance.getJSONObject(i);if(!"user".equals(row.optString("role"))||!(row.opt("ownerMessageId") instanceof String))continue;Object revision=row.opt("ownerMessageRevision");if(revision instanceof Integer||revision instanceof Long)origins.put(row.getString("ownerMessageId"),((Number)revision).longValue());
         }
@@ -136,6 +136,7 @@ public final class OwnerSourceRequestProjection implements AgentRunner.RequestPr
     /** Idempotent physical admission. STARTED-before/after calls never consume the selection or add allowance. */
     @Override public void derivedPrepared(JSONArray nativeProvenance,RunControl control)throws Exception {
         if(control!=original||!control.hasHostRun())throw new SecurityException("派生请求只能属于原私人任务");
+        if(attachments!=null)attachments.derivedPrepared(nativeProvenance,control);
         requirePreparedPreviews(nativeProvenance,new JSONArray(),control);
     }
     private void requirePreparedPreviews(JSONArray provenance,JSONArray finalRequest,RunControl control)throws Exception {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import './collaboration-depth.css';
 import { Button, SettingsDialog, TextField } from './forms-library';
 import { bridge } from './bridge';
 import { registerOverlayBack } from './overlay-back';
@@ -35,7 +36,7 @@ export function RemoteProjectBaseline({ prepared, visible, onClose, onRegistered
   }, [prepared.reviewHandle]);
   useEffect(() => registerOverlayBack(dismiss), [onClose]);
   const review = snapshot?.projectHistoryReview, operation = snapshot?.projectHistoryOperation;
-  return <SettingsDialog isOpen={visible} title="先保留项目基线，再开始工作" onClose={dismiss}><div className="pw-remote-section">
+  return <SettingsDialog isOpen={visible} title="先保留项目基线，再开始工作" onClose={dismiss}><div className="pw-remote-section pw-collaboration-dialog">
     <p>将明确目录的公开源码冻结为修改前基线，再沿同一原任务执行。结束后的文件不能补造启动前版本。</p>
     <p>原工作区：{snapshot?.projectEnvironment?.workspace || '正在核对实际工作区'}</p>
     <TextField label="项目相对目录（留空为配置工作区）" value={root} isDisabled={!!pending || !!operation} onChange={value => { inputs.current.root = value; setRoot(value); setReviewRoot(null); }} />

@@ -41,7 +41,8 @@ class PocketWebBridgeObservationTest {
 
     /** Emission deduplication hides duplicate observers, so inspect retained observation groups too. */
     private fun observationGroups(bridge: PocketWebBridge): List<Any> {
-        val observer = PocketWebBridge::class.java.getDeclaredField("observer").apply { isAccessible = true }.get(bridge)
+        val lifecycle = PocketWebBridge::class.java.getDeclaredField("snapshotObserver").apply { isAccessible = true }.get(bridge)
+        val observer = PocketWebSnapshotObserver::class.java.getDeclaredField("observer").apply { isAccessible = true }.get(lifecycle)
         val groups = SnapshotStateObserver::class.java.getDeclaredField("observedScopeMaps").apply { isAccessible = true }.get(observer)
         val size = groups.javaClass.getMethod("getSize").invoke(groups) as Int
         val entries = groups.javaClass.getMethod("getContent").invoke(groups) as Array<*>

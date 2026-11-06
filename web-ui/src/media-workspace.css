@@ -11,6 +11,14 @@
 .pw-media-service span { font-size: 13px; font-weight: 500; line-height: 21px; }
 .pw-media-service small { font-size: 11px; line-height: 18px; color: var(--pw-copy, #626262); overflow-wrap: anywhere; }
 .pw-media-service > button { flex-shrink: 0; }
+/* Paper Widgets reproduction-v1 paper card shadow and label/large-value
+ * hierarchy, bound to the current task collection rather than sample metrics. */
+.pw-media-paper-overview { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 14px; margin-bottom: 26px; }
+.pw-media-paper-overview > div { position: relative; overflow: hidden; padding: 18px 20px; border-radius: 22px; background: var(--pw-surface,#fff); box-shadow: inset 0 1px 1px #ffffff40,0 1px 1px #00000004,0 10px 15px -10px #00000018,0 26px 38px -24px #00000012; }
+.pw-media-paper-overview > div > span { color: var(--pw-copy,#666); font-size: 12px; }
+.pw-media-paper-overview strong { display: block; margin: 14px 0 10px; font-size: 38px; font-weight: 400; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -.04em; }
+.pw-media-paper-overview strong small { margin-left: 6px; font-size: 11px; color: var(--pw-copy,#666); letter-spacing: 0; }
+.pw-media-paper-overview p { margin: 0; font-size: 11px; line-height: 1.7; color: var(--pw-copy,#666); }
 .pw-media-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 12px; }
 .pw-media-section-heading h3, .pw-media-section-heading h4 { margin: 0; font-size: 14px; font-weight: 500; line-height: 23px; }
 .pw-media-section-heading small { font-size: 12px; color: var(--pw-copy, #626262); }
@@ -80,6 +88,9 @@
 .pw-media-workspace button:not([slot="trigger"]), .pw-media-review button, .pw-media-settings > .pw-form-actions button { height: auto; min-height: 34px; }
 .pw-media-workspace button:not([slot="trigger"]) > span, .pw-media-review button > span, .pw-media-settings button > span { min-width: 0; flex-shrink: 1; white-space: normal; overflow-wrap: anywhere; }
 @media (max-width: 640px) {
+  .pw-media-paper-overview { gap: 8px; }
+  .pw-media-paper-overview > div { padding: 16px 12px; border-radius: 16px; }
+  .pw-media-paper-overview strong { font-size: 30px; }
   .pw-media-heading { align-items: flex-start; }
   .pw-media-heading > button { flex-shrink: 0; }
   .pw-media-heading h2 { font-size: 22px; line-height: 30px; }
@@ -91,3 +102,27 @@
   .pw-media-workspace .pw-media-task-row { gap: 10px; padding-inline: 7px; }
 }
 @media (prefers-reduced-motion: reduce) { .pw-media-workspace *, .pw-media-settings *, .pw-media-review * { scroll-behavior: auto; } }
+
+/* Results share the task's primary axis; identity and provider internals use
+ * the existing BoardUI Accordion. A small status strip replaces dashboard tiles. */
+.pw-media-workspace .pw-media-heading { margin-bottom: 24px; }
+.pw-media-workspace .pw-media-service { margin-bottom: 24px; padding: 8px 0; background: transparent; border-radius: 0; }
+.pw-media-service span { font-size: 12px; color: var(--pw-copy); }
+.pw-media-workspace .pw-media-paper-overview { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px 24px; margin: 0 0 28px; padding: 0; }
+.pw-media-workspace .pw-media-paper-overview > div { display: flex; flex-direction: row-reverse; align-items: baseline; gap: 6px; padding: 0; background: transparent; border-radius: 0; box-shadow: none; }
+.pw-media-workspace .pw-media-paper-overview strong { margin: 0; font-size: 18px; font-weight: 500; }
+.pw-media-workspace .pw-media-paper-overview strong small,.pw-media-workspace .pw-media-paper-overview p { display: none; }
+.pw-media-workspace .pw-media-paper-overview > div > span { font-size: 11px; }
+.pw-media-workspace .pw-media-work-surface { padding: 24px; border-radius: 16px; box-shadow: none; }
+.pw-media-workspace .pw-media-panel-heading { margin-bottom: 20px; }
+.pw-media-workspace .pw-media-panel-heading > p { display: inline-block; margin: 8px 0 0; font-size: 11px; }
+.pw-media-workspace .pw-media-task-actions { margin-bottom: 24px; }
+.pw-media-workspace .pw-media-task-actions > button { font-size: 12px; }
+.pw-media-workspace .pw-media-results { padding: 0 0 28px; border-top: 0; }
+.pw-media-workspace .pw-media-receipt { padding-bottom: 24px; }
+.pw-media-workspace .pw-media-receipt > p { font-size: 12px; line-height: 1.75; }
+.pw-media-source-details { display: grid; grid-template-columns: 6em minmax(0,1fr); gap: 8px 12px; margin: 0 0 16px; font-size: 11px; }
+.pw-media-source-details dt { color: var(--pw-muted); }.pw-media-source-details dd { margin: 0; overflow-wrap: anywhere; }
+.pw-media-settings .pw-media-settings-group { gap: 12px; margin-top: 8px; }
+.pw-media-settings .pw-media-settings-group > h3 { margin-bottom: 4px; font-size: 12px; color: var(--pw-muted); }
+@media(max-width:640px){.pw-media-workspace .pw-media-work-surface { padding: 20px 18px; }.pw-media-workspace .pw-media-heading h2 { font-size: 20px; }.pw-media-workspace[data-media-view="task"] .pw-media-heading p { display: none; }.pw-media-workspace .pw-media-paper-overview { gap: 8px 18px; }.pw-media-workspace .pw-media-task-actions { gap: 6px; }.pw-media-compose-footer { align-items: stretch; }.pw-media-compose-footer > button { align-self: stretch; }}

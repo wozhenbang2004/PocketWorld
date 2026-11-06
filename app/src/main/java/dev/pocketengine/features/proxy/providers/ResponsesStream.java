@@ -240,6 +240,10 @@ final class ResponsesStream {
     }
     private void reportUsage(JSONObject response)throws Exception{
         JSONObject usage=response.optJSONObject("usage");
+        // A provider-reported incomplete terminal is evidence even without token counters.
+        // Omit usage entirely: missing counters must not become observed zero/final usage.
+        if(usage==null&&"incomplete".equals(response.optString("status")))
+            sink.usage(new JSONObject().put("status","incomplete"));
         if(usage!=null){
             JSONObject report=new JSONObject().put("usage",safeUsage(usage));String status=response.optString("status");
             if(Set.of("completed","failed","incomplete","cancelled").contains(status))report.put("status",status);

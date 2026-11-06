@@ -79,7 +79,20 @@ public final class TeamProjectRoundHost {
             review.requireModel(actualModel);
             if(!binding.compareAndSet(false,true))throw new SecurityException("该原新一轮输入已有绑定，只可核对原操作，不能重发复制");review.checkCurrent();TaskStore.TeamProjectRoundCopy copy=issuer.tasks.prepareTeamProjectRoundCopy(approved,task,original);boolean settled=false;
             try{issuer.tasks.enterTeamProjectRoundCopy(copy);JSONObject nativeBinding=copy.view();LocalModule.TeamProjectCheckout actual=issuer.local.cloneTeamProjectForHost(review.fixed,review.view().getString("projectId"),nativeBinding,java.util.List.<LocalModule.TeamProjectOverlay>of(),copy::checkCurrent);JSONObject receipt=issuer.tasks.finishTeamProjectRoundCopy(copy,actual);settled=true;issuer.changed.accept(task.getString("id"));if(!receipt.getBoolean("executionAdmitted"))throw new InterruptedException("原副本已确定保存，但新执行已停止；只保留成果，不复活Runner");}
-            catch(Exception failure){if(!settled)issuer.tasks.unknownTeamProjectRoundCopy(copy);issuer.changed.accept(task.getString("id"));throw failure;}
+            catch(Exception failure){
+                // The original copy/settlement failure explains why this attempt stopped.
+                // Reconciliation is still required, in its original order, but a second
+                // storage/observer failure must not replace that primary diagnostic.
+                try {
+                    if(!settled)issuer.tasks.unknownTeamProjectRoundCopy(copy);
+                    issuer.changed.accept(task.getString("id"));
+                } catch(Exception reconciliationFailure) {
+                    // A collaborator may rethrow the very same exception instance.
+                    if(reconciliationFailure!=failure)failure.addSuppressed(reconciliationFailure);
+                }
+                // Never clear binding or retry the copy: its external effect may be unknown.
+                throw failure;
+            }
         }
     }
     public ContinuationPage openContinuation(String originalTaskId)throws Exception{return new ContinuationPage(originalTaskId,tasks.openTeamRoundContinuationWindow(originalTaskId));}

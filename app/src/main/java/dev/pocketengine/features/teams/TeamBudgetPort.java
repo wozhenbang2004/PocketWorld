@@ -47,9 +47,40 @@ public final class TeamBudgetPort implements CapabilityPort {
         // and must not change the original read's argument hash or budget identity.
         JSONObject readArguments=arguments;
         if("project_view_image".equals(name)&&arguments!=null&&arguments.has("_hostOperationId")){readArguments=new JSONObject(arguments.toString());readArguments.remove("_hostOperationId");}
-        original.validate(name,readArguments);if(roundParent){if(name.equals("teams_get")||name.equals("teams_wait"))return original.execute(name,arguments,control);TaskStore.TeamRoundRead read=tasks.beginTeamRoundRead(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"),name,readArguments,control);try{JSONObject value=tasks.admitTeamRoundRead(read,()->original.execute(name,arguments,control));tasks.finishTeamRoundRead(read,value,false);return value;}catch(Exception uncertain){tasks.finishTeamRoundRead(read,new JSONObject().put("status","unknown").put("message","本次原native读取没有完整回执；保留原read/预算，不自动重放"),true);throw uncertain;}}
+        original.validate(name,readArguments);
+        if(roundParent){
+            if(name.equals("teams_get")||name.equals("teams_wait"))return original.execute(name,arguments,control);
+            TaskStore.TeamRoundRead read=tasks.beginTeamRoundRead(binding.getString("taskId"),binding.getString("runId"),binding.getInt("coordinatorEpoch"),name,readArguments,control);
+            try{
+                JSONObject value=tasks.admitTeamRoundRead(read,()->original.execute(name,arguments,control));
+                tasks.finishTeamRoundRead(read,value,false);
+                return value;
+            }catch(Exception uncertain){
+                // Settlement is still attempted on the same reserved read, never by replaying IO.
+                // A second storage/identity failure must not replace the original failure that
+                // explains why this read has no definite result. Keep both for diagnosis.
+                try{
+                    tasks.finishTeamRoundRead(read,new JSONObject().put("status","unknown").put("message","本次原native读取没有完整回执；保留原read/预算，不自动重放"),true);
+                }catch(Exception persistence){
+                    if(persistence!=uncertain)uncertain.addSuppressed(persistence);
+                }
+                throw uncertain;
+            }
+        }
         JSONObject nativeRead=tasks.beginTeamAssignmentRead(binding,name,readArguments,control);
-        try{JSONObject result=original.execute(name,arguments,control);tasks.finishTeamNativeRead(nativeRead,result,false);return result;}
-        catch(Exception failure){tasks.finishTeamNativeRead(nativeRead,new JSONObject().put("status","unknown").put("message","原工具没有确定完成回执；预算与操作保留，不重放"),true);throw failure;}
+        try{
+            JSONObject result=original.execute(name,arguments,control);
+            tasks.finishTeamNativeRead(nativeRead,result,false);
+            return result;
+        }catch(Exception failure){
+            // Preserve the member read's original error even if its unknown-receipt write
+            // also fails. The existing reservation and unknown-effect rules stay in TaskStore.
+            try{
+                tasks.finishTeamNativeRead(nativeRead,new JSONObject().put("status","unknown").put("message","原工具没有确定完成回执；预算与操作保留，不重放"),true);
+            }catch(Exception persistence){
+                if(persistence!=failure)failure.addSuppressed(persistence);
+            }
+            throw failure;
+        }
     }
 }

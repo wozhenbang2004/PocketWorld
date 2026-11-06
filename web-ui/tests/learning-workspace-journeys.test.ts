@@ -195,7 +195,7 @@ test('a delayed model-start receipt after background cannot restore stale author
 });
 
 test('querying an old completed operation cannot overwrite a re-inspected draft', async () => {
-  const f = fixture('Experience', { 'experience.operation.query': { settled: true, result: draft } }); await startDraft(f); f.field('完整 SKILL.md', '新的已检查正文'); f.click('重新检查当前草稿'); await f.flush(); f.click('核对同一次原请求'); await f.flush(); assert.equal(f.value('完整 SKILL.md'), '新的已检查正文'); f.click('核对并保存为停用技能'); await f.flush(); assert.deepEqual(last(f, 'experience.import.review'), { draftHandle: 'draft-rechecked' });
+  const f = fixture('Experience', { 'experience.operation.query': { settled: true, result: draft } }); await startDraft(f); f.field('完整 SKILL.md', '新的已检查正文'); f.click('重新检查当前草稿'); await f.flush(); f.expand('method-finish'); f.click('核对同一次原请求'); await f.flush(); assert.equal(f.value('完整 SKILL.md'), '新的已检查正文'); f.click('核对并保存为停用技能'); await f.flush(); assert.deepEqual(last(f, 'experience.import.review'), { draftHandle: 'draft-rechecked' });
 });
 
 for (const kind of ['Learning', 'Experience'] as const) test(`${kind} first valid owner arrival loads the original collection once`, async () => {

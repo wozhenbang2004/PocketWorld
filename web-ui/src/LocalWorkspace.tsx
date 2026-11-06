@@ -154,7 +154,7 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
         </section>
         <section className="pw-local-panel" data-local-panel="session" hidden={panel !== 'session'}>
           <Button variant="ghost" size="small" className="pw-local-back" leadingIcon={ArrowLeft} disabled={busy} onClick={() => changePanel('setup')}>返回工作副本</Button>
-          <header className="pw-local-panel-heading"><span className="pw-local-eyebrow">{view ? '原终端屏幕' : '原任务记录'}</span><h2 tabIndex={-1}>{currentTask?.goal || '本次手动终端'}</h2>{currentTask?.summary && <p>{currentTask.summary}</p>}</header>
+          <header className="pw-local-panel-heading"><span className="pw-local-eyebrow">{view ? '原终端屏幕' : '原任务记录'}</span><h2 tabIndex={-1}>{currentTask?.goal || '本次手动终端'}</h2></header>
           {original && <>
             <div className="pw-local-session-status"><span>{statusLabel(currentStatus)}</span>{executionMessage && <p role="status">{executionMessage}</p>}</div>
             <div className="pw-form-actions pw-local-session-actions">
@@ -168,16 +168,16 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
               <p className="pw-field-hint">关闭视图只结束查看，原进程按原时限继续。</p>
               {output?.terminal && <p className="pw-local-inline-notice" role="status">原进程已返回终态；资源释放：{output.resourcesReleased ? '已确认' : '尚未确认'}。</p>}
               {view.metadata?.observingOnly && <p className="pw-local-inline-notice">当前为只读观察，不会取得新的输入授权。</p>}
-              <div className="pw-local-input">
+              <Accordion className="pw-local-disclosures"><AccordionItem id="local-input-tools" title="终端输入" description={output?.terminal?'进程已结束，保留的输入仍可查看':'普通输入、控制键与原输入回执'}><div className="pw-local-input">
                 <TextAreaField label="普通终端输入" value={input} onChange={setInput} hint="发送一行会在末尾加入换行。不要输入密码、令牌等秘密。" />
                 <div className="pw-local-input-actions"><Button disabled={!canInput || !input || inputBytes > 4096} onClick={() => send({ action: 'text', text: input + '\n' })}>发送这一行</Button><Button variant="secondary" disabled={!canInput} onClick={() => send({ action: 'text', text: '\u0003' })}>Ctrl+C</Button><Button variant="secondary" disabled={!canInput} onClick={() => send({ action: 'eof' })}>EOF</Button><small>{input ? `${inputBytes} / 4096 字节（含换行）` : '单次最多 4096 字节'}</small></div>
                 <p className="pw-field-hint">原授权上限：{view.metadata?.inputByteLimit ?? '未提供'} 字节 · {view.metadata?.inputRequestLimit ?? '未提供'} 次动作 · {view.metadata?.timeoutMillis == null ? '时限未提供' : `${view.metadata.timeoutMillis / 1000} 秒`}。仍由原任务核对剩余额度。</p>
                 {inputReceipt && <p className="pw-local-inline-notice" role="status">{inputReceipt.knownInput === false ? '这个视图没有待核输入；原任务记录保留。' : inputReceipt.message || (inputReceipt.nativeInputSettled ? inputReceipt.accepted ? '已取得原输入回执，没有再次发送。' : '已核对原输入回执。' : '输入结果仍待核对，没有重发。')}</p>}
                 {!uncertain && <Button variant="ghost" size="small" disabled={busy} onClick={queryInput}>核对原输入回执</Button>}
-              </div>
+              </div></AccordionItem></Accordion>
               <Accordion className="pw-local-disclosures"><AccordionItem id="geometry" title="终端尺寸" description={`${columns} 列 × ${height} 行，调整也计入原输入动作`}><div className="pw-form-grid"><TextField label="列数（20–300）" value={columns} onChange={setColumns} inputMode="numeric" isDisabled={busy} /><TextField label="行数（5–120）" value={height} onChange={setHeight} inputMode="numeric" isDisabled={busy} /></div><Button variant="secondary" disabled={!canInput || !/^\d+$/.test(columns) || !/^\d+$/.test(height) || Number(columns) < 20 || Number(columns) > 300 || Number(height) < 5 || Number(height) > 120} onClick={() => send({ action: 'resize', columns: Number(columns), rows: Number(height) })}>调整原终端尺寸</Button></AccordionItem></Accordion>
             </> : <div className="pw-local-closed"><Terminal size={24} aria-hidden /><p>打开原屏幕，继续查看输出。</p><small>查看不会新建进程，也不会自动发送输入。</small></div>}
-            <Accordion className="pw-local-disclosures"><AccordionItem id="identity" title="原执行身份"><dl className="pw-facts"><div><dt>任务</dt><dd>{original.taskId}</dd></div><div><dt>运行</dt><dd>{original.runId}</dd></div><div><dt>执行</dt><dd>{original.executionId}</dd></div><div><dt>代次</dt><dd>{original.epoch}</dd></div>{view?.metadata?.projectId && <div><dt>项目</dt><dd>{view.metadata.projectId}</dd></div>}{view?.metadata?.checkoutId && <div><dt>工作副本</dt><dd>{view.metadata.checkoutId}</dd></div>}</dl></AccordionItem></Accordion>
+            <Accordion className="pw-local-disclosures"><AccordionItem id="identity" title="执行来源与任务记录">{currentTask?.summary && <p className="pw-field-hint">{currentTask.summary}</p>}<dl className="pw-facts"><div><dt>任务</dt><dd>{original.taskId}</dd></div><div><dt>运行</dt><dd>{original.runId}</dd></div><div><dt>执行</dt><dd>{original.executionId}</dd></div><div><dt>代次</dt><dd>{original.epoch}</dd></div>{view?.metadata?.projectId && <div><dt>项目</dt><dd>{view.metadata.projectId}</dd></div>}{view?.metadata?.checkoutId && <div><dt>工作副本</dt><dd>{view.metadata.checkoutId}</dd></div>}</dl></AccordionItem></Accordion>
           </>}
         </section>
       </div>

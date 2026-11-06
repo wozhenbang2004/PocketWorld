@@ -43,3 +43,22 @@
   .pw-proxy-heading h2 { font-size: 22px; line-height: 30px; }
   .pw-proxy-service { padding: 18px 16px; }
 }
+
+/* The listening address and service state form one object. Protocol detail
+ * stays in the source Accordion; startup retains a deliberate action footer. */
+.pw-proxy-workspace .pw-proxy-service { padding: 24px; border-radius: 16px; box-shadow: none; }
+.pw-proxy-workspace .pw-proxy-heading { margin-bottom: 28px; }
+.pw-proxy-workspace .pw-proxy-endpoint { padding: 16px 0 0; margin-top: 24px; background: transparent; border-radius: 0; }
+.pw-proxy-workspace .pw-proxy-endpoint > p { font-family: var(--font-code,monospace); font-size: 14px; }
+.pw-proxy-workspace .pw-proxy-primary-action { display: flex; align-items: center; justify-content: space-between; gap: 12px 20px; margin-top: 24px; }
+.pw-proxy-workspace .pw-proxy-primary-action > p { margin: 0; max-width: 250px; font-size: 11px; }
+.pw-proxy-workspace .pw-proxy-endpoints { margin-top: 24px; }
+.pw-proxy-workspace .pw-proxy-calls { margin-top: 32px; }
+.pw-proxy-workspace .pw-proxy-call-list { background: transparent; padding: 0; }
+.pw-proxy-workspace .pw-proxy-call-row { min-height: 64px; padding: 12px 4px; }
+.pw-proxy-setup { display: flex; flex-direction: column; gap: 24px; }
+.pw-proxy-setup-context { margin: 0; color: var(--pw-copy); font-size: 13px; line-height: 1.8; }
+.pw-proxy-setup-fields { display: flex; flex-direction: column; gap: 16px; }
+.pw-proxy-setup-fields > .pw-muted { margin-top: 4px; font-size: 11px; }
+.pw-proxy-setup-footer { display: flex; justify-content: flex-end; padding-top: 8px; }
+@media(max-width:640px){.pw-proxy-workspace .pw-proxy-service { padding: 20px 18px; }.pw-proxy-workspace .pw-proxy-heading h2 { font-size: 20px; }.pw-proxy-workspace .pw-proxy-primary-action { align-items: flex-start; flex-direction: column; }.pw-proxy-setup-footer > button { width: 100%; }}

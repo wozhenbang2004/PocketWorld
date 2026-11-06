@@ -27,6 +27,8 @@ public final class InferenceFailurePresentation {
                 case POLICY_REFUSAL -> {title="服务按政策拒绝本次请求";lines.add("没有换号或换模型重试。");}
                 case NETWORK -> title="本地连接未能完整结束";
                 case TIMEOUT -> title="本次等待超时";
+                case INCOMPLETE_STREAM -> title="本次模型流未完整结束";
+                case CONTEXT_LIMIT -> title="本次请求触及上下文限制";
                 case PROTOCOL -> title="返回或本机处理未能完整核对";
                 case LOCAL_REFUSAL -> title="本机准入未通过";
                 case ACCOUNT_GATE -> {title="账号入口未能完成这次请求";if(!failure.nativeCode.isEmpty())lines.add("原生账号门："+failure.nativeCode+"；不是从服务正文猜测的账号状态。");}

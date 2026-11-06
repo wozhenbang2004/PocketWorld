@@ -42,6 +42,44 @@ final class InferenceRequestStore {
         else {attempt.put("receiptRef",receipt.getString("callId")).put("outcome",receipt.getString("outcome")).put("finishedAt",receipt.get("finishedAt"));}
         save(d,row);
     }
+    /** Bind selected receipt identities to an already reserved physical attempt.
+     * This is preparation evidence only, never proof that network I/O occurred. */
+    static void bindOwnerWorkReceipt(SQLiteDatabase d,String task,String run,int epoch,String call,String work,String delivery)throws Exception {
+        JSONObject original=null,selected=null;
+        try(Cursor rows=d.rawQuery("SELECT logical_request_id FROM inference_requests WHERE task_id=? AND run_id=? AND epoch=?",new String[]{task,run,Integer.toString(epoch)})){
+            while(rows.moveToNext()){
+                JSONObject row=get(d,rows.getString(0));JSONArray attempts=row.getJSONObject("control").getJSONArray("attempts");
+                for(int i=0;i<attempts.length();i++)if(call.equals(attempts.getJSONObject(i).getString("callId"))){
+                    if(original!=null)throw new SecurityException("owner_receipt_call_identity_ambiguous");original=row;selected=attempts.getJSONObject(i);
+                }
+            }
+        }
+        if(original==null||!"ATTEMPT_RESERVED".equals(original.getString("state"))||!"reserved".equals(selected.getString("dispatchState")))throw new SecurityException("owner_receipt_call_not_original_reserved_attempt");
+        JSONArray references=selected.optJSONArray("ownerWorkReceipts");if(references==null)references=new JSONArray();
+        for(int i=0;i<references.length();i++){JSONObject ref=references.getJSONObject(i);if(work.equals(ref.getString("taskId"))&&delivery.equals(ref.getString("deliveryId")))return;}
+        if(references.length()>=16)throw new SecurityException("owner_receipt_reference_limit");
+        references.put(new JSONObject().put("taskId",work).put("deliveryId",delivery));selected.put("ownerWorkReceipts",references);save(d,original);
+    }
+    /** Only positive, original not_dispatched evidence releases a bound receipt.
+     * Reserved, missing, partial, completed or potentially dispatched calls are not
+     * evidence that the old consumer did nothing. Inspect every physical attempt. */
+    static boolean ownerWorkReceiptNeverDispatched(SQLiteDatabase d,String task,String run,int epoch,String work,String delivery)throws Exception {
+        boolean found=false;
+        try(Cursor rows=d.rawQuery("SELECT attempt_control FROM inference_requests WHERE task_id=? AND run_id=? AND epoch=?",new String[]{task,run,Integer.toString(epoch)})){
+            while(rows.moveToNext()){
+                JSONArray attempts=new JSONObject(rows.getString(0)).getJSONArray("attempts");
+                for(int i=0;i<attempts.length();i++){
+                    JSONObject attempt=attempts.getJSONObject(i);JSONArray references=attempt.optJSONArray("ownerWorkReceipts");
+                    for(int j=0;references!=null&&j<references.length();j++){
+                        JSONObject ref=references.getJSONObject(j);if(!work.equals(ref.getString("taskId"))||!delivery.equals(ref.getString("deliveryId")))continue;
+                        found=true;
+                        if(!"not_dispatched".equals(attempt.optString("dispatchState"))||attempt.has("outcome")||TaskAuditStore.call(d,task,attempt.getString("callId"))!=null)return false;
+                    }
+                }
+            }
+        }
+        return found;
+    }
     static JSONArray list(SQLiteDatabase d,String task)throws Exception {JSONArray out=new JSONArray();try(Cursor c=d.rawQuery("SELECT logical_request_id FROM inference_requests WHERE task_id=? ORDER BY created_at_ms DESC LIMIT 16",new String[]{task})){int bytes=0;while(c.moveToNext()){JSONObject row=get(d,c.getString(0));int size=row.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;if(bytes+size>65536)break;out.put(row);bytes+=size;}}return out;}
     static void recover(SQLiteDatabase d)throws Exception {d.beginTransaction();try{java.util.List<String> ids=new java.util.ArrayList<>();try(Cursor c=d.rawQuery("SELECT logical_request_id FROM inference_requests WHERE state IN ('PLANNED','ATTEMPT_RESERVED','DISPATCH_MAY_HAVE_OCCURRED','SEMANTIC_COMMITTED')",null)){while(c.moveToNext())ids.add(c.getString(0));}for(String id:ids){JSONObject row=get(d,id);row.put("state",row.getBoolean("semanticCommitted")?"PARTIAL":"UNKNOWN");row.getJSONObject("control").put("completionOutcome","unknown").put("streamCompleteness",row.getBoolean("semanticCommitted")?"partial":"none");save(d,row);}d.setTransactionSuccessful();}finally{d.endTransaction();}}
 }

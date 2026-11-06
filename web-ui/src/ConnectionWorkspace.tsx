@@ -33,7 +33,7 @@ function Receipt({ value, run }: { value: Data | null; run: Run }) {
       {(value.resumeSupported === false || value.sessionResumeSupported === false) && <p className="pw-field-hint">执行端报告本会话不支持恢复。可用的补充、停止和审批操作请在原任务核对。</p>}
       {object(value.capabilities).teamToolsOnly === true && object(value.capabilities).codingToolsSupported === false && <p className="pw-field-hint">此会话仅开放团队协作工具，未开放代码、命令与文件工具。</p>}
     </AccordionItem></Accordion>}
-    {['stdout', 'stderr'].map(key => value[key] ? <details key={key}><summary>{key === 'stdout' ? '标准输出' : '错误输出'}</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{value[key]}</pre></details> : null)}
+    <Accordion variant="divided">{['stdout', 'stderr'].map(key => value[key] ? <AccordionItem id={'connection-' + key} key={key} title={key === 'stdout' ? '标准输出' : '错误输出'}><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{value[key]}</pre></AccordionItem> : null)}</Accordion>
     {task && <Button variant="secondary" onClick={() => { void run('tasks.open', { id: task }).catch(() => {}); }}>打开原任务与回执</Button>}</div>;
 }
 function useRequest(run: Run, state: Data, visible = true) {
@@ -169,14 +169,22 @@ function ProfileEditor({ domain, original, current, state, run, close, back }: {
   const stale = !!original.id && (!current || current.bindingHash !== original.bindingHash);
   const field = (key: string, value: any) => setForm(previous => ({ ...previous, [key]: value }));
   const canSave = !busy && !attempted && !stale && text(form.name).trim() && (domain === 'remote' ? text(form.baseUrl).trim() : text(form.host).trim() && text(form.username).trim() && text(form.workspace).startsWith('/') && wirelessPort(form.port));
-  return <SettingsDialog isOpen title={domain === 'remote' ? '电脑环境连接' : 'SSH 连接'} onClose={() => { if (!busy) { clear(); close(); } }}><div className="pw-form-grid">
-    <TextField label="名称" value={form.name} onChange={value => field('name', value)} />
-    {domain === 'remote' ? <><TextField label="Companion 地址" type="url" value={form.baseUrl} onChange={value => field('baseUrl', value)} /><TextField label="连接令牌" type="password" autoComplete="new-password" value={form.token} onChange={value => field('token', value)} hint="相同服务可留空保留凭据；更换服务需重新填写。" /></> : <>
-      <TextField label="主机" value={form.host} onChange={value => field('host', value)} /><TextField label="端口" inputMode="numeric" value={form.port} onChange={value => field('port', value.replace(/\D/g, '').slice(0, 5))} /><TextField label="用户名" value={form.username} onChange={value => field('username', value)} /><TextField label="工作区" value={form.workspace} onChange={value => field('workspace', value)} />
-      <SelectField label="认证方式" value={form.authType} options={[{ id: 'key', label: '私钥' }, { id: 'password', label: '密码' }]} onChange={value => { clear(); field('authType', value); }} />
-      {form.authType === 'key' ? <><TextAreaField label="私钥内容" value={form.privateKey} onChange={value => field('privateKey', value)} autoComplete="off" /><TextField label="私钥口令（如有）" type="password" value={form.passphrase} onChange={value => field('passphrase', value)} autoComplete="new-password" /></> : <TextField label="密码" type="password" value={form.password} onChange={value => field('password', value)} autoComplete="new-password" />}
-      <p className="pw-field-hint">凭据只写入手机加密存储，不回填。更换主机或用户时请重新填写。</p>
-    </>}</div>{stale && <p role="alert">连接已在其他页面修改，请关闭后重新读取。</p>}{error && <p role="alert">{error} 请先核对当前连接列表，不重复这次保存。</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { clear(); close(); }}>关闭</Button><Button disabled={!canSave} onClick={() => { const payload = connectionProfilePayload(domain, form, original); setAttempted(true); clear(); void request(domain + '.saveProfile', payload).then(close).catch(() => {}); }}>{busy ? '等待保存回执…' : '保存这项连接'}</Button></div></SettingsDialog>;
+  return <SettingsDialog isOpen title={domain === 'remote' ? '电脑环境连接' : 'SSH 连接'} onClose={() => { if (!busy) { clear(); close(); } }}><div className="pw-connection-profile-editor">
+    <section><h3>连接位置</h3><div className="pw-form-grid">
+      <TextField label="名称" value={form.name} onChange={value => field('name', value)} />
+      {domain === 'remote' ? <TextField label="Companion 地址" type="url" value={form.baseUrl} onChange={value => field('baseUrl', value)} /> : <>
+        <TextField label="主机" value={form.host} onChange={value => field('host', value)} /><TextField label="端口" inputMode="numeric" value={form.port} onChange={value => field('port', value.replace(/\D/g, '').slice(0, 5))} /><TextField label="用户名" value={form.username} onChange={value => field('username', value)} /><TextField label="工作区" value={form.workspace} onChange={value => field('workspace', value)} />
+      </>}
+    </div></section>
+    <section><h3>访问凭据</h3><div className="pw-form-grid">
+      {domain === 'remote' ? <TextField label="连接令牌" type="password" autoComplete="new-password" value={form.token} onChange={value => field('token', value)} hint="相同服务可留空保留凭据；更换服务需重新填写。" /> : <>
+        <SelectField label="认证方式" value={form.authType} options={[{ id: 'key', label: '私钥' }, { id: 'password', label: '密码' }]} onChange={value => { clear(); field('authType', value); }} />
+        {form.authType === 'key' ? <><TextAreaField label="私钥内容" value={form.privateKey} onChange={value => field('privateKey', value)} autoComplete="off" /><TextField label="私钥口令（如有）" type="password" value={form.passphrase} onChange={value => field('passphrase', value)} autoComplete="new-password" /></> : <TextField label="密码" type="password" value={form.password} onChange={value => field('password', value)} autoComplete="new-password" />}
+        <p className="pw-field-hint">凭据只写入手机加密存储，不回填。更换主机或用户时请重新填写。</p>
+      </>}
+    </div></section>
+    {stale && <p role="alert">连接已在其他页面修改，请关闭后重新读取。</p>}{error && <p role="alert">{error} 请先核对当前连接列表，不重复这次保存。</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { clear(); close(); }}>关闭</Button><Button disabled={!canSave} onClick={() => { const payload = connectionProfilePayload(domain, form, original); setAttempted(true); clear(); void request(domain + '.saveProfile', payload).then(close).catch(() => {}); }}>{busy ? '等待保存回执…' : '保存这项连接'}</Button></div>
+  </div></SettingsDialog>;
 }
 
 type RemoteDraft = { environmentId: string; worker: string; goal: string; argv: string; model: string; modeId: string; effort: string; readOnly: boolean; timeout: string; operation: Data | null; uncertain: boolean };

@@ -3,6 +3,7 @@ import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SelectFi
 import { bridge } from './bridge';
 import { appendRemoteClipboard, managedRemoteRows, remoteApprovalClaim, remoteDraftState, remoteEditor, remoteObject as object, remoteProgress, remoteReadsPaused, remoteRows as rows, sameRemoteEditor, savedRemoteEditor, type RemoteData as Data, type RemoteEditor } from './remote-task-workspace';
 import './remote-task-workspace.css';
+import './collaboration-depth.css';
 import { RemoteTaskArtifacts } from './RemoteTaskArtifacts';
 import { RemoteTaskPreview } from './RemoteTaskPreview';
 import { RemoteTaskHarness } from './RemoteTaskHarness';
@@ -10,6 +11,8 @@ import { RemoteTaskInputActions } from './RemoteTaskInputs';
 
 type Run = (action: string, args?: Data) => Promise<any>;
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
+const executionLabel = (value: string) => ({ waiting_approval: '等待你决定', awaiting_approval: '等待你决定', working: '进行中', running: '进行中', waiting: '等待下一步', completed: '已完成', failed: '未完成', paused: '已暂停', cancelled: '已停止', status: '执行状态', tool: '工具观察' } as Record<string,string>)[value] || value;
+const workerLabel = (value: string) => ({ codex_app_server: 'Codex', pi: 'Pi', claude_code: 'Claude Code' } as Record<string,string>)[value] || value;
 const storedEditors = new Map<string, RemoteEditor>();
 const supported = (action: string) => bridge.getState().capabilities.commands.includes(action);
 const windowIdentity = () => {
@@ -133,7 +136,7 @@ export function RemoteProgress({ snapshot }: { snapshot: Data }) {
     {rows(progress.gaps).map((gap, index) => <p key={index} className="pw-field-hint">{gap.reason === 'retention_gap' ? `事件 ${gap.fromSequence}–${gap.throughSequence} 已超出电脑保留窗口。` : '来源代次已变化，旧代遗漏范围无法确认。'}没有补造遗漏内容。</p>)}
     {(children.length > 0 || filter !== '*') && <SelectField label="进度来源" value={filter} onChange={value => { setFilter(value); setExpanded(false); }} options={[{ id: '*', label: '全部原来源' }, { id: 'main_or_unspecified', label: '主／未标记来源' }, ...children.map(source => ({ id: source.key, label: sourceLabel(source) }))]} />}
     {!visible.length && <p className="pw-muted">当前保留窗口没有此来源的可核对记录。</p>}
-    <ol className="pw-remote-events">{(expanded ? visible : visible.slice(-6)).map(({ event, source }, index) => <li key={`${event.sequence || index}:${source.key}`}><small>{sourceLabel(source)}{source.kind === 'child' ? ' · 只读' : ''}</small><strong>{[event.tool || event.kind, event.status].filter(Boolean).join(' · ')}</strong>
+    <ol className="pw-remote-events">{(expanded ? visible : visible.slice(-6)).map(({ event, source }, index) => <li key={`${event.sequence || index}:${source.key}`}><small>{sourceLabel(source)}{source.kind === 'child' ? ' · 只读' : ''}</small><strong>{[event.tool || executionLabel(event.kind || ''), executionLabel(event.status || '')].filter(Boolean).join(' · ')}</strong>
       {event.textForm === 'received_public_delta_not_complete_message' && <p className="pw-field-hint">已收到的公开增量观察，不代表完整消息。</p>}
       {['summary', 'command', 'text', 'explanation', 'counters'].map(key => event[key] ? <div key={key}><p>{typeof event[key] === 'string' ? event[key] : JSON.stringify(event[key])}</p>{event[`${key}Truncated`] && <small>本段已截断。</small>}</div> : null)}
       {event.kind === 'usage' && <small>供应商原 thread 累计观察，不逐快照累加，不代表本任务账单。</small>}
@@ -162,22 +165,27 @@ export function RemoteTaskWorkspace({ taskId }: { taskId: string }) {
   const { snapshot, pending, error, stale, act, current } = useRemoteTask(taskId);
   const enabled = !!snapshot && !stale && taskVisible(taskId), source = object(snapshot?.source);
   if (!supported('remoteTask.open')) return null;
-  return <section className="pw-remote-workspace" aria-label="原电脑任务"><div className="pw-section-heading"><h3>电脑会话</h3><Button variant="secondary" disabled={!!pending || !taskVisible(taskId)} onClick={() => void act(!snapshot || stale ? 'remoteTask.open' : 'remoteTask.refresh')}>{pending ? '正在核对…' : !snapshot || stale ? '重新打开原任务' : '查询原任务'}</Button></div>
+  return <section className="pw-remote-workspace pw-depth-collaboration" aria-label="原电脑任务"><div className="pw-section-heading"><h3>电脑会话</h3><Button variant="secondary" disabled={!!pending || !taskVisible(taskId)} onClick={() => void act(!snapshot || stale ? 'remoteTask.open' : 'remoteTask.refresh')}>{pending ? '正在核对…' : !snapshot || stale ? '重新打开原任务' : '查询原任务'}</Button></div>
     {error && <p className="pw-field-error" role="alert">{error}</p>}{stale && <p className="pw-field-hint">原页面已变化，请重新核对；没有自动发送旧输入。</p>}
-    {snapshot && <><p className="pw-muted">{source.worker || '原执行器'} · {source.executorStatus || '状态待核对'}{source.threadId ? ` · 会话 ${String(source.threadId).slice(0, 24)}` : ''}</p>
+    {snapshot && <><p className="pw-muted">{workerLabel(source.worker || '原执行器')} · {executionLabel(source.executorStatus || '状态待核对')}</p>
+      {source.threadId && <Accordion className="pw-remote-identity"><AccordionItem title="原会话身份"><p className="pw-source-copy">{source.threadId}</p><p className="pw-field-hint">{source.worker} · {source.executorStatus}</p></AccordionItem></Accordion>}
       {!snapshot.fresh && !stale && <p className="pw-field-hint">{snapshot.reason || '请查询原任务后再作出新的决定。'}</p>}
-      {rows(source.pendingApprovals).map(approval => <section className="pw-remote-question" key={`${snapshot.reviewId}:${approval.requestId}`}><h4>{approval.tool || approval.method || '原执行请求'}</h4><p>{approval.summary || approval.command || approval.reason || '请核对原请求的完整范围。'}</p><pre>{JSON.stringify(approval, null, 2)}</pre>{remoteApprovalClaim(snapshot, approval.requestId) ? <p className="pw-field-hint">决定已登记，只查询原回执，不会再次发送。</p> : <div className="pw-form-actions">
+      <div className="pw-remote-work-layout"><div className="pw-remote-primary" aria-label="待处理与输入">
+      {rows(source.pendingApprovals).map(approval => <section className="pw-remote-question" key={`${snapshot.reviewId}:${approval.requestId}`}><h4>{approval.tool || approval.method || '原执行请求'}</h4><p>{approval.summary || approval.command || approval.reason || '请核对原请求的完整范围。'}</p><Accordion className="pw-remote-request-details"><AccordionItem title="准确请求参数" description="原请求身份与完整参数"><pre>{JSON.stringify(approval, null, 2)}</pre></AccordionItem></Accordion>{remoteApprovalClaim(snapshot, approval.requestId) ? <p className="pw-field-hint">决定已登记，只查询原回执，不会再次发送。</p> : <div className="pw-form-actions">
         {['decline', 'accept', ...(!snapshot.teamRemoteWriter ? ['cancel'] : [])].map(decision => <Button key={decision} variant={decision === 'accept' ? 'primary' : decision === 'cancel' ? 'ghost' : 'secondary'} disabled={!enabled || !!pending || !snapshot.fresh || !approval.requestId || decision === 'accept' && (approval.canAccept !== true || Array.isArray(snapshot.teamMemberApprovalAcceptIds) && !snapshot.teamMemberApprovalAcceptIds.includes(approval.requestId))} onClick={() => { const now = current(); if (!now || now.reviewId !== snapshot.reviewId || remoteApprovalClaim(now, approval.requestId)) return; void act('remoteTask.approve', { requestId: approval.requestId, decision }); }}>{decision === 'accept' ? '只允许这一次' : decision === 'cancel' ? '取消这一次' : '拒绝这一次'}</Button>)}</div>}</section>)}
       {rows(snapshot.task?.operations).filter(operation => operation.tool === 'remote_approval').slice(-8).map(operation => <p className="pw-field-hint" key={operation.operationId}>本机单次决定：{operation.arguments?.requestId} · {operation.arguments?.decision} · {operation.state === 'remote_approval_receipt' ? '已收到协议回执，非工具成功' : '决定已登记，仅查询原回执'}</p>)}
       {rows(source.pendingQuestions).map(request => <RemoteQuestion key={`${taskId}:${source.jobOperationId}:${request.requestId}:${request.requestHash}`} request={request} snapshot={snapshot} busy={!enabled || !!pending} run={act} />)}
       <RemoteDraftEditor key={taskId} snapshot={snapshot} busy={!!pending} active={enabled} run={act} />
+      </div><aside className="pw-remote-context" aria-label="执行观察与来源">
       <RemoteProgress snapshot={snapshot} />
       <RemoteTaskHarness snapshot={snapshot} busy={!!pending} active={enabled} run={act} returnToTask={() => void act('remoteTask.open')} />
       <RemoteTaskArtifacts snapshot={snapshot} busy={!!pending} active={enabled} run={act} />
       <RemoteTaskInputActions snapshot={snapshot} enabled={enabled && !pending} onReturn={() => void act('remoteTask.open')} />
-      {!snapshot.teamRemoteWriter && <RemoteTaskPreview taskId={taskId} enabled={enabled && !pending && snapshot.fresh === true} />}
+
       <Accordion><AccordionItem title="本机提醒与连接核对"><StretchSwitch label="原任务需要我时提醒" checked={snapshot.attention?.enabled === true} disabled={!enabled || !!pending || !snapshot.fresh} onChange={value => { if (current()?.reviewId === snapshot.reviewId) void act('remoteTask.setAttention', { enabled: value }); }} description="只修改这个原电脑任务的本机提醒。" />
         <Button variant="secondary" disabled={!enabled || !!pending || !snapshot.fresh || snapshot.teamRemoteWriter} onClick={() => void act('remoteTask.inspectRecovery')}>核对原连接恢复状态</Button></AccordionItem></Accordion>
+      </aside></div>
+      {!snapshot.teamRemoteWriter && <RemoteTaskPreview taskId={taskId} enabled={enabled && !pending && snapshot.fresh === true} />}
     </>}
   </section>;
 }
@@ -201,18 +209,19 @@ export function RemoteManagedSessionsWorkspace() {
     return () => { alive.current = false; generation.current++; live.current = null; unsubscribe(); document.removeEventListener('visibilitychange', inspect); window.removeEventListener('pagehide', retire); };
   }, []);
   if (!supported('remoteSessions.read')) return null;
-  const listing = data?.listingHandle;
-  return <section className="pw-remote-sessions" aria-label="本机电脑会话清单"><div className="pw-section-heading"><h3>本机电脑会话</h3><Button variant="ghost" disabled={pending} onClick={read}>{pending ? '正在读取…' : '刷新本机原任务清单'}</Button></div>
+  const listing = data?.listingHandle, sessionRows = data ? managedRemoteRows(data) : [];
+  const sessionGroups = Array.from(new Set(sessionRows.map(row => JSON.stringify([row.connectionLabel, row.environmentLabel]))));
+  return <section className="pw-remote-sessions pw-depth-collaboration" aria-label="本机电脑会话清单"><div className="pw-section-heading"><h3>本机电脑会话</h3><Button variant="ghost" disabled={pending} onClick={read}>{pending ? '正在读取…' : '刷新本机原任务清单'}</Button></div>
     <p className="pw-muted">仅最后保存的本机原任务元数据，不探测外部 CLI。打开只导航到原任务，不新增执行或授权。</p>
     {error && <p className="pw-field-error" role="alert">{error}</p>}
     {data && <><p className="pw-field-hint">外部已认领会话：不可用；外部会话发现：不可用。{data.olderLocalTasksNotScanned ? '更早的本机任务未在本次窗口扫描。' : ''}</p>
-      <div className="pw-remote-session-list">{managedRemoteRows(data).map(row => <Button variant="ghost" key={`${row.taskId}:${row.rowIdentity}`} className="pw-remote-session" disabled={pending || !row.rowIdentity || !supported('remoteSessions.open')} onClick={async () => {
+      <div className="pw-remote-session-list">{sessionGroups.map(group => { const [connection, environment] = JSON.parse(group); return <section className="pw-remote-session-group" key={group}><h4>{connection} · {environment}</h4>{sessionRows.filter(row => JSON.stringify([row.connectionLabel, row.environmentLabel]) === group).map(row => <Button variant="ghost" key={`${row.taskId}:${row.rowIdentity}`} className="pw-remote-session" disabled={pending || !row.rowIdentity || !supported('remoteSessions.open')} onClick={async () => {
         if (!alive.current || busy.current || document.visibilityState !== 'visible' || !live.current || live.current.listingHandle !== listing || !managedRemoteRows(live.current).some(actual => actual.taskId === row.taskId && actual.rowIdentity === row.rowIdentity)) return;
         const epoch = generation.current; busy.current = true; setPending(true); setError('');
         try { await bridge.command('remoteSessions.open', { listingHandle: listing, taskId: row.taskId, rowIdentity: row.rowIdentity }); }
         catch (failure) { if (alive.current && epoch === generation.current) setError(message(failure)); }
         finally { busy.current = false; if (alive.current) setPending(false); }
-      }}><span><strong>{row.title || row.goal || row.taskId}</strong><small>{row.worker || row.protocol} · {row.sessionEvidence === 'native_protocol_observed' ? '原协议会话已观察' : '原会话身份待核对'}</small><small>{row.connectionLabel} · {row.environmentLabel}</small></span><span>打开原任务</span></Button>)}</div>
+      }}><span className="pw-remote-session-copy"><strong>{row.title || row.goal || row.taskId}</strong><small>{workerLabel(row.worker || row.protocol || '原执行器')} · {row.sessionEvidence === 'native_protocol_observed' ? '原协议会话已观察' : '原会话身份待核对'}</small></span><span className="pw-remote-session-action">打开原任务</span></Button>)}</section>; })}</div>
       {!managedRemoteRows(data).length && <p className="pw-muted">本次窗口没有可核对的原电脑会话。</p>}
       {rows(data.unconfirmedLocalTasks).length > 0 && <p className="pw-field-hint">另有 {rows(data.unconfirmedLocalTasks).length} 项本机任务身份不完整，仅保留记录，不能猜测会话。</p>}
     </>}

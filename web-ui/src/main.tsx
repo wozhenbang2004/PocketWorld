@@ -20,6 +20,8 @@ import './workspace-refactor.css';
 import './presentation-theme.css';
 import './composer-compact.css';
 import './motion.css';
+import './uiux-surfaces.css';
+import './uiux-page-depth.css';
 
 const element = document.getElementById('app');
 if (!element) throw new Error('PocketWorld application mount is missing');

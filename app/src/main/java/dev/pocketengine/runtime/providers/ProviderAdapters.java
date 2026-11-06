@@ -1,6 +1,7 @@
 package dev.pocketengine.runtime.providers;
 
 import dev.pocketengine.core.ModelConfig;
+import dev.pocketengine.runtime.models.ReasoningOptions;
 import dev.pocketengine.runtime.ModelGateway.GatewayException;
 import dev.pocketengine.runtime.providers.bedrock.BedrockEndpoint;
 import dev.pocketengine.runtime.providers.bedrock.BedrockSigV4;
@@ -17,6 +18,32 @@ public final class ProviderAdapters {
     private ProviderAdapters(){}
     public static ProviderAdapter selected(String provider)throws GatewayException {
         switch(provider){case "openai_chat":return new Chat();case "openai_responses":return new Responses();case "anthropic":return new Anthropic();case "bedrock_anthropic":return new BedrockAnthropic();case "gemini":return new Gemini();default:throw error("不支持的模型协议");}
+    }
+    /** Encode already-validated native reasoning options only. This is not capability
+     * evidence or request admission: ModelRequestPolicy retains those checks before
+     * projection. No credentials, route choice, retries or mutable capability state. */
+    public static void projectReasoning(String provider,ReasoningOptions options,JSONObject wire)throws Exception {
+        switch (options.mode()) {
+            case DEFAULT: break;
+            case OPENAI_EFFORT:
+                if (provider.equals("openai_chat")) wire.put("reasoning_effort", options.level());
+                else wire.put("reasoning", new JSONObject().put("effort", options.level()));
+                break;
+            case ANTHROPIC_ADAPTIVE:
+                wire.put("thinking", new JSONObject().put("type", "adaptive"));
+                wire.put("output_config", new JSONObject().put("effort", options.level()));
+                break;
+            case ANTHROPIC_BUDGET:
+                wire.put("thinking", new JSONObject().put("type", "enabled").put("budget_tokens", options.budgetTokens()));
+                break;
+            case GEMINI_LEVEL:
+            case GEMINI_BUDGET:
+                JSONObject generation = wire.getJSONObject("generationConfig");
+                generation.put("thinkingConfig", options.mode() == ReasoningOptions.Mode.GEMINI_LEVEL
+                        ? new JSONObject().put("thinkingLevel", options.level())
+                        : new JSONObject().put("thinkingBudget", options.budgetTokens()));
+                break;
+        }
     }
     private abstract static class Base implements ProviderAdapter {
         final String id;Base(String id){this.id=id;}

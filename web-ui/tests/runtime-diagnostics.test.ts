@@ -24,7 +24,7 @@ function fixture() {
     if (action === 'modelDiagnostics.logs') return delayLogs ? new Promise(resolve => { resolveLogs = resolve; }) : logs;
     return {};
   } };
-  const controls = Object.fromEntries(['Accordion', 'AccordionItem', 'Button', 'CheckboxField', 'SettingsDialog'].map(name => [name, name]));
+  const controls = Object.fromEntries(['Accordion', 'AccordionItem', 'Button', 'CheckboxField', 'SettingsDialog', 'DiagnosticWorkflowSteps', 'ProbeObservationCard', 'RuntimeAttemptChain'].map(name => [name, name]));
   const React = { Fragment: 'Fragment', createElement: (type: any, props: any, ...children: any[]) => ({ type, props: props || {}, children: children.flat(Infinity).filter(value => value !== false && value != null) }) };
   const dependencies = { React, useState, useRef, useEffect, bridge, document, navigator: { clipboard: { writeText: async (text: string) => { calls.push({ action: 'clipboard', text }); return new Promise<void>(resolve => { finishCopy = resolve; }); } } }, ...controls };
   const Component = new Function(...Object.keys(dependencies), compiled + '\nreturn ModelDiagnosticsWorkspace;')(...Object.values(dependencies));

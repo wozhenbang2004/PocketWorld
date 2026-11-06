@@ -9,6 +9,7 @@ import android.os.Looper
 import android.provider.Settings
 import dev.pocketengine.ui.ComposeActivity
 import dev.pocketengine.ui.UiAppearance
+import dev.pocketengine.ui.UiTypography
 import java.util.concurrent.Executors
 import org.json.JSONObject
 
@@ -24,7 +25,7 @@ internal class PocketWebPresentation(
     private var saving = false
     private var error: String? = null
     private val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == UiAppearance.KEY) main.post { refreshAppearance() }
+        if (key == UiAppearance.KEY || key == UiTypography.KEY) main.post { refreshAppearance() }
     }
     private val configurationListener = object : ComponentCallbacks {
         override fun onConfigurationChanged(configuration: Configuration) { main.post { refreshAppearance() } }
@@ -32,7 +33,7 @@ internal class PocketWebPresentation(
     }
 
     companion object {
-        val COMMANDS = setOf("settings.appearance", "speech.prepare", "speech.openSettings")
+        val COMMANDS = setOf("settings.appearance", "settings.typography", "speech.prepare", "speech.openSettings")
     }
 
     fun start() {
@@ -46,6 +47,7 @@ internal class PocketWebPresentation(
 
     fun snapshot(): JSONObject = JSONObject()
         .put("mode", UiAppearance.mode(preferences)).put("dark", UiAppearance.dark(activity))
+        .put("typography", UiTypography.snapshot(preferences))
         .put("saving", saving).put("error", error ?: JSONObject.NULL)
 
     fun speechInfo(): JSONObject = activity.media.systemSpeechInfo()
@@ -86,6 +88,34 @@ internal class PocketWebPresentation(
                 } catch (failure: Exception) {
                     saving = false
                     error = failure.message ?: "外观设置未保存"
+                    changed()
+                    done(null, error)
+                }
+            }
+            "settings.typography" -> {
+                val selection = UiTypography.validate(args)
+                check(!saving) { "请等待原展示设置回执" }
+                saving = true
+                error = null
+                changed()
+                try {
+                    io.execute {
+                        val result = runCatching {
+                            check(active) { "原设置窗口已关闭" }
+                            UiTypography.save(preferences, selection)
+                        }
+                        main.post {
+                            saving = false
+                            error = result.exceptionOrNull()?.message
+                            if (active) {
+                                refreshAppearance()
+                                done(if (result.isSuccess) snapshot().put("saved", true) else null, error)
+                            }
+                        }
+                    }
+                } catch (failure: Exception) {
+                    saving = false
+                    error = failure.message ?: "字体设置未保存"
                     changed()
                     done(null, error)
                 }

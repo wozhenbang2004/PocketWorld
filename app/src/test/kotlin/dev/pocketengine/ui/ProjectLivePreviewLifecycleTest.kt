@@ -93,8 +93,9 @@ class ProjectLivePreviewLifecycleTest {
                 .put("sourceDigest", "a".repeat(64)).put("requestDigest", ProjectSources.digest(payload)).put("payload", payload)
             val binding = JSONObject().put("taskId", task.getString("id")).put("runId", task.getString("runId"))
                 .put("coordinatorEpoch", 1).put("operationId", "fixture-service")
-            val unsafe = sun.misc.Unsafe::class.java.getDeclaredField("theUnsafe").let { it.isAccessible = true; it.get(null) as sun.misc.Unsafe }
-            return (unsafe.allocateInstance(ProjectDevSession.Observed::class.java) as ProjectDevSession.Observed).also {
+            val unsafeType = Class.forName("sun.misc.Unsafe")
+            val unsafe = unsafeType.getDeclaredField("theUnsafe").let { it.isAccessible = true; it.get(null) }
+            return (unsafeType.getMethod("allocateInstance", Class::class.java).invoke(unsafe, ProjectDevSession.Observed::class.java) as ProjectDevSession.Observed).also {
                 set(it, "reference", RuntimeExecutionRef.fromHost(exact, binding))
                 set(it, "identity", identity); set(it, "baseUrl", "http://127.0.0.1:12345/fixture/")
                 set(it, "entryUrl", "http://127.0.0.1:12345/fixture/index.html"); set(it, "policyDigest", "c".repeat(64))

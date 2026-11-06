@@ -1,0 +1,213 @@
+{
+  "schema": 1,
+  "scope": "PocketWorld interaction adapters, reviewed source snapshots; no new native authority",
+  "references": [
+    {
+      "name": "BeUI Morphing Search",
+      "repository": "https://github.com/starc007/ui-components",
+      "commit": "a866cb2f37ce68c3fc0c66425e86e3f31566e4be",
+      "upstream": "components/motion/morphing-search.tsx",
+      "runtime": "web-ui/src/shell-library/CommandMenu.tsx",
+      "adaptation": [
+        "Retain actual controlled filtering, combobox, IME, keyboard and host onSelect actions.",
+        "Adapt original shared active-result layout, .58/.22 morph and .32 clip transition in the existing navigation drawer. Do not create another modal, portal, scroll lock or focus trap.",
+        "Never retain outgoing actionable search rows."
+      ]
+    },
+    {
+      "name": "BeUI Morphing Modal",
+      "repository": "https://github.com/starc007/ui-components",
+      "commit": "a866cb2f37ce68c3fc0c66425e86e3f31566e4be",
+      "upstream": "components/motion/morphing-modal.tsx",
+      "runtime": "web-ui/src/shell-library/Review.tsx:PermissionReview",
+      "adaptation": [
+        "Port original layout panel + layout-position inner content with SPRING_PANEL into existing review shells.",
+        "Host drawer/dialog retains focus trapping and back handling. Only current approval buttons exist; pending disables both actions and errors remain visible."
+      ]
+    },
+    {
+      "name": "BeUI Sortable List",
+      "repository": "https://github.com/starc007/ui-components",
+      "commit": "a866cb2f37ce68c3fc0c66425e86e3f31566e4be",
+      "runtime": "web-ui/src/shell-library/beui-adapted/sortable-list.tsx",
+      "productUsage": "ReviewCenter pending-task directory",
+      "adaptation": [
+        "Actual source retained including drag handles, keyboard Home/End/arrow movement, stable IDs, reorder validation and undo.",
+        "Localize strings, replace icon imports, use local retained easing/utilities, neutral CSS.",
+        "Only current page directory display order changes, with explicit user-facing scope. No execution priority or saved order is claimed."
+      ]
+    },
+    {
+      "name": "BeUI Swipeable List",
+      "repository": "https://github.com/starc007/ui-components",
+      "commit": "a866cb2f37ce68c3fc0c66425e86e3f31566e4be",
+      "runtime": "web-ui/src/shell-library/beui-adapted/swipeable-list.tsx",
+      "productUsage": "ReviewCenter task-directory row: reveal 查看详情; calls the same existing onSelect(id)",
+      "adaptation": [
+        "Actual source retains swipe thresholds, release spring, keyboard disclosure/focus, inert hidden rails and one controlled open row.",
+        "No swipe-to-approve, delete, dismiss or state change. Hidden and outgoing task authority is not recreated.",
+        "Localize labels, replace icon imports and restyle grayscale.",
+        "Suppress the pointer click following a completed row drag so embedded real selection buttons do not also activate. Keyboard activation remains available."
+      ]
+    },
+    {
+      "name": "ncdai React Wheel Picker",
+      "repository": "https://github.com/ncdai/react-wheel-picker",
+      "commit": "fbe21d7901b66683ec022337e2140dd815bdb4fd",
+      "packageVersion": "1.2.3",
+      "runtime": "web-ui/src/forms-library/uiux/wheel/index.tsx",
+      "productUsage": "ReminderWorkspace calendar local-time draft via WheelTimeField",
+      "adaptation": [
+        "Vendor actual geometry, pointer/wheel inertia, typeahead and grouped keyboard focus source.",
+        "Add labelled spinbutton semantics and hide duplicate visual lists from accessibility tree.",
+        "Add disabled/inert handling, abort gestures and rAF, restore visual selection when disabled, and guard current callbacks.",
+        "Reduced-motion or hidden-document animation snaps to endScroll and completes exactly once; fix original duration-zero branch that snapped to startScroll.",
+        "Latest-time ref merges concurrent hour/minute updates. Preserve exact HH:mm TextField, invalid partial input, and original native preview/confirm flow. No wheel action submits."
+      ]
+    },
+    {
+      "name": "BoardUI Slider + Ramotion Fluid Slider reference",
+      "repositories": [
+        "Pinned BoardUI archive: forms-library/SOURCE-map.json; boardui-upstream.zip",
+        "https://github.com/Ramotion/fluid-slider"
+      ],
+      "commits": [
+        "ec5c5eb3e29c2441be63b9422cd54f411ef23466",
+        "98c787c0d4cf841213111242ee42897b8542ec6a"
+      ],
+      "runtime": "web-ui/src/forms-library/uiux/FluidValueSlider.tsx",
+      "productUsage": "Controlled draft-value companion for existing exact numeric input; host wires budget/limits.",
+      "adaptation": [
+        "Actual BoardUI Slider render model and React Aria primitives retain hidden range input, value precision, bounds, step, keyboard and disabled semantics.",
+        "Ramotion ValueView tracking elevation and .22s return are bounded Web styling/animation guidance. This is not an official Web port or a claim that the original UIKit/CoreImage metaball filter runs in Web.",
+        "Current exact value remains visible; out-of-range or non-finite host values disable the slider without coercing the draft.",
+        "Neutral color, inherit user font, reduced-motion zero duration."
+      ],
+      "credit": "Fluid Slider visual reference: Ramotion https://www.ramotion.com/; original design inspiration Virgil Pana https://dribbble.com/shots/3868232-Fluid-Slider"
+    }
+  ],
+  "licenses": [
+    {
+      "name": "BeUI",
+      "spdx": "MIT",
+      "path": "web-ui/src/shell-library/upstream/beui-a866cb2/LICENSE"
+    },
+    {
+      "name": "ncdai/react-wheel-picker",
+      "spdx": "MIT",
+      "path": "web-ui/src/forms-library/upstream/uiux/ncdai-wheel-fbe21d7/LICENSE"
+    },
+    {
+      "name": "Ramotion/fluid-slider",
+      "spdx": "MIT",
+      "path": "web-ui/src/forms-library/upstream/uiux/RAMOTION-LICENSE"
+    },
+    {
+      "name": "BoardUI",
+      "spdx": "MIT",
+      "path": "web-ui/src/shell-library/upstream/boardui/LICENSE"
+    }
+  ],
+  "retainedOriginals": [
+    {
+      "path": "web-ui/src/shell-library/upstream/beui-a866cb2/LICENSE",
+      "sha256": "9e27b491d5691a1bd95708e79de23beb2962f33fe6c1ee31ab639f43009a0b20",
+      "bytes": 1072
+    },
+    {
+      "path": "web-ui/src/shell-library/upstream/beui-a866cb2/lib/touch.ts",
+      "sha256": "f2a15c243c86c8bd1abb6e2e65a423b3a4c45cc1d797ebd83997f21cd1beadb9",
+      "bytes": 5736
+    },
+    {
+      "path": "web-ui/src/shell-library/upstream/beui-a866cb2/lib/presence-gate.tsx",
+      "sha256": "f3c3911933dda28679c108281da9acc37e8f98bc28d7bb79ff63bc0e3aaa9c74",
+      "bytes": 1868
+    },
+    {
+      "path": "web-ui/src/shell-library/upstream/beui-a866cb2/lib/ease.ts",
+      "sha256": "bdfa2814cffaa4d974a5fc8614868ddb89e0310a0ead9e7105f2e8132b219ff3",
+      "bytes": 1670
+    },
+    {
+      "path": "web-ui/src/shell-library/upstream/beui-a866cb2/components/motion/swipeable-list.tsx",
+      "sha256": "a77023f94ff0600ce93770cd1e1f3e77fff91a12450a1d75b493698b56ffbac9",
+      "bytes": 16191
+    },
+    {
+      "path": "web-ui/src/shell-library/upstream/beui-a866cb2/components/motion/sortable-list.tsx",
+      "sha256": "740c2ae4c5d23455eb7ba61a60ab0ef2ee46d3bf986b0ff0e5ef6be329806027",
+      "bytes": 13152
+    },
+    {
+      "path": "web-ui/src/shell-library/upstream/beui-a866cb2/components/motion/morphing-search.tsx",
+      "sha256": "01b0391a6cacfdd7e0e9125ed5f3b223ac8f8c58b725f3f01c6634cad96a8669",
+      "bytes": 18684
+    },
+    {
+      "path": "web-ui/src/shell-library/upstream/beui-a866cb2/components/motion/morphing-modal.tsx",
+      "sha256": "670ca21ce8741634cda1ae3b4e5fbe6b4860dfe0925b605deeb2db6d82df473f",
+      "bytes": 8635
+    },
+    {
+      "path": "web-ui/src/forms-library/upstream/uiux/ramotion-ValueView-98c787c.swift",
+      "sha256": "e364f77a2ce1241e72f55f0ee4943ce4df12089c843d64e10d9fc72023a2d338",
+      "bytes": 3666
+    },
+    {
+      "path": "web-ui/src/forms-library/upstream/uiux/boardui-slider-ec5c5eb.tsx",
+      "sha256": "ff6cd1b6e2216c4a7226f44cc5dcf8841df4e2c3383eac7824979875e646615b",
+      "bytes": 8051
+    },
+    {
+      "path": "web-ui/src/forms-library/upstream/uiux/RAMOTION-LICENSE",
+      "sha256": "04a2dd74a63784bb2b1d6c09336b2f4e2e9bfad8915dd0012dc241072d89db63",
+      "bytes": 1065
+    },
+    {
+      "path": "web-ui/src/forms-library/upstream/uiux/ncdai-wheel-fbe21d7/index.tsx",
+      "sha256": "820d722a3d78b9b805c699bd91d10a41880745685ad60727c7b8c1fe70069804",
+      "bytes": 31170
+    },
+    {
+      "path": "web-ui/src/forms-library/upstream/uiux/ncdai-wheel-fbe21d7/types.ts",
+      "sha256": "c72fa25d980b2477cbe8959226af05054548f3627e501a726f2d802681adde83",
+      "bytes": 2303
+    },
+    {
+      "path": "web-ui/src/forms-library/upstream/uiux/ncdai-wheel-fbe21d7/style.css",
+      "sha256": "e66a08062b36988933ff745fb522a608cd93834b905286672fe041c01da5d543",
+      "bytes": 1594
+    },
+    {
+      "path": "web-ui/src/forms-library/upstream/uiux/ncdai-wheel-fbe21d7/use-typeahead-search.ts",
+      "sha256": "73be19ff83ad701d9a944c9a0a7ddb3b17b1e241987cb0f48084fd7142cd9bcf",
+      "bytes": 3377
+    },
+    {
+      "path": "web-ui/src/forms-library/upstream/uiux/ncdai-wheel-fbe21d7/context.tsx",
+      "sha256": "1fd3d952781ea52fcfc272504060233f49770a3b6621913f78fd603e24a2560d",
+      "bytes": 2032
+    },
+    {
+      "path": "web-ui/src/forms-library/upstream/uiux/ncdai-wheel-fbe21d7/LICENSE",
+      "sha256": "a8da880a12aa3a21cc1aee2c6ec0a172fb42b0534c92cad4df927d090f2292a0",
+      "bytes": 1062
+    },
+    {
+      "path": "web-ui/src/forms-library/upstream/uiux/ncdai-wheel-fbe21d7/use-controllable-state.ts",
+      "sha256": "1ede498073656c0c2755bce6ce55aed9f8f7423a92bc3e3a39664cd3ca59ede5",
+      "bytes": 2216
+    }
+  ],
+  "validation": {
+    "typecheck": "passed",
+    "interactionBrowser": "tests/uiux-interactions.mjs; Chromium141, mobile390px and desktop1000px, reduced and ordinary motion; search, IME, actual pointer swipe, keyboard swipe, view-only sorting+undo, pending, exact inputs, concurrent wheels, slider bounds; zero page errors",
+    "independentReview": "second agent Chromium141 review passed after concurrent-wheel and disabled-visual fixes",
+    "fullNodeSuite": "669/670 pass; untouched tests/conversation-work.test.ts:35 fails expected failed vs undefined",
+    "limits": [
+      "Browser fixture asserts component callback contracts, not native host task execution.",
+      "Original Ramotion iOS control not compiled or run on Linux."
+    ]
+  }
+}

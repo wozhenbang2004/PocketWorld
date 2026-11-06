@@ -61,6 +61,18 @@ public final class AccountMainStreamTest {
             assertEquals(3,counts.getJSONObject("CACHE_READ").getInt("value"));assertEquals(2,counts.getJSONObject("REASONING").getInt("value"));
             assertEquals(rig.book.row(id).getLong("version"),receipt.getJSONObject("route").getLong("accountVersion"));
             assertEquals(id,receipt.getJSONObject("route").getString("accountId"));assertEquals(1,rig.fake.responses.get());
+            assertEquals("provider_text_delta",receipt.getString("timingEvidence"));assertTrue(receipt.getLong("firstVisibleTextAt")>=receipt.getLong("startedAt"));
+            assertTrue(receipt.getLong("firstVisibleTextElapsedNanos")<=receipt.getLong("elapsedNanos"));
+        }
+    }
+    @Test public void nativeAccountProviderDeltaHasTimingEvenWithoutAPresentationSink()throws Exception{
+        try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
+            String id=rig.connect();bind(rig);rig.fake.stream=textStream();List<InferenceReceipt> captured=new ArrayList<>();
+            InferenceCapture.Target target=new InferenceCapture.Target(InferenceReceipt.Context.unattributed(),new InferenceCapture.Sink(){
+                public void started(InferenceReceipt receipt){}public void finished(InferenceReceipt receipt){captured.add(receipt);}});
+            assertEquals("真实分片",ModelGateway.complete(route(rig,id),messages(),null,new RunControl(),target).getString("content"));
+            assertEquals(1,captured.size());assertEquals("provider_text_delta",captured.get(0).timingEvidence);
+            assertNotNull(captured.get(0).firstVisibleTextAt);assertEquals(1,rig.fake.responses.get());
         }
     }
     @Test public void incompleteNativeAccountReportsUsageThroughTheNumericSideChannel()throws Exception{

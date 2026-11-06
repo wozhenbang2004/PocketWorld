@@ -111,6 +111,9 @@ final class TeamIntegrationCompaction {
             public boolean reserveModelRecovery(String failedCall,long waitMillis)throws Exception{return originalJournal.reserveModelRecovery(failedCall,waitMillis);}
             public int executionStepCeiling(int captured)throws Exception{return originalJournal.executionStepCeiling(captured);}
             public InferenceCapture.Target inferenceTarget(InferenceReceipt.Purpose purpose,String member)throws Exception {
+                return inferenceTarget(purpose,member,null);
+            }
+            public InferenceCapture.Target inferenceTarget(InferenceReceipt.Purpose purpose,String member,InferenceReceipt.CallSite site)throws Exception {
                 if(purpose!=InferenceReceipt.Purpose.MAIN&&purpose!=InferenceReceipt.Purpose.SUMMARY)throw new SecurityException("此原整合journal不授其他推理阶段");
                 fence.check();
                 // Reserve immediately before each PHYSICAL call, not request projection: a SUMMARY
@@ -122,7 +125,11 @@ final class TeamIntegrationCompaction {
                     // all Gateway/HTTP work. No post-dispatch failure is reclassified here.
                     throw new RunJournal.NativeBudgetPaused(raw.taskId,raw.runId,raw.epoch,empty.parentTaskId,empty.parentRunId,purpose.name(),empty.used,empty.limit);
                 }
-                return originalJournal.inferenceTarget(purpose,member);
+                // Runner supplies its native cycle identity through the three-argument
+                // overload. Keep it with the physical receipt; falling back to the
+                // default overload would discard it while trace events retain it.
+                // Both overloads share this single fence/reservation, never two debits.
+                return originalJournal.inferenceTarget(purpose,member,site);
             }
         };
         CompactionJournal nativeCompaction=tasks.compactionJournal(raw.taskId,raw.runId,raw.epoch,original,raw,()->capturedModel);

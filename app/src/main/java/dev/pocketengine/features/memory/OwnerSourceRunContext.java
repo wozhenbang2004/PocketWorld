@@ -162,6 +162,19 @@ public final class OwnerSourceRunContext {
             }
         }return result;
     }
+    /** Body-free dependencies for an owner trace read. No source is filtered out merely because
+     * it is now retired: the canonical forget fence must see the original exact references. */
+    public static JSONArray traceUserSources(SQLiteDatabase db,String task,String run)throws Exception {
+        JSONObject fact=loaded(db,task,run,null,null);if(!fact.getBoolean("trackingComplete"))throw new TaskStoreMemoryReader.RawMessageUnavailable(UNAVAILABLE);
+        java.util.LinkedHashMap<String,JSONObject> refs=new java.util.LinkedHashMap<>();
+        JSONArray carriers=fact.getJSONArray("carriers");
+        for(int i=0;i<carriers.length();i++){JSONObject carrier=carriers.getJSONObject(i);
+            SourceRef own=new SourceRef("message",carrier.getString("ownerMessageId"),carrier.getLong("ownerMessageRevision"),"owner","private");refs.put(own.sourceId+":"+own.revision,own.toJson());
+            JSONArray sources=carrier.getJSONArray("ownerSourceRefs");for(int j=0;j<sources.length();j++){SourceRef ref=SourceRef.fromJson(sources.getJSONObject(j).getJSONObject("sourceRef"));refs.put(ref.sourceId+":"+ref.revision,ref.toJson());}}
+        JSONArray parts=fact.optJSONArray("nativeUserParts");
+        for(int i=0;parts!=null&&i<parts.length();i++){SourceRef ref=SourceRef.fromJson(parts.getJSONObject(i).getJSONObject("sourceRef"));refs.put(ref.sourceId+":"+ref.revision,ref.toJson());}
+        return new JSONArray(refs.values());
+    }
     /** Native history body preparation propagates the same original dependencies to its caller.
      * No new source permission or model-consumption receipt is created. Both run identities came
      * from the original bound query, after same-conversation ACL and currentness checks. */

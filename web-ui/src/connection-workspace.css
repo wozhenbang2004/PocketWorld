@@ -131,7 +131,7 @@
 .pw-connection-file-location > small { font-size: 12px; line-height: 20px; color: var(--pw-copy, #626262); }
 .pw-connection-file-list { margin-top: 10px; padding: 4px 8px; border-radius: 14px; background: var(--pw-surface, #fff); }
 .pw-connection-workspace .pw-connection-file-list .pw-connection-row { min-height: 62px; }
-.pw-connection-file-editor textarea { min-height: 320px; font-family: ui-monospace, monospace; font-size: 13px; line-height: 22px; }
+.pw-connection-file-editor textarea { min-height: 320px; font-family: var(--pw-font-code, ui-monospace, monospace); font-size: 13px; line-height: 22px; }
 .pw-connection-terminal-entry > p,
 .pw-connection-diagnostics > p { margin: 0 0 16px; color: var(--pw-copy, #626262); font-size: 13px; line-height: 22px; }
 .pw-connection-terminal-entry > .pw-connection-list { margin-top: 18px; }

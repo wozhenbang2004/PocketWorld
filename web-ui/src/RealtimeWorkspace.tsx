@@ -4,6 +4,7 @@ import { ProgressBar } from './library';
 import { mergeRealtimeSnapshot, realtimeReviewCurrent, realtimeStage } from './realtime-contract';
 import { Mic, Phone, RefreshCw, Settings2, Video, Volume2 } from 'lucide-react';
 import './realtime-workspace.css';
+import './browser-depth.css';
 
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
@@ -96,7 +97,7 @@ export function RealtimeWorkspace({ state, run, registerTransientBack }: { state
   const hasTranscript = transcript.active || transcript.retained || turns.length > 0;
   const hasVoiceRecord = voice.active || voice.recognizedText || voice.replyText || voice.message;
   const captureLabel = (enabled: any) => enabled === true ? '正在发送' : enabled === false ? '关闭' : '状态待核对';
-  return <div className="pw-realtime-workspace">
+  return <div className="pw-realtime-workspace" data-realtime-view={active ? 'live' : waiting ? 'invitation' : 'start'}>
     <header className="pw-realtime-heading">
       <div><h2>实时通话</h2><p aria-live="polite">{loaded ? realtimeStage(session.state) : '尚未读取通话状态'}</p></div>
       <Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="刷新通话状态" title="刷新通话状态" onClick={refresh} />
@@ -140,7 +141,7 @@ export function RealtimeWorkspace({ state, run, registerTransientBack }: { state
         <p>{invitation.source === 'provider_invitation' ? `来自已配置服务 ${invitation.providerId || ''} 的邀请。` : '这是你准备发起的通话。'}</p>
         <p className="pw-realtime-endpoint">{invitation.serverUrl}</p>
         {invitation.tokenEndpoint && <p className="pw-reading-copy">接受后向 {invitation.tokenEndpoint} 请求参与者凭据；agent：{invitation.agentName}</p>}
-        {natural && <p>语音模型：{invitation.model} · 声音：{invitation.voice}。开启麦克风后原始声音发送到该服务。</p>}
+        <Accordion className="pw-realtime-disclosures"><AccordionItem id="invitation-service" title="本次语音与连接说明" description={natural ? `${invitation.model || '自然语音'} · ${invitation.voice || '声音待核对'}` : '查看房间服务与连接说明'}>{natural && <p>语音模型：{invitation.model} · 声音：{invitation.voice}。开启麦克风后原始声音发送到该服务。</p>}{!natural && <p>加入当前房间不代表 AI 对端已经就绪；摄像头发送仍需要本次明确选择。</p>}</AccordionItem></Accordion>
         <div className="pw-realtime-choices"><CheckboxField isSelected={microphone} onChange={setMicrophone} isDisabled={locked}>发送本机麦克风声音</CheckboxField>{!natural && <CheckboxField isSelected={camera} onChange={setCamera} isDisabled={locked}>打开并发送本机摄像头</CheckboxField>}</div>
         <p className="pw-realtime-policy">采集默认关闭，也可只接收对端音频。语音服务可能计费；通话不会自动执行任务或敏感操作。</p>
         <div className="pw-form-actions">{!snapshot.microphonePermission && <Button variant="secondary" disabled={busy} onClick={() => permission('Microphone')}>授予麦克风权限</Button>}{!natural && !snapshot.cameraPermission && <Button variant="secondary" disabled={busy} onClick={() => permission('Camera')}>授予摄像头权限</Button>}</div>
@@ -175,7 +176,7 @@ export function RealtimeWorkspace({ state, run, registerTransientBack }: { state
         {transcript.notice && <p className="pw-realtime-notice" role="status">{transcript.notice}</p>}
         <p className="pw-realtime-policy">未保存转录只保留到下一次通话或重启；已保存任务留在原任务记录中。</p>
       </section>}
-      <section className="pw-realtime-task" aria-label="语音目标与原任务">
+      <section className="pw-realtime-task" aria-label="语音目标与原任务" data-has-task={!!taskId}>
         <header className="pw-realtime-section-heading"><div><h3>语音目标与原任务</h3><p>挂断和停止说话不取消任务；权限与敏感操作仍在原任务中确认。</p></div></header>
         {taskView.available ? <>
           {taskId ? <div className="pw-realtime-task-record" data-task-id={taskId}>
@@ -184,7 +185,7 @@ export function RealtimeWorkspace({ state, run, registerTransientBack }: { state
             <div className="pw-form-actions"><Button variant="secondary" onClick={() => openTask(taskId)}>查看原任务与产物</Button>{taskView.bindingId && <Button variant="ghost" disabled={busy || taskView.busy} onClick={() => void invoke('realtime.inspectVoiceTask', binding)}>核对原任务状态</Button>}{taskView.canStart && <Button disabled={locked} onClick={() => reviewAction('startVoiceTask', binding)}>核对并开始原任务</Button>}{taskView.canCancel && <Button variant="secondary" disabled={locked} onClick={() => reviewAction('cancelVoiceTask', { ...binding, viewToken: taskView.cancelToken })}>核对取消当前执行</Button>}</div>
             {!readout.active && task.summary && <Button variant="ghost" disabled={locked || occupied || taskView.busy || taskView.needsRefresh || readout.resourceReleaseUnknown} onClick={() => reviewAction('readVoiceTask', binding)}>核对朗读原任务记录</Button>}
             {readout.message && <p className="pw-realtime-policy">{readout.message}</p>}
-          </div> : <p className="pw-realtime-empty">还没有关联的语音目标。通话不会自动创建任务；在最终转录下明确复核后，再选择只保存或开始处理。</p>}
+          </div> : <p className="pw-realtime-empty">通话后可从最终转录复核并保存目标。</p>}
           <Accordion className="pw-realtime-disclosures"><AccordionItem id="saved-voice-tasks" title="找回已保存的语音任务" description="读取原记录，不会重新创建任务"><Button variant="secondary" disabled={busy} onClick={() => void invoke('realtime.listVoiceTasks')}>读取已保存的任务</Button>{taskView.recoveryMessage && <p>{taskView.recoveryMessage}</p>}{rows(taskView.recentTasks).map(saved => <article className="pw-realtime-saved" key={saved.taskId}><div><h4>{saved.goal || '已保存语音目标'}</h4><p>{taskStatus(saved.status)}</p></div><Button variant="ghost" disabled={busy} onClick={() => void invoke('realtime.recoverVoiceTask', { taskId: saved.taskId })}>恢复这项原任务视图</Button></article>)}</AccordionItem></Accordion>
         </> : <p className="pw-realtime-empty">{loaded ? '语音任务宿主尚未接入，不能从此页创建或控制任务。' : '等待读取语音任务能力。'}</p>}
       </section>
@@ -205,13 +206,18 @@ export function RealtimeWorkspace({ state, run, registerTransientBack }: { state
       </AccordionItem>
     </Accordion>
 
-    <SettingsDialog isOpen={!!settings && !review} title="通话连接设置" onClose={() => { if (!busy) setSettings(null); }}>{settings && <div className="pw-form-grid">
+    <SettingsDialog isOpen={!!settings && !review} title="通话连接设置" onClose={() => { if (!busy) setSettings(null); }}>{settings && <div className="pw-form-grid pw-realtime-settings-form">
       <SelectField label="连接类型" value={settings.kind} isDisabled={busy} options={[{ id: 'natural', label: '自然语音服务' }, { id: 'provider', label: '通话服务' }, { id: 'room', label: '手动房间' }]} onChange={openSettings} />
-      {settings.kind !== 'room' && <TextField label={settings.kind === 'natural' ? '实时语音 WSS 端点' : '凭据服务 HTTPS 端点'} value={settings.endpointUrl} isDisabled={busy} onChange={endpointUrl => setSettings(old => ({ ...old, endpointUrl }))} />}
-      {settings.kind === 'natural' ? <><TextField label="服务实际支持的语音模型" value={settings.model} isDisabled={busy} onChange={model => setSettings(old => ({ ...old, model }))} /><TextField label="声音标识" value={settings.voice} isDisabled={busy} onChange={voice => setSettings(old => ({ ...old, voice }))} /><TextField label="输入转录模型（可选）" value={settings.transcriptionModel} isDisabled={busy} onChange={transcriptionModel => setSettings(old => ({ ...old, transcriptionModel }))} hint="需要把话语复核为任务时，填写该服务实际支持的输入转录模型。" /></> : <TextField label="LiveKit 房间 WSS 地址" value={settings.serverUrl} isDisabled={busy} onChange={serverUrl => setSettings(old => ({ ...old, serverUrl }))} />}
-      {settings.kind === 'provider' && <TextField label="真实部署的 agent 名称" value={settings.agentName} isDisabled={busy} onChange={agentName => setSettings(old => ({ ...old, agentName }))} />}
-      <TextField label={settings.kind === 'room' ? '短期参与者令牌' : '服务认证凭据'} type="password" autoComplete="new-password" value={settings.kind === 'room' ? settings.participantToken : settings.authenticationToken} isDisabled={busy} onChange={value => setSettings(old => ({ ...old, [old?.kind === 'room' ? 'participantToken' : 'authenticationToken']: value }))} hint="同一服务可留空保留已保存凭据；更换服务须输入新凭据。审阅后和进入后台会清除输入框。" />
-      {settings.kind === 'room' && <><CheckboxField isSelected={settings.allowLoopbackWs} onChange={allowLoopbackWs => setSettings(old => ({ ...old, allowLoopbackWs }))}>允许仅本机回环使用 WS</CheckboxField><CheckboxField isSelected={settings.clearToken} onChange={clearToken => setSettings(old => ({ ...old, clearToken }))}>清除已保存的房间令牌</CheckboxField></>}
+      <section className="pw-realtime-settings-group"><h3>连接与认证</h3>
+        {settings.kind !== 'room' ? <TextField label={settings.kind === 'natural' ? '实时语音 WSS 端点' : '凭据服务 HTTPS 端点'} value={settings.endpointUrl} isDisabled={busy} onChange={endpointUrl => setSettings(old => ({ ...old, endpointUrl }))} /> : <TextField label="LiveKit 房间 WSS 地址" value={settings.serverUrl} isDisabled={busy} onChange={serverUrl => setSettings(old => ({ ...old, serverUrl }))} />}
+        {settings.kind === 'provider' && <><TextField label="LiveKit 房间 WSS 地址" value={settings.serverUrl} isDisabled={busy} onChange={serverUrl => setSettings(old => ({ ...old, serverUrl }))} /><TextField label="真实部署的 agent 名称" value={settings.agentName} isDisabled={busy} onChange={agentName => setSettings(old => ({ ...old, agentName }))} /></>}
+        <TextField label={settings.kind === 'room' ? '短期参与者令牌' : '服务认证凭据'} type="password" autoComplete="new-password" value={settings.kind === 'room' ? settings.participantToken : settings.authenticationToken} isDisabled={busy} onChange={value => setSettings(old => ({ ...old, [old?.kind === 'room' ? 'participantToken' : 'authenticationToken']: value }))} hint="同一服务可留空保留已保存凭据；更换服务须输入新凭据。审阅后和进入后台会清除输入框。" />
+        {settings.kind === 'room' && <><CheckboxField isSelected={settings.allowLoopbackWs} onChange={allowLoopbackWs => setSettings(old => ({ ...old, allowLoopbackWs }))}>允许仅本机回环使用 WS</CheckboxField><CheckboxField isSelected={settings.clearToken} onChange={clearToken => setSettings(old => ({ ...old, clearToken }))}>清除已保存的房间令牌</CheckboxField></>}
+      </section>
+      {settings.kind === 'natural' && <section className="pw-realtime-settings-group"><h3>语音与转录</h3><div className="pw-realtime-settings-voice">
+        <TextField label="服务实际支持的语音模型" value={settings.model} isDisabled={busy} onChange={model => setSettings(old => ({ ...old, model }))} />
+        <TextField label="声音标识" value={settings.voice} isDisabled={busy} onChange={voice => setSettings(old => ({ ...old, voice }))} />
+      </div><Accordion><AccordionItem id="input-transcription" title="输入转录（可选）" description={settings.transcriptionModel || '需要把话语复核为任务时填写'}><TextField label="输入转录模型（可选）" value={settings.transcriptionModel} isDisabled={busy} onChange={transcriptionModel => setSettings(old => ({ ...old, transcriptionModel }))} hint="需要把话语复核为任务时，填写该服务实际支持的输入转录模型。" /></AccordionItem></Accordion></section>}
       {uncertain && <><p role="status">原保存结果待核对，草稿已保留。请读取实际配置后再决定是否重新准备。</p>{readAfterUnknown && <p className="pw-reading-copy">当前保存的服务：{(settings.kind === 'natural' ? naturalConfig.endpointUrl : settings.kind === 'provider' ? providerConfig.endpointUrl : config.serverUrl) || '尚未配置'}</p>}<div className="pw-form-actions"><Button variant="secondary" onClick={refresh}>读取原通话状态</Button><Button variant="secondary" disabled={!readAfterUnknown || busy} onClick={() => { setUncertain(false); setReadAfterUnknown(false); }}>我已核对，允许重新准备</Button></div></>}
       {error && <p role="alert">{error}</p>}<div className="pw-form-actions"><Button disabled={locked || occupied} onClick={configReview}>核对并保存设置</Button>{settings.kind !== 'room' && (settings.kind === 'natural' ? snapshot.naturalVoiceConfigured : snapshot.providerConfigured) && <Button variant="ghost" disabled={locked || occupied} onClick={() => reviewAction(settings.kind === 'natural' ? 'clearNaturalVoice' : 'clearEndpointProvider')}>核对移除此配置</Button>}</div>
     </div>}</SettingsDialog>

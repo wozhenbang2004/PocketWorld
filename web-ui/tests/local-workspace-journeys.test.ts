@@ -49,7 +49,7 @@ function fixture(options: Data = {}) {
   };
 }
 async function ready(f: ReturnType<typeof fixture>) { f.field('原项目', 'project-a'); f.field('私人工作副本', 'checkout-a'); f.click('读取这个副本的实际版本'); await f.flush(); }
-async function view(f: ReturnType<typeof fixture>) { f.session(); await f.flush(); f.click('打开原终端'); await f.flush(); }
+async function view(f: ReturnType<typeof fixture>) { f.session(); await f.flush(); f.click('打开原终端'); await f.flush(); f.expand('local-input-tools'); }
 
 test('local workspace starts with source selection, without automatic prepare, probe, review or launch', async () => {
   const f = fixture(); assert.equal(f.panel, 'setup'); assert.equal(f.calls.length, 0);

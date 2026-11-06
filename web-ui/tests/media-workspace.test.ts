@@ -79,7 +79,7 @@ test('media starts with the original task collection and service identity, not a
 test('creation, original reading and return preserve draft, object, scroll and a focus destination without retaining view authority', async () => {
   const f = fixture(); await create(f, '未提交草稿'); f.scroller.scrollTop = 154; const stalePrepare = f.button('准备并核对输入'); f.click('返回媒体任务');
   assert.equal(f.panel, 'library'); stalePrepare.props.onClick(); await f.flush(); assert.equal(count(f, 'media.prepare'), 0);
-  f.scroller.scrollTop = 62; await read(f); assert.equal(f.panel, 'task'); assert.equal(f.scroller.scrollTop, 0); assert.match(f.visibleText, /原任务 · task-original/); assert.match(f.visibleText, /原服务操作 · operation-original/);
+  f.scroller.scrollTop = 62; await read(f); assert.equal(f.panel, 'task'); assert.equal(f.scroller.scrollTop, 0); assert.doesNotMatch(f.visibleText, /operation-original/); f.expand('media-source-details'); assert.match(f.visibleText, /原任务task-original/); assert.match(f.visibleText, /原服务操作operation-original/);
   f.scroller.scrollTop = 286; const staleQuery = f.button('查询原操作'); f.click('返回媒体任务'); assert.equal(f.scroller.scrollTop, 62); staleQuery.props.onClick(); await f.flush(); assert.equal(count(f, 'media.query'), 0);
   f.click('继续创作'); assert.equal(f.value('描述要生成的内容'), '未提交草稿'); assert.equal(f.scroller.scrollTop, 154); assert.ok(f.focus.length > 0); f.click('返回媒体任务'); await read(f); assert.equal(f.scroller.scrollTop, 286);
   assert.equal(count(f, 'media.readTask'), 2); assert.ok(f.calls.some(call => call.action === 'media.closeReading' && call.args.viewHandle === 'view-original'));

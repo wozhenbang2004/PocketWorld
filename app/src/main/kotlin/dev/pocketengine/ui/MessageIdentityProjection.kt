@@ -1,5 +1,6 @@
 package dev.pocketengine.ui
 
+import dev.pocketengine.store.OwnerWorkResultProtocol
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -37,19 +38,28 @@ internal data class UiReplyContext private constructor(
 internal data class UiTaskResult private constructor(
     val kind: String, val taskId: String, val runId: String, val epoch: Int,
     val deliveryId: String, val status: String, val endedAt: Long,
-    val summaryTruncated: Boolean, val summaryChars: Int,
+    val summaryTruncated: Boolean, val summaryChars: Int, val noticeKind: String?,
 ) {
     fun toJson(): JSONObject = JSONObject().put("kind", kind).put("taskId", taskId).put("runId", runId)
         .put("epoch", epoch).put("deliveryId", deliveryId).put("status", status).put("endedAt", endedAt)
         .put("summaryTruncated", summaryTruncated).put("summaryChars", summaryChars)
+        .put("noticeKind", noticeKind ?: JSONObject.NULL)
 
     companion object {
         fun fromNativeMessage(message: JSONObject): UiTaskResult? {
             val context = UiReplyContext.fromNativeMessage(message) ?: return null
             val kind = message.opt("nativeDeliveryKind") as? String ?: return null
             if (kind !in setOf("automation", "team", "owner_work")) return null
+            val notice = if (message.has("nativeNoticeKind")) {
+                (message.opt("nativeNoticeKind") as? String)?.takeIf {
+                    kind == "owner_work" && OwnerWorkResultProtocol.isCapacityNoticeKind(it)
+                } ?: return null
+            } else null
             val delivery = context.deliveryId ?: return null
-            if (!delivery.startsWith("$kind:")) return null
+            // Owner-work persisted UUID identities must not be rewritten into prefixed IDs.
+            if (kind == "owner_work") {
+                if (!delivery.matches(Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"))) return null
+            } else if (!delivery.startsWith("$kind:")) return null
             val reference = message.optJSONObject("taskReference") ?: return null
             if (reference.opt("taskId") != context.taskId || reference.opt("runId") != context.runId ||
                 messageInteger(reference, "epoch") != context.epoch.toLong()) return null
@@ -59,7 +69,7 @@ internal data class UiTaskResult private constructor(
             val ended = messageInteger(message, "taskEndedAt")?.takeIf { it > 0 } ?: return null
             val truncated = message.opt("summaryTruncated") as? Boolean ?: return null
             val chars = messageInteger(message, "summaryChars")?.takeIf { it in 0..Int.MAX_VALUE.toLong() }?.toInt() ?: return null
-            return UiTaskResult(kind, context.taskId, context.runId, context.epoch, delivery, status, ended, truncated, chars)
+            return UiTaskResult(kind, context.taskId, context.runId, context.epoch, delivery, status, ended, truncated, chars, notice)
         }
     }
 }

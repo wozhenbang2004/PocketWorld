@@ -35,6 +35,10 @@ export function installProjectPreviewHost(options = {}) {
       conversations: [{ id: 'project-conversation', title: '原项目讨论' }, { id: 'other-conversation', title: '另一份草稿' }], conversationId: 'project-conversation',
       selectedChatAttachments: [attachment], chatBusy: false, chatSubmitting: false, features: {}, ownerSnapshots: {}, ownerResponses: {}, ownerErrors: {}, ownerPending: [],
       projectPreview: null, requestedProjectRevision: 0, phoneReadiness: { groups: [] } } };
+  if (options.typography) {
+    commands.push('settings.typography', 'settings.appearance');
+    snapshot.state.appearance = { mode: 'light', dark: false, typography: JSON.parse(localStorage.getItem('test-native-typography') || 'null') || { chinese: 'notosanssc', latin: 'inter', code: 'jetbrainsmono' } };
+  }
   if (options.packages) {
     commands.push('tasks.close', 'tasks.refresh', 'projects.package.preview.inspect', 'projects.package.preview.open');
     snapshot.state.projects.push({ id: 'other-project', name: '另一个项目' }); snapshot.state.projectId = 'other-project';
@@ -168,6 +172,12 @@ export function installProjectPreviewHost(options = {}) {
         if (!options.packages && !continuationOptions) throw new Error('Fixture does not execute model requests');
         if (!args.text.trim()) throw new Error('需要原主人文字'); value = { accepted: true, status: 'accepted', taskId: 'original-project-task' };
       } else if (action === 'projects.select') { if (!snapshot.state.projects.some(row => row.id === args.id)) throw new Error('未知项目'); snapshot.state.projectId = args.id; snapshot.state.filePath = null; publish(); }
+      else if (options.typography && action === 'settings.appearance') { snapshot.state.appearance.mode=args.mode; snapshot.state.appearance.dark=args.mode==='dark'; value={...structuredClone(snapshot.state.appearance),saved:true};publish(); }
+      else if (options.typography && action === 'settings.typography') {
+        snapshot.state.appearance.typography = structuredClone(args);
+        localStorage.setItem('test-native-typography', JSON.stringify(args));
+        value = { ...structuredClone(snapshot.state.appearance), saved: true }; publish();
+      }
       else if (!['composer.reading', 'projects.refresh', ...(options.packages || continuationOptions ? ['tasks.refresh'] : [])].includes(action)) throw new Error('Unexpected fixture command: ' + action);
       reply(request, value);
     } catch (failure) {

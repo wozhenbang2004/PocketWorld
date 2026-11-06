@@ -167,6 +167,75 @@
         "sha256": "484ad46c8cc261e168d7e2602bbb70b80f8d10307b7de91d99485da28c350a03",
         "source_url": "https://raw.githubusercontent.com/theKashey/react-remove-scroll-bar/8ca9ba5ea52de03308fe8ced94f7b159a44d28ff/package.json"
       }
+    },
+    {
+      "package": "embla-carousel",
+      "version": "8.6.0",
+      "declared_license": "MIT",
+      "file": "embla-carousel-0fe6583/LICENSE.txt",
+      "bytes": 1066,
+      "sha256": "992490064b90ec94c302fe5f29dcc14cb44145857064e46f9ffe6c8f511c1093",
+      "git_blob_sha1": "2376624f527f4f1e53887552e42b004ab4056898",
+      "source_url": "https://raw.githubusercontent.com/davidjerleke/embla-carousel/0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54/LICENSE",
+      "repository": "https://github.com/davidjerleke/embla-carousel",
+      "commit": "0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54",
+      "release_identity": "Official v8.6.0 release/tag resolves to this commit; each retained package.json at the same immutable commit declares the exact installed package, version 8.6.0 and MIT license.",
+      "copyright": "Copyright (c) David Jerleke.",
+      "version_evidence": {
+        "file": "embla-carousel-0fe6583/evidence/embla-carousel.package.json",
+        "sha256": "c6ae3309d97829ff46b26a037c1dcc6e494ffa95f73e37fc1d77d4585f84d092",
+        "source_url": "https://raw.githubusercontent.com/davidjerleke/embla-carousel/0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54/packages/embla-carousel/package.json"
+      },
+      "release_evidence": {
+        "file": "embla-carousel-0fe6583/evidence/release.json",
+        "sha256": "c5f68ec0c2e77a72c29f347bf520457a50f60c4f80420f47664215c529d76532"
+      }
+    },
+    {
+      "package": "embla-carousel-react",
+      "version": "8.6.0",
+      "declared_license": "MIT",
+      "file": "embla-carousel-0fe6583/LICENSE.txt",
+      "bytes": 1066,
+      "sha256": "992490064b90ec94c302fe5f29dcc14cb44145857064e46f9ffe6c8f511c1093",
+      "git_blob_sha1": "2376624f527f4f1e53887552e42b004ab4056898",
+      "source_url": "https://raw.githubusercontent.com/davidjerleke/embla-carousel/0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54/LICENSE",
+      "repository": "https://github.com/davidjerleke/embla-carousel",
+      "commit": "0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54",
+      "release_identity": "Official v8.6.0 release/tag resolves to this commit; each retained package.json at the same immutable commit declares the exact installed package, version 8.6.0 and MIT license.",
+      "copyright": "Copyright (c) David Jerleke.",
+      "version_evidence": {
+        "file": "embla-carousel-0fe6583/evidence/embla-carousel-react.package.json",
+        "sha256": "522db07188f768f3817d181001bc31aea72e6841e630ada25266d68eb89a0056",
+        "source_url": "https://raw.githubusercontent.com/davidjerleke/embla-carousel/0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54/packages/embla-carousel-react/package.json"
+      },
+      "release_evidence": {
+        "file": "embla-carousel-0fe6583/evidence/release.json",
+        "sha256": "c5f68ec0c2e77a72c29f347bf520457a50f60c4f80420f47664215c529d76532"
+      }
+    },
+    {
+      "package": "embla-carousel-reactive-utils",
+      "version": "8.6.0",
+      "declared_license": "MIT",
+      "file": "embla-carousel-0fe6583/LICENSE.txt",
+      "bytes": 1066,
+      "sha256": "992490064b90ec94c302fe5f29dcc14cb44145857064e46f9ffe6c8f511c1093",
+      "git_blob_sha1": "2376624f527f4f1e53887552e42b004ab4056898",
+      "source_url": "https://raw.githubusercontent.com/davidjerleke/embla-carousel/0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54/LICENSE",
+      "repository": "https://github.com/davidjerleke/embla-carousel",
+      "commit": "0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54",
+      "release_identity": "Official v8.6.0 release/tag resolves to this commit; each retained package.json at the same immutable commit declares the exact installed package, version 8.6.0 and MIT license.",
+      "copyright": "Copyright (c) David Jerleke.",
+      "version_evidence": {
+        "file": "embla-carousel-0fe6583/evidence/embla-carousel-reactive-utils.package.json",
+        "sha256": "ec9039d7a67092c62df6f85095ee0f1c8b304f06b988e809ac02c6b1d7684b03",
+        "source_url": "https://raw.githubusercontent.com/davidjerleke/embla-carousel/0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54/packages/embla-carousel-reactive-utils/package.json"
+      },
+      "release_evidence": {
+        "file": "embla-carousel-0fe6583/evidence/release.json",
+        "sha256": "c5f68ec0c2e77a72c29f347bf520457a50f60c4f80420f47664215c529d76532"
+      }
     }
   ],
   "unresolved": [

@@ -126,4 +126,45 @@ public final class AccountModelContinuityTest {
             assertEquals(2,rig.fake.responses.get());
         }
     }
+
+    @Test public void catalogCacheRequiresExactVersionAndBoundedObservationTime()throws Exception {
+        try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
+            String id=rig.connect();long version=pinBoth(rig,id);
+            JSONArray models=rig.gateway.modelsReviewed(id,version,new GatewayCall(5000)).getJSONArray("models");
+            AccountModelCatalog catalog=new AccountModelCatalog(rig.book);long now=System.currentTimeMillis();
+            catalog.observed(id,version,models,now);
+            assertFalse(catalog.pinFresh(id,version+1,"model-a",now));
+            assertFalse(catalog.pinFresh("other-account",version,"model-a",now));
+            assertFalse(catalog.pinFresh(id,version,"model-a",now-1));
+            assertTrue(catalog.pinFresh(id,version,"model-a",now+ModelConnectionService.MAX_CATALOG_AGE_MILLIS));
+            assertFalse(catalog.pinFresh(id,version,"model-a",now+ModelConnectionService.MAX_CATALOG_AGE_MILLIS+1));
+            assertEquals("STALE_MODEL_CATALOG",assertThrows(GatewayFailure.class,()->catalog.pinReviewed(id,version+1,"model-a")).code);
+            assertEquals(version,rig.book.row(id).getLong("version"));
+            assertEquals(0,rig.fake.responses.get());
+        }
+    }
+    @Test public void catalogCacheOwnsItsObservationWithoutBorrowingCallerMutations()throws Exception {
+        try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
+            String id=rig.connect();long version=pinBoth(rig,id);
+            JSONArray models=rig.gateway.modelsReviewed(id,version,new GatewayCall(5000)).getJSONArray("models");
+            AccountModelCatalog catalog=new AccountModelCatalog(rig.book);long now=System.currentTimeMillis();
+            catalog.observed(id,version,models,now);
+            models.getJSONObject(0).put("id","replaced-by-caller");
+            assertTrue(catalog.pinFresh(id,version,"model-a",now));
+            assertEquals(100000,rig.gateway.modelFacts(id,version,"model-a").facts.contextWindow().value.tokens());
+            assertEquals("STALE_MODEL_CATALOG",assertThrows(GatewayFailure.class,()->catalog.pinReviewed(id,version,"replaced-by-caller")).code);
+            assertEquals(0,rig.fake.responses.get());
+        }
+    }
+    @Test public void ambiguousCatalogCannotOverwritePinnedEvidence()throws Exception {
+        try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
+            String id=rig.connect();long version=pinBoth(rig,id);
+            JSONArray models=rig.gateway.modelsReviewed(id,version,new GatewayCall(5000)).getJSONArray("models");
+            models.put(new JSONObject(models.getJSONObject(0).toString()));
+            AccountModelCatalog catalog=new AccountModelCatalog(rig.book);
+            assertEquals("INVALID_MODEL_CATALOG",assertThrows(GatewayFailure.class,()->catalog.pin(id,version,"model-a",models)).code);
+            assertEquals(100000,rig.gateway.modelFacts(id,version,"model-a").facts.contextWindow().value.tokens());
+            assertEquals(0,rig.fake.responses.get());
+        }
+    }
 }

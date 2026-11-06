@@ -125,7 +125,7 @@ try {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = 'http://127.0.0.1:' + server.address().port;
-  browser = await chromium.launch({ headless: true, args: ['--disable-background-networking'] });
+  browser = await chromium.launch({ headless: true, ...(process.env.PW_CHROMIUM ? { executablePath: process.env.PW_CHROMIUM } : {}), args: ['--disable-background-networking'] });
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, locale: 'zh-CN', timezoneId: 'Asia/Shanghai', serviceWorkers: 'block' });
   await context.route('**/*', route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
   await context.addInitScript(fixture);
@@ -185,7 +185,8 @@ try {
 
   await page.evaluate(() => window.phoneViewerFixture.hold());
   await page.waitForFunction(() => window.phoneViewerFixture.hasHeld());
-  await card.getByLabel('查看任务', { exact: true }).selectOption(JSON.stringify(['weather', 'run-weather', 1]));
+  await card.locator('.pw-phone-viewer-select .pw-select-trigger').click();
+  await page.getByRole('option', { name: '查看明天的天气和出行建议', exact: true }).click();
   await page.locator('[data-phone-viewer-task="weather"] .pw-phone-viewer-card img').waitFor();
   await page.evaluate(() => window.phoneViewerFixture.release());
   assert.match(await card.locator('img').getAttribute('alt'), /天气/);

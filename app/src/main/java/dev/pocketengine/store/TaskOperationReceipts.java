@@ -15,9 +15,13 @@ import org.json.JSONObject;
 /** Original operation receipt storage. TaskStore retains its monitor, transaction,
  * native-preservation chain and task/run/epoch authority; this class grants none. */
 final class TaskOperationReceipts {
-    private static final String MIGRATION="tool_outcome_uncertainty_v1";
+    // v1 skipped some uncertainty fields for large bodies. Revisit only original
+    // receipt rows; resolved owner decisions and native running rows stay excluded.
+    private static final String MIGRATION="tool_outcome_uncertainty_v2";
     private static final int INLINE_BYTES=1024*1024;
-    private static final Set<String> UNCERTAINTY_FIELDS=Set.of("ok","accepted","requiresReconciliation","reconciliationRequired","requiresPause","requiresOwnerReturn","status","state","code","error","nextObservationAction");
+    // These top-level fields are consumed by ToolOutcome.hasUncertaintyEvidence.
+    // Do not omit explicit uncertainty merely because the receipt body is large.
+    private static final Set<String> UNCERTAINTY_FIELDS=Set.of("ok","accepted","terminal","requiresReconciliation","reconciliationRequired","requiresPause","requiresOwnerReturn","status","state","code","error","effectStatus","dispatchStatus","exitCode","nextObservationAction");
     private TaskOperationReceipts(){}
 
     static final class Saved {
@@ -47,20 +51,40 @@ final class TaskOperationReceipts {
     static Set<String> restoreLegacyUncertainty(SQLiteDatabase db)throws Exception{
         try(Cursor marker=db.rawQuery("SELECT 1 FROM meta WHERE key=?",new String[]{MIGRATION})){if(marker.moveToFirst())return Set.of();}
         Set<String> affected=new HashSet<>();
-        try(Cursor rows=db.rawQuery("SELECT operation_id,task_id,CASE WHEN length(CAST(receipt AS BLOB))<=? THEN receipt END FROM operations WHERE state='receipt' AND receipt IS NOT NULL",new String[]{Integer.toString(INLINE_BYTES)})){
-            while(rows.moveToNext()){
+        String after=null;
+        while(true){
+            // Updating state while a live cursor refills would shrink its WHERE
+            // result and skip later rows. Materialize a small identity-keyed page,
+            // close the cursor, then mutate within the caller's same transaction.
+            java.util.List<LegacyReceipt> page=new java.util.ArrayList<>();
+            String sql="SELECT operation_id,task_id,CASE WHEN length(CAST(receipt AS BLOB))<=? THEN receipt END FROM operations WHERE state='receipt' AND receipt IS NOT NULL"
+                    +(after==null?"":" AND operation_id>?")+" ORDER BY operation_id LIMIT 8";
+            String[] args=after==null?new String[]{Integer.toString(INLINE_BYTES)}:new String[]{Integer.toString(INLINE_BYTES),after};
+            try(Cursor rows=db.rawQuery(sql,args)){
+                while(rows.moveToNext()){
+                    // SQLite TEXT PRIMARY KEY can still contain NULL. It cannot
+                    // form a continuation key or be safely matched for this repair.
+                    if(rows.isNull(0))throw new IllegalStateException("Original operation identity missing during receipt recovery");
+                    page.add(new LegacyReceipt(rows.getString(0),rows.getString(1),rows.isNull(2)?null:rows.getString(2)));
+                }
+            }
+            if(page.isEmpty())break;
+            after=page.get(page.size()-1).operation();
+            for(LegacyReceipt row:page){
                 boolean unknown;
-                try{unknown=ToolOutcome.hasUncertaintyEvidence(rows.isNull(2)?largeReceiptFlags(db,rows.getString(0),rows.getString(1)):new JSONObject(rows.getString(2)));}
+                try{unknown=ToolOutcome.hasUncertaintyEvidence(row.inline()==null?largeReceiptFlags(db,row.operation(),row.task()):new JSONObject(row.inline()));}
                 catch(ReceiptReadFailure unavailable){throw unavailable;}
                 catch(Exception malformed){unknown=true;}
                 if(!unknown)continue;
                 ContentValues value=new ContentValues();value.put("state","unknown");
-                if(db.update("operations",value,"operation_id=? AND task_id=? AND state='receipt'",new String[]{rows.getString(0),rows.getString(1)})==1)affected.add(rows.getString(1));
+                if(db.update("operations",value,"operation_id=? AND task_id=? AND state='receipt'",new String[]{row.operation(),row.task()})==1)affected.add(row.task());
             }
         }
         ContentValues marker=new ContentValues();marker.put("key",MIGRATION);marker.put("value","1");db.insertOrThrow("meta",null,marker);
         return affected;
     }
+
+    private record LegacyReceipt(String operation,String task,String inline) {}
 
     /** A supported MCP result can exceed CursorWindow and the inline read limit.
      * Stream only top-level flags; a large, known body is not uncertainty evidence. */
@@ -75,6 +99,14 @@ final class TaskOperationReceipts {
                 if(token==JsonToken.BOOLEAN)flags.put(key,reader.nextBoolean());
                 else if(token==JsonToken.STRING)flags.put(key,reader.nextString());
                 else if(token==JsonToken.NULL){reader.nextNull();flags.put(key,JSONObject.NULL);}
+                else if(token==JsonToken.NUMBER){
+                    // The inline JSONObject path cannot establish a finite numeric
+                    // value from overflow (for example 1e999). Reject the receipt
+                    // rather than hiding invalid evidence behind a type sentinel.
+                    double number=Double.parseDouble(reader.nextString());
+                    if(!Double.isFinite(number))throw new IOException("Non-finite original receipt number");
+                    flags.put(key,number);
+                }
                 else{reader.skipValue();flags.put(key,new org.json.JSONArray());}
             }
             reader.endObject();if(reader.peek()!=JsonToken.END_DOCUMENT)throw new IOException("Malformed original receipt");

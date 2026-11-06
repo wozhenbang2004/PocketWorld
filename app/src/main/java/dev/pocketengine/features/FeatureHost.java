@@ -527,14 +527,16 @@ public final class FeatureHost implements AutoCloseable {
             this.issuer=issuer;task=original.task;run=original.run;epoch=original.epoch;feature=original.feature;this.children=java.util.List.copyOf(children);mcp=original.mcp;this.module=module;this.team=team;
         }
     }
-    /** Capture before cancelling the parent. SQL is frozen first; native locks are acquired only after releasing TaskStore. */
+    /** Capture before cancelling the parent. SQL is frozen first; native locks are acquired only after releasing TaskStore.
+     * Only original core relationships/lifecycle fields choose this ticket. Unrelated
+     * event bodies must not hide a retained child, and a UI summary cannot authorize it. */
     public RelatedTaskCancellation captureRelatedTaskCancellation(String parent,String run,int epoch){
         if(tasks==null)return null;
         // A caller's outer monitor would otherwise survive the inner synchronized block.
         if(Thread.holdsLock(tasks))throw new IllegalStateException("related_task_capture_requires_unlocked_tasks");
         try{
             RelatedTaskSnapshot original;
-            synchronized(tasks){JSONObject current=tasks.get(parent,false);if(current==null||!run.equals(current.optString("runId"))||epoch!=current.optInt("coordinatorEpoch"))throw new SecurityException("原父执行已变化");if(current.optBoolean("cancelRequested"))throw new SecurityException("原父执行已取消，请核对既有清场记录，不能重新选取团队代次");original=snapshotRelatedTaskCancellation(current,new java.util.HashSet<>());}
+            synchronized(tasks){JSONObject current=tasks.relatedCancellationContextSnapshot(parent);if(current==null||!run.equals(current.optString("runId"))||epoch!=current.optInt("coordinatorEpoch"))throw new SecurityException("原父执行已变化");if(current.optBoolean("cancelRequested"))throw new SecurityException("原父执行已取消，请核对既有清场记录，不能重新选取团队代次");original=snapshotRelatedTaskCancellation(current,new java.util.HashSet<>());}
             return bindRelatedTaskCancellation(original);
         }
         catch(Exception unknown){events.emit(json("type","error","message","原父执行或子任务清场范围未确认；未选择当前新执行，请查看原任务"));return null;}
@@ -543,7 +545,7 @@ public final class FeatureHost implements AutoCloseable {
         String parent=original.getString("id"),run=original.optString("runId");if(!seen.add(parent))throw new SecurityException("原子任务关联存在重复或循环");
         java.util.List<RelatedTaskSnapshot> children=new java.util.ArrayList<>();JSONArray links=original.optJSONArray("relatedTasks");
         for(int i=0;links!=null&&i<links.length();i++){
-            JSONObject link=links.getJSONObject(i),child=tasks.get(link.getString("taskId"),false);
+            JSONObject link=links.getJSONObject(i),child=tasks.relatedCancellationContextSnapshot(link.getString("taskId"));
             if(child==null||!child.optString("status").matches("preparing|queued|running|paused|awaiting_user|stopping"))continue;
             if(!parent.equals(child.optString("parentTaskId"))||child.has("parentRunId")&&!run.equals(child.getString("parentRunId"))||link.has("runId")&&!link.getString("runId").equals(child.optString("runId")))continue;
             String feature=child.optString("feature");if(!feature.equals("teams")&&!(feature.equals("remote")&&!child.optString("externalId").isEmpty()))continue;
@@ -568,7 +570,7 @@ public final class FeatureHost implements AutoCloseable {
         cancelRelatedTasks(original,original);
     }
     private boolean originalRelatedTaskCurrent(RelatedTaskCancellation original)throws Exception{
-        JSONObject current=tasks.get(original.task,false);return current!=null&&original.run.equals(current.optString("runId"))&&original.epoch==current.optInt("coordinatorEpoch")&&original.feature.equals(current.optString("feature"));
+        JSONObject current=tasks.relatedCancellationContextSnapshot(original.task);return current!=null&&original.run.equals(current.optString("runId"))&&original.epoch==current.optInt("coordinatorEpoch")&&original.feature.equals(current.optString("feature"));
     }
     private void cancelRelatedTasks(RelatedTaskCancellation root,RelatedTaskCancellation original){
         try{
@@ -623,14 +625,14 @@ public final class FeatureHost implements AutoCloseable {
     }
     /** Freeze existing native team controllers before recording the parent stop. No ID is resolved later. */
     public Runnable prepareOriginalPhoneTeamStops(String parent,String run,int epoch)throws Exception {
-        JSONObject task=tasks.get(parent,false);
+        JSONObject task=tasks.relatedCancellationContextSnapshot(parent);
         if(task==null||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("原父执行已变化");
         EngineModule selected=module("teams");java.util.ArrayList<Runnable> captured=new java.util.ArrayList<>();
         if(selected instanceof dev.pocketengine.features.teams.TeamsModule team){
             JSONArray links=task.optJSONArray("relatedTasks");
             if(links!=null&&links.length()>100)throw new SecurityException("原团队关联范围尚未完整核对");
             for(int i=0;links!=null&&i<links.length();i++){
-                JSONObject link=links.getJSONObject(i);String id=link.getString("taskId");JSONObject child=tasks.get(id,false);
+                JSONObject link=links.getJSONObject(i);String id=link.getString("taskId");JSONObject child=tasks.relatedCancellationContextSnapshot(id);
                 if(child==null||!"teams".equals(child.optString("feature"))||!parent.equals(child.optString("parentTaskId"))||!run.equals(child.optString("parentRunId")))continue;
                 String childRun=child.getString("runId");int childEpoch=child.getInt("coordinatorEpoch");
                 if(!childRun.equals(link.optString("runId")))throw new SecurityException("原团队关联执行已变化");

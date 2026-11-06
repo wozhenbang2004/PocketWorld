@@ -68,7 +68,7 @@ export function BackgroundAudioSettings({ state, supported, run, registerBack }:
   useEffect(() => { registerBack(confirm ? () => { setConfirm(false); return true; } : null); return () => registerBack(null); }, [confirm, registerBack]);
   useEffect(() => { setConfirm(false); }, [windowRevision]);
   useEffect(() => { if (!canRestore) setConfirm(false); }, [canRestore]);
-  return <section className="pw-settings-section" aria-label="后台应用声音">
+  return <section className="pw-settings-section pw-background-audio-preference" aria-label="后台应用声音">
     <StretchSwitch label="打开应用前静音" checked={enabled} busy={busy}
       description="默认关闭。只影响目标 App 的后台声音，关闭开关停止后续静音，已有记录需单独处理。"
       disabled={!canSet}
@@ -108,7 +108,7 @@ export function BackgroundOwnerSettings({ state, supported, run, registerBack }:
   useEffect(() => { if (!canForget) setForget(false); }, [canForget]);
   const button = (action: string, label: string, disabled = false, args: Data = {}) => <Button variant="secondary" disabled={!available || Boolean(pending) || disabled || !supported(action)} onClick={() => { if (!disabled) void act(action, args); }}>{label}</Button>;
   const setAccess = (nextAutomation: boolean, nextShare: boolean) => { if (copy && policyWritable) void act('background.apps.set', { selectionHandle: copy.selectionHandle, automation: nextAutomation, ownerShare: nextShare, expectedRevision: access.revision }); };
-  return <section className="pw-settings-section">
+  return <section className="pw-settings-section pw-background-owner-preferences">
     <Accordion variant="divided">
       <AccordionItem id="background-app-policy" title="应用分享限制与可选粘贴">
         <p className="pw-field-hint">按系统可见的应用副本选择。读取、截图、动作和分享均会重新核对当前规则。</p>
@@ -123,6 +123,8 @@ export function BackgroundOwnerSettings({ state, supported, run, registerBack }:
           <p className="pw-field-hint">分享许可与自动操作相互独立。保存前复核资料、UID、版本和安装签名。</p></>}
         {owner.policyMessage && <p role="status" className="pw-field-hint">{owner.policyMessage}</p>}
         {access.revision === null && <p className="pw-field-hint">应用规则尚不可读，修改暂不可用。</p>}
+      </AccordionItem>
+      <AccordionItem id="background-clipboard" title="兼容粘贴与原记录" description="可选剪贴板输入、原记录核对与复原">
         <StretchSwitch label="允许可恢复的剪贴板粘贴" checked={display.clipboardPasteAllowed === true}
           description="默认关闭，优先使用界面树输入。兼容粘贴会临时占用系统剪贴板并尝试复原；你后来复制的内容会保留。"
           disabled={!available || typeof display.clipboardPasteAllowed !== 'boolean' || !!pending || busyKeys.includes('display.clipboard.consent') || !supported('background.clipboard.consent')}
@@ -169,7 +171,7 @@ export function BackgroundChecks({ state, supported, run, registerBack }: Props)
   const validField = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/.test(packageName) && field.trim().length > 0 && field.length <= 120;
   useEffect(() => { if (practice && !canConfirmPractice) setPractice(null); }, [canConfirmPractice]);
   const labels: Data = { helper: '助手认证', display: '独立显示会话', tree: '界面树', frame: '实际画面', click: '点击后的计数', ascii_input: '英文输入读回', chinese_input: '中文输入读回', scroll: '滚动后内容', back: '返回离开测试页', live_updates: '延时内容更新', main_screen_isolation: '主屏隔离', ime_isolation: '输入法隔离', rotation: '旋转后的画面与点击' };
-  return <section className="pw-settings-section"><Accordion variant="divided">
+  return <section className="pw-settings-section pw-background-checks"><header className="pw-preference-heading"><h3>排查与演练</h3><p>先读取已有证据，需要时再明确开始演练。</p></header><Accordion variant="divided">
     <AccordionItem id="background-diagnostics" title="脱敏诊断报告">
       <p className="pw-field-hint">预览版本、权限和连接事实。预览不会运行演练或申请新权限。</p>
       <Button variant="secondary" disabled={!available || !!pending || owner.diagnosticBusy || !supported('background.diagnostics.preview')} onClick={() => { setReport(null); void act('background.diagnostics.preview', {}, value => { diagnosticPreview(value); return '已读取诊断预览。'; }, value => setReport(diagnosticPreview(value))); }}>{owner.diagnosticBusy || pending === 'background.diagnostics.preview' ? '正在读取诊断…' : '预览脱敏诊断报告'}</Button>

@@ -1,0 +1,93 @@
+{
+  "component": "PocketWorld execution trajectory: Whaleness overview and event details with retained interval/tree view",
+  "sourceIdentity": "Default overview and detail structure adapted from pinned Whaleness iOS MIT source; auxiliary waterfall from approved personal library independent reproduction v3 0e69029b, not official Affect UI Pro source",
+  "approvalScope": "User-confirmed Whaleness iOS reference and previously approved auxiliary library component. Production behavior and visual acceptance are verified separately.",
+  "archive": "references/uiux/assets/affectui-interactive-family-20261031/interactive-components-source.zip",
+  "upstreamFiles": [
+    {
+      "path": "../shell-library/upstream/affect/src/demos/components-c/pro.tsx",
+      "symbol": "TraceWaterfallDemo",
+      "sha256": "beeb8bc3c94b7f401155d5dc57e1634ddf70cb01b39abc4a84e8d4305e062c0b"
+    },
+    {
+      "path": "../shell-library/upstream/affect/src/demos/components-c/style.ts",
+      "symbols": [
+        ".acc-trace-axis",
+        ".acc-trace-row",
+        ".acc-trace-name",
+        ".acc-timeline"
+      ],
+      "sha256": "f55222203718089e6fdd3be2905dae3ddc2e173380f6416b1bba493be99562d3"
+    },
+    {
+      "path": "upstream/whaleness/TrajectoryView.swift",
+      "symbol": "TrajectoryView",
+      "sha256": "ee10b93da8ce8de138c9b5034f6af92811a77d0ae669427aeecc3c06c53ea93b"
+    }
+  ],
+  "adaptedFiles": [
+    "adapted/trace-overview.tsx",
+    "adapted/trace-event-list.tsx",
+    "adapted/trace-waterfall.tsx",
+    "../execution-trace.css",
+    "../TaskTrajectory.tsx",
+    "../forms-library/boardui/components/base/select/select.tsx (optional popup container only)"
+  ],
+  "preserved": [
+    "Source tree and row structure",
+    "Roving keyboard navigation and parent/child collapse",
+    "Positioned per-call duration track",
+    "Node selection and detail disclosure"
+  ],
+  "removed": [
+    "Fixture spans",
+    "Simulated elapsed-time timer",
+    "Demo completion and success payloads",
+    "Cost and token guesses"
+  ],
+  "adaptation": [
+    "Controlled original native trace facts",
+    "Phone rows and neutral project tokens",
+    "Source Vaul nested detail drawer",
+    "Source BoardUI search, select and buttons",
+    "Source Ovio minimal filter tabs",
+    "Explicit unknown timing and running start markers",
+    "Preserved raw provider usage semantics"
+  ],
+  "dependencyProvenance": [
+    "../shell-library/source-manifest.json",
+    "../forms-library/SOURCE-provenance.md"
+  ],
+  "reference": "User-confirmed Whaleness / DSH Mobile iOS trajectory; the earlier DSH-Go Flutter sheet is not the target for this integration.",
+  "verification": [
+    "tests/execution-trace.test.ts",
+    "tests/execution-trace-ui.mjs"
+  ],
+  "whaleness": {
+    "repository": "https://github.com/Clarklevis1995/dsh-mobile",
+    "commit": "fc12ae44dcb777f9429553048cba21d53849f427",
+    "sourcePath": "DeepSeekHarnessMobile/Views/TrajectoryView.swift",
+    "retainedSource": "upstream/whaleness/TrajectoryView.swift",
+    "sourceSha256": "ee10b93da8ce8de138c9b5034f6af92811a77d0ae669427aeecc3c06c53ea93b",
+    "license": "MIT",
+    "copyright": "Copyright (c) 2026 Chaofan Li",
+    "licenseFile": "upstream/whaleness/LICENSE",
+    "adoptedMechanics": [
+      "Three horizontal Input/Model/Tools lanes",
+      "Event-order and duration-weighted overview modes",
+      "Overview selection scrolls to and highlights its original event",
+      "Turn sections with Input, Context, Assistant, Tool and Subtool roles",
+      "Separate physical Request entry on assistant events",
+      "Event summary/preview/raw, request summary/options/usage/timing, tool summary/arguments/result/schema/timing"
+    ],
+    "adaptation": [
+      "React and existing PocketWorld components instead of SwiftUI",
+      "Neutral project surfaces and typography instead of iOS system chrome",
+      "Original native run/turn/call identity and source-currentness gates",
+      "Whole-run compact backfill with independently loaded event details",
+      "No invented timing, usage, message bodies or parent relationships"
+    ],
+    "referenceEvidence": "Author screenshots and pinned Swift source inspected; no claim of running the original iOS build",
+    "approvalScope": "The user confirmed this iOS trajectory reference and authorized complete reproduction and wiring; PocketWorld implementation acceptance remains separately verified"
+  }
+}

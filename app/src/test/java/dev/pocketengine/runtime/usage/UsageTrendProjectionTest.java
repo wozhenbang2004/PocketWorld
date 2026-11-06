@@ -11,7 +11,7 @@ public final class UsageTrendProjectionTest {
     private static JSONObject receipt(String call,long at,Long input,String stage)throws Exception{
         JSONObject count=new JSONObject().put("value",input==null?JSONObject.NULL:input).put("source",input==null?"unknown":"provider_reported").put("stage",stage);
         return new JSONObject().put("type","inference_receipt").put("receiptVersion",1).put("callId",call).put("evidenceOnly",true)
-                .put("startedAt",at).put("finishedAt",at+10).put("outcome","COMPLETED")
+                .put("startedAt",at).put("finishedAt",at+10).put("elapsedNanos",10000000L).put("outcome","COMPLETED")
                 .put("context",new JSONObject().put("taskId","original-task").put("runId","original-run").put("epoch",1).put("purpose","MAIN").put("memberId",""))
                 .put("route",new JSONObject().put("kind","api_key").put("providerId","historical-provider").put("requestedModel","deleted-model").put("protocol","openai"))
                 .put("usage",new JSONObject().put("protocol","openai").put("counters",new JSONObject().put("INPUT",count)));

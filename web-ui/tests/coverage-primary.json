@@ -1,0 +1,266 @@
+{
+  "baseline": "Published main e86952a, local identical source 379911a",
+  "currentProductionBuild": "9f4bb4355e23a18052e5205d38e8e1f62d103084",
+  "boundary": "Actual production Web build with synthetic native records; not Android/device/provider execution.",
+  "scenes": [
+    {
+      "id": "chat",
+      "title": "主对话与继续工作",
+      "task": "查看回复并补充自己的下一件事",
+      "change": "消除重复执行状态；将继续工作对象同行对齐并与原回答保持归属。",
+      "status": "optimized_verified",
+      "matureSources": [
+        "Retained BoardUI AppShell/Button/Popover and MrLightful file tree",
+        "Affect continuation/object groups",
+        "Existing Vaul task/create drawers"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-before/chat-360.png",
+            "sha256": "1316f65fae0df722e29db36473c1919883f5a97ed13e335c865ad38e1a2688a0"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-after/chat-360.png",
+            "sha256": "06eee0f6f99c2a1e7e75490646b6bf4e7785acf4100f7f4563c76303d8c15a1e"
+          }
+        },
+        {
+          "width": 1280,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-before/chat-1280.png",
+            "sha256": "b89da746dcd8534a8d52cd39d92426a7d11025b2e75680c99b4ac9817a9255f1"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-after/chat-1280.png",
+            "sha256": "dd245e497cc2ba4d96caf1db4f7fc6ab25e51818c41acae25c90f71d7c8728df"
+          }
+        }
+      ],
+      "verification": "Production App; expected live content/target controls; stable frames and loaded fonts; no page errors/viewport overflow; composer.send never invoked."
+    },
+    {
+      "id": "project-files",
+      "title": "项目文件入口",
+      "task": "选择原项目，搜索并浏览文件",
+      "change": "已检查保留：文件为主对象，搜索与显示操作贴近列表；宽屏保留同一文件/预览关系。",
+      "status": "reviewed_retained",
+      "matureSources": [
+        "Retained BoardUI AppShell/Button/Popover and MrLightful file tree",
+        "Affect continuation/object groups",
+        "Existing Vaul task/create drawers"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-before/project-files-360.png",
+            "sha256": "f1f406fe60b9633637cccbbb8413dd0fce8b279bda2c3b2b3d9e8ef6ccf2ffd4"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-after/project-files-360.png",
+            "sha256": "f1f406fe60b9633637cccbbb8413dd0fce8b279bda2c3b2b3d9e8ef6ccf2ffd4"
+          }
+        },
+        {
+          "width": 1280,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-before/project-files-1280.png",
+            "sha256": "eff44465f5a1ec8df128aaf29cea898bc56dffc7fd78e0a085821c3fa8623cd8"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-after/project-files-1280.png",
+            "sha256": "eff44465f5a1ec8df128aaf29cea898bc56dffc7fd78e0a085821c3fa8623cd8"
+          }
+        }
+      ],
+      "verification": "Production App; expected live content/target controls; stable frames and loaded fonts; no page errors/viewport overflow; composer.send never invoked."
+    },
+    {
+      "id": "project-picker",
+      "title": "项目切换",
+      "task": "核对当前项目并选择下一份工作",
+      "change": "已检查保留：现有BoardUI Popover中按项目身份选择；不把项目目录混进文件正文。",
+      "status": "reviewed_retained",
+      "matureSources": [
+        "Retained BoardUI AppShell/Button/Popover and MrLightful file tree",
+        "Affect continuation/object groups",
+        "Existing Vaul task/create drawers"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-before/project-picker-360.png",
+            "sha256": "b616ee95fb8c12ae6cd93922a86d828241740988e2cf3f6aafbb934f6e062fbb"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-after/project-picker-360.png",
+            "sha256": "b616ee95fb8c12ae6cd93922a86d828241740988e2cf3f6aafbb934f6e062fbb"
+          }
+        },
+        {
+          "width": 1280,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-before/project-picker-1280.png",
+            "sha256": "435c3550dd94cba969403b6cb6c64ad9bbeca7fc8afd11be64b656c02276e0b7"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-after/project-picker-1280.png",
+            "sha256": "435c3550dd94cba969403b6cb6c64ad9bbeca7fc8afd11be64b656c02276e0b7"
+          }
+        }
+      ],
+      "verification": "Production App; expected live content/target controls; stable frames and loaded fonts; no page errors/viewport overflow; composer.send never invoked."
+    },
+    {
+      "id": "project-create",
+      "title": "创建项目",
+      "task": "填写新项目名称",
+      "change": "已检查保留：单一名称与明确创建操作，沿现有Vaul受控表单。",
+      "status": "reviewed_retained",
+      "matureSources": [
+        "Retained BoardUI AppShell/Button/Popover and MrLightful file tree",
+        "Affect continuation/object groups",
+        "Existing Vaul task/create drawers"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-before/project-create-360.png",
+            "sha256": "c2c5ffd02297120a74cb8d1e3e137a84d75eeaf373fc4fa66c5a1fb6b335af54"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-after/project-create-360.png",
+            "sha256": "c2c5ffd02297120a74cb8d1e3e137a84d75eeaf373fc4fa66c5a1fb6b335af54"
+          }
+        },
+        {
+          "width": 1280,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-before/project-create-1280.png",
+            "sha256": "b10311ae790657b1c80bb3666ac6c561fb6cec7160bf7fb24ae16af393ab569e"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-after/project-create-1280.png",
+            "sha256": "b10311ae790657b1c80bb3666ac6c561fb6cec7160bf7fb24ae16af393ab569e"
+          }
+        }
+      ],
+      "verification": "Production App; expected live content/target controls; stable frames and loaded fonts; no page errors/viewport overflow; composer.send never invoked."
+    },
+    {
+      "id": "tasks",
+      "title": "任务列表",
+      "task": "判断待处理、进行中及最近结果",
+      "change": "按任务状态分组并拉开组间距；修复真实Button label span布局使右轴对齐，宽屏主辅并置。",
+      "status": "optimized_verified",
+      "matureSources": [
+        "Retained BoardUI AppShell/Button/Popover and MrLightful file tree",
+        "Affect continuation/object groups",
+        "Existing Vaul task/create drawers"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-before/tasks-360.png",
+            "sha256": "a9de53e21ee996ee7e5045b3ac233b7bed3d3c66653d125d14b23b0d491f0376"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-after/tasks-360.png",
+            "sha256": "4e4bcc13e5da5b3c30948132b8440fa69a11f19e8e506645045e5677d3a2909c"
+          }
+        },
+        {
+          "width": 1280,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-before/tasks-1280.png",
+            "sha256": "a5b00bbdf972e685c779ffd8a97b526cb6ec336e8cd4ecd61a67d4c3ac03e689"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-after/tasks-1280.png",
+            "sha256": "fbf689cb7e38070fd54def3f4c5baf8a7a206d284f21c07ad5385fdeb1682000"
+          }
+        }
+      ],
+      "verification": "Production App; expected live content/target controls; stable frames and loaded fonts; no page errors/viewport overflow; composer.send never invoked."
+    },
+    {
+      "id": "task-overview",
+      "title": "任务概览",
+      "task": "核对状态、当前摘要与下一步",
+      "change": "真实状态与介入/停止邻近；删去重复通用状态；过程与低频机制逐步披露。",
+      "status": "optimized_verified",
+      "matureSources": [
+        "Retained BoardUI AppShell/Button/Popover and MrLightful file tree",
+        "Affect continuation/object groups",
+        "Existing Vaul task/create drawers"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-before/task-overview-360.png",
+            "sha256": "0bd3ca213bd25777264351ce2d60b98889f71025aa24e0dd29422d8a0fcd702a"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-after/task-overview-360.png",
+            "sha256": "f7e8290e55d4c374594801848c96e8a7159c8f233d9f491b4afb70ee2d3c5079"
+          }
+        },
+        {
+          "width": 1280,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-before/task-overview-1280.png",
+            "sha256": "e71e476789de151e04bd365ee44c5a5225cace875ca03bd8640d0401338e21d3"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-after/task-overview-1280.png",
+            "sha256": "0f3f7b73d6b7279aa5780c44136befc7384239940adc64e4b2c65e5fe802c428"
+          }
+        }
+      ],
+      "verification": "Production App; expected live content/target controls; stable frames and loaded fonts; no page errors/viewport overflow; composer.send never invoked."
+    },
+    {
+      "id": "task-process",
+      "title": "任务执行过程",
+      "task": "查看原任务的执行记录与范围",
+      "change": "沿任务原详情关系进入执行过程，保留真实记录/未知状态和返回。",
+      "status": "reviewed_retained",
+      "matureSources": [
+        "Retained BoardUI AppShell/Button/Popover and MrLightful file tree",
+        "Affect continuation/object groups",
+        "Existing Vaul task/create drawers"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-before/task-process-360.png",
+            "sha256": "63280f2ee288e3605e1a4bcd235f150fb92ad505a9b74537731aabf14cd0b5e1"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-after/task-process-360.png",
+            "sha256": "63280f2ee288e3605e1a4bcd235f150fb92ad505a9b74537731aabf14cd0b5e1"
+          }
+        },
+        {
+          "width": 1280,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-before/task-process-1280.png",
+            "sha256": "f47836e294cefa917713e2fd5e6f5ccf2c1ca5dc8f5b8a3adaac13bc4947b16f"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/primary-depth-after/task-process-1280.png",
+            "sha256": "6dec1acf3d862535e2a08824ae6484e67727e14b7e0b87d832e5bc30d44a2f96"
+          }
+        }
+      ],
+      "verification": "Production App; expected live content/target controls; stable frames and loaded fonts; no page errors/viewport overflow; composer.send never invoked."
+    }
+  ]
+}

@@ -2,6 +2,7 @@ package dev.pocketengine.runtime.context;
 
 import dev.pocketengine.runtime.usage.InferenceReceipt;
 import dev.pocketengine.core.ModelConfig;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** A completed real SUMMARY call. Coverage and provenance are native, never supplied by the model. */
@@ -14,7 +15,14 @@ public final class SummaryDraft {
         if(receipt==null||receipt.outcome!=InferenceReceipt.Outcome.COMPLETED||receipt.context.purpose!=InferenceReceipt.Purpose.SUMMARY
                 ||!expected.taskId.equals(receipt.context.taskId)||!expected.runId.equals(receipt.context.runId)||expected.epoch!=receipt.context.epoch)
             throw new SecurityException("摘要没有原任务真实完成的SUMMARY调用证据");
-        if(actual.has("tool_calls")||!(actual.opt("content") instanceof String))throw new SecurityException("摘要不能派发工具或自行选择覆盖范围");
+        JSONArray calls=actual.optJSONArray("tool_calls");
+        // The production Chat adapter preserves absent, JSON-null and empty
+        // tool_calls for a text-only terminal. None of them requests a tool.
+        // Reject actual calls and malformed shapes without weakening the
+        // native SUMMARY receipt, coverage or source barriers above/below.
+        boolean invalidCalls=actual.has("tool_calls")&&!actual.isNull("tool_calls")
+                &&(calls==null||calls.length()>0);
+        if(invalidCalls||!(actual.opt("content") instanceof String))throw new SecurityException("摘要不能派发工具或自行选择覆盖范围");
         String body=actual.getString("content");if(blank(body)||body.length()>CompactionPlan.MAX_SUMMARY_CHARS)throw new CompactionPlan.Unavailable("summary_output_exceeds_bound");
         text=java.util.Objects.requireNonNull(selected).redactSensitive(body);secretRedacted=!body.equals(text);
         if(text.length()>CompactionPlan.MAX_SUMMARY_CHARS)throw new CompactionPlan.Unavailable("summary_output_exceeds_bound");

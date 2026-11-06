@@ -57,7 +57,9 @@ final class BackgroundPhoneRun {
         this.service=service;this.app=app;runningId=taskId;ownerControl=original;
         var identity=original.hostRunIdentity();if(identity==null||!taskId.equals(identity.taskId())||!app.isBackgroundPhoneRun(taskId,original))throw new SecurityException("没有原后台运行身份");
         runningRunId=identity.runId();runningEpoch=identity.epoch();this.notificationId=notificationId;lastStartId=startId;
-        JSONObject task=app.tasks.get(taskId,false);if(!original.matchesHostRun(taskId,task.optString("runId"),task.optInt("coordinatorEpoch")))throw new SecurityException("原后台任务已变化");
+        // Startup needs the original run/goal, not accumulated audit history.
+        // Model and device/team admissions remain the retained native objects below.
+        JSONObject task=app.tasks.foregroundNotificationContextSnapshot(taskId);if(!original.matchesHostRun(taskId,task.optString("runId"),task.optInt("coordinatorEpoch")))throw new SecurityException("原后台任务已变化");
         runningGoal=task.getString("goal");runningConfig=app.config(taskId);if(runningConfig==null)throw new SecurityException("原后台模型未冻结");
         deviceGoal=app.originalDeviceGoalSession(taskId);teamAdmission=app.originalTeamPhoneAdmission(taskId);
         leaseSupervisor=leases;this.cleanup=cleanup;

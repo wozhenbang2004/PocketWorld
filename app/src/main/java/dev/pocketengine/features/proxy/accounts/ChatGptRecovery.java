@@ -56,7 +56,7 @@ public final class ChatGptRecovery {
             case "PROVIDER_CONTEXT_LIMIT":return "ChatGPT 明确报告上下文超限，尚未派发工具；请整理上下文后再继续。";
             case "CHATGPT_USAGE_LIMIT_REACHED":return "ChatGPT 套餐或此应用的用量限制已到达。已暂停套餐请求，请在 Manage usage 查看；这里没有余额或重置时间。";
             case "CHATGPT_PLAN_NOT_ELIGIBLE":return "当前 ChatGPT 账号暂不具备用套餐连接此应用的资格。请查看套餐设置，或明确选择 API key 连接；重复登录不会解除限制。";
-            case "CHATGPT_POLICY_RESTRICTED":return "ChatGPT 的地区或政策限制阻止了此次请求。请检查官方使用条件；重复登录不会解除限制。";
+            case "CHATGPT_POLICY_RESTRICTED":return "ChatGPT 拒绝了此次请求（HTTP 403），具体原因尚未确认。请核对账号权限和服务方提示。";
             case "CHATGPT_ACCOUNT_PERMISSION_REJECTED":return "ChatGPT 拒绝了本次账号权限。登录身份已保留；请核对授权设置，确认授权已撤销时再重新登录。";
             case "CHATGPT_DIRECT_PERMISSION_REJECTED":case "PLAN_USAGE_PERMISSION_REQUIRED":return "已保留 ChatGPT 登录身份，但尚未授权使用套餐推理。可主动重新授权套餐权限，或选择 API key 连接。";
             case "CHATGPT_UNSUPPORTED_CAPABILITY":return "当前 ChatGPT 模型不支持此次输入或能力。请检查所选模型；原请求没有自动重试。";

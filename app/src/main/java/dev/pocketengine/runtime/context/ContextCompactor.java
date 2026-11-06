@@ -76,16 +76,23 @@ public final class ContextCompactor {
             ContextBudgetPolicy.Resolved resolved=ContextBudgetPolicy.resolve(budgets,selected,ContextBudgetPolicy.REQUEST_BYTES);
             ModelConfig summarySelection=selected.forPurpose("SUMMARY");
             long summaryDeadline=System.currentTimeMillis()+summarySelection.requestTimeoutSeconds*1000L;
+            // Optional local facts only: never prepare an account or admit a candidate here.
+            List<ContextWindow.Budget> summaryBudgets=knownSummaryBudgets(summarySelection,original);
             CompactionPlan plan;
-            try{plan=active==null?CompactionPlan.choose(raw,visible,sourceMap,tools,selected,resolved.limits):CompactionPlan.chooseIncremental(raw,visible,sourceMap,tools,selected,resolved.limits,active,summary,projectionId,original);}
+            try{plan=summaryBudgets!=null?CompactionPlan.chooseWithSummaryBudgets(raw,visible,sourceMap,tools,selected,resolved.limits,summaryBudgets,active,summary,projectionId,original,true):active==null?CompactionPlan.choose(raw,visible,sourceMap,tools,selected,resolved.limits):CompactionPlan.chooseIncremental(raw,visible,sourceMap,tools,selected,resolved.limits,active,summary,projectionId,original);}
             catch(CompactionPlan.Unavailable unavailable){
                 if(!"no_bounded_summary_fit".equals(unavailable.code))throw unavailable;
                 // Cold raw can be larger than one SUMMARY request. Each intermediate prefix is
                 // published under this CURRENT native run and advances original coverage. It is
                 // not permission to issue MAIN, and uses a real separately charged SUMMARY below.
-                ModelConfig preparedSummary=ModelGateway.prepareAccount(summarySelection,original,summaryDeadline);
-                var summaryBudget=ContextBudgetPolicy.resolve(budgets,preparedSummary,ContextBudgetPolicy.REQUEST_BYTES);
-                plan=CompactionPlan.chooseReconstructionStep(raw,visible,sourceMap,tools,selected,summaryBudget.limits,active,summary,projectionId,original);
+                if(summaryBudgets!=null){
+                    plan=CompactionPlan.chooseWithSummaryBudgets(raw,visible,sourceMap,tools,selected,resolved.limits,summaryBudgets,active,summary,projectionId,original,false);
+                }else{
+                    // Missing local facts retain the original preparation/reconstruction path.
+                    ModelConfig preparedSummary=ModelGateway.prepareAccount(summarySelection,original,summaryDeadline);
+                    var summaryBudget=ContextBudgetPolicy.resolve(budgets,preparedSummary,ContextBudgetPolicy.REQUEST_BYTES);
+                    plan=CompactionPlan.chooseReconstructionStep(raw,visible,sourceMap,tools,selected,summaryBudget.limits,active,summary,projectionId,original);
+                }
             }
             if(active!=null&&(plan.endExclusive<=active.plan.endExclusive||!plan.coveredIndexes().containsAll(active.plan.coveredIndexes())||plan.coveredIndexes().size()<=active.plan.coveredIndexes().size()))throw new CompactionPlan.Unavailable("summary_reconstruction_did_not_advance");
             requirePlanning(planning,turn);
@@ -131,6 +138,26 @@ public final class ContextCompactor {
             // Finite by strict end/coverage advancement and the original per-physical-call budget.
             // A pause, source change, unknown effect or exhausted reservation stops before another HTTP.
         }
+    }
+    /** Budget hints are not an eligible-candidate list. Gateway rechecks the original
+     * group, actual account generation and exact input before any physical request.
+     * An unknown/unavailable window keeps the legacy path instead of guessing a limit. */
+    private List<ContextWindow.Budget> knownSummaryBudgets(ModelConfig selected,RunControl original)throws Exception {
+        original.check();
+        try{
+            ModelConfig actual=selected.forPurpose("SUMMARY");
+            var plan=actual.routePlan;
+            var candidates=plan==null?List.of(new dev.pocketengine.runtime.models.ModelRoutePlan.Candidate("exact",actual,"")):plan.candidates;
+            List<ContextWindow.Budget> result=new java.util.ArrayList<>();
+            for(var candidate:candidates){
+                if(candidate.config()==null||!candidate.exclusion().isEmpty()||plan!=null&&!plan.dispatches(candidate))continue;
+                ContextBudgetPolicy.Resolved resolved=ContextBudgetPolicy.resolve(budgets,candidate.config(),ContextBudgetPolicy.REQUEST_BYTES);
+                if(!resolved.limits.tokenWindowKnown)return null;
+                result.add(resolved.limits);
+            }
+            original.check();return result.isEmpty()?null:List.copyOf(result);
+        }catch(InterruptedException stopped){throw stopped;}
+        catch(Exception unavailable){original.check();return null;}
     }
     private static void requirePlanning(ExecutionPlanning planning,ExecutionPlanning.Snapshot turn)throws Exception {
         if(planning!=null)planning.requireCurrent(turn);else if(turn!=null)throw new SecurityException("摘要丢失原任务规划控制器");

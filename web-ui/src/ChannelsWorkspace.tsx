@@ -3,6 +3,7 @@ import { ChevronRight, MessageSquare, RefreshCw, Settings } from 'lucide-react';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextField } from './forms-library';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import './channels-workspace.css';
+import './collaboration-depth.css';
 import { channelCanStop, channelConnectionStatus, channelIdentity, channelObjects as rows, channelOriginalCurrent, channelOwnerCandidates, channelOwnerIdentity, channelProfilePayload, channelReceivingStatus, channelText as text, type ChannelData as Data } from './channel-contracts';
 
 type Run = (action: string, args?: Data) => Promise<any>;
@@ -72,7 +73,7 @@ export default function ChannelsWorkspace({ state, data, supported, run, registe
     const bound = bindings.find(binding => binding.profileId === profile.id);
     setModal({ kind: 'owner', operation, original: clone({ ...profile, ownerIdentity: channelOwnerIdentity(profile, bound), ownerBinding: bound, requestedEnabled: enabled }) });
   };
-  return <section ref={root} className="pw-channels-workspace pw-settings-section">
+  return <section ref={root} className="pw-channels-workspace pw-depth-collaboration pw-settings-section">
     <header className="pw-channels-heading"><div><h2>渠道消息</h2><p>先看消息，再沿原记录查看任务与回复。</p></div><div className="pw-form-actions">
       <Button variant="ghost" leadingIcon={Settings} onClick={openConnections}>连接与接收</Button>
       <Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="刷新真实状态" disabled={busy || !supported('channels.inspect')} onClick={() => act('channels.inspect')} />
@@ -135,7 +136,7 @@ type ManagerProps = DisclosureControl & { data: Data; supported: (action: string
 function ChannelConnections({ data, candidates, selected, select, supported, busy, error, expanded, expand, openAccount, openModal, request, act, close, register }: ManagerProps & { candidates: Data[]; selected: string[]; select: (value: string[] | ((previous: string[]) => string[])) => void; openAccount: (id: string) => void }) {
   useBack(register, busy, close);
   const profiles = rows(data.profiles), background = object(data.background), platform = object(background.platform), receiving = channelCanStop(background);
-  return <SettingsDialog isOpen title="连接与接收" onClose={() => { if (!busy) close(); }}><div className="pw-channels-settings">
+  return <SettingsDialog isOpen title="连接与接收" onClose={() => { if (!busy) close(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="ChannelsWorkspace"><div className="pw-channels-settings">
     <p className="pw-channels-caption">连接账号、绑定主人、自动回答与持续接收分别确认。</p>
     {receiving && <div className="pw-channels-receiving"><div><p className="pw-channels-status">{channelReceivingStatus(background)}</p><p className="pw-channels-caption">关闭此页不会停止接收，停止接收不会停止已有任务。</p></div><Button variant="secondary" disabled={busy || !supported('channels.stopReceiving')} onClick={() => act('channels.stopReceiving', { sessionId: background.sessionId })}>请求停止本次接收</Button></div>}
     <div className="pw-channels-account-list">{profiles.map(profile => {
@@ -158,14 +159,14 @@ function ChannelConnections({ data, candidates, selected, select, supported, bus
     </AccordionItem></Accordion>
     {error && <p role="alert">{error}</p>}
     <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={close}>返回消息工作区</Button>{supported('channels.advanced') && <Button variant="ghost" disabled={busy} onClick={() => act('channels.advanced')}>可信中继与现有诊断入口</Button>}</div>
-  </div></SettingsDialog>;
+  </div></div></SettingsDialog>;
 }
 
 function ChannelAccount({ profile, data, supported, busy, error, receipt, expanded, expand, openModal, owner, request, act, close, register }: ManagerProps & { profile?: Data; receipt: Data | null; owner: (profile: Data, operation: string, enabled?: boolean) => void }) {
   useBack(register, busy, close);
   const bound = rows(data.bindings).find(binding => binding.profileId === profile?.id), background = object(data.background);
   const connection = profile && rows(object(data[profile.provider]).connections).find(row => row.profileId === profile.id);
-  return <SettingsDialog isOpen title={profile?.name || '原连接已不在本机'} onClose={() => { if (!busy) close(); }}><div className="pw-channels-settings">
+  return <SettingsDialog isOpen title={profile?.name || '原连接已不在本机'} onClose={() => { if (!busy) close(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="ChannelsWorkspace"><div className="pw-channels-settings">
     {profile ? <>
       <p className="pw-channels-caption">{providerName(profile.provider)} · {profile.enabled ? '配置已启用，平台状态单独核对' : '配置已停用'}</p>
       {['qq', 'weixin'].includes(profile.provider) && <p className="pw-channels-status">{channelConnectionStatus(profile.provider, connection)}</p>}{connection?.message && <p>{connection.message}</p>}
@@ -193,7 +194,7 @@ function ChannelAccount({ profile, data, supported, busy, error, receipt, expand
       {receipt?.message && <p role="status">{receipt.message}</p>}
     </> : <p>这个账号已移除或不在当前保留范围。不会改选其他账号。</p>}
     {error && <p role="alert">{error}</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={close}>返回原列表</Button></div>
-  </div></SettingsDialog>;
+  </div></div></SettingsDialog>;
 }
 
 function ChannelProfile({ original, data, run, close, register }: { original: Data; data: Data; run: Run; close: () => void; register: Back }) {
@@ -205,22 +206,25 @@ function ChannelProfile({ original, data, run, close, register }: { original: Da
   useBack(register, busy, leave);
   useEffect(() => { const hide = () => { if (document.visibilityState !== 'visible') clear(); }; document.addEventListener('visibilitychange', hide); window.addEventListener('pagehide', clear); return () => { document.removeEventListener('visibilitychange', hide); window.removeEventListener('pagehide', clear); }; }, []);
   const save = () => { const payload = channelProfilePayload(original, form); setAttempted(true); clear(); void request('channels.saveProfile', payload).then(close).catch(() => {}); };
-  return <SettingsDialog isOpen title={original.adding ? '添加 QQ 官方机器人' : '连接设置'} onClose={() => { if (!busy) leave(); }}>
-    <div className="pw-form-grid"><TextField label="连接名称" value={form.name} onChange={value => change('name', value)} />
+  return <SettingsDialog isOpen title={original.adding ? '添加 QQ 官方机器人' : '连接设置'} onClose={() => { if (!busy) leave(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="ChannelsWorkspace">
+    <section className="pw-channel-profile-identity"><h3>连接身份</h3><div className="pw-form-grid"><TextField label="连接名称" value={form.name} onChange={value => change('name', value)} />
       {original.provider === 'qq' ? <><TextField label="QQ 平台 AppID" value={form.appId} isReadOnly={!original.adding} onChange={value => change('appId', value)} /><TextField label={original.adding ? 'QQ 平台 AppSecret' : '新 AppSecret（留空保留）'} type="password" autoComplete="new-password" value={form.secret} onChange={value => change('secret', value)} />
         <p className="pw-field-hint">更换 AppID 请另建连接。保存配置不代表机器人资格或网关已验证。</p>
-        <CheckboxField isSelected={form.qqGuildEnabled} onChange={value => change('qqGuildEnabled', value)}>同时接收 QQ 频道 @ 消息与频道私信</CheckboxField><p className="pw-field-hint">需机器人已获官方权限；频道私信与 C2C 的用户身份分别核对。</p>
-        <CheckboxField isSelected={form.qqStreamRepliesEnabled} onChange={value => change('qqStreamRepliesEnabled', value)}>向 QQ C2C 显示生成中的回答</CheckboxField><p className="pw-field-hint">仅自动问答已开启、原消息在五分钟内时使用。实际模型草稿会传到同一条 QQ 消息；中断或未知保留原帧，不改发第二条。群和频道不使用此流式接口。</p>
+
       </> : <p>微信凭据来自原官方扫码流程；重新登录请使用“连接微信私聊”。</p>}
-      <CheckboxField isSelected={form.enabled} onChange={value => change('enabled', value)}>启用此连接</CheckboxField><CheckboxField isSelected={form.autoReply} onChange={value => change('autoReply', value)}>对新消息自动文字问答</CheckboxField>
-      <CheckboxField isSelected={form.ownerImagesEnabled} onChange={value => change('ownerImagesEnabled', value)}>下载并向所选图像模型提供本人私聊图片</CheckboxField>
+</div></section>
+    <section className="pw-channel-profile-receiving"><h3>接收与回复</h3>      <CheckboxField isSelected={form.enabled} onChange={value => change('enabled', value)}>启用此连接</CheckboxField><CheckboxField isSelected={form.autoReply} onChange={value => change('autoReply', value)}>对新消息自动文字问答</CheckboxField>
+{original.provider === 'qq' && <Accordion><AccordionItem title="QQ 频道与生成中的回答" description="分别核对平台范围与实际草稿外发">        <CheckboxField isSelected={form.qqGuildEnabled} onChange={value => change('qqGuildEnabled', value)}>同时接收 QQ 频道 @ 消息与频道私信</CheckboxField><p className="pw-field-hint">需机器人已获官方权限；频道私信与 C2C 的用户身份分别核对。</p>
+        <CheckboxField isSelected={form.qqStreamRepliesEnabled} onChange={value => change('qqStreamRepliesEnabled', value)}>向 QQ C2C 显示生成中的回答</CheckboxField><p className="pw-field-hint">仅自动问答已开启、原消息在五分钟内时使用。实际模型草稿会传到同一条 QQ 消息；中断或未知保留原帧，不改发第二条。群和频道不使用此流式接口。</p></AccordionItem></Accordion>}</section>
+    <Accordion className="pw-channel-profile-originals"><AccordionItem title="本人私聊原件" description="图片、文件、语音和视频的独立同意">      <CheckboxField isSelected={form.ownerImagesEnabled} onChange={value => change('ownerImagesEnabled', value)}>下载并向所选图像模型提供本人私聊图片</CheckboxField>
       <p className="pw-field-hint">仅原消息接收时已绑定的本人私聊。每条最多 4 张、单张 4 MiB / 12 MP、合计 8 MiB；从官方 CDN 下载，保存实际文件后提供给明确支持图片的模型。自动图片回答还需自动问答和实际接收。此同意不包含语音、视频或群图片。</p>
       <CheckboxField isSelected={form.ownerMediaEnabled} onChange={value => change('ownerMediaEnabled', value)}>允许逐项保存本人私聊文件、语音和视频</CheckboxField>
-      <p className="pw-field-hint">每项仍需在本机另行确认，最多 8 MiB。保存原件不会自动转写、分析、上传电脑或回发；关闭不删除已保存原件。</p>
-    </div><p className="pw-field-hint">保存会更新原连接代次并停止原接收和生成，请用新消息重新核对。群和非主人私聊仅使用明确配置的 API 模型。</p>
+      <p className="pw-field-hint">每项仍需在本机另行确认，最多 8 MiB。保存原件不会自动转写、分析、上传电脑或回发；关闭不删除已保存原件。</p></AccordionItem></Accordion>
+
+<p className="pw-field-hint">保存会更新原连接代次并停止原接收和生成，请用新消息重新核对。群和非主人私聊仅使用明确配置的 API 模型。</p>
     {stale && <p role="alert">原连接已改变，请返回核对当前配置，未用旧表单覆盖。</p>}{error && <p role="alert">{error} 请先返回核对原连接，不重复这次保存。</p>}
     <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={leave}>返回</Button><Button disabled={busy || attempted || stale || !text(form.name).trim() || original.provider === 'qq' && (!text(form.appId).trim() || original.adding && !text(form.secret))} onClick={save}>{busy ? '等待原保存回执…' : '保存这项连接'}</Button></div>
-  </SettingsDialog>;
+  </div></SettingsDialog>;
 }
 
 function ChannelLogin({ run, close, register }: { run: Run; close: () => void; register: Back }) {
@@ -236,7 +240,7 @@ function ChannelLogin({ run, close, register }: { run: Run; close: () => void; r
   }, []);
   const labels: Data = { starting: '正在请求原官方二维码', awaiting_scan: '请用微信扫描这次二维码', wait: '等待扫描确认', scaned: '已扫描，等待手机确认', need_verifycode: '官方流程需要核对码', confirmed: '账号登录已确认', cancelled: '原本机登录检查已取消', expired: '原二维码已到期', unknown: '原登录状态未知，请先核对已保存账号', failed: '原登录未完成', verify_code_blocked: '官方核对码流程已停止', not_started: '原本机扫码窗口已关闭' };
   const terminal = ['confirmed', 'cancelled', 'expired', 'unknown', 'failed', 'verify_code_blocked', 'not_started'].includes(text(view?.status));
-  return <SettingsDialog isOpen title="连接微信私聊" onClose={() => { if (!busy) leave(); }}>
+  return <SettingsDialog isOpen title="连接微信私聊" onClose={() => { if (!busy) leave(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="ChannelsWorkspace">
     <p>使用现有官方 iLink 机器人登录。二维码只在本机编码；成功后仍需接收本人私聊，再另行绑定主人。</p>
     {!attempted && <TextField label="连接名称" value={name} maxLength={80} onChange={setName} />}
     {view && <p role="status">{labels[view.status] || '已收到官方流程回执，请继续核对原登录'}</p>}
@@ -253,7 +257,7 @@ function ChannelLogin({ run, close, register }: { run: Run; close: () => void; r
       {attempted && terminal && view?.status !== 'confirmed' && <Button variant="secondary" disabled={busy} onClick={() => { const original = id; void request('channels.loginCancel', { loginId: original }).then(() => { if (!alive.current) return; const next = crypto.randomUUID(); idRef.current = next; setId(next); setView(null); setAttempted(false); setCode(''); }).catch(() => {}); }}>关闭原会话后重新开始</Button>}
       <Button variant="ghost" disabled={busy} onClick={leave}>返回账号列表</Button>
     </div>
-  </SettingsDialog>;
+  </div></SettingsDialog>;
 }
 
 function ChannelOwner({ original, operation, data, run, close, register }: { original: Data; operation: string; data: Data; run: Run; close: () => void; register: Back }) {
@@ -262,7 +266,7 @@ function ChannelOwner({ original, operation, data, run, close, register }: { ori
   useBack(register, busy, close);
   const prepare = () => { setAccepted(false); void request('channels.reviewOwner', { ...original.ownerIdentity, operation, ...(operation === 'bind' ? { verifiedEventId: eventId } : operation === 'tasks' ? { enabled: original.requestedEnabled } : {}) }).then(setReview).catch(() => {}); };
   const title = operation === 'bind' ? '核对主人私聊' : operation === 'unbind' ? '解除原主人绑定' : original.requestedEnabled ? '允许原主人私聊创建任务' : '关闭原私聊任务权限';
-  return <SettingsDialog isOpen title={title} onClose={() => { if (!busy) close(); }}><p>{original.name}</p>
+  return <SettingsDialog isOpen title={title} onClose={() => { if (!busy) close(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="ChannelsWorkspace"><p>{original.name}</p>
     {operation === 'bind' && !review && <>
       <p>请选择本人账号最近发来的已认证私聊。昵称、转发内容或“我是主人”等消息正文不能建立身份。</p>
       <SelectField label="原私聊证据" value={eventId} options={source.map(row => ({ id: row.id, label: `${row.senderId} · ${text(row.text).slice(0, 80) || '媒体消息'}`, description: row.authenticatedBy + (row.conversationKind ? ` · ${row.conversationKind}` : '') }))} onChange={setEvent} isDisabled={busy} />
@@ -273,17 +277,17 @@ function ChannelOwner({ original, operation, data, run, close, register }: { ori
     {review && <CheckboxField isSelected={accepted} onChange={setAccepted} isDisabled={busy || attempted || stale}>我已核对这个原账号与本次权限范围</CheckboxField>}
     {stale && <p role="alert">原连接、主人或权限已变化，请返回重新核对。</p>}{error && <p role="alert">{error}</p>}
     <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={close}>返回</Button>{!review ? <Button disabled={busy || stale || operation === 'bind' && !eventId} onClick={prepare}>读取原审阅</Button> : <Button disabled={busy || attempted || stale || !accepted} onClick={() => { setAttempted(true); void request('channels.confirmOwner', { reviewHandle: review.reviewHandle }).then(close).catch(() => {}); }}>{busy ? '等待原回执…' : '明确确认此操作'}</Button>}</div>
-  </SettingsDialog>;
+  </div></SettingsDialog>;
 }
 
 function ChannelConfirmation({ modal, run, close, register }: { modal: Modal; run: Run; close: () => void; register: Back }) {
   const [accepted, setAccepted] = useState(false), [attempted, setAttempted] = useState(false), { request, busy, error } = useRequest(run);
   useBack(register, busy, close); const receiving = modal.kind === 'receiving';
-  return <SettingsDialog isOpen title={receiving ? '开启所选账号的持续接收' : '移除原渠道连接'} onClose={() => { if (!busy) close(); }}>
+  return <SettingsDialog isOpen title={receiving ? '开启所选账号的持续接收' : '移除原渠道连接'} onClose={() => { if (!busy) close(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="ChannelsWorkspace">
     {receiving ? <>{(Array.isArray(modal.review?.names) ? modal.review.names : []).map((name: string) => <p key={name}>{name}</p>)}<p>会建立有停止按钮的常驻通知并增加耗电；省电可能延迟接收。强停、进程结束或重启后不会静默恢复，已有任务须在原任务中停止。</p></> : <><p>{modal.review?.name}</p><p>移除此连接、它的主人绑定和本机渠道收发记录，停止相关接收；不撤回平台上已经发生的动作。</p></>}
     <CheckboxField isSelected={accepted} onChange={setAccepted} isDisabled={busy || attempted}>{receiving ? '我已核对所选账号及接收和耗电范围' : '我已核对这项原连接的移除范围'}</CheckboxField>{error && <p role="alert">{error} 请返回核对原状态，不重复本次确认。</p>}
     <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={close}>返回</Button><Button disabled={busy || attempted || !accepted} onClick={() => { setAttempted(true); void request(receiving ? 'channels.startReceiving' : 'channels.confirmRemoval', { reviewHandle: modal.review?.reviewHandle }).then(close).catch(() => {}); }}>{busy ? '等待实际回执…' : receiving ? '明确开启接收' : '移除这项连接'}</Button></div>
-  </SettingsDialog>;
+  </div></SettingsDialog>;
 }
 
 function ChannelHistory({ original, data, run, close, register }: { original: Data; data: Data; run: Run; close: () => void; register: Back }) {
@@ -291,13 +295,13 @@ function ChannelHistory({ original, data, run, close, register }: { original: Da
   useBack(register, busy, close);
   const candidates = rows(data.inbox).filter(event => event.profileId === original.id && event.transportEpoch === original.transportEpoch).reverse().slice(0, 12), coverage = object(history?.coverage);
   const stale = !rows(data.profiles).some(profile => profile.id === original.id && profile.transportEpoch === original.transportEpoch);
-  return <SettingsDialog isOpen title="这次问答可读的历史" onClose={() => { if (!busy) close(); }}><p>只读取本机已接收、同账号和同会话的部分记录。平台完整历史和离线遗漏仍未知。</p>
+  return <SettingsDialog isOpen title="这次问答可读的历史" onClose={() => { if (!busy) close(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="ChannelsWorkspace"><p>只读取本机已接收、同账号和同会话的部分记录。平台完整历史和离线遗漏仍未知。</p>
     {original.receivingCheckpoint && <p>{original.receivingCheckpoint.persisted ? 'QQ 原同步位置已保存；平台若保留会话，可从原位置请求重放。' : '当前没有可用的 QQ 同步位置。'}</p>}
     <SelectField label="原消息" value={eventId} options={candidates.map(event => ({ id: event.id, label: `${event.kind === 'group' ? '群 ' + event.roomId : '私聊 ' + event.senderId} · ${text(event.text).slice(0, 100) || '媒体消息'}` }))} onChange={value => { setEvent(value); setHistory(null); }} isDisabled={busy || stale} />
     {history && <><Facts values={[[ '本次包含', coverage.includedMessageCount ], ['本机可用', coverage.availableMessageCount ], ['窗口省略', coverage.omittedByLimit ], ['未确认投递未作历史回复', coverage.unconfirmedRepliesOmitted ]]} />{rows(history.messages).map((row, index) => <div className="pw-selected-object" key={index}><strong>{row.role === 'assistant' ? '已确认发出的回复' : '已收到'}</strong><p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{row.content}</p></div>)}</>}
     {stale && <p role="alert">原连接代次已变化，请返回重新读取。</p>}{error && <p role="alert">{error}</p>}
     <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={close}>返回</Button><Button disabled={busy || stale || !eventId} onClick={() => { void request('channels.history', { ...channelIdentity(original), eventId }).then(setHistory).catch(() => {}); }}>读取原消息之前的记录</Button></div>
-  </SettingsDialog>;
+  </div></SettingsDialog>;
 }
 
 function ChannelInbox({ data, supported, run, connect, account, media }: { data: Data; supported: (action: string) => boolean; run: Run; connect: () => void; account: (id: string) => void; media: (event: Data, index: number) => void }) {
@@ -311,13 +315,13 @@ function ChannelInbox({ data, supported, run, connect, account, media }: { data:
     {!inbox.length && <div className="pw-channels-empty"><MessageSquare size={26} aria-hidden /><p>最近消息会出现在这里</p><span>连接账号并明确开启接收后，从自己的账号发送一条私聊。</span><Button variant="secondary" onClick={connect}>查看连接与接收</Button></div>}
     <Accordion className="pw-channels-records" allowsMultipleExpanded expandedKeys={expanded} onExpandedChange={keys => setExpanded(new Set(keys))}>
       {visible.map(event => <AccordionItem id={event.id} key={event.id} title={<span className="pw-channels-preview">{event.text || '媒体消息'}</span>} description={<span className="pw-channels-message-meta"><span>{profiles.find(profile => profile.id === event.profileId)?.name || '原连接'} · {event.kind === 'group' ? event.roomId : event.senderId}</span>{messageTime(event.receivedAt) && <time dateTime={new Date(event.receivedAt).toISOString()}>{messageTime(event.receivedAt)}</time>}</span>}>
-        <div className="pw-channels-record-detail"><Facts values={[[ '来源', event.senderId ], ['会话', event.kind === 'group' ? event.roomId : event.conversationKind || '私聊' ], ['认证', event.authenticatedBy ]]} /><p className="pw-channels-body">{event.text || '媒体消息；正文为空不代表已读取媒体内容。'}</p>
+        <div className="pw-channels-record-detail"><p className="pw-channels-body">{event.text || '媒体消息；正文为空不代表已读取媒体内容。'}</p>
           {event.imageInputState && <p className="pw-field-hint">{descriptions[event.imageInputState] || '图片尚未提供给模型'}</p>}
           <div className="pw-form-actions">{event.profileId && <Button variant="ghost" onClick={() => account(event.profileId)}>查看原连接</Button>}
             {object(event.latestInferenceReference).taskId && <Button variant="ghost" disabled={busy || !supported('tasks.open')} onClick={() => { void request('tasks.open', { id: event.latestInferenceReference.taskId }).catch(() => {}); }}>查看本消息最近一次模型用量</Button>}
             {rows(event.ownerImageArtifacts).map(ref => <Button key={ref.artifactId} variant="secondary" disabled={busy || !supported('channels.openImage')} onClick={() => { void request('channels.openImage', { eventId: event.id, id: ref.artifactId, sha256: ref.sha256 }).catch(() => {}); }}>查看固定原图 · 第 {Number(ref.itemIndex) + 1} 项</Button>)}
             {rows(object(event.messageParts).parts).map((part, index) => ['media', 'unsupported_media'].includes(part.kind) && (part.kind === 'media' || part.media) ? <Button key={index} variant="secondary" disabled={!supported('channels.reviewMedia')} onClick={() => media(event, index)}>核对原件 · {part.declaredName || object(part.media).name || (part.mediaKind === 'voice' ? '原语音' : part.mediaKind === 'video' ? '原视频' : '原文件')}</Button> : null)}
-          </div>{event.message && <p className="pw-field-hint">{event.message}</p>}
+          </div><Accordion className="pw-channels-source-details"><AccordionItem title="消息来源与认证"><Facts values={[[ '来源', event.senderId ], ['会话', event.kind === 'group' ? event.roomId : event.conversationKind || '私聊' ], ['认证', event.authenticatedBy ]]} /></AccordionItem></Accordion>{event.message && <p className="pw-field-hint">{event.message}</p>}
         </div>
       </AccordionItem>)}
     </Accordion>
@@ -332,12 +336,12 @@ function ChannelMedia({ event, index, run, close, register }: { event: Data; ind
   const { request, busy, error, alive } = useRequest(run);
   const leave = () => { void run('channels.closeMedia', { viewId }).catch(() => {}); close(); }; useBack(register, busy, leave);
   useEffect(() => { void request('channels.reviewMedia', { viewId, eventId: event.id, itemIndex: index }).then(value => { if (alive.current) setReview(value); }).catch(() => {}); return () => { void run('channels.closeMedia', { viewId }).catch(() => {}); }; }, []);
-  return <SettingsDialog isOpen title="核对这份本人私聊原件" onClose={() => { if (!busy) leave(); }}>
+  return <SettingsDialog isOpen title="核对这份本人私聊原件" onClose={() => { if (!busy) leave(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="ChannelsWorkspace">
     {review && <><Facts values={[[ '原件', review.name ], ['连接', review.profileName ], ['原账号', review.senderId ], ['项目', Number(review.itemIndex) + 1 ], ['平台声明大小', review.declaredBytes === undefined ? '未声明；下载后核对' : `${review.declaredBytes} bytes` ]]} /><p>只从原已认证消息的官方 CDN 保存到本机私人附件，最多 8 MiB。不会自动调用模型、转写音视频、上传电脑或回发。</p></>}
     {saved ? <><Facts values={[[ '实际大小', `${saved.size} bytes` ], ['按文件头识别格式', saved.mimeType ], ['SHA-256', saved.sha256 ]]} /><p>原件已保存；格式标记不证明全部内容可播放或已理解。交给远端任务时仍需另选这份固定原件并确认外传。</p></> : review && <CheckboxField isSelected={accepted} onChange={setAccepted} isDisabled={busy || attempted}>我确认这份原本人私聊的这一项，只允许保存到本机</CheckboxField>}
     {error && <p role="alert">{error} 如保存结果未知，请重新只读核对原件，不重放本次确认。</p>}
     <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={leave}>返回</Button>{saved ? <Button disabled={busy || !review} onClick={() => { void request('channels.openMedia', { digest: review?.digest }).catch(() => {}); }}>打开固定原件</Button> : <Button disabled={busy || !review || !accepted || attempted} onClick={() => { setAttempted(true); void request('channels.freezeMedia', { digest: review?.digest }).then(value => setSaved(object(value.attachment))).catch(() => {}); }}>{busy ? '等待原件回执…' : review?.frozen ? '核对本机固定版本' : '保存这一项'}</Button>}</div>
-  </SettingsDialog>;
+  </div></SettingsDialog>;
 }
 
 function ChannelTask({ row, task, supported, run }: { row: Data; task?: Data; supported: (action: string) => boolean; run: Run }) {

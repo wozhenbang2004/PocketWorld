@@ -30,7 +30,20 @@ public final class AccountResponsesAdapter {
      * This proves input provenance only; it never authorizes an old credential generation. */
     public static ResponsesRequest request(ModelConfig config,JSONArray messages,JSONArray tools,Set<Long> acceptedVersions,boolean imageInputSupported,HistoryOrigin historyOrigin)throws Exception {
         if(!config.usesAccount()||messages==null)throw invalid();
-        JSONArray input=new JSONArray(),functions=new JSONArray(),namespaces=new JSONArray();
+        JSONArray input = new JSONArray();
+        JSONArray namespaces = toolNamespaces(tools);
+        for (int i = 0; i < messages.length(); i++) {
+            appendHistoryMessage(input, messages.getJSONObject(i), config, acceptedVersions,
+                    imageInputSupported, historyOrigin);
+        }
+        // This bounded validator rejects unknown fields, dangling results and unsupported modalities.
+        return new ResponsesRequest(config.model,"",input,namespaces,config.sendScreenshots&&imageInputSupported,config.reasoning,config.maxOutputTokens,config.imageTokenReserve);
+    }
+
+    /** Tool declaration translation only. A namespace describes available tools;
+     * it never grants execution, which remains with the native task owner. */
+    private static JSONArray toolNamespaces(JSONArray tools) throws Exception {
+        JSONArray functions=new JSONArray(),namespaces=new JSONArray();
         if(tools!=null)for(int i=0;i<tools.length();i++){
             JSONObject tool=tools.getJSONObject(i);keys(tool,"type","function");
             if(!"function".equals(tool.optString("type")))throw unsupported();
@@ -42,61 +55,76 @@ public final class AccountResponsesAdapter {
         }
         if(functions.length()>0)namespaces.put(new JSONObject().put("type","namespace").put("name",NAMESPACE)
                 .put("description","Host-provided tools. Every execution remains subject to native task authority and approval.").put("tools",functions));
-        for(int i=0;i<messages.length();i++){
-            JSONObject message=messages.getJSONObject(i);keys(message,"role","content","tool_calls","tool_call_id","provider_data","refusal");
-            String role=message.getString("role");
-            if(role.equals("tool")){
-                if(message.has("provider_data")||message.has("tool_calls"))throw invalid();
-                input.put(new JSONObject().put("type","function_call_output").put("call_id",message.getString("tool_call_id")).put("output",text(message.opt("content"))));
-                continue;
-            }
-            if(!Set.of("system","developer","user","assistant").contains(role))throw invalid();
-            JSONObject metadata=message.optJSONObject("provider_data");
-            if(message.has("provider_data")&&metadata==null)throw invalid();
-            if(metadata!=null){
-                if(!role.equals("assistant"))throw invalid();
-                keys(metadata,"provider","nativeRef","items","originCallId");
-                ModelConfig.AccountModelRef prior=ModelConfig.AccountModelRef.fromJson(metadata.getJSONObject("nativeRef"));
-                if(!ModelConfig.ACCOUNT_PROVIDER.equals(metadata.optString("provider"))||
-                        !config.accountModel.sameModel(prior)||(!acceptedVersions.contains(prior.accountVersion)&&!historyOrigin.accepts(metadata)))
-                    throw new GatewayException("历史模型上下文属于另一个账号、版本或模型；请在原连接恢复，或新建对话，不能自动重放。");
-                JSONArray raw=metadata.getJSONArray("items");
-                for(int j=0;j<raw.length();j++)input.put(copy(raw.getJSONObject(j)));
-                continue; // Native output already contains its messages and calls, in original order.
-            }
-            Object content=message.opt("content");
-            Object body=content;
-            if(content instanceof JSONArray&&role.equals("user")){
-                JSONArray converted=new JSONArray(),parts=(JSONArray)content;
-                for(int j=0;j<parts.length();j++){
-                    JSONObject part=parts.getJSONObject(j);String type=part.optString("type");
-                    if(type.equals("text")){keys(part,"type","text");converted.put(new JSONObject().put("type","input_text").put("text",part.getString("text")));}
-                    else if(type.equals("image_url")){
-                        if(!config.sendScreenshots)throw new GatewayException("截图发送已关闭，图片未发送；请在本机设置明确允许后再继续原任务。");
-                        if(!imageInputSupported)throw new dev.pocketengine.features.proxy.accounts.GatewayFailure("ACCOUNT_IMAGE_CAPABILITY_REQUIRED");
-                        keys(part,"type","image_url");JSONObject image=part.getJSONObject("image_url");keys(image,"url","detail");
-                        JSONObject nativeImage=new JSONObject().put("type","input_image").put("image_url",image.getString("url"));
-                        if(image.has("detail"))nativeImage.put("detail",image.getString("detail"));converted.put(nativeImage);
-                    }else throw new GatewayException("此账号连接尚未接入文件、音频或视频，原内容没有被丢弃或发送。");
-                }
-                body=converted;
-            }else body=text(content);
-            if(body instanceof JSONArray||!((String)body).isEmpty())input.put(new JSONObject().put("type","message").put("role",role.equals("system")?"developer":role).put("content",body));
-            JSONArray calls=message.optJSONArray("tool_calls");
-            if(calls!=null){
-                if(!role.equals("assistant"))throw invalid();
-                for(int j=0;j<calls.length();j++){
-                    JSONObject call=calls.getJSONObject(j);keys(call,"id","type","function");
-                    if(!"function".equals(call.optString("type")))throw unsupported();
-                    JSONObject fn=call.getJSONObject("function");keys(fn,"name","arguments");
-                    input.put(new JSONObject().put("type","function_call").put("call_id",call.getString("id"))
-                        .put("namespace",NAMESPACE).put("name",fn.getString("name")).put("arguments",fn.getString("arguments")));
-                }
-            }
-            if(!message.optString("refusal").isEmpty())throw new GatewayException("历史包含未接入的拒绝消息，请新建对话。");
+        return namespaces;
+    }
+
+    /**
+     * Append exactly one canonical message in place, preserving history order.
+     * Native provider_data is a separate provenance path: its original items
+     * replace visible-message reconstruction, rather than being appended twice.
+     * The accepted-version set and history-origin callback are supplied only by
+     * the gateway; this translator never derives authority from message fields.
+     * Any failure aborts request construction before a ResponsesRequest exists.
+     */
+    private static void appendHistoryMessage(JSONArray input, JSONObject message, ModelConfig config,
+            Set<Long> acceptedVersions, boolean imageInputSupported, HistoryOrigin historyOrigin)
+            throws Exception {
+        keys(message,"role","content","tool_calls","tool_call_id","provider_data","refusal");
+        String role=message.getString("role");
+        if(role.equals("tool")){
+            if(message.has("provider_data")||message.has("tool_calls"))throw invalid();
+            input.put(new JSONObject().put("type","function_call_output").put("call_id",message.getString("tool_call_id")).put("output",text(message.opt("content"))));
+            return;
         }
-        // This bounded validator rejects unknown fields, dangling results and unsupported modalities.
-        return new ResponsesRequest(config.model,"",input,namespaces,config.sendScreenshots&&imageInputSupported,config.reasoning,config.maxOutputTokens,config.imageTokenReserve);
+        if(!Set.of("system","developer","user","assistant").contains(role))throw invalid();
+        JSONObject metadata=message.optJSONObject("provider_data");
+        if(message.has("provider_data")&&metadata==null)throw invalid();
+        if(metadata!=null){
+            if(!role.equals("assistant"))throw invalid();
+            keys(metadata,"provider","nativeRef","items","originCallId");
+            ModelConfig.AccountModelRef prior=ModelConfig.AccountModelRef.fromJson(metadata.getJSONObject("nativeRef"));
+            if(!ModelConfig.ACCOUNT_PROVIDER.equals(metadata.optString("provider"))||
+                    !config.accountModel.sameModel(prior)||(!acceptedVersions.contains(prior.accountVersion)&&!historyOrigin.accepts(metadata)))
+                throw new GatewayException("历史模型上下文属于另一个账号、版本或模型；请在原连接恢复，或新建对话，不能自动重放。");
+            JSONArray raw=metadata.getJSONArray("items");
+            for(int j=0;j<raw.length();j++)input.put(copy(raw.getJSONObject(j)));
+            return; // Native output already contains its messages and calls, in original order.
+        }
+        Object content=message.opt("content");
+        Object body=content;
+        if(content instanceof JSONArray&&role.equals("user")){
+            JSONArray converted=new JSONArray(),parts=(JSONArray)content;
+            for(int j=0;j<parts.length();j++){
+                JSONObject part=parts.getJSONObject(j);String type=part.optString("type");
+                if(type.equals("text")){keys(part,"type","text");converted.put(new JSONObject().put("type","input_text").put("text",part.getString("text")));}
+                else if(type.equals("image_url")){
+                    if(!config.sendScreenshots)throw new GatewayException("截图发送已关闭，图片未发送；请在本机设置明确允许后再继续原任务。");
+                    if(!imageInputSupported)throw new dev.pocketengine.features.proxy.accounts.GatewayFailure("ACCOUNT_IMAGE_CAPABILITY_REQUIRED");
+                    keys(part,"type","image_url");JSONObject image=part.getJSONObject("image_url");keys(image,"url","detail");
+                    JSONObject nativeImage=new JSONObject().put("type","input_image").put("image_url",image.getString("url"));
+                    if(image.has("detail"))nativeImage.put("detail",image.getString("detail"));converted.put(nativeImage);
+                }else throw new GatewayException("此账号连接尚未接入文件、音频或视频，原内容没有被丢弃或发送。");
+            }
+            body=converted;
+        }else body=text(content);
+        if(body instanceof JSONArray||!((String)body).isEmpty())input.put(new JSONObject().put("type","message").put("role",role.equals("system")?"developer":role).put("content",body));
+        JSONArray calls=message.optJSONArray("tool_calls");
+        // optJSONArray also returns null for a malformed object/string. That is
+        // not an absent call list: dropping it would silently rewrite history
+        // before ResponsesRequest can validate call/result linkage. Preserve the
+        // existing absent/JSON-null representation, but reject other shapes.
+        if(message.has("tool_calls")&&!message.isNull("tool_calls")&&calls==null)throw invalid();
+        if(calls!=null){
+            if(!role.equals("assistant"))throw invalid();
+            for(int j=0;j<calls.length();j++){
+                JSONObject call=calls.getJSONObject(j);keys(call,"id","type","function");
+                if(!"function".equals(call.optString("type")))throw unsupported();
+                JSONObject fn=call.getJSONObject("function");keys(fn,"name","arguments");
+                input.put(new JSONObject().put("type","function_call").put("call_id",call.getString("id"))
+                    .put("namespace",NAMESPACE).put("name",fn.getString("name")).put("arguments",fn.getString("arguments")));
+            }
+        }
+        if(!message.optString("refusal").isEmpty())throw new GatewayException("历史包含未接入的拒绝消息，请新建对话。");
     }
 
     /** Accept only the gateway's verified completed event, never deltas or partial function arguments. */
@@ -150,3 +178,4 @@ public final class AccountResponsesAdapter {
     private static GatewayException invalid(){return new GatewayException("账号模型上下文无效或不完整，未发出新的请求。");}
     private static GatewayException unsupported(){return new GatewayException("账号模型返回或请求了尚未接入的字段或工具，未派发动作。");}
 }
+

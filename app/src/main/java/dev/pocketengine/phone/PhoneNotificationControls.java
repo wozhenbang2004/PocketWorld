@@ -41,7 +41,8 @@ public final class PhoneNotificationControls {
                         ||original==null||original!=app.control(id)||!original.hasHostRun()||!original.matchesHostRun(id,run,epoch))return false;
                 nativeOwner=true;
             }
-            JSONObject task=app.tasks.get(id,false);
+            // Read the original native tuple/state, not audit history or a UI header.
+            JSONObject task=app.tasks.foregroundNotificationContextSnapshot(id);
             if(task==null||!"phone".equals(task.optString("kind"))||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))return false;
             boolean active=task.optString("status").matches("preparing|running|pausing|paused|awaiting_user|reconciling");
             if(PhoneRunService.STOP.equals(intent.getAction())){if(active)app.stopOriginalPhoneRun(id,run,epoch);else original.cancel();return true;}
@@ -62,7 +63,7 @@ public final class PhoneNotificationControls {
         intent.setAction(null);intent.removeExtra("taskId");intent.removeExtra(RUN);intent.removeExtra(EPOCH);
         try {
             if(id==null||id.isEmpty()||id.length()>100||run==null||run.isEmpty()||run.length()>100||epoch<1)throw new IllegalArgumentException();
-            JSONObject task=app.tasks.get(id,false);
+            JSONObject task=app.tasks.foregroundNotificationContextSnapshot(id);
             if(task==null||!"phone".equals(task.optString("kind"))||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new IllegalArgumentException();
             focus.accept(id);
         } catch(Exception unavailable) {app.error("原通知所属执行已结束或无法核对，请在任务列表查看记录");}

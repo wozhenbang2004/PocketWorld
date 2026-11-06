@@ -5,7 +5,7 @@ export type ExecutionState = 'pending'|'running'|'complete'|'success'|'returned'
 export type SourceReference = {id:string; title?:string; name?:string; excerpt?:string; version?:string|number; url?:string; [key:string]:unknown};
 export type Attachment = {id:string; name:string; size?:number; status?:string; [key:string]:unknown};
 export type ModelOption = {id:string; name:string; description?:string; disabled?:boolean; reason?:string; [key:string]:unknown};
-export type Step = {id:string; title?:string; label?:string; status?:ExecutionState|string; state?:ExecutionState|string; statusLabel?:string; durationMs?:number; children?:Step[]; tasks?:Step[]};
+export type Step = {id:string; title?:string; label?:string; status?:ExecutionState|string; state?:ExecutionState|string; statusLabel?:string; durationMs?:number; durationLabel?:string; children?:Step[]; tasks?:Step[]; depth?:number; hasChildren?:boolean; expanded?:boolean; canToggle?:boolean; context?:boolean};
 export type PressButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {label?:string; icon?:ReactNode; compact?:boolean};
 export type ChatComposerProps = {
  value:string; onChange:(text:string)=>void; onSend:()=>void; onStop?:()=>void;

@@ -363,3 +363,48 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Whaleness / DSH Mobile trajectory
+
+The three-lane overview, turn navigation and event/request/tool detail structure
+are adapted from Chaofan Li’s Whaleness iOS `TrajectoryView.swift`:
+`Clarklevis1995/dsh-mobile` at `fc12ae44dcb777f9429553048cba21d53849f427`.
+The pinned Swift source and license are retained in
+`src/library/upstream/whaleness/`; PocketWorld supplies its own native journal,
+source-currentness checks, React components and Android presentation.
+
+```text
+MIT License
+
+Copyright (c) 2026 Chaofan Li
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+
+## UI/UX component additions · 2026-11-06
+
+- BeUI actual source at a866cb2f37ce68c3fc0c66425e86e3f31566e4be (MIT): morphing search/modal, sortable and swipeable list. Exact notice is bundled in source-notices/src/shell-library/upstream/beui-a866cb2/LICENSE.
+- ncdai/react-wheel-picker actual source at fbe21d7901b66683ec022337e2140dd815bdb4fd (MIT), with controlled-value and disabled-state adaptations. Exact notice is bundled in source-notices/src/forms-library/upstream/uiux/ncdai-wheel-fbe21d7/LICENSE.
+- Ramotion Fluid Slider Swift ValueView at 98c787c0d4cf841213111242ee42897b8542ec6a (MIT) supplies the tracking/return mechanism reference. React Aria/BoardUI provide Web input behavior. Exact notice is bundled in source-notices/src/forms-library/upstream/uiux/RAMOTION-LICENSE. Requested author attribution: https://www.ramotion.com/.
+- Ovio Compare Slider source at 81a1bcb6737356038163728b3b2a657c9dcffa32 (MIT), adapted to original attachment pins. Its own source notice is bundled in source-notices/src/workspace-library/upstream/ovio/LICENSE.
+- Stageshow hero-grid player source at 8020574 (full identity in WORKSPACE-UIUX-PROVENANCE.json), MIT, Benji Taylor. Its own source notice is bundled in source-notices/src/workspace-library/upstream/stageshow/LICENSE.
+- Embla Carousel runtime packages are exactly 8.6.0; exact upstream license and version evidence are retained in licenses/embla-carousel-0fe6583 and incorporated by the dependency collector.
+- Reaction action capsules adapt the approved library-maintained independent study v1, retained as src/library/reaction-study-v1.html.source. This is not a released Malay source-code claim. No original screenshots, avatars, reaction counts or participants ship with the application.
+- Kevin, Neverland, FlexLayout, Material Carousel and Fennel inform layout/interaction selection. Their marketing screenshots/videos are not shipped as product artwork. Paper Widgets uses the separately identified library study; no paid template source claim is made.

@@ -79,6 +79,10 @@ public final class TaskInferencePresentation {
         if("COMPLETED".equals(receipt.optString("outcome")))return List.of();
         List<String> lines=new ArrayList<>();
         if(receipt.optBoolean("projectionConflict")){lines.add("同一callId记录冲突，失败细节未据此判定；请核对原调用。");return immutable(lines);}
+        JSONObject route=receipt.optJSONObject("route"),usage=receipt.optJSONObject("usage");
+        if("FAILED".equals(receipt.optString("outcome"))&&route!=null&&"account".equals(route.optString("kind"))
+                &&usage!=null&&"openai_responses".equals(usage.optString("protocol"))&&"incomplete".equals(usage.optString("finishReason")))
+            lines.add("服务端报告本次输出未完整完成（incomplete），具体原因未据此确认；缺失用量仍为未知。");
         JSONObject value=receipt.optJSONObject("failure");
         if(value==null){lines.add("失败或取消原因未保留；没有观察到可核对的冷却时间，不代表连接可用。");return immutable(lines);}
         InferenceFailurePresentation.View failure=InferenceFailurePresentation.fromFailure(value,System.currentTimeMillis());lines.add(failure.title());lines.addAll(failure.lines());return immutable(lines);

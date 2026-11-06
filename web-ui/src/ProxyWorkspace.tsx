@@ -61,21 +61,21 @@ export function ProxyWorkspace({ state, run, registerTransientBack }: { state: D
       {snapshot.running && snapshot.routeCurrent === false && <p className="pw-proxy-inline-note" role="alert">原模型连接已经变化，旧服务不再接受新的推理。请先停止，再审阅新的模型选择。</p>}
       <div className="pw-proxy-primary-action">{snapshot.running ? <Button variant="secondary" disabled={locked || !snapshot.sessionId} onClick={() => void invoke('proxy.stop', { sessionId: snapshot.sessionId }, value => { setSnapshot(value); setUnknown(false); setNotice('已收到这次原服务的停止回执。'); }, true)}>停止这次本机服务</Button>
         : <Button disabled={locked || unknown || snapshot.externalRelayAllowed !== true} trailingIcon={ChevronRight} onClick={() => setSettings(true)}>配置并启动</Button>}<p>只监听这台手机，不开放到局域网或公网。</p></div>
-      {snapshot.protocol && <p className="pw-proxy-inline-note">客户端协议：{snapshot.protocol}。不转换协议，也不授予手机或工具执行权限。</p>}
-      {Array.isArray(snapshot.endpoints) && snapshot.endpoints.length > 0 && <Accordion className="pw-proxy-endpoints"><AccordionItem id="endpoints" title="支持的调用端点" description="使用当前模型的原协议">{snapshot.endpoints.map((path: string) => <p key={path} className="pw-reading-copy">{path}</p>)}</AccordionItem></Accordion>}
+
+      {Array.isArray(snapshot.endpoints) && snapshot.endpoints.length > 0 && <Accordion className="pw-proxy-endpoints"><AccordionItem id="endpoints" title="连接协议与调用端点" description={snapshot.protocol||'使用当前模型的原协议'}><p className="pw-proxy-inline-note">只使用当前模型原协议，不授予手机或工具执行权限。</p>{snapshot.endpoints.map((path: string) => <p key={path} className="pw-reading-copy">{path}</p>)}</AccordionItem></Accordion>}
     </section>
     <section className="pw-proxy-calls" aria-label="近期模型调用"><header><div><h3>近期调用</h3><p>只保留本次服务进程最近 8 条引用，不代表累计用量。</p></div><History size={18} aria-hidden /></header>
       {rows.length ? <div className="pw-proxy-call-list">{[...rows].reverse().map(row => <Button key={row.taskId} variant="ghost" className="pw-proxy-call-row" trailingIcon={ArrowUpRight} onClick={() => void run('tasks.open', { id: row.taskId }).catch(failure => setError(failure.message))}><span><strong>{row.model || '原模型调用'}</strong><small>查看原任务 · {row.taskId}</small></span></Button>)}</div> : <div className="pw-proxy-empty"><p>还没有返回调用记录</p><span>{snapshot.running === true ? '在客户端调用后，刷新查看这次服务的原记录。' : '服务启动并被客户端实际调用后，可在这里查看原记录。'}</span></div>}
     </section>
     <SettingsDialog isOpen={settings && !review} title="启动本机模型服务" onClose={() => { if (!locked) { closeReview(); setSettings(false); setToken(''); setShowToken(false); } }}>
-      <p>启动后固定本次 API 模型选择。更换连接或模型前先停止服务，不会自动切换计费身份。</p>
+      <div className="pw-proxy-setup"><p className="pw-proxy-setup-context">本次固定使用 <strong>{snapshot.model||'当前 API 模型'}</strong>。更换连接或模型前先停止服务。</p><div className="pw-proxy-setup-fields">
       <TextField label="监听端口，0 为自动选择" value={port} onChange={setPort} inputMode="numeric" isDisabled={locked} />
       <TextField label="独立访问令牌" value={token} onChange={setToken} type={showToken ? 'text' : 'password'} isDisabled={locked} hint="24–256 位字母、数字、下划线或短横线；与上游 API 密钥分开。" />
       <div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={() => { const bytes = crypto.getRandomValues(new Uint8Array(32)); setToken(Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('')); }}>生成随机访问令牌</Button><CheckboxField isSelected={showToken} onChange={setShowToken} isDisabled={locked}>显示令牌</CheckboxField></div>
       <p className="pw-muted">请在审阅前为客户端保存这项令牌。审阅后、进入后台或离开页面会清除输入框中的令牌；已保存的服务凭据留在原生加密存储中。</p>
-      {unknown && <><p role="status">原启动结果待核对，草稿已保留。当前读取：{typeof snapshot.running !== 'boolean' ? '尚未读取服务状态' : snapshot.running ? `服务正在运行 · ${snapshot.endpoint}` : '服务未运行'}。请核对后再决定是否重新准备。</p><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={refresh}>读取原服务状态</Button><Button variant="secondary" disabled={!readAfterUnknown || locked} onClick={() => { setUnknown(false); setReadAfterUnknown(false); }}>我已核对，允许重新准备</Button></div></>}
+      </div>{unknown && <><p role="status">原启动结果待核对，草稿已保留。当前读取：{typeof snapshot.running !== 'boolean' ? '尚未读取服务状态' : snapshot.running ? `服务正在运行 · ${snapshot.endpoint}` : '服务未运行'}。请核对后再决定是否重新准备。</p><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={refresh}>读取原服务状态</Button><Button variant="secondary" disabled={!readAfterUnknown || locked} onClick={() => { setUnknown(false); setReadAfterUnknown(false); }}>我已核对，允许重新准备</Button></div></>}
       {error && <p className="pw-field-error" role="alert">{error}</p>}
-      <Button disabled={!canReview} onClick={prepare}>核对启动配置</Button>
+      <div className="pw-proxy-setup-footer"><Button disabled={!canReview} onClick={prepare}>核对启动配置</Button></div></div>
     </SettingsDialog>
     <SettingsDialog isOpen={!!review} title="核对本次本机服务" onClose={closeReview}>{review && <>
       <p>模型：{review.model}</p><p>协议：{review.protocol}</p><p>端口：{review.port === 0 ? '由系统选择空闲端口' : review.port}</p>

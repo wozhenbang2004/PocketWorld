@@ -1,0 +1,134 @@
+/* Derived from the retained PromptLibraryDemo/ExperimentCardDemo/FallbackChainDemo
+ * refinements.css and StepperForm styles.css. See affect-workflow-provenance.md. */
+.pw-affect-workflow {
+  --aw-line: color-mix(in srgb, var(--pw-ink, #222) 13%, transparent);
+  --aw-bg: var(--pw-surface, #fff);
+  --aw-tray: var(--pw-inset, #f5f5f5);
+  --aw-copy: var(--pw-copy, #686868);
+  --aw-ink: var(--pw-ink, #222);
+  --aw-blue: #527ba9;
+  color: var(--aw-ink);
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+.pw-affect-workflow button { font: inherit; cursor: pointer; }
+.pw-affect-workflow button:disabled { cursor: default; opacity: .5; }
+.pw-affect-workflow button:focus-visible { outline: 2px solid var(--pw-focus, #527ba9); outline-offset: 3px; }
+.pw-affect-workflow :is(h3, h4, p) { margin: 0; }
+.pw-affect-tag { display: inline-flex; align-items: center; border-radius: 5px; background: var(--aw-tray); color: var(--aw-copy); padding: 3px 6px; font-size: 11px; line-height: 16px; font-weight: 500; white-space: nowrap; }
+.pw-affect-workflow [data-tone=passed] { --aw-status: #418568; --aw-status-bg: #41856814; }
+.pw-affect-workflow [data-tone=uncertain] { --aw-status: #aa7142; --aw-status-bg: #aa714214; }
+.pw-affect-tag[data-tone=passed], .pw-affect-tag[data-tone=uncertain] { color: var(--aw-status); background: var(--aw-status-bg); }
+.pw-affect-empty, .pw-affect-evidence-note { color: var(--aw-copy); font-size: 12px; line-height: 1.8; }
+.pw-affect-empty { padding: 18px 10px; }
+
+/* Prompt Library's searchable left pane + selected metadata/preview pane. */
+.pw-skill-workspace .pw-skill-list-heading .pw-affect-skill-actions { display: flex; flex-direction: row; flex-wrap: nowrap; align-items: center; gap: 4px; margin: 0; }
+.pw-affect-library { background: var(--aw-bg); border: 1px solid var(--aw-line); border-radius: 12px; overflow: hidden; }
+.pw-affect-library-layout { display: grid; grid-template-columns: minmax(190px, 38%) minmax(0, 1fr); min-height: 285px; }
+.pw-affect-library-list { padding: 15px 10px; border-right: 1px solid var(--aw-line); min-width: 0; }
+.pw-affect-library-heading { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0 4px 14px; font-size: 13px; }
+.pw-affect-library-heading > :first-child { flex-shrink: 0; }
+.pw-affect-library-heading > :nth-child(2) { min-width: 0; flex: 1; }
+.pw-affect-library-heading > span:last-child { font-size: 11px; color: var(--aw-copy); }
+.pw-affect-library-list > .pw-field { margin: 0 2px 10px; }
+.pw-affect-library-options { display: flex; flex-direction: column; gap: 3px; max-height: 460px; overflow-y: auto; }
+.pw-affect-library-entry > button { display: flex; gap: 9px; align-items: center; width: 100%; border: 0; border-radius: 7px; padding: 10px 8px; background: transparent; color: inherit; text-align: left; min-height: 52px; }
+.pw-affect-library-entry > button[aria-pressed=true] { background: var(--aw-tray); }
+.pw-affect-library-entry > button > svg { flex-shrink: 0; color: var(--aw-copy); }
+.pw-affect-library-entry > button > span:nth-child(2) { flex: 1; min-width: 0; }
+.pw-affect-library-entry strong { display: block; font-size: 13px; font-weight: 550; }
+.pw-affect-library-entry small { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 4px; color: var(--aw-copy); font-size: 11px; line-height: 1.6; }
+.pw-affect-library-entry > label { margin: 3px 6px 10px; }
+.pw-affect-library-detail { padding: 20px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.pw-affect-library-detail .pw-affect-library-heading { margin: 0; }
+.pw-affect-library-detail h3 { font-size: 15px; font-weight: 550; flex: 1; }
+.pw-affect-library-detail > p { color: var(--aw-copy); font-size: 13px; line-height: 1.9; }
+.pw-affect-library-facts { display: flex; flex-direction: column; gap: 9px; margin: 0; font-size: 12px; }
+.pw-affect-library-facts > div { display: grid; grid-template-columns: 50px minmax(0, 1fr); gap: 10px; }
+.pw-affect-library-facts dt { color: var(--aw-copy); }
+.pw-affect-library-facts dd { margin: 0; }
+.pw-affect-library-preview { padding: 13px; border: 1px solid var(--aw-line); background: var(--aw-tray); border-radius: 7px; font-size: 12px; line-height: 1.8; }
+.pw-affect-library-preview > span { font-size: 11px; color: var(--aw-copy); }
+.pw-affect-library-preview > p { margin-top: 5px; }
+.pw-affect-library-detail footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--aw-line); }
+.pw-affect-library-detail footer > span { color: var(--aw-copy); font-size: 11px; }
+.pw-affect-library-placeholder { display: grid; place-content: center; justify-items: center; gap: 15px; min-height: 225px; color: var(--aw-copy); font-size: 12px; }
+
+/* Stepper Form's numbered top-rule progress, driven by actual review/start. */
+.pw-affect-stepnav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 0; margin: 22px 0 18px; list-style: none; gap: 9px; }
+.pw-affect-stepnav li { display: flex; align-items: center; gap: 7px; border-top: 2px solid var(--aw-line); padding-top: 10px; font-size: 12px; color: var(--aw-copy); }
+.pw-affect-stepnav li[data-reached=true] { border-color: var(--aw-blue); color: var(--aw-ink); }
+.pw-affect-stepnav li > span { display: grid; place-items: center; min-width: 20px; height: 20px; font-size: 11px; color: var(--aw-copy); }
+.pw-affect-stepnav li[aria-current=step] > span { border-radius: 50%; color: var(--aw-blue); background: color-mix(in srgb, var(--aw-blue) 13%, transparent); }
+.pw-affect-stepbody { border: 1px solid var(--aw-line); border-radius: 12px; padding: 18px; background: var(--aw-bg); }
+.pw-affect-stepbody > h3 { margin-top: 0; }
+.pw-affect-stepbody .pw-form-actions { flex-wrap: wrap; }
+
+/* Experiment Card's compact summary and grid unfold. No A/B or fabricated metrics. */
+.pw-affect-observation { border: 1px solid var(--aw-line); border-radius: 10px; background: var(--aw-bg); margin-top: 18px; overflow: hidden; }
+.pw-affect-experiment-summary { display: flex; align-items: center; gap: 10px; border: 0; background: transparent; color: inherit; padding: 15px; width: 100%; text-align: left; }
+.pw-affect-experiment-summary > span:nth-child(2) { flex: 1; min-width: 0; }
+.pw-affect-experiment-summary strong { display: block; font-size: 14px; font-weight: 550; margin-bottom: 5px; }
+.pw-affect-experiment-summary small { color: var(--aw-copy); font-size: 11px; line-height: 1.7; }
+.pw-affect-experiment-mark { display: flex; align-items: center; gap: 3px; }
+.pw-affect-experiment-mark i { display: block; width: 4px; height: 16px; background: var(--aw-line); border-radius: 2px; }
+.pw-affect-experiment-mark i:nth-child(2) { height: 25px; }
+.pw-affect-experiment-mark i[data-tone=passed], .pw-affect-experiment-mark i[data-tone=uncertain] { background: var(--aw-status); }
+.pw-affect-unfold-icon { transition: transform .2s; }
+.pw-affect-experiment-summary[aria-expanded=true] > .pw-affect-unfold-icon { transform: rotate(90deg); }
+.pw-affect-observation-overview { display: flex; gap: 10px; padding: 0 15px 15px; flex-wrap: wrap; }
+.pw-affect-observation-overview > span { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.pw-affect-experiment-unfold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .3s ease, opacity .25s; opacity: 0; }
+.pw-affect-experiment-unfold[data-open=true] { grid-template-rows: 1fr; opacity: 1; }
+.pw-affect-experiment-inner { overflow: hidden; min-height: 0; padding: 0 15px; }
+.pw-affect-experiment-unfold[data-open=true] .pw-affect-experiment-inner { padding-bottom: 15px; }
+.pw-affect-experiment-observations { display: flex; flex-direction: column; gap: 12px; padding-top: 14px; border-top: 1px solid var(--aw-line); margin-bottom: 15px; }
+.pw-affect-experiment-observations > div { display: flex; align-items: start; gap: 9px; }
+.pw-affect-observation-letter { display: grid; place-items: center; width: 23px; height: 25px; border-radius: 4px; flex-shrink: 0; background: var(--aw-status-bg, var(--aw-tray)); color: var(--aw-status, var(--aw-copy)); font-size: 12px; }
+.pw-affect-experiment-observations > div > div { flex: 1; min-width: 0; }
+.pw-affect-experiment-observations strong { font-size: 12px; font-weight: 550; margin-right: 8px; }
+.pw-affect-experiment-observations p { margin-top: 7px; color: var(--aw-copy); font-size: 12px; line-height: 1.8; }
+.pw-affect-experiment-observations code { display: block; font-size: 10px; }
+.pw-affect-raw { margin-top: 12px; font-size: 12px; }
+.pw-affect-raw summary { cursor: pointer; padding: 8px 0; }
+.pw-affect-workflow pre { max-height: 320px; white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; font-size: 11px; line-height: 1.7; }
+
+/* Fallback Chain's inspectable operation nodes; only real log ordering is linked. */
+.pw-affect-attempts { margin-top: 18px; }
+.pw-affect-attempts > header { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 12px; }
+.pw-affect-attempts h4 { flex: 1; font-size: 13px; font-weight: 550; }
+.pw-affect-attempts header > span { color: var(--aw-copy); font-size: 11px; }
+.pw-affect-attempt-filters { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+.pw-affect-attempt-filters button { background: var(--aw-bg); border: 1px solid var(--aw-line); border-radius: 6px; padding: 7px 9px; color: var(--aw-copy); font-size: 11px; min-height: 34px; }
+.pw-affect-attempt-filters button[aria-pressed=true] { background: var(--aw-tray); color: var(--aw-ink); }
+.pw-affect-flow-models { display: flex; flex-direction: column; gap: 12px; list-style: none; padding: 0; margin: 14px 0 0; }
+.pw-affect-flow-models > li { position: relative; }
+.pw-affect-flow-models > li + li:before { content: ''; position: absolute; top: -12px; left: 25px; height: 12px; border-left: 1px dashed var(--aw-line); }
+.pw-affect-flow-model { display: flex; align-items: center; gap: 10px; width: 100%; background: var(--aw-bg); color: inherit; padding: 11px; border: 1px solid var(--aw-line); border-radius: 10px; text-align: left; min-width: 0; }
+.pw-affect-flow-model[aria-expanded=true] { border-color: var(--aw-blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--aw-blue) 12%, transparent); }
+.pw-affect-flow-number { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; background: var(--aw-status-bg, var(--aw-tray)); color: var(--aw-status, var(--aw-copy)); flex-shrink: 0; font-size: 11px; }
+.pw-affect-flow-copy { flex: 1; min-width: 0; }
+.pw-affect-flow-copy > span { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.pw-affect-flow-copy strong { font-size: 12px; font-weight: 550; }
+.pw-affect-flow-copy small { font-size: 11px; color: var(--aw-copy); white-space: nowrap; }
+.pw-affect-flow-copy b { margin-top: 6px; color: var(--aw-status, var(--aw-copy)); font-size: 11px; font-weight: 400; }
+.pw-affect-flow-copy code { color: var(--aw-copy); font-size: 10px; }
+.pw-affect-attempt-inspector { margin-top: 8px; padding: 13px; border: 1px solid var(--aw-line); border-radius: 8px; background: var(--aw-tray); font-size: 12px; }
+.pw-affect-attempt-inspector > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.pw-affect-attempt-inspector button { display: grid; place-items: center; width: 32px; height: 32px; border: 0; background: transparent; color: inherit; }
+@media (max-width: 600px) {
+  .pw-affect-library-layout { grid-template-columns: 1fr; }
+  .pw-affect-library-list { border-right: 0; border-bottom: 1px solid var(--aw-line); padding: 13px 10px; }
+  .pw-affect-library-options { max-height: 250px; }
+  .pw-affect-library-detail { padding: 17px 14px; }
+  .pw-affect-stepnav li { gap: 4px; font-size: 11px; }
+  .pw-affect-stepbody { padding: 14px; }
+  .pw-affect-flow-copy > span:last-child { flex-wrap: wrap; gap: 4px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pw-affect-experiment-unfold, .pw-affect-unfold-icon { transition: none; }
+}
+:root.dark .pw-affect-workflow { --aw-blue: #a2c1e5; }
+:root.dark .pw-affect-workflow [data-tone=passed] { --aw-status: #8ac5a7; --aw-status-bg: #8ac5a719; }
+:root.dark .pw-affect-workflow [data-tone=uncertain] { --aw-status: #d8ad7e; --aw-status-bg: #d8ad7e19; }

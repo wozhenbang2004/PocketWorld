@@ -92,3 +92,30 @@
   .pw-local-screen-toolbar { align-items: flex-start; flex-direction: column; gap: 3px; }
   .pw-local-input-actions > small { flex-basis: 100%; margin: 2px 0 0; }
 }
+
+/* One work surface, with output before secondary tools. Existing xterm and
+ * BoardUI disclosures keep their identities through these layout changes. */
+.pw-local-workspace .pw-local-heading { margin-bottom: 28px; }
+.pw-local-workspace .pw-local-main { box-shadow: none; border-radius: 16px; }
+.pw-local-workspace .pw-local-panel-heading { margin-bottom: 24px; }
+.pw-local-workspace .pw-local-session-status { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; margin: 0 0 16px; }
+.pw-local-workspace .pw-local-session-status > span { font-size: 11px; padding: 3px 8px; border-radius: 6px; background: var(--pw-inset); }
+.pw-local-workspace .pw-local-session-status > p { margin: 0; font-size: 12px; }
+.pw-local-workspace .pw-local-disclosures .pw-local-input { margin-top: 4px; }
+.pw-local-workspace .pw-local-source { background: transparent; border-radius: 0; padding: 12px 0 0; }
+.pw-local-workspace .pw-local-setup-step + .pw-local-setup-step { padding-top: 24px; border-top: 1px solid color-mix(in srgb,var(--pw-ink) 6%,transparent); }
+.pw-local-workspace .pw-local-runtime { margin-top: 28px; }
+.pw-local-workspace .pw-local-runtime-row + .pw-local-runtime-row { border-top: 1px solid color-mix(in srgb,var(--pw-ink) 6%,transparent); }
+.pw-project-execution .pw-local-screen-toolbar { align-items: center; margin-block: 4px 12px; }
+.pw-project-execution .pw-local-screen-toolbar > span { display: grid; gap: 3px; font-family: var(--font-code,monospace); }
+.pw-project-execution .pw-local-screen-toolbar strong { font-size: 13px; font-family: var(--font-ui); font-weight: 500; }
+.pw-project-execution .pw-local-screen-toolbar small { font-size: 11px; }
+.pw-project-execution .pw-execution-scope { margin: 0 0 16px; font-size: 11px; line-height: 1.75; color: var(--pw-muted); }
+.pw-project-execution .pw-local-screen { margin-bottom: 12px; }
+.pw-project-execution > * { border: 0; }
+.pw-project-execution .pw-local-input { margin-top: 4px; }
+.pw-project-execution .pw-field-hint { margin-block: 8px; font-size: 11px; line-height: 1.75; }
+.pw-project-execution .pw-local-inline-notice { margin-block: 12px; font-size: 12px; line-height: 1.75; }
+.pw-project-execution .pw-local-disclosures { margin-top: 20px; }
+.pw-project-execution button[slot="trigger"] { min-height: 48px; }
+@media(max-width:640px){.pw-local-workspace .pw-local-heading h2 { font-size: 20px; }.pw-local-workspace .pw-local-main { padding: 20px 18px; }.pw-local-workspace .pw-local-heading { margin-bottom: 20px; }.pw-project-execution .pw-local-screen-toolbar { flex-direction: row; align-items: center; }.pw-project-execution .pw-local-screen-toolbar > button { flex: none; }}

@@ -224,4 +224,49 @@ public final class TaskRecoveryTest {
         assertEquals("awaiting_user",store.get(operation,false).getString("status"));
         store.requestCancel(parent,parent);request.put("operationId",java.util.UUID.randomUUID().toString());assertThrows(SecurityException.class,()->store.prepareTeamChild(request,binding));
     }
+
+    private static JSONObject reviewedStop(JSONObject attempt)throws Exception{
+        return new JSONObject().put("taskId",attempt.getString("id")).put("runId",attempt.getString("runId")).put("epoch",attempt.getInt("coordinatorEpoch"));
+    }
+    private static RunControl reviewedStopControl(JSONObject attempt)throws Exception{
+        RunControl original=new RunControl();original.bindHostRun(attempt.getString("id"),attempt.getString("runId"),attempt.getInt("coordinatorEpoch"));return original;
+    }
+    @Test public void reviewedPrivateStopIsIdempotentAndKeepsTheOriginalRun()throws Exception{
+        TaskStore store=new TaskStore(context());String id=store.create("停止原执行").getString("id");JSONObject attempt=store.startAttempt(id,"main_screen",20),input=reviewedStop(attempt);RunControl original=reviewedStopControl(attempt);original.cancel();
+        assertEquals(TaskStore.ReviewedPrivateStopResult.STOP_REQUESTED,store.requestReviewedPrivateTaskStop(input,original));
+        assertEquals(TaskStore.ReviewedPrivateStopResult.ALREADY_REQUESTED,store.requestReviewedPrivateTaskStop(input,original));
+        JSONObject stopped=store.get(id,false);assertEquals("stopping",stopped.getString("status"));assertTrue(stopped.getBoolean("cancelRequested"));
+        assertEquals(attempt.getString("runId"),stopped.getString("runId"));assertEquals(attempt.getInt("coordinatorEpoch"),stopped.getInt("coordinatorEpoch"));
+    }
+    @Test public void reviewedPrivateStopCannotOverwriteSettledWaitingRun()throws Exception{
+        TaskStore store=new TaskStore(context());String id=store.create("等待原输入").getString("id");JSONObject attempt=store.startAttempt(id,"main_screen",20);RunControl original=reviewedStopControl(attempt);
+        store.endAttempt(id,attempt.getString("runId"),"awaiting_user","等待原输入",new JSONObject());original.cancel();
+        assertEquals(TaskStore.ReviewedPrivateStopResult.SETTLED,store.requestReviewedPrivateTaskStop(reviewedStop(attempt),original));
+        assertEquals("cancelled",store.get(id,false).getString("status"));
+        try(android.database.Cursor row=database(store).rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=?",new String[]{id,attempt.getString("runId")})){assertTrue(row.moveToFirst());assertEquals("cancelled",row.getString(0));}
+    }
+    @Test public void reviewedPrivateStopPreservesSynchronousCancellationSettlement()throws Exception{
+        TaskStore store=new TaskStore(context());String id=store.create("取消回调结算").getString("id");JSONObject attempt=store.startAttempt(id,"main_screen",20);RunControl original=reviewedStopControl(attempt);
+        original.onCancel(()->{try{store.endAttempt(id,attempt.getString("runId"),"completed","原动作已完成",new JSONObject().put("marker","original"));}catch(Exception failed){throw new AssertionError(failed);}});
+        original.cancel();assertEquals(TaskStore.ReviewedPrivateStopResult.STATE_PRESERVED,store.requestReviewedPrivateTaskStop(reviewedStop(attempt),original));
+        JSONObject settled=store.get(id,false);assertEquals("completed",settled.getString("status"));assertEquals("原动作已完成",settled.getString("summary"));assertEquals("original",settled.getJSONObject("evidence").getString("marker"));
+    }
+    @Test public void reviewedPrivateStopRejectsLiveAndStaleControlsWithoutChangingTheRun()throws Exception{
+        TaskStore store=new TaskStore(context());String id=store.create("原身份核对").getString("id");JSONObject attempt=store.startAttempt(id,"main_screen",20),input=reviewedStop(attempt);RunControl original=reviewedStopControl(attempt);
+        assertThrows(SecurityException.class,()->store.requestReviewedPrivateTaskStop(input,original));
+        original.cancel();JSONObject stale=new JSONObject(input.toString()).put("epoch",input.getInt("epoch")+1);
+        assertThrows(SecurityException.class,()->store.requestReviewedPrivateTaskStop(stale,original));
+        RunControl wrong=new RunControl();wrong.bindHostRun(id,"other-run",attempt.getInt("coordinatorEpoch"));wrong.cancel();
+        assertThrows(SecurityException.class,()->store.requestReviewedPrivateTaskStop(input,wrong));
+        assertFalse(store.get(id,false).optBoolean("cancelRequested"));assertEquals(attempt.getString("status"),store.get(id,false).getString("status"));
+    }
+    @Test public void reviewedPrivateStopCannotTouchSuccessorCreatedByCancellationCallback()throws Exception{
+        TaskStore store=new TaskStore(context());String id=store.create("同步重入后继").getString("id");JSONObject attempt=store.startAttempt(id,"main_screen",20);RunControl original=reviewedStopControl(attempt);
+        try{
+            original.onCancel(()->{try{store.endAttempt(id,attempt.getString("runId"),"awaiting_user","等待继续",new JSONObject());store.startAttempt(id,"main_screen",20);}catch(Exception failed){throw new AssertionError(failed);}});
+            original.cancel();JSONObject successor=store.get(id,false);assertNotEquals(attempt.getString("runId"),successor.getString("runId"));
+            assertThrows(SecurityException.class,()->store.requestReviewedPrivateTaskStop(reviewedStop(attempt),original));
+            JSONObject unchanged=store.get(id,false);assertEquals(successor.getString("runId"),unchanged.getString("runId"));assertEquals(successor.getInt("coordinatorEpoch"),unchanged.getInt("coordinatorEpoch"));assertFalse(unchanged.optBoolean("cancelRequested"));
+        }finally{database(store).close();}
+    }
 }

@@ -1,0 +1,46 @@
+/* Page composition over retained BoardUI AppShell's bounded column/header/action
+ * relations and Affect's flat object groups. See DESIGN.md (whole-screen pass).
+ * These classes express object grouping; they do not wrap every field in a card. */
+
+/* Main tasks: align complete object rows, including BoardUI's real label wrapper. */
+.pw-redesign .pw-depth-tasks { padding-top: 22px; padding-bottom: 28px; }
+.pw-redesign .pw-depth-tasks .pw-task-results { gap: 30px; }
+.pw-depth-tasks .pw-task-collection > h3 { font-size: 13px; line-height: 20px; font-weight: 600; color: var(--pw-copy); margin: 0 0 8px; }
+.pw-redesign .pw-depth-tasks .pw-task-row.button-press-motion { width: 100%; min-width: 0; height: auto; min-height: 76px; padding: 12px 8px; }
+.pw-redesign .pw-depth-tasks .pw-task-row.button-press-motion > span { display: grid; grid-template-columns: 20px minmax(0,1fr) 16px; align-items: start; gap: 12px; width: 100%; min-width: 0; padding: 0; white-space: normal; }
+.pw-depth-tasks .pw-task-row-copy { display: flex; flex-direction: column; min-width: 0; gap: 5px; text-align: start; }
+.pw-redesign .pw-depth-tasks .pw-task-row-copy b { font-size: 15px; line-height: 23px; font-weight: 550; overflow-wrap: anywhere; }
+.pw-depth-tasks .pw-task-row-copy > span { font-size: 12px; line-height: 19px; color: var(--pw-copy); }
+.pw-depth-tasks .pw-task-row > span > svg { align-self: center; color: var(--pw-copy); }
+.pw-depth-tasks .pw-task-row-status { padding-top: 3px; }
+.pw-depth-tasks .pw-ended-tasks { padding-top: 2px; }
+.pw-task-overview-top { display: grid; gap: 12px; padding-bottom: 18px; margin-bottom: 4px; border-bottom: 1px solid var(--pw-line); }
+.pw-task-overview-top .pw-task-identity { display: flex; align-items: center; gap: 8px; margin: 0; }
+.pw-task-overview-top .pw-task-identity > [role="progressbar"] { width: 14px; height: 14px; }
+.pw-task-overview-top .pw-owner-work-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0; }
+.pw-task-overview-top .pw-owner-work-actions > p { flex-basis: 100%; margin: 0; }
+.pw-task-body .pw-task-disclosures { margin-top: 22px; }
+.pw-task-body .pw-task-overview { gap: 20px; }
+.pw-task-body .pw-task-outcome.pw-task-reading { margin: 0; }
+
+/* Continuations stay attached to the conversation, below its answer. */
+.pw-redesign .pw-conversation-work { margin-top: 28px; }
+.pw-conversation-work .pw-work-heading { padding-inline: 4px; margin-bottom: 10px; }
+.pw-conversation-work .pw-work-row.button-press-motion { width: 100%; min-width: 0; height: auto; padding: 12px; }
+.pw-conversation-work .pw-work-row.button-press-motion > span { display: grid; grid-template-columns: 16px minmax(0,1fr) 16px; align-items: center; gap: 12px; width: 100%; min-width: 0; padding: 0; }
+.pw-conversation-work .pw-work-copy { display: grid; gap: 5px; min-width: 0; }
+.pw-conversation-work .pw-work-copy b { font-size: 13px; line-height: 20px; font-weight: 550; overflow-wrap: anywhere; }
+.pw-conversation-work .pw-work-copy small { font-size: 12px; line-height: 18px; }
+.pw-linked-task.button-press-motion > span { display: flex; gap: 14px; justify-content: space-between; width: 100%; min-width: 0; padding: 0; }
+.pw-linked-task-copy { flex: 1; min-width: 0; }
+.pw-linked-task-action { flex-shrink: 0; }
+@media (min-width: 1100px) {
+ .pw-redesign .pw-depth-tasks { max-width: 1080px; padding-inline: 32px; }
+ .pw-depth-tasks .pw-task-results[data-has-active="true"] { display: grid; grid-template-columns: minmax(0,1fr) minmax(240px,.62fr); align-items: start; column-gap: 40px; }
+ .pw-depth-tasks .pw-priority-decisions { grid-column: 1 / -1; }
+ .pw-depth-tasks .pw-task-collection:not(.pw-ended-tasks) { grid-column: 1; }
+ .pw-depth-tasks .pw-ended-tasks { grid-column: 2; }
+}
+@media (max-width: 420px) {
+ .pw-redesign .pw-depth-tasks { padding-inline: 16px; }
+}

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import './collaboration-depth.css';
 import { ArrowLeft, ArrowUpRight, ChevronRight, FileText, Plus, RefreshCw, Settings2, ShieldCheck, Users } from 'lucide-react';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextField } from './forms-library';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
@@ -209,7 +210,7 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
   const canActOnTask = readState === 'known' && !!task && !busy;
   const requestSender = selectedRequest && (groupRows(group?.members).find(member => member.senderId === selectedRequest.senderId)?.displayName || selectedRequest.senderId || '原群请求');
 
-  return <section ref={root} className="pw-group-workspace" tabIndex={-1} data-group-view={viewKey}>
+  return <section ref={root} className="pw-group-workspace pw-depth-collaboration" tabIndex={-1} data-group-view={viewKey}>
     <header className="pw-group-header">
       <div className="pw-group-heading">
         {(groupId || editor) && <Button type="button" variant="ghost" iconOnly leadingIcon={ArrowLeft} disabled={busy} aria-label={editor ? '返回并保留草稿' : selectedRequest && tab === 'tasks' ? '返回请求列表' : '返回群列表'} onClick={back} />}
@@ -291,14 +292,13 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
         </div>}
         {selectedRequest && <article className="pw-group-reading" aria-label="群请求详情">
           <header className="pw-group-reading-heading"><p className="pw-group-eyebrow">{capabilityName(selectedRequest.capability)} · {requestSender}</p><h3>{selectedRequest.goal || '原群任务'}</h3><p className="pw-group-task-status">{readState !== 'known' && task ? '上次读取：' : ''}{groupTaskLabel(task?.status)}</p></header>
-          <p className="pw-group-scope"><ShieldCheck size={18} aria-hidden />结果受众：{audienceName(selectedRequest.audience)}。{task?.resultPrivate === true ? '这份结果保持原私人范围，不提供群投递。' : '不会改投其他群或私聊。'}</p>
-          {(readState === 'unknown' || readState === 'error') && <p className="pw-group-warning" role="status">原任务当前状态{readState === 'error' ? '读取失败' : '尚未知'}。{task ? '下方保留上次读取的内容，不能据此继续、停止或发回。' : ''}这里只查询原引用，不重新提交任务。</p>}
+          <div className="pw-group-reading-status">          {(readState === 'unknown' || readState === 'error') && <p className="pw-group-warning" role="status">原任务当前状态{readState === 'error' ? '读取失败' : '尚未知'}。{task ? '下方保留上次读取的内容，不能据此继续、停止或发回。' : ''}这里只查询原引用，不重新提交任务。</p>}
           {readState === 'reading' && <p className="pw-muted" role="status">正在核对原任务，已读内容保留在下方。</p>}
           {presentation?.progress?.message && <p>{presentation.progress.message}</p>}
           {(presentation?.approval?.message || task?.status === 'awaiting_user') && <p className="pw-group-warning" role="status">{presentation?.approval?.message || '这项任务等待主人处理，请进入原任务核对审批。'}</p>}
           {(presentation?.recovery?.message || ['reconciling', 'needs_confirmation'].includes(task?.status)) && <p className="pw-group-warning" role="status">{presentation?.recovery?.message || '执行效果待核对，请在原任务确认已有结果，不要重新提交。'}</p>}
-          <div className="pw-group-actions"><Button type="button" trailingIcon={ArrowUpRight} disabled={busy} onClick={openTask}>打开原任务与审批</Button><Button type="button" variant="ghost" leadingIcon={RefreshCw} disabled={busy} onClick={() => inspectTask(selectedRequest)}>重新读取原状态</Button></div>
-          {task?.summary && <section className="pw-group-result"><h4>任务摘要</h4><p className="pw-group-copy">{task.summary}</p></section>}
+</div>
+          <div className="pw-group-reading-layout"><div className="pw-group-reading-main">          {task?.summary && <section className="pw-group-result"><h4>任务摘要</h4><p className="pw-group-copy">{task.summary}</p></section>}
           {task?.resultPrivate !== true && groupRows(task?.outputs).map((output, index) => {
             const previous = requestDeliveries.find(row => row.outputId === output.outputId && row.audience === output.audience);
             const attempted = deliveryAttempts[`${identity(selectedRequest)}:${output.outputId}`];
@@ -312,8 +312,10 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
             <div><strong>{groupDeliveryLabel(delivery.state)}</strong><p>受众：{audienceName(delivery.audience)}</p>{(delivery.message || delivery.error) && <p className="pw-group-copy">{delivery.message || delivery.error}</p>}</div>
             <Button type="button" variant="ghost" disabled={busy} onClick={() => { void invoke('groups.inspectDelivery', { deliveryId: delivery.deliveryId }, value => { const actual = acceptGroupDelivery(selectedRequest, value, delivery.deliveryId); setDeliveries(old => ({ ...old, [actual.deliveryId]: { ...delivery, ...actual, outputId: delivery.outputId } })); }); }}>查询原投递，不重新发送</Button>
           </div>)}</section>}
+</div><aside className="pw-group-reading-context" aria-label="原请求范围与操作">          <p className="pw-group-scope"><ShieldCheck size={18} aria-hidden />结果受众：{audienceName(selectedRequest.audience)}。{task?.resultPrivate === true ? '这份结果保持原私人范围，不提供群投递。' : '不会改投其他群或私聊。'}</p>
+          <div className="pw-group-actions"><Button type="button" trailingIcon={ArrowUpRight} disabled={busy} onClick={openTask}>打开原任务与审批</Button><Button type="button" variant="ghost" leadingIcon={RefreshCw} disabled={busy} onClick={() => inspectTask(selectedRequest)}>重新读取原状态</Button></div>
           <div className="pw-group-actions pw-group-run-actions">{task && ['paused', 'interrupted'].includes(task.status) && <Button type="button" variant="secondary" disabled={!canActOnTask} onClick={() => { void invoke('groups.reviewTask', { requestId: selectedRequest.requestId, intent: 'resume' }, receiveReview); }}>核对并继续原任务</Button>}{task && typeof task.runId === 'string' && task.coordinatorEpoch > 0 && !['completed', 'failed', 'cancelled'].includes(task.status) && <Button type="button" variant="ghost" disabled={!canActOnTask} onClick={() => { void invoke('groups.reviewTask', { requestId: selectedRequest.requestId, intent: 'cancel' }, receiveReview); }}>核对并停止原运行</Button>}</div>
-          <Accordion className="pw-group-diagnostics"><AccordionItem id="request-identity" title="原始引用与运行信息" description="请求、任务、执行代次和投递编号"><dl className="pw-facts"><div><dt>原请求</dt><dd>{selectedRequest.requestId}</dd></div><div><dt>原任务</dt><dd>{selectedRequest.taskId}</dd></div><div><dt>原空间</dt><dd>{selectedRequest.spaceId}</dd></div><div><dt>原运行</dt><dd>{task?.runId || '尚未提供'}</dd></div><div><dt>执行代次</dt><dd>{task?.coordinatorEpoch ?? '尚未提供'}</dd></div><div><dt>任务版本</dt><dd>{task?.revision ?? '尚未提供'}</dd></div></dl>{requestDeliveries.map(delivery => <p className="pw-group-identifier" key={delivery.deliveryId}>投递 {delivery.deliveryId} · 产物 {delivery.outputId}{delivery.platformMessageId ? ` · 平台消息 ${delivery.platformMessageId}` : ''}</p>)}</AccordionItem></Accordion>
+          <Accordion className="pw-group-diagnostics"><AccordionItem id="request-identity" title="原始引用与运行信息" description="请求、任务、执行代次和投递编号"><dl className="pw-facts"><div><dt>原请求</dt><dd>{selectedRequest.requestId}</dd></div><div><dt>原任务</dt><dd>{selectedRequest.taskId}</dd></div><div><dt>原空间</dt><dd>{selectedRequest.spaceId}</dd></div><div><dt>原运行</dt><dd>{task?.runId || '尚未提供'}</dd></div><div><dt>执行代次</dt><dd>{task?.coordinatorEpoch ?? '尚未提供'}</dd></div><div><dt>任务版本</dt><dd>{task?.revision ?? '尚未提供'}</dd></div></dl>{requestDeliveries.map(delivery => <p className="pw-group-identifier" key={delivery.deliveryId}>投递 {delivery.deliveryId} · 产物 {delivery.outputId}{delivery.platformMessageId ? ` · 平台消息 ${delivery.platformMessageId}` : ''}</p>)}</AccordionItem></Accordion></aside></div>
         </article>}
       </TabPanel>
       <TabPanel id="members"><section className="pw-group-members"><header className="pw-group-section-heading"><div><h3>谁能在群里发起请求</h3><p>成员角色与启用状态仅作用于这个群空间。</p></div><Button type="button" leadingIcon={Plus} disabled={busy} onClick={() => openMember()}>添加群成员</Button></header>
@@ -328,7 +330,7 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
         <Accordion><AccordionItem id="saved-quota" title="任务与媒体额度" description={`全群每日 ${group.quota?.dailyTasks ?? '未设置'} 项任务 · 同时运行 ${group.quota?.maxConcurrent ?? '未设置'} 项`}><dl className="pw-facts">{groupQuotaFields.map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{group.quota?.[key] ?? '尚未提供'}</dd></div>)}</dl><p className="pw-muted">模型额度是本地累计保守预留，不是服务商账单 token。</p></AccordionItem></Accordion>
       </section></TabPanel>
     </Tabs>}
-    <SettingsDialog isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={review?.command === 'group.create' ? '创建这个群空间' : review?.command === 'delivery.send' ? '发回这份原产物' : review?.command?.startsWith('task.') ? '核对原任务操作' : '保存这份群设置'}>
+    <SettingsDialog isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={review?.command === 'group.create' ? '创建这个群空间' : review?.command === 'delivery.send' ? '发回这份原产物' : review?.command?.startsWith('task.') ? '核对原任务操作' : '保存这份群设置'}><div className="pw-collaboration-dialog" data-collaboration-kind="GroupsWorkspace">
       {review && <div className="pw-group-review">
         <p className="pw-group-review-context">{review.group?.name || review.input.name}</p>
         {review.command === 'group.create' && <><p>连接 {review.connection?.name || review.input.accountId} · {review.input.conversationKind === 'qq_guild_channel' ? `频道 ${review.input.conversationParentId} / ` : ''}{review.input.roomId}</p><p className="pw-group-scope">空间创建后保持关闭，继续添加成员与授权。</p></>}
@@ -339,6 +341,6 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
         <CheckboxField isSelected={acknowledged} onChange={setAcknowledged} isDisabled={busy}>我已核对对象、范围与影响，确认这一次操作</CheckboxField>
         <div className="pw-group-actions"><Button type="button" variant="secondary" disabled={busy} onClick={closeReview}>返回核对</Button><Button type="button" disabled={busy || !acknowledged} onClick={confirm}>{review.command === 'delivery.send' ? '确认发回原产物' : review.command === 'task.cancel' ? '确认停止原运行' : review.command === 'task.resume' ? '确认继续原任务' : '确认保存'}</Button></div>
       </div>}
-    </SettingsDialog>
+    </div></SettingsDialog>
   </section>;
 }

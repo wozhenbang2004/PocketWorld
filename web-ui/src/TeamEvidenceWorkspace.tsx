@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import './collaboration-depth.css';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { emptyTeamEvidence, teamEvidenceSelection, TeamEvidenceConsent, type TeamEvidenceDraft } from './team-evidence';
 
@@ -82,7 +83,7 @@ export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, o
   }, []);
   useEffect(() => { onBackChange?.(() => { if (busy) return true; if (review) { closeReview(); return true; } if (expanded) { closePage(); setExpanded(false); return true; } return false; }); return () => onBackChange?.(null); }, [busy, review, expanded, onBackChange]);
   const catalogue = page?.catalogue || {};
-  return <section className="pw-team-overview" aria-label="成员资料范围">
+  return <section className="pw-team-overview pw-team-evidence" aria-label="成员资料范围">
     <Button variant="ghost" disabled={busy || disabled} onClick={() => { if (expanded) closePage(); setExpanded(!expanded); }}>{expanded ? '收起成员资料范围' : '成员能读哪些资料'}</Button>
     {expanded && <>
       <p className="pw-field-hint">共同目标与发给团队的消息沿原协作共享。个人记忆、原文、技能、附件与项目文件在这里逐项选择，再确认给所列成员。</p>
@@ -91,7 +92,7 @@ export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, o
       {busy && <p className="pw-muted" role="status">正在核对原目录与范围…</p>}{error && <p className="pw-secondary-error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
       {page && <>
         <p className="pw-muted">当前{page.current?.state === 'active' ? '已分享' : page.current?.state === 'revoked' ? '已撤回' : '尚未分享'} · 范围修订 {page.current?.revision ?? '未知'}。选择清单尚未生效。</p>
-        <EvidenceScope scope={page.current} />
+        <Accordion className="pw-team-evidence-current"><AccordionItem title="已分享的准确版本与来源"><EvidenceScope scope={page.current} /></AccordionItem></Accordion>
         <Accordion variant="divided" className="pw-compact-disclosures" allowsMultipleExpanded>
           <AccordionItem id="records" title="正式记忆" description="只分享明确选择的版本">
             {rows(catalogue.records).map(row => <CheckboxField key={row.choiceHandle} isSelected={draft.records.includes(row.choiceHandle)} isDisabled={busy || disabled} onChange={checked => toggle('records', row.choiceHandle, checked)}>{row.text} · 修订 {row.revision}</CheckboxField>)}
@@ -119,17 +120,17 @@ export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, o
         {page.current?.state === 'active' && <div className="pw-form-actions"><Button variant="ghost" disabled={busy || disabled} onClick={() => { closeReview(); void invoke('teamEvidence.renew', { pageHandle: page.pageHandle }, showReview); }}>续审相同材料与检查点</Button><Button variant="ghost" disabled={busy || disabled} onClick={() => { closeReview(); void invoke('teamEvidence.revoke.review', { pageHandle: page.pageHandle }, showReview); }}>核对撤回此成员资料</Button></div>}
       </>}
     </>}
-    <SettingsDialog isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={review?.operation === 'revoke' ? '撤回后续资料读取' : review?.scope === 'current_members' ? '核对本次当前成员与同一资料范围' : '核对本成员读取范围'}>
+    <SettingsDialog isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={review?.operation === 'revoke' ? '撤回后续资料读取' : review?.scope === 'current_members' ? '核对本次当前成员与同一资料范围' : '核对本成员读取范围'}><div className="pw-collaboration-dialog" data-collaboration-kind="TeamEvidenceWorkspace">
       {review?.scope === 'current_members' ? <>{rows(review.review?.members).map(target => <section key={target.memberId}><h3>{members.find(member => member.id === target.memberId)?.name || target.memberId}</h3><EvidenceScope scope={target.review} /></section>)}<p>仅这次列出的成员收到同一显选范围，未来新增身份不会继承。</p></> : <><h3>{members.find(member => member.id === memberId)?.name || memberId}</h3><EvidenceScope scope={review?.review} /></>}
       <p>{review?.operation === 'revoke' ? '撤回后续读取与答案接纳资格。已经提供给模型的历史内容如实保留。' : review?.review?.reviewMode === 'renew_identical_materials' ? '重新核对相同材料，保留原研究检查点与已用次数；旧票据失效，没有自动继续。' : '只分享所示准确资料，不增加写入、执行或模型与工具预算；空集合不会回退为默认私人范围。'}</p>
       <CheckboxField isSelected={acknowledged} onChange={acknowledge} isDisabled={busy}>我确认这次所列成员与准确资料范围</CheckboxField>
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>返回核对</Button><Button disabled={busy || !acknowledged || disabled} onClick={confirm}>{review?.operation === 'revoke' ? '确认撤回' : '确认这一次范围'}</Button></div>
-    </SettingsDialog>
+    </div></SettingsDialog>
   </section>;
 }
 
 function SourceRange({ value, disabled, onChange }: { value: Data; disabled: boolean; onChange: (key: string, value: string) => void }) {
-  return <div className="pw-form-actions"><TextField label="UTF-16 字符起点" value={value.offset} onChange={value => onChange('offset', value)} isDisabled={disabled} /><TextField label="范围字符数，最多 24000" value={value.chars} onChange={value => onChange('chars', value)} isDisabled={disabled} /></div>;
+  return <div className="pw-evidence-source-range"><TextField label="UTF-16 字符起点" value={value.offset} onChange={value => onChange('offset', value)} isDisabled={disabled} /><TextField label="范围字符数，最多 24000" value={value.chars} onChange={value => onChange('chars', value)} isDisabled={disabled} /></div>;
 }
 function EvidenceScope({ scope }: { scope: Data | null | undefined }) {
   if (!scope) return null;

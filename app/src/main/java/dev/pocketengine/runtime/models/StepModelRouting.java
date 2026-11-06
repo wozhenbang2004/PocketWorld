@@ -197,7 +197,12 @@ public final class StepModelRouting {
         }
     }
     private static boolean successful(JSONObject receipt) {
-        if (receipt == null || !dev.pocketengine.core.ToolOutcome.classify(receipt).successful()
+        if (receipt == null) return false;
+        dev.pocketengine.core.ToolOutcome outcome = dev.pocketengine.core.ToolOutcome.classify(receipt);
+        // Accepted/running is successful admission, not a completed safe read.
+        // It must reset the consecutive-read signal rather than promote a lighter
+        // model. Keep legacy unspecified completion under the existing checks.
+        if (!outcome.successful() || "pending".equals(outcome.completion())
                 || receipt.has("accepted") && !Boolean.TRUE.equals(receipt.opt("accepted"))) return false;
         if (receipt.has("error") && !receipt.isNull("error") && !receipt.optString("error").isEmpty()) return false;
         String state = receipt.optString("status", receipt.optString("state"));

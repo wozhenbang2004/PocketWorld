@@ -7,8 +7,8 @@ const work = (id = 'work-a', status = 'running') => ({ id, goal: '整理明天�
   controls: { canStop: true, canInput: true, canContinue: false },
 } });
 const reply = (kind = 'owner_work') => ({ role: 'assistant', taskId: 'work-a', content: '当时核对的结果',
-  replyContext: { taskId: 'work-a', runId: 'old-run', epoch: 1, deliveryId: `${kind}:work-a:old-run:1`, replyToMessageIds: ['request-a'] },
-  taskResult: { kind, taskId: 'work-a', runId: 'old-run', epoch: 1, deliveryId: `${kind}:work-a:old-run:1`, status: 'failed', endedAt: 1793764860000, summaryChars: 8, summaryTruncated: false },
+  replyContext: { taskId: 'work-a', runId: 'old-run', epoch: 1, deliveryId: kind === 'owner_work' ? 'b3f065b7-e049-4192-b798-39d01a8b69c7' : `${kind}:work-a:old-run:1`, replyToMessageIds: ['request-a'] },
+  taskResult: { kind, taskId: 'work-a', runId: 'old-run', epoch: 1, deliveryId: kind === 'owner_work' ? 'b3f065b7-e049-4192-b798-39d01a8b69c7' : `${kind}:work-a:old-run:1`, status: 'failed', endedAt: 1793764860000, summaryChars: 8, summaryTruncated: false },
 });
 
 test('background work never supplies the foreground typing or stop identity', () => {
@@ -45,6 +45,8 @@ test('old delivery status and original request stay frozen while the current tas
 
 test('conflicting delivery identities cannot be presented as a verified outcome', () => {
   const message = reply();
+  const oldId = 'owner_work:work-a:old-run:1';
+  assert.equal(messageTaskResult({ ...message, replyContext: { ...message.replyContext, deliveryId: oldId }, taskResult: { ...message.taskResult, deliveryId: oldId } }), null);
   assert.equal(messageTaskResult({ ...message, role: 'user' }), null);
   assert.equal(messageTaskResult({ ...message, taskResult: { ...message.taskResult, runId: 'another-run' } }), null);
   assert.equal(messageTaskResult({ ...message, taskResult: { ...message.taskResult, status: 'running' } }), null);

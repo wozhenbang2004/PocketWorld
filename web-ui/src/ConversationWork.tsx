@@ -18,7 +18,7 @@ export function ConversationWork({ tasks, labelStatus, onOpen, canOpen }: { task
       const progress = getRecentTaskProgress(task), busy = ['running', 'preparing', 'queued', 'verifying', 'stopping'].includes(task.status), phone = phoneConversationId(task) !== null;
       return <li key={task.id} data-work-task-id={task.id}><Button variant="ghost" className="pw-work-row pw-conversation-phone-task" aria-label={`${phone ? '查看手机任务' : '查看工作'}：${task.goal}`} disabled={!canOpen} onClick={() => onOpen(task)}>
         <span className="pw-work-mark">{busy ? <ProgressCircle isIndeterminate size="sm" aria-label={labelStatus(task.status)} /> : <span aria-hidden="true">·</span>}</span>
-        <span className="pw-work-copy"><b>{task.goal}</b><small>{labelStatus(task.status)}{progress?.title && progress.title !== task.goal ? ` · ${progress.title}` : ''}</small></span><RiArrowRightSLine size={16} aria-hidden="true" />
+        <span className="pw-work-copy"><b>{task.goal}</b><small>{labelStatus(task.status)}{progress?.source !== 'task' && progress?.title && progress.title !== task.goal && progress.title !== labelStatus(task.status) ? ` · ${progress.title}` : ''}</small></span><RiArrowRightSLine size={16} aria-hidden="true" />
       </Button></li>;
     })}</ol>
   </section>;
