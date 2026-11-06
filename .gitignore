@@ -38,3 +38,8 @@ __pycache__/
 /app/src/main/assets/pocket-ui/
 /web-ui/public/licenses/
 /web-ui/test-results/
+
+# Machine-local release configuration and DPAPI-protected publisher credential.
+/release.local.json
+/release-runs/
+*.dpapi

@@ -555,7 +555,21 @@ public final class AgentRunner {
                 control.check();String nativeReference=clean(requestClock.referenceData(inputClock),config);
                 String repeatNotice=repeatedTools.referenceData();if(!repeatNotice.isEmpty())nativeReference+="\n\n"+repeatNotice;
                 if(!recovery.referenceData().isEmpty())nativeReference+="\n\n"+recovery.referenceData();
-                String nativePlanningReference=turnPlanning==null?"":clean("当前原生任务阶段与已保存的计划确认事实；具体操作仍须原工具权限和参数审批："+planning.reference(turnPlanning),config);
+                String nativePlanningReference="";
+                if(turnPlanning!=null){
+                    JSONObject currentPlanning=planning.reference(turnPlanning);
+                    String meaning="当前原生任务阶段与已保存的计划确认事实；具体操作仍须原工具权限和参数审批：";
+                    if(!turnPlanning.planning()&&turnPlanning.planRevision>0&&"current_native_task_scope".equals(currentPlanning.optString("source"))
+                            &&Boolean.TRUE.equals(currentPlanning.opt("planApprovalRecorded"))&&currentPlanning.optJSONObject("nativePlanApproval")!=null){
+                        if(reviewedPlanConsumesOldReadHint(currentPlanning,turnPlanning,history,recallIntent))intent.consumeReviewedStageRead();
+                        meaning="当前SQL与scope修订已核验：同一planArtifactRef、planRevision和planHash的计划审核已经通过。"
+                                +"历史计划待审回执不再表示当前状态：execution_plan_awaiting_review以及旧规划阶段的等待审核条件已满足，不要仅因这些旧回执再次停等或重提同一计划。"
+                                +"批准来源run/epoch仅记录原确认的来源；续接run不同，不表示当前scope中已经核验的计划确认失效，也不允许重放旧工具调用。"
+                                +"authorizesExecution=false表示这条参考消息不增加通用工具权限，不是说计划仍未批准。沿原目标选择尚未完成的下一步，具体工具效果与参数仍须原生权限、单独审批和剩余预算检查。"
+                                +"新的主人停止或修改仍然有效；任何当前真实主人要求的只读限制也须遵守，不能借计划确认覆盖它们。当前原生事实：";
+                    }
+                    nativePlanningReference=clean(meaning+currentPlanning,config);
+                }
                 JSONArray tools=phone==null||!control.phoneSurfaceActive()?new JSONArray():tools();
                 if(control.phoneSurfaceActive()&&phone instanceof AdaptivePhonePort)addTool(tools,"phone_observation_help","当前节点中找不到目标时请求新的观察；仅在本机允许且模型已配置图像输入能力时发送真实图片，不重试业务动作。",properties("observationId","string").put("reason",new JSONObject().put("type","string").put("enum",new JSONArray().put("target_missing"))),new String[]{"observationId","reason"});
                 JSONArray outcomeTools=RunOutcomeTools.tools();for(int i=0;i<outcomeTools.length();i++)tools.put(outcomeTools.getJSONObject(i));
@@ -1389,6 +1403,39 @@ public final class AgentRunner {
             if("user".equals(row.optString("role"))&&!row.optString("ownerMessageId").isEmpty()&&java.util.Set.of("queue","steer").contains(row.optString("ownerInputMode")))latest=row.getString("content");
             if(Boolean.TRUE.equals(row.opt("ownerRecallFeedback")))latest=recallFeedback(row);
         }return latest;
+    }
+    /** Match the preserved native plan receipt, not owner prose. Any later owner entry wins,
+     * even when its text is identical. This consumes a language hint, never native authority. */
+    private static boolean reviewedPlanConsumesOldReadHint(JSONObject facts,ExecutionPlanning.Snapshot current,JSONArray history,String recall)throws Exception {
+        JSONObject approval=facts.optJSONObject("nativePlanApproval");if(approval==null||current.planning()||current.planRevision<1)return false;
+        if(!current.taskId.equals(approval.optString("taskId"))||current.scopeRevision!=approval.optLong("scopeRevision",-1)
+                ||current.planRevision!=approval.optLong("planRevision",-1)||!current.planArtifactRef.equals(approval.optString("planArtifactRef"))||!current.planHash.equals(approval.optString("planHash")))return false;
+        int owner=-1,ownerBefore=-1,matched=-1,matches=0;
+        for(int i=0;i<history.length();i++){
+            JSONObject row=history.getJSONObject(i);
+            if("user".equals(row.optString("role"))&&(Boolean.TRUE.equals(row.opt("ownerRecallFeedback"))
+                    ||!row.optString("ownerMessageId").isEmpty()&&Set.of("queue","steer").contains(row.optString("ownerInputMode"))))owner=i;
+            if(!"tool".equals(row.optString("role")))continue;
+            JSONObject receipt;try{receipt=new JSONObject(row.getString("content"));}catch(Exception notNativeJson){continue;}
+            if(!"execution_plan_awaiting_review".equals(receipt.optString("code"))||!current.taskId.equals(receipt.optString("taskId"))
+                    ||!approval.optString("approvalId").equals(receipt.optString("approvalId"))||!approval.optString("runId").equals(receipt.optString("runId"))
+                    ||approval.optInt("epoch",-1)!=receipt.optInt("epoch",-2)||current.scopeRevision-1!=receipt.optLong("scopeRevision",-1)
+                    ||current.planRevision!=receipt.optLong("planRevision",-1)||!current.planArtifactRef.equals(receipt.optString("planArtifactRef"))||!current.planHash.equals(receipt.optString("planHash")))continue;
+            String call=row.optString("tool_call_id");int submitted=0;
+            for(int prior=0;prior<i;prior++){
+                JSONObject message=history.getJSONObject(prior);if(!"assistant".equals(message.optString("role")))continue;
+                JSONArray calls=message.optJSONArray("tool_calls");
+                for(int n=0;calls!=null&&n<calls.length();n++){
+                    JSONObject candidate=calls.getJSONObject(n),function=candidate.optJSONObject("function");
+                    if(call.isEmpty()||!call.equals(candidate.optString("id"))||function==null||!ExecutionPlanning.SUBMIT.equals(function.optString("name")))continue;
+                    try{if(current.planHash.equals(ExecutionPlan.hash(new JSONObject(function.getString("arguments")).getJSONObject("plan"))))submitted++;}catch(Exception notOriginalPlan){return false;}
+                }
+            }
+            if(submitted!=1)return false;matches++;matched=i;ownerBefore=owner;
+        }
+        if(matches!=1||ownerBefore<0||owner!=ownerBefore||owner>matched)return false;
+        JSONObject input=history.getJSONObject(owner);
+        return recall.equals(Boolean.TRUE.equals(input.opt("ownerRecallFeedback"))?recallFeedback(input):input.getString("content"));
     }
     private static boolean hasRecallFeedback(JSONArray history,String feedback)throws Exception{
         for(int i=history.length()-1;i>=0;i--){JSONObject row=history.getJSONObject(i);if(Boolean.TRUE.equals(row.opt("ownerRecallFeedback")))return feedback.equals(recallFeedback(row));}return false;
