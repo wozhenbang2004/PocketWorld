@@ -388,6 +388,49 @@ class ReleaseOrchestratorTest(unittest.TestCase):
                 runner.build.assert_not_called()
                 self.assertEqual(1, runner.command.call_count)
 
+    def test_python_gate_uses_final_summary_instead_of_negative_fixture_stdout(self):
+        web = Path(self.c["repo"]) / "web-ui"
+        (web / "node_modules").mkdir(parents=True)
+        (web / "package-lock.json").write_text("{}", encoding="utf-8")
+        (Path(self.c["cache_root"]) / "release-web-lock.sha256").write_text(RELEASE.digest(web / "package-lock.json"))
+        RELEASE.write_json(Path(self.c["repo"]) / "app/src/main/assets/pocket-ui/build-identity.json", {"sourceRevision": HEAD})
+        valid_web = "# tests 1\n# fail 0\n# cancelled 0\n# skipped 0\n"
+        separator = "-" * 70 + "\n"
+        outputs = (
+            (True, "test_zero_or_skipped_web_tests_stop_before_apk_build ... # skipped 1\nok\n\n"
+                   + separator + "Ran 91 tests in 10.776s\n\nOK"),
+            (True, separator + "Ran 2 tests in 0.001s\n\nOK (skipped=1)\n"
+                   + separator + "Ran 91 tests in 10.776s\n\nOK\n"),
+            (True, "test_one ... ok\n" + separator.replace("\n", "\r\n") + "Ran 1 test in 0.001s\r\n\r\nOK\r\n"),
+            (False, separator + "Ran 91 tests in 10.776s\n\nOK (skipped=1)"),
+            (False, separator + "Ran 91 tests in 10.776s\n\nFAILED (failures=1)"),
+            (False, separator + "Ran 0 tests in 0.000s\n\nOK"),
+            (False, "test_one ... ok\n"),
+            (False, separator + "Ran 91 tests in 10.776s\n"),
+            (False, "OK"),
+            (False, separator + "Ran 91 tests in 10.776s\n\nOK\nunconfirmed trailing output"),
+        )
+
+        class ReachedBuild(Exception):
+            pass
+
+        for allowed, output in outputs:
+            with self.subTest(allowed=allowed, output=output):
+                runner = self.runner()
+                runner.command = mock.Mock(side_effect=[(0, valid_web), (0, "synthetic Web build"), (0, output)])
+                runner.build = mock.Mock(side_effect=ReachedBuild)
+                try:
+                    RELEASE.make_bundle(runner, HEAD, 255, self.root / "base.apk")
+                except ReachedBuild:
+                    reached_build = True
+                except RELEASE.ReleaseError:
+                    reached_build = False
+                else:
+                    self.fail("The mocked APK build boundary must stop the test")
+                self.assertEqual(allowed, reached_build)
+                self.assertEqual(allowed, runner.build.called)
+                self.assertEqual(3, runner.command.call_count)
+
     def test_manifest_is_activated_only_after_all_uploaded_full_hash_and_range_checks(self):
         bundle, runner = self.bundle(), self.runner()
         http = PublisherFixture(self.c, bundle)

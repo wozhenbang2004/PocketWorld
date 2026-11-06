@@ -416,9 +416,11 @@ def make_bundle(runner, head, version, base_apk):
                     "tools/tests/test_update_manifest_signing.py", "tools/tests/test_windows_release.py",
                     "tools/tests/test_release_orchestrator.py"], capture=True)
     print(python_tests, flush=True)
-    count = re.search(r"Ran (\d+) tests? in", python_tests)
-    if not count or int(count[1]) < 1 or re.search(r"\bskipped\s*[= ]\s*[1-9]", python_tests):
-        raise ReleaseError("Python 发布检查存在跳过或没有执行用例。")
+    # Fixture stdout may contain its own skipped/FAILED samples. Only the final
+    # unittest summary is authoritative; bare OK also excludes actual skip/fail counts.
+    summary = re.search(r"(?m)^-{5,}\r?\nRan (\d+) tests? in [0-9]+(?:\.[0-9]+)?s\r?\n\r?\nOK[ \t]*(?:\r?\n)*\Z", python_tests)
+    if not summary or int(summary[1]) < 1:
+        raise ReleaseError("Python 发布检查没有有效的正测试数、零失败和零跳过最终汇总。")
     host = run / "host-tests"
     targets = [":app:testDebugUnitTest", ":app:assembleDebug", "-PpocketworldHostTests=" + c["host_test_groups"],
                "-PpocketworldHostReport=" + host.as_posix(), "--no-daemon", "-Dorg.gradle.jvmargs=-Xmx1024m -Dfile.encoding=UTF-8"]
