@@ -331,7 +331,8 @@ internal class PocketWebHost private constructor(
             .put("bridgeAvailable", listenerRegistered)
         runCatching { values.put("appearance", JSONObject()
             .put("mode", dev.pocketengine.ui.UiAppearance.mode(dev.pocketengine.ui.UiAppearance.preferences(activity)))
-            .put("dark", dev.pocketengine.ui.UiAppearance.dark(activity))) }
+            .put("dark", dev.pocketengine.ui.UiAppearance.dark(activity))
+            .put("typography", dev.pocketengine.ui.UiTypography.snapshot(dev.pocketengine.ui.UiAppearance.preferences(activity)))) }
         if (!listenerRegistered) values.put("bridgeUnavailableReason", "当前系统 WebView 不支持安全通信。请更新 Android System WebView 后重新打开；本页不能重试或维修数据。")
         val token = documentToken?.takeIf { listenerRegistered && bridge.canInteract() }
         if (token != null) values.put("documentToken", token)

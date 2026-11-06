@@ -6,6 +6,7 @@
  */
 import {useId,type ComponentType,type ReactNode} from 'react';
 import {LayoutGroup,motion} from 'motion/react';
+import {RiSideBarFill} from '@remixicon/react';
 import {useReducedMotion} from '../library/core';
 import {useTemplateCopy} from './adapted/boardui/components/foundations/template-copy/template-copy';
 import {cx} from './adapted/boardui/utils/cx';
@@ -37,6 +38,7 @@ function NavItem({
   href = "#",
   onClick,
   reduceMotion,
+  disabled = false,
 }: {
   icon: IconComponent;
   label: string;
@@ -47,6 +49,7 @@ function NavItem({
   /** Action rows (e.g. Settings → modal) intercept the navigation. */
   onClick?: () => void;
   reduceMotion: boolean;
+  disabled?: boolean;
 }) {
   const localize = useTemplateCopy();
   return localize((
@@ -56,12 +59,14 @@ function NavItem({
         onClick
           ? (event) => {
               event.preventDefault();
-              onClick();
+              if (!disabled) onClick();
             }
           : undefined
       }
       aria-current={isSelected ? "page" : undefined}
       aria-label={label}
+      aria-disabled={disabled || undefined}
+      tabIndex={disabled ? -1 : undefined}
       title={collapsed ? label : undefined}
       className={cx(
         "flex items-center justify-between overflow-hidden rounded-2lg p-2",
@@ -86,7 +91,7 @@ function NavItem({
           className={cx("size-5 shrink-0", isSelected ? "text-white" : "text-foreground-icon-secondary")}
           aria-hidden
         />
-        <Collapsible collapsed={collapsed}>
+        <Collapsible collapsed={collapsed} className="pw-nav-label">
           <span
             className={cx(
               "text-body-medium whitespace-nowrap",
@@ -97,31 +102,36 @@ function NavItem({
           </span>
         </Collapsible>
       </span>
-      {badge && <Collapsible collapsed={collapsed} className="pw-nav-content">{badge}</Collapsible>}
+      {badge && <Collapsible collapsed={collapsed} className="pw-nav-content pw-nav-badge">{badge}</Collapsible>}
     </a>
   ));
 }
 
-/** A primary navigation row. Rows without an `href` are decoration only. */
+/** BoardUI rows dispatch the existing product route/action; compact is controlled
+ * by the single App shell so every navigation group shares the same rail. */
 
 export type WorkNavItem={key:string;label:string;icon:IconComponent;count?:number;group?:string;description?:string;disabled?:boolean};
-export function WorkSidebar({items,selected,onNavigate,header,footer,label='工作与功能',hideGroupLabels=false}:{items:WorkNavItem[];selected:string;onNavigate:(key:string)=>void;header?:ReactNode;footer?:ReactNode;label?:string;hideGroupLabels?:boolean}) {
+export function WorkSidebar({items,selected,onNavigate,header,footer,label='工作与功能',hideGroupLabels=false,compact=false,onCompactChange}:{items:WorkNavItem[];selected:string;onNavigate:(key:string)=>void;header?:ReactNode;footer?:ReactNode;label?:string;hideGroupLabels?:boolean;compact?:boolean;onCompactChange?:(compact:boolean)=>void}) {
  const navigationId=useId();
  const reduceMotion=useReducedMotion();
  const groups=Array.from(new Set(items.map(x=>x.group||'工作')));
  return (
   <LayoutGroup id={navigationId}>
-   <div className="pw-work-sidebar" data-motion-nav="">
+   <div className="pw-work-sidebar" data-motion-nav="" data-compact={compact ? 'true' : 'false'}>
     {header}
     <nav aria-label={label}>
      {groups.map(group=><section key={group}>
       <h3 className={hideGroupLabels?'pw-sr-only':undefined}>{group}</h3>
       {items.filter(x=>(x.group||'工作')===group).map(item=><div className="pw-nav-item" key={item.key}>
-       <NavItem icon={item.icon} label={item.label} isSelected={selected===item.key} reduceMotion={reduceMotion} badge={item.count!=null?<span className="pw-nav-count">{item.count}</span>:undefined} onClick={()=>{if(!item.disabled)onNavigate(item.key)}}/>
-       {item.description&&<small>{item.description}</small>}
+       <NavItem icon={item.icon} label={item.label} collapsed={compact} disabled={item.disabled} isSelected={selected===item.key} reduceMotion={reduceMotion} badge={item.count!=null?<span className="pw-nav-count">{item.count}</span>:undefined} onClick={()=>onNavigate(item.key)}/>
+       {item.description&&selected===item.key&&!compact&&<small>{item.description}</small>}
       </div>)}
      </section>)}
     </nav>
+    {onCompactChange && <button type="button" className="pw-nav-compact-toggle" aria-label={compact ? '展开导航' : '收起导航'} aria-expanded={!compact} title={compact ? '展开导航' : undefined} onClick={()=>onCompactChange(!compact)}>
+      <RiSideBarFill aria-hidden="true" className={compact ? 'pw-nav-compact-icon' : 'pw-nav-compact-icon is-expanded'}/>
+      <Collapsible collapsed={compact} className="pw-nav-label"><span>收起导航</span></Collapsible>
+    </button>}
     {footer}
    </div>
   </LayoutGroup>

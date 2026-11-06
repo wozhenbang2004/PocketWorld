@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { RiArrowRightSLine, RiBookOpenLine, RiRefreshLine } from '@remixicon/react';
+import { RiRefreshLine } from '@remixicon/react';
+import { SkillLibrary } from './shell-library/affect-workflows';
 import { MarkdownBody } from './library/MarkdownBody';
 import './skills-reading.css';
-import { Accordion, AccordionItem, Button, CheckboxField, HostFileUpload, IconButton, SearchField, SelectField, SettingsDialog, TextField } from './forms-library';
+import { Accordion, AccordionItem, Button, CheckboxField, HostFileUpload, IconButton, SelectField, SettingsDialog, TextField } from './forms-library';
 
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
@@ -76,7 +77,6 @@ export default function SkillsWorkspace({ state, run, registerTransientBack }: {
       (row || collectionPanel.current)?.focus({ preventScroll: true });
     }
   }, [skill?.id, waiting, selecting, catalogue]);
-  const filtered = rows(catalogue?.skills).filter(row => [row.name, row.description, row.source].join(' ').toLowerCase().includes(query.toLowerCase()));
   const plugins = rows(state.features?.plugins?.plugins).filter(row => row.installationId && Number.isSafeInteger(row.stateRevision));
   const summary = (value: Data) => <><h3>{value.name || '当前原技能'}</h3><p>{value.description}</p><dl className="pw-facts"><div><dt>修订</dt><dd>{value.revision ?? '新导入'} · {value.sourceVersion || '未注明来源版本'}</dd></div><div><dt>来源</dt><dd>{value.source || '本次待核对内容'}</dd></div><div><dt>状态</dt><dd>{value.enabled ? '已启用' : '停用'}{value.active === false && value.enabled ? ' · 当前不可用' : ''}</dd></div></dl><p className="pw-muted">{strings(value.resources).join('、') || '尚无已核对资源列表'}</p><Accordion variant="divided" className="pw-skill-disclosures"><AccordionItem id="skill-identity" title="内容身份与原权限"><p className="pw-muted">{value.digest}</p><p>原能力要求：{strings(value.requiredCapabilities).join('、') || '未列出'}</p>{value.expiresAt && <p>到期：{new Date(value.expiresAt).toLocaleString()}</p>}</AccordionItem></Accordion></>;
   const comparison = (value: Data) => <dl className="pw-facts">{[['added', '新增'], ['modified', '修改'], ['removed', '移除']].map(([key, title]) => <div key={key}><dt>{title}</dt><dd>{strings(value?.[key]).join('、') || '无'}</dd></div>)}</dl>;
@@ -84,16 +84,8 @@ export default function SkillsWorkspace({ state, run, registerTransientBack }: {
   return <div className="pw-skill-workspace">
       {(error || native.error) && <p className="pw-error" role="alert">{error || native.error}</p>}{notice && <p role="status">{notice}</p>}{waiting && <p role="status">正在处理本次原技能请求…</p>}{native.busy && native.operationId && <Button variant="ghost" disabled={stopping} onClick={() => { const operationId = native.operationId; setStopping(true); void run('skills.cancel', { operationId }).then(() => { if (alive.current) setNotice('已请求停止这次原处理，仍需等待实际回执；可能已发生的写入不会自动重试。'); }).catch(failure => { if (alive.current) setError(failure.message); }).finally(() => { if (alive.current) setStopping(false); }); }}>停止这次原处理</Button>}
     <section ref={collectionPanel} tabIndex={-1} className="pw-memory-collection pw-skill-collection" aria-label="技能管理" hidden={!!skill}>
-      <div className="pw-skill-toolbar"><SearchField aria-label="查找已登记技能" value={query} onChange={setQuery} placeholder="查找技能" /><IconButton icon={RiRefreshLine} aria-label="重新读取技能" title="重新读取技能" disabled={waiting} onClick={refresh}/></div>
-      <div className="pw-skill-list-heading"><p>先阅读，再决定启用或更新。</p><Button variant="ghost" className="pw-skill-batch-toggle" disabled={waiting} onClick={() => { if (checkingSources) { batch.forEach(item => release(item.skillHandle)); setBatch([]); } setCheckingSources(value => !value); }}>{checkingSources ? '退出多选' : '批量检查来源'}</Button></div>
-
-      {catalogue && !filtered.length && <p>当前没有匹配的技能。可以从下方选择文件，或检查明确的 Git 来源。</p>}
-      <div className="pw-skill-list">{filtered.map(row => <article className="pw-skill-list-item" key={row.id}>
-        <Button variant="ghost" className="pw-skill-row" data-skill-id={row.id} leadingIcon={RiBookOpenLine} trailingIcon={RiArrowRightSLine} disabled={waiting || selecting} onClick={() => open(row.id)} aria-label={`打开技能：${row.name || '未命名技能'}`} aria-description={[row.description, `${row.enabled ? '已启用' : '停用'}，修订 ${row.revision}`].filter(Boolean).join('；')}>
-          <span className="pw-skill-row-copy"><span className="pw-skill-row-title">{row.name || '未命名技能'}</span>{row.description && <span className="pw-skill-row-description">{row.description}</span>}<small>{row.enabled ? '已启用' : '停用'} · 修订 {row.revision}</small></span>
-        </Button>
-        {checkingSources && row.gitSource && !row.origin && <CheckboxField className="pw-skill-select" isSelected={batch.some(item => item.skill.id === row.id)} isDisabled={waiting || (!batch.some(item => item.skill.id === row.id) && batch.length >= 8)} onChange={checked => toggleBatch(row, checked)}>加入本次来源检查</CheckboxField>}
-      </article>)}</div>
+      <div className="pw-skill-list-heading"><p>先阅读，再决定启用或更新。</p><div className="pw-form-actions pw-affect-skill-actions"><IconButton icon={RiRefreshLine} aria-label="重新读取技能" title="重新读取技能" disabled={waiting} onClick={refresh}/><Button variant="ghost" className="pw-skill-batch-toggle" disabled={waiting} onClick={() => { if (checkingSources) { batch.forEach(item => release(item.skillHandle)); setBatch([]); } setCheckingSources(value => !value); }}>{checkingSources ? '退出多选' : '批量检查来源'}</Button></div></div>
+      <SkillLibrary skills={rows(catalogue?.skills)} loaded={!!catalogue} query={query} onQuery={setQuery} disabled={waiting || selecting} onOpen={open} checkingSources={checkingSources} selectedIds={batch.map(item => item.skill.id)} onToggle={toggleBatch}/>
       {batch.length > 0 && <div className="pw-form-actions"><span>已选择 {batch.length} 项</span><Button variant="secondary" disabled={waiting} onClick={() => { void invoke('skills.batch.inspect', { skillHandles: batch.map(item => item.skillHandle) }, openReview); }}>检查这些原来源</Button></div>}
     </section>
     {incoming.pending && <section className="pw-source-record"><h3>收到一份待核对的 SKILL.md</h3><p>正文尚未读取。先检查内容、来源与资源缺口，再决定是否导入。</p><div className="pw-form-actions"><Button disabled={waiting || selecting} onClick={() => { void invoke('skills.incoming.inspect', { requestId: incoming.requestId, targetHandle }, openReview); }}>检查这份原文件</Button><Button variant="ghost" disabled={waiting} onClick={() => { void invoke('skills.incoming.discard', { requestId: incoming.requestId }); }}>放弃这份文件</Button></div></section>}

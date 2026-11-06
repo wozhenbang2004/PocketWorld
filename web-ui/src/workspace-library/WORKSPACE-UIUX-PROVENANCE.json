@@ -1,0 +1,136 @@
+{
+  "schema": "pocketworld-workspace-uiux-provenance-v1",
+  "base_main": "e2d38166f3fb7dd6f1921c5f0ce4d73e1303e254",
+  "scope": "Actual attachment readers, fixed-image comparison, file collections and connected project preview; no synthetic records in production.",
+  "sources": [
+    {
+      "name": "Stageshow hero-grid Player",
+      "commit": "802057409787133703c56001080169e347305572",
+      "license": "MIT",
+      "original": "upstream/stageshow/examples/hero-grid/index.tsx#Player",
+      "styles": "upstream/stageshow/examples/hero-grid/grid.css#.hg-player",
+      "adapter": "OriginalMediaPlayer.tsx",
+      "changes": [
+        "Retain original content/names/progress/times/control hierarchy and dark player/light play-key geometry",
+        "Exclude Stage script, illustrative album art, fake title, author song and hardcoded elapsed/duration",
+        "Use existing BoardUI buttons and React Aria slider; bind to one real host-authorized audio/video element",
+        "Actual play/pause/time/mute/seek/metadata/error; pause on visibility/pagehide and unmount"
+      ]
+    },
+    {
+      "name": "Ovio CompareSlider Minimal",
+      "commit": "81a1bcb6737356038163728b3b2a657c9dcffa32",
+      "license": "MIT",
+      "adapter": "../shell-library/adapted/ovio/components/ovio/compare-slider/",
+      "original": "upstream/ovio/components/ovio/compare-slider/",
+      "changes": [
+        "Port original compare.ts, use-compare.ts, compare-slider.tsx, parts.tsx and worlds/minimal.tsx",
+        "Use existing pinned Ovio shared world/utils/motion modules via relative paths; install only Minimal world",
+        "Add pointer-capture loss cleanup and horizontal aria orientation",
+        "Parent passes exactly two compareParent-created original image pins; images only, no interactive content",
+        "Contain full source image in compare stage; retain zoom/readers in an explicitly opened disclosure"
+      ]
+    },
+    {
+      "name": "Material Multi-browse Carousel reference + Embla interaction",
+      "reference": "references/uiux/cases/component-carousel-material-multi-browse.md",
+      "reference_sha256": "756df7ce6c5a68a1b53754f01485f5de761aa8ae74d52c52971ba1d7de1ea334",
+      "implementation": "embla-carousel-react@8.6.0 / embla-carousel@8.6.0",
+      "license": "MIT (Embla), original Material image is reference only",
+      "adapter": "MediaCarousel.tsx",
+      "changes": [
+        "Embla owns pointer drag, snapping, focus scrolling and re-initialization",
+        "Unequal width cards preserve a visible following item; previous/next controls and count; no autoplay",
+        "Display real authorized image URLs only in the two-pin comparison browser",
+        "Unopened library files show true file type/name/size and original selectFile/attach action, never fabricated thumbnails"
+      ]
+    },
+    {
+      "name": "Paper Widgets",
+      "reference": "references/uiux/cases/paper-widgets-sean-galt-20261101.md",
+      "source_identity": "Saved independent reproduction-v1; author paid template source unavailable and not claimed",
+      "source_sha256": "add4ef6b19a6848fa47335cdea8fea22a33b0b82149e1cf0c2b6f858f35d6c30",
+      "adapter": [
+        "workspace-media.css",
+        "../media-workspace.css"
+      ],
+      "changes": [
+        "Reuse independent paper-card layered shadow and label/value hierarchy",
+        "Bind overview numbers only to current real task list; explicitly label current records",
+        "No author artwork, sample weather, demo songs, sample calendar or other invented business values"
+      ]
+    },
+    {
+      "name": "Fennel connected workspace",
+      "reference": "references/uiux/assets/fennel-research-workspace-20261101/author-original.jpg",
+      "reference_sha256": "11440a5f2811e6be803eda7c94a831aa073684fbb870a55526b2814bb34fb3e7",
+      "identity": "Visual composition reference; original Fennel source unavailable",
+      "implementation": "Existing BoardUI Tabs/controls, Affect FilesBrowser and the existing single native ProjectPreviewPane",
+      "adapter": "../project-preview.css",
+      "changes": [
+        "Wide desktop source/result layout remains one workspace, no separate window",
+        "Root owns App wiring and responsive branch; no duplicated native viewport or business owner"
+      ]
+    },
+    {
+      "name": "Affect Files/Folder",
+      "identity": "Existing traced library adapter retained; see ../shell-library/source-manifest.json",
+      "adapter": "../shell-library/FilesBrowser.tsx",
+      "changes": [
+        "Retain original type illustration and object menu",
+        "Use existing BoardUI SearchField",
+        "Grid selected object reflects the same selectedPath as list/tree, real version label and focus state",
+        "Keep current file paths and original open/copy callbacks"
+      ]
+    }
+  ],
+  "original_file_hashes": [
+    {
+      "path": "web-ui/src/workspace-library/upstream/ovio/LICENSE",
+      "sha256": "9cc1ae60b5608abf96341d6d3f22f8d3b46cd06e4cbbc600bebe65eb9b305b1f"
+    },
+    {
+      "path": "web-ui/src/workspace-library/upstream/ovio/components/ovio/compare-slider/compare-slider.tsx.source.txt",
+      "sha256": "dd2f39803eefb9acdc56bc932bd27e67b8862eddfd3dea4c70c7b3164879607b"
+    },
+    {
+      "path": "web-ui/src/workspace-library/upstream/ovio/components/ovio/compare-slider/compare.ts.source.txt",
+      "sha256": "322dc0e310b607b1de29608880ebc6c0f2966318f7a3c9e6782bee04228e92e3"
+    },
+    {
+      "path": "web-ui/src/workspace-library/upstream/ovio/components/ovio/compare-slider/parts.tsx.source.txt",
+      "sha256": "434f2f34ebe068bf6e3e8538c524310f463f3041bd5fe19261fc9b67cfde8c17"
+    },
+    {
+      "path": "web-ui/src/workspace-library/upstream/ovio/components/ovio/compare-slider/use-compare.ts.source.txt",
+      "sha256": "9f3472bd5d466e687a12cb4572934e1cf3149d6eeb9cb61dbb5553806c484bf9"
+    },
+    {
+      "path": "web-ui/src/workspace-library/upstream/ovio/components/ovio/compare-slider/worlds/minimal.tsx.source.txt",
+      "sha256": "0b1719efae9ced5f13051fc5594219f73c44e01ef1d6c2014cd9967deaeb870b"
+    },
+    {
+      "path": "web-ui/src/workspace-library/upstream/paper-widgets/paper-widgets.css.source.txt",
+      "sha256": "add4ef6b19a6848fa47335cdea8fea22a33b0b82149e1cf0c2b6f858f35d6c30"
+    },
+    {
+      "path": "web-ui/src/workspace-library/upstream/stageshow/LICENSE",
+      "sha256": "f948862c8d317b6b3bbfbe5e7ea7648199443a9c0649de2dac338444676ff0d9"
+    },
+    {
+      "path": "web-ui/src/workspace-library/upstream/stageshow/examples/hero-grid/grid.css",
+      "sha256": "c09b693bc598ff062ac3d49ec26edfcfc6c32b4438c4e27e9a976a1fa42d9d67"
+    },
+    {
+      "path": "web-ui/src/workspace-library/upstream/stageshow/examples/hero-grid/index.tsx",
+      "sha256": "14e99e02fca985838e35e909ecaba9d8d9c94e11057326bbb3a0617cb583c7ba"
+    }
+  ],
+  "validation": {
+    "typecheck": "passed",
+    "node_tests": "20 media/attachment tests passed",
+    "browser": "workspace-media-ui.mjs: real Chromium synthetic WAV/WebM playback and deterministic SVG fixtures at 1200,390,320 widths; reduced motion at 320",
+    "native": "Existing native authority paths retained; Android device playback/pinning not newly verified",
+    "aesthetic": "Implementation screenshots reviewed internally; no new user aesthetic acceptance inferred"
+  }
+}

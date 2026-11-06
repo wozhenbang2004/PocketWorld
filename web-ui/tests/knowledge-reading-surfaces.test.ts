@@ -18,9 +18,18 @@ function fixture(name: string, initial: Data = {}) {
   const sameDependencies = (previous?: readonly any[], next?: readonly any[]) => !!previous && !!next && previous.length === next.length && next.every((value, i) => Object.is(value, previous[i]));
   const useCallback = (callback: (...args: any[]) => any, deps?: any[]) => { const i = index++; if (!sameDependencies(slots[i]?.deps, deps)) slots[i] = { deps, callback }; return slots[i].callback; };
   const effect = (queue: (() => void)[]) => (callback: () => void | (() => void), deps?: any[]) => { const i = index++, prior = slots[i]; if (!sameDependencies(prior?.deps, deps)) { const slot = slots[i] = { deps, cleanup: prior?.cleanup }; queue.push(() => { slot.cleanup?.(); slot.cleanup = callback(); }); } };
-  const React = { Fragment: 'Fragment', createElement: (type: any, props: any, ...children: any[]) => ({ type, props: props || {}, children: children.flat(Infinity).filter(child => child !== null && child !== undefined && child !== false) }) };
+  const React = { Fragment: 'Fragment', createElement: (type: any, props: any, ...children: any[]): any => typeof type === 'function' ? type(props) : ({ type, props: props || {}, children: children.flat(Infinity).filter(child => child !== null && child !== undefined && child !== false) }) };
+  // The library pane is a presentation double here; its real search/selection/reading
+  // is exercised in affect-workflows-ui.mjs. Keep original native handle/focus checks.
+  const SkillLibrary = (props: any) => React.createElement('SkillLibrary', props,
+    ...props.skills.map((row: any) => React.createElement('div', {},
+      React.createElement('Button', { 'data-skill-id': row.id, disabled: props.disabled, onClick() {} }, `预览技能：${row.name}`),
+      props.checkingSources && row.gitSource && !row.origin && React.createElement('CheckboxField', { onChange: (selected: boolean) => props.onToggle(row, selected) }),
+    )),
+    props.skills.length > 0 && React.createElement('Button', { disabled: props.disabled, onClick: () => props.onOpen(props.skills[0].id) }, '阅读这份技能'),
+  );
   const controls = Object.fromEntries(['Tabs', 'TabList', 'Tab', 'TabPanel', 'Accordion', 'AccordionItem', 'Button', 'CheckboxField', 'HostFileUpload', 'IconButton', 'SearchField', 'SelectField', 'SettingsDialog', 'TextAreaField', 'TextField', 'MemoryAssertionFields', 'MemoryHistoryWorkspace', 'MarkdownBody', 'RiArrowLeftSLine', 'RiArrowRightSLine', 'RiBookOpenLine', 'RiRefreshLine'].map(key => [key, key]));
-  const dependencies = { React, useState, useRef, useCallback, useEffect: effect(effects), useLayoutEffect: effect(layouts), ...controls };
+  const dependencies = { React, useState, useRef, useCallback, useEffect: effect(effects), useLayoutEffect: effect(layouts), SkillLibrary, ...controls };
   const Component = new Function(...Object.keys(dependencies), compiled + '\nreturn ' + name + ';')(...Object.values(dependencies));
   const props = { state: {}, domain: 'memory', registerTransientBack: () => {}, ...initial, run: (action: string, args: Data = {}) => new Promise(resolve => { calls.push({ action, args, resolve }); if (action.endsWith('.close')) resolve({}); }) };
   const nodes = (node: any): any[] => node && typeof node === 'object' ? [node, ...(node.children || []).flatMap(nodes)] : [];
@@ -37,10 +46,10 @@ function fixture(name: string, initial: Data = {}) {
 const skill = { id: 'skill-a', name: '原技能', description: '原说明', revision: 3, enabled: false, resources: ['SKILL.md'], sourcePolicy: { layer: 'USER', invocation: 'MODEL_AND_OWNER' } };
 const record = { id: 'memory-a', text: '完整原记忆\n第二行内容', layer: 'fact', revision: 4, active: true, ownerId: 'owner', spaceId: 'private', consolidationBlocked: false, sourceRefs: [{ sourceId: 'source-a', revision: 2 }] };
 
-test('skill row directly reads the original object; returning restores the collection position and focus', async () => {
+test('explicit skill reading uses the original object; returning restores the collection position and focus', async () => {
   const f = fixture('SkillsWorkspace'); await f.settle(f.calls[0], { skills: [skill] });
   assert.equal(f.all.some(node => node.type === 'CheckboxField'), false);
-  f.scroller.scrollTop = 260; f.click('打开技能：原技能');
+  f.scroller.scrollTop = 260; f.click('阅读这份技能');
   const read = f.calls.findLast(call => call.action === 'skills.get')!; assert.deepEqual(read.args, { id: 'skill-a' });
   await f.settle(read, { skill, skillHandle: 'original-skill-handle' });
   assert.equal(f.find(node => node.props['aria-label'] === '技能管理').props.hidden, true); assert.equal(f.scroller.scrollTop, 0);
@@ -49,7 +58,7 @@ test('skill row directly reads the original object; returning restores the colle
   assert.ok(f.calls.some(call => call.action === 'skills.close' && call.args.handle === 'original-skill-handle'));
 });
 test('Markdown reading preserves the complete original resource and does not submit an approval', async () => {
-  const f = fixture('SkillsWorkspace'); await f.settle(f.calls[0], { skills: [skill] }); f.click('打开技能：原技能');
+  const f = fixture('SkillsWorkspace'); await f.settle(f.calls[0], { skills: [skill] }); f.click('阅读这份技能');
   await f.settle(f.calls.findLast(call => call.action === 'skills.get')!, { skill, skillHandle: 'original-skill-handle' });
   f.click('读取原资源正文'); const read = f.calls.findLast(call => call.action === 'skills.read')!;
   assert.deepEqual(read.args, { skillHandle: 'original-skill-handle', path: 'SKILL.md', offset: 0 });
@@ -66,7 +75,7 @@ test('batch-source selection is explicit and cancelling it releases the read han
   assert.equal(f.all.some(node => node.type === 'CheckboxField'), false); assert.equal(f.calls.some(call => call.action === 'skills.batch.confirm'), false);
 });
 test('skill mutation restores focus only after the refreshed list is enabled', async () => {
-  const f = fixture('SkillsWorkspace'); await f.settle(f.calls[0], { skills: [skill] }); f.click('打开技能：原技能');
+  const f = fixture('SkillsWorkspace'); await f.settle(f.calls[0], { skills: [skill] }); f.click('阅读这份技能');
   await f.settle(f.calls.findLast(call => call.action === 'skills.get')!, { skill, skillHandle: 'original-skill-handle' });
   f.click('核对并启用当前内容'); await f.settle(f.calls.findLast(call => call.action === 'skills.enabled.review')!, { reviewHandle: 'review-a', reviewKind: 'enabled', before: skill, enabled: true });
   f.find(node => node.type === 'CheckboxField').props.onChange(true); f.render(); f.click('确认这次原操作');

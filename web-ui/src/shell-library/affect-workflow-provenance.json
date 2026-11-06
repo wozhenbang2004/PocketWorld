@@ -1,0 +1,39 @@
+{
+  "libraryCommit": "0e69029b0f617de3e4d40d3241dd9cdd1d50abc4",
+  "archive": "interactive-components-source.zip",
+  "archiveSha256": "cc7f9c7b8a0e0d07e4b9f74a1b8255c92bd63a61e3c798f892eaf2ef4b0dbe82",
+  "entries": [
+    {
+      "symbol": "PromptLibraryDemo",
+      "archivePath": "src/demos/components-b/tools.tsx",
+      "excerptSha256": "87e6450b3c153113536ec51b69b67ab29fef3fecbf4b60ddde1b01a3ae991d79",
+      "adaptedExport": "SkillLibrary",
+      "provenance": "independent-reimplementation",
+      "officialProSource": false
+    },
+    {
+      "symbol": "ExperimentCardDemo",
+      "archivePath": "src/demos/components-b/metrics.tsx",
+      "excerptSha256": "f1d0b1ba50ec323b9fa93858a6f961fb4be3ea5b0a247c72283f399d6f2ed5b7",
+      "adaptedExport": "ProbeObservationCard",
+      "provenance": "independent-reimplementation",
+      "officialProSource": false
+    },
+    {
+      "symbol": "FallbackChainDemo",
+      "archivePath": "src/demos/components-b/agents.tsx",
+      "excerptSha256": "c5a4cedc84a934d45f41f7edfbcc4ff69f125ba7030a3c88593f6ec2354c9f9f",
+      "adaptedExport": "RuntimeAttemptChain",
+      "provenance": "independent-reimplementation",
+      "officialProSource": false
+    },
+    {
+      "symbol": "StepperForm",
+      "archivePath": "src/demos/components-a/inputs.tsx",
+      "excerptSha256": "4de33f650ee63618a32ff709c7f56911905920af6c9328566cbc96946a0c1ca7",
+      "adaptedExport": "DiagnosticWorkflowSteps",
+      "provenance": "independent-reimplementation",
+      "officialProSource": false
+    }
+  ]
+}

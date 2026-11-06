@@ -12,6 +12,7 @@ import { bridge } from './bridge';
 import ReminderWorkspace from './ReminderWorkspace';
 import ConnectionWorkspace from './ConnectionWorkspace';
 import { AppearanceSettings, SystemSpeechSettings } from './PresentationSettings';
+import { TypographySettings } from './TypographySettings';
 import {LocalWorkspace} from './LocalWorkspace';
 import {MemoryWorkspace} from './MemoryWorkspace';
 import {LearningWorkspace, type LearningCandidateTarget} from './LearningWorkspace';
@@ -553,7 +554,7 @@ function PhoneSettings({ state, supported, run, navigate, registerTransientBack,
   const sections: Record<string, { title: string; description: string }> = {
     execution: { title: '执行权限与连接', description: '查看这台手机的实际准备状态，再选择系统授权或后台连接。' },
     observation: { title: '本地观察与截图', description: '分别控制取图、识字和新结果截图的本机留存。' },
-    appearance: { title: '界面外观', description: '使用系统外观，或明确选择浅色与深色。' },
+    appearance: { title: '外观与字体', description: '选择浅色、深色与中文、英数和代码字体。' },
     speech: { title: '语音与朗读', description: '听写只进入草稿，发送仍由你决定。' },
     browser: { title: '浏览器', description: '按这次目的打开网页研究或普通浏览窗口。' },
   };
@@ -563,7 +564,7 @@ function PhoneSettings({ state, supported, run, navigate, registerTransientBack,
       <div className="pw-settings-links pw-phone-entries">
         <DataOperationRow id="execution" title="执行权限与连接" detail={`界面读取 ${flag(state.accessibilityEnabled, '已连接', '未连接')} · 任务通知 ${flag(state.notificationsEnabled)}`} onOpen={journey.open}/>
         <DataOperationRow id="observation" title="本地观察与截图" detail={`取图 ${flag(state.localCaptureAllowed)} · OCR ${flag(state.localOcrAllowed)}`} onOpen={journey.open}/>
-        <DataOperationRow id="appearance" title="界面外观" detail={({ system: '跟随系统', light: '浅色', dark: '深色' } as Data)[appearance] || '尚未读取当前外观'} onOpen={journey.open}/>
+        <DataOperationRow id="appearance" title="外观与字体" detail={({ system: '跟随系统', light: '浅色', dark: '深色' } as Data)[appearance] || '尚未读取当前外观'} onOpen={journey.open}/>
         <DataOperationRow id="speech" title="语音与朗读" detail={state.speaking ? '正在朗读' : state.speechAvailable === true ? '系统听写可用' : '听写、朗读与任务状态提示'} onOpen={journey.open}/>
         <DataOperationRow id="browser" title="浏览器" detail="网页研究与内置浏览器" onOpen={journey.open}/>
       </div>
@@ -589,7 +590,7 @@ function PhoneSettings({ state, supported, run, navigate, registerTransientBack,
       <div className="pw-phone-preference-section"><h3>结果截图</h3>{typeof screenshotPolicy.revision === 'number' ? <RadioOptions label="新结果截图的本机留存" value={text(screenshotPolicy.retentionMillis)} options={[{ id: '0', label: '不保存新截图' }, { id: '86400000', label: '1 天' }, { id: '604800000', label: '7 天' }, { id: '2592000000', label: '30 天' }]} isDisabled={Boolean(state.taskScreenshotSaving) || !supported('privacy.screenshots.save')} onChange={value => { void run('privacy.screenshots.save', { revision: screenshotPolicy.revision, retentionMillis: Number(value) }).catch(() => {}); }}/> : <CapabilityAction action="privacy.screenshots.read" supported={supported} run={run}>读取截图留存设置</CapabilityAction>}
       <p className="pw-field-hint">结果截图使用本机密钥加密。设置只影响之后生成的截图；旧图保留到你主动删除或被同一任务的新结果替换。可从原任务核对中删除本机截图。</p></div>
     </section>}
-    <section className="pw-phone-detail" hidden={journey.view !== 'appearance'} inert={journey.view !== 'appearance'}><AppearanceSettings state={state} supported={supported} run={run}/></section>
+    <section className="pw-phone-detail" hidden={journey.view !== 'appearance'} inert={journey.view !== 'appearance'}><AppearanceSettings state={state} supported={supported} run={run}/><TypographySettings state={state} supported={supported} run={run}/></section>
     <section className="pw-phone-detail" aria-label="语音与朗读" hidden={journey.view !== 'speech'} inert={journey.view !== 'speech'}>
       <SystemSpeechSettings state={state} supported={supported} run={run}/>
       <div className="pw-phone-preference-section"><h3>回复与状态提示</h3><p className="pw-field-hint">系统语音引擎可能联网。听写只填入草稿，由你决定发送。</p>
@@ -1331,7 +1332,7 @@ const SETTINGS_GROUPS = [
 ];
 const COMMON_SETTINGS = [
   { id: 'model-settings', title: '选择模型', detail: '模型能力、API 与账号连接', icon: RiKey2Line },
-  { id: 'phone', title: '手机能力', detail: '观察、执行、后台、通知与应用更新', icon: RiSmartphoneLine },
+  { id: 'phone', title: '手机能力与字体', detail: '外观、字体、观察与后台连接', icon: RiSmartphoneLine },
   { id: 'history', title: '任务历史', detail: '查看原任务与结果', icon: RiFileList3Line },
   { id: 'usage', title: '模型调用记录', detail: '查看实际调用与用量', icon: RiFileList3Line },
   { id: 'archives', title: '备份与迁移', detail: '导出或恢复原数据', icon: RiDatabase2Line },
@@ -1431,7 +1432,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const filtered = settingsEntries.filter(item => (item.title + item.detail).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const frequentSettings = [
     { id: 'model-settings', title: '当前模型', detail: text(state.modelName) || '连接模型，开始工作', icon: RiKey2Line },
-    { id: 'phone', title: '手机能力', detail: '权限、后台连接与执行方式', icon: RiSmartphoneLine },
+    { id: 'phone', title: '手机能力与字体', detail: '外观、字体、权限与后台连接', icon: RiSmartphoneLine },
   ];
   const viewKey = page + (isModelPage ? ':' + modelView.kind + ':' + (modelView.id || '') : '');
   const modelBrowseActive = ['list', 'catalog', 'model'].includes(modelView.kind);

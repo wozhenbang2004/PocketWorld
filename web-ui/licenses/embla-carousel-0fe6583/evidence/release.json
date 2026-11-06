@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-11-06",
+  "repository": "https://github.com/davidjerleke/embla-carousel",
+  "release": {
+    "tag": "v8.6.0",
+    "id": 210427504,
+    "url": "https://github.com/davidjerleke/embla-carousel/releases/tag/v8.6.0",
+    "published_at": "2025-04-04T17:33:59Z",
+    "draft": false,
+    "prerelease": false
+  },
+  "tag_resolution": {
+    "requested_ref": "v8.6.0",
+    "resolved_commit": "0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54",
+    "message": "8.6.0",
+    "url": "https://github.com/davidjerleke/embla-carousel/commit/0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54",
+    "method": "Official GitHub commit API via fetch_commit(repo_full_name, commit_sha=v8.6.0)"
+  },
+  "files": [
+    {
+      "file": "LICENSE.txt",
+      "git_blob_sha1": "2376624f527f4f1e53887552e42b004ab4056898",
+      "source_url": "https://github.com/davidjerleke/embla-carousel/blob/0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54/LICENSE"
+    },
+    {
+      "file": "evidence/embla-carousel.package.json",
+      "git_blob_sha1": "af3acee8042eeec2ae45ffca1014d00a5b5734a0",
+      "source_url": "https://github.com/davidjerleke/embla-carousel/blob/0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54/packages/embla-carousel/package.json"
+    },
+    {
+      "file": "evidence/embla-carousel-react.package.json",
+      "git_blob_sha1": "c04e0cfcbf8013365588f06163ffee3addcd2191",
+      "source_url": "https://github.com/davidjerleke/embla-carousel/blob/0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54/packages/embla-carousel-react/package.json"
+    },
+    {
+      "file": "evidence/embla-carousel-reactive-utils.package.json",
+      "git_blob_sha1": "719d183ccefb59e272ab7b5f8ca445a54bbff6f8",
+      "source_url": "https://github.com/davidjerleke/embla-carousel/blob/0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54/packages/embla-carousel-reactive-utils/package.json"
+    }
+  ],
+  "policy": "License and three release package.json files fetched independently at the resolved immutable release commit. No current-main or unrelated dependency license is inferred."
+}

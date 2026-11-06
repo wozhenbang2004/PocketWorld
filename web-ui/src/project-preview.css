@@ -45,3 +45,19 @@
 .pw-preview-footer { flex-wrap: wrap; }
 .pw-preview-footer > button { min-height: 44px; }
 .pw-preview-pane .pw-preview-source-details { max-height: 120px; overflow: auto; }
+
+/* Fennel reference: source objects and the corresponding result share one
+ * workspace. BoardUI controls and the one host viewport retain their owners. */
+@media (min-width: 1024px) {
+  .pw-project-connected-workspace { display: grid; grid-template-columns: minmax(0,1fr); flex: 1; gap: 18px; min-height: 0; }
+  .pw-project-connected-workspace[data-preview-open="true"] { grid-template-columns: minmax(240px,.8fr) minmax(420px,1.2fr); }
+  .pw-project-connected-workspace > .pw-project-files-pane { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding-inline-end: 4px; }
+  .pw-project-connected-workspace > .pw-project-preview-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 18px; border-radius: 20px; background: var(--pw-surface,#fff); box-shadow: 0 1px 2px #00000003,0 12px 24px -18px #00000016; }
+  .pw-project-connected-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; margin-bottom: 12px; }
+  .pw-project-connected-header h2 { margin: 0; font-size: 14px; font-weight: 550; }
+  .pw-project-connected-workspace .pw-preview-pane { padding-top: 0; }
+  .pw-project-connected-workspace .pw-preview-context { max-height: 26dvh; overflow: auto; overscroll-behavior: contain; }
+  .pw-project-connected-workspace .pw-preview-viewport { min-height: 160px; }
+  .pw-project-connected-workspace .pw-preview-heading { margin-bottom: 4px; }
+  .pw-project-connected-workspace .pw-preview-footer { padding-top: 6px; }
+}

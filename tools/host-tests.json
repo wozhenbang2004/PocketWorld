@@ -1785,6 +1785,7 @@
   },
   "pocket-web-bundle": {
     "class": "dev.pocketengine.ui.web.PocketWebBundleTest",
+    "additionalClasses": ["dev.pocketengine.ui.UiTypographyTest"],
     "helpers": [],
     "description": "Original runtime resource allowlist, exact origin, canonical paths and bounded receipt admission. No mounted Android WebView or APK acceptance."
   },

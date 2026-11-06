@@ -14,7 +14,7 @@
 .pw-bootstrap-facts>div{display:grid;grid-template-columns:104px minmax(0,1fr);align-items:start;gap:12px}
 .pw-bootstrap-facts dt,.pw-bootstrap-file-proof dt{font-size:12px;line-height:1.7;color:var(--pw-muted,#737373)}
 .pw-bootstrap-facts dd,.pw-bootstrap-file-proof dd{font-size:13px;line-height:1.7;margin:0;min-width:0}
-.pw-bootstrap-code{font-family:'JetBrains Mono',monospace;font-size:12px!important;overflow-wrap:anywhere;word-break:break-word}
+.pw-bootstrap-code{font-family:var(--pw-font-code, 'JetBrains Mono',monospace);font-size:12px!important;overflow-wrap:anywhere;word-break:break-word}
 .pw-bootstrap-receipt{padding:18px;background:var(--pw-surface,#fff);border-radius:14px;box-shadow:0 2px 10px #00000006}
 .pw-bootstrap-explanations{display:flex;flex-direction:column;gap:18px}.pw-bootstrap-explanations p{color:var(--pw-muted,#737373)}
 .pw-bootstrap-file-proof{margin:16px 0 0;display:flex;flex-direction:column;gap:4px;min-width:0}

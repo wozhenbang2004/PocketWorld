@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "date": "2026-11-06",
+  "scope": "Controlled desktop navigation rail and neutral product surface composition",
+  "implementation": ["WorkSidebar.tsx", "navigation-motion.css", "../uiux-surfaces.css", "../product.css"],
+  "sources": [
+    {
+      "identity": "BoardUI DashboardSidebar",
+      "role": "Actual MIT source adaptation",
+      "repository": "https://github.com/boardui/boardui",
+      "commit": "ec5c5eb3e29c2441be63b9422cd54f411ef23466",
+      "original": "upstream/boardui/components/application/dashboard/dashboard-sidebar.tsx",
+      "sha256": "b4e7bc7740cf9fef982d11edba7af4df82fd765aee29ba2f7c7b2f476a479ee9",
+      "license": "adapted/boardui/LICENSE",
+      "license_sha256": "ea8a0a9ec64dcf0fdb223a4bb8a4878b6027b83f7b14a57cdd506fbeee69d6c2",
+      "retained": ["Pinned icon and Collapsible label/badge slots", "NavItem anchor structure", "Expanded/collapsed sidebar affordance and aria-expanded"],
+      "differences": ["Compact state is controlled by the existing single App shell", "Existing product actions replace sample routes/profile/team/theme controls", "248px expanded and 76px compact retain at least 44px hit areas", "Existing approved Motion shared selection surface stays beneath labels", "Compact labels retain accessible names and native hover titles", "Unavailable actions retain aria-disabled and cannot dispatch"]
+    },
+    {
+      "identity": "BoardUI AppShell",
+      "role": "Bounded CSS layout adaptation of actual MIT source",
+      "repository": "https://github.com/boardui/boardui",
+      "commit": "ec5c5eb3e29c2441be63b9422cd54f411ef23466",
+      "original": "navigation-upstream/boardui-app-shell.tsx.source",
+      "sha256": "0cc0aa1398c6e815ffa677577bd74b1cdcb12609ac2fadcdceb7fca669b49398",
+      "license": "adapted/boardui/LICENSE",
+      "retained": ["12px wide-screen frame", "flex sibling navigation/content", "min-width/min-height zero boundaries and independent scrolling"],
+      "differences": ["Existing Vaul drawer remains the phone authority", "Existing PocketWorld workspace remains mounted", "12px gap instead of original 16px", "No Next routing, sample notification/offer/profile or sample page column"]
+    },
+    {
+      "identity": "Kevin sidebar polish",
+      "role": "Approved visual/motion reference only; original implementation source unavailable",
+      "source": "https://x.com/keviduk/status/2116168166673924226",
+      "library_entry": "uiux-sidebar-kevin-polish-20261031",
+      "reference": "references/uiux/assets/sidebar-kevin-20261031/frame-00-expanded.jpg",
+      "application": "Pinned icon anchors while labels disclose; the actual implementation uses the retained BoardUI source and product routes",
+      "limitations": "Does not claim to reproduce Kevin original source, exact timing or desktop illustration touch dimensions"
+    },
+    {
+      "identity": "Caelyreth Neverland",
+      "role": "Approved continuous yielding reference only; original application source unavailable",
+      "library_entry": "uiux-caelyreth-neverland-motion-20261101",
+      "reference": "references/uiux/assets/caelyreth-neverland-20261101/frame-325-sidebar-transition.jpg",
+      "application": "The existing mounted content continuously receives space as the BoardUI rail changes width",
+      "limitations": "No second live editor or execution authority; not a port of Neverland source"
+    },
+    {
+      "identity": "Alma soft shadow",
+      "role": "Approved official visual reference only",
+      "source": "https://alma.now",
+      "reference": "references/uiux/assets/alma-soft-shadow-20261104/alma-official-03-codex-chat.webp",
+      "application": "Fitted neutral short contact shadow plus broad weak elevation on composer, pending decisions and transient tools; ordinary reading/list rows stay flat",
+      "limitations": "CSS values are PocketWorld fitted values, not official Alma design tokens or source code"
+    }
+  ],
+  "verification": {
+    "fixture": "../../tests/navigation-shell-fixture.tsx",
+    "browser_check": "../../tests/navigation-shell-ui.mjs",
+    "boundary": "Local Chromium production-component mount verifies web layout and interaction; does not establish Android/WebView, IME, native route execution or OS lifecycle behavior"
+  }
+}

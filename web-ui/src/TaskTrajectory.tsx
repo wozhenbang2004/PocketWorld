@@ -8,7 +8,9 @@ import { Drawer, LiquidTabs, Tabs, TabList, Tab, TabPanel } from './shell-librar
 import { TraceWaterfall } from './library/adapted/trace-waterfall';
 import { TraceOverview } from './library/adapted/trace-overview';
 import { TraceEventList } from './library/adapted/trace-event-list';
+import { ExecutionSteps } from './library/execution';
 import { MarkdownBody } from './library/MarkdownBody';
+import { traceSteps } from './trace-stepper';
 import { durationLabel, executionTraceDetail, executionTracePage, mergeTraceNodes, nodeDurationLabel, tokenLabel, traceBody, traceBounds, traceCount,
   traceEventMatches, traceEvents, traceFailed, traceInProgress, traceRequestTiming, traceRole, traceRoleLabel, traceRows, traceStatus, traceSummary,
   traceTime, traceTurnCount, traceUsageBreakdown, type ExecutionTraceDetail, type ExecutionTracePage, type TraceAggregate, type TraceFilter, type TraceNode } from './execution-trace';
@@ -294,7 +296,7 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack }:
   const [popoverContainer, setPopoverContainer] = useState<Element>();
   const bindRoot = useCallback((element: HTMLElement | null) => { if (element) setPopoverContainer(element.closest('[role="dialog"]') || undefined); }, []);
   const [selectedRun, setSelectedRun] = useState(''), [filter, setFilter] = useState<TraceFilter>('all'), [query, setQuery] = useState('');
-  const [viewMode, setViewMode] = useState<'events' | 'intervals'>('events'), [overviewMode, setOverviewMode] = useState<'order' | 'duration'>('order');
+  const [viewMode, setViewMode] = useState<'events' | 'intervals' | 'steps'>('events'), [overviewMode, setOverviewMode] = useState<'order' | 'duration'>('order');
   const [intervalMode, setIntervalMode] = useState<'timeline' | 'tree'>('timeline'), [folded, setFolded] = useState<Set<string>>(new Set());
   const [selection, setSelection] = useState<Selection | null>(null), [highlighted, setHighlighted] = useState<string | null>(null), [locateTicket, setLocateTicket] = useState(0);
   const readWindow = useTraceWindow(task, selectedRun, active, canRead, documentEpoch), page = readWindow.view?.page;
@@ -316,6 +318,7 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack }:
   const nodes = page?.nodes || [];
   const events = useMemo(() => traceEvents(nodes), [page?.nodes]);
   const filteredEvents = useMemo(() => events.filter(row => traceEventMatches(row, filter, query)), [events, filter, query]);
+  const steps = useMemo(() => viewMode === 'steps' ? traceSteps(nodes, folded, filter, query) : [], [page?.nodes, folded, filter, query, viewMode]);
   const stats = traceSummary(nodes), filtering = filter !== 'all' || query.trim() !== '';
   const select = (node: TraceNode) => { if (page) setSelection({ node, taskId: task.id, runId: page.runId, epoch: page.epoch, documentEpoch }); };
   const locate = (node: TraceNode) => { setQuery(''); setFilter('all'); setViewMode('events'); setHighlighted(node.id); setLocateTicket(value => value + 1); };
@@ -338,14 +341,19 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack }:
       <div className="pw-trace-completeness" role="status"><span>{readWindow.view?.backfilling ? '正在补齐较早记录' : complete ? '当前快照已完整读取' : '当前为部分记录'} · {nodes.length} 条</span><span>{stats.models} 次请求{stats.failed ? ` · ${stats.failed} 条异常` : ''}</span></div>
       {stats.models > 0 && <dl className="pw-trace-token-summary" aria-label={complete ? '本次执行模型用量' : '已读取请求的部分用量'}><div><dt>输入 token</dt><dd>{aggregateLabel(stats.input)}</dd></div><div><dt>输出 token</dt><dd>{aggregateLabel(stats.output)}</dd></div></dl>}
       <div className="pw-trace-search-row"><SearchField aria-label="搜索执行轨迹" placeholder="搜索调用、模型、轮次" clearLabel="清空轨迹搜索" value={query} onChange={setQuery}/>
-        <IconButton icon={viewMode === 'events' ? RiTimeLine : RiListUnordered} aria-label={viewMode === 'events' ? '查看执行区间' : '返回轮次列表'} onClick={() => setViewMode(viewMode === 'events' ? 'intervals' : 'events')}/>
+        <IconButton icon={viewMode === 'intervals' ? RiListUnordered : RiTimeLine} aria-label={viewMode === 'intervals' ? '返回轮次列表' : '查看执行区间'} onClick={() => setViewMode(viewMode === 'intervals' ? 'events' : 'intervals')}/>
+        <Button variant={viewMode === 'steps' ? 'secondary' : 'ghost'} aria-label="查看执行步骤" aria-pressed={viewMode === 'steps'} onClick={() => setViewMode(viewMode === 'steps' ? 'events' : 'steps')}>步骤</Button>
       </div>
       <LiquidTabs className="pw-trace-filters" variant="minimal" tabs={['全部', '模型', '工具', '异常']} value={filters.indexOf(filter)} onValueChange={index => setFilter(filters[index])} label="轨迹筛选"/>
       {page.limited && <p className="pw-trace-note pw-trace-read-limit">原记录有部分内容未包含；即使已读到分页末尾，仍不是完整记录。</p>}
       {viewMode === 'events' ? filteredEvents.length ? <TraceEventList rows={filteredEvents} selectedId={selected?.node.id || null} highlightedId={highlighted} locateTicket={locateTicket} onHighlightEnd={endHighlight} onSelect={select} complete={complete}/>
         : <div className="pw-trace-empty"><p>{filtering ? '已读取记录中没有匹配项。' : readWindow.live ? '正在等待原执行产生轨迹…' : '这次执行没有已保存的调用轨迹。'}</p>{filtering && <Button variant="ghost" onClick={() => { setFilter('all'); setQuery(''); }}>清除筛选</Button>}</div>
-        : <><div className="pw-trace-interval-controls"><p className="pw-trace-note">原始父子关系和实际执行区间</p><Button variant="ghost" onClick={() => setIntervalMode(intervalMode === 'timeline' ? 'tree' : 'timeline')}>{intervalMode === 'timeline' ? '调用树' : '时间轴'}</Button></div>
-          <TraceWaterfall rows={traceRows(nodes, folded, filter, query)} bounds={traceBounds(nodes)} mode={intervalMode} selectedId={selected?.node.id || null} filtering={filtering} onToggle={toggle} onSelect={select}/></>}
+        : viewMode === 'intervals' ? <><div className="pw-trace-interval-controls"><p className="pw-trace-note">原始父子关系和实际执行区间</p><Button variant="ghost" onClick={() => setIntervalMode(intervalMode === 'timeline' ? 'tree' : 'timeline')}>{intervalMode === 'timeline' ? '调用树' : '时间轴'}</Button></div>
+          <TraceWaterfall rows={traceRows(nodes, folded, filter, query)} bounds={traceBounds(nodes)} mode={intervalMode} selectedId={selected?.node.id || null} filtering={filtering} onToggle={toggle} onSelect={select}/></>
+          : <><p className="pw-trace-note">按原记录的父子层级展开；连线不代表执行依赖或完成进度。</p>
+            {steps.length ? <ExecutionSteps steps={steps} scope={`${identity}:${page.runId}:${page.epoch}:${documentEpoch}`} active={active && readWindow.enabled}
+              onSelect={id => { const node = nodes.find(value => value.id === id); if (node) select(node); }} onToggle={filtering ? undefined : toggle}/>
+              : <div className="pw-trace-empty"><p>{filtering ? '已读取记录中没有匹配项。' : readWindow.live ? '正在等待原执行产生轨迹…' : '这次执行没有已保存的调用轨迹。'}</p>{filtering && <Button variant="ghost" onClick={() => { setFilter('all'); setQuery(''); }}>清除筛选</Button>}</div>}</>}
       <p className="pw-trace-note pw-trace-timing-note">轮次来自原执行记录；总览的累计耗时包含并行重叠。缺失的计时、用量与正文保持可见。</p>
     </>}
     {!page && canRead && !readWindow.busy && !readWindow.error && <p className="pw-trace-note">打开此页后读取原任务轨迹。</p>}

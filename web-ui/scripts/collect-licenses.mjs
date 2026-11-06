@@ -139,11 +139,20 @@ while (queue.length) {
 
 packages.sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
 const selectedSourceFiles = [];
-for (const filename of ['THIRD-PARTY-NOTICES.md']) {
+for (const filename of [
+  'THIRD-PARTY-NOTICES.md',
+  'src/shell-library/upstream/beui-a866cb2/LICENSE',
+  'src/forms-library/upstream/uiux/ncdai-wheel-fbe21d7/LICENSE',
+  'src/forms-library/upstream/uiux/RAMOTION-LICENSE',
+  'src/workspace-library/upstream/ovio/LICENSE',
+  'src/workspace-library/upstream/stageshow/LICENSE',
+]) {
   try {
     const bytes = await readFile(path.join(root, filename));
-    await writeFile(path.join(output, filename), bytes);
-    selectedSourceFiles.push({ file: filename, bytes: bytes.length, sha256: hash(bytes) });
+    const destination = filename === 'THIRD-PARTY-NOTICES.md' ? filename : 'source-notices/' + filename;
+    await mkdir(path.dirname(path.join(output, destination)), { recursive: true });
+    await writeFile(path.join(output, destination), bytes);
+    selectedSourceFiles.push({ source: filename, file: destination, bytes: bytes.length, sha256: hash(bytes) });
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
     missing.push({ file: filename, reason: 'selected UI source attribution is not present' });

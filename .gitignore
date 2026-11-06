@@ -30,3 +30,10 @@ __pycache__/
 *.apk
 *.aab
 /README.md
+
+# Generated web bundle, dependencies and reproducible full font cache.
+/web-ui/node_modules/
+/web-ui/public/fonts/
+/app/src/main/assets/pocket-ui/
+/web-ui/public/licenses/
+/web-ui/test-results/

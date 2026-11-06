@@ -1,7 +1,9 @@
 import { useLayoutEffect } from 'react';
+import { usePocketTypography } from './usePocketTypography';
 
 /** Host preference is authoritative; no separate Web-only persisted setting. */
 export function usePocketAppearance(value: unknown) {
+  usePocketTypography(value);
   const appearance = value && typeof value === 'object' ? value as Record<string, unknown> : {};
   const dark = appearance.dark;
   const mode = appearance.mode;

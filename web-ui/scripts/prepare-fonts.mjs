@@ -3,25 +3,12 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Full, unmodified official font files.
-// The exact commit and Git blob identities were read from google/fonts on 2026-11-02.
-const commit = '6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'public', 'fonts');
-const entries = [
-  { family: 'Inter', file: 'Inter-variable.ttf', source: 'ofl/inter/Inter[opsz,wght].ttf', bytes: 876576,
-    blob: '047c92f6e2212473dc436020afed689527076d44', glyphs: 'PocketWorld 0123456789' },
-  { family: 'Noto Sans SC', file: 'NotoSansSC-variable.ttf', source: 'ofl/notosanssc/NotoSansSC[wght].ttf', bytes: 17772300,
-    blob: 'fb0637bafbcd804fe32152370a1225990745b4bc', glyphs: '主工作模型任务审批记忆文件设备广州繁體廣東龍龜' },
-  { family: 'JetBrains Mono', file: 'JetBrainsMono-variable.ttf', source: 'ofl/jetbrainsmono/JetBrainsMono[wght].ttf', bytes: 187208,
-    blob: 'aa310be8b717fe3774f9444dd89d5f4101cc6d10', glyphs: 'const path = ./src 0123456789 {}[]()' },
-  { family: 'Inter', file: 'Inter-OFL.txt', source: 'ofl/inter/OFL.txt', bytes: 4377,
-    blob: '21f6aff961064c2e429f570995e446bcdd555422' },
-  { family: 'Noto Sans SC', file: 'NotoSansSC-OFL.txt', source: 'ofl/notosanssc/OFL.txt', bytes: 4388,
-    blob: '1c9f43281b8f216c5461fe9ac729afbade7724e4' },
-  { family: 'JetBrains Mono', file: 'JetBrainsMono-OFL.txt', source: 'ofl/jetbrainsmono/OFL.txt', bytes: 4399,
-    blob: '821a3dac22aff15a1f1c9689a1d79c45bb58ca39' },
-];
+// Complete, unmodified official files. Pin updates are explicit source changes;
+// catalogue specimens must never be substituted for these production fonts.
+const sources = JSON.parse(await readFile(new URL('./font-sources.json', import.meta.url), 'utf8'));
+const entries = sources.files;
 
 function gitBlob(bytes) {
   return createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
@@ -69,7 +56,7 @@ function cmapHas(bytes, codepoint) {
 }
 
 function verify(entry, bytes) {
-  if (bytes.length !== entry.bytes || gitBlob(bytes) !== entry.blob) throw new Error(`Pinned font identity mismatch: ${entry.file}`);
+  if (bytes.length !== entry.bytes || gitBlob(bytes) !== entry.blob || createHash('sha256').update(bytes).digest('hex') !== entry.sha256) throw new Error(`Pinned font identity mismatch: ${entry.file}`);
   if (entry.glyphs) {
     const sfnt = bytes.readUInt32BE(0);
     if (sfnt !== 0x00010000 && bytes.toString('ascii', 0, 4) !== 'OTTO') throw new Error(`Not an SFNT font: ${entry.file}`);
@@ -81,7 +68,7 @@ function verify(entry, bytes) {
 }
 
 function url(entry) {
-  return `https://raw.githubusercontent.com/google/fonts/${commit}/${entry.source.split('/').map(encodeURIComponent).join('/')}`;
+  return `https://raw.githubusercontent.com/${entry.repository}/${entry.commit}/${entry.source.split('/').map(encodeURIComponent).join('/')}`;
 }
 
 async function prepare(entry) {
@@ -90,7 +77,8 @@ async function prepare(entry) {
   try {
     bytes = await readFile(destination);
     verify(entry, bytes);
-  } catch {
+  } catch (error) {
+    if (process.argv.includes('--verify-only')) throw new Error(`Bundled font unavailable or invalid: ${entry.file}`, { cause: error });
     const response = await fetch(url(entry), { signal: AbortSignal.timeout(180000) });
     if (!response.ok) throw new Error(`Font download failed (${response.status}): ${entry.file}`);
     bytes = Buffer.from(await response.arrayBuffer());
@@ -100,7 +88,8 @@ async function prepare(entry) {
     await rename(temporary, destination);
   }
   return {
-    family: entry.family, file: entry.file, source: entry.source,
+    id: entry.id, family: entry.family, file: entry.file, source: entry.source,
+    repository: entry.repository, commit: entry.commit, weight: entry.weight || null,
     bytes: bytes.length, git_blob_sha1: entry.blob,
     sha256: createHash('sha256').update(bytes).digest('hex'),
     required_glyphs_verified: entry.glyphs || null,
@@ -108,21 +97,40 @@ async function prepare(entry) {
 }
 
 const filenames = new Set();
+const families = new Map(sources.families.map(family => [family.id, family]));
+if (sources.format !== 'pocketworld-font-sources/v1' || families.size !== 18 || sources.families.length !== 18) throw new Error('Invalid production font family configuration');
 for (const entry of entries) {
-  if (filenames.has(entry.file) || !/^[0-9a-f]{40}$/.test(entry.blob) || !Number.isInteger(entry.bytes)) throw new Error('Invalid font pin configuration');
+  if (!families.has(entry.id) || families.get(entry.id).family !== entry.family ||
+      filenames.has(entry.file) || !/^[A-Za-z0-9.-]+$/.test(entry.file) ||
+      !['google/fonts', 'lxgw/LxgwWenKai'].includes(entry.repository) ||
+      !/^[0-9a-f]{40}$/.test(entry.commit) || !/^[0-9a-f]{40}$/.test(entry.blob) ||
+      !/^[0-9a-f]{64}$/.test(entry.sha256) || !Number.isInteger(entry.bytes) || entry.bytes <= 0 ||
+      typeof entry.source !== 'string' || entry.source.startsWith('/') || entry.source.split('/').some(part => !part || part === '..' || part === '.')) throw new Error('Invalid font pin configuration');
   filenames.add(entry.file);
+}
+for (const id of families.keys()) {
+  if (!entries.some(entry => entry.id === id && entry.glyphs) || !entries.some(entry => entry.id === id && !entry.glyphs && entry.file.endsWith('-OFL.txt'))) throw new Error(`Incomplete font or license: ${id}`);
 }
 
 if (process.argv.includes('--check-config')) {
-  console.log(JSON.stringify({ repository: 'google/fonts', commit, files: entries.length, mode: 'configuration-only; no font download or glyph validation performed' }));
+  console.log(JSON.stringify({ families: families.size, files: entries.length, mode: 'configuration-only; no font download or glyph validation performed' }));
 } else {
   await mkdir(output, { recursive: true });
-  const files = await Promise.all(entries.map(prepare));
+  const files = new Array(entries.length);
+  let next = 0;
+  // Bound concurrent downloads and decoded font buffers for the full CJK families.
+  await Promise.all(Array.from({ length: Math.min(4, entries.length) }, async () => {
+    for (;;) {
+      const index = next++;
+      if (index >= entries.length) return;
+      files[index] = await prepare(entries[index]);
+    }
+  }));
   const receipt = {
-    repository: 'https://github.com/google/fonts', commit, license: 'SIL Open Font License 1.1',
-    scope: 'Unmodified full variable font files published at the pinned paths; not catalogue specimen subsets. Glyph samples validate UI coverage, not every Unicode character.',
+    format: sources.format, license: sources.license,
+    scope: sources.scope, families: sources.families,
     files,
   };
   await writeFile(path.join(output, 'sources.json'), `${JSON.stringify(receipt, null, 2)}\n`);
-  console.log(JSON.stringify({ fonts: files.filter(file => file.file.endsWith('.ttf')).length, licenses: files.filter(file => file.file.endsWith('.txt')).length, commit, output }));
+  console.log(JSON.stringify({ families: families.size, fonts: files.filter(file => file.file.endsWith('.ttf')).length, licenses: files.filter(file => file.file.endsWith('.txt')).length, font_bytes: files.filter(file => file.file.endsWith('.ttf')).reduce((sum, file) => sum + file.bytes, 0), output }));
 }

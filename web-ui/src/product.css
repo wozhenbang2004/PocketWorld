@@ -4,12 +4,12 @@
  * and navigation stay in App/Secondary; source motion remains in those components.
  */
 :root {
-  --pw-font: "Inter", "Noto Sans SC", system-ui, sans-serif;
-  --pw-mono: "JetBrains Mono", ui-monospace, monospace;
-  --pw-canvas: #f5f5f5;
+  --pw-font: var(--pw-font-ui, var(--font-ui, system-ui, sans-serif));
+  --pw-mono: var(--pw-font-code, var(--font-code, ui-monospace, monospace));
+  --pw-canvas: #fafafa;
   --pw-surface: #fff;
-  --pw-inset: #efefef;
-  --pw-selected: #e7e7e7;
+  --pw-inset: #f3f3f3;
+  --pw-selected: #eaeaea;
   --pw-hover: var(--pw-selected);
   --pw-edge: transparent;
   --pw-edge-hover: transparent;
@@ -22,10 +22,10 @@
   --pw-focus: #626262;
   --pw-radius-control: 10px;
   --pw-radius-popover: 14px;
-  --pw-shadow-input: none;
-  --pw-shadow-surface: 0 10px 36px -14px rgb(0 0 0 / 9%);
-  --pw-shadow-floating: 0 14px 48px -12px rgb(0 0 0 / 12%);
-  --pw-shadow-sheet: 0 16px 64px -16px rgb(0 0 0 / 14%);
+  --pw-shadow-input: 0 2px 6px -2px rgb(0 0 0 / 2.5%), 0 12px 24px -8px rgb(0 0 0 / 6.5%);
+  --pw-shadow-surface: 0 2px 6px -2px rgb(0 0 0 / 2.5%), 0 12px 24px -8px rgb(0 0 0 / 7%);
+  --pw-shadow-floating: 0 4px 12px -4px rgb(0 0 0 / 2.5%), 0 16px 32px -10px rgb(0 0 0 / 9%);
+  --pw-shadow-sheet: 0 4px 12px -4px rgb(0 0 0 / 2.5%), 0 20px 40px -12px rgb(0 0 0 / 12%);
 
   /* BoardUI semantic aliases also reach its portaled menus. */
   --font-inter: var(--pw-font);

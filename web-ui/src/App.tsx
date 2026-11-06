@@ -1,3 +1,4 @@
+import { FluidValueSlider } from './forms-library/uiux/FluidValueSlider';
 /**
  * PocketWorld's controlled work surface.
  * Layout/regions are adapted from the selected Affect AssistantHome, AgentRun,
@@ -114,6 +115,8 @@ export default function App(){
  const [commandScope,setCommandScope]=useState<'all'|'conversations'>('all');
  const [desktopNavigation,setDesktopNavigation]=useState(()=>window.matchMedia('(min-width: 1024px)').matches);
  const [navigationToolsOpen,setNavigationToolsOpen]=useState(false);
+ const [navigationCompact,setNavigationCompact]=useState(false);
+ const effectiveCompact=desktopNavigation&&navigationCompact&&!commandOpen;
  useEffect(()=>{const media=window.matchMedia('(min-width: 1024px)');const update=()=>setDesktopNavigation(media.matches);update();media.addEventListener('change',update);return()=>media.removeEventListener('change',update)},[]);
  const previousDesktopNavigation=useRef(desktopNavigation);
  useEffect(()=>{if(previousDesktopNavigation.current===desktopNavigation)return;previousDesktopNavigation.current=desktopNavigation;setWorkOpen(!desktopNavigation&&commandOpen)},[desktopNavigation,commandOpen]);
@@ -516,7 +519,7 @@ export default function App(){
     {scope.executionPhase==='planning'&&<p className="pw-muted">{Number(scope.planRevision)>0?`当前计划版本 ${String(scope.planRevision)}；请在原任务授权中核对完整步骤。`:'当前还没有提交计划正文。'} 关闭页面或重新打开不会自动退出规划。</p>}
     {actionNames.includes('tasks.plan.enter')&&<><p className="pw-muted">先保存只读规划阶段，不启动任务，也不增加调用额度、延长截止时间或授权新工具。</p><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.plan.enter')}>进入只读规划</Button></>}
    </section>
-   {actionNames.includes('tasks.scope')?<><h3>原任务预算与截止</h3><TextField label="工具调用总上限" inputMode="numeric" pattern="[0-9]*" hint="1–400" value={scopeTools} onChange={setScopeTools}/><TextField label="模型调用总上限" inputMode="numeric" pattern="[0-9]*" hint="1–512" value={scopeModels} onChange={setScopeModels}/><RadioOptions label="任务截止" value={scopeMinutes} onChange={setScopeMinutes} options={[{id:'-1',label:'保留原截止时间'},{id:'0',label:'不设置截止时间'},{id:'30',label:'从本次确认起30分钟'},{id:'120',label:'从本次确认起2小时'}]}/><p className="pw-muted">这是新的总上限，不是追加次数。修订范围会使旧计划确认失效。</p></>:<p>这次任务当前不能修订预算与截止时间。</p>}
+   {actionNames.includes('tasks.scope')?<><h3>原任务预算与截止</h3><TextField label="工具调用总上限" inputMode="numeric" pattern="[0-9]*" hint="1–400" value={scopeTools} onChange={setScopeTools} isDisabled={protectedDisabled}/><FluidValueSlider label="拖动设置工具调用上限" value={/^\d+$/.test(scopeTools)?Number(scopeTools):NaN} onChange={value=>setScopeTools(String(value))} minValue={1} maxValue={400} disabled={protectedDisabled} unit="次"/><TextField label="模型调用总上限" inputMode="numeric" pattern="[0-9]*" hint="1–512" value={scopeModels} onChange={setScopeModels} isDisabled={protectedDisabled}/><FluidValueSlider label="拖动设置模型调用上限" value={/^\d+$/.test(scopeModels)?Number(scopeModels):NaN} onChange={value=>setScopeModels(String(value))} minValue={1} maxValue={512} disabled={protectedDisabled} unit="次"/><RadioOptions label="任务截止" value={scopeMinutes} onChange={setScopeMinutes} options={[{id:'-1',label:'保留原截止时间'},{id:'0',label:'不设置截止时间'},{id:'30',label:'从本次确认起30分钟'},{id:'120',label:'从本次确认起2小时'}]}/><p className="pw-muted">这是新的总上限，不是追加次数。修订范围会使旧计划确认失效。</p></>:<p>这次任务当前不能修订预算与截止时间。</p>}
   </div>;
   const readingReview=taskOpening||reviewPending;
   const hasDecision=!!review?.ownerQuestion||!!project||actionNames.some(action=>action!=='tasks.scope'&&action!=='tasks.plan.enter');
@@ -593,12 +596,12 @@ export default function App(){
     {!desktopNavigation&&<><Drawer.Description id="pw-work-description" className="pw-sr-only">从侧边切换对话、任务和项目；更多工具中可进入团队、记忆和任务历史。</Drawer.Description><Drawer.Close asChild><IconButton icon={RiCloseLine} aria-label="关闭导航"/></Drawer.Close></>}
    </header>
    {!commandOpen&&<div className="pw-navigation-actions">
-    {can('conversation.new')&&<Button variant="secondary" leadingIcon={RiAddLine} disabled={!!state.chatSubmitting} onClick={()=>{navigate('chat');run('conversation.new')}}>新对话</Button>}
-    <IconButton ref={workSearch} icon={RiSearchLine} aria-label="搜索工作" data-testid="work_search" onClick={()=>{setCommandScope('all');setCommandOpen(true)}}/>
+    {can('conversation.new')&&<Button variant="secondary" leadingIcon={RiAddLine} title="新对话" disabled={!!state.chatSubmitting} onClick={()=>{navigate('chat');run('conversation.new')}}>新对话</Button>}
+    <IconButton ref={workSearch} icon={RiSearchLine} aria-label="搜索工作" title="搜索工作" data-testid="work_search" onClick={()=>{setCommandScope('all');setCommandOpen(true)}}/>
    </div>}
    <div className={`pw-drawer-body ${commandOpen?'pw-navigation-search':''}`}>
     {commandOpen?<CommandMenu key={commandScope} commands={commandScope==='conversations'?workCommands.filter(item=>item.id.startsWith('conversation:')):workCommands} conversationOnly={commandScope==='conversations'} onClose={()=>setCommandOpen(false)}/>:<>
-     <WorkSidebar items={workNav.filter(item=>['chat','tasks','projects'].includes(item.key))} label="主导航" hideGroupLabels selected={navigationSelection} onNavigate={navigate}/>
+     <WorkSidebar items={workNav.filter(item=>['chat','tasks','projects'].includes(item.key))} label="主导航" compact={effectiveCompact} onCompactChange={desktopNavigation?setNavigationCompact:undefined} hideGroupLabels selected={navigationSelection} onNavigate={navigate}/>
      <section className="pw-work-recent" aria-label="最近对话">
       <div className="pw-section-heading"><h3>最近对话</h3></div>
       <div className="pw-recent-work">{recentWork.map(c=><div className="pw-conversation-row" key={c.id}><Button variant="ghost" aria-current={c.id===state.conversationId&&route==='chat'?'page':undefined} className={c.id===state.conversationId&&route==='chat'?'is-current':''} onClick={()=>selectConversation(c.id)}><span>{c.title||'未命名对话'}</span>{Number(c.pinOrder)>0&&<small>置顶</small>}</Button>{can('conversation.organization.read')&&<IconButton icon={RiMoreLine} aria-label={`整理对话：${c.title||'未命名对话'}`} onClick={()=>setOrganizationTarget(c.id)}/>}</div>)}</div>
@@ -609,11 +612,11 @@ export default function App(){
    {!commandOpen&&<footer className="pw-navigation-footer">
     <Accordion className="pw-navigation-tools" expandedKeys={navigationToolsOpen?['navigation-tools']:[]} onExpandedChange={keys=>setNavigationToolsOpen(keys.has('navigation-tools'))}>
      <AccordionItem id="navigation-tools" title="更多工具" icon={RiToolsLine}>
-      <WorkSidebar items={workNav.filter(item=>['teams','memory','history'].includes(item.key))} label="更多工具" hideGroupLabels selected={navigationSelection} onNavigate={navigate}/>
-      {can('attachmentWorkspace.open')&&<Button variant="ghost" leadingIcon={RiFileLine} onClick={()=>{setWorkOpen(false);run('attachmentWorkspace.open')}}>文件与成果</Button>}
+      <WorkSidebar items={workNav.filter(item=>['teams','memory','history'].includes(item.key))} label="更多工具" compact={effectiveCompact} hideGroupLabels selected={navigationSelection} onNavigate={navigate}/>
+      {can('attachmentWorkspace.open')&&<Button variant="ghost" leadingIcon={RiFileLine} title="文件与成果" onClick={()=>{setWorkOpen(false);run('attachmentWorkspace.open')}}>文件与成果</Button>}
      </AccordionItem>
     </Accordion>
-    <WorkSidebar items={workNav.filter(item=>item.key==='settings')} label="设置" hideGroupLabels selected={navigationSelection} onNavigate={navigate}/>
+    <WorkSidebar items={workNav.filter(item=>item.key==='settings')} label="设置" compact={effectiveCompact} hideGroupLabels selected={navigationSelection} onNavigate={navigate}/>
    </footer>}
  </>;
  const allWork=!desktopNavigation&&<Drawer.Portal>
@@ -685,21 +688,26 @@ export default function App(){
     {can('remoteSessions.read')&&<Accordion variant="divided"><AccordionItem id="remote-sessions" title="电脑端托管会话"><RemoteManagedSessionsWorkspace/></AccordionItem></Accordion>}
   </main>;
  const openProjectFile=(path:string)=>{if(!can('projects.open'))return;updateProjectView({selected:path});run('projects.open',{projectId:state.projectId,path})};
+ const projectFiles=<><div className="pw-project-tools"><SearchField value={fileQuery} onChange={setFileQuery} aria-label="搜索当前项目文件" placeholder="搜索文件"/><PopoverTrigger isOpen={fileDisplayOpen} onOpenChange={setFileDisplayOpen}><IconButton icon={fileView==='tree'?RiFolderLine:RiLayoutGridLine} aria-label="文件显示方式" title="文件显示方式"/><Popover aria-label="文件显示方式"><PopoverHeader title="文件显示"/><RadioOptions label="显示方式" value={fileView} onChange={value=>{setFileView(value as 'files'|'tree'|'grid');setFileDisplayOpen(false)}} options={[{id:'files',label:'文件列表'},{id:'tree',label:'目录层级'},{id:'grid',label:'网格'}]}/><Button variant="ghost" leadingIcon={RiTerminalBoxLine} onClick={()=>{setFileDisplayOpen(false);navigate('local')}}>运行与工具</Button></Popover></PopoverTrigger>{can('projects.newFile')&&<IconButton icon={RiAddLine} aria-label="新文件" title="新文件" onClick={()=>openCreate('file')}/>}</div>
+      <div className="pw-project-list-caption"><span>{fileQuery?`匹配 ${shownFiles.length} 个文件`:`${files.length} 个文件`}</span>{fileQuery&&<Button variant="ghost" size="small" onClick={()=>setFileQuery('')}>清空搜索</Button>}{can('projects.refresh')&&<IconButton icon={RiRefreshLine} size="small" aria-label="重新读取项目文件" onClick={()=>run('projects.refresh')}/>}</div>
+      <div className="pw-project-objects">{!shownFiles.length?<div className="pw-empty-small"><p>{fileQuery?'没有匹配的文件。':'当前未列出项目文件。'}</p><p className="pw-muted">{fileQuery?'换个关键词，或清空搜索返回文件列表。':'可创建新文件，或重新读取原项目。'}</p></div>:fileView==='tree'?<TreeView aria-label="项目文件" key={state.projectId} className="pw-file-tree" data={treeData(shownFiles)} selectedItemId={projectView.selected||undefined} expandedIds={projectView.expanded} onExpandedChange={expanded=>updateProjectView({expanded})} onSelectChange={file=>{if(file&&!file.children)openProjectFile(file.id)}}/>:<FilesBrowser files={shownFiles as any} showToolbar={false} view={fileView==='grid'?'Grid':'List'} onViewChange={view=>setFileView(view==='Grid'?'grid':'files')} onCopyPath={path=>{void copyText(path).catch(()=>{})}} selectedPath={projectView.selected} onOpen={file=>openProjectFile(file.path)}/>}</div></>;
  const projectsPage=<main ref={projectScroll} className={`pw-page pw-projects-page ${state.filePath?'pw-project-file-open':''}`} data-preview-open={projectPreview.expanded&&!state.filePath||undefined} onScroll={event=>{if(!state.filePath&&!projectPreview.expanded)projectListTop.current.set(String(state.projectId||''),event.currentTarget.scrollTop)}}>
   {packageOpening&&<ProgressBar label="正在读取这次任务的固定包" isIndeterminate showValueLabel={false} size="sm"/>}
   {state.filePath?<ProjectFileEditor key={currentFileKey} path={state.filePath} version={Number(state.fileVersion||0)} draft={fileDraft} state={state} conflict={fileConflict} mode={fileMode} setMode={setFileMode} can={can} edit={editFile} save={saveFile} readHistory={()=>run('projects.history',fileIdentity)} readRevision={revision=>run('projects.revision',{...fileIdentity,revision})} retry={()=>run('projects.retry',{projectId:state.projectId,path:state.filePath})} copy={()=>{if(fileDraft)void copyText(fileDraft.text).catch(()=>{})}} adoption={fileAdoption} registerBack={registerProjectFileBack}/>:currentProject?<section className="pw-project-work" aria-label="当前项目工作区">
-    <Tabs selectedKey={projectPreview.expanded?'preview':'files'} onSelectionChange={key=>{if(key==='preview')projectPreview.open();else projectPreview.hide()}} className="pw-project-tabs">
+    {desktopNavigation?<div className="pw-project-connected-workspace" data-preview-open={projectPreview.expanded||undefined}>
+      <section className="pw-project-files-pane" aria-label="项目文件"><header className="pw-project-connected-header"><h2>项目文件</h2>{!projectPreview.expanded&&<Button variant="secondary" leadingIcon={RiPlayLine} disabled={!can('projects.preview')} onClick={projectPreview.open}>打开预览</Button>}</header>{projectFiles}</section>
+      {projectPreview.expanded&&<section className="pw-project-preview-panel" aria-label="项目预览"><ProjectPreviewPane control={projectPreview} composer={composer}/></section>}
+    </div>:(<Tabs selectedKey={projectPreview.expanded?'preview':'files'} onSelectionChange={key=>{if(key==='preview')projectPreview.open();else projectPreview.hide()}} className="pw-project-tabs">
       <TabList aria-label="项目工作方式"><Tab id="files" icon={RiFolderLine}>文件</Tab><Tab id="preview" icon={RiPlayLine} isDisabled={!can('projects.preview')&&!projectPreview.expanded}>预览</Tab></TabList>
-      <TabPanel id="files"><div className="pw-project-tools"><SearchField value={fileQuery} onChange={setFileQuery} aria-label="搜索当前项目文件" placeholder="搜索文件"/><PopoverTrigger isOpen={fileDisplayOpen} onOpenChange={setFileDisplayOpen}><IconButton icon={fileView==='tree'?RiFolderLine:RiLayoutGridLine} aria-label="文件显示方式" title="文件显示方式"/><Popover aria-label="文件显示方式"><PopoverHeader title="文件显示"/><RadioOptions label="显示方式" value={fileView} onChange={value=>{setFileView(value as 'files'|'tree'|'grid');setFileDisplayOpen(false)}} options={[{id:'files',label:'文件列表'},{id:'tree',label:'目录层级'},{id:'grid',label:'网格'}]}/><Button variant="ghost" leadingIcon={RiTerminalBoxLine} onClick={()=>{setFileDisplayOpen(false);navigate('local')}}>运行与工具</Button></Popover></PopoverTrigger>{can('projects.newFile')&&<IconButton icon={RiAddLine} aria-label="新文件" title="新文件" onClick={()=>openCreate('file')}/>}</div>
-      <div className="pw-project-list-caption"><span>{fileQuery?`匹配 ${shownFiles.length} 个文件`:`${files.length} 个文件`}</span>{fileQuery&&<Button variant="ghost" size="small" onClick={()=>setFileQuery('')}>清空搜索</Button>}{can('projects.refresh')&&<IconButton icon={RiRefreshLine} size="small" aria-label="重新读取项目文件" onClick={()=>run('projects.refresh')}/>}</div>
-      <div className="pw-project-objects">{!shownFiles.length?<div className="pw-empty-small"><p>{fileQuery?'没有匹配的文件。':'当前未列出项目文件。'}</p><p className="pw-muted">{fileQuery?'换个关键词，或清空搜索返回文件列表。':'可创建新文件，或重新读取原项目。'}</p></div>:fileView==='tree'?<TreeView aria-label="项目文件" key={state.projectId} className="pw-file-tree" data={treeData(shownFiles)} selectedItemId={projectView.selected||undefined} expandedIds={projectView.expanded} onExpandedChange={expanded=>updateProjectView({expanded})} onSelectChange={file=>{if(file&&!file.children)openProjectFile(file.id)}}/>:<FilesBrowser files={shownFiles as any} showToolbar={false} view={fileView==='grid'?'Grid':'List'} onViewChange={view=>setFileView(view==='Grid'?'grid':'files')} onCopyPath={path=>{void copyText(path).catch(()=>{})}} selectedPath={projectView.selected} onOpen={file=>openProjectFile(file.path)}/>}</div></TabPanel>
+      <TabPanel id="files">{projectFiles}</TabPanel>
       <TabPanel id="preview" className="pw-project-preview-panel"><ProjectPreviewPane control={projectPreview} composer={composer}/></TabPanel>
-    </Tabs>
+    </Tabs>)}
+
   </section>:<div className="pw-empty"><RiFolderLine size={27}/><h3>选择项目继续</h3><p>从顶部打开项目，或新建一份项目。</p>{can('projects.create')&&<Button variant="secondary" leadingIcon={RiAddLine} onClick={()=>openCreate('project')}>新项目</Button>}</div>}
  </main>;
  return <ReadingContext.Provider value={openReading}><Drawer.Root open={workOpen&&!desktopNavigation} onOpenChange={changeNavigation} direction="left" autoFocus shouldScaleBackground={false}>
  <div className="pw-app pw-redesign" data-navigation={desktopNavigation?'sidebar':'drawer'} data-route={route} data-file-open={!!state.filePath||undefined} data-vaul-drawer-wrapper=""><Toaster/>
-  {desktopNavigation&&<aside className="pw-desktop-navigation pw-navigation-drawer" aria-label="侧边工作导航" onKeyDown={event=>{if(commandOpen&&event.key==='Escape'&&!event.nativeEvent.isComposing&&event.nativeEvent.keyCode!==229){event.preventDefault();setCommandOpen(false)}}}>{navigationContent}</aside>}
+  {desktopNavigation&&<aside className="pw-desktop-navigation pw-navigation-drawer" data-compact={effectiveCompact?'true':'false'} aria-label="侧边工作导航" onKeyDown={event=>{if(commandOpen&&event.key==='Escape'&&!event.nativeEvent.isComposing&&event.nativeEvent.keyCode!==229){event.preventDefault();setCommandOpen(false)}}}>{navigationContent}</aside>}
   <div className="pw-main-workspace" ref={workspace}>
   {isPrimaryRoute&&<header className="pw-app-header">
    {route==='projects'&&state.filePath?<IconButton icon={RiArrowLeftLine} aria-label="返回项目文件" disabled={fileAdoption.pending||!!state.fileSaving} onClick={()=>{if(!fileAdoption.isPending()&&!bridge.getState().state.fileSaving&&!projectFileBack.current?.())run('projects.close',fileIdentity)}}/>:route==='projects'&&state.projectTaskReturn?.taskId?<IconButton icon={RiArrowLeftLine} aria-label="回到原任务" onClick={()=>openTask(state.projectTaskReturn.taskId)}/>:navigationTrigger}

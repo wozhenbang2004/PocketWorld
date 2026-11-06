@@ -1,0 +1,22 @@
+/* Uses the existing BoardUI fields/surfaces; the preview is one bounded reading area. */
+.pw-typography-settings { display: grid; gap: 14px; min-width: 0; }
+.pw-typography-heading h3 { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+.pw-typography-heading p { margin: 0; }
+.pw-typography-fields { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.pw-typography-fields .pw-selection-field { min-width: 0; }
+.pw-typography-fields .pw-select-trigger { max-width: 100%; }
+.pw-typography-preview { padding: 16px; border-radius: 16px; background: var(--background-secondary, #f5f5f5); color: var(--text-primary, #171717); min-height: 128px; }
+.pw-typography-preview > p { margin: 0; }
+.pw-typography-specimens { display: grid; gap: 8px; font-synthesis: none; }
+.pw-typography-specimens[hidden] { display: none; }
+.pw-typography-specimens p { margin: 0; overflow-wrap: anywhere; }
+.pw-typography-sample-cjk, .pw-typography-sample-latin { font-size: 20px; line-height: 1.55; }
+.pw-typography-sample-code { display: block; padding: 0; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; color: inherit; background: transparent; }
+.pw-typography-preview-error { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pw-typography-preview-error p { margin: 0; }
+.pw-typography-actions { margin-top: 0; }
+.dark .pw-typography-preview { background: var(--background-secondary, #242424); color: var(--text-primary, #ededed); }
+@media (max-width: 640px) {
+  .pw-typography-fields { grid-template-columns: minmax(0, 1fr); }
+  .pw-typography-preview { padding: 14px; }
+}
