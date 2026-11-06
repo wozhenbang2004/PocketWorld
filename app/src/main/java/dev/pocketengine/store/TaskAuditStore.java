@@ -3,9 +3,7 @@ package dev.pocketengine.store;
 import android.content.ContentValues;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
-import android.util.JsonReader;
 import android.util.JsonToken;
-import android.util.JsonWriter;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.StringWriter;
@@ -47,35 +45,44 @@ public final class TaskAuditStore {
     private static void migrateOne(SQLiteDatabase db,String task)throws Exception{
         db.beginTransaction();try{
             ContentValues stage=new ContentValues();stage.put("audit_stage","");db.update("tasks",stage,"task_id=? AND audit_format=0",new String[]{task});
-            JSONObject headerFields=new JSONObject();SqlWriter sink=new SqlWriter(db,task,0,true);
-            try(JsonReader in=new JsonReader(new SqlDocumentReader(db,task));JsonWriter out=new JsonWriter(sink)){
-                in.beginObject();out.beginObject();long order=0;
+            JSONObject headerFields=new JSONObject();
+            // Only legacy migration bypasses the scalar transport cap. Runtime readers
+            // keep their original limits; no authority changes until the final SQL switch.
+            try(MigrationJsonInput in=new MigrationJsonInput(new SqlDocumentReader(db,task,false));SqlWriter out=new SqlWriter(db,task,0,true)){
+                in.beginObject();out.write('{');long order=0;boolean first=true;
                 while(in.hasNext()){
-                    String key=in.nextName();out.name(key);
+                    String key=in.nextName();if(!first)out.write(',');first=false;MigrationJsonInput.writeString(out,key);out.write(':');
                     if("events".equals(key)&&in.peek()==JsonToken.BEGIN_ARRAY){
-                        in.beginArray();out.beginArray();out.endArray();
+                        in.beginArray();out.write("[]");
                         while(in.hasNext()){
                             if(order==Long.MAX_VALUE)throw new IllegalStateException("原事件序号已耗尽");
                             long position=++order;ContentValues row=new ContentValues();row.put("task_id",task);row.put("event_order",position);row.put("event_type","");row.put("event_json","");db.insertOrThrow("task_events",null,row);
-                            SqlWriter eventSink=new SqlWriter(db,task,position,false);SmallWriter metadata=new SmallWriter(8192);
-                            try(JsonWriter event=new JsonWriter(eventSink);JsonWriter capture=new JsonWriter(metadata)){event.setLenient(true);capture.setLenient(true);copyValue(in,event,capture,0);}
-                            JSONObject body=null;if(!metadata.limited)try{body=new JSONObject(metadata.toString());}catch(Exception oldNonObject){/* Retained exactly as JSON; not promoted into native evidence. */}
+                            SmallWriter metadata=new SmallWriter(8192);SqlWriter eventSink=new SqlWriter(db,task,position,false);
+                            try(SqlWriter event=eventSink){in.copyValue(event,metadata,0);}
+                            JSONObject body=null;if(!metadata.limited)try{body=new JSONObject(metadata.toString());}catch(Exception oldNonObject){/* Preserve JSON without promoting it into native evidence. */}
                             updateMetadata(db,task,position,body,eventSink.bytes,false);
                         }
                         in.endArray();
                     }else if("sourceLearningJob".equals(key)&&in.peek()==JsonToken.BEGIN_OBJECT){
-                        JSONObject small=new JSONObject();in.beginObject();out.beginObject();
-                        while(in.hasNext()){String field=in.nextName();out.name(field);boolean wanted=Set.of("format","revision","nextIndex","reservedModelAttempts").contains(field);SmallWriter captured=wanted?new SmallWriter(512):null;JsonWriter second=captured==null?null:new JsonWriter(captured);if(second!=null)second.setLenient(true);copyValue(in,out,second,0);if(second!=null){second.close();if(!captured.limited)small.put(field,new JSONTokener(captured.toString()).nextValue());}}
-                        in.endObject();out.endObject();headerFields.put("sourceLearningJob",small);
+                        JSONObject small=new JSONObject();in.beginObject();out.write('{');boolean firstField=true;
+                        while(in.hasNext()){
+                            String field=in.nextName();if(!firstField)out.write(',');firstField=false;MigrationJsonInput.writeString(out,field);out.write(':');
+                            SmallWriter captured=Set.of("format","revision","nextIndex","reservedModelAttempts").contains(field)?new SmallWriter(512):null;
+                            in.copyValue(out,captured,0);if(captured!=null&&!captured.limited)small.put(field,new JSONTokener(captured.toString()).nextValue());
+                        }
+                        in.endObject();out.write('}');headerFields.put("sourceLearningJob",small);
                     }else{
                         SmallWriter captured=HEADER_FIELDS.contains(key)?new SmallWriter(8192):null;
-                        JsonWriter second=captured==null?null:new JsonWriter(captured);if(second!=null)second.setLenient(true);copyValue(in,out,second,0);
-                        if(second!=null){second.close();if(!captured.limited)headerFields.put(key,new JSONTokener(captured.toString()).nextValue());}
+                        in.copyValue(out,captured,0);
+                        // A later oversized identity must never inherit an earlier duplicate
+                        // id. Refuse the upgrade rather than binding a body to a guessed row.
+                        if(captured!=null){if(captured.limited&&"id".equals(key))throw new IllegalStateException("原任务身份超过迁移范围，未切换权威");if(!captured.limited)headerFields.put(key,new JSONTokener(captured.toString()).nextValue());}
                     }
                 }
-                in.endObject();out.endObject();if(in.peek()!=JsonToken.END_DOCUMENT)throw new IllegalStateException("旧任务文档含多余正文，未切换原权威");
+                in.endObject();out.write('}');if(in.peek()!=JsonToken.END_DOCUMENT)throw new IllegalStateException("旧任务文档含多余正文，未切换原权威");
             }
-            // Metadata for unusually large events is read by streaming only their three native fields.
+            // Keep the original second pass for all events lacking an indexed type,
+            // including small objects. Its metadata is bounded, not the retained body.
             try(Cursor missing=db.rawQuery("SELECT event_order FROM task_events WHERE task_id=? AND event_type=''",new String[]{task})){
                 while(missing.moveToNext())migrateEventMetadata(db,task,missing.getLong(0));
             }
@@ -86,29 +93,14 @@ public final class TaskAuditStore {
         }finally{db.endTransaction();}
     }
     private static void migrateEventMetadata(SQLiteDatabase db,String task,long position)throws Exception{
-        JSONObject meta=new JSONObject();try(JsonReader in=new JsonReader(new SqlEventReader(db,task,position))){
+        JSONObject meta=new JSONObject();try(MigrationJsonInput in=new MigrationJsonInput(new SqlEventReader(db,task,position,false))){
             if(in.peek()!=JsonToken.BEGIN_OBJECT)return;in.beginObject();while(in.hasNext()){
                 String key=in.nextName();JsonToken token=in.peek();
-                if((key.equals("type")||key.equals("callId"))&&token==JsonToken.STRING){String value=in.nextString();if(value.length()<=240)meta.put(key,value);}
-                else if(key.equals("seq")&&token==JsonToken.NUMBER){String value=in.nextString();try{meta.put(key,new BigDecimal(value).longValueExact());}catch(ArithmeticException ignored){}}
+                if((key.equals("type")||key.equals("callId"))&&token==JsonToken.STRING){String value=in.boundedString(240);if(value!=null)meta.put(key,value);}
+                else if(key.equals("seq")&&token==JsonToken.NUMBER){String value=in.nextNumber();try{meta.put(key,new BigDecimal(value).longValueExact());}catch(ArithmeticException ignored){}}
                 else if(key.equals("completed")&&token==JsonToken.BOOLEAN)meta.put(key,in.nextBoolean());else in.skipValue();
             }in.endObject();
         }updateMetadata(db,task,position,meta,-1,false);
-    }
-    private static void copyValue(JsonReader in,JsonWriter out,JsonWriter capture,int depth)throws Exception{
-        if(depth>100)throw new IllegalStateException("旧任务嵌套过深；原始数据库未删除");
-        switch(in.peek()){
-            case BEGIN_OBJECT:
-                in.beginObject();out.beginObject();if(capture!=null)capture.beginObject();
-                while(in.hasNext()){String key=in.nextName();out.name(key);if(capture!=null)capture.name(key);copyValue(in,out,capture,depth+1);}in.endObject();out.endObject();if(capture!=null)capture.endObject();break;
-            case BEGIN_ARRAY:
-                in.beginArray();out.beginArray();if(capture!=null)capture.beginArray();while(in.hasNext())copyValue(in,out,capture,depth+1);in.endArray();out.endArray();if(capture!=null)capture.endArray();break;
-            case STRING:{String value=in.nextString();out.value(value);if(capture!=null)capture.value(value);break;}
-            case NUMBER:{BigDecimal value=new BigDecimal(in.nextString());out.value(value);if(capture!=null)capture.value(value);break;}
-            case BOOLEAN:{boolean value=in.nextBoolean();out.value(value);if(capture!=null)capture.value(value);break;}
-            case NULL:in.nextNull();out.nullValue();if(capture!=null)capture.nullValue();break;
-            default:throw new IllegalStateException("原任务JSON不可读，未用摘要替代");
-        }
     }
     /** Called inside the original TaskStore write transaction. Existing event rows are never replaced
      * by a UI snapshot; only first-time native legacy import may introduce its retained old array. */
@@ -332,10 +324,10 @@ public final class TaskAuditStore {
         public void flush()throws IOException{flushChunk(false);}public void close()throws IOException{flushChunk(true);}
     }
     private abstract static class SqlReader extends Reader{
-        final SQLiteDatabase db;final String task;long start=1;String chunk="";int offset;boolean ended,inString,escaped;int tokenChars;
-        SqlReader(SQLiteDatabase db,String task){this.db=db;this.task=task;}abstract String select();abstract String[] args();
+        final SQLiteDatabase db;final String task;final boolean boundScalars;long start=1;String chunk="";int offset;boolean ended,inString,escaped;int tokenChars;
+        SqlReader(SQLiteDatabase db,String task){this(db,task,true);}SqlReader(SQLiteDatabase db,String task,boolean boundScalars){this.db=db;this.task=task;this.boundScalars=boundScalars;}abstract String select();abstract String[] args();
         public int read(char[] target,int off,int len)throws IOException{
-            if(len==0)return 0;if(offset==chunk.length()&&!ended)try(Cursor row=db.rawQuery(select(),args())){if(!row.moveToFirst())throw new IOException("原任务迁移行已消失");chunk=row.getString(0);offset=0;if(chunk.isEmpty())ended=true;else{checkTokens(chunk);start+=chunk.codePointCount(0,chunk.length());}}catch(Exception failed){throw new IOException("原任务分块读取失败，未切换权威",failed);}
+            if(len==0)return 0;if(offset==chunk.length()&&!ended)try(Cursor row=db.rawQuery(select(),args())){if(!row.moveToFirst())throw new IOException("原任务迁移行已消失");chunk=row.getString(0);offset=0;if(chunk.isEmpty())ended=true;else{if(boundScalars)checkTokens(chunk);start+=chunk.codePointCount(0,chunk.length());}}catch(Exception failed){throw new IOException("原任务分块读取失败，未切换权威",failed);}
             if(ended)return -1;int count=Math.min(len,chunk.length()-offset);chunk.getChars(offset,offset+count,target,off);offset+=count;return count;
         }
         private void checkTokens(String value)throws IOException{
@@ -344,9 +336,9 @@ public final class TaskAuditStore {
         public void close(){}
     }
     private static final class SqlDocumentReader extends SqlReader{
-        SqlDocumentReader(SQLiteDatabase db,String task){super(db,task);}String select(){return "SELECT substr(document,?,4096) FROM tasks WHERE task_id=?";}String[] args(){return new String[]{Long.toString(start),task};}
+        SqlDocumentReader(SQLiteDatabase db,String task){super(db,task);}SqlDocumentReader(SQLiteDatabase db,String task,boolean boundScalars){super(db,task,boundScalars);}String select(){return "SELECT substr(document,?,4096) FROM tasks WHERE task_id=?";}String[] args(){return new String[]{Long.toString(start),task};}
     }
     private static final class SqlEventReader extends SqlReader{
-        final long order;SqlEventReader(SQLiteDatabase db,String task,long order){super(db,task);this.order=order;}String select(){return "SELECT substr(event_json,?,4096) FROM task_events WHERE task_id=? AND event_order=?";}String[] args(){return new String[]{Long.toString(start),task,Long.toString(order)};}
+        final long order;SqlEventReader(SQLiteDatabase db,String task,long order){super(db,task);this.order=order;}SqlEventReader(SQLiteDatabase db,String task,long order,boolean boundScalars){super(db,task,boundScalars);this.order=order;}String select(){return "SELECT substr(event_json,?,4096) FROM task_events WHERE task_id=? AND event_order=?";}String[] args(){return new String[]{Long.toString(start),task,Long.toString(order)};}
     }
 }
