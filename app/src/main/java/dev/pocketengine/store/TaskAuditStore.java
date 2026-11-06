@@ -152,6 +152,25 @@ public final class TaskAuditStore {
         for(String type:new String[]{"memory_owner_consolidation","media_owner_prepared","browser_research_requested"})try(Cursor row=db.rawQuery("SELECT 1 FROM task_events WHERE task_id=? AND event_type=? LIMIT 1",new String[]{id,type})){flags.put(type,row.moveToFirst());}
         return out.put("nativeEventTypeFlags",flags).put("nativeTaskKind",out.optJSONObject("sourceLearningJob")!=null?"source_learning":flags.optBoolean("memory_owner_consolidation")?"memory_consolidation":flags.optBoolean("media_owner_prepared")?"media":out.optString("kind"));
     }
+    /** The index narrows candidates, but is not the final classification authority:
+     * legacy large-event metadata can retain an earlier duplicate type while the
+     * original JSONObject resolves the final duplicate. Inspect only candidate
+     * bodies, in original order, and preserve that final-value interpretation. */
+    static boolean hasEventType(SQLiteDatabase db,String task,String type)throws Exception{
+        try(Cursor rows=db.rawQuery("SELECT event_order,body_bytes FROM task_events WHERE task_id=? AND event_type=? ORDER BY event_order",new String[]{task,type})){
+            while(rows.moveToNext())if(type.equals(nativeEvent(db,task,rows.getLong(0),rows.getLong(1)).optString("type")))return true;
+        }
+        return false;
+    }
+    @FunctionalInterface interface NativeEventVisitor { void accept(JSONObject event)throws Exception; }
+    /** Exact full event scan for a native trace transaction. Only row identity/size
+     * enters the cursor; the existing native reader retains each body's parsing
+     * and capacity rules. The visitor must not retain the historical collection. */
+    static void visitEvents(SQLiteDatabase db,String task,NativeEventVisitor visitor)throws Exception{
+        try(Cursor rows=db.rawQuery("SELECT event_order,body_bytes FROM task_events WHERE task_id=? ORDER BY event_order",new String[]{task})){
+            while(rows.moveToNext())visitor.accept(nativeEvent(db,task,rows.getLong(0),rows.getLong(1)));
+        }
+    }
     public static JSONArray events(SQLiteDatabase db,String task,String type)throws Exception{
         JSONArray out=new JSONArray();String sql="SELECT event_order,body_bytes FROM task_events WHERE task_id=?"+(type==null?"":" AND event_type=?")+" ORDER BY event_order";
         try(Cursor rows=db.rawQuery(sql,type==null?new String[]{task}:new String[]{task,type})){while(rows.moveToNext())out.put(nativeEvent(db,task,rows.getLong(0),rows.getLong(1)));}return out;

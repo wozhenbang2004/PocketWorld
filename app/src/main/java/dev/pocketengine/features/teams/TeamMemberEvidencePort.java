@@ -21,6 +21,9 @@ public final class TeamMemberEvidencePort implements CapabilityPort {
     private TaskStore.TeamResearchBinding research;
     TeamMemberEvidencePort(TeamMemberEvidenceHost host,FeatureHost features,TaskStore tasks,TaskMemoryUse.SourceReader sources,TeamCoordinator.MemberEvidenceCall caller){this.host=host;this.features=features;this.tasks=tasks;this.sources=sources;this.caller=caller;}
     public static boolean readTool(String tool){return READS.contains(tool);}
+    /** Immutable native catalogue shared with SQL proof recovery. Filtering and dispatch
+     * must agree on which original operations carry member-material evidence. */
+    public static Set<String> readTools(){return READS;}
     boolean belongsTo(String run,String member){try{JSONObject who=caller.view();return run.equals(who.getString("teamRunId"))&&member.equals(who.getString("memberId"));}catch(Exception invalid){return false;}}
     void invalidateMaterials(){invalidated=true;}
     private void current()throws Exception{if(closed||invalidated)throw new SecurityException("原成员资料范围已撤回/换版，请重审后继续");caller.checkCurrent();}

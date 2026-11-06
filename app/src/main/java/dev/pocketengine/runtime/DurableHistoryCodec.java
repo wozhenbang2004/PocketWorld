@@ -125,6 +125,12 @@ final class DurableHistoryCodec {
                     continue;
                 }
                 closePending(result, pending);
+                // Tool classifications belong to the just-closed assistant batch,
+                // exactly like pending call/result identities. A later batch may
+                // reuse a call id; it must not inherit an earlier history-reader
+                // or reference-tool interpretation of that id's receipt.
+                referenceCalls.clear();
+                historyCalls.clear();
                 if (!("system".equals(role) || "user".equals(role) || "assistant".equals(role))) throw new JournalFailure();
                 if ("system".equals(role)) {
                     if (i != 0) throw new JournalFailure();

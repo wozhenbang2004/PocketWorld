@@ -9,6 +9,8 @@ import org.json.JSONObject;
 /** One physical Gateway invocation; streaming snapshots and JSON negotiation share one identity. */
 public final class InferenceCapture {
     public interface Admission {void check()throws Exception;}
+    /** Read-only host constraint for the actual candidate, not another grant or route selector. */
+    public interface CandidateAdmission {void check(ModelConfig candidate)throws Exception;}
     public interface BudgetAttribution {void check(InferenceReceipt.Context context,InferenceTokenReservation.NativeIdentity identity)throws Exception;}
     private static volatile BudgetAttribution budgetAttribution=(context,route)->{};
     /** Original TaskStore only. Unattributed call sites cannot bypass an enabled saved-route guard. */
@@ -22,9 +24,11 @@ public final class InferenceCapture {
         public final LogicalInferenceAuthority logical;
         private final Sink sink;
         private final Admission admission;
+        private final CandidateAdmission candidateAdmission;
         public Target(InferenceReceipt.Context context,Sink sink){this(context,sink,()->{});}
         public Target(InferenceReceipt.Context context,Sink sink,Admission admission){this(context,sink,admission,null);}
-        public Target(InferenceReceipt.Context context,Sink sink,Admission admission,LogicalInferenceAuthority logical){this.logical=logical;this.context=java.util.Objects.requireNonNull(context);this.sink=java.util.Objects.requireNonNull(sink);this.admission=java.util.Objects.requireNonNull(admission);}
+        public Target(InferenceReceipt.Context context,Sink sink,Admission admission,LogicalInferenceAuthority logical){this(context,sink,admission,logical,candidate->{});}
+        private Target(InferenceReceipt.Context context,Sink sink,Admission admission,LogicalInferenceAuthority logical,CandidateAdmission candidateAdmission){this.logical=logical;this.context=java.util.Objects.requireNonNull(context);this.sink=java.util.Objects.requireNonNull(sink);this.admission=java.util.Objects.requireNonNull(admission);this.candidateAdmission=java.util.Objects.requireNonNull(candidateAdmission);}
     }
     private static volatile Sink presentationObserver;
     /** Native connection-page observation only; a future capture pins the currently installed observer. */
@@ -37,14 +41,21 @@ public final class InferenceCapture {
         return new Target(original.context,new Sink(){
             public void started(InferenceReceipt receipt)throws Exception{original.sink.started(receipt);observer.started(receipt);}
             public void finished(InferenceReceipt receipt)throws Exception{original.sink.finished(receipt);observer.finished(receipt);}
-        },original.admission,original.logical);
+        },original.admission,original.logical,original.candidateAdmission);
     }
     /** Add a currentness check without replacing the original run admission or durable sink. */
     public static Target withAdmission(Target original,Admission extra){
         java.util.Objects.requireNonNull(original);java.util.Objects.requireNonNull(extra);
-        return new Target(original.context,original.sink,()->{original.admission.check();extra.check();},original.logical);
+        return new Target(original.context,original.sink,()->{original.admission.check();extra.check();},original.logical,original.candidateAdmission);
     }
-    public static Target withLogicalAuthority(Target original,LogicalInferenceAuthority authority){return new Target(original.context,original.sink,original.admission,java.util.Objects.requireNonNull(authority));}
+    public static Target withLogicalAuthority(Target original,LogicalInferenceAuthority authority){return new Target(original.context,original.sink,original.admission,java.util.Objects.requireNonNull(authority),original.candidateAdmission);}
+    /** Preserve native context, receipts and logical authority while narrowing candidate delivery. */
+    public static Target withCandidateAdmission(Target original,CandidateAdmission extra){
+        java.util.Objects.requireNonNull(original);java.util.Objects.requireNonNull(extra);
+        return new Target(original.context,original.sink,original.admission,original.logical,candidate->{original.candidateAdmission.check(candidate);extra.check(candidate);});
+    }
+    /** Preflight can skip a forbidden candidate without creating a physical call or replacing the pin. */
+    public static void requireCandidate(Target original,ModelConfig candidate)throws Exception {original.candidateAdmission.check(candidate);}
     public final String callId=UUID.randomUUID().toString();
     public final ProviderUsage.Collector usage;
     private final Target target;
@@ -61,7 +72,9 @@ public final class InferenceCapture {
     private long deadlineAt=Long.MAX_VALUE;
     public InferenceCapture(ModelConfig config,RunControl control,Target target)throws Exception{this(config,control,target,config.usesAccount()?"openai_responses":config.provider);}
     private InferenceCapture(ModelConfig config,RunControl control,Target target,String protocol)throws Exception{
-        this.target=java.util.Objects.requireNonNull(target);observer=presentationObserver;
+        // Bind the check to this physical candidate, not the Runner's initial route-plan primary.
+        // Existing admission sites recheck it at dispatch and history-origin validation.
+        this.target=withAdmission(java.util.Objects.requireNonNull(target),()->requireCandidate(target,config));observer=presentationObserver;
         pricingConfig=config;budgetIdentity=InferenceTokenReservation.captureIdentity(config);
         requireOriginalContext(control,target);
         usage=new ProviderUsage.Collector(protocol);

@@ -44,6 +44,11 @@ public final class TeamParentResearchHistory {
             public InferenceCapture.Target inferenceTarget(InferenceReceipt.Purpose purpose,String member)throws Exception{
                 current.check();return InferenceCapture.withAdmission(original.inferenceTarget(purpose,member),current::check);
             }
+            // Source-currentness decoration must retain the Runner's native call-site identity.
+            // The legacy overload stays on its original path; neither overload grants authority.
+            public InferenceCapture.Target inferenceTarget(InferenceReceipt.Purpose purpose,String member,InferenceReceipt.CallSite site)throws Exception{
+                current.check();return InferenceCapture.withAdmission(original.inferenceTarget(purpose,member,site),current::check);
+            }
         };
     }
 }

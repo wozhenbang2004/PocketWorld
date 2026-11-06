@@ -545,9 +545,12 @@ public final class HostToolSupervisor implements CapabilityPort {
             if(tool.preset!=null&&host.module(tool.feature) instanceof PluginsModule plugins){JSONObject program=plugins.localMcpApprovalSummaryForHost(tool.preset);if(program!=null)capability.put("nativeProgram",program);}
             JSONObject approval=tasks.requireCapabilityApproval(taskId,runId,name,args,capability);
             if(!approval.optBoolean("approved")){
-                String id=approval.optString("approvalId"),message="该写入需要主人确认本次具体参数，尚未执行。";
-                host.emitApproval(new JSONObject().put("taskId",taskId).put("runId",runId).put("approvalId",id).put("tool",name).put("capability",capability).put("arguments",redacted(args,0)).put("message",message));
-                return new JSONObject().put("ok",false).put("accepted",false).put("code","approval_required").put("approvalId",id).put("message",message);
+                // A denied decision is durable for these exact parameters. Keep the
+                // existing user-wait barrier, but do not present its ID as pending again.
+                String id=approval.optString("approvalId"),approvalState=approval.optString("state","pending");
+                String message="denied".equals(approvalState)?"主人已拒绝本次具体参数的写入，尚未执行；该审批不能再次确认。":"该写入需要主人确认本次具体参数，尚未执行。";
+                host.emitApproval(new JSONObject().put("taskId",taskId).put("runId",runId).put("approvalId",id).put("approvalState",approvalState).put("tool",name).put("capability",capability).put("arguments",redacted(args,0)).put("message",message));
+                return new JSONObject().put("ok",false).put("accepted",false).put("code","approval_required").put("approvalId",id).put("approvalState",approvalState).put("message",message);
             }
             consumedApprovalId=approval.getString("approvalId");
         }

@@ -32,6 +32,12 @@ public final class RunContextBudget {
         String raw=function.toString();committedReads.put(delivered,new ReadProof(CompactionPlan.fingerprint(raw),CompactionPlan.fingerprint(content),CompactionPlan.fingerprint(raw+"\n"+content)));
     }
     private static boolean completedReadReceipt(JSONObject receipt){
+        dev.pocketengine.core.ToolOutcome outcome=dev.pocketengine.core.ToolOutcome.classify(receipt);
+        // This proof can make a duplicate read batch evictable. An admission-only
+        // acknowledgement or unresolved effect is not a completed observation,
+        // even when ok/status look positive. Keep the narrower legacy checks
+        // below; unspecified completion alone does not invalidate old ok-only reads.
+        if(!outcome.successful()||"pending".equals(outcome.completion()))return false;
         String code=receipt.optString("code"),state=receipt.optString("state"),status=receipt.optString("status");
         return Boolean.TRUE.equals(receipt.opt("ok"))&&(!receipt.has("accepted")||Boolean.TRUE.equals(receipt.opt("accepted")))
                 &&(!receipt.has("nativeDispatched")||Boolean.TRUE.equals(receipt.opt("nativeDispatched")))

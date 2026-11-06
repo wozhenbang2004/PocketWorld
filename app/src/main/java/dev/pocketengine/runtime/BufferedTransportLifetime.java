@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class BufferedTransportLifetime implements AutoCloseable {
     private final HttpURLConnection connection;
     private final RunControl control;
+    private final long deadline;
     private final AtomicBoolean finished = new AtomicBoolean();
     private final AtomicBoolean expired = new AtomicBoolean();
     private final CountDownLatch cancellationWake = new CountDownLatch(1);
@@ -23,6 +24,7 @@ final class BufferedTransportLifetime implements AutoCloseable {
     private BufferedTransportLifetime(HttpURLConnection connection, RunControl control, long deadline) {
         this.connection = connection;
         this.control = control;
+        this.deadline = deadline;
         Thread caller = Thread.currentThread();
         cancellation = new Thread(() -> {
             try {
@@ -54,7 +56,9 @@ final class BufferedTransportLifetime implements AutoCloseable {
         }
     }
 
-    boolean expired() { return expired.get(); }
+    // The caller must not depend on the watchdog's polling schedule to notice
+    // expiry after a blocking admission. The same original deadline is authoritative.
+    boolean expired() { return expired.get() || System.nanoTime() >= deadline; }
 
     @Override public void close() {
         // Preserve the existing shutdown order: stop polling, unregister, wake

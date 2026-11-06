@@ -365,7 +365,11 @@ public final class AgentRunner {
             trace[0].finish(receipt,recordedOperation,null,control);
             diagnosticToolReceipt(toolDiagnostic,receipt);
             ToolOutcome outcome=ToolOutcome.classify(receipt);
-            if(outcome.mayContinue()&&!control.isCancelled()&&!control.isPaused())capabilities.afterTool(name,arguments,receipt,control);
+            // Persisting an issued receipt survives pause/cancel, but handing it to
+            // extension code does not. A pause followed by resume is still a new
+            // continuation revision, just as in the ordinary tool path below.
+            if(outcome.mayContinue()&&ToolReceiptSettlement.continuationCurrent(control,pause))
+                capabilities.afterTool(name,arguments,receipt,control);
             boolean unknown=outcome.requiresReconciliation();
             if(unknown)evidence.put("requiresReconciliation",true);
             String summary=unknown?"原脚本效果仍待核对，请读取原操作回执；不会重跑。":receipt.optBoolean("ok")?"主人所选脚本已返回执行回执，请在原任务核对实际成果；任务目标尚未确认完成。":receipt.optString("message","本次脚本未完成，请核对原任务回执和执行准备，再明确选择下一步。");
@@ -1162,7 +1166,7 @@ public final class AgentRunner {
                     checkpoint(taskId, journal, history, steps, latest, config, toolSink, contextBudget,repeatedTools);
                     diagnosticToolReceipt(toolDiagnostic,receipt);
                     String toolStatus=settlement.eventStatus();
-                    String toolMessage=projectRunning?nativeRunning?"原开发服务已启动且仍归此原执行；这不是程序结束或服务就绪，后续仅允许原授权的只读核对。":"运行中回执未能与原生已启动服务及原操作核对，未继续模型请求或新工具。"
+                    String toolMessage=projectRunning&&(toolOutcome.successful()||unverifiedProjectRunning)?nativeRunning?"原开发服务已启动且仍归此原执行；这不是程序结束或服务就绪，后续仅允许原授权的只读核对。":"运行中回执未能与原生已启动服务及原操作核对，未继续模型请求或新工具。"
                             :receipt.optString("message",receipt.optBoolean("ok",false)?"操作回执已收到。":"操作未成功，请检查当前页面。");
                     emit(taskId,"tool",toolStatus,toolMessage,name,receipt,config,toolSink,recordedOperation);
                     toolTrace.finish(receipt,recordedOperation,null,control);

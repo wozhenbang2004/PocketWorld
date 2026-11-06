@@ -50,7 +50,7 @@ public final class ProtocolGateway {
         call.timeout().timeout(remainingMillis,TimeUnit.MILLISECONDS)
                 .deadlineNanoTime(timeoutStart+TimeUnit.MILLISECONDS.toNanos(remainingMillis));
         Runnable cancel=call::cancel;control.onCancel(cancel);
-        final boolean[] committed={false};final long[] sequence={0};final EventProjection events=new EventProjection(capture,request.egressProtocol,request.ingressProtocol);final String responseId="gw_"+capture.callId.replace("-","");
+        final boolean[] committed={false};final long[] sequence={0};final ProtocolEventProjection events=new ProtocolEventProjection(capture,request.egressProtocol,request.ingressProtocol);final String responseId="gw_"+capture.callId.replace("-","");
         WireSink guarded=(event,data)->{
             control.check();request.revalidate();if(event.equals("ping")){output.frame(event,data);return;}long seq=++sequence[0];
             if(!committed[0]){commit.beforeFlush(capture.callId,seq);committed[0]=true;}
@@ -87,44 +87,6 @@ public final class ProtocolGateway {
             InferenceFailure failure=(error instanceof Failure?((Failure)error).observation():InferenceFailure.local(kind,System.currentTimeMillis())).withPartialText(committed[0]);capture.failure(failure);
             if(error instanceof IOException&&!(error instanceof Failure)){Failure typed=new Failure("native_transport_failed",failure);typed.initCause(error);throw typed;}throw error;
         }finally{control.removeCancelAction(cancel);call.cancel();}
-    }
-    /** Projection is synchronous and indexed by actual native block/call identity. The raw
-     * InferenceCapture observer remains the authority for egress usage and finish reasons. */
-    private static final class EventProjection {
-        private final String call,sourceProtocol,wireProtocol;private final InferenceCapture capture;private long sequence;
-        private final java.util.Map<String,String> ids=new java.util.HashMap<>();
-        EventProjection(InferenceCapture capture,String source,String wire){this.capture=capture;call=capture.callId;sourceProtocol=source;wireProtocol=wire;}
-        java.util.List<GatewayEvent> decode(long wireSequence,String event,String data)throws Exception {
-            java.util.List<GatewayEvent> out=new java.util.ArrayList<>();
-            if(data.equals("[DONE]")){add(out,GatewayEvent.Type.COMPLETE,"","","",null);return out;}
-            JSONObject j=new JSONObject(data);String type=j.optString("type",event),item=j.optString("item_id");
-            if(type.equals("message_start")||type.equals("response.created")){JSONObject message=j.optJSONObject(type.equals("message_start")?"message":"response");add(out,GatewayEvent.Type.BEGIN,message==null?"":message.optString("id"),"","",j);}
-            else if(type.equals("content_block_start")){JSONObject block=j.getJSONObject("content_block");String key="block/"+j.getInt("index"),id=block.optString("id");ids.put(key,id);add(out,GatewayEvent.Type.PART_BEGIN,key,id,"",j);}
-            else if(type.equals("content_block_delta")){JSONObject d=j.getJSONObject("delta");String key="block/"+j.getInt("index"),kind=d.getString("type");add(out,kind.equals("input_json_delta")?GatewayEvent.Type.TOOL_ARGS_DELTA:kind.equals("thinking_delta")?GatewayEvent.Type.REASONING_DELTA:GatewayEvent.Type.TEXT_DELTA,key,ids.getOrDefault(key,""),d.optString("partial_json",d.optString("text",d.optString("thinking"))),j);}
-            else if(type.equals("response.output_item.added")){JSONObject v=j.getJSONObject("item");String key="item/"+j.getInt("output_index");ids.put(key,v.optString("call_id"));add(out,GatewayEvent.Type.PART_BEGIN,v.optString("id"),v.optString("call_id"),"",j);}
-            else if(type.equals("response.content_part.added"))add(out,GatewayEvent.Type.PART_BEGIN,item,"","",j);
-            else if(type.equals("response.function_call_arguments.delta"))add(out,GatewayEvent.Type.TOOL_ARGS_DELTA,item,ids.getOrDefault("item/"+j.getInt("output_index"),""),j.getString("delta"),j);
-            else if(type.equals("response.output_text.delta"))add(out,GatewayEvent.Type.TEXT_DELTA,item,"",j.getString("delta"),j);
-            else if(type.contains("reasoning")&&j.opt("delta") instanceof String)add(out,GatewayEvent.Type.REASONING_DELTA,item,"",j.getString("delta"),j);
-            else if(type.equals("content_block_stop")||type.endsWith(".done"))add(out,GatewayEvent.Type.PART_END,item,"","",j);
-            else if(type.equals("message_stop")||type.equals("response.completed"))add(out,GatewayEvent.Type.COMPLETE,item,"","",j);
-            else if(type.equals("error"))add(out,GatewayEvent.Type.ERROR,item,"","",j);
-            JSONArray choices=j.optJSONArray("choices");for(int i=0;choices!=null&&i<choices.length();i++){
-                JSONObject choice=choices.getJSONObject(i),delta=choice.optJSONObject("delta");if(delta==null)continue;
-                if(delta.has("role"))add(out,GatewayEvent.Type.BEGIN,j.optString("id"),"","",j);
-                if(delta.opt("content") instanceof String)add(out,GatewayEvent.Type.TEXT_DELTA,j.optString("id"),"",delta.getString("content"),j);
-                if(delta.opt("reasoning_content") instanceof String)add(out,GatewayEvent.Type.REASONING_DELTA,j.optString("id"),"",delta.getString("reasoning_content"),j);
-                JSONArray calls=delta.optJSONArray("tool_calls");for(int t=0;calls!=null&&t<calls.length();t++){
-                    JSONObject tc=calls.getJSONObject(t);String key="chat/"+choice.optInt("index",0)+"/"+tc.getInt("index");JSONObject fn=tc.optJSONObject("function");
-                    if(tc.has("id")){boolean fresh=!ids.containsKey(key);ids.put(key,tc.getString("id"));if(fresh)add(out,GatewayEvent.Type.PART_BEGIN,key,tc.getString("id"),"",j);}
-                    if(fn!=null&&fn.opt("arguments") instanceof String&&!fn.getString("arguments").isEmpty())add(out,GatewayEvent.Type.TOOL_ARGS_DELTA,key,ids.getOrDefault(key,""),fn.getString("arguments"),j);
-                }
-            }
-            if(j.optJSONObject("usage")!=null)add(out,GatewayEvent.Type.USAGE,"","","",j);
-            JSONObject response=j.optJSONObject("response");if(response!=null&&response.optJSONObject("usage")!=null)add(out,GatewayEvent.Type.USAGE,response.optString("id"),"","",response);
-            return out;
-        }
-        private void add(java.util.List<GatewayEvent> out,GatewayEvent.Type type,String item,String tool,String delta,JSONObject raw)throws Exception{out.add(new GatewayEvent(++sequence,call,type,item,tool,delta,raw,sourceProtocol,wireProtocol,type==GatewayEvent.Type.USAGE||type==GatewayEvent.Type.COMPLETE?capture.usage.toJson():null));}
     }
     private static String errorBody(ResponseBody body){
         if(body==null)return "";try(InputStream in=body.byteStream()){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buffer=new byte[4096];int n;while((n=in.read(buffer))!=-1){if(out.size()+n>16384)return "";out.write(buffer,0,n);}return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(out.toByteArray())).toString();}catch(Exception ignored){return "";}

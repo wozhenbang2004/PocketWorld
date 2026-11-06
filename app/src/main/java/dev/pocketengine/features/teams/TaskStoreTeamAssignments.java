@@ -13,7 +13,25 @@ import org.json.JSONObject;
 public final class TaskStoreTeamAssignments implements TeamAssignmentHost.Tasks {
     private final TaskStore tasks;private final Consumer<String> changed;
     public TaskStoreTeamAssignments(TaskStore tasks,Consumer<String> changed){this.tasks=java.util.Objects.requireNonNull(tasks);this.changed=java.util.Objects.requireNonNull(changed);}
-    @Override public JSONObject begin(TeamCoordinator.AssignmentCall call,RunControl original,int allocation)throws Exception {JSONObject binding=tasks.startTeamAssignment(call,original,allocation);changed.accept(call.assignmentId);return binding;}
+    @Override public JSONObject begin(TeamCoordinator.AssignmentCall call,RunControl original,int allocation)throws Exception {
+        JSONObject binding=tasks.startTeamAssignment(call,original,allocation);
+        try{
+            changed.accept(call.assignmentId);
+            return binding;
+        }catch(Exception notificationFailure){
+            // The durable attempt already exists, but the Host cannot settle it until this
+            // adapter returns its binding. A failed notification must not strand that run.
+            // Inspection did not start an attempt and must never end someone else's run.
+            if(!binding.optBoolean("inspectOnly"))try{
+                tasks.endAttempt(binding.getString("taskId"),binding.getString("runId"),
+                        original.isCancelled()?"cancelled":"interrupted",
+                        "原分工启动通知失败，尚未交给执行宿主；原操作保留，不自动重放",new JSONObject());
+            }catch(Exception settlementFailure){
+                if(settlementFailure!=notificationFailure)notificationFailure.addSuppressed(settlementFailure);
+            }
+            throw notificationFailure;
+        }
+    }
     @Override public AutoCloseable retainExecution(JSONObject binding,RunControl original)throws Exception {JSONObject retained=new JSONObject(binding.toString());return original.retainAuthorityCheck(()->tasks.checkTeamAssignmentExecutionCurrent(retained));}
     @Override public TeamWorkFiles.Host files(TeamCoordinator.AssignmentCall call,JSONObject binding,RunControl original)throws Exception{TeamWorkFiles.Host nativeHost=fileHost(binding,original);return new TeamWorkFiles.Host(){
         public void check(String tool,RunControl live)throws Exception{nativeHost.check(tool,live);}
@@ -46,8 +64,14 @@ public final class TaskStoreTeamAssignments implements TeamAssignmentHost.Tasks 
             public boolean reserveModelRecovery(String call,long wait)throws Exception{return journal.reserveModelRecovery(call,wait);}
             public int executionStepCeiling(int captured)throws Exception{return journal.executionStepCeiling(captured);}
             public dev.pocketengine.runtime.usage.InferenceCapture.Target inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose purpose,String supplied)throws Exception {
+                return inferenceTarget(purpose,supplied,null);
+            }
+            public dev.pocketengine.runtime.usage.InferenceCapture.Target inferenceTarget(dev.pocketengine.runtime.usage.InferenceReceipt.Purpose purpose,String supplied,dev.pocketengine.runtime.usage.InferenceReceipt.CallSite site)throws Exception {
                 var actual=purpose==dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN?dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MEMBER:purpose;
-                return journal.inferenceTarget(actual,actual==dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MEMBER||actual==dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.SUMMARY?member:supplied);
+                // Attribution changes purpose/member, not the Runner's native turn.
+                // Preserve its site so the physical receipt and emitted trace remain
+                // correlated; callers cannot replace this binding's member identity.
+                return journal.inferenceTarget(actual,actual==dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MEMBER||actual==dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.SUMMARY?member:supplied,site);
             }
         };
     }

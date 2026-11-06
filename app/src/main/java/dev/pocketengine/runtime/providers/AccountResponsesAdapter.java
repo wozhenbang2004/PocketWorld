@@ -109,6 +109,11 @@ public final class AccountResponsesAdapter {
         }else body=text(content);
         if(body instanceof JSONArray||!((String)body).isEmpty())input.put(new JSONObject().put("type","message").put("role",role.equals("system")?"developer":role).put("content",body));
         JSONArray calls=message.optJSONArray("tool_calls");
+        // optJSONArray also returns null for a malformed object/string. That is
+        // not an absent call list: dropping it would silently rewrite history
+        // before ResponsesRequest can validate call/result linkage. Preserve the
+        // existing absent/JSON-null representation, but reject other shapes.
+        if(message.has("tool_calls")&&!message.isNull("tool_calls")&&calls==null)throw invalid();
         if(calls!=null){
             if(!role.equals("assistant"))throw invalid();
             for(int j=0;j<calls.length();j++){

@@ -282,8 +282,62 @@ public final class TaskMemoryTrace {
         }
     }
 
+    /** Local original-event source. The TaskStore adapter owns its cursor and keeps
+     * every scan inside the same existing transaction; this is never caller JSON. */
+    @FunctionalInterface public interface EventRows { void scan(EventVisitor visitor)throws Exception; }
+    @FunctionalInterface public interface EventVisitor { void accept(JSONObject event)throws Exception; }
+
+    /** A computed scan, not an arbitrary digest/count supplied by a caller. It binds
+     * the original core object and event source for this one transactional read.
+     * The store must not mutate the core or retain this object beyond that read. */
+    public static final class ScannedTaskEvents {
+        private final JSONObject task;private final EventRows source;private final String digest;private final int count;
+        private ScannedTaskEvents(JSONObject task,EventRows source,String digest,int count){this.task=task;this.source=source;this.digest=digest;this.count=count;}
+    }
+
+    /** Preserve digest(task-with-events) without retaining all historical events.
+     * Reuse canonical() for each parsed value, including duplicate-key/number
+     * semantics. Whole canonical values are UTF-8 encoded together, never sliced
+     * through a surrogate pair. Per-event/core-value allocations remain bounded
+     * only by their existing readers; this is an aggregate-history improvement. */
+    public static ScannedTaskEvents scanTaskEvents(JSONObject task,EventRows source)throws Exception{
+        if(task==null||source==null)throw new IllegalArgumentException("缺少原执行记录");
+        MessageDigest hash=MessageDigest.getInstance("SHA-256");List<String> keys=new ArrayList<>();task.keys().forEachRemaining(keys::add);
+        // The previous producer unconditionally replaced task.events. Its sorted
+        // root position must remain unchanged, even when the core omitted the key.
+        if(!task.has("events"))keys.add("events");java.util.Collections.sort(keys);
+        int[] count={0};boolean first=true;canonicalFragment(hash,"{");
+        for(String key:keys){
+            if(!first)canonicalFragment(hash,",");first=false;
+            canonicalFragment(hash,JSONObject.quote(key));canonicalFragment(hash,":");
+            if("events".equals(key)){
+                canonicalFragment(hash,"[");
+                source.scan(event->{
+                    if(count[0]>0)canonicalFragment(hash,",");
+                    canonicalFragment(hash,canonical(event));
+                    count[0]=Math.incrementExact(count[0]);
+                });
+                canonicalFragment(hash,"]");
+            }else canonicalFragment(hash,canonical(task.get(key)));
+        }
+        canonicalFragment(hash,"}");return new ScannedTaskEvents(task,source,hex(hash.digest()),count[0]);
+    }
+    private static void canonicalFragment(MessageDigest hash,String completeValue){hash.update(completeValue.getBytes(StandardCharsets.UTF_8));}
+
+    /** Existing array-backed callers retain their original input and behavior. */
     public static JSONObject page(JSONObject scope,JSONObject task,JSONObject run,Iterator<JSONObject> operations,
                                   JSONObject lineage,JSONObject options)throws Exception{
+        return page(scope,task,run,operations,lineage,options,null);
+    }
+    /** The scan and any event-selection pass belong to the same original SQL read.
+     * Only event pages rescan; other sections need its exact digest and count. */
+    public static JSONObject pageFromScannedEvents(JSONObject scope,ScannedTaskEvents scanned,JSONObject run,Iterator<JSONObject> operations,
+                                  JSONObject lineage,JSONObject options)throws Exception{
+        if(scanned==null)throw new IllegalArgumentException("缺少原执行记录");
+        return page(scope,scanned.task,run,operations,lineage,options,scanned);
+    }
+    private static JSONObject page(JSONObject scope,JSONObject task,JSONObject run,Iterator<JSONObject> operations,
+                                   JSONObject lineage,JSONObject options,ScannedTaskEvents scanned)throws Exception{
         if(scope==null||task==null||run==null||operations==null||lineage==null||options==null)throw new IllegalArgumentException("缺少原执行记录");
         String owner=scope.getString("ownerId"),space=scope.getString("spaceId"),taskId=task.getString("id"),runId=run.getString("runId");
         identifier(taskId);if(!runId.isEmpty())identifier(runId);
@@ -292,11 +346,13 @@ public final class TaskMemoryTrace {
                 ||origin!=null&&Set.of("group","channel").contains(origin.optString("kind")))throw new SecurityException("执行记录不属于当前原私人任务空间");
         Request request=new Request(scope,taskId,runId,options);
         JSONObject checkpoint=run.optJSONObject("checkpoint");JSONArray messages=checkpoint==null?null:checkpoint.optJSONArray("messages");
-        if(messages==null)messages=new JSONArray();JSONArray events=task.optJSONArray("events");if(events==null)events=new JSONArray();
+        if(messages==null)messages=new JSONArray();
+        JSONArray events=scanned==null?task.optJSONArray("events"):null;if(scanned==null&&events==null)events=new JSONArray();
+        int eventCount=scanned==null?events.length():scanned.count;
         JSONArray links=lineage.getJSONArray("links");if(links.length()>MAX_PARENTS)throw new IllegalArgumentException("父链超过有界范围");
         Map<Integer,JSONObject> messageParents=toolParents(taskId,runId,messages);
         MessageDigest snapshot=MessageDigest.getInstance("SHA-256");
-        charge(snapshot,"task",digest(task));charge(snapshot,"run",digest(run));charge(snapshot,"lineage",digest(lineage));
+        charge(snapshot,"task",scanned==null?digest(task):scanned.digest);charge(snapshot,"run",digest(run));charge(snapshot,"lineage",digest(lineage));
         Selection selected=new Selection(request);
         for(int i=0;i<messages.length();i++){
             JSONObject message=messages.getJSONObject(i);String revision=digest(message);
@@ -321,10 +377,13 @@ public final class TaskMemoryTrace {
                     .put("causalState","not_recorded").put("operationId",operation.getString("operationId")).put("state",operation.optString("state")));
             operationCount++;
         }
-        for(int i=0;i<events.length();i++)if(request.section.equals("events")){
-            JSONObject event=events.getJSONObject(i);Object seq=event.opt("seq");
-            selected.read(i,event,entry("host_event","task:"+taskId+":event:"+(positiveInteger(seq)?seq:"position-"+i),digest(event),i)
-                    .put("causalState","not_recorded").put("runBinding",event.optString("sourceRunId").isEmpty()?"not_recorded":event.getString("sourceRunId")));
+        if(request.section.equals("events")){
+            if(scanned==null){for(int i=0;i<events.length();i++)selectEvent(selected,taskId,events.getJSONObject(i),i);}
+            else{
+                // Do not stop when the returned page fills: query counts, positions
+                // and malformed-row failures retain the full original scan contract.
+                int[] position={0};scanned.source.scan(event->{selectEvent(selected,taskId,event,position[0]);position[0]=Math.incrementExact(position[0]);});
+            }
         }
         for(int i=0;i<links.length();i++){
             JSONObject link=links.getJSONObject(i);
@@ -348,7 +407,7 @@ public final class TaskMemoryTrace {
         return result.put("status","current").put("run",runCard).put("entries",selected.rows).put("charsReturned",selected.chars)
                 .put("matchedCount",selected.matches).put("entriesNotOnPage",Math.max(0,selected.matches-selected.rows.length()))
                 .put("nextCursor",selected.nextIndex<0?"":request.cursor(fingerprint,selected.nextIndex,selected.nextOffset))
-                .put("counts",new JSONObject().put("messages",messages.length()).put("operations",operationCount).put("events",events.length()).put("parents",links.length()))
+                .put("counts",new JSONObject().put("messages",messages.length()).put("operations",operationCount).put("events",eventCount).put("parents",links.length()))
                 .put("coverage",new JSONObject().put("messages","retained_checkpoint_only").put("operations","stored_host_ledger_for_selected_run")
                         .put("events","stored_task_events_some_legacy_run_bindings_unavailable").put("parents",lineage.optString("status","unavailable"))
                         .put("maxParents",MAX_PARENTS).put("maxRows",request.limit).put("maxChars",request.maxChars).put("revisionKind","sha256_content_fingerprint")
@@ -356,6 +415,11 @@ public final class TaskMemoryTrace {
                         .put("returnedBodies","bounded_ranges_only").put("originalMessageTotalKnown",false).put("storedBodiesMayAlreadyBeTruncated",true));
     }
 
+    private static void selectEvent(Selection selected,String taskId,JSONObject event,int index)throws Exception{
+        Object seq=event.opt("seq");
+        selected.read(index,event,entry("host_event","task:"+taskId+":event:"+(positiveInteger(seq)?seq:"position-"+index),digest(event),index)
+                .put("causalState","not_recorded").put("runBinding",event.optString("sourceRunId").isEmpty()?"not_recorded":event.getString("sourceRunId")));
+    }
     private static JSONObject entry(String kind,String id,String revision,int index)throws Exception{
         return new JSONObject().put("kind",kind).put("sourceId",id).put("revision","sha256:"+revision).put("revisionKind","sha256_content_fingerprint").put("index",index);
     }

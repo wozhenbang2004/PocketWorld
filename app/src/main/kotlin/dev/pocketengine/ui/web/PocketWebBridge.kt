@@ -886,7 +886,15 @@ internal class PocketWebBridge(
             }
             "tasks.close" -> restoreTaskWorkspace()
             "tasks.stop" -> {
+                checkedPayload(args, setOf("id", "runId", "epoch"))
                 val task = requireTask(requiredString(args, "id"))
+                // Preserve the execution displayed when Stop was clicked. Looking up
+                // by task id alone would silently retarget a newly resumed run.
+                // An unadmitted preparing/queued task has epoch=0 and may omit runId.
+                val run = requiredString(args, "runId", empty = true)
+                val epoch = requiredInt(args, "epoch")
+                require(epoch >= 0 && (run.isNotBlank() || epoch == 0) && task.raw.optString("runId") == run &&
+                    requiredInt(task.raw, "coordinatorEpoch") == epoch) { "原任务执行已变化，请刷新后核对要停止的执行" }
                 require(canUseTaskControls(task) && !PocketWebTaskActions.specialOwnerTask(task) && task.raw.optString("executionRole") != "owner_work" && (isPhoneTask(task) || task.raw.optString("kind") == "assistant")) { "请回这项任务的原能力审核窗口操作" }
                 controller.stopReviewedTask(task)
             }

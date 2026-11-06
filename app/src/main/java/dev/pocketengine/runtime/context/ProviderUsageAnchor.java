@@ -74,10 +74,27 @@ public final class ProviderUsageAnchor {
                     ||messages.length()<current.messages.size()){clear();return null;}
             for(int i=0;i<current.messages.size();i++)if(!current.messages.get(i).equals(messages.getJSONObject(i).toString())){clear();return null;}
             long added=0;
-            for(int i=current.messages.size();i<messages.length();i++)added=Math.addExact(added,messages.getJSONObject(i).toString().getBytes(StandardCharsets.UTF_8).length+1L);
+            for(int i=current.messages.size();i<messages.length();i++){
+                JSONObject row=messages.getJSONObject(i);
+                // The provider priced images in the exact old prefix, not new pixels.
+                // URL bytes cannot price a new image. Drop this optional anchor and
+                // let ContextWindow apply its existing image reserve/unknown-budget gate.
+                if(hasImage(row)){clear();return null;}
+                added=Math.addExact(added,row.toString().getBytes(StandardCharsets.UTF_8).length+1L);
+            }
             long reserve=Math.max(128,Math.addExact(current.input,9)/10);
             return new ContextWindow.UsageCharge(Math.addExact(Math.addExact(current.input,added),reserve),current.input,current.call,current.messages.size());
         }catch(Exception unavailable){clear();return null;}
+    }
+    /** Match ContextWindow's canonical image shape; opaque provider metadata is not an image part. */
+    private static boolean hasImage(JSONObject row){
+        JSONArray parts=row.optJSONArray("content");
+        for(int i=0;parts!=null&&i<parts.length();i++){
+            JSONObject part=parts.optJSONObject(i),image=part==null?null:part.optJSONObject("image_url");
+            if(part!=null&&"image_url".equals(part.optString("type"))&&image!=null
+                    &&image.opt("url") instanceof String)return true;
+        }
+        return false;
     }
     private static long counter(JSONObject value){
         if(value==null||!"provider_reported".equals(value.optString("source"))||!"FINAL".equals(value.optString("stage")))return -1;

@@ -31,10 +31,10 @@ public final class MediaWorkflowHost implements AutoCloseable {
 
     /** Routing guard: these tasks must never enter the generic assistant/model resume loop. */
     public boolean ownsTask(String taskId)throws Exception{
-        synchronized(tasks){JSONObject task=tasks.get(taskId,false);if(task==null)return false;
-            JSONArray events=task.optJSONArray("events");for(int i=0;events!=null&&i<events.length();i++)if("media_owner_prepared".equals(events.getJSONObject(i).optString("type")))return true;
-            return "media".equals(task.optString("feature"))&&mediaOperation(task)!=null;
-        }
+        // Routing needs original ownership and operation uniqueness, not every
+        // argument/receipt body. The native store still verifies marker bodies;
+        // this predicate never replaces preview or dispatch-time authority checks.
+        synchronized(tasks){return tasks.ownsMediaTaskForNativeRouting(taskId);}
     }
 
     /** First owner action: durable preview identity, with no run, grant, operation or HTTP effect. */

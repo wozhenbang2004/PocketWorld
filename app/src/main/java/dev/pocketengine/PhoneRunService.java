@@ -173,9 +173,14 @@ public final class PhoneRunService extends Service {
         }
         if(runningId!=null)return START_NOT_STICKY;
         if(control==null||config==null){settleForegroundOwnership(startId);return START_NOT_STICKY;}
+        var admitted=control.hostRunIdentity();
+        if(admitted==null||!admitted.taskId().equals(id)){settleForegroundOwnership(startId);return START_NOT_STICKY;}
+        // Keep the admitted owner even if the first task read fails before the
+        // service's run/control fields are published. Never settle by task ID alone.
+        String admittedRun=admitted.runId();
         runningId=id;
         try{
-            JSONObject task=app.tasks.get(id,false);String runId=task.optString("runId");int epoch=task.optInt("coordinatorEpoch");runningRunId=runId;runningEpoch=epoch;runningGoal=task.optString("goal");runningConfig=config;ownerControl=control;lastStartId=startId;startLeaseWatch(id,runId,epoch,control);startTaskForeground(task);
+            JSONObject task=app.tasks.foregroundNotificationContextSnapshot(id);String runId=task.optString("runId");int epoch=task.optInt("coordinatorEpoch");runningRunId=runId;runningEpoch=epoch;runningGoal=task.optString("goal");runningConfig=config;ownerControl=control;lastStartId=startId;startLeaseWatch(id,runId,epoch,control);startTaskForeground(task);
             PhoneAccessibilityService phone=PhoneAccessibilityService.get();
             boolean background="background".equals(app.mode(id));
             if(!background){if(phone==null)throw new IllegalStateException("手机操作服务已断开，请重新授权");phone.showControls(id,task.optString("goal"),control);}
@@ -188,7 +193,7 @@ public final class PhoneRunService extends Service {
                 if(!stopReady){finishAttempt(id,runId,control,new RunOutcome("awaiting_user","停止入口不可用，请开启任务通知或重新启用手机操作服务",new JSONObject()),startId);return;}
                 worker.execute(()->run(id,runId,epoch,task.optString("goal"),config,control,startId,intent.getBooleanExtra("manualOnly",false)));
             },750);
-        }catch(Exception ex){finish(id,new RunOutcome("failed",ex.getMessage()==null?"无法启动手机任务":ex.getMessage(),new JSONObject()),startId);}
+        }catch(Exception ex){finishAttempt(id,admittedRun,control,new RunOutcome("failed",ex.getMessage()==null?"无法启动手机任务":ex.getMessage(),new JSONObject()),startId);}
         return START_NOT_STICKY;
     }
     private void startBackgroundRun(Intent intent,int startId){
@@ -200,7 +205,8 @@ public final class PhoneRunService extends Service {
             session=new BackgroundPhoneRun(this,app,id,original,backgroundNotificationIds.getAndIncrement(),startId,leaseSupervisor,CLEANUP);
             BackgroundPhoneRun previous=backgroundRuns.putIfAbsent(id,session);
             if(previous!=null){session.discardUnstarted();return;}
-            refreshBackgroundNotifications();session.start(intent.getBooleanExtra("manualOnly",false));
+            if(!refreshBackgroundNotifications(session))throw new IllegalStateException("原后台任务通知未发布，未启动执行");
+            session.start(intent.getBooleanExtra("manualOnly",false));
         }catch(Exception unavailable){
             if(session!=null){backgroundRuns.remove(id,session);session.destroy();}
             else{original.cancel();try{app.tasks.endAttempt(id,run,"awaiting_user",safeMessage(unavailable),new JSONObject());}catch(Exception ignored){app.error("原后台启动结果保存尚未确认");}app.released(id,original);}
@@ -213,25 +219,36 @@ public final class PhoneRunService extends Service {
         getSystemService(NotificationManager.class).cancel(session.notificationId);
         if(!destroyed)settleForegroundOwnership(startId);
     }
-    private void refreshBackgroundNotifications(){
-        if(destroyed||backgroundRuns.isEmpty())return;
+    private void refreshBackgroundNotifications(){refreshBackgroundNotifications(null);}
+    /** A new run must publish its own notice before worker dispatch. Routine
+     * refresh remains best-effort; another session's notice cannot satisfy this
+     * gate. Success means Android accepted the API calls, not proven visibility. */
+    private boolean refreshBackgroundNotifications(BackgroundPhoneRun required){
+        if(destroyed||backgroundRuns.isEmpty())return false;
+        boolean published=required==null;
         NotificationManager notifications=getSystemService(NotificationManager.class);boolean primary=runningId==null;
         for(BackgroundPhoneRun session:backgroundRuns.values())try{
-            JSONObject task=app.tasks.get(session.runningId,false);
+            // Retained-run routing and question controls use native core fields;
+            // unrelated audit history is not required to keep the stop notice visible.
+            JSONObject task=app.tasks.foregroundNotificationContextSnapshot(session.runningId);
             if(task==null||!session.matches(task.optString("id"),task.optString("runId"),task.optInt("coordinatorEpoch"),app.control(session.runningId)))continue;
             Notification note=notification(task,session.ownerControl,false);
             if(primary){startForeground(NOTIFICATION,note);notifications.cancel(session.notificationId);primary=false;}
             else notifications.notify(session.notificationId,note);
+            if(session==required)published=true;
         }catch(Exception unavailable){app.error("原后台任务通知暂不可用，请在任务页核对原执行");}
         var receiver=receiverOnly;if(receiver!=null)notifications.notify(RECEIVER_NOTIFICATION,receiverNotification(receiver));
         showOwnerWorkNotification(false);
+        return published;
     }
     /** Native original-task recovery only; no AgentRunner, PhonePort or phone.local grant. */
     private void startGatewayParent(Intent intent,int startId){
         if(runningId!=null||gatewayParent!=null||gatewayOnly!=null)return;EngineApplication.GatewayParentRun owner=app.originalGatewayParentRun(intent.getStringExtra("gatewayParentResourceId"));if(owner==null){settleForegroundOwnership(startId);return;}
-        try{gatewayParent=owner;runningId=owner.task();runningRunId=owner.run();runningEpoch=owner.epoch();ownerControl=owner.control();lastStartId=startId;startTaskForeground(app.tasks.get(runningId,false));owner.serviceRegistered();watchGatewayParent(owner,startId);}catch(Exception unavailable){gatewayParent=null;runningId=null;runningRunId=null;ownerControl=null;CLEANUP.execute(()->{try{owner.close();}finally{main.post(()->settleForegroundOwnership(startId));}});settleForegroundOwnership(startId);}
+        try{gatewayParent=owner;runningId=owner.task();runningRunId=owner.run();runningEpoch=owner.epoch();ownerControl=owner.control();lastStartId=startId;startTaskForeground(app.tasks.foregroundNotificationContextSnapshot(runningId));owner.serviceRegistered();watchGatewayParent(owner,startId);}catch(Exception unavailable){gatewayParent=null;runningId=null;runningRunId=null;ownerControl=null;CLEANUP.execute(()->{try{owner.close();}finally{main.post(()->settleForegroundOwnership(startId));}});settleForegroundOwnership(startId);}
     }
-    private void watchGatewayParent(EngineApplication.GatewayParentRun owner,int startId){if(destroyed||gatewayParent!=owner)return;try{owner.checkCurrent();JSONObject projection=owner.snapshot();String state=projection.optString("state")+":"+projection.optInt("nativeCallsInProgress")+":"+projection.optInt("remainingModels");if(!state.equals(lastGatewayProjection)){lastGatewayProjection=state;app.refreshGatewayParentProjection(owner.task());getSystemService(NotificationManager.class).notify(NOTIFICATION,notification(app.tasks.get(owner.task(),false)));}}catch(Exception stopped){stopGatewayParent(owner,startId);return;}main.postDelayed(()->watchGatewayParent(owner,startId),500);}
+    // Gateway authority stays on the native owner; notification rendering must not
+    // load unrelated audit rows and accidentally trigger the service-stop catch.
+    private void watchGatewayParent(EngineApplication.GatewayParentRun owner,int startId){if(destroyed||gatewayParent!=owner)return;try{owner.checkCurrent();JSONObject projection=owner.snapshot();String state=projection.optString("state")+":"+projection.optInt("nativeCallsInProgress")+":"+projection.optInt("remainingModels");if(!state.equals(lastGatewayProjection)){lastGatewayProjection=state;app.refreshGatewayParentProjection(owner.task());getSystemService(NotificationManager.class).notify(NOTIFICATION,notification(app.tasks.foregroundNotificationContextSnapshot(owner.task())));}}catch(Exception stopped){stopGatewayParent(owner,startId);return;}main.postDelayed(()->watchGatewayParent(owner,startId),500);}
     private void stopGatewayParent(EngineApplication.GatewayParentRun owner,int startId){if(gatewayParent!=owner)return;gatewayParent=null;gatewayOnly=null;runningId=null;runningRunId=null;ownerControl=null;lastGatewayProjection=null;CLEANUP.execute(()->{try{owner.close();}finally{main.post(()->settleForegroundOwnership(startId));}});settleForegroundOwnership(startId);}
     private void startTaskForeground(JSONObject task){startForeground(NOTIFICATION,notification(task));var resource=receiverOnly;if(resource!=null)getSystemService(NotificationManager.class).notify(RECEIVER_NOTIFICATION,receiverNotification(resource));showOwnerWorkNotification(false);}
     private void retainOwnerWorkLifetime(Intent intent,int startId){
@@ -312,15 +329,19 @@ public final class PhoneRunService extends Service {
         if(runningId!=null)return;var session=app.originalDeviceGoalSession(id);
         if(session==null||session.originalControl()!=app.control(id)){settleForegroundOwnership(startId);return;}
         RunControl original=session.originalControl();
+        // The session exists only after its original run is durably admitted.
+        // Startup may fail before service fields are published; settle that run,
+        // never the null/global fallback that skips original-attempt bookkeeping.
+        String admittedRun=original.hostRunIdentity().runId();
         try{
-            session.checkCurrent();JSONObject task=app.tasks.get(id,false);
+            session.checkCurrent();JSONObject task=app.tasks.foregroundNotificationContextSnapshot(id);
             if(!original.matchesHostRun(id,task.getString("runId"),task.getInt("coordinatorEpoch")))throw new SecurityException("设备目标没有原run");
             runningId=id;runningRunId=task.getString("runId");runningEpoch=task.getInt("coordinatorEpoch");ownerControl=original;runningGoal=task.getString("goal");runningConfig=session.capturedModel();lastStartId=startId;deviceGoal=session;deviceGoalPhysicalCreated=false;deviceGoalPhysicalSessionId=null;
             startTaskForeground(task);
             if(!AndroidPhoneReadiness.snapshot(this,null).getJSONObject("taskNotifications").optBoolean("ready"))throw new SecurityException("设备目标需要本机可见任务通知和停止入口");
             if("main_screen".equals(session.admission().executionMode())){PhoneAccessibilityService phone=PhoneAccessibilityService.get();if(phone==null)throw new SecurityException("原主屏无障碍未连接");phone.showControls(id,runningGoal,original);}
             startLeaseWatch(id,runningRunId,runningEpoch,original);worker.execute(()->runDeviceGoal(session,startId));
-        }catch(Exception unavailable){finishAttempt(id,runningRunId,original,new RunOutcome("awaiting_user","原设备目标本机模型或可见停止条件不可用，未借主屏START",new JSONObject()),startId);}
+        }catch(Exception unavailable){finishAttempt(id,admittedRun,original,new RunOutcome("awaiting_user","原设备目标本机模型或可见停止条件不可用，未借主屏START",new JSONObject()),startId);}
     }
     private void runDeviceGoal(dev.pocketengine.features.devices.DeviceGoalSession session,int startId){
         String id=session.taskId(),run=runningRunId;RunControl original=session.originalControl();
@@ -369,14 +390,17 @@ public final class PhoneRunService extends Service {
         var session=app.originalDeviceToolsSession(id);
         if(session==null||session.originalControl()!=app.control(id)){settleForegroundOwnership(startId);return;}
         RunControl original=session.originalControl();
+        // This mailbox was created only after the original run committed. A
+        // failed preflight still settles that run, even before service publication.
+        String admittedRun=original.hostRunIdentity().runId();
         try{
-            var admission=session.firstAdmission();admission.checkCurrent();JSONObject task=app.tasks.get(id,false);
+            var admission=session.firstAdmission();admission.checkCurrent();JSONObject task=app.tasks.foregroundNotificationContextSnapshot(id);
             if(task==null||!original.matchesHostRun(id,task.getString("runId"),task.getInt("coordinatorEpoch")))throw new SecurityException("设备工具服务没有原运行身份");
             runningId=id;runningRunId=task.getString("runId");runningEpoch=task.getInt("coordinatorEpoch");ownerControl=original;lastStartId=startId;
             runningGoal=task.getString("goal");runningConfig=null;startTaskForeground(task);startLeaseWatch(id,runningRunId,runningEpoch,original);
             if(admission.executionMode().equals("main_screen")){PhoneAccessibilityService phone=PhoneAccessibilityService.get();if(phone==null)throw new SecurityException("本机无障碍未连接");phone.showControls(id,runningGoal,original);}
             worker.execute(()->runDeviceTools(session,startId));
-        }catch(Exception unavailable){finishAttempt(id,runningRunId,original,new RunOutcome("awaiting_user","原设备工具本机条件不可用，未运行模型或切换显示",new JSONObject()),startId);}
+        }catch(Exception unavailable){finishAttempt(id,admittedRun,original,new RunOutcome("awaiting_user","原设备工具本机条件不可用，未运行模型或切换显示",new JSONObject()),startId);}
     }
     private void requireDeviceToolsReady(String mode,RunControl original)throws Exception{
         if(original!=ownerControl||original!=app.control(runningId)||original.isCancelled())throw new SecurityException("设备工具原控制已变化");
@@ -432,7 +456,7 @@ public final class PhoneRunService extends Service {
             if(gatewayParent!=null&&(!gatewayParent.active()||!id.equals(gatewayParent.task())||!state.getString("runId").equals(gatewayParent.run())||control!=gatewayParent.control()))throw new SecurityException("不能把别的scope接到原网关服务");
             if(!app.ownsNativeTaskControl(id,control)||control.isCancelled()||control.isPaused())throw new SecurityException("原任务控制器已变化");
             gatewayOnly=bridge;runningId=id;runningRunId=state.getString("runId");runningEpoch=state.getInt("epoch");ownerControl=control;lastStartId=startId;
-            startTaskForeground(app.tasks.get(id,false));
+            startTaskForeground(app.tasks.foregroundNotificationContextSnapshot(id));
             worker.execute(()->{try{bridge.start();main.post(()->watchGatewayOnly(bridge,startId));}catch(Exception stopped){main.post(()->stopGatewayOnly(bridge,startId));}});
         }catch(Exception unavailable){var bridge=candidate;if(bridge!=null)CLEANUP.execute(bridge::close);gatewayOnly=null;if(gatewayParent==null){runningId=null;runningRunId=null;settleForegroundOwnership(startId);}}
     }

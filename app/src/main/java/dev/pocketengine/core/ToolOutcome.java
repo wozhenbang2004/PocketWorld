@@ -44,10 +44,15 @@ public final class ToolOutcome {
                 ||receipt.optBoolean("requiresPause")||receipt.optBoolean("requiresOwnerReturn"))return new ToolOutcome(Kind.NEEDS_USER);
         if(Boolean.FALSE.equals(receipt.opt("ok"))||Boolean.FALSE.equals(receipt.opt("accepted"))||FAILURE_STATES.contains(status)
                 ||receipt.opt("exitCode") instanceof Number&&((Number)receipt.opt("exitCode")).doubleValue()!=0)return new ToolOutcome(Kind.CORRECTABLE_FAILURE);
-        if(PENDING_STATES.contains(status)||Boolean.TRUE.equals(receipt.opt("accepted"))||Boolean.FALSE.equals(receipt.opt("terminal")))
+        if(PENDING_STATES.contains(status)||Boolean.FALSE.equals(receipt.opt("terminal")))
             return new ToolOutcome(Kind.SUCCESS,"pending");
-        if(Boolean.TRUE.equals(receipt.opt("ok"))||SUCCESS_STATES.contains(status))
-            return new ToolOutcome(Kind.SUCCESS,Boolean.TRUE.equals(receipt.opt("terminal"))||SUCCESS_STATES.contains(status)?"terminal":"unspecified");
+        // Native terminal receipts can retain accepted=true from their admission.
+        // A completed status is stronger evidence than that acknowledgement, but
+        // never overrides explicit pending/terminal=false, failure or uncertainty.
+        if(SUCCESS_STATES.contains(status))return new ToolOutcome(Kind.SUCCESS,"terminal");
+        if(Boolean.TRUE.equals(receipt.opt("accepted")))return new ToolOutcome(Kind.SUCCESS,"pending");
+        if(Boolean.TRUE.equals(receipt.opt("ok")))
+            return new ToolOutcome(Kind.SUCCESS,Boolean.TRUE.equals(receipt.opt("terminal"))?"terminal":"unspecified");
         return new ToolOutcome(Kind.EFFECT_UNKNOWN);
     }
 

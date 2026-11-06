@@ -30,9 +30,14 @@ final class ToolReceiptSettlement {
         private Decision(ToolOutcome outcome,boolean projectRunning,boolean nativeRunning){
             this.outcome=outcome;this.projectRunning=projectRunning;this.nativeRunning=nativeRunning;
         }
-        boolean unverifiedProjectRunning(){return projectRunning&&!nativeRunning;}
+        // Native identity remains available for cleanup/exit audit even when
+        // the receipt asks for the owner or reports uncertainty. It must not
+        // override that outcome with a running presentation or a different barrier.
+        // A contradictory correctable failure still keeps the existing unverified
+        // service barrier; this change must not admit another tool after that failure.
+        boolean unverifiedProjectRunning(){return projectRunning&&!nativeRunning&&!outcome.requiresUser()&&!outcome.requiresReconciliation();}
         boolean stopBatch(){return outcome.requiresUser()||outcome.requiresReconciliation()||unverifiedProjectRunning();}
-        String eventStatus(){return projectRunning?nativeRunning?"running":"awaiting_user":outcome.eventStatus();}
+        String eventStatus(){return outcome.successful()&&projectRunning?nativeRunning?"running":"awaiting_user":outcome.eventStatus();}
     }
 
     static Decision inspect(RunJournal journal,String operationId,JSONObject receipt)throws Exception {

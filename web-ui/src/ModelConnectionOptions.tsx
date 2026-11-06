@@ -13,6 +13,7 @@ export function ModelConnectionOptions({ value, onChange, provider, adding, revi
   return <div className="pw-form-grid" data-connection-policy>
     <p className="pw-field-hint">{adding ? '先保存这项连接，再设置兼容与缓存策略。' : revision ? `已保存兼容档案 · 修订 ${revision}。变更后先保存，再进行连接测试。` : '按这项连接保存请求策略；不会改变模型能力、工具权限或历史消息。'}</p>
     {section === 'wire' && <CheckboxField isSelected={value.enabled} isDisabled={adding} onChange={next => change('enabled', next)}>使用连接兼容档案</CheckboxField>}
+    {section === 'wire' && chat && <p className="pw-field-hint">Chat 的输出上限只有在模型目录已明确字段，或已启用的兼容档案指定 max_tokens / max_completion_tokens 时才随请求发送。已有目录但字段未知时会在发送前拒绝；未接入目录且未指定兼容字段时，不发送这个限制，由服务端决定输出长度。本地输出预留不等于服务端输出上限。</p>}
     {section === 'wire' && value.enabled && <>
       <section className="pw-connection-policy-group" aria-label="输出请求格式"><h4>输出与用量</h4>
       <SelectField label="输出上限字段" value={value.tokenField} isDisabled={!chat} onChange={next => change('tokenField', next)}

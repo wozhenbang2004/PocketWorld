@@ -12,8 +12,9 @@ final class TaskOperationProjection {
     private TaskOperationProjection() {}
 
     static JSONArray forTask(SQLiteDatabase db,String taskId)throws Exception {
-        // Own only the ledger read. TaskStore has already run copy/maintenance;
-        // moving that work inside this transaction would silently suppress it.
+        // Own only the ledger read. Display callers run copy/maintenance beforehand;
+        // journal restore callers deliberately do neither. Never move presentation
+        // maintenance into this transaction or make it a prerequisite for recovery.
         // IMMEDIATE may reserve the writer for the whole history, with no row cap.
         boolean owns=!db.inTransaction();if(owns)db.beginTransactionNonExclusive();
         try {

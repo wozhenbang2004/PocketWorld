@@ -18,8 +18,13 @@ final class AccountModelCatalog {
     AccountModelCatalog(AccountBook book){this.book=book;}
 
     void observed(String id,long version,JSONArray models,long now)throws GatewayFailure {
-        observations.put(id,new Observation(version,now,copyArray(models)));
-        refreshPinnedEvidence(id,version,models);
+        JSONArray snapshot=copyArray(models);
+        // A failed durable evidence refresh must not publish a usable observation.
+        // Selection and inference preparation both consume this cache under the same
+        // gateway monitor; publish only after the matching pinned evidence is saved.
+        // Copy first so malformed input cannot change durable evidence either.
+        refreshPinnedEvidence(id,version,snapshot);
+        observations.put(id,new Observation(version,now,snapshot));
     }
 
     void pinReviewed(String id,long version,String model)throws GatewayFailure {

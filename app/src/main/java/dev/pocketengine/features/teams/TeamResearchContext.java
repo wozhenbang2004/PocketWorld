@@ -82,6 +82,9 @@ public final class TeamResearchContext implements AutoCloseable {
             public boolean reserveModelRecovery(String call,long millis)throws Exception{return originalJournal.reserveModelRecovery(call,millis);}
             public int executionStepCeiling(int capturedSteps)throws Exception{return originalJournal.executionStepCeiling(capturedSteps);}
             public InferenceCapture.Target inferenceTarget(InferenceReceipt.Purpose requested,String ignored)throws Exception {
+                return inferenceTarget(requested,ignored,null);
+            }
+            public InferenceCapture.Target inferenceTarget(InferenceReceipt.Purpose requested,String ignored,InferenceReceipt.CallSite site)throws Exception {
                 InferenceReceipt.Purpose purpose=requested==InferenceReceipt.Purpose.MAIN?InferenceReceipt.Purpose.MEMBER:requested;
                 if(purpose!=InferenceReceipt.Purpose.MEMBER&&purpose!=InferenceReceipt.Purpose.SUMMARY)throw new SecurityException("研究journal仅接本成员MAIN与同child SUMMARY");
                 fence.metadata();JSONObject reservation;
@@ -91,7 +94,9 @@ public final class TeamResearchContext implements AutoCloseable {
                 // TaskStore keeps the original journal sink and binds each physical
                 // attempt to its own reservation in this same native parent pool.
                 // Source checks and coordinator feedback stay outside SQL callbacks.
-                return InferenceCapture.withAdmission(tasks.teamResearchInferenceTarget(binding,purpose,reservation.getString("reservationId")),()->{
+                // Preserve the native Runner turn alongside the original parent-pool
+                // reservation. Neither identity replaces or recreates the other.
+                return InferenceCapture.withAdmission(tasks.teamResearchInferenceTarget(binding,purpose,reservation.getString("reservationId"),site),()->{
                     fence.metadata();call.budgetChanged(tasks.teamBudgetSnapshot(call.teamRunId));
                 });
             }
