@@ -43,6 +43,12 @@ No signing key, credential or source-repository access token is shipped to the
 website or placed in command arguments. The authenticated endpoint does not
 depend on an expiring interactive Codex source credential.
 
+Read-only publisher JSON queries allow three transport attempts, each with a
+30 second socket timeout. Authorization, certificate and protocol failures stop
+immediately. Upload and activation requests are never automatically replayed.
+Each run's `network.log` records the method, path, transport stage and error
+class without credentials, query strings or response bodies.
+
 Read-only previews:
 
 ```powershell

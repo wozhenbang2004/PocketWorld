@@ -501,6 +501,85 @@ class ReleaseOrchestratorTest(unittest.TestCase):
         self.assertEqual(1, http.opener.open.call_count)
         self.assertIsNone(RELEASE.NoRedirect().redirect_request(request, None, 302, "redirect", {}, "https://other.example/steal"))
 
+    def test_read_only_site_status_retries_a_transient_timeout_before_building(self):
+        http = RELEASE.Http(self.c["origin"], token=SYNTHETIC_TOKEN)
+        http.opener = mock.Mock()
+        http.opener.open.side_effect = [TimeoutError("The read operation timed out"), Response(b'{"current":{"versionCode":253}}')]
+        with mock.patch.object(RELEASE.time, "sleep"):
+            self.assertEqual(253, http.json("/__publisher/status")["current"]["versionCode"])
+        self.assertEqual(2, http.opener.open.call_count)
+        self.assertEqual(30, http.opener.open.call_args.kwargs["timeout"])
+
+    def test_site_json_retries_read_failures_only_for_read_only_get(self):
+        class BrokenResponse(Response):
+            def read(self, *_args):
+                raise TimeoutError("Synthetic Bearer " + SYNTHETIC_TOKEN)
+
+        for method, expected_attempts in (("GET", 2), ("POST", 1)):
+            with self.subTest(method=method):
+                http = RELEASE.Http(self.c["origin"], token=SYNTHETIC_TOKEN)
+                http.opener = mock.Mock()
+                http.opener.open.side_effect = [BrokenResponse(b""), Response(b'{"ok":true}')]
+                with mock.patch.object(RELEASE.time, "sleep"):
+                    if method == "GET":
+                        self.assertTrue(http.json("/__publisher/status")["ok"])
+                    else:
+                        with self.assertRaisesRegex(RELEASE.ReleaseError, r"POST /__publisher/releases.*read.*TimeoutError"):
+                            http.json("/__publisher/releases", method, {"synthetic": True})
+                self.assertEqual(expected_attempts, http.opener.open.call_count)
+                self.assertEqual(30 if method == "GET" else 180, http.opener.open.call_args.kwargs["timeout"])
+
+    def test_read_only_site_retries_are_bounded_and_network_logs_exclude_secrets(self):
+        path = self.root / "network.log"
+        http = RELEASE.Http(self.c["origin"], token=SYNTHETIC_TOKEN, log_path=path)
+        http.opener = mock.Mock()
+        http.opener.open.side_effect = TimeoutError("Synthetic Bearer " + SYNTHETIC_TOKEN)
+        with mock.patch.object(RELEASE.time, "sleep") as sleep, self.assertRaises(RELEASE.ReleaseError):
+            http.json("/__publisher/status?synthetic-secret-query")
+        self.assertEqual(3, http.opener.open.call_count)
+        self.assertEqual(2, sleep.call_count)
+        log = path.read_text(encoding="utf-8")
+        self.assertIn("GET /__publisher/status", log)
+        self.assertIn("TimeoutError", log)
+        self.assertNotIn(SYNTHETIC_TOKEN, log)
+        self.assertNotIn("synthetic-secret-query", log)
+
+    def test_site_authorization_certificate_and_protocol_failures_are_not_retried(self):
+        for error in (RELEASE.urllib.error.HTTPError("https://synthetic.invalid", 401, "Unauthorized", {}, None),
+                      RELEASE.urllib.error.URLError(RELEASE.ssl.SSLCertVerificationError(1, "synthetic certificate failure"))):
+            with self.subTest(error=type(error).__name__):
+                http = RELEASE.Http(self.c["origin"], token=SYNTHETIC_TOKEN)
+                http.opener = mock.Mock()
+                http.opener.open.side_effect = error
+                with mock.patch.object(RELEASE.time, "sleep") as sleep, self.assertRaises(RELEASE.ReleaseError):
+                    http.json("/__publisher/status")
+                self.assertEqual(1, http.opener.open.call_count)
+                sleep.assert_not_called()
+        for raw in (b"not JSON", b" " * (128 * 1024 + 1)):
+            with self.subTest(body_length=len(raw)):
+                http = RELEASE.Http(self.c["origin"], token=SYNTHETIC_TOKEN)
+                http.opener = mock.Mock()
+                http.opener.open.return_value = Response(raw)
+                with mock.patch.object(RELEASE.time, "sleep") as sleep, self.assertRaises((RELEASE.ReleaseError, ValueError)):
+                    http.json("/__publisher/status")
+                self.assertEqual(1, http.opener.open.call_count)
+                sleep.assert_not_called()
+
+    def test_mutating_site_requests_are_not_replayed_and_report_safe_context(self):
+        for method, path in (("POST", "/__publisher/releases"), ("PUT", "/__publisher/releases/fixture/parts/0"),
+                             ("POST", "/__publisher/releases/fixture/activate")):
+            with self.subTest(method=method, path=path):
+                http = RELEASE.Http(self.c["origin"], token=SYNTHETIC_TOKEN)
+                http.opener = mock.Mock()
+                http.opener.open.side_effect = TimeoutError("Synthetic Bearer " + SYNTHETIC_TOKEN)
+                with mock.patch.object(RELEASE.time, "sleep") as sleep, self.assertRaises(RELEASE.ReleaseError) as failure:
+                    http.request(path, method, b"synthetic write", auth=True)
+                self.assertEqual(1, http.opener.open.call_count)
+                sleep.assert_not_called()
+                self.assertIn(method + " " + path, str(failure.exception))
+                self.assertIn("TimeoutError", str(failure.exception))
+                self.assertNotIn(SYNTHETIC_TOKEN, str(failure.exception))
+
     def test_bearer_credential_is_not_in_subprocess_argv_capture_or_disk_log(self):
         runner = self.runner()
         process = mock.MagicMock()

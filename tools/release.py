@@ -7,11 +7,13 @@ import base64
 import contextlib
 import ctypes
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import time
@@ -35,6 +37,12 @@ class ReleaseError(RuntimeError):
 
 class ScriptUpdated(ReleaseError):
     pass
+
+
+class SiteTransportError(ReleaseError):
+    def __init__(self, message, retryable=True):
+        super().__init__(message)
+        self.retryable = retryable
 
 
 def digest(path):
@@ -213,14 +221,28 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class Http:
-    def __init__(self, origin, token=None, proxy=None):
+    def __init__(self, origin, token=None, proxy=None, log_path=None):
         self.origin, self.token = origin, token
+        self.log_path = Path(log_path) if log_path else None
         handlers = [NoRedirect()]
         if proxy:
             handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
         self.opener = urllib.request.build_opener(*handlers)
 
-    def request(self, path, method="GET", data=None, auth=False, headers=None):
+    def note(self, message):
+        print(message, flush=True)
+        if self.log_path:
+            with self.log_path.open("a", encoding="utf-8") as log:
+                log.write(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + " " + message + "\n")
+
+    def network_error(self, method, path, error, stage):
+        reason = getattr(error, "reason", error)
+        # Log classification only: transport exception text can contain secrets.
+        message = "下载站请求未确认完成：" + method + " " + path.split("?")[0] + "（" + stage + "，" + type(reason).__name__ + "）；本地产物保留，写入请求须先对账。"
+        self.note(message)
+        return SiteTransportError(message, retryable=not isinstance(reason, ssl.SSLCertVerificationError))
+
+    def request(self, path, method="GET", data=None, auth=False, headers=None, timeout=180):
         if not path.startswith("/") or path.startswith("//"):
             raise ReleaseError("上传路径不属于既定下载站。")
         h = {"User-Agent": "PocketWorld-Release/1.0 (+https://github.com/wozhenbang2004/PocketWorld)",
@@ -235,18 +257,29 @@ class Http:
             h["Content-Type"] = "application/json"
         request = urllib.request.Request(self.origin + path, data=data, method=method, headers=h)
         try:
-            return self.opener.open(request, timeout=180)
+            return self.opener.open(request, timeout=timeout)
         except urllib.error.HTTPError as error:
-            raise ReleaseError("下载站请求失败：HTTP " + str(error.code) + " " + path.split("?")[0]) from None
-        except (OSError, urllib.error.URLError):
-            raise ReleaseError("下载站请求未确认完成；本地产物保留，下次将先对账，不自动重打包。") from None
+            raise ReleaseError("下载站请求失败：HTTP " + str(error.code) + " " + method + " " + path.split("?")[0]) from None
+        except (OSError, urllib.error.URLError) as error:
+            raise self.network_error(method, path, error, "open") from None
 
     def json(self, path, method="GET", data=None):
-        with self.request(path, method, data, auth=True) as response:
-            raw = response.read(128 * 1024 + 1)
-        if len(raw) > 128 * 1024:
-            raise ReleaseError("上传服务响应超过限制。")
-        return json.loads(raw)
+        attempts = 3 if method == "GET" and data is None else 1
+        for attempt in range(attempts):
+            try:
+                with self.request(path, method, data, auth=True, timeout=30 if attempts > 1 else 180) as response:
+                    try:
+                        raw = response.read(128 * 1024 + 1)
+                    except (OSError, urllib.error.URLError, http.client.IncompleteRead) as error:
+                        raise self.network_error(method, path, error, "read") from None
+                if len(raw) > 128 * 1024:
+                    raise ReleaseError("上传服务响应超过限制。")
+                return json.loads(raw)
+            except SiteTransportError as error:
+                if not error.retryable or attempt + 1 == attempts:
+                    raise
+                self.note("只读 GET 网络错误，第 " + str(attempt + 1) + "/" + str(attempts) + " 次；有限重试 " + path.split("?")[0])
+                time.sleep(0.5 * (attempt + 1))
 
 
 def dpapi(data, protect=False):
@@ -558,7 +591,7 @@ def run_release(c, prepare_only=False):
                 core_acceptance(runner, head)
             except ReleaseError:
                 print("核心实测记录尚未覆盖本次源码；继续准备候选产物，最后单独核对正式更新激活条件。", flush=True)
-        http = Http(c["origin"], proxy=c.get("proxy"))
+        http = Http(c["origin"], proxy=c.get("proxy"), log_path=directory / "network.log")
         if not prepare_only:
             http.token = read_token(c)
         previous = root / "last-run.json"
