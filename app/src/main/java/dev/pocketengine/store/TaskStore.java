@@ -5714,7 +5714,10 @@ public final class TaskStore {
     private JSONObject teamProjectFailedRoundFacts(TeamWorkWindow window,dev.pocketengine.features.teams.TeamCoordinator.WorkMutationSource original,String itemId)throws Exception {
         window.require();original.checkCurrent();JSONObject team=teamWriteTask(window.teamRun),nativeRun=original.view(),plan=team.getJSONObject("teamWorkPlan"),scope=team.getJSONObject("teamWriteScope");if(!canonical(plan).equals(canonical(nativeRun.getJSONObject("workPlan")))||!canonical(scope).equals(canonical(nativeRun.getJSONObject("productionScope")))||!scope.has("projectSelection"))throw new SecurityException("不是原完整项目失败工作计划");JSONObject item=dev.pocketengine.features.teams.TeamWorkItems.find(plan.getJSONArray("items"),itemId),child=required(item.getString("assignmentId"));currentTeamWorkItem(team,child.getJSONObject("teamAssignment"));
         if(!child.optString("status").matches("failed|cancelled|interrupted|paused|awaiting_user|needs_confirmation")||hasUnresolved(child.getString("id"))||hasUnresolved(window.teamRun)||teamHasPendingQuestion(child)||child.optJSONObject("teamProject")==null)throw new SecurityException("失败副本仍在执行/待答/有未决效果，或没有实际native完整checkout；不能新开一轮");try(Cursor live=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND status='running' LIMIT 1",new String[]{child.getString("id")})){if(live.moveToFirst())throw new SecurityException("原失败Runner尚未真实终结");}
-        JSONArray evidence=new JSONArray(),ops=get(child.getString("id"),false).getJSONArray("operations");for(int i=0;i<ops.length();i++){JSONObject op=ops.getJSONObject(i),receipt=op.optJSONObject("receipt");boolean ownerResolved=op.optString("state").equals("resolved")&&receipt!=null&&receipt.optString("source").equals("owner_reconciliation")&&receipt.optString("outcome").matches("occurred|not_occurred");if(!ownerResolved&&(!op.optString("state").equals("receipt")||receipt==null||receipt.optString("status").matches("unknown|running|stopping")||receipt.optString("code").contains("unknown")))throw new SecurityException("原失败工作还有未决操作，不用新任务洗账");evidence.put(new JSONObject().put("operationId",op.getString("operationId")).put("runId",op.getString("runId")).put("tool",op.getString("tool")).put("state",op.getString("state")).put("receiptHash",capabilityFingerprint(receipt)));}
+        // Classify the original complete operation evidence, not a display task.
+        // Unrelated audit/screenshot history is neither a receipt nor permission
+        // to retry; keep all native identity, terminal and budget checks unchanged.
+        JSONArray evidence=new JSONArray(),ops=TaskOperationProjection.forTask(db,child.getString("id"));for(int i=0;i<ops.length();i++){JSONObject op=ops.getJSONObject(i),receipt=op.optJSONObject("receipt");boolean ownerResolved=op.optString("state").equals("resolved")&&receipt!=null&&receipt.optString("source").equals("owner_reconciliation")&&receipt.optString("outcome").matches("occurred|not_occurred");if(!ownerResolved&&(!op.optString("state").equals("receipt")||receipt==null||receipt.optString("status").matches("unknown|running|stopping")||receipt.optString("code").contains("unknown")))throw new SecurityException("原失败工作还有未决操作，不用新任务洗账");evidence.put(new JSONObject().put("operationId",op.getString("operationId")).put("runId",op.getString("runId")).put("tool",op.getString("tool")).put("state",op.getString("state")).put("receiptHash",capabilityFingerprint(receipt)));}
         JSONObject integration=teamIntegrationContext(window.teamRun,new RunControl());if(integration!=null&&(integration.optBoolean("activeAttempt")||integration.optBoolean("hasUnresolved")))throw new SecurityException("原整合仍有活跃进程或未知写入，先核对原任务");return teamProjectRoundAncestry(window,team,scope).put("format","pocketworld.team-project-round-source.v1").put("sourceKind","failed_work_copy").put("teamRunId",window.teamRun).put("workPlan",plan).put("scope",scope).put("failedWorkItemId",itemId).put("failedWorkItem",dev.pocketengine.features.teams.TeamWorkItems.exactIdentity(item)).put("selectedFiles",item.getJSONArray("files")).put("oldTaskId",child.getString("id")).put("oldRunId",child.getString("runId")).put("oldEpoch",child.getInt("coordinatorEpoch")).put("oldStatus",child.getString("status")).put("projectContext",new JSONObject(child.getJSONObject("teamProject").toString())).put("operationEvidence",evidence).put("completeDeliveryVerified",false).put("oldGrantRestored",false).put("executionAuthorized",false);
     }
     /** Owner-only original links. This is inspection, not retry or restoration of a dispatch control. */
@@ -7423,7 +7426,10 @@ public final class TaskStore {
         JSONObject child=read(item.getString("assignmentId")),identity=child==null?new JSONObject():child.getJSONObject("teamAssignment");if(child!=null)currentTeamWorkItem(team,identity);boolean unstarted=child==null||child.optString("runId").isEmpty();
         if(identity.has("remoteSelection")||item.has("parentUnstartedContinuation")||child!=null&&(hasUnresolved(child.getString("id"))||teamHasPendingQuestion(child)||!unstarted&&!child.optString("status").matches("failed|awaiting_user|needs_confirmation|interrupted|paused|cancelled")))throw new SecurityException("原作者仍在运行/待答/有未决写入，或不处于确定失败/未开始点；不能改派或退款");
         if(unstarted)checkUnstartedWorkItem(item);else try(Cursor active=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND status='running' LIMIT 1",new String[]{child.getString("id")})){if(active.moveToFirst())throw new SecurityException("原Runner仍未终结，不能交接");}
-        JSONArray operations=child==null?new JSONArray():get(child.getString("id"),false).getJSONArray("operations"),evidence=new JSONArray();JSONObject draft=null;int effects=0;
+        // Classify the original complete operation evidence, not a display task.
+        // Unrelated audit/screenshot history is neither a receipt nor permission
+        // to retry; keep all native identity, terminal and budget checks unchanged.
+        JSONArray operations=child==null?new JSONArray():TaskOperationProjection.forTask(db,child.getString("id")),evidence=new JSONArray();JSONObject draft=null;int effects=0;
         for(int i=0;i<operations.length();i++){JSONObject operation=operations.getJSONObject(i),receipt=operation.optJSONObject("receipt");if(!operation.optString("state").equals("receipt")||receipt==null||receipt.optString("status").matches("unknown|running|stopping")||receipt.optString("code").contains("unknown"))throw new SecurityException("原操作尚无确定结算，只可核对原效果，不能交接");
             evidence.put(new JSONObject().put("operationId",operation.getString("operationId")).put("runId",operation.getString("runId")).put("tool",operation.getString("tool")).put("receiptHash",capabilityFingerprint(receipt)));
             if(operation.optString("tool").equals("team_prepare_draft")&&receipt.optBoolean("ok")&&receipt.optJSONObject("teamDraft")!=null){JSONObject saved=receipt.getJSONObject("teamDraft");if(saved.optInt("assignmentRevision",1)==identity.optInt("assignmentRevision",1)){if(draft!=null&&!draft.getString("draftProjectId").equals(saved.getString("draftProjectId")))throw new SecurityException("原作者存在多个不一致草稿，先核对");draft=new JSONObject(saved.toString());}}
@@ -9769,9 +9775,18 @@ public final class TaskStore {
     public synchronized JSONObject projectOperationReceipt(JSONObject binding,JSONObject exact)throws Exception {
         return projectOperationRecord(binding,exact,false);
     }
+    /** Original project evidence only: complete core plus the canonical operation
+     * ledger, without unrelated audit history or screenshot presentation upkeep.
+     * This read grants nothing; callers retain their owner/device/team and exact
+     * run/job checks. Keep full ledger parsing before those existing checks, as
+     * get() did, and preserve a missing task as null rather than an empty record. */
+    private JSONObject projectTaskEvidence(String id)throws Exception{
+        JSONObject task=read(id);if(task==null)return null;
+        return task.put("operations",TaskOperationProjection.forTask(db,id));
+    }
     private JSONObject projectOperationRecord(JSONObject binding,JSONObject exact,boolean current)throws Exception {
         String taskId=binding.getString("taskId"),run=binding.getString("runId"),operation=binding.getString("operationId");int epoch=binding.getInt("coordinatorEpoch");
-        JSONObject task=get(taskId,false);if(task==null)throw new SecurityException("项目原任务不存在");if(TaskStoreDeviceTasks.deviceTask(task))deviceTasks.requireProjectTask(task);else requirePrivateOwner(task);
+        JSONObject task=projectTaskEvidence(taskId);if(task==null)throw new SecurityException("项目原任务不存在");if(TaskStoreDeviceTasks.deviceTask(task))deviceTasks.requireProjectTask(task);else requirePrivateOwner(task);
         if(dev.pocketengine.features.local.project.ProjectManagedOutput.COMMAND.equals(exact.optString("command"))&&(!"assistant".equals(task.optString("kind"))||task.has("origin")))throw new SecurityException("此生成文件保存仅属于原私人项目任务，团队来源需独立typed交付");
         if(current&&(!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")))throw new SecurityException("项目原执行代次已失效");
         try(Cursor original=db.rawQuery("SELECT epoch FROM runs WHERE task_id=? AND run_id=?",new String[]{taskId,run})){if(!original.moveToFirst()||epoch!=original.getInt(0))throw new SecurityException("项目回执不是此任务的原执行代次");}
@@ -9792,7 +9807,7 @@ public final class TaskStore {
             JSONObject row=projectOperation(binding,exact);if(!"prepared".equals(row.getString("state"))){db.setTransactionSuccessful();return new JSONObject().put("fresh",false).put("knownOperation",true);}
             JSONObject liveService=projectLiveEditService(binding,exact);String serviceId=liveService==null?null:liveService.getString("operationId");
             if(projectServiceCheckoutConflict(exact,binding.getString("operationId"),serviceId)){db.setTransactionSuccessful();return new JSONObject().put("fresh",false).put("notDispatched",true).put("status","not_dispatched").put("accepted",false).put("code","project_service_conflict").put("message","同一项目仍有原受控服务或冲突执行；请回原任务停止并确认释放。本步骤未派发");}
-            JSONArray all=get(binding.getString("taskId"),false).getJSONArray("operations");for(int i=0;i<all.length();i++){JSONObject other=all.getJSONObject(i);if(!row.getString("operationId").equals(other.getString("operationId"))&&!other.getString("operationId").equals(serviceId)&&other.optString("state").matches("prepared|unknown|project_running|project_stopping"))throw new SecurityException("原任务有其他未决动作，不能派发项目命令");}
+            JSONArray all=TaskOperationProjection.forTask(db,binding.getString("taskId"));for(int i=0;i<all.length();i++){JSONObject other=all.getJSONObject(i);if(!row.getString("operationId").equals(other.getString("operationId"))&&!other.getString("operationId").equals(serviceId)&&other.optString("state").matches("prepared|unknown|project_running|project_stopping"))throw new SecurityException("原任务有其他未决动作，不能派发项目命令");}
             // Only the original consumed startup approval can delegate these particular
             // existing source edits. Each write still spends an original journal operation.
             JSONObject teamFileScope=teamProjectFileGrant(required(binding.getString("taskId")),row.getJSONObject("arguments").getJSONObject("plan"));
@@ -9830,7 +9845,7 @@ public final class TaskStore {
      * lease or new run; actual dispatch must still pass the same original project journal. */
     public synchronized JSONObject ownerProjectDevWatchForOwner(String id,String checkout)throws Exception{
         JSONObject task=required(id);requirePrivateOwner(task);JSONObject context=task.optJSONObject("developmentContext");if(!"assistant".equals(task.optString("kind"))||task.has("origin")||context==null||!checkout.equals(context.optString("checkoutId"))||!"managed_process_v1".equals(context.optString("runtime")))throw new SecurityException("请选择此项目副本的原私人开发任务");
-        JSONObject binding=new JSONObject().put("taskId",id).put("runId",task.getString("runId")).put("coordinatorEpoch",task.getInt("coordinatorEpoch")),selected=null;JSONArray rows=get(id,false).getJSONArray("operations");
+        JSONObject binding=new JSONObject().put("taskId",id).put("runId",task.getString("runId")).put("coordinatorEpoch",task.getInt("coordinatorEpoch")),selected=null;JSONArray rows=TaskOperationProjection.forTask(db,id);
         for(int i=0;i<rows.length();i++){JSONObject candidate=rows.getJSONObject(i),receipt=candidate.optJSONObject("receipt"),actual=receipt==null?null:receipt.optJSONObject("executionReceipt");if(!"project_execute".equals(candidate.optString("tool"))||!"project_running".equals(candidate.optString("state"))||!binding.getString("runId").equals(candidate.optString("runId"))||actual==null||actual.optJSONObject("devWatch")==null)continue;JSONObject row=projectDevServiceForPreview(binding,candidate.getString("operationId"));if(selected!=null)throw new SecurityException("此原run存在多个候选服务，请先核对原执行而非猜一个");selected=row;}
         if(selected==null)throw new IllegalStateException("此原任务没有已核存活的受控开发服务；普通保存仍需先停止并排空进程");return new JSONObject().put("binding",binding).put("service",selected);
     }
@@ -9845,13 +9860,15 @@ public final class TaskStore {
         JSONObject policy=dev.pocketengine.features.local.project.ProjectLiveEditPolicy.fromExact(launch),actual=backend.getJSONObject("devWatch");
         if(policy==null||!Boolean.TRUE.equals(actual.opt("nativeSessionCreated"))||!policy.getString("policyDigest").equals(actual.optString("policyDigest")))throw new SecurityException("原服务没有本机创建的dev-watch会话");
         dev.pocketengine.features.local.project.ProjectLiveEditPolicy.requireLaunchManifest(policy,plan.getJSONArray("sourceManifest"),plan.getString("projectId"),plan.getString("checkoutId"),plan.getString("sourceDigest"));
-        JSONObject editPlan=null;JSONArray operations=get(binding.getString("taskId"),false).getJSONArray("operations");for(int i=0;i<operations.length();i++){JSONObject candidate=operations.getJSONObject(i);if(binding.optString("operationId").equals(candidate.optString("operationId")))editPlan=dev.pocketengine.features.local.project.ProjectBuildPlan.verified(projectStoredArguments(binding.getString("taskId"),candidate.getString("runId"),candidate.getJSONObject("arguments")).getJSONObject("plan"));}
+        JSONObject editPlan=null;JSONArray operations=TaskOperationProjection.forTask(db,binding.getString("taskId"));for(int i=0;i<operations.length();i++){JSONObject candidate=operations.getJSONObject(i);if(binding.optString("operationId").equals(candidate.optString("operationId")))editPlan=dev.pocketengine.features.local.project.ProjectBuildPlan.verified(projectStoredArguments(binding.getString("taskId"),candidate.getString("runId"),candidate.getJSONObject("arguments")).getJSONObject("plan"));}
         // A before-prepare caller supplies the already verified plan separately below.
         JSONArray manifest=editPlan==null?beforePrepareManifest:editPlan.getJSONArray("sourceManifest");
         if(manifest==null||!exact.getString("sourceDigest").equals(dev.pocketengine.features.local.project.ProjectSources.manifestDigest(manifest)))throw new SecurityException("热改缺少原prepared源码清单");
         dev.pocketengine.features.local.project.ProjectLiveEditPolicy.requirePlannedEdit(policy,manifest,payload.getString("path"));
         if(!payload.optString("expectedHash").matches("[a-f0-9]{64}")||!(payload.opt("content") instanceof String))throw new SecurityException("热改必须提供既有文件的SHA与明确正文");
-        boolean approved=false;JSONArray approvals=get(binding.getString("taskId"),false).getJSONArray("approvals");for(int i=0;i<approvals.length();i++){JSONObject approval=approvals.getJSONObject(i),capability=approval.optJSONObject("capability"),owned=capability==null?null:capability.optJSONObject("ownedService");if(route.getString("approvalId").equals(approval.optString("id"))&&"consumed".equals(approval.optString("state"))&&owned!=null&&policy.getString("policyDigest").equals(owned.optString("liveEditPolicyDigest"))&&Boolean.TRUE.equals(owned.opt("subsequentSourceExecution"))&&route.getString("capabilityFingerprint").equals(capabilityFingerprint(capability)))approved=true;}
+        // Re-read actual saved approvals at the original decision point. Display
+        // history is not authorization; the consumed grant and policy digest below are.
+        boolean approved=false;JSONArray approvals=read(binding.getString("taskId")).getJSONArray("approvals");for(int i=0;i<approvals.length();i++){JSONObject approval=approvals.getJSONObject(i),capability=approval.optJSONObject("capability"),owned=capability==null?null:capability.optJSONObject("ownedService");if(route.getString("approvalId").equals(approval.optString("id"))&&"consumed".equals(approval.optString("state"))&&owned!=null&&policy.getString("policyDigest").equals(owned.optString("liveEditPolicyDigest"))&&Boolean.TRUE.equals(owned.opt("subsequentSourceExecution"))&&route.getString("capabilityFingerprint").equals(capabilityFingerprint(capability)))approved=true;}
         if(!approved)throw new SecurityException("原启动批准未明确包含这些源码的后续执行影响");return new JSONObject(row.toString());
     }
     /** Native before-prepare proof. The copied manifest is not a launch/lease ticket. */
@@ -9936,7 +9953,7 @@ public final class TaskStore {
         return requireCapabilityApproval(id,runId,tool,args,new JSONObject().put("kind","local").put("tool",tool));
     }
     private JSONObject ownedServiceRow(String id,String run,int epoch,String operation)throws Exception {
-        JSONObject task=get(id,false);requirePrivateOwner(task);JSONObject selected;if(teamProjectSelection(task)!=null)selected=teamProjectAssociation(task,run,epoch);else{if(task.has("ownerLocalTerminal"))requireOwnerLocalTerminalTask(id);else if(!"assistant".equals(task.optString("kind"))||task.optJSONObject("origin")!=null)throw new SecurityException("受控服务只属于本机私人原项目任务");selected=task.getJSONObject("developmentContext");}
+        JSONObject task=projectTaskEvidence(id);requirePrivateOwner(task);JSONObject selected;if(teamProjectSelection(task)!=null)selected=teamProjectAssociation(task,run,epoch);else{if(task.has("ownerLocalTerminal"))requireOwnerLocalTerminalTask(id);else if(!"assistant".equals(task.optString("kind"))||task.optJSONObject("origin")!=null)throw new SecurityException("受控服务只属于本机私人原项目任务");selected=task.getJSONObject("developmentContext");}
         for(int i=0;i<task.getJSONArray("operations").length();i++){
             JSONObject row=task.getJSONArray("operations").getJSONObject(i);if(!operation.equals(row.optString("operationId")))continue;
             if(!"project_execute".equals(row.optString("tool"))||!run.equals(row.optString("runId"))||!row.optString("state").matches("project_running|project_stopping|receipt"))throw new SecurityException("不是原执行轮次的受控服务");
@@ -9962,7 +9979,7 @@ public final class TaskStore {
             if(!candidate.moveToFirst())return new JSONArray();
         }
         checkCapabilityCurrent(id,run,epoch,"project_inspect");
-        JSONArray result=new JSONArray(),operations=get(id,false).getJSONArray("operations");
+        JSONArray result=new JSONArray(),operations=TaskOperationProjection.forTask(db,id);
         for(int i=0;i<operations.length();i++){
             JSONObject candidate=operations.getJSONObject(i);if(!run.equals(candidate.optString("runId"))||!"project_running".equals(candidate.optString("state")))continue;
             JSONObject row=ownedServiceRow(id,run,epoch,candidate.getString("operationId")),args=row.getJSONObject("arguments"),plan=dev.pocketengine.features.local.project.ProjectBuildPlan.verified(args.getJSONObject("plan")),exact=dev.pocketengine.features.local.project.ProjectDevelopment.exact(plan,dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,args.getString("stepId"))),payload=exact.getJSONObject("payload"),envelope=row.getJSONObject("receipt"),backend=envelope.getJSONObject("executionReceipt"),route=envelope.getJSONObject("projectExecution");
@@ -10167,14 +10184,14 @@ public final class TaskStore {
     /** A stop is a new original-journal control intent, not another process or launch grant. */
     public synchronized JSONObject claimProjectServiceStop(JSONObject binding,String target,RunControl original)throws Exception {
         String id=binding.getString("taskId"),run=binding.getString("runId"),operation=binding.getString("operationId");int epoch=binding.getInt("coordinatorEpoch");
-        fence(id,run,epoch,original,true,true,operation);checkCapabilityCurrent(id,run,epoch,"project_stop");JSONObject service=ownedServiceRow(id,run,epoch,target),intent=null;JSONArray rows=get(id,false).getJSONArray("operations");
+        fence(id,run,epoch,original,true,true,operation);checkCapabilityCurrent(id,run,epoch,"project_stop");JSONObject service=ownedServiceRow(id,run,epoch,target),intent=null;JSONArray rows=TaskOperationProjection.forTask(db,id);
         for(int i=0;i<rows.length();i++)if(operation.equals(rows.getJSONObject(i).optString("operationId")))intent=rows.getJSONObject(i);
         if(intent==null||!run.equals(intent.optString("runId"))||!"project_stop".equals(intent.optString("tool"))||!"prepared".equals(intent.optString("state"))||!target.equals(intent.getJSONObject("arguments").getString("executionId")))throw new SecurityException("缺少原prepared停止意图或目标已变化");
         JSONObject pending=new JSONObject().put("code","project_stop_pending_unknown").put("status","unknown").put("accepted",JSONObject.NULL).put("projectStopTarget",target).put("binding",binding).put("replayAllowed",false);
         ContentValues update=new ContentValues();update.put("state","unknown");update.put("receipt",pending.toString());if(db.update("operations",update,"task_id=? AND run_id=? AND operation_id=? AND tool='project_stop' AND state='prepared'",new String[]{id,run,operation})!=1)throw new SecurityException("停止意图已被消费");return service;
     }
     public synchronized JSONObject recordProjectServiceStop(JSONObject binding,String target)throws Exception {
-        JSONObject task=get(binding.getString("taskId"),false);requirePrivateOwner(task);JSONArray rows=task.getJSONArray("operations");JSONObject intent=null;
+        JSONObject task=projectTaskEvidence(binding.getString("taskId"));requirePrivateOwner(task);JSONArray rows=task.getJSONArray("operations");JSONObject intent=null;
         for(int i=0;i<rows.length();i++)if(binding.getString("operationId").equals(rows.getJSONObject(i).optString("operationId")))intent=rows.getJSONObject(i);
         if(intent==null||!binding.getString("runId").equals(intent.optString("runId"))||!"project_stop".equals(intent.optString("tool"))||!"unknown".equals(intent.optString("state"))||!target.equals(intent.getJSONObject("arguments").getString("executionId")))throw new SecurityException("停止回执不属于原意图");
         JSONObject receipt=new JSONObject().put("code","project_stop_requested").put("status","stop_requested").put("ok",true).put("accepted",true).put("processTerminal",false).put("executionId",target).put("projectStopTarget",target).put("binding",binding).put("replayAllowed",false).put("message","停止要求已交给原owned进程；是否已退出仍以原服务回执为准");
@@ -12874,6 +12891,12 @@ public final class TaskStore {
         for(String key:new String[]{"developmentContext","runId","coordinatorEpoch"})
             if(task.has(key))context.put(key,task.get(key));
         return context;
+    }
+    /** Native source classification for generic owner-action routing only. The caller
+     * still performs its action-specific authority checks; unrelated audit/display
+     * data must not prevent the original paired-device exclusion from being read. */
+    public synchronized boolean isDeviceTaskForOwnerRouting(String id)throws Exception{
+        return TaskStoreDeviceTasks.deviceTask(read(id));
     }
     /** Native notification routing check only. Intent/controller checks remain in
      * the caller, and actual control mutations still validate their own authority.

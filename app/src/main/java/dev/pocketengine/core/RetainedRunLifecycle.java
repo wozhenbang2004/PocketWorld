@@ -26,5 +26,9 @@ public final class RetainedRunLifecycle {
     /** Call only after execute rejected without pickup, after cancellation callbacks. */
     public void closeRejected() { phase.compareAndSet(Phase.CLOSE_QUEUED, Phase.CLOSE_PENDING); }
     public void closeFailed() { phase.compareAndSet(Phase.CLOSING, Phase.CLOSE_PENDING); }
+    /** Active resume only: caller retained a returned physical-close outcome,
+     * but its original SQL settlement was not confirmed. This is not permission
+     * to resume work or a claim that a durable pending session was written. */
+    public void resumeCloseFailed() { phase.compareAndSet(Phase.ACTIVE, Phase.CLOSE_PENDING); }
     public boolean release() { return phase.getAndSet(Phase.CLOSED) != Phase.CLOSED; }
 }

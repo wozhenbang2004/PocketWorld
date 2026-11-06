@@ -2603,7 +2603,28 @@ public final class EngineApplication extends Application implements dev.pocketen
                 if(runner.developmentYielded())return held(result);
                 tasks.finishCapabilityAttempt(id,run,epoch,control,result);settlementCommitted=true;pushTask(id);
                 return json("content",result.evidence.optString("modelSummary",result.summary),"taskId",id,"status",tasks.get(id,false).getString("status"),"nativeOwnerReplyRecorded",true);
-            }catch(Exception failure){if(settlementCommitted)throw failure;control.cancel();RunOutcome stopped=runner.closeDevelopment(id,control,journal);tasks.finishCapabilityAttempt(id,run,epoch,control,stopped);throw failure;}
+            }catch(Exception failure){
+                if(settlementCommitted)throw failure;
+                // held(result) may already have yielded and registered cancellation.
+                // Keep that existing path separate from a still-active resume failure.
+                if(lifecycle.phase()!=dev.pocketengine.core.RetainedRunLifecycle.Phase.ACTIVE){
+                    control.cancel();RunOutcome stopped=runner.closeDevelopment(id,control,journal);
+                    tasks.finishCapabilityAttempt(id,run,epoch,control,stopped);throw failure;
+                }
+                try{
+                    control.cancel();
+                    closeOutcome=runner.closeDevelopment(id,control,journal);
+                    try{tasks.finishRetainedDevelopmentClose(id,run,epoch,control,closeOutcome);}
+                    catch(Exception unconfirmed){
+                        // Publish pending ownership only AFTER a close result exists.
+                        // SQL retry reuses this result, never drains the port again.
+                        // resume removed developmentSession: do not fabricate a durable
+                        // close_pending session or relax the store's original identity gate.
+                        lifecycle.resumeCloseFailed();throw unconfirmed;
+                    }
+                }catch(Exception cleanup){if(cleanup!=failure)failure.addSuppressed(cleanup);}
+                throw failure;
+            }
             finally{if(lifecycle.phase()==dev.pocketengine.core.RetainedRunLifecycle.Phase.ACTIVE)release();}
         }
         void nativeReceipt(){
@@ -3352,7 +3373,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(!businessReady()&&!java.util.Set.of("stopTask","stopRun","pauseRun").contains(action))throw new SecurityException("原启动恢复或维护尚未完成；请先读取启动维护页");
         if(input==null)input=new JSONObject();
         if(input.has("taskId")&&java.util.Set.of("updateTask","resumeTask","configureTaskExecutionScope","enterTaskPlanning","approveCapability","resolveOperation","reconcileExternalTask","confirmResult","stopTask","takeoverTask","ownerPhoneHandoff","observeTask","manualTaskAction","ownerSecretInput","continueDevelopmentTask").contains(action)
-                &&dev.pocketengine.store.TaskStoreDeviceTasks.deviceTask(tasks.get(input.getString("taskId"),false)))throw new SecurityException("配对设备任务保留原来源；请用准确原run的设备控制/原生审阅，通用Owner输入、私有范围、重建run和结果确认入口不接管此任务");
+                &&tasks.isDeviceTaskForOwnerRouting(input.getString("taskId")))throw new SecurityException("配对设备任务保留原来源；请用准确原run的设备控制/原生审阅，通用Owner输入、私有范围、重建run和结果确认入口不接管此任务");
         switch(action){
             case "startSshTask":if(sshOwnerWorkflows==null)throw new IllegalStateException("SSH主人工作流尚未准备");return sshOwnerWorkflows.startTask(input);
             case "startDevelopmentTask":if(projectOwnerWorkflows==null)throw new IllegalStateException("项目宿主尚未准备");return projectOwnerWorkflows.start(input);

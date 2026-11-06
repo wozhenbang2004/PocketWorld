@@ -1034,6 +1034,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         } } catch (_: java.util.concurrent.RejectedExecutionException) { pluginRuntime = JSONObject().put("status", "unavailable").put("message", "工作队列不可用，本次准备未开始。") }
     }
 
+    private data class ProjectCreationNavigation(
+        val requestId: String,
+        val window: Pair<Triple<Long, Int, Long>, Long>
+    )
+    private var projectCreationNavigation: ProjectCreationNavigation? = null
     private var fileRequestId: String? = null
     private var workspaceArtifactReadRequest: String? = null
     private var workspaceArtifactDiffRequest: String? = null
@@ -3214,7 +3219,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         state = state.copy(projectId = id, files = emptyList(), filePath = null, lastSavedVersion = null, fileReady = false, workspaceArtifactEditorOrigin = null, projectTaskReturn = state.projectTaskReturn?.takeIf { it.projectId == id })
         feature("workspace", "list", JSONObject().put("projectId", id))
     }
-    fun createProject(name: String) { feature("workspace", "create", JSONObject().put("name", name.trim())) }
+    fun createProject(name: String) {
+        val window = webWindowTicket()
+        val requestId = feature("workspace", "create", JSONObject().put("name", name.trim()))
+        // Creation continues independently. Only the latest creation intent may
+        // open its result, and only while its original owner window is still current.
+        projectCreationNavigation = ProjectCreationNavigation(requestId, window)
+    }
     fun openFile(path: String) {
         val project = state.projectId ?: return
         invalidateFileRequests()
@@ -3863,6 +3874,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val key = "$feature.$command"
         if (meta.first != key) return
         pending.remove(requestId)
+        val createdProjectNavigation = if (feature == "workspace" && command == "create")
+            projectCreationNavigation?.takeIf { it.requestId == requestId } else null
+        // Retire this navigation receipt on success or failure, without clearing a
+        // newer creation. A late result still keeps its normal persisted/result data.
+        if (createdProjectNavigation != null) projectCreationNavigation = null
         state = state.copy(moduleBusy = if (pending.values.any { it.first == key }) state.moduleBusy else state.moduleBusy - key)
         if (feature == "workspace" && command in setOf("read", "write", "history") && requestId !in setOf(fileRequestId, historyRequestId, revisionRequestId)) return
         if (feature == "workspace" && (command == "listArtifacts" && requestId != workspaceArtifactsRequest || command == "readArtifact" && (requestId != workspaceArtifactReadRequest || state.workspaceArtifactView == null) || command == "diffArtifact" && (requestId != workspaceArtifactDiffRequest || state.workspaceArtifactView == null))) return
@@ -3916,7 +3932,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             if (feature == "workspace") state = when (requestId) {
                 fileRequestId -> state.copy(fileError = message, fileLoading = false, fileSaving = false)
                 revisionRequestId -> state.copy(fileError = message, revisionLoading = false)
-                else -> state.copy(fileError = message)
+                historyRequestId -> state.copy(fileError = message)
+                // Project creation/list/export failures retain their module/global error.
+                // They do not belong to whichever file the user has since opened.
+                else -> state
             }
             return
         }
@@ -4007,7 +4026,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     state = state.copy(workspaceArtifactView = if (valid) view.copy(diffLoading = false, diffError = null, diff = UiWorkspaceArtifactDiff(result.getString("diff"), result.getInt("version"), result.getString("revisionId"), result.getBoolean("truncated"), System.currentTimeMillis())) else view.copy(diffLoading = false, diffError = "差异回执不属于原成果及源文件，请重新读取"))
                 }
                 "createArtifact" -> refreshWorkspaceArtifacts()
-                "create" -> result.optString("id").takeIf { it.isNotBlank() }?.let(::selectProject)
+                "create" -> if (createdProjectNavigation != null && createdProjectNavigation.window == webWindowTicket()) {
+                    result.optString("id").takeIf { it.isNotBlank() }?.let(::selectProject)
+                }
                 "list" -> if (meta.second.optString("projectId") == state.projectId) state = state.copy(files = result.optJSONArray("files").objects().map { UiFile(it.optString("path"), it.optInt("version")) })
                 "history" -> if (requestId == historyRequestId) state = state.copy(fileHistory = result.optJSONArray("history").objects().map { UiFileRevision(it.optInt("version"), it.optLong("at"), it.optInt("characters"), it.optBoolean("deleted")) }.sortedByDescending { it.version })
                 "read", "write" -> if (meta.second.optString("projectId") == state.projectId && meta.second.optString("path") == state.filePath) {
