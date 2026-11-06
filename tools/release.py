@@ -113,6 +113,8 @@ class Runner:
         self.env["PATH"] = str(Path(config["node"]).parent) + os.pathsep + str(Path(config["java_home"]) / "bin") + os.pathsep + str(Path(config["openssl"]).parent) + os.pathsep + self.env.get("PATH", "")
         if config.get("proxy"):
             self.env.update(HTTP_PROXY=config["proxy"], HTTPS_PROXY=config["proxy"], NO_PROXY="localhost,127.0.0.1")
+            # Node 24 fetch opts into these existing proxy settings at startup.
+            self.env["NODE_USE_ENV_PROXY"] = "1"
 
     def command(self, command, cwd=None, capture=False, input_text=None, check=True):
         if self.directory:

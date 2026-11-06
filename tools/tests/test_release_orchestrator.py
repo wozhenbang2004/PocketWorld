@@ -1,4 +1,4 @@
-"""Offline release orchestration regressions; no APK build, credentials or HTTP.
+"""Offline release regressions; no APK build, credentials or external HTTP.
 
 Every artifact/manifest/provider reply here is synthetic. Local Git fixtures only
 fetch from another directory in the same E-drive temporary tree.
@@ -11,8 +11,10 @@ import io
 import os
 from pathlib import Path
 import shutil
+import socketserver
 import subprocess
 import tempfile
+import threading
 import types
 import unittest
 from unittest import mock
@@ -113,6 +115,32 @@ class PublisherFixture:
 
 
 class ReleaseOrchestratorTest(unittest.TestCase):
+    def test_node_fetch_uses_configured_proxy_without_external_network(self):
+        seen = []
+        Path(self.c["repo"]).mkdir()
+        self.c["node"] = shutil.which("node")
+        self.assertTrue(self.c["node"], "An existing Node runtime is required")
+
+        class Proxy(socketserver.StreamRequestHandler):
+            def handle(self):
+                seen.append(self.rfile.readline().decode("ascii").strip())
+                self.wfile.write(b"HTTP/1.1 502 Synthetic proxy response\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+
+        with socketserver.ThreadingTCPServer(("127.0.0.1", 0), Proxy) as proxy:
+            worker = threading.Thread(target=proxy.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+            worker.start()
+            try:
+                self.c["proxy"] = "http://127.0.0.1:" + str(proxy.server_address[1])
+                with mock.patch.dict(os.environ, {"NODE_USE_ENV_PROXY": ""}):
+                    runner = self.runner()
+                code, _ = runner.command([self.c["node"], "-e",
+                    "fetch('https://font-release.invalid/font.ttf',{signal:AbortSignal.timeout(2500)}).catch(()=>process.exit(0));"], capture=True)
+                self.assertEqual(0, code)
+                self.assertEqual(["CONNECT font-release.invalid:443 HTTP/1.1"], seen)
+            finally:
+                proxy.shutdown()
+                worker.join(2)
+
     def setUp(self):
         parent = Path(os.environ.get("POCKETWORLD_RELEASE_TEST_TEMP", "E:/PocketWorld-dev/temp/release-orchestrator-tests"))
         if not parent.is_absolute() or parent.drive.lower() == "c:":

@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { downloadFont } from './font-download.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'public', 'fonts');
@@ -77,15 +78,16 @@ async function prepare(entry) {
   try {
     bytes = await readFile(destination);
     verify(entry, bytes);
+    console.log(`[fonts] verified cache: ${entry.file}`);
   } catch (error) {
     if (process.argv.includes('--verify-only')) throw new Error(`Bundled font unavailable or invalid: ${entry.file}`, { cause: error });
-    const response = await fetch(url(entry), { signal: AbortSignal.timeout(180000) });
-    if (!response.ok) throw new Error(`Font download failed (${response.status}): ${entry.file}`);
-    bytes = Buffer.from(await response.arrayBuffer());
-    verify(entry, bytes);
-    const temporary = `${destination}.download`;
-    await writeFile(temporary, bytes);
-    await rename(temporary, destination);
+    console.log(`[fonts] downloading ${entry.file} (${entry.bytes} bytes)`);
+    try {
+      bytes = await downloadFont(entry, url(entry), destination, verify);
+      console.log(`[fonts] verified download: ${entry.file}`);
+    } catch (cause) {
+      throw new Error(`Font preparation failed: ${entry.file} (${cause?.name || 'Error'}); verified cached fonts are retained.`, { cause });
+    }
   }
   return {
     id: entry.id, family: entry.family, file: entry.file, source: entry.source,

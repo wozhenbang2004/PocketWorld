@@ -21,6 +21,13 @@ generates the Google BSDIFF43/GZIP delta, reconstructs and hashes the whole targ
 and signs the new manifest with the existing publisher RSA key. The original APK
 and manifest keys are never regenerated.
 
+With the configured proxy, Node 24 font downloads use the existing HTTP(S) proxy.
+Complete pinned fonts are cached on the project volume. Downloads show byte
+progress, allow 180 seconds without new data and at most 30 minutes overall,
+and retain temporary prefixes for a checked Range resume on the next run.
+Only a complete file passing the original size, hashes and glyph/license checks
+replaces the cached font; an ignored Range response restarts only its temporary file.
+
 Both the APK and the verified delta are uploaded through the original Site's
 authenticated `__publisher` API. The server checks chunks and whole objects;
 the client checks public full bytes and Range responses. Only then does one
