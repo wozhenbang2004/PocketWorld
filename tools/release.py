@@ -202,7 +202,7 @@ def core_acceptance(runner, head):
             raise ValueError()
         return receipt
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-        raise ReleaseError("核心批量验收尚未通过，或应用源码在验收后已变化；不构建、不上传。请先完成原核心验收记录。") from None
+        raise ReleaseError("核心批量验收尚未通过，或应用源码在验收后已变化；正式更新清单暂不激活。") from None
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -378,7 +378,8 @@ def make_bundle(runner, head, version, base_apk):
     _, python_tests = runner.command([c["python"], "-B", "-m", "unittest", "-v", "tools/tests/test_app_version.py",
                     "tools/tests/test_apk_workflow_paths.py", "tools/tests/test_packaged_web_receipt.py",
                     "tools/tests/test_update_artifact_preflight.py", "tools/tests/test_update_release_bundle.py",
-                    "tools/tests/test_update_manifest_signing.py"], capture=True)
+                    "tools/tests/test_update_manifest_signing.py", "tools/tests/test_windows_release.py",
+                    "tools/tests/test_release_orchestrator.py"], capture=True)
     print(python_tests, flush=True)
     count = re.search(r"Ran (\d+) tests? in", python_tests)
     if not count or int(count[1]) < 1 or re.search(r"\bskipped\s*[= ]\s*[1-9]", python_tests):
@@ -491,7 +492,14 @@ def upload_release(runner, http, bundle, baseline_sha, head):
     # A lost activation reply is reconciled, never treated as permission to rebuild or downgrade.
     if source_state(runner) != head:
         raise ReleaseError("上传期间源码变化，保留已上传的不可变文件，未激活更新。")
-    core_acceptance(runner, head)
+    identity = {"sourceCommit": head, "releaseId": release_id, "manifestSha256": manifest_sha,
+                "manifestUrl": http.origin + runner.c["manifest_path"],
+                "artifacts": [http.origin + row["path"] for row in descriptors]}
+    try:
+        core_acceptance(runner, head)
+    except ReleaseError as error:
+        return identity | {"status": "staged_awaiting_acceptance", "activated": False,
+                           "activationBlocked": True, "blockingReason": str(error)}
     try:
         http.json(prefix + "/activate", "POST", {})
     except ReleaseError:
@@ -502,9 +510,7 @@ def upload_release(runner, http, bundle, baseline_sha, head):
         actual = response.read(96 * 1024 + 1)
     if actual != raw:
         raise ReleaseError("公开更新清单与本次已验签原字节不同。")
-    return {"status": "published", "sourceCommit": head, "releaseId": release_id,
-            "manifestSha256": manifest_sha, "manifestUrl": http.origin + runner.c["manifest_path"],
-            "artifacts": [http.origin + row["path"] for row in descriptors]}
+    return identity | {"status": "published", "activated": True}
 
 
 @contextlib.contextmanager
@@ -546,7 +552,10 @@ def run_release(c, prepare_only=False):
         if digest(Path(__file__)) != original_script:
             raise ScriptUpdated("发布脚本已随 main 更新，将在构建前自动重启一次。")
         if not prepare_only:
-            core_acceptance(runner, head)
+            try:
+                core_acceptance(runner, head)
+            except ReleaseError:
+                print("核心实测记录尚未覆盖本次源码；继续准备候选产物，最后单独核对正式更新激活条件。", flush=True)
         http = Http(c["origin"], proxy=c.get("proxy"))
         if not prepare_only:
             http.token = read_token(c)
@@ -565,13 +574,23 @@ def run_release(c, prepare_only=False):
                 return {"status": "up_to_date", "sourceCommit": published_source, "currentCheckout": head,
                         "applicationInputsUnchanged": True, "noBuildOrPublication": True}
         bundle = None
-        if pending.get("sourceCommit") == head and pending.get("stage") == "artifacts_ready":
+        if pending.get("sourceCommit") == head and pending.get("stage") in ("artifacts_ready", "uploaded_waiting_acceptance"):
             candidate = owned(Path(pending["bundle"]), root)
             if (candidate / "release.json").is_file():
                 if digest(candidate / "release.json") == base_sha:
                     return {"status": "published", "sourceCommit": head, "manifestUrl": c["origin"] + c["manifest_path"], "reconciled": True}
                 if pending.get("baselineManifestSha256") != base_sha:
                     raise ReleaseError("线上基线已被另一发布推进；保留本次候选包和差分，停止而不自动重建。")
+                if pending.get("stage") == "uploaded_waiting_acceptance":
+                    if digest(candidate / "release.json") != pending.get("manifestSha256"):
+                        raise ReleaseError("已上传候选的本地签名清单改变，停止激活。")
+                    try:
+                        core_acceptance(runner, head)
+                    except ReleaseError as error:
+                        artifact_descriptors(candidate)
+                        print("候选产物已上传，核心验收仍待完成；复用原记录，不构建、不重复上传、不激活更新。", flush=True)
+                        return pending | {"status": "staged_awaiting_acceptance", "activated": False,
+                                          "activationBlocked": True, "blockingReason": str(error), "reused": True}
                 verification = directory / "resume-verified.json"
                 runner.tool("verify-envelope", "--envelope", candidate / "release.json", "--classpath", c["org_json_classpath"], "--output", verification)
                 if read_json(verification)["versionCode"] > base["versionCode"]:
@@ -587,17 +606,23 @@ def run_release(c, prepare_only=False):
             return {"status": "prepared_local_only", "sourceCommit": head, "bundle": str(bundle)}
         if source_state(runner) != head:
             raise ReleaseError("上传前源码变化；已保存产物，没有发布。")
-        core_acceptance(runner, head)
         http.token = read_token(c)
         status = http.json("/__publisher/status")
         if status["current"]["manifestSha256"] != base_sha or status["pinSpkiSha256"] != c["public_pin_sha256"]:
             raise ReleaseError("站点版本或签名链已改变；已保存产物，没有发布。")
         print("[5/7] 上传完整 APK 和差分（支持断点对账）", flush=True)
         result = upload_release(runner, http, bundle, base_sha, head)
-        print("[6/7] 公开字节与范围校验通过，已最后激活签名清单。", flush=True)
-        write_json(directory / "published.json", result)
-        write_json(previous, result | {"stage": "published", "bundle": str(bundle)})
-        print("[7/7] 完成", flush=True)
+        if result["status"] == "published":
+            print("[6/7] 公开字节与范围校验通过，已最后激活签名清单。", flush=True)
+            write_json(directory / "published.json", result)
+            write_json(previous, result | {"stage": "published", "bundle": str(bundle)})
+            print("[7/7] 发布完成", flush=True)
+        else:
+            print("[6/7] 候选整包和差分已上传，公开字节与范围校验通过。", flush=True)
+            write_json(directory / "staged.json", result)
+            write_json(previous, result | {"stage": "uploaded_waiting_acceptance", "bundle": str(bundle),
+                                          "baselineManifestSha256": base_sha})
+            print("[7/7] 候选准备完成；核心验收通过后再次运行会复用产物完成激活，不重打包。", flush=True)
         return result
 
 
@@ -618,11 +643,14 @@ def check(c):
     except ReleaseError as error:
         blockers.append(str(error))
         head = runner.git("rev-parse", "HEAD", check=False)[1]
+    preparation_blockers = list(blockers)
     try:
         core_acceptance(runner, head)
     except ReleaseError as error:
         blockers.append(str(error))
-    return {"infrastructureReady": not missing, "missingPaths": missing, "readyToRelease": not missing and not blockers, "blockers": blockers}
+    return {"infrastructureReady": not missing, "missingPaths": missing,
+            "readyToPrepare": not missing and not preparation_blockers,
+            "readyToRelease": not missing and not blockers, "blockers": blockers}
 
 
 def main(argv=None):
@@ -640,7 +668,7 @@ def main(argv=None):
         c = load_config(args.config)
         if args.plan:
             result = {"mode": "plan_only", "repo": c["repo"], "origin": c["origin"], "noBuildOrPublication": True,
-                      "stages": ["保留现场并同步main", "核心批量验收门", "线上签名基线及实际本地版本", "本地检查与一次APK构建", "同签名差分生成及完整重建", "整包与差分上传/公开核验", "最后激活签名清单"],
+                      "stages": ["保留现场并同步main", "线上签名基线及实际本地版本", "本地检查与一次APK构建", "同签名差分生成及完整重建", "整包与差分上传/公开核验", "核心批量验收激活门", "验收通过才激活正式更新"],
                       "uploadResume": "同源码且已有有效产物时复用，不重复打包", "readiness": check(c)}
         elif args.check:
             result = check(c)

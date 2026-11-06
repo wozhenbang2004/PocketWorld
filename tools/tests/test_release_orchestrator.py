@@ -44,6 +44,7 @@ class PublisherFixture:
     def __init__(self, config, bundle, *, fault=None, lost_reply=False, activate_applied=True):
         self.origin = config["origin"]
         self.manifest_path = config["manifest_path"]
+        self.pin = config["public_pin_sha256"]
         self.token = SYNTHETIC_TOKEN
         self.raw = (bundle / "release.json").read_bytes()
         self.release_id = sha(self.raw)
@@ -78,7 +79,9 @@ class PublisherFixture:
             return {"active": self.active}
         if path == "/__publisher/status":
             return {"activeReleaseId": self.release_id if self.active else "older-release",
-                    "current": {"manifestSha256": self.release_id if self.active else BASE_SHA}}
+                    "current": {"manifestSha256": self.release_id if self.active else BASE_SHA},
+                    "pinSpkiSha256": self.pin, "partBytes": RELEASE.PART_BYTES,
+                    "digestStreamAvailable": True}
         raise AssertionError("Unexpected fixture operation: " + method + " " + path)
 
     def request(self, path, method="GET", data=None, auth=False, headers=None):
@@ -222,20 +225,14 @@ class ReleaseOrchestratorTest(unittest.TestCase):
             self.assertEqual(301, RELEASE.next_version(self.runner(), 300))
         self.assertEqual({artifact, built}, {call.args[1] for call in inspect.call_args_list})
 
-    def test_blocked_or_incomplete_core_acceptance_stops_before_network_or_build(self):
+    def test_activation_acceptance_rejects_incomplete_or_changed_production_inputs(self):
         for overall, agent in (("blocked", "failed"), ("passed", "pending")):
             with self.subTest(overall=overall, agent=agent):
                 cases = {case: {"status": "passed"} for case in RELEASE.CORE_CASES}
                 cases["agent_execution"] = {"status": agent}
                 RELEASE.write_json(self.c["core_acceptance_file"], {"releaseAcceptance": {"status": overall, "sourceCommit": HEAD, "cases": cases}})
-                with mock.patch.object(RELEASE, "runtime_paths", return_value=[]), \
-                        mock.patch.object(RELEASE, "sync_source", return_value=HEAD), \
-                        mock.patch.object(RELEASE, "make_bundle") as build, \
-                        mock.patch.object(RELEASE, "Http") as http:
-                    with self.assertRaises(RELEASE.ReleaseError):
-                        RELEASE.run_release(self.c)
-                build.assert_not_called()
-                http.assert_not_called()
+                with self.assertRaises(RELEASE.ReleaseError):
+                    RELEASE.core_acceptance(self.runner(), HEAD)
 
         # This directory is registered as a production source set in app/build.gradle.
         # An accepted ancestor must not authorize a changed pendingAdb implementation.
@@ -253,6 +250,82 @@ class ReleaseOrchestratorTest(unittest.TestCase):
             "cases": {case: {"status": "passed"} for case in RELEASE.CORE_CASES}}})
         with self.assertRaises(RELEASE.ReleaseError):
             RELEASE.core_acceptance(self.runner(), current)
+
+    def test_unaccepted_candidate_stages_once_then_activates_same_bundle_after_acceptance(self):
+        bundle = self.bundle()
+        original_manifest = (bundle / "release.json").read_bytes()
+        original_artifacts = {row["file"]: row["sha256"]
+                              for row in RELEASE.read_json(bundle / "release-plan.json")["artifactUploads"]}
+        http = PublisherFixture(self.c, bundle)
+        previous = Path(self.c["work_root"]) / "last-run.json"
+        accepted = False
+
+        def acceptance(_runner, head):
+            self.assertEqual(HEAD, head)
+            if not accepted:
+                raise RELEASE.ReleaseError("Synthetic core batch still awaiting acceptance")
+            return {"status": "passed", "sourceCommit": head}
+
+        def verify(_runner, name, *args):
+            self.assertEqual("verify-envelope", name)
+            self.assertNotIn(SYNTHETIC_TOKEN, str(args))
+            RELEASE.write_json(args[args.index("--output") + 1], {"versionCode": 255})
+
+        with mock.patch.object(RELEASE, "runtime_paths", return_value=[]), \
+                mock.patch.object(RELEASE, "sync_source", return_value=HEAD), \
+                mock.patch.object(RELEASE, "source_state", return_value=HEAD), \
+                mock.patch.object(RELEASE, "core_acceptance", side_effect=acceptance), \
+                mock.patch.object(RELEASE, "baseline", return_value=({"versionCode": 253}, self.root / "base.apk", BASE_SHA)), \
+                mock.patch.object(RELEASE, "Http", return_value=http), \
+                mock.patch.object(RELEASE, "read_token", return_value=SYNTHETIC_TOKEN), \
+                mock.patch.object(RELEASE.Runner, "tool", autospec=True, side_effect=verify), \
+                mock.patch.object(RELEASE, "make_bundle", return_value=bundle) as build, \
+                mock.patch.object(RELEASE, "next_version", return_value=255) as version:
+            staged = RELEASE.run_release(self.c)
+            self.assertEqual("staged_awaiting_acceptance", staged["status"])
+            self.assertIs(False, staged["activated"])
+            self.assertFalse(http.active)
+            self.assertFalse(any(path.endswith("/activate") for _, path in http.events))
+            saved = RELEASE.read_json(previous)
+            self.assertEqual("uploaded_waiting_acceptance", saved["stage"])
+            self.assertEqual(BASE_SHA, saved["baselineManifestSha256"])
+            self.assertEqual(sha(original_manifest), saved["manifestSha256"])
+            for path in http.artifacts:
+                self.assertIn(("GET", path), http.events)
+                self.assertIn(("RANGE", path), http.events)
+            self.assertEqual(len(http.artifacts), sum(method == "PUT" for method, _ in http.events))
+            first_events = list(http.events)
+
+            waiting = RELEASE.run_release(self.c)
+            self.assertEqual("staged_awaiting_acceptance", waiting["status"])
+            self.assertIs(False, waiting["activated"])
+            self.assertTrue(waiting["reused"])
+            # Baseline/status reads are permitted; none of the candidate upload or
+            # public artifact operations should repeat while acceptance is pending.
+            repeated_events = http.events[len(first_events):]
+            self.assertTrue(all(method == "GET" and path == "/__publisher/status"
+                                for method, path in repeated_events))
+            self.assertEqual(1, build.call_count)
+            self.assertEqual(1, version.call_count)
+            self.assertEqual("uploaded_waiting_acceptance", RELEASE.read_json(previous)["stage"])
+
+            accepted = True
+            before_activation = len(http.events)
+            published = RELEASE.run_release(self.c)
+            self.assertEqual("published", published["status"])
+            self.assertIs(True, published["activated"])
+            self.assertTrue(http.active)
+            self.assertEqual(1, build.call_count)
+            self.assertEqual(1, version.call_count)
+            final_events = http.events[before_activation:]
+            self.assertFalse(any(method == "PUT" or path.endswith("/complete")
+                                 for method, path in final_events))
+            self.assertEqual(1, sum(path.endswith("/activate") for _, path in http.events))
+            self.assertEqual("published", RELEASE.read_json(previous)["stage"])
+
+        self.assertEqual(original_manifest, (bundle / "release.json").read_bytes())
+        for relative, expected in original_artifacts.items():
+            self.assertEqual(expected, RELEASE.digest(bundle / relative))
 
     def test_junit_zero_or_skipped_bodies_cannot_be_reported_as_passed(self):
         report = self.root / "host"

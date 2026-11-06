@@ -13,7 +13,7 @@ It never resets, cleans, stashes, force-pushes or starts GitHub Actions. A sourc
 update to the orchestrator restarts it once before any build. All bulk output,
 dependency caches and temporary files use the configured non-system volumes.
 
-After the core batch is accepted, the run verifies the signed online baseline,
+The run verifies the signed online baseline,
 chooses a version above the real published/local APK versions, runs local checks,
 builds the current Web assets, and invokes one local APK build with explicit
 version properties. It checks the fixed Android signer and complete APK contents,
@@ -44,14 +44,20 @@ Read-only previews:
 ```
 
 `-PrepareOnly` is an explicit local build-and-bundle operation which does not
-upload. The normal release requires the existing
+upload. Normal execution can build, verify and upload candidate artifacts before
+end-to-end acceptance is complete. Formal update activation requires the existing
 `qa/functional-results.json` record's `releaseAcceptance.status` and its five
 core cases (`account_model`, `conversation`, `native_files`, `agent_execution`,
 `owner_controls`) to be `passed`. The tested commit must be an ancestor and its
 application, Web, runtime/dependency and build inputs must still match. Scripts
 and documentation alone can change without changing those tested App inputs.
 The orchestrator never marks a missing, failed or partial core case passed.
-The current unfinished 254 Agent acceptance therefore blocks publication.
+If that record is missing, stale or incomplete, successful preparation returns
+`staged_awaiting_acceptance`, with artifact URLs and `activated: false`. It does
+not advertise the candidate on the homepage or replace the App update manifest.
+Running again with unchanged source preserves that candidate without rebuilding
+or reuploading it. Once the real acceptance record passes, a subsequent run uses
+the same signed bundle for activation. The script never marks acceptance passed.
 
 This entry automates publishing an accepted batch. Writing or checking the
 script does not start a build or publish the local candidate.
