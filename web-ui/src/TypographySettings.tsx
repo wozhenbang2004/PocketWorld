@@ -78,7 +78,7 @@ export function TypographySettings({ state, supported, run }: Props) {
 
   return <section className="pw-typography-settings" aria-label="字体设置">
     <div className="pw-typography-heading"><h3>字体</h3><p className="pw-field-hint">选择后预览，保存后应用到软件界面。</p></div>
-    <div className="pw-typography-fields">
+    <div className="pw-typography-workbench"><div className="pw-typography-fields">
       <SelectField label="中文" options={options(CHINESE_FONTS)} value={draft.chinese} onChange={value => change('chinese', value)} isDisabled={locked || !canSave} />
       <SelectField label="英文与数字" options={options(LATIN_FONTS)} value={draft.latin} onChange={value => change('latin', value)} isDisabled={locked || !canSave} />
       <SelectField label="代码与终端" options={options(CODE_FONTS)} value={draft.code} onChange={value => change('code', value)} isDisabled={locked || !canSave} />
@@ -92,7 +92,7 @@ export function TypographySettings({ state, supported, run }: Props) {
         <code className="pw-typography-sample-code" style={{ fontFamily: fonts.code, fontWeight: 400 }}>const goal = "你好";  // 0O 1Il</code>
       </div>
     </div>
-    <div className="pw-form-actions pw-typography-actions">
+    </div><div className="pw-form-actions pw-typography-actions">
       <Button disabled={locked || !canSave || !needsSave || preview !== 'ready'} onClick={() => { void save(); }}>{pending ? '正在保存…' : visibleError ? '重试保存' : '保存字体'}</Button>
       <Button variant="ghost" disabled={locked || !canSave || draftKey === typographyKey(DEFAULT_TYPOGRAPHY)} onClick={() => { setDraft({ ...DEFAULT_TYPOGRAPHY }); setSaved(null); setError(''); }}>恢复默认组合</Button>
     </div>

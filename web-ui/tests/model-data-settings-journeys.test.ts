@@ -15,7 +15,7 @@ function fixture(name: string, initial: Data) {
   const journeySource = ts.createSourceFile('DataSettingsJourney.tsx', read('../src/DataSettingsJourney.tsx'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const journey = journeySource.statements.filter(node => !ts.isImportDeclaration(node)).map(node => node.getText(journeySource).replace(/^export /, '')).join('\n');
   const compiled = ts.transpileModule(journey + '\n' + body, { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText;
-  const slots: any[] = [], effects: (() => void)[] = [], calls: Data[] = [], opened: Data[] = [], focused: string[] = [];
+  const slots: any[] = [], effects: (() => void)[] = [], calls: Data[] = [], opened: Data[] = [], focused: string[] = [], expanded = new Set<string>();
   let index = 0, dirty = false, tree: any, back: (() => boolean) | null = null;
   const scroller = { scrollTop: 0 };
   const nodes = (node: any): any[] => node && typeof node === 'object' ? [node, ...(node.children || []).flatMap(nodes)] : [];
@@ -35,7 +35,7 @@ function fixture(name: string, initial: Data) {
     document: { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} }, window: { addEventListener() {}, removeEventListener() {} } };
   const Component = new Function(...Object.keys(dependencies), compiled + '\nreturn ' + name + ';')(...Object.values(dependencies));
   const props = { data: {}, state: {}, supported: () => true, busy: false, run: async (action: string, args: Data = {}) => { calls.push({ action, args }); return {}; }, open: (value: Data) => opened.push(value), navigate: (page: string) => opened.push({ page }), registerTransientBack: (handler: any) => { back = handler; }, ...initial };
-  const content = (node: any, visible = false): string => node && typeof node === 'object' ? visible && (node.props.hidden || node.type === 'SettingsDialog' && !node.props.isOpen || node.type === 'AccordionItem') ? '' : (node.children || []).map((child: any) => content(child, visible)).join('') : String(node ?? '');
+  const content = (node: any, visible = false): string => node && typeof node === 'object' ? visible && (node.props.hidden || node.type === 'SettingsDialog' && !node.props.isOpen || node.type === 'AccordionItem' && !expanded.has(node.props.id)) ? '' : (node.children || []).map((child: any) => content(child, visible)).join('') : String(node ?? '');
   const render = () => { do { dirty = false; index = 0; tree = Component(props); effects.splice(0).forEach(effect => effect()); } while (dirty); };
   const find = (predicate: (node: any) => boolean) => { const node = nodes(tree).find(predicate); assert.ok(node, 'expected production element'); return node; };
   render();
@@ -44,6 +44,7 @@ function fixture(name: string, initial: Data) {
     entry(id: string) { find(node => node.props['data-operation-entry'] === id).props.onClick(); render(); },
     back() { const result = back?.(); render(); return result; },
     change(next: Data) { Object.assign(props, next); render(); },
+    expand(id: string) { find(node => node.type === 'AccordionItem' && node.props.id === id); expanded.add(id); render(); },
     click(label: string) { const node = find(node => ['Button', 'PressButton'].includes(node.type) && (node.props['aria-label'] === label || content(node) === label)); assert.ok(!node.props.disabled); node.props.onClick(); render(); },
     async action(action: string) { const node = find(node => node.type === 'CapabilityAction' && node.props.action === action); assert.ok(!node.props.disabled); await node.props.run(action, node.props.args); render(); },
   };
@@ -89,7 +90,9 @@ test('create retains all available default sections, import remains preview-only
   assert.deepEqual(f.calls[1], { action: 'archives.chooseImport', args: { encrypted: true } }); assert.equal(f.calls.some(call => call.action.includes('confirm')), false);
   f.change({ data: { ...archiveData(), selection: { selectionId: 'native-selection', archiveSha256: 'a'.repeat(64), archiveBytes: 1024 }, preview: { review: { settings: { counts: { apiConnections: 1 } } } } } });
   assert.equal(f.view, 'snapshot'); assert.equal(f.find(node => node.type === 'Tabs').props.selectedKey, 'restore');
-  assert.ok(f.visibleText.includes('a'.repeat(64))); assert.ok(f.visibleText.includes('native-selection'));
+  assert.ok(!f.visibleText.includes('a'.repeat(64)), 'full checksum is secondary to the fixed backup task');
+  f.expand('backup-identity');
+  assert.ok(f.visibleText.includes('a'.repeat(64))); assert.ok(f.visibleText.includes('native-selection'), 'the exact original identity remains available in its named disclosure');
   await f.action('archives.reviewPhase'); assert.deepEqual(f.calls.at(-1), { action: 'archives.reviewPhase', args: { selectionId: 'native-selection', sha256: 'a'.repeat(64), phase: 'settings' } });
 });
 

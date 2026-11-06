@@ -182,11 +182,11 @@ export function WorkProfilesWorkspace({ state, supported, run, registerTransient
   const sourceNames: Data = { skills: '指令与技能', plugins: '插件', extensions: '扩展', teams: '团队模板' };
   const unavailableSources = Object.keys(sourceNames).filter(key => sections[key]?.available !== true).map(key => sourceNames[key]);
   return <section className="pw-settings-section pw-profiles-workspace">
-    <header className="pw-profile-heading"><div><h2>工作配置</h2><p>保存常用的模型、资料与工具组合。</p></div><div className="pw-form-actions">
+    <header className="pw-profile-heading"><div><h2>已保存的配置</h2><p>选一份继续编辑，或建立下一次任务的常用组合。</p></div><div className="pw-form-actions">
       <Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="刷新原记录" disabled={busy} onClick={refresh} />
       <PressButton compact disabled={busy || !!unknown || !!editor && dirty} onClick={() => open()}>新建配置</PressButton>
     </div></header>
-    <p className="pw-profile-policy">原技能、插件与设备权限仍由各自来源管理；保存配置不会启动任务。</p>
+    <p className="pw-profile-policy">保存配置不会启动任务，原来源与权限保留。</p>
     {editor && <div className="pw-profile-draft" aria-label="保留的工作配置草稿"><FileSliders size={20} aria-hidden /><div><strong>{draft?.name || '未命名配置'}</strong><p>{dirty ? '有未保存修改' : '编辑内容已保留'} · {editor.original ? `原修订 ${editor.original.revision}` : '新建草稿'}{draft?.restoredPendingReview ? ' · 恢复后待重新绑定' : ''}</p></div><Button variant="ghost" trailingIcon={ChevronRight} disabled={busy} onClick={resumeEditor}>继续编辑草稿</Button></div>}
     {startedTask && <Button variant="secondary" disabled={busy || !supported('tasks.open')} onClick={() => { void run('tasks.open', { id: startedTask }); }}>查看这次原任务与回执</Button>}{busy && mutation.current?.command === 'start' && <Button variant="secondary" onClick={() => { const operationId = mutation.current?.operationId; if (operationId) void run('profiles.stop', { operationId }).then(() => setNotice('已请求停止这次原任务，等待原结果。')).catch(failure => setError(String(failure))); }}>请求停止这次原任务</Button>}
     {unknownControls}{error && <p className="pw-profile-feedback" role="alert">{error}</p>}{notice && <p className="pw-profile-feedback" role="status">{notice}</p>}
@@ -197,10 +197,10 @@ export function WorkProfilesWorkspace({ state, supported, run, registerTransient
     {editor && !editorOpen && dirty && <p className="pw-profile-caption">先继续上方草稿，或在编辑器中明确舍弃，再新建与切换。</p>}
     <SettingsDialog isOpen={editorOpen && !!editor && !review && !inspection} title={editor?.original ? `编辑 · ${editor.original.name}` : '新建工作配置'} onClose={pauseEditor}>
       {editor && draft && <div className="pw-profile-editor">
-        <div className="pw-profile-source-bar" aria-label="当前来源窗口"><div><strong>{sourcesReady ? '本次来源窗口已读取' : '来源窗口待读取'}</strong><p>{editor.useCurrentProject ? '当前已选项目范围' : '默认资料范围'} · {editor.original ? `原修订 ${editor.original.revision}${editor.viewHandle ? ' 已核对' : ' 待重新核对'}` : '新建配置'}</p></div><Button variant="ghost" leadingIcon={RefreshCw} disabled={locked} onClick={() => loadChoices(editor.useCurrentProject)}>读取当前可用来源</Button></div>
+        <div className="pw-profile-identity"><TextField label="配置名称" value={draft.name} onChange={name => change({ ...draft, name })} isDisabled={locked} /></div>
+        <div className="pw-profile-source-bar" aria-label="当前来源窗口"><div><strong>{sourcesReady ? '本次来源窗口已读取' : '来源窗口待读取'}</strong><p>{editor.useCurrentProject ? '当前已选项目范围' : '默认资料范围'} · {editor.original ? `原修订 ${editor.original.revision}${editor.viewHandle ? ' 已核对' : ' 待重新核对'}` : '新建配置'}</p></div><Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="读取当前可用来源" title="读取当前可用来源" disabled={locked} onClick={() => loadChoices(editor.useCurrentProject)}/></div>
         <div className="pw-profile-editor-scroll">
           {unknownControls}
-          <TextField label="配置名称" value={draft.name} onChange={name => change({ ...draft, name })} isDisabled={locked} />
           <div className="pw-profile-scope"><CheckboxField isSelected={editor.useCurrentProject} isDisabled={locked} onChange={useCurrentProject => { if (!editorCurrent()) return; release('choicesHandle', choices.choicesHandle); closeInspection(); closeReview(); setChoices({}); setEditor({ ...editor, useCurrentProject }); setRestoreAck(false); setMemberModel(''); }}>使用当前已选项目的资料范围</CheckboxField>
             {!sourcesReady ? <p className="pw-profile-caption">来源窗口尚未读取或已关闭。原引用和编辑内容保留；重新选择来源前请先读取。</p> : <p className="pw-profile-caption" role="status">{unavailableSources.length ? `尚未成功读取：${unavailableSources.join('、')}。已保存引用仍保留。` : '指令与技能、插件、扩展和团队模板均已读取。仍按各自原权限选择。'}</p>}
           </div>

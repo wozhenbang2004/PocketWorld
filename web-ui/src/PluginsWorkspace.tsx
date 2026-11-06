@@ -4,6 +4,7 @@ import { Tab, TabList, TabPanel, Tabs } from './shell-library';
 import { FunctionalPacksWorkspace } from './FunctionalPacksWorkspace';
 import { acceptPluginReview, acceptPluginView, catalogReceiptResult, catalogReview, catalogUnknown, confirmedPluginResult, confirmedSourceConfiguration, jsPluginIdentity, pluginIdentity, pluginRows, samePluginIdentity, sourceConfiguration, sourceDraft, type PluginData as Data } from './plugins-workspace';
 import './plugins-workspace.css';
+import './ecosystem-depth.css';
 
 type Run = (action: string, args?: Data) => Promise<any>;
 type Props = { mode: 'plugins' | 'pluginCatalog'; state: Data; run: Run; supported: (action: string) => boolean; registerTransientBack: (handler: (() => boolean) | null) => void; onNavigate?: (domain: 'plugins' | 'pluginCatalog' | 'mcp' | 'skills') => void };
@@ -13,7 +14,7 @@ const strings = (value: unknown): string[] => Array.isArray(value) ? value.filte
 const operationTitle = (review: Data) => ({ install: '核对安装差异', restore: '核对历史版本恢复', enabled: review.data.nextEnabled ? '启用这个安装' : '停用这个安装', grant: review.data.nextGranted ? '授予工具权限' : '收回工具权限', remove: '移除这个安装', declaration_install: '核对目录安装差异', js_install: review.data.restoring ? '阅读历史源码' : '阅读待安装源码', js_permission: '源码与运行权限' } as Record<string, string>)[review.kind] || '核对插件操作';
 
 function Facts({ rows }: { rows: [string, unknown][] }) {
-  return <dl className="pw-facts">{rows.filter(([, value]) => value !== undefined && value !== null && value !== '').map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{String(value)}</dd></div>)}</dl>;
+  return <dl className="pw-facts pw-eco-facts">{rows.filter(([, value]) => value !== undefined && value !== null && value !== '').map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{String(value)}</dd></div>)}</dl>;
 }
 function Definition({ title, value }: { title: string; value: unknown }) {
   return <Accordion><AccordionItem title={title}><pre className="pw-plugin-definition">{json(value)}</pre></AccordionItem></Accordion>;
@@ -37,9 +38,10 @@ function DeclarationReview({ data }: { data: Data }) {
 function SourceReview({ data }: { data: Data }) {
   return <div className="pw-plugin-review-copy">
     <h3>{data.name || data.id}</h3>
-    <Facts rows={[["扩展", data.id], ["本次版本", data.version], ["当前版本", data.current?.version], ["源码摘要", data.sourceSha256], ["包摘要", data.packageSha256], ["安装身份", data.installationId], ["当前批准", data.installationId ? (data.approved ? '已批准' : '未批准') : undefined], ["当前启用", data.installationId ? (data.enabled ? '已启用' : '已停用') : undefined]]} />
+    <Facts rows={[["扩展", data.id], ["本次版本", data.version], ["当前版本", data.current?.version], ["当前批准", data.installationId ? (data.approved ? '已批准' : '未批准') : undefined], ["当前启用", data.installationId ? (data.enabled ? '已启用' : '已停用') : undefined]]} />
     <p className="pw-muted">批准后，这份准确源码可在选用它的任务中执行初始化、工具和钩子。运行环境不提供 Node、网络、文件、Android 或直接宿主 API。</p>
     {data.restoring && <p className="pw-field-hint">恢复使用本机保留并重新核验的原包。新安装保持未批准、停用，旧任务许可不会恢复。</p>}
+    <Definition title="源码摘要与安装身份" value={{sourceSha256:data.sourceSha256,packageSha256:data.packageSha256,installationId:data.installationId}} />
     <h4>完整源码</h4>
     <pre className="pw-plugin-source" tabIndex={0} aria-label={`${data.name || data.id} 的完整源码`}>{data.source}</pre>
   </div>;
@@ -198,53 +200,51 @@ export function PluginsWorkspace({ mode, state, run, supported, registerTransien
     });
   };
 
-  const installedContent = <>
+  const installedContent = <div className="pw-eco-record-list" aria-label="已安装声明插件">
     {!installed.length && <p className="pw-secondary-empty">尚未安装声明插件。可添加声明，或从「我的插件目录」选择版本。</p>}
-    {installed.map(row => <article className="pw-source-record" key={row.installationId}>
+    {installed.map(row => <article className="pw-source-record pw-eco-record" key={row.installationId}>
       <header><h3>{row.manifest?.name || row.id}</h3><span>{row.enabled ? '已启用' : '已停用'} · {row.manifest?.version}</span></header>
-      <p>{row.id} · {pluginRows(row.manifest?.tools).length} 个工具，{strings(row.grants).length} 项授权</p>
+      <p className="pw-eco-record-meta">{pluginRows(row.manifest?.tools).length} 个工具 · {strings(row.grants).length} 项授权</p>
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { setSelectedId(selectedId === row.id ? '' : row.id); setHistory(null); }}>{selectedId === row.id ? '收起工具' : '管理工具'}</Button><Button variant="ghost" disabled={locked} onClick={() => changePlugin(row, 'enabled', { enabled: !row.enabled })}>{row.enabled ? '停用' : '启用'}</Button><Button variant="ghost" disabled={busy} onClick={() => readHistory(row)}>版本历史</Button></div>
-      {selectedId === row.id && <div className="pw-selected-object">
-        <Facts rows={[["安装身份", row.installationId], ["状态版本", row.stateRevision], ["工具凭据", row.hasToken ? '已配置' : '未配置'], ["MCP 状态", row.mcpStatus]]} />
-        {pluginRows(row.manifest?.tools).map(tool => <div className="pw-source-record" key={tool.name}>
+      {selectedId === row.id && <div className="pw-selected-object pw-eco-plugin-detail"><div className="pw-eco-install-identity"><h4>当前安装</h4><Facts rows={[["安装身份", row.installationId], ["状态版本", row.stateRevision], ["工具凭据", row.hasToken ? '已配置' : '未配置'], ["MCP 状态", row.mcpStatus]]} />
+        <Definition title="安装声明与原始定义" value={row.manifestText || row.manifest} /></div><div className="pw-eco-tools"><div className="pw-eco-section-heading"><h4>工具权限</h4><p>每项工具单独核对；启用安装不会授予其他工具。</p></div>{pluginRows(row.manifest?.tools).map(tool => <div className="pw-source-record pw-eco-tool" key={tool.name}>
           <header><h3>{tool.name}</h3><span>{tool.effect === 'read' ? '读取' : '可能修改'}</span></header><p>{tool.description}</p>
-          <Facts rows={[["类型", tool.kind], ["服务地址", tool.endpoint]]} />
+          <Definition title="工具类型与服务地址" value={{kind:tool.kind,endpoint:tool.endpoint}} />
           <div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={() => changePlugin(row, 'grant', { tool: tool.name, granted: !strings(row.grants).includes(`tool:${tool.name}`) })}>{strings(row.grants).includes(`tool:${tool.name}`) ? '收回这个工具的权限' : '核对并授予权限'}</Button></div>
         </div>)}
-        <Definition title="查看这个安装的完整声明" value={row.manifestText || row.manifest} />
-        <div className="pw-form-actions"><Button variant="ghost" disabled={locked} onClick={() => changePlugin(row, 'remove', {})}>移除这个安装</Button></div>
+        </div><div className="pw-form-actions pw-eco-danger-actions"><Button variant="ghost" disabled={locked} onClick={() => changePlugin(row, 'remove', {})}>移除这个安装</Button></div>
       </div>}
     </article>)}
-    {history && selected && history.id === selected.id && <section className="pw-selected-object"><h3>{selected.manifest?.name || selected.id} · 版本历史</h3><p className="pw-field-hint">保留最近三次被替换的声明。恢复创建新安装，保持停用，不带回旧凭据和授权。</p>{!pluginRows(history.versions).length && <p className="pw-secondary-empty">没有保留的历史版本。</p>}{pluginRows(history.versions).map(row => <article className="pw-source-record" key={row.installationId}><header><h3>{row.manifest?.version}</h3><span>历史安装</span></header><p>{row.installationId}</p><div className="pw-form-actions"><Button variant="secondary" disabled={locked || history.currentInstallationId !== selected.installationId || history.currentStateRevision !== selected.stateRevision} onClick={() => restorePlugin(selected, row)}>核对恢复差异</Button></div></article>)}</section>}
-  </>;
+    {history && selected && history.id === selected.id && <section className="pw-selected-object"><h3>{selected.manifest?.name || selected.id} · 版本历史</h3><p className="pw-field-hint">保留最近三次被替换的声明。恢复创建新安装，保持停用，不带回旧凭据和授权。</p>{!pluginRows(history.versions).length && <p className="pw-secondary-empty">没有保留的历史版本。</p>}{pluginRows(history.versions).map(row => <article className="pw-source-record pw-eco-record" key={row.installationId}><header><h3>{row.manifest?.version}</h3><span>历史安装</span></header><p>{row.installationId}</p><div className="pw-form-actions"><Button variant="secondary" disabled={locked || history.currentInstallationId !== selected.installationId || history.currentStateRevision !== selected.stateRevision} onClick={() => restorePlugin(selected, row)}>核对恢复差异</Button></div></article>)}</section>}
+  </div>;
   const jsContent = <>
-    <div className="pw-plugin-runtime"><div><h3>JS 运行环境</h3><p className="pw-field-hint">{runtime.message || '先核对本机 WebView 与隔离能力。准备环境不会执行插件源码。'}</p></div><div className="pw-form-actions"><Button variant="secondary" disabled={busy || runtime.status === 'preparing'} onClick={() => { void invoke('pluginCatalog.prepareRuntime', {}, value => setRuntime(value)); }}>{runtime.prepared ? '重新核对环境' : runtime.status === 'preparing' ? '正在准备' : '准备运行环境'}</Button>{runtime.status === 'preparing' && <Button variant="ghost" disabled={busy} onClick={() => { void invoke('pluginCatalog.runtime', {}, value => setRuntime(value)); }}>查询准备结果</Button>}</div></div>
+    <div className="pw-plugin-runtime pw-eco-status-strip"><div><h3>JS 运行环境</h3><p className="pw-field-hint">{runtime.message || '先核对本机 WebView 与隔离能力。准备环境不会执行插件源码。'}</p></div><div className="pw-form-actions"><Button variant="secondary" disabled={busy || runtime.status === 'preparing'} onClick={() => { void invoke('pluginCatalog.prepareRuntime', {}, value => setRuntime(value)); }}>{runtime.prepared ? '重新核对环境' : runtime.status === 'preparing' ? '正在准备' : '准备运行环境'}</Button>{runtime.status === 'preparing' && <Button variant="ghost" disabled={busy} onClick={() => { void invoke('pluginCatalog.runtime', {}, value => setRuntime(value)); }}>查询准备结果</Button>}</div></div>
     {!extensions.length && <p className="pw-secondary-empty">尚未安装 JS 扩展。先在目录中阅读完整源码，再选择安装。</p>}
-    {extensions.map(row => <article className="pw-source-record" key={row.installationId}><header><h3>{row.name || row.id}</h3><span>{row.enabled ? '已启用' : row.approved ? '已批准 · 未启用' : '未批准'} · {row.version}</span></header><p>{row.id}</p><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={() => readJs(row)}>阅读源码与权限</Button><Button variant="ghost" disabled={busy || unresolved} onClick={() => readJs(row, true)}>源码历史</Button></div>
+    {extensions.map(row => <article className="pw-source-record pw-eco-record" key={row.installationId}><header><h3>{row.name || row.id}</h3><span>{row.enabled ? '已启用' : row.approved ? '已批准 · 未启用' : '未批准'} · {row.version}</span></header><p>{row.id}</p><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={() => readJs(row)}>阅读源码与权限</Button><Button variant="ghost" disabled={busy || unresolved} onClick={() => readJs(row, true)}>源码历史</Button></div>
       {jsHistory && jsHistory.id === row.id && <div className="pw-selected-object"><h4>保留的源码版本</h4><p className="pw-field-hint">只恢复可核验的原包，不恢复旧批准、启用状态或任务许可。</p>{!pluginRows(jsHistory.versions).length && <p className="pw-secondary-empty">没有保留的源码版本。</p>}{pluginRows(jsHistory.versions).map(version => <article className="pw-source-record" key={version.installationId}><header><h3>{version.version}</h3><span>{version.restorable ? '原包可核验' : '无法恢复'}</span></header><p>{version.message}</p><Facts rows={[["原安装", version.installationId], ["源码摘要", version.sourceSha256]]} /><div className="pw-form-actions"><Button variant="secondary" disabled={locked || version.restorable !== true} onClick={() => restoreJs(row, version)}>阅读并核对恢复</Button></div></article>)}</div>}
     </article>)}
   </>;
   const catalogContent = <>
-    <div className="pw-form-grid"><SelectField label="目录来源" options={sources.map(row => ({ id: row.id, label: row.label || row.id, description: row.enabled ? row.catalogUrl : '已停用' }))} value={sourceId} onChange={value => { discardReview(); setSourceId(value); }} isDisabled={busy} /><SelectField label="包类型" value={catalogKind} options={[{ id: 'declaration', label: '声明插件', description: '核对实际工具定义与版本差异' }, { id: 'js', label: 'JS 扩展', description: '下载并阅读完整源码' }]} onChange={value => { discardReview(); setCatalogKind(value); }} isDisabled={busy} /></div>
+    <section className="pw-eco-catalog-source" aria-label="当前目录来源"><div className="pw-form-grid"><SelectField label="目录来源" options={sources.map(row => ({ id: row.id, label: row.label || row.id, description: row.enabled ? row.catalogUrl : '已停用' }))} value={sourceId} onChange={value => { discardReview(); setSourceId(value); }} isDisabled={busy} /><SelectField label="包类型" value={catalogKind} options={[{ id: 'declaration', label: '声明插件', description: '核对实际工具定义与版本差异' }, { id: 'js', label: 'JS 扩展', description: '下载并阅读完整源码' }]} onChange={value => { discardReview(); setCatalogKind(value); }} isDisabled={busy} /></div>
     {source && <p className="pw-field-hint pw-plugin-url">{source.catalogUrl}{source.pinnedCatalogSha256 ? ' · 已固定目录摘要' : ''}</p>}
     {!sources.length && <p className="pw-secondary-empty">添加你选择的目录来源，然后读取其中的明确版本。</p>}
     <div className="pw-form-actions"><Button disabled={locked || !source?.enabled} onClick={() => { void invoke('pluginCatalog.refresh', { kind: catalogKind, sourceId }, value => { receive(value); }); }}>读取可选版本</Button><Button variant="secondary" disabled={locked || !snapshot?.config?.revision} onClick={() => openSource()}>添加来源</Button>{source && <Button variant="ghost" disabled={locked} onClick={() => openSource(source)}>编辑来源</Button>}<Button variant="ghost" disabled={busy} onClick={() => { discardReview(); void invoke('pluginCatalog.read', {}, value => { receive(value); }); }}>重读来源配置</Button></div>
-    {candidates.length > 0 && <p className="pw-field-hint">目录说明来自所选来源。下载后会核对准确包内容；版本由你选择。</p>}
-    {candidates.map(entry => <article className="pw-source-record" key={`${entry.id}:${entry.version}`}><header><h3>{entry.id}</h3><span>{entry.version}</span></header>{entry.currentVersion && <p>目录读取时已安装：{entry.currentVersion}</p>}{catalogKind === 'declaration' && <p>{pluginRows(entry.capabilities).map(tool => `${tool.name} · ${tool.effect === 'read' ? '读取' : '可能修改'}`).join('；')}</p>}{catalogKind === 'declaration' && entry.compatibilityResult?.compatible !== true && <p>此版本与当前设备或支持格式不兼容。</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={locked || catalogKind === 'declaration' && entry.compatibilityResult?.compatible !== true} onClick={() => { void invoke('pluginCatalog.prepare', { kind: catalogKind, sourceId, id: entry.id, version: entry.version }, receiveCatalogReview); }}>{catalogKind === 'js' ? '下载并阅读源码' : '查看安装差异'}</Button></div></article>)}
-    {snapshot?.status === 'ready' && snapshot.catalog?.source?.id === sourceId && !candidates.length && <p className="pw-secondary-empty">本次目录没有匹配的可选版本。可切换包类型后重新读取。</p>}
+    </section><section className="pw-eco-record-list" aria-label="可选版本">{candidates.length > 0 && <p className="pw-field-hint">目录说明来自所选来源。下载后会核对准确包内容；版本由你选择。</p>}
+    {candidates.map(entry => <article className="pw-source-record pw-eco-record" key={`${entry.id}:${entry.version}`}><header><h3>{entry.id}</h3><span>{entry.version}</span></header>{entry.currentVersion && <p>目录读取时已安装：{entry.currentVersion}</p>}{catalogKind === 'declaration' && <p>{pluginRows(entry.capabilities).map(tool => `${tool.name} · ${tool.effect === 'read' ? '读取' : '可能修改'}`).join('；')}</p>}{catalogKind === 'declaration' && entry.compatibilityResult?.compatible !== true && <p>此版本与当前设备或支持格式不兼容。</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={locked || catalogKind === 'declaration' && entry.compatibilityResult?.compatible !== true} onClick={() => { void invoke('pluginCatalog.prepare', { kind: catalogKind, sourceId, id: entry.id, version: entry.version }, receiveCatalogReview); }}>{catalogKind === 'js' ? '下载并阅读源码' : '查看安装差异'}</Button></div></article>)}
+    {snapshot?.status === 'ready' && snapshot.catalog?.source?.id === sourceId && !candidates.length && <p className="pw-secondary-empty">本次目录没有匹配的可选版本。可切换包类型后重新读取。</p>}</section>
   </>;
 
-  return <div className="pw-plugins-workspace">
+  return <div className="pw-plugins-workspace pw-ecosystem-depth">
     {error && <p className="pw-field-error" role="alert">{error}</p>}{notice && <div className="pw-request-notice" role="status"><p>{notice}</p>{followup && <div className="pw-form-actions">{followup === 'js' ? <Button variant="secondary" disabled={busy} onClick={() => setTab('js')}>查看已安装源码</Button> : onNavigate && <Button variant="secondary" disabled={busy} onClick={() => onNavigate(followup)}>{followup === 'mcp' ? '打开 MCP 工具' : '前往插件管理'}</Button>}</div>}</div>}
     <section className="pw-settings-section">
-      <div className="pw-section-heading"><div><h2>{mode === 'plugins' ? '已安装插件' : '我的插件目录'}</h2><p>{mode === 'plugins' ? '启停、工具权限和版本，都对应这一份具体安装。' : '选择来源与版本，核对真实内容后再安装。'}</p></div></div>
+      <div className="pw-section-heading pw-eco-workspace-heading"><div><h2>{mode === 'plugins' ? '已安装插件' : '我的插件目录'}</h2><p>{mode === 'plugins' ? '启停、工具权限和版本，都对应这一份具体安装。' : '选择来源与版本，核对真实内容后再安装。'}</p></div></div>
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy || !snapshot} onClick={queryInstalled}>{needsQuery || unresolved ? '查询当前实际安装' : '刷新安装状态'}</Button>{mode === 'plugins' && <Button disabled={locked || !snapshot} onClick={() => { setEditor('manifest'); setError(''); }}>添加插件声明</Button>}{onNavigate && <Button variant="ghost" disabled={busy} onClick={() => onNavigate(mode === 'plugins' ? 'pluginCatalog' : 'plugins')}>{mode === 'plugins' ? '打开我的插件目录' : '前往插件管理'}</Button>}{!snapshot && <Button variant="ghost" disabled={busy || !foreground} onClick={open}>重新读取</Button>}</div>
       {busy && <p className="pw-field-hint" role="status">正在读取原生结果，请稍候…</p>}
       {needsQuery && !unresolved && <p className="pw-field-hint">上次操作已提交或审阅已失效。先读取当前安装，再继续新的操作。</p>}
       {snapshot && <Tabs selectedKey={tab} onSelectionChange={key => { if (!busy) { discardReview(); setTab(String(key)); } }}><TabList aria-label="插件工作区">{mode === 'plugins' ? <Tab id="declaration">声明插件 · {installed.length}</Tab> : <Tab id="catalog">选择版本</Tab>}<Tab id="js">JS 扩展 · {extensions.length}</Tab><Tab id="packs">完整功能包</Tab></TabList>{mode === 'plugins' ? <TabPanel id="declaration">{installedContent}</TabPanel> : <TabPanel id="catalog">{catalogContent}</TabPanel>}<TabPanel id="js">{jsContent}</TabPanel><TabPanel id="packs">{tab === 'packs' && <FunctionalPacksWorkspace state={state} run={run} supported={supported} registerTransientBack={handler => { functionalPackBack.current = handler; }} onNavigate={onNavigate} />}</TabPanel></Tabs>}
     </section>
     <SettingsDialog isOpen={!!review || !!editor} title={review ? operationTitle(review) : editor === 'source' ? editingSource ? '编辑目录来源' : '添加目录来源' : '添加插件声明'} onClose={() => { if (busy) return; if (review) discardReview(); else { setEditor(null); setToken(''); } }}>
-      <div className="pw-plugins-workspace pw-plugin-dialog-body">
+      <div className="pw-plugins-workspace pw-plugin-dialog-body pw-ecosystem-depth pw-eco-review-body">
         {error && <p className="pw-field-error" role="alert">{error}</p>}
         {review ? <>
           {['install', 'restore', 'declaration_install'].includes(review.kind) ? <DeclarationReview data={review.data} /> : review.catalog ? <SourceReview data={review.data} /> : <>
@@ -254,7 +254,7 @@ export function PluginsWorkspace({ mode, state, run, supported, registerTransien
           </>}
           <CheckboxField isSelected={acknowledged} onChange={setAcknowledged} isDisabled={busy}>{review.catalog && review.kind !== 'declaration_install' ? '我已阅读这份完整源码及运行范围' : '我已核对本次安装、工具与权限变化'}</CheckboxField>
           {!review.catalog && ['install', 'restore'].includes(review.kind) && <TextField label="本次工具凭据（可选）" type="password" autoComplete="off" value={token} onChange={setToken} maxLength={4096} isDisabled={busy} hint="只用于本次新安装；不会带回旧凭据。关闭审阅后清空。" />}
-          <div className="pw-form-actions">
+          <div className="pw-form-actions pw-eco-review-confirm">
             {!review.catalog && <Button disabled={busy || !acknowledged} onClick={confirmDeclaration}>{review.kind === 'remove' ? '确认移除这个安装' : ['install', 'restore'].includes(review.kind) ? '确认安装并保持停用' : '确认这项变更'}</Button>}
             {review.catalog && review.kind !== 'js_permission' && <Button disabled={busy || !acknowledged || unresolved} onClick={() => confirmCatalog('install')}>{review.kind === 'js_install' ? '安装并保持未批准' : review.data.packageReview?.requiresMcpRediscovery ? '继续到 MCP 重新发现' : '确认安装并保持停用'}</Button>}
             {review.catalog && review.kind === 'js_permission' && <><Button disabled={busy || unresolved || !review.data.approved && !acknowledged} onClick={() => confirmCatalog(review.data.approved ? 'revoke' : 'approve')}>{review.data.approved ? '撤销源码批准' : '批准任务中执行'}</Button><Button variant="secondary" disabled={busy || unresolved || !review.data.enabled && (!review.data.approved || !acknowledged)} onClick={() => confirmCatalog(review.data.enabled ? 'disable' : 'enable')}>{review.data.enabled ? '停用扩展' : '启用扩展'}</Button><Button variant="ghost" disabled={busy || unresolved} onClick={() => confirmCatalog('remove')}>卸载这个安装</Button></>}

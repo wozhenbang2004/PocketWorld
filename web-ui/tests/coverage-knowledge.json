@@ -1,0 +1,3567 @@
+{
+  "format": "pocketworld.depth-coverage.v1",
+  "area": "knowledge",
+  "baselineCommit": "379911a",
+  "baselineTreeEquivalentPublishedMain": "e86952a",
+  "scope": "Actual production React components with deterministic representative native fixtures. Before plugin loads exact baseline git source for all 9 domain TSX modules and relevant baseline CSS. A scene counts only after its specific heading/control/value gate passes; files and screenshots are not scene coverage units.",
+  "sources": [
+    {
+      "id": "boardui-settings",
+      "identity": "Retained official BoardUI MIT source captured 2026-11-01",
+      "source": "src/forms-library/upstream/components/application/settings/settings-modal.tsx.source",
+      "adopted": "src/forms-library/SettingsDialog.tsx",
+      "mechanism": "fixed title, separately scrolling content, controlled review; product-owned semantic form groups"
+    },
+    {
+      "id": "boardui-disclosure",
+      "identity": "Retained official BoardUI registry 2026-11-01",
+      "source": "src/forms-library/upstream/registry-20261101/components/base/accordion/accordion.tsx.source",
+      "adopted": "src/forms-library/boardui/components/base/accordion/accordion.tsx",
+      "mechanism": "named in-place progressive disclosure, real DisclosureGroup; important state remains outside"
+    },
+    {
+      "id": "openmuse-linkrow",
+      "identity": "OpenMuse MIT 61796eb2 existing approved adaptation",
+      "source": "src/ExperienceWorkspace.tsx::LearningObjectRow (upstream apps/mobile/src/ui.tsx:368)",
+      "adopted": "LearningObjectRow + existing BoardUI Button",
+      "mechanism": "whole-row title/detail/chevron; preserve original native selection and reading"
+    },
+    {
+      "id": "boardui-button",
+      "identity": "Existing approved BoardUI Button port",
+      "source": "src/forms-library/boardui/components/base/buttons/button.tsx",
+      "adopted": "existing Button/PressButton/SelectField/TextAreaField",
+      "mechanism": "reuse actual controls; local label flex rules correct composite rows without changing shared source"
+    },
+    {
+      "id": "vaul-drawer",
+      "identity": "Existing approved local Vaul 1.1.2 adaptation, package.json pinned",
+      "source": "src/shell-library/upstream/vaul/src/index.tsx",
+      "adopted": "src/shell-library/adapted/vaul/src/index.tsx via existing Drawer",
+      "mechanism": "existing modal focus/dismissal/drag behavior retained; product-owned body scroll and confirmation footer composition only"
+    }
+  ],
+  "scenes": [
+    {
+      "id": "commitment-create",
+      "module": "CommitmentsWorkspace.tsx",
+      "task": "填写目标、期限与关联原任务",
+      "oldProblem": "编辑字段缺少语义分组；频率/时区与常用通知控制同权；取消靠近日常操作",
+      "change": "目标与时间分组；通知频率/时区按需展开且生效摘要可见；取消归入调整，完成核对与原回执保持明确",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/commitment-create-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/commitment-create-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "新增明确委托",
+              "heading": null,
+              "input": "承诺目标",
+              "action": "核对保存内容",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "新增明确委托",
+              "heading": null,
+              "input": "承诺目标",
+              "action": "核对保存内容",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "commitment-detail",
+      "module": "CommitmentsWorkspace.tsx",
+      "task": "核对期限与原任务后选择跟进动作",
+      "oldProblem": "编辑字段缺少语义分组；频率/时区与常用通知控制同权；取消靠近日常操作",
+      "change": "目标与时间分组；通知频率/时区按需展开且生效摘要可见；取消归入调整，完成核对与原回执保持明确",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/commitment-detail-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/commitment-detail-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "确认项目发布结果",
+              "input": null,
+              "action": "确认已完成",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "确认项目发布结果",
+              "input": null,
+              "action": "确认已完成",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/commitment-detail-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/commitment-detail-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "确认项目发布结果",
+              "input": null,
+              "action": "确认已完成",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "确认项目发布结果",
+              "input": null,
+              "action": "确认已完成",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "commitment-edit",
+      "module": "CommitmentsWorkspace.tsx",
+      "task": "修改当前委托草稿并保留未改期限",
+      "oldProblem": "编辑字段缺少语义分组；频率/时区与常用通知控制同权；取消靠近日常操作",
+      "change": "目标与时间分组；通知频率/时区按需展开且生效摘要可见；取消归入调整，完成核对与原回执保持明确",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/commitment-edit-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/commitment-edit-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "编辑当前委托",
+              "heading": null,
+              "input": "承诺目标",
+              "action": "核对保存内容",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "编辑当前委托",
+              "heading": null,
+              "input": "承诺目标",
+              "action": "核对保存内容",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "commitment-policy",
+      "module": "CommitmentsWorkspace.tsx",
+      "task": "核对有效通知策略与安静时段",
+      "oldProblem": "编辑字段缺少语义分组；频率/时区与常用通知控制同权；取消靠近日常操作",
+      "change": "目标与时间分组；通知频率/时区按需展开且生效摘要可见；取消归入调整，完成核对与原回执保持明确",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/commitment-policy-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/commitment-policy-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "承诺跟进设置",
+              "heading": null,
+              "input": null,
+              "action": "核对设置",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "承诺跟进设置",
+              "heading": null,
+              "input": null,
+              "action": "核对设置",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/commitment-policy-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/commitment-policy-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "承诺跟进设置",
+              "heading": null,
+              "input": null,
+              "action": "核对设置",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "承诺跟进设置",
+              "heading": null,
+              "input": null,
+              "action": "核对设置",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "commitment-receipts",
+      "module": "CommitmentsWorkspace.tsx",
+      "task": "读取原通知回执并核对未知结果",
+      "oldProblem": "编辑字段缺少语义分组；频率/时区与常用通知控制同权；取消靠近日常操作",
+      "change": "目标与时间分组；通知频率/时区按需展开且生效摘要可见；取消归入调整，完成核对与原回执保持明确",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/commitment-receipts-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/commitment-receipts-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "通知结果待核对",
+              "input": null,
+              "action": "查询本机通知",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "通知结果待核对",
+              "input": null,
+              "action": "查询本机通知",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "commitment-review",
+      "module": "CommitmentsWorkspace.tsx",
+      "task": "明确确认当前版本已经完成",
+      "oldProblem": "编辑字段缺少语义分组；频率/时区与常用通知控制同权；取消靠近日常操作",
+      "change": "目标与时间分组；通知频率/时区按需展开且生效摘要可见；取消归入调整，完成核对与原回执保持明确",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/commitment-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/commitment-review-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "确认已经完成",
+              "heading": null,
+              "input": null,
+              "action": "确认确认已经完成",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "确认已经完成",
+              "heading": null,
+              "input": null,
+              "action": "确认确认已经完成",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "commitments-list",
+      "module": "CommitmentsWorkspace.tsx",
+      "task": "选择待跟进的单项委托",
+      "oldProblem": "复合行受Button内部label布局影响，主次与内容宽度不稳定",
+      "change": "保留真实列表/详情模式，局部label与正文伸展，统一对象/状态/下一次跟进语法",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/commitments-list-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/commitments-list-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "单项委托",
+              "input": null,
+              "action": "新增委托",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "单项委托",
+              "input": null,
+              "action": "新增委托",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/commitments-list-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/commitments-list-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "单项委托",
+              "input": null,
+              "action": "新增委托",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "单项委托",
+              "input": null,
+              "action": "新增委托",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "experience-approve-review",
+      "module": "ExperienceWorkspace.tsx",
+      "task": "核对原版本与影响，确认一次批准",
+      "oldProblem": "起草后原方法和重复状态仍抢占草稿；批准动作与阅读状态分离",
+      "change": "草稿成为当前主对象，原方法按需展开；同页已取得草稿的重复提示收束，其他分区保留草稿入口；原技能批准状态紧邻阅读",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "openmuse-linkrow"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/experience-approve-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/experience-approve-review-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "批准这个原版本的技能",
+              "heading": null,
+              "input": null,
+              "action": "确认这一次操作",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "批准这个原版本的技能",
+              "heading": null,
+              "input": null,
+              "action": "确认这一次操作",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "experience-draft",
+      "module": "ExperienceWorkspace.tsx",
+      "task": "编辑当前同一份技能草稿",
+      "oldProblem": "起草后原方法和重复状态仍抢占草稿；批准动作与阅读状态分离",
+      "change": "草稿成为当前主对象，原方法按需展开；同页已取得草稿的重复提示收束，其他分区保留草稿入口；原技能批准状态紧邻阅读",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "openmuse-linkrow"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/experience-draft-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/experience-draft-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "技能草稿",
+              "input": "完整 SKILL.md",
+              "action": "",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "技能草稿",
+              "input": "完整 SKILL.md",
+              "action": "",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/experience-draft-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/experience-draft-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "技能草稿",
+              "input": "完整 SKILL.md",
+              "action": "",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "技能草稿",
+              "input": "完整 SKILL.md",
+              "action": "",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "experience-draft-review",
+      "module": "ExperienceWorkspace.tsx",
+      "task": "核对一次模型起草的正文与影响",
+      "oldProblem": "起草后原方法和重复状态仍抢占草稿；批准动作与阅读状态分离",
+      "change": "草稿成为当前主对象，原方法按需展开；同页已取得草稿的重复提示收束，其他分区保留草稿入口；原技能批准状态紧邻阅读",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "openmuse-linkrow"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/experience-draft-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/experience-draft-review-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "从原方法记忆起草技能",
+              "heading": null,
+              "input": null,
+              "action": "确认这一次操作",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "从原方法记忆起草技能",
+              "heading": null,
+              "input": null,
+              "action": "确认这一次操作",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "experience-import-review",
+      "module": "ExperienceWorkspace.tsx",
+      "task": "核对将保存为停用技能的操作",
+      "oldProblem": "起草后原方法和重复状态仍抢占草稿；批准动作与阅读状态分离",
+      "change": "草稿成为当前主对象，原方法按需展开；同页已取得草稿的重复提示收束，其他分区保留草稿入口；原技能批准状态紧邻阅读",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "openmuse-linkrow"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/experience-import-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/experience-import-review-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "保存为停用的技能",
+              "heading": null,
+              "input": null,
+              "action": "确认这一次操作",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "保存为停用的技能",
+              "heading": null,
+              "input": null,
+              "action": "确认这一次操作",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "experience-method",
+      "module": "ExperienceWorkspace.tsx",
+      "task": "阅读方法并决定是否起草技能",
+      "oldProblem": "起草后原方法和重复状态仍抢占草稿；批准动作与阅读状态分离",
+      "change": "草稿成为当前主对象，原方法按需展开；同页已取得草稿的重复提示收束，其他分区保留草稿入口；原技能批准状态紧邻阅读",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "openmuse-linkrow"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/experience-method-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/experience-method-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "先复现，再判断原因。",
+              "input": null,
+              "action": "核对并起草技能",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "先复现，再判断原因。",
+              "input": null,
+              "action": "核对并起草技能",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/experience-method-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/experience-method-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "先复现，再判断原因。",
+              "input": null,
+              "action": "核对并起草技能",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "先复现，再判断原因。",
+              "input": null,
+              "action": "核对并起草技能",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "experience-methods",
+      "module": "ExperienceWorkspace.tsx",
+      "task": "选择一个已审阅方法",
+      "oldProblem": "起草后原方法和重复状态仍抢占草稿；批准动作与阅读状态分离",
+      "change": "草稿成为当前主对象，原方法按需展开；同页已取得草稿的重复提示收束，其他分区保留草稿入口；原技能批准状态紧邻阅读",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "openmuse-linkrow"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/experience-methods-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/experience-methods-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "方法",
+              "input": null,
+              "action": "/打开：先复现，再判断原因/",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "方法",
+              "input": null,
+              "action": "/打开：先复现，再判断原因/",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/experience-methods-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/experience-methods-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "方法",
+              "input": null,
+              "action": "/打开：先复现，再判断原因/",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "方法",
+              "input": null,
+              "action": "/打开：先复现，再判断原因/",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "experience-skill",
+      "module": "ExperienceWorkspace.tsx",
+      "task": "打开当前原版本的技能阅读入口",
+      "oldProblem": "起草后原方法和重复状态仍抢占草稿；批准动作与阅读状态分离",
+      "change": "草稿成为当前主对象，原方法按需展开；同页已取得草稿的重复提示收束，其他分区保留草稿入口；原技能批准状态紧邻阅读",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "openmuse-linkrow"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/experience-skill-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/experience-skill-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "项目周报整理",
+              "input": null,
+              "action": "读取原正文",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "项目周报整理",
+              "input": null,
+              "action": "读取原正文",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "experience-skill-read",
+      "module": "ExperienceWorkspace.tsx",
+      "task": "读取原技能完整正文后查看批准入口",
+      "oldProblem": "起草后原方法和重复状态仍抢占草稿；批准动作与阅读状态分离",
+      "change": "草稿成为当前主对象，原方法按需展开；同页已取得草稿的重复提示收束，其他分区保留草稿入口；原技能批准状态紧邻阅读",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "openmuse-linkrow"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/experience-skill-read-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/experience-skill-read-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "项目周报整理",
+              "input": null,
+              "action": "核对并批准此原版本",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "项目周报整理",
+              "input": null,
+              "action": "核对并批准此原版本",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/experience-skill-read-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/experience-skill-read-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "项目周报整理",
+              "input": null,
+              "action": "核对并批准此原版本",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "项目周报整理",
+              "input": null,
+              "action": "核对并批准此原版本",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "experience-skills",
+      "module": "ExperienceWorkspace.tsx",
+      "task": "选择来源技能或返回已保留草稿",
+      "oldProblem": "起草后原方法和重复状态仍抢占草稿；批准动作与阅读状态分离",
+      "change": "草稿成为当前主对象，原方法按需展开；同页已取得草稿的重复提示收束，其他分区保留草稿入口；原技能批准状态紧邻阅读",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "openmuse-linkrow"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/experience-skills-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/experience-skills-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "来源技能",
+              "input": null,
+              "action": "打开：项目周报整理",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "来源技能",
+              "input": null,
+              "action": "打开：项目周报整理",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "history-cognition",
+      "module": "MemoryHistoryWorkspace.tsx",
+      "task": "读取同主体的当前认知并核对冲突",
+      "oldProblem": "查阅类型、搜索、主体认知、冲突与结果缺少明确分组；主体字段挤占阅读",
+      "change": "使用对象标题与相邻搜索操作；匹配结果单独成组，主体关系折叠，证据与缺失原文提示保持可见",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/history-cognition-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/history-cognition-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "核对这组冲突",
+              "input": null,
+              "action": "/保留的当前事实/",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "核对这组冲突",
+              "input": null,
+              "action": "/保留的当前事实/",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/history-cognition-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/history-cognition-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "核对这组冲突",
+              "input": null,
+              "action": "/保留的当前事实/",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "核对这组冲突",
+              "input": null,
+              "action": "/保留的当前事实/",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "history-detail",
+      "module": "MemoryHistoryWorkspace.tsx",
+      "task": "阅读历史版本，区分当前事实",
+      "oldProblem": "查阅类型、搜索、主体认知、冲突与结果缺少明确分组；主体字段挤占阅读",
+      "change": "使用对象标题与相邻搜索操作；匹配结果单独成组，主体关系折叠，证据与缺失原文提示保持可见",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/history-detail-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/history-detail-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "这份已存记忆",
+              "input": null,
+              "action": "查看原来源 1",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "这份已存记忆",
+              "input": null,
+              "action": "查看原来源 1",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "history-edit",
+      "module": "MemoryHistoryWorkspace.tsx",
+      "task": "起草历史记录纠正",
+      "oldProblem": "查阅类型、搜索、主体认知、冲突与结果缺少明确分组；主体字段挤占阅读",
+      "change": "使用对象标题与相邻搜索操作；匹配结果单独成组，主体关系折叠，证据与缺失原文提示保持可见",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/history-edit-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/history-edit-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": null,
+              "input": "正确的内容",
+              "action": "核对纠正",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": null,
+              "input": "正确的内容",
+              "action": "核对纠正",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "history-results",
+      "module": "MemoryHistoryWorkspace.tsx",
+      "task": "从匹配旧事中选择原记录",
+      "oldProblem": "查阅类型、搜索、主体认知、冲突与结果缺少明确分组；主体字段挤占阅读",
+      "change": "使用对象标题与相邻搜索操作；匹配结果单独成组，主体关系折叠，证据与缺失原文提示保持可见",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/history-results-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/history-results-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": null,
+              "input": null,
+              "action": "/曾采用逐项核对/",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": null,
+              "input": null,
+              "action": "/曾采用逐项核对/",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "history-search",
+      "module": "MemoryHistoryWorkspace.tsx",
+      "task": "输入关键词或日期查旧事",
+      "oldProblem": "查阅类型、搜索、主体认知、冲突与结果缺少明确分组；主体字段挤占阅读",
+      "change": "使用对象标题与相邻搜索操作；匹配结果单独成组，主体关系折叠，证据与缺失原文提示保持可见",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/history-search-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/history-search-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": null,
+              "input": null,
+              "action": "查旧事",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": null,
+              "input": null,
+              "action": "查旧事",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "history-source",
+      "module": "MemoryHistoryWorkspace.tsx",
+      "task": "阅读旧版本的原来源而不提升为事实",
+      "oldProblem": "查阅类型、搜索、主体认知、冲突与结果缺少明确分组；主体字段挤占阅读",
+      "change": "使用对象标题与相邻搜索操作；匹配结果单独成组，主体关系折叠，证据与缺失原文提示保持可见",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/history-source-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/history-source-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "原复盘记录",
+              "input": null,
+              "action": "",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "原复盘记录",
+              "input": null,
+              "action": "",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "learning-episode",
+      "module": "LearningWorkspace.tsx",
+      "task": "完整阅读原任务经过再保留来源",
+      "oldProblem": "批次动作在长列表之后；原文与所选来源关系弱；提示跨分区重复",
+      "change": "当前任务的继续动作前置；来源阅读与本次清单在宽屏关联并列，窄屏顺序阅读；普通来源提示留在对应分区",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "openmuse-linkrow"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/learning-episode-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/learning-episode-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "排查项目预览空白",
+              "input": null,
+              "action": "保留来源并加入清单",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "排查项目预览空白",
+              "input": null,
+              "action": "保留来源并加入清单",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "learning-job",
+      "module": "LearningWorkspace.tsx",
+      "task": "核对当前批次与下一步",
+      "oldProblem": "批次动作在长列表之后；原文与所选来源关系弱；提示跨分区重复",
+      "change": "当前任务的继续动作前置；来源阅读与本次清单在宽屏关联并列，窄屏顺序阅读；普通来源提示留在对应分区",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "openmuse-linkrow"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/learning-job-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/learning-job-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "排查项目预览空白",
+              "input": null,
+              "action": "核对并继续原批次",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "排查项目预览空白",
+              "input": null,
+              "action": "核对并继续原批次",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/learning-job-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/learning-job-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "排查项目预览空白",
+              "input": null,
+              "action": "核对并继续原批次",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "排查项目预览空白",
+              "input": null,
+              "action": "核对并继续原批次",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "learning-jobs",
+      "module": "LearningWorkspace.tsx",
+      "task": "选择待继续的来源学习任务",
+      "oldProblem": "批次动作在长列表之后；原文与所选来源关系弱；提示跨分区重复",
+      "change": "当前任务的继续动作前置；来源阅读与本次清单在宽屏关联并列，窄屏顺序阅读；普通来源提示留在对应分区",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "openmuse-linkrow"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/learning-jobs-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/learning-jobs-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "学习任务",
+              "input": null,
+              "action": "整理新来源",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "学习任务",
+              "input": null,
+              "action": "整理新来源",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/learning-jobs-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/learning-jobs-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "学习任务",
+              "input": null,
+              "action": "整理新来源",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "学习任务",
+              "input": null,
+              "action": "整理新来源",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "learning-review",
+      "module": "LearningWorkspace.tsx",
+      "task": "确认向当前模型发送原批次来源",
+      "oldProblem": "批次动作在长列表之后；原文与所选来源关系弱；提示跨分区重复",
+      "change": "当前任务的继续动作前置；来源阅读与本次清单在宽屏关联并列，窄屏顺序阅读；普通来源提示留在对应分区",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "openmuse-linkrow"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/learning-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/learning-review-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "继续这个原学习任务",
+              "heading": null,
+              "input": null,
+              "action": "发送并继续原任务",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "继续这个原学习任务",
+              "heading": null,
+              "input": null,
+              "action": "发送并继续原任务",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "learning-selection",
+      "module": "LearningWorkspace.tsx",
+      "task": "核对所选来源并建立不发送模型的学习任务",
+      "oldProblem": "批次动作在长列表之后；原文与所选来源关系弱；提示跨分区重复",
+      "change": "当前任务的继续动作前置；来源阅读与本次清单在宽屏关联并列，窄屏顺序阅读；普通来源提示留在对应分区",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "openmuse-linkrow"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/learning-selection-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/learning-selection-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "本次所选来源",
+              "input": null,
+              "action": "建立学习任务，暂不发送模型",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "本次所选来源",
+              "input": null,
+              "action": "建立学习任务，暂不发送模型",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/learning-selection-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/learning-selection-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "本次所选来源",
+              "input": null,
+              "action": "建立学习任务，暂不发送模型",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "本次所选来源",
+              "input": null,
+              "action": "建立学习任务，暂不发送模型",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "learning-sources",
+      "module": "LearningWorkspace.tsx",
+      "task": "选择作为来源的原任务",
+      "oldProblem": "批次动作在长列表之后；原文与所选来源关系弱；提示跨分区重复",
+      "change": "当前任务的继续动作前置；来源阅读与本次清单在宽屏关联并列，窄屏顺序阅读；普通来源提示留在对应分区",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "openmuse-linkrow"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/learning-sources-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/learning-sources-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "整理新来源",
+              "input": null,
+              "action": "读取任务经过",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "整理新来源",
+              "input": null,
+              "action": "读取任务经过",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "memory-candidate-detail",
+      "module": "MemoryWorkspace.tsx",
+      "task": "阅读候选及来源，决定是否采用",
+      "oldProblem": "范围控件在主列表之前；正文、来源、编辑与低频遗忘操作缺少层次",
+      "change": "范围名称保持可见，范围管理移到列表之后；正文与状态在前，来源成组，候选采用明确，核心与遗忘按需展开",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-candidate-detail-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-candidate-detail-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "候选审阅",
+              "input": null,
+              "action": "核对并采用候选",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "候选审阅",
+              "input": null,
+              "action": "核对并采用候选",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "memory-candidate-review",
+      "module": "MemoryWorkspace.tsx",
+      "task": "核对候选影响，确认一次采用",
+      "oldProblem": "范围控件在主列表之前；正文、来源、编辑与低频遗忘操作缺少层次",
+      "change": "范围名称保持可见，范围管理移到列表之后；正文与状态在前，来源成组，候选采用明确，核心与遗忘按需展开",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-candidate-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-candidate-review-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "采用这条候选",
+              "heading": null,
+              "input": null,
+              "action": "确认这次修改",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "采用这条候选",
+              "heading": null,
+              "input": null,
+              "action": "确认这次修改",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "memory-candidates",
+      "module": "MemoryWorkspace.tsx",
+      "task": "选择一条待审候选",
+      "oldProblem": "范围控件在主列表之前；正文、来源、编辑与低频遗忘操作缺少层次",
+      "change": "范围名称保持可见，范围管理移到列表之后；正文与状态在前，来源成组，候选采用明确，核心与遗忘按需展开",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-candidates-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-candidates-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": null,
+              "input": null,
+              "action": "",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": null,
+              "input": null,
+              "action": "",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "memory-detail",
+      "module": "MemoryWorkspace.tsx",
+      "task": "阅读当前记忆并选择下一步",
+      "oldProblem": "范围控件在主列表之前；正文、来源、编辑与低频遗忘操作缺少层次",
+      "change": "范围名称保持可见，范围管理移到列表之后；正文与状态在前，来源成组，候选采用明确，核心与遗忘按需展开",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-detail-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-detail-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "这条记忆",
+              "input": null,
+              "action": "返回列表",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "这条记忆",
+              "input": null,
+              "action": "返回列表",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-detail-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-detail-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "这条记忆",
+              "input": null,
+              "action": "返回列表",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "这条记忆",
+              "input": null,
+              "action": "返回列表",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "memory-edit",
+      "module": "MemoryWorkspace.tsx",
+      "task": "起草对原版本的正文纠正",
+      "oldProblem": "范围控件在主列表之前；正文、来源、编辑与低频遗忘操作缺少层次",
+      "change": "范围名称保持可见，范围管理移到列表之后；正文与状态在前，来源成组，候选采用明确，核心与遗忘按需展开",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-edit-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-edit-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": null,
+              "input": "纠正后的正文",
+              "action": "",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": null,
+              "input": "纠正后的正文",
+              "action": "",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "memory-list",
+      "module": "MemoryWorkspace.tsx",
+      "task": "在当前归属中选择一条已保存记忆",
+      "oldProblem": "范围控件在主列表之前；正文、来源、编辑与低频遗忘操作缺少层次",
+      "change": "范围名称保持可见，范围管理移到列表之后；正文与状态在前，来源成组，候选采用明确，核心与遗忘按需展开",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-list-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-list-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": null,
+              "input": null,
+              "action": "选择记忆归纳",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": null,
+              "input": null,
+              "action": "选择记忆归纳",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-list-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-list-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": null,
+              "input": null,
+              "action": "选择记忆归纳",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": null,
+              "input": null,
+              "action": "选择记忆归纳",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "memory-review",
+      "module": "MemoryWorkspace.tsx",
+      "task": "对照原文与改后正文，确认一次纠正",
+      "oldProblem": "范围控件在主列表之前；正文、来源、编辑与低频遗忘操作缺少层次",
+      "change": "范围名称保持可见，范围管理移到列表之后；正文与状态在前，来源成组，候选采用明确，核心与遗忘按需展开",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-review-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "保存纠正",
+              "heading": null,
+              "input": null,
+              "action": "确认这次修改",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "保存纠正",
+              "heading": null,
+              "input": null,
+              "action": "确认这次修改",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "memory-source",
+      "module": "MemoryWorkspace.tsx",
+      "task": "核对记忆对应的原来源正文",
+      "oldProblem": "范围控件在主列表之前；正文、来源、编辑与低频遗忘操作缺少层次",
+      "change": "范围名称保持可见，范围管理移到列表之后；正文与状态在前，来源成组，候选采用明确，核心与遗忘按需展开",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-source-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-source-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "原复盘记录",
+              "input": null,
+              "action": "",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "原复盘记录",
+              "input": null,
+              "action": "",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "plans-authorization",
+      "module": "PlansWorkspace.tsx",
+      "task": "选择执行方式并核对资料、模型及预算范围",
+      "oldProblem": "授权前完整步骤/文件元信息压住授权条件；取消与推进操作同权",
+      "change": "目标摘要、执行方式、资料与模型、预算与期限分组；文件标准与低频取消渐进披露，原审核保持完整且仍需明确确认",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/plans-authorization-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/plans-authorization-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "审阅执行范围",
+              "heading": null,
+              "input": null,
+              "action": "/触发方式/",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "审阅执行范围",
+              "heading": null,
+              "input": null,
+              "action": "/触发方式/",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/plans-authorization-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/plans-authorization-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "审阅执行范围",
+              "heading": null,
+              "input": null,
+              "action": "/触发方式/",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "审阅执行范围",
+              "heading": null,
+              "input": null,
+              "action": "/触发方式/",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "plans-create",
+      "module": "PlansWorkspace.tsx",
+      "task": "起草待审目标与执行步骤",
+      "oldProblem": "授权前完整步骤/文件元信息压住授权条件；取消与推进操作同权",
+      "change": "目标摘要、执行方式、资料与模型、预算与期限分组；文件标准与低频取消渐进披露，原审核保持完整且仍需明确确认",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/plans-create-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/plans-create-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "建立持续目标",
+              "heading": null,
+              "input": "最终要得到什么结果",
+              "action": "核对保存内容",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "建立持续目标",
+              "heading": null,
+              "input": "最终要得到什么结果",
+              "action": "核对保存内容",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "plans-detail",
+      "module": "PlansWorkspace.tsx",
+      "task": "阅读目标、预算、当前步骤与下一步",
+      "oldProblem": "授权前完整步骤/文件元信息压住授权条件；取消与推进操作同权",
+      "change": "目标摘要、执行方式、资料与模型、预算与期限分组；文件标准与低频取消渐进披露，原审核保持完整且仍需明确确认",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/plans-detail-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/plans-detail-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "整理本周项目交付",
+              "input": null,
+              "action": "审阅目标与执行范围",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "整理本周项目交付",
+              "input": null,
+              "action": "审阅目标与执行范围",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/plans-detail-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/plans-detail-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "整理本周项目交付",
+              "input": null,
+              "action": "审阅目标与执行范围",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "整理本周项目交付",
+              "input": null,
+              "action": "审阅目标与执行范围",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "plans-list",
+      "module": "PlansWorkspace.tsx",
+      "task": "选择待推进持续目标",
+      "oldProblem": "授权前完整步骤/文件元信息压住授权条件；取消与推进操作同权",
+      "change": "目标摘要、执行方式、资料与模型、预算与期限分组；文件标准与低频取消渐进披露，原审核保持完整且仍需明确确认",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/plans-list-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/plans-list-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "持续目标",
+              "input": null,
+              "action": "建立持续目标",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "持续目标",
+              "input": null,
+              "action": "建立持续目标",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/plans-list-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/plans-list-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "持续目标",
+              "input": null,
+              "action": "建立持续目标",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "持续目标",
+              "input": null,
+              "action": "建立持续目标",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "plans-review",
+      "module": "PlansWorkspace.tsx",
+      "task": "核对全部步骤、原文件标准和授权范围后批准",
+      "oldProblem": "授权前完整步骤/文件元信息压住授权条件；取消与推进操作同权",
+      "change": "目标摘要、执行方式、资料与模型、预算与期限分组；文件标准与低频取消渐进披露，原审核保持完整且仍需明确确认",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/plans-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/plans-review-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "批准目标范围",
+              "heading": null,
+              "input": null,
+              "action": "确认批准目标范围",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "批准目标范围",
+              "heading": null,
+              "input": null,
+              "action": "确认批准目标范围",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "reminder-advanced",
+      "module": "ReminderWorkspace.tsx",
+      "task": "核对时间跳过、重叠及夏令时策略",
+      "oldProblem": "每条规则同时展开版本、调度与全部操作；最近投递全部平铺且标题挤压",
+      "change": "规则变为真实本地选择的列表/详情；详情中版本按需展开；需要核对的原发生结果默认可见，完整投递记录折叠；编辑按内容时间/提醒动作/高级策略分组",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/reminder-advanced-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/reminder-advanced-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "编辑提醒",
+              "heading": null,
+              "input": null,
+              "action": "核对提醒计划",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "编辑提醒",
+              "heading": null,
+              "input": null,
+              "action": "核对提醒计划",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "reminder-create",
+      "module": "ReminderWorkspace.tsx",
+      "task": "起草提醒并选择提醒后的动作",
+      "oldProblem": "每条规则同时展开版本、调度与全部操作；最近投递全部平铺且标题挤压",
+      "change": "规则变为真实本地选择的列表/详情；详情中版本按需展开；需要核对的原发生结果默认可见，完整投递记录折叠；编辑按内容时间/提醒动作/高级策略分组",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/reminder-create-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/reminder-create-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "新建提醒",
+              "heading": null,
+              "input": "提醒内容",
+              "action": "核对提醒计划",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "新建提醒",
+              "heading": null,
+              "input": "提醒内容",
+              "action": "核对提醒计划",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "reminder-detail",
+      "module": "ReminderWorkspace.tsx",
+      "task": "选择一条原提醒查看状态及下一步",
+      "oldProblem": "每条规则同时展开版本、调度与全部操作；最近投递全部平铺且标题挤压",
+      "change": "规则变为真实本地选择的列表/详情；详情中版本按需展开；需要核对的原发生结果默认可见，完整投递记录折叠；编辑按内容时间/提醒动作/高级策略分组",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/reminder-detail-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/reminder-detail-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "晚间检查项目进度",
+              "input": null,
+              "action": "编辑",
+              "sceneAsserted": true,
+              "baselineInlineRule": true
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "晚间检查项目进度",
+              "input": null,
+              "action": "编辑",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      },
+      "baselineScene": "Published baseline has inline rule collection; before asserts 2 original edit actions, after asserts single selected-rule detail. No separate baseline detail is claimed."
+    },
+    {
+      "id": "reminder-edit",
+      "module": "ReminderWorkspace.tsx",
+      "task": "修改原提醒正文或时间草稿",
+      "oldProblem": "每条规则同时展开版本、调度与全部操作；最近投递全部平铺且标题挤压",
+      "change": "规则变为真实本地选择的列表/详情；详情中版本按需展开；需要核对的原发生结果默认可见，完整投递记录折叠；编辑按内容时间/提醒动作/高级策略分组",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/reminder-edit-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/reminder-edit-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "编辑提醒",
+              "heading": null,
+              "input": "提醒内容",
+              "action": "核对提醒计划",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "编辑提醒",
+              "heading": null,
+              "input": "提醒内容",
+              "action": "核对提醒计划",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/reminder-edit-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/reminder-edit-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "编辑提醒",
+              "heading": null,
+              "input": "提醒内容",
+              "action": "核对提醒计划",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "编辑提醒",
+              "heading": null,
+              "input": "提醒内容",
+              "action": "核对提醒计划",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "reminder-list",
+      "module": "ReminderWorkspace.tsx",
+      "task": "查看下一次安排和需核对的投递结果",
+      "oldProblem": "每条规则同时展开版本、调度与全部操作；最近投递全部平铺且标题挤压",
+      "change": "规则变为真实本地选择的列表/详情；详情中版本按需展开；需要核对的原发生结果默认可见，完整投递记录折叠；编辑按内容时间/提醒动作/高级策略分组",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/reminder-list-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/reminder-list-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "提醒与主动任务",
+              "input": null,
+              "action": "新建提醒",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "提醒与主动任务",
+              "input": null,
+              "action": "新建提醒",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/reminder-list-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/reminder-list-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "提醒与主动任务",
+              "input": null,
+              "action": "新建提醒",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "提醒与主动任务",
+              "input": null,
+              "action": "新建提醒",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "reminder-review",
+      "module": "ReminderWorkspace.tsx",
+      "task": "核对手机原日历计算的提醒计划",
+      "oldProblem": "每条规则同时展开版本、调度与全部操作；最近投递全部平铺且标题挤压",
+      "change": "规则变为真实本地选择的列表/详情；详情中版本按需展开；需要核对的原发生结果默认可见，完整投递记录折叠；编辑按内容时间/提醒动作/高级策略分组",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/reminder-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/reminder-review-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": "核对提醒计划",
+              "heading": null,
+              "input": null,
+              "action": "保存修改",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": "核对提醒计划",
+              "heading": null,
+              "input": null,
+              "action": "保存修改",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "task-memory-receipt",
+      "module": "MemoryHistoryWorkspace.tsx",
+      "task": "核对该原任务当时提供给模型的记忆凭据",
+      "oldProblem": "任务搜索、原任务与记忆凭据连续平铺",
+      "change": "搜索结果与所选任务/原凭据分组，保留明确的原凭据读取动作和独立证据边界",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/task-memory-receipt-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/task-memory-receipt-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "排查项目预览空白",
+              "input": null,
+              "action": "读取本轮记忆凭据",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": "排查项目预览空白",
+              "input": null,
+              "action": "读取本轮记忆凭据",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "task-memory-results",
+      "module": "MemoryHistoryWorkspace.tsx",
+      "task": "搜索原任务记录",
+      "oldProblem": "任务搜索、原任务与记忆凭据连续平铺",
+      "change": "搜索结果与所选任务/原凭据分组，保留明确的原凭据读取动作和独立证据边界",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/task-memory-results-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/task-memory-results-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": null,
+              "input": null,
+              "action": "/排查项目预览空白/",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "dialog": null,
+              "heading": null,
+              "input": null,
+              "action": "/排查项目预览空白/",
+              "sceneAsserted": true,
+              "baselineInlineRule": false
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "horizontalOverflow": "none at captured widths",
+        "visualReview": "current 360px after contact sheet inspected; major 1280px scenes sampled; production font hook active",
+        "authority": "existing native identity/revision/approval commands unchanged; no device or native persistence verification",
+        "sceneGate": "passed: unique expected heading/control, exact edited value/selected tab/collection count where relevant; SettingsDialog requires data-visible=true",
+        "captureMode": "static hierarchy only: reduced motion and screenshot animations disabled; not motion, Android renderer, or native persistence verification"
+      }
+    },
+    {
+      "id": "assertion-edit",
+      "module": "MemoryAssertionFields.tsx",
+      "task": "为原候选明确选择主体并填写陈述",
+      "oldProblem": "身份搜索和可选关系、日期与核心陈述平铺",
+      "change": "主体和陈述常显；已有主体查找、可选关系、条件日期具名展开",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/assertion-edit-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/assertion-edit-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "主体与关系",
+              "control": "事实值或关系目标名称"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "主体与关系",
+              "control": "事实值或关系目标名称"
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/assertion-edit-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/assertion-edit-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "主体与关系",
+              "control": "事实值或关系目标名称"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "主体与关系",
+              "control": "事实值或关系目标名称"
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "sceneGate": "unique expected modal/Drawer heading and control; original field values, exact subject and unverified text, original source body where relevant",
+        "horizontalOverflow": "none at captured after widths",
+        "visualReview": "all current 360px after child contact sheets inspected; 1280px update comparison inspected",
+        "authority": "original prepare/review/source/confirm/query identities preserved; unknown query cannot replay confirm",
+        "captureMode": "static hierarchy only, reduced motion and animations disabled; not Android renderer or native persistence verification"
+      }
+    },
+    {
+      "id": "assertion-times",
+      "module": "MemoryAssertionFields.tsx",
+      "task": "核对该陈述的条件与生效、结束时点",
+      "oldProblem": "适用条件与日期关系弱，原生details语法与其他界面不一致",
+      "change": "复用BoardUI命名Accordion，条件与日期同组，未填保持未知",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/assertion-times-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/assertion-times-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "主体与关系",
+              "control": "生效时间"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "主体与关系",
+              "control": "生效时间"
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "sceneGate": "unique expected modal/Drawer heading and control; original field values, exact subject and unverified text, original source body where relevant",
+        "horizontalOverflow": "none at captured after widths",
+        "visualReview": "all current 360px after child contact sheets inspected; 1280px update comparison inspected",
+        "authority": "original prepare/review/source/confirm/query identities preserved; unknown query cannot replay confirm",
+        "captureMode": "static hierarchy only, reduced motion and animations disabled; not Android renderer or native persistence verification"
+      }
+    },
+    {
+      "id": "assertion-review",
+      "module": "MemoryAssertionFields.tsx",
+      "task": "对照原版本核对本次主体与关系修改",
+      "oldProblem": "编辑和原版本确认缺少清楚的核对终点",
+      "change": "保留原SettingsDialog确认，精确readHandle与明确ack gate不变",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/assertion-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/assertion-review-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "核对主体与关系",
+              "control": "确认这次修改"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "核对主体与关系",
+              "control": "确认这次修改"
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "sceneGate": "unique expected modal/Drawer heading and control; original field values, exact subject and unverified text, original source body where relevant",
+        "horizontalOverflow": "none at captured after widths",
+        "visualReview": "all current 360px after child contact sheets inspected; 1280px update comparison inspected",
+        "authority": "original prepare/review/source/confirm/query identities preserved; unknown query cannot replay confirm",
+        "captureMode": "static hierarchy only, reduced motion and animations disabled; not Android renderer or native persistence verification"
+      }
+    },
+    {
+      "id": "assertion-load-error",
+      "module": "MemoryAssertionFields.tsx",
+      "task": "读取失败后明确恢复原身份选择",
+      "oldProblem": "原身份读取失败缺少明显恢复入口",
+      "change": "错误常显，明确重新读取按钮复用原load且不选择主体",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/assertion-load-error-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/assertion-load-error-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "主体与关系",
+              "control": "事实值或关系目标名称"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "主体与关系",
+              "control": "事实值或关系目标名称"
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "sceneGate": "unique expected modal/Drawer heading and control; original field values, exact subject and unverified text, original source body where relevant",
+        "horizontalOverflow": "none at captured after widths",
+        "visualReview": "all current 360px after child contact sheets inspected; 1280px update comparison inspected",
+        "authority": "original prepare/review/source/confirm/query identities preserved; unknown query cannot replay confirm",
+        "captureMode": "static hierarchy only, reduced motion and animations disabled; not Android renderer or native persistence verification"
+      }
+    },
+    {
+      "id": "assertion-recovered",
+      "module": "MemoryAssertionFields.tsx",
+      "task": "重新读取后继续原草稿而不擅自选主人",
+      "oldProblem": "重试状态不清楚可能被误认为已经获得主体",
+      "change": "原主体选择恢复可用，未选主体或陈述仍禁用核对",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/assertion-recovered-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/assertion-recovered-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "主体与关系",
+              "control": "事实值或关系目标名称"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "主体与关系",
+              "control": "事实值或关系目标名称"
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "sceneGate": "unique expected modal/Drawer heading and control; original field values, exact subject and unverified text, original source body where relevant",
+        "horizontalOverflow": "none at captured after widths",
+        "visualReview": "all current 360px after child contact sheets inspected; 1280px update comparison inspected",
+        "authority": "original prepare/review/source/confirm/query identities preserved; unknown query cannot replay confirm",
+        "captureMode": "static hierarchy only, reduced motion and animations disabled; not Android renderer or native persistence verification"
+      }
+    },
+    {
+      "id": "memory-draft-create",
+      "module": "MemoryDraftReview.tsx",
+      "task": "核对一次保存记忆的主体、正文与影响",
+      "oldProblem": "正文、主体元信息、来源、影响和动作长列；确认动作被正文推走",
+      "change": "主体+类型+未核实常显；正文前后明确比较；确认影响不折叠，底部保留原ack动作",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "vaul-drawer"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-draft-create-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-draft-create-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "保存这条记忆",
+              "control": "我已核对正文、来源与以上影响"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "保存这条记忆",
+              "control": "我已核对正文、来源与以上影响"
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-draft-create-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-draft-create-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "保存这条记忆",
+              "control": "我已核对正文、来源与以上影响"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "保存这条记忆",
+              "control": "我已核对正文、来源与以上影响"
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "sceneGate": "unique expected modal/Drawer heading and control; original field values, exact subject and unverified text, original source body where relevant",
+        "horizontalOverflow": "none at captured after widths",
+        "visualReview": "all current 360px after child contact sheets inspected; 1280px update comparison inspected",
+        "authority": "original prepare/review/source/confirm/query identities preserved; unknown query cannot replay confirm",
+        "captureMode": "static hierarchy only, reduced motion and animations disabled; not Android renderer or native persistence verification"
+      }
+    },
+    {
+      "id": "memory-draft-create-assertion",
+      "module": "MemoryDraftReview.tsx",
+      "task": "展开核对将保存内容的原句与断言依据",
+      "oldProblem": "全部断言及日期抢占默认正文阅读",
+      "change": "主体常显摘要保留，详核陈述、原句与条件时间按需展开，精确原句校验不变",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "vaul-drawer"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-draft-create-assertion-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-draft-create-assertion-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "保存这条记忆",
+              "control": "我已核对正文、来源与以上影响"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "保存这条记忆",
+              "control": "我已核对正文、来源与以上影响"
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "sceneGate": "unique expected modal/Drawer heading and control; original field values, exact subject and unverified text, original source body where relevant",
+        "horizontalOverflow": "none at captured after widths",
+        "visualReview": "all current 360px after child contact sheets inspected; 1280px update comparison inspected",
+        "authority": "original prepare/review/source/confirm/query identities preserved; unknown query cannot replay confirm",
+        "captureMode": "static hierarchy only, reduced motion and animations disabled; not Android renderer or native persistence verification"
+      }
+    },
+    {
+      "id": "memory-draft-create-source",
+      "module": "MemoryDraftReview.tsx",
+      "task": "读取本次保存提案的原主人消息",
+      "oldProblem": "来源与影响混排、确认操作随长文本滚走",
+      "change": "原handle的来源读取保持显式；正文可独立滚动，确认固定于现有Drawer内部底部",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "vaul-drawer"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-draft-create-source-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-draft-create-source-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "保存这条记忆",
+              "control": "原主人消息"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "保存这条记忆",
+              "control": "原主人消息"
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "sceneGate": "unique expected modal/Drawer heading and control; original field values, exact subject and unverified text, original source body where relevant",
+        "horizontalOverflow": "none at captured after widths",
+        "visualReview": "all current 360px after child contact sheets inspected; 1280px update comparison inspected",
+        "authority": "original prepare/review/source/confirm/query identities preserved; unknown query cannot replay confirm",
+        "captureMode": "static hierarchy only, reduced motion and animations disabled; not Android renderer or native persistence verification"
+      }
+    },
+    {
+      "id": "memory-draft-update",
+      "module": "MemoryDraftReview.tsx",
+      "task": "核对一次纠正记忆的主体、正文与影响",
+      "oldProblem": "正文、主体元信息、来源、影响和动作长列；确认动作被正文推走",
+      "change": "主体+类型+未核实常显；正文前后明确比较；确认影响不折叠，底部保留原ack动作",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "vaul-drawer"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-draft-update-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-draft-update-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "纠正这条记忆",
+              "control": "我已核对正文、来源与以上影响"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "纠正这条记忆",
+              "control": "我已核对正文、来源与以上影响"
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-draft-update-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-draft-update-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "纠正这条记忆",
+              "control": "我已核对正文、来源与以上影响"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "纠正这条记忆",
+              "control": "我已核对正文、来源与以上影响"
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "sceneGate": "unique expected modal/Drawer heading and control; original field values, exact subject and unverified text, original source body where relevant",
+        "horizontalOverflow": "none at captured after widths",
+        "visualReview": "all current 360px after child contact sheets inspected; 1280px update comparison inspected",
+        "authority": "original prepare/review/source/confirm/query identities preserved; unknown query cannot replay confirm",
+        "captureMode": "static hierarchy only, reduced motion and animations disabled; not Android renderer or native persistence verification"
+      }
+    },
+    {
+      "id": "memory-draft-update-assertion",
+      "module": "MemoryDraftReview.tsx",
+      "task": "展开核对将纠正内容的原句与断言依据",
+      "oldProblem": "全部断言及日期抢占默认正文阅读",
+      "change": "主体常显摘要保留，详核陈述、原句与条件时间按需展开，精确原句校验不变",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "vaul-drawer"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-draft-update-assertion-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-draft-update-assertion-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "纠正这条记忆",
+              "control": "我已核对正文、来源与以上影响"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "纠正这条记忆",
+              "control": "我已核对正文、来源与以上影响"
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "sceneGate": "unique expected modal/Drawer heading and control; original field values, exact subject and unverified text, original source body where relevant",
+        "horizontalOverflow": "none at captured after widths",
+        "visualReview": "all current 360px after child contact sheets inspected; 1280px update comparison inspected",
+        "authority": "original prepare/review/source/confirm/query identities preserved; unknown query cannot replay confirm",
+        "captureMode": "static hierarchy only, reduced motion and animations disabled; not Android renderer or native persistence verification"
+      }
+    },
+    {
+      "id": "memory-draft-update-source",
+      "module": "MemoryDraftReview.tsx",
+      "task": "读取本次纠正提案的原主人消息",
+      "oldProblem": "来源与影响混排、确认操作随长文本滚走",
+      "change": "原handle的来源读取保持显式；正文可独立滚动，确认固定于现有Drawer内部底部",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "vaul-drawer"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-draft-update-source-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-draft-update-source-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "纠正这条记忆",
+              "control": "原主人消息"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "纠正这条记忆",
+              "control": "原主人消息"
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "sceneGate": "unique expected modal/Drawer heading and control; original field values, exact subject and unverified text, original source body where relevant",
+        "horizontalOverflow": "none at captured after widths",
+        "visualReview": "all current 360px after child contact sheets inspected; 1280px update comparison inspected",
+        "authority": "original prepare/review/source/confirm/query identities preserved; unknown query cannot replay confirm",
+        "captureMode": "static hierarchy only, reduced motion and animations disabled; not Android renderer or native persistence verification"
+      }
+    },
+    {
+      "id": "memory-draft-forget",
+      "module": "MemoryDraftReview.tsx",
+      "task": "核对一次遗忘记忆的主体、正文与影响",
+      "oldProblem": "正文、主体元信息、来源、影响和动作长列；确认动作被正文推走",
+      "change": "主体+类型+未核实常显；正文前后明确比较；确认影响不折叠，底部保留原ack动作",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "vaul-drawer"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-draft-forget-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-draft-forget-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "遗忘这条记忆",
+              "control": "我已核对正文、来源与以上影响"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "遗忘这条记忆",
+              "control": "我已核对正文、来源与以上影响"
+            }
+          }
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-draft-forget-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-draft-forget-1280.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "遗忘这条记忆",
+              "control": "我已核对正文、来源与以上影响"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "遗忘这条记忆",
+              "control": "我已核对正文、来源与以上影响"
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "sceneGate": "unique expected modal/Drawer heading and control; original field values, exact subject and unverified text, original source body where relevant",
+        "horizontalOverflow": "none at captured after widths",
+        "visualReview": "all current 360px after child contact sheets inspected; 1280px update comparison inspected",
+        "authority": "original prepare/review/source/confirm/query identities preserved; unknown query cannot replay confirm",
+        "captureMode": "static hierarchy only, reduced motion and animations disabled; not Android renderer or native persistence verification"
+      }
+    },
+    {
+      "id": "memory-draft-forget-assertion",
+      "module": "MemoryDraftReview.tsx",
+      "task": "展开核对将遗忘内容的原句与断言依据",
+      "oldProblem": "全部断言及日期抢占默认正文阅读",
+      "change": "主体常显摘要保留，详核陈述、原句与条件时间按需展开，精确原句校验不变",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "vaul-drawer"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-draft-forget-assertion-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-draft-forget-assertion-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "遗忘这条记忆",
+              "control": "我已核对正文、来源与以上影响"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "遗忘这条记忆",
+              "control": "我已核对正文、来源与以上影响"
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "sceneGate": "unique expected modal/Drawer heading and control; original field values, exact subject and unverified text, original source body where relevant",
+        "horizontalOverflow": "none at captured after widths",
+        "visualReview": "all current 360px after child contact sheets inspected; 1280px update comparison inspected",
+        "authority": "original prepare/review/source/confirm/query identities preserved; unknown query cannot replay confirm",
+        "captureMode": "static hierarchy only, reduced motion and animations disabled; not Android renderer or native persistence verification"
+      }
+    },
+    {
+      "id": "memory-draft-forget-source",
+      "module": "MemoryDraftReview.tsx",
+      "task": "读取本次遗忘提案的原主人消息",
+      "oldProblem": "来源与影响混排、确认操作随长文本滚走",
+      "change": "原handle的来源读取保持显式；正文可独立滚动，确认固定于现有Drawer内部底部",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "vaul-drawer"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-draft-forget-source-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-draft-forget-source-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "遗忘这条记忆",
+              "control": "原主人消息"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "遗忘这条记忆",
+              "control": "原主人消息"
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "sceneGate": "unique expected modal/Drawer heading and control; original field values, exact subject and unverified text, original source body where relevant",
+        "horizontalOverflow": "none at captured after widths",
+        "visualReview": "all current 360px after child contact sheets inspected; 1280px update comparison inspected",
+        "authority": "original prepare/review/source/confirm/query identities preserved; unknown query cannot replay confirm",
+        "captureMode": "static hierarchy only, reduced motion and animations disabled; not Android renderer or native persistence verification"
+      }
+    },
+    {
+      "id": "memory-draft-unknown",
+      "module": "MemoryDraftReview.tsx",
+      "task": "结果未知时查询原提案，避免重发",
+      "oldProblem": "未知状态可能与编辑动作混淆",
+      "change": "保留原未知结果状态与查询入口；按原task/run/epoch/operation/digest查询，confirm仅一次",
+      "matureSources": [
+        "boardui-settings",
+        "boardui-disclosure",
+        "boardui-button",
+        "vaul-drawer"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-draft-unknown-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-draft-unknown-360.png",
+          "readiness": {
+            "before": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "原修改结果待核对",
+              "control": "查询原修改结果"
+            },
+            "after": {
+              "horizontalOverflow": false,
+              "sceneAsserted": true,
+              "heading": "原修改结果待核对",
+              "control": "查询原修改结果"
+            }
+          }
+        }
+      ],
+      "verification": {
+        "browserJourney": "passed with synthetic native fixture",
+        "sceneGate": "unique expected modal/Drawer heading and control; original field values, exact subject and unverified text, original source body where relevant",
+        "horizontalOverflow": "none at captured after widths",
+        "visualReview": "all current 360px after child contact sheets inspected; 1280px update comparison inspected",
+        "authority": "original prepare/review/source/confirm/query identities preserved; unknown query cannot replay confirm",
+        "captureMode": "static hierarchy only, reduced motion and animations disabled; not Android renderer or native persistence verification"
+      }
+    }
+  ],
+  "checks": {
+    "typecheck": "passed",
+    "affectedContractAndLifecycleTests": 71,
+    "browserReceipt": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/receipt.json",
+    "beforeReceipt": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/receipt.json",
+    "uniqueScenes": 64,
+    "screenshotsPerPhase": 86,
+    "allSceneReadinessAssertions": "passed in both before and after",
+    "memoryReviewReceipt": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/after/memory-review-receipt.json",
+    "memoryReviewBeforeReceipt": "/workspace/scratch/a7233424b5cb/depth-knowledge-evidence/before/memory-review-receipt.json",
+    "captureCorrection": "Earlier screenshots accepted font readiness before SettingsDialog was visible. Those weak screenshots and visual claims were withdrawn; full before+after rerun now requires active unique visible dialog, scene-specific content and frozen Vite input (HMR disabled).",
+    "commands": [
+      "npx tsc --noEmit",
+      "node --experimental-strip-types --test tests/knowledge-reading-surfaces.test.ts tests/memory-history.test.ts tests/memory-assertion-evidence.test.ts tests/memory-scope.test.ts tests/learning-workspace-journeys.test.ts tests/commitment-contract.test.ts tests/reminder-contract.test.ts tests/plan-contract.test.ts tests/followup-reading-surfaces.test.ts",
+      "PW_DEPTH_PHASE=before flock /dev/shm/pocketworld-depth-ui-secondary.lock timeout 180s node tests/depth-knowledge-ui.mjs",
+      "flock /dev/shm/pocketworld-depth-ui-secondary.lock timeout 180s node tests/depth-knowledge-ui.mjs",
+      "PW_DEPTH_PHASE=before flock /dev/shm/pocketworld-depth-ui-secondary.lock timeout 180s node tests/depth-memory-review-ui.mjs",
+      "flock /dev/shm/pocketworld-depth-ui-secondary.lock timeout 180s node tests/depth-memory-review-ui.mjs"
+    ]
+  },
+  "additionalChildren": [
+    {
+      "module": "MemoryAssertionFields.tsx",
+      "status": "implemented and before/after verified",
+      "parentScene": "memory-candidate-detail/history-detail",
+      "scenes": [
+        "assertion-edit",
+        "assertion-times",
+        "assertion-review",
+        "assertion-load-error",
+        "assertion-recovered"
+      ]
+    },
+    {
+      "module": "MemoryDraftReview.tsx",
+      "status": "implemented and before/after verified",
+      "parentScene": "task proposal review",
+      "scenes": [
+        "memory-draft-create",
+        "memory-draft-create-assertion",
+        "memory-draft-create-source",
+        "memory-draft-update",
+        "memory-draft-update-assertion",
+        "memory-draft-update-source",
+        "memory-draft-forget",
+        "memory-draft-forget-assertion",
+        "memory-draft-forget-source",
+        "memory-draft-unknown"
+      ]
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import './collaboration-depth.css';
 import { Accordion, AccordionItem, Button, CheckboxField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { bridge } from './bridge';
 import { registerOverlayBack } from './overlay-back';
@@ -47,7 +48,7 @@ export function RemoteInputFlow({ taskId, continuation = false, prepared, visibl
   const busy = pending.some(operation => operation !== 'inspect') || view?.busy === true, selected = rows(view?.files), available = rows(view?.availableFiles), target = object(view?.request), scope = object(view?.scope), review = object(view?.review), receiver = object(view?.inputState);
   const selectedIds = new Set(selected.map(file => file.attachmentId));
   const canReview = !!view && !busy && !unknown && selected.length > 0 && (!view.continuation || view.registered || target.prompt === prompt && target.timeoutSeconds === Number(timeout));
-  return <SettingsDialog isOpen={visible} title="把选定原件交给这项电脑任务" onClose={dismiss}><div className="pw-remote-section">
+  return <SettingsDialog isOpen={visible} title="把选定原件交给这项电脑任务" onClose={dismiss}><div className="pw-remote-section pw-collaboration-dialog">
     <p>这里的选择独立于聊天附件。确认后只发送列出的原件，其他文件与账号凭据不会自动加入。</p>
     <p>目标：{target.profileId || prepared?.profileId} · {target.environmentId || prepared?.environmentId} · {target.worker || prepared?.worker}<br />工作区：{scope.workspace || view?.environment?.workspace || '正在核对'}</p>
     {!view?.registered && continuation && <><p className="pw-field-hint">在原会话建立本次新的执行和输入目录；旧 job、旧原件与旧批准保持各自记录。</p><TextAreaField label="这次如何使用新文件" value={prompt} onChange={value => { input.current.prompt = value; setPrompt(value); setConfirmClosed(review.digest || ''); }} isDisabled={busy} maxLength={8000} /><TextField label="本次新执行时限（10–3600 秒）" value={timeout} onChange={value => { input.current.timeout = value; setTimeoutValue(value); setConfirmClosed(review.digest || ''); }} isDisabled={busy} inputMode="numeric" /><Button variant="secondary" disabled={busy || unknown || !view || !prompt.trim() || prompt.length > 8000 || !/^\d+$/.test(timeout) || Number(timeout) < 10 || Number(timeout) > 3600} onClick={() => void act('setContinuation', { prompt, timeoutSeconds: Number(timeout) })}>保存本次新要求与时限</Button></>}

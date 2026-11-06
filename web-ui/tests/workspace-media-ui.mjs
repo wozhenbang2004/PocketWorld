@@ -15,7 +15,7 @@ const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'pocket-media-fixture-
 await fs.mkdir(output, { recursive: true });
 execFileSync('ffmpeg', ['-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=220:sample_rate=8000:duration=30', '-c:a', 'pcm_s16le', path.join(temporary, 'fixture-tone.wav')]);
 execFileSync('ffmpeg', ['-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=gray:s=320x180:r=12:d=12', '-c:v', 'libvpx', '-b:v', '60k', path.join(temporary, 'fixture-video.webm')]);
-const server = await createServer({ root, logLevel: 'error', server: { host: '127.0.0.1', port: 0 }, plugins: [{ name: 'workspace-real-media-fixtures', configureServer(server) { server.middlewares.use(async (request, response, next) => {
+const server = await createServer({ root, cacheDir: process.env.WORKSPACE_MEDIA_CACHE || undefined, optimizeDeps: { entries: ['tests/workspace-media-fixture.html'] }, logLevel: 'error', server: { host: '127.0.0.1', port: 0 }, plugins: [{ name: 'workspace-real-media-fixtures', configureServer(server) { server.middlewares.use(async (request, response, next) => {
   if (!['/fixture-tone.wav', '/fixture-video.webm'].includes(request.url)) return next();
   const bytes = await fs.readFile(path.join(temporary, request.url.slice(1))), range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.range || '');
   response.setHeader('Content-Type', request.url.endsWith('.wav') ? 'audio/wav' : 'video/webm'); response.setHeader('Accept-Ranges', 'bytes');

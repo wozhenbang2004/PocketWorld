@@ -2,11 +2,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { RiArrowLeftLine, RiArrowRightSLine, RiCloseLine, RiFileTextLine, RiRefreshLine } from '@remixicon/react';
 import { bridge, type PocketSnapshot } from './bridge';
 import { usePocketAppearance } from './usePocketAppearance';
-import { Button } from './forms-library';
+import { Accordion, AccordionItem, Button } from './forms-library';
 import { Drawer } from './shell-library';
 import { Skeleton, ShimmerText } from './library';
 import { captureReaderPosition, readerCoverage, readerDomain, readerIdentity, restoreReaderPosition, readerFieldCurrent, readerFieldPayload, readerPin, readerTime, sameReader, type ReaderField, type ReaderPosition, type ReaderState } from './reader-contract';
 import './browser-source-reader.css';
+import './browser-depth.css';
 
 /** One native-pinned saved source, with a reversible field view in the same reading window. */
 export default function BrowserSourceReader({ snapshot }: { snapshot: PocketSnapshot }) {
@@ -121,7 +122,7 @@ export default function BrowserSourceReader({ snapshot }: { snapshot: PocketSnap
             <div className="browser-reader-heading">
               {source && <p className="browser-reader-domain">{readerDomain(source.safeUrl)}{captured && <><span aria-hidden> · </span><time dateTime={captured.iso}>{captured.label}</time></>}</p>}
               <Drawer.Title asChild><h1 ref={title} tabIndex={-1}>{heading}</h1></Drawer.Title>
-              <Drawer.Description id="browser-reader-description">当时保存的内容，不会自动换成现网页。网页文字仍需核实。</Drawer.Description>
+              <Drawer.Description id="browser-reader-description">当时保存的{source?.coverage.partial ? '部分' : '所选范围'}原文 · 尚未经核实</Drawer.Description>
             </div>
             {notice && <div className="browser-reader-error" role="alert"><p>{notice}</p><Button variant="secondary" className="browser-reader-control" onClick={() => void refresh()} disabled={busy}>重读原件</Button></div>}
             {busy && <div className="browser-reader-loading" role="status"><ShimmerText>正在核对当时保存的原件…</ShimmerText>{!source && <div aria-hidden="true"><Skeleton height={18} width="87%" /><Skeleton height={18} width="100%" /><Skeleton height={18} width="94%" /><Skeleton height={18} width="62%" /></div>}</div>}
@@ -141,7 +142,7 @@ export default function BrowserSourceReader({ snapshot }: { snapshot: PocketSnap
                   <p>{cell.text || '（空）'}</p><Button variant="ghost" className="browser-reader-control browser-reader-field-link" data-reader-key={`row-${row.index}-column-${cell.column}`} aria-label={`查看第 ${row.index + 1} 行第 ${cell.column + 1} 列原字段`} onClick={() => void readField(cell.fieldRef, `row-${row.index}-column-${cell.column}`)} disabled={busy}>字段依据<RiArrowRightSLine aria-hidden /></Button>
                 </Cell>;
               })}</tr>)}</tbody></table></div> : <div className="browser-reader-prose">{source.excerpt || '这份来源没有保存正文摘录。'}</div>}
-              <footer className="browser-reader-source-note"><h2>这次保存的范围</h2><p>{readerCoverage(source)}</p>{!!source.projection?.omittedRows && <p>已交付的行中另有 {source.projection.omittedRows} 行未保留在这份投影内。</p>}<p className="browser-reader-url">{source.safeUrl}</p>{source.urlQueryOmitted && <p>地址中的查询参数和片段已省略，正文与表头中的同一精确地址也以安全地址显示。</p>}<p>{source.projection && !source.projection.partial ? '另看现网页和制作只读配方仍在原结果面板中。' : '另看现网页仍在原结果面板中。'}</p></footer>
+              <footer className="browser-reader-source-note"><Accordion variant="divided"><AccordionItem id="capture-scope" title="这次保存的范围与出处" description="查看采集范围与安全地址"><p>{readerCoverage(source)}</p>{!!source.projection?.omittedRows && <p>已交付的行中另有 {source.projection.omittedRows} 行未保留在这份投影内。</p>}<p className="browser-reader-url">{source.safeUrl}</p>{source.urlQueryOmitted && <p>地址中的查询参数和片段已省略，正文与表头中的同一精确地址也以安全地址显示。</p>}<p>{source.projection && !source.projection.partial ? '另看现网页和制作只读配方仍在原结果面板中。' : '另看现网页仍在原结果面板中。'}</p></AccordionItem></Accordion></footer>
             </article>)}
           </div>
         </div>

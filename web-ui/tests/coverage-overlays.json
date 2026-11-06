@@ -1,0 +1,575 @@
+{
+  "boundary": "Actual React components or production Web build, explicit synthetic native transport. Static visual evidence, not motion timing/Android/device acceptance.",
+  "scenes": [
+    {
+      "id": "conversation",
+      "title": "整理对话",
+      "task": "整理对话",
+      "change": "已检查保留：现有成熟组件的对象归属、正文与操作主次合适；不为改动数量重写。",
+      "status": "reviewed_retained",
+      "sourceUnchanged": true,
+      "screenshots": [
+        {
+          "width": 360,
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/root-depth-overlays/conversation-360.png",
+            "sha256": "48b9a9436d8e6c8dcca36296ba558f0ecadafe906e80ddf878f4fb5af1c41539"
+          },
+          "arrival": {
+            "object": "conversation-1 / org-selection-1",
+            "box": {
+              "x": 10,
+              "y": 309,
+              "width": 340,
+              "height": 282
+            },
+            "foreground": true,
+            "handshake": "real app.ready before render"
+          }
+        },
+        {
+          "width": 1280,
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/root-depth-overlays/conversation-1280.png",
+            "sha256": "5dd8a4db16c9bfd1bc83ae69ab602e4eea91974f2af799935d4821d52bed5660"
+          },
+          "arrival": {
+            "object": "conversation-1 / org-selection-1",
+            "box": {
+              "x": 330,
+              "y": 309,
+              "width": 620,
+              "height": 282
+            },
+            "foreground": true,
+            "handshake": "real app.ready before render"
+          }
+        }
+      ],
+      "verification": "Passed explicit document-bound app.ready fixture, intended foreground object and static hierarchy assertions; original handle/selection/receipt behavior checked.",
+      "limitation": "Current images only because these production components are unchanged; no fabricated before capture."
+    },
+    {
+      "id": "quote",
+      "title": "引用原消息",
+      "task": "引用原消息",
+      "change": "已检查保留：现有成熟组件的对象归属、正文与操作主次合适；不为改动数量重写。",
+      "status": "reviewed_retained",
+      "sourceUnchanged": true,
+      "screenshots": [
+        {
+          "width": 360,
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/root-depth-overlays/quote-360.png",
+            "sha256": "31a7cad6e3c0405fa4ff4a388d59cee149d10743db4e72b07b64c3fbf2ae8197"
+          },
+          "arrival": {
+            "object": "answer-1 / quote-window-1",
+            "box": {
+              "x": 10,
+              "y": 243.5,
+              "width": 340,
+              "height": 413
+            },
+            "foreground": true,
+            "handshake": "real app.ready before render"
+          }
+        },
+        {
+          "width": 1280,
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/root-depth-overlays/quote-1280.png",
+            "sha256": "a8b11c4ec55dd55822c0156129aa591168a618bc5c4f59027a75aec45152a608"
+          },
+          "arrival": {
+            "object": "answer-1 / quote-window-1",
+            "box": {
+              "x": 330,
+              "y": 255,
+              "width": 620,
+              "height": 390
+            },
+            "foreground": true,
+            "handshake": "real app.ready before render"
+          }
+        }
+      ],
+      "verification": "Passed explicit document-bound app.ready fixture, intended foreground object and static hierarchy assertions; original handle/selection/receipt behavior checked.",
+      "limitation": "Current images only because these production components are unchanged; no fabricated before capture."
+    },
+    {
+      "id": "origin",
+      "title": "答复原请求",
+      "task": "答复原请求",
+      "change": "已检查保留：现有成熟组件的对象归属、正文与操作主次合适；不为改动数量重写。",
+      "status": "reviewed_retained",
+      "sourceUnchanged": true,
+      "screenshots": [
+        {
+          "width": 360,
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/root-depth-overlays/origin-360.png",
+            "sha256": "072ea3ac627118e179ea929d4b4503e9ecbc5b67a5d4b3a01b66cace3186de4d"
+          },
+          "arrival": {
+            "object": "answer-1 -> request-1",
+            "box": {
+              "x": 0,
+              "y": 706,
+              "width": 360,
+              "height": 194
+            },
+            "foreground": true,
+            "handshake": "real app.ready before render"
+          }
+        },
+        {
+          "width": 1280,
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/root-depth-overlays/origin-1280.png",
+            "sha256": "23cdad44331dece2a3f17f691e2459b644b89e9f5b9838dfd9791fa969b809e7"
+          },
+          "arrival": {
+            "object": "answer-1 -> request-1",
+            "box": {
+              "x": 280,
+              "y": 730,
+              "width": 720,
+              "height": 170
+            },
+            "foreground": true,
+            "handshake": "real app.ready before render"
+          }
+        }
+      ],
+      "verification": "Passed explicit document-bound app.ready fixture, intended foreground object and static hierarchy assertions; original handle/selection/receipt behavior checked.",
+      "limitation": "Current images only because these production components are unchanged; no fabricated before capture."
+    },
+    {
+      "id": "sources",
+      "title": "回答来源列表",
+      "task": "回答来源列表",
+      "change": "已检查保留：现有成熟组件的对象归属、正文与操作主次合适；不为改动数量重写。",
+      "status": "reviewed_retained",
+      "sourceUnchanged": true,
+      "screenshots": [
+        {
+          "width": 360,
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/root-depth-overlays/sources-360.png",
+            "sha256": "9759e105ecefd852b08b296f8c2b994a9f7f5cd21a4812ff90633746cd026825"
+          },
+          "arrival": {
+            "object": "answer-1 / source-window-1",
+            "box": {
+              "x": 0,
+              "y": 655,
+              "width": 360,
+              "height": 245
+            },
+            "foreground": true,
+            "handshake": "real app.ready before render"
+          }
+        },
+        {
+          "width": 1280,
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/root-depth-overlays/sources-1280.png",
+            "sha256": "6d3ded9a03339aea27641691252b2b11961c0b2b6e36560a70bb36d0d4b301e0"
+          },
+          "arrival": {
+            "object": "answer-1 / source-window-1",
+            "box": {
+              "x": 280,
+              "y": 655,
+              "width": 720,
+              "height": 245
+            },
+            "foreground": true,
+            "handshake": "real app.ready before render"
+          }
+        }
+      ],
+      "verification": "Passed explicit document-bound app.ready fixture, intended foreground object and static hierarchy assertions; original handle/selection/receipt behavior checked.",
+      "limitation": "Current images only because these production components are unchanged; no fabricated before capture."
+    },
+    {
+      "id": "sources-read",
+      "title": "来源原文",
+      "task": "来源原文",
+      "change": "已检查保留：现有成熟组件的对象归属、正文与操作主次合适；不为改动数量重写。",
+      "status": "reviewed_retained",
+      "sourceUnchanged": true,
+      "screenshots": [
+        {
+          "width": 360,
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/root-depth-overlays/sources-read-360.png",
+            "sha256": "f5874cfc38624da1622610b8955984726e48132215e445f44d4eb53709aaffbd"
+          },
+          "arrival": {
+            "object": "answer-1 / source-window-1 / source-handle-1",
+            "box": {
+              "x": 0,
+              "y": 619,
+              "width": 360,
+              "height": 281
+            },
+            "foreground": true,
+            "handshake": "real app.ready before render"
+          }
+        },
+        {
+          "width": 1280,
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/root-depth-overlays/sources-read-1280.png",
+            "sha256": "e3c14951c8dd6053ff30e13707cab986354680c8e86a62588f1d699721fc4565"
+          },
+          "arrival": {
+            "object": "answer-1 / source-window-1 / source-handle-1",
+            "box": {
+              "x": 280,
+              "y": 644.5,
+              "width": 720,
+              "height": 255.5
+            },
+            "foreground": true,
+            "handshake": "real app.ready before render"
+          }
+        }
+      ],
+      "verification": "Passed explicit document-bound app.ready fixture, intended foreground object and static hierarchy assertions; original handle/selection/receipt behavior checked.",
+      "limitation": "Current images only because these production components are unchanged; no fabricated before capture."
+    },
+    {
+      "id": "approval",
+      "title": "任务审批",
+      "task": "任务审批",
+      "change": "已检查保留：现有成熟组件的对象归属、正文与操作主次合适；不为改动数量重写。",
+      "status": "reviewed_retained",
+      "sourceUnchanged": true,
+      "screenshots": [
+        {
+          "width": 360,
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/root-depth-overlays/approval-360.png",
+            "sha256": "159b56fa74aeaf7a228aa3db278ca9df4c68fb3a29f71814ffeca91711ba7402"
+          },
+          "arrival": {
+            "object": "approval-1 / submit_form",
+            "box": {
+              "x": 20,
+              "y": 24,
+              "width": 320,
+              "height": 305
+            },
+            "foreground": true,
+            "handshake": "real app.ready before render"
+          }
+        },
+        {
+          "width": 1280,
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/root-depth-overlays/approval-1280.png",
+            "sha256": "351553d3b79a122c33b8fea4b7cd37cae242337d0f7a23435719d384f1c39cfb"
+          },
+          "arrival": {
+            "object": "approval-1 / submit_form",
+            "box": {
+              "x": 280,
+              "y": 24,
+              "width": 720,
+              "height": 319
+            },
+            "foreground": true,
+            "handshake": "real app.ready before render"
+          }
+        }
+      ],
+      "verification": "Passed explicit document-bound app.ready fixture, intended foreground object and static hierarchy assertions; original handle/selection/receipt behavior checked.",
+      "limitation": "Current images only because these production components are unchanged; no fabricated before capture."
+    },
+    {
+      "id": "approval-pending",
+      "title": "审批处理中",
+      "task": "审批处理中",
+      "change": "已检查保留：现有成熟组件的对象归属、正文与操作主次合适；不为改动数量重写。",
+      "status": "reviewed_retained",
+      "sourceUnchanged": true,
+      "screenshots": [
+        {
+          "width": 360,
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/root-depth-overlays/approval-pending-360.png",
+            "sha256": "f97abf0c09d3f50cc063f16531e3d29ce9002640c92d2e5322554ff5a591f2a0"
+          },
+          "arrival": {
+            "object": "approval-1 / submit_form",
+            "box": {
+              "x": 20,
+              "y": 24,
+              "width": 320,
+              "height": 305
+            },
+            "foreground": true,
+            "handshake": "real app.ready before render"
+          }
+        },
+        {
+          "width": 1280,
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/root-depth-overlays/approval-pending-1280.png",
+            "sha256": "cf2cf1390d55bfe863e48a3f2ba165bf75127f9e6df0e029820c5c15dd0cfc16"
+          },
+          "arrival": {
+            "object": "approval-1 / submit_form",
+            "box": {
+              "x": 280,
+              "y": 24,
+              "width": 720,
+              "height": 319
+            },
+            "foreground": true,
+            "handshake": "real app.ready before render"
+          }
+        }
+      ],
+      "verification": "Passed explicit document-bound app.ready fixture, intended foreground object and static hierarchy assertions; original handle/selection/receipt behavior checked.",
+      "limitation": "Current images only because these production components are unchanged; no fabricated before capture."
+    },
+    {
+      "id": "usage",
+      "title": "任务模型用量",
+      "task": "任务模型用量",
+      "change": "已检查保留：现有成熟组件的对象归属、正文与操作主次合适；不为改动数量重写。",
+      "status": "reviewed_retained",
+      "sourceUnchanged": true,
+      "screenshots": [
+        {
+          "width": 360,
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/root-depth-overlays/usage-360.png",
+            "sha256": "1d103182a4a066bf36e6609d38d8f252aeb7fc29908413521d81639e5fa77247"
+          },
+          "arrival": {
+            "object": "task-1 / readOnly usage",
+            "box": {
+              "x": 20,
+              "y": 36,
+              "width": 320,
+              "height": 395
+            },
+            "foreground": true,
+            "handshake": "real app.ready before render"
+          }
+        },
+        {
+          "width": 1280,
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/root-depth-overlays/usage-1280.png",
+            "sha256": "66a6eb21f686ed48ad9535908cb9fa664633b78b3351c3f3e1f0aa7b86f762ba"
+          },
+          "arrival": {
+            "object": "task-1 / readOnly usage",
+            "box": {
+              "x": 280,
+              "y": 36,
+              "width": 720,
+              "height": 395
+            },
+            "foreground": true,
+            "handshake": "real app.ready before render"
+          }
+        }
+      ],
+      "verification": "Passed explicit document-bound app.ready fixture, intended foreground object and static hierarchy assertions; original handle/selection/receipt behavior checked.",
+      "limitation": "Current images only because these production components are unchanged; no fabricated before capture."
+    },
+    {
+      "id": "question",
+      "title": "等待你的选择",
+      "task": "等待你的选择",
+      "change": "已检查保留：现有成熟组件的对象归属、正文与操作主次合适；不为改动数量重写。",
+      "status": "reviewed_retained",
+      "sourceUnchanged": true,
+      "screenshots": [
+        {
+          "width": 360,
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/root-depth-overlays/question-360.png",
+            "sha256": "6af4add0e771ac70fcdcb65d73dc0889063755952d3fd8f926f82a5761819298"
+          },
+          "arrival": {
+            "object": "owner-question-1",
+            "box": {
+              "x": 20,
+              "y": 24,
+              "width": 320,
+              "height": 404
+            },
+            "foreground": true,
+            "handshake": "real app.ready before render"
+          }
+        },
+        {
+          "width": 1280,
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/root-depth-overlays/question-1280.png",
+            "sha256": "b8dbf9af74da8eae3522323abcde72f09a46f15bd6b121f5d726af6a5ead38d4"
+          },
+          "arrival": {
+            "object": "owner-question-1",
+            "box": {
+              "x": 280,
+              "y": 24,
+              "width": 720,
+              "height": 418
+            },
+            "foreground": true,
+            "handshake": "real app.ready before render"
+          }
+        }
+      ],
+      "verification": "Passed explicit document-bound app.ready fixture, intended foreground object and static hierarchy assertions; original handle/selection/receipt behavior checked.",
+      "limitation": "Current images only because these production components are unchanged; no fabricated before capture."
+    },
+    {
+      "id": "reading-reading",
+      "title": "连续阅读",
+      "task": "保持原内容、选字、表格及返回位置的连续性",
+      "change": "已检查保留：长文连续排版，阅读与选字分离；表格局部展开，不把阅读改成仪表盘。",
+      "status": "reviewed_retained",
+      "sourceUnchanged": true,
+      "screenshots": [
+        {
+          "width": 360,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/reading-depth-before/360-light-reading.png",
+            "sha256": "a122d297ceec5520b223ee1c60f95866bb2205a7eace20a15bbb3fd2fc3e131a"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/reading-depth-after/360-light-reading.png",
+            "sha256": "a122d297ceec5520b223ee1c60f95866bb2205a7eace20a15bbb3fd2fc3e131a"
+          }
+        }
+      ],
+      "verification": "Nine original production reading journeys passed, including snapshot freeze, focus trap, exact table copy and original review return.",
+      "limitation": "DOM selection and clipboard fixture, not physical Android long press/OS clipboard."
+    },
+    {
+      "id": "reading-selection",
+      "title": "原文选字",
+      "task": "保持原内容、选字、表格及返回位置的连续性",
+      "change": "已检查保留：长文连续排版，阅读与选字分离；表格局部展开，不把阅读改成仪表盘。",
+      "status": "reviewed_retained",
+      "sourceUnchanged": true,
+      "screenshots": [
+        {
+          "width": 360,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/reading-depth-before/360-light-selection.png",
+            "sha256": "ff7d3cab2acebe9d9e82a2546a2b49369ea87b8633a5e279e835f8bc6bc8499e"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/reading-depth-after/360-light-selection.png",
+            "sha256": "ff7d3cab2acebe9d9e82a2546a2b49369ea87b8633a5e279e835f8bc6bc8499e"
+          }
+        }
+      ],
+      "verification": "Nine original production reading journeys passed, including snapshot freeze, focus trap, exact table copy and original review return.",
+      "limitation": "DOM selection and clipboard fixture, not physical Android long press/OS clipboard."
+    },
+    {
+      "id": "reading-table-expanded",
+      "title": "宽表格展开",
+      "task": "保持原内容、选字、表格及返回位置的连续性",
+      "change": "已检查保留：长文连续排版，阅读与选字分离；表格局部展开，不把阅读改成仪表盘。",
+      "status": "reviewed_retained",
+      "sourceUnchanged": true,
+      "screenshots": [
+        {
+          "width": 360,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/reading-depth-before/360-light-table-expanded.png",
+            "sha256": "9ea19d98f2f8497963a470983dd2e0ca00feca28c37a243dbb82f6474354e1b6"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/reading-depth-after/360-light-table-expanded.png",
+            "sha256": "0dc4a2cc596d3646a6f7ad85a06a08646197ef8bf1ecf1fb0fd900ae7e439f0a"
+          }
+        }
+      ],
+      "verification": "Nine original production reading journeys passed, including snapshot freeze, focus trap, exact table copy and original review return.",
+      "limitation": "DOM selection and clipboard fixture, not physical Android long press/OS clipboard."
+    },
+    {
+      "id": "reading-reference-table",
+      "title": "引用式表格",
+      "task": "保持原内容、选字、表格及返回位置的连续性",
+      "change": "已检查保留：长文连续排版，阅读与选字分离；表格局部展开，不把阅读改成仪表盘。",
+      "status": "reviewed_retained",
+      "sourceUnchanged": true,
+      "screenshots": [
+        {
+          "width": 360,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/reading-depth-before/360-light-reference-table.png",
+            "sha256": "662564fdee3157c5ef8b3609cb5ae998f57cb5d612c8df1f332330f6699b5529"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/reading-depth-after/360-light-reference-table.png",
+            "sha256": "662564fdee3157c5ef8b3609cb5ae998f57cb5d612c8df1f332330f6699b5529"
+          }
+        }
+      ],
+      "verification": "Nine original production reading journeys passed, including snapshot freeze, focus trap, exact table copy and original review return.",
+      "limitation": "DOM selection and clipboard fixture, not physical Android long press/OS clipboard."
+    },
+    {
+      "id": "reading-media-review-table",
+      "title": "媒体核对中的嵌套阅读",
+      "task": "保持原内容、选字、表格及返回位置的连续性",
+      "change": "已检查保留：长文连续排版，阅读与选字分离；表格局部展开，不把阅读改成仪表盘。",
+      "status": "reviewed_retained",
+      "sourceUnchanged": true,
+      "screenshots": [
+        {
+          "width": 360,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/reading-depth-before/360-light-media-review-table.png",
+            "sha256": "724e660e2d9cc849fed229c6a6177dbe6293da34a658cb0859a047cbfe3c8dac"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/reading-depth-after/360-light-media-review-table.png",
+            "sha256": "724e660e2d9cc849fed229c6a6177dbe6293da34a658cb0859a047cbfe3c8dac"
+          }
+        }
+      ],
+      "verification": "Nine original production reading journeys passed, including snapshot freeze, focus trap, exact table copy and original review return.",
+      "limitation": "DOM selection and clipboard fixture, not physical Android long press/OS clipboard."
+    },
+    {
+      "id": "reading-media-review-return",
+      "title": "返回原媒体核对",
+      "task": "保持原内容、选字、表格及返回位置的连续性",
+      "change": "已检查保留：长文连续排版，阅读与选字分离；表格局部展开，不把阅读改成仪表盘。",
+      "status": "reviewed_retained",
+      "sourceUnchanged": true,
+      "screenshots": [
+        {
+          "width": 360,
+          "before": {
+            "path": "/workspace/scratch/a7233424b5cb/reading-depth-before/360-light-media-review-return.png",
+            "sha256": "81c7a9a2114443decbd6412165ceadd1d0d9aff6f3b6198b1901c15eaf8103d4"
+          },
+          "after": {
+            "path": "/workspace/scratch/a7233424b5cb/reading-depth-after/360-light-media-review-return.png",
+            "sha256": "1c968d55566d983598be9bb1c54306bf30ce75866aa22206628dbb2a1e9fbc58"
+          }
+        }
+      ],
+      "verification": "Nine original production reading journeys passed, including snapshot freeze, focus trap, exact table copy and original review return.",
+      "limitation": "DOM selection and clipboard fixture, not physical Android long press/OS clipboard."
+    }
+  ]
+}

@@ -198,9 +198,7 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
     </div>}
     <div className="pw-preview-context">
       <p className="pw-muted">{choosing ? '只打开这次任务保存的版本，不构建或启动任务。' : view?.selecting ? '点选元素加入原草稿，不会执行页面按钮。' : fixed ? '固定包不会随当前项目的修改而更新。' : '开启元素选择后，可把画面位置加入原草稿。'}</p>
-      {view && <Accordion variant="divided"><AccordionItem id="opened-package-source" title="来源与原任务" headingLevel={4}>
-        <dl className="pw-preview-source-details"><dt>原任务</dt><dd>{view.taskId}</dd><dt>项目</dt><dd>{String(view.metadata.projectId || '')}</dd>{fixed && <><dt>原操作</dt><dd>{view.packageOperationId}</dd><dt>固定版本</dt><dd>{String(view.metadata.artifactId || '')}</dd><dt>归档摘要</dt><dd>{String(view.metadata.artifactSha256 || '')}</dd></>}</dl>
-      </AccordionItem></Accordion>}
+
       {view && !view.selectionAvailable && <p className="pw-muted" role="status">{view.selectionUnavailableReason || '暂未确认原来源仍可用于元素选择。'}{fixed ? ' 历史画面仍可查看，发送时还会重新核对来源。' : ''}</p>}
       {problem && <p className="pw-error" role="alert">{problem}</p>}
       {unknown && <p className="pw-muted">原操作结果待核对，没有重发。请返回后核对原预览与草稿。</p>}
@@ -218,6 +216,9 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
       {!view?.ready && <div className="pw-preview-placeholder">{busy || view && !problem ? <><ProgressCircle isIndeterminate size="sm" aria-label="正在打开已采集预览"/><p>正在打开已采集预览…</p></> : <p>{problem ? '原文件和草稿仍保留。' : '当前项目没有可用的已采集预览。'}</p>}</div>}
     </div>}
     {view && <p className="pw-preview-draft-status" role="status">{count > 0 ? `草稿中有 ${count} 处元素引用，尚未发送` : '选择的元素会留在原对话草稿中'}</p>}
+    {view && <Accordion variant="divided"><AccordionItem id="opened-package-source" title="来源与原任务" headingLevel={4}>
+        <dl className="pw-preview-source-details"><dt>原任务</dt><dd>{view.taskId}</dd><dt>项目</dt><dd>{String(view.metadata.projectId || '')}</dd>{fixed && <><dt>原操作</dt><dd>{view.packageOperationId}</dd><dt>固定版本</dt><dd>{String(view.metadata.artifactId || '')}</dd><dt>归档摘要</dt><dd>{String(view.metadata.artifactSha256 || '')}</dd></>}</dl>
+      </AccordionItem></Accordion>}
     <footer className="pw-preview-footer">
       <Button variant="ghost" leadingIcon={RiArrowLeftLine} size="small" onClick={control.hide}>返回项目文件</Button>
       {choosing && <Button variant="secondary" size="small" disabled={!!busy} onClick={control.returnToPackageTask}>返回原任务</Button>}

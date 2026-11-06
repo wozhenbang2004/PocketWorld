@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "scope": "Two real business surfaces, four representative states; supplemental coverage for App routeReference action and Tasks managed-session disclosure.",
+  "baseline": "0f36884 exact source snapshot (same pre-supplement UI as main)",
+  "status": "passed",
+  "fixture": "tests/depth-reference-sessions-fixture.tsx",
+  "runner": "tests/depth-reference-sessions-ui.mjs",
+  "nativeBoundary": "Complete synthetic native document token/envelope/app.ready handshake through real bridge; no replacement of production gates. No Android, system picker, share sheet, route execution, real remote session or file write claim.",
+  "validation": {
+    "typecheck": "passed",
+    "contractTests": "21 remote-task-workspace production callback/identity/lifecycle tests passed",
+    "browser": "8 before +8 after scene/viewport renders passed under lock B, 360x900 and1280x900",
+    "checks": [
+      "Unique actual heading or native task row visible, outside hidden/inert/aria-hidden layer, two animation frames after fonts ready",
+      "No horizontal viewport overflow, no pageerror or fixture protocol errors",
+      "Route original task/run/epoch/namespace remain constrained by the original host target; file bytes/SHA remain visibly available",
+      "Full retained original file can open without changing exact bytes or scope",
+      "Visible BoardUI checkbox label toggles consent; export unavailable before consent and after withdrawal; no export/share/picker command dispatched",
+      "Discard only the original selected handle/requestId; returns to prior state",
+      "Session navigation sends exactly original listingHandle/taskId/rowIdentity and authorizes no execution"
+    ],
+    "matureSources": [
+      "Retained Vaul Drawer in shell-library (existing approved controlled flow)",
+      "Retained BoardUI Accordion, Button, Checkbox, HostFileUpload; src/forms-library/SOURCE-map.json and LICENSE-BoardUI.txt unchanged"
+    ],
+    "limits": [
+      "Static reduced-motion browser fixtures, not native visual/device execution validation.",
+      "The hidden native checkbox input is intentionally not a pointer target; the final journey clicks its visible associated label, as a user does."
+    ]
+  },
+  "scenes": [
+    {
+      "scene": "reference",
+      "component": "RouteReference.tsx",
+      "mainTask": "核对原私人任务的可分享路线，明确一次导出",
+      "oldProblem": "步骤、技术参数、原件、边界与导出同意沿一列文档平铺。",
+      "change": "应用版本、字节、SHA和内容指纹常显；原task/run/epoch/namespace仅保留逻辑约束；原导出与外来检查分区；逐步条件和原件采用BoardUI Accordion；保留步骤显式序号与独立ack。",
+      "decision": "upgraded after actual before inspection; no native authority change",
+      "matureSources": [
+        "BoardUI retained controls and Accordion",
+        "Vaul retained drawer"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/reference-sessions-evidence/before/reference-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/reference-sessions-evidence/after/reference-360.png"
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/reference-sessions-evidence/before/reference-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/reference-sessions-evidence/after/reference-1280.png"
+        }
+      ],
+      "verification": "passed — actual expected business object, reachable controls and exact fake-native receipt identities"
+    },
+    {
+      "scene": "reference-imported",
+      "component": "RouteReference.tsx",
+      "mainTask": "比较原路线与所选外来参考，不提升外来内容信任",
+      "oldProblem": "原参考与导入参考在同一阅读轴长串联。",
+      "change": "宽屏并列原导出与外来检查，手机依次分区；外来相同指纹不提高信任的提示保留。",
+      "decision": "upgraded after actual before inspection; no native authority change",
+      "matureSources": [
+        "BoardUI retained controls and Accordion",
+        "Vaul retained drawer"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/reference-sessions-evidence/before/reference-imported-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/reference-sessions-evidence/after/reference-imported-360.png"
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/reference-sessions-evidence/before/reference-imported-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/reference-sessions-evidence/after/reference-imported-1280.png"
+        }
+      ],
+      "verification": "passed — actual expected business object, reachable controls and exact fake-native receipt identities"
+    },
+    {
+      "scene": "reference-selection",
+      "component": "RouteReference.tsx",
+      "mainTask": "核对本次所选文件并可放弃本次选择",
+      "oldProblem": "选择器阶段与原参考、外来参考边界不明显。",
+      "change": "本次所选文件与原请求保持共同区域，放弃仍仅携带原handle/requestId，不打开选择器或读写。",
+      "decision": "upgraded after actual before inspection; no native authority change",
+      "matureSources": [
+        "BoardUI retained controls and Accordion",
+        "Vaul retained drawer"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/reference-sessions-evidence/before/reference-selection-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/reference-sessions-evidence/after/reference-selection-360.png"
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/reference-sessions-evidence/before/reference-selection-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/reference-sessions-evidence/after/reference-selection-1280.png"
+        }
+      ],
+      "verification": "passed — actual expected business object, reachable controls and exact fake-native receipt identities"
+    },
+    {
+      "scene": "sessions",
+      "component": "RemoteTaskWorkspace.tsx / RemoteManagedSessionsWorkspace",
+      "mainTask": "按真实电脑与环境找到原任务会话并回到原任务",
+      "oldProblem": "BoardUI Button共享label span导致标题、执行器与环境挤为连续文本，打开动作与任务关系弱。",
+      "change": "沿native connection/environment分组，任务标题/真实会话证据/打开原任务成稳定行轴；身份不完整与未扫描范围常显，未改listingHandle/taskId/rowIdentity门禁。",
+      "decision": "upgraded after actual before inspection; no native authority change",
+      "matureSources": [
+        "BoardUI retained controls and Accordion",
+        "Existing controlled native session metadata adapter"
+      ],
+      "screenshots": [
+        {
+          "width": 360,
+          "before": "/workspace/scratch/a7233424b5cb/reference-sessions-evidence/before/sessions-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/reference-sessions-evidence/after/sessions-360.png"
+        },
+        {
+          "width": 1280,
+          "before": "/workspace/scratch/a7233424b5cb/reference-sessions-evidence/before/sessions-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/reference-sessions-evidence/after/sessions-1280.png"
+        }
+      ],
+      "verification": "passed — actual expected business object, reachable controls and exact fake-native receipt identities"
+    }
+  ]
+}

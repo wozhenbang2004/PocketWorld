@@ -46,6 +46,19 @@
 .pw-preview-footer > button { min-height: 44px; }
 .pw-preview-pane .pw-preview-source-details { max-height: 120px; overflow: auto; }
 
+/* The single native viewport leads; source details follow the actual image.
+ * ResizeObserver continues reporting this same node's final visible bounds. */
+.pw-preview-pane { gap: 12px; }
+.pw-preview-pane .pw-preview-heading h3 { font-size: 15px; font-weight: 550; }
+.pw-preview-pane .pw-preview-actions { gap: 6px; }
+.pw-preview-pane > .pw-preview-context { font-size: 11px; }
+.pw-preview-pane > .pw-preview-context p { font-size: 11px; line-height: 1.7; }
+.pw-preview-pane > .pw-preview-viewport { min-height: 180px; border-radius: 14px; box-shadow: none; }
+.pw-preview-pane > [data-orientation] { flex: none; }
+.pw-preview-pane > .pw-preview-draft-status { margin-top: 2px; }
+.pw-preview-pane > .pw-preview-footer { padding-top: 4px; }
+.pw-preview-pane > [data-orientation] button[slot="trigger"] { min-height: 40px; padding-block: 6px; font-size: 12px; }
+
 /* Fennel reference: source objects and the corresponding result share one
  * workspace. BoardUI controls and the one host viewport retain their owners. */
 @media (min-width: 1024px) {

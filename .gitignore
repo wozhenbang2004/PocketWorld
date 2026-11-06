@@ -20,6 +20,7 @@ __pycache__/
 /SESSION.md
 /research/
 /reports/
+/build-artifacts/
 *.bundle
 
 # Credentials, local configuration, and generated packages.

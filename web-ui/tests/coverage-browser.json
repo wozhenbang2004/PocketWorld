@@ -1,0 +1,1169 @@
+{
+  "scope": "Browser/reader/startup/realtime/phone presentation depth, base 379911a (same tree as released main e86952a); QuickPanelVoiceDraft supplemental audit (existing production hierarchy retained)",
+  "user_requirement": "每一个界面深度优化；格式塔、留白、信息和视觉层级，不能像文档铺列表。",
+  "evidence_scope": "Real React components rendered in Chromium 141 with synthetic native state. Does not establish Android/WebView, native DOM capture, physical screen frames, microphones, calls, billing, SQLite cutover or device persistence.",
+  "viewports": [
+    360,
+    1280
+  ],
+  "evidence_directory": "test-results/depth-browser",
+  "mature_sources": {
+    "boardui": {
+      "version": "ec5c5eb3e29c2441be63b9422cd54f411ef23466 + retained official free registry additions",
+      "source": "src/forms-library/SOURCE-map.json; src/shell-library/upstream/boardui/components/application/dashboard/dashboard-sidebar.tsx; src/shell-library/upstream/boardui/components/base/tabs/tabs.tsx",
+      "adaptation": "Existing sidebar/current selection and bounded content composition; horizontal mobile navigation keeps the same host setView action. No new navigation authority."
+    },
+    "disclosure": {
+      "source": "src/forms-library/boardui/components/base/accordion/accordion.tsx; src/forms-library/SettingsDialog.tsx",
+      "adaptation": "Actual BoardUI React Aria disclosure and existing dialog: secondary scope/timing/source details, unchanged confirmation gates. Recipient endpoint, partial-source status, errors and stop/handoff remain visible."
+    },
+    "research": "Existing Affect result/reading composition and approved Fennel plan/result relationship (visual reference only; no official Fennel source claim). Result is primary, raw answer remains a disclosure.",
+    "phone": {
+      "source": "src/phone-viewer.tsx; src/phone-viewer.css; retained CopilotKit/OpenMuse a4944f4 ComputerEntry/DesktopToolCard/Sheet, MIT",
+      "adaptation": "Same single feed/decode/visibility lifecycle and Vaul/Radix surfaces; neutral frame/control grouping. Task chooser now uses real retained BoardUI Select with portal inside the existing dialog."
+    },
+    "reader": "Existing Vaul 1.1.2 full reading window + BoardUI buttons + Affect 37b91fa Shimmer, retained browser-source-reader.css. Saved-source identity, safe text, field pins and two-axis position restoration remain unchanged.",
+    "gestalt": "ai-dev-orchestrator 2.6.1 references/uiux/practices/gestalt-minimal-expression.md: proximity, common region, figure-ground, continuous reading, progressive disclosure. Package HEAD verified centrally by root: 20261105T145855Z-9cfaa33a.",
+    "quick_voice": {
+      "source": "src/QuickPanelVoiceDraft.tsx; src/composer-context.css; src/forms-library/SettingsDialog.tsx; src/forms-library/boardui/components/base/accordion/accordion.tsx",
+      "adaptation": "Retained actual BoardUI SettingsDialog, TextArea and Accordion. Existing stage -> review -> receipt composition already groups the task, primary action and secondary original note. This pass adds real component scene and journey evidence; no production change is justified."
+    }
+  },
+  "scenes": [
+    {
+      "scene": "browser-new",
+      "primary_task": "提出研究目标，核对本次范围后开始",
+      "original_problem": "窄屏68px侧栏压缩目标，时限单选铺满正文",
+      "change": "顶部三页导航；目标优先，时限与额外范围用实际BoardUI披露，授权与开始仍显式",
+      "mature_source_keys": [
+        "boardui",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-browser-new-360.png",
+          "after": "test-results/depth-browser/after-browser-new-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-browser-new-1280.png",
+          "after": "test-results/depth-browser/after-browser-new-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "browser-research",
+      "primary_task": "看懂当前研究并能停止",
+      "original_problem": "当前动作隐藏在活动列表，停止位于低频设置后",
+      "change": "目标、原状态、最近真实活动与停止动作形成一组；原活动/授权详情按需展开",
+      "mature_source_keys": [
+        "boardui",
+        "research"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-browser-research-360.png",
+          "after": "test-results/depth-browser/after-browser-research-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-browser-research-1280.png",
+          "after": "test-results/depth-browser/after-browser-research-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "browser-handoff",
+      "primary_task": "完成手动操作后交还当前页或停止",
+      "original_problem": "交还与执行详情等权，接管归属不清楚",
+      "change": "当前任务下优先展示交还与停止，保留unresolved/cancel/file/prompt禁用条件",
+      "mature_source_keys": [
+        "boardui",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-browser-handoff-360.png",
+          "after": "test-results/depth-browser/after-browser-handoff-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-browser-handoff-1280.png",
+          "after": "test-results/depth-browser/after-browser-handoff-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "browser-sources",
+      "primary_task": "先读研究结论，再逐项核对来源与下载",
+      "original_problem": "结论默认隐藏；来源、摘录、动作、下载像同权段落",
+      "change": "结论成为主阅读区，未独立核实仍可见；来源按标题/地址/摘录/动作归组，完整原回答披露",
+      "mature_source_keys": [
+        "research",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-browser-sources-360.png",
+          "after": "test-results/depth-browser/after-browser-sources-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-browser-sources-1280.png",
+          "after": "test-results/depth-browser/after-browser-sources-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "browser-pages",
+      "primary_task": "分辨当前任务页与个人页并明确接管",
+      "original_problem": "侧栏挤压长标题，所有元信息同样密度",
+      "change": "标题和归属先行，当前选择保留；查看/交给任务/关闭保持原tabId行动",
+      "mature_source_keys": [
+        "boardui"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-browser-pages-360.png",
+          "after": "test-results/depth-browser/after-browser-pages-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-browser-pages-1280.png",
+          "after": "test-results/depth-browser/after-browser-pages-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "browser-error",
+      "primary_task": "识别读取失败并核对同一研究",
+      "original_problem": "错误与普通状态容易混入文字流",
+      "change": "错误维持原alert与刷新路径，主任务/停止仍同屏",
+      "mature_source_keys": [
+        "boardui"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-browser-error-360.png",
+          "after": "test-results/depth-browser/after-browser-error-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-browser-error-1280.png",
+          "after": "test-results/depth-browser/after-browser-error-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "browser-review",
+      "primary_task": "阅读精确网页操作并明确允许或拒绝",
+      "original_problem": "审阅原请求中文等宽字缺少CJK回退",
+      "change": "保留原BoardUI dialog和原reviewId；修复portal内中文/code栈，ack前确认禁用",
+      "mature_source_keys": [
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-browser-review-360.png",
+          "after": "test-results/depth-browser/after-browser-review-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-browser-review-1280.png",
+          "after": "test-results/depth-browser/after-browser-review-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "chrome",
+      "primary_task": "输入地址并辨认网页导航与研究工具",
+      "original_problem": "七图标等权连续排列，历史与任务工具归属弱",
+      "change": "原52/44/16px预算内按历史/任务分组，沿用BoardUI输入和按钮",
+      "mature_source_keys": [
+        "boardui"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-chrome-360.png",
+          "after": "test-results/depth-browser/after-chrome-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-chrome-1280.png",
+          "after": "test-results/depth-browser/after-chrome-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "chrome-error",
+      "primary_task": "保留未确认导航提醒并返回/核对",
+      "original_problem": "未确认提示被普通状态的小字弱化",
+      "change": "不扩大native高度；未确认状态采用清楚中性提示面，原页面变化动作保持锁定",
+      "mature_source_keys": [
+        "boardui"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-chrome-error-360.png",
+          "after": "test-results/depth-browser/after-chrome-error-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-chrome-error-1280.png",
+          "after": "test-results/depth-browser/after-chrome-error-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "reader",
+      "primary_task": "阅读一份当时保存的原文",
+      "original_problem": "采集实现与地址占据正文尾部同权文字",
+      "change": "连续阅读尺度；部分/未经核实保持可见，完整范围与安全地址按需披露",
+      "mature_source_keys": [
+        "reader",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-reader-360.png",
+          "after": "test-results/depth-browser/after-reader-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-reader-1280.png",
+          "after": "test-results/depth-browser/after-reader-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "reader-table",
+      "primary_task": "比较原行列并打开精确字段",
+      "original_problem": "原表格后紧跟技术元数据，主阅读结束不清楚",
+      "change": "保留原表格语义、字段pin和横轴滚动；尾部来源详情披露",
+      "mature_source_keys": [
+        "reader",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-reader-table-360.png",
+          "after": "test-results/depth-browser/after-reader-table-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-reader-table-1280.png",
+          "after": "test-results/depth-browser/after-reader-table-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "reader-field",
+      "primary_task": "读取单一字段并返回原位置",
+      "original_problem": "字段值、表头与解释间权重接近",
+      "change": "字段内容提高尺度，表头与范围作为上下文；原双轴位置与focus恢复不变",
+      "mature_source_keys": [
+        "reader"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-reader-field-360.png",
+          "after": "test-results/depth-browser/after-reader-field-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-reader-field-1280.png",
+          "after": "test-results/depth-browser/after-reader-field-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "reader-error",
+      "primary_task": "重读同一保存原件",
+      "original_problem": "错误表面与当前中性设计不一致",
+      "change": "原alert/refresh identity不变；错误中性高可读，不藏入披露",
+      "mature_source_keys": [
+        "reader"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-reader-error-360.png",
+          "after": "test-results/depth-browser/after-reader-error-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-reader-error-1280.png",
+          "after": "test-results/depth-browser/after-reader-error-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "bootstrap-loading",
+      "primary_task": "理解真实启动阶段并等待",
+      "original_problem": "启动事实与维护解释纵向等权堆放",
+      "change": "当前状态、实际阶段与只读操作形成近组；技术解释继续低频披露，无假进度",
+      "mature_source_keys": [
+        "boardui",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-bootstrap-loading-360.png",
+          "after": "test-results/depth-browser/after-bootstrap-loading-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-bootstrap-loading-1280.png",
+          "after": "test-results/depth-browser/after-bootstrap-loading-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "bootstrap-failure",
+      "primary_task": "看懂阻塞原因与安全下一步",
+      "original_problem": "原因、检查、操作没有明显行动分区",
+      "change": "下一步和当前事实分组；原重试/只读receipt/未知结果门禁完整保留",
+      "mature_source_keys": [
+        "boardui",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-bootstrap-failure-360.png",
+          "after": "test-results/depth-browser/after-bootstrap-failure-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-bootstrap-failure-1280.png",
+          "after": "test-results/depth-browser/after-bootstrap-failure-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "bootstrap-recovery",
+      "primary_task": "先核对保全，再决定恢复或空库",
+      "original_problem": "保全状态、危险选项、说明混在一条文字流",
+      "change": "独立维修任务面绑定保全与明确checkbox；文件指纹留在原披露，原件/遗漏风险不删",
+      "mature_source_keys": [
+        "boardui",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-bootstrap-recovery-360.png",
+          "after": "test-results/depth-browser/after-bootstrap-recovery-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-bootstrap-recovery-1280.png",
+          "after": "test-results/depth-browser/after-bootstrap-recovery-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "realtime-start",
+      "primary_task": "准备一次通话或配置缺失服务",
+      "original_problem": "未发生通话时就显示冗长无任务说明",
+      "change": "当前通话入口优先，未绑定任务缩成一行说明和显式恢复入口",
+      "mature_source_keys": [
+        "boardui"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-realtime-start-360.png",
+          "after": "test-results/depth-browser/after-realtime-start-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-realtime-start-1280.png",
+          "after": "test-results/depth-browser/after-realtime-start-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "realtime-invitation",
+      "primary_task": "核对真实服务与本次采集范围后接受",
+      "original_problem": "长连接说明与采集/接受动作同权",
+      "change": "收件server/token地址保持可见；低频模型说明披露，mic/camera默认关闭且原review+ack不变",
+      "mature_source_keys": [
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-realtime-invitation-360.png",
+          "after": "test-results/depth-browser/after-realtime-invitation-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-realtime-invitation-1280.png",
+          "after": "test-results/depth-browser/after-realtime-invitation-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "realtime-live",
+      "primary_task": "辨认采集状态并能立即关闭或挂断",
+      "original_problem": "会话说明、工具和控制接近同一层级",
+      "change": "原sticky控制面与采集信息近组，停止永不移入披露；无音频节点或lease变更",
+      "mature_source_keys": [
+        "boardui"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-realtime-live-360.png",
+          "after": "test-results/depth-browser/after-realtime-live-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-realtime-live-1280.png",
+          "after": "test-results/depth-browser/after-realtime-live-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "realtime-transcript",
+      "primary_task": "复核最终转录，再决定只保存或开始原任务",
+      "original_problem": "文字、任务状态和服务配置互相竞争",
+      "change": "转录是主阅读对象，宽屏与原任务相邻，低频服务在下方；保存/开始原review保持分离",
+      "mature_source_keys": [
+        "boardui",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-realtime-transcript-360.png",
+          "after": "test-results/depth-browser/after-realtime-transcript-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-realtime-transcript-1280.png",
+          "after": "test-results/depth-browser/after-realtime-transcript-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "realtime-error",
+      "primary_task": "看到音频释放未知并核对实际状态",
+      "original_problem": "故障提醒与正常说明缺少稳定分组",
+      "change": "保留全部release/provider错误与当前停止路径，未降级成普通成功状态",
+      "mature_source_keys": [
+        "boardui"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-realtime-error-360.png",
+          "after": "test-results/depth-browser/after-realtime-error-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-realtime-error-1280.png",
+          "after": "test-results/depth-browser/after-realtime-error-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "phone-card",
+      "primary_task": "看当前任务画面并明确暂停或展开",
+      "original_problem": "灰色外卡和白框嵌套，控制区归属较弱",
+      "change": "OpenMuse原结构上以单一轻盈表面承载画面和动作，任务选择改真实BoardUI Select",
+      "mature_source_keys": [
+        "phone"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-phone-card-360.png",
+          "after": "test-results/depth-browser/after-phone-card-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-phone-card-1280.png",
+          "after": "test-results/depth-browser/after-phone-card-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "phone-sheet",
+      "primary_task": "展开相同feed并可原位收起",
+      "original_problem": "状态卡与画面套层较重，选择器是原生select",
+      "change": "保留Vaul/Radix、同feed和returnFocus；Select portal留在原dialog，补暗色范围；暂停动作位于画面前的sticky控制栏，桌面纵长画面也不遮住停止入口",
+      "mature_source_keys": [
+        "phone"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-phone-sheet-360.png",
+          "after": "test-results/depth-browser/after-phone-sheet-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-phone-sheet-1280.png",
+          "after": "test-results/depth-browser/after-phone-sheet-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "phone-error",
+      "primary_task": "辨认画面中断并重读同一任务",
+      "original_problem": "预览故障与卡片边界相混",
+      "change": "错误、重读、暂停仍可见，原frame保留/geometry验证/polling/lease没有改动",
+      "mature_source_keys": [
+        "phone"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-phone-error-360.png",
+          "after": "test-results/depth-browser/after-phone-error-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-phone-error-1280.png",
+          "after": "test-results/depth-browser/after-phone-error-1280.png"
+        }
+      },
+      "validation": "actual-component scene/object/foreground assertions + stable-frame screenshots at 360/1280; visual inspection and affected contract checks passed"
+    },
+    {
+      "scene": "quick-start",
+      "primary_task": "明确开始系统听写，不在mount启动",
+      "original_problem": "未发现层级阻塞；需补足实际子scene、前景浮层与原操作语义验证。",
+      "change": "保留已有任务阶段/近组动作/原说明与回执披露，补实际组件截图和交互断言。",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "quick_voice",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-quick-start-360.png",
+          "after": "test-results/depth-browser/after-quick-start-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-quick-start-1280.png",
+          "after": "test-results/depth-browser/after-quick-start-1280.png"
+        }
+      },
+      "validation": "passed: unique stage/alert in visible foreground dialog, before/after 360/1280; real component start/stop/review/edit/disclose/return/one-use append/receipt journeys; no production change needed"
+    },
+    {
+      "scene": "quick-recording",
+      "primary_task": "识别正在听写，明确结束本次录音",
+      "original_problem": "未发现层级阻塞；需补足实际子scene、前景浮层与原操作语义验证。",
+      "change": "保留已有任务阶段/近组动作/原说明与回执披露，补实际组件截图和交互断言。",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "quick_voice",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-quick-recording-360.png",
+          "after": "test-results/depth-browser/after-quick-recording-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-quick-recording-1280.png",
+          "after": "test-results/depth-browser/after-quick-recording-1280.png"
+        }
+      },
+      "validation": "passed: unique stage/alert in visible foreground dialog, before/after 360/1280; real component start/stop/review/edit/disclose/return/one-use append/receipt journeys; no production change needed"
+    },
+    {
+      "scene": "quick-stopping",
+      "primary_task": "等待原音频释放，不重复停止或录音",
+      "original_problem": "未发现层级阻塞；需补足实际子scene、前景浮层与原操作语义验证。",
+      "change": "保留已有任务阶段/近组动作/原说明与回执披露，补实际组件截图和交互断言。",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "quick_voice",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-quick-stopping-360.png",
+          "after": "test-results/depth-browser/after-quick-stopping-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-quick-stopping-1280.png",
+          "after": "test-results/depth-browser/after-quick-stopping-1280.png"
+        }
+      },
+      "validation": "passed: unique stage/alert in visible foreground dialog, before/after 360/1280; real component start/stop/review/edit/disclose/return/one-use append/receipt journeys; no production change needed"
+    },
+    {
+      "scene": "quick-review",
+      "primary_task": "核对和修改本次文字，再明确追加原草稿",
+      "original_problem": "未发现层级阻塞；需补足实际子scene、前景浮层与原操作语义验证。",
+      "change": "保留已有任务阶段/近组动作/原说明与回执披露，补实际组件截图和交互断言。",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "quick_voice",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-quick-review-360.png",
+          "after": "test-results/depth-browser/after-quick-review-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-quick-review-1280.png",
+          "after": "test-results/depth-browser/after-quick-review-1280.png"
+        }
+      },
+      "validation": "passed: unique stage/alert in visible foreground dialog, before/after 360/1280; real component start/stop/review/edit/disclose/return/one-use append/receipt journeys; no production change needed"
+    },
+    {
+      "scene": "quick-close",
+      "primary_task": "选择返回核对或明确舍弃，不在询问时丢文字",
+      "original_problem": "未发现层级阻塞；需补足实际子scene、前景浮层与原操作语义验证。",
+      "change": "保留已有任务阶段/近组动作/原说明与回执披露，补实际组件截图和交互断言。",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "quick_voice",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-quick-close-360.png",
+          "after": "test-results/depth-browser/after-quick-close-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-quick-close-1280.png",
+          "after": "test-results/depth-browser/after-quick-close-1280.png"
+        }
+      },
+      "validation": "passed: unique stage/alert in visible foreground dialog, before/after 360/1280; real component start/stop/review/edit/disclose/return/one-use append/receipt journeys; no production change needed"
+    },
+    {
+      "scene": "quick-receipt",
+      "primary_task": "确认只追加原草稿，按需读取原保存回执",
+      "original_problem": "未发现层级阻塞；需补足实际子scene、前景浮层与原操作语义验证。",
+      "change": "保留已有任务阶段/近组动作/原说明与回执披露，补实际组件截图和交互断言。",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "quick_voice",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-quick-receipt-360.png",
+          "after": "test-results/depth-browser/after-quick-receipt-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-quick-receipt-1280.png",
+          "after": "test-results/depth-browser/after-quick-receipt-1280.png"
+        }
+      },
+      "validation": "passed: unique stage/alert in visible foreground dialog, before/after 360/1280; real component start/stop/review/edit/disclose/return/one-use append/receipt journeys; no production change needed"
+    },
+    {
+      "scene": "quick-unknown",
+      "primary_task": "保留音频释放未知故障，锁住录音与追加",
+      "original_problem": "未发现层级阻塞；需补足实际子scene、前景浮层与原操作语义验证。",
+      "change": "保留已有任务阶段/近组动作/原说明与回执披露，补实际组件截图和交互断言。",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "quick_voice",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-quick-unknown-360.png",
+          "after": "test-results/depth-browser/after-quick-unknown-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-quick-unknown-1280.png",
+          "after": "test-results/depth-browser/after-quick-unknown-1280.png"
+        }
+      },
+      "validation": "passed: unique stage/alert in visible foreground dialog, before/after 360/1280; real component start/stop/review/edit/disclose/return/one-use append/receipt journeys; no production change needed"
+    },
+    {
+      "scene": "quick-other",
+      "primary_task": "识别另一听写占用，不开始或停止其他录音",
+      "original_problem": "未发现层级阻塞；需补足实际子scene、前景浮层与原操作语义验证。",
+      "change": "保留已有任务阶段/近组动作/原说明与回执披露，补实际组件截图和交互断言。",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "quick_voice",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-quick-other-360.png",
+          "after": "test-results/depth-browser/after-quick-other-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-quick-other-1280.png",
+          "after": "test-results/depth-browser/after-quick-other-1280.png"
+        }
+      },
+      "validation": "passed: unique stage/alert in visible foreground dialog, before/after 360/1280; real component start/stop/review/edit/disclose/return/one-use append/receipt journeys; no production change needed"
+    },
+    {
+      "scene": "quick-start-wait",
+      "primary_task": "读懂开始已提交并等待原状态，不重复发起",
+      "original_problem": "未发现层级阻塞；需补足实际子scene、前景浮层与原操作语义验证。",
+      "change": "保留已有任务阶段/近组动作/原说明与回执披露，补实际组件截图和交互断言。",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "quick_voice",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-quick-start-wait-360.png",
+          "after": "test-results/depth-browser/after-quick-start-wait-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-quick-start-wait-1280.png",
+          "after": "test-results/depth-browser/after-quick-start-wait-1280.png"
+        }
+      },
+      "validation": "passed: unique stage/alert in visible foreground dialog, before/after 360/1280; real component start/stop/review/edit/disclose/return/one-use append/receipt journeys; no production change needed"
+    },
+    {
+      "scene": "quick-save-wait",
+      "primary_task": "只读核对原追加结果，不重复保存",
+      "original_problem": "未发现层级阻塞；需补足实际子scene、前景浮层与原操作语义验证。",
+      "change": "保留已有任务阶段/近组动作/原说明与回执披露，补实际组件截图和交互断言。",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "quick_voice",
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-quick-save-wait-360.png",
+          "after": "test-results/depth-browser/after-quick-save-wait-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-quick-save-wait-1280.png",
+          "after": "test-results/depth-browser/after-quick-save-wait-1280.png"
+        }
+      },
+      "validation": "passed: unique stage/alert in visible foreground dialog, before/after 360/1280; real component start/stop/review/edit/disclose/return/one-use append/receipt journeys; no production change needed"
+    },
+    {
+      "scene": "browser-profiles",
+      "primary_task": "识别当前登录资料，明确审阅切换或删除",
+      "original_problem": "现有标题/对象/动作已归组，无阻塞",
+      "change": "保留当前结构，补实际两资料对象与真实弹窗断言",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-browser-profiles-360.png",
+          "after": "test-results/depth-browser/after-browser-profiles-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-browser-profiles-1280.png",
+          "after": "test-results/depth-browser/after-browser-profiles-1280.png"
+        }
+      },
+      "validation": "passed: actual scene heading plus specific object/fields/controls, current non-inert foreground, stable paints and bounded static screenshot at both viewports"
+    },
+    {
+      "scene": "browser-read-scope",
+      "primary_task": "只在本次显式选择读取与保留范围",
+      "original_problem": "原范围字段缺少读取与操作归属",
+      "change": "以原只读开关为组首保留全部范围/保留选择，核对前仍显式选择",
+      "audited_no_production_change": false,
+      "mature_source_keys": [
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-browser-read-scope-360.png",
+          "after": "test-results/depth-browser/after-browser-read-scope-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-browser-read-scope-1280.png",
+          "after": "test-results/depth-browser/after-browser-read-scope-1280.png"
+        }
+      },
+      "validation": "passed: actual scene heading plus specific object/fields/controls, current non-inert foreground, stable paints and bounded static screenshot at both viewports"
+    },
+    {
+      "scene": "browser-action-scope",
+      "primary_task": "指定网站、次数与允许交互，再核对范围",
+      "original_problem": "等权checkbox与额外origin长输入铺满窗口",
+      "change": "网站与次数近组；交互控件按弱分隔归组，额外origin实际披露并显示是否已填写",
+      "audited_no_production_change": false,
+      "mature_source_keys": [
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-browser-action-scope-360.png",
+          "after": "test-results/depth-browser/after-browser-action-scope-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-browser-action-scope-1280.png",
+          "after": "test-results/depth-browser/after-browser-action-scope-1280.png"
+        }
+      },
+      "validation": "passed: actual scene heading plus specific object/fields/controls, current non-inert foreground, stable paints and bounded static screenshot at both viewports"
+    },
+    {
+      "scene": "browser-scope-review",
+      "primary_task": "逐条核对原工具预算、种子与允许网站",
+      "original_problem": "当前明确范围/风险/ack已齐备，无新增层级阻塞",
+      "change": "保留原显式审阅、风险说明、ack和reviewId，只补场景断言",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-browser-scope-review-360.png",
+          "after": "test-results/depth-browser/after-browser-scope-review-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-browser-scope-review-1280.png",
+          "after": "test-results/depth-browser/after-browser-scope-review-1280.png"
+        }
+      },
+      "validation": "passed: actual scene heading plus specific object/fields/controls, current non-inert foreground, stable paints and bounded static screenshot at both viewports"
+    },
+    {
+      "scene": "browser-recipe-form",
+      "primary_task": "按当前来源指定识别词，明确核对字段",
+      "original_problem": "已有短任务表单可用，无阻塞",
+      "change": "保留原来源/query和禁用条件，补真实表单断言",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-browser-recipe-form-360.png",
+          "after": "test-results/depth-browser/after-browser-recipe-form-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-browser-recipe-form-1280.png",
+          "after": "test-results/depth-browser/after-browser-recipe-form-1280.png"
+        }
+      },
+      "validation": "passed: actual scene heading plus specific object/fields/controls, current non-inert foreground, stable paints and bounded static screenshot at both viewports"
+    },
+    {
+      "scene": "browser-recipe-review",
+      "primary_task": "决定是否保存启用原只读配方",
+      "original_problem": "已启用选择与ack分离，无阻塞",
+      "change": "保留启用默认关闭和确认门禁，只补实际审阅覆盖",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-browser-recipe-review-360.png",
+          "after": "test-results/depth-browser/after-browser-recipe-review-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-browser-recipe-review-1280.png",
+          "after": "test-results/depth-browser/after-browser-recipe-review-1280.png"
+        }
+      },
+      "validation": "passed: actual scene heading plus specific object/fields/controls, current non-inert foreground, stable paints and bounded static screenshot at both viewports"
+    },
+    {
+      "scene": "browser-draft-conflict",
+      "primary_task": "比较已保存与当前输入后显式选一份",
+      "original_problem": "已有双对象标题和保留/采用动作，无阻塞",
+      "change": "保留原文字和冲突解决语义，补原对象与当前弹窗断言",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-browser-draft-conflict-360.png",
+          "after": "test-results/depth-browser/after-browser-draft-conflict-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-browser-draft-conflict-1280.png",
+          "after": "test-results/depth-browser/after-browser-draft-conflict-1280.png"
+        }
+      },
+      "validation": "passed: actual scene heading plus specific object/fields/controls, current non-inert foreground, stable paints and bounded static screenshot at both viewports"
+    },
+    {
+      "scene": "browser-upload-review",
+      "primary_task": "记录站点实际接收/拒绝/未知结果",
+      "original_problem": "已有明确结果输入与三结论，无阻塞",
+      "change": "保留原上传身份；输入前结论禁用，不重新上传",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-browser-upload-review-360.png",
+          "after": "test-results/depth-browser/after-browser-upload-review-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-browser-upload-review-1280.png",
+          "after": "test-results/depth-browser/after-browser-upload-review-1280.png"
+        }
+      },
+      "validation": "passed: actual scene heading plus specific object/fields/controls, current non-inert foreground, stable paints and bounded static screenshot at both viewports"
+    },
+    {
+      "scene": "bootstrap-review-empty",
+      "primary_task": "核对保全身份与历史未恢复，再决定空库",
+      "original_problem": "风险、身份披露、ack及危险确认已完整",
+      "change": "保留原维修review/指纹/ack，补真实空库审阅和禁用确认断言",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-bootstrap-review-empty-360.png",
+          "after": "test-results/depth-browser/after-bootstrap-review-empty-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-bootstrap-review-empty-1280.png",
+          "after": "test-results/depth-browser/after-bootstrap-review-empty-1280.png"
+        }
+      },
+      "validation": "passed: actual scene heading plus specific object/fields/controls, current non-inert foreground, stable paints and bounded static screenshot at both viewports"
+    },
+    {
+      "scene": "bootstrap-review-copy",
+      "primary_task": "先看真实恢复数量与遗漏，再决定替换",
+      "original_problem": "已有实际范围与遗漏主区，无阻塞",
+      "change": "保留默认可见的范围/不可恢复项，身份和逐项遗漏低频披露，确认需ack",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-bootstrap-review-copy-360.png",
+          "after": "test-results/depth-browser/after-bootstrap-review-copy-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-bootstrap-review-copy-1280.png",
+          "after": "test-results/depth-browser/after-bootstrap-review-copy-1280.png"
+        }
+      },
+      "validation": "passed: actual scene heading plus specific object/fields/controls, current non-inert foreground, stable paints and bounded static screenshot at both viewports"
+    },
+    {
+      "scene": "realtime-settings-natural",
+      "primary_task": "核对端点认证与模型声音，再审阅保存",
+      "original_problem": "连接与语音字段同权长排，可选转录抢占主层",
+      "change": "连接认证与语音近组，宽屏模型/声音并列；可选转录用实际Accordion并保留值",
+      "audited_no_production_change": false,
+      "mature_source_keys": [
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-realtime-settings-natural-360.png",
+          "after": "test-results/depth-browser/after-realtime-settings-natural-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-realtime-settings-natural-1280.png",
+          "after": "test-results/depth-browser/after-realtime-settings-natural-1280.png"
+        }
+      },
+      "validation": "passed: actual scene heading plus specific object/fields/controls, current non-inert foreground, stable paints and bounded static screenshot at both viewports"
+    },
+    {
+      "scene": "realtime-settings-provider",
+      "primary_task": "填写实际凭据服务、房间与agent并审阅",
+      "original_problem": "配置字段缺乏共同连接归属",
+      "change": "原连接、agent与认证组内相邻；原清空凭据/审阅门禁不变",
+      "audited_no_production_change": false,
+      "mature_source_keys": [
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-realtime-settings-provider-360.png",
+          "after": "test-results/depth-browser/after-realtime-settings-provider-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-realtime-settings-provider-1280.png",
+          "after": "test-results/depth-browser/after-realtime-settings-provider-1280.png"
+        }
+      },
+      "validation": "passed: actual scene heading plus specific object/fields/controls, current non-inert foreground, stable paints and bounded static screenshot at both viewports"
+    },
+    {
+      "scene": "realtime-settings-room",
+      "primary_task": "核对短期房间令牌与回环/清除选择",
+      "original_problem": "配置字段缺乏共同连接归属",
+      "change": "原房间地址、令牌与风险选项共同归组，保持回环与清除显式",
+      "audited_no_production_change": false,
+      "mature_source_keys": [
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-realtime-settings-room-360.png",
+          "after": "test-results/depth-browser/after-realtime-settings-room-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-realtime-settings-room-1280.png",
+          "after": "test-results/depth-browser/after-realtime-settings-room-1280.png"
+        }
+      },
+      "validation": "passed: actual scene heading plus specific object/fields/controls, current non-inert foreground, stable paints and bounded static screenshot at both viewports"
+    },
+    {
+      "scene": "realtime-review",
+      "primary_task": "核对连接与采集范围，再显式接受通话",
+      "original_problem": "既有接收端/采集/计费/ack已齐备",
+      "change": "保留原邀请身份、默认关闭采集、计费说明及确认门禁，只补子窗口覆盖",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-realtime-review-360.png",
+          "after": "test-results/depth-browser/after-realtime-review-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-realtime-review-1280.png",
+          "after": "test-results/depth-browser/after-realtime-review-1280.png"
+        }
+      },
+      "validation": "passed: actual scene heading plus specific object/fields/controls, current non-inert foreground, stable paints and bounded static screenshot at both viewports"
+    },
+    {
+      "scene": "realtime-voice-turn",
+      "primary_task": "读本轮听写与回复，能停止本轮",
+      "original_problem": "现有当前音频控制与文字主区已清楚",
+      "change": "保留原voiceTurnId停止路径，补真实单轮状态与可操作控件断言",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "boardui"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-realtime-voice-turn-360.png",
+          "after": "test-results/depth-browser/after-realtime-voice-turn-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-realtime-voice-turn-1280.png",
+          "after": "test-results/depth-browser/after-realtime-voice-turn-1280.png"
+        }
+      },
+      "validation": "passed: actual scene heading plus specific object/fields/controls, current non-inert foreground, stable paints and bounded static screenshot at both viewports"
+    },
+    {
+      "scene": "realtime-room-live",
+      "primary_task": "看真实房间采集状态并能立即挂断",
+      "original_problem": "需确认房间分支未被自然语音主场景掩盖",
+      "change": "保留房间原会话和可见停止/采集控件，补独立分支对象断言",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "boardui"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-realtime-room-live-360.png",
+          "after": "test-results/depth-browser/after-realtime-room-live-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-realtime-room-live-1280.png",
+          "after": "test-results/depth-browser/after-realtime-room-live-1280.png"
+        }
+      },
+      "validation": "passed: actual scene heading plus specific object/fields/controls, current non-inert foreground, stable paints and bounded static screenshot at both viewports"
+    },
+    {
+      "scene": "realtime-task-recovery",
+      "primary_task": "找回原保存目标，不重建或启动任务",
+      "original_problem": "现有按需读取/恢复原记录已明确，无阻塞",
+      "change": "保留原任务对象、状态与恢复动作，补两项原记录可见断言",
+      "audited_no_production_change": true,
+      "mature_source_keys": [
+        "disclosure"
+      ],
+      "screenshots": {
+        "360": {
+          "before": "test-results/depth-browser/before-realtime-task-recovery-360.png",
+          "after": "test-results/depth-browser/after-realtime-task-recovery-360.png"
+        },
+        "1280": {
+          "before": "test-results/depth-browser/before-realtime-task-recovery-1280.png",
+          "after": "test-results/depth-browser/after-realtime-task-recovery-1280.png"
+        }
+      },
+      "validation": "passed: actual scene heading plus specific object/fields/controls, current non-inert foreground, stable paints and bounded static screenshot at both viewports"
+    }
+  ],
+  "verification": {
+    "status": "passed: 51 task scenes, 102 before/after visual pairs at 360/1280, affected real React journeys, 108 original Node tests, typecheck and production build; synthetic native scope only",
+    "contract_tests": "86 affected tests pass; realtime invitation recipient-address gate was retained after an initial disclosure regression was caught.",
+    "native_authority": "No changed command payload/receipt contract, auto-start, WebView/media/feed construction, native source-origin or lease logic.",
+    "visual_pairs": 102,
+    "interaction_checks": [
+      "Displayed browser stop/handoff keep exact frame",
+      "scope options need explicit selection/consent then review only",
+      "original reviewId plus acknowledgement gates approval",
+      "exact saved field pin and return to source",
+      "bootstrap mount is not a retry; refresh read-only",
+      "capture off by default; native review + ack before realtime.confirm",
+      "mute/disconnect retain exact session",
+      "phone expand/collapse does not pause or start task"
+    ],
+    "dark_report": "test-results/depth-browser/after-dark.json (10 asserted current scenes, zero errors/overflow); phone waiting surface contrast fixed and inspected",
+    "scene_assertions": "Each screenshot requires one scene-specific real heading/field/alert/object, visible and outside inert/aria-hidden; two requestAnimationFrame paints after fonts.ready. Screenshot races are not accepted as scene coverage.",
+    "production_phone": {
+      "scope": "Production UI with isolated synthetic native host and clearly labelled generated test frames; no device acceptance.",
+      "checks": [
+        "Native preparing error, pending geometry and ready pixels recover automatically on the same handle, without an error surface or manual retry.",
+        "One in-flight frame per native handle, continuously changing decoded frames and one conversation viewer.",
+        "Mobile bottom sheet shares the feed; exact-run pause/resume keeps frames updating; Android back preserves task and composer.",
+        "Switching the selected phone discards a late frame and never selects by global activeTaskId.",
+        "Hidden document closes native viewer and stops polling; return opens one fresh handle with cursor -1.",
+        "Substituted display is rejected, last frame is marked stale, automatic reads stop, deliberate retry stays on original task.",
+        "Desktop centered 790px sheet, Escape/focus return and nested task-detail Android back preserve the parent workspace; no duplicate viewer.",
+        "Task end releases the feed and labels the retained last frame without reopening or resuming execution."
+      ],
+      "errors": [],
+      "screenshots": [
+        "phone-viewer-loading-390.png",
+        "phone-viewer-card-390.png",
+        "phone-viewer-sheet-390.png",
+        "phone-viewer-stale-390.png",
+        "phone-viewer-sheet-1280.png"
+      ],
+      "bundle": "index-DFCmUKnE.js",
+      "sha256": "a4454be20164f01a269393a5d0ec823ea458ff099434546886fb3c38eda49cb4",
+      "status": "passed"
+    },
+    "typecheck": "npm run typecheck passed",
+    "production_build": "vite build passed; 18 full offline families verified; existing chunk-size advisory remains",
+    "reproduction": "Set PW_CHROMIUM to an installed Chromium executable. Serialize browser runs with flock /dev/shm/pocketworld-depth-ui.lock; PW_DEPTH_PHASE=after node tests/depth-browser-ui.mjs; PW_DEPTH_DARK=1 and PW_DEPTH_SCENES select dark audit. Supplemental scenes are listed by scene name in before-dialogs/after-dialogs and before-quick/after-quick reports; set PW_DEPTH_SCENES explicitly. Root allows at most two browser lanes; child continuation used pocketworld-depth-ui-secondary.lock.",
+    "before_evidence": "48 actual same-content baseline screenshots captured and visually inspected before production edits. Baseline report predates per-scene runtime assertion addition; final light/dark reports include the asserted object and bounding box.",
+    "quick_voice_contract": "22/22 original composer-context-journeys pass, including original handoff/document identity, one-use append, permission-only receipt, no-service and start-failure wait escape.",
+    "quick_voice_status": "passed: before/after 20 images each + 4 dark images; entered objects and foreground confirmed; edited text survives original-note disclosure and exit-return; start/stop/append/completion preserve original identities and one-use gates",
+    "dialog_audit": {
+      "scenes": 17,
+      "before_report": "test-results/depth-browser/before-dialogs.json",
+      "before_source": "379911a actual detached worktree in RAM, removed after successful capture; same fixture data",
+      "after_report": "test-results/depth-browser/after-dialogs.json",
+      "changes_affecting_primary_scenes": "ScopeChoices changed inside disclosed options and separate scope dialogs only; realtime changes are inside settings. Main scene rendered content remains the first-commit content. Final dialog runner also repeats the primary action journeys."
+    },
+    "new_dialog_journeys": [
+      "Original action-origin/ordinary-input/extra-origin survive disclosure and go only to original reviewScope(target=renewActions)",
+      "Optional transcription model survives disclosure and goes only to realtime.reviewConfiguration with original endpoint",
+      "Credential text is cleared before review, is absent from review details, and returning does not save/confirm",
+      "Review remains disabled before acknowledgement"
+    ],
+    "static_visual_scope": "Reduced-motion Chromium with animations disabled for stable screenshots. This is not an animation timing or native-device acceptance claim.",
+    "dark_reports": {
+      "main": "after-dark.json: 10 scene-asserted images",
+      "quick_voice": "after-dark-quick.json: 4 scene-asserted images",
+      "dialogs": "after-dark-dialogs.json: 6 current scene-asserted images, visually inspected after final grouping"
+    },
+    "production_phone_scope": "The archived 8-check production phone result is from dc37d16; later production changes touch only BrowserScopeChoices and realtime settings. Latest local Vite build/typecheck pass; root owns final integrated bundle freshness."
+  }
+}

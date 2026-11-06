@@ -7,6 +7,7 @@ import { Spinner } from './forms-library/boardui/components/base/spinner/spinner
 import { bootstrapView, bootstrapRetryPayload, currentBootstrapView, retainedBootstrapOperation, captureRepairReview, repairAllowed, repairModeAllowed, repairConsistencyText, repairConfirmPayload, repairOutcome, repairRestoration, repairReviewPayload, repairReviewCurrent,
   type BootstrapOperation, type BootstrapView, type RepairFile, type RepairGap, type RepairMode, type RepairRestoration, type RepairReview } from './bootstrap-contract';
 import './bootstrap.css';
+import './browser-depth.css';
 
 const moduleLabels: Record<string, string> = { memory: '记忆', assistant: '对话', workspace: '工作区', display: '屏幕', phone_setup: '手机设置', notifications: '通知', automation: '提醒与跟进', remote: '远程连接', channels: '消息渠道', teams: '团队', plugins: '插件', local: '本地工具', skills: '技能', attachments: '附件', media: '媒体', realtime: '语音', ssh: 'SSH 连接', proxy: '账号连接', browser: '浏览器', semantic: '界面理解', groups: '群组' };
 const activities: Record<string, string> = { installation: '检查安装', storage: '检查存储', ui_resources: '核验界面资源', opening_store: '打开本机数据', models: '准备模型连接', features: '准备工作能力', devices: '准备设备连接', attachments_recovery: '核对附件状态', channels_recovery: '核对渠道任务', source_sync: '核对内容来源', final_checks: '完成启动检查', ready: '启动已完成' };
@@ -144,9 +145,9 @@ export default function BootstrapWorkspace({ snapshot }: { snapshot: PocketSnaps
   else if (view.state === 'initializing') title = '正在准备 PocketWorld';
   else if (view.state === 'ready') title = unknown ? '启动已完成，先核对原回执' : '本机数据已就绪';
   else if (maintenance?.repairId) title = '核对本机数据与保全副本';
-  return <main className="pw-bootstrap" aria-label="启动与数据维护">
+  return <main className="pw-bootstrap" aria-label="启动与数据维护" data-bootstrap-state={view?.state || 'connecting'}>
     <header className="pw-bootstrap-header"><span className="pw-bootstrap-brand">PocketWorld</span><span className="pw-bootstrap-context">启动与数据维护</span></header>
-    <section className="pw-bootstrap-summary" aria-live="polite">
+    <section className="pw-bootstrap-summary" aria-live="polite"><p className="pw-bootstrap-eyebrow">{view?.state === 'initializing' ? '本机启动' : maintenance ? '保留原件，再决定下一步' : '启动状态'}</p>
       <div className="pw-bootstrap-heading">{view?.state === 'initializing' && <Spinner />}<h1>{title}</h1></div>
       {outcome ? <p>{outcome}</p> : preparationFailed ? <p>启动尚未完成，暂时无法进入工作区。请保留当前安装，展开下方详情查看具体失败位置。</p> : <p>{view?.reason?.message || (view?.state === 'initializing' ? '正在核对本机安装、数据和原任务。期间不会接收新的模型、工具或渠道执行。' : '正在读取原宿主状态，不会另建数据库或重放旧操作。')}</p>}
       {view?.reason?.nextStep && <p className="pw-bootstrap-next">{preparationFailed ? '可在系统设置中强行停止 PocketWorld 后重新打开一次；若仍失败，请保留诊断详情。不要清除应用数据或建立空库。' : view.reason.nextStep}</p>}

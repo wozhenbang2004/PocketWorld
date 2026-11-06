@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import './collaboration-depth.css';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { registerOverlayBack } from './overlay-back';
 import { holdRemoteReads, remoteObject as object, remoteRows as rows, type RemoteData as Data } from './remote-task-workspace';
@@ -20,7 +21,7 @@ export function RemoteActionReview({ identity, title, active, busy, expiresAt, o
   useEffect(() => registerOverlayBack(dismiss), [onClose]);
   useEffect(() => { if (!active) onClose(); }, [active]);
   useEffect(() => { if (!expiresAt) return; const remaining = expiresAt - Date.now(); if (remaining <= 0) { setExpired(true); return; } const timer = setTimeout(() => setExpired(true), remaining); return () => clearTimeout(timer); }, [expiresAt]);
-  return <SettingsDialog isOpen={active} title={title} onClose={dismiss}><div className="pw-remote-review">{children}
+  return <SettingsDialog isOpen={active} title={title} onClose={dismiss}><div className="pw-remote-review pw-collaboration-dialog">{children}
     <CheckboxField isSelected={accepted && acceptedIdentity.current === identity} isDisabled={busy || expired} onChange={value => { live.current.accepted = value; acceptedIdentity.current = value ? identity : ''; setAccepted(value); }}>我已核对确切目标与完整范围，只同意这一次动作。</CheckboxField>
     {expired && <p className="pw-field-error">本次审阅已过期，请重新读取核对。</p>}
     <div className="pw-form-actions"><Button variant="secondary" onClick={dismiss}>返回核对</Button><Button disabled={!accepted || acceptedIdentity.current !== identity || busy || expired} onClick={() => {

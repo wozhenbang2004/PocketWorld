@@ -1,0 +1,3779 @@
+{
+  "schemaVersion": 1,
+  "baseline": {
+    "localCommit": "379911a",
+    "upstreamMainTree": "e86952a",
+    "beforeMode": "Vite loads the exact baseline bytes of each production module from379911a; same actual component fixture, representative content and interaction route as after."
+  },
+  "scope": [
+    "SkillsWorkspace.tsx",
+    "PluginsWorkspace.tsx (plugins + pluginCatalog)",
+    "FunctionalPacksWorkspace.tsx",
+    "TaskCapabilityWorkspace.tsx",
+    "SkillDraftReview.tsx (conversation proposal reading/review)",
+    "ComposerApiModels.tsx (connection-aware model choice and review)",
+    "ComposerAccountModels.tsx (account catalog and bounded model options)",
+    "ModelConnectionOptions.tsx (wire protocol and cache policy)"
+  ],
+  "designBasis": [
+    "用户要求从任务重排信息层级，拒绝文档式平铺、只换色与大Hero",
+    "格式塔邻近/共同区域/相似性：同对象与同类操作聚合；组内8–12px，任务组24–32px",
+    "阅读/工具管理与身份/历史分主辅；宽屏并置，窄屏主任务先行",
+    "风险、未知和部分回执保留在可见主层；支持性JSON和机制说明渐进披露"
+  ],
+  "matureSources": [
+    {
+      "name": "Affect PromptLibrary list/detail composition",
+      "runtime": "src/shell-library/affect-workflows.tsx:SkillLibrary",
+      "retained": "src/shell-library/upstream/affect/src/demos/components-b/tools.tsx:PromptLibraryDemo",
+      "scope": "沿用已批准且已入项目的成熟列表/阅读组合，不新造原生UI"
+    },
+    {
+      "name": "BoardUI controlled fields, buttons and Accordion",
+      "runtime": "src/forms-library/boardui/components/base/accordion/accordion.tsx",
+      "retained": "src/forms-library/upstream/registry-20261101/components/base/accordion/accordion.tsx.source",
+      "scope": "保留真实React Aria控件及已有键盘、披露与reduced-motion行为"
+    },
+    {
+      "name": "BoardUI SettingsModal adapter",
+      "runtime": "src/forms-library/SettingsDialog.tsx",
+      "retained": "src/forms-library/upstream/components/application/settings/settings-modal.tsx.source",
+      "scope": "原审核浮层、关闭/返回和焦点语义不变，重新组织内容"
+    },
+    {
+      "name": "Vaul adopted source drawer",
+      "runtime": "src/shell-library/adapted/vaul/src/index.tsx",
+      "version": "1.1.2",
+      "scope": "沿用已批准的实际Drawer，保留焦点、关闭、返回与机主原提案权限语义"
+    },
+    {
+      "name": "Affect ModelPicker controlled list and metadata",
+      "runtime": "src/library/composer.tsx:ModelPicker",
+      "retained": "src/library/upstream/affect-library/src/demos/components-b/tools.tsx.source.txt",
+      "scope": "Retain approved Affect ModelPicker source and controlled ports; group connection, local selection state and declared capabilities without changing selection handles."
+    },
+    {
+      "name": "Existing PermissionReview exact-recipient review",
+      "runtime": "src/shell-library/Review.tsx:PermissionReview",
+      "scope": "Reuse the adopted review surface and pending/disabled/error behavior; scoped layout separates the real model name from the actual connection or account recipient."
+    }
+  ],
+  "scenes": [
+    {
+      "id": "skills/collection",
+      "parent": "skills",
+      "scene": "技能选择",
+      "primaryTask": "选择技能，阅读当前版本，再核对启用、来源或导入",
+      "originalProblem": "阅读正文与管理信息在单列中等权串联；资源与身份说明占据原文之前的空间。",
+      "change": [
+        "保留真实Affect技能库主从选择",
+        "对象标题、当前修订、状态形成紧凑概览",
+        "宽屏阅读与管理并置；手机原文先于来源和历史",
+        "启停、原文件阅读、分页与来源权限链保持原处理函数"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/skills-collection-360.png",
+          "arrival": {
+            "target": "skills/collection: current skill collection",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/skills-collection-360.png",
+          "arrival": {
+            "target": "skills/collection: current skill collection",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/skills-collection-1280.png",
+          "arrival": {
+            "target": "skills/collection: current skill collection",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/skills-collection-1280.png",
+          "arrival": {
+            "target": "skills/collection: current skill collection",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "skills/reading",
+      "parent": "skills",
+      "scene": "原版本阅读",
+      "primaryTask": "选择技能，阅读当前版本，再核对启用、来源或导入",
+      "originalProblem": "阅读正文与管理信息在单列中等权串联；资源与身份说明占据原文之前的空间。",
+      "change": [
+        "保留真实Affect技能库主从选择",
+        "对象标题、当前修订、状态形成紧凑概览",
+        "宽屏阅读与管理并置；手机原文先于来源和历史",
+        "启停、原文件阅读、分页与来源权限链保持原处理函数"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/skills-reading-360.png",
+          "arrival": {
+            "target": "skills/reading: read original resource",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/skills-reading-360.png",
+          "arrival": {
+            "target": "skills/reading: read original resource",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/skills-reading-1280.png",
+          "arrival": {
+            "target": "skills/reading: read original resource",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/skills-reading-1280.png",
+          "arrival": {
+            "target": "skills/reading: read original resource",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "skills/policy-history",
+      "parent": "skills",
+      "scene": "来源、调用与修订历史",
+      "primaryTask": "选择技能，阅读当前版本，再核对启用、来源或导入",
+      "originalProblem": "阅读正文与管理信息在单列中等权串联；资源与身份说明占据原文之前的空间。",
+      "change": [
+        "保留真实Affect技能库主从选择",
+        "对象标题、当前修订、状态形成紧凑概览",
+        "宽屏阅读与管理并置；手机原文先于来源和历史",
+        "启停、原文件阅读、分页与来源权限链保持原处理函数"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/skills-policy-history-360.png",
+          "arrival": {
+            "target": "skills/policy-history: original revision history",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/skills-policy-history-360.png",
+          "arrival": {
+            "target": "skills/policy-history: original revision history",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/skills-policy-history-1280.png",
+          "arrival": {
+            "target": "skills/policy-history: original revision history",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/skills-policy-history-1280.png",
+          "arrival": {
+            "target": "skills/policy-history: original revision history",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "skills/enable-review",
+      "parent": "skills",
+      "scene": "准确启用审阅",
+      "primaryTask": "选择技能，阅读当前版本，再核对启用、来源或导入",
+      "originalProblem": "阅读正文与管理信息在单列中等权串联；资源与身份说明占据原文之前的空间。",
+      "change": [
+        "保留真实Affect技能库主从选择",
+        "对象标题、当前修订、状态形成紧凑概览",
+        "宽屏阅读与管理并置；手机原文先于来源和历史",
+        "启停、原文件阅读、分页与来源权限链保持原处理函数"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/skills-enable-review-360.png",
+          "arrival": {
+            "target": "skills/enable-review: skill enable review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/skills-enable-review-360.png",
+          "arrival": {
+            "target": "skills/enable-review: skill enable review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/skills-enable-review-1280.png",
+          "arrival": {
+            "target": "skills/enable-review: skill enable review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/skills-enable-review-1280.png",
+          "arrival": {
+            "target": "skills/enable-review: skill enable review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "skills/import",
+      "parent": "skills",
+      "scene": "本机文件导入",
+      "primaryTask": "选择技能，阅读当前版本，再核对启用、来源或导入",
+      "originalProblem": "阅读正文与管理信息在单列中等权串联；资源与身份说明占据原文之前的空间。",
+      "change": [
+        "保留真实Affect技能库主从选择",
+        "对象标题、当前修订、状态形成紧凑概览",
+        "宽屏阅读与管理并置；手机原文先于来源和历史",
+        "启停、原文件阅读、分页与来源权限链保持原处理函数"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/skills-import-360.png",
+          "arrival": {
+            "target": "skills/import: expanded file import",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/skills-import-360.png",
+          "arrival": {
+            "target": "skills/import: expanded file import",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/skills-import-1280.png",
+          "arrival": {
+            "target": "skills/import: expanded file import",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/skills-import-1280.png",
+          "arrival": {
+            "target": "skills/import: expanded file import",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "skills/git-import",
+      "parent": "skills",
+      "scene": "明确Git来源导入",
+      "primaryTask": "选择技能，阅读当前版本，再核对启用、来源或导入",
+      "originalProblem": "阅读正文与管理信息在单列中等权串联；资源与身份说明占据原文之前的空间。",
+      "change": [
+        "保留真实Affect技能库主从选择",
+        "对象标题、当前修订、状态形成紧凑概览",
+        "宽屏阅读与管理并置；手机原文先于来源和历史",
+        "启停、原文件阅读、分页与来源权限链保持原处理函数"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/skills-git-import-360.png",
+          "arrival": {
+            "target": "skills/git-import: explicit Git source",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/skills-git-import-360.png",
+          "arrival": {
+            "target": "skills/git-import: explicit Git source",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/skills-git-import-1280.png",
+          "arrival": {
+            "target": "skills/git-import: explicit Git source",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/skills-git-import-1280.png",
+          "arrival": {
+            "target": "skills/git-import: explicit Git source",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "plugins/installed",
+      "parent": "plugins",
+      "scene": "当前安装",
+      "primaryTask": "管理准确安装及其单项工具权限，阅读JS源码后单独批准与启用",
+      "originalProblem": "每个对象的工具、安装身份、服务地址与历史等权展开，移动端主工具操作被元数据打断。",
+      "change": [
+        "安装列表按对象分组，状态和主操作靠近对象",
+        "工具权限为主区，当前安装为辅助区；手机先呈现工具",
+        "服务地址、声明和源码身份移入BoardUI披露",
+        "JS批准与启用、revision和卸载身份检查保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/plugins-installed-360.png",
+          "arrival": {
+            "target": "plugins/installed: installed declaration list",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/plugins-installed-360.png",
+          "arrival": {
+            "target": "plugins/installed: installed declaration list",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/plugins-installed-1280.png",
+          "arrival": {
+            "target": "plugins/installed: installed declaration list",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/plugins-installed-1280.png",
+          "arrival": {
+            "target": "plugins/installed: installed declaration list",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "plugins/tools",
+      "parent": "plugins",
+      "scene": "原安装工具管理",
+      "primaryTask": "管理准确安装及其单项工具权限，阅读JS源码后单独批准与启用",
+      "originalProblem": "每个对象的工具、安装身份、服务地址与历史等权展开，移动端主工具操作被元数据打断。",
+      "change": [
+        "安装列表按对象分组，状态和主操作靠近对象",
+        "工具权限为主区，当前安装为辅助区；手机先呈现工具",
+        "服务地址、声明和源码身份移入BoardUI披露",
+        "JS批准与启用、revision和卸载身份检查保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/plugins-tools-360.png",
+          "arrival": {
+            "target": "plugins/tools: current installation tools",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/plugins-tools-360.png",
+          "arrival": {
+            "target": "plugins/tools: current installation tools",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/plugins-tools-1280.png",
+          "arrival": {
+            "target": "plugins/tools: current installation tools",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/plugins-tools-1280.png",
+          "arrival": {
+            "target": "plugins/tools: current installation tools",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "plugins/grant-review",
+      "parent": "plugins",
+      "scene": "单项工具权限审阅",
+      "primaryTask": "管理准确安装及其单项工具权限，阅读JS源码后单独批准与启用",
+      "originalProblem": "每个对象的工具、安装身份、服务地址与历史等权展开，移动端主工具操作被元数据打断。",
+      "change": [
+        "安装列表按对象分组，状态和主操作靠近对象",
+        "工具权限为主区，当前安装为辅助区；手机先呈现工具",
+        "服务地址、声明和源码身份移入BoardUI披露",
+        "JS批准与启用、revision和卸载身份检查保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/plugins-grant-review-360.png",
+          "arrival": {
+            "target": "plugins/grant-review: exact tool grant review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/plugins-grant-review-360.png",
+          "arrival": {
+            "target": "plugins/grant-review: exact tool grant review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/plugins-grant-review-1280.png",
+          "arrival": {
+            "target": "plugins/grant-review: exact tool grant review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/plugins-grant-review-1280.png",
+          "arrival": {
+            "target": "plugins/grant-review: exact tool grant review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "plugins/enable-review",
+      "parent": "plugins",
+      "scene": "准确启用审阅",
+      "primaryTask": "管理准确安装及其单项工具权限，阅读JS源码后单独批准与启用",
+      "originalProblem": "每个对象的工具、安装身份、服务地址与历史等权展开，移动端主工具操作被元数据打断。",
+      "change": [
+        "安装列表按对象分组，状态和主操作靠近对象",
+        "工具权限为主区，当前安装为辅助区；手机先呈现工具",
+        "服务地址、声明和源码身份移入BoardUI披露",
+        "JS批准与启用、revision和卸载身份检查保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/plugins-enable-review-360.png",
+          "arrival": {
+            "target": "plugins/enable-review: exact installation enable review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/plugins-enable-review-360.png",
+          "arrival": {
+            "target": "plugins/enable-review: exact installation enable review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/plugins-enable-review-1280.png",
+          "arrival": {
+            "target": "plugins/enable-review: exact installation enable review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/plugins-enable-review-1280.png",
+          "arrival": {
+            "target": "plugins/enable-review: exact installation enable review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "plugins/manifest-editor",
+      "parent": "plugins",
+      "scene": "声明编辑",
+      "primaryTask": "管理准确安装及其单项工具权限，阅读JS源码后单独批准与启用",
+      "originalProblem": "每个对象的工具、安装身份、服务地址与历史等权展开，移动端主工具操作被元数据打断。",
+      "change": [
+        "安装列表按对象分组，状态和主操作靠近对象",
+        "工具权限为主区，当前安装为辅助区；手机先呈现工具",
+        "服务地址、声明和源码身份移入BoardUI披露",
+        "JS批准与启用、revision和卸载身份检查保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/plugins-manifest-editor-360.png",
+          "arrival": {
+            "target": "plugins/manifest-editor: manifest editor",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/plugins-manifest-editor-360.png",
+          "arrival": {
+            "target": "plugins/manifest-editor: manifest editor",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/plugins-manifest-editor-1280.png",
+          "arrival": {
+            "target": "plugins/manifest-editor: manifest editor",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/plugins-manifest-editor-1280.png",
+          "arrival": {
+            "target": "plugins/manifest-editor: manifest editor",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "plugins/history",
+      "parent": "plugins",
+      "scene": "安装版本历史",
+      "primaryTask": "管理准确安装及其单项工具权限，阅读JS源码后单独批准与启用",
+      "originalProblem": "每个对象的工具、安装身份、服务地址与历史等权展开，移动端主工具操作被元数据打断。",
+      "change": [
+        "安装列表按对象分组，状态和主操作靠近对象",
+        "工具权限为主区，当前安装为辅助区；手机先呈现工具",
+        "服务地址、声明和源码身份移入BoardUI披露",
+        "JS批准与启用、revision和卸载身份检查保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/plugins-history-360.png",
+          "arrival": {
+            "target": "plugins/history: original installation history",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/plugins-history-360.png",
+          "arrival": {
+            "target": "plugins/history: original installation history",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/plugins-history-1280.png",
+          "arrival": {
+            "target": "plugins/history: original installation history",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/plugins-history-1280.png",
+          "arrival": {
+            "target": "plugins/history: original installation history",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "plugins/js-installed",
+      "parent": "plugins",
+      "scene": "JS扩展与运行环境",
+      "primaryTask": "管理准确安装及其单项工具权限，阅读JS源码后单独批准与启用",
+      "originalProblem": "每个对象的工具、安装身份、服务地址与历史等权展开，移动端主工具操作被元数据打断。",
+      "change": [
+        "安装列表按对象分组，状态和主操作靠近对象",
+        "工具权限为主区，当前安装为辅助区；手机先呈现工具",
+        "服务地址、声明和源码身份移入BoardUI披露",
+        "JS批准与启用、revision和卸载身份检查保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/plugins-js-installed-360.png",
+          "arrival": {
+            "target": "plugins/js-installed: installed executable source",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/plugins-js-installed-360.png",
+          "arrival": {
+            "target": "plugins/js-installed: installed executable source",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/plugins-js-installed-1280.png",
+          "arrival": {
+            "target": "plugins/js-installed: installed executable source",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/plugins-js-installed-1280.png",
+          "arrival": {
+            "target": "plugins/js-installed: installed executable source",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "plugins/js-review",
+      "parent": "plugins",
+      "scene": "JS完整源码与批准范围",
+      "primaryTask": "管理准确安装及其单项工具权限，阅读JS源码后单独批准与启用",
+      "originalProblem": "每个对象的工具、安装身份、服务地址与历史等权展开，移动端主工具操作被元数据打断。",
+      "change": [
+        "安装列表按对象分组，状态和主操作靠近对象",
+        "工具权限为主区，当前安装为辅助区；手机先呈现工具",
+        "服务地址、声明和源码身份移入BoardUI披露",
+        "JS批准与启用、revision和卸载身份检查保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/plugins-js-review-360.png",
+          "arrival": {
+            "target": "plugins/js-review: JS source approval review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/plugins-js-review-360.png",
+          "arrival": {
+            "target": "plugins/js-review: JS source approval review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/plugins-js-review-1280.png",
+          "arrival": {
+            "target": "plugins/js-review: JS source approval review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/plugins-js-review-1280.png",
+          "arrival": {
+            "target": "plugins/js-review: JS source approval review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "plugins/js-history",
+      "parent": "plugins",
+      "scene": "保留的源码版本",
+      "primaryTask": "管理准确安装及其单项工具权限，阅读JS源码后单独批准与启用",
+      "originalProblem": "每个对象的工具、安装身份、服务地址与历史等权展开，移动端主工具操作被元数据打断。",
+      "change": [
+        "安装列表按对象分组，状态和主操作靠近对象",
+        "工具权限为主区，当前安装为辅助区；手机先呈现工具",
+        "服务地址、声明和源码身份移入BoardUI披露",
+        "JS批准与启用、revision和卸载身份检查保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/plugins-js-history-360.png",
+          "arrival": {
+            "target": "plugins/js-history: retained executable versions",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/plugins-js-history-360.png",
+          "arrival": {
+            "target": "plugins/js-history: retained executable versions",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/plugins-js-history-1280.png",
+          "arrival": {
+            "target": "plugins/js-history: retained executable versions",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/plugins-js-history-1280.png",
+          "arrival": {
+            "target": "plugins/js-history: retained executable versions",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "catalog/versions",
+      "parent": "catalog",
+      "scene": "目录来源与可选版本",
+      "primaryTask": "选择可信来源和准确版本，核对差异后安装",
+      "originalProblem": "来源选择、来源维护与版本对象缺少可感知的区域关系。",
+      "change": [
+        "来源控制集中为一个工作区域，候选版本在下方对象列表",
+        "原始定义保持渐进披露",
+        "来源CAS保存失败保留输入，安装核对确认链保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/catalog-versions-360.png",
+          "arrival": {
+            "target": "catalog/versions: catalog source and versions",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/catalog-versions-360.png",
+          "arrival": {
+            "target": "catalog/versions: catalog source and versions",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/catalog-versions-1280.png",
+          "arrival": {
+            "target": "catalog/versions: catalog source and versions",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/catalog-versions-1280.png",
+          "arrival": {
+            "target": "catalog/versions: catalog source and versions",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "catalog/source-editor",
+      "parent": "catalog",
+      "scene": "目录来源编辑",
+      "primaryTask": "选择可信来源和准确版本，核对差异后安装",
+      "originalProblem": "来源选择、来源维护与版本对象缺少可感知的区域关系。",
+      "change": [
+        "来源控制集中为一个工作区域，候选版本在下方对象列表",
+        "原始定义保持渐进披露",
+        "来源CAS保存失败保留输入，安装核对确认链保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/catalog-source-editor-360.png",
+          "arrival": {
+            "target": "catalog/source-editor: source editor fields",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/catalog-source-editor-360.png",
+          "arrival": {
+            "target": "catalog/source-editor: source editor fields",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/catalog-source-editor-1280.png",
+          "arrival": {
+            "target": "catalog/source-editor: source editor fields",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/catalog-source-editor-1280.png",
+          "arrival": {
+            "target": "catalog/source-editor: source editor fields",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "catalog/source-save-error",
+      "parent": "catalog",
+      "scene": "来源CAS保存失败与保留输入",
+      "primaryTask": "选择可信来源和准确版本，核对差异后安装",
+      "originalProblem": "来源选择、来源维护与版本对象缺少可感知的区域关系。",
+      "change": [
+        "来源控制集中为一个工作区域，候选版本在下方对象列表",
+        "原始定义保持渐进披露",
+        "来源CAS保存失败保留输入，安装核对确认链保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/catalog-source-save-error-360.png",
+          "arrival": {
+            "target": "catalog/source-save-error: source save failure",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/catalog-source-save-error-360.png",
+          "arrival": {
+            "target": "catalog/source-save-error: source save failure",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/catalog-source-save-error-1280.png",
+          "arrival": {
+            "target": "catalog/source-save-error: source save failure",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/catalog-source-save-error-1280.png",
+          "arrival": {
+            "target": "catalog/source-save-error: source save failure",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "catalog/install-review",
+      "parent": "catalog",
+      "scene": "准确安装组件审阅",
+      "primaryTask": "选择可信来源和准确版本，核对差异后安装",
+      "originalProblem": "来源选择、来源维护与版本对象缺少可感知的区域关系。",
+      "change": [
+        "来源控制集中为一个工作区域，候选版本在下方对象列表",
+        "原始定义保持渐进披露",
+        "来源CAS保存失败保留输入，安装核对确认链保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/catalog-install-review-360.png",
+          "arrival": {
+            "target": "catalog/install-review: catalog exact install review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/catalog-install-review-360.png",
+          "arrival": {
+            "target": "catalog/install-review: catalog exact install review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/catalog-install-review-1280.png",
+          "arrival": {
+            "target": "catalog/install-review: catalog exact install review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/catalog-install-review-1280.png",
+          "arrival": {
+            "target": "catalog/install-review: catalog exact install review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "packs/installed",
+      "parent": "packs",
+      "scene": "当前安装",
+      "primaryTask": "核对功能包实际组件、部分结果和卸载时保留项",
+      "originalProblem": "机制长说明与当前组件、原回执和主操作争夺首屏。",
+      "change": [
+        "当前包、版本、组件数量及部分状态为首屏主对象",
+        "安装机制移到明确可达的BoardUI披露，未决结果继续可见",
+        "逐组件移除和保留状态分组，审核动作靠近确认",
+        "选择revision、原任务和逐组件回执不改"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/packs-installed-360.png",
+          "arrival": {
+            "target": "packs/installed: installed pack",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/packs-installed-360.png",
+          "arrival": {
+            "target": "packs/installed: installed pack",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/packs-installed-1280.png",
+          "arrival": {
+            "target": "packs/installed: installed pack",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/packs-installed-1280.png",
+          "arrival": {
+            "target": "packs/installed: installed pack",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "packs/remove-review",
+      "parent": "packs",
+      "scene": "移除与手工更新保留项",
+      "primaryTask": "核对功能包实际组件、部分结果和卸载时保留项",
+      "originalProblem": "机制长说明与当前组件、原回执和主操作争夺首屏。",
+      "change": [
+        "当前包、版本、组件数量及部分状态为首屏主对象",
+        "安装机制移到明确可达的BoardUI披露，未决结果继续可见",
+        "逐组件移除和保留状态分组，审核动作靠近确认",
+        "选择revision、原任务和逐组件回执不改"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/packs-remove-review-360.png",
+          "arrival": {
+            "target": "packs/remove-review: pack removal and retention",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/packs-remove-review-360.png",
+          "arrival": {
+            "target": "packs/remove-review: pack removal and retention",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/packs-remove-review-1280.png",
+          "arrival": {
+            "target": "packs/remove-review: pack removal and retention",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/packs-remove-review-1280.png",
+          "arrival": {
+            "target": "packs/remove-review: pack removal and retention",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "packs/journal",
+      "parent": "packs",
+      "scene": "原组件操作记录",
+      "primaryTask": "核对功能包实际组件、部分结果和卸载时保留项",
+      "originalProblem": "机制长说明与当前组件、原回执和主操作争夺首屏。",
+      "change": [
+        "当前包、版本、组件数量及部分状态为首屏主对象",
+        "安装机制移到明确可达的BoardUI披露，未决结果继续可见",
+        "逐组件移除和保留状态分组，审核动作靠近确认",
+        "选择revision、原任务和逐组件回执不改"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/packs-journal-360.png",
+          "arrival": {
+            "target": "packs/journal: original component journal",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/packs-journal-360.png",
+          "arrival": {
+            "target": "packs/journal: original component journal",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/packs-journal-1280.png",
+          "arrival": {
+            "target": "packs/journal: original component journal",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/packs-journal-1280.png",
+          "arrival": {
+            "target": "packs/journal: original component journal",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "packs/selected-file",
+      "parent": "packs",
+      "scene": "所选文件待核对",
+      "primaryTask": "核对功能包实际组件、部分结果和卸载时保留项",
+      "originalProblem": "机制长说明与当前组件、原回执和主操作争夺首屏。",
+      "change": [
+        "当前包、版本、组件数量及部分状态为首屏主对象",
+        "安装机制移到明确可达的BoardUI披露，未决结果继续可见",
+        "逐组件移除和保留状态分组，审核动作靠近确认",
+        "选择revision、原任务和逐组件回执不改"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/packs-selected-file-360.png",
+          "arrival": {
+            "target": "packs/selected-file: selected native document",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/packs-selected-file-360.png",
+          "arrival": {
+            "target": "packs/selected-file: selected native document",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/packs-selected-file-1280.png",
+          "arrival": {
+            "target": "packs/selected-file: selected native document",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/packs-selected-file-1280.png",
+          "arrival": {
+            "target": "packs/selected-file: selected native document",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "packs/install-review",
+      "parent": "packs",
+      "scene": "准确安装组件审阅",
+      "primaryTask": "核对功能包实际组件、部分结果和卸载时保留项",
+      "originalProblem": "机制长说明与当前组件、原回执和主操作争夺首屏。",
+      "change": [
+        "当前包、版本、组件数量及部分状态为首屏主对象",
+        "安装机制移到明确可达的BoardUI披露，未决结果继续可见",
+        "逐组件移除和保留状态分组，审核动作靠近确认",
+        "选择revision、原任务和逐组件回执不改"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/packs-install-review-360.png",
+          "arrival": {
+            "target": "packs/install-review: pack component install review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/packs-install-review-360.png",
+          "arrival": {
+            "target": "packs/install-review: pack component install review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/packs-install-review-1280.png",
+          "arrival": {
+            "target": "packs/install-review: pack component install review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/packs-install-review-1280.png",
+          "arrival": {
+            "target": "packs/install-review: pack component install review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "task/closed",
+      "parent": "task",
+      "scene": "任务能力入口",
+      "primaryTask": "先核对待审脚本，再读取原执行回执与文件成果",
+      "originalProblem": "脚本审阅、回执、原始输出和工具需求连续平铺，原始输出抢占主要任务。",
+      "change": [
+        "待审脚本形成明确下一步",
+        "回执与成果为主，工具需求为辅；宽屏自然并置",
+        "原始输出与工具定义折叠，未知结果、错误和授权范围常驻",
+        "read/consent/approval/retrieve/export原身份与精确范围保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/task-closed-360.png",
+          "arrival": {
+            "target": "task/closed: collapsed task capability entry",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/task-closed-360.png",
+          "arrival": {
+            "target": "task/closed: collapsed task capability entry",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/task-closed-1280.png",
+          "arrival": {
+            "target": "task/closed: collapsed task capability entry",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/task-closed-1280.png",
+          "arrival": {
+            "target": "task/closed: collapsed task capability entry",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "task/receipts",
+      "parent": "task",
+      "scene": "任务脚本回执与成果",
+      "primaryTask": "先核对待审脚本，再读取原执行回执与文件成果",
+      "originalProblem": "脚本审阅、回执、原始输出和工具需求连续平铺，原始输出抢占主要任务。",
+      "change": [
+        "待审脚本形成明确下一步",
+        "回执与成果为主，工具需求为辅；宽屏自然并置",
+        "原始输出与工具定义折叠，未知结果、错误和授权范围常驻",
+        "read/consent/approval/retrieve/export原身份与精确范围保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/task-receipts-360.png",
+          "arrival": {
+            "target": "task/receipts: pending task script review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/task-receipts-360.png",
+          "arrival": {
+            "target": "task/receipts: pending task script review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/task-receipts-1280.png",
+          "arrival": {
+            "target": "task/receipts: pending task script review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/task-receipts-1280.png",
+          "arrival": {
+            "target": "task/receipts: pending task script review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "task/script-review",
+      "parent": "task",
+      "scene": "准确脚本执行范围审阅",
+      "primaryTask": "先核对待审脚本，再读取原执行回执与文件成果",
+      "originalProblem": "脚本审阅、回执、原始输出和工具需求连续平铺，原始输出抢占主要任务。",
+      "change": [
+        "待审脚本形成明确下一步",
+        "回执与成果为主，工具需求为辅；宽屏自然并置",
+        "原始输出与工具定义折叠，未知结果、错误和授权范围常驻",
+        "read/consent/approval/retrieve/export原身份与精确范围保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/task-script-review-360.png",
+          "arrival": {
+            "target": "task/script-review: exact task script scope",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/task-script-review-360.png",
+          "arrival": {
+            "target": "task/script-review: exact task script scope",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/task-script-review-1280.png",
+          "arrival": {
+            "target": "task/script-review: exact task script scope",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/task-script-review-1280.png",
+          "arrival": {
+            "target": "task/script-review: exact task script scope",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "task/script-source",
+      "parent": "task",
+      "scene": "当前版本脚本原文",
+      "primaryTask": "先核对待审脚本，再读取原执行回执与文件成果",
+      "originalProblem": "脚本审阅、回执、原始输出和工具需求连续平铺，原始输出抢占主要任务。",
+      "change": [
+        "待审脚本形成明确下一步",
+        "回执与成果为主，工具需求为辅；宽屏自然并置",
+        "原始输出与工具定义折叠，未知结果、错误和授权范围常驻",
+        "read/consent/approval/retrieve/export原身份与精确范围保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/task-script-source-360.png",
+          "arrival": {
+            "target": "task/script-source: current script version body",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/task-script-source-360.png",
+          "arrival": {
+            "target": "task/script-source: current script version body",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/task-script-source-1280.png",
+          "arrival": {
+            "target": "task/script-source: current script version body",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/task-script-source-1280.png",
+          "arrival": {
+            "target": "task/script-source: current script version body",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "task/read-error",
+      "parent": "task",
+      "scene": "原记录读取失败恢复",
+      "primaryTask": "先核对待审脚本，再读取原执行回执与文件成果",
+      "originalProblem": "脚本审阅、回执、原始输出和工具需求连续平铺，原始输出抢占主要任务。",
+      "change": [
+        "待审脚本形成明确下一步",
+        "回执与成果为主，工具需求为辅；宽屏自然并置",
+        "原始输出与工具定义折叠，未知结果、错误和授权范围常驻",
+        "read/consent/approval/retrieve/export原身份与精确范围保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/task-read-error-360.png",
+          "arrival": {
+            "target": "task/read-error: original task read error",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/task-read-error-360.png",
+          "arrival": {
+            "target": "task/read-error: original task read error",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/task-read-error-1280.png",
+          "arrival": {
+            "target": "task/read-error: original task read error",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/task-read-error-1280.png",
+          "arrival": {
+            "target": "task/read-error: original task read error",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "task/tool-review",
+      "parent": "task",
+      "scene": "任务所需单项工具审阅",
+      "primaryTask": "先核对待审脚本，再读取原执行回执与文件成果",
+      "originalProblem": "脚本审阅、回执、原始输出和工具需求连续平铺，原始输出抢占主要任务。",
+      "change": [
+        "待审脚本形成明确下一步",
+        "回执与成果为主，工具需求为辅；宽屏自然并置",
+        "原始输出与工具定义折叠，未知结果、错误和授权范围常驻",
+        "read/consent/approval/retrieve/export原身份与精确范围保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/task-tool-review-360.png",
+          "arrival": {
+            "target": "task/tool-review: single original tool review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/task-tool-review-360.png",
+          "arrival": {
+            "target": "task/tool-review: single original tool review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/task-tool-review-1280.png",
+          "arrival": {
+            "target": "task/tool-review: single original tool review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/task-tool-review-1280.png",
+          "arrival": {
+            "target": "task/tool-review: single original tool review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "task/artifact",
+      "parent": "task",
+      "scene": "原文件成果身份",
+      "primaryTask": "先核对待审脚本，再读取原执行回执与文件成果",
+      "originalProblem": "脚本审阅、回执、原始输出和工具需求连续平铺，原始输出抢占主要任务。",
+      "change": [
+        "待审脚本形成明确下一步",
+        "回执与成果为主，工具需求为辅；宽屏自然并置",
+        "原始输出与工具定义折叠，未知结果、错误和授权范围常驻",
+        "read/consent/approval/retrieve/export原身份与精确范围保持"
+      ],
+      "matureSources": [
+        0,
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/task-artifact-360.png",
+          "arrival": {
+            "target": "task/artifact: retrieved artifact identity",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/task-artifact-360.png",
+          "arrival": {
+            "target": "task/artifact: retrieved artifact identity",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/before/task-artifact-1280.png",
+          "arrival": {
+            "target": "task/artifact: retrieved artifact identity",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/main/after/task-artifact-1280.png",
+          "arrival": {
+            "target": "task/artifact: retrieved artifact identity",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; synthetic native component fixture, not Android execution"
+    },
+    {
+      "id": "skills/conversation-draft/proposal",
+      "parent": "skills/conversation-draft",
+      "scene": "技能提案与前后文件",
+      "primaryTask": "核对原文件、候选文件与来源，再明确保存为停用技能",
+      "originalProblem": "前后文件和原消息串列，原生details与既有披露语法不一致；当前阅读对象缺少稳定主区。",
+      "change": [
+        "前后文件一组选择，一个当前原文阅读面；宽屏并置，手机文件分组在上",
+        "来源说明与原主人消息统一为实际BoardUI Accordion",
+        "原全部文件分页提供、ack、handle、来源revision、未知结果查询保持不变"
+      ],
+      "matureSources": [
+        0,
+        1,
+        3
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/before/draft-proposal-360.png",
+          "arrival": {
+            "target": "draft/proposal: current conversation proposal",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/before/draft-proposal-1280.png",
+          "arrival": {
+            "target": "draft/proposal: current conversation proposal",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/after/draft-proposal-360.png",
+          "arrival": {
+            "target": "draft/proposal: current conversation proposal",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/after/draft-proposal-1280.png",
+          "arrival": {
+            "target": "draft/proposal: current conversation proposal",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; explicit synthetic native projection, not Android host validation"
+    },
+    {
+      "id": "skills/conversation-draft/original-file",
+      "parent": "skills/conversation-draft",
+      "scene": "原技能文件原文",
+      "primaryTask": "核对原文件、候选文件与来源，再明确保存为停用技能",
+      "originalProblem": "前后文件和原消息串列，原生details与既有披露语法不一致；当前阅读对象缺少稳定主区。",
+      "change": [
+        "前后文件一组选择，一个当前原文阅读面；宽屏并置，手机文件分组在上",
+        "来源说明与原主人消息统一为实际BoardUI Accordion",
+        "原全部文件分页提供、ack、handle、来源revision、未知结果查询保持不变"
+      ],
+      "matureSources": [
+        0,
+        1,
+        3
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/before/draft-original-file-360.png",
+          "arrival": {
+            "target": "draft/original-file: original proposal file",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/before/draft-original-file-1280.png",
+          "arrival": {
+            "target": "draft/original-file: original proposal file",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/after/draft-original-file-360.png",
+          "arrival": {
+            "target": "draft/original-file: original proposal file",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/after/draft-original-file-1280.png",
+          "arrival": {
+            "target": "draft/original-file: original proposal file",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; explicit synthetic native projection, not Android host validation"
+    },
+    {
+      "id": "skills/conversation-draft/candidate-first-page",
+      "parent": "skills/conversation-draft",
+      "scene": "候选文件第一页",
+      "primaryTask": "核对原文件、候选文件与来源，再明确保存为停用技能",
+      "originalProblem": "前后文件和原消息串列，原生details与既有披露语法不一致；当前阅读对象缺少稳定主区。",
+      "change": [
+        "前后文件一组选择，一个当前原文阅读面；宽屏并置，手机文件分组在上",
+        "来源说明与原主人消息统一为实际BoardUI Accordion",
+        "原全部文件分页提供、ack、handle、来源revision、未知结果查询保持不变"
+      ],
+      "matureSources": [
+        0,
+        1,
+        3
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/before/draft-candidate-first-page-360.png",
+          "arrival": {
+            "target": "draft/candidate-first-page: candidate first page",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/before/draft-candidate-first-page-1280.png",
+          "arrival": {
+            "target": "draft/candidate-first-page: candidate first page",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/after/draft-candidate-first-page-360.png",
+          "arrival": {
+            "target": "draft/candidate-first-page: candidate first page",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/after/draft-candidate-first-page-1280.png",
+          "arrival": {
+            "target": "draft/candidate-first-page: candidate first page",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; explicit synthetic native projection, not Android host validation"
+    },
+    {
+      "id": "skills/conversation-draft/candidate-complete",
+      "parent": "skills/conversation-draft",
+      "scene": "候选文件到末页",
+      "primaryTask": "核对原文件、候选文件与来源，再明确保存为停用技能",
+      "originalProblem": "前后文件和原消息串列，原生details与既有披露语法不一致；当前阅读对象缺少稳定主区。",
+      "change": [
+        "前后文件一组选择，一个当前原文阅读面；宽屏并置，手机文件分组在上",
+        "来源说明与原主人消息统一为实际BoardUI Accordion",
+        "原全部文件分页提供、ack、handle、来源revision、未知结果查询保持不变"
+      ],
+      "matureSources": [
+        0,
+        1,
+        3
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/before/draft-candidate-complete-360.png",
+          "arrival": {
+            "target": "draft/candidate-complete: candidate complete pages",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/before/draft-candidate-complete-1280.png",
+          "arrival": {
+            "target": "draft/candidate-complete: candidate complete pages",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/after/draft-candidate-complete-360.png",
+          "arrival": {
+            "target": "draft/candidate-complete: candidate complete pages",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/after/draft-candidate-complete-1280.png",
+          "arrival": {
+            "target": "draft/candidate-complete: candidate complete pages",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; explicit synthetic native projection, not Android host validation"
+    },
+    {
+      "id": "skills/conversation-draft/proposal-source",
+      "parent": "skills/conversation-draft",
+      "scene": "原主人消息与保存范围",
+      "primaryTask": "核对原文件、候选文件与来源，再明确保存为停用技能",
+      "originalProblem": "前后文件和原消息串列，原生details与既有披露语法不一致；当前阅读对象缺少稳定主区。",
+      "change": [
+        "前后文件一组选择，一个当前原文阅读面；宽屏并置，手机文件分组在上",
+        "来源说明与原主人消息统一为实际BoardUI Accordion",
+        "原全部文件分页提供、ack、handle、来源revision、未知结果查询保持不变"
+      ],
+      "matureSources": [
+        0,
+        1,
+        3
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/before/draft-proposal-source-360.png",
+          "arrival": {
+            "target": "draft/proposal-source: read source message",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/before/draft-proposal-source-1280.png",
+          "arrival": {
+            "target": "draft/proposal-source: read source message",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/after/draft-proposal-source-360.png",
+          "arrival": {
+            "target": "draft/proposal-source: read source message",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/after/draft-proposal-source-1280.png",
+          "arrival": {
+            "target": "draft/proposal-source: read source message",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; explicit synthetic native projection, not Android host validation"
+    },
+    {
+      "id": "skills/conversation-draft/ready-to-save",
+      "parent": "skills/conversation-draft",
+      "scene": "全部文件提供与明确确认",
+      "primaryTask": "核对原文件、候选文件与来源，再明确保存为停用技能",
+      "originalProblem": "前后文件和原消息串列，原生details与既有披露语法不一致；当前阅读对象缺少稳定主区。",
+      "change": [
+        "前后文件一组选择，一个当前原文阅读面；宽屏并置，手机文件分组在上",
+        "来源说明与原主人消息统一为实际BoardUI Accordion",
+        "原全部文件分页提供、ack、handle、来源revision、未知结果查询保持不变"
+      ],
+      "matureSources": [
+        0,
+        1,
+        3
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/before/draft-ready-to-save-360.png",
+          "arrival": {
+            "target": "draft/ready-to-save: explicit file-read acknowledgement",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/before/draft-ready-to-save-1280.png",
+          "arrival": {
+            "target": "draft/ready-to-save: explicit file-read acknowledgement",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/after/draft-ready-to-save-360.png",
+          "arrival": {
+            "target": "draft/ready-to-save: explicit file-read acknowledgement",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/after/draft-ready-to-save-1280.png",
+          "arrival": {
+            "target": "draft/ready-to-save: explicit file-read acknowledgement",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; explicit synthetic native projection, not Android host validation"
+    },
+    {
+      "id": "skills/conversation-draft/unknown-save",
+      "parent": "skills/conversation-draft",
+      "scene": "保存回执未知",
+      "primaryTask": "核对原文件、候选文件与来源，再明确保存为停用技能",
+      "originalProblem": "前后文件和原消息串列，原生details与既有披露语法不一致；当前阅读对象缺少稳定主区。",
+      "change": [
+        "前后文件一组选择，一个当前原文阅读面；宽屏并置，手机文件分组在上",
+        "来源说明与原主人消息统一为实际BoardUI Accordion",
+        "原全部文件分页提供、ack、handle、来源revision、未知结果查询保持不变"
+      ],
+      "matureSources": [
+        0,
+        1,
+        3
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/before/draft-unknown-save-360.png",
+          "arrival": {
+            "target": "draft/unknown-save: unknown native save receipt",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/before/draft-unknown-save-1280.png",
+          "arrival": {
+            "target": "draft/unknown-save: unknown native save receipt",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/after/draft-unknown-save-360.png",
+          "arrival": {
+            "target": "draft/unknown-save: unknown native save receipt",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/after/draft-unknown-save-1280.png",
+          "arrival": {
+            "target": "draft/unknown-save: unknown native save receipt",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; explicit synthetic native projection, not Android host validation"
+    },
+    {
+      "id": "skills/conversation-draft/query-original",
+      "parent": "skills/conversation-draft",
+      "scene": "原保存结果只读查询",
+      "primaryTask": "核对原文件、候选文件与来源，再明确保存为停用技能",
+      "originalProblem": "前后文件和原消息串列，原生details与既有披露语法不一致；当前阅读对象缺少稳定主区。",
+      "change": [
+        "前后文件一组选择，一个当前原文阅读面；宽屏并置，手机文件分组在上",
+        "来源说明与原主人消息统一为实际BoardUI Accordion",
+        "原全部文件分页提供、ack、handle、来源revision、未知结果查询保持不变"
+      ],
+      "matureSources": [
+        0,
+        1,
+        3
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/before/draft-query-original-360.png",
+          "arrival": {
+            "target": "draft/query-original: original result recheck",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/before/draft-query-original-1280.png",
+          "arrival": {
+            "target": "draft/query-original: original result recheck",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/after/draft-query-original-360.png",
+          "arrival": {
+            "target": "draft/query-original: original result recheck",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/ecosystem-depth/skill-draft/after/draft-query-original-1280.png",
+          "arrival": {
+            "target": "draft/query-original: original result recheck",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — unique scene target + current non-inert layer + four stable frames; explicit synthetic native projection, not Android host validation"
+    },
+    {
+      "id": "models/api/connections-models",
+      "parent": "models/api",
+      "scene": "连接与真实模型目录",
+      "primaryTask": "从准确连接选择可用模型，再核对接收方与原选择结果",
+      "originalProblem": "连接、收藏、最近、当前、不可用与能力描述串成一条长句；审核标题和接收方层级不清。",
+      "change": [
+        "原连接与模型目录保留；描述分为连接、状态与已声明能力",
+        "实际审核模型名与连接接收方分行；未知选择回执保持显式未确认",
+        "原window/review/connection revision与favorite/disabled gates保持不变"
+      ],
+      "matureSources": [
+        1,
+        4,
+        5
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/api-connections-models-360.png",
+          "arrival": {
+            "target": "api/connections-models",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/api-connections-models-1280.png",
+          "arrival": {
+            "target": "api/connections-models",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/api-connections-models-360.png",
+          "arrival": {
+            "target": "api/connections-models",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/api-connections-models-1280.png",
+          "arrival": {
+            "target": "api/connections-models",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — exact scene/object/value or error target + current non-inert layer + four stable frames; original handles and recipient gates retained. Actual components with synthetic native projections, not provider, billing or Android host validation."
+    },
+    {
+      "id": "models/api/unavailable-review",
+      "parent": "models/api",
+      "scene": "不可用模型的受阻审核",
+      "primaryTask": "从准确连接选择可用模型，再核对接收方与原选择结果",
+      "originalProblem": "连接、收藏、最近、当前、不可用与能力描述串成一条长句；审核标题和接收方层级不清。",
+      "change": [
+        "原连接与模型目录保留；描述分为连接、状态与已声明能力",
+        "实际审核模型名与连接接收方分行；未知选择回执保持显式未确认",
+        "原window/review/connection revision与favorite/disabled gates保持不变"
+      ],
+      "matureSources": [
+        1,
+        4,
+        5
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/api-unavailable-review-360.png",
+          "arrival": {
+            "target": "api/unavailable-review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/api-unavailable-review-1280.png",
+          "arrival": {
+            "target": "api/unavailable-review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/api-unavailable-review-360.png",
+          "arrival": {
+            "target": "api/unavailable-review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/api-unavailable-review-1280.png",
+          "arrival": {
+            "target": "api/unavailable-review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — exact scene/object/value or error target + current non-inert layer + four stable frames; original handles and recipient gates retained. Actual components with synthetic native projections, not provider, billing or Android host validation."
+    },
+    {
+      "id": "models/api/exact-connection-review",
+      "parent": "models/api",
+      "scene": "准确连接的模型接收方审核",
+      "primaryTask": "从准确连接选择可用模型，再核对接收方与原选择结果",
+      "originalProblem": "连接、收藏、最近、当前、不可用与能力描述串成一条长句；审核标题和接收方层级不清。",
+      "change": [
+        "原连接与模型目录保留；描述分为连接、状态与已声明能力",
+        "实际审核模型名与连接接收方分行；未知选择回执保持显式未确认",
+        "原window/review/connection revision与favorite/disabled gates保持不变"
+      ],
+      "matureSources": [
+        1,
+        4,
+        5
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/api-exact-connection-review-360.png",
+          "arrival": {
+            "target": "api/exact-connection-review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/api-exact-connection-review-1280.png",
+          "arrival": {
+            "target": "api/exact-connection-review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/api-exact-connection-review-360.png",
+          "arrival": {
+            "target": "api/exact-connection-review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/api-exact-connection-review-1280.png",
+          "arrival": {
+            "target": "api/exact-connection-review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — exact scene/object/value or error target + current non-inert layer + four stable frames; original handles and recipient gates retained. Actual components with synthetic native projections, not provider, billing or Android host validation."
+    },
+    {
+      "id": "models/api/selection-unknown",
+      "parent": "models/api",
+      "scene": "原选择结果尚未确认",
+      "primaryTask": "从准确连接选择可用模型，再核对接收方与原选择结果",
+      "originalProblem": "连接、收藏、最近、当前、不可用与能力描述串成一条长句；审核标题和接收方层级不清。",
+      "change": [
+        "原连接与模型目录保留；描述分为连接、状态与已声明能力",
+        "实际审核模型名与连接接收方分行；未知选择回执保持显式未确认",
+        "原window/review/connection revision与favorite/disabled gates保持不变"
+      ],
+      "matureSources": [
+        1,
+        4,
+        5
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/api-selection-unknown-360.png",
+          "arrival": {
+            "target": "api/selection-unknown",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/api-selection-unknown-1280.png",
+          "arrival": {
+            "target": "api/selection-unknown",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/api-selection-unknown-360.png",
+          "arrival": {
+            "target": "api/selection-unknown",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/api-selection-unknown-1280.png",
+          "arrival": {
+            "target": "api/selection-unknown",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — exact scene/object/value or error target + current non-inert layer + four stable frames; original handles and recipient gates retained. Actual components with synthetic native projections, not provider, billing or Android host validation."
+    },
+    {
+      "id": "models/accounts/account-recipient",
+      "parent": "models/accounts",
+      "scene": "主人账号接收方",
+      "primaryTask": "先选主人账号与实际模型，再确认推理偏好和有界本地输入预留",
+      "originalProblem": "重复目录说明淹没模型差异；推理与本地输入准入混列；审核标题与账号接收方靠在一起。",
+      "change": [
+        "保留实际模型ID差异与账号接收方；返回账号列表靠近目录上下文",
+        "推理偏好与本地输入准入分组；精确字段与范围说明保持可见",
+        "原planUsage、account revision、read/review handle和非法数值阻止确认保持不变"
+      ],
+      "matureSources": [
+        1,
+        4,
+        5
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/accounts-account-recipient-360.png",
+          "arrival": {
+            "target": "accounts/account-recipient",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/accounts-account-recipient-1280.png",
+          "arrival": {
+            "target": "accounts/account-recipient",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/accounts-account-recipient-360.png",
+          "arrival": {
+            "target": "accounts/account-recipient",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/accounts-account-recipient-1280.png",
+          "arrival": {
+            "target": "accounts/account-recipient",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — exact scene/object/value or error target + current non-inert layer + four stable frames; original handles and recipient gates retained. Actual components with synthetic native projections, not provider, billing or Android host validation."
+    },
+    {
+      "id": "models/accounts/account-catalog",
+      "parent": "models/accounts",
+      "scene": "账号真实模型目录",
+      "primaryTask": "先选主人账号与实际模型，再确认推理偏好和有界本地输入预留",
+      "originalProblem": "重复目录说明淹没模型差异；推理与本地输入准入混列；审核标题与账号接收方靠在一起。",
+      "change": [
+        "保留实际模型ID差异与账号接收方；返回账号列表靠近目录上下文",
+        "推理偏好与本地输入准入分组；精确字段与范围说明保持可见",
+        "原planUsage、account revision、read/review handle和非法数值阻止确认保持不变"
+      ],
+      "matureSources": [
+        1,
+        4,
+        5
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/accounts-account-catalog-360.png",
+          "arrival": {
+            "target": "accounts/account-catalog",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/accounts-account-catalog-1280.png",
+          "arrival": {
+            "target": "accounts/account-catalog",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/accounts-account-catalog-360.png",
+          "arrival": {
+            "target": "accounts/account-catalog",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/accounts-account-catalog-1280.png",
+          "arrival": {
+            "target": "accounts/account-catalog",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — exact scene/object/value or error target + current non-inert layer + four stable frames; original handles and recipient gates retained. Actual components with synthetic native projections, not provider, billing or Android host validation."
+    },
+    {
+      "id": "models/accounts/model-options-review",
+      "parent": "models/accounts",
+      "scene": "推理与有界本地准入审核",
+      "primaryTask": "先选主人账号与实际模型，再确认推理偏好和有界本地输入预留",
+      "originalProblem": "重复目录说明淹没模型差异；推理与本地输入准入混列；审核标题与账号接收方靠在一起。",
+      "change": [
+        "保留实际模型ID差异与账号接收方；返回账号列表靠近目录上下文",
+        "推理偏好与本地输入准入分组；精确字段与范围说明保持可见",
+        "原planUsage、account revision、read/review handle和非法数值阻止确认保持不变"
+      ],
+      "matureSources": [
+        1,
+        4,
+        5
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/accounts-model-options-review-360.png",
+          "arrival": {
+            "target": "accounts/model-options-review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/accounts-model-options-review-1280.png",
+          "arrival": {
+            "target": "accounts/model-options-review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/accounts-model-options-review-360.png",
+          "arrival": {
+            "target": "accounts/model-options-review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/accounts-model-options-review-1280.png",
+          "arrival": {
+            "target": "accounts/model-options-review",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — exact scene/object/value or error target + current non-inert layer + four stable frames; original handles and recipient gates retained. Actual components with synthetic native projections, not provider, billing or Android host validation."
+    },
+    {
+      "id": "models/accounts/selection-unknown",
+      "parent": "models/accounts",
+      "scene": "原账号模型选择尚未确认",
+      "primaryTask": "先选主人账号与实际模型，再确认推理偏好和有界本地输入预留",
+      "originalProblem": "重复目录说明淹没模型差异；推理与本地输入准入混列；审核标题与账号接收方靠在一起。",
+      "change": [
+        "保留实际模型ID差异与账号接收方；返回账号列表靠近目录上下文",
+        "推理偏好与本地输入准入分组；精确字段与范围说明保持可见",
+        "原planUsage、account revision、read/review handle和非法数值阻止确认保持不变"
+      ],
+      "matureSources": [
+        1,
+        4,
+        5
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/accounts-selection-unknown-360.png",
+          "arrival": {
+            "target": "accounts/selection-unknown",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/accounts-selection-unknown-1280.png",
+          "arrival": {
+            "target": "accounts/selection-unknown",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/accounts-selection-unknown-360.png",
+          "arrival": {
+            "target": "accounts/selection-unknown",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/accounts-selection-unknown-1280.png",
+          "arrival": {
+            "target": "accounts/selection-unknown",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — exact scene/object/value or error target + current non-inert layer + four stable frames; original handles and recipient gates retained. Actual components with synthetic native projections, not provider, billing or Android host validation."
+    },
+    {
+      "id": "models/wire/request-policy",
+      "parent": "models/connection-options",
+      "scene": "请求协议与输出策略",
+      "primaryTask": "确认实际发送协议和输出字段策略，理解未知字段发送拒绝边界",
+      "originalProblem": "整段Chat输出字段机制说明抢过实际协议与策略控件，相关字段纵向散列。",
+      "change": [
+        "保留重要未知字段发送拒绝警告；完整字段机制说明用实际BoardUI Accordion披露",
+        "协议、模板和输出策略按原语义分组；宽屏相关字段并置",
+        "只修改本地受控draft，精确非法值不静默改写、不引入native请求"
+      ],
+      "matureSources": [
+        1
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/wire-request-policy-360.png",
+          "arrival": {
+            "target": "wire/request-policy",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/wire-request-policy-1280.png",
+          "arrival": {
+            "target": "wire/request-policy",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/wire-request-policy-360.png",
+          "arrival": {
+            "target": "wire/request-policy",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/wire-request-policy-1280.png",
+          "arrival": {
+            "target": "wire/request-policy",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — exact scene/object/value or error target + current non-inert layer + four stable frames; original handles and recipient gates retained. Actual components with synthetic native projections, not provider, billing or Android host validation."
+    },
+    {
+      "id": "models/wire/output-field-rules",
+      "parent": "models/connection-options",
+      "scene": "输出字段机制披露",
+      "primaryTask": "确认实际发送协议和输出字段策略，理解未知字段发送拒绝边界",
+      "originalProblem": "整段Chat输出字段机制说明抢过实际协议与策略控件，相关字段纵向散列。",
+      "change": [
+        "保留重要未知字段发送拒绝警告；完整字段机制说明用实际BoardUI Accordion披露",
+        "协议、模板和输出策略按原语义分组；宽屏相关字段并置",
+        "只修改本地受控draft，精确非法值不静默改写、不引入native请求"
+      ],
+      "matureSources": [
+        1
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/wire-output-field-rules-360.png",
+          "arrival": {
+            "target": "wire/output-field-rules",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/wire-output-field-rules-1280.png",
+          "arrival": {
+            "target": "wire/output-field-rules",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/wire-output-field-rules-360.png",
+          "arrival": {
+            "target": "wire/output-field-rules",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/wire-output-field-rules-1280.png",
+          "arrival": {
+            "target": "wire/output-field-rules",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — exact scene/object/value or error target + current non-inert layer + four stable frames; original handles and recipient gates retained. Actual components with synthetic native projections, not provider, billing or Android host validation."
+    },
+    {
+      "id": "models/cache/unconfirmed-cost",
+      "parent": "models/connection-options",
+      "scene": "支持与费用尚未确认",
+      "primaryTask": "核对端点缓存支持与费用未知状态，再明确修改本地缓存草稿",
+      "originalProblem": "既有缓存控件已围绕任务组织，本轮需要完整核对未确认支持和费用边界，避免为diff强改。",
+      "change": [
+        "保留原成熟受控界面；纳入同内容双视口场景覆盖",
+        "未确认支持的开关仍禁用；显式支持后只改本地EPHEMERAL草稿",
+        "支持未知、费用未知与不代表免费提示保留可见，不伪造计费或保存结果"
+      ],
+      "matureSources": [
+        1
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/cache-unconfirmed-cost-360.png",
+          "arrival": {
+            "target": "cache/unconfirmed-cost",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/cache-unconfirmed-cost-1280.png",
+          "arrival": {
+            "target": "cache/unconfirmed-cost",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/cache-unconfirmed-cost-360.png",
+          "arrival": {
+            "target": "cache/unconfirmed-cost",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/cache-unconfirmed-cost-1280.png",
+          "arrival": {
+            "target": "cache/unconfirmed-cost",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — exact scene/object/value or error target + current non-inert layer + four stable frames; original handles and recipient gates retained. Actual components with synthetic native projections, not provider, billing or Android host validation."
+    },
+    {
+      "id": "models/cache/explicit-cache-draft",
+      "parent": "models/connection-options",
+      "scene": "显式支持后的本地缓存草稿",
+      "primaryTask": "核对端点缓存支持与费用未知状态，再明确修改本地缓存草稿",
+      "originalProblem": "既有缓存控件已围绕任务组织，本轮需要完整核对未确认支持和费用边界，避免为diff强改。",
+      "change": [
+        "保留原成熟受控界面；纳入同内容双视口场景覆盖",
+        "未确认支持的开关仍禁用；显式支持后只改本地EPHEMERAL草稿",
+        "支持未知、费用未知与不代表免费提示保留可见，不伪造计费或保存结果"
+      ],
+      "matureSources": [
+        1
+      ],
+      "evidence": [
+        {
+          "phase": "before",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/cache-explicit-cache-draft-360.png",
+          "arrival": {
+            "target": "cache/explicit-cache-draft",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "before",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/before/cache-explicit-cache-draft-1280.png",
+          "arrival": {
+            "target": "cache/explicit-cache-draft",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            360,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/cache-explicit-cache-draft-360.png",
+          "arrival": {
+            "target": "cache/explicit-cache-draft",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        },
+        {
+          "phase": "after",
+          "viewport": [
+            1280,
+            900
+          ],
+          "screenshot": "test-results/model-picker-depth/after/cache-explicit-cache-draft-1280.png",
+          "arrival": {
+            "target": "cache/explicit-cache-draft",
+            "activeLayer": true,
+            "stableFrames": 4
+          }
+        }
+      ],
+      "verification": "PASS — exact scene/object/value or error target + current non-inert layer + four stable frames; original handles and recipient gates retained. Actual components with synthetic native projections, not provider, billing or Android host validation."
+    }
+  ],
+  "validation": {
+    "typecheck": "PASS npm run typecheck",
+    "contracts": "PASS 20/20: plugins-workspace, functional-packs, task-capabilities, harness-capabilities original tests unchanged",
+    "browser": "PASS strict51 scenes:62 main+16 SkillDraft+24 model child screenshots before and the same102 after. Every scene uniquely asserts its actual current object, value, disclosure or error on an active non-inert layer with at least four stable frames, at360/1280; zero page errors.",
+    "journeys": [
+      "read before enable review",
+      "review consent disabled until explicit acknowledgement",
+      "return closes only current review",
+      "source CAS write error retains typed values",
+      "JS source approval does not enable extension",
+      "no implicit confirm/decide on opening, reading or returning",
+      "SkillDraft save remains blocked until original and candidate pages are all provided + explicit ack; exactly one explicit handle-bound confirm; unknown receipt only queries original result",
+      "Exact API connection/model identity survives selection review; unavailable model never gains confirm; unknown receipt stays unknown with original window/review handles.",
+      "Account model reads retain original account/revision, planUsage remains required, invalid127 local output reserve blocks confirm, exact valid bounded values survive explicit selection.",
+      "Wire fields preserve local exact draft, including invalid513; cache remains disabled until explicit support; supported switch changes only local draft to EPHEMERAL without a native request."
+    ],
+    "limits": [
+      "Actual React components with explicitly synthetic native replies; not Android device, real install, real credentials, real provider, billing or task execution.",
+      "Screenshots are generated workspace evidence. Reproduce with tests/ecosystem-depth-ui.mjs and tests/model-picker-depth-ui.mjs against the recorded baseline ref."
+    ],
+    "independentGuardReview": "PASS read-only second agent: original handles/revisions/all-file-page read/ack, source boundaries and callbacks preserved; not a visual or native-device claim",
+    "modelContracts": "PASS19/19 original composer-api-models, composer-account-models and model-connection-policy tests unchanged.",
+    "modelAppRegression": "PASS11/11 original model-account-ui App-level journeys and assertions unchanged; local runner only uses RAM Vite cache, explicit Chromium executable, disables dev watching and omits duplicate screenshots."
+  },
+  "followup": []
+}

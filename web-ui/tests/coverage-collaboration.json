@@ -1,0 +1,2152 @@
+{
+  "version": 1,
+  "task": "协作、团队、群、渠道、设备、电脑会话的任务层级与格式塔布局改造",
+  "baselineCommit": "379911a",
+  "fixture": "tests/collaboration-depth-fixture.tsx",
+  "runner": "tests/collaboration-depth-ui.mjs",
+  "beforeMechanism": "Vite loads the exact six production TSX files from baselineCommit through git show; same current fixture data and shared base controls as after. No Photoshop or mock UI screenshot.",
+  "boundary": "Synthetic native receipts; actual browser rendering of production components. No Android, real pairing, account login, message delivery, paid model execution, remote file write or native lease verification claim.",
+  "matureSources": [
+    {
+      "name": "BoardUI settings, fields, Accordion, Button",
+      "identity": "ec5c5eb3e29c2441be63b9422cd54f411ef23466 + retained official free registry 2026-11-01",
+      "license": "MIT retained in src/forms-library/LICENSE-BoardUI.txt",
+      "source": [
+        "src/forms-library/upstream/components/application/settings/settings-modal.tsx.source",
+        "src/forms-library/upstream/components/base/accordion/accordion.tsx.source",
+        "src/forms-library/upstream/components/base/buttons/button.tsx.source"
+      ],
+      "adaptation": "Reuse the existing controlled primitives; add workspace-specific composition and dialog interiors, keep labels, native handles, consent gates and reduced-motion lifecycle."
+    },
+    {
+      "name": "Affect AIAnswer",
+      "identity": "official 37b91fa, retained source and provenance",
+      "license": "MIT, existing src/library/PROVENANCE.json",
+      "source": [
+        "src/library/upstream/affect-library/src/demos/components-a/chat.tsx.source.txt",
+        "src/library/composer.tsx"
+      ],
+      "adaptation": "Reuse existing result/message body, on the continuous main reading surface. No new card scaffold or independent-reproduction Pro code introduced."
+    }
+  ],
+  "designRules": {
+    "proximity": "labels stay with fields; related controls 8–12px; independent sections24–32px",
+    "commonRegion": "one primary reading region, one contextual region on wide screens; no every-paragraph cards",
+    "similarity": "object row titles, true status and trailing affordances share alignment; settings retain adopted primitives",
+    "continuity": "continuous result/message/event reading, original Back and draft ownership retained",
+    "mobile": "existing16px page inset, one-column fields; sheets stay within viewport",
+    "motion": "existing BoardUI reduced-motion behavior retained; no new animation loop or execution effect"
+  },
+  "validation": {
+    "typecheck": "passed",
+    "contractTests": {
+      "count": 141,
+      "status": "passed — consolidated unique 13-file suite, 141 tests",
+      "files": [
+        "team-phone.test.ts",
+        "team-production.test.ts",
+        "team-message.test.ts",
+        "team-evidence.test.ts",
+        "groups-workspace.test.ts",
+        "groups-workspace-journeys.test.ts",
+        "channel-contract.test.ts",
+        "channel-workspace-journeys.test.ts",
+        "devices-workspace.test.ts",
+        "remote-task-workspace.test.ts",
+        "harness-capabilities.test.ts",
+        "desktop-viewer.test.ts",
+        "desktop-viewer-lifecycle.test.ts"
+      ]
+    },
+    "browser": {
+      "status": "passed for every scene via explicit expected object, active non-inert layer and stable frames",
+      "sceneCount": 58,
+      "beforeScreenshots": 116,
+      "afterScreenshots": 116,
+      "viewports": [
+        360,
+        1280
+      ],
+      "pageErrors": [],
+      "assertions": [
+        "no horizontal viewport overflow",
+        "all browsing routes preserve no-send/no-confirm/no-approve boundary",
+        "start and member/native-review confirmation remains disabled before explicit consent",
+        "team reply textarea retains local draft without sending",
+        "remote draft is writable locally when permitted; hidden native window removes or disables saving/sending",
+        "Every scene has a unique expected object, heading, field or native receipt; no heading-shell-only capture.",
+        "Target must be visible, outside hidden/inert/aria-hidden ancestors, in the top active dialog when applicable, and have stable animation-frame geometry."
+      ],
+      "evidenceRoot": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence",
+      "mainSceneCount": 42,
+      "nestedSceneCount": 16,
+      "mainBeforeScreenshots": 84,
+      "mainAfterScreenshots": 84,
+      "nestedBeforeScreenshots": 32,
+      "nestedAfterScreenshots": 32,
+      "afterSegments": [
+        "first 30 phone scenes from completed unique-object checks before the recorded later timeout",
+        "devices-debug:16 original-device scene/viewport pairs",
+        "after-wide-other:30 wide non-device scene/viewport pairs",
+        "after-remote:8 remote scene/viewport pairs"
+      ],
+      "priorFailure": {
+        "status": "failed_initial_full_after",
+        "verifiedScenesBeforeFailure": 34,
+        "failure": "After grant-review Back, a full synthetic journey timed out locating stop-active-connection. No source or fixture identity changed to bypass it.",
+        "followup": "Exact devices-only browser journey passed all 16 scene/viewport pairs unchanged; baseline/current production-hook diagnostic preserved detail + stop CTA and discarded only the original grant handle.",
+        "record": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/attempts/after-partial-34-scenes.json"
+      }
+    },
+    "limitations": [
+      "Synthetic native receipts and real production React components only; no Android/native execution, pairing, OAuth, model billing, real remote writes or real preview tunnel claim.",
+      "One initial full-after device selector timeout was not reproduced by the unchanged focused device journey; retained in the evidence attempts record. Final scene evidence is assembled from explicit successful segments."
+    ],
+    "nestedContracts": {
+      "count": 84,
+      "status": "passed",
+      "files": [
+        "remote-task-workspace.test.ts",
+        "team-production.test.ts",
+        "harness-capabilities.test.ts",
+        "desktop-viewer.test.ts",
+        "desktop-viewer-lifecycle.test.ts"
+      ]
+    }
+  },
+  "scenes": [
+    {
+      "scene": "teams-directory",
+      "source": "src/TeamsWorkspace.tsx",
+      "mainTask": "先判断共同工作的当前成果，再查看成员分工、回答问题或补充下一步。",
+      "oldProblem": "成员与工作项清单排在当前成果之前；宽屏仍纵向阅读；编辑器缺少成员共同区域。",
+      "changes": [
+        "成果与沟通为主区，成员/依赖/资料为宽屏辅助区。",
+        "开始下一次工作的目标和原操作提前；成员配置为独立字段组。",
+        "成员列表复合Button标签拉伸，返回/草稿与原团队身份不改。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button",
+        "Affect AIAnswer"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/teams-directory-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/teams-directory-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/teams-directory-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/teams-directory-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "teams-run",
+      "source": "src/TeamsWorkspace.tsx",
+      "mainTask": "先判断共同工作的当前成果，再查看成员分工、回答问题或补充下一步。",
+      "oldProblem": "成员与工作项清单排在当前成果之前；宽屏仍纵向阅读；编辑器缺少成员共同区域。",
+      "changes": [
+        "成果与沟通为主区，成员/依赖/资料为宽屏辅助区。",
+        "开始下一次工作的目标和原操作提前；成员配置为独立字段组。",
+        "成员列表复合Button标签拉伸，返回/草稿与原团队身份不改。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button",
+        "Affect AIAnswer"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/teams-run-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/teams-run-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/teams-run-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/teams-run-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "teams-message-compose",
+      "source": "src/TeamsWorkspace.tsx",
+      "mainTask": "先判断共同工作的当前成果，再查看成员分工、回答问题或补充下一步。",
+      "oldProblem": "成员与工作项清单排在当前成果之前；宽屏仍纵向阅读；编辑器缺少成员共同区域。",
+      "changes": [
+        "成果与沟通为主区，成员/依赖/资料为宽屏辅助区。",
+        "开始下一次工作的目标和原操作提前；成员配置为独立字段组。",
+        "成员列表复合Button标签拉伸，返回/草稿与原团队身份不改。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button",
+        "Affect AIAnswer"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/teams-message-compose-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/teams-message-compose-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/teams-message-compose-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/teams-message-compose-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "teams-member",
+      "source": "src/TeamsWorkspace.tsx",
+      "mainTask": "先判断共同工作的当前成果，再查看成员分工、回答问题或补充下一步。",
+      "oldProblem": "成员与工作项清单排在当前成果之前；宽屏仍纵向阅读；编辑器缺少成员共同区域。",
+      "changes": [
+        "成果与沟通为主区，成员/依赖/资料为宽屏辅助区。",
+        "开始下一次工作的目标和原操作提前；成员配置为独立字段组。",
+        "成员列表复合Button标签拉伸，返回/草稿与原团队身份不改。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button",
+        "Affect AIAnswer"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/teams-member-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/teams-member-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/teams-member-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/teams-member-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "teams-evidence",
+      "source": "src/TeamEvidenceWorkspace.tsx",
+      "mainTask": "先判断共同工作的当前成果，再查看成员分工、回答问题或补充下一步。",
+      "oldProblem": "成员与工作项清单排在当前成果之前；宽屏仍纵向阅读；编辑器缺少成员共同区域。",
+      "changes": [
+        "成果与沟通为主区，成员/依赖/资料为宽屏辅助区。",
+        "开始下一次工作的目标和原操作提前；成员配置为独立字段组。",
+        "成员列表复合Button标签拉伸，返回/草稿与原团队身份不改。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button",
+        "Affect AIAnswer"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/teams-evidence-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/teams-evidence-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/teams-evidence-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/teams-evidence-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "teams-evidence-review",
+      "source": "src/TeamEvidenceWorkspace.tsx",
+      "mainTask": "先判断共同工作的当前成果，再查看成员分工、回答问题或补充下一步。",
+      "oldProblem": "成员与工作项清单排在当前成果之前；宽屏仍纵向阅读；编辑器缺少成员共同区域。",
+      "changes": [
+        "成果与沟通为主区，成员/依赖/资料为宽屏辅助区。",
+        "开始下一次工作的目标和原操作提前；成员配置为独立字段组。",
+        "成员列表复合Button标签拉伸，返回/草稿与原团队身份不改。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button",
+        "Affect AIAnswer"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/teams-evidence-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/teams-evidence-review-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/teams-evidence-review-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/teams-evidence-review-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "teams-definition",
+      "source": "src/TeamsWorkspace.tsx",
+      "mainTask": "先判断共同工作的当前成果，再查看成员分工、回答问题或补充下一步。",
+      "oldProblem": "成员与工作项清单排在当前成果之前；宽屏仍纵向阅读；编辑器缺少成员共同区域。",
+      "changes": [
+        "成果与沟通为主区，成员/依赖/资料为宽屏辅助区。",
+        "开始下一次工作的目标和原操作提前；成员配置为独立字段组。",
+        "成员列表复合Button标签拉伸，返回/草稿与原团队身份不改。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button",
+        "Affect AIAnswer"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/teams-definition-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/teams-definition-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/teams-definition-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/teams-definition-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "teams-editor",
+      "source": "src/TeamsWorkspace.tsx",
+      "mainTask": "先判断共同工作的当前成果，再查看成员分工、回答问题或补充下一步。",
+      "oldProblem": "成员与工作项清单排在当前成果之前；宽屏仍纵向阅读；编辑器缺少成员共同区域。",
+      "changes": [
+        "成果与沟通为主区，成员/依赖/资料为宽屏辅助区。",
+        "开始下一次工作的目标和原操作提前；成员配置为独立字段组。",
+        "成员列表复合Button标签拉伸，返回/草稿与原团队身份不改。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button",
+        "Affect AIAnswer"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/teams-editor-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/teams-editor-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/teams-editor-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/teams-editor-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "teams-start-review",
+      "source": "src/TeamsWorkspace.tsx",
+      "mainTask": "先判断共同工作的当前成果，再查看成员分工、回答问题或补充下一步。",
+      "oldProblem": "成员与工作项清单排在当前成果之前；宽屏仍纵向阅读；编辑器缺少成员共同区域。",
+      "changes": [
+        "成果与沟通为主区，成员/依赖/资料为宽屏辅助区。",
+        "开始下一次工作的目标和原操作提前；成员配置为独立字段组。",
+        "成员列表复合Button标签拉伸，返回/草稿与原团队身份不改。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button",
+        "Affect AIAnswer"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/teams-start-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/teams-start-review-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/teams-start-review-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/teams-start-review-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "groups-directory",
+      "source": "src/GroupsWorkspace.tsx",
+      "mainTask": "从原群请求阅读真实结果，按原受众继续、停止或核对投递。",
+      "oldProblem": "摘要卡片嵌在文档清单里；原范围和操作与阅读内容没有空间层级。",
+      "changes": [
+        "结果连续平面阅读；宽屏原受众与操作独立辅助区。",
+        "成员与策略的相似字段对齐，组内12–20px、组间24px。",
+        "中性状态与极弱边界，保留真实权限、未知回执和投递记录。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/groups-directory-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/groups-directory-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/groups-directory-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/groups-directory-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "groups-requests",
+      "source": "src/GroupsWorkspace.tsx",
+      "mainTask": "从原群请求阅读真实结果，按原受众继续、停止或核对投递。",
+      "oldProblem": "摘要卡片嵌在文档清单里；原范围和操作与阅读内容没有空间层级。",
+      "changes": [
+        "结果连续平面阅读；宽屏原受众与操作独立辅助区。",
+        "成员与策略的相似字段对齐，组内12–20px、组间24px。",
+        "中性状态与极弱边界，保留真实权限、未知回执和投递记录。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/groups-requests-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/groups-requests-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/groups-requests-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/groups-requests-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "groups-request-detail",
+      "source": "src/GroupsWorkspace.tsx",
+      "mainTask": "从原群请求阅读真实结果，按原受众继续、停止或核对投递。",
+      "oldProblem": "摘要卡片嵌在文档清单里；原范围和操作与阅读内容没有空间层级。",
+      "changes": [
+        "结果连续平面阅读；宽屏原受众与操作独立辅助区。",
+        "成员与策略的相似字段对齐，组内12–20px、组间24px。",
+        "中性状态与极弱边界，保留真实权限、未知回执和投递记录。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/groups-request-detail-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/groups-request-detail-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/groups-request-detail-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/groups-request-detail-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "groups-members",
+      "source": "src/GroupsWorkspace.tsx",
+      "mainTask": "从原群请求阅读真实结果，按原受众继续、停止或核对投递。",
+      "oldProblem": "摘要卡片嵌在文档清单里；原范围和操作与阅读内容没有空间层级。",
+      "changes": [
+        "结果连续平面阅读；宽屏原受众与操作独立辅助区。",
+        "成员与策略的相似字段对齐，组内12–20px、组间24px。",
+        "中性状态与极弱边界，保留真实权限、未知回执和投递记录。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/groups-members-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/groups-members-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/groups-members-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/groups-members-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "groups-member-editor",
+      "source": "src/GroupsWorkspace.tsx",
+      "mainTask": "从原群请求阅读真实结果，按原受众继续、停止或核对投递。",
+      "oldProblem": "摘要卡片嵌在文档清单里；原范围和操作与阅读内容没有空间层级。",
+      "changes": [
+        "结果连续平面阅读；宽屏原受众与操作独立辅助区。",
+        "成员与策略的相似字段对齐，组内12–20px、组间24px。",
+        "中性状态与极弱边界，保留真实权限、未知回执和投递记录。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/groups-member-editor-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/groups-member-editor-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/groups-member-editor-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/groups-member-editor-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "groups-member-review",
+      "source": "src/GroupsWorkspace.tsx",
+      "mainTask": "从原群请求阅读真实结果，按原受众继续、停止或核对投递。",
+      "oldProblem": "摘要卡片嵌在文档清单里；原范围和操作与阅读内容没有空间层级。",
+      "changes": [
+        "结果连续平面阅读；宽屏原受众与操作独立辅助区。",
+        "成员与策略的相似字段对齐，组内12–20px、组间24px。",
+        "中性状态与极弱边界，保留真实权限、未知回执和投递记录。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/groups-member-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/groups-member-review-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/groups-member-review-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/groups-member-review-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "groups-policy",
+      "source": "src/GroupsWorkspace.tsx",
+      "mainTask": "从原群请求阅读真实结果，按原受众继续、停止或核对投递。",
+      "oldProblem": "摘要卡片嵌在文档清单里；原范围和操作与阅读内容没有空间层级。",
+      "changes": [
+        "结果连续平面阅读；宽屏原受众与操作独立辅助区。",
+        "成员与策略的相似字段对齐，组内12–20px、组间24px。",
+        "中性状态与极弱边界，保留真实权限、未知回执和投递记录。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/groups-policy-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/groups-policy-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/groups-policy-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/groups-policy-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "groups-policy-editor",
+      "source": "src/GroupsWorkspace.tsx",
+      "mainTask": "从原群请求阅读真实结果，按原受众继续、停止或核对投递。",
+      "oldProblem": "摘要卡片嵌在文档清单里；原范围和操作与阅读内容没有空间层级。",
+      "changes": [
+        "结果连续平面阅读；宽屏原受众与操作独立辅助区。",
+        "成员与策略的相似字段对齐，组内12–20px、组间24px。",
+        "中性状态与极弱边界，保留真实权限、未知回执和投递记录。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/groups-policy-editor-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/groups-policy-editor-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/groups-policy-editor-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/groups-policy-editor-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "channels-inbox",
+      "source": "src/ChannelsWorkspace.tsx",
+      "mainTask": "阅读本人渠道消息并分别核对账号、接收、主人与原件权限。",
+      "oldProblem": "消息先显示技术来源；连接编辑混排凭据、接收方式、原件同意及长说明。",
+      "changes": [
+        "消息正文与关联动作先呈现，认证与来源编号低频披露。",
+        "身份、接收与回复分组；QQ细项与本人私聊原件各自Accordion。",
+        "连接/主人/历史/原件/登录sheet拥有有界的专属组间距。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-inbox-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-inbox-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-inbox-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-inbox-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "channels-message",
+      "source": "src/ChannelsWorkspace.tsx",
+      "mainTask": "阅读本人渠道消息并分别核对账号、接收、主人与原件权限。",
+      "oldProblem": "消息先显示技术来源；连接编辑混排凭据、接收方式、原件同意及长说明。",
+      "changes": [
+        "消息正文与关联动作先呈现，认证与来源编号低频披露。",
+        "身份、接收与回复分组；QQ细项与本人私聊原件各自Accordion。",
+        "连接/主人/历史/原件/登录sheet拥有有界的专属组间距。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-message-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-message-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-message-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-message-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "channels-media-review",
+      "source": "src/ChannelsWorkspace.tsx",
+      "mainTask": "阅读本人渠道消息并分别核对账号、接收、主人与原件权限。",
+      "oldProblem": "消息先显示技术来源；连接编辑混排凭据、接收方式、原件同意及长说明。",
+      "changes": [
+        "消息正文与关联动作先呈现，认证与来源编号低频披露。",
+        "身份、接收与回复分组；QQ细项与本人私聊原件各自Accordion。",
+        "连接/主人/历史/原件/登录sheet拥有有界的专属组间距。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-media-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-media-review-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-media-review-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-media-review-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "channels-task",
+      "source": "src/ChannelsWorkspace.tsx",
+      "mainTask": "阅读本人渠道消息并分别核对账号、接收、主人与原件权限。",
+      "oldProblem": "消息先显示技术来源；连接编辑混排凭据、接收方式、原件同意及长说明。",
+      "changes": [
+        "消息正文与关联动作先呈现，认证与来源编号低频披露。",
+        "身份、接收与回复分组；QQ细项与本人私聊原件各自Accordion。",
+        "连接/主人/历史/原件/登录sheet拥有有界的专属组间距。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-task-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-task-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-task-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-task-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "channels-delivery",
+      "source": "src/ChannelsWorkspace.tsx",
+      "mainTask": "阅读本人渠道消息并分别核对账号、接收、主人与原件权限。",
+      "oldProblem": "消息先显示技术来源；连接编辑混排凭据、接收方式、原件同意及长说明。",
+      "changes": [
+        "消息正文与关联动作先呈现，认证与来源编号低频披露。",
+        "身份、接收与回复分组；QQ细项与本人私聊原件各自Accordion。",
+        "连接/主人/历史/原件/登录sheet拥有有界的专属组间距。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-delivery-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-delivery-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-delivery-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-delivery-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "channels-connections",
+      "source": "src/ChannelsWorkspace.tsx",
+      "mainTask": "阅读本人渠道消息并分别核对账号、接收、主人与原件权限。",
+      "oldProblem": "消息先显示技术来源；连接编辑混排凭据、接收方式、原件同意及长说明。",
+      "changes": [
+        "消息正文与关联动作先呈现，认证与来源编号低频披露。",
+        "身份、接收与回复分组；QQ细项与本人私聊原件各自Accordion。",
+        "连接/主人/历史/原件/登录sheet拥有有界的专属组间距。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-connections-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-connections-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-connections-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-connections-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "channels-account",
+      "source": "src/ChannelsWorkspace.tsx",
+      "mainTask": "阅读本人渠道消息并分别核对账号、接收、主人与原件权限。",
+      "oldProblem": "消息先显示技术来源；连接编辑混排凭据、接收方式、原件同意及长说明。",
+      "changes": [
+        "消息正文与关联动作先呈现，认证与来源编号低频披露。",
+        "身份、接收与回复分组；QQ细项与本人私聊原件各自Accordion。",
+        "连接/主人/历史/原件/登录sheet拥有有界的专属组间距。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-account-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-account-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-account-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-account-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "channels-permissions",
+      "source": "src/ChannelsWorkspace.tsx",
+      "mainTask": "阅读本人渠道消息并分别核对账号、接收、主人与原件权限。",
+      "oldProblem": "消息先显示技术来源；连接编辑混排凭据、接收方式、原件同意及长说明。",
+      "changes": [
+        "消息正文与关联动作先呈现，认证与来源编号低频披露。",
+        "身份、接收与回复分组；QQ细项与本人私聊原件各自Accordion。",
+        "连接/主人/历史/原件/登录sheet拥有有界的专属组间距。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-permissions-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-permissions-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-permissions-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-permissions-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "channels-profile",
+      "source": "src/ChannelsWorkspace.tsx",
+      "mainTask": "阅读本人渠道消息并分别核对账号、接收、主人与原件权限。",
+      "oldProblem": "消息先显示技术来源；连接编辑混排凭据、接收方式、原件同意及长说明。",
+      "changes": [
+        "消息正文与关联动作先呈现，认证与来源编号低频披露。",
+        "身份、接收与回复分组；QQ细项与本人私聊原件各自Accordion。",
+        "连接/主人/历史/原件/登录sheet拥有有界的专属组间距。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-profile-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-profile-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-profile-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-profile-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "channels-profile-originals",
+      "source": "src/ChannelsWorkspace.tsx",
+      "mainTask": "阅读本人渠道消息并分别核对账号、接收、主人与原件权限。",
+      "oldProblem": "消息先显示技术来源；连接编辑混排凭据、接收方式、原件同意及长说明。",
+      "changes": [
+        "消息正文与关联动作先呈现，认证与来源编号低频披露。",
+        "身份、接收与回复分组；QQ细项与本人私聊原件各自Accordion。",
+        "连接/主人/历史/原件/登录sheet拥有有界的专属组间距。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-profile-originals-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-profile-originals-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-profile-originals-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-profile-originals-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "channels-owner",
+      "source": "src/ChannelsWorkspace.tsx",
+      "mainTask": "阅读本人渠道消息并分别核对账号、接收、主人与原件权限。",
+      "oldProblem": "消息先显示技术来源；连接编辑混排凭据、接收方式、原件同意及长说明。",
+      "changes": [
+        "消息正文与关联动作先呈现，认证与来源编号低频披露。",
+        "身份、接收与回复分组；QQ细项与本人私聊原件各自Accordion。",
+        "连接/主人/历史/原件/登录sheet拥有有界的专属组间距。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-owner-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-owner-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-owner-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-owner-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "channels-history",
+      "source": "src/ChannelsWorkspace.tsx",
+      "mainTask": "阅读本人渠道消息并分别核对账号、接收、主人与原件权限。",
+      "oldProblem": "消息先显示技术来源；连接编辑混排凭据、接收方式、原件同意及长说明。",
+      "changes": [
+        "消息正文与关联动作先呈现，认证与来源编号低频披露。",
+        "身份、接收与回复分组；QQ细项与本人私聊原件各自Accordion。",
+        "连接/主人/历史/原件/登录sheet拥有有界的专属组间距。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-history-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-history-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-history-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-history-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "channels-login",
+      "source": "src/ChannelsWorkspace.tsx",
+      "mainTask": "阅读本人渠道消息并分别核对账号、接收、主人与原件权限。",
+      "oldProblem": "消息先显示技术来源；连接编辑混排凭据、接收方式、原件同意及长说明。",
+      "changes": [
+        "消息正文与关联动作先呈现，认证与来源编号低频披露。",
+        "身份、接收与回复分组；QQ细项与本人私聊原件各自Accordion。",
+        "连接/主人/历史/原件/登录sheet拥有有界的专属组间距。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-login-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-login-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/channels-login-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/channels-login-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "devices-directory",
+      "source": "src/DevicesWorkspace.tsx",
+      "mainTask": "确认当前设备与真实连接，阅读关联任务，核对双端权限与身份。",
+      "oldProblem": "连接、授权与任务被多个卡片割裂；宽屏仍一列。",
+      "changes": [
+        "连接状态带与连续关联任务去掉重复浮卡。",
+        "宽屏任务主区、连接与权限辅助区；手机顺序阅读。",
+        "审核内保持完整指纹、预算、准确资源与独立同意。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/devices-directory-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/devices-directory-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/devices-directory-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/devices-directory-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "devices-detail",
+      "source": "src/DevicesWorkspace.tsx",
+      "mainTask": "确认当前设备与真实连接，阅读关联任务，核对双端权限与身份。",
+      "oldProblem": "连接、授权与任务被多个卡片割裂；宽屏仍一列。",
+      "changes": [
+        "连接状态带与连续关联任务去掉重复浮卡。",
+        "宽屏任务主区、连接与权限辅助区；手机顺序阅读。",
+        "审核内保持完整指纹、预算、准确资源与独立同意。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/devices-detail-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/devices-detail-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/devices-detail-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/devices-detail-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "devices-permissions",
+      "source": "src/DevicesWorkspace.tsx",
+      "mainTask": "确认当前设备与真实连接，阅读关联任务，核对双端权限与身份。",
+      "oldProblem": "连接、授权与任务被多个卡片割裂；宽屏仍一列。",
+      "changes": [
+        "连接状态带与连续关联任务去掉重复浮卡。",
+        "宽屏任务主区、连接与权限辅助区；手机顺序阅读。",
+        "审核内保持完整指纹、预算、准确资源与独立同意。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/devices-permissions-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/devices-permissions-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/devices-permissions-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/devices-permissions-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "devices-grant-review",
+      "source": "src/DevicesWorkspace.tsx",
+      "mainTask": "确认当前设备与真实连接，阅读关联任务，核对双端权限与身份。",
+      "oldProblem": "连接、授权与任务被多个卡片割裂；宽屏仍一列。",
+      "changes": [
+        "连接状态带与连续关联任务去掉重复浮卡。",
+        "宽屏任务主区、连接与权限辅助区；手机顺序阅读。",
+        "审核内保持完整指纹、预算、准确资源与独立同意。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/devices-grant-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/devices-grant-review-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/devices-grant-review-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/devices-grant-review-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "devices-action-review",
+      "source": "src/DevicesWorkspace.tsx",
+      "mainTask": "确认当前设备与真实连接，阅读关联任务，核对双端权限与身份。",
+      "oldProblem": "连接、授权与任务被多个卡片割裂；宽屏仍一列。",
+      "changes": [
+        "连接状态带与连续关联任务去掉重复浮卡。",
+        "宽屏任务主区、连接与权限辅助区；手机顺序阅读。",
+        "审核内保持完整指纹、预算、准确资源与独立同意。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/devices-action-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/devices-action-review-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/devices-action-review-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/devices-action-review-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "devices-identity",
+      "source": "src/DevicesWorkspace.tsx",
+      "mainTask": "确认当前设备与真实连接，阅读关联任务，核对双端权限与身份。",
+      "oldProblem": "连接、授权与任务被多个卡片割裂；宽屏仍一列。",
+      "changes": [
+        "连接状态带与连续关联任务去掉重复浮卡。",
+        "宽屏任务主区、连接与权限辅助区；手机顺序阅读。",
+        "审核内保持完整指纹、预算、准确资源与独立同意。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/devices-identity-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/devices-identity-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/devices-identity-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/devices-identity-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "devices-connection-editor",
+      "source": "src/DevicesWorkspace.tsx",
+      "mainTask": "确认当前设备与真实连接，阅读关联任务，核对双端权限与身份。",
+      "oldProblem": "连接、授权与任务被多个卡片割裂；宽屏仍一列。",
+      "changes": [
+        "连接状态带与连续关联任务去掉重复浮卡。",
+        "宽屏任务主区、连接与权限辅助区；手机顺序阅读。",
+        "审核内保持完整指纹、预算、准确资源与独立同意。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/devices-connection-editor-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/devices-connection-editor-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/devices-connection-editor-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/devices-connection-editor-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "devices-pair-editor",
+      "source": "src/DevicesWorkspace.tsx",
+      "mainTask": "确认当前设备与真实连接，阅读关联任务，核对双端权限与身份。",
+      "oldProblem": "连接、授权与任务被多个卡片割裂；宽屏仍一列。",
+      "changes": [
+        "连接状态带与连续关联任务去掉重复浮卡。",
+        "宽屏任务主区、连接与权限辅助区；手机顺序阅读。",
+        "审核内保持完整指纹、预算、准确资源与独立同意。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/devices-pair-editor-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/devices-pair-editor-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/devices-pair-editor-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/devices-pair-editor-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "remote-session",
+      "source": "src/RemoteTaskWorkspace.tsx",
+      "mainTask": "决定本次原电脑请求、回答原问题、保留本地输入，观察真实执行。",
+      "oldProblem": "原始审批JSON直接占据首屏；输入和执行观察混为一列，事件逐项卡片。",
+      "changes": [
+        "请求摘要与单次决定优先，完整参数与原会话身份低频披露。",
+        "问题与草稿为主区，进度来源/配置/产物为宽屏辅助区。",
+        "执行事件连续排列、已知状态中文化，原始身份状态仍可核对。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/remote-session-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/remote-session-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/remote-session-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/remote-session-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "remote-configuration",
+      "source": "src/RemoteTaskWorkspace.tsx",
+      "mainTask": "决定本次原电脑请求、回答原问题、保留本地输入，观察真实执行。",
+      "oldProblem": "原始审批JSON直接占据首屏；输入和执行观察混为一列，事件逐项卡片。",
+      "changes": [
+        "请求摘要与单次决定优先，完整参数与原会话身份低频披露。",
+        "问题与草稿为主区，进度来源/配置/产物为宽屏辅助区。",
+        "执行事件连续排列、已知状态中文化，原始身份状态仍可核对。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/remote-configuration-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/remote-configuration-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/remote-configuration-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/remote-configuration-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "remote-question-and-draft",
+      "source": "src/RemoteTaskWorkspace.tsx",
+      "mainTask": "决定本次原电脑请求、回答原问题、保留本地输入，观察真实执行。",
+      "oldProblem": "原始审批JSON直接占据首屏；输入和执行观察混为一列，事件逐项卡片。",
+      "changes": [
+        "请求摘要与单次决定优先，完整参数与原会话身份低频披露。",
+        "问题与草稿为主区，进度来源/配置/产物为宽屏辅助区。",
+        "执行事件连续排列、已知状态中文化，原始身份状态仍可核对。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/remote-question-and-draft-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/remote-question-and-draft-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/remote-question-and-draft-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/remote-question-and-draft-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "remote-local-draft",
+      "source": "src/RemoteTaskWorkspace.tsx",
+      "mainTask": "决定本次原电脑请求、回答原问题、保留本地输入，观察真实执行。",
+      "oldProblem": "原始审批JSON直接占据首屏；输入和执行观察混为一列，事件逐项卡片。",
+      "changes": [
+        "请求摘要与单次决定优先，完整参数与原会话身份低频披露。",
+        "问题与草稿为主区，进度来源/配置/产物为宽屏辅助区。",
+        "执行事件连续排列、已知状态中文化，原始身份状态仍可核对。"
+      ],
+      "matureSources": [
+        "BoardUI settings, fields, Accordion, Button"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/remote-local-draft-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/remote-local-draft-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/before/remote-local-draft-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/after/remote-local-draft-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object visible in active non-hidden/non-inert layer; stable frames; no horizontal viewport overflow; no prohibited execution/approval/send"
+    },
+    {
+      "scene": "nested-computer-member",
+      "source": [
+        "src/TeamHarnessFields.tsx",
+        "src/TeamProductionFields.tsx"
+      ],
+      "mainTask": "核对电脑、环境和执行器的明确分工",
+      "oldProblem": "嵌套配置/原件/审核存在连续字段与技术记录，需区分任务范围、主要操作和完整核对；桌面保留已有清晰的viewport/状态/工具结构。",
+      "changes": [
+        "Retain existing computer/environment/runner relationship and BoardUI model/mode disclosure. Parent common-region spacing applies; no execution/probe authority change.",
+        "Make file responsibility and source selection one common region; execution/output/contribution limits form a separate aligned group. Keep all three transfer/command/billing acknowledgments outside disclosure."
+      ],
+      "matureSources": [
+        "Existing retained BoardUI controlled fields, SettingsDialog and Accordion; exact native review adapters"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-computer-member-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-computer-member-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-computer-member-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-computer-member-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object, active layer, stable frames, no horizontal viewport overflow; all exact-scope confirmation buttons remain disabled before acknowledgment"
+    },
+    {
+      "scene": "nested-production-limits",
+      "source": [
+        "src/TeamProductionFields.tsx"
+      ],
+      "mainTask": "对照源码外传范围与执行、输出和贡献上限",
+      "oldProblem": "嵌套配置/原件/审核存在连续字段与技术记录，需区分任务范围、主要操作和完整核对；桌面保留已有清晰的viewport/状态/工具结构。",
+      "changes": [
+        "Make file responsibility and source selection one common region; execution/output/contribution limits form a separate aligned group. Keep all three transfer/command/billing acknowledgments outside disclosure."
+      ],
+      "matureSources": [
+        "Existing retained BoardUI controlled fields, SettingsDialog and Accordion; exact native review adapters"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-production-limits-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-production-limits-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-production-limits-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-production-limits-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object, active layer, stable frames, no horizontal viewport overflow; all exact-scope confirmation buttons remain disabled before acknowledgment"
+    },
+    {
+      "scene": "nested-harness-evidence",
+      "source": [
+        "src/TeamHarnessFields.tsx",
+        "src/HarnessEvidence.tsx"
+      ],
+      "mainTask": "读取本次执行器能力证据，不把声明当成实际运行",
+      "oldProblem": "嵌套配置/原件/审核存在连续字段与技术记录，需区分任务范围、主要操作和完整核对；桌面保留已有清晰的viewport/状态/工具结构。",
+      "changes": [
+        "Retain existing computer/environment/runner relationship and BoardUI model/mode disclosure. Parent common-region spacing applies; no execution/probe authority change.",
+        "Retain current factual status first and existing ability-evidence disclosure. No inferred session/model/tool readiness."
+      ],
+      "matureSources": [
+        "Existing retained BoardUI controlled fields, SettingsDialog and Accordion; exact native review adapters"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-harness-evidence-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-harness-evidence-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-harness-evidence-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-harness-evidence-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object, active layer, stable frames, no horizontal viewport overflow; all exact-scope confirmation buttons remain disabled before acknowledgment"
+    },
+    {
+      "scene": "nested-remote-output",
+      "source": [
+        "src/RemoteTaskArtifacts.tsx"
+      ],
+      "mainTask": "阅读原执行输出与当前文件，区分冻结成果",
+      "oldProblem": "嵌套配置/原件/审核存在连续字段与技术记录，需区分任务范围、主要操作和完整核对；桌面保留已有清晰的viewport/状态/工具结构。",
+      "changes": [
+        "Continuous output/file groups; exact review sheet uses scoped group spacing; frozen evidence remains separate from current workspace and job success."
+      ],
+      "matureSources": [
+        "Existing retained BoardUI controlled fields, SettingsDialog and Accordion; exact native review adapters"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-remote-output-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-remote-output-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-remote-output-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-remote-output-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object, active layer, stable frames, no horizontal viewport overflow; all exact-scope confirmation buttons remain disabled before acknowledgment"
+    },
+    {
+      "scene": "nested-remote-frozen",
+      "source": [
+        "src/RemoteTaskArtifacts.tsx"
+      ],
+      "mainTask": "查看准确冻结版本与文件来源",
+      "oldProblem": "嵌套配置/原件/审核存在连续字段与技术记录，需区分任务范围、主要操作和完整核对；桌面保留已有清晰的viewport/状态/工具结构。",
+      "changes": [
+        "Continuous output/file groups; exact review sheet uses scoped group spacing; frozen evidence remains separate from current workspace and job success."
+      ],
+      "matureSources": [
+        "Existing retained BoardUI controlled fields, SettingsDialog and Accordion; exact native review adapters"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-remote-frozen-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-remote-frozen-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-remote-frozen-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-remote-frozen-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object, active layer, stable frames, no horizontal viewport overflow; all exact-scope confirmation buttons remain disabled before acknowledgment"
+    },
+    {
+      "scene": "nested-project-history",
+      "source": [
+        "src/RemoteTaskArtifacts.tsx"
+      ],
+      "mainTask": "核对原工作前后版本，避免将当前文件归为独占作者",
+      "oldProblem": "嵌套配置/原件/审核存在连续字段与技术记录，需区分任务范围、主要操作和完整核对；桌面保留已有清晰的viewport/状态/工具结构。",
+      "changes": [
+        "Continuous output/file groups; exact review sheet uses scoped group spacing; frozen evidence remains separate from current workspace and job success."
+      ],
+      "matureSources": [
+        "Existing retained BoardUI controlled fields, SettingsDialog and Accordion; exact native review adapters"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-project-history-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-project-history-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-project-history-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-project-history-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object, active layer, stable frames, no horizontal viewport overflow; all exact-scope confirmation buttons remain disabled before acknowledgment"
+    },
+    {
+      "scene": "nested-gateway-configuration",
+      "source": [
+        "src/RemoteTaskHarness.tsx"
+      ],
+      "mainTask": "分别核对模型网关与准确CLI配置",
+      "oldProblem": "嵌套配置/原件/审核存在连续字段与技术记录，需区分任务范围、主要操作和完整核对；桌面保留已有清晰的viewport/状态/工具结构。",
+      "changes": [
+        "Separate gateway and CLI configuration common regions, disclose retained request/lease logs; keep unknown states, stop/query controls, exact plan and independent approval visible."
+      ],
+      "matureSources": [
+        "Existing retained BoardUI controlled fields, SettingsDialog and Accordion; exact native review adapters"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-gateway-configuration-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-gateway-configuration-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-gateway-configuration-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-gateway-configuration-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object, active layer, stable frames, no horizontal viewport overflow; all exact-scope confirmation buttons remain disabled before acknowledgment"
+    },
+    {
+      "scene": "nested-configuration-review",
+      "source": [
+        "src/RemoteTaskHarness.tsx"
+      ],
+      "mainTask": "只同意当前准确配置计划，不批准CLI执行",
+      "oldProblem": "嵌套配置/原件/审核存在连续字段与技术记录，需区分任务范围、主要操作和完整核对；桌面保留已有清晰的viewport/状态/工具结构。",
+      "changes": [
+        "Separate gateway and CLI configuration common regions, disclose retained request/lease logs; keep unknown states, stop/query controls, exact plan and independent approval visible."
+      ],
+      "matureSources": [
+        "Existing retained BoardUI controlled fields, SettingsDialog and Accordion; exact native review adapters"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-configuration-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-configuration-review-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-configuration-review-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-configuration-review-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object, active layer, stable frames, no horizontal viewport overflow; all exact-scope confirmation buttons remain disabled before acknowledgment"
+    },
+    {
+      "scene": "nested-project-baseline",
+      "source": [
+        "src/RemoteProjectBaseline.tsx"
+      ],
+      "mainTask": "先选择项目基线范围，再核对这次新工作",
+      "oldProblem": "嵌套配置/原件/审核存在连续字段与技术记录，需区分任务范围、主要操作和完整核对；桌面保留已有清晰的viewport/状态/工具结构。",
+      "changes": [
+        "Scoped modal spacing; original workspace, exact project-root field and single-operation review remain visible."
+      ],
+      "matureSources": [
+        "Existing retained BoardUI controlled fields, SettingsDialog and Accordion; exact native review adapters"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-project-baseline-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-project-baseline-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-project-baseline-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-project-baseline-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object, active layer, stable frames, no horizontal viewport overflow; all exact-scope confirmation buttons remain disabled before acknowledgment"
+    },
+    {
+      "scene": "nested-project-review",
+      "source": [
+        "src/RemoteProjectBaseline.tsx",
+        "src/RemoteTaskArtifacts.tsx"
+      ],
+      "mainTask": "对照准确项目、环境、工作内容与本次风险",
+      "oldProblem": "嵌套配置/原件/审核存在连续字段与技术记录，需区分任务范围、主要操作和完整核对；桌面保留已有清晰的viewport/状态/工具结构。",
+      "changes": [
+        "Scoped modal spacing; original workspace, exact project-root field and single-operation review remain visible.",
+        "Continuous output/file groups; exact review sheet uses scoped group spacing; frozen evidence remains separate from current workspace and job success."
+      ],
+      "matureSources": [
+        "Existing retained BoardUI controlled fields, SettingsDialog and Accordion; exact native review adapters"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-project-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-project-review-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-project-review-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-project-review-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object, active layer, stable frames, no horizontal viewport overflow; all exact-scope confirmation buttons remain disabled before acknowledgment"
+    },
+    {
+      "scene": "nested-private-inputs",
+      "source": [
+        "src/RemoteTaskInputs.tsx"
+      ],
+      "mainTask": "从私人原件中选择本次明确范围",
+      "oldProblem": "嵌套配置/原件/审核存在连续字段与技术记录，需区分任务范围、主要操作和完整核对；桌面保留已有清晰的viewport/状态/工具结构。",
+      "changes": [
+        "Scoped private-input and exact-external-target modal spacing. No change to page/view handles, hashes, receiver evidence, send/inspect/cancel gate or Back/background invalidation."
+      ],
+      "matureSources": [
+        "Existing retained BoardUI controlled fields, SettingsDialog and Accordion; exact native review adapters"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-private-inputs-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-private-inputs-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-private-inputs-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-private-inputs-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object, active layer, stable frames, no horizontal viewport overflow; all exact-scope confirmation buttons remain disabled before acknowledgment"
+    },
+    {
+      "scene": "nested-private-input-review",
+      "source": [
+        "src/RemoteTaskInputs.tsx"
+      ],
+      "mainTask": "核对目标、文件hash与外传范围后才单次同意",
+      "oldProblem": "嵌套配置/原件/审核存在连续字段与技术记录，需区分任务范围、主要操作和完整核对；桌面保留已有清晰的viewport/状态/工具结构。",
+      "changes": [
+        "Scoped private-input and exact-external-target modal spacing. No change to page/view handles, hashes, receiver evidence, send/inspect/cancel gate or Back/background invalidation."
+      ],
+      "matureSources": [
+        "Existing retained BoardUI controlled fields, SettingsDialog and Accordion; exact native review adapters"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-private-input-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-private-input-review-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-private-input-review-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-private-input-review-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object, active layer, stable frames, no horizontal viewport overflow; all exact-scope confirmation buttons remain disabled before acknowledgment"
+    },
+    {
+      "scene": "nested-preview-target",
+      "source": [
+        "src/RemoteTaskPreview.tsx"
+      ],
+      "mainTask": "核对原SSH连接、单一端口与时限",
+      "oldProblem": "嵌套配置/原件/审核存在连续字段与技术记录，需区分任务范围、主要操作和完整核对；桌面保留已有清晰的viewport/状态/工具结构。",
+      "changes": [
+        "Scoped source/port/duration grouping; retain SSH binding, single-port lease, exact review and unobscured viewport projection. No tunnel was opened."
+      ],
+      "matureSources": [
+        "Existing retained BoardUI controlled fields, SettingsDialog and Accordion; exact native review adapters"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-preview-target-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-preview-target-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-preview-target-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-preview-target-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object, active layer, stable frames, no horizontal viewport overflow; all exact-scope confirmation buttons remain disabled before acknowledgment"
+    },
+    {
+      "scene": "nested-preview-review",
+      "source": [
+        "src/RemoteTaskPreview.tsx"
+      ],
+      "mainTask": "核对原目标与限时隧道风险，未打开实际隧道",
+      "oldProblem": "嵌套配置/原件/审核存在连续字段与技术记录，需区分任务范围、主要操作和完整核对；桌面保留已有清晰的viewport/状态/工具结构。",
+      "changes": [
+        "Scoped source/port/duration grouping; retain SSH binding, single-port lease, exact review and unobscured viewport projection. No tunnel was opened."
+      ],
+      "matureSources": [
+        "Existing retained BoardUI controlled fields, SettingsDialog and Accordion; exact native review adapters"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-preview-review-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-preview-review-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-preview-review-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-preview-review-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object, active layer, stable frames, no horizontal viewport overflow; all exact-scope confirmation buttons remain disabled before acknowledgment"
+    },
+    {
+      "scene": "nested-desktop-idle",
+      "source": [
+        "src/DesktopViewer.tsx"
+      ],
+      "mainTask": "看到真实未连接状态，保持控制禁用",
+      "oldProblem": "嵌套配置/原件/审核存在连续字段与技术记录，需区分任务范围、主要操作和完整核对；桌面保留已有清晰的viewport/状态/工具结构。",
+      "changes": [
+        "Keep existing task-oriented video viewport, connection status and progressively disclosed desktop tools. No control, frame identity, lifecycle or authority change."
+      ],
+      "matureSources": [
+        "Existing PocketWorld DesktopViewer viewport/status/tools and native frame/control lease contract, retained"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-desktop-idle-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-desktop-idle-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-desktop-idle-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-desktop-idle-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object, active layer, stable frames, no horizontal viewport overflow; all exact-scope confirmation buttons remain disabled before acknowledgment"
+    },
+    {
+      "scene": "nested-desktop-tools",
+      "source": [
+        "src/DesktopViewer.tsx"
+      ],
+      "mainTask": "展开与当前桌面相关的观察工具，保持无控制权时操作禁用",
+      "oldProblem": "嵌套配置/原件/审核存在连续字段与技术记录，需区分任务范围、主要操作和完整核对；桌面保留已有清晰的viewport/状态/工具结构。",
+      "changes": [
+        "Keep existing task-oriented video viewport, connection status and progressively disclosed desktop tools. No control, frame identity, lifecycle or authority change."
+      ],
+      "matureSources": [
+        "Existing PocketWorld DesktopViewer viewport/status/tools and native frame/control lease contract, retained"
+      ],
+      "screenshots": [
+        {
+          "viewport": {
+            "width": 360,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-desktop-tools-360.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-desktop-tools-360.png"
+        },
+        {
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "before": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-before/nested-desktop-tools-1280.png",
+          "after": "/workspace/scratch/a7233424b5cb/collaboration-depth-evidence/nested-after/nested-desktop-tools-1280.png"
+        }
+      ],
+      "verification": "passed — unique expected object, active layer, stable frames, no horizontal viewport overflow; all exact-scope confirmation buttons remain disabled before acknowledgment"
+    }
+  ],
+  "status": "passed_browser_fixture_and_contracts",
+  "nestedSourceMap": [
+    {
+      "source": "src/DesktopViewer.tsx",
+      "parent": "DevicesWorkspace / desktop detail",
+      "scenes": [
+        "nested-desktop-idle",
+        "nested-desktop-tools"
+      ],
+      "decision": "Keep existing task-oriented video viewport, connection status and progressively disclosed desktop tools. No control, frame identity, lifecycle or authority change.",
+      "sourceReview": "complete",
+      "browserVerification": "passed — referenced scenes have before/after 360 and1280 expected-object/active-layer/stable-frame evidence; native operations were not executed"
+    },
+    {
+      "source": "src/RemoteProjectBaseline.tsx",
+      "parent": "RemoteProjectBaseline modal / original prepared operation",
+      "scenes": [
+        "nested-project-baseline",
+        "nested-project-review"
+      ],
+      "decision": "Scoped modal spacing; original workspace, exact project-root field and single-operation review remain visible.",
+      "sourceReview": "complete",
+      "browserVerification": "passed — referenced scenes have before/after 360 and1280 expected-object/active-layer/stable-frame evidence; native operations were not executed"
+    },
+    {
+      "source": "src/RemoteTaskArtifacts.tsx",
+      "parent": "RemoteTaskWorkspace / observation context",
+      "scenes": [
+        "nested-remote-output",
+        "nested-remote-frozen",
+        "nested-project-history",
+        "nested-project-review"
+      ],
+      "decision": "Continuous output/file groups; exact review sheet uses scoped group spacing; frozen evidence remains separate from current workspace and job success.",
+      "sourceReview": "complete",
+      "browserVerification": "passed — referenced scenes have before/after 360 and1280 expected-object/active-layer/stable-frame evidence; native operations were not executed"
+    },
+    {
+      "source": "src/RemoteTaskHarness.tsx",
+      "parent": "RemoteTaskWorkspace / configuration context",
+      "scenes": [
+        "remote-configuration",
+        "nested-gateway-configuration",
+        "nested-configuration-review"
+      ],
+      "decision": "Separate gateway and CLI configuration common regions, disclose retained request/lease logs; keep unknown states, stop/query controls, exact plan and independent approval visible.",
+      "sourceReview": "complete",
+      "browserVerification": "passed — referenced scenes have before/after 360 and1280 expected-object/active-layer/stable-frame evidence; native operations were not executed"
+    },
+    {
+      "source": "src/RemoteTaskInputs.tsx",
+      "parent": "RemoteTaskWorkspace / explicit attachment flow",
+      "scenes": [
+        "nested-private-inputs",
+        "nested-private-input-review"
+      ],
+      "decision": "Scoped private-input and exact-external-target modal spacing. No change to page/view handles, hashes, receiver evidence, send/inspect/cancel gate or Back/background invalidation.",
+      "sourceReview": "complete",
+      "browserVerification": "passed — referenced scenes have before/after 360 and1280 expected-object/active-layer/stable-frame evidence; native operations were not executed"
+    },
+    {
+      "source": "src/RemoteTaskPreview.tsx",
+      "parent": "RemoteTaskWorkspace / native isolated preview",
+      "scenes": [
+        "nested-preview-target",
+        "nested-preview-review"
+      ],
+      "decision": "Scoped source/port/duration grouping; retain SSH binding, single-port lease, exact review and unobscured viewport projection. No tunnel was opened.",
+      "sourceReview": "complete",
+      "browserVerification": "passed — referenced scenes have before/after 360 and1280 expected-object/active-layer/stable-frame evidence; native operations were not executed"
+    },
+    {
+      "source": "src/TeamHarnessFields.tsx",
+      "parent": "TeamsWorkspace member editor",
+      "scenes": [
+        "nested-computer-member",
+        "nested-harness-evidence"
+      ],
+      "decision": "Retain existing computer/environment/runner relationship and BoardUI model/mode disclosure. Parent common-region spacing applies; no execution/probe authority change.",
+      "sourceReview": "complete",
+      "browserVerification": "passed — referenced scenes have before/after 360 and1280 expected-object/active-layer/stable-frame evidence; native operations were not executed"
+    },
+    {
+      "source": "src/TeamProductionFields.tsx",
+      "parent": "TeamsWorkspace member editor / production scope",
+      "scenes": [
+        "nested-computer-member",
+        "nested-production-limits"
+      ],
+      "decision": "Make file responsibility and source selection one common region; execution/output/contribution limits form a separate aligned group. Keep all three transfer/command/billing acknowledgments outside disclosure.",
+      "sourceReview": "complete",
+      "browserVerification": "passed — referenced scenes have before/after 360 and1280 expected-object/active-layer/stable-frame evidence; native operations were not executed"
+    },
+    {
+      "source": "src/HarnessEvidence.tsx",
+      "parent": "TeamHarnessFields / saved team member",
+      "scenes": [
+        "nested-harness-evidence"
+      ],
+      "decision": "Retain current factual status first and existing ability-evidence disclosure. No inferred session/model/tool readiness.",
+      "sourceReview": "complete",
+      "browserVerification": "passed — referenced scenes have before/after 360 and1280 expected-object/active-layer/stable-frame evidence; native operations were not executed"
+    }
+  ]
+}

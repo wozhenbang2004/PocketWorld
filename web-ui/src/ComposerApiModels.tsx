@@ -4,6 +4,7 @@ import { Button, RadioOptions } from './forms-library';
 import { PermissionReview } from './shell-library';
 import { apiCapability, apiModelFavorite, apiModelKey, apiModelProjectionCurrent, apiModelReviewCurrent, apiModelReviewRequest, apiModelRows, apiModelSelection, apiModelUnavailable, type ApiModelFilter, type ApiModelRecord } from './composer-api-models';
 import './composer-models.css';
+import './model-picker-depth.css';
 
 type Props = { state: ApiModelRecord; can: (action: string) => boolean; act: (action: string, args?: ApiModelRecord) => Promise<any>;
   onSelected: () => void; onSelectionPending: (pending: boolean) => void };
@@ -84,7 +85,7 @@ export function ComposerApiModels({ state, can, act, onSelected, onSelectionPend
   const models = apiModelRows(projection, state.modelSelectionRevision, filter), selected = apiModelRows(projection, state.modelSelectionRevision).find(row => row.selected === true);
   const recent = (row: ApiModelRecord) => typeof row.lastUsedAt === 'number' && Number.isFinite(row.lastUsedAt) && row.lastUsedAt > 0 ? new Date(row.lastUsedAt).toLocaleString('zh-CN') : '';
   if (!supported) return <p className="pw-muted">当前界面尚未接通跨连接模型选择，请在模型管理中核对。</p>;
-  return <>
+  return <section className="pw-model-picker-depth pw-api-picker-depth" aria-label="API模型选择">
     {loading ? <div className="pw-loading-models" aria-busy="true"><ShimmerText>正在读取连接与模型</ShimmerText></div> : review && row ? <PermissionReview
       title={String(row.modelId)} context={`API 连接：${row.connectionName || row.connectionId}`}
       reason={row.available ? '此选择用于之后开始的任务，已有任务保留原模型。模型能力与工具授权分别核对。' : apiModelUnavailable(row)}
@@ -97,7 +98,7 @@ export function ComposerApiModels({ state, can, act, onSelected, onSelectionPend
     </PermissionReview> : current && !needsRead ? <>
       <RadioOptions label="模型列表" value={filter} isDisabled={locked} options={[{ id: 'all', label: '全部' }, { id: 'favorites', label: '收藏' }, { id: 'recent', label: '最近使用' }]} onChange={value => setFilter(value as ApiModelFilter)} />
       <ModelPicker label="API 连接与模型" models={models.map(row => ({ id: apiModelKey(row), name: String(row.modelId), disabled: locked,
-        description: [row.connectionName || row.connectionId, row.favorite ? '已收藏' : '', recent(row) ? '最近使用' : '', row.selected ? '当前使用' : '', apiModelUnavailable(row), `图片：${apiCapability(row.imageInput)}`, `工具：${apiCapability(row.toolCalls)}`].filter(Boolean).join(' · ') }))}
+        description: [row.connectionName || row.connectionId, [row.selected ? '当前使用' : '', row.favorite ? '已收藏' : '', recent(row) ? '最近使用' : ''].filter(Boolean).join(' · '), apiModelUnavailable(row), `图片：${apiCapability(row.imageInput)} · 工具：${apiCapability(row.toolCalls)}`].filter(Boolean).join('\n') }))}
         value={selected ? apiModelKey(selected) : undefined} onChange={reviewModel} />
       {models.length === 0 && <p className="pw-muted">{filter === 'favorites' ? '尚无收藏模型。可在全部列表中打开模型并收藏。' : filter === 'recent' ? '尚无成功使用记录。选择模型不会新增使用记录。' : '尚无 API 连接，请先在连接管理中添加。'}</p>}
       {projection?.preferencesAvailable !== true && <p className="pw-muted">收藏与最近使用记录暂不可读取，请重新读取后核对。</p>}
@@ -105,5 +106,5 @@ export function ComposerApiModels({ state, can, act, onSelected, onSelectionPend
     </> : null}
     {error && <p className="pw-error" role="alert">{error}</p>}
     {!review && <div className="pw-action-row"><Button variant="secondary" disabled={locked} onClick={() => void readModels()}>重新读取模型</Button></div>}
-  </>;
+  </section>;
 }

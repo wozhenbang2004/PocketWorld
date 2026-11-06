@@ -69,8 +69,8 @@ function fixture() {
   } };
   window.butlerFixture = { requests, snapshot, publish, interruptSecond() { tasks[1].status = 'interrupted'; tasks[1].raw.controls = { canInput: false, canStop: true, canContinue: true }; publish(); }, advance() { snapshot.state.tasks[0].raw.runId = 'work-a-later-run'; snapshot.state.tasks[0].raw.coordinatorEpoch = 2; publish(); }, deliver() {
     snapshot.state.messages.push({ id: 'old-outcome', role: 'assistant', taskId: 'work-a', content: '第一次核对没有完成，原始记录保留。',
-      replyContext: { taskId: 'work-a', runId: 'work-a-run', epoch: 1, deliveryId: 'owner_work:work-a:work-a-run:1', replyToMessageIds: ['request-a'] },
-      taskResult: { kind: 'owner_work', taskId: 'work-a', runId: 'work-a-run', epoch: 1, deliveryId: 'owner_work:work-a:work-a-run:1', status: 'failed', endedAt: 1793764860000, summaryChars: 20, summaryTruncated: false } }); publish();
+      replyContext: { taskId: 'work-a', runId: 'work-a-run', epoch: 1, deliveryId: '00000000-0000-4000-8000-000000000001', replyToMessageIds: ['request-a'] },
+      taskResult: { kind: 'owner_work', taskId: 'work-a', runId: 'work-a-run', epoch: 1, deliveryId: '00000000-0000-4000-8000-000000000001', status: 'failed', endedAt: 1793764860000, summaryChars: 20, summaryTruncated: false } }); publish();
   } };
 }
 let browser, server, page;
@@ -86,7 +86,7 @@ try {
     } catch { response.writeHead(404); response.end(); }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); const origin = `http://127.0.0.1:${server.address().port}`;
-  browser = await chromium.launch({ headless: true, args: ['--disable-background-networking'] });
+  browser = await chromium.launch({ headless: true, ...(process.env.UIUX_CHROMIUM ? { executablePath: process.env.UIUX_CHROMIUM } : {}), args: ['--disable-background-networking'] });
   const context = await browser.newContext({ viewport: { width: 360, height: 800 }, locale: 'zh-CN', timezoneId: 'Asia/Shanghai', serviceWorkers: 'block' });
   await context.route('**/*', route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
   await context.addInitScript(fixture); page = await context.newPage(); page.setDefaultTimeout(10000);
@@ -111,7 +111,7 @@ try {
   await page.getByRole('button', { name: '查询原回执', exact: true }).waitFor(); assert.equal(await input.inputValue(), '这件事先核对上午的安排。');
   const targeted = await page.evaluate(() => window.butlerFixture.requests.find(request => request.action === 'ownerWork.input').args);
   assert.equal(targeted.taskId, 'work-a'); assert.equal(targeted.runId, 'work-a-run'); assert.equal(targeted.epoch, 1); assert.equal(targeted.mode, 'queue');
-  await page.getByRole('button', { name: '查询原回执', exact: true }).click(); await page.waitForFunction(() => window.butlerFixture.snapshot.composer.pending.length === 0); assert.equal(await input.inputValue(), '');
+  await page.getByRole('button', { name: '查询原回执', exact: true }).click(); await page.waitForFunction(() => window.butlerFixture.snapshot.composer.pending.length === 0); await page.waitForFunction(field => field.value === '', await input.elementHandle()); assert.equal(await input.inputValue(), '');
   assert.equal(await page.evaluate(() => window.butlerFixture.requests.filter(request => request.action === 'ownerWork.input').length), 1);
   record.checks.push('Explicit work input uses its displayed task/run/epoch; uncertain receipt keeps text and queries the same client without resending.');
   await page.evaluate(() => window.butlerFixture.advance()); await input.fill('不要误发给新的执行轮次。');
@@ -135,13 +135,18 @@ try {
   record.checks.push('An interrupted work remains reachable when native continuation is available; explicit continue uses its original tuple and preserves the independent conversation draft.');
   await page.locator('[data-message-id="answer-a"]').getByRole('button', { name: /记忆与技能提案/ }).click();
   await page.getByRole('button', { name: /记住你下午不喝咖啡/ }).click(); const memory = page.getByRole('dialog', { name: '保存这条记忆', exact: true }); await memory.waitFor();
-  await memory.getByText('记住，我下午不喝咖啡。', { exact: true }).waitFor(); assert.equal(await memory.getByText('下午', { exact: true }).count(), 1);
+  await memory.getByRole('button', { name: /^主体与依据/ }).click();
+  await memory.getByRole('button', { name: /^适用条件与时间/ }).click();
+  await memory.getByText('记住，我下午不喝咖啡。', { exact: true }).waitFor(); assert.equal(await memory.locator('.pw-memory-assertion .pw-facts').getByText('下午', { exact: true }).count(), 1);
+  assert.equal(await memory.locator('.pw-memory-assertion .pw-facts').getByText('你', { exact: true }).count(), 1);
   assert.equal(await memory.getByText('你的原话', { exact: true }).count(), 1);
   assert.equal(await page.evaluate(() => window.butlerFixture.requests.some(request => request.action.startsWith('knowledge.assertion.'))), false);
   await memory.getByText('你的原话', { exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(output, 'butler-memory-360.png'), animations: 'disabled' }); record.screenshots.push('butler-memory-360.png');
   await memory.getByText('我已核对正文、来源与以上影响', { exact: true }).click(); assert.equal(await memory.getByRole('checkbox').isChecked(), true);
   await memory.getByRole('button', { name: '确认保存', exact: true }).click(); await memory.getByText('原记忆已保存', { exact: true }).waitFor();
+  const memoryConfirmations = await page.evaluate(() => window.butlerFixture.requests.filter(request => request.action === 'memoryDraft.confirm'));
+  assert.equal(memoryConfirmations.length, 1); assert.deepEqual(memoryConfirmations[0].args, { handle: 'memory-native-review' });
   await memory.getByRole('button', { name: '返回原回答', exact: true }).click();
   await page.locator('[data-message-id="answer-a"]').getByText('已处理', { exact: true }).waitFor();
   record.checks.push('Memory draft reuses assertion display with subject, condition and exact quote; confirmation sends only its original native review handle.');

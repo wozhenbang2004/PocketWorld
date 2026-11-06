@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import './collaboration-depth.css';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { DeviceRequestScope, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, type DeviceData as Data } from './devices-workspace';
 import { ArrowLeft, ChevronRight, Monitor, Plus, RefreshCw, ShieldCheck, Smartphone } from 'lucide-react';
@@ -152,7 +153,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const taskLabels: Record<string, string> = { queued: '等待执行', preparing: '准备中', running: '执行中', pausing: '正在暂停', paused: '已暂停', stopping: '正在停止', verifying: '正在核对', needs_confirmation: '成果待确认', awaiting_user: '待你处理', waiting_user: '待你处理', waiting_approval: '等待授权', awaiting_approval: '等待授权', waiting_permission: '等待授权', interrupted: '已中断', completed: '已完成', failed: '未完成', cancelled: '已停止', canceled: '已停止', stopped: '已停止', reconciling: '结果待核对', reconciliation_required: '结果待核对', unknown: '结果待核对' };
 
   return <>
-    <section ref={readingRoot} className="pw-settings-section pw-devices-reading" data-device-view={desktopOpen ? 'desktop' : peerId ? 'detail' : 'list'}>
+    <section ref={readingRoot} className="pw-settings-section pw-devices-reading pw-depth-collaboration" data-device-view={desktopOpen ? 'desktop' : peerId ? 'detail' : 'list'}>
       <header className="pw-device-heading">
         <div className="pw-device-heading-copy">
           {peerId && !desktopOpen && <Button variant="ghost" className="pw-device-back" leadingIcon={ArrowLeft} disabled={busy} onClick={() => { setPeerId(''); setForm(''); setRaw(''); }}>所有设备</Button>}
@@ -272,7 +273,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         {snapshot && <p className="pw-device-footnote">原状态读取于 {time(snapshot.capturedAt)}{snapshot.hasMorePeers || snapshot.hasMorePendingPairings || snapshot.hasMoreTaskActions ? ' · 当前展示有界读取页，更多记录需从原对象继续核对。' : ''}</p>}
       </>}
     </section>
-    <SettingsDialog isOpen={!!form} onClose={() => { clearSensitive(true); refresh(); }} title={form === 'relay' ? '临时中继租约' : form === 'connection' ? '更新原设备连接地址' : form.startsWith('recovery') ? '核对原配对结果' : '配对你的另一台设备'}>
+    <SettingsDialog isOpen={!!form} onClose={() => { clearSensitive(true); refresh(); }} title={form === 'relay' ? '临时中继租约' : form === 'connection' ? '更新原设备连接地址' : form.startsWith('recovery') ? '核对原配对结果' : '配对你的另一台设备'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
       <div className="pw-device-form">
         {error && <p className="pw-device-feedback" role="alert">{error}</p>}
         {busy && <p className="pw-device-loading" role="status">正在读取原设备回执…</p>}
@@ -299,9 +300,9 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         {form === 'recoveryProvide' && <><p>仅开放原结果的短时只读窗口，关闭页面会关闭入口。</p><SelectField label="本机实际地址或原中继" value={address} onChange={setAddress} options={recoveryAddresses.map(value => ({ id: value, label: value }))} isDisabled={busy} /><Button disabled={busy || !address} onClick={() => { void invoke('devices.openRecovery', { inviteId, address }, acceptReview); }}>开启原结果只读窗口</Button></>}
         {form === 'recoveryRead' && <><TextField label="原设备显示的数字地址或已配置中继服务" value={host} onChange={setHost} isDisabled={busy} />{!/^wss:\/\/|^https:\/\//.test(host) && <TextField label="原恢复端口" value={port} onChange={setPort} isDisabled={busy} />}<Button disabled={busy || !host || !/^wss:\/\/|^https:\/\//.test(host) && !/^\d+$/.test(port)} onClick={() => { void invoke('devices.recoverPairing', { inviteId, host, port: /^wss:\/\/|^https:\/\//.test(host) ? 0 : Number(port) }, () => { setForm(''); setNotice('已查询原已提交配对结果，未重新授权。'); }); }}>只读取原配对结果</Button></>}
       </div>
-    </SettingsDialog>
-    <SettingsDialog isOpen={!!invitation} onClose={() => setInvitation('')} title="本机一次性短时邀请"><p>仅交给你信任的另一台设备。邀请到期后需要重新创建；接下来仍需双端指纹与准确权限审阅。</p><TextAreaField label="原邀请，选中后可复制" value={invitation} isReadOnly /><Button variant="secondary" onClick={() => setInvitation('')}>关闭并清除显示</Button></SettingsDialog>
-    <SettingsDialog isOpen={!!review} onClose={closeReview} title={review?.kind === 'pair' ? '范围与双端身份' : review?.kind === 'grant' ? '原设备权限修改' : review?.kind === 'goal' ? '用本机模型处理原目标' : review?.kind === 'result' ? '核对这次原成果' : review?.kind === 'approval' ? '核对这次设备操作' : review?.kind === 'recovery' ? '原配对结果只读窗口' : review?.kind === 'resume' ? '核对这次恢复请求' : review?.kind === 'history' ? '原设备操作回执' : '核对原设备操作'}>
+    </div></SettingsDialog>
+    <SettingsDialog isOpen={!!invitation} onClose={() => setInvitation('')} title="本机一次性短时邀请"><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace"><p>仅交给你信任的另一台设备。邀请到期后需要重新创建；接下来仍需双端指纹与准确权限审阅。</p><TextAreaField label="原邀请，选中后可复制" value={invitation} isReadOnly /><Button variant="secondary" onClick={() => setInvitation('')}>关闭并清除显示</Button></div></SettingsDialog>
+    <SettingsDialog isOpen={!!review} onClose={closeReview} title={review?.kind === 'pair' ? '范围与双端身份' : review?.kind === 'grant' ? '原设备权限修改' : review?.kind === 'goal' ? '用本机模型处理原目标' : review?.kind === 'result' ? '核对这次原成果' : review?.kind === 'approval' ? '核对这次设备操作' : review?.kind === 'recovery' ? '原配对结果只读窗口' : review?.kind === 'resume' ? '核对这次恢复请求' : review?.kind === 'history' ? '原设备操作回执' : '核对原设备操作'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
       {review && <div className="pw-device-review">
         {error && <p role="alert">{error}</p>}
         {['pair', 'grant'].includes(review.kind) && !exactGrant ? <GrantSelection key={review.viewHandle} review={review} busy={busy} confirm={args => { void invoke('devices.reviewGrant', args, acceptReview); }} /> : <>
@@ -321,6 +322,6 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         </>}
         {review.kind === 'pair' && <Button variant="ghost" disabled={busy} onClick={() => { const old = review; handle.current = ''; setReview(null); void invoke('devices.reject', { viewHandle: old.viewHandle }, () => setNotice('本机已拒绝这次配对，请核对原状态。')); }}>拒绝这次原配对</Button>}
       </div>}
-    </SettingsDialog>
+    </div></SettingsDialog>
   </>;
 }

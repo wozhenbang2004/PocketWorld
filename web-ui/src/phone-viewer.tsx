@@ -4,12 +4,14 @@
  * License notice: ../THIRD-PARTY-NOTICES.md
  */
 import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
-import { ChevronDown, Expand, LoaderCircle, Monitor, Pause, Play, RefreshCw, X } from 'lucide-react';
+import { Expand, LoaderCircle, Monitor, Pause, Play, RefreshCw, X } from 'lucide-react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Drawer } from './shell-library';
+import { Select, SelectItem } from './forms-library/boardui/components/base/select/select';
 import { bridge } from './bridge';
 import { PhoneViewerConnection, phoneViewerKey, type PhonePreviewFrame, type PhoneViewerIdentity, type PhoneViewerState, type PhoneViewerTask } from './phone-viewer-protocol';
 import './phone-viewer.css';
+import './browser-depth.css';
 
 export type { PhoneViewerIdentity, PhoneViewerTask } from './phone-viewer-protocol';
 export type PhoneViewerProps = {
@@ -143,9 +145,10 @@ function PhoneFrame({ task, feed, large = false }: { task: PhoneViewerTask; feed
 }
 
 function TaskSelector({ task, tasks, onSelectTask }: Pick<PhoneViewerProps, 'task' | 'tasks' | 'onSelectTask'>) {
-  const id = useId();
+  const root = useRef<HTMLDivElement>(null), [container, setContainer] = useState<Element>();
+  useLayoutEffect(() => { setContainer(root.current?.closest('[role="dialog"]') || undefined); }, [tasks?.length]);
   if (!onSelectTask || !tasks || tasks.length < 2) return null;
-  return <label className="pw-phone-viewer-select" htmlFor={id}><span>查看任务</span><span className="pw-phone-viewer-select-field"><select id={id} aria-label="查看任务" value={phoneViewerKey(task)} onChange={event => { const next = tasks.find(item => phoneViewerKey(item) === event.target.value); if (next) onSelectTask(next); }}>{tasks.map(item => <option key={phoneViewerKey(item)} value={phoneViewerKey(item)}>{item.title || '手机任务'}{item.status === 'paused' ? ' · 已暂停' : item.status === 'ended' ? ' · 已结束' : ''}</option>)}</select><ChevronDown size={16} aria-hidden="true" /></span></label>;
+  return <div ref={root} className="pw-phone-viewer-select"><span className="pw-field-label">查看任务</span><Select aria-label="查看任务" selectedKey={phoneViewerKey(task)} popoverContainer={container} triggerClassName="pw-select-trigger" onSelectionChange={key => { const next = tasks.find(item => phoneViewerKey(item) === key); if (next) onSelectTask(next); }}>{tasks.map(item => <SelectItem key={phoneViewerKey(item)} id={phoneViewerKey(item)} textValue={item.title || '手机任务'}><span>{item.title || '手机任务'}{item.status === 'paused' ? ' · 已暂停' : item.status === 'ended' ? ' · 已结束' : ''}</span></SelectItem>)}</Select></div>;
 }
 
 type Controls = { busy: boolean; error: string; pause?: () => void; resume?: () => void };
@@ -186,8 +189,8 @@ export function PhoneViewerSheet({ task, feed, controls, expanded, onExpandedCha
     <div className="pw-phone-viewer-sheet-body">
       <TaskSelector task={task} tasks={tasks} onSelectTask={onSelectTask} />
       <div className="pw-phone-viewer-sheet-status"><span className="pw-phone-viewer-icon"><Monitor size={24} aria-hidden="true" /></span><div><strong role="status">{statusLabel(task, feed)}</strong><p>{terminal(task) || feed.phase === 'ended' ? '这次任务已结束。画面仅保留于本次查看中。' : '画面来自这次任务的后台独立屏。'}</p></div></div>
+      <div className="pw-phone-viewer-sheet-control-rail"><PhoneControls task={task} feed={feed} controls={controls} /></div>
       <PhoneFrame task={task} feed={feed} large />
-      <PhoneControls task={task} feed={feed} controls={controls} />
       {!terminal(task) && feed.phase !== 'ended' && <p className="pw-phone-viewer-note">收起画面后，任务仍会在后台继续执行。</p>}
     </div>
   </>;

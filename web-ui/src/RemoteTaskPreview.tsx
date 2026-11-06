@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import './collaboration-depth.css';
 import { Button, SelectField, SettingsDialog, TextField } from './forms-library';
 import { bridge } from './bridge';
 import { registerOverlayBack } from './overlay-back';
@@ -57,7 +58,7 @@ export function RemoteTaskPreview({ taskId, enabled }: { taskId: string; enabled
   const profiles = rows(view?.profiles), selected = profiles.find(row => row.id === profileId), fieldsValid = /^\d+$/.test(port) && Number(port) >= 1024 && Number(port) <= 65535 && /^\d+$/.test(seconds) && Number(seconds) >= 10 && Number(seconds) <= 600;
   const reviewedInput = object(review?.input), reviewedProfile = object(review?.sshProfile);
   return <><Button variant="secondary" disabled={!enabled || !!pending} onClick={() => void request('remotePreview.openPage')}>预览这个项目已运行的网页</Button>
-    <SettingsDialog isOpen={!!view} title="原项目网页预览" onClose={close}><div className="pw-remote-section">
+    <SettingsDialog isOpen={!!view} title="原项目网页预览" onClose={close}><div className="pw-remote-section pw-collaboration-dialog">
       <p>先在电脑正常运行开发服务器。这里只建立所选 SSH 到电脑 127.0.0.1 单一端口的限时转发，不启动服务。</p>
       {!view?.mounted && <><SelectField label="原 SSH 连接" value={profileId} isDisabled={!!pending || !!view?.starting} onChange={value => { inputs.current.profileId = value; setProfile(value); setReview(null); }} options={profiles.map(row => ({ id: row.id, label: `${row.name} · ${row.host} · ${row.workspace || ''}` }))} />
         {!profiles.length && <p className="pw-field-hint">尚无已核对主机密钥且已配置凭据的 SSH 连接，请先到连接设置完成。</p>}

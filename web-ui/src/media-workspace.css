@@ -102,3 +102,27 @@
   .pw-media-workspace .pw-media-task-row { gap: 10px; padding-inline: 7px; }
 }
 @media (prefers-reduced-motion: reduce) { .pw-media-workspace *, .pw-media-settings *, .pw-media-review * { scroll-behavior: auto; } }
+
+/* Results share the task's primary axis; identity and provider internals use
+ * the existing BoardUI Accordion. A small status strip replaces dashboard tiles. */
+.pw-media-workspace .pw-media-heading { margin-bottom: 24px; }
+.pw-media-workspace .pw-media-service { margin-bottom: 24px; padding: 8px 0; background: transparent; border-radius: 0; }
+.pw-media-service span { font-size: 12px; color: var(--pw-copy); }
+.pw-media-workspace .pw-media-paper-overview { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px 24px; margin: 0 0 28px; padding: 0; }
+.pw-media-workspace .pw-media-paper-overview > div { display: flex; flex-direction: row-reverse; align-items: baseline; gap: 6px; padding: 0; background: transparent; border-radius: 0; box-shadow: none; }
+.pw-media-workspace .pw-media-paper-overview strong { margin: 0; font-size: 18px; font-weight: 500; }
+.pw-media-workspace .pw-media-paper-overview strong small,.pw-media-workspace .pw-media-paper-overview p { display: none; }
+.pw-media-workspace .pw-media-paper-overview > div > span { font-size: 11px; }
+.pw-media-workspace .pw-media-work-surface { padding: 24px; border-radius: 16px; box-shadow: none; }
+.pw-media-workspace .pw-media-panel-heading { margin-bottom: 20px; }
+.pw-media-workspace .pw-media-panel-heading > p { display: inline-block; margin: 8px 0 0; font-size: 11px; }
+.pw-media-workspace .pw-media-task-actions { margin-bottom: 24px; }
+.pw-media-workspace .pw-media-task-actions > button { font-size: 12px; }
+.pw-media-workspace .pw-media-results { padding: 0 0 28px; border-top: 0; }
+.pw-media-workspace .pw-media-receipt { padding-bottom: 24px; }
+.pw-media-workspace .pw-media-receipt > p { font-size: 12px; line-height: 1.75; }
+.pw-media-source-details { display: grid; grid-template-columns: 6em minmax(0,1fr); gap: 8px 12px; margin: 0 0 16px; font-size: 11px; }
+.pw-media-source-details dt { color: var(--pw-muted); }.pw-media-source-details dd { margin: 0; overflow-wrap: anywhere; }
+.pw-media-settings .pw-media-settings-group { gap: 12px; margin-top: 8px; }
+.pw-media-settings .pw-media-settings-group > h3 { margin-bottom: 4px; font-size: 12px; color: var(--pw-muted); }
+@media(max-width:640px){.pw-media-workspace .pw-media-work-surface { padding: 20px 18px; }.pw-media-workspace .pw-media-heading h2 { font-size: 20px; }.pw-media-workspace[data-media-view="task"] .pw-media-heading p { display: none; }.pw-media-workspace .pw-media-paper-overview { gap: 8px 18px; }.pw-media-workspace .pw-media-task-actions { gap: 6px; }.pw-media-compose-footer { align-items: stretch; }.pw-media-compose-footer > button { align-self: stretch; }}

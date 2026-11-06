@@ -87,11 +87,11 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
   };
   const activity = projectExecutionActivity(output.activity || {}, execution), logPolicy = output.logObservationPolicy || {};
   if (!entries.length) return null;
-  return <Accordion className="pw-local-disclosures" expandedKeys={expanded ? [disclosureId] : []} onExpandedChange={values => { const next = values.has(disclosureId); live.current.expanded = next; if (!next) close(); setExpanded(next); }}><AccordionItem id={disclosureId} title="执行终端与原日志" description={operation ? '这次原项目执行' : `${entries.length} 条已读取的项目执行记录`}>
+  return <Accordion className="pw-local-disclosures pw-project-execution" expandedKeys={expanded ? [disclosureId] : []} onExpandedChange={values => { const next = values.has(disclosureId); live.current.expanded = next; if (!next) close(); setExpanded(next); }}><AccordionItem id={disclosureId} title="执行终端与原日志" description={operation ? '这次原项目执行' : `${entries.length} 条已读取的项目执行记录`}>
     {!operation && entries.length > 1 && <SelectField label="原项目执行" value={execution} isDisabled={!!busy || stopReview} options={entries.map(row => ({ id: row.operationId, label: `${row.interactive ? '当前 PTY' : '只读执行'} · ${row.operationId}` }))} onChange={value => { if (pending.current || !current()) return; close(); live.current.execution = value; setSelection(value); }} />}
     {!view ? <><p className="pw-field-hint">读取原标准输出、错误输出和记录游标。打开页面不会新建或恢复执行。</p><div className="pw-form-actions"><Button variant="secondary" disabled={!active || !!busy} onClick={() => { void request('local.execution.open', { observingOnly: true }); }}>查看原执行日志</Button>{selected?.interactive && <Button variant="secondary" disabled={!active || !!busy} onClick={() => { void request('local.execution.open', { observingOnly: false }); }}>打开原交互终端</Button>}</div></> : <>
-      <div className="pw-local-screen-toolbar"><span>{metadata.executable} · {metadata.workingDirectory}</span><Button variant="ghost" size="small" onClick={close}>关闭视图</Button></div>
-      <p className="pw-field-hint">{metadata.observingOnly ? '只读观察，不能输入或停止执行。' : '原交互终端；输入仍受原任务时限、额度与进程状态约束。'}关闭视图只结束查看，不停止原进程。</p>
+      <div className="pw-local-screen-toolbar"><span><strong>{metadata.executable}</strong><small>{metadata.workingDirectory}</small></span><Button variant="ghost" size="small" onClick={close}>关闭视图</Button></div>
+      <p className="pw-field-hint pw-execution-scope">{metadata.observingOnly ? '只读观察，不能输入或停止执行。' : '原交互终端；输入仍受原任务时限、额度与进程状态约束。'}关闭视图只结束查看，不停止原进程。</p>
       {activity && <p role="status" className="pw-local-inline-notice">{activity}</p>}
       {logPolicy.automaticLogPageReduced && <p role="status" className="pw-local-inline-notice">{logPolicy.ownerMessage || '原运行时已减少自动日志页的读取字节；仍读取同一份原日志。'}</p>}
       <div className="pw-local-screen"><TerminalSurface key={view.handle} dimensionMode="project" frame={frame || null} onFrameApplied={(revision, generation) => { if (alive.current && currentPage.current?.handle === view.handle) setPainted(`${view.handle}|${generation}|${revision}`); }} /></div>
@@ -99,18 +99,20 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
       {(output.outputTruncated || frame?.gap || output.logIncompleteTail) && <p role="status" className="pw-local-inline-notice">{output.logIncompleteTail ? '原日志末条尚未写完整，只显示此前完整记录。' : '较早输出已被覆盖或截断，当前内容不是完整输出。'}已停止继续输入，不能把日志缺口当作进程完成。</p>}
       {!projectExecutionShouldRead(output) && !output.terminal && <p className="pw-field-hint">当前原状态不可自动轮询；请明确读取原记录，不会重放执行。</p>}
       <div className="pw-form-actions"><Button variant="secondary" disabled={!active || !!busy} onClick={() => { void request('local.execution.readLogs'); }}>读取原日志与退出回执</Button></div>
-      {!metadata.observingOnly && <div className="pw-local-input">
+      {uncertain && <p role="status" className="pw-local-inline-notice">原输入结果待核，已禁止继续输入；没有自动重发。</p>}
+      {stopRequested && <p role="status" className="pw-local-inline-notice">{stopReceipt?.resourcesReleased === true ? '原停止回执已确认资源释放，已有日志保留。' : '已请求停止原进程，退出与资源回收仍待原回执确认。请读取原日志与退出回执，不要重复停止。'}</p>}
+      {!metadata.observingOnly && <Accordion className="pw-local-disclosures"><AccordionItem id="project-input-tools" title="终端输入与进程控制" description={output.terminal?'进程已结束，输入已停用':'普通输入、控制键与原范围授权'}><div className="pw-local-input">
         <CheckboxField isSelected={accepted} isDisabled={!active || !!busy || stopRequested} onChange={value => { live.current.accepted = value; setAccepted(value); }}>允许在原范围内输入普通内容</CheckboxField>
         <p className="pw-field-hint">原授权上限：{metadata.inputByteLimit} 字节 · {metadata.inputRequestLimit} 次动作。输入可能修改原私人副本，内容会留在原任务记录中。不支持密码等秘密输入。</p>
         <TextAreaField label="原终端普通输入" value={input} onChange={value => { live.current.input = value; setInput(value); drafts.set(originalKey, value); if (drafts.size > 32) drafts.delete(drafts.keys().next().value!); }} hint="明确发送后在末尾加入换行，编辑本身不会派发。" />
         <div className="pw-form-actions"><Button disabled={!enabled || !input || input.includes('\0') || new TextEncoder().encode(input + '\n').length > 4096} onClick={() => send({ action: 'text', text: input + '\n' }, input)}>发送这一行</Button><Button variant="secondary" disabled={!enabled} onClick={() => send({ action: 'text', text: '\u0003' })}>Ctrl+C</Button><Button variant="secondary" disabled={!enabled} onClick={() => send({ action: 'eof' })}>EOF</Button></div>
-        {uncertain && <p role="status" className="pw-local-inline-notice">原输入结果待核，已禁止继续输入；没有自动重发。</p>}
+
         {inputReceipt && <p role="status" className="pw-field-hint">{inputReceipt.knownInput === false ? '当前视图没有原输入记录。' : inputReceipt.message || (inputReceipt.nativeInputSettled ? '已取得原输入回执；字节接收不证明程序已处理。' : '原输入仍待核对，没有重新发送。')}</p>}
         <Button variant="ghost" size="small" disabled={!active || !!busy} onClick={() => { void request('local.execution.inputReceipt'); }}>核对原输入回执</Button>
         <Accordion><AccordionItem id="project-terminal-keys" title="终端按键与尺寸"><div className="pw-form-grid"><SelectField label="原终端按键" value={key} options={keys} onChange={value => { live.current.key = value; setKey(value); }} /><Button variant="secondary" disabled={!enabled} onClick={() => { if (live.current.key === key) send({ action: 'text', text: key }); }}>发送这个按键</Button></div><div className="pw-form-grid"><TextField label="列数（4–400）" value={columns} onChange={value => { live.current.columns = value; setColumns(value); }} inputMode="numeric" /><TextField label="行数（2–200）" value={height} onChange={value => { live.current.height = value; setHeight(value); }} inputMode="numeric" /></div><Button variant="secondary" disabled={!enabled || !/^\d+$/.test(columns) || !/^\d+$/.test(height) || Number(columns) < 4 || Number(columns) > 400 || Number(height) < 2 || Number(height) > 200} onClick={() => send({ action: 'resize', columns: Number(columns), rows: Number(height) })}>调整原终端尺寸</Button></AccordionItem></Accordion>
         <Button variant="ghost" disabled={!active || !!busy || stopRequested || output.terminal} onClick={() => { if (!current() || pending.current || live.current.stopRequested) return; live.current.stopReview = true; setStopReview(true); }}>停止这个原进程</Button>
-        {stopRequested && <p role="status" className="pw-local-inline-notice">{stopReceipt?.resourcesReleased === true ? '原停止回执已确认资源释放，已有日志保留。' : '已请求停止原进程，退出与资源回收仍待原回执确认。请读取原日志与退出回执，不要重复停止。'}</p>}
-      </div>}
+
+      </div></AccordionItem></Accordion>}
       <Accordion><AccordionItem id="project-terminal-identity" title="原执行身份"><dl className="pw-facts"><div><dt>任务</dt><dd>{metadata.taskId}</dd></div><div><dt>运行</dt><dd>{metadata.runId} · {metadata.epoch}</dd></div><div><dt>执行</dt><dd>{metadata.executionId}</dd></div><div><dt>项目 / 副本</dt><dd>{metadata.projectId} / {metadata.checkoutId}</dd></div></dl></AccordionItem></Accordion>
     </>}
     {error && <p role="alert" className="pw-secondary-error">{error}</p>}

@@ -1,4 +1,5 @@
 import { CheckboxField, SelectField, TextAreaField, TextField } from './forms-library';
+import './collaboration-depth.css';
 import { resetTeamProductionAcknowledgments, teamProductionDraft, teamProductionPackageKey, teamProductionSnapshotKey,
   teamProductionSnapshots, teamProductionSourceLabel, type TeamProductionDraft } from './team-production';
 
@@ -14,7 +15,7 @@ export function TeamProductionFields({ member, sources, disabled, onChange }: {
   const snapshotKey = teamProductionSnapshotKey(draft), packageKey = teamProductionPackageKey({ id: draft.packageId, sha256: draft.packageSha, manifestIdentity: draft.packageManifest });
   const knownSnapshot = snapshots.some(value => teamProductionSnapshotKey(value) === snapshotKey);
   const knownPackage = packages.some(value => teamProductionPackageKey(value) === packageKey);
-  return <>
+  return <section className="pw-team-production-fields"><h4>负责的文件与源码</h4>
     <TextAreaField label="负责的项目文件，每行一个" value={member.writeFiles || ''} onChange={writeFiles => onChange({ writeFiles })}
       isDisabled={disabled} placeholder={'src/example.txt\nREADME.md'} hint="每名成员负责 1 至 8 个项目相对路径；不同成员不能负责同一个文件。" />
     {member.runner !== 'model' && <>
@@ -37,12 +38,13 @@ export function TeamProductionFields({ member, sources, disabled, onChange }: {
         {!snapshots.length && <p role="status">当前已加载任务没有匹配快照。请先在原电脑任务冻结所需文件，再刷新团队页。</p>}
         {draft.snapshotId && !knownSnapshot && <p role="status">原文件快照不属于当前电脑与环境，请重新选择。</p>}
       </>}
+      <section className="pw-team-production-limits"><h4>执行与交付上限</h4>
       <TextField label="该任务最长运行秒数" value={draft.wallSeconds} onChange={wallSeconds => update({ wallSeconds })} isDisabled={disabled} hint="10–900 秒" />
       <TextField label="该任务输出字节上限" value={draft.outputBytes} onChange={outputBytes => update({ outputBytes })} isDisabled={disabled} hint="1024–196608 字节" />
       <TextField label="冻结贡献字节上限" value={draft.contributionBytes} onChange={contributionBytes => update({ contributionBytes })} isDisabled={disabled} hint={`1024–${full ? 16777216 : 524288} 字节`} />
-      <CheckboxField isSelected={draft.billingAcknowledged} isDisabled={disabled} onChange={billingAcknowledged => update({ billingAcknowledged })}>我理解执行器内部模型次数、token 和费用不能硬限；启动时仍须批准本次独立远端任务范围。</CheckboxField>
+      <CheckboxField isSelected={draft.billingAcknowledged} isDisabled={disabled} onChange={billingAcknowledged => update({ billingAcknowledged })}>我理解执行器内部模型次数、token 和费用不能硬限；启动时仍须批准本次独立远端任务范围。</CheckboxField></section>
     </>}
-  </>;
+  </section>;
 }
 
 export function TeamProductionReview({ member, sources }: { member: Data; sources: Data }) {

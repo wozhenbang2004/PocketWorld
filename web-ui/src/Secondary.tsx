@@ -37,6 +37,7 @@ import './secondary.css';
 import './secondary-refactor.css';
 import './model-data-settings.css';
 import './phone-workspace.css';
+import './settings-depth.css';
 import { DataOperationHeading, DataOperationRow, useDataSettingsJourney } from './DataSettingsJourney';
 import { backgroundConnection, modelConnectionCommand, wirelessEndpoints, wirelessPort } from './forms-library/host-contracts';
 import { ModelConnectionOptions, ModelConnectionTestFeedback } from './ModelConnectionOptions';
@@ -418,6 +419,7 @@ function ModelConnections({ state, data, supported, run, navigate, open }: { sta
   const account = state.modelRoute === 'account';
   const configured = Boolean(text(state.baseUrl).trim());
   return <section className="pw-model-connections" data-model-layer="connections" aria-label="连接列表">
+      <header className="pw-settings-object-heading"><div><h2>API 连接</h2><p>选择一项连接，核对后用于新任务。</p></div><Button variant="secondary" leadingIcon={RiAddLine} disabled={!supported('models.connection.add')} onClick={() => open({ kind: 'add' })}>添加 API 连接</Button></header>
       <div className="pw-settings-links">
         {configured && selectedConnection && <Button variant="ghost" aria-label="查看当前 API 连接" leadingIcon={RiLink} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => open({ kind: 'connection', id: selectedId })}>
           <span><span>{first(selectedConnection || {}, ['name', 'label'], 'API 连接设置')}</span><small>{account ? '保留的连接' : '后续任务默认'}{' · '}{selectedConnection.credentialStatus === 'expired' ? '短期凭据已过期' : selectedConnection.hasApiKey || selectedConnection.hasAwsSession ? '凭据已保存' : '地址、凭据与能力'}</small></span>
@@ -425,11 +427,10 @@ function ModelConnections({ state, data, supported, run, navigate, open }: { sta
         {profiles.filter(row => recordId(row) !== selectedId || !configured).map((row, index) => <Button key={recordId(row, String(index))} variant="ghost" leadingIcon={RiLink} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => open({ kind: 'connection', id: recordId(row) })}>
           <span><span>{first(row, ['name', 'label', 'id'], '已保存连接')}</span><small>{MODEL_PROVIDERS[text(row.provider)] || first(row, ['provider', 'protocol'], 'API')}{row.enabled === false ? ' · 已停用' : ' · 已保存'}</small></span>
         </Button>)}
-        <Button variant="ghost" leadingIcon={RiKey2Line} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate('accounts')}><span><span>ChatGPT 账号</span></span></Button>
       </div>
       {account && selectedConnection && <div className="pw-form-actions"><Button variant="secondary" disabled={Boolean(state.modelSaving || state.modelSelectionBusy)} onClick={() => open({ kind: 'connection', id: selectedId })}>核对并使用这项 API 连接</Button></div>}
       {!configured && profiles.length === 0 && <Empty>还没有 API 连接。添加后可以测试并保存。</Empty>}
-      <div className="pw-connection-add"><Button variant="secondary" leadingIcon={RiAddLine} disabled={!supported('models.connection.add')} onClick={() => open({ kind: 'add' })}>添加 API 连接</Button></div>
+      <section className="pw-settings-related"><h3>账号连接</h3><Button variant="ghost" leadingIcon={RiKey2Line} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate('accounts')}><span><span>ChatGPT 账号</span><small>授权与套餐模型</small></span></Button></section>
   </section>;
 }
 
@@ -443,11 +444,11 @@ function ModelConnectionDetail({ connection, data, state, supported, run, open, 
   const config = object(connection.configuration);
   return <section className="pw-model-connection-detail" data-model-layer="connection" aria-label="连接详情">
     <header className="pw-connection-overview"><span className="pw-model-eyebrow">{active ? grouped ? '默认模型组当前连接' : '后续任务的 API 连接' : selected ? '保留的 API 目录连接' : '已保存的 API 连接'}</span><h2>{text(connection.model, '尚未设置模型')}</h2><p>{MODEL_PROVIDERS[text(connection.provider)] || first(connection, ['provider', 'protocol'])} · 修订 {text(connection.revision, '未提供')}</p></header>
-    <Facts items={[[ '地址', first(connection, ['baseUrl', 'endpoint']) ], ['区域', connection.bedrockRegion || config.bedrockRegion], ['状态', connection.enabled === false ? '已停用' : '已启用'], ['凭据', connection.credentialStatus === 'expired' ? '已过期，请替换完整会话' : connection.hasApiKey || connection.hasAwsSession || connection.credentialsConfigured ? '已配置；可用性需另行测试' : '未配置'], ['到期时间', connection.credentialExpiresAt]]} />
     <div className="pw-settings-links pw-connection-destinations">
       <Button variant="ghost" leadingIcon={RiSettings3Line} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" aria-label="配置与测试" disabled={busy || !supported('models.connection.edit')} onClick={() => open({ kind: 'edit', id: recordId(connection) })}><span><span>配置与测试</span><small>地址、模型、凭据与高级请求选项</small></span></Button>
       {selected && <Button variant="ghost" leadingIcon={RiFileList3Line} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => open({ kind: 'catalog' })}><span><span>这项连接的模型目录</span><small>{data.catalogAvailable === false ? '使用明确模型 ID，目录暂不可用' : '核对能力与参数，再明确选择模型'}</small></span></Button>}
     </div>
+    <section className="pw-settings-object-facts" aria-label="当前连接状态"><Facts items={[[ '地址', first(connection, ['baseUrl', 'endpoint']) ], ['区域', connection.bedrockRegion || config.bedrockRegion], ['状态', connection.enabled === false ? '已停用' : '已启用'], ['凭据', connection.credentialStatus === 'expired' ? '已过期，请替换完整会话' : connection.hasApiKey || connection.hasAwsSession || connection.credentialsConfigured ? '已配置；可用性需另行测试' : '未配置'], ['到期时间', connection.credentialExpiresAt]]} /></section>
     {!selected && <p className="pw-field-hint">模型目录属于当前选定的 API 连接。先明确使用这项连接，再查看它的目录。</p>}
     <div className="pw-connection-selection"><p>{active ? grouped ? '默认模型组当前指向此连接，后续任务仍按原用途和路由规则选择。' : '新任务使用这项 API 连接。' : '明确选择后，仅用于之后发起的工作。'}正在执行的任务与连续补充保留原模型；停用连接或撤销凭据仍会生效。</p><CapabilityAction action="models.connection.select" args={{ id: recordId(connection), expectedRevision: connection.revision }} supported={supported} run={run} disabled={busy || connection.enabled === false || connection.credentialStatus === 'expired' || connection.provider === 'bedrock_anthropic' && !connection.hasAwsSession}>用于后续任务</CapabilityAction></div>
     <Accordion variant="divided"><AccordionItem id="connection-source" title="原连接身份" description={'修订 ' + text(connection.revision, '未提供')}><Facts items={[[ '原连接', recordId(connection) ], ['原修订', connection.revision], ['目录地址', object(connection.binding).modelsEndpoint]]} /><p className="pw-field-hint">保存与测试分别返回结果。已保存凭据不代表连接测试通过，也不代表免费使用。</p></AccordionItem></Accordion>
@@ -703,7 +704,6 @@ function BackgroundSettings({ state, supported, run, onReturn, registerTransient
     {errors.map((message, index) => <p className="pw-field-error" role="alert" key={index}>{message}</p>)}
       {Number.isSafeInteger(audioPending) && audioPending > 0 && <div role="alert"><p className="pw-field-error">还有 {audioPending} 项声音记录待处理，原 App 可能仍静音。请在下方处理原声音记录。</p>{audioRecovery.needsOwnerAction === true && <div className="pw-form-actions"><CapabilityAction action="settings.openSystem" args={{ section: 'accessibility' }} supported={supported} run={run}>打开无障碍设置</CapabilityAction></div>}</div>}
       {!connection.taskOwned && connection.loaded && connection.supported && !alternate && !connected && (connection.busy || connection.recoveryRequired || awaiting) && <div className="pw-form-actions"><Button variant="secondary" disabled={!supported('background.cancel') || pending.includes('display.adb.cancel')} onClick={() => { setCode(''); void run('background.cancel', {}).catch(() => {}); }}>停止本次连接与启动</Button></div>}
-    <BackgroundAudioSettings state={state} supported={supported} run={run} registerBack={handler => { ownerBack.current.audio = handler; }} />
     <Tabs selectedKey={panel} onSelectionChange={key => selectPanel(key as 'setup' | 'checks')} className="pw-background-tabs">
       <TabList aria-label="后台连接内容"><Tab id="setup">连接设置</Tab><Tab id="checks" count={blockedGroups || undefined}>能力检查</Tab></TabList>
       <TabPanel id="setup">
@@ -742,6 +742,7 @@ function BackgroundSettings({ state, supported, run, onReturn, registerTransient
     <BackgroundChecks state={state} supported={supported} run={run} registerBack={handler => { ownerBack.current.checks = handler; }} />
 </TabPanel>
     </Tabs>
+    <section className="pw-background-preferences" aria-label="后台偏好"><h3>后台偏好</h3><BackgroundAudioSettings state={state} supported={supported} run={run} registerBack={handler => { ownerBack.current.audio = handler; }}/></section>
     <div className="pw-background-return"><Button variant={connection.helperConnected && !requiresCheck ? 'primary' : 'ghost'} onClick={() => { setCode(''); onReturn(); }}>{connection.helperConnected && !requiresCheck ? '助手已连接，返回手机能力' : '返回手机能力'}</Button></div>
     <SettingsDialog isOpen={mainScreenConsent} title="改用主屏兼容模式？" onClose={() => setMainScreenConsent(false)}><p>助手执行时会切换应用并占用当前屏幕。请先完成界面读取与任务通知授权；此处只选择模式，不会开始原目标。</p><div className="pw-form-actions"><Button variant="secondary" onClick={() => setMainScreenConsent(false)}>暂不使用</Button><CapabilityAction action="background.selectMainScreen" supported={supported} run={run} disabled={connection.taskOwned || connection.busy} primary>明确选择主屏模式</CapabilityAction></div></SettingsDialog>
   </div>;
@@ -772,7 +773,7 @@ function HistoryPage({ usage, supported, run }: { usage: boolean; supported: (ac
     {busy && <p className="pw-field-hint" aria-live="polite">正在读取原记录…</p>}
     {!read && !busy && <Empty>尚未读取原记录。</Empty>}
     {read && items.length === 0 && <Empty>{usage ? '当前窗口没有保留的独立调用记录；不代表服务用量为 0。' : '当前窗口没有任务记录。'}</Empty>}
-    {items.map(row => <SourceRecord key={recordId(row)} item={row} titleKeys={['goal', 'title', 'id']}><Facts items={[[ '更新时间', timeText(row.updatedAt) ], ['来源', first(row, ['source', 'executionMode']) ]]} /><CapabilityAction action="tasks.open" args={{ id: recordId(row) }} supported={supported} run={run}>打开原任务与回执</CapabilityAction></SourceRecord>)}
+    <div className="pw-settings-record-list">{items.map(row => <CapabilityAction key={recordId(row)} row action="tasks.open" args={{ id: recordId(row) }} supported={supported} run={run}><span><span>{first(row, ['goal', 'title', 'id'], '原任务')}<em className="pw-settings-record-status">{statusText(row.status || row.state)}</em></span><small>{[timeText(row.updatedAt), first(row, ['source', 'executionMode'])].filter(Boolean).join(' · ')}</small></span></CapabilityAction>)}</div>
     {more && items.length < 160 && <Button variant="secondary" disabled={busy} onClick={() => load(false)}>读取较早窗口</Button>}
     {items.length >= 160 && <p className="pw-field-hint">已到本次 160 条显示上限；原记录仍保留，刷新可回到最近窗口。</p>}
   </Card>;
@@ -944,9 +945,8 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack 
   const welcomeAccount = accounts.find(row => row.enabled === true && row.planUsageEnabled === true);
   const loginActive = ['pending', 'exchanging'].includes(text(login.status));
   return <>
-    <Card className="pw-accounts-workspace">
-      <p className="pw-reading-lead">连接账号，读取可用模型后用于新任务。</p>
-      <div className="pw-form-actions"><PressButton compact disabled={locked || loginActive || needsAccountRead || !supported('accounts.beginLogin')} onClick={() => { setAccountFeedback(null); setAdding(true); }}>添加账号</PressButton>{act('accounts.refresh', {}, '刷新账号状态')}</div>
+    <Card className="pw-accounts-workspace" ><div hidden={Boolean(catalog)} className="pw-accounts-overview">
+      <header className="pw-settings-object-heading"><div><h2>你的账号</h2><p>读取可用模型，用于之后的新任务。</p></div><div className="pw-form-actions"><PressButton compact disabled={locked || loginActive || needsAccountRead || !supported('accounts.beginLogin')} onClick={() => { setAccountFeedback(null); setAdding(true); }}>添加账号</PressButton>{act('accounts.refresh', {}, '刷新账号状态')}</div></header>
       {needsAccountRead && <p className="pw-field-hint">请先刷新账号状态，核对上次操作后再添加账号。</p>}
       {accountFeedback && !adding && <p className={accountFeedback.error ? 'pw-field-error' : 'pw-receipt-copy'} role={accountFeedback.error ? 'alert' : 'status'}>{accountFeedback.message}</p>}
       {state.modelRoute === 'account' && data.selectedModelRef && <div className="pw-selected-object"><h3>当前账号模型</h3><Facts items={[[ '模型', selected.modelId ], ['账号', accounts.find(row => row.id === selected.accountId)?.label ], ['可用状态', data.selectedModelUsable ? '当前引用可用' : '需要重新读取目录并选择' ]]} /></div>}
@@ -954,17 +954,21 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack 
       <Collection data={data} keys={['accounts']} label="账号" formatStatus={accountStatusText}>{row => <>
         <Facts items={[[ '套餐', row.plan || row.planName ], ['套餐使用权限', row.planUsageEnabled ? '已授予' : '尚未授予'], ['状态', accountStatusText(row.status)], ['冷却至', timeText(row.cooldownUntil)], ['本机选择', data.selectedAccountId === row.id ? '当前账号' : undefined]]} />
         {row.usageLimited && <p className="pw-field-hint">套餐请求已暂停。明确允许再试后，仍需回到原任务继续；不会自动发送请求。</p>}
-        <StretchSwitch label="启用此账号" description="关闭会停止新的账号请求；已发生的远端操作仍需按原回执核对。" checked={row.enabled === true} disabled={locked || !supported('accounts.setEnabled')} onChange={enabled => { void runAccount('accounts.setEnabled', {accountId: row.id, expectedVersion: row.version, enabled}).catch(() => {}); }} />
         {row.error && <p className="pw-field-error" role="alert">{row.error === 'LOGIN_EXPIRED' ? '上次登录授权已过期，请重新登录。' : text(row.error)}</p>}
         <div className="pw-form-actions">
           {act('accounts.select', { accountId: row.id, expectedVersion: row.version }, '选择此账号')}
           <Button variant="secondary" disabled={locked || !supported('accounts.models') || !row.enabled || !row.planUsageEnabled || row.usageLimited} onClick={() => readModels(row)}>读取模型目录</Button>
           {row.usageLimited && act('accounts.retryPlanUsage', { accountId: row.id, expectedVersion: row.version }, '允许手动再试')}
+          {row.enabled && !loginActive && !(login.status === 'expired' && login.accountId === row.id) && (['signed_out', 'reauthorization_required'].includes(text(row.status)) || !row.planUsageEnabled) && act('accounts.reauthorize', {accountId: row.id, expectedVersion: row.version}, '重新登录此账号')}
+        </div>
+        <Accordion variant="divided" className="pw-account-management"><AccordionItem id={'account-management-' + row.id} title="账号管理与授权" description="启停、授权、套餐用量与退出">
+          <StretchSwitch label="启用此账号" description="关闭会停止新的账号请求；已发生的远端操作仍需按原回执核对。" checked={row.enabled === true} disabled={locked || !supported('accounts.setEnabled')} onChange={enabled => { void runAccount('accounts.setEnabled', {accountId: row.id, expectedVersion: row.version, enabled}).catch(() => {}); }} />
+          <div className="pw-form-actions">
           {row.planUsageEnabled && act('accounts.manageUsage', {}, '管理套餐用量')}
           {row.enabled && !loginActive && row.status === 'connected' && act('accounts.refreshAuthorization', {accountId: row.id, expectedVersion: row.version}, '刷新授权')}
-          {row.enabled && !loginActive && !(login.status === 'expired' && login.accountId === row.id) && (['signed_out', 'reauthorization_required'].includes(text(row.status)) || !row.planUsageEnabled) && act('accounts.reauthorize', {accountId: row.id, expectedVersion: row.version}, '重新登录此账号')}
           <Button variant="secondary" disabled={locked || !supported('accounts.logout.review')} onClick={() => prepare('logout', { accountId: row.id, expectedVersion: row.version })}>核对并退出</Button>
-        </div>
+          </div>
+        </AccordionItem></Accordion>
       </>}</Collection>
       {login.sessionId && <section className="pw-selected-object" aria-label="本次授权"><h3>本次授权</h3><Facts items={[[ '账号', loginAccount?.label ], [ '状态', accountStatusText(login.status) ], ['到期时间', timeText(login.expiresAt) ]]} />
         {login.status === 'pending' && <div className="pw-form-actions">{act('accounts.openAuthorization', { sessionId: login.sessionId }, '打开原授权页面')}{act('accounts.cancelLogin', { sessionId: login.sessionId }, '取消本次授权')}</div>}
@@ -979,7 +983,7 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack 
         </>}
       </section>}
       {receipt && <div className="pw-receipt-copy" role="status">{receipt.status !== 'saved' ? '原操作结果待核对。请刷新账号状态；不会自动重试。' : receipt.kind === 'model' ? '模型选择已保存。当前使用状态以上方统一模型状态为准；已有任务保留原模型。' : actualReceipt.signedOutLocally ? '已在本机退出，账号记录保留。' + (actualReceipt.credentialCleanupRequired ? ' 本机凭据仍需清理。' : '') + (actualReceipt.remoteRevocationConfirmed ? ' 服务商确认撤销授权。' : ' 远端撤销尚未确认。') : '收到原退出回执，请刷新并核对本机状态。'}</div>}
-    </Card>
+    </div></Card>
     <SettingsDialog isOpen={adding} title="添加 ChatGPT 账号" onClose={() => { if (!busy) setAdding(false); }}>
       <TextField label="账号名称（可选）" placeholder="我的 ChatGPT 账号" value={accountLabel} maxLength={80} isDisabled={busy} onChange={setAccountLabel} hint="名称只用于本机辨认。登录会打开系统浏览器。" />
       {accountFeedback && <p className={accountFeedback.error ? 'pw-field-error' : 'pw-receipt-copy'} role={accountFeedback.error ? 'alert' : 'status'}>{accountFeedback.message}</p>}
@@ -989,7 +993,8 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack 
         catch (failure) { setAccountFeedback({ message: (failure as Error).message, error: true }); }
       }}>{busy ? '正在准备授权…' : '用 ChatGPT 登录'}</PressButton></div>
     </SettingsDialog>
-    {catalog && <Card title="此账号的模型目录" description="能力以这次实际目录为准；选择不会自动授权手机操作。">
+    {catalog && <Card className="pw-account-catalog" title="此账号的模型目录" description="能力以这次实际目录为准；选择不会自动授权手机操作。">
+      <Button variant="ghost" leadingIcon={RiArrowLeftLine} onClick={() => { generation.current++; setCatalog(null); }}>返回账号</Button>
       {!catalogCurrent && <p role="alert" className="pw-field-error">账号或模型设置已变化，请重新读取目录。</p>}
       {models.length > 8 && <SearchField label="筛选账号模型" value={query} onChange={setQuery} placeholder="模型名称" />}
       {visibleModels.length === 0 ? <Empty>{models.length ? '没有匹配的模型。' : '服务商没有返回可用模型。'}</Empty> : visibleModels.map(row => <SourceRecord key={text(row.id)} item={row} titleKeys={['displayName', 'id']}><Button variant="secondary" disabled={locked || !catalogCurrent || !supported('accounts.model.review')} onClick={() => prepare('model', { accountId: catalogBody.accountId, modelId: row.id })}>核对能力与选项</Button></SourceRecord>)}
@@ -1038,15 +1043,17 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack }: { 
   const installed = list(data.plugins), currentDetail = detail && installed.find(item => item.id === detail.id && item.installationId === detail.installationId);
   const progressCopy: Record<string, string> = { discovering: '正在读取服务声明，等待原发现回执…', discovered: '工具发现完成，可以打开预览。', installing: '原安装正在保存，等待实际回执…', installed: '安装已保存，保持停用；工具权限需要逐项核对。', unknown: '安装结果待核对，请刷新已安装列表；不会自动重新安装。', stale: '原发现已变化或过期，请重新核对配置。', failed: '原发现未完成，请查看回执后核对服务。' };
   return <>
-    <Card title="MCP 服务" description="读取服务声明、安装与工具授权分别确认。">
+    <Card className="pw-mcp-workspace" title="已安装的服务" description="打开服务，核对工具与当前权限。">
       <Collection data={data} keys={['plugins']} label="已安装服务">{row => <>
         <Facts items={[[ '版本', object(row.manifest).version ], ['状态', row.enabled ? '已启用' : '已停用'], ['服务状态', row.mcpStatus]]} />
         <div className="pw-form-actions"><Button variant="secondary" disabled={writing || !supported('mcp.read')} onClick={async () => { const original = ++view.current; try { const receipt = object(await run('mcp.read', { id: row.id, installationId: row.installationId })); if (alive.current && original === view.current) setDetail(receipt); } catch {} }}>查看工具与权限</Button><Button variant="secondary" disabled={writing || !supported('mcp.reviewEnabled')} onClick={() => openReview('mcp.reviewEnabled', { id: row.id, installationId: row.installationId, enabled: !row.enabled }, 'enable')}>{row.enabled ? '核对并停用' : '核对并启用'}</Button></div>
       </>}</Collection>
+      <Accordion variant="divided" className="pw-mcp-import" defaultExpandedKeys={picked.ok === true || phase && phase !== 'idle' ? ['mcp-import'] : []}><AccordionItem id="mcp-import" title="添加 MCP 服务" description="选择配置，发现并核对工具后安装">
       <HostFileUpload label="选择 MCP 配置" onChoose={() => { closeReview(); void run('mcp.pickConfig', {}).catch(() => {}); }} disabled={writing || preparing || !supported('mcp.pickConfig') || pending.includes('mcp.pickConfig')} status={pending.includes('mcp.pickConfig') ? 'importing' : picked.ok === false ? 'error' : 'idle'} statusDescription="系统选择器读取不含凭据的 JSON 配置，上限 64 KB" error={picked.ok === false ? text(picked.error) : undefined} />
       {picked.ok === true && <div className="pw-selected-object"><h3>已读取的配置</h3><Facts items={[[ '名称', config.name ], ['端点', config.endpoint ], ['协议版本', config.protocolVersion ]]} /><p className="pw-field-hint">发现只读取服务声明；安装不会调用工具，也不会自动启用或授权。</p><CapabilityAction action="mcp.discoverImport" args={{ importRequestId: picked.requestId }} supported={supported} run={run} disabled={writing || preparing || phase === 'unknown'}>发现并预览服务</CapabilityAction></div>}
-      {phase !== 'idle' && <p className="pw-receipt-copy" role="status">{progressCopy[phase] || text(progress.message)}</p>}
       {phase === 'discovered' && <Button variant="secondary" disabled={writing || !supported('mcp.reviewImport')} onClick={() => openReview('mcp.reviewImport', {}, 'install')}>核对工具并安装</Button>}
+      </AccordionItem></Accordion>
+      {phase !== 'idle' && <p className="pw-receipt-copy" role="status">{progressCopy[phase] || text(progress.message)}</p>}
       {preparing && <CapabilityAction action="mcp.cancel" args={{ operationId: progress.operationId }} supported={supported} run={run}>取消原发现</CapabilityAction>}
       {[['启停', object(progress.enableReceipt)], ['工具权限', object(progress.grantReceipt)]].map(([label, raw]) => { const receipt = object(raw); return receipt.requestId ? <p key={text(label)} className="pw-receipt-copy" role="status">{text(label)}：{receipt.status === 'saved' ? '原安装的更改已保存。' : receipt.status === 'pending' ? '等待原操作回执…' : '结果待核对，请刷新原安装。'}</p> : null; })}
     </Card>
@@ -1057,8 +1064,8 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack }: { 
       <p className="pw-field-hint">启用服务不代替逐项工具授权；敏感执行仍需原任务按具体参数批准。</p>
     </>}</SettingsDialog>
     <SettingsDialog isOpen={review !== null} title={review?.kind === 'install' ? '核对这次发现并安装' : review?.kind === 'grant' ? review.granted ? '允许这个工具？' : '撤销工具权限？' : review?.enabled ? '启用这项安装？' : '停用这项安装？'} onClose={() => { if (!busy) closeReview(); }}>{review && <>
-      <Facts items={[[ '服务', review.name || object(review.manifest).name || review.id ], ['地址', review.endpoint || object(review.selectedTool).endpoint ], ['协议', review.protocolVersion ], ['预览到期', timeText(review.expiresAt) ]]} />
-      {review.kind === 'install' ? <><p>选择要安装的工具（{selected.length}/12）。服务说明和参数仅供核对。</p>{list(review.tools).map(tool => <div key={text(tool.name)}><CheckboxField isSelected={selected.includes(tool.name)} isDisabled={busy || !tool.supported || selected.length >= 12 && !selected.includes(tool.name)} onChange={value => setSelected(current => value ? [...current, tool.name] : current.filter(name => name !== tool.name))}>{text(tool.name)}</CheckboxField><p className="pw-field-hint">{text(tool.description || object(tool.declaration).description)}{!tool.supported ? ' · 当前不支持' : ''}</p></div>)}{review.mcpSource && <p>包含资源或提示来源；不选工具可只安装参考来源。</p>}{review.expectedInstallationId && <p>将替换同标识的旧安装、清空旧工具授权；已发生的远端效果不会撤回。</p>}<p>保存后保持停用且不授予工具权限。</p></> : review.kind === 'grant' ? <><p>{text(object(review.selectedTool).description)}</p><pre className="pw-source-code">{JSON.stringify(object(object(review.selectedTool).schema), null, 2)}</pre><p>仅改变这项安装的一个工具权限。原任务仍需按实际参数批准敏感动作。</p></> : <p>{review.enabled ? '仅启用这项安装。工具仍需逐项授权。' : '停止继续使用这项安装；已发生的远端效果不会撤回。'}</p>}
+      <Facts items={[[ '服务', review.name || object(review.manifest).name || review.id ], ['工具', object(review.selectedTool).name ], ['地址', review.endpoint || object(review.selectedTool).endpoint ], ['协议', review.protocolVersion ], ['预览到期', timeText(review.expiresAt) ]]} />
+      {review.kind === 'install' ? <><p>选择要安装的工具（{selected.length}/12）。服务说明和参数仅供核对。</p>{list(review.tools).map(tool => <div key={text(tool.name)}><CheckboxField isSelected={selected.includes(tool.name)} isDisabled={busy || !tool.supported || selected.length >= 12 && !selected.includes(tool.name)} onChange={value => setSelected(current => value ? [...current, tool.name] : current.filter(name => name !== tool.name))}>{text(tool.name)}</CheckboxField><p className="pw-field-hint">{text(tool.description || object(tool.declaration).description)}{!tool.supported ? ' · 当前不支持' : ''}</p></div>)}{review.mcpSource && <p>包含资源或提示来源；不选工具可只安装参考来源。</p>}{review.expectedInstallationId && <p>将替换同标识的旧安装、清空旧工具授权；已发生的远端效果不会撤回。</p>}<p>保存后保持停用且不授予工具权限。</p></> : review.kind === 'grant' ? <><p>{text(object(review.selectedTool).description)}</p><Accordion variant="divided"><AccordionItem id="mcp-tool-schema" title="工具参数结构"><pre className="pw-source-code">{JSON.stringify(object(object(review.selectedTool).schema), null, 2)}</pre></AccordionItem></Accordion><p>仅改变这项安装的一个工具权限。原任务仍需按实际参数批准敏感动作。</p></> : <p>{review.enabled ? '仅启用这项安装。工具仍需逐项授权。' : '停止继续使用这项安装；已发生的远端效果不会撤回。'}</p>}
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>取消</Button><PressButton compact disabled={busy || review.kind === 'install' && selected.length === 0 && !review.mcpSource} onClick={confirm}>{busy ? '等待受理…' : review.kind === 'install' ? '确认安装' : '确认更改'}</PressButton></div>
     </>}</SettingsDialog>
   </>;
@@ -1179,7 +1186,7 @@ function ArchiveWorkspace({ data, supported, run, registerTransientBack, navigat
     {data.originalAction && journey.view !== 'result' && <section className="pw-data-action-notice" aria-label="原恢复状态"><p>原恢复 · {statusText(original.status || 'unknown')}</p><p className="pw-field-hint">{phasePending ? '原恢复尚未结束。先核对原动作，不重复恢复。' : '恢复结果保留在原动作中，可继续核对。'}</p><Button variant="secondary" onClick={() => journey.open('result')}>查看原恢复结果</Button></section>}
       {data.webDavAction && <section className="pw-data-action-notice" aria-label="原上传状态"><h3>原上传结果</h3><Facts items={[[ '原上传', data.webDavAction ], ['目标', object(upload.scope).destination ], ['状态', statusText(object(upload.receipt).status || upload.status) ], ['远端字节', object(upload.receipt).remoteBytesVerified ? '已核对与本次密文一致' : '尚未确认一致' ]]} /><div className="pw-form-actions">{act('archives.webdav.query', { actionId: data.webDavAction }, '只读核对原版本')}<CapabilityAction action="archives.webdav.stop" args={{ actionId: data.webDavAction }} supported={supported} run={run}>请求停止原上传</CapabilityAction></div><p className="pw-field-hint">结果未知时不会自动重传。已发送的字节不会因停止而撤回。</p></section>}
     {journey.view === 'create' && <Card className="pw-data-operation-body">
-      {data.projectMemoryName ? <p>范围：{text(data.projectMemoryName)}及其记忆。</p> : <div className="pw-selection-list">{Object.entries(ARCHIVE_SECTIONS).map(([key, label]) => <CheckboxField key={key} isSelected={selected.includes(key)} isDisabled={locked || phasePending || !sectionReady(key)} onChange={yes => setSelected(value => yes ? [...value, key] : value.filter(item => item !== key))}>{label}{hasInventory && !sectionReady(key) ? ' · 当前不可用' : ''}</CheckboxField>)}</div>}
+      {data.projectMemoryName ? <p>范围：{text(data.projectMemoryName)}及其记忆。</p> : <div className="pw-backup-scope-groups">{[{ title: '项目与资料', keys: ['projects', 'artifacts', 'memory'] }, { title: '设置与规则', keys: ['settings', 'skills', 'schedules'] }, { title: '连接与经历', keys: ['remoteConnections', 'sshConnections', 'experiences'] }].map(group => <section key={group.title}><h3>{group.title}</h3><div className="pw-selection-list">{group.keys.map(key => <CheckboxField key={key} isSelected={selected.includes(key)} isDisabled={locked || phasePending || !sectionReady(key)} onChange={yes => setSelected(value => yes ? [...value, key] : value.filter(item => item !== key))}>{ARCHIVE_SECTIONS[key]}{hasInventory && !sectionReady(key) ? ' · 当前不可用' : ''}</CheckboxField>)}</div></section>)}</div>}
       <p className="pw-data-caution">用户文本、图片和项目文件可能包含敏感内容。生成后的本机审阅缓存未加密，导出时默认使用口令加密。</p>
       {selected.includes('experiences') && <p className="pw-data-caution">已包含聊天、任务与工具回执正文，请确认这些私人内容确实需要随备份带走。</p>}
       <div className="pw-form-actions">{act('archives.create', { sections: visibleSections }, '生成所选范围的备份', locked || phasePending || visibleSections.length === 0 || Boolean(data.projectMemoryName && !data.projectMemoryCurrent), true)}{act('archives.refresh', {}, '刷新清单', locked)}</div>
@@ -1194,7 +1201,7 @@ function ArchiveWorkspace({ data, supported, run, registerTransientBack, navigat
     </Card>}
     {journey.view === 'snapshot' && !selection.selectionId && <Empty>还没有固定备份。返回选择创建或导入。</Empty>}
     {journey.view === 'snapshot' && selection.selectionId && <Card className="pw-data-operation-body">
-      <Facts items={[[ '备份大小', bytesText(selection.archiveBytes) ], ['本机缓存', '未加密'], ['创建时间', timeText(selection.createdAt) ], ['原备份编号', selection.selectionId ], ['内容 SHA-256', selection.archiveSha256 ], ['包含分区', Object.keys(preview).map(key => ARCHIVE_SECTIONS[key] || key).join('、') || '尚未返回分区清单']]} />
+      <div className="pw-backup-object-summary"><strong>{bytesText(selection.archiveBytes)}</strong><span>固定备份 · 本机缓存未加密</span><p>{Object.keys(preview).map(key => ARCHIVE_SECTIONS[key] || key).join('、') || '尚未返回分区清单'}</p></div>
       <p className="pw-data-caution">这份本机缓存未加密。正文、图片与项目文件可能包含敏感内容。</p>
       <Tabs selectedKey={snapshotTab} onSelectionChange={key => setSnapshotTab(String(key))} className="pw-data-tabs">
         <TabList aria-label="固定备份操作"><Tab id="export">导出备份</Tab><Tab id="restore">恢复分区</Tab></TabList>
@@ -1210,6 +1217,7 @@ function ArchiveWorkspace({ data, supported, run, registerTransientBack, navigat
           </AccordionItem>; })}</Accordion>
         </TabPanel>
       </Tabs>
+      <Accordion variant="divided"><AccordionItem id="backup-identity" title="备份身份与内容校验" description={timeText(selection.createdAt)}><Facts items={[[ '原备份编号', selection.selectionId ], ['内容 SHA-256', selection.archiveSha256 ], ['创建时间', timeText(selection.createdAt) ]]} /></AccordionItem></Accordion>
     </Card>}
     {journey.view === 'webdav' && <Card className="pw-data-operation-body">
       <div className="pw-form-actions">{act('archives.webdav.load', {}, '读取连接设置', locked)}{data.webDavConfig && <Button variant="secondary" disabled={locked} onClick={() => setConfigDraft({ revision: config.revision, collection: text(config.collection), username: text(config.username), enabled: config.enabled === true, password: '' })}>编辑连接</Button>}</div>
@@ -1462,7 +1470,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
     return () => registerBackHandler?.(null);
   }, [registerBackHandler]);
   const back = () => { if (!consumeBack()) onBack(); };
-  const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof RiKey2Line }>, showCurrentModel = false) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate(item.id)}><span><span>{item.title}</span>{showCurrentModel && item.id === 'model-settings' && <small>{text(state.modelName) || '尚未连接'}</small>}</span></Button>)}</div>;
+  const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof RiKey2Line }>, showCurrentModel = false) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate(item.id)}><span><span>{item.title}</span><small>{showCurrentModel && item.id === 'model-settings' ? text(state.modelName) || '尚未连接' : item.detail}</small></span></Button>)}</div>;
   const refreshAction = page === 'background' ? 'background.refresh' : isModelPage ? 'models.snapshot' : page === 'memory' ? 'memory.list' : 'app.refresh';
   return <section className="pw-secondary pw-secondary-refactor" data-secondary-page={page} aria-label={pageTitle}>
     <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label={isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} onClick={back} /><div><h1>{pageTitle}</h1></div>{!['memory', 'memoryReview', 'teams'].includes(page) && <IconButton icon={RiRefreshLine} aria-label="刷新当前状态" title="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} />}{navigationTrigger}</header>
@@ -1470,12 +1478,11 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
       {notice && <p className="pw-request-notice" role="status">{notice}</p>}
       {(error || domainError) && <p className="pw-field-error" role="alert">{error || domainError}</p>}
       <div className="pw-secondary-page" data-secondary-view={viewKey}>
-        {(page === 'settings' || page === 'connections') ? <>
+        {(page === 'settings' || page === 'connections') ? <div className="pw-settings-home">
           <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="搜索设置" placeholder="搜索设置" value={query} onChange={setQuery} shape="rounded" />
-          {!query.trim() && <ExecutionControls state={state} supported={supported} run={run} />}
           {query.trim() ? <section className="pw-settings-results" aria-label="匹配的设置">{settingRows(filtered)}{filtered.length === 0 && <Empty>没有匹配的设置。</Empty>}</section>
-            : <><section className="pw-settings-frequent" aria-label="常用设置">{settingRows(frequentSettings, true)}</section><Accordion variant="divided" className="pw-settings-groups" aria-label="按目的浏览设置" expandedKeys={expandedSettings} onExpandedChange={values => setExpandedSettings(new Set([...values].map(String)))} allowsMultipleExpanded>{SETTINGS_GROUPS.map(group => <AccordionItem id={group.id} key={group.id} title={group.title} icon={group.icon} headingLevel={2} className="pw-settings-group">{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</AccordionItem>)}</Accordion></>}
-        </> : settingsGroup ? <section className="pw-settings-group-page">{settingRows(settingsGroup.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</section>
+            : <><div className="pw-settings-primary"><section className="pw-settings-frequent" aria-label="常用设置"><h2>常用设置</h2>{settingRows(frequentSettings, true)}</section><section className="pw-settings-execution"><h2>执行开关</h2><ExecutionControls state={state} supported={supported} run={run}/></section></div><section className="pw-settings-purpose"><h2>按用途查找</h2><Accordion variant="divided" className="pw-settings-groups" aria-label="按目的浏览设置" expandedKeys={expandedSettings} onExpandedChange={values => setExpandedSettings(new Set([...values].map(String)))} allowsMultipleExpanded>{SETTINGS_GROUPS.map(group => <AccordionItem id={group.id} key={group.id} title={group.title} description={group.detail} icon={group.icon} headingLevel={3} className="pw-settings-group">{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</AccordionItem>)}</Accordion></section></>}
+        </div> : settingsGroup ? <section className="pw-settings-group-page"><p className="pw-settings-page-intent">{settingsGroup.detail}</p>{settingRows(settingsGroup.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</section>
           : isModelPage ? <>
             <div className="pw-model-list" data-model-layer={modelView.kind === 'model' ? 'model' : 'list'} hidden={!modelBrowseActive}>
               {modelView.kind !== 'model' && <header className="pw-model-current"><div><span className="pw-model-eyebrow">后续任务默认模型</span><strong>{text(state.modelName) || '尚未连接'}</strong><span className="pw-model-origin">{state.modelRoute === 'account' ? 'ChatGPT 账号' : MODEL_PROVIDERS[text(state.modelProvider)] || 'API 连接'}</span></div><IconButton className="pw-utility-icon" icon={RiSettings3Line} aria-label="管理连接" title="管理连接" onClick={() => openModel({ kind: 'connections' })} /></header>}
@@ -1483,7 +1490,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
               {state.activeTaskId && modelView.kind !== 'model' && <p className="pw-field-hint pw-model-task-context">进行中的任务保留原模型与连接。这里的选择不会替换原任务身份。</p>}
               <ModelCatalog key={page} state={state} data={data} active={modelBrowseActive} selectedId={modelView.kind === 'model' ? modelView.id : undefined} supported={supported} run={run} open={openModel} registerTransientBack={registerTransientBack} />
             </div>
-            {modelView.kind === 'connections' ? <><ModelConnections state={state} data={data} supported={supported} run={run} navigate={navigate} open={openModel} /><TokenBudgetsWorkspace supported={supported} registerTransientBack={registerTransientBack} /><ModelDiagnosticsWorkspace state={state} supported={supported} /></>
+            {modelView.kind === 'connections' ? <><ModelConnections state={state} data={data} supported={supported} run={run} navigate={navigate} open={openModel} /><section className="pw-model-connection-tools" aria-label="连接用量与排查"><h2>用量与排查</h2><TokenBudgetsWorkspace supported={supported} registerTransientBack={registerTransientBack} /><ModelDiagnosticsWorkspace state={state} supported={supported} /></section></>
               : modelView.kind === 'edit' || modelView.kind === 'add' ? <ModelSettings key={modelDraftKey} state={state} connection={editConnection} supported={supported} run={run} adding={modelView.kind === 'add'} draft={modelDrafts.current[modelDraftKey]} onDraftChange={value => { if (value) modelDrafts.current[modelDraftKey] = value; else delete modelDrafts.current[modelDraftKey]; }} onInspect={() => { void run('models.snapshot', {}).catch(() => {}); finishModelEdit(modelView.kind === 'add' ? { kind: 'connections' } : { kind: 'connection', id: recordId(editConnection || {}) }); }} onSaved={saved => { const id = modelView.kind === 'add' ? text(object(saved.connections).selectedConnectionId) : recordId(editConnection || {}); finishModelEdit(id ? { kind: 'connection', id } : { kind: 'connections' }); setNotice('已收到原连接保存回执。当前修订可在详情核对；保存不代表测试通过。'); }} registerTransientBack={registerTransientBack} />
               : modelView.kind === 'connection' ? <ModelConnectionDetail connection={connection} data={data} state={state} supported={supported} run={run} open={openModel} busy={Boolean(state.modelSelectionBusy || state.modelSaving || state.modelTesting || state.chatSubmitting || state.phoneSubmitting)} /> : null}
           </>

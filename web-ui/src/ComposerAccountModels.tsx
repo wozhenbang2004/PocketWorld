@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ModelPicker, ShimmerText } from './library';
 import { Button, SelectField, TextField } from './forms-library';
 import { PermissionReview } from './shell-library';
+import './model-picker-depth.css';
 import { accountModelAccountRows, accountModelCatalog, accountModelProjectionCurrent, accountModelReadRequest,
   accountModelReasoningLevels, accountModelReviewCurrent, accountModelReviewRequest, accountModelSelection,
   type AccountModelOptions, type AccountModelRecord } from './composer-account-models';
@@ -84,7 +85,7 @@ export function ComposerAccountModels({ state, can, act, onSelected, onSelection
   const levels = accountModelReasoningLevels(review), facts = review?.catalogFacts?.facts || {};
   const known = (key: string) => facts[key]?.known === true ? facts[key].value : undefined;
   if (!supported) return <p className="pw-muted">当前界面尚未接通聊天内账号模型选择，请先在账号管理中选择。</p>;
-  return <>
+  return <section className="pw-model-picker-depth pw-account-picker-depth" aria-label="账号模型选择">
     {loading ? <div className="pw-loading-models" aria-busy="true"><ShimmerText>正在读取原账号模型记录</ShimmerText></div> : review ? <PermissionReview
       title={String(review.displayName || review.modelId)} context={`ChatGPT 账号：${review.accountLabel || '原账号'}`}
       reason="此选择用于之后开始的任务，已有任务保留原模型。模型目录与账号授权仍以实际状态为准。"
@@ -93,20 +94,19 @@ export function ComposerAccountModels({ state, can, act, onSelected, onSelection
       pending={selecting || !!state.modelSelectionBusy} onApprove={!locked && selection && !needsRead ? confirm : undefined}
       onReject={() => { if (!selecting) setReview(null); }} approveLabel="确认使用此账号模型" rejectLabel="返回模型目录">
       {!accountModelReviewCurrent(review, state.modelSelectionRevision) && <p role="alert" className="pw-error">原账号或模型设置已变化，请重新读取。</p>}
-      <div className="pw-form-grid">
-        <SelectField label="推理设置" value={options.reasoningEffort} options={[{ id: '', label: '服务默认' }, ...levels.map(level => ({ id: level, label: level }))]} onChange={value => setOptions(old => ({ ...old, reasoningEffort: value }))} isDisabled={selecting} />
+      <div className="pw-account-model-options"><section aria-label="推理偏好"><SelectField label="推理设置" value={options.reasoningEffort} options={[{ id: '', label: '服务默认' }, ...levels.map(level => ({ id: level, label: level }))]} onChange={value => setOptions(old => ({ ...old, reasoningEffort: value }))} isDisabled={selecting} /></section><section className="pw-account-local-reserve" aria-label="本地输入准入"><h4>本地输入准入</h4><div className="pw-form-grid">
         <TextField label="本地输出预留" inputMode="numeric" value={options.outputReserve} onChange={value => setOptions(old => ({ ...old, outputReserve: value.replace(/\D/g, '').slice(0, 5) }))} hint="128–32768 tokens，用于输入准入，不是服务端输出限制。" isDisabled={selecting} />
         <TextField label="每张图片本地预留" inputMode="numeric" value={options.imageTokenReserve} onChange={value => setOptions(old => ({ ...old, imageTokenReserve: value.replace(/\D/g, '').slice(0, 7) }))} hint="0–2000000；已知上下文时需配置后才可发送图片。" isDisabled={selecting} />
-      </div>
+      </div></section></div>
     </PermissionReview> : current && !needsRead ? catalog ? <>
-      <ModelPicker label={`${catalog.accountLabel}的模型`} models={catalog.models.map(model => ({ id: model.id, name: String(model.displayName || model.id), description: '来自此账号的实际模型目录', disabled: locked }))}
-        value={state.modelRoute === 'account' && selected?.accountId === catalog.accountId ? selected.modelId : undefined} onChange={reviewModel} />
       <Button variant="ghost" disabled={locked} onClick={() => setProjection(old => old ? { ...old, catalog: undefined } : old)}>返回账号列表</Button>
+      <ModelPicker label={`${catalog.accountLabel}的模型`} models={catalog.models.map(model => ({ id: model.id, name: String(model.displayName || model.id), description: model.displayName && model.displayName !== model.id ? String(model.id) : undefined, disabled: locked }))}
+        value={state.modelRoute === 'account' && selected?.accountId === catalog.accountId ? selected.modelId : undefined} onChange={reviewModel} />
     </> : <>
       <ModelPicker label="选择 ChatGPT 账号" models={accounts.map(row => ({ ...row, disabled: locked || row.disabled }))} value={state.modelRoute === 'account' ? selected?.accountId : undefined} onChange={readModels} />
       {accounts.length === 0 && <p className="pw-muted">尚无已连接账号。请先在账号管理中登录，再回来选择模型。</p>}
     </> : null}
     {error && <p className="pw-error" role="alert">{error}</p>}
     {!review && <div className="pw-action-row"><Button variant="secondary" disabled={locked} onClick={() => void readAccounts()}>重新读取账号状态</Button></div>}
-  </>;
+  </section>;
 }

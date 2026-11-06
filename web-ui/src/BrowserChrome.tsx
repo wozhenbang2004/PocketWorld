@@ -12,6 +12,7 @@ import {
   reconcileBrowserChromeDraft, type BrowserChromeAction, type BrowserChromeContext, type BrowserChromeNotice, type BrowserChromeNoticeReview, type BrowserChromeReceipt,
 } from './browser-chrome-contract';
 import './browser-chrome.css';
+import './browser-depth.css';
 
 /** Fixed native toolbar surface. The real webpage remains in its separate native WebView. */
 export default function BrowserChrome({ snapshot }: { snapshot: PocketSnapshot }) {
