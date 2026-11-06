@@ -1,5 +1,61 @@
 # Owner-controlled signed application updates
 
+## Windows one-click release
+
+The configured local entry is `E:\PocketWorld-dev\一键拉取构建发布.cmd`.
+It calls `tools/release.ps1` and `tools/release.py`; machine paths live in
+`E:\PocketWorld-dev\release.local.json`, outside Git. Start from
+`tools/release.config.example.json` on another machine.
+
+The default run preserves the current branch, requires a clean working tree,
+fetches and normally merges `origin/main`, and stops with conflict files intact.
+It never resets, cleans, stashes, force-pushes or starts GitHub Actions. A source
+update to the orchestrator restarts it once before any build. All bulk output,
+dependency caches and temporary files use the configured non-system volumes.
+
+After the core batch is accepted, the run verifies the signed online baseline,
+chooses a version above the real published/local APK versions, runs local checks,
+builds the current Web assets, and invokes one local APK build with explicit
+version properties. It checks the fixed Android signer and complete APK contents,
+generates the Google BSDIFF43/GZIP delta, reconstructs and hashes the whole target,
+and signs the new manifest with the existing publisher RSA key. The original APK
+and manifest keys are never regenerated.
+
+Both the APK and the verified delta are uploaded through the original Site's
+authenticated `__publisher` API. The server checks chunks and whole objects;
+the client checks public full bytes and Range responses. Only then does one
+conditional activation replace the ed896 manifest. The old stable channel and
+historical objects remain available. An inefficient delta is still retained and
+uploaded, but omitted from the App's delta choices so the full APK is used.
+If uploading fails after preparation, the next run with the same source reuses
+the signed bundle and reconciles existing parts instead of rebuilding it.
+
+The upload credential is protected with Windows current-user DPAPI and a local
+file ACL. Sites stores only its digest as the secret `PUBLISHER_TOKEN_SHA256`.
+No signing key, credential or source-repository access token is shipped to the
+website or placed in command arguments. The authenticated endpoint does not
+depend on an expiring interactive Codex source credential.
+
+Read-only previews:
+
+```powershell
+& E:\PocketWorld-dev\repo\tools\release.ps1 -Plan
+& E:\PocketWorld-dev\repo\tools\release.ps1 -Check
+```
+
+`-PrepareOnly` is an explicit local build-and-bundle operation which does not
+upload. The normal release requires the existing
+`qa/functional-results.json` record's `releaseAcceptance.status` and its five
+core cases (`account_model`, `conversation`, `native_files`, `agent_execution`,
+`owner_controls`) to be `passed`. The tested commit must be an ancestor and its
+application, Web, runtime/dependency and build inputs must still match. Scripts
+and documentation alone can change without changing those tested App inputs.
+The orchestrator never marks a missing, failed or partial core case passed.
+The current unfinished 254 Agent acceptance therefore blocks publication.
+
+This entry automates publishing an accepted batch. Writing or checking the
+script does not start a build or publish the local candidate.
+
 The application now has a Settings → 应用更新 entry. It checks a signed
 release manifest, announces an available version, downloads an exact-base delta
 when available, falls back to the full APK, verifies the result, and opens Android's
