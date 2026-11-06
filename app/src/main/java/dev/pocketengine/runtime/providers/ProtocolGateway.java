@@ -41,7 +41,15 @@ public final class ProtocolGateway {
         for(var header:ProviderAdapters.selected(config.provider).headers(config).entrySet())builder.header(header.getKey(),header.getValue());
         java.util.concurrent.atomic.AtomicBoolean exchanged=new java.util.concurrent.atomic.AtomicBoolean();
         Call call=HTTP.newBuilder().addNetworkInterceptor(chain->{if(!exchanged.compareAndSet(false,true))throw new IOException("second_physical_exchange_forbidden");return chain.proceed(chain.request());}).connectTimeout(Math.min(15,config.requestTimeoutSeconds),TimeUnit.SECONDS).readTimeout(config.requestTimeoutSeconds,TimeUnit.SECONDS).writeTimeout(config.requestTimeoutSeconds,TimeUnit.SECONDS).build().newCall(builder.build());
-        call.timeout().timeout(capture.remainingMillis(config),TimeUnit.MILLISECONDS);Runnable cancel=call::cancel;control.onCancel(cancel);
+        // Call's relative timeout starts at execute(), after dispatch admission.
+        // Those callbacks may wait on original approval or remote claim queries.
+        // Pin the same initial budget to a monotonic deadline so that waiting
+        // consumes it rather than granting a fresh full network timeout later.
+        long timeoutStart=System.nanoTime();
+        long remainingMillis=capture.remainingMillis(config);
+        call.timeout().timeout(remainingMillis,TimeUnit.MILLISECONDS)
+                .deadlineNanoTime(timeoutStart+TimeUnit.MILLISECONDS.toNanos(remainingMillis));
+        Runnable cancel=call::cancel;control.onCancel(cancel);
         final boolean[] committed={false};final long[] sequence={0};final EventProjection events=new EventProjection(capture,request.egressProtocol,request.ingressProtocol);final String responseId="gw_"+capture.callId.replace("-","");
         WireSink guarded=(event,data)->{
             control.check();request.revalidate();if(event.equals("ping")){output.frame(event,data);return;}long seq=++sequence[0];

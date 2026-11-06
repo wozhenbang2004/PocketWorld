@@ -33,6 +33,8 @@ final class LoopbackAuthorization implements AutoCloseable {
         try{server=new ServerSocket();server.bind(new InetSocketAddress("127.0.0.1",0),4);server.setSoTimeout(250);callback="http://127.0.0.1:"+server.getLocalPort()+"/auth/callback";}
         catch(Exception error){throw new GatewayFailure("CALLBACK_LISTENER_UNAVAILABLE");}
     }
+    /** The expiry worker is cleanup, not the authority for crossing this deadline. */
+    boolean deadlineExpired(){return System.nanoTime()>=deadline;}
     String challenge()throws GatewayFailure {try{return Base64.getUrlEncoder().withoutPadding().encodeToString(MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(StandardCharsets.US_ASCII)));}catch(Exception error){throw new GatewayFailure("AUTHORIZATION_UNAVAILABLE");}}
     void start(){
         Thread thread=new Thread(this::listen,"pocket-account-login");thread.setDaemon(true);thread.start();

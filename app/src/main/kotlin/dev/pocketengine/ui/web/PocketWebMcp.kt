@@ -26,6 +26,44 @@ internal class PocketWebMcp(private val controller: PocketWorldController) {
     private var grantExpires = 0L
     private var grantAttempt: Pair<String, JSONObject>? = null
 
+    companion object {
+        val COMMANDS: Set<String> = setOf(
+            "mcp.snapshot", "mcp.pickConfig", "mcp.cancel", "mcp.discoverImport",
+            "mcp.reviewImport", "mcp.installImport", "mcp.reviewEnabled", "mcp.confirmEnabled",
+            "mcp.read", "mcp.reviewGrant", "mcp.confirmGrant"
+        )
+    }
+
+    /** The bridge must check the original MCP page before entering this command owner. */
+    fun dispatch(action: String, args: JSONObject): JSONObject {
+        when (action) {
+            "mcp.snapshot" -> { return accepted(controller.requestOwnerDomain("mcp", "snapshot")) }
+            "mcp.pickConfig" -> { return accepted(controller.pickMcpConfig()) }
+            "mcp.cancel" -> { return accepted(controller.requestOwnerDomain("mcp", "cancel", checkedPayload(args, setOf("operationId")))) }
+            "mcp.discoverImport" -> { checkedPayload(args, setOf("importRequestId")); return discover(requiredString(args, "importRequestId")) }
+            "mcp.reviewImport" -> { checkedPayload(args, emptySet()); return review() }
+            "mcp.installImport" -> { checkedPayload(args, setOf("reviewHandle", "tools")); return install(requiredString(args, "reviewHandle"), args.getJSONArray("tools")) }
+            "mcp.reviewEnabled" -> { checkedPayload(args, setOf("id", "installationId", "enabled")); return reviewEnabled(requiredString(args, "id"), requiredString(args, "installationId"), requiredBoolean(args, "enabled")) }
+            "mcp.confirmEnabled" -> { checkedPayload(args, setOf("reviewHandle")); return confirmEnabled(requiredString(args, "reviewHandle")) }
+            "mcp.read" -> { checkedPayload(args, setOf("id", "installationId")); return PocketWebState.publicValue(read(requiredString(args, "id"), requiredString(args, "installationId"))) as JSONObject }
+            "mcp.reviewGrant" -> { checkedPayload(args, setOf("id", "installationId", "grantsDigest", "tool", "granted")); return PocketWebState.publicValue(reviewGrant(requiredString(args, "id"), requiredString(args, "installationId"), requiredString(args, "grantsDigest"), requiredString(args, "tool"), requiredBoolean(args, "granted"))) as JSONObject }
+            "mcp.confirmGrant" -> { checkedPayload(args, setOf("reviewHandle")); return confirmGrant(requiredString(args, "reviewHandle")) }
+            else -> error("这项操作没有已接入的宿主实现")
+        }
+    }
+
+    private fun accepted(requestId: String): JSONObject = JSONObject().put("accepted", true).put("requestId", requestId)
+    private fun checkedPayload(args: JSONObject, allowed: Set<String>): JSONObject {
+        require(args.keys().asSequence().all { it in allowed }) { "操作包含未接入的参数" }
+        return JSONObject(args.toString())
+    }
+    private fun requiredString(args: JSONObject, name: String): String {
+        val value = args.opt(name); require(value is String && value.isNotBlank()) { "缺少有效参数 $name" }; return value
+    }
+    private fun requiredBoolean(args: JSONObject, name: String): Boolean {
+        val value = args.opt(name); require(value is Boolean) { "缺少有效开关参数 $name" }; return value
+    }
+
     fun clear() { revision++; discovery = null; reviewed = null; reviewHandle = null; attempt = null; enableReview = null; enableHandle = null; enableAttempt = null; grantReview = null; grantHandle = null; grantAttempt = null }
 
     fun discover(importRequestId: String): JSONObject {

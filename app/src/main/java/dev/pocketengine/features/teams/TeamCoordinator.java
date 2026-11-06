@@ -43,6 +43,26 @@ public final class TeamCoordinator implements AutoCloseable {
         private Run nativeRun;private RunControl originalControl;private String captured,executionTurnId;private int requestOrdinal;
         private dev.pocketengine.runtime.usage.InferenceCapture.Admission nativeFence;
         private dev.pocketengine.runtime.usage.InferenceCapture.Admission sourceFence;
+        private String traceContext,traceTools;private ModelConfig traceConfig;private volatile String physicalCallId="";
+        private CoordinatorTrace trace;
+        /** Only this native coordinator supplies the original context to the native accounting host. */
+        public JSONObject traceContext()throws Exception {if(traceContext==null)throw new SecurityException("original_coordinator_context_not_prepared");return new JSONObject(traceContext);}
+        public String physicalCallId(){return physicalCallId;}
+        public JSONObject traceTool(String name)throws Exception{return dev.pocketengine.runtime.usage.ToolTraceCapture.schema(traceTools==null?null:new JSONArray(traceTools),name);}
+        public dev.pocketengine.runtime.usage.InferenceCapture.Target observe(dev.pocketengine.runtime.usage.InferenceCapture.Target original,CoordinatorTrace observer){
+            if(original.context.bindingKind!=dev.pocketengine.runtime.usage.InferenceReceipt.BindingKind.EXTERNAL_TASK_RUN||!nativeRunId.equals(original.context.runId)||original.context.callSite!=site)throw new SecurityException("original_coordinator_trace_identity_required");
+            trace=java.util.Objects.requireNonNull(observer);return dev.pocketengine.runtime.usage.InferenceCapture.observe(original,new dev.pocketengine.runtime.usage.InferenceCapture.Sink(){
+                public void started(dev.pocketengine.runtime.usage.InferenceReceipt receipt){physicalCallId=receipt.callId;try{observer.request(InferenceCall.this,receipt);}catch(Exception ignored){}}
+                public void finished(dev.pocketengine.runtime.usage.InferenceReceipt receipt){}
+            });
+        }
+        private void accepted(JSONObject response){if(trace==null||physicalCallId.isEmpty())return;try{JSONObject message=traceMessage(response,traceConfig).put("role","assistant").put("nativeTraceCallId",physicalCallId);trace.assistant(this,message);}catch(Exception ignored){}}
+        private dev.pocketengine.runtime.usage.ToolTraceCapture beginTraceTool(String name,String provider,JSONObject arguments,int step){
+            try{return trace==null?null:trace.tool(this,name,provider,(JSONObject)traceSafe(arguments,traceConfig),step);}catch(Exception ignored){return null;}
+        }
+        private void finishTraceTool(dev.pocketengine.runtime.usage.ToolTraceCapture selected,JSONObject receipt,JSONObject operation,Exception failure){
+            if(selected==null)return;try{selected.finish(receipt==null?null:(JSONObject)traceSafe(receipt,traceConfig),operation==null?null:operation.optString("operationId"),failure,originalControl);}catch(Exception ignored){}
+        }
         /** Additional metadata/forget check outside the SQL sink, never a source-read grant. */
         public void checkSourcesCurrent()throws Exception{if(sourceFence!=null)sourceFence.check();}
         public void checkCurrent()throws Exception{current.check();}
@@ -51,6 +71,12 @@ public final class TeamCoordinator implements AutoCloseable {
         public JSONObject source()throws Exception{checkBudgetCurrent();return new JSONObject(captured);}
         public JSONObject executionIdentity()throws Exception{return new JSONObject().put("executionTurnId",executionTurnId).put("requestOrdinal",requestOrdinal).put("requestSiteId",site.turnId);}
         public JSONObject budgetIdentity()throws Exception{return new JSONObject().put("turnId",site.turnId).put("round",site.round).put("runGeneration",site.runGeneration).put("memberGeneration",site.memberGeneration);}
+    }
+    /** Observation only; failure cannot admit, replay, or fail the existing coordinator invocation. */
+    public interface CoordinatorTrace {
+        void request(InferenceCall call,dev.pocketengine.runtime.usage.InferenceReceipt receipt)throws Exception;
+        void assistant(InferenceCall call,JSONObject message)throws Exception;
+        dev.pocketengine.runtime.usage.ToolTraceCapture tool(InferenceCall call,String name,String provider,JSONObject arguments,int step)throws Exception;
     }
     /** Original SQL admission/accounting, injected only by the native host. No executor is added. */
     public static final class InitialBudgetPlan {
@@ -69,6 +95,10 @@ public final class TeamCoordinator implements AutoCloseable {
     }
     private volatile BudgetHost budgetHost;
     public void setBudgetHost(BudgetHost host){budgetHost=java.util.Objects.requireNonNull(host);}
+    /** A successful native scope mutation invalidates open owner detail without publishing any body. */
+    void materialScopeChanged(String run,String member)throws Exception{
+        try{events.accept(new JSONObject().put("event","material_scope_changed").put("runId",run).put("memberId",member));}catch(RuntimeException ignored){}
+    }
     private synchronized InferenceCall nativeCall(Run run,RunControl control,InferenceCall call,dev.pocketengine.runtime.usage.InferenceCapture.Admission fence)throws Exception {
         call.nativeRun=run;call.executionTurnId=call.site.turnId;call.originalControl=control;call.nativeFence=fence;call.captured=run.json.toString();return call;
     }
@@ -76,10 +106,33 @@ public final class TeamCoordinator implements AutoCloseable {
         ResearchSources outputSources=null;if(call.purpose==dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.SUMMARY&&call.nativeRun!=null&&researchEnabled(call.nativeRun)){synchronized(this){JSONArray refs=new JSONArray();Run run=call.nativeRun;for(int m=0;m<roster(run).length();m++){JSONObject slot=roster(run).getJSONObject(m);for(int r=1;r<=plannedRounds(run);r++){JSONObject state=progress(slot,r),result=state.optJSONObject("researchTask");if(result!=null&&"completed".equals(state.optString("status")))refs.put(new JSONObject().put("kind","output").put("taskId",state.getString("researchTaskId")).put("memberId",slot.getString("id")).put("identityRevision",slot.optInt("identityRevision",1)).put("round",r).put("hash",researchOriginalReference(result).getString("sha256")));}}outputSources=new ResearchSources(run,refs);}researchFactory.checkOutputs(outputSources);}
         final ResearchSources outputProof=outputSources;
         if(outputProof!=null)call.sourceFence=()->researchFactory.checkOutputs(outputProof);
-        BudgetHost host=budgetHost;if(host==null){JSONObject result=gateway.complete(config,messages,tools,control,call);if(outputProof!=null)researchFactory.checkOutputs(outputProof);return result;}
+        prepareTrace(call,config,messages,tools,outputProof);
+        BudgetHost host=budgetHost;if(host==null){JSONObject result=gateway.complete(config,messages,tools,control,call);if(outputProof!=null)researchFactory.checkOutputs(outputProof);call.checkCurrent();call.accepted(result);return result;}
         call.checkBudgetCurrent();JSONObject reservation=host.reserveInference(call);
         synchronized(this){nativeBudget(call.nativeRun,new JSONObject().put("parentBudget",reservation.getJSONObject("parentBudget")));}
-        try{JSONObject result=gateway.complete(config,messages,tools,control,call);if(outputProof!=null)researchFactory.checkOutputs(outputProof);return result;}finally{host.releaseUnstarted(call);synchronized(this){nativeBudget(call.nativeRun,new JSONObject().put("parentBudget",host.snapshot(call.nativeRunId)));}}
+        try{JSONObject result=gateway.complete(config,messages,tools,control,call);if(outputProof!=null)researchFactory.checkOutputs(outputProof);call.checkCurrent();call.accepted(result);return result;}finally{host.releaseUnstarted(call);synchronized(this){nativeBudget(call.nativeRun,new JSONObject().put("parentBudget",host.snapshot(call.nativeRunId)));}}
+    }
+    private synchronized void prepareTrace(InferenceCall call,ModelConfig config,JSONArray messages,JSONArray tools,ResearchSources outputs)throws Exception{
+        call.checkCurrent();JSONArray context=new JSONArray(),inputs=new JSONArray();for(int i=0;i<messages.length();i++)context.put(traceMessage(messages.getJSONObject(i),config));
+        inputs.put(messageJson("user",redact(call.nativeRun.json.getString("goal"),config)).put("nativeInputId","goal:"+call.nativeRunId).put("inputSource","native_team_goal"));
+        JSONArray inbox=call.nativeRun.json.optJSONArray("inbox");for(int i=0;inbox!=null&&i<inbox.length();i++){JSONObject letter=inbox.getJSONObject(i);if(!letter.optString("senderParentTaskId").isEmpty())continue;JSONArray deliveries=letter.optJSONArray("deliveries");
+            for(int n=0;deliveries!=null&&n<deliveries.length();n++)if(call.executionTurnId.equals(deliveries.getJSONObject(n).optString("turnId"))){inputs.put(messageJson("user",redact(letter.getString("text"),config)).put("nativeInputId","inbox:"+letter.getString("id")).put("inputSource","native_owner_team_inbox"));break;}}
+        call.traceConfig=config;call.traceTools=tools==null?null:((JSONArray)traceSafe(tools,config)).toString();
+        java.util.Set<String> dependencyTurns=new java.util.LinkedHashSet<>();dependencyTurns.add(call.executionTurnId);
+        for(int m=0;m<roster(call.nativeRun).length();m++){JSONObject member=roster(call.nativeRun).getJSONObject(m);JSONArray phases=member.optJSONArray("roundStates");
+            for(int r=0;phases!=null&&r<phases.length();r++){JSONObject phase=phases.getJSONObject(r);if("completed".equals(phase.optString("status"))&&(call.memberId.isEmpty()||phase.optInt("round")==call.site.round-1)&&!(outputs!=null&&phase.optJSONObject("researchTask")!=null))dependencyTurns.add(phase.optString("turnId"));
+                if(call.memberId.equals(member.optString("id"))&&phase.optInt("round")==call.site.round){JSONArray dependencies=phase.optJSONArray("dependencyOutputs");for(int d=0;dependencies!=null&&d<dependencies.length();d++)dependencyTurns.add(dependencies.getJSONObject(d).optString("turnId"));}}}
+        JSONArray mailbox=call.nativeRun.json.optJSONArray("mailbox");for(int i=0;mailbox!=null&&i<mailbox.length();i++){JSONObject letter=mailbox.getJSONObject(i);JSONArray deliveries=letter.optJSONArray("deliveries");for(int d=0;deliveries!=null&&d<deliveries.length();d++)if(call.executionTurnId.equals(deliveries.getJSONObject(d).optString("turnId")))dependencyTurns.add(letter.optString("senderTurnId"));}
+        dependencyTurns.remove("");call.traceContext=new JSONObject().put("messages",context).put("inputs",inputs).put("executionTurnId",call.executionTurnId).put("requestOrdinal",call.requestOrdinal).put("dependencyTurns",new JSONArray(dependencyTurns))
+                .put("discussionRound",call.site.round).put("memberId",call.memberId).put("researchSources",outputs==null?new JSONArray():outputs.view()).put("sanitized",true).toString();
+    }
+    private static JSONObject traceMessage(JSONObject original,ModelConfig config)throws Exception{
+        JSONObject selected=new JSONObject();for(String key:new String[]{"role","content","tool_calls","tool_call_id","nativeTraceCallId"})if(original.has(key))selected.put(key,traceSafe(original.get(key),config));return selected;
+    }
+    private static Object traceSafe(Object value,ModelConfig config)throws Exception{
+        if(value instanceof JSONObject){JSONObject source=(JSONObject)value,safe=new JSONObject();java.util.Iterator<String> keys=source.keys();while(keys.hasNext()){String key=keys.next();if(key.matches("(?i)apiKey|authorization|token|secret|imageBase64|imageDataUrl|image_url|provider_data"))continue;safe.put(key,traceSafe(source.get(key),config));}return safe;}
+        if(value instanceof JSONArray){JSONArray source=(JSONArray)value,safe=new JSONArray();for(int i=0;i<source.length();i++)safe.put(traceSafe(source.get(i),config));return safe;}
+        return value instanceof String?redact((String)value,config):value;
     }
     public interface EvidenceFactory {CapabilityPort forMember(MemberEvidenceCall original)throws Exception;}
     /** Native read-only child adapter. It uses the existing Runner, never a second tool loop. */
@@ -1083,8 +1136,13 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
             JSONObject planned=messageJson("assistant","").put("tool_calls",accepted);
             if(response.optJSONObject("provider_data")!=null)planned.put("provider_data",JsonFiles.copy(response.getJSONObject("provider_data")));messages.put(planned);
             for(int i=0;i<accepted.length();i++){
-                JSONObject request=accepted.getJSONObject(i),arguments=new JSONObject(request.getJSONObject("function").getString("arguments")),readOp=budgetHost==null?null:budgetHost.beginRead(call,"team_read_output",arguments);JSONObject read;try{read=readSynthesisOutput(run,snapshot,arguments,synthesisId,request.getString("id"),generation,owner);if(readOp!=null)budgetHost.finishRead(readOp,read,false);}catch(Exception failure){if(readOp!=null)budgetHost.finishRead(readOp,new JSONObject().put("status","unknown"),true);throw failure;}used++;
-                messages.put(new JSONObject().put("role","tool").put("tool_call_id",request.getString("id")).put("content",read.toString()));
+                JSONObject request=accepted.getJSONObject(i),arguments=new JSONObject(request.getJSONObject("function").getString("arguments")),readOp=null,read=null;Exception failed=null;
+                var observed=call.beginTraceTool("team_read_output",request.getString("id"),arguments,used+1);
+                try{readOp=budgetHost==null?null:budgetHost.beginRead(call,"team_read_output",arguments);if(observed!=null)observed.dispatchEntered();
+                    read=readSynthesisOutput(run,snapshot,arguments,synthesisId,request.getString("id"),generation,owner);if(readOp!=null)budgetHost.finishRead(readOp,read,false);used++;
+                    messages.put(new JSONObject().put("role","tool").put("tool_call_id",request.getString("id")).put("content",read.toString()));
+                }catch(Exception failure){failed=failure;if(readOp!=null)budgetHost.finishRead(readOp,new JSONObject().put("status","unknown"),true);throw failure;}
+                finally{call.finishTraceTool(observed,read,readOp,failed);}
             }
         }
         throw new IllegalStateException("本次整合模型调用预算已用尽");
@@ -1136,16 +1194,19 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
             JSONObject planned=new JSONObject().put("role","assistant").put("tool_calls",accepted);if(response.optJSONObject("provider_data")!=null)planned.put("provider_data",JsonFiles.copy(response.getJSONObject("provider_data")));messages.put(planned);
             for(int i=0;i<accepted.length();i++){
                 JSONObject call=accepted.getJSONObject(i),function=call.getJSONObject("function"),args=new JSONObject(function.getString("arguments"));String name=function.getString("name");
-                if(name.equals("team_send_message")){reserveTool(run,turn);used++;JSONObject readOp=budgetHost==null?null:budgetHost.beginRead(inferenceCall,name,args);JSONObject receipt;try{receipt=sendPeerMessage(turn,call.getString("id"),args);if(readOp!=null)budgetHost.finishRead(readOp,receipt,false);}catch(Exception failure){if(readOp!=null)budgetHost.finishRead(readOp,new JSONObject().put("message","原消息派发未取得确定终态"),true);throw failure;}messages.put(new JSONObject().put("role","tool").put("tool_call_id",call.getString("id")).put("content",receipt.toString()));continue;}
+                var observed=inferenceCall.beginTraceTool(name,call.getString("id"),args,used+1);JSONObject traceReceipt=null,traceOperation=null;Exception traceFailure=null;
+                try{
+                if(name.equals("team_send_message")){reserveTool(run,turn);used++;JSONObject readOp=budgetHost==null?null:budgetHost.beginRead(inferenceCall,name,args);traceOperation=readOp;JSONObject receipt;try{if(observed!=null)observed.dispatchEntered();receipt=sendPeerMessage(turn,call.getString("id"),args);traceReceipt=receipt;if(readOp!=null)budgetHost.finishRead(readOp,receipt,false);}catch(Exception failure){if(readOp!=null)budgetHost.finishRead(readOp,new JSONObject().put("message","原消息派发未取得确定终态"),true);throw failure;}messages.put(new JSONObject().put("role","tool").put("tool_call_id",call.getString("id")).put("content",receipt.toString()));continue;}
                 if(evidence==null)throw new SecurityException("没有本轮实际证据端口");
                 guard(turn);if(!evidence.supports(name)||evidence.sideEffecting(name))throw new SecurityException("证据工具授权已变化");evidence.validate(name,args);
-                reserveTool(run,turn);used++;JSONObject readOp=budgetHost==null?null:budgetHost.beginRead(inferenceCall,name,args);JSONObject receipt;boolean nativeCallCompleted=true;
-                try{receipt=evidence instanceof TeamMemberEvidencePort?((TeamMemberEvidencePort)evidence).executeRead(name,args,turn.control,readOp):evidence.execute(name,args,turn.control);if(receipt==null)throw new IllegalStateException("empty evidence receipt");}
+                reserveTool(run,turn);used++;JSONObject readOp=budgetHost==null?null:budgetHost.beginRead(inferenceCall,name,args);traceOperation=readOp;JSONObject receipt;boolean nativeCallCompleted=true;
+                try{if(observed!=null)observed.dispatchEntered();receipt=evidence instanceof TeamMemberEvidencePort?((TeamMemberEvidencePort)evidence).executeRead(name,args,turn.control,readOp):evidence.execute(name,args,turn.control);if(receipt==null)throw new IllegalStateException("empty evidence receipt");}
                 catch(InterruptedException stopped){if(readOp!=null)budgetHost.finishRead(readOp,new JSONObject().put("status","unknown"),true);throw stopped;}
                 catch(Exception failure){nativeCallCompleted=false;receipt=new JSONObject().put("ok",false).put("code","evidence_unavailable").put("message","证据工具未取得有效结果；没有编造来源或自动重试");}
-                if(readOp!=null)budgetHost.finishRead(readOp,receipt,!nativeCallCompleted);guard(turn);final JSONObject safe=safeEvidence(receipt,config,0),entry=new JSONObject().put("tool",name).put("arguments",safeEvidence(args,config,0)).put("receipt",safe).put("at",System.currentTimeMillis()).put("nativeCallCompleted",nativeCallCompleted&&!Boolean.FALSE.equals(receipt.opt("ok"))&&!receipt.optString("status").matches("failed|cancelled|unknown|interrupted|not_found")&&!receipt.optString("code").contains("unknown"));
+                traceReceipt=receipt;if(readOp!=null)budgetHost.finishRead(readOp,receipt,!nativeCallCompleted);guard(turn);final JSONObject safe=safeEvidence(receipt,config,0),entry=new JSONObject().put("tool",name).put("arguments",safeEvidence(args,config,0)).put("receipt",safe).put("at",System.currentTimeMillis()).put("nativeCallCompleted",nativeCallCompleted&&!Boolean.FALSE.equals(receipt.opt("ok"))&&!receipt.optString("status").matches("failed|cancelled|unknown|interrupted|not_found")&&!receipt.optString("code").contains("unknown"));
                 JSONObject ref=recordEvidence(turn,entry),delivered=new JSONObject(safe.toString());if(TeamEvidenceDiscussion.enabled(run.json))delivered.put("nativeEvidenceRef",ref);
                 messages.put(new JSONObject().put("role","tool").put("tool_call_id",call.getString("id")).put("content",delivered.toString()));
+                }catch(Exception failure){traceFailure=failure;throw failure;}finally{inferenceCall.finishTraceTool(observed,traceReceipt,traceOperation,traceFailure);}
             }
         }
         throw new IllegalStateException("研究模型调用预算已耗尽");

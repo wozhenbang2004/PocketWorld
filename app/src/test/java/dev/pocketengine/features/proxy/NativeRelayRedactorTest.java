@@ -2,6 +2,7 @@ package dev.pocketengine.features.proxy;
 
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
+import dev.pocketengine.runtime.ModelGateway.GatewayException;
 import dev.pocketengine.runtime.providers.ApiTurnStream;
 import dev.pocketengine.runtime.providers.ProviderAdapter;
 import java.io.ByteArrayInputStream;
@@ -16,9 +17,11 @@ import org.json.JSONObject;
 import org.junit.Test;
 import static org.junit.Assert.*;
 
-/** Production SSE validation and credential redaction, with a deterministic in-memory producer. */
+/** Redactor component boundaries and production SSE validation, with a deterministic in-memory producer. */
 public final class NativeRelayRedactorTest {
     private static final String SECRET = "sk-synthetic-private";
+    private static final String[] CLOSING_TYPES = {"response.output_text.done", "response.content_part.done",
+            "response.output_item.done", "response.completed"};
     private static final ProviderAdapter TEXT = new ProviderAdapter() {
         public URL endpoint(ModelConfig config) { throw new UnsupportedOperationException(); }
         public JSONObject request(ModelConfig config, JSONArray messages, JSONArray tools) { throw new UnsupportedOperationException(); }
@@ -51,13 +54,14 @@ public final class NativeRelayRedactorTest {
         return event;
     }
     private static final class Frames {
-        final StringBuilder body = new StringBuilder(); int sequence;
+        final StringBuilder body = new StringBuilder(); final List<JSONObject> events = new ArrayList<>(); int sequence;
         void add(JSONObject event) throws Exception {
             event.put("sequence_number", sequence++);
+            events.add(event);
             body.append("event: ").append(event.getString("type")).append("\ndata: ").append(event).append("\n\n");
         }
     }
-    private static String stream(String text, String closingType, boolean wrongIdentity) throws Exception {
+    private static Frames frames(String text, String closingType, boolean wrongIdentity) throws Exception {
         Frames frames = new Frames();
         frames.add(new JSONObject().put("type", "response.created").put("response",
                 new JSONObject().put("id", "response-one").put("status", "in_progress")));
@@ -72,7 +76,10 @@ public final class NativeRelayRedactorTest {
         if (wrongIdentity) close.put("item_id", "other-message");
         frames.add(close);
         if (!closingType.equals("response.completed")) frames.add(boundary("response.completed", 0, text));
-        return frames.body.toString();
+        return frames;
+    }
+    private static String stream(String text, String closingType, boolean wrongIdentity) throws Exception {
+        return frames(text, closingType, wrongIdentity).body.toString();
     }
     private static final class Capture {
         final List<JSONObject> frames = new ArrayList<>();
@@ -93,11 +100,16 @@ public final class NativeRelayRedactorTest {
                 "openai_responses", TEXT, new JSONArray(), new RunControl(), capture.redactor::accept);
     }
     private static void longReplyCloses(String type) throws Exception {
-        String text = "界".repeat(100000) + "s", body = stream(text, type, false);
+        String text = "界".repeat(100000) + "s";
+        Frames fixture = frames(text, type, false); String body = fixture.body.toString();
         assertTrue(boundary(type, 0, text).toString().getBytes(StandardCharsets.UTF_8).length > 256 * 1024);
         assertTrue(body.getBytes(StandardCharsets.UTF_8).length < ApiTurnStream.MAX_BYTES);
+        // This deliberately oversized closing snapshot exercises the redactor component.
+        // Its wire form must be rejected by the native SSE budget, covered separately below.
         Capture capture = new Capture();
-        assertEquals(text, read(body, capture).getString("content"));
+        for (JSONObject event : fixture.events) capture.accept(event);
+        assertEquals(text, TEXT.response(capture.frames.get(capture.frames.size() - 1).getJSONObject("response")).getString("content"));
+        assertEquals("The matching closing boundary releases the suffix before finish", text, capture.deltas(0, 0));
         capture.redactor.finish();
         assertEquals(text, capture.deltas(0, 0));
         assertEquals("response.completed", capture.frames.get(capture.frames.size() - 1).getString("type"));
@@ -115,6 +127,32 @@ public final class NativeRelayRedactorTest {
     @Test public void validatedCompletionReleasesOutstandingSuffixes() throws Exception {
         longReplyCloses("response.completed");
     }
+    @Test public void oversizedClosingSnapshotsAreRejectedWithoutReleasingNativeDoneFrames() throws Exception {
+        String text = "界".repeat(100000) + "s";
+        for (String type : CLOSING_TYPES) {
+            String body = stream(text, type, false); Capture capture = new Capture();
+            assertTrue(boundary(type, 0, text).toString().getBytes(StandardCharsets.UTF_8).length > 256 * 1024);
+            assertTrue(body.getBytes(StandardCharsets.UTF_8).length < ApiTurnStream.MAX_BYTES);
+            GatewayException failure = assertThrows(GatewayException.class, () -> read(body, capture));
+            assertEquals("模型流超过本次大小或事件限制；未派发工具，没有自动重试。", failure.getMessage());
+            assertEquals("An unvalidated boundary cannot release the credential prefix", text.substring(0, text.length() - 1), capture.deltas(0, 0));
+            for (JSONObject frame : capture.frames) assertFalse(type + " must not escape protocol rejection",
+                    frame.getString("type").endsWith(".done") || frame.getString("type").equals("response.completed"));
+        }
+    }
+    @Test public void boundedClosingSnapshotsPreserveTheFullNativeRelayResult() throws Exception {
+        String text = "界".repeat(80000) + "s";
+        for (String type : CLOSING_TYPES) {
+            String body = stream(text, type, false); Capture capture = new Capture();
+            assertTrue(boundary(type, 0, text).toString().getBytes(StandardCharsets.UTF_8).length < 256 * 1024);
+            assertTrue(body.getBytes(StandardCharsets.UTF_8).length < ApiTurnStream.MAX_BYTES);
+            assertEquals(type, text, read(body, capture).getString("content"));
+            capture.redactor.finish();
+            assertEquals(type, text, capture.deltas(0, 0));
+            assertEquals("response.completed", capture.frames.get(capture.frames.size() - 1).getString("type"));
+        }
+    }
+
     @Test public void closingAnotherContentPathDoesNotReleaseAnUnfinishedCredential() throws Exception {
         Capture capture = new Capture();
         capture.accept(textEvent("response.output_text.delta", 0, 0, "before sk-"));

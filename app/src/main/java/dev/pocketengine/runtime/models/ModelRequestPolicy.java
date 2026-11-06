@@ -50,15 +50,7 @@ public final class ModelRequestPolicy {
         if (toolContext) requireTrue(facts.toolCalls(), "tool_capability", "当前精确模型的工具调用能力未知或不支持；请在模型页核对，历史工具结果不会被删除。");
         validateOutput(config, facts);
         checkContext(config, messages, tools, facts, images);
-        if (config.provider.equals("openai_chat")) {
-            wire.remove("max_tokens"); wire.remove("max_completion_tokens");
-            ModelFacts.Fact<ModelFacts.ChatOutputParameter> field = facts.chatOutputParameter();
-            if (!field.known || field.value == ModelFacts.ChatOutputParameter.NOT_APPLICABLE)
-                throw new Rejected("chat_output_parameter_unknown", "Chat 输出参数字段未知，请在模型页明确选择 max_tokens 或 max_completion_tokens；本次尚未发送。");
-            wire.put(field.value == ModelFacts.ChatOutputParameter.MAX_TOKENS ? "max_tokens" : "max_completion_tokens", config.maxOutputTokens);
-        }
-        applyReasoning(config, facts, wire);
-        return projectCompatibility(config,messages,tools,wire);
+        return projectAdmittedOptions(config,messages,tools,facts,wire);
     }
 
     private static JSONObject projectCompatibility(ModelConfig config,JSONArray messages,JSONArray tools,JSONObject wire)throws Exception {
@@ -84,6 +76,13 @@ public final class ModelRequestPolicy {
         if (toolContext && facts.toolCalls().known) requireTrue(facts.toolCalls(), "tool_capability", "当前精确模型的工具调用能力未知或不支持；请在模型页核对，历史工具结果不会被删除。");
         validateOutput(config, facts);
         checkContext(config, messages, tools, facts, images);
+        return projectAdmittedOptions(config,messages,tools,facts,wire);
+    }
+
+    /** Common projection only after each entry has checked its own native authority,
+     * capability facts and context budget. It does not resolve or cache a new grant. */
+    private static JSONObject projectAdmittedOptions(ModelConfig config,JSONArray messages,JSONArray tools,
+            ModelFacts facts,JSONObject wire)throws Exception {
         if (config.provider.equals("openai_chat")) {
             wire.remove("max_tokens"); wire.remove("max_completion_tokens");
             ModelFacts.Fact<ModelFacts.ChatOutputParameter> field = facts.chatOutputParameter();
@@ -91,7 +90,8 @@ public final class ModelRequestPolicy {
                 throw new Rejected("chat_output_parameter_unknown", "Chat 输出参数字段未知，请在模型页明确选择 max_tokens 或 max_completion_tokens；本次尚未发送。");
             wire.put(field.value == ModelFacts.ChatOutputParameter.MAX_TOKENS ? "max_tokens" : "max_completion_tokens", config.maxOutputTokens);
         }
-        applyReasoning(config, facts, wire);
+        validateReasoning(config, facts);
+        dev.pocketengine.runtime.providers.ProviderAdapters.projectReasoning(config.provider,config.reasoning,wire);
         return projectCompatibility(config,messages,tools,wire);
     }
 
@@ -132,32 +132,6 @@ public final class ModelRequestPolicy {
         if (options.mode() == ReasoningOptions.Mode.ANTHROPIC_BUDGET && options.budgetTokens() >= config.maxOutputTokens
                 || options.mode() == ReasoningOptions.Mode.GEMINI_BUDGET && options.budgetTokens() > config.maxOutputTokens)
             throw new Rejected("reasoning_budget_exceeds_output", "推理预算与输出上限不一致，请调整；不会自动提高费用预算。");
-    }
-
-    private static void applyReasoning(ModelConfig config, ModelFacts facts, JSONObject wire) throws Exception {
-        validateReasoning(config, facts);
-        ReasoningOptions options = config.reasoning;
-        switch (options.mode()) {
-            case DEFAULT: break;
-            case OPENAI_EFFORT:
-                if (config.provider.equals("openai_chat")) wire.put("reasoning_effort", options.level());
-                else wire.put("reasoning", new JSONObject().put("effort", options.level()));
-                break;
-            case ANTHROPIC_ADAPTIVE:
-                wire.put("thinking", new JSONObject().put("type", "adaptive"));
-                wire.put("output_config", new JSONObject().put("effort", options.level()));
-                break;
-            case ANTHROPIC_BUDGET:
-                wire.put("thinking", new JSONObject().put("type", "enabled").put("budget_tokens", options.budgetTokens()));
-                break;
-            case GEMINI_LEVEL:
-            case GEMINI_BUDGET:
-                JSONObject generation = wire.getJSONObject("generationConfig");
-                generation.put("thinkingConfig", options.mode() == ReasoningOptions.Mode.GEMINI_LEVEL
-                        ? new JSONObject().put("thinkingLevel", options.level())
-                        : new JSONObject().put("thinkingBudget", options.budgetTokens()));
-                break;
-        }
     }
 
     private static void requireTrue(ModelFacts.Fact<Boolean> fact, String code, String text) throws Rejected {

@@ -46,7 +46,7 @@ public final class ExecutionPlanningRunnerTest {
         final HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         final List<JSONObject> requests=new CopyOnWriteArrayList<>(),replies=new ArrayList<>(),events=new ArrayList<>(),dispatched=new ArrayList<>();
         final NativePlanning planner;
-        JSONArray history=new JSONArray();int steps,prepared,effectReceipts,effects,reads,phoneReads,observations,beforeTools,contextReads;
+        JSONArray history=new JSONArray();int steps,prepared,effectReceipts,effects,reads,phoneReads,observations,beforeTools,contextReads,afterTools;
         boolean withPhone,exposeHandle=true,changeBeforeModel,changeOnResponse,pauseOnResponse,browserReturn,cancelRead,lateKnownReadAfterCancel,throwRead,unknownRead,nullRead,firstScreenChanged,changeBeforeFinalObservation,changeAfterWait;
         int unconfirmedObservationAt=-1;String unconfirmedObservationCode="empty_observation";
         Fixture()throws Exception {
@@ -98,6 +98,7 @@ public final class ExecutionPlanningRunnerTest {
                 }
                 if(unknownRead)receipt.put("accepted",JSONObject.NULL);return receipt;
             }
+            public void afterTool(String name,JSONObject arguments,JSONObject receipt,RunControl control){afterTools++;}
             public JSONObject contextSnapshot(String query){
                 if(dev.pocketengine.browser.BrowserTaskCapabilityPort.OWNER_RETURN_CONTEXT.equals(query)){contextReads++;throw new AssertionError("Planning owner-return must stop before the unmetered context read");}
                 return new JSONObject();
@@ -110,6 +111,11 @@ public final class ExecutionPlanningRunnerTest {
             ContextBudgetPolicy.Source budget=selected->ContextBudgetPolicy.RouteBudget.forRoute(selected,new ContextWindow.Budget(128000,1000,1000,2L*1024*1024,64,0),ContextBudgetPolicy.SourceKind.OWNER_OVERRIDE,1,1);
             CapabilityPort guarded=PlanningCapabilityPort.wrap(port,exposeHandle?planner:null);
             return new AgentRunner(withPhone?phone:null,guarded,budget).run("original-task","请核对原目标并准备可审阅的计划",config,original,event->{
+                if(lateKnownReadAfterCancel&&"tool_trace".equals(event.optString("type"))&&"finished".equals(event.optString("stage"))){
+                    String settled=planner.lastRead.operationId;
+                    assertEquals("Original read must settle before its trace",ExecutionPlanning.ReadOutcome.RECEIPT,planner.finished.get(settled));
+                    assertEquals("original-read-after-stop",planner.actualReceipts.get(settled).optString("nativeReceiptMarker"));
+                }
                 events.add(event);if(changeBeforeModel&&"context_budget".equals(event.optString("type"))){changeBeforeModel=false;planner.scopeRevision++;}
                 if(changeBeforeFinalObservation&&"verification".equals(event.optString("type"))){changeBeforeFinalObservation=false;planner.scopeRevision++;}
                 if(changeAfterWait&&"tool".equals(event.optString("type"))&&"phone_wait".equals(event.optString("tool"))&&"completed".equals(event.optString("status"))){changeAfterWait=false;planner.scopeRevision++;}
@@ -221,7 +227,7 @@ public final class ExecutionPlanningRunnerTest {
     }
     @Test public void actualReadReceiptAfterCancellationIsSettledOnceWithoutAnotherModelRequestOrDispatch()throws Exception {
         try(Fixture f=new Fixture()){
-            f.lateKnownReadAfterCancel=true;f.replies.add(calls(call("read","fixture_read",new JSONObject())));
+            f.lateKnownReadAfterCancel=true;f.replies.add(calls(call("read","fixture_read",new JSONObject()),call("tail-read","fixture_read",new JSONObject())));
             RunOutcome outcome=f.run();String operation=f.planner.lastRead.operationId;
             assertEquals("cancelled",outcome.status);assertEquals(1,f.requests.size());assertEquals(1,f.reads);assertEquals(1,f.planner.debits);
             assertEquals(ExecutionPlanning.ReadOutcome.RECEIPT,f.planner.finished.get(operation));
@@ -229,6 +235,16 @@ public final class ExecutionPlanningRunnerTest {
             assertTrue(f.planner.actualReceipts.get(operation).getBoolean("ok"));assertEquals(1,f.planner.finished.size());
             assertTrue(f.planner.live.isEmpty());assertEquals(0,f.prepared);assertEquals(0,f.effectReceipts);
             assertFalse(f.history.toString().contains("original-read-after-stop"));
+            List<JSONObject> finishedTraces=f.events.stream().filter(event->"tool_trace".equals(event.optString("type"))&&"finished".equals(event.optString("stage"))).toList();
+            assertEquals("Exactly the issued read has a terminal trace",1,finishedTraces.size());
+            JSONObject trace=finishedTraces.get(0);
+            assertEquals(operation,trace.optString("operationId"));assertEquals("read",trace.getString("providerToolCallId"));
+            assertEquals("fixture_read",trace.getString("tool"));assertEquals("COMPLETED",trace.getString("outcome"));assertTrue(trace.getBoolean("dispatchEntered"));
+            assertEquals("original-read-after-stop",trace.getJSONObject("output").getString("nativeReceiptMarker"));
+            assertTrue(trace.getJSONObject("output").getBoolean("ok"));assertEquals("Original native source",trace.getJSONObject("output").getString("content"));
+            assertEquals(dev.pocketengine.core.ScopedToolCatalog.fingerprint(f.planner.actualReceipts.get(operation)),dev.pocketengine.core.ScopedToolCatalog.fingerprint(trace.getJSONObject("output")));
+            assertEquals(1,f.beforeTools);assertEquals(1,f.dispatched.size());assertEquals(0,f.afterTools);
+            assertTrue(f.events.stream().noneMatch(event->"tool_trace".equals(event.optString("type"))&&"tail-read".equals(event.optString("providerToolCallId"))));
             assertThrows(InterruptedException.class,()->f.planner.beginRead(f.planner.capture(),"fixture_read",new JSONObject(),"must-not-dispatch",ExecutionPlanning.Access.READ));
             assertEquals(1,f.planner.debits);
         }

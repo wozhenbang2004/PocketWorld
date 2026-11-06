@@ -19,11 +19,15 @@ public final class VersionedWorkspace {
     private final File root,catalog;
     @FunctionalInterface interface RecordWrite {void write(File target,JSONObject value)throws Exception;}
     private final RecordWrite recordWrite;
+    private final java.util.function.Consumer<JSONObject> sourceCommitted;
     private volatile java.util.Map<String,HeadObservation> nativeHeads=Collections.emptyMap();
     private volatile java.util.Set<String> nativeProjects;private volatile boolean projectionClosed;
     public VersionedWorkspace(File root){this(root,JsonFiles::write);}
     /** The same real atomic writer is injected only by package-local deterministic IO fixtures. */
-    VersionedWorkspace(File root,RecordWrite recordWrite){this.root=root;this.catalog=new File(root,"projects.json");this.recordWrite=java.util.Objects.requireNonNull(recordWrite);}
+    VersionedWorkspace(File root,RecordWrite recordWrite){this(root,recordWrite,metadata->{});}
+    /** Package-native presentation observer. It may only enqueue immutable metadata;
+     * it must not enter TaskStore, a source gate or an event sink under this monitor. */
+    VersionedWorkspace(File root,RecordWrite recordWrite,java.util.function.Consumer<JSONObject> sourceCommitted){this.root=root;this.catalog=new File(root,"projects.json");this.recordWrite=java.util.Objects.requireNonNull(recordWrite);this.sourceCommitted=java.util.Objects.requireNonNull(sourceCommitted);}
     /** Body-free currentness of a registered native source, not a permission, file watcher or
      * persistent store. UNKNOWN is mandatory before IO bootstrap, during writes and after errors. */
     public static final class HeadObservation {
@@ -169,6 +173,11 @@ public final class VersionedWorkspace {
         updateNativeHead(projectId,path,null,false);
         recordWrite.write(target,next);
         updateNativeHead(projectId,path,new FileSnapshot(this,projectId,path,entry),false);
+        // Every text/byte/delete/immutable-artifact continuation reaches this
+        // committed record. Do not notify reads, failed CAS or failed writes.
+        try{sourceCommitted.accept(new JSONObject().put("projectId",projectId).put("path",path).put("version",entry.getInt("version"))
+            .put("revisionId",entry.getString("revisionId")).put("sha256",entry.getString("sha256")).put("sizeBytes",entry.getLong("sizeBytes")).put("deleted",deleted));}
+        catch(Exception presentationUnavailable){/* The original file commit remains authoritative; never report it as a failed write. */}
     }
     public synchronized JSONArray history(String projectId,String path)throws Exception {
         JSONObject head=head(projectId,path);JSONArray result=new JSONArray(),all=head.optJSONArray("history");

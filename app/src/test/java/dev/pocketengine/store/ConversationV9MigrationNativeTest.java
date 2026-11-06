@@ -95,6 +95,7 @@ public final class ConversationV9MigrationNativeTest {
             List<String> tables=new ArrayList<>();try(Cursor row=sql.rawQuery("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",null)){while(row.moveToNext())tables.add(row.getString(0));}
             for(String table:tables){
                 boolean newer=version<8&&table.startsWith("device_")||version<9&&table.equals("assistant_conversation_groups")||version<10&&table.equals("phone_stop_batches")
+                    ||version<11&&table.equals("team_coordinator_checkpoints")
                     ||version<7&&table.startsWith("harness_gateway_")||version<6&&table.equals("inference_requests")
                     ||version<5&&table.startsWith("task_output_")||version<4&&(table.startsWith("project_plan")||table.equals("team_parent_plans"))
                     ||version<3&&table.equals("task_events")||version<2&&table.startsWith("assistant_");
@@ -112,7 +113,7 @@ public final class ConversationV9MigrationNativeTest {
             }
             sql.setVersion(version);sql.close();TaskStore migrated=store();sql=db(migrated);
             assertEquals("legacy version "+version,TaskStore.DATABASE_SCHEMA,sql.getVersion());assertEquals(goal,migrated.get(task,false).getString("goal"));
-            for(String table:new String[]{"assistant_conversation_groups","device_pairing_candidates","device_grants","harness_gateway_claims","inference_requests","team_parent_plans","project_plans","task_output_sources","phone_stop_batches"})assertEquals(table+" from version "+version,"0",scalar(sql,"SELECT count(*) FROM "+table));
+            for(String table:new String[]{"assistant_conversation_groups","device_pairing_candidates","device_grants","harness_gateway_claims","inference_requests","team_parent_plans","project_plans","task_output_sources","phone_stop_batches","team_coordinator_checkpoints"})assertEquals(table+" from version "+version,"0",scalar(sql,"SELECT count(*) FROM "+table));
             assertEquals("completed",migrated.get(task,false).getString("status"));sql.close();
         }
     }

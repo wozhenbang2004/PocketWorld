@@ -8,7 +8,7 @@ const ended = new Set(['completed', 'failed', 'cancelled', 'interrupted', 'needs
 
 export type WorkIdentity = { taskId: string; runId: string; epoch: number };
 export type ReplyContext = WorkIdentity & { replyId?: string | null; deliveryId?: string | null; replyToMessageIds: string[] };
-export type TaskResult = WorkIdentity & { kind: 'automation' | 'team' | 'owner_work'; deliveryId: string; status: string; endedAt: number; summaryChars: number; summaryTruncated: boolean };
+export type TaskResult = WorkIdentity & { kind: 'automation' | 'team' | 'owner_work'; deliveryId: string; status: string; endedAt: number; summaryChars: number; summaryTruncated: boolean; noticeKind?: 'capacity_recovery' | 'capacity_cancel' | null };
 
 /** These fields were checked by native projection; they only support reading and navigation. */
 export function messageReplyContext(message: unknown): ReplyContext | null {
@@ -24,10 +24,11 @@ export function messageTaskResult(message: unknown): TaskResult | null {
   const row = object(message), context = messageReplyContext(message), value = object(row?.taskResult);
   if (!context || !value || !['automation', 'team', 'owner_work'].includes(value.kind) || value.taskId !== context.taskId
       || value.runId !== context.runId || value.epoch !== context.epoch || !id(value.deliveryId) || value.deliveryId !== context.deliveryId
-      || !value.deliveryId.startsWith(`${value.kind}:`) || !ended.has(value.status) || !positive(value.endedAt)
+      || !(value.kind === 'owner_work' ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value.deliveryId) : value.deliveryId.startsWith(`${value.kind}:`)) || !ended.has(value.status) || !positive(value.endedAt)
       || !Number.isSafeInteger(value.summaryChars) || value.summaryChars < 0 || typeof value.summaryTruncated !== 'boolean') return null;
+  if (value.noticeKind != null && (value.kind !== 'owner_work' || !['capacity_recovery', 'capacity_cancel'].includes(value.noticeKind))) return null;
   return { kind: value.kind, taskId: value.taskId, runId: value.runId, epoch: value.epoch, deliveryId: value.deliveryId,
-    status: value.status, endedAt: value.endedAt, summaryChars: value.summaryChars, summaryTruncated: value.summaryTruncated };
+    status: value.status, endedAt: value.endedAt, summaryChars: value.summaryChars, summaryTruncated: value.summaryTruncated, noticeKind: value.noticeKind ?? null };
 }
 
 export function ownerWorkIdentity(task: unknown): WorkIdentity | null {

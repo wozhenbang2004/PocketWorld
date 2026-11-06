@@ -1050,11 +1050,21 @@ public final class AssistantModule implements EngineModule {
     }
     /** Only the original typed TaskStore outbox may publish a durable work's final answer. */
     public JSONObject appendOwnerWorkResult(String taskId,String runId,int epoch)throws Exception{
+        return appendOwnerWorkResult(null,taskId,runId,epoch,null);
+    }
+    /** Native outbox drain: keep its original database and exact delivery identity. */
+    public JSONObject appendOwnerWorkResult(dev.pocketengine.store.TaskStore original,dev.pocketengine.store.TaskStore.OwnerWorkDeliveryRef expected)throws Exception{
+        java.util.Objects.requireNonNull(original);java.util.Objects.requireNonNull(expected);java.util.Objects.requireNonNull(expected.deliveryId());
+        return appendOwnerWorkResult(original,expected.taskId(),expected.runId(),expected.epoch(),expected.deliveryId());
+    }
+    private JSONObject appendOwnerWorkResult(dev.pocketengine.store.TaskStore original,String taskId,String runId,int epoch,String deliveryId)throws Exception{
         JSONObject saved;boolean added;
         synchronized(admission){
             if(migrationInProgress||historyTasks==null||!durable())throw new IllegalStateException("私人工作结果与原会话尚未就绪");
+            if(original!=null&&historyTasks!=original)throw new SecurityException("私人工作投递数据库宿主已变化");
             Set<String> busy=new HashSet<>();for(var lease:liveTurns.snapshot())busy.add(lease.conversationId());busy.addAll(developmentTurns.keySet());for(Cancellation pending:pendingCancellations.values())busy.add(pending.conversation());
-            saved=historyTasks.withOwnerWorkDelivery(taskId,runId,epoch,delivery->historyRepository.appendOwnerWorkResult(historyTasks,delivery,busy.contains(delivery.snapshot().getString("conversationId"))));
+            dev.pocketengine.store.TaskStore.OwnerWorkDeliveryMutation mutation=delivery->historyRepository.appendOwnerWorkResult(historyTasks,delivery,busy.contains(delivery.snapshot().getString("conversationId")));
+            saved=deliveryId==null?historyTasks.withOwnerWorkDelivery(taskId,runId,epoch,mutation):historyTasks.withOwnerWorkDelivery(new dev.pocketengine.store.TaskStore.OwnerWorkDeliveryRef(taskId,runId,epoch,deliveryId),mutation);
             added=saved.optBoolean("accepted")&&!saved.optBoolean("duplicate");if(added){sourceGeneration++;synchronizationPending=true;}
         }
         if(added)try{synchronizeSources();}finally{

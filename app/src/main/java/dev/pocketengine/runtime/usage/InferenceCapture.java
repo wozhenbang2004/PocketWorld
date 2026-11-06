@@ -55,6 +55,8 @@ public final class InferenceCapture {
     private JSONObject frozenPrice;
     private final JSONObject route=new JSONObject();
     private long startedAt,startNanos;
+    private Long firstVisibleTextAt,firstVisibleTextElapsedNanos,lastVisibleTextAt,lastVisibleTextElapsedNanos;
+    private boolean pendingVisibleHighSurrogate;
     private boolean started,finished,terminalPersisted;
     private long deadlineAt=Long.MAX_VALUE;
     public InferenceCapture(ModelConfig config,RunControl control,Target target)throws Exception{this(config,control,target,config.usesAccount()?"openai_responses":config.provider);}
@@ -100,6 +102,30 @@ public final class InferenceCapture {
         JSONObject diagnostics=dev.pocketengine.runtime.providers.ProviderCompatibility.diagnostics(pricingConfig,finalWire);
         if(pricingConfig.containsSensitive(diagnostics.toString()))diagnostics=new JSONObject().put("format","pocketworld.provider-projection.v1").put("identityRedacted",true).put("cacheHitKnown",false);
         route.put("providerProjection",diagnostics);
+        route.put("requestOptions",requestOptions(finalWire)).put("requestOptionsSource","final_wire_allowlist");
+    }
+    /** Content-free values from the final serialized request, never headers, prompt, tool bodies or arbitrary metadata. */
+    private JSONObject requestOptions(JSONObject wire)throws Exception {
+        JSONObject result=new JSONObject();
+        for(String key:new String[]{"stream","temperature","top_p","top_k","max_tokens","max_completion_tokens","max_output_tokens","frequency_penalty","presence_penalty","seed","n","parallel_tool_calls","store","service_tier","reasoning_effort"})copyOption(wire,result,key);
+        for(String key:new String[]{"reasoning","thinking","generationConfig","inferenceConfig","stream_options","tool_choice","text","response_format"}){
+            Object value=wire.opt(key);if(value instanceof String){copyOption(wire,result,key);continue;}
+            if(!(value instanceof JSONObject))continue;JSONObject source=(JSONObject)value,safe=new JSONObject();
+            for(String child:new String[]{"type","effort","summary","budget_tokens","max_tokens","temperature","topP","topK","maxOutputTokens","maxTokens","candidateCount","seed","responseMimeType","include_usage","disable_parallel_tool_use","verbosity"})copyOption(source,safe,child);
+            for(String nested:new String[]{"thinkingConfig","format","function"})if(source.optJSONObject(nested)!=null){JSONObject small=new JSONObject();for(String field:new String[]{"type","name","thinkingBudget","includeThoughts","thinkingLevel"})copyOption(source.getJSONObject(nested),small,field);if(small.length()>0)safe.put(nested,small);}
+            if(safe.length()>0)result.put(key,safe);
+        }
+        return result;
+    }
+    /** The account provider exposes only its frozen option fields, never the private wire body. */
+    public void accountRequestOptions(JSONObject options)throws Exception {
+        if(started||finished||!pricingConfig.usesAccount())throw new SecurityException("native_account_options_before_dispatch_required");
+        route.put("requestOptions",requestOptions(options)).put("requestOptionsSource","native_account_wire_options");
+    }
+    private void copyOption(JSONObject source,JSONObject target,String key)throws Exception {
+        Object value=source.opt(key);
+        if(value instanceof Boolean||value instanceof Number)target.put(key,value);
+        else if(value instanceof String&&((String)value).length()<=160&&!pricingConfig.containsSensitive((String)value))target.put(key,value);
     }
     public void tokenReservation(org.json.JSONArray messages,org.json.JSONArray tools)throws Exception {
         if(started||finished)throw new SecurityException("token_reservation_after_dispatch");
@@ -119,6 +145,25 @@ public final class InferenceCapture {
     public boolean wasDispatched(){return started;}
     public boolean terminalPersisted(){return !started||terminalPersisted;}
     public InferenceFailure failureObservation(){return failure;}
+    /** First decoded provider text, before presentation buffering. Never retains text or counts JSON fallback output. */
+    public void observedVisibleText(String delta){
+        if(!started||finished||delta==null||delta.isEmpty())return;
+        boolean visible=false;int offset=0;
+        if(pendingVisibleHighSurrogate){
+            pendingVisibleHighSurrogate=false;
+            if(!Character.isLowSurrogate(delta.charAt(0)))return;
+            visible=true;offset=1;
+        }
+        for(int i=offset;i<delta.length();i++){
+            char value=delta.charAt(i);
+            if(Character.isHighSurrogate(value)){
+                if(i+1==delta.length()){pendingVisibleHighSurrogate=true;break;}
+                if(!Character.isLowSurrogate(delta.charAt(++i)))return;
+            }else if(Character.isLowSurrogate(value))return;
+            visible=true;
+        }
+        if(visible){long at=System.currentTimeMillis(),elapsed=Math.max(0,System.nanoTime()-startNanos);if(firstVisibleTextAt==null){firstVisibleTextAt=at;firstVisibleTextElapsedNanos=elapsed;}lastVisibleTextAt=at;lastVisibleTextElapsedNanos=elapsed;}
+    }
     /** Service correlation only. The original physical callId remains the receipt identity. */
     public void observedBedrockRequestId(java.util.List<String> values)throws Exception {
         if(!pricingConfig.usesBedrock()||!started||finished||values==null||values.size()!=1)return;
@@ -177,6 +222,6 @@ public final class InferenceCapture {
         Object reason=observedUsage.opt("finishReason");
         if(reason instanceof String&&pricingConfig.containsSensitive((String)reason))observedUsage.put("finishReason",JSONObject.NULL);
         return new InferenceReceipt(callId,target.context,outcome,startedAt,
-                outcome==InferenceReceipt.Outcome.STARTED?0:System.currentTimeMillis(),Math.max(0,System.nanoTime()-startNanos),route,InferencePricing.apply(observedUsage,frozenPrice),outcome==InferenceReceipt.Outcome.STARTED?null:failure,budgetIdentity);
+                outcome==InferenceReceipt.Outcome.STARTED?0:System.currentTimeMillis(),Math.max(0,System.nanoTime()-startNanos),route,InferencePricing.apply(observedUsage,frozenPrice),outcome==InferenceReceipt.Outcome.STARTED?null:failure,budgetIdentity,firstVisibleTextAt,firstVisibleTextElapsedNanos,lastVisibleTextAt,lastVisibleTextElapsedNanos);
     }
 }

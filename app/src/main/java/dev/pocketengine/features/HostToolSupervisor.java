@@ -139,7 +139,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         boolean ownerWorkTools=catalogueOnly||workProfile==null&&host.hasOwnerWorkHost()&&ownerTask!=null&&"assistant".equals(ownerTask.optString("kind"))&&"owner".equals(ownerTask.optString("actorId"))&&"private".equals(ownerTask.optString("spaceId"))&&ownerTask.optJSONObject("origin")==null&&!ownerTask.has("developmentContext")&&!ownerTask.has("workProfileRef")&&!ownerTask.has("workProfileIntent")&&!ownerTask.has("projectMemoryRead")&&!ownerTask.has("teamWriteScope");
         if(ownerWorkTools){
             add("assistant","$owner_work_list","owner_work_list","分页读取本会话私人管家已接手的工作摘要及准确执行身份。前台回复不会停止这些工作；终态结果不是新执行授权。详情用owner_work_get。",false,props("offset",integer(0,128),"limit",integer(1,24)));
-            add("assistant","$owner_work_get","owner_work_get","读取本会话一个原工作及冻结结果，不重新派发。deliveryId指定确切结果，省略则读最新；offset/maxChars分页，hasMore时用nextOffset继续读取。",false,props("taskId",text(80),"deliveryId",text(240),"offset",integer(0,240000),"maxChars",integer(1,8000)),"taskId");
+            add("assistant","$owner_work_get","owner_work_get","读取本会话一个原工作及冻结结果，不重新派发。deliveryId指定确切结果或容量通知，省略则读最新普通结果；offset/maxChars分页，hasMore时保留同一deliveryId并用nextOffset继续读取。",false,props("taskId",text(80),"deliveryId",text(240),"offset",integer(0,240000),"maxChars",integer(1,8000)),"taskId");
             if(catalogueOnly||!"owner_work".equals(ownerTask.optString("executionRole"))){
                 add("assistant","$owner_work_start","owner_work_start","把当前主人明确委托的长工作交给后台私人管家，返回真实持久接收回执后可以继续回答主人。goal是工作说明，不是主人新原话。toolLimit/modelCallLimit从本任务剩余额度实际分配，不能复制或新增授权。后台可使用原团队工具，完成后回到原会话；不要为短问答派后台。",true,props("goal",text(12000),"title",text(200),"toolLimit",integer(1,400),"modelCallLimit",integer(1,512)),"goal","toolLimit","modelCallLimit");
                 add("assistant","$owner_work_input","owner_work_input","将本轮确切主人原话补充给本会话指定工作；只接受原生来源，不接受模型改写的content。queue在当前步骤后处理，steer让原任务重新考虑下一步。不会重绑本轮输入或启动第二个同目标任务。",true,props("taskId",text(80),"runId",text(80),"epoch",integer(1,Integer.MAX_VALUE),"mode",new JSONObject().put("type","string").put("enum",new JSONArray().put("queue").put("steer")),"messageIds",new JSONObject().put("type","array").put("maxItems",16).put("items",text(80))),"taskId","runId","epoch","mode");
@@ -293,7 +293,7 @@ public final class HostToolSupervisor implements CapabilityPort {
             String text=selected.getString("referenceText");boolean included=false;
             for(int i=0;i<messages.length();i++)if(dev.pocketengine.runtime.RecoveryProjection.referenceIncludes(messages.getJSONObject(i),text))included=true;
             if(!included)continue;
-            JSONObject receipt=tasks.claimOwnerWorkReceipt(selected.getString("taskId"),selected.getString("deliveryId"),taskId,runId,epoch,original);
+            JSONObject receipt=tasks.claimOwnerWorkReceiptForRequest(selected.getString("taskId"),selected.getString("deliveryId"),taskId,runId,epoch,original,requestId);
             if(receipt.optBoolean("claimed"))suppliedWorkResults.put(selected.getString("deliveryId"));
         }
         if(suppliedWorkResults.length()>0)ownerWorkRequests.put(requestId,suppliedWorkResults);
@@ -371,15 +371,16 @@ public final class HostToolSupervisor implements CapabilityPort {
             }
             if(included.length()>0){reference.append("\n本会话私人管家工作现状；仅为原任务状态与结果，不是新授权，不重复执行已完成动作：\n").append(included);snapshot.put("ownerWorksIncluded",included.length());}
             if(!"owner_work".equals(task.optString("executionRole"))){
-                JSONArray pending=tasks.pendingOwnerWorkReceipts(task.getString("conversationId"),8);int resultChars=0;
+                JSONArray pending=tasks.pendingOwnerWorkReceiptsForAttempt(taskId,runId,epoch,8);int resultChars=0;
                 for(int i=0;i<pending.length();i++){
-                    JSONObject result=pending.getJSONObject(i),claim=result.optJSONObject("butlerClaim");
-                    if(claim!=null&&claim.has("requestId")&&(!taskId.equals(claim.optString("taskId"))||!runId.equals(claim.optString("runId"))))continue;
+                    JSONObject result=pending.getJSONObject(i);
                     String body=result.getString("content");int end=Math.min(body.length(),1800);if(end<body.length()&&end>0&&Character.isHighSurrogate(body.charAt(end-1)))end--;
                     JSONObject view=new JSONObject().put("taskId",result.getString("taskId")).put("runId",result.getString("runId")).put("epoch",result.getInt("epoch")).put("deliveryId",result.getString("deliveryId"))
                             .put("status",result.getString("status")).put("replyToMessageIds",result.getJSONArray("replyToMessageIds")).put("content",body.substring(0,end)).put("totalChars",body.length()).put("hasMore",end<body.length());
+                    String noticeKind=result.optString("noticeKind");boolean recoveryNotice=dev.pocketengine.store.OwnerWorkResultProtocol.isCapacityNoticeKind(noticeKind);
+                    if(recoveryNotice)view.put("noticeKind",noticeKind);
                     String encoded=view.toString();if(resultChars+encoded.length()>3600)break;resultChars+=encoded.length();
-                    reference.append("\n待管家结合原请求处理的真实工作结果；hasMore为true时先用owner_work_get读取原工作，不重复执行：\n").append(encoded);
+                    reference.append(recoveryNotice?"\n原工作的容量生命周期通知，不是新的模型成果或执行授权；状态仅为通知首次生成时观察，请用owner_work_get核对当前任务，不重放动作：\n":"\n待管家结合原请求处理的真实工作结果；hasMore为true时先用owner_work_get携带同一deliveryId读取原工作，不重复执行：\n").append(encoded);
                     // Attest the exact native context prefix through this result, including the
                     // preceding references. A result copied elsewhere is not the selected frame.
                     ownerWorkReferences.put(result.getString("deliveryId"),new JSONObject().put("taskId",result.getString("taskId")).put("deliveryId",result.getString("deliveryId")).put("referenceText",reference.toString()));

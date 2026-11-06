@@ -54,6 +54,8 @@ export interface SelectProps<T extends object>
   triggerClassName?: string;
   /** Classes for the open popover (e.g. constrain its width). */
   popoverClassName?: string;
+  /** Keep an embedded select's popup inside its existing modal focus boundary. */
+  popoverContainer?: Element;
   /** `md` (default) or `sm` for compact/dense contexts (e.g. compact tables). */
   size?: SelectSize;
   children: ReactNode;
@@ -68,6 +70,7 @@ export function Select<T extends object>({
   className,
   triggerClassName,
   popoverClassName,
+  popoverContainer,
   size = "md",
   children,
   items,
@@ -126,6 +129,7 @@ export function Select<T extends object>({
           </AriaButton>
           <AriaPopover
             offset={4}
+            UNSTABLE_portalContainer={popoverContainer}
             className={cx(
               MENU_POPOVER_WIDTH,
               MENU_POPOVER_SURFACE,

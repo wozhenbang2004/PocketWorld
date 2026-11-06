@@ -188,13 +188,53 @@ public final class AccountCatalogJourneyTest {
             assertEquals(1,rig.fake.refreshes.get());assertEquals(0,dispatched.get());assertEquals(0,rig.fake.responses.get());assertEquals(2,rig.fake.models.get());
         }
     }
-    @Test public void UnknownCatalogKeepsOriginalInternalTextEntryButCannotAuthorizeAnEffort()throws Exception {
+    @Test public void NativePreparationPinsSparseCatalogBeforeTextAndRejectsEffortWithoutAnotherRequest()throws Exception {
         try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
-            String id=rig.connect();ModelConfig config=new ModelConfig("","","",false,3,10).withAccountModel(ModelConfig.AccountModelRef.fromJson(new JSONObject().put("provider","chatgpt_plan").put("accountId",id).put("accountVersion",rig.book.row(id).getLong("version")).put("modelId","fixture-model")));
-            bind(rig,new AtomicLong(config.accountModel.accountVersion));rig.fake.stream=answer();
-            assertEquals("verified",ModelGateway.complete(config,input("hello"),null,new RunControl()).getString("content"));assertFalse(rig.fake.lastRequest.has("reasoning"));
-            try{ModelGateway.complete(config.withAccountOptions(effort("low"),0,256),input("hello"),null,new RunControl());fail();}catch(ModelGateway.GatewayException expected){assertTrue(expected.getMessage().contains("推理选项"));}
-            assertEquals(1,rig.fake.responses.get());assertEquals(0,rig.fake.models.get());
+            String id=rig.connect();long version=rig.book.row(id).getLong("version");
+            ModelConfig config=new ModelConfig("","","",false,3,10).withAccountModel(ModelConfig.AccountModelRef.fromJson(new JSONObject().put("provider","chatgpt_plan").put("accountId",id).put("accountVersion",version).put("modelId","fixture-model")));
+            AtomicLong persisted=new AtomicLong(version);bind(rig,persisted);rig.fake.stream=answer();
+            assertEquals(0,rig.fake.models.get());assertEquals(0,rig.fake.responses.get());
+            assertNull(AccountBook.modelEvidence(rig.book.row(id),version));assertNull(rig.gateway.modelFacts(id,version,"fixture-model"));
+            JSONObject result=ModelGateway.complete(config,input("hello"),null,new RunControl());
+            assertEquals("verified",result.getString("content"));assertFalse(rig.fake.lastRequest.has("reasoning"));
+            assertEquals("fixture-model",rig.fake.lastRequest.getString("model"));
+            assertEquals(1,rig.fake.models.get());assertEquals(1,rig.fake.responses.get());assertEquals(0,rig.fake.refreshes.get());
+            JSONObject nativeRef=result.getJSONObject("provider_data").getJSONObject("nativeRef");
+            assertEquals(id,nativeRef.getString("accountId"));assertEquals(version,nativeRef.getLong("accountVersion"));assertEquals("fixture-model",nativeRef.getString("modelId"));
+            JSONObject original=rig.book.row(id),evidence=original.getJSONObject("modelEvidence");
+            assertEquals(id,original.getString("id"));assertEquals(version,original.getLong("version"));assertEquals(version,persisted.get());assertEquals(version,evidence.getLong("accountVersion"));
+            JSONObject models=AccountBook.modelEvidence(original,version);assertNotNull(models);assertEquals(1,models.length());assertTrue(models.has("fixture-model"));
+            AccountBook restored=new AccountBook(rig.file,rig.vault,"host-owner");
+            JSONObject persistedRow=restored.row(id);assertEquals(id,persistedRow.getString("id"));assertEquals(version,persistedRow.getLong("version"));assertEquals(version,persistedRow.getJSONObject("modelEvidence").getLong("accountVersion"));
+            assertEquals(models.toString(),AccountBook.modelEvidence(persistedRow,version).toString());
+            AccountCatalogFacts observed=restored.modelFacts(id,version,"fixture-model");assertNotNull(observed);assertEquals("fixture-model",observed.modelId);assertFalse(observed.facts.reasoningLevels().known);
+            String pinned=evidence.toString();
+            try{ModelGateway.complete(config.withAccountOptions(effort("low"),0,256),input("hello"),null,new RunControl());fail();}
+            catch(ModelGateway.GatewayException expected){assertTrue(expected.getMessage().contains("推理选项"));}
+            assertEquals(1,rig.fake.responses.get());assertEquals(1,rig.fake.models.get());assertEquals(0,rig.fake.refreshes.get());
+            assertEquals(version,persisted.get());assertEquals(version,rig.book.row(id).getLong("version"));
+            assertEquals(pinned,rig.book.row(id).getJSONObject("modelEvidence").toString());
         }
+    }
+    @Test public void DirectReviewedGatewayKeepsUnobservedDefaultTextWithoutCatalogPreparation()throws Exception {
+        try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
+            String id=rig.connect();long version=rig.book.row(id).getLong("version");
+            assertNull(rig.gateway.modelFacts(id,version,"fixture-model"));
+            assertEquals(0,rig.fake.models.get());assertEquals(0,rig.fake.responses.get());rig.fake.stream=answer();
+            JSONArray events=new JSONArray();ResponsesRequest request=new ResponsesRequest("fixture-model","",input("hello"),new JSONArray());
+            AtomicLong admitted=new AtomicLong(-1);
+            rig.gateway.streamResponsesReviewed(id,version,request,new GatewayCall(5000),actual->{assertEquals(0,rig.fake.responses.get());assertTrue(admitted.compareAndSet(-1,actual));},events::put);
+            assertEquals(version,admitted.get());
+            assertEquals(2,events.length());assertEquals("verified",events.getJSONObject(0).getString("delta"));assertEquals("completed",events.getJSONObject(1).getString("type"));
+            assertEquals("fixture-model",rig.fake.lastRequest.getString("model"));assertFalse(rig.fake.lastRequest.has("reasoning"));
+            assertEquals(1,rig.fake.responses.get());assertEquals(0,rig.fake.models.get());assertEquals(0,rig.fake.refreshes.get());
+            assertEquals(version,rig.book.row(id).getLong("version"));assertNull(AccountBook.modelEvidence(rig.book.row(id),version));assertNull(rig.gateway.modelFacts(id,version,"fixture-model"));
+        }
+    }
+    @Test public void UnobservedRequestFactsAllowDefaultTextButCannotAuthorizeExplicitEffort()throws Exception {
+        new ResponsesRequest("fixture-model","",input("hello"),new JSONArray()).admit(null);
+        ResponsesRequest explicit=new ResponsesRequest("fixture-model","",input("hello"),new JSONArray(),false,effort("low"),256,0);
+        GatewayFailure failure=assertThrows(GatewayFailure.class,()->explicit.admit(null));
+        assertEquals("ACCOUNT_MODEL_OPTION_UNAVAILABLE",failure.code);
     }
 }

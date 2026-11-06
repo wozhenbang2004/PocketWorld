@@ -167,7 +167,7 @@ public final class ConversationRepository {
             if(nativeParentBusy.getAsBoolean())throw new IllegalStateException("原会话仍在回复，请等待后重新选择分支锚点");
             // A cold-resumed original task may run without AssistantModule.activeTurn.
             // Inspect the original live-run rows while holding its same database monitor.
-            int activeRows=0;try(Cursor running=db.rawQuery("SELECT t.document FROM tasks t JOIN runs r ON r.task_id=t.task_id WHERE r.status='running' LIMIT 101",null)){
+            int activeRows=0;try(Cursor running=dev.pocketengine.store.TaskDocumentCursor.tasks(db,"SELECT t.document FROM tasks t JOIN runs r ON r.task_id=t.task_id WHERE r.status='running' LIMIT 101","SELECT t.task_id AS document FROM tasks t JOIN runs r ON r.task_id=t.task_id WHERE r.status='running' LIMIT 101",null,0)){
                 while(running.moveToNext()){if(++activeRows>100)throw new ReadLimited("conversation_fork_live_run_budget");String raw=running.getString(0);if(raw.length()>MAX_BYTES)throw new ReadLimited("conversation_fork_live_task_metadata_budget");if(parent.equals(new JSONObject(raw).optString("conversationId")))throw new IllegalStateException("原会话仍有执行中的任务，不能选择变化中的分支锚点");}
             }
             JSONObject state=metadata(anchor);if(state==null||state.optBoolean("deleted")||!parent.equals(state.optString("conversationId"))||state.getLong("revision")!=version||state.optLong("memorySourceRetiredThrough")>=version||state.optBoolean("memoryContextRetired"))throw new SecurityException("分支锚点已变化、停用或不属于原会话");
@@ -428,7 +428,10 @@ public final class ConversationRepository {
         delivery.requireMutationScope(original);if(monitor!=original)throw new SecurityException("私人工作必须投递到同一原数据库");
         JSONObject result=delivery.snapshot();String conversation=result.getString("conversationId"),task=result.getString("taskId"),run=result.getString("runId"),key=result.getString("deliveryId"),digest=result.getString("resultDigest"),status=result.getString("status");int epoch=result.getInt("epoch");
         if(!digest.matches("[a-f0-9]{64}")||!Set.of("completed","needs_confirmation","awaiting_user","failed","cancelled","interrupted","reconciling","paused").contains(status))throw new SecurityException("原私人工作结果不可核对");
+        String noticeKind=result.optString("noticeKind");boolean recoveryNotice=dev.pocketengine.store.OwnerWorkResultProtocol.isCapacityNoticeKind(noticeKind);
+        if(recoveryNotice&&(result.has("nativeFinalAnswerProof")||result.optJSONArray("consumableInputs")!=null&&result.getJSONArray("consumableInputs").length()!=0))throw new SecurityException("容量通知不能冒充模型成果或消费主人输入");
         JSONObject ack=new JSONObject().put("taskId",task).put("runId",run).put("epoch",epoch).put("conversationId",conversation).put("deliveryId",key).put("executionAuthorized",false),prior=sourceByReply(key);
+        if(recoveryNotice)ack.put("noticeKind",noticeKind);
         if(!activeGeneration().equals(result.getString("generation")))return ack.put("accepted",false).put("available",false).put("conversationDeleted",true);
         if(prior!=null){
             requirePhoneResultIndex(prior,conversation,task,run,epoch,key);if(!digest.equals(prior.optString("nativeReplyDigest"))||!status.equals(prior.optString("nativeStatus")))throw new SecurityException("同一私人工作结果不能更换内容");
@@ -445,10 +448,12 @@ public final class ConversationRepository {
                 .put("taskReference",new JSONObject().put("taskId",task).put("runId",run).put("epoch",epoch))
                 .put("replyToMessageIds",new JSONArray(result.getJSONArray("replyToMessageIds").toString())).put("replyToSourceRefs",new JSONArray(result.getJSONArray("sourceMessageRefs").toString()))
                 .put("executionAuthorized",false).put("resultVerified",false);
+        if(recoveryNotice)message.put("nativeNoticeKind",noticeKind);
         JSONObject answerProof=result.optJSONObject("nativeFinalAnswerProof");
         if(answerProof!=null)for(String field:new String[]{"memoryReference","memoryContext"})if(answerProof.has(field))message.put(field,new JSONObject(answerProof.getJSONObject(field).toString()));
         JSONObject state=new SourceRef("message",messageId,1,"owner","private").toJson().put("conversationId",conversation).put("role","assistant").put("deleted",false).put("updatedAt",now)
                 .put("nativeReplyId",key).put("nativeReplyDigest",digest).put("nativeTaskId",task).put("nativeRunId",run).put("nativeEpoch",epoch).put("nativeStatus",status);
+        if(recoveryNotice)state.put("nativeNoticeKind",noticeKind);
         saveSource(state);saveMessage(conversation,message);JSONObject header=header(conversation);header.put("updatedAt",now);saveConversation(header);
         JSONArray consumed=new JSONArray(),inputs=result.optJSONArray("consumableInputs");
         for(int i=0;inputs!=null&&i<inputs.length();i++){

@@ -163,7 +163,16 @@ public final class NativeHarnessGatewayBridge implements AutoCloseable {
             String json=StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(raw)).toString();
             var prepared=NativeRelayPolicy.prepare(selection,request.getString("path"),ChatCompletionStream.parseObject(json));
             Wire wire=new Wire(path,bound,prepared.gateway.stream);checkContinuous();
-            var admitted=InferenceCapture.withAdmission(target,()->{checkContinuous();JSONObject current=transport.request(path+"?"+query(bound),null);validateRequest(current);if(!"CLAIMED".equals(current.optString("state"))||!claim.claimId().equals(current.optString("claimId"))||!current.optBoolean("clientAlive"))throw new SecurityException("原客户端/claim已停止，未新增派发");});
+            var admitted=InferenceCapture.withAdmission(target,()->{
+                checkContinuous();
+                JSONObject current=transport.request(path+"?"+query(bound),null);
+                validateRequest(current);
+                if(!"CLAIMED".equals(current.optString("state"))||!claim.claimId().equals(current.optString("claimId"))||!current.optBoolean("clientAlive"))throw new SecurityException("原客户端/claim已停止，未新增派发");
+                // Claim liveness and local execution authority are separate facts.
+                // The remote query can outlive this lease/route; the last admission
+                // callback must reject that change before the model is dispatched.
+                checkContinuous();
+            });
             inferenceRunning=true;
             JSONObject result;try{result=ModelGateway.completeNative(selection,prepared.gateway,original,admitted,(call,seq)->check(),(event,data)->wire.event(((event.isEmpty()?"":"event: "+event+"\n")+"data: "+data+"\n\n").getBytes(StandardCharsets.UTF_8)));}finally{inferenceRunning=false;}
             if(!prepared.gateway.stream)wire.event(result.toString().getBytes(StandardCharsets.UTF_8));wire.eof();claims.outcome(leaseId,requestId,claim.claimId(),true);
@@ -180,7 +189,17 @@ public final class NativeHarnessGatewayBridge implements AutoCloseable {
             // Retry only these exact bytes/identity. No path here re-enters completeNative.
             while(true){current();try{JSONObject ack=transport.request(path+"/frames",frame);current();JSONObject at=ack.getJSONObject("acceptedThrough");if(at.getLong("eventSeq")!=seq||at.getInt("offset")!=offset)throw new SecurityException("ACK不是原完整片段身份");return;}
                 catch(dev.pocketengine.features.remote.RemoteTransport.HttpFailure failure){if(failure.status!=429)throw failure;Thread.sleep(50);}
-                catch(IOException unavailable){current();JSONObject state=transport.request(path+"?"+query(binding),null);JSONObject at=state.optJSONObject("acceptedThrough");if(at!=null&&at.optLong("eventSeq")==seq&&at.optInt("offset")==offset)return;throw unavailable;}}
+                catch(IOException unavailable){
+                    current();
+                    JSONObject state=transport.request(path+"?"+query(binding),null);
+                    // Acceptance of these exact bytes does not keep the local
+                    // lease/route/deadline alive while the query is in flight.
+                    // EOF has no next fragment to recheck before claim success.
+                    current();
+                    JSONObject at=state.optJSONObject("acceptedThrough");
+                    if(at!=null&&at.optLong("eventSeq")==seq&&at.optInt("offset")==offset)return;
+                    throw unavailable;
+                }}
         }
     }
     private void cancelLocal(){closed=true;if(inferenceRunning)original.cancel();Thread running=worker;if(running!=null)running.interrupt();}
