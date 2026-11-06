@@ -49,6 +49,16 @@ immediately. Upload and activation requests are never automatically replayed.
 Each run's `network.log` records the method, path, transport stage and error
 class without credentials, query strings or response bodies.
 
+When `aria2` is configured, public artifact verification uses the existing local
+downloader with four connections, bounded retries, TLS verification and the
+signed SHA-256 checksum. It also independently checks the completed file's exact
+size and hash; public HEAD and Range checks cover the original Site URL.
+Without that optional tool, the existing Python download path remains available.
+An interrupted upload can reuse an older signed bundle after script-only source
+updates when its build commit is an ancestor and all application inputs are
+unchanged. The registered source commit remains the APK's actual build commit;
+the current checkout is checked separately before activation.
+
 Read-only previews:
 
 ```powershell

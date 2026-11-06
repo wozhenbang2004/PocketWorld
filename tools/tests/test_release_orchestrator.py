@@ -54,6 +54,7 @@ class PublisherFixture:
         self.artifacts = {"/" + entry["file"]: (bundle / entry["file"]).read_bytes()
                           for entry in RELEASE.read_json(bundle / "release-plan.json")["artifactUploads"]}
         self.events = []
+        self.registered_sources = []
         self.ready = set()
         self.fault = fault
         self.lost_reply = lost_reply
@@ -63,6 +64,7 @@ class PublisherFixture:
     def json(self, path, method="GET", data=None):
         self.events.append((method, path))
         if path == "/__publisher/releases" and method == "POST":
+            self.registered_sources.append(data["sourceCommit"])
             if data["expectedCurrentManifestSha256"] != BASE_SHA:
                 raise AssertionError("Wrong baseline CAS")
             self.descriptors = data["artifacts"]
@@ -155,7 +157,7 @@ class ReleaseOrchestratorTest(unittest.TestCase):
         self.c = RELEASE.read_json(ROOT / "tools/release.config.example.json")
         self.c.update(repo=str(self.root / "repo"), work_root=str(self.root / "runs"),
                       artifact_root=str(self.root / "apks"), cache_root=str(self.root / "cache"),
-                      core_acceptance_file=str(self.root / "functional-results.json"), proxy="")
+                      core_acceptance_file=str(self.root / "functional-results.json"), proxy="", aria2=None)
         for key in ("work_root", "artifact_root", "cache_root"):
             Path(self.c[key]).mkdir()
 
@@ -196,6 +198,21 @@ class ReleaseOrchestratorTest(unittest.TestCase):
         RELEASE.write_json(bundle / "release-plan.json", {"artifactUploads": rows})
         (bundle / "release.json").write_bytes(b'{"payload":"synthetic-test-only","signature":"synthetic-test-only"}\n')
         return bundle
+
+    def verify_bundle_tool(self, runner, name, *args):
+        self.assertNotIn(SYNTHETIC_TOKEN, str(args))
+        if name == "verify-envelope":
+            bundle = Path(args[args.index("--envelope") + 1]).parent
+            row = next(item for item in RELEASE.read_json(bundle / "release-plan.json")["artifactUploads"]
+                       if item["contentType"] == "application/vnd.android.package-archive")
+            RELEASE.write_json(args[args.index("--output") + 1], {
+                "versionCode": 255, "signatureVerified": True, "pinSpkiSha256": self.c["public_pin_sha256"],
+                "apk": {key: row[key] for key in ("url", "bytes", "sha256")}})
+        elif name == "verify-apk":
+            self.assertEqual(self.c["apk_signer_sha256"], args[args.index("--expected-signer") + 1])
+            self.assertTrue(Path(args[args.index("--apk") + 1]).is_file())
+        else:
+            self.fail("Unexpected native bundle check: " + name)
 
     def test_dirty_source_keeps_staged_unstaged_and_untracked_work_without_build(self):
         repo = Path(self.c["repo"])
@@ -295,9 +312,7 @@ class ReleaseOrchestratorTest(unittest.TestCase):
             return {"status": "passed", "sourceCommit": head}
 
         def verify(_runner, name, *args):
-            self.assertEqual("verify-envelope", name)
-            self.assertNotIn(SYNTHETIC_TOKEN, str(args))
-            RELEASE.write_json(args[args.index("--output") + 1], {"versionCode": 255})
+            self.verify_bundle_tool(_runner, name, *args)
 
         with mock.patch.object(RELEASE, "runtime_paths", return_value=[]), \
                 mock.patch.object(RELEASE, "sync_source", return_value=HEAD), \
@@ -468,9 +483,7 @@ class ReleaseOrchestratorTest(unittest.TestCase):
                                       "digestStreamAvailable": True}))
 
         def verify(_runner, name, *args):
-            self.assertEqual("verify-envelope", name)
-            self.assertNotIn(SYNTHETIC_TOKEN, str(args))
-            RELEASE.write_json(args[args.index("--output") + 1], {"versionCode": 255})
+            self.verify_bundle_tool(_runner, name, *args)
 
         with mock.patch.object(RELEASE, "runtime_paths", return_value=[]), \
                 mock.patch.object(RELEASE, "sync_source", return_value=HEAD), \
@@ -502,6 +515,182 @@ class ReleaseOrchestratorTest(unittest.TestCase):
                         RELEASE.upload_release(runner, http, bundle, BASE_SHA, HEAD)
                 self.assertFalse(any(path.endswith("/activate") for _, path in http.events))
                 self.assertFalse(http.active)
+
+    def test_aria2_public_download_has_bounded_verified_arguments_and_no_credentials(self):
+        runner = self.runner()
+        runner.c["aria2"] = str(self.root / "aria2c.exe")
+        Path(runner.c["aria2"]).write_bytes(b"synthetic executable, never run")
+        body = b"synthetic public download bytes"
+        target = runner.directory / "public.verified"
+        url = self.c["origin"] + "/artifacts/synthetic.apk"
+        http = types.SimpleNamespace(origin=self.c["origin"], token=SYNTHETIC_TOKEN,
+                                     request=mock.Mock(return_value=Response(status=200, headers={"Content-Length": str(len(body))})))
+
+        def execute(arguments, **kwargs):
+            target.write_bytes(body)
+            return 0, "Synthetic aria2 completed"
+
+        runner.command = mock.Mock(side_effect=execute)
+        RELEASE.download_exact(http, url, target, {"bytes": len(body), "sha256": sha(body)}, runner=runner)
+        http.request.assert_called_once_with("/artifacts/synthetic.apk", method="HEAD")
+        args = list(map(str, runner.command.call_args.args[0]))
+        for option in ("--no-conf=true", "--check-certificate=true", "--split=4", "--max-connection-per-server=4",
+                       "--min-split-size=1M", "--continue=true", "--auto-file-renaming=false", "--allow-overwrite=false",
+                       "--file-allocation=none", "--check-integrity=true", "--checksum=sha-256=" + sha(body),
+                       "--max-tries=3", "--retry-wait=1", "--connect-timeout=15", "--timeout=30", "--stop=600",
+                       "--summary-interval=10", "--enable-color=false"):
+            self.assertIn(option, args)
+        self.assertTrue(any(arg.startswith("--user-agent=PocketWorld") for arg in args))
+        self.assertIn("--dir=" + str(target.parent), args)
+        self.assertIn("--out=" + target.name, args)
+        self.assertEqual(url, args[-1])
+        self.assertNotIn(SYNTHETIC_TOKEN, repr(args))
+        self.assertFalse(any("proxy" in arg.lower() or "authorization" in arg.lower() or "max-redirect" in arg.lower() for arg in args))
+        self.assertEqual(body, target.read_bytes())
+
+    def test_aria2_failures_bad_head_size_or_hash_are_rejected(self):
+        body = b"verified synthetic bytes"
+        for fault in ("exit", "missing", "size", "sha", "head-status", "head-length"):
+            with self.subTest(fault=fault):
+                runner = self.runner()
+                runner.c["aria2"] = str(self.root / "aria2c.exe")
+                target = runner.directory / (fault + ".verified")
+                http = types.SimpleNamespace(origin=self.c["origin"], request=mock.Mock(return_value=Response(
+                    status=302 if fault == "head-status" else 200,
+                    headers={"Content-Length": "999999" if fault == "head-length" else str(len(body))})))
+
+                def execute(arguments, **kwargs):
+                    if fault != "missing":
+                        target.write_bytes(body[:-1] if fault == "size" else b"!" * len(body) if fault == "sha" else body)
+                    return (1 if fault == "exit" else 0), "Synthetic download result"
+
+                runner.command = mock.Mock(side_effect=execute)
+                with self.assertRaises(RELEASE.ReleaseError):
+                    RELEASE.download_exact(http, self.c["origin"] + "/public.apk", target,
+                                           {"bytes": len(body), "sha256": sha(body)}, runner=runner)
+                if fault.startswith("head-"):
+                    runner.command.assert_not_called()
+
+    def test_unconfigured_aria2_keeps_the_original_exact_urllib_download(self):
+        runner = self.runner()
+        runner.command = mock.Mock()
+        body = b"portable original urllib bytes"
+        http = types.SimpleNamespace(origin=self.c["origin"], request=mock.Mock(return_value=Response(body)))
+        target = runner.directory / "fallback.verified"
+        RELEASE.download_exact(http, self.c["origin"] + "/public.apk", target,
+                               {"bytes": len(body), "sha256": sha(body)}, runner=runner)
+        self.assertEqual(body, target.read_bytes())
+        runner.command.assert_not_called()
+        http.request.assert_called_once_with("/public.apk")
+
+    def test_configured_aria2_must_be_absolute_and_existing(self):
+        self.c["aria2"] = "relative/aria2c.exe"
+        config = self.root / "config.json"
+        RELEASE.write_json(config, self.c)
+        with self.assertRaises(RELEASE.ReleaseError):
+            RELEASE.load_config(config)
+        self.c["aria2"] = str(self.root / "missing-aria2c.exe")
+        self.assertIn("aria2", RELEASE.runtime_paths(self.c))
+
+    def test_script_only_ancestor_reuses_native_verified_bundle_with_original_source(self):
+        repo = Path(self.c["repo"])
+        self.git_repo(repo)
+        artifact_source = self.git(repo, "rev-parse", "HEAD")
+        script = repo / "tools/release-fixture.txt"
+        script.parent.mkdir()
+        script.write_text("synthetic release-only fix\n", encoding="utf-8")
+        self.git(repo, "add", "tools/release-fixture.txt")
+        self.git(repo, "commit", "-m", "Script-only change")
+        current = self.git(repo, "rev-parse", "HEAD")
+        bundle = self.bundle()
+        RELEASE.write_json(Path(self.c["work_root"]) / "last-run.json", {"stage": "artifacts_ready", "sourceCommit": artifact_source,
+                           "bundle": str(bundle), "baselineManifestSha256": BASE_SHA})
+        http = PublisherFixture(self.c, bundle)
+        http.ready = {sha(body) for body in http.artifacts.values()}
+        with mock.patch.object(RELEASE, "runtime_paths", return_value=[]), \
+                mock.patch.object(RELEASE, "sync_source", return_value=current), \
+                mock.patch.object(RELEASE, "source_state", return_value=current), \
+                mock.patch.object(RELEASE, "core_acceptance", return_value={}) as acceptance, \
+                mock.patch.object(RELEASE, "baseline", return_value=({"versionCode": 253}, self.root / "base.apk", BASE_SHA)), \
+                mock.patch.object(RELEASE, "Http", return_value=http), \
+                mock.patch.object(RELEASE, "read_token", return_value=SYNTHETIC_TOKEN), \
+                mock.patch.object(RELEASE.Runner, "tool", autospec=True, side_effect=self.verify_bundle_tool) as verify, \
+                mock.patch.object(RELEASE, "make_bundle", side_effect=AssertionError("Must reuse the unchanged application")) as build:
+            result = RELEASE.run_release(self.c)
+        self.assertEqual("published", result["status"])
+        self.assertEqual(artifact_source, result["sourceCommit"])
+        self.assertEqual(current, result["currentCheckout"])
+        self.assertEqual([artifact_source], http.registered_sources)
+        self.assertEqual({"verify-envelope", "verify-apk"}, {call.args[1] for call in verify.call_args_list})
+        self.assertTrue(all(call.args[1] == current for call in acceptance.call_args_list))
+        self.assertFalse(any(method == "PUT" for method, _ in http.events))
+        build.assert_not_called()
+
+    def test_application_change_nonancestor_or_invalid_source_never_reuses_old_bundle(self):
+        bundle = self.bundle()
+        for fault in ("app-change", "nonancestor", "invalid-source"):
+            with self.subTest(fault=fault):
+                RELEASE.write_json(Path(self.c["work_root"]) / "last-run.json", {
+                    "stage": "artifacts_ready", "sourceCommit": "not-a-commit" if fault == "invalid-source" else "b" * 40,
+                    "bundle": str(bundle), "baselineManifestSha256": BASE_SHA})
+                http = PublisherFixture(self.c, bundle)
+
+                def git(_runner, *args, **kwargs):
+                    self.assertIn(args[0], ("merge-base", "diff"))
+                    return (1 if fault == "nonancestor" or args[0] == "diff" else 0), ""
+
+                with mock.patch.object(RELEASE, "runtime_paths", return_value=[]), \
+                        mock.patch.object(RELEASE, "sync_source", return_value=HEAD), \
+                        mock.patch.object(RELEASE, "core_acceptance", return_value={}), \
+                        mock.patch.object(RELEASE, "baseline", return_value=({"versionCode": 253}, self.root / "base.apk", BASE_SHA)), \
+                        mock.patch.object(RELEASE, "Http", return_value=http), \
+                        mock.patch.object(RELEASE, "read_token", return_value=SYNTHETIC_TOKEN), \
+                        mock.patch.object(RELEASE.Runner, "git", autospec=True, side_effect=git), \
+                        mock.patch.object(RELEASE.Runner, "tool") as verify, \
+                        mock.patch.object(RELEASE, "next_version", return_value=256), \
+                        mock.patch.object(RELEASE, "make_bundle", side_effect=RELEASE.ReleaseError("Synthetic new-build boundary")) as build:
+                    with self.assertRaises(RELEASE.ReleaseError):
+                        RELEASE.run_release(self.c)
+                build.assert_called_once()
+                verify.assert_not_called()
+                self.assertEqual([], http.registered_sources)
+
+    def test_reuse_stops_on_changed_baseline_artifacts_or_native_verification(self):
+        bundle = self.bundle()
+        artifact = next((bundle / "artifacts").rglob("*.apk"))
+        original = artifact.read_bytes()
+        for fault in ("baseline", "artifact", "manifest-native", "pin", "apk-native"):
+            with self.subTest(fault=fault):
+                artifact.write_bytes(b"changed artifact" if fault == "artifact" else original)
+                RELEASE.write_json(Path(self.c["work_root"]) / "last-run.json", {
+                    "stage": "artifacts_ready", "sourceCommit": HEAD, "bundle": str(bundle),
+                    "baselineManifestSha256": "c" * 64 if fault == "baseline" else BASE_SHA})
+                http = PublisherFixture(self.c, bundle)
+
+                def verify(runner, name, *args):
+                    if (name == "verify-envelope" and fault == "manifest-native") or (name == "verify-apk" and fault == "apk-native"):
+                        raise RELEASE.ReleaseError("Synthetic native verification refusal")
+                    self.verify_bundle_tool(runner, name, *args)
+                    if name == "verify-envelope" and fault == "pin":
+                        output = args[args.index("--output") + 1]
+                        value = RELEASE.read_json(output)
+                        value["pinSpkiSha256"] = "c" * 64
+                        RELEASE.write_json(output, value)
+
+                with mock.patch.object(RELEASE, "runtime_paths", return_value=[]), \
+                        mock.patch.object(RELEASE, "sync_source", return_value=HEAD), \
+                        mock.patch.object(RELEASE, "source_state", return_value=HEAD), \
+                        mock.patch.object(RELEASE, "core_acceptance", return_value={}), \
+                        mock.patch.object(RELEASE, "baseline", return_value=({"versionCode": 253}, self.root / "base.apk", BASE_SHA)), \
+                        mock.patch.object(RELEASE, "Http", return_value=http), \
+                        mock.patch.object(RELEASE, "read_token", return_value=SYNTHETIC_TOKEN), \
+                        mock.patch.object(RELEASE.Runner, "tool", autospec=True, side_effect=verify), \
+                        mock.patch.object(RELEASE, "make_bundle") as build, \
+                        mock.patch.object(RELEASE, "upload_release") as upload:
+                    with self.assertRaises(RELEASE.ReleaseError):
+                        RELEASE.run_release(self.c)
+                build.assert_not_called()
+                upload.assert_not_called()
 
     def test_already_published_unchanged_application_does_not_build_again(self):
         previous = Path(self.c["work_root"]) / "last-run.json"

@@ -90,6 +90,10 @@ def load_config(path):
         raise ReleaseError("配置格式不正确；上传凭据只能保存在受保护文件中。")
     for key in ("repo", "work_root", "artifact_root", "cache_root"):
         c[key] = str(no_system_drive(c[key]))
+    if c.get("aria2") is not None:
+        if not isinstance(c["aria2"], str) or not Path(c["aria2"]).is_absolute():
+            raise ReleaseError("可选 aria2 必须是既存工具的绝对路径。")
+        c["aria2"] = str(Path(c["aria2"]).resolve())
     origin = urllib.parse.urlsplit(c["origin"])
     if origin.scheme != "https" or not origin.hostname or origin.username or origin.password or origin.query or origin.fragment or origin.path not in ("", "/"):
         raise ReleaseError("下载站必须是没有凭据或查询参数的 HTTPS origin。")
@@ -331,10 +335,27 @@ def next_version(runner, online):
     return highest + 1
 
 
-def download_exact(http, url, target, expected):
+def download_exact(http, url, target, expected, runner=None):
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme + "://" + parsed.netloc != http.origin or parsed.query or parsed.fragment:
         raise ReleaseError("产物 URL 与既定下载站不一致。")
+    target = Path(target)
+    if runner is not None and runner.c.get("aria2"):
+        # Control/authenticated requests stay in NoRedirect Http. The optional
+        # downloader receives only this public, same-origin, credential-free URL.
+        with http.request(parsed.path, method="HEAD") as response:
+            if response.status != 200 or response.headers.get("Content-Length") != str(expected["bytes"]):
+                raise ReleaseError("公共产物 HEAD 状态或长度与已签名值不一致。")
+        code, _ = runner.command([
+            runner.c["aria2"], "--no-conf=true", "--check-certificate=true", "--user-agent=PocketWorld-Release/1.0 (+https://github.com/wozhenbang2004/PocketWorld)",
+            "--split=4", "--max-connection-per-server=4", "--min-split-size=1M", "--continue=true",
+            "--auto-file-renaming=false", "--allow-overwrite=false", "--file-allocation=none", "--check-integrity=true",
+            "--checksum=sha-256=" + expected["sha256"], "--max-tries=3", "--retry-wait=1", "--connect-timeout=15",
+            "--timeout=30", "--stop=600", "--summary-interval=10", "--enable-color=false",
+            "--dir=" + str(target.parent), "--out=" + target.name, url])
+        if code or not target.is_file() or target.stat().st_size != expected["bytes"] or digest(target) != expected["sha256"]:
+            raise ReleaseError("公共产物下载失败或完整大小/SHA不匹配。")
+        return
     h, count = hashlib.sha256(), 0
     with http.request(parsed.path) as response, Path(target).open("xb") as output:
         if response.status != 200:
@@ -368,7 +389,7 @@ def baseline(runner, http):
         if candidate.stat().st_size == expected["bytes"] and digest(candidate) == expected["sha256"]:
             return item, candidate, hashlib.sha256(raw).hexdigest()
     candidate = runner.directory / ("baseline-" + str(item["versionCode"]) + ".apk")
-    download_exact(http, expected["url"], candidate, expected)
+    download_exact(http, expected["url"], candidate, expected, runner=runner)
     return item, candidate, hashlib.sha256(raw).hexdigest()
 
 
@@ -486,12 +507,15 @@ def artifact_descriptors(bundle):
     return result
 
 
-def upload_release(runner, http, bundle, baseline_sha, head):
+def upload_release(runner, http, bundle, baseline_sha, head, artifact_source_commit=None):
+    artifact_source_commit = artifact_source_commit or head
+    if not re.fullmatch(r"[a-f0-9]{40}", artifact_source_commit):
+        raise ReleaseError("构建来源不是完整源码提交。")
     raw = (Path(bundle) / "release.json").read_bytes()
     manifest_sha = hashlib.sha256(raw).hexdigest()
     descriptors = artifact_descriptors(bundle)
     request = {"schema": 1, "manifestBase64": base64.b64encode(raw).decode("ascii"),
-               "expectedCurrentManifestSha256": baseline_sha, "sourceCommit": head, "artifacts": descriptors}
+               "expectedCurrentManifestSha256": baseline_sha, "sourceCommit": artifact_source_commit, "artifacts": descriptors}
     registered = http.json("/__publisher/releases", "POST", request)
     release_id = registered["releaseId"]
     if release_id != manifest_sha or registered["manifestSha256"] != manifest_sha:
@@ -518,7 +542,7 @@ def upload_release(runner, http, bundle, baseline_sha, head):
         public_check = runner.directory / ("public-" + sha + ".verified")
         if public_check.exists():
             public_check = runner.directory / ("public-" + sha + "-" + uuid.uuid4().hex[:6] + ".verified")
-        download_exact(http, http.origin + descriptor["path"], public_check, descriptor)
+        download_exact(http, http.origin + descriptor["path"], public_check, descriptor, runner=runner)
         length = min(64, descriptor["bytes"])
         with http.request(descriptor["path"], headers={"Range": "bytes=0-" + str(length - 1)}) as response:
             if response.status != 206 or response.headers.get("Content-Range") != "bytes 0-" + str(length - 1) + "/" + str(descriptor["bytes"]):
@@ -529,7 +553,7 @@ def upload_release(runner, http, bundle, baseline_sha, head):
     # A lost activation reply is reconciled, never treated as permission to rebuild or downgrade.
     if source_state(runner) != head:
         raise ReleaseError("上传期间源码变化，保留已上传的不可变文件，未激活更新。")
-    identity = {"sourceCommit": head, "releaseId": release_id, "manifestSha256": manifest_sha,
+    identity = {"sourceCommit": artifact_source_commit, "currentCheckout": head, "releaseId": release_id, "manifestSha256": manifest_sha,
                 "manifestUrl": http.origin + runner.c["manifest_path"],
                 "artifacts": [http.origin + row["path"] for row in descriptors]}
     try:
@@ -610,29 +634,46 @@ def run_release(c, prepare_only=False):
             if code == 0:
                 return {"status": "up_to_date", "sourceCommit": published_source, "currentCheckout": head,
                         "applicationInputsUnchanged": True, "noBuildOrPublication": True}
-        bundle = None
-        if pending.get("sourceCommit") == head and pending.get("stage") in ("artifacts_ready", "uploaded_waiting_acceptance"):
+        bundle, artifact_source_commit = None, head
+        pending_source = pending.get("sourceCommit", "")
+        reusable_source = pending_source == head
+        if pending.get("stage") in ("artifacts_ready", "uploaded_waiting_acceptance") and not reusable_source and re.fullmatch(r"[a-f0-9]{40}", pending_source):
+            ancestor, _ = runner.git("merge-base", "--is-ancestor", pending_source, head, check=False)
+            if ancestor == 0:
+                changed, _ = runner.git("diff", "--quiet", pending_source, head, "--", *APP_PATHS, check=False)
+                reusable_source = changed == 0
+        if reusable_source and pending.get("stage") in ("artifacts_ready", "uploaded_waiting_acceptance"):
             candidate = owned(Path(pending["bundle"]), root)
             if (candidate / "release.json").is_file():
                 if digest(candidate / "release.json") == base_sha:
-                    return {"status": "published", "sourceCommit": head, "manifestUrl": c["origin"] + c["manifest_path"], "reconciled": True}
+                    return {"status": "published", "sourceCommit": pending_source, "currentCheckout": head,
+                            "manifestUrl": c["origin"] + c["manifest_path"], "reconciled": True}
                 if pending.get("baselineManifestSha256") != base_sha:
                     raise ReleaseError("线上基线已被另一发布推进；保留本次候选包和差分，停止而不自动重建。")
+                descriptors = artifact_descriptors(candidate)
+                verification = directory / "resume-verified.json"
+                runner.tool("verify-envelope", "--envelope", candidate / "release.json", "--classpath", c["org_json_classpath"], "--output", verification)
+                verified = read_json(verification)
+                if verified.get("signatureVerified") is not True or verified.get("pinSpkiSha256") != c["public_pin_sha256"]:
+                    raise ReleaseError("待复用包的原生清单验签或公钥 pin 不一致。")
+                apk = verified["apk"]
+                matches = [row for row in descriptors if c["origin"] + row["path"] == apk["url"]
+                           and row["bytes"] == apk["bytes"] and row["sha256"] == apk["sha256"]]
+                if len(matches) != 1 or verified["versionCode"] <= base["versionCode"]:
+                    raise ReleaseError("待复用包与原生已验签清单不一致或版本不递增。")
+                runner.tool("verify-apk", "--apk", owned(candidate / matches[0]["path"].lstrip("/"), candidate),
+                            "--out", directory / "resume-apk-check", "--expected-signer", c["apk_signer_sha256"])
                 if pending.get("stage") == "uploaded_waiting_acceptance":
                     if digest(candidate / "release.json") != pending.get("manifestSha256"):
                         raise ReleaseError("已上传候选的本地签名清单改变，停止激活。")
                     try:
                         core_acceptance(runner, head)
                     except ReleaseError as error:
-                        artifact_descriptors(candidate)
                         print("候选产物已上传，核心验收仍待完成；复用原记录，不构建、不重复上传、不激活更新。", flush=True)
-                        return pending | {"status": "staged_awaiting_acceptance", "activated": False,
+                        return pending | {"status": "staged_awaiting_acceptance", "activated": False, "currentCheckout": head,
                                           "activationBlocked": True, "blockingReason": str(error), "reused": True}
-                verification = directory / "resume-verified.json"
-                runner.tool("verify-envelope", "--envelope", candidate / "release.json", "--classpath", c["org_json_classpath"], "--output", verification)
-                if read_json(verification)["versionCode"] > base["versionCode"]:
-                    bundle = candidate
-                    print("复用上次已验证产物，继续上传，不重新构建。", flush=True)
+                bundle, artifact_source_commit = candidate, pending_source
+                print("复用上次已验证产物，继续上传，不重新构建。", flush=True)
         if bundle is None:
             version = next_version(runner, base["versionCode"])
             print("[3/7] 本地测试、更新 Web 资产、一次构建 APK v" + str(version), flush=True)
@@ -640,7 +681,7 @@ def run_release(c, prepare_only=False):
             print("[4/7] 差分已完整重建并核对，清单已本机签名。", flush=True)
             write_json(previous, {"stage": "artifacts_ready", "sourceCommit": head, "bundle": str(bundle), "baselineManifestSha256": base_sha})
         if prepare_only:
-            return {"status": "prepared_local_only", "sourceCommit": head, "bundle": str(bundle)}
+            return {"status": "prepared_local_only", "sourceCommit": artifact_source_commit, "currentCheckout": head, "bundle": str(bundle)}
         if source_state(runner) != head:
             raise ReleaseError("上传前源码变化；已保存产物，没有发布。")
         http.token = read_token(c)
@@ -648,7 +689,7 @@ def run_release(c, prepare_only=False):
         if status["current"]["manifestSha256"] != base_sha or status["pinSpkiSha256"] != c["public_pin_sha256"]:
             raise ReleaseError("站点版本或签名链已改变；已保存产物，没有发布。")
         print("[5/7] 上传完整 APK 和差分（支持断点对账）", flush=True)
-        result = upload_release(runner, http, bundle, base_sha, head)
+        result = upload_release(runner, http, bundle, base_sha, head, artifact_source_commit=artifact_source_commit)
         if result["status"] == "published":
             print("[6/7] 公开字节与范围校验通过，已最后激活签名清单。", flush=True)
             write_json(directory / "published.json", result)
@@ -668,6 +709,8 @@ def runtime_paths(c, publish=True):
              "manifest_private_key", "manifest_public_key", "org_json_classpath"]
     if publish:
         names.append("publisher_token_file")
+    if c.get("aria2"):
+        names.append("aria2")
     return [name for name in names if not Path(c[name]).is_file()]
 
 
