@@ -423,7 +423,7 @@ def make_bundle(runner, head, version, base_apk):
         raise ReleaseError("Python 发布检查没有有效的正测试数、零失败和零跳过最终汇总。")
     host = run / "host-tests"
     targets = [":app:testDebugUnitTest", ":app:assembleDebug", "-PpocketworldHostTests=" + c["host_test_groups"],
-               "-PpocketworldHostReport=" + host.as_posix(), "--no-daemon", "-Dorg.gradle.jvmargs=-Xmx1024m -Dfile.encoding=UTF-8"]
+               "-PpocketworldHostReport=" + host.as_posix(), "--no-daemon", "--stacktrace", "-Dorg.gradle.jvmargs=-Xmx1024m -Dfile.encoding=UTF-8"]
     build_output = runner.build(version, targets)
     check_host_xml(host)
     evidence = re.findall(r"Build evidence:\s*(.+)", build_output)
