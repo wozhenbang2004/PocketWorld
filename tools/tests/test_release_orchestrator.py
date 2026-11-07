@@ -61,6 +61,9 @@ class PublisherFixture:
         self.activate_applied = activate_applied
         self.active = False
 
+    def fork(self):
+        return types.SimpleNamespace(request=self.request)
+
     def json(self, path, method="GET", data=None):
         self.events.append((method, path))
         if path == "/__publisher/releases" and method == "POST":
@@ -74,6 +77,8 @@ class PublisherFixture:
                                    "missingParts": list(range(len(row["parts"]))) if row["sha256"] not in self.ready else []}
                                   for row in self.descriptors]}
         if path.startswith(self.prefix + "/blobs/") and path.endswith("/complete"):
+            if self.fault == "complete":
+                raise RELEASE.ReleaseError("Synthetic server digest/complete failure")
             self.ready.add(path.split("/")[-2])
             return {"ready": True}
         if path == self.prefix + "/activate":
@@ -102,6 +107,11 @@ class PublisherFixture:
         if path not in self.artifacts:
             raise AssertionError("Unexpected public artifact")
         body = self.artifacts[path]
+        if auth:
+            raise AssertionError("Public artifact checks must not carry publisher credentials")
+        if method == "HEAD":
+            return Response(status=503 if self.fault == "head-status" else 200,
+                            headers={"Content-Length": "999999" if self.fault == "head-length" else str(len(body))})
         if kind == "RANGE":
             size = min(64, len(body))
             if self.fault == "range-status":
@@ -111,9 +121,80 @@ class PublisherFixture:
                 content_range = "bytes 0-" + str(size - 1) + "/999999"
             selected = body[:size] if self.fault != "range-bytes" else b"!" * size
             return Response(selected, status=206, headers={"Content-Range": content_range})
-        if self.fault == "full-sha":
-            body = b"!" * len(body)
-        return Response(body)
+        raise AssertionError("Publishing must not redownload the full public artifact")
+
+
+class ParallelPublisherFixture(PublisherFixture):
+    """Small in-memory parts, with deterministic overlap and completion order."""
+
+    def __init__(self, *args, paired=False, fail_once=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.lock = threading.Lock()
+        self.paired = paired
+        self.fail_once = fail_once
+        self.received = {}
+        self.attempts = []
+        self.finished = []
+        self.active_workers = 0
+        self.maximum_workers = 0
+        self.second_started = threading.Event()
+        self.failed = threading.Event()
+        self.release_inflight = threading.Event()
+        self.barriers = {}
+        self.part_one_done = {}
+
+    def json(self, path, method="GET", data=None):
+        if path == self.prefix and method == "GET":
+            self.events.append((method, path))
+            return {"artifacts": [{"sha256": row["sha256"], "ready": row["sha256"] in self.ready,
+                    "missingParts": [index for index in range(len(row["parts"]))
+                                     if index not in self.received.get(row["sha256"], set())]}
+                    for row in self.descriptors]}
+        if path.startswith(self.prefix + "/blobs/") and path.endswith("/complete"):
+            digest = path.split("/")[-2]
+            descriptor = next(row for row in self.descriptors if row["sha256"] == digest)
+            if self.active_workers or self.received.get(digest, set()) != set(range(len(descriptor["parts"]))):
+                raise AssertionError("Complete preceded successful acknowledgements")
+        return super().json(path, method, data)
+
+    def request(self, path, method="GET", data=None, auth=False, headers=None):
+        if method != "PUT":
+            return super().request(path, method, data, auth, headers)
+        digest, index = path.split("/")[-3], int(path.split("/")[-1])
+        with self.lock:
+            self.active_workers += 1
+            self.maximum_workers = max(self.maximum_workers, self.active_workers)
+            self.attempts.append((digest, index))
+            self.events.append((method, path))
+            barrier = self.barriers.setdefault(digest, threading.Barrier(2))
+            one_done = self.part_one_done.setdefault(digest, threading.Event())
+        try:
+            descriptor = next(row for row in self.descriptors if row["sha256"] == digest)
+            if not auth or len(data) != descriptor["parts"][index]["bytes"] or sha(data) != descriptor["parts"][index]["sha256"]:
+                raise AssertionError("PUT bytes or authentication differ from original descriptor")
+            if self.fail_once and index in (0, 1):
+                if index == 0:
+                    if not self.second_started.wait(2):
+                        raise AssertionError("The second worker never started")
+                    self.fail_once = False
+                    self.failed.set()
+                    raise RELEASE.ReleaseError("Synthetic one-shot part failure")
+                self.second_started.set()
+                if not self.release_inflight.wait(2):
+                    raise AssertionError("The in-flight worker was not released")
+            elif self.paired and index in (0, 1):
+                barrier.wait(2)
+                if index == 0 and not one_done.wait(2):
+                    raise AssertionError("Part one did not finish before part zero")
+            with self.lock:
+                self.received.setdefault(digest, set()).add(index)
+                self.finished.append((digest, index))
+            if index == 1:
+                one_done.set()
+            return Response()
+        finally:
+            with self.lock:
+                self.active_workers -= 1
 
 
 class ReleaseOrchestratorTest(unittest.TestCase):
@@ -213,6 +294,119 @@ class ReleaseOrchestratorTest(unittest.TestCase):
             self.assertTrue(Path(args[args.index("--apk") + 1]).is_file())
         else:
             self.fail("Unexpected native bundle check: " + name)
+
+    def test_parallel_parts_are_bounded_and_complete_after_out_of_order_success(self):
+        bundle, runner = self.bundle(), self.runner()
+        http = ParallelPublisherFixture(self.c, bundle, paired=True)
+        with mock.patch.object(RELEASE, "PART_BYTES", 64), mock.patch.object(RELEASE, "source_state", return_value=HEAD):
+            result = RELEASE.upload_release(runner, http, bundle, BASE_SHA, HEAD)
+        self.assertEqual("published", result["status"])
+        self.assertEqual(2, http.maximum_workers)
+        self.assertEqual(0, http.active_workers)
+        activate = http.events.index(("POST", http.prefix + "/activate"))
+        previous_public_check = -1
+        for descriptor in http.descriptors:
+            digest = descriptor["sha256"]
+            self.assertLess(http.finished.index((digest, 1)), http.finished.index((digest, 0)))
+            first_put = next(index for index, event in enumerate(http.events)
+                             if event[0] == "PUT" and "/blobs/" + digest + "/parts/" in event[1])
+            self.assertGreater(first_put, previous_public_check)
+            complete = http.events.index(("POST", http.prefix + "/blobs/" + digest + "/complete"))
+            self.assertLess(complete, http.events.index(("HEAD", descriptor["path"])))
+            previous_public_check = http.events.index(("RANGE", descriptor["path"]))
+            self.assertLess(previous_public_check, activate)
+
+    def test_failed_part_drains_inflight_and_next_attempt_only_uploads_missing_parts(self):
+        bundle, runner = self.bundle(), self.runner()
+        runner.build = mock.Mock()
+        http = ParallelPublisherFixture(self.c, bundle, fail_once=True)
+        ended, errors = threading.Event(), []
+
+        def upload():
+            try:
+                RELEASE.upload_release(runner, http, bundle, BASE_SHA, HEAD)
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                ended.set()
+
+        with mock.patch.object(RELEASE, "PART_BYTES", 64), mock.patch.object(RELEASE, "source_state", return_value=HEAD):
+            worker = threading.Thread(target=upload)
+            worker.start()
+            try:
+                self.assertTrue(http.failed.wait(2), "The fixture must observe the first failed PUT")
+                self.assertFalse(ended.wait(0.03), "The uploader returned before its other in-flight request ended")
+                self.assertFalse(any(path.endswith("/complete") or path.endswith("/activate") for _, path in http.events))
+            finally:
+                http.release_inflight.set()
+                worker.join(3)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(1, len(errors))
+            self.assertIsInstance(errors[0], RELEASE.ReleaseError)
+            self.assertEqual(0, http.active_workers)
+            self.assertEqual({0, 1}, {index for _, index in http.attempts})
+            successful = {(digest, index) for digest, values in http.received.items() for index in values}
+            self.assertTrue(successful)
+            first_attempts = len(http.attempts)
+            result = RELEASE.upload_release(runner, http, bundle, BASE_SHA, HEAD)
+        self.assertEqual("published", result["status"])
+        self.assertTrue(successful.isdisjoint(http.attempts[first_attempts:]))
+        self.assertEqual(2, http.maximum_workers)
+        self.assertEqual(1, sum(path.endswith("/activate") for _, path in http.events))
+        runner.build.assert_not_called()
+
+    def test_upload_concurrency_one_is_serial_and_bad_values_stop_before_network(self):
+        bundle, runner = self.bundle(), self.runner()
+        self.c["upload_concurrency"] = 1
+        http = ParallelPublisherFixture(self.c, bundle)
+        with mock.patch.object(RELEASE, "PART_BYTES", 64), mock.patch.object(RELEASE, "source_state", return_value=HEAD):
+            self.assertEqual("published", RELEASE.upload_release(runner, http, bundle, BASE_SHA, HEAD)["status"])
+        self.assertEqual(1, http.maximum_workers)
+        for value in (True, False, 0, -1, 3, 1.0, "2", None):
+            with self.subTest(value=value):
+                self.c["upload_concurrency"] = value
+                config = self.root / "invalid-concurrency.json"
+                RELEASE.write_json(config, self.c)
+                with self.assertRaises(RELEASE.ReleaseError):
+                    RELEASE.load_config(config)
+                uncalled = mock.Mock()
+                with self.assertRaises(RELEASE.ReleaseError):
+                    RELEASE.upload_release(runner, uncalled, self.root / "not-read", BASE_SHA, HEAD)
+                uncalled.json.assert_not_called()
+                uncalled.request.assert_not_called()
+        self.c.pop("upload_concurrency")
+        RELEASE.write_json(config, self.c)
+        self.assertEqual(2, RELEASE.load_config(config)["upload_concurrency"])
+
+    def test_part_payload_hash_failure_does_not_put_that_part_or_complete(self):
+        bundle, runner = self.bundle(), self.runner()
+        http = ParallelPublisherFixture(self.c, bundle)
+        original = RELEASE.artifact_descriptors
+
+        def describe_then_change(path):
+            result = original(path)
+            target = bundle / result[0]["path"].lstrip("/")
+            data = target.read_bytes()
+            target.write_bytes(b"!" + data[1:])
+            return result
+
+        with mock.patch.object(RELEASE, "PART_BYTES", 64), mock.patch.object(RELEASE, "artifact_descriptors", side_effect=describe_then_change):
+            with self.assertRaises(RELEASE.ReleaseError):
+                RELEASE.upload_release(runner, http, bundle, BASE_SHA, HEAD)
+        self.assertNotIn((http.descriptors[0]["sha256"], 0), http.attempts)
+        self.assertFalse(any(path.endswith("/complete") or path.endswith("/activate") for _, path in http.events))
+
+    def test_http_worker_fork_preserves_security_and_owns_an_independent_opener(self):
+        http = RELEASE.Http(self.c["origin"], SYNTHETIC_TOKEN, "http://127.0.0.1:17890", self.root / "network.log")
+        first, second = http.fork(), http.fork()
+        self.assertIsNot(first.opener, http.opener)
+        self.assertIsNot(first.opener, second.opener)
+        for child in (first, second):
+            self.assertEqual(http.origin, child.origin)
+            self.assertEqual(http.token, child.token)
+            self.assertEqual(http.proxy, child.proxy)
+            self.assertEqual(http.log_path, child.log_path)
+            self.assertTrue(any(isinstance(handler, RELEASE.NoRedirect) for handler in child.opener.handlers))
 
     def test_dirty_source_keeps_staged_unstaged_and_untracked_work_without_build(self):
         repo = Path(self.c["repo"])
@@ -337,7 +531,7 @@ class ReleaseOrchestratorTest(unittest.TestCase):
             self.assertEqual(BASE_SHA, saved["baselineManifestSha256"])
             self.assertEqual(sha(original_manifest), saved["manifestSha256"])
             for path in http.artifacts:
-                self.assertIn(("GET", path), http.events)
+                self.assertIn(("HEAD", path), http.events)
                 self.assertIn(("RANGE", path), http.events)
             self.assertEqual(len(http.artifacts), sum(method == "PUT" for method, _ in http.events))
             before_activation = len(http.events)
@@ -526,18 +720,29 @@ class ReleaseOrchestratorTest(unittest.TestCase):
                 self.assertEqual(allowed, runner.build.called)
                 self.assertEqual(3, runner.command.call_count)
 
-    def test_manifest_is_activated_only_after_all_uploaded_full_hash_and_range_checks(self):
+    def test_publish_uses_only_public_head_and_range_before_freeze_and_activation(self):
         bundle, runner = self.bundle(), self.runner()
         http = PublisherFixture(self.c, bundle)
-        with mock.patch.object(RELEASE, "source_state", return_value=HEAD):
+
+        def frozen(_runner):
+            http.events.append(("SOURCE", HEAD))
+            return HEAD
+
+        with mock.patch.object(RELEASE, "source_state", side_effect=frozen), \
+                mock.patch.object(RELEASE, "download_exact", side_effect=AssertionError("No full download during publication")) as full:
             result = RELEASE.upload_release(runner, http, bundle, BASE_SHA, HEAD)
         self.assertEqual("published", result["status"])
         activate = http.events.index(("POST", http.prefix + "/activate"))
+        freeze = http.events.index(("SOURCE", HEAD))
         for path in http.artifacts:
-            self.assertLess(http.events.index(("GET", path)), activate)
-            self.assertLess(http.events.index(("RANGE", path)), activate)
+            self.assertLess(http.events.index(("HEAD", path)), http.events.index(("RANGE", path)))
+            self.assertLess(http.events.index(("RANGE", path)), freeze)
+            self.assertNotIn(("GET", path), http.events)
+        self.assertLess(freeze, activate)
         self.assertEqual(("GET", self.c["manifest_path"]), http.events[-1])
         self.assertEqual(1, sum(path.endswith("/activate") for _, path in http.events))
+        full.assert_not_called()
+        self.assertFalse(list(runner.directory.glob("*.verified")))
 
     def test_lost_activation_reply_requires_exact_active_release_and_manifest_reconciliation(self):
         bundle, runner = self.bundle(), self.runner()
@@ -584,9 +789,9 @@ class ReleaseOrchestratorTest(unittest.TestCase):
         build.assert_not_called()
         version.assert_not_called()
 
-    def test_bad_range_or_full_sha_never_reaches_activation(self):
+    def test_bad_public_head_range_or_server_complete_never_reaches_activation(self):
         bundle, runner = self.bundle(), self.runner()
-        for fault in ("range-status", "range-header", "range-bytes", "full-sha"):
+        for fault in ("head-status", "head-length", "range-status", "range-header", "range-bytes", "complete"):
             with self.subTest(fault=fault):
                 http = PublisherFixture(self.c, bundle, fault=fault)
                 with mock.patch.object(RELEASE, "source_state", return_value=HEAD):

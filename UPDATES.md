@@ -29,13 +29,24 @@ Only a complete file passing the original size, hashes and glyph/license checks
 replaces the cached font; an ignored Range response restarts only its temporary file.
 
 Both the APK and the verified delta are uploaded through the original Site's
-authenticated `__publisher` API. The server checks chunks and whole objects;
-the client checks public full bytes and Range responses. Only then does one
-conditional activation replace the ed896 manifest. The old stable channel and
+authenticated `__publisher` API. The server checks chunks and streams the whole
+assembled object through SHA-256 before marking it ready. The publisher checks
+the public HEAD length and a 64-byte Range against the local artifact, without
+downloading the whole APK or delta again. Only then does one conditional
+activation replace the ed896 manifest. The old stable channel and
 historical objects remain available. An inefficient delta is still retained and
 uploaded, but omitted from the App's delta choices so the full APK is used.
 If uploading fails after preparation, the next run with the same source reuses
 the signed bundle and reconciles existing parts instead of rebuilding it.
+
+Missing parts of each artifact upload with two concurrent workers by default.
+`upload_concurrency` accepts only `1` or `2`; `1` retains serial uploads. Each
+worker opens its own file handle and HTTP client, checks the part SHA, and holds
+at most one 16 MiB payload. Parts may finish out of order. Any failure stops new
+work and waits for in-flight requests before returning; successful remote parts
+remain available for the next reconciliation. Blob completion, public HEAD/Range
+verification and manifest activation remain ordered after all uploads
+succeed. Connection concurrency does not guarantee a fixed speed increase.
 
 The upload credential is protected with Windows current-user DPAPI and a local
 file ACL. Sites stores only its digest as the secret `PUBLISHER_TOKEN_SHA256`.
@@ -49,11 +60,12 @@ immediately. Upload and activation requests are never automatically replayed.
 Each run's `network.log` records the method, path, transport stage and error
 class without credentials, query strings or response bodies.
 
-When `aria2` is configured, public artifact verification uses the existing local
-downloader with four connections, bounded retries, TLS verification and the
-signed SHA-256 checksum. It also independently checks the completed file's exact
-size and hash; public HEAD and Range checks cover the original Site URL.
-Without that optional tool, the existing Python download path remains available.
+Generating a delta requires the exact signed baseline APK. If no matching copy
+is already cached locally, the optional `aria2` tool downloads that necessary
+baseline with bounded retries, TLS verification and its signed SHA-256 checksum;
+the completed baseline's size and hash are independently checked. Without that
+tool, the existing Python download path remains available. This baseline download
+is separate from publication checks, which never re-download complete artifacts.
 An interrupted upload can reuse an older signed bundle after script-only source
 updates when its build commit is an ancestor and all application inputs are
 unchanged. The registered source commit remains the APK's actual build commit;
@@ -67,8 +79,8 @@ Read-only previews:
 ```
 
 Normal execution publishes automatically: successful local checks, APK signature
-verification, exact delta reconstruction, upload and complete public SHA/Range
-verification are followed by conditional manifest activation. It reports
+verification, exact delta reconstruction, upload, server whole-object SHA and
+public HEAD/Range verification are followed by conditional manifest activation. It reports
 `published` only after the public update manifest matches the signed bytes.
 Failed checks, changed source or baseline, and unconfirmed activation stop the
 run with the existing artifacts preserved. A stale external core-QA record

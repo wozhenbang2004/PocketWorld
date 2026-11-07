@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import concurrent.futures
 import ctypes
 import hashlib
 import http.client
@@ -16,6 +17,7 @@ import shutil
 import ssl
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -83,10 +85,18 @@ def sanitize(text):
     return re.sub(r"(https?://)[^/\s@]+@", r"\1[redacted]@", text)
 
 
+def upload_concurrency(config):
+    value = config.get("upload_concurrency", 2)
+    if type(value) is not int or not 1 <= value <= 2:
+        raise ReleaseError("上传并发数必须是整数 1 或 2。")
+    return value
+
+
 def load_config(path):
     c = read_json(path)
     if c.get("schema") != 1 or any(key in c for key in ("token", "password", "access_token")):
         raise ReleaseError("配置格式不正确；上传凭据只能保存在受保护文件中。")
+    c["upload_concurrency"] = upload_concurrency(c)
     for key in ("repo", "work_root", "artifact_root", "cache_root"):
         c[key] = str(no_system_drive(c[key]))
     if c.get("aria2") is not None:
@@ -207,17 +217,25 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 class Http:
     def __init__(self, origin, token=None, proxy=None, log_path=None):
         self.origin, self.token = origin, token
+        self.proxy = proxy
         self.log_path = Path(log_path) if log_path else None
+        self._note_lock = threading.Lock()
         handlers = [NoRedirect()]
         if proxy:
             handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
         self.opener = urllib.request.build_opener(*handlers)
 
+    def fork(self):
+        peer = Http(self.origin, self.token, self.proxy, self.log_path)
+        peer._note_lock = self._note_lock
+        return peer
+
     def note(self, message):
-        print(message, flush=True)
-        if self.log_path:
-            with self.log_path.open("a", encoding="utf-8") as log:
-                log.write(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + " " + message + "\n")
+        with self._note_lock:
+            print(message, flush=True)
+            if self.log_path:
+                with self.log_path.open("a", encoding="utf-8") as log:
+                    log.write(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + " " + message + "\n")
 
     def network_error(self, method, path, error, stage):
         reason = getattr(error, "reason", error)
@@ -488,6 +506,7 @@ def artifact_descriptors(bundle):
 
 
 def upload_release(runner, http, bundle, baseline_sha, head, artifact_source_commit=None, stage_only=False):
+    concurrency = upload_concurrency(runner.c)
     artifact_source_commit = artifact_source_commit or head
     if not re.fullmatch(r"[a-f0-9]{40}", artifact_source_commit):
         raise ReleaseError("构建来源不是完整源码提交。")
@@ -508,21 +527,56 @@ def upload_release(runner, http, bundle, baseline_sha, head, artifact_source_com
         state = by_hash[sha]
         if not state["ready"]:
             local = owned(Path(bundle) / descriptor["path"].lstrip("/"), bundle)
-            with local.open("rb") as source:
-                for index in state["missingParts"]:
-                    source.seek(index * PART_BYTES)
-                    data = source.read(descriptor["parts"][index]["bytes"])
-                    if hashlib.sha256(data).hexdigest() != descriptor["parts"][index]["sha256"]:
+            missing = state["missingParts"]
+            if not isinstance(missing, list) or any(type(index) is not int or not 0 <= index < len(descriptor["parts"]) for index in missing) or len(set(missing)) != len(missing):
+                raise ReleaseError("站点缺失块清单不符合已验证产物。")
+            stopped, clients = threading.Event(), threading.local()
+
+            def send_part(index):
+                if stopped.is_set():
+                    return
+                try:
+                    part = descriptor["parts"][index]
+                    with local.open("rb") as source:
+                        source.seek(index * PART_BYTES)
+                        data = source.read(part["bytes"])
+                    if len(data) != part["bytes"] or hashlib.sha256(data).hexdigest() != part["sha256"]:
                         raise ReleaseError("上传块与已经验证的文件不一致。")
-                    with http.request(prefix + "/blobs/" + sha + "/parts/" + str(index), "PUT", data, auth=True,
-                                      headers={"Content-Type": "application/octet-stream"}) as response:
+                    if not hasattr(clients, "http"):
+                        clients.http = http.fork()
+                    if stopped.is_set():
+                        return
+                    with clients.http.request(prefix + "/blobs/" + sha + "/parts/" + str(index), "PUT", data, auth=True,
+                                              headers={"Content-Type": "application/octet-stream"}) as response:
                         response.read(4096)
-                    print("已上传 " + Path(descriptor["path"]).name + " 块 " + str(index + 1) + "/" + str(len(descriptor["parts"])), flush=True)
+                    return index
+                except BaseException:
+                    stopped.set()
+                    raise
+
+            # Futures retain only indices. Each worker owns one file handle and
+            # at most one part's bytes; shutdown waits for every in-flight PUT.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="pocketworld-upload") as workers:
+                futures = [workers.submit(send_part, index) for index in missing]
+                completed = len(descriptor["parts"]) - len(missing)
+                try:
+                    for future in concurrent.futures.as_completed(futures):
+                        index = future.result()
+                        if index is not None:
+                            completed += 1
+                            print("已上传 " + Path(descriptor["path"]).name + " 块 " + str(index + 1) + "/" + str(len(descriptor["parts"]))
+                                  + "（完成 " + str(completed) + "/" + str(len(descriptor["parts"])) + "，并行 " + str(concurrency) + "）", flush=True)
+                except BaseException:
+                    stopped.set()
+                    for future in futures:
+                        future.cancel()
+                    raise
             http.json(prefix + "/blobs/" + sha + "/complete", "POST", {})
-        public_check = runner.directory / ("public-" + sha + ".verified")
-        if public_check.exists():
-            public_check = runner.directory / ("public-" + sha + "-" + uuid.uuid4().hex[:6] + ".verified")
-        download_exact(http, http.origin + descriptor["path"], public_check, descriptor, runner=runner)
+        # Server complete/ready already binds the full byte count and SHA. Public
+        # publication checks stay small; full baseline downloads are separate.
+        with http.request(descriptor["path"], method="HEAD") as response:
+            if response.status != 200 or response.headers.get("Content-Length") != str(descriptor["bytes"]):
+                raise ReleaseError("新产物的 HEAD 状态或长度校验失败。")
         length = min(64, descriptor["bytes"])
         with http.request(descriptor["path"], headers={"Range": "bytes=0-" + str(length - 1)}) as response:
             if response.status != 206 or response.headers.get("Content-Range") != "bytes 0-" + str(length - 1) + "/" + str(descriptor["bytes"]):
@@ -662,12 +716,12 @@ def run_release(c, prepare_only=False, stage_only=False):
         if result.get("status") != ("staged" if stage_only else "published") or result.get("activated") is not (not stage_only):
             raise ReleaseError("发布结果未满足当前模式的完成条件；没有记录发布成功。")
         if not stage_only:
-            print("[6/7] 公开字节与范围校验通过，已最后激活签名清单。", flush=True)
+            print("[6/7] 公开 HEAD 与范围校验通过，已最后激活签名清单。", flush=True)
             write_json(directory / "published.json", result)
             write_json(previous, result | {"stage": "published", "bundle": str(bundle)})
             print("[7/7] 发布完成", flush=True)
         else:
-            print("[6/7] 整包和差分已上传，公开字节与范围校验通过。", flush=True)
+            print("[6/7] 整包和差分已上传，公开 HEAD 与范围校验通过。", flush=True)
             write_json(directory / "staged.json", result)
             write_json(previous, result | {"stage": "staged", "bundle": str(bundle),
                                           "baselineManifestSha256": base_sha})
@@ -715,7 +769,7 @@ def main(argv=None):
         c = load_config(args.config)
         if args.plan:
             result = {"mode": "plan_only", "repo": c["repo"], "origin": c["origin"], "noBuildOrPublication": True,
-                      "stages": ["保留现场并同步main", "线上签名基线及实际本地版本", "本地检查与一次APK构建", "同签名差分生成及完整重建", "整包与差分上传/公开核验", "自动激活签名清单", "回读公开原字节后确认发布"],
+                      "stages": ["保留现场并同步main", "线上签名基线及实际本地版本", "本地检查与一次APK构建", "同签名差分生成及完整重建", "整包与差分上传/HEAD与范围核验", "自动激活签名清单", "回读公开清单原字节后确认发布"],
                       "uploadResume": "同源码且已有有效产物时复用，不重复打包", "readiness": check(c)}
         elif args.check:
             result = check(c)

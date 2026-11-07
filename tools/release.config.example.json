@@ -13,6 +13,7 @@
   "build_tools": "F:/java_structure/android_sdk/build-tools/35.0.0",
   "openssl": "D:/developer/scoop/apps/git/current/usr/bin/openssl.exe",
   "aria2": "D:/developer/scoop/shims/aria2c.exe",
+  "upload_concurrency": 2,
   "org_json_classpath": "E:/PocketWorld-cache/gradle-windows/caches/modules-2/files-2.1/org.json/json/20240303/ebb88e8fb5122b7506d5cf1d69f1ccdb790d22a/json-20240303.jar",
   "manifest_public_key": "E:/PocketWorld-dev/signing/update-manifest-public.pem",
   "manifest_private_key": "E:/PocketWorld-dev/signing/update-manifest-private.pem",
