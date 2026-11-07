@@ -66,7 +66,7 @@ const sceneExpectations = {
   'commitments-list': { heading: '单项委托', button: '新增委托', rows: ['[data-commitment-id]', 1] },
   'commitment-detail': { heading: '确认项目发布结果', button: '确认已完成' },
   'commitment-receipts': { heading: '通知结果待核对', button: '查询本机通知' },
-  'commitment-review': { dialog: '确认已经完成', button: '确认确认已经完成', checkbox: '我已核对这次原记录与操作' },
+  'commitment-review': { dialog: '确认已经完成', button: '确认完成', checkbox: '我已核对这次原记录与操作' },
   'commitment-edit': { dialog: '编辑当前委托', textbox: '承诺目标', value: '确认项目发布结果', button: '核对保存内容' },
   'commitment-policy': { dialog: '承诺跟进设置', checkbox: '启用跟进通知', button: '核对设置' },
   'commitment-create': { dialog: '新增明确委托', textbox: '承诺目标', value: '', button: '核对保存内容' },

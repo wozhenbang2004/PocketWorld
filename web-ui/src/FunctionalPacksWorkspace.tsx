@@ -86,7 +86,7 @@ export function FunctionalPacksWorkspace({ state, run, supported, registerTransi
   const selectedMatches = !!review && review.selectionMatches === true && packSelectionMatches(review), actionable = !!review && review.data.ready === true && selectedMatches;
   const doc = view?.document || {}, rows = packRows(view?.snapshot?.packs);
   return <div className="pw-functional-packs pw-ecosystem-depth">
-    <header className="pw-eco-workspace-heading"><div><h3>完整功能包</h3><p>一起核对相关组件，安装后仍分别配置和启用。</p></div></header>
+    <header className="pw-eco-workspace-heading"><div><h3>完整功能包</h3></div></header>
     {error && <p className="pw-field-error" role="alert">{error}</p>}{notice && <p className="pw-field-hint" role="status">{notice}</p>}
     <div className="pw-form-actions"><Button disabled={busy || !view || doc.status === 'pending'} onClick={choose}>选择准确功能包</Button><Button variant="secondary" disabled={busy} onClick={view ? refresh : open}>读取当前安装</Button>{busy && <Button variant="ghost" onClick={stop}>停止后续组件</Button>}</div>
     {busy && <p className="pw-field-hint" role="status">正在读取原包或处理原组件…</p>}

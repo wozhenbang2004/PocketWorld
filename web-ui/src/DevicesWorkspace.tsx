@@ -158,7 +158,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         <div className="pw-device-heading-copy">
           {peerId && !desktopOpen && <Button variant="ghost" className="pw-device-back" leadingIcon={ArrowLeft} disabled={busy} onClick={() => { setPeerId(''); setForm(''); setRaw(''); }}>所有设备</Button>}
           <h2 tabIndex={-1}>{desktopOpen ? '电脑桌面' : peer ? name(peer) : peerId ? '设备详情' : '我的设备'}</h2>
-          {!desktopOpen && <p>{peer ? peer.platform || '已配对设备' : '连接你信任的设备，查看授权与关联任务。'}</p>}
+          {!desktopOpen && peer && <p>{peer.platform || '已配对设备'}</p>}
         </div>
         {!desktopOpen && <div className="pw-device-heading-actions">
           <Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="刷新原设备状态" title="刷新原设备状态" disabled={busy} onClick={refresh} />
@@ -171,7 +171,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         {error && <p className="pw-device-feedback" role="alert">{error}</p>}
         {notice && <p className="pw-device-feedback" role="status">{notice}</p>}
         {busy && <p role="status" className="pw-device-loading">正在读取原设备回执…</p>}
-        {!snapshot && !busy && <div className="pw-device-empty"><h3>先读取设备状态</h3><p>当前还没有完整的设备记录。刷新后可查看连接和配对进度。</p><Button variant="secondary" onClick={refresh}>读取设备状态</Button></div>}
+        {!snapshot && !busy && <div className="pw-device-empty"><h3>设备状态待读取</h3><Button variant="secondary" onClick={refresh}>读取设备状态</Button></div>}
         {snapshot && !peerId && <>
           {pairings.length > 0 && <section className="pw-device-section" aria-label="等待核对的原配对">
             <header className="pw-device-section-heading"><h3>配对待确认</h3><span>{pairings.length} 项</span></header>
@@ -190,7 +190,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               </Button>)}
             </div> : <div className="pw-device-empty">
               <span className="pw-device-empty-icon" aria-hidden="true"><Monitor size={24} /><Smartphone size={19} /></span>
-              <h3>把另一台设备连接进来</h3>
+              <h3>尚未配对设备</h3>
               <p>使用另一台设备的短时邀请，或从这台手机创建邀请。配对前，你会核对两端指纹和准确权限。</p>
               <Button disabled={busy} onClick={() => { setForm('add'); setRaw(''); setAddress(''); }}>配对第一台设备</Button>
             </div>}

@@ -95,7 +95,7 @@ export const SECONDARY_DOMAINS = [
   { id: 'mcp', title: 'MCP 工具', detail: '配置导入、权限预览和授权', group: '协作与扩展', icon: RiPuzzle2Line },
   { id: 'teams', title: '团队', detail: '成员、共同对话和工作分配', group: '协作与扩展', icon: RiTeamLine },
   { id: 'groups', title: '群协作', detail: '参与者、任务、材料与成果投递', group: '协作与扩展', icon: RiTeamLine },
-  { id: 'media', title: '生图与语音文件', detail: '提供方、原提交和结果附件', group: '语音与媒体', icon: RiMicLine },
+  { id: 'media', title: '媒体', detail: '提供方、原提交和结果附件', group: '语音与媒体', icon: RiMicLine },
   { id: 'realtime', title: '实时通话', detail: '邀请、当前会话与音视频权限', group: '语音与媒体', icon: RiMicLine },
   { id: 'proxy', title: '本机模型服务', detail: '运行状态、端点与近期调用', group: '语音与媒体', icon: RiComputerLine },
 ] as const;
@@ -348,8 +348,8 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
     placeholder={stale ? '先返回核对连接' : canRetainApiKey ? '已保存 · 留空保留' : '输入 API 密钥'} hint={apiKeyHint} />;
   return <div data-model-layer="edit" className="pw-model-edit-layer">
     <section className="pw-model-editor" aria-label={adding ? '新连接配置' : '当前连接配置'}>
-      <header className="pw-connection-editor-heading"><span className="pw-model-eyebrow">{adding ? '新 API 连接' : first(original.current || {}, ['name', 'label', 'id'], '原 API 连接')}</span><h2>连接与凭据</h2>{!adding && <p>原修订 {text(original.current?.revision, '未提供')} · 保存后更新原连接</p>}</header>
-      <p className="pw-model-editor-context">{adding ? '保存后使用这项 API 配置。已有工作保留原连接。' : '修改当前 API 配置；测试连接不会切换模型。'}</p>
+      <div className="pw-model-editor-scroll">
+      <header className="pw-connection-editor-heading"><h2>{adding ? '新连接' : first(original.current || {}, ['name', 'label', 'id'], 'API 连接')}</h2></header>
       <section className="pw-model-form-section" aria-label="连接身份"><h3>服务与模型</h3><div className="pw-form-grid">
         <SelectField label="接口协议" options={providers} value={form.provider} onChange={value => change('provider', value)} />
         {bedrock && <TextField label="AWS 区域" value={form.bedrockRegion} onChange={value => change('bedrockRegion', value)} placeholder="例如 us-east-1" autoComplete="off" />}
@@ -364,7 +364,7 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
           <Accordion key={savedAwsExpired ? 'expired' : 'saved'} defaultExpandedKeys={savedAwsExpired ? ['aws-session'] : []} variant="divided"><AccordionItem id="aws-session" title="替换短期凭据" description="整组替换三项凭据与到期时间">{awsFields}</AccordionItem></Accordion>
         </> : awsFields}
       </> : canRetainApiKey ? <><p className="pw-credential-summary"><RiShieldCheckLine size={16} aria-hidden="true" />密钥已保存，留空保留原密钥。</p><Accordion variant="divided"><AccordionItem id="api-credential" title="替换 API 密钥" description="仅在明确保存后更换">{apiKeyField}</AccordionItem></Accordion></> : <div className="pw-form-grid">{apiKeyField}</div>}</section>
-      <div className="pw-model-options-heading"><h3>能力与请求选项</h3><p>按服务商的实际支持设置。更换地址、协议或模型后重新核对。</p></div>
+      <div className="pw-model-options-heading"><h3>能力与请求选项</h3></div>
       <Accordion className="pw-model-advanced" variant="divided">
         <AccordionItem id="advanced" title="高级设置" description="输出上限、图像输入与截图">
           <div className="pw-form-grid">
@@ -383,7 +383,6 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
           <ModelConnectionOptions section="cache" value={form.compatibility} onChange={changeCompatibility} provider={form.provider} adding={adding} revision={object(config.compatibility).revision} />
         </AccordionItem>}
       </Accordion>
-      {formError && <p role="alert" className="pw-field-error">{formError}</p>}
       {(unknownSave || stale) && <div ref={outcomeNotice} className="pw-request-notice" role="status"><p>{unknownSave ? '原连接的保存结果待核对；本表单不会再次保存。请读取连接列表，核对原记录与修订。' : '这项原连接已被更新；旧草稿没有套用新修订。请返回详情核对后重新编辑。'}</p><Button variant="secondary" onClick={onInspect}>返回核对连接</Button></div>}
       {policyNeedsSave && <p className="pw-field-hint" role="status">先保存兼容与缓存设置，再测试原连接。</p>}
       {bedrock && <p className="pw-field-hint" role="status">{bedrockNeedsSave ? '先保存这项连接和有效短期凭据，再测试已保存的原连接。' : '测试将使用已保存的原区域、模型和短期凭据。'} 本连接使用原生 Messages 请求，不添加缓存提示。</p>}
@@ -393,9 +392,9 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
         {testResult.inferenceReference?.taskId && <CapabilityAction action="tasks.open" supported={supported} run={run} args={{ id: testResult.inferenceReference.taskId }}>查看本次实际调用与用量</CapabilityAction>}
       </div>}
       {unknownTest && <div ref={outcomeNotice} className="pw-request-notice" role="status"><p>原测试结果待核对；本表单不会自动重试或再次发送。请先核对原调用与连接，再明确开始新的测试。</p><Button variant="secondary" onClick={onInspect}>返回核对连接</Button></div>}
-      {state.error && <p className="pw-field-error" role="alert">{text(state.error)}</p>}
-      <p className="pw-field-hint pw-model-test-cost">测试会向此服务发送文字请求，可能产生费用。保存配置与测试通过分别核对。</p>
-      <div className="pw-form-actions pw-model-save-actions"><Button variant="secondary" disabled={stale || unknownSave || unknownTest || bedrockNeedsSave || policyNeedsSave || Boolean(policyError) || requesting || state.modelTesting || state.modelSelectionBusy || !supported('models.connection.test')} onClick={() => request('models.connection.test')}>{state.modelTesting ? '测试中…' : '测试连接'}</Button><PressButton compact disabled={stale || unknownSave || Boolean(policyError) || requesting || state.modelSaving || state.modelTesting || state.modelSelectionBusy || !supported(saveAction)} onClick={() => request(saveAction)}>{state.modelSaving ? '保存中…' : adding ? '添加并用于后续任务' : '保存原连接'}</PressButton></div>
+      </div>
+      <footer className="pw-model-editor-footer">{(formError || state.error) && <p role="alert" className="pw-field-error">{formError || text(state.error)}</p>}<p className="pw-field-hint pw-model-test-cost">测试可能产生费用。{adding ? '添加后用于后续任务。' : '保存不会切换模型。'}保存不代表测试通过。</p>
+      <div className="pw-form-actions pw-model-save-actions"><Button variant="ghost" disabled={requesting || state.modelSaving || state.modelTesting} onClick={onInspect}>返回</Button><Button variant="secondary" disabled={stale || unknownSave || unknownTest || bedrockNeedsSave || policyNeedsSave || Boolean(policyError) || requesting || state.modelTesting || state.modelSelectionBusy || !supported('models.connection.test')} onClick={() => request('models.connection.test')}>{state.modelTesting ? '测试中…' : '测试连接'}</Button><PressButton compact disabled={stale || unknownSave || Boolean(policyError) || requesting || state.modelSaving || state.modelTesting || state.modelSelectionBusy || !supported(saveAction)} onClick={() => request(saveAction)}>{state.modelSaving ? '保存中…' : adding ? '添加并使用' : '保存连接'}</PressButton></div></footer>
     </section>
     <SettingsDialog isOpen={Boolean(transport)} title="允许这个明文模型连接？" onClose={clearSecret}>
       {transport && <><Facts items={[[ '协议', providers.find(x => x.id === transport.provider)?.label ], ['地址', transport.displayTarget || transport.url]]} />
@@ -419,7 +418,7 @@ function ModelConnections({ state, data, supported, run, navigate, open }: { sta
   const account = state.modelRoute === 'account';
   const configured = Boolean(text(state.baseUrl).trim());
   return <section className="pw-model-connections" data-model-layer="connections" aria-label="连接列表">
-      <header className="pw-settings-object-heading"><div><h2>API 连接</h2><p>选择一项连接，核对后用于新任务。</p></div><Button variant="secondary" leadingIcon={RiAddLine} disabled={!supported('models.connection.add')} onClick={() => open({ kind: 'add' })}>添加 API 连接</Button></header>
+      <header className="pw-settings-object-heading"><div><h2>API 连接</h2></div><Button variant="secondary" leadingIcon={RiAddLine} disabled={!supported('models.connection.add')} onClick={() => open({ kind: 'add' })}>添加 API 连接</Button></header>
       <div className="pw-settings-links">
         {configured && selectedConnection && <Button variant="ghost" aria-label="查看当前 API 连接" leadingIcon={RiLink} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => open({ kind: 'connection', id: selectedId })}>
           <span><span>{first(selectedConnection || {}, ['name', 'label'], 'API 连接设置')}</span><small>{account ? '保留的连接' : '后续任务默认'}{' · '}{selectedConnection.credentialStatus === 'expired' ? '短期凭据已过期' : selectedConnection.hasApiKey || selectedConnection.hasAwsSession ? '凭据已保存' : '地址、凭据与能力'}</small></span>
@@ -561,7 +560,7 @@ function PhoneSettings({ state, supported, run, navigate, registerTransientBack,
   };
   return <div ref={journey.root} tabIndex={-1} className="pw-phone-workspace" data-phone-view={journey.view}>
     {journey.view === 'list' ? <>
-      <header className="pw-phone-overview"><p className="pw-model-eyebrow">这台手机</p><h2>能力与偏好</h2><p role="status">{first(ready, ['message', 'summary', 'status'], '尚未核对执行能力')}</p></header>
+      <header className="pw-phone-overview"><h2>能力与偏好</h2><p role="status">{first(ready, ['message', 'summary', 'status'], '尚未核对执行能力')}</p></header>
       <div className="pw-settings-links pw-phone-entries">
         <DataOperationRow id="execution" title="执行权限与连接" detail={`界面读取 ${flag(state.accessibilityEnabled, '已连接', '未连接')} · 任务通知 ${flag(state.notificationsEnabled)}`} onOpen={journey.open}/>
         <DataOperationRow id="observation" title="本地观察与截图" detail={`取图 ${flag(state.localCaptureAllowed)} · OCR ${flag(state.localOcrAllowed)}`} onOpen={journey.open}/>
@@ -570,7 +569,7 @@ function PhoneSettings({ state, supported, run, navigate, registerTransientBack,
         <DataOperationRow id="browser" title="浏览器" detail="网页研究与内置浏览器" onOpen={journey.open}/>
       </div>
       <div className="pw-phone-app-entry"><CapabilityAction row action="settings.openAppUpdates" supported={supported} run={run}><span><span>应用更新</span><small>检查新版本与管理下载</small></span></CapabilityAction></div>
-    </> : <DataOperationHeading title={sections[journey.view]?.title || '手机能力'} parent="手机能力" description={sections[journey.view]?.description || ''} onBack={() => journey.open('list')}/>}
+    </> : <DataOperationHeading title={sections[journey.view]?.title || '手机能力'} parent="手机能力" description="" onBack={() => journey.open('list')}/>}
     {(state.speaking || readout.active) && <section className="pw-phone-live-audio" aria-label="当前朗读"><span role="status">{state.speaking ? '正在朗读回复' : '正在播报任务状态'}</span><div>{state.speaking && <CapabilityAction action="speech.stop" supported={supported} run={run}>停止朗读</CapabilityAction>}{readout.active && <CapabilityAction action="speech.stopTaskAnnouncement" args={{ readoutId: readout.readoutId }} supported={supported} run={run}>停止这次状态提示</CapabilityAction>}</div></section>}
     {journey.view === 'execution' && <section className="pw-phone-detail" aria-label="执行权限与连接">
       <p className="pw-detail-status" role="status">{first(ready, ['message', 'summary', 'status'], '尚未核对执行能力')}</p>
@@ -588,7 +587,7 @@ function PhoneSettings({ state, supported, run, navigate, registerTransientBack,
       {!observationKnown && <p className="pw-field-hint" role="status">尚未读取观察设置，请刷新当前状态后再更改。</p>}
       <StretchSwitch label="允许本地按需取图" description="更改用于后续运行；关闭后不为 OCR 采集像素。" checked={state.localCaptureAllowed === true} disabled={!observationKnown || !supported('settings.saveLocalObservation')} onChange={capture => { void run('settings.saveLocalObservation', { capture, ocr: state.localOcrAllowed === true }).catch(() => {}); }}/>
       <StretchSwitch label="允许本地 OCR" description="像素在本地识字；有来源的识别文字可发送给已选推理服务。" checked={state.localOcrAllowed === true} disabled={!observationKnown || !supported('settings.saveLocalObservation')} onChange={ocr => { void run('settings.saveLocalObservation', { capture: state.localCaptureAllowed === true, ocr }).catch(() => {}); }}/>
-      <div className="pw-phone-preference-section"><h3>结果截图</h3>{typeof screenshotPolicy.revision === 'number' ? <RadioOptions label="新结果截图的本机留存" value={text(screenshotPolicy.retentionMillis)} options={[{ id: '0', label: '不保存新截图' }, { id: '86400000', label: '1 天' }, { id: '604800000', label: '7 天' }, { id: '2592000000', label: '30 天' }]} isDisabled={Boolean(state.taskScreenshotSaving) || !supported('privacy.screenshots.save')} onChange={value => { void run('privacy.screenshots.save', { revision: screenshotPolicy.revision, retentionMillis: Number(value) }).catch(() => {}); }}/> : <CapabilityAction action="privacy.screenshots.read" supported={supported} run={run}>读取截图留存设置</CapabilityAction>}
+      <div className="pw-phone-preference-section"><h3>结果截图</h3>{typeof screenshotPolicy.revision === 'number' ? <SelectField label="本机留存时间" value={text(screenshotPolicy.retentionMillis)} options={[{ id: '0', label: '不保存新截图' }, { id: '86400000', label: '1 天' }, { id: '604800000', label: '7 天' }, { id: '2592000000', label: '30 天' }]} isDisabled={Boolean(state.taskScreenshotSaving) || !supported('privacy.screenshots.save')} onChange={value => { void run('privacy.screenshots.save', { revision: screenshotPolicy.revision, retentionMillis: Number(value) }).catch(() => {}); }}/> : <CapabilityAction action="privacy.screenshots.read" supported={supported} run={run}>读取截图留存设置</CapabilityAction>}
       <p className="pw-field-hint">结果截图使用本机密钥加密。设置只影响之后生成的截图；旧图保留到你主动删除或被同一任务的新结果替换。可从原任务核对中删除本机截图。</p></div>
     </section>}
     <section className="pw-phone-detail" hidden={journey.view !== 'appearance'} inert={journey.view !== 'appearance'}><AppearanceSettings state={state} supported={supported} run={run}/><TypographySettings state={state} supported={supported} run={run}/></section>
@@ -1470,7 +1469,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
     return () => registerBackHandler?.(null);
   }, [registerBackHandler]);
   const back = () => { if (!consumeBack()) onBack(); };
-  const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof RiKey2Line }>, showCurrentModel = false) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate(item.id)}><span><span>{item.title}</span><small>{showCurrentModel && item.id === 'model-settings' ? text(state.modelName) || '尚未连接' : item.detail}</small></span></Button>)}</div>;
+  const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof RiKey2Line }>, showCurrentModel = false) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate(item.id)}><span><span>{item.title}</span>{showCurrentModel && item.id === 'model-settings' && <small>{text(state.modelName) || '尚未连接'}</small>}</span></Button>)}</div>;
   const refreshAction = page === 'background' ? 'background.refresh' : isModelPage ? 'models.snapshot' : page === 'memory' ? 'memory.list' : 'app.refresh';
   return <section className="pw-secondary pw-secondary-refactor" data-secondary-page={page} aria-label={pageTitle}>
     <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label={isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} onClick={back} /><div><h1>{pageTitle}</h1></div>{!['memory', 'memoryReview', 'teams'].includes(page) && <IconButton icon={RiRefreshLine} aria-label="刷新当前状态" title="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} />}{navigationTrigger}</header>
@@ -1481,8 +1480,8 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
         {(page === 'settings' || page === 'connections') ? <div className="pw-settings-home">
           <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="搜索设置" placeholder="搜索设置" value={query} onChange={setQuery} shape="rounded" />
           {query.trim() ? <section className="pw-settings-results" aria-label="匹配的设置">{settingRows(filtered)}{filtered.length === 0 && <Empty>没有匹配的设置。</Empty>}</section>
-            : <><div className="pw-settings-primary"><section className="pw-settings-frequent" aria-label="常用设置"><h2>常用设置</h2>{settingRows(frequentSettings, true)}</section><section className="pw-settings-execution"><h2>执行开关</h2><ExecutionControls state={state} supported={supported} run={run}/></section></div><section className="pw-settings-purpose"><h2>按用途查找</h2><Accordion variant="divided" className="pw-settings-groups" aria-label="按目的浏览设置" expandedKeys={expandedSettings} onExpandedChange={values => setExpandedSettings(new Set([...values].map(String)))} allowsMultipleExpanded>{SETTINGS_GROUPS.map(group => <AccordionItem id={group.id} key={group.id} title={group.title} description={group.detail} icon={group.icon} headingLevel={3} className="pw-settings-group">{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</AccordionItem>)}</Accordion></section></>}
-        </div> : settingsGroup ? <section className="pw-settings-group-page"><p className="pw-settings-page-intent">{settingsGroup.detail}</p>{settingRows(settingsGroup.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</section>
+            : <><div className="pw-settings-primary"><section className="pw-settings-frequent" aria-label="常用设置"><h2>常用设置</h2>{settingRows(frequentSettings, true)}</section><section className="pw-settings-execution"><h2>执行开关</h2><ExecutionControls state={state} supported={supported} run={run}/></section></div><section className="pw-settings-purpose"><h2>全部设置</h2><Accordion variant="divided" className="pw-settings-groups" aria-label="按目的浏览设置" expandedKeys={expandedSettings} onExpandedChange={values => setExpandedSettings(new Set([...values].map(String)))} allowsMultipleExpanded>{SETTINGS_GROUPS.map(group => <AccordionItem id={group.id} key={group.id} title={group.title} icon={group.icon} headingLevel={3} className="pw-settings-group">{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</AccordionItem>)}</Accordion></section></>}
+        </div> : settingsGroup ? <section className="pw-settings-group-page">{settingRows(settingsGroup.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</section>
           : isModelPage ? <>
             <div className="pw-model-list" data-model-layer={modelView.kind === 'model' ? 'model' : 'list'} hidden={!modelBrowseActive}>
               {modelView.kind !== 'model' && <header className="pw-model-current"><div><span className="pw-model-eyebrow">后续任务默认模型</span><strong>{text(state.modelName) || '尚未连接'}</strong><span className="pw-model-origin">{state.modelRoute === 'account' ? 'ChatGPT 账号' : MODEL_PROVIDERS[text(state.modelProvider)] || 'API 连接'}</span></div><IconButton className="pw-utility-icon" icon={RiSettings3Line} aria-label="管理连接" title="管理连接" onClick={() => openModel({ kind: 'connections' })} /></header>}

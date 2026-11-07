@@ -72,7 +72,7 @@
 .pw-local-review { min-width: 0; font-size: 13px; line-height: 22px; }
 .pw-local-review p { margin-block: 14px; overflow-wrap: anywhere; }
 .pw-local-review .pw-facts { margin: 0 0 18px; padding: 14px; border: 0; border-radius: 12px; background: var(--pw-canvas, #f5f5f5); }
-.pw-local-workspace button:not([slot="trigger"]), .pw-local-review button { max-width: 100%; height: auto; min-height: 32px; }
+.pw-local-workspace button:not([slot="trigger"]), .pw-local-review button { max-width: 100%; height: auto; min-height: 44px; }
 .pw-local-workspace button:not([slot="trigger"]) > span, .pw-local-review button > span { min-width: 0; flex-shrink: 1; white-space: normal; overflow-wrap: anywhere; }
 @media (max-width: 760px) {
   .pw-local-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
@@ -95,15 +95,17 @@
 
 /* One work surface, with output before secondary tools. Existing xterm and
  * BoardUI disclosures keep their identities through these layout changes. */
-.pw-local-workspace .pw-local-heading { margin-bottom: 28px; }
+.pw-local-workspace .pw-local-heading { margin-bottom: 16px; }
 .pw-local-workspace .pw-local-main { box-shadow: none; border-radius: 16px; }
-.pw-local-workspace .pw-local-panel-heading { margin-bottom: 24px; }
+.pw-local-workspace .pw-local-panel-heading { margin-bottom: 20px; }
+.pw-local-workspace .pw-local-setup-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; position: sticky; top: -1px; z-index: 2; padding-block: 8px 12px; background: var(--pw-surface, #fff); }
+.pw-local-setup-heading > button { flex: none; }
 .pw-local-workspace .pw-local-session-status { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; margin: 0 0 16px; }
 .pw-local-workspace .pw-local-session-status > span { font-size: 11px; padding: 3px 8px; border-radius: 6px; background: var(--pw-inset); }
 .pw-local-workspace .pw-local-session-status > p { margin: 0; font-size: 12px; }
 .pw-local-workspace .pw-local-disclosures .pw-local-input { margin-top: 4px; }
 .pw-local-workspace .pw-local-source { background: transparent; border-radius: 0; padding: 12px 0 0; }
-.pw-local-workspace .pw-local-setup-step + .pw-local-setup-step { padding-top: 24px; border-top: 1px solid color-mix(in srgb,var(--pw-ink) 6%,transparent); }
+.pw-local-workspace .pw-local-setup-step + .pw-local-setup-step { margin-top: 20px; padding-top: 20px; border-top: 1px solid color-mix(in srgb,var(--pw-ink) 6%,transparent); }
 .pw-local-workspace .pw-local-runtime { margin-top: 28px; }
 .pw-local-workspace .pw-local-runtime-row + .pw-local-runtime-row { border-top: 1px solid color-mix(in srgb,var(--pw-ink) 6%,transparent); }
 .pw-project-execution .pw-local-screen-toolbar { align-items: center; margin-block: 4px 12px; }
@@ -119,3 +121,7 @@
 .pw-project-execution .pw-local-disclosures { margin-top: 20px; }
 .pw-project-execution button[slot="trigger"] { min-height: 48px; }
 @media(max-width:640px){.pw-local-workspace .pw-local-heading h2 { font-size: 20px; }.pw-local-workspace .pw-local-main { padding: 20px 18px; }.pw-local-workspace .pw-local-heading { margin-bottom: 20px; }.pw-project-execution .pw-local-screen-toolbar { flex-direction: row; align-items: center; }.pw-project-execution .pw-local-screen-toolbar > button { flex: none; }}
+
+@media(max-width:520px){.pw-local-workspace .pw-local-setup-heading{align-items:flex-start;flex-direction:column;gap:10px}.pw-local-setup-heading > button{width:100%;justify-content:center}.pw-local-workspace .pw-local-panel-heading h2{font-size:18px;line-height:27px}}
+
+@media(min-width:761px){.pw-local-workspace .pw-local-sessions{max-height:min(64dvh,680px);overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}}

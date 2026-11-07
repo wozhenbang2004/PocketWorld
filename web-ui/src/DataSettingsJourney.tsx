@@ -39,7 +39,7 @@ export function DataOperationRow({ id, title, detail, onOpen, disabled = false }
 export function DataOperationHeading({ title, parent, description, onBack, children }: { title: string; parent: string; description: string; onBack: () => void; children?: ReactNode }) {
   return <header className="pw-data-operation-heading">
     <Button variant="ghost" leadingIcon={RiArrowLeftLine} onClick={onBack}>返回{parent}</Button>
-    <div tabIndex={-1} data-operation-heading><p className="pw-model-eyebrow">{parent}</p><h2>{title}</h2><p>{description}</p></div>
+    <div tabIndex={-1} data-operation-heading><h2>{title}</h2>{description&&<p>{description}</p>}</div>
     {children}
   </header>;
 }

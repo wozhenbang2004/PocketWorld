@@ -171,7 +171,7 @@ export function BackgroundChecks({ state, supported, run, registerBack }: Props)
   const validField = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/.test(packageName) && field.trim().length > 0 && field.length <= 120;
   useEffect(() => { if (practice && !canConfirmPractice) setPractice(null); }, [canConfirmPractice]);
   const labels: Data = { helper: '助手认证', display: '独立显示会话', tree: '界面树', frame: '实际画面', click: '点击后的计数', ascii_input: '英文输入读回', chinese_input: '中文输入读回', scroll: '滚动后内容', back: '返回离开测试页', live_updates: '延时内容更新', main_screen_isolation: '主屏隔离', ime_isolation: '输入法隔离', rotation: '旋转后的画面与点击' };
-  return <section className="pw-settings-section pw-background-checks"><header className="pw-preference-heading"><h3>排查与演练</h3><p>先读取已有证据，需要时再明确开始演练。</p></header><Accordion variant="divided">
+  return <section className="pw-settings-section pw-background-checks"><header className="pw-preference-heading"><h3>排查与演练</h3></header><Accordion variant="divided">
     <AccordionItem id="background-diagnostics" title="脱敏诊断报告">
       <p className="pw-field-hint">预览版本、权限和连接事实。预览不会运行演练或申请新权限。</p>
       <Button variant="secondary" disabled={!available || !!pending || owner.diagnosticBusy || !supported('background.diagnostics.preview')} onClick={() => { setReport(null); void act('background.diagnostics.preview', {}, value => { diagnosticPreview(value); return '已读取诊断预览。'; }, value => setReport(diagnosticPreview(value))); }}>{owner.diagnosticBusy || pending === 'background.diagnostics.preview' ? '正在读取诊断…' : '预览脱敏诊断报告'}</Button>

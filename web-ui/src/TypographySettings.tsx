@@ -77,7 +77,7 @@ export function TypographySettings({ state, supported, run }: Props) {
   };
 
   return <section className="pw-typography-settings" aria-label="字体设置">
-    <div className="pw-typography-heading"><h3>字体</h3><p className="pw-field-hint">选择后预览，保存后应用到软件界面。</p></div>
+    <div className="pw-typography-heading"><h3>字体</h3></div>
     <div className="pw-typography-workbench"><div className="pw-typography-fields">
       <SelectField label="中文" options={options(CHINESE_FONTS)} value={draft.chinese} onChange={value => change('chinese', value)} isDisabled={locked || !canSave} />
       <SelectField label="英文与数字" options={options(LATIN_FONTS)} value={draft.latin} onChange={value => change('latin', value)} isDisabled={locked || !canSave} />
@@ -87,8 +87,8 @@ export function TypographySettings({ state, supported, run }: Props) {
       {preview === 'loading' && <p className="pw-field-hint" role="status">正在准备所选字体…</p>}
       {preview === 'error' && <div className="pw-typography-preview-error"><p className="pw-field-hint" role="status">字体预览暂未载入，当前选择已保留。</p><Button variant="ghost" size="small" onClick={() => setPreviewAttempt(value => value + 1)}>重试预览</Button></div>}
       <div className="pw-typography-specimens" hidden={preview !== 'ready'}>
-        <p lang="zh-CN" className="pw-typography-sample-cjk" style={{ fontFamily: fonts.chinese, fontWeight: 400 }}>今天，专注一件重要的事。</p>
-        <p lang="en" className="pw-typography-sample-latin" style={{ fontFamily: fonts.ui, fontWeight: 400 }}>Make room for what matters.</p>
+        <p lang="zh-CN" className="pw-typography-sample-cjk" style={{ fontFamily: fonts.chinese, fontWeight: 400 }}>中文界面与阅读</p>
+        <p lang="en" className="pw-typography-sample-latin" style={{ fontFamily: fonts.ui, fontWeight: 400 }}>Interface · 0123456789</p>
         <code className="pw-typography-sample-code" style={{ fontFamily: fonts.code, fontWeight: 400 }}>const goal = "你好";  // 0O 1Il</code>
       </div>
     </div>

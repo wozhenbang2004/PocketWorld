@@ -74,7 +74,7 @@ export default function ChannelsWorkspace({ state, data, supported, run, registe
     setModal({ kind: 'owner', operation, original: clone({ ...profile, ownerIdentity: channelOwnerIdentity(profile, bound), ownerBinding: bound, requestedEnabled: enabled }) });
   };
   return <section ref={root} className="pw-channels-workspace pw-depth-collaboration pw-settings-section">
-    <header className="pw-channels-heading"><div><h2>渠道消息</h2><p>先看消息，再沿原记录查看任务与回复。</p></div><div className="pw-form-actions">
+    <header className="pw-channels-heading"><div><h2>渠道消息</h2></div><div className="pw-form-actions">
       <Button variant="ghost" leadingIcon={Settings} onClick={openConnections}>连接与接收</Button>
       <Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="刷新真实状态" disabled={busy || !supported('channels.inspect')} onClick={() => act('channels.inspect')} />
     </div></header>
@@ -101,14 +101,14 @@ export default function ChannelsWorkspace({ state, data, supported, run, registe
         <ChannelInbox data={data} supported={supported} run={run} connect={openConnections} account={id => { rememberOrigin(); openAccount(id); }} media={(event, index) => { rememberOrigin(); setModal({ kind: 'media', event: clone(event), index }); }} />
       </TabPanel>
       <TabPanel id="tasks" shouldForceMount hidden={panel !== 'tasks'}>
-        <p className="pw-channels-caption">从已认证的主人私聊创建，始终回到同一个本机任务。</p>
+
         {!tasks.length && <div className="pw-channels-empty"><p>还没有主人私聊任务</p><span>核对主人身份并单独允许 /task 后，原任务会留在这里。</span><Button variant="ghost" onClick={openConnections}>查看连接与主人权限</Button></div>}
         <Accordion className="pw-channels-records" allowsMultipleExpanded>{tasks.map(row => <AccordionItem id={row.requestId} key={row.requestId} title={rows(state.tasks).find(task => task.id === row.taskId)?.goal || '原任务等待本机核对'} description={taskNeedsReview(row) ? '上次请求结果未知 · 只核对原宿主任务' : admissionState(row.admission)}>
           <ChannelTask row={row} task={rows(state.tasks).find(task => task.id === row.taskId)} supported={supported} run={run} />
         </AccordionItem>)}</Accordion>
       </TabPanel>
       <TabPanel id="outbox" shouldForceMount hidden={panel !== 'outbox'}>
-        <p className="pw-channels-caption">本机保留的投递记录。平台接受不代表收件人已读。</p>
+        <p className="pw-channels-caption">平台接受不代表已读</p>
         {!outbox.length && <div className="pw-channels-empty"><p>还没有回复投递</p><span>回复产生后，可在这里核对原投递状态。</span></div>}
         <Accordion className="pw-channels-records" allowsMultipleExpanded>{outbox.map(row => <AccordionItem id={row.id} key={row.id} title={<span className="pw-channels-preview">{row.text || '原回复正文未保留'}</span>} description={deliveryState(row.status)}>
           <div className="pw-channels-record-detail"><p className="pw-channels-body">{row.text}</p>{row.message && <p className="pw-field-hint">{row.message}</p>}
@@ -311,7 +311,7 @@ function ChannelInbox({ data, supported, run, connect, account, media }: { data:
   const visible = inbox.filter((event, index) => index < limit || expanded.has(event.id));
   const descriptions: Data = { frozen_bytes_not_model_understanding: '实际图片已保存，尚无本次模型响应证明', model_request_prepared: '图片输入已准备，模型结果仍待确认', model_response_received: '模型已返回本次图片输入的响应', model_result_unconfirmed: '模型结果未确认，原文件已保留' };
   return <div className="pw-channels-inbox">
-    <p className="pw-channels-caption">仅本机保留的消息，不代表平台完整历史。图片响应不等于理解全部内容，音视频保存不代表转写或播放。</p>
+    <p className="pw-channels-caption">仅显示本机已接收的消息</p>
     {!inbox.length && <div className="pw-channels-empty"><MessageSquare size={26} aria-hidden /><p>最近消息会出现在这里</p><span>连接账号并明确开启接收后，从自己的账号发送一条私聊。</span><Button variant="secondary" onClick={connect}>查看连接与接收</Button></div>}
     <Accordion className="pw-channels-records" allowsMultipleExpanded expandedKeys={expanded} onExpandedChange={keys => setExpanded(new Set(keys))}>
       {visible.map(event => <AccordionItem id={event.id} key={event.id} title={<span className="pw-channels-preview">{event.text || '媒体消息'}</span>} description={<span className="pw-channels-message-meta"><span>{profiles.find(profile => profile.id === event.profileId)?.name || '原连接'} · {event.kind === 'group' ? event.roomId : event.senderId}</span>{messageTime(event.receivedAt) && <time dateTime={new Date(event.receivedAt).toISOString()}>{messageTime(event.receivedAt)}</time>}</span>}>

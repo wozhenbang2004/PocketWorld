@@ -19,14 +19,13 @@
  * from reading/processing tools. File, source and original-pin ownership stay. */
 .pw-drawer.pw-file-workspace .pw-drawer-header { align-items: center; padding-block: 18px; }
 .pw-drawer.pw-file-workspace .pw-drawer-header > div { min-width: 0; flex: 1; }
-.pw-drawer.pw-file-workspace .pw-drawer-header [id="pw-file-workspace-description"] { margin-top: 4px; font-size: 11px; line-height: 1.5; }
-.pw-drawer.pw-file-workspace .pw-drawer-body { gap: 28px; }
+.pw-drawer.pw-file-workspace .pw-drawer-body { gap: 20px; }
 .pw-attachment-object-heading { display: grid; gap: 6px; padding-block: 4px; }
 .pw-attachment-object-heading h2,.pw-file-library-header h2 { margin: 0; font-size: 20px; font-weight: 550; line-height: 1.4; letter-spacing: -.025em; }
 .pw-attachment-object-heading > p { margin: 0; font-size: 12px; }
 .pw-attachment-library-scope { display: block; margin-bottom: 6px; font-size: 12px; color: var(--pw-muted); }
 .pw-drawer.pw-file-workspace .pw-comparison-toolbar h3 { display: none; }
-.pw-drawer.pw-file-workspace .pw-outcome-file-detail { gap: 24px; }
+.pw-drawer.pw-file-workspace .pw-outcome-file-detail { gap: 18px; }
 .pw-drawer.pw-file-workspace .pw-outcome-file-detail > .pw-action-row { margin-top: -8px; padding-bottom: 8px; gap: 8px; }
 .pw-drawer.pw-file-workspace .pw-attachment-tools { border: 0; margin: 0; }
 .pw-attachment-tools > * { border: 0; }

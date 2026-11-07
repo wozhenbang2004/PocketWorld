@@ -3,7 +3,7 @@
  * original media receipts and attachment opens remain host-owned. */
 .pw-media-workspace.pw-settings-section { max-width: 1020px; min-width: 0; color: var(--pw-ink, #202020); }
 .pw-media-workspace [hidden] { display: none !important; }
-.pw-media-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin: 4px 0 20px; }
+.pw-media-heading { display: flex; justify-content: flex-end; align-items: center; gap: 16px; margin: 4px 0 20px; }
 .pw-media-heading h2 { margin: 0; font-size: 24px; line-height: 32px; letter-spacing: -.035em; font-weight: 500; }
 .pw-media-heading p { margin: 5px 0 0; color: var(--pw-copy, #626262); font-size: 13px; line-height: 21px; }
 .pw-media-service { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 22px; padding: 12px 14px; border: 0; border-radius: 12px; background: var(--pw-surface, #fff); }
@@ -23,7 +23,7 @@
 .pw-media-section-heading h3, .pw-media-section-heading h4 { margin: 0; font-size: 14px; font-weight: 500; line-height: 23px; }
 .pw-media-section-heading small { font-size: 12px; color: var(--pw-copy, #626262); }
 .pw-media-workspace [data-media-heading]:focus { outline: none; }
-.pw-media-task-list { display: flex; flex-direction: column; gap: 3px; }
+.pw-media-task-list { display: flex; flex-direction: column; gap: 3px; max-height: min(58dvh, 620px); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .pw-media-workspace .pw-media-task-row, .pw-media-workspace .pw-media-file-row { display: flex; width: 100%; height: auto; min-height: 64px; justify-content: flex-start; gap: 14px; padding: 14px; border: 0; border-radius: 12px; background: transparent; box-shadow: none; text-align: start; white-space: normal; }
 .pw-media-workspace .pw-media-task-row:hover, .pw-media-workspace .pw-media-file-row:hover { background: var(--pw-surface, #fff); }
 .pw-media-workspace .pw-media-task-row > svg, .pw-media-workspace .pw-media-file-row > svg { flex: none; width: 18px; height: 18px; color: var(--pw-copy, #626262); }
@@ -46,7 +46,7 @@
 .pw-media-compose-fields > .pw-selection-field { max-width: 360px; }
 .pw-media-field-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .pw-media-note { margin: 8px 0 0; font-size: 12px; font-weight: 400; line-height: 21px; color: var(--pw-copy, #626262); overflow-wrap: anywhere; }
-.pw-media-compose-footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 24px; }
+.pw-media-compose-footer { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
 .pw-media-compose-footer p { max-width: 470px; margin: 0; }
 .pw-media-compose-footer > button { flex-shrink: 0; }
 .pw-media-workspace .pw-form-actions { gap: 6px; margin-top: 14px; }
@@ -85,7 +85,7 @@
 .pw-media-review-identity strong { font-size: 13px; font-weight: 500; }
 .pw-media-review > [data-react-aria-pressable] { margin-top: 16px; }
 .pw-media-workspace button, .pw-media-settings button, .pw-media-review button { max-width: 100%; }
-.pw-media-workspace button:not([slot="trigger"]), .pw-media-review button, .pw-media-settings > .pw-form-actions button { height: auto; min-height: 34px; }
+.pw-media-workspace button:not([slot="trigger"]), .pw-media-review button, .pw-media-settings > .pw-form-actions button { height: auto; min-height: 44px; }
 .pw-media-workspace button:not([slot="trigger"]) > span, .pw-media-review button > span, .pw-media-settings button > span { min-width: 0; flex-shrink: 1; white-space: normal; overflow-wrap: anywhere; }
 @media (max-width: 640px) {
   .pw-media-paper-overview { gap: 8px; }
@@ -105,16 +105,19 @@
 
 /* Results share the task's primary axis; identity and provider internals use
  * the existing BoardUI Accordion. A small status strip replaces dashboard tiles. */
-.pw-media-workspace .pw-media-heading { margin-bottom: 24px; }
-.pw-media-workspace .pw-media-service { margin-bottom: 24px; padding: 8px 0; background: transparent; border-radius: 0; }
+.pw-media-workspace .pw-media-heading { margin-bottom: 12px; }
+.pw-media-workspace .pw-media-service { margin-bottom: 16px; padding: 8px 0; background: transparent; border-radius: 0; }
 .pw-media-service span { font-size: 12px; color: var(--pw-copy); }
-.pw-media-workspace .pw-media-paper-overview { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px 24px; margin: 0 0 28px; padding: 0; }
+.pw-media-workspace .pw-media-paper-overview { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px 24px; margin: 0 0 20px; padding: 0; }
 .pw-media-workspace .pw-media-paper-overview > div { display: flex; flex-direction: row-reverse; align-items: baseline; gap: 6px; padding: 0; background: transparent; border-radius: 0; box-shadow: none; }
 .pw-media-workspace .pw-media-paper-overview strong { margin: 0; font-size: 18px; font-weight: 500; }
-.pw-media-workspace .pw-media-paper-overview strong small,.pw-media-workspace .pw-media-paper-overview p { display: none; }
 .pw-media-workspace .pw-media-paper-overview > div > span { font-size: 11px; }
 .pw-media-workspace .pw-media-work-surface { padding: 24px; border-radius: 16px; box-shadow: none; }
-.pw-media-workspace .pw-media-panel-heading { margin-bottom: 20px; }
+.pw-media-workspace .pw-media-panel-heading { margin-bottom: 16px; }
+.pw-media-workspace .pw-media-compose-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; position: sticky; top: -1px; z-index: 2; padding-block: 8px 12px; background: var(--pw-surface, #fff); }
+.pw-media-compose-heading > button { flex: none; min-height: 44px !important; }
+.pw-media-compose-heading + .pw-media-compose-fields textarea { min-height: 140px; }
+.pw-media-settings .pw-media-settings-actions { position: sticky; bottom: -1px; z-index: 2; padding-block: 12px; margin-bottom: -12px; background: var(--pw-surface, #fff); }
 .pw-media-workspace .pw-media-panel-heading > p { display: inline-block; margin: 8px 0 0; font-size: 11px; }
 .pw-media-workspace .pw-media-task-actions { margin-bottom: 24px; }
 .pw-media-workspace .pw-media-task-actions > button { font-size: 12px; }

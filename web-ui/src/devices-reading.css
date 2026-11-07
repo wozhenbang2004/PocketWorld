@@ -110,7 +110,7 @@
 .pw-devices-reading .pw-device-disclosures p,
 .pw-devices-reading .pw-device-task-history p { font-size: 13px; line-height: 22px; overflow-wrap: anywhere; }
 .pw-devices-reading .pw-device-disclosures h4 { margin: 18px 0 8px; color: var(--pw-ink, #202020); font-size: 14px; font-weight: 500; line-height: 22px; }
-.pw-devices-reading .pw-device-task-list { padding: 0 18px; }
+.pw-devices-reading .pw-device-task-list { max-height: min(58dvh, 620px); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 0 18px; }
 .pw-devices-reading .pw-device-task { padding: 18px 0 12px; }
 .pw-devices-reading .pw-device-task + .pw-device-task { border-top: 1px solid var(--pw-edge, rgb(0 0 0 / .045)); }
 .pw-devices-reading .pw-device-task > header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }

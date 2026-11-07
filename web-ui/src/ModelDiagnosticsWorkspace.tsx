@@ -56,10 +56,9 @@ export function ModelDiagnosticsWorkspace({ state, supported }: Props) {
     } catch (failure) { if (current()) setCopyStatus(failure instanceof Error ? failure.message : '复制未完成，请选择日志文字后复制。'); }
   }
   return <section className="pw-model-diagnostics">
-    <Button variant="ghost" disabled={!available || pending} onClick={() => { if (expanded) { setExpanded(false); setReview(null); setLogs(null); setCopyStatus(''); setStage('select'); void invoke('modelDiagnostics.close'); } else void invoke('modelDiagnostics.open'); }}>诊断与运行日志</Button>
-    {expanded && <div className="pw-model-diagnostics-body">
+    <Button variant="ghost" aria-expanded={expanded} aria-controls="pw-model-diagnostics-body" disabled={!available || pending} onClick={() => { if (expanded) { setExpanded(false); setReview(null); setLogs(null); setCopyStatus(''); setStage('select'); void invoke('modelDiagnostics.close'); } else void invoke('modelDiagnostics.open'); }}>诊断与运行日志</Button>
+    {expanded && <div id="pw-model-diagnostics-body" className="pw-model-diagnostics-body">
       <div className="pw-diagnostics-workbench"><section className="pw-diagnostics-logs"><h3>最近运行记录</h3>
-      <p className="pw-field-hint">先读取本机记录，定位失败阶段。</p>
       <div className="pw-form-actions"><Button variant="secondary" disabled={!ready || pending || !supported('modelDiagnostics.logs')} onClick={() => { setCopyStatus(''); void invoke('modelDiagnostics.logs').then(result => { if (result && Array.isArray(result.events)) setLogs(result); }); }}>读取最近日志</Button>{logs && <Button variant="secondary" disabled={!ready || pending} onClick={() => { void copyLogs(); }}>复制日志</Button>}</div>
       {logs && <><RuntimeAttemptChain events={logs.events}/><p className="pw-field-hint">本次读取 {logs.retainedEvents || 0} 条，最多保留 {logs.maxEvents || 256} 条；本机日志文件总上限 512 KiB。</p>{(logs.fileWriteFailures > 0 || logs.droppedFileWrites > 0) && <p role="status">部分记录未写入文件，可先复制当前日志，并补充 Logcat。</p>}<Accordion variant="divided"><AccordionItem id="runtime-log" title="查看本次日志"><pre className="pw-source-code" tabIndex={0}>{logText}</pre></AccordionItem></Accordion></>}
       {copyStatus && <p role="status">{copyStatus}</p>}
@@ -67,14 +66,14 @@ export function ModelDiagnosticsWorkspace({ state, supported }: Props) {
       </section><section className="pw-diagnostics-probe">
       <DiagnosticWorkflowSteps stage={review ? 'review' : stage}/>
       <div className="pw-affect-workflow pw-affect-stepbody">
-      <h3>文本、工具与合成图片实测 · {data.model || '原 API 模型'}</h3>
-      <p className="pw-field-hint">测试保留的 API 连接。最多 2 次请求；选择合成图片后最多 3 次，会消耗该连接额度。只发送随机合成内容和一个声明但不执行的函数，不使用聊天历史或手机画面。</p>
-      <p className="pw-field-hint">全部阶段共用原连接的 {data.requestTimeoutSeconds || 60} 秒期限。离开此页停止后续探测，已发生的请求用量仍保留。</p>
+      <h3>能力实测</h3><p className="pw-diagnostics-model">{data.model || '原 API 模型'}</p>
+      <p className="pw-field-hint">最多 {image ? 3 : 2} 次合成内容请求，会消耗原 API 连接额度；不发送聊天历史或手机画面，不执行测试函数。</p>
+      <p className="pw-field-hint">总期限 {data.requestTimeoutSeconds || 60} 秒。离开此页停止后续探测，已发生用量保留。</p>
       <CheckboxField isSelected={image} isDisabled={!ready || busy} onChange={next => { setImage(next); setReview(null); setAcknowledge(false); setStage('select'); }}>增加一张合成图片（不读取屏幕）</CheckboxField>
       <div className="pw-form-actions"><Button variant="secondary" disabled={!ready || busy || !data.canProbe} onClick={() => { void invoke('modelDiagnostics.review', { includeImage: image }).then(result => { if (result?.reviewHandle) { setReview(result); setAcknowledge(false); setStage('review'); } }); }}>核对本次测试</Button>{data.busy && <Button variant="secondary" disabled={!ready || pending} onClick={() => { void invoke('modelDiagnostics.stop'); }}>停止</Button>}</div>
       {data.busy && <p role="status">正在测试原连接，请等待实际结果…</p>}
       {probe.model && <ProbeObservationCard key={`${probe.model}:${probe.at || ''}:${probe.configurationDigest || ''}`} probe={probe}/>}
-      <p className="pw-field-hint">通过只说明本次合成结构，不能证明全部工具、JSON schema 或模型质量。未证实不表示永久不支持，也不会覆盖目录声明。</p>
+      <Accordion variant="divided"><AccordionItem id="probe-scope" title="结果适用范围"><p className="pw-field-hint">通过只说明本次合成结构，不能证明全部工具、JSON schema 或模型质量。未证实不表示永久不支持，也不会覆盖目录声明。</p></AccordionItem></Accordion>
       </div>
       </section></div>
     </div>}
