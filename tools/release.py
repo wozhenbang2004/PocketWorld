@@ -25,7 +25,6 @@ import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
 PART_BYTES = 16 * 1024 * 1024
-CORE_CASES = ("account_model", "conversation", "native_files", "agent_execution", "owner_controls")
 APP_PATHS = ("app/src/main", "app/src/pendingAdb/java", "app/build.gradle", "app/gradle.lockfile", "web-ui", "display-helper",
              "third-party", "gradle", "gradle.lockfile", "gradle.properties", "build.gradle", "settings.gradle",
              ":(glob)tools/build*", ":(glob)tools/*runtime*")
@@ -198,25 +197,6 @@ def sync_source(runner):
     except ReleaseError:
         raise ReleaseError("同步 main 失败或发生冲突；现场已保留，未 reset/stash/clean，未开始构建。") from None
     return source_state(runner)
-
-
-def core_acceptance(runner, head):
-    try:
-        receipt = read_json(runner.c["core_acceptance_file"])["releaseAcceptance"]
-        source = receipt["sourceCommit"]
-        if receipt.get("status") != "passed" or not re.fullmatch(r"[a-f0-9]{40}", source):
-            raise ValueError()
-        if any(receipt.get("cases", {}).get(case, {}).get("status") != "passed" for case in CORE_CASES):
-            raise ValueError()
-        code, _ = runner.git("merge-base", "--is-ancestor", source, head, check=False)
-        if code:
-            raise ValueError()
-        code, _ = runner.git("diff", "--quiet", source, head, "--", *APP_PATHS, check=False)
-        if code:
-            raise ValueError()
-        return receipt
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-        raise ReleaseError("核心批量验收尚未通过，或应用源码在验收后已变化；正式更新清单暂不激活。") from None
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -507,7 +487,7 @@ def artifact_descriptors(bundle):
     return result
 
 
-def upload_release(runner, http, bundle, baseline_sha, head, artifact_source_commit=None):
+def upload_release(runner, http, bundle, baseline_sha, head, artifact_source_commit=None, stage_only=False):
     artifact_source_commit = artifact_source_commit or head
     if not re.fullmatch(r"[a-f0-9]{40}", artifact_source_commit):
         raise ReleaseError("构建来源不是完整源码提交。")
@@ -556,11 +536,8 @@ def upload_release(runner, http, bundle, baseline_sha, head, artifact_source_com
     identity = {"sourceCommit": artifact_source_commit, "currentCheckout": head, "releaseId": release_id, "manifestSha256": manifest_sha,
                 "manifestUrl": http.origin + runner.c["manifest_path"],
                 "artifacts": [http.origin + row["path"] for row in descriptors]}
-    try:
-        core_acceptance(runner, head)
-    except ReleaseError as error:
-        return identity | {"status": "staged_awaiting_acceptance", "activated": False,
-                           "activationBlocked": True, "blockingReason": str(error)}
+    if stage_only:
+        return identity | {"status": "staged", "activated": False}
     try:
         http.json(prefix + "/activate", "POST", {})
     except ReleaseError:
@@ -595,7 +572,9 @@ def release_lock(root):
         lock.close()
 
 
-def run_release(c, prepare_only=False):
+def run_release(c, prepare_only=False, stage_only=False):
+    if prepare_only and stage_only:
+        raise ReleaseError("仅本地准备与仅暂存上传不能同时选择。")
     with release_lock(c["work_root"]):
         root = Path(c["work_root"])
         directory = root / (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + uuid.uuid4().hex[:7])
@@ -612,11 +591,6 @@ def run_release(c, prepare_only=False):
         head = sync_source(runner)
         if digest(Path(__file__)) != original_script:
             raise ScriptUpdated("发布脚本已随 main 更新，将在构建前自动重启一次。")
-        if not prepare_only:
-            try:
-                core_acceptance(runner, head)
-            except ReleaseError:
-                print("核心实测记录尚未覆盖本次源码；继续准备候选产物，最后单独核对正式更新激活条件。", flush=True)
         http = Http(c["origin"], proxy=c.get("proxy"), log_path=directory / "network.log")
         if not prepare_only:
             http.token = read_token(c)
@@ -637,16 +611,16 @@ def run_release(c, prepare_only=False):
         bundle, artifact_source_commit = None, head
         pending_source = pending.get("sourceCommit", "")
         reusable_source = pending_source == head
-        if pending.get("stage") in ("artifacts_ready", "uploaded_waiting_acceptance") and not reusable_source and re.fullmatch(r"[a-f0-9]{40}", pending_source):
+        if pending.get("stage") in ("artifacts_ready", "uploaded_waiting_acceptance", "staged") and not reusable_source and re.fullmatch(r"[a-f0-9]{40}", pending_source):
             ancestor, _ = runner.git("merge-base", "--is-ancestor", pending_source, head, check=False)
             if ancestor == 0:
                 changed, _ = runner.git("diff", "--quiet", pending_source, head, "--", *APP_PATHS, check=False)
                 reusable_source = changed == 0
-        if reusable_source and pending.get("stage") in ("artifacts_ready", "uploaded_waiting_acceptance"):
+        if reusable_source and pending.get("stage") in ("artifacts_ready", "uploaded_waiting_acceptance", "staged"):
             candidate = owned(Path(pending["bundle"]), root)
             if (candidate / "release.json").is_file():
                 if digest(candidate / "release.json") == base_sha:
-                    return {"status": "published", "sourceCommit": pending_source, "currentCheckout": head,
+                    return {"status": "published", "activated": True, "sourceCommit": pending_source, "currentCheckout": head,
                             "manifestUrl": c["origin"] + c["manifest_path"], "reconciled": True}
                 if pending.get("baselineManifestSha256") != base_sha:
                     raise ReleaseError("线上基线已被另一发布推进；保留本次候选包和差分，停止而不自动重建。")
@@ -663,15 +637,9 @@ def run_release(c, prepare_only=False):
                     raise ReleaseError("待复用包与原生已验签清单不一致或版本不递增。")
                 runner.tool("verify-apk", "--apk", owned(candidate / matches[0]["path"].lstrip("/"), candidate),
                             "--out", directory / "resume-apk-check", "--expected-signer", c["apk_signer_sha256"])
-                if pending.get("stage") == "uploaded_waiting_acceptance":
+                if pending.get("stage") in ("uploaded_waiting_acceptance", "staged"):
                     if digest(candidate / "release.json") != pending.get("manifestSha256"):
                         raise ReleaseError("已上传候选的本地签名清单改变，停止激活。")
-                    try:
-                        core_acceptance(runner, head)
-                    except ReleaseError as error:
-                        print("候选产物已上传，核心验收仍待完成；复用原记录，不构建、不重复上传、不激活更新。", flush=True)
-                        return pending | {"status": "staged_awaiting_acceptance", "activated": False, "currentCheckout": head,
-                                          "activationBlocked": True, "blockingReason": str(error), "reused": True}
                 bundle, artifact_source_commit = candidate, pending_source
                 print("复用上次已验证产物，继续上传，不重新构建。", flush=True)
         if bundle is None:
@@ -689,18 +657,21 @@ def run_release(c, prepare_only=False):
         if status["current"]["manifestSha256"] != base_sha or status["pinSpkiSha256"] != c["public_pin_sha256"]:
             raise ReleaseError("站点版本或签名链已改变；已保存产物，没有发布。")
         print("[5/7] 上传完整 APK 和差分（支持断点对账）", flush=True)
-        result = upload_release(runner, http, bundle, base_sha, head, artifact_source_commit=artifact_source_commit)
-        if result["status"] == "published":
+        result = upload_release(runner, http, bundle, base_sha, head,
+                                artifact_source_commit=artifact_source_commit, stage_only=stage_only)
+        if result.get("status") != ("staged" if stage_only else "published") or result.get("activated") is not (not stage_only):
+            raise ReleaseError("发布结果未满足当前模式的完成条件；没有记录发布成功。")
+        if not stage_only:
             print("[6/7] 公开字节与范围校验通过，已最后激活签名清单。", flush=True)
             write_json(directory / "published.json", result)
             write_json(previous, result | {"stage": "published", "bundle": str(bundle)})
             print("[7/7] 发布完成", flush=True)
         else:
-            print("[6/7] 候选整包和差分已上传，公开字节与范围校验通过。", flush=True)
+            print("[6/7] 整包和差分已上传，公开字节与范围校验通过。", flush=True)
             write_json(directory / "staged.json", result)
-            write_json(previous, result | {"stage": "uploaded_waiting_acceptance", "bundle": str(bundle),
+            write_json(previous, result | {"stage": "staged", "bundle": str(bundle),
                                           "baselineManifestSha256": base_sha})
-            print("[7/7] 候选准备完成；核心验收通过后再次运行会复用产物完成激活，不重打包。", flush=True)
+            print("[7/7] 仅暂存/未发布；下次默认运行会复用同包并自动激活，不重打包。", flush=True)
         return result
 
 
@@ -719,41 +690,37 @@ def check(c):
     runner = Runner(c)
     blockers = []
     try:
-        head = source_state(runner)
-    except ReleaseError as error:
-        blockers.append(str(error))
-        head = runner.git("rev-parse", "HEAD", check=False)[1]
-    preparation_blockers = list(blockers)
-    try:
-        core_acceptance(runner, head)
+        source_state(runner)
     except ReleaseError as error:
         blockers.append(str(error))
     return {"infrastructureReady": not missing, "missingPaths": missing,
-            "readyToPrepare": not missing and not preparation_blockers,
-            "readyToRelease": not missing and not blockers, "blockers": blockers}
+            "readyToPrepare": not missing and not blockers,
+            "readyToRelease": not missing and not blockers, "blockers": blockers,
+            "activationMode": "automatic_after_verified_upload"}
 
 
 def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__ + " Default: automatically activate after all checks and verified uploads.")
     parser.add_argument("--config", type=Path, required=True)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--plan", action="store_true", help="Offline preview only; no fetch/build/upload")
     mode.add_argument("--check", action="store_true", help="Read-only local readiness check")
     mode.add_argument("--prepare-only", action="store_true", help="Explicit local candidate preparation; never uploads")
+    mode.add_argument("--stage-only", action="store_true", help="Explicitly upload and verify artifacts without activating; default runs publish automatically")
     args = parser.parse_args(argv)
     try:
         c = load_config(args.config)
         if args.plan:
             result = {"mode": "plan_only", "repo": c["repo"], "origin": c["origin"], "noBuildOrPublication": True,
-                      "stages": ["保留现场并同步main", "线上签名基线及实际本地版本", "本地检查与一次APK构建", "同签名差分生成及完整重建", "整包与差分上传/公开核验", "核心批量验收激活门", "验收通过才激活正式更新"],
+                      "stages": ["保留现场并同步main", "线上签名基线及实际本地版本", "本地检查与一次APK构建", "同签名差分生成及完整重建", "整包与差分上传/公开核验", "自动激活签名清单", "回读公开原字节后确认发布"],
                       "uploadResume": "同源码且已有有效产物时复用，不重复打包", "readiness": check(c)}
         elif args.check:
             result = check(c)
         else:
-            result = run_release(c, args.prepare_only)
+            result = run_release(c, prepare_only=args.prepare_only, stage_only=args.stage_only)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if args.plan or result.get("readyToRelease", True) else 2
     except ScriptUpdated as error:

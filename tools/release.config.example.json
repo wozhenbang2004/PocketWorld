@@ -17,7 +17,6 @@
   "manifest_public_key": "E:/PocketWorld-dev/signing/update-manifest-public.pem",
   "manifest_private_key": "E:/PocketWorld-dev/signing/update-manifest-private.pem",
   "publisher_token_file": "E:/PocketWorld-dev/signing/release-publisher.dpapi",
-  "core_acceptance_file": "E:/PocketWorld-dev/qa/functional-results.json",
   "origin": "https://binary-range-probe-nov04.k01075888660.chatgpt.site",
   "manifest_path": "/releases/ed896/release.json",
   "package_name": "dev.pocketengine",

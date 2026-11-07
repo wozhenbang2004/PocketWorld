@@ -4,7 +4,8 @@ param(
     [string]$Config = (Join-Path $PSScriptRoot '../../release.local.json'),
     [switch]$Plan,
     [switch]$Check,
-    [switch]$PrepareOnly
+    [switch]$PrepareOnly,
+    [switch]$StageOnly
 )
 $ErrorActionPreference = 'Stop'
 $env:PYTHONUTF8 = '1'
@@ -14,5 +15,6 @@ $arguments = @('-B', (Join-Path $PSScriptRoot 'release.py'), '--config', $Config
 if ($Plan) { $arguments += '--plan' }
 if ($Check) { $arguments += '--check' }
 if ($PrepareOnly) { $arguments += '--prepare-only' }
+if ($StageOnly) { $arguments += '--stage-only' }
 & $settings.python @arguments
 exit $LASTEXITCODE

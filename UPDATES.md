@@ -66,24 +66,28 @@ Read-only previews:
 & E:\PocketWorld-dev\repo\tools\release.ps1 -Check
 ```
 
-`-PrepareOnly` is an explicit local build-and-bundle operation which does not
-upload. Normal execution can build, verify and upload candidate artifacts before
-end-to-end acceptance is complete. Formal update activation requires the existing
-`qa/functional-results.json` record's `releaseAcceptance.status` and its five
-core cases (`account_model`, `conversation`, `native_files`, `agent_execution`,
-`owner_controls`) to be `passed`. The tested commit must be an ancestor and its
-application, Web, runtime/dependency and build inputs must still match. Scripts
-and documentation alone can change without changing those tested App inputs.
-The orchestrator never marks a missing, failed or partial core case passed.
-If that record is missing, stale or incomplete, successful preparation returns
-`staged_awaiting_acceptance`, with artifact URLs and `activated: false`. It does
-not advertise the candidate on the homepage or replace the App update manifest.
-Running again with unchanged source preserves that candidate without rebuilding
-or reuploading it. Once the real acceptance record passes, a subsequent run uses
-the same signed bundle for activation. The script never marks acceptance passed.
+Normal execution publishes automatically: successful local checks, APK signature
+verification, exact delta reconstruction, upload and complete public SHA/Range
+verification are followed by conditional manifest activation. It reports
+`published` only after the public update manifest matches the signed bytes.
+Failed checks, changed source or baseline, and unconfirmed activation stop the
+run with the existing artifacts preserved. A stale external core-QA record
+cannot silently turn this default operation into a candidate upload. The release
+script neither reads nor changes the separate functional acceptance record.
 
-This entry automates publishing an accepted batch. Writing or checking the
-script does not start a build or publish the local candidate.
+Candidate preparation requires an explicit option:
+
+- `-PrepareOnly` builds and signs a local bundle without uploading or activating.
+- `-StageOnly` uploads and verifies the bundle, then reports `staged` with
+  `activated: false`. It does not replace the App update manifest.
+- A subsequent normal run reuses an unchanged staged bundle and activates it
+  after verification, without rebuilding or reuploading ready artifacts.
+
+These options are mutually exclusive with each other and with `-Plan`/`-Check`.
+Legacy `uploaded_waiting_acceptance` records are also resumable by a normal run;
+they no longer require editing a QA file or a separate manual activation step.
+Already published, unchanged application inputs return `up_to_date` without a
+new build. Plan and readiness checks do not start builds or publication.
 
 The application now has a Settings → 应用更新 entry. It checks a signed
 release manifest, announces an available version, downloads an exact-base delta

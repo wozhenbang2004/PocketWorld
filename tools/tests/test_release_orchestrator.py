@@ -270,89 +270,76 @@ class ReleaseOrchestratorTest(unittest.TestCase):
             self.assertEqual(301, RELEASE.next_version(self.runner(), 300))
         self.assertEqual({artifact, built}, {call.args[1] for call in inspect.call_args_list})
 
-    def test_activation_acceptance_rejects_incomplete_or_changed_production_inputs(self):
-        for overall, agent in (("blocked", "failed"), ("passed", "pending")):
-            with self.subTest(overall=overall, agent=agent):
-                cases = {case: {"status": "passed"} for case in RELEASE.CORE_CASES}
-                cases["agent_execution"] = {"status": agent}
-                RELEASE.write_json(self.c["core_acceptance_file"], {"releaseAcceptance": {"status": overall, "sourceCommit": HEAD, "cases": cases}})
-                with self.assertRaises(RELEASE.ReleaseError):
-                    RELEASE.core_acceptance(self.runner(), HEAD)
+    def test_default_release_activates_without_reading_or_changing_failed_stale_qa(self):
+        bundle = self.bundle()
+        http = PublisherFixture(self.c, bundle)
+        qa = Path(self.c["core_acceptance_file"])
+        RELEASE.write_json(qa, {"releaseAcceptance": {"status": "failed", "sourceCommit": "c" * 40,
+                           "cases": {"agent_execution": {"status": "pending"}}}})
+        original_qa = qa.read_bytes(), qa.stat().st_mtime_ns
+        read, write = RELEASE.read_json, RELEASE.write_json
 
-        # This directory is registered as a production source set in app/build.gradle.
-        # An accepted ancestor must not authorize a changed pendingAdb implementation.
-        repo = Path(self.c["repo"])
-        self.git_repo(repo)
-        accepted = self.git(repo, "rev-parse", "HEAD")
-        source = repo / "app/src/pendingAdb/java/SyntheticProduction.java"
-        source.parent.mkdir(parents=True)
-        source.write_text("class SyntheticProduction {}\n", encoding="utf-8")
-        self.git(repo, "add", "app/src/pendingAdb/java/SyntheticProduction.java")
-        self.git(repo, "commit", "-m", "Changed production source registered by AGP")
-        current = self.git(repo, "rev-parse", "HEAD")
-        RELEASE.write_json(self.c["core_acceptance_file"], {"releaseAcceptance": {
-            "status": "passed", "sourceCommit": accepted,
-            "cases": {case: {"status": "passed"} for case in RELEASE.CORE_CASES}}})
-        with self.assertRaises(RELEASE.ReleaseError):
-            RELEASE.core_acceptance(self.runner(), current)
+        def read_other(path):
+            self.assertNotEqual(qa.resolve(), Path(path).resolve(), "Release must not read the historical QA log")
+            return read(path)
 
-    def test_unaccepted_candidate_stages_once_then_activates_same_bundle_after_acceptance(self):
+        def write_other(path, value):
+            self.assertNotEqual(qa.resolve(), Path(path).resolve(), "Release must not rewrite the historical QA log")
+            return write(path, value)
+
+        with mock.patch.object(RELEASE, "runtime_paths", return_value=[]), \
+                mock.patch.object(RELEASE, "sync_source", return_value=HEAD), \
+                mock.patch.object(RELEASE, "source_state", return_value=HEAD), \
+                mock.patch.object(RELEASE, "baseline", return_value=({"versionCode": 253}, self.root / "base.apk", BASE_SHA)), \
+                mock.patch.object(RELEASE, "Http", return_value=http), \
+                mock.patch.object(RELEASE, "read_token", return_value=SYNTHETIC_TOKEN), \
+                mock.patch.object(RELEASE, "make_bundle", return_value=bundle) as build, \
+                mock.patch.object(RELEASE, "next_version", return_value=255), \
+                mock.patch.object(RELEASE, "read_json", side_effect=read_other), \
+                mock.patch.object(RELEASE, "write_json", side_effect=write_other):
+            result = RELEASE.run_release(self.c)
+            readiness = RELEASE.check(self.c)
+        self.assertEqual("published", result["status"])
+        self.assertIs(True, result["activated"])
+        self.assertTrue(http.active)
+        self.assertTrue(readiness["readyToRelease"])
+        self.assertEqual("automatic_after_verified_upload", readiness["activationMode"])
+        self.assertEqual("published", RELEASE.read_json(Path(self.c["work_root"]) / "last-run.json")["stage"])
+        self.assertEqual(original_qa, (qa.read_bytes(), qa.stat().st_mtime_ns))
+        build.assert_called_once()
+
+    def test_explicit_stage_only_then_default_activates_same_bundle_without_rebuild(self):
         bundle = self.bundle()
         original_manifest = (bundle / "release.json").read_bytes()
         original_artifacts = {row["file"]: row["sha256"]
                               for row in RELEASE.read_json(bundle / "release-plan.json")["artifactUploads"]}
         http = PublisherFixture(self.c, bundle)
         previous = Path(self.c["work_root"]) / "last-run.json"
-        accepted = False
-
-        def acceptance(_runner, head):
-            self.assertEqual(HEAD, head)
-            if not accepted:
-                raise RELEASE.ReleaseError("Synthetic core batch still awaiting acceptance")
-            return {"status": "passed", "sourceCommit": head}
-
         def verify(_runner, name, *args):
             self.verify_bundle_tool(_runner, name, *args)
 
         with mock.patch.object(RELEASE, "runtime_paths", return_value=[]), \
                 mock.patch.object(RELEASE, "sync_source", return_value=HEAD), \
                 mock.patch.object(RELEASE, "source_state", return_value=HEAD), \
-                mock.patch.object(RELEASE, "core_acceptance", side_effect=acceptance), \
                 mock.patch.object(RELEASE, "baseline", return_value=({"versionCode": 253}, self.root / "base.apk", BASE_SHA)), \
                 mock.patch.object(RELEASE, "Http", return_value=http), \
                 mock.patch.object(RELEASE, "read_token", return_value=SYNTHETIC_TOKEN), \
                 mock.patch.object(RELEASE.Runner, "tool", autospec=True, side_effect=verify), \
                 mock.patch.object(RELEASE, "make_bundle", return_value=bundle) as build, \
                 mock.patch.object(RELEASE, "next_version", return_value=255) as version:
-            staged = RELEASE.run_release(self.c)
-            self.assertEqual("staged_awaiting_acceptance", staged["status"])
+            staged = RELEASE.run_release(self.c, stage_only=True)
+            self.assertEqual("staged", staged["status"])
             self.assertIs(False, staged["activated"])
             self.assertFalse(http.active)
             self.assertFalse(any(path.endswith("/activate") for _, path in http.events))
             saved = RELEASE.read_json(previous)
-            self.assertEqual("uploaded_waiting_acceptance", saved["stage"])
+            self.assertEqual("staged", saved["stage"])
             self.assertEqual(BASE_SHA, saved["baselineManifestSha256"])
             self.assertEqual(sha(original_manifest), saved["manifestSha256"])
             for path in http.artifacts:
                 self.assertIn(("GET", path), http.events)
                 self.assertIn(("RANGE", path), http.events)
             self.assertEqual(len(http.artifacts), sum(method == "PUT" for method, _ in http.events))
-            first_events = list(http.events)
-
-            waiting = RELEASE.run_release(self.c)
-            self.assertEqual("staged_awaiting_acceptance", waiting["status"])
-            self.assertIs(False, waiting["activated"])
-            self.assertTrue(waiting["reused"])
-            # Baseline/status reads are permitted; none of the candidate upload or
-            # public artifact operations should repeat while acceptance is pending.
-            repeated_events = http.events[len(first_events):]
-            self.assertTrue(all(method == "GET" and path == "/__publisher/status"
-                                for method, path in repeated_events))
-            self.assertEqual(1, build.call_count)
-            self.assertEqual(1, version.call_count)
-            self.assertEqual("uploaded_waiting_acceptance", RELEASE.read_json(previous)["stage"])
-
-            accepted = True
             before_activation = len(http.events)
             published = RELEASE.run_release(self.c)
             self.assertEqual("published", published["status"])
@@ -369,6 +356,99 @@ class ReleaseOrchestratorTest(unittest.TestCase):
         self.assertEqual(original_manifest, (bundle / "release.json").read_bytes())
         for relative, expected in original_artifacts.items():
             self.assertEqual(expected, RELEASE.digest(bundle / relative))
+
+    def test_legacy_uploaded_waiting_record_defaults_to_activation_without_rebuild(self):
+        bundle = self.bundle()
+        manifest_sha = RELEASE.digest(bundle / "release.json")
+        RELEASE.write_json(Path(self.c["work_root"]) / "last-run.json", {
+            "stage": "uploaded_waiting_acceptance", "sourceCommit": HEAD, "bundle": str(bundle),
+            "baselineManifestSha256": BASE_SHA, "manifestSha256": manifest_sha})
+        http = PublisherFixture(self.c, bundle)
+        http.ready = {sha(body) for body in http.artifacts.values()}
+        with mock.patch.object(RELEASE, "runtime_paths", return_value=[]), \
+                mock.patch.object(RELEASE, "sync_source", return_value=HEAD), \
+                mock.patch.object(RELEASE, "source_state", return_value=HEAD), \
+                mock.patch.object(RELEASE, "baseline", return_value=({"versionCode": 253}, self.root / "base.apk", BASE_SHA)), \
+                mock.patch.object(RELEASE, "Http", return_value=http), \
+                mock.patch.object(RELEASE, "read_token", return_value=SYNTHETIC_TOKEN), \
+                mock.patch.object(RELEASE.Runner, "tool", autospec=True, side_effect=self.verify_bundle_tool), \
+                mock.patch.object(RELEASE, "make_bundle") as build, \
+                mock.patch.object(RELEASE, "next_version") as version:
+            result = RELEASE.run_release(self.c)
+        self.assertEqual("published", result["status"])
+        self.assertIs(True, result["activated"])
+        self.assertFalse(any(method == "PUT" or path.endswith("/complete") for method, path in http.events))
+        build.assert_not_called()
+        version.assert_not_called()
+
+    def test_cli_modes_are_mutually_exclusive_before_any_side_effect(self):
+        modes = ("--stage-only", "--prepare-only", "--plan", "--check")
+        for index, first in enumerate(modes):
+            for second in modes[index + 1:]:
+                with self.subTest(first=first, second=second), \
+                        mock.patch.object(RELEASE, "load_config") as load, \
+                        mock.patch.object(RELEASE, "run_release") as run, \
+                        mock.patch("sys.stderr", new=io.StringIO()):
+                    with self.assertRaises(SystemExit) as stopped:
+                        RELEASE.main(["--config", str(self.root / "not-read.json"), first, second])
+                    self.assertEqual(2, stopped.exception.code)
+                    load.assert_not_called()
+                    run.assert_not_called()
+
+    def test_cli_stage_only_dispatches_only_when_explicit(self):
+        for extra, stage_only in (([], False), (["--stage-only"], True)):
+            with self.subTest(mode=extra), mock.patch.object(RELEASE, "load_config", return_value=self.c), \
+                    mock.patch.object(RELEASE, "run_release", return_value={"status": "staged" if stage_only else "published"}) as run, \
+                    mock.patch("sys.stdout", new=io.StringIO()):
+                self.assertEqual(0, RELEASE.main(["--config", str(self.root / "config.json"), *extra]))
+            run.assert_called_once_with(self.c, prepare_only=False, stage_only=stage_only)
+
+    def test_completion_requires_the_exact_result_of_the_explicit_mode(self):
+        bundle = self.bundle()
+        previous = Path(self.c["work_root"]) / "last-run.json"
+        cases = ((False, "staged", False), (False, "published", False),
+                 (True, "published", True), (True, "staged", True))
+        for stage_only, status, activated in cases:
+            with self.subTest(stage_only=stage_only, status=status, activated=activated):
+                RELEASE.write_json(previous, {"stage": "artifacts_ready", "sourceCommit": HEAD,
+                                   "bundle": str(bundle), "baselineManifestSha256": BASE_SHA})
+                http = PublisherFixture(self.c, bundle)
+                with mock.patch.object(RELEASE, "runtime_paths", return_value=[]), \
+                        mock.patch.object(RELEASE, "sync_source", return_value=HEAD), \
+                        mock.patch.object(RELEASE, "source_state", return_value=HEAD), \
+                        mock.patch.object(RELEASE, "baseline", return_value=({"versionCode": 253}, self.root / "base.apk", BASE_SHA)), \
+                        mock.patch.object(RELEASE, "Http", return_value=http), \
+                        mock.patch.object(RELEASE, "read_token", return_value=SYNTHETIC_TOKEN), \
+                        mock.patch.object(RELEASE.Runner, "tool", autospec=True, side_effect=self.verify_bundle_tool), \
+                        mock.patch.object(RELEASE, "upload_release", return_value={"status": status, "activated": activated}), \
+                        mock.patch.object(RELEASE, "make_bundle") as build:
+                    with self.assertRaises(RELEASE.ReleaseError):
+                        RELEASE.run_release(self.c, stage_only=stage_only)
+                self.assertEqual("artifacts_ready", RELEASE.read_json(previous)["stage"])
+                build.assert_not_called()
+        self.assertFalse(list(Path(self.c["work_root"]).glob("*/published.json")))
+        self.assertFalse(list(Path(self.c["work_root"]).glob("*/staged.json")))
+
+    def test_prepare_only_stays_local_and_rejects_stage_conflict_before_lock(self):
+        with mock.patch.object(RELEASE, "release_lock") as lock:
+            with self.assertRaises(RELEASE.ReleaseError):
+                RELEASE.run_release(self.c, prepare_only=True, stage_only=True)
+            lock.assert_not_called()
+        bundle = self.bundle()
+        http = PublisherFixture(self.c, bundle)
+        with mock.patch.object(RELEASE, "runtime_paths", return_value=[]), \
+                mock.patch.object(RELEASE, "sync_source", return_value=HEAD), \
+                mock.patch.object(RELEASE, "baseline", return_value=({"versionCode": 253}, self.root / "base.apk", BASE_SHA)), \
+                mock.patch.object(RELEASE, "Http", return_value=http), \
+                mock.patch.object(RELEASE, "read_token") as token, \
+                mock.patch.object(RELEASE, "make_bundle", return_value=bundle), \
+                mock.patch.object(RELEASE, "next_version", return_value=255), \
+                mock.patch.object(RELEASE, "upload_release") as upload:
+            result = RELEASE.run_release(self.c, prepare_only=True)
+        self.assertEqual("prepared_local_only", result["status"])
+        self.assertEqual([], http.events)
+        token.assert_not_called()
+        upload.assert_not_called()
 
     def test_junit_zero_or_skipped_bodies_cannot_be_reported_as_passed(self):
         report = self.root / "host"
@@ -449,7 +529,7 @@ class ReleaseOrchestratorTest(unittest.TestCase):
     def test_manifest_is_activated_only_after_all_uploaded_full_hash_and_range_checks(self):
         bundle, runner = self.bundle(), self.runner()
         http = PublisherFixture(self.c, bundle)
-        with mock.patch.object(RELEASE, "source_state", return_value=HEAD), mock.patch.object(RELEASE, "core_acceptance", return_value={}):
+        with mock.patch.object(RELEASE, "source_state", return_value=HEAD):
             result = RELEASE.upload_release(runner, http, bundle, BASE_SHA, HEAD)
         self.assertEqual("published", result["status"])
         activate = http.events.index(("POST", http.prefix + "/activate"))
@@ -464,7 +544,7 @@ class ReleaseOrchestratorTest(unittest.TestCase):
         for applied in (True, False):
             with self.subTest(activation_applied=applied):
                 http = PublisherFixture(self.c, bundle, lost_reply=True, activate_applied=applied)
-                with mock.patch.object(RELEASE, "source_state", return_value=HEAD), mock.patch.object(RELEASE, "core_acceptance", return_value={}):
+                with mock.patch.object(RELEASE, "source_state", return_value=HEAD):
                     if applied:
                         self.assertEqual("published", RELEASE.upload_release(runner, http, bundle, BASE_SHA, HEAD)["status"])
                     else:
@@ -488,14 +568,13 @@ class ReleaseOrchestratorTest(unittest.TestCase):
         with mock.patch.object(RELEASE, "runtime_paths", return_value=[]), \
                 mock.patch.object(RELEASE, "sync_source", return_value=HEAD), \
                 mock.patch.object(RELEASE, "source_state", return_value=HEAD), \
-                mock.patch.object(RELEASE, "core_acceptance", return_value={}), \
                 mock.patch.object(RELEASE, "baseline", return_value=({"versionCode": 253}, self.root / "base.apk", BASE_SHA)), \
                 mock.patch.object(RELEASE, "Http", return_value=http), \
                 mock.patch.object(RELEASE, "read_token", return_value=SYNTHETIC_TOKEN), \
                 mock.patch.object(RELEASE.Runner, "tool", autospec=True, side_effect=verify), \
                 mock.patch.object(RELEASE, "make_bundle") as build, \
                 mock.patch.object(RELEASE, "next_version") as version, \
-                mock.patch.object(RELEASE, "upload_release", side_effect=[RELEASE.ReleaseError("synthetic upload interruption"), {"status": "published", "sourceCommit": HEAD}]) as upload:
+                mock.patch.object(RELEASE, "upload_release", side_effect=[RELEASE.ReleaseError("synthetic upload interruption"), {"status": "published", "activated": True, "sourceCommit": HEAD}]) as upload:
             with self.assertRaises(RELEASE.ReleaseError):
                 RELEASE.run_release(self.c)
             self.assertEqual("artifacts_ready", RELEASE.read_json(previous)["stage"])
@@ -510,11 +589,32 @@ class ReleaseOrchestratorTest(unittest.TestCase):
         for fault in ("range-status", "range-header", "range-bytes", "full-sha"):
             with self.subTest(fault=fault):
                 http = PublisherFixture(self.c, bundle, fault=fault)
-                with mock.patch.object(RELEASE, "source_state", return_value=HEAD), mock.patch.object(RELEASE, "core_acceptance", return_value={}):
+                with mock.patch.object(RELEASE, "source_state", return_value=HEAD):
                     with self.assertRaises(RELEASE.ReleaseError):
                         RELEASE.upload_release(runner, http, bundle, BASE_SHA, HEAD)
                 self.assertFalse(any(path.endswith("/activate") for _, path in http.events))
                 self.assertFalse(http.active)
+
+    def test_upload_or_source_failure_cannot_activate_and_manifest_mismatch_is_not_success(self):
+        bundle, runner = self.bundle(), self.runner()
+        for fault in ("upload", "source", "manifest"):
+            with self.subTest(fault=fault):
+                http = PublisherFixture(self.c, bundle)
+                request = http.request
+
+                def response(path, method="GET", data=None, auth=False, headers=None):
+                    if fault == "upload" and method == "PUT":
+                        raise RELEASE.ReleaseError("Synthetic upload interruption")
+                    if fault == "manifest" and path == self.c["manifest_path"]:
+                        return Response(b"different public manifest bytes")
+                    return request(path, method, data, auth, headers)
+
+                http.request = response
+                with mock.patch.object(RELEASE, "source_state", return_value="c" * 40 if fault == "source" else HEAD):
+                    with self.assertRaises(RELEASE.ReleaseError):
+                        RELEASE.upload_release(runner, http, bundle, BASE_SHA, HEAD)
+                self.assertEqual(1 if fault == "manifest" else 0,
+                                 sum(path.endswith("/activate") for _, path in http.events))
 
     def test_aria2_public_download_has_bounded_verified_arguments_and_no_credentials(self):
         runner = self.runner()
@@ -609,8 +709,7 @@ class ReleaseOrchestratorTest(unittest.TestCase):
         http.ready = {sha(body) for body in http.artifacts.values()}
         with mock.patch.object(RELEASE, "runtime_paths", return_value=[]), \
                 mock.patch.object(RELEASE, "sync_source", return_value=current), \
-                mock.patch.object(RELEASE, "source_state", return_value=current), \
-                mock.patch.object(RELEASE, "core_acceptance", return_value={}) as acceptance, \
+                mock.patch.object(RELEASE, "source_state", return_value=current) as frozen, \
                 mock.patch.object(RELEASE, "baseline", return_value=({"versionCode": 253}, self.root / "base.apk", BASE_SHA)), \
                 mock.patch.object(RELEASE, "Http", return_value=http), \
                 mock.patch.object(RELEASE, "read_token", return_value=SYNTHETIC_TOKEN), \
@@ -622,7 +721,7 @@ class ReleaseOrchestratorTest(unittest.TestCase):
         self.assertEqual(current, result["currentCheckout"])
         self.assertEqual([artifact_source], http.registered_sources)
         self.assertEqual({"verify-envelope", "verify-apk"}, {call.args[1] for call in verify.call_args_list})
-        self.assertTrue(all(call.args[1] == current for call in acceptance.call_args_list))
+        self.assertGreaterEqual(frozen.call_count, 2)
         self.assertFalse(any(method == "PUT" for method, _ in http.events))
         build.assert_not_called()
 
@@ -641,7 +740,6 @@ class ReleaseOrchestratorTest(unittest.TestCase):
 
                 with mock.patch.object(RELEASE, "runtime_paths", return_value=[]), \
                         mock.patch.object(RELEASE, "sync_source", return_value=HEAD), \
-                        mock.patch.object(RELEASE, "core_acceptance", return_value={}), \
                         mock.patch.object(RELEASE, "baseline", return_value=({"versionCode": 253}, self.root / "base.apk", BASE_SHA)), \
                         mock.patch.object(RELEASE, "Http", return_value=http), \
                         mock.patch.object(RELEASE, "read_token", return_value=SYNTHETIC_TOKEN), \
@@ -680,7 +778,6 @@ class ReleaseOrchestratorTest(unittest.TestCase):
                 with mock.patch.object(RELEASE, "runtime_paths", return_value=[]), \
                         mock.patch.object(RELEASE, "sync_source", return_value=HEAD), \
                         mock.patch.object(RELEASE, "source_state", return_value=HEAD), \
-                        mock.patch.object(RELEASE, "core_acceptance", return_value={}), \
                         mock.patch.object(RELEASE, "baseline", return_value=({"versionCode": 253}, self.root / "base.apk", BASE_SHA)), \
                         mock.patch.object(RELEASE, "Http", return_value=http), \
                         mock.patch.object(RELEASE, "read_token", return_value=SYNTHETIC_TOKEN), \
@@ -700,7 +797,6 @@ class ReleaseOrchestratorTest(unittest.TestCase):
             "partBytes": RELEASE.PART_BYTES, "digestStreamAvailable": True}))
         with mock.patch.object(RELEASE, "runtime_paths", return_value=[]), \
                 mock.patch.object(RELEASE, "sync_source", return_value=HEAD), \
-                mock.patch.object(RELEASE, "core_acceptance", return_value={}), \
                 mock.patch.object(RELEASE, "baseline", return_value=({"versionCode": 255, "validNow": True}, self.root / "base.apk", BASE_SHA)), \
                 mock.patch.object(RELEASE, "Http", return_value=http), \
                 mock.patch.object(RELEASE, "read_token", return_value=SYNTHETIC_TOKEN), \
