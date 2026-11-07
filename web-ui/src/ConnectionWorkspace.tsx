@@ -123,13 +123,13 @@ export default function ConnectionWorkspace({ domain, state, data, supported, ru
   const closeEditor = () => { setEditing(null); requestAnimationFrame(() => { const trigger = editorTrigger.current; (trigger?.isConnected && trigger.getClientRects().length ? trigger : journey.root.current)?.focus({ preventScroll: true }); }); };
   return <div className="pw-connection-workspace" ref={journey.root} tabIndex={-1} data-connection-view={journey.view}>
     <div hidden={journey.view !== 'list'}>
-      <header className="pw-connection-collection-heading"><div><h2>{collectionName}</h2><p>{domain === 'remote' ? '选择一台电脑，继续原任务或开始新工作。' : '选择一台主机，查看文件、运行任务或打开终端。'}</p></div><Button variant="ghost" iconOnly leadingIcon={Plus} aria-label={'添加' + collectionName} disabled={busy} onClick={() => openEditor({})} /></header>
+      <header className="pw-connection-collection-heading"><div><h2>{collectionName}</h2></div><Button variant="ghost" iconOnly leadingIcon={Plus} aria-label={'添加' + collectionName} disabled={busy} onClick={() => openEditor({})} /></header>
       {profiles.length === 0 ? <div className="pw-connection-empty"><Monitor size={25} aria-hidden /><h3>{domain === 'remote' ? '连接你的第一台电脑' : '添加你的第一台主机'}</h3><p>{domain === 'remote' ? '填写 Companion 地址与令牌，再读取实际工作环境。' : '保存地址与凭据后，通过可信渠道核对主机指纹。'}</p><Button disabled={busy} onClick={() => openEditor({})}>添加{collectionName}</Button></div> : <div className="pw-connection-list">{profiles.map(profile => <ConnectionRow key={profile.id} title={profile.name} detail={profileAddress(profile)} icon={domain === 'remote' ? Monitor : Server} disabled={busy} entry={'profile:' + profile.id} onOpen={() => openProfile(profile)}><small className="pw-connection-readiness">{profileReadiness(domain, profile)}</small></ConnectionRow>)}</div>}
       {domain === 'remote' && list(data.jobs).length > 0 && <div className="pw-connection-history-entry"><ConnectionRow title="电脑上的原任务" detail="按原连接读取回执，保留已经发生的工作" icon={History} entry="all-jobs" disabled={busy} onOpen={() => journey.open('all-jobs')} /></div>}
     </div>
     {journey.view !== 'list' && <header className="pw-connection-detail-heading">
       <Button variant="ghost" leadingIcon={ArrowLeft} disabled={busy} onClick={goBack}>{overview || journey.view === 'all-jobs' ? '返回' + collectionName : working ? '返回' : '返回连接概览'}</Button>
-      <div tabIndex={-1} data-operation-heading><p className="pw-connection-eyebrow">{showingJobs ? '原任务' : domain === 'remote' ? 'COMPANION' : 'SSH'}</p><h2>{journey.view === 'all-jobs' ? '电脑上的原任务' : selected?.name}</h2>{selected && journey.view !== 'all-jobs' && <p className="pw-connection-address">{profileAddress(selected)}</p>}</div>
+      <div tabIndex={-1} data-operation-heading><h2>{journey.view === 'all-jobs' ? '电脑上的原任务' : selected?.name}</h2>{selected && journey.view !== 'all-jobs' && <p className="pw-connection-address">{profileAddress(selected)}</p>}</div>
     </header>}
     {error && <p className="pw-secondary-error" role="alert">{error}</p>}
     {selected && journey.view !== 'list' && journey.view !== 'all-jobs' && stale && <div className="pw-connection-attention"><p role="alert">连接已在另一页面修改。旧目标仍显示在这里，尚未沿用它开始新工作。</p><Button variant="secondary" onClick={() => { const current = profiles.find(profile => profile.id === selected.id); setSelected(current ? { ...current } : null); setWorkOpened(false); setProbe(null); setReceipt(null); if (!current) journey.back(); else journey.open('profile:' + current.id); }}>重新读取当前连接</Button></div>}
@@ -169,7 +169,7 @@ function ProfileEditor({ domain, original, current, state, run, close, back }: {
   const stale = !!original.id && (!current || current.bindingHash !== original.bindingHash);
   const field = (key: string, value: any) => setForm(previous => ({ ...previous, [key]: value }));
   const canSave = !busy && !attempted && !stale && text(form.name).trim() && (domain === 'remote' ? text(form.baseUrl).trim() : text(form.host).trim() && text(form.username).trim() && text(form.workspace).startsWith('/') && wirelessPort(form.port));
-  return <SettingsDialog isOpen title={domain === 'remote' ? '电脑环境连接' : 'SSH 连接'} onClose={() => { if (!busy) { clear(); close(); } }}><div className="pw-connection-profile-editor">
+  return <SettingsDialog isOpen title={domain === 'remote' ? '电脑环境连接' : 'SSH 连接'} onClose={() => { if (!busy) { clear(); close(); } }}><div className="pw-connection-profile-editor"><div className="pw-connection-profile-editor-scroll">
     <section><h3>连接位置</h3><div className="pw-form-grid">
       <TextField label="名称" value={form.name} onChange={value => field('name', value)} />
       {domain === 'remote' ? <TextField label="Companion 地址" type="url" value={form.baseUrl} onChange={value => field('baseUrl', value)} /> : <>
@@ -183,7 +183,7 @@ function ProfileEditor({ domain, original, current, state, run, close, back }: {
         <p className="pw-field-hint">凭据只写入手机加密存储，不回填。更换主机或用户时请重新填写。</p>
       </>}
     </div></section>
-    {stale && <p role="alert">连接已在其他页面修改，请关闭后重新读取。</p>}{error && <p role="alert">{error} 请先核对当前连接列表，不重复这次保存。</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { clear(); close(); }}>关闭</Button><Button disabled={!canSave} onClick={() => { const payload = connectionProfilePayload(domain, form, original); setAttempted(true); clear(); void request(domain + '.saveProfile', payload).then(close).catch(() => {}); }}>{busy ? '等待保存回执…' : '保存这项连接'}</Button></div>
+    </div><footer className="pw-connection-profile-editor-footer">{stale && <p role="alert">连接已在其他页面修改，请关闭后重新读取。</p>}{error && <p role="alert">{error} 请先核对当前连接列表，不重复这次保存。</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { clear(); close(); }}>关闭</Button><Button disabled={!canSave} onClick={() => { const payload = connectionProfilePayload(domain, form, original); setAttempted(true); clear(); void request(domain + '.saveProfile', payload).then(close).catch(() => {}); }}>{busy ? '等待保存回执…' : '保存连接'}</Button></div></footer>
   </div></SettingsDialog>;
 }
 

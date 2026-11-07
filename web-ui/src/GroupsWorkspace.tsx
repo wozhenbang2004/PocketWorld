@@ -214,7 +214,7 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
     <header className="pw-group-header">
       <div className="pw-group-heading">
         {(groupId || editor) && <Button type="button" variant="ghost" iconOnly leadingIcon={ArrowLeft} disabled={busy} aria-label={editor ? '返回并保留草稿' : selectedRequest && tab === 'tasks' ? '返回请求列表' : '返回群列表'} onClick={back} />}
-        <div><p className="pw-group-eyebrow">{group ? providerName(group) : '协作空间'}</p><h2>{group?.name || '群协作'}</h2></div>
+        <div>{group && <p className="pw-group-eyebrow">{providerName(group)}</p>}<h2>{group?.name || '群协作'}</h2></div>
         {group && <span className="pw-group-state" data-enabled={group.enabled === true}>{group.enabled ? '服务已启用' : '服务已关闭'}</span>}
       </div>
       <div className="pw-group-tools">
@@ -222,7 +222,6 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
         {!editor && !groupId && <Button type="button" leadingIcon={Plus} disabled={busy} onClick={openCreate}>新建群空间</Button>}
       </div>
     </header>
-    {!groupId && !editor && <p className="pw-group-intro">从群里的请求，接着查看任务与结果。</p>}
     {group && <p className="pw-group-context">{groupRows(group.members).filter(member => member.enabled).length} 位已启用成员 · {requests.length} 项请求 · {group.visibility === 'members' ? '进度可按任务开放给群成员' : '任务进度仅发起人可见'}</p>}
     <div className="pw-group-feedback" aria-live="polite">
       {error && <p className="pw-group-warning" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
@@ -235,12 +234,12 @@ export function GroupsWorkspace({ state, data, run, supported, registerTransient
         <span className="pw-group-row-copy"><strong>{row.name}</strong><span>{providerName(row)} · {groupRows(row.members).filter(member => member.enabled).length} 位成员 · {groupRows(snapshot?.requests).filter(request => request.groupId === row.id).length} 项请求</span></span>
         <span className="pw-group-row-end"><span className="pw-group-state" data-enabled={row.enabled === true}>{row.enabled ? '已启用' : '已关闭'}</span><ChevronRight size={17} aria-hidden /></span>
       </Button>)}
-      {snapshot && groupRows(snapshot.groups).length === 0 && <div className="pw-group-empty"><Users aria-hidden /><h3>把一个群带进协作空间</h3><p>选择已有机器人连接，再添加成员与能力授权。新空间默认关闭。</p><Button type="button" disabled={busy} onClick={openCreate}>绑定第一个群空间</Button></div>}
+      {snapshot && groupRows(snapshot.groups).length === 0 && <div className="pw-group-empty"><Users aria-hidden /><h3>暂无群空间</h3><p>新建后添加成员与能力授权。</p></div>}
     </div>}
     {groupId && !group && !editor && <p className="pw-group-warning" role="alert">这个群空间当前未读取到，请刷新核对。</p>}
 
     {editor && <form className="pw-group-editor" aria-label={editorTitle} onSubmit={event => { event.preventDefault(); if (formReady) requestReview(); }}>
-      <header className="pw-group-section-heading"><div><p className="pw-group-eyebrow">{editor === 'create' ? '连接一个原群' : group?.name}</p><h3>{editorTitle}</h3><p>先填写，再核对这一次变更。返回会保留未提交的内容。</p></div></header>
+      <header className="pw-group-section-heading"><div><p className="pw-group-eyebrow">{editor === 'create' ? '连接一个原群' : group?.name}</p><h3>{editorTitle}</h3></div></header>
       {editor === 'create' && <>
         <div className="pw-group-form-grid">{field('name', '群空间名称')}
           <SelectField label="机器人连接" value={draft.accountId} onChange={value => { closeReview(); setDraft(old => ({ ...old, accountId: value, conversationKind: 'group', conversationParentId: '', roomId: '' })); }} options={connections.map(row => ({ id: row.id, label: `${row.name || row.id} · ${row.provider}`, disabled: row.enabled !== true }))} isDisabled={busy} hint="使用已配置的 QQ 或可信 Webhook 连接。" />

@@ -109,7 +109,7 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
   }, [task?.taskHandle, !!receipt, version]);
   const details = taskMemorySelectionDetails(receipt);
   return <section className="pw-memory-history pw-knowledge-workspace" aria-label="旧事与任务来源">
-    {!selected && <header className="pw-knowledge-heading"><h2>{view === 'history' ? '查阅旧事' : '核对任务来源'}</h2><p>{view === 'history' ? '找到曾经保存的内容，再回到原证据核对。' : '查看原任务当时提供给模型的记忆。'}</p></header>}
+    {!selected && <header className="pw-knowledge-heading"><h2>{view === 'history' ? '查阅旧事' : '核对任务来源'}</h2></header>}
     <SelectField label="查阅内容" value={view} options={[{ id: 'history', label: '旧事与主体认知' }, { id: 'tasks', label: '原任务与本轮记忆来源' }]} isDisabled={busy} onChange={value => { reset(); setView(value as 'history' | 'tasks'); setQuery(''); }} />
     {error && <p className="pw-secondary-error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}{busy && <p className="pw-muted" role="status">正在核对原版本与回执…</p>}
     {!selected && <>
@@ -146,7 +146,7 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
       {view === 'tasks' && <div className="pw-form-actions">{rows(selected.sourceRefs).map((ref, index) => ref.kind === 'task_evidence' && <Button key={index} variant="ghost" disabled={busy} onClick={() => { if (selectedRef.current === selected) void invoke('taskMemory.source.focus', { readHandle: selected.readHandle, index }); }}>打开来源原任务 {index + 1}</Button>)}</div>}
       {!rows(selected.assertion?.evidenceSpans).length && <p className="pw-muted">未附确切原文片段；这段记忆不作为主人原话认证。</p>}
       {source && <section className="pw-source-record"><h3>{source.title || '确切原来源'}</h3><p className="pw-muted">{source.verifiedOriginalSpan ? '原范围与指纹已核对；不证明陈述为真。' : source.status && source.status !== 'current' ? '原来源当前不可读，不显示旧正文。' : '原选择范围，不自动取得执行权限。'}</p><pre className="pw-source-copy" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{source.text}</pre>{source.sourceReadLimited && !source.hasMore && <p className="pw-muted">本次原宿主只返回了这一段原文。请打开来源原任务核对其余内容；没有把截取片段当作全文。</p>}{source.hasMore && <Button variant="ghost" disabled={busy} onClick={() => readSource(source.index, source.span, source.nextOffset)}>继续读取原文</Button>}</section>}
-      <Accordion variant="divided" className="pw-compact-disclosures pw-memory-edit"><AccordionItem id="correction" title="纠正或遗忘" description="核对这次原版本，再确认一次修改">
+      <Accordion variant="divided" className="pw-compact-disclosures pw-memory-edit"><AccordionItem id="correction" title="纠正或遗忘">
         <TextAreaField label="正确的内容" value={draft} onChange={setDraft} maxLength={4000} isDisabled={busy} />
         <Button variant="secondary" disabled={busy || !draft.trim() || draft.trim() === selected.text} onClick={() => prepare('correct')}>核对纠正</Button>
         {view === 'tasks' && <><Button variant="ghost" disabled={busy} onClick={() => { void invoke('taskMemory.replacements', { readHandle: selected.readHandle }, value => { setReplacements(rows(value.records)); setReplacement(''); }); }}>选择另一条正式记忆替代</Button>{replacements.length > 0 && <><SelectField label="保留的正式记忆" value={replacement} options={replacements.map(row => ({ id: row.replacementHandle, label: row.text }))} onChange={setReplacement} isDisabled={busy} /><Button variant="secondary" disabled={busy || !replacement} onClick={() => prepare('replace')}>核对替代与旧版本停用</Button></>}<Button variant="ghost" disabled={busy} onClick={() => prepare('forget')}>核对遗忘</Button></>}

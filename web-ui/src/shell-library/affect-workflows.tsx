@@ -26,16 +26,15 @@ export function SkillLibrary({ skills, query, onQuery, disabled, loaded, onOpen,
             </button>
             {checkingSources && row.gitSource && !row.origin && <CheckboxField isSelected={selectedIds.includes(row.id)} isDisabled={disabled || (!selectedIds.includes(row.id) && selectedIds.length >= 8)} onChange={checked => onToggle(row, checked)}>加入来源检查</CheckboxField>}
           </div>)}
-          {loaded && !filtered.length && <p className="pw-affect-empty">{skills.length ? '没有匹配的技能，试试名称或来源。' : '尚未登记技能。可在下方导入并核对。'}</p>}
+          {loaded && !filtered.length && <p className="pw-affect-empty">{skills.length ? '没有匹配的技能，试试名称或来源。' : '尚未登记技能。可从上方导入。'}</p>}
           {!loaded && <p className="pw-affect-empty">正在读取技能清单…</p>}
         </div>
       </aside>
       <div className="pw-affect-library-detail" aria-label="技能摘要">
         {active ? <><div className="pw-affect-library-heading"><RiBookOpenLine size={20} aria-hidden="true"/><h3>{active.name || '未命名技能'}</h3><span className="pw-affect-tag" data-tone={active.enabled ? 'passed' : 'neutral'}>{active.enabled ? '已启用' : '停用'}</span></div>
+          <footer>{query.trim() && <span>{filtered.length} 项匹配</span>}<Button disabled={disabled} trailingIcon={RiArrowRightSLine} onClick={() => onOpen(active.id)}>阅读这份技能</Button></footer>
           <p>{active.description || '这份技能尚未提供说明。'}</p>
           <dl className="pw-affect-library-facts"><div><dt>来源</dt><dd>{active.source || '未注明来源'}</dd></div><div><dt>修订</dt><dd>{active.revision ?? '未注明'}{active.sourceVersion ? ` · ${active.sourceVersion}` : ''}</dd></div>{active.enabled && active.active === false && <div><dt>可用性</dt><dd>当前不可用，阅读详情核对</dd></div>}</dl>
-          <div className="pw-affect-library-preview"><span>阅读后再决定</span><p>打开当前登记版本的正文与资源，核对来源、调用方式和修订历史。</p></div>
-          <footer><span>{filtered.length} 项匹配</span><Button disabled={disabled} trailingIcon={RiArrowRightSLine} onClick={() => onOpen(active.id)}>阅读这份技能</Button></footer>
         </> : <div className="pw-affect-library-placeholder"><RiBookOpenLine size={28} aria-hidden="true"/><p>选择一份技能，查看真实登记信息。</p></div>}
       </div>
     </div>

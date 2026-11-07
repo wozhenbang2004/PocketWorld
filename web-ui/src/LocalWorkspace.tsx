@@ -107,7 +107,7 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
   const resultUnknown = !!original && (!receipt || !/^(running|completed|failed|paused|stopped)$/.test(String(receipt.status)) || /^(unknown|prepared)$/.test(String(receipt.operationState)));
   const executionMessage = receipt?.message || receipt?.receipt?.message;
   return <section ref={readingRoot} className="pw-local-workspace pw-settings-section" data-local-view={panel}>
-    <header className="pw-local-heading"><div><h2>本机工作区</h2><p>私人副本与手动终端，在同一个地方继续。</p></div><Terminal size={22} aria-hidden /></header>
+    <header className="pw-local-heading"><div><h2>本机终端</h2></div></header>
     {error && <p role="alert" className="pw-local-feedback pw-secondary-error">{error}</p>}
     {knownResults['local.probe']?.message && <p className="pw-local-runtime-message" role="status">{knownResults['local.probe'].message}</p>}
     {legacyReceiptRecovery && <div className="pw-local-feedback" role="status"><p>{legacyReceiptRecovery.message || '原只读命令的恢复清单只用于核对既有记录。'}</p><p className="pw-field-hint">可读原记录 {legacyReceiptRecovery.readableOriginalRecords ?? '尚未返回'} 条 · 冷恢复待核 {legacyReceiptRecovery.coldUnconfirmedRecords ?? '尚未返回'} 条 · 保留的不可读原记录 {legacyReceiptRecovery.unreadableOriginalRecordsRetained ?? '尚未返回'} 条。</p>{(legacyReceiptRecovery.originalInventoryUnconfirmed || legacyReceiptRecovery.coldUnconfirmedRecords > 0) && <p className="pw-field-hint">{legacyReceiptRecovery.blockingScope === 'all_checkouts' ? '全部工作副本的原写入范围仍受阻止。' : '相关原工作副本仍保持占用。'}重新打开页面不证明进程已经退出，也不会恢复执行权限。</p>}</div>}
@@ -119,7 +119,7 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
     <div className="pw-local-layout">
       <nav className="pw-local-sessions" aria-label="本机终端">
         <Button variant="ghost" className="pw-local-session-row pw-local-new" leadingIcon={Plus} aria-pressed={panel === 'setup'} disabled={busy} onClick={() => changePanel('setup')}>新建终端</Button>
-        <div className="pw-local-session-label"><span>已有终端</span><small>当前已读取的记录</small></div>
+        <div className="pw-local-session-label"><span>已有终端</span></div>
         {original && !currentTask && <Button variant="ghost" className="pw-local-session-row" leadingIcon={Terminal} aria-pressed={panel === 'session'} disabled={busy} onClick={() => changePanel('session')}><span className="pw-local-session-copy"><strong>本次手动终端</strong><small>{statusLabel(currentStatus)}</small></span></Button>}
         {terminals.map(task => {
           const active = identity(task).taskId === original?.taskId && identity(task).executionId === original?.executionId;
@@ -129,7 +129,13 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
       </nav>
       <div className="pw-local-main">
         <section className="pw-local-panel" data-local-panel="setup" hidden={panel !== 'setup'}>
-          <header className="pw-local-panel-heading"><span className="pw-local-eyebrow">私人工作副本</span><h2 tabIndex={-1}>新建手动终端</h2><p>选择项目、核对副本，再审阅启动。不会调用模型。</p></header>
+          <header className="pw-local-panel-heading pw-local-setup-heading"><h2 tabIndex={-1}>新建手动终端</h2><Button disabled={busy || resultUnknown || uncertain || !ready || Number(seconds) < 1 || Number(seconds) > 300 || !supported('local.terminal.review')} trailingIcon={ChevronRight} onClick={() => {
+              if (activePanel.current !== 'setup' || entered.current || resultUnknown || uncertain) return;
+              try { const environment = JSON.parse(env); if (!environment || Array.isArray(environment) || typeof environment !== 'object') throw new Error('环境变量需要 JSON 对象。');
+                if (view) closeViewer();
+                void invoke('local.terminal.review', { projectId: project, checkoutId: checkout, expectedSourceDigest: source!.sourceDigest, runtimeId: 'managed_process_v1', cwd, env: environment, timeoutMillis: Number(seconds) * 1000, columns: 80, rows: 24, inputByteLimit: 65536 }, result => { reviewHandle.current = result.handle; setReview(result); setAcknowledged(false); }).catch(() => {});
+              } catch (failure) { setError(failure instanceof Error ? failure.message : '请核对表单'); }
+            }}>核对并准备终端</Button></header>
           <div className="pw-local-setup-step">
             <h3><Folder size={17} aria-hidden />选择工作副本</h3>
             <div className="pw-form-grid"><SelectField label="原项目" value={project} isDisabled={busy} options={[{ id: '', label: '选择已有项目' }, ...rows(state.projects).map(row => ({ id: row.id, label: row.name }))]} onChange={value => { if (!busy) { setProject(value); setCheckout(''); setSource(null); setPrepareAttempted(false); } }} />
@@ -143,13 +149,6 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
             <div className="pw-form-grid"><TextField label="副本中的工作目录" value={cwd} onChange={setCwd} isDisabled={busy} /><TextField label="最长运行秒数（1–300）" inputMode="numeric" value={seconds} isDisabled={busy} onChange={value => setSeconds(value.replace(/\D/g, '').slice(0, 3))} /></div>
             <Accordion className="pw-local-disclosures"><AccordionItem id="environment" title="环境变量" description={env.trim() === '{}' ? '可选，仅限普通配置值' : '已编辑普通环境变量，启动前会核对'}><TextAreaField label="普通环境变量（JSON 对象）" value={env} onChange={setEnv} isDisabled={busy} hint="例如 APP_LABEL；不能设置密钥或覆盖宿主运行环境。" /></AccordionItem></Accordion>
             <p className="pw-local-safety">终端操作可能修改私人副本，输入和输出会保留在原任务记录中。不支持密码等秘密输入。</p>
-            <Button disabled={busy || resultUnknown || uncertain || !ready || Number(seconds) < 1 || Number(seconds) > 300 || !supported('local.terminal.review')} trailingIcon={ChevronRight} onClick={() => {
-              if (activePanel.current !== 'setup' || entered.current || resultUnknown || uncertain) return;
-              try { const environment = JSON.parse(env); if (!environment || Array.isArray(environment) || typeof environment !== 'object') throw new Error('环境变量需要 JSON 对象。');
-                if (view) closeViewer();
-                void invoke('local.terminal.review', { projectId: project, checkoutId: checkout, expectedSourceDigest: source!.sourceDigest, runtimeId: 'managed_process_v1', cwd, env: environment, timeoutMillis: Number(seconds) * 1000, columns: 80, rows: 24, inputByteLimit: 65536 }, result => { reviewHandle.current = result.handle; setReview(result); setAcknowledged(false); }).catch(() => {});
-              } catch (failure) { setError(failure instanceof Error ? failure.message : '请核对表单'); }
-            }}>核对并准备终端</Button>
           </div>
         </section>
         <section className="pw-local-panel" data-local-panel="session" hidden={panel !== 'session'}>
