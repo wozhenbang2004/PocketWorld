@@ -18,14 +18,14 @@ public final class UiAppearance {
     }
     public static boolean dark(Context context){String mode=mode(preferences(context));return "dark".equals(mode)||"system".equals(mode)&&(context.getResources().getConfiguration().uiMode&Configuration.UI_MODE_NIGHT_MASK)==Configuration.UI_MODE_NIGHT_YES;}
     public static int theme(Context context){return dark(context)?R.style.AppTheme_Dark:R.style.AppTheme_Light;}
-    public static int surface(Context context){return dark(context)?0xff1b1b1b:0xffffffff;}
-    public static int surfaceVariant(Context context){return dark(context)?0xff2b2b2b:0xfff2f2f2;}
-    public static int foreground(Context context){return dark(context)?0xffe8e8e8:0xff181818;}
-    public static int secondary(Context context){return dark(context)?0xffbdbdbd:0xff666666;}
-    public static int primary(Context context){return dark(context)?0xffededed:0xff202020;}
-    public static int onPrimary(Context context){return dark(context)?0xff181818:0xffffffff;}
-    public static int outline(Context context){return dark(context)?0xff4b4b4b:0xffe4e4e4;}
-    public static int warning(Context context){return dark(context)?0xffffb4ab:0xffa3443d;}
+    public static int surface(Context context){return dark(context)?0xff1c1c1c:0xffffffff;}
+    public static int surfaceVariant(Context context){return dark(context)?0xff262626:0xfff1f1ef;}
+    public static int foreground(Context context){return dark(context)?0xfff4f4f4:0xff181818;}
+    public static int secondary(Context context){return dark(context)?0xffc4c4c4:0xff555555;}
+    public static int primary(Context context){return dark(context)?0xfff3f3f3:0xff242424;}
+    public static int onPrimary(Context context){return dark(context)?0xff171717:0xffffffff;}
+    public static int outline(Context context){return dark(context)?0xff353535:0xffe7e7e5;}
+    public static int warning(Context context){return dark(context)?0xfff3aaa5:0xffa03f39;}
     /** Only native app chrome. Web documents, screenshots and media pixels retain their own colors. */
     public static void window(Activity activity){
         activity.setTheme(theme(activity));int surface=surface(activity);activity.getWindow().setStatusBarColor(surface);activity.getWindow().setNavigationBarColor(surface);

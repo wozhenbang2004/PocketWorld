@@ -3,13 +3,7 @@
  * Kevin and Neverland are visual/motion references, not claimed source ports.
  * Alma/card-04 inform fitted neutral elevation; no official Alma tokens/code. */
 .pw-redesign {
-  --pw-canvas: #fafafa;
-  --pw-surface: #fff;
-  --pw-inset: #f3f3f3;
-  --pw-selected: #eaeaea;
-  --pw-hover: #efefef;
-  --pw-shadow-input: 0 2px 6px -2px rgb(0 0 0 / 2.5%), 0 12px 24px -8px rgb(0 0 0 / 6.5%);
-  --pw-shadow-surface: 0 2px 6px -2px rgb(0 0 0 / 2.5%), 0 12px 24px -8px rgb(0 0 0 / 7%);
+  /* Colors inherit from the product tokens; never repin the light theme here. */
   background: var(--pw-canvas);
 }
 
@@ -171,13 +165,8 @@
 }
 
 :root.dark .pw-redesign {
-  --pw-canvas: #121212;
-  --pw-surface: #1b1b1b;
-  --pw-inset: #252525;
-  --pw-selected: #353535;
-  --pw-hover: #303030;
-  --pw-shadow-input: 0 2px 8px -2px rgb(0 0 0 / 10%), 0 12px 24px -8px rgb(0 0 0 / 20%);
-  --pw-shadow-surface: 0 2px 8px -2px rgb(0 0 0 / 10%), 0 12px 24px -8px rgb(0 0 0 / 22%);
+  --pw-shadow-input: 0 2px 8px -2px rgb(0 0 0 / 12%), 0 12px 26px -8px rgb(0 0 0 / 27%);
+  --pw-shadow-surface: 0 3px 12px -4px rgb(0 0 0 / 18%), 0 15px 32px -10px rgb(0 0 0 / 30%);
 }
 :root.dark .pw-redesign .pw-composer-region .pw-composer-host .afa-composer > .afa-card { background: var(--pw-inset); }
 

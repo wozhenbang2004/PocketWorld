@@ -2,19 +2,28 @@
  * adopted BoardUI .dark and product/source tokens. No filters touch media. */
 :root.dark {
   color-scheme: dark;
-  --pw-canvas: #121212;
-  --pw-surface: #1b1b1b;
-  --pw-inset: #2b2b2b;
-  --pw-selected: #353535;
-  --pw-edge: transparent;
+  --pw-canvas: #111111;
+  --pw-surface: #1C1C1C;
+  --pw-inset: #262626;
+  --pw-selected: #303030;
+  --pw-hover: #292929;
+  --pw-danger: #F3AAA5;
+  --pw-danger-surface: #352523;
+  --pw-danger-border: #74403C;
+  --pw-warning: #F0C48A;
+  --pw-warning-surface: #33291E;
+  --pw-success: #DEDEDE;
+  --pw-success-surface: #2B2B2B;
+  --pw-edge-hover: #484848;
+  --pw-edge: #353535;
   --pw-edge-hover: transparent;
-  --pw-ink: #e8e8e8;
-  --pw-copy: #bdbdbd;
-  --pw-muted: #b7b7b7;
-  --pw-disabled: #929292;
-  --pw-strong: #ededed;
-  --pw-focus: #ededed;
-  --pw-on-strong: #181818;
+  --pw-ink: #F4F4F4;
+  --pw-copy: #C4C4C4;
+  --pw-muted: #B5B5B5;
+  --pw-disabled: #949494;
+  --pw-strong: #F3F3F3;
+  --pw-focus: #D5D5D5;
+  --pw-on-strong: #171717;
   --ovio-on-accent: var(--pw-on-strong);
   --pw-shadow-surface: 0 12px 36px -12px rgb(0 0 0 / 24%);
   --pw-shadow-floating: 0 16px 48px -12px rgb(0 0 0 / 32%);
@@ -31,14 +40,7 @@
   color: var(--pw-ink);
 }
 
-/* The workspace retains a local light token block; use the same native palette
- * here so its children and portaled settings agree with the root preference. */
-:root.dark .pw-redesign {
-  --pw-canvas: #121212;
-  --pw-edge: transparent;
-  --pw-ink: #e8e8e8;
-  --pw-strong: #ededed;
-}
+/* All product surfaces and portals inherit the same root dark palette. */
 :root.dark :is(.pw-app, .pw-secondary) { background: var(--pw-canvas); color: var(--pw-ink); }
 :root.dark .pw-library { color: var(--pw-ink); color-scheme: dark; }
 :root.dark .pw-navigation-overlay { background: rgb(0 0 0 / 32%); }

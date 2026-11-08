@@ -22,6 +22,7 @@ import './composer-compact.css';
 import './motion.css';
 import './uiux-surfaces.css';
 import './uiux-page-depth.css';
+import './color-roles.css';
 
 const element = document.getElementById('app');
 if (!element) throw new Error('PocketWorld application mount is missing');

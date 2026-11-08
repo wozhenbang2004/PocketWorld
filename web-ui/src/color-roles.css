@@ -1,0 +1,122 @@
+/* PocketWorld semantic color contract · 2026-11-08
+ * Keep the retained BoardUI/Affect/Vaul controls. This layer assigns color
+ * by surface responsibility; it never clones native controls or task state.
+ * Brand remains monochrome; only danger/warning use restrained semantic hues.
+ */
+:root {
+  --pw-scrim: rgb(17 17 17 / 27%);
+  --pw-divider: var(--pw-edge);
+}
+:root.dark {
+  --pw-scrim: rgb(0 0 0 / 60%);
+  --pw-divider: var(--pw-edge);
+}
+
+/* A quiet canvas, readable work surface, and identifiable temporary sheets. */
+.pw-redesign,
+.pw-secondary {
+  color: var(--pw-ink);
+  background: var(--pw-canvas);
+}
+.pw-redesign .pw-main-workspace,
+.pw-redesign .pw-chat-workspace {
+  background: var(--pw-surface);
+  color: var(--pw-ink);
+}
+.pw-redesign .pw-desktop-navigation,
+.pw-work-drawer {
+  background: var(--pw-canvas);
+  border-color: var(--pw-divider);
+}
+.pw-redesign .pw-app-header,
+.pw-secondary .pw-secondary-header {
+  background: var(--pw-surface);
+  border-bottom: 1px solid var(--pw-divider);
+}
+.pw-secondary .pw-secondary-scroll {
+  background: var(--pw-canvas);
+}
+.pw-redesign .pw-app-header h1,
+.pw-secondary .pw-secondary-header h1 {
+  color: var(--pw-ink);
+  font-weight: 600;
+  letter-spacing: -.025em;
+}
+.pw-redesign :is(.pw-active-bar, .pw-banner:not(.pw-banner-error)) {
+  background: var(--pw-inset);
+  color: var(--pw-copy);
+  border-color: var(--pw-divider);
+}
+
+/* Rows stay flat; selected and hovered objects communicate focus quietly. */
+.pw-redesign .pw-task-row.button-press-motion {
+  border-bottom-color: var(--pw-divider);
+}
+.pw-redesign .pw-task-row.button-press-motion:hover:not(:disabled),
+.pw-redesign .pw-file-open:hover:not(:disabled),
+.pw-secondary .pw-domain-link:hover:not(:disabled) {
+  background: var(--pw-hover);
+}
+.pw-redesign .pw-task-row.button-press-motion[aria-current="true"],
+.pw-redesign .pw-file-object[data-open="true"],
+.pw-secondary .pw-domain-link[aria-current="page"] {
+  background: var(--pw-selected);
+}
+.pw-redesign :is(.pw-task-row.button-press-motion, .pw-file-open),
+.pw-secondary .pw-domain-link {
+  transition: background-color .16s ease, border-color .16s ease;
+}
+.pw-secondary :is(.pw-settings-frequent, .pw-selected-object) {
+  background: var(--pw-surface);
+  border-color: var(--pw-divider);
+}
+
+/* Composer and popovers use the softest raised plane, not thick card outlines. */
+.pw-redesign .pw-composer-region .pw-composer-host .afa-composer > .afa-card {
+  background: var(--pw-surface);
+  border: 1px solid var(--pw-edge);
+  box-shadow: var(--pw-shadow-input);
+}
+.pw-redesign .pw-composer-region .pw-composer-host .afa-composer > .afa-card:focus-within {
+  border-color: var(--pw-edge-hover);
+  box-shadow: 0 0 0 2px var(--pw-focus), var(--pw-shadow-input);
+}
+:is(.pw-create-drawer, .pw-model-drawer, .pw-settings-dialog) {
+  background: var(--pw-surface);
+  border-color: var(--pw-edge);
+  box-shadow: var(--pw-shadow-sheet);
+}
+.pw-overlay {
+  background: var(--pw-scrim);
+}
+
+/* Failure/warning are semantic exceptions, never the product accent. */
+.pw-redesign :is(.pw-error, .pw-banner-error),
+.pw-secondary .pw-error {
+  background: var(--pw-danger-surface);
+  border-color: var(--pw-danger-border);
+  color: var(--pw-danger);
+}
+.pw-redesign .pw-banner-error {
+  border-left: 3px solid var(--pw-danger);
+}
+:where(.pw-redesign, .pw-secondary) :is(.pw-field-error, [data-task-status="failed"], [data-task-status="error"]) {
+  color: var(--pw-danger);
+}
+.pw-redesign .pw-task-state-dot:is([data-state="failed"], [data-state="error"]) {
+  background-color: var(--pw-danger);
+}
+
+/* Accessibility is not negotiable for a minimalist palette. */
+:where(.pw-redesign, .pw-secondary) :is(button, a, input, textarea, select, [role="option"]):focus-visible {
+  outline: 2px solid var(--pw-focus);
+  outline-offset: 3px;
+}
+@media (prefers-contrast: more) {
+  :root:not(.dark) { --pw-edge: #979795; --pw-edge-hover: #707070; --pw-focus: #202020; }
+  :root.dark { --pw-edge: #888888; --pw-edge-hover: #AAAAAA; --pw-focus: #FFFFFF; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pw-redesign :is(.pw-task-row.button-press-motion, .pw-file-open),
+  .pw-secondary .pw-domain-link { transition: none; }
+}

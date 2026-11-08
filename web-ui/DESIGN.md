@@ -145,3 +145,15 @@
 - 用户2026-11-07追加明确要求：“合并直接提交到 main”。本轮仅提交上述前端范围；远端提交结果以main及commit回读为准。
 
 后续验证：在有资源的构建环境完成默认类型/生产构建及Android设备验收。保持原组件、字体、任务权威和审阅身份约束。
+
+
+## 2026-11-08 配色系统重构 · Paper / Graphite
+
+本轮直接在 main 上应用 UIUX 配色研究，**不改动 Space 中的正式 Skill 快照**。唯一的基础色彩入口是 `web-ui/src/product.css`（浅色）和 `web-ui/src/presentation-theme.css`（深色）；`color-roles.css` 只处理页面职责，不重复声明基础 HEX。现有 `app.css` 和 `secondary.css` 常用硬编码中性色替换为语义 Token，`uiux-surfaces.css` 移除本地的明暗配色覆盖。原生 `UiAppearance.java` 与主色值一致。
+
+- Paper：canvas `#F7F7F6`、surface `#FFFFFF`、ink `#181818`、primary `#242424`。Graphite：canvas `#111111`、surface `#1C1C1C`、ink `#F4F4F4`、primary `#F3F3F3`。
+- 采用“内容平面 / 轻分隔 / 交互表面 / 临时浮层”的空间语义。平面列表不改成大卡片墙；仅输入及浮层使用柔和阴影。
+- 错误和警告以克制的局部语义色显示；成功保留中性色与文字/图标双重辨认，不引入绿色品牌视觉。焦点边界须明确。
+- 保留 BoardUI、Affect、BeUI、Vaul 的组件、动效及全部任务/权限/来源/草稿逻辑；不替换为 Android 默认控件。
+- `web-ui/tests/palette-contract.test.ts` 负责检查静态颜色角色、WCAG 对比度、深浅模式继承与原生色值一致性。未完成 Android 真机或整个仓库构建时不能将其当作验收。
+- 研究来源：[Space 九种配色与 Token](https://chatgpt.com/space/page_1b6df8cc995481918d068372051824a9)。本次是实现候选，不代表用户已逐屏审核。
