@@ -3,12 +3,12 @@
  * add a component system or override shared form/button implementations. */
 .pw-knowledge-workspace { min-width: 0; color: var(--pw-ink, #252525); }
 .pw-knowledge-heading { margin: 4px 0 16px; }
-.pw-knowledge-heading h2 { margin: 0; font-size: 20px; line-height: 29px; font-weight: 550; letter-spacing: -.02em; }
+.pw-knowledge-heading h2 { margin: 0; font-size: 20px; line-height: 29px; font-weight: 600; letter-spacing: -.02em; }
 .pw-knowledge-heading p { margin: 7px 0 0; color: var(--pw-copy, #646464); font-size: 13px; line-height: 22px; }
 .pw-knowledge-section { margin-block: 28px; }
 .pw-knowledge-section-heading, .pw-knowledge-evidence > h3 { margin: 0 0 10px; font-size: 14px; line-height: 23px; font-weight: 550; }
-.pw-knowledge-caption { font-size: 12px; line-height: 21px; color: var(--pw-copy, #646464); }
-.pw-knowledge-status { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 24px; color: var(--pw-copy, #646464); font-size: 12px; line-height: 21px; }
+.pw-knowledge-caption { font-size: 13px; line-height: 21px; color: var(--pw-copy, #646464); }
+.pw-knowledge-status { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 24px; color: var(--pw-copy, #646464); font-size: 13px; line-height: 21px; }
 .pw-knowledge-evidence { margin: 26px 0; }
 .pw-knowledge-evidence .pw-form-actions { margin: 0; gap: 8px; }
 .pw-knowledge-evidence .pw-source-record { margin: 12px 0 0; border: 0; border-radius: 10px; padding: 14px; background: var(--pw-surface, #fff); }
@@ -16,7 +16,7 @@
 .pw-knowledge-notice { margin-block: 16px; font-size: 13px; line-height: 22px; }
 .pw-knowledge-search-actions { display: flex; align-items: center; gap: 8px; margin: 16px 0 20px; }
 .pw-knowledge-search-actions > :first-child { min-width: 0; flex: 1; }
-.pw-knowledge-search-actions > button { flex: none; min-height: 40px; }
+.pw-knowledge-search-actions > button { flex: none; min-height: 48px; }
 .pw-knowledge-workspace .pw-compact-disclosures { margin-block: 16px 0; }
 .pw-knowledge-workspace .pw-compact-disclosures > * { border: 0; }
 .pw-knowledge-workspace .pw-compact-disclosures button[slot=trigger] { min-height: 48px; padding-inline: 0; }
@@ -27,7 +27,9 @@
 .pw-knowledge-workspace .pw-memory-list { padding-inline: 12px; }
 .pw-knowledge-workspace .pw-memory-row > span { width: 100%; min-width: 0; flex: 1 1 auto; justify-content: flex-start; }
 .pw-knowledge-workspace .pw-memory-row-copy { width: 100%; min-width: 0; flex: 1 1 auto; }
-.pw-memory-workspace .pw-memory-document { border-radius: 12px; box-shadow: none; padding: 20px; }
+.pw-memory-history .pw-memory-row { text-align: left; }
+.pw-memory-history .pw-memory-row-copy { text-align: left; }
+.pw-knowledge-workspace .pw-memory-document { border-radius: 0; background: transparent; box-shadow: none; padding: 0; }
 .pw-memory-workspace .pw-memory-detail-header { gap: 12px; margin-bottom: 20px; }
 .pw-memory-workspace .pw-memory-detail-header h2 { font-size: 20px; line-height: 29px; font-weight: 550; margin: 0; }
 .pw-memory-workspace .pw-memory-reading > .pw-knowledge-status { margin-bottom: 24px; }
@@ -39,7 +41,7 @@
 
 /* Portaled review and edit surfaces keep their own scope. Fields are not laid
  * across unrelated two-column cells by the older secondary form grid. */
-.pw-knowledge-dialog, .pw-knowledge-review { min-width: 0; font-size: 14px; line-height: 1.75; }
+.pw-knowledge-dialog, .pw-knowledge-review { min-width: 0; font-size: 16px; line-height: 1.75; }
 .pw-knowledge-dialog .pw-form-grid { display: flex; flex-direction: column; gap: 16px; }
 .pw-knowledge-dialog .pw-knowledge-form-section { display: flex; flex-direction: column; gap: 12px; margin-block: 8px 20px; }
 .pw-knowledge-dialog .pw-knowledge-form-section > :is(h3, h4) { margin: 0 0 2px; font-size: 14px; line-height: 23px; font-weight: 550; }
@@ -52,7 +54,7 @@
 .pw-knowledge-dialog .pw-knowledge-summary strong { display: block; font-size: 15px; font-weight: 550; line-height: 24px; }
 .pw-knowledge-dialog .pw-knowledge-summary p { margin: 5px 0 0; font-size: 12px; line-height: 21px; color: var(--pw-copy, #646464); }
 .pw-knowledge-dialog .pw-form-actions { gap: 8px; margin-top: 20px; }
-.pw-knowledge-dialog .pw-form-actions > button { white-space: normal; height: auto; min-height: 42px; }
+.pw-knowledge-dialog .pw-form-actions > button { white-space: normal; height: auto; min-height: 48px; }
 
 /* The same mounted learning workspace distinguishes sources, the active batch,
  * a draft and a source skill without making every supporting paragraph a card. */
@@ -84,19 +86,19 @@
 .pw-knowledge-dialog .pw-followup-plan-contents .pw-source-record + .pw-source-record { border-top: 1px solid color-mix(in srgb, var(--pw-ink, #222) 9%, transparent); }
 
 .pw-reminder-workspace .pw-followup-heading { margin-bottom: 16px; }
-.pw-reminder-workspace .pw-reminder-rules { margin-block: 20px 28px; padding: 2px 12px; background: var(--pw-surface, #fff); border-radius: 12px; }
+.pw-reminder-workspace .pw-reminder-rules { margin-block: 0; padding: 0; background: transparent; border-radius: 0; }
 .pw-reminder-workspace .pw-reminder-rule-row + .pw-reminder-rule-row { border-top: 1px solid color-mix(in srgb, var(--pw-ink, #222) 8%, transparent); border-radius: 0; }
-.pw-reminder-workspace .pw-reminder-rule-row { width: 100%; height: auto; min-height: 84px; padding: 14px 6px; text-align: left; justify-content: flex-start; color: inherit; background: transparent; border: 0; box-shadow: none; white-space: normal; }
+.pw-reminder-workspace .pw-reminder-rule-row { width: 100%; height: auto; min-height: 72px; padding: 14px 2px; text-align: left; justify-content: flex-start; color: inherit; background: transparent; border: 0; box-shadow: none; white-space: normal; }
 .pw-reminder-workspace .pw-reminder-rule-row > span { display: flex; gap: 10px; width: 100%; min-width: 0; flex: 1 1 auto; justify-content: flex-start; }
 .pw-reminder-workspace .pw-reminder-rule-row-copy { display: flex; flex: 1 1 auto; min-width: 0; flex-direction: column; gap: 4px; }
-.pw-reminder-workspace .pw-reminder-rule-row-copy strong { font-size: 15px; line-height: 23px; font-weight: 550; }
-.pw-reminder-workspace .pw-reminder-rule-row-copy small { color: var(--pw-copy, #646464); font-size: 12px; line-height: 20px; }
+.pw-reminder-workspace .pw-reminder-rule-row-copy strong { font-size: 16px; line-height: 24px; font-weight: 600; }
+.pw-reminder-workspace .pw-reminder-rule-row-copy small { color: var(--pw-copy, #646464); font-size: 13px; line-height: 21px; }
 .pw-reminder-workspace .pw-reminder-rule-row svg { flex: none; width: 18px; height: 18px; }
-.pw-reminder-workspace .pw-reminder-record { border: 0; background: var(--pw-surface, #fff); border-radius: 12px; padding: 17px; margin-block: 12px; }
+.pw-reminder-workspace .pw-reminder-record { border: 0; background: transparent; border-radius: 0; padding: 16px 0; margin: 0; }
 .pw-reminder-workspace .pw-reminder-record header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
-.pw-reminder-workspace .pw-reminder-record h3 { margin: 0; font-size: 14px; line-height: 23px; font-weight: 550; }
-.pw-reminder-workspace .pw-reminder-record header > span { font-size: 12px; line-height: 21px; color: var(--pw-copy, #646464); }
-.pw-reminder-workspace .pw-reminder-record p { font-size: 13px; line-height: 22px; margin: 10px 0 0; }
+.pw-reminder-workspace .pw-reminder-record h3 { margin: 0; font-size: 16px; line-height: 24px; font-weight: 600; }
+.pw-reminder-workspace .pw-reminder-record header > span { font-size: 13px; line-height: 21px; color: var(--pw-copy, #646464); }
+.pw-reminder-workspace .pw-reminder-record p { font-size: 16px; line-height: 26px; margin: 10px 0 0; }
 .pw-reminder-workspace .pw-reminder-alerts { margin-block: 28px; }
 .pw-reminder-workspace .pw-reminder-alerts h2 { font-size: 15px; line-height: 24px; font-weight: 550; margin: 0 0 12px; }
 .pw-knowledge-assertion-editor { padding: 0; border: 0; background: transparent; box-shadow: none; }
@@ -136,9 +138,8 @@
 @media (max-width: 560px) {
   .pw-knowledge-heading h2 { font-size: 20px; line-height: 29px; }
   .pw-knowledge-search-actions > button { max-width: 112px; padding-inline: 12px; }
-  .pw-memory-workspace .pw-memory-document { padding: 16px; }
-  .pw-reminder-workspace .pw-followup-heading { flex-wrap: wrap; }
-  .pw-reminder-workspace .pw-followup-heading-actions { width: 100%; justify-content: flex-start; }
+  .pw-memory-workspace .pw-memory-document { padding: 0; }
+  .pw-reminder-workspace .pw-followup-heading-actions { width: auto; justify-content: flex-end; }
 }
 
 /* Keep the existing BoardUI modal's title and local actions in view; only the
@@ -149,10 +150,52 @@
 .pw-knowledge-edit-dialog > .pw-form-grid { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 16px 18px; gap: 12px; }
 .pw-knowledge-edit-dialog > .pw-form-grid > * { flex-shrink: 0; }
 .pw-knowledge-edit-dialog > .pw-knowledge-edit-actions { flex: none; justify-content: flex-end; gap: 8px; margin: 0; padding: 12px 18px max(12px, env(safe-area-inset-bottom)); background: var(--pw-surface, #fff); box-shadow: 0 -5px 14px color-mix(in srgb, var(--pw-ink, #222) 3%, transparent); }
-.pw-knowledge-edit-dialog > .pw-knowledge-edit-actions > button { min-height: 44px; }
+.pw-knowledge-edit-dialog > .pw-knowledge-edit-actions > button { min-height: 48px; }
 .pw-memory-workspace .pw-memory-selection-actions { position: sticky; top: 0; z-index: 2; gap: 8px; margin: 0 0 12px; padding: 10px 0; background: var(--pw-canvas, #f7f7f7); }
 .pw-memory-selection-actions > span { font-size: 12px; color: var(--pw-copy, #646464); }
 .pw-memory-workspace .pw-memory-decisions { margin: 16px 0; }
 .pw-learning-workspace .pw-learning-selection-actions { margin: 10px 0 14px; }
-.pw-learning-workspace .pw-learning-selection-actions > button { white-space: normal; height: auto; min-height: 44px; }
+.pw-learning-workspace .pw-learning-selection-actions > button { white-space: normal; height: auto; min-height: 48px; }
 .pw-learning-workspace .pw-learning-selection > ul { max-height: min(320px, 44dvh); overflow: auto; overscroll-behavior: contain; }
+
+/* Collections share a flat directory: local filters, then meaningful groups.
+ * The controls remain the retained BoardUI/React Aria components. */
+.pw-knowledge-workspace .pw-knowledge-directory-heading,
+.pw-knowledge-workspace :is(.pw-learning-heading, .pw-followup-heading) { display: flex; align-items: center; justify-content: space-between; flex-wrap: nowrap; gap: 12px; margin: 0 0 20px; }
+.pw-knowledge-workspace :is(.pw-knowledge-directory-heading, .pw-learning-heading, .pw-followup-heading) > div:first-child { min-width: 0; flex: 1 1 0; }
+.pw-knowledge-workspace :is(.pw-learning-heading, .pw-followup-heading) h2 { font-size: 20px; line-height: 29px; font-weight: 600; }
+.pw-knowledge-workspace :is(.pw-learning-heading, .pw-followup-heading) .pw-form-actions { flex: 0 0 auto; }
+.pw-knowledge-workspace :is(button:not([role=tab]), [role=tab], .pw-utility-icon) { min-height: 48px; }
+.pw-knowledge-workspace :is(.pw-learning-heading, .pw-followup-heading, .pw-knowledge-directory-heading) button[aria-label] { min-width: 48px; }
+.pw-knowledge-workspace .pw-secondary-search { margin: 12px 0 0; }
+.pw-knowledge-filters { display: flex; gap: 6px; margin: 8px 0 16px; max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: none; }
+.pw-knowledge-filters > button { flex: none; padding: 10px 14px; font-size: 13px; line-height: 20px; border-radius: 12px; color: var(--pw-copy); }
+.pw-knowledge-filters > button[aria-pressed=true] { color: var(--pw-ink); background: var(--pw-selected); }
+.pw-knowledge-directory-group { margin: 24px 0; min-width: 0; }
+.pw-knowledge-group-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 4px; }
+.pw-knowledge-group-heading h3 { margin: 0; font-size: 13px; line-height: 22px; font-weight: 600; color: var(--pw-copy); }
+.pw-knowledge-group-heading > span { font-size: 13px; line-height: 22px; color: var(--pw-copy); font-variant-numeric: tabular-nums; }
+.pw-knowledge-workspace .pw-knowledge-directory-group :is(.pw-memory-list, .pw-learning-list, .pw-followup-list) { padding: 0; background: transparent; border-radius: 0; box-shadow: none; }
+.pw-knowledge-directory-group :is(.pw-memory-list-item, .pw-followup-row, .pw-learning-object) + :is(.pw-memory-list-item, .pw-followup-row, .pw-learning-object) { border-top: 1px solid var(--pw-hairline); }
+.pw-knowledge-workspace .pw-knowledge-directory-group :is(.pw-memory-row, .pw-learning-object, .pw-followup-row) { padding: 14px 2px; min-height: 72px; border-radius: 0; }
+.pw-knowledge-workspace :is(.pw-memory-row-copy strong, .pw-learning-object-copy strong, .pw-followup-row-title) { display: block; font-size: 16px; line-height: 25px; font-weight: 600; white-space: normal; overflow-wrap: anywhere; }
+.pw-knowledge-workspace :is(.pw-memory-row-copy small, .pw-learning-object-copy small, .pw-followup-row-meta, .pw-followup-row-copy small) { display: block; font-size: 13px; line-height: 22px; color: var(--pw-copy); white-space: normal; overflow: visible; -webkit-line-clamp: unset; }
+.pw-knowledge-workspace .pw-memory-row-copy > .pw-knowledge-row-preview { font-size: 14px; line-height: 23px; font-weight: 400; color: var(--pw-copy); -webkit-line-clamp: 2; }
+.pw-knowledge-workspace :is(.pw-learning-verbatim, .pw-reading-copy, .pw-followup-goal) { font-size: 16px; line-height: 1.8; }
+.pw-knowledge-workspace :is(.pw-learning-caption, .pw-learning-eyebrow, .pw-followup-facts dt, .pw-followup-facts dd) { font-size: 13px; line-height: 22px; }
+.pw-knowledge-workspace .pw-learning-next { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 18px 0 24px; padding-bottom: 20px; }
+.pw-knowledge-workspace .pw-learning-next > p { flex: 1 1 240px; margin: 0; }
+.pw-knowledge-workspace .pw-learning-batches > li { position: relative; min-height: 76px; padding: 16px 12px; gap: 12px; }
+.pw-knowledge-workspace .pw-learning-batches > li + li::before { content: ''; position: absolute; top: -12px; left: 21px; height: 24px; width: 1px; background: var(--pw-hairline); }
+.pw-knowledge-workspace .pw-learning-batches strong { font-size: 16px; line-height: 25px; font-weight: 600; }
+.pw-knowledge-workspace .pw-learning-batches p { font-size: 13px; line-height: 22px; }
+.pw-reminder-workspace .pw-reminder-record + .pw-reminder-record { border-top: 1px solid var(--pw-hairline); }
+.pw-reminder-workspace .pw-reminder-record .pw-field-hint { font-size: 13px; line-height: 22px; }
+.pw-reminder-workspace .pw-reminder-record header { flex-wrap: wrap; gap: 4px 12px; }
+.pw-reminder-workspace .pw-reminder-record header h3 { flex: 1 1 180px; }
+.pw-reminder-workspace .pw-reminder-record header > span { flex: none; }
+.pw-reminder-workspace .pw-reminder-alerts { margin: 24px 0; }
+.pw-knowledge-empty-copy { margin: 22px 0; color: var(--pw-copy); font-size: 14px; line-height: 24px; }
+.pw-knowledge-object-state { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; font-size: 13px; line-height: 22px; color: var(--pw-copy); }
+.pw-knowledge-object-state > strong { color: var(--pw-ink); font-weight: 600; }
+.pw-knowledge-next-time { margin: 12px 0 20px; font-size: 16px; line-height: 26px; }

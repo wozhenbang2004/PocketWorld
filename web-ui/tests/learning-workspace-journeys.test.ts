@@ -36,7 +36,7 @@ function fixture(kind: 'Learning' | 'Experience', responses: Data = {}, initialS
     bridge: { getState: () => host, getDocumentEpoch: () => 1, subscribe: (fn: () => void) => { subscribers.add(fn); return () => subscribers.delete(fn); } },
     setInterval: (fn: () => void) => { const id = ++timerId; timers.set(id, fn); return id; }, clearInterval: (id: number) => timers.delete(id),
   };
-  for (const name of ['Accordion', 'AccordionItem', 'Button', 'CheckboxField', 'SelectField', 'SettingsDialog', 'TextAreaField', 'TextField', 'AIAnswer', 'Tabs', 'TabList', 'Tab', 'TabPanel', 'ArrowLeft', 'BookOpen', 'Plus', 'RefreshCw', 'ChevronRight', 'FileText']) dependencies[name] = name;
+  for (const name of ['Accordion', 'AccordionItem', 'Button', 'CheckboxField', 'SearchField', 'SelectField', 'SettingsDialog', 'TextAreaField', 'TextField', 'AIAnswer', 'Tabs', 'TabList', 'Tab', 'TabPanel', 'ArrowLeft', 'BookOpen', 'Plus', 'RefreshCw', 'ChevronRight', 'FileText']) dependencies[name] = name;
   if (kind === 'Learning') { dependencies.ExperienceWorkspace = 'ExperienceWorkspace'; dependencies.LearningObjectRow = 'LearningObjectRow'; }
   const exported = new Function(...Object.keys(dependencies), code + `\nreturn { Component: ${kind}Workspace, ${kind === 'Learning' ? 'learningStopRequest, learningBatchStatus' : 'experienceFilePage, experienceRecoveryTarget'} };`)(...Object.values(dependencies));
   const values: Data = {

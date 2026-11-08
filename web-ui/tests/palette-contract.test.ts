@@ -58,6 +58,7 @@ test('workspace inherits the root palette without light-in-dark overrides', () =
   for (const name of ['pw-canvas', 'pw-surface', 'pw-inset', 'pw-selected']) {
     assert.ok(!local.includes('--' + name + ':'), 'local light ' + name);
     assert.ok(!localDark.includes('--' + name + ':'), 'local dark ' + name);
+    assert.ok(!root(read('workspace-refactor.css'), '.pw-redesign').includes('--' + name + ':'), 'legacy workspace ' + name);
   }
   assert.ok(!read('presentation-theme.css').includes('--pw-edge: transparent'));
 });
@@ -65,6 +66,7 @@ test('workspace inherits the root palette without light-in-dark overrides', () =
 test('semantic tokens feed retained components and high contrast mode', () => {
   const theme = read('product.css');
   for (const item of ['--color-text-error-primary: var(--pw-danger)',
+    '--color-accent-500: var(--pw-strong)',
     '--cb-warn: var(--pw-warning)', '--cb-red: var(--pw-danger)',
     '--color-border-focus-ring: var(--pw-focus)']) {
     assert.ok(theme.includes(item), 'missing alias ' + item);

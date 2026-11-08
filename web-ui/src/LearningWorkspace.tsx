@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
 import { ExperienceWorkspace, LearningObjectRow } from './ExperienceWorkspace';
-import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog } from './forms-library';
+import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog } from './forms-library';
 import { AIAnswer } from './library';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import { ArrowLeft, BookOpen, Plus, RefreshCw } from 'lucide-react';
@@ -14,6 +14,10 @@ export type LearningCandidateTarget = { id: string; revision: number; taskId: st
 const rows = (value: any): Data[] => Array.isArray(value) ? value : [];
 const title = (value: Data | null) => value?.job?.inputs?.[0]?.title || '来源学习任务';
 const taskStatus = (value: string) => ({ preparing: '准备中', running: '提炼中', stopping: '正在停止', completed: '已完成', failed: '需要核对', cancelled: '已取消', interrupted: '已中断', needs_confirmation: '等待确认', awaiting_user: '等待处理' } as Data)[value] || value || '状态待核对';
+const jobGroup = (job: Data) => {
+  const status = job.jobStatus || job.taskStatus;
+  return ['preparing', 'running', 'stopping'].includes(status) ? 'active' : ['awaiting_user', 'needs_confirmation', 'failed', 'interrupted'].includes(status) ? 'attention' : ['completed', 'cancelled'].includes(status) ? 'finished' : 'other';
+};
 // Reading context is retained, never the authority to reuse an old native window.
 let saved: { current: Data | null; taskId: string; episode: Data | null; sources: Data[]; operation: Data | null; createAttempted: boolean } | null = null;
 export function learningBatchStatus(job: Data, index: number): string {
@@ -34,6 +38,7 @@ export function learningStopRequest(current: Data | null, operation: Data | null
 export function LearningWorkspace({ state, data, run, registerTransientBack, onReviewCandidate }: { state: Data; data: Data; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; onReviewCandidate: (target: LearningCandidateTarget) => void }) {
   const [panel, setPanel] = useState('jobs'), [view, setView] = useState(saved?.current ? 'job' : 'list');
   const [jobs, setJobs] = useState<Data[]>([]), [loaded, setLoaded] = useState(false), [cursor, setCursor] = useState('');
+  const [query, setQuery] = useState(''), [filter, setFilter] = useState('all');
   const [current, setCurrent] = useState<Data | null>(saved?.current || null), [taskId, setTaskId] = useState(saved?.taskId || '');
   const [episode, setEpisode] = useState<Data | null>(saved?.episode || null), [sources, setSources] = useState<Data[]>(saved?.sources || []);
   const [retained, setRetained] = useState(false), [createAttempted, setCreateAttempted] = useState(saved?.createAttempted || false);
@@ -120,6 +125,10 @@ export function LearningWorkspace({ state, data, run, registerTransientBack, onR
   const canEndOperationView = !!operation?.stale && !operation.operationHandle && !!current && current.taskId === operation.taskId && !current.stale && !busy && !stopping;
   const endOperationView = () => { if (!canEndOperationView) return; setOperation(null); setNotice('本地调用查看已结束。原任务、用量与未知结果继续保留；这不表示旧调用成功或已取消。'); };
   const attention = operation || current?.active || ['preparing', 'running', 'stopping'].includes(current?.taskStatus);
+  const visibleJobs = jobs.filter(job => [title(job), ...rows(job.job?.inputs).map(source => source.title)].join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+    .filter(job => filter === 'all' || (filter === 'open' ? jobGroup(job) !== 'finished' : jobGroup(job) === 'finished'));
+  const jobGroups = [{ id: 'attention', label: '需要处理' }, { id: 'active', label: '正在提炼' }, { id: 'other', label: '其他任务' }, { id: 'finished', label: '已结束' }]
+    .map(group => ({ ...group, jobs: visibleJobs.filter(job => jobGroup(job) === group.id) })).filter(group => group.jobs.length > 0);
   return <section ref={root} className="pw-learning-workspace pw-knowledge-workspace">
     <Tabs selectedKey={panel} onSelectionChange={key => navigate(String(key))} className="pw-learning-tabs">
       <TabList aria-label="学习与经验"><Tab id="jobs">学习任务</Tab><Tab id="procedures">方法</Tab><Tab id="skills">来源技能</Tab></TabList>
@@ -134,8 +143,11 @@ export function LearningWorkspace({ state, data, run, registerTransientBack, onR
         <div hidden={view !== 'list'}>
           <header className="pw-learning-heading"><div><h2>学习任务</h2></div><div className="pw-form-actions"><Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="刷新学习任务" disabled={busy} onClick={() => loadJobs()} /><Button leadingIcon={Plus} onClick={() => { focus.current = document.activeElement as HTMLElement; navigate('jobs', 'sources'); }}>整理新来源</Button></div></header>
           {sources.length > 0 && <LearningObjectRow title={`继续整理 · ${sources.length} 份所选来源`} detail="保留上次阅读与选择，尚未发送模型" onClick={() => navigate('jobs', 'sources')} />}
+          <SearchField className="pw-secondary-search" aria-label="查找已读取的学习任务" placeholder="查找任务或来源" value={query} onChange={setQuery} />
+          <div className="pw-knowledge-filters" role="group" aria-label="学习任务状态筛选">{[{ id: 'all', label: '全部' }, { id: 'open', label: '待处理与进行中' }, { id: 'finished', label: '已结束' }].map(item => <Button key={item.id} variant="ghost" aria-pressed={filter === item.id} onClick={() => setFilter(item.id)}>{item.label}</Button>)}</div>
           {!jobs.length && <div className="pw-learning-empty"><BookOpen aria-hidden="true" /><h3>{loaded ? '还没有读取到学习任务' : '正在读取学习任务'}</h3><p>{loaded ? '整理一份已结束任务的来源即可开始。建立任务不会调用模型。' : '只读取已有记录，不会开始提炼。'}</p></div>}
-          <div className="pw-learning-list">{jobs.map(job => <LearningObjectRow key={job.taskId} title={title(job)} detail={`${taskStatus(job.jobStatus || job.taskStatus)} · 已处理 ${job.job?.nextIndex ?? 0} / ${rows(job.job?.inputs).length} 份来源`} disabled={busy || unresolved && operation?.taskId !== job.taskId} selected={current?.taskId === job.taskId} onClick={() => { focus.current = document.activeElement as HTMLElement; if (current && current.taskId === job.taskId && !current.stale) showCurrent(); else selectJob(job.taskId); }} />)}</div>
+          {jobs.length > 0 && !visibleJobs.length && <p className="pw-secondary-empty" role="status">已读取的任务中没有匹配项。可以调整关键词或筛选。</p>}
+          {jobGroups.map(group => <section key={group.id} className="pw-knowledge-directory-group" aria-label={group.label}><header className="pw-knowledge-group-heading"><h3>{group.label}</h3><span>{group.jobs.length}</span></header><div className="pw-learning-list">{group.jobs.map(job => <LearningObjectRow key={job.taskId} title={title(job)} detail={`${taskStatus(job.jobStatus || job.taskStatus)} · 已处理 ${job.job?.nextIndex ?? 0} / ${rows(job.job?.inputs).length} 份来源`} disabled={busy || unresolved && operation?.taskId !== job.taskId} selected={current?.taskId === job.taskId} onClick={() => { focus.current = document.activeElement as HTMLElement; if (current && current.taskId === job.taskId && !current.stale) showCurrent(); else selectJob(job.taskId); }} />)}</div></section>)}
           {cursor && <Button variant="ghost" disabled={busy} onClick={() => loadJobs(cursor)}>读取较早任务</Button>}
         </div>
         <div hidden={view !== 'sources'}>

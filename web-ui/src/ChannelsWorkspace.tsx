@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronRight, MessageSquare, RefreshCw, Settings } from 'lucide-react';
-import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextField } from './forms-library';
+import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog, TextField } from './forms-library';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import './channels-workspace.css';
 import './collaboration-depth.css';
@@ -49,6 +49,16 @@ export default function ChannelsWorkspace({ state, data, supported, run, registe
   const receiving = channelCanStop(background), candidates = profiles.filter(profile => ['qq', 'weixin'].includes(profile.provider) && profile.enabled === true && profile.hasSecret === true);
   const tasks = rows(data.taskRequests).slice().reverse(), outbox = rows(data.outbox).slice().reverse();
   const unknownTasks = tasks.filter(taskNeedsReview), unknownDeliveries = outbox.filter(row => row.status === 'unknown');
+  const taskAttention = (row: Data) => taskNeedsReview(row) || row.admission === 'awaiting_owner';
+  const taskSections = [
+    { id: 'attention', title: '需要核对', rows: tasks.filter(taskAttention) },
+    { id: 'records', title: '任务记录', rows: tasks.filter(row => !taskAttention(row)) },
+  ];
+  const outboxSections = [
+    { id: 'attention', title: '需要核对', rows: outbox.filter(row => ['unknown', 'failed'].includes(row.status)) },
+    { id: 'sending', title: '正在投递', rows: outbox.filter(row => ['queued', 'sending'].includes(row.status)) },
+    { id: 'records', title: '投递记录', rows: outbox.filter(row => !['unknown', 'failed', 'queued', 'sending'].includes(row.status)) },
+  ];
   const account = profiles.find(profile => profile.id === accountId);
   const close = () => { setModal(null); if (!accountId && !connectionsOpen) origin.current?.focus({ preventScroll: true }); };
   const selectPanel = (next: string) => {
@@ -74,18 +84,18 @@ export default function ChannelsWorkspace({ state, data, supported, run, registe
     setModal({ kind: 'owner', operation, original: clone({ ...profile, ownerIdentity: channelOwnerIdentity(profile, bound), ownerBinding: bound, requestedEnabled: enabled }) });
   };
   return <section ref={root} className="pw-channels-workspace pw-depth-collaboration pw-settings-section">
-    <header className="pw-channels-heading"><div><h2>渠道消息</h2></div><div className="pw-form-actions">
+    <header className="pw-channels-heading"><div><p className="pw-collaboration-eyebrow">接收状态 · {profiles.length} 个连接</p><strong className="pw-channels-status">{channelReceivingStatus(background)}</strong></div><div className="pw-form-actions">
       <Button variant="ghost" leadingIcon={Settings} onClick={openConnections}>连接与接收</Button>
       <Button variant="ghost" iconOnly leadingIcon={RefreshCw} aria-label="刷新真实状态" disabled={busy || !supported('channels.inspect')} onClick={() => act('channels.inspect')} />
     </div></header>
 
-    <div className="pw-channels-receiving" aria-label="当前接收状态">
-      <div><p className="pw-channels-status">{channelReceivingStatus(background)}</p>
+    {(receiving || background.foregroundActive || background.message) && <div className="pw-channels-receiving" aria-label="当前接收状态">
+      <div>
         {background.foregroundActive && <p className="pw-channels-caption">进程内接收 {Number(background.runningReceivers || 0)} 个 · 已认证或同步 {Number(background.authenticatedReceivers || 0)} 个。服务建立不代表每个账号在线。</p>}
         {background.message && <p className="pw-channels-caption">{background.message}</p>}
       </div>
       {receiving && <Button variant="secondary" disabled={busy || !supported('channels.stopReceiving')} onClick={() => act('channels.stopReceiving', { sessionId: background.sessionId })}>请求停止本次接收</Button>}
-    </div>
+    </div>}
     {(unknownTasks.length > 0 || unknownDeliveries.length > 0) && <div className="pw-channels-attention" role="status">
       <p>有原操作结果待核对。只查原记录，不重新提交或重发。</p><div className="pw-form-actions">
         {unknownTasks.length > 0 && <Button variant="ghost" onClick={() => selectPanel('tasks')}>{unknownTasks.length} 项任务回执待核对</Button>}
@@ -103,20 +113,20 @@ export default function ChannelsWorkspace({ state, data, supported, run, registe
       <TabPanel id="tasks" shouldForceMount hidden={panel !== 'tasks'}>
 
         {!tasks.length && <div className="pw-channels-empty"><p>还没有主人私聊任务</p><span>核对主人身份并单独允许 /task 后，原任务会留在这里。</span><Button variant="ghost" onClick={openConnections}>查看连接与主人权限</Button></div>}
-        <Accordion className="pw-channels-records" allowsMultipleExpanded>{tasks.map(row => <AccordionItem id={row.requestId} key={row.requestId} title={rows(state.tasks).find(task => task.id === row.taskId)?.goal || '原任务等待本机核对'} description={taskNeedsReview(row) ? '上次请求结果未知 · 只核对原宿主任务' : admissionState(row.admission)}>
+        <Accordion className="pw-channels-records pw-channels-grouped-records" allowsMultipleExpanded>{taskSections.filter(section => section.rows.length > 0).flatMap(section => [<header className="pw-collaboration-group-heading" key={`heading:${section.id}`}><h3>{section.title}</h3><span>{section.rows.length}</span></header>, ...section.rows.map(row => <AccordionItem id={row.requestId} key={row.requestId} title={rows(state.tasks).find(task => task.id === row.taskId)?.goal || '原任务等待本机核对'} description={taskNeedsReview(row) ? '上次请求结果未知 · 只核对原宿主任务' : admissionState(row.admission)}>
           <ChannelTask row={row} task={rows(state.tasks).find(task => task.id === row.taskId)} supported={supported} run={run} />
-        </AccordionItem>)}</Accordion>
+        </AccordionItem>)])}</Accordion>
       </TabPanel>
       <TabPanel id="outbox" shouldForceMount hidden={panel !== 'outbox'}>
         <p className="pw-channels-caption">平台接受不代表已读</p>
         {!outbox.length && <div className="pw-channels-empty"><p>还没有回复投递</p><span>回复产生后，可在这里核对原投递状态。</span></div>}
-        <Accordion className="pw-channels-records" allowsMultipleExpanded>{outbox.map(row => <AccordionItem id={row.id} key={row.id} title={<span className="pw-channels-preview">{row.text || '原回复正文未保留'}</span>} description={deliveryState(row.status)}>
+        <Accordion className="pw-channels-records pw-channels-grouped-records" allowsMultipleExpanded>{outboxSections.filter(section => section.rows.length > 0).flatMap(section => [<header className="pw-collaboration-group-heading" key={`heading:${section.id}`}><h3>{section.title}</h3><span>{section.rows.length}</span></header>, ...section.rows.map(row => <AccordionItem id={row.id} key={row.id} title={<span className="pw-channels-preview">{row.text || '原回复正文未保留'}</span>} description={deliveryState(row.status)}>
           <div className="pw-channels-record-detail"><p className="pw-channels-body">{row.text}</p>{row.message && <p className="pw-field-hint">{row.message}</p>}
             {row.nativeQqStream && <p className="pw-field-hint">QQ 原消息已确认 {Number(row.nativeQqStream.lastAckIndex ?? -1) + 1} 帧 · {row.nativeQqStream.complete ? '最终帧已被平台接受' : '完整结束尚未确认，部分草稿可能已显示'}</p>}
             {row.status === 'queued' && <Button variant="secondary" disabled={busy || !supported('channels.cancelOutbox')} onClick={() => act('channels.cancelOutbox', { id: row.id })}>取消这项待发回复</Button>}
             {row.status === 'unknown' && <p>请到原平台核对结果；保留同一条投递记录，不自动重发。</p>}
           </div>
-        </AccordionItem>)}</Accordion>
+        </AccordionItem>)])}</Accordion>
       </TabPanel>
     </Tabs>
 
@@ -139,12 +149,13 @@ function ChannelConnections({ data, candidates, selected, select, supported, bus
   return <SettingsDialog isOpen title="连接与接收" onClose={() => { if (!busy) close(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="ChannelsWorkspace"><div className="pw-channels-settings">
     <p className="pw-channels-caption">连接账号、绑定主人、自动回答与持续接收分别确认。</p>
     {receiving && <div className="pw-channels-receiving"><div><p className="pw-channels-status">{channelReceivingStatus(background)}</p><p className="pw-channels-caption">关闭此页不会停止接收，停止接收不会停止已有任务。</p></div><Button variant="secondary" disabled={busy || !supported('channels.stopReceiving')} onClick={() => act('channels.stopReceiving', { sessionId: background.sessionId })}>请求停止本次接收</Button></div>}
-    <div className="pw-channels-account-list">{profiles.map(profile => {
+    <div className="pw-form-actions"><Button disabled={busy || !supported('channels.loginStart')} onClick={() => openModal({ kind: 'login' })}>连接微信私聊</Button><Button variant="secondary" disabled={busy || !supported('channels.saveProfile')} onClick={() => openModal({ kind: 'profile', original: { id: crypto.randomUUID(), adding: true, provider: 'qq', name: '我的 QQ 机器人', enabled: true } })}>添加 QQ 官方机器人</Button></div>
+    <section className="pw-channel-account-directory" aria-label="渠道账号"><header className="pw-collaboration-group-heading"><h3>渠道账号</h3><span>{profiles.length}</span></header><div className="pw-channels-account-list">{profiles.map(profile => {
       const connection = rows(object(data[profile.provider]).connections).find(row => row.profileId === profile.id);
       return <Button className="pw-channels-link-row" key={profile.id} variant="ghost" disabled={busy} onClick={() => openAccount(profile.id)}><span className="pw-channels-account-icon" aria-hidden><MessageSquare size={20} /></span><span className="pw-channels-link-copy"><strong>{profile.name}</strong><small>{providerName(profile.provider)} · {['qq', 'weixin'].includes(profile.provider) ? channelConnectionStatus(profile.provider, connection) : profile.enabled ? '配置已启用' : '配置已停用'}</small></span><ChevronRight size={16} aria-hidden /></Button>;
-    })}</div>
+    })}</div></section>
     {!profiles.length && <p>还没有渠道账号。连接后，从自己的账号发送私聊，再在本机核对主人身份。</p>}
-    <div className="pw-form-actions"><Button disabled={busy || !supported('channels.loginStart')} onClick={() => openModal({ kind: 'login' })}>连接微信私聊</Button><Button variant="secondary" disabled={busy || !supported('channels.saveProfile')} onClick={() => openModal({ kind: 'profile', original: { id: crypto.randomUUID(), adding: true, provider: 'qq', name: '我的 QQ 机器人', enabled: true } })}>添加 QQ 官方机器人</Button></div>
+
     <Accordion className="pw-channels-settings-disclosure" expandedKeys={expanded} onExpandedChange={keys => expand(new Set(keys))}><AccordionItem id="receiving-scope" title="接收范围与通知" description={channelReceivingStatus(background)}>
       {background.message && <p>{background.message}</p>}
       {receiving ? <p>原接收会话仍在管理所选账号。先停止这次接收，再更改接收范围。</p> : <>
@@ -306,12 +317,16 @@ function ChannelHistory({ original, data, run, close, register }: { original: Da
 
 function ChannelInbox({ data, supported, run, connect, account, media }: { data: Data; supported: (action: string) => boolean; run: Run; connect: () => void; account: (id: string) => void; media: (event: Data, index: number) => void }) {
   const { request, busy, error } = useRequest(run), [limit, setLimit] = useState(12), [expanded, setExpanded] = useState<Set<string | number>>(new Set());
+  const [query, setQuery] = useState(''), [profileId, setProfileId] = useState('');
   const inbox = rows(data.inbox).slice().reverse(), profiles = rows(data.profiles);
+  const filtered = inbox.filter(event => (!profileId || event.profileId === profileId) && [event.text, event.senderId, event.roomId, profiles.find(profile => profile.id === event.profileId)?.name].filter(Boolean).join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   // Expanded original messages stay mounted when new arrivals move them beyond the initial window.
-  const visible = inbox.filter((event, index) => index < limit || expanded.has(event.id));
+  const visible = filtered.filter((event, index) => index < limit || expanded.has(event.id));
   const descriptions: Data = { frozen_bytes_not_model_understanding: '实际图片已保存，尚无本次模型响应证明', model_request_prepared: '图片输入已准备，模型结果仍待确认', model_response_received: '模型已返回本次图片输入的响应', model_result_unconfirmed: '模型结果未确认，原文件已保留' };
   return <div className="pw-channels-inbox">
-    <p className="pw-channels-caption">仅显示本机已接收的消息</p>
+    {inbox.length > 0 && <div className="pw-channels-inbox-tools"><SearchField fieldClassName="pw-collaboration-search" shape="rounded" aria-label="搜索本机渠道消息" placeholder="搜索消息或发送者" value={query} onChange={value => { setQuery(value); setLimit(12); }} />{profiles.length > 1 && <SelectField label="渠道账号" value={profileId} options={[{ id: '', label: '全部账号' }, ...profiles.map(profile => ({ id: profile.id, label: profile.name || profile.id }))]} onChange={value => { setProfileId(value); setLimit(12); }} />}</div>}
+    <header className="pw-collaboration-group-heading"><h3>{query || profileId ? '匹配的本机消息' : '本机已接收'}</h3><span>{filtered.length} 条</span></header>
+    {inbox.length > 0 && !filtered.length && <p className="pw-secondary-empty">没有匹配的消息。</p>}
     {!inbox.length && <div className="pw-channels-empty"><MessageSquare size={26} aria-hidden /><p>最近消息会出现在这里</p><span>连接账号并明确开启接收后，从自己的账号发送一条私聊。</span><Button variant="secondary" onClick={connect}>查看连接与接收</Button></div>}
     <Accordion className="pw-channels-records" allowsMultipleExpanded expandedKeys={expanded} onExpandedChange={keys => setExpanded(new Set(keys))}>
       {visible.map(event => <AccordionItem id={event.id} key={event.id} title={<span className="pw-channels-preview">{event.text || '媒体消息'}</span>} description={<span className="pw-channels-message-meta"><span>{profiles.find(profile => profile.id === event.profileId)?.name || '原连接'} · {event.kind === 'group' ? event.roomId : event.senderId}</span>{messageTime(event.receivedAt) && <time dateTime={new Date(event.receivedAt).toISOString()}>{messageTime(event.receivedAt)}</time>}</span>}>
@@ -325,7 +340,7 @@ function ChannelInbox({ data, supported, run, connect, account, media }: { data:
         </div>
       </AccordionItem>)}
     </Accordion>
-    {visible.length < inbox.length && <Button className="pw-channels-load-more" variant="ghost" onClick={() => setLimit(value => value + 12)}>查看更多本机消息</Button>}
+    {visible.length < filtered.length && <Button className="pw-channels-load-more" variant="ghost" onClick={() => setLimit(value => value + 12)}>查看更多本机消息</Button>}
     {error && <p role="alert">{error}</p>}
   </div>;
 }

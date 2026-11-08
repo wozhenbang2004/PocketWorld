@@ -57,6 +57,18 @@ test('explicit skill reading uses the original object; returning restores the co
   assert.equal(f.scroller.scrollTop, 260); assert.equal(f.focus.at(-1), 'skill-a');
   assert.ok(f.calls.some(call => call.action === 'skills.close' && call.args.handle === 'original-skill-handle'));
 });
+test('skill status filtering opens the matching original object and retains the filter on return', async () => {
+  const enabled = { ...skill, id: 'skill-enabled', name: '已启用的另一份技能', enabled: true };
+  const f = fixture('SkillsWorkspace'); await f.settle(f.calls[0], { skills: [skill, enabled] });
+  f.click('已启用1'); f.click('阅读这份技能');
+  const read = f.calls.findLast(call => call.action === 'skills.get')!;
+  assert.deepEqual(read.args, { id: enabled.id });
+  await f.settle(read, { skill: enabled, skillHandle: 'enabled-original-handle' });
+  f.click('返回技能列表');
+  assert.deepEqual(f.find(node => node.type === 'SkillLibrary').props.skills.map((row: Data) => row.id), [enabled.id]);
+  assert.equal(f.focus.at(-1), enabled.id);
+  assert.equal(f.calls.some(call => /\.confirm$|\.review$/.test(call.action)), false);
+});
 test('Markdown reading preserves the complete original resource and does not submit an approval', async () => {
   const f = fixture('SkillsWorkspace'); await f.settle(f.calls[0], { skills: [skill] }); f.click('阅读这份技能');
   await f.settle(f.calls.findLast(call => call.action === 'skills.get')!, { skill, skillHandle: 'original-skill-handle' });

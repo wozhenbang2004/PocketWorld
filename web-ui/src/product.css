@@ -39,6 +39,7 @@
   --font-sans: var(--pw-font);
   --font-mono-source: var(--pw-mono);
   --color-text-primary: var(--pw-ink);
+  --color-accent-500: var(--pw-strong);
   --color-accent-600: var(--pw-strong);
   --color-text-secondary: var(--pw-copy);
   --color-text-tertiary: var(--pw-muted);
@@ -81,12 +82,12 @@
   --shadow-xs: none;
   --shadow-card: none;
   --shadow-dropdown: var(--pw-shadow-floating);
-  --text-body-regular: 14px;
-  --text-body-regular--line-height: 22px;
-  --text-body-medium: 14px;
-  --text-body-medium--line-height: 22px;
-  --text-body-2-regular: 12px;
-  --text-body-2-regular--line-height: 18px;
+  --text-body-regular: 16px;
+  --text-body-regular--line-height: 24px;
+  --text-body-medium: 15px;
+  --text-body-medium--line-height: 23px;
+  --text-body-2-regular: 13px;
+  --text-body-2-regular--line-height: 20px;
   --text-body-2-medium: 12px;
   --text-body-2-medium--line-height: 18px;
   --text-caption-1-medium: 12px;

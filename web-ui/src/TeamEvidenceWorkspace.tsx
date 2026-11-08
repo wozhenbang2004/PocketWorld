@@ -83,28 +83,31 @@ export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, o
   }, []);
   useEffect(() => { onBackChange?.(() => { if (busy) return true; if (review) { closeReview(); return true; } if (expanded) { closePage(); setExpanded(false); return true; } return false; }); return () => onBackChange?.(null); }, [busy, review, expanded, onBackChange]);
   const catalogue = page?.catalogue || {};
+  const selectedCount = draft.records.length + draft.sources.length + draft.skills.length + draft.resources.length + draft.projectFiles.length + draft.webOrigins.split('\n').filter(site => site.trim()).length;
   return <section className="pw-team-overview pw-team-evidence" aria-label="成员资料范围">
-    <Button variant="ghost" disabled={busy || disabled} onClick={() => { if (expanded) closePage(); setExpanded(!expanded); }}>{expanded ? '收起成员资料范围' : '成员能读哪些资料'}</Button>
-    {expanded && <>
+    <Button variant="ghost" aria-expanded={expanded} disabled={busy || disabled} onClick={() => { if (expanded) closePage(); setExpanded(!expanded); }}>{expanded ? '收起成员资料范围' : '成员能读哪些资料'}</Button>
+    {expanded && <div className="pw-team-evidence-content">
       <p className="pw-field-hint">共同目标与发给团队的消息沿原协作共享。个人记忆、原文、技能、附件与项目文件在这里逐项选择，再确认给所列成员。</p>
-      <SelectField label="核对哪名成员" value={memberId} options={activeMembers.map(member => ({ id: member.id, label: member.name || member.id }))} isDisabled={busy || disabled} onChange={value => { closePage(); setMemberId(value); }} />
-      <Button variant="secondary" disabled={busy || disabled || !memberId} onClick={load}>{page ? '重新读取原目录与范围' : '读取原成员资料目录'}</Button>
+      <section className="pw-team-evidence-recipient" aria-label="资料接收成员"><SelectField label="核对哪名成员" value={memberId} options={activeMembers.map(member => ({ id: member.id, label: member.name || member.id }))} isDisabled={busy || disabled} onChange={value => { closePage(); setMemberId(value); }} />
+      <Button variant="secondary" disabled={busy || disabled || !memberId} onClick={load}>{page ? '重新读取原目录与范围' : '读取原成员资料目录'}</Button></section>
       {busy && <p className="pw-muted" role="status">正在核对原目录与范围…</p>}{error && <p className="pw-secondary-error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
       {page && <>
-        <p className="pw-muted">当前{page.current?.state === 'active' ? '已分享' : page.current?.state === 'revoked' ? '已撤回' : '尚未分享'} · 范围修订 {page.current?.revision ?? '未知'}。选择清单尚未生效。</p>
-        <Accordion className="pw-team-evidence-current"><AccordionItem title="已分享的准确版本与来源"><EvidenceScope scope={page.current} /></AccordionItem></Accordion>
+        <section className="pw-team-evidence-current-state" aria-label="当前资料范围"><header className="pw-collaboration-group-heading"><h3>当前范围</h3><span>修订 {page.current?.revision ?? '未知'}</span></header><p>{page.current?.state === 'active' ? '已分享给这名成员' : page.current?.state === 'revoked' ? '后续读取已撤回' : '尚未分享资料'}</p>
+        <Accordion className="pw-team-evidence-current"><AccordionItem title="已分享的准确版本与来源"><EvidenceScope scope={page.current} />{page.current?.state === 'active' && <div className="pw-form-actions"><Button variant="ghost" disabled={busy || disabled} onClick={() => { closeReview(); void invoke('teamEvidence.renew', { pageHandle: page.pageHandle }, showReview); }}>续审相同材料与检查点</Button><Button variant="ghost" disabled={busy || disabled} onClick={() => { closeReview(); void invoke('teamEvidence.revoke.review', { pageHandle: page.pageHandle }, showReview); }}>核对撤回此成员资料</Button></div>}</AccordionItem></Accordion></section>
+        <header className="pw-collaboration-group-heading"><h3>待核对清单</h3><span>已选择 {selectedCount} 项</span></header><p className="pw-field-hint">下面的选择尚未生效。</p>
         <Accordion variant="divided" className="pw-compact-disclosures" allowsMultipleExpanded>
-          <AccordionItem id="records" title="正式记忆" description="只分享明确选择的版本">
+          <AccordionItem id="records" title="正式记忆" description={`已选 ${draft.records.length} · 可选 ${rows(catalogue.records).length} 个版本`}>
             {rows(catalogue.records).map(row => <CheckboxField key={row.choiceHandle} isSelected={draft.records.includes(row.choiceHandle)} isDisabled={busy || disabled} onChange={checked => toggle('records', row.choiceHandle, checked)}>{row.text} · 修订 {row.revision}</CheckboxField>)}
             {!rows(catalogue.records).length && <p className="pw-muted">当前目录没有可选的有效正式记忆。</p>}
           </AccordionItem>
-          <AccordionItem id="sources" title="原文的确切范围">
+          <AccordionItem id="sources" title="原文的确切范围" description={`已选 ${draft.sources.length} · 可选 ${rows(catalogue.sources).length} 项`}>
             {rows(catalogue.sources).map(row => { const choice = draft.sources.find(value => value.choiceHandle === row.choiceHandle); return <section key={row.choiceHandle}><CheckboxField isSelected={!!choice} isDisabled={busy || disabled} onChange={checked => toggleObject('sources', row.choiceHandle, checked)}>{row.sourceRef?.kind} · {row.sourceRef?.sourceId} · 修订 {row.sourceRef?.revision}</CheckboxField>{choice && <SourceRange value={choice} disabled={busy || disabled} onChange={(key, value) => range('sources', row.choiceHandle, key, value)} />}</section>; })}
           </AccordionItem>
-          <AccordionItem id="skills" title="技能资料" description="选择文档资源不授权脚本执行">
+          <AccordionItem id="skills" title="技能资料" description={`已选 ${draft.skills.length} · 可选 ${rows(catalogue.skills).length} 个版本`}>
+            <p className="pw-field-hint">选择文档资源不授权脚本执行。</p>
             {rows(catalogue.skills).map(row => { const choice = draft.skills.find(value => value.choiceHandle === row.choiceHandle); return <section key={row.choiceHandle}><CheckboxField isSelected={!!choice} isDisabled={busy || disabled} onChange={checked => toggleObject('skills', row.choiceHandle, checked)}>{row.name || row.id} · 修订 {row.revision}</CheckboxField>{choice && <TextAreaField label="只允许这些准确资源路径，每行一个" value={choice.paths} onChange={value => range('skills', row.choiceHandle, 'paths', value)} isDisabled={busy || disabled} />}</section>; })}
           </AccordionItem>
-          <AccordionItem id="resources" title="附件与冻结文件">
+          <AccordionItem id="resources" title="附件与冻结文件" description={`已选 ${draft.resources.length} · 可选 ${rows(catalogue.resources).length} 项`}>
             {rows(catalogue.resources).map(row => { const choice = draft.resources.find(value => value.choiceHandle === row.choiceHandle); return <section key={row.choiceHandle}><CheckboxField isSelected={!!choice} isDisabled={busy || disabled} onChange={checked => toggleObject('resources', row.choiceHandle, checked)}>{row.name || row.id}</CheckboxField>{choice && <SourceRange value={choice} disabled={busy || disabled} onChange={(key, value) => range('resources', row.choiceHandle, key, value)} />}</section>; })}
           </AccordionItem>
           {catalogue.researchReadAvailable && <AccordionItem id="research" title="持续研究可读的站点与项目文件">
@@ -116,10 +119,10 @@ export function TeamEvidenceWorkspace({ runId, members, run, disabled = false, o
             {draft.projectFiles.map(handle => <div className="pw-form-actions" key={handle}><span>{fileChoices[handle]?.path || '原项目文件'} · 版本 {fileChoices[handle]?.version ?? '待核对'}</span><Button variant="ghost" disabled={busy || disabled} onClick={() => toggle('projectFiles', handle, false)}>移出此文件</Button></div>)}
           </AccordionItem>}
         </Accordion>
-        <div className="pw-form-actions"><Button variant="secondary" disabled={busy || disabled} onClick={() => prepare('member')}>核对本成员的准确范围</Button><Button variant="ghost" disabled={busy || disabled} onClick={() => prepare('current_members')}>核对给当前成员共享</Button></div>
-        {page.current?.state === 'active' && <div className="pw-form-actions"><Button variant="ghost" disabled={busy || disabled} onClick={() => { closeReview(); void invoke('teamEvidence.renew', { pageHandle: page.pageHandle }, showReview); }}>续审相同材料与检查点</Button><Button variant="ghost" disabled={busy || disabled} onClick={() => { closeReview(); void invoke('teamEvidence.revoke.review', { pageHandle: page.pageHandle }, showReview); }}>核对撤回此成员资料</Button></div>}
+        <footer className="pw-team-evidence-actions"><Button variant="secondary" disabled={busy || disabled} onClick={() => prepare('member')}>核对本成员的准确范围</Button><Button variant="ghost" disabled={busy || disabled} onClick={() => prepare('current_members')}>核对给当前成员共享</Button></footer>
+
       </>}
-    </>}
+    </div>}
     <SettingsDialog isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={review?.operation === 'revoke' ? '撤回后续资料读取' : review?.scope === 'current_members' ? '核对本次当前成员与同一资料范围' : '核对本成员读取范围'}><div className="pw-collaboration-dialog" data-collaboration-kind="TeamEvidenceWorkspace">
       {review?.scope === 'current_members' ? <>{rows(review.review?.members).map(target => <section key={target.memberId}><h3>{members.find(member => member.id === target.memberId)?.name || target.memberId}</h3><EvidenceScope scope={target.review} /></section>)}<p>仅这次列出的成员收到同一显选范围，未来新增身份不会继承。</p></> : <><h3>{members.find(member => member.id === memberId)?.name || memberId}</h3><EvidenceScope scope={review?.review} /></>}
       <p>{review?.operation === 'revoke' ? '撤回后续读取与答案接纳资格。已经提供给模型的历史内容如实保留。' : review?.review?.reviewMode === 'renew_identical_materials' ? '重新核对相同材料，保留原研究检查点与已用次数；旧票据失效，没有自动继续。' : '只分享所示准确资料，不增加写入、执行或模型与工具预算；空集合不会回退为默认私人范围。'}</p>

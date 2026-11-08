@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { RiAddLine, RiArrowLeftSLine, RiArrowRightSLine, RiRefreshLine, RiSettings3Line } from '@remixicon/react';
-import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
+import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { PressButton } from './library';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
 import { PlansWorkspace } from './PlansWorkspace';
@@ -30,6 +30,7 @@ function CommitmentList({ state, supported, run, registerTransientBack, onEditin
   const [snapshot, setSnapshot] = useState<Data>({}), [reading, setReading] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null);
   const [editor, setEditor] = useState<{ draft: CommitmentDraft; original: Data | null } | null>(null), [policy, setPolicy] = useState<Data | null>(null);
   const [receiptRows, setReceiptRows] = useState<Data[]>([]), [receiptsLoaded, setReceiptsLoaded] = useState(false), [dueOnly, setDueOnly] = useState(false), [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState(''), [filter, setFilter] = useState('all');
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [ack, setAck] = useState(false), [uncertain, setUncertain] = useState(false), [readAfterUnknown, setReadAfterUnknown] = useState(false);
   const mutationPending = useRef(false), taskOpen = useRef(state.webWorkspaceTaskOpen);
   const openedNotification = useRef('');
@@ -93,7 +94,13 @@ function CommitmentList({ state, supported, run, registerTransientBack, onEditin
       if (result.receipt) setReceiptRows(old => old.map(row => row.claimId === result.receipt.claimId ? result.receipt : row));
     }, true);
   };
-  const current = reading?.commitment, records = rows(snapshot.commitments).filter(row => !dueOnly || row.followUpDue === true), terminal = ['completed', 'cancelled'].includes(current?.status);
+  const current = reading?.commitment, terminal = ['completed', 'cancelled'].includes(current?.status);
+  const records = rows(snapshot.commitments).filter(row => !dueOnly || row.followUpDue === true)
+    .filter(row => [row.title, row.details].join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+    .filter(row => filter === 'all' || (filter === 'open' ? !['completed', 'cancelled'].includes(row.status) : ['completed', 'cancelled'].includes(row.status)));
+  const recordGroup = (row: Data) => ['completed', 'cancelled'].includes(row.status) ? 'finished' : row.followUpDue === true ? 'due' : row.status === 'snoozed' ? 'snoozed' : 'upcoming';
+  const groups = [{ id: 'due', label: '需要跟进' }, { id: 'upcoming', label: '接下来' }, { id: 'snoozed', label: '暂缓中' }, { id: 'finished', label: '已结束' }]
+    .map(group => ({ ...group, records: records.filter(row => recordGroup(row) === group.id) })).filter(group => group.records.length > 0);
   const openEditor = (original: Data | null) => { if (!busy && !uncertain) setEditor({ draft: commitmentDraft(original?.commitment), original: original ? structuredClone(original) : null }); };
   const openPolicy = () => { const p = snapshot.policy; if (p) setPolicy({ revision: p.revision, enabled: p.enabled === true, zoneId: p.zoneId || 'UTC', quiet: !!p.quietHours, start: p.quietHours?.start || '22:00', end: p.quietHours?.end || '08:00', cooldownMinutes: String((p.cooldownMillis || 0) / 60000), pausedUntil: p.pausedUntil > Date.now() ? p.pausedUntil : null, maxNotificationsPerDay: p.maxNotificationsPerDay == null ? '' : String(p.maxNotificationsPerDay) }); };
   const recheckEditor = () => { const original = editor?.original?.commitment; if (!original) return; void invoke('commitments.read', { id: original.id }, value => { if (value.commitment?.id !== original.id || value.commitment?.revision !== original.revision) { release(value, 'viewHandle'); throw new Error('原委托版本已变化，草稿保留。请返回详情核对新版本。'); } acceptReading(value); setEditor(old => old ? { ...old, original: value } : null); }); };
@@ -108,10 +115,12 @@ function CommitmentList({ state, supported, run, registerTransientBack, onEditin
         <Button variant="ghost" iconOnly leadingIcon={RiRefreshLine} aria-label="刷新原记录" disabled={busy} onClick={refresh} />
         <Button variant="secondary" leadingIcon={RiAddLine} disabled={busy || uncertain || !snapshot.commitments || !supported('commitments.review')} onClick={() => openEditor(null)}>新增委托</Button>
       </div></header>
+      <SearchField className="pw-secondary-search" aria-label="查找已读取的委托" placeholder="查找委托或要求" value={query} onChange={setQuery} />
+      <div className="pw-knowledge-filters" role="group" aria-label="委托状态筛选">{[{ id: 'all', label: '全部' }, { id: 'open', label: '待跟进' }, { id: 'finished', label: '已结束' }].map(item => <Button key={item.id} variant="ghost" aria-pressed={filter === item.id} onClick={() => setFilter(item.id)}>{item.label}</Button>)}</div>
       <div className="pw-followup-list-heading"><CheckboxField isSelected={dueOnly} onChange={setDueOnly}>只看已到跟进时间</CheckboxField>{snapshot.commitments && <span>{records.length} 项</span>}</div>
-      {!snapshot.commitments ? <p className="pw-followup-empty" role="status">正在读取原委托…</p> : !records.length ? <div className="pw-followup-empty"><h3>{dueOnly ? '还没有到期的委托' : '把需要跟进的事记在这里'}</h3><p>{dueOnly ? '其他委托仍保留在完整清单中。' : '设定目标和期限。保存后只跟进，不会自动执行手机任务。'}</p></div> : <div className="pw-followup-list" aria-label="原委托清单">{records.map(row => <Button className="pw-followup-row" variant="ghost" key={row.id} data-commitment-id={row.id} trailingIcon={RiArrowRightSLine} aria-label={'查看目标与跟进：' + row.title} aria-description={[status(row.status), row.followUpDue === true ? '已到跟进时间' : '', '下次跟进 ' + time(row.followUpAt || row.dueAt)].filter(Boolean).join('；')} disabled={busy} onClick={() => read(row.id)}>
+      {!snapshot.commitments ? <p className="pw-followup-empty" role="status">正在读取原委托…</p> : !records.length ? <div className="pw-followup-empty"><h3>{query || filter !== 'all' ? '没有匹配的委托' : dueOnly ? '还没有到期的委托' : '把需要跟进的事记在这里'}</h3><p>{query || filter !== 'all' || dueOnly ? '调整关键词或筛选后，其他委托仍保留在完整清单中。' : '设定目标和期限。保存后只跟进，不会自动执行手机任务。'}</p></div> : <div aria-label="原委托清单">{groups.map(group => <section key={group.id} className="pw-knowledge-directory-group" aria-label={group.label}><header className="pw-knowledge-group-heading"><h3>{group.label}</h3><span>{group.records.length}</span></header><div className="pw-followup-list">{group.records.map(row => <Button className="pw-followup-row" variant="ghost" key={row.id} data-commitment-id={row.id} trailingIcon={RiArrowRightSLine} aria-label={'查看目标与跟进：' + row.title} aria-description={[status(row.status), row.followUpDue === true ? '已到跟进时间' : '', '下次跟进 ' + time(row.followUpAt || row.dueAt)].filter(Boolean).join('；')} disabled={busy} onClick={() => read(row.id)}>
         <span className="pw-followup-row-copy"><span className="pw-followup-row-title">{row.title}</span><span className="pw-followup-row-meta">{status(row.status)}{row.followUpDue === true ? ' · 已到跟进时间' : ''}</span><small>下次跟进 {time(row.followUpAt || row.dueAt)}</small></span>
-      </Button>)}</div>}
+      </Button>)}</div></section>)}</div>}
       <Button className="pw-followup-settings-link" variant="ghost" leadingIcon={RiSettings3Line} trailingIcon={RiArrowRightSLine} disabled={busy || uncertain || !snapshot.policy} onClick={openPolicy}><span>跟进设置<small>{snapshot.policy ? snapshot.policy.enabled ? '通知已启用' : '通知关闭' : '等待读取'}</small></span></Button>
 
     </div>

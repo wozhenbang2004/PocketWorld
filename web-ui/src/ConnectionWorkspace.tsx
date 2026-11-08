@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
+import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { bridge } from './bridge';
 import { connectionProfilePayload, wirelessPort } from './forms-library/host-contracts';
 import TerminalSurface from './TerminalSurface';
@@ -85,7 +85,7 @@ export default function ConnectionWorkspace({ domain, state, data, supported, ru
   const editorTrigger = useRef<HTMLElement | null>(null);
   const workBack = useRef<(() => boolean) | null>(null), editorBack = useRef<(() => boolean) | null>(null);
   const journey = useDataSettingsJourney();
-  const [workOpened, setWorkOpened] = useState(false);
+  const [workOpened, setWorkOpened] = useState(false), [query, setQuery] = useState('');
   const [probe, setProbe] = useState<Data | null>(null), [trust, setTrust] = useState<Data | null>(null), [checked, setChecked] = useState(false), [receipt, setReceipt] = useState<Data | null>(null);
   const { request, busy, error } = useRequest(run, state);
   const resume = Number(state.webWorkspaceResumeRevision || 0), previousResume = useRef(resume);
@@ -119,12 +119,19 @@ export default function ConnectionWorkspace({ domain, state, data, supported, ru
   };
   const openWork = () => { setWorkOpened(true); journey.open('work:' + selected!.id); };
   const collectionName = domain === 'remote' ? '电脑环境' : 'SSH 主机';
+  const filteredProfiles = profiles.filter(profile => `${profile.name || ''} ${profileAddress(profile)} ${profile.workspace || ''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const needsConfiguration = (profile: Data) => domain === 'remote' ? !profile.hasToken : !profile.credentialsConfigured || !profile.hostKeyTrusted;
+  const profileSections = [
+    { id: 'attention', title: '需要配置或核对', profiles: filteredProfiles.filter(needsConfiguration) },
+    { id: 'configured', title: '已保存配置', profiles: filteredProfiles.filter(profile => !needsConfiguration(profile)) },
+  ];
   const openEditor = (profile: Data) => { editorTrigger.current = document.activeElement as HTMLElement; setEditing(profile); };
   const closeEditor = () => { setEditing(null); requestAnimationFrame(() => { const trigger = editorTrigger.current; (trigger?.isConnected && trigger.getClientRects().length ? trigger : journey.root.current)?.focus({ preventScroll: true }); }); };
   return <div className="pw-connection-workspace" ref={journey.root} tabIndex={-1} data-connection-view={journey.view}>
     <div hidden={journey.view !== 'list'}>
-      <header className="pw-connection-collection-heading"><div><h2>{collectionName}</h2></div><Button variant="ghost" iconOnly leadingIcon={Plus} aria-label={'添加' + collectionName} disabled={busy} onClick={() => openEditor({})} /></header>
-      {profiles.length === 0 ? <div className="pw-connection-empty"><Monitor size={25} aria-hidden /><h3>{domain === 'remote' ? '连接你的第一台电脑' : '添加你的第一台主机'}</h3><p>{domain === 'remote' ? '填写 Companion 地址与令牌，再读取实际工作环境。' : '保存地址与凭据后，通过可信渠道核对主机指纹。'}</p><Button disabled={busy} onClick={() => openEditor({})}>添加{collectionName}</Button></div> : <div className="pw-connection-list">{profiles.map(profile => <ConnectionRow key={profile.id} title={profile.name} detail={profileAddress(profile)} icon={domain === 'remote' ? Monitor : Server} disabled={busy} entry={'profile:' + profile.id} onOpen={() => openProfile(profile)}><small className="pw-connection-readiness">{profileReadiness(domain, profile)}</small></ConnectionRow>)}</div>}
+      <header className="pw-connection-collection-heading"><p className="pw-connection-directory-count">{profiles.length} 个{collectionName}</p><Button variant="secondary" leadingIcon={Plus} aria-label={'添加' + collectionName} disabled={busy} onClick={() => openEditor({})}>添加连接</Button></header>
+      {profiles.length > 0 && <SearchField className="pw-connection-directory-search" fieldClassName="pw-connection-search" shape="rounded" aria-label={'搜索' + collectionName} placeholder="搜索名称、地址或工作区" value={query} onChange={setQuery} />}
+      {profiles.length === 0 ? <div className="pw-connection-empty"><Monitor size={25} aria-hidden /><h3>{domain === 'remote' ? '连接你的第一台电脑' : '添加你的第一台主机'}</h3><p>{domain === 'remote' ? '填写 Companion 地址与令牌，再读取实际工作环境。' : '保存地址与凭据后，通过可信渠道核对主机指纹。'}</p><Button disabled={busy} onClick={() => openEditor({})}>添加{collectionName}</Button></div> : <div className="pw-connection-directory">{profileSections.filter(section => section.profiles.length > 0).map(section => <section className="pw-connection-directory-group" key={section.id} aria-label={section.title}><header><h3>{section.title}</h3><span>{section.profiles.length}</span></header><div className="pw-connection-list">{section.profiles.map(profile => <ConnectionRow key={profile.id} title={profile.name} detail={profileAddress(profile)} icon={domain === 'remote' ? Monitor : Server} disabled={busy} entry={'profile:' + profile.id} onOpen={() => openProfile(profile)}><small className="pw-connection-readiness">{profileReadiness(domain, profile)}</small></ConnectionRow>)}</div></section>)}{query && !filteredProfiles.length && <p className="pw-secondary-empty">没有匹配的连接。</p>}</div>}
       {domain === 'remote' && list(data.jobs).length > 0 && <div className="pw-connection-history-entry"><ConnectionRow title="电脑上的原任务" detail="按原连接读取回执，保留已经发生的工作" icon={History} entry="all-jobs" disabled={busy} onOpen={() => journey.open('all-jobs')} /></div>}
     </div>
     {journey.view !== 'list' && <header className="pw-connection-detail-heading">
@@ -135,11 +142,12 @@ export default function ConnectionWorkspace({ domain, state, data, supported, ru
     {selected && journey.view !== 'list' && journey.view !== 'all-jobs' && stale && <div className="pw-connection-attention"><p role="alert">连接已在另一页面修改。旧目标仍显示在这里，尚未沿用它开始新工作。</p><Button variant="secondary" onClick={() => { const current = profiles.find(profile => profile.id === selected.id); setSelected(current ? { ...current } : null); setWorkOpened(false); setProbe(null); setReceipt(null); if (!current) journey.back(); else journey.open('profile:' + current.id); }}>重新读取当前连接</Button></div>}
     {selected && overview && !stale && <>
       <div className="pw-connection-summary"><span className="pw-connection-summary-icon">{domain === 'remote' ? <Monitor size={22} aria-hidden /> : <Server size={22} aria-hidden />}</span><div><h3>{profileReadiness(domain, selected)}</h3><p>{domain === 'remote' ? '能力与账号状态以每次实际核对为准。' : '当前工作区 · ' + (selected.workspace || '尚未设置')}</p></div></div>
+      {domain === 'remote' && unresolvedOperations.length > 0 && <section className="pw-connection-attention" aria-label="待核对的原提交"><h3>有原提交待核对</h3><p>先读取原任务的实际结果，不会重新发送这次工作。</p>{unresolvedOperations.map(item => <ConnectionRow key={item.operationId} title={item.worker || '电脑原操作'} detail={status(item.status) + ' · ' + text(item.operationId)} icon={History} onOpen={() => { void run('tasks.open', { id: item.operationId }).catch(() => {}); }} />)}</section>}
       <div className="pw-connection-list">
         <ConnectionRow title={domain === 'remote' ? '进入电脑工作区' : '进入主机工作区'} detail={domain === 'remote' ? '继续原工作，或核对后开始下一项' : '任务、文件、命令和终端'} icon={domain === 'remote' ? Monitor : Terminal} disabled={busy} onOpen={openWork} />
         <ConnectionRow title="查看原任务" detail={domain === 'remote' ? '读取回执、处理审批，继续同一项工作' : '回到原任务，查看执行、审批与结果'} icon={History} disabled={busy} onOpen={() => journey.open('jobs:' + selected.id)} />
       </div>
-      {domain === 'remote' && unresolvedOperations.length > 0 && <section className="pw-connection-attention" aria-label="待核对的原提交"><h3>有原提交待核对</h3><p>先读取原任务的实际结果，不会重新发送这次工作。</p>{unresolvedOperations.map(item => <ConnectionRow key={item.operationId} title={item.worker || '电脑原操作'} detail={status(item.status) + ' · ' + text(item.operationId)} icon={History} onOpen={() => { void run('tasks.open', { id: item.operationId }).catch(() => {}); }} />)}</section>}
+
       <section className="pw-connection-detail-section"><h3>{domain === 'remote' ? '连接能力' : '主机身份'}</h3>
         {domain === 'ssh' && <><Facts values={[[ '已保存指纹', selected.hostFingerprint || '尚未保存' ]]} /><p className="pw-field-hint">指纹须与这台主机的可信来源一致。普通 SSH 不保证断线后任务继续。</p></>}
         <div className="pw-form-actions"><Button variant="secondary" disabled={!available(domain === 'remote' ? 'probe' : 'probeHostKey')} onClick={() => act(domain === 'remote' ? 'remote.probe' : 'ssh.probeHostKey', binding(selected), value => setProbe({ ...value, originalProfile: { ...selected } }))}>{domain === 'remote' ? '探测能力' : '查看主机指纹'}</Button>{domain === 'remote' && <Button variant="ghost" disabled={!available('reconnect')} onClick={() => act('remote.reconnect', binding(selected))}>同步原任务</Button>}</div>
@@ -446,7 +454,7 @@ function SshWork({ profile, state, data, run, supported, back, visible }: { prof
   const tool = tools.find(item => item.id === mode);
   return <div className="pw-ssh-work" ref={journey.root} tabIndex={-1} data-ssh-view={mode}>
     {!trusted && <div className="pw-connection-attention"><ShieldCheck size={18} aria-hidden /><p>先返回连接概览，核对主机指纹并保存凭据，才可使用此连接。</p></div>}
-    <div className="pw-connection-list" hidden={mode !== 'list'}>{tools.map(item => <ConnectionRow key={item.id} title={item.title} detail={item.detail} icon={item.icon} disabled={busy} entry={item.id} onOpen={() => journey.open(item.id)} />)}</div>
+    <div className="pw-connection-tool-directory" hidden={mode !== 'list'}>{[{ title: '任务与文件', ids: ['agent', 'files'] }, { title: '命令与终端', ids: ['command', 'terminal'] }, { title: '检查环境', ids: ['doctor'] }].map(section => <section className="pw-connection-directory-group" key={section.title} aria-label={section.title}><header><h3>{section.title}</h3></header><div className="pw-connection-list">{tools.filter(item => section.ids.includes(item.id)).map(item => <ConnectionRow key={item.id} title={item.title} detail={item.detail} icon={item.icon} disabled={busy} entry={item.id} onOpen={() => journey.open(item.id)} />)}</div></section>)}</div>
     {tool && <header className="pw-connection-work-title" tabIndex={-1} data-operation-heading><h3>{tool.title}</h3><p>{tool.detail}</p></header>}
     {mode === 'agent' && <section className="pw-connection-task-composer"><TextAreaField label="这次要完成什么" value={goal} isDisabled={busy || !!client} onChange={value => { if (!client) setGoal(value); }} hint="目标绑定当前主机与目录，写入授权仍在原任务核对。" /><Button disabled={!trusted || busy || !goal.trim() || goal.length > 12000 || !!agentReceipt?.taskId} onClick={() => { const id = client || crypto.randomUUID(); draft.current = { ...draft.current, client: id }; setClient(id); void request('ssh.startTask', { profileId: profile.id, bindingHash: profile.bindingHash, clientMessageId: id, goal }).then(value => { setAgentReceipt(value); setReceipt(value); }).catch(() => {}); }}>{client ? '核对同一输入回执' : '开始这次 SSH 任务'}</Button>{agentReceipt?.taskId && <Button variant="ghost" onClick={() => { setClient(null); setAgentReceipt(null); setReceipt(null); setGoal(''); }}>新建另一项工作</Button>}</section>}
     {mode === 'command' && <section className="pw-connection-task-composer"><TextAreaField label="POSIX 命令" value={command} isDisabled={busy} onChange={setCommand} hint="从所选工作目录执行，使用此账号的远端权限；工作目录不是沙箱。" /><Button disabled={!trusted || busy || unknown || !command.trim() || command.length > 12000} onClick={() => prepare('exec', { command, timeoutSeconds: 60 })}>核对并执行这条命令</Button></section>}

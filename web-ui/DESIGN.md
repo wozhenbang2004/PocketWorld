@@ -1,6 +1,6 @@
 # PocketWorld UI/UX · 2026-11-07
 
-当前要求和改造以本文末尾“2026-11-07 排版、首屏与必要表达重构”为准。11月6日选型、反馈与验证记录保留为来源；旧场景覆盖数量不证明本轮已通过。
+当前要求以本文末尾“2026-11-08 Android / iOS 交互与页面重构”为准，并继承 Paper / Graphite 配色。历史选型、反馈与验证记录保留为来源；旧场景覆盖数量不证明本轮已通过。
 
 基线：main e2d38166f3fb7dd6f1921c5f0ce4d73e1303e254。React 为统一业务前端，Android 保留执行、存储、授权和来源权威。审美资料正式版本为 20261105T145855Z-9cfaa33a，父版本 20261105T142018Z-86e18660。
 
@@ -157,3 +157,68 @@
 - 保留 BoardUI、Affect、BeUI、Vaul 的组件、动效及全部任务/权限/来源/草稿逻辑；不替换为 Android 默认控件。
 - `web-ui/tests/palette-contract.test.ts` 负责检查静态颜色角色、WCAG 对比度、深浅模式继承与原生色值一致性。未完成 Android 真机或整个仓库构建时不能将其当作验收。
 - 研究来源：[Space 九种配色与 Token](https://chatgpt.com/space/page_1b6df8cc995481918d068372051824a9)。本次是实现候选，不代表用户已逐屏审核。
+
+## 2026-11-08 Android / iOS 交互与页面重构
+
+用户本轮要求“研究安卓苹果软件的 uiux 设计然后去大范围深度重做我们 pocketworld 的 uiux”。从 main `cfc74c8ebeb20a984cbc285d26e60414cae179c8` 出发；以下是本轮采用的实现基线，尚非用户逐屏审美认可。实际目标仍是 Android 上同一 React / WebView 业务前端，iOS 作为交互研究来源。
+
+### 统一页面语法
+
+- 手机继续抽屉导航，主入口是对话、任务、项目；近期对话属于对象列表，更多工具和设置是低频入口。宽屏沿用同一工作区和可收放侧栏，不能重挂载草稿或编辑器。
+- 对话以阅读和输入为中心：标题与模型分层、正文可连续阅读、执行中的事情归到同一工作区、补充和停止仍绑定原任务。输入框随真实内容增长，附件与工具按需披露，禁止示例内容静默变成用户草稿。
+- 集合页使用“主对象工具栏 → 搜索/本地筛选 → 有意义的对象分组 → 对象行”。首屏不出现第二份大标题或说明文章；待处理事项优先于运行记录，运行记录优先于历史。
+- 对象详情使用“状态和主操作 → 主要内容 → 相关对象 → 可展开的技术/历史信息”。结果、权限、费用、错误、未决状态保持可见，不能为了简洁折叠必要决策依据。
+- 设置首页是少量常用入口加分组导航行；进入分组后才显示具体设置。行首是稳定图标锚点，中间是名称及真实当前值，尾部为状态或进入箭头。长编辑走现有完整子页面；短选择与临时核对使用单层浮面。
+- 编辑页沿用现有字段、显式保存和草稿返回；正文只保留一个主要纵向滚动区，保存/取消在窄屏和短屏可达。读取、接受、执行完成三种状态不得混写。
+
+### 视觉与触控规则
+
+沿用 Paper / Graphite 唯一颜色源和既有三角色字体，不引入新皮肤或依赖。页面标题 18–20px / 600，重要对象 15–16px / 600，正文及输入 16px，元信息 12–13px。手机边距 16–20px、组内 8–12px、组间 24px 起；可点击对象行至少 56px，独立图标与主要触控目标以 48px 为基线。图标本身可为 18–22px。长中文、320px 窄屏、深色和大字号必须保持阅读顺序，不把单行省略用于唯一的关键决策内容。
+
+页面和列表保持平面，组内以邻近和轻分隔组织；输入、选择对象和临时浮面可有弱表面。圆角和内边距共同保证文字安全，不用全页重复大卡片承载每一个字段。内容区使用实色；材料/透明效果只用于必要的控制层，不给长文阅读铺玻璃。
+
+继续使用 BoardUI / React Aria、Affect、BeUI、Motion、Vaul 的现有适配。按压约 120–160ms、披露 180–240ms、抽屉 240–320ms 为本轮调参起点，非平台强制规范。动效呈现真实选中、展开和空间归属；允许中断，减少动态时取消非必要位移。返回依次处理当前浮层、对象详情/编辑、上一页面；保持已有草稿、查询、滚动和权威身份。
+
+### 研究取舍及边界
+
+采用 Android 的触控、安全区、键盘与返回约束，结合 Apple 的列表分组、稳定工具栏、上下文浮面和连续动效；参考 Things 的标题分组、Bear 的长内容折叠、Linear 的移动端操作组织。现有组件负责实现，不复制第三方产品源码。RikkaHub 的 AGPL 源码只用于行为研究。
+
+- Android：[内容结构](https://developer.android.com/design/ui/mobile/guides/layout-and-content/content-structure)、[设置](https://developer.android.com/design/ui/mobile/guides/patterns/settings)、[可访问性](https://developer.android.com/design/ui/mobile/guides/foundations/accessibility)、[Edge to edge](https://developer.android.com/design/ui/mobile/guides/layout-and-content/edge-to-edge)、[WebView insets](https://developer.android.com/develop/ui/views/layout/webapps/understand-window-insets)。重点是 48dp 触控、单一 inset 责任与 IME 下稳定输入；不能简单在 native 和 CSS 两边都加安全区。
+- Apple：[Lists and tables](https://developer.apple.com/design/human-interface-guidelines/lists-and-tables)、[Sheets](https://developer.apple.com/design/human-interface-guidelines/sheets)、[Materials](https://developer.apple.com/design/human-interface-guidelines/materials)、[Accessibility](https://developer.apple.com/design/human-interface-guidelines/accessibility)。借鉴层级与行为，不将 iOS 视觉原样移植或添加底部三栏。
+- 产品参考：[Things headings](https://culturedcode.com/things/support/articles/2803577/)、[Bear folding](https://blog.bear.app/2024/06/how-to-use-folding-to-stay-organized/)、[Linear mobile](https://linear.app/changelog/2025-10-16-mobile-app-redesign)。研究实际阅读了官方文字和部分源码；没有将未亲自运行的第三方 App 宣称为实测。
+- Linux.do 和 RikkaHub Issues 作为失败线索，不能当作总体用户共识。X、知乎、小黑盒尚无足以改变本轮选择的直接核实材料。
+
+### 实施范围与验证
+
+重做主外壳、对话/任务/项目、设置/模型/手机/历史，以及知识与主动任务、协作、连接设备和扩展媒体等主要页面族。沿用现有路由、命令、审批、原件 pin、revision、草稿与保存契约；不重写后端执行或加入未授权功能。优先改 JSX 和现有局部样式，避免堆叠一套平行 CSS 皮肤。
+
+改前已取得当前 React 实际渲染的 390×844 对话、抽屉、任务、设置截图，隔离 native fixture 无页面错误；基线 TypeScript 通过。完成后以相同内容、窄屏/深色/宽屏、核心操作与现有契约回归核对。浏览器 fixture 只能证明 Web 呈现和交互；Android 系统返回、真实 IME、TalkBack、实际权限/磁盘及 APK 安装必须单独标记，不拿旧 381 场景统计替代本轮证据。
+
+### 本轮实现与完成证据
+
+本轮重构涉及 34 个生产源码与样式文件，沿用原依赖和原生桥接处理器。远端同期新增的发布工具提交 `aa6541d63bbf64838230e3636cf6f01a076d10d4` 已作为集成基线保留。
+
+| 页面族 | 当前落地行为 |
+| --- | --- |
+| 对话、抽屉、任务、项目 | 置顶与近期对话分组；办理事项归入同一工作区；输入正文与工具分行；触屏 Enter 换行、显式发送；任务四种状态筛选常驻并显示真实摘要、更新时间；未选择项目时呈现可进入的项目目录。 |
+| 设置、模型、手机、历史 | 六组设置改为进入子页面的导航；常用项显示真实值；连接目录保留当前选择与其他配置的区别；手机能力按设备能力、使用偏好分组；历史按真实日期及原状态组织。 |
+| 记忆、旧事、学习、方法、委托、提醒 | 本地搜索和状态分组；详情返回恢复上下文；已读取冲突与未决投递保持可见；原来源、连续阅读及批准门禁保持。 |
+| 团队、群、渠道、资料范围 | 需处理事项前置；原回答接续引用与回复；目录、消息和投递按业务关系分组；当前授权范围与未提交选择分开显示。 |
+| 设备、电脑、SSH | 设备真实连接状态分组；连接按待配置与已保存配置分组；本地名称、地址或工作区搜索；未决原提交先于新工作；主机工具按任务与文件、命令与终端、环境检查组织。 |
+| 浏览器、媒体、技能、插件 | 任务页面与个人页面分组；来源搜索保留原序号和原 id；媒体状态筛选并前置待核对成果；技能与插件目录增加状态和来源搜索，原批准与安装身份保持。 |
+
+实际截图修正了四类可见问题：320px 设置与团队编辑器的最小内容宽度溢出；团队复制/引用按钮重叠；设置分类说明重复导致首屏过长；深色执行圆环沿用旧颜色导致辨认困难。另移除了工作区旧的浅色 canvas 覆盖，恢复统一 Paper 变量。
+
+2026-11-08 最终验证：
+
+- `npm test`：**703 / 703** 通过，0 跳过。为新增 SearchField 补充既有 VM 测试依赖；原审批、回执与身份断言保留。新增技能筛选后原 id / 返回焦点回归。
+- `npm run build`：完整字体准备、许可证扫描、`tsc --noEmit`、Vite 生产构建、构建回执均退出 0。现有许可证扫描仍保留 `client-only` 的原 unresolved 状态；没有把它改写为已核实。
+- `tests/mobile-uiux-journeys.mjs`：最终生产 bundle 的 390 浅色、320 浅色、390 深色、1280 宽屏及空白首次使用 **5 个场景全部通过**；验证触屏换行、IME 合成保护、显式发送参数、导航草稿、任务筛选返回、设置六组导航、短屏可达、无横向溢出；生成 20 张截图，页面错误 0。
+- `tests/private-butler-ui.mjs`：最终生产 bundle 中独立对话、指定原任务补充、未知回执查询、过期 run 拒绝、中断继续及原记忆审阅句柄通过，页面错误 0。
+- `tests/navigation-shell-ui.mjs`：收放锚点、焦点、禁用项、同一草稿节点、深色、减少动态、360/280px 短屏滚动与手机导航通过。
+- 领域实际组件旅程通过：知识 44 场景、技能/插件 19 场景、Browser 8 场景、Media 6 场景；设置 5 组旅程；协作原有 4 组与最终 6 项聚焦检查。独立只读复核补查知识搜索后的非首项身份、提醒未决入口、History 冲突与返回，并复核主界面/Browser/Media，未发现阻塞问题。这些数量按各套检查定义分别记录，不合并成一个夸大的覆盖率。
+- `git diff --check` 通过。首次空白状态使用隔离空数据，未自动生成用户草稿或任务。
+
+最终 Web JS 为 `index-DbDkTUGh.js`，SHA-256 `0c5aebdb8da4fb54f32d5eded18d62a9b4625c25780a6473a5b5a94481aaafbe`。保留 [移动旅程回执](docs/uiux-20261108/mobile-journeys.json) 和四张当前生产构建的代表截图：[对话](docs/uiux-20261108/390-light-conversation.png)、[任务](docs/uiux-20261108/390-light-tasks.png)、[设置](docs/uiux-20261108/390-light-settings.png)、[深色对话](docs/uiux-20261108/390-dark-conversation.png)。截图内容来自测试 fixture；可用上述脚本重新生成全部场景。
+
+**平台边界：** 本轮证据覆盖 Web 前端与合成宿主回执。Android 真机的系统返回、实际 IME/安全区、TalkBack、系统字体放大、真实账户和持久执行仍待设备验收；未构建或发布本轮 APK，也未实现 iOS 客户端。Native inset 责任需要结合 WebView 版本单独验证，不能把浏览器短屏测试当成 IME 实测。

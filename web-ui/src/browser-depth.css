@@ -1,5 +1,5 @@
 /* BoardUI DashboardSidebar/Header + settings/disclosure composition over the
- * retained native surfaces. Affect research/result and OpenMuse object/control
+ * retained native surfaces. Affect research/result and object/control
  * hierarchy: one current object, nearby actions, secondary evidence on demand.
  * No changes to WebView, media/feed identity, authority, timers or native leases. */
 .pw-browser-workspace { background:var(--pw-canvas,#fafafa) }
@@ -10,12 +10,12 @@
 .pw-browser-workspace .pw-browser-workspace-nav button { border-radius:10px }
 .pw-browser-workspace .pw-browser-workspace-scroll { border-radius:18px;background:var(--pw-surface,#fff);padding:32px clamp(20px,4vw,56px) 40px }
 .pw-browser-workspace .pw-browser-workspace-scroll > section,.pw-browser-workspace .pw-browser-workspace-scroll > .pw-accordion { max-width:860px }
-.pw-browser-workspace h2 { font-size:22px;line-height:1.5;letter-spacing:-.035em;font-weight:550;margin-bottom:16px }
+.pw-browser-workspace h2 { font-size:20px;line-height:1.4;letter-spacing:-.025em;font-weight:600;margin-bottom:16px }
 .pw-browser-workspace h3 { font-size:16px;font-weight:550;line-height:1.5 }
 .pw-browser-workspace p { margin-block:8px 12px }
 .pw-browser-workspace .pw-model-eyebrow { font-size:11px;letter-spacing:.04em;margin-bottom:8px;color:var(--pw-muted,#777) }
 .pw-browser-workspace .pw-form-actions { gap:8px;margin-block:12px }
-.pw-browser-workspace .pw-form-actions button { min-height:44px }
+.pw-browser-workspace .pw-form-actions button { min-height:48px }
 .pw-browser-workspace .pw-browser-current-status { font-size:13px;color:var(--pw-copy,#666) }
 .pw-browser-workspace .pw-browser-current-activity { display:grid;grid-template-columns:1fr auto;align-items:center;gap:4px 16px;padding:18px 0 24px;margin-top:16px;border-top:1px solid color-mix(in srgb,var(--pw-ink,#222) 7%,transparent) }
 .pw-browser-workspace .pw-browser-current-activity .pw-model-eyebrow { grid-column:1/-1;margin:0 }.pw-browser-workspace .pw-browser-current-activity p{margin:0;font-size:15px}.pw-browser-workspace .pw-browser-current-activity>span:last-child{font-size:12px;color:var(--pw-muted,#777)}
@@ -26,8 +26,22 @@
 .pw-browser-workspace .pw-browser-record { padding:22px 0;border-bottom-color:color-mix(in srgb,var(--pw-ink,#222) 6%,transparent) }
 .pw-browser-workspace .pw-browser-source-record>.pw-reading-copy { font-size:15px;line-height:1.8;margin-block:14px }
 .pw-browser-workspace .pw-browser-source-record>.pw-field-hint { font-size:12px;line-height:1.65 }
-.pw-browser-workspace .pw-browser-page-record h3 { max-width:48em }.pw-browser-workspace .pw-browser-page-record>.pw-field-hint{font-size:12px}
+.pw-browser-workspace .pw-browser-page-record h3 { max-width:48em; margin:0 }.pw-browser-workspace .pw-browser-page-record>.pw-field-hint{font-size:12px}
 .pw-browser-workspace .pw-browser-downloads { margin-top:28px }.pw-browser-workspace .pw-browser-workspace-code { font-family:var(--font-code,'JetBrains Mono','Noto Sans SC',monospace) }
+
+.pw-browser-workspace .pw-browser-page-group { margin-top:24px; }
+.pw-browser-workspace h3.pw-browser-group-label { display:flex;align-items:center;gap:8px;margin:0;font-size:13px;line-height:20px;color:var(--pw-copy);font-weight:600; }
+.pw-browser-group-label > span { font-size:12px;font-weight:400;color:var(--pw-muted); }
+.pw-browser-page-title { display:flex;align-items:flex-start;gap:12px; }
+.pw-browser-page-title > h3 { flex:1;min-width:0;overflow-wrap:anywhere; }
+.pw-browser-current-badge { flex:none;font-size:12px;line-height:20px;padding:2px 8px;border-radius:6px;background:var(--pw-inset);color:var(--pw-copy); }
+.pw-browser-workspace .pw-browser-page-record { padding-block:14px; }
+.pw-browser-workspace .pw-browser-page-record .pw-form-actions { margin-block:10px 0; }
+.pw-browser-workspace .pw-browser-source-tools { margin-top:20px; }
+.pw-browser-workspace .pw-browser-source-tools input { font-size:16px;min-height:28px; }
+.pw-browser-workspace .pw-browser-source-record { padding-block:20px; }
+.pw-browser-workspace .pw-browser-source-record .pw-form-actions { margin-bottom:0; }
+
 /* Reader: an uninterrupted reading measure, source mechanics stay attached below. */
 .browser-reader .browser-reader-page { max-width:760px }.browser-reader .browser-reader-heading { margin-bottom:28px }
 .browser-reader .browser-reader-heading h1 { font-size:26px;line-height:1.5;letter-spacing:-.03em }
@@ -58,18 +72,18 @@
 .pw-realtime-workspace .pw-realtime-task-record { padding:18px;background:var(--pw-surface,#fff) }
 .pw-realtime-workspace .pw-realtime-turn{padding-block:18px 24px}.pw-realtime-workspace .pw-realtime-turn>.pw-reading-copy{font-size:16px;margin-block:12px 16px}
 .pw-realtime-workspace .pw-realtime-services { padding-top:16px;border-top:1px solid color-mix(in srgb,var(--pw-ink,#222) 7%,transparent) }
-/* OpenMuse preview: frame owns the surface; controls sit on a quiet common rail. */
+/* Live preview: the original frame owns the surface and its control rail. */
 .pw-phone-viewer .pw-phone-viewer-card { background:var(--pw-surface,#fff);border-radius:18px;box-shadow:0 8px 28px -18px #00000024;padding:16px }
 .pw-phone-viewer .pw-phone-viewer-card-header { margin-bottom:16px }.pw-phone-viewer .pw-phone-viewer-frame{border-radius:12px;background:var(--pw-inset,#f4f4f4)}
 .pw-phone-viewer .pw-phone-viewer-card-actions{padding-top:12px;gap:8px}.pw-phone-viewer .pw-phone-viewer-card-actions .pw-phone-viewer-button{min-height:44px}
 .pw-phone-viewer .pw-phone-viewer-select>.pw-selection-field{width:100%}.pw-phone-viewer .pw-phone-viewer-select{display:block;margin-block:0 16px}
 .pw-phone-viewer-sheet .pw-phone-viewer-sheet-body{gap:20px}.pw-phone-viewer-sheet .pw-phone-viewer-sheet-status{margin-bottom:0}
 @media(max-width:680px){
- .pw-browser-workspace .pw-browser-workspace-header{padding:10px 14px;min-height:68px}.pw-browser-workspace .pw-browser-workspace-header>div{min-width:100px}.pw-browser-workspace .pw-browser-workspace-header h1{font-size:16px}
+ .pw-browser-workspace .pw-browser-workspace-header{padding:6px 12px;min-height:64px}.pw-browser-workspace .pw-browser-workspace-header>div{min-width:0;flex:1}.pw-browser-workspace .pw-browser-workspace-header h1{font-size:16px}
  .pw-browser-workspace .pw-browser-workspace-body{flex-direction:column;gap:0;padding:0}.pw-browser-workspace .pw-browser-workspace-nav{width:100%;flex:0 0 auto;flex-direction:row;border-radius:0;background:var(--pw-canvas,#fafafa);padding:6px 14px 12px;gap:6px}
- .pw-browser-workspace .pw-browser-workspace-nav button{flex:1;flex-direction:row;justify-content:center;min-height:44px;gap:7px;padding:8px;font-size:13px}
- .pw-browser-workspace .pw-browser-workspace-scroll{border-radius:18px 18px 0 0;padding:24px 20px 32px}.pw-browser-workspace h2{font-size:20px;margin-bottom:14px}.pw-browser-workspace .pw-browser-current-activity{padding-block:18px}
- .pw-browser-workspace .pw-browser-workspace-header{flex-wrap:nowrap}.pw-browser-workspace .pw-browser-workspace-header>button{padding-inline:8px;font-size:12px}.pw-browser-workspace .pw-browser-workspace-header>button:first-child{padding:8px;min-width:40px}
+ .pw-browser-workspace .pw-browser-workspace-nav button{flex:1;flex-direction:row;justify-content:center;min-height:48px;gap:7px;padding:8px;font-size:13px}
+ .pw-browser-workspace .pw-browser-workspace-scroll{border-radius:18px 18px 0 0;padding:20px 20px 32px}.pw-browser-workspace h2{font-size:20px;margin-bottom:14px}.pw-browser-workspace .pw-browser-current-activity{padding-block:18px}
+ .pw-browser-workspace .pw-browser-workspace-header{flex-wrap:nowrap}.pw-browser-workspace .pw-browser-workspace-header>button{padding-inline:8px;font-size:12px}.pw-browser-workspace .pw-browser-workspace-header>button:first-child{padding:12px;min-width:48px}
  .browser-reader .browser-reader-heading h1{font-size:24px}.browser-reader .browser-reader-heading{margin-bottom:24px}.browser-reader .browser-reader-prose{font-size:16px;line-height:1.9}.browser-reader .browser-reader-source-note{margin-top:28px}
  .pw-bootstrap{padding:20px 20px 36px;gap:24px}.pw-bootstrap h1{font-size:23px}.pw-bootstrap .pw-bootstrap-maintenance{padding:18px}.pw-bootstrap .pw-bootstrap-header{gap:8px}.pw-bootstrap .pw-bootstrap-context{max-width:9em;text-align:right}
  .pw-realtime-workspace .pw-realtime-invitation{padding:18px}.pw-realtime-workspace .pw-realtime-live{padding:14px}.pw-realtime-workspace .pw-realtime-context{gap:28px}

@@ -209,6 +209,21 @@ try {
             await page.screenshot({ path: path.join(out, screenshot), fullPage: !scene.startsWith('chrome'), animations: 'disabled', timeout: 15000 });
             if (process.env.PW_DEPTH_PROGRESS) console.log(`${phase} ${width} ${scene} verified`);
             records.push({ scene, width, screenshot, assertion, overflow: await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), calls: await page.evaluate(() => window.depthBrowser.calls) });
+            if (phase === 'after' && scene === 'browser-sources') {
+                const search = page.getByRole('searchbox', { name: '搜索已保留来源', exact: true });
+                await search.fill('计划与定价');
+                assert.equal(await page.locator('.pw-browser-source-record').count(), 1);
+                assert.equal(await page.locator('.pw-browser-source-record .pw-model-eyebrow').textContent(), '来源 2');
+                await page.getByRole('button', { name: '查看当时原文', exact: true }).click();
+                const read = await page.evaluate(() => window.depthBrowser.calls.filter(call => call.args?.command === 'openSource').at(-1));
+                assert.equal(read.args.sourceId, 's2');
+                assert.equal(read.args.taskId, 'research-a');
+                await search.fill('不存在的来源');
+                assert.equal(await page.locator('.pw-browser-source-record').count(), 0);
+                await page.getByText('没有匹配的已保留来源。', { exact: true }).waitFor();
+                await search.fill('');
+                assert.equal(await page.locator('.pw-browser-source-record').count(), 2);
+            }
         }
         if (phase === 'after' && !dark && scenes.includes('browser-action-scope')) {
             const enter = async name => { await page.evaluate(s => window.depthBrowser.scene(s), name); await page.waitForTimeout(100); };

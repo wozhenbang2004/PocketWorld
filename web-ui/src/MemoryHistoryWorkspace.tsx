@@ -23,6 +23,7 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const window = useRef(new MemoryReadingWindow()), session = useRef(''), reviewHandle = useRef('');
   const selectedRef = useRef<Data | null>(null), focus = useRef<HTMLElement | null>(null), reading = useRef<HTMLElement | null>(null);
+  const collection = useRef<HTMLElement | null>(null), listPosition = useRef(0), returnFocus = useRef('');
   selectedRef.current = selected;
   const version = window.current.capture();
   const closeHandle = (handle: string) => { if (handle) void run('memoryHistory.close', { handle }).catch(() => {}); };
@@ -51,10 +52,12 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
     } catch (failure) { if (window.current.current(ticket)) setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { window.current.finish(ticket); if (window.current.current(ticket)) setBusy(false); }
   };
-  const choose = (record: Data) => {
+  const choose = (record: Data, identity = '') => {
     window.current.invalidate(); setBusy(false);
     closeHandle(selectedRef.current?.readHandle || '');
     focus.current = document.activeElement as HTMLElement;
+    returnFocus.current = identity || focus.current?.dataset.historyId || '';
+    listPosition.current = collection.current?.closest('.pw-secondary-scroll')?.scrollTop || 0;
     setSelected(record); setDraft(record.text || ''); setSource(null); setReplacement(''); setReplacements([]); closeReview();
   };
   const openReview = (value: Data) => { reviewHandle.current = value.reviewHandle; setReview(value); setAcknowledged(false); };
@@ -93,7 +96,15 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
     return () => { window.current.close(); closeHandle(session.current); closeHandle(reviewHandle.current); session.current = ''; reviewHandle.current = ''; };
   }, []);
   useEffect(() => { reset(); }, [scopeKey]);
-  useEffect(() => { if (selected) reading.current?.focus({ preventScroll: true }); else focus.current?.focus({ preventScroll: true }); }, [selected]);
+  useEffect(() => {
+    const scroll = collection.current?.closest('.pw-secondary-scroll');
+    if (selected) { if (scroll) scroll.scrollTop = 0; reading.current?.focus({ preventScroll: true }); }
+    else if (!busy && returnFocus.current) {
+      if (scroll) scroll.scrollTop = listPosition.current;
+      const target = Array.from(collection.current?.querySelectorAll<HTMLElement>('[data-history-id]') || []).find(node => node.dataset.historyId === returnFocus.current);
+      (target || collection.current)?.focus({ preventScroll: true }); returnFocus.current = '';
+    }
+  }, [selected, busy]);
   useEffect(() => {
     registerTransientBack(review || selected ? () => { if (!busy) { if (review) closeReview(); else clearReading(); } return true; } : null);
     return () => registerTransientBack(null);
@@ -108,9 +119,12 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
     return () => clearInterval(timer);
   }, [task?.taskHandle, !!receipt, version]);
   const details = taskMemorySelectionDetails(receipt);
-  return <section className="pw-memory-history pw-knowledge-workspace" aria-label="旧事与任务来源">
+  const pageRecords = rows(view === 'history' ? page?.matches : page?.tasks);
+  const resultGroup = (row: Data) => view === 'history' ? (['pending_conflict', 'current', 'historical'].includes(row.temporalStatus) ? row.temporalStatus : 'unknown') : (['awaiting_user', 'blocked', 'failed'].includes(row.status) ? 'attention' : ['completed', 'cancelled'].includes(row.status) ? 'finished' : 'active');
+  const resultGroups = (view === 'history' ? [{ id: 'pending_conflict', label: '冲突待核' }, { id: 'current', label: '当前记录' }, { id: 'historical', label: '历史版本' }, { id: 'unknown', label: '时间或主体待核对' }] : [{ id: 'attention', label: '需要处理' }, { id: 'active', label: '其他原任务' }, { id: 'finished', label: '已结束' }]).map(group => ({ ...group, records: pageRecords.filter(row => resultGroup(row) === group.id) })).filter(group => group.records.length);
+  return <section ref={collection} tabIndex={-1} className="pw-memory-history pw-knowledge-workspace" aria-label="旧事与任务来源">
     {!selected && <header className="pw-knowledge-heading"><h2>{view === 'history' ? '查阅旧事' : '核对任务来源'}</h2></header>}
-    <SelectField label="查阅内容" value={view} options={[{ id: 'history', label: '旧事与主体认知' }, { id: 'tasks', label: '原任务与本轮记忆来源' }]} isDisabled={busy} onChange={value => { reset(); setView(value as 'history' | 'tasks'); setQuery(''); }} />
+    {!selected && <SelectField label="查阅内容" value={view} options={[{ id: 'history', label: '旧事与主体认知' }, { id: 'tasks', label: '原任务与本轮记忆来源' }]} isDisabled={busy} onChange={value => { reset(); setView(value as 'history' | 'tasks'); setQuery(''); }} />}
     {error && <p className="pw-secondary-error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}{busy && <p className="pw-muted" role="status">正在核对原版本与回执…</p>}
     {!selected && <>
       <div className="pw-knowledge-search-actions">
@@ -121,22 +135,23 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
         <p className="pw-muted">未知主体不会归入主人；计划与想象不参与当前现实事实。</p>
         <TextField label="稳定主体身份" value={subject} onChange={value => { reset(); setSubject(value); }} maxLength={200} isDisabled={busy} />
         <Button variant="ghost" disabled={busy || !subject.trim()} onClick={() => { clearReading(); setPage(null); setCognition(null); void invoke('memoryHistory.cognition', { subjectId: subject.trim() }, setCognition); }}>读取当前认知</Button>
-        {cognition && <>
-          <p>当前 {rows(cognition.current).length} · 历史 {rows(cognition.history).length} · 待审冲突 {rows(cognition.pendingConflicts).length}</p>
-          {(['current', 'history'] as const).map(key => <section key={key}><h3>{key === 'current' ? '当前认知' : '历史、计划或尚未生效'}</h3><div className="pw-memory-list">{rows(cognition[key]).map(row => <article key={row.id} className="pw-memory-list-item"><Button variant="ghost" className="pw-memory-row" trailingIcon={RiArrowRightSLine} disabled={busy} onClick={() => choose(row)}><span className="pw-memory-row-copy"><span>{row.text}</span><small>{row.assertion?.kind} · {row.assertionStatus}</small></span></Button></article>)}</div></section>)}
-          {rows(cognition.conflictGroups).map(group => <ConflictReview key={group.conflictHandle} group={group} busy={busy} onReview={args => { void invoke('memoryHistory.conflict.review', args, openReview); }} />)}
-        </>}
       </AccordionItem></Accordion>}
+      {!page && !cognition && !task && !busy && <p className="pw-knowledge-empty-copy">{view === 'history' ? '输入关键词或记载日期，查找保存过的原文。也可以按主体核对当前认知与未决冲突。' : '搜索原任务，再查看当时提供给模型的记忆凭据。'}</p>}
+      {cognition && <section aria-label="已读取的主体认知"><p className="pw-knowledge-caption">当前 {rows(cognition.current).length} · 历史 {rows(cognition.history).length} · 待审冲突 {rows(cognition.pendingConflicts).length}</p>
+        {rows(cognition.conflictGroups).map(group => <ConflictReview key={group.conflictHandle} group={group} busy={busy} onReview={args => { void invoke('memoryHistory.conflict.review', args, openReview); }} />)}
+        {(['current', 'history'] as const).map(key => rows(cognition[key]).length > 0 && <section className="pw-knowledge-directory-group" key={key}><header className="pw-knowledge-group-heading"><h3>{key === 'current' ? '当前认知' : '历史、计划或尚未生效'}</h3><span>{rows(cognition[key]).length}</span></header><div className="pw-memory-list">{rows(cognition[key]).map(row => <article key={row.id} className="pw-memory-list-item"><Button variant="ghost" className="pw-memory-row" data-history-id={`${key}:${row.id}`} trailingIcon={RiArrowRightSLine} disabled={busy} onClick={() => choose(row, `${key}:${row.id}`)}><span className="pw-memory-row-copy"><strong>{row.text}</strong><small>{row.assertion?.kind} · {row.assertionStatus}</small></span></Button></article>)}</div></section>)}
+      </section>}
       {page && <section className="pw-knowledge-section"><h3 className="pw-knowledge-section-heading">{view === 'history' ? '匹配的旧事' : '原任务记录'}</h3>
         <p className="pw-muted">{view === 'history' ? `本页 ${rows(page.matches).length} / 匹配 ${page.totalMatches ?? '未知'}。未列出不代表从未保存。` : `本页 ${rows(page.tasks).length} 条原任务 · ${page.coverage === 'full_task_store' ? '完整任务记录检索' : '以原宿主声明范围为准'}`}</p>
         {page.unverifiedArchiveRecords > 0 && <p className="pw-muted">另有 {page.unverifiedArchiveRecords} 条未核归档；查看不会激活历史包。</p>}
-        <div className="pw-memory-list">{rows(view === 'history' ? page.matches : page.tasks).map(row => <article key={row.id || row.taskId} className="pw-memory-list-item"><Button variant="ghost" className="pw-memory-row" trailingIcon={RiArrowRightSLine} disabled={busy} onClick={() => view === 'history' ? void invoke('memoryHistory.record', { recordHandle: row.recordHandle }, value => choose({ ...value.record, readHandle: value.readHandle })) : openTask(row.taskId)}><span className="pw-memory-row-copy"><span>{row.textPreview || row.goal || row.title || row.taskId}</span><small>{view === 'history' ? memoryHistoryStatus(row.temporalStatus) : `${row.status || '状态未知'} · 任务记录，不是正式记忆`}</small></span></Button></article>)}</div>
+        {resultGroups.map(group => <section key={group.id} className="pw-knowledge-directory-group" aria-label={group.label}><header className="pw-knowledge-group-heading"><h3>{group.label}</h3><span>{group.records.length}</span></header><div className="pw-memory-list">{group.records.map(row => <article key={row.id || row.taskId} className="pw-memory-list-item"><Button variant="ghost" className="pw-memory-row" data-history-id={`result:${row.id || row.taskId}`} trailingIcon={RiArrowRightSLine} disabled={busy} onClick={() => view === 'history' ? void invoke('memoryHistory.record', { recordHandle: row.recordHandle }, value => choose({ ...value.record, readHandle: value.readHandle }, `result:${row.id || row.taskId}`)) : openTask(row.taskId)}><span className="pw-memory-row-copy"><strong>{row.textPreview || row.goal || row.title || row.taskId}</strong><small>{view === 'history' ? memoryHistoryStatus(row.temporalStatus) : `${row.status || '状态未知'} · 任务记录，不是正式记忆`}</small></span></Button></article>)}</div></section>)}
+        {!pageRecords.length && <p className="pw-knowledge-empty-copy">这次搜索没有匹配项。可以换一个关键词；未列出不代表从未保存。</p>}
         {page.nextCursor && <Button variant="ghost" disabled={busy} onClick={() => search(page.nextCursor)}>下一页</Button>}
       </section>}
       {task && <section className="pw-source-record"><h3>{task.goal || '所选原任务'}</h3><p className="pw-muted">{task.status}</p><div className="pw-form-actions"><Button variant="ghost" disabled={busy} onClick={() => { void invoke('taskMemory.focus', { taskHandle: task.taskHandle }); }}>打开这条原任务</Button><Button variant="secondary" disabled={busy || !task.referenceAvailable} onClick={readReceipt}>读取本轮记忆凭据</Button></div>{!task.referenceAvailable && <p>此原任务没有提供给模型的记忆凭据。不会用当前检索补写当时的来源。</p>}</section>}
       {receipt && <section aria-label="本次提供给模型的记忆来源"><p>{taskMemorySummary(receipt)}</p>{!taskMemoryVisibleRecords(receipt).length && <p className="pw-muted">原凭据没有可显示的记忆条目。</p>}
         {details && <Accordion variant="divided"><AccordionItem id="selection" title="查看本次选择与省略"><p>当时提供核心参考 {details.core} 条 · 任务匹配 {details.retrieved} 条 · 使用 {details.chars} 字符。</p>{Object.entries(details.counts).map(([key, count]) => <p key={key}>{key === 'record_limit' ? '条数预算已满' : key === 'character_limit' ? '字符预算已满' : key === 'record_too_large' ? '条目过长' : '来源或版本变化'}：{String(count)} 条</p>)}<p className="pw-muted">省略版本仅保留标识，不保留旧正文。</p>{details.omitted.map((row: Data) => <p key={row.id}>{row.id} · 修订 {row.revision}</p>)}</AccordionItem></Accordion>}
-        <div className="pw-memory-list">{taskMemoryVisibleRecords(receipt).map(row => <article key={row.id} className="pw-memory-list-item"><Button variant="ghost" className="pw-memory-row" trailingIcon={RiArrowRightSLine} disabled={busy || !row.readHandle} onClick={() => choose(row)}><span className="pw-memory-row-copy"><span>{row.text || '原正文已失效，不再显示'}</span><small>{row.id} · 修订 {row.revision} · {row.status}</small></span></Button></article>)}</div>
+        <section className="pw-knowledge-directory-group"><header className="pw-knowledge-group-heading"><h3>本次提供的原版本</h3><span>{taskMemoryVisibleRecords(receipt).length}</span></header><div className="pw-memory-list">{taskMemoryVisibleRecords(receipt).map(row => <article key={row.id} className="pw-memory-list-item"><Button variant="ghost" className="pw-memory-row" data-history-id={`receipt:${row.id}`} trailingIcon={RiArrowRightSLine} disabled={busy || !row.readHandle} onClick={() => choose(row, `receipt:${row.id}`)}><span className="pw-memory-row-copy"><strong>{row.text || '原正文已失效，不再显示'}</strong><small>{row.id} · 修订 {row.revision} · {row.status}</small></span></Button></article>)}</div></section>
       </section>}
     </>}
     {selected && <section ref={reading} tabIndex={-1} className="pw-memory-reading"><header className="pw-memory-detail-header"><Button variant="ghost" leadingIcon={RiArrowLeftSLine} disabled={busy} onClick={clearReading}>返回来源列表</Button><h2>{view === 'history' ? '这份已存记忆' : '这次提供的原版本'}</h2></header>

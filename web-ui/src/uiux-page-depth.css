@@ -1,19 +1,35 @@
-/* Page composition over retained BoardUI AppShell's bounded column/header/action
- * relations and Affect's flat object groups. See DESIGN.md (whole-screen pass).
- * These classes express object grouping; they do not wrap every field in a card. */
-
-/* Main tasks: align complete object rows, including BoardUI's real label wrapper. */
-.pw-redesign .pw-depth-tasks { padding-top: 22px; padding-bottom: 28px; }
-.pw-redesign .pw-depth-tasks .pw-task-results { gap: 30px; }
-.pw-depth-tasks .pw-task-collection > h3 { font-size: 13px; line-height: 20px; font-weight: 600; color: var(--pw-copy); margin: 0 0 8px; }
-.pw-redesign .pw-depth-tasks .pw-task-row.button-press-motion { width: 100%; min-width: 0; height: auto; min-height: 76px; padding: 12px 8px; }
+/* Mobile page composition over the retained BoardUI and Affect components.
+ * Collection tools, object rows, reading content and temporary sheets each have
+ * one role; no parallel theme or execution-state projection lives here. */
+.pw-redesign .pw-depth-tasks { padding: 0 20px 28px; }
+.pw-task-collection-tools { position: sticky; top: 0; z-index: 2; margin: 0 -4px 20px; padding: 8px 0 4px; background: var(--pw-surface); }
+.pw-task-status-filters { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 2px; padding: 3px; background: var(--pw-inset); border-radius: 14px; }
+.pw-redesign .pw-task-status-filters > button { height: auto; min-height: 48px; min-width: 0; padding: 8px 4px; border-radius: 11px; font-size: 13px; line-height: 20px; color: var(--pw-copy); }
+.pw-redesign .pw-task-status-filters > button[aria-pressed="true"] { color: var(--pw-ink); background: var(--pw-surface); box-shadow: var(--pw-shadow-surface); font-weight: 600; }
+.pw-task-status-filters > button > span { padding: 0; }
+.pw-depth-tasks .pw-task-filters { padding-top: 10px; }
+.pw-depth-tasks .pw-task-list-tools > button { width: 48px; min-width: 48px; height: 48px; }
+.pw-depth-tasks .pw-active-filter { margin-top: 4px; }
+.pw-depth-tasks .pw-filter-summary { display: flex; align-items: center; gap: 8px; }
+.pw-redesign .pw-depth-tasks .pw-task-results { gap: 28px; }
+.pw-depth-tasks .pw-task-collection > h3 { display: flex; align-items: baseline; gap: 8px; margin: 0 0 6px; font-size: 13px; line-height: 20px; font-weight: 600; color: var(--pw-copy); }
+.pw-depth-tasks .pw-task-collection > h3 > span { color: var(--pw-muted); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.pw-redesign .pw-depth-tasks .pw-task-row.button-press-motion { width: 100%; min-width: 0; height: auto; min-height: 76px; padding: 14px 4px; border-radius: 0; }
 .pw-redesign .pw-depth-tasks .pw-task-row.button-press-motion > span { display: grid; grid-template-columns: 20px minmax(0,1fr) 16px; align-items: start; gap: 12px; width: 100%; min-width: 0; padding: 0; white-space: normal; }
 .pw-depth-tasks .pw-task-row-copy { display: flex; flex-direction: column; min-width: 0; gap: 5px; text-align: start; }
-.pw-redesign .pw-depth-tasks .pw-task-row-copy b { font-size: 15px; line-height: 23px; font-weight: 550; overflow-wrap: anywhere; }
-.pw-depth-tasks .pw-task-row-copy > span { font-size: 12px; line-height: 19px; color: var(--pw-copy); }
-.pw-depth-tasks .pw-task-row > span > svg { align-self: center; color: var(--pw-copy); }
+.pw-redesign .pw-depth-tasks .pw-task-row-copy b { font-size: 16px; line-height: 24px; font-weight: 550; overflow-wrap: anywhere; }
+.pw-depth-tasks .pw-task-row-copy > span { font-size: 13px; line-height: 21px; color: var(--pw-copy); }
+.pw-depth-tasks .pw-task-row-copy .pw-task-row-summary { white-space: normal; overflow-wrap: anywhere; text-overflow: clip; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-weight: 400; }
+.pw-depth-tasks .pw-task-row-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 1px; font-weight: 400; }
+.pw-depth-tasks .pw-task-row-meta time { color: var(--pw-muted); font-size: 12px; }
+.pw-depth-tasks .pw-task-row > span > svg { align-self: center; color: var(--pw-muted); }
 .pw-depth-tasks .pw-task-row-status { padding-top: 3px; }
+.pw-depth-tasks .pw-task-list > .pw-task-row + .pw-task-row { border-top: 1px solid var(--pw-edge); }
 .pw-depth-tasks .pw-ended-tasks { padding-top: 2px; }
+.pw-depth-tasks .pw-ended-tasks .pw-task-row-copy b { font-weight: 500; }
+.pw-depth-tasks .pw-priority-decisions { margin-top: 0; }
+
+/* An overview starts with the authoritative status and actions for this object. */
 .pw-task-overview-top { display: grid; gap: 12px; padding-bottom: 18px; margin-bottom: 4px; border-bottom: 1px solid var(--pw-line); }
 .pw-task-overview-top .pw-task-identity { display: flex; align-items: center; gap: 8px; margin: 0; }
 .pw-task-overview-top .pw-task-identity > [role="progressbar"] { width: 14px; height: 14px; }
@@ -23,50 +39,65 @@
 .pw-task-body .pw-task-overview { gap: 20px; }
 .pw-task-body .pw-task-outcome.pw-task-reading { margin: 0; }
 
-/* Continuations stay attached to the conversation, below its answer. */
-.pw-redesign .pw-conversation-work { margin-top: 28px; }
-.pw-conversation-work .pw-work-heading { padding-inline: 4px; margin-bottom: 10px; }
-.pw-conversation-work .pw-work-row.button-press-motion { width: 100%; min-width: 0; height: auto; padding: 12px; }
-.pw-conversation-work .pw-work-row.button-press-motion > span { display: grid; grid-template-columns: 16px minmax(0,1fr) 16px; align-items: center; gap: 12px; width: 100%; min-width: 0; padding: 0; }
-.pw-conversation-work .pw-work-copy { display: grid; gap: 5px; min-width: 0; }
-.pw-conversation-work .pw-work-copy b { font-size: 13px; line-height: 20px; font-weight: 550; overflow-wrap: anywhere; }
-.pw-conversation-work .pw-work-copy small { font-size: 12px; line-height: 18px; }
+/* Work is one related collection under the answer, not independent chat bubbles. */
+.pw-redesign .pw-conversation-work { width: min(100%,760px); max-width: 760px; margin: 18px auto 8px; padding: 0 20px 16px; }
+.pw-conversation-work .pw-work-heading { justify-content: flex-start; gap: 8px; min-height: 36px; margin-bottom: 2px; padding: 0; }
+.pw-work-heading h3 { margin: 0; font-size: 13px; line-height: 20px; font-weight: 600; color: var(--pw-copy); }
+.pw-work-count { font-size: 12px; font-variant-numeric: tabular-nums; }
+.pw-work-heading > button { margin-left: auto; min-height: 48px; }
+.pw-conversation-work ol { gap: 0; border-top: 1px solid var(--pw-edge); }
+.pw-conversation-work li + li { border-top: 1px solid var(--pw-edge); }
+.pw-redesign .pw-conversation-work .pw-work-row.button-press-motion { width: 100%; min-width: 0; height: auto; min-height: 68px; padding: 12px 0; border-radius: 8px; background: transparent; box-shadow: none; }
+.pw-conversation-work .pw-work-row.button-press-motion > span { display: grid; grid-template-columns: 18px minmax(0,1fr) 16px; align-items: center; gap: 12px; width: 100%; min-width: 0; padding: 0; }
+.pw-conversation-work .pw-work-copy { display: grid; gap: 4px; min-width: 0; }
+.pw-conversation-work .pw-work-copy b { font-size: 15px; line-height: 23px; font-weight: 550; overflow-wrap: anywhere; white-space: normal; }
+.pw-conversation-work .pw-work-copy small { font-size: 12px; line-height: 19px; }
 .pw-linked-task.button-press-motion > span { display: flex; gap: 14px; justify-content: space-between; width: 100%; min-width: 0; padding: 0; }
 .pw-linked-task-copy { flex: 1; min-width: 0; }
 .pw-linked-task-action { flex-shrink: 0; }
+.pw-redesign .pw-chat-start { margin-top: clamp(32px,12dvh,96px); width: min(100%,760px); }
+.pw-redesign .pw-chat-start h2 { font-size: 24px; line-height: 34px; letter-spacing: -.025em; }
+.pw-chat-start .pw-start-actions { margin-top: 4px; gap: 4px; }
+.pw-chat-start .pw-start-actions button { min-height: 48px; font-size: 14px; }
+
+/* Bounded AppShell header and sheets keep reading and commit actions reachable. */
+.pw-primary-tools { display: flex; align-items: center; gap: 2px; flex: none; }
+.pw-primary-tools > button { width: 48px; min-width: 48px; height: 48px; }
+.pw-redesign .pw-conversation-context.button-press-motion { width: 100%; height: auto; min-height: 48px; padding: 2px 6px; }
+.pw-conversation-context.button-press-motion > span { display: flex; flex-direction: column; align-items: center; gap: 0; width: 100%; min-width: 0; padding: 0; }
+.pw-drawer-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 16px max(16px,env(safe-area-inset-bottom,0px)); background: var(--pw-surface); box-shadow: 0 -6px 18px -16px rgb(0 0 0 / 18%); }
+.pw-drawer-actions > button { min-height: 48px; min-width: 0; }
+.pw-attachment-drawer > .pw-drawer-body, .pw-model-drawer > .pw-drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.pw-attachment-drawer .pw-attachment-objects { min-width: 0; }
+.pw-attachment-drawer .pw-attachment-object { padding: 10px 0; border: 0; }
+.pw-attachment-drawer .pw-attachment-copy { padding-inline: 2px 8px; }
+.pw-projects-page .pw-project-tools { position: sticky; top: 0; z-index: 2; margin-block: 0 8px; padding-block: 8px; background: var(--pw-surface); }
+.pw-projects-page .pw-project-tools > button { width: 48px; min-width: 48px; height: 48px; }
+.pw-project-library { display: grid; gap: 16px; }
+.pw-project-library > header { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
+.pw-project-library h2 { margin: 0; font-size: 18px; line-height: 26px; font-weight: 600; }
+.pw-project-library > div { display: grid; gap: 0; }
+.pw-project-library .pw-project-library-row { min-height: 64px; width: 100%; justify-content: flex-start; padding: 12px 4px; gap: 12px; font-size: 16px; }
+.pw-project-library-row > span { flex: 1; min-width: 0; text-align: start; white-space: normal; overflow-wrap: anywhere; }
+.pw-project-library-row + .pw-project-library-row { border-top: 1px solid var(--pw-edge); }
+
 @media (min-width: 1100px) {
  .pw-redesign .pw-depth-tasks { max-width: 1080px; padding-inline: 32px; }
  .pw-depth-tasks .pw-task-results[data-has-active="true"] { display: grid; grid-template-columns: minmax(0,1fr) minmax(240px,.62fr); align-items: start; column-gap: 40px; }
  .pw-depth-tasks .pw-priority-decisions { grid-column: 1 / -1; }
  .pw-depth-tasks .pw-task-collection:not(.pw-ended-tasks) { grid-column: 1; }
  .pw-depth-tasks .pw-ended-tasks { grid-column: 2; }
+ .pw-task-status-filters { max-width: 480px; }
 }
-@media (max-width: 420px) {
- .pw-redesign .pw-depth-tasks { padding-inline: 16px; }
-}
-
-/* 2026-11-07: retain BoardUI AppShell boundaries. Object contents scroll;
- * committing or closing a sheet never requires reaching the end of its list. */
-.pw-primary-tools { display: flex; align-items: center; gap: 2px; flex: none; }
-.pw-primary-tools > button { width: 44px; min-width: 44px; height: 44px; }
-.pw-redesign .pw-conversation-context.button-press-motion { width: 100%; height: auto; min-height: 44px; padding: 2px 6px; }
-.pw-conversation-context.button-press-motion > span { display: flex; flex-direction: column; align-items: center; gap: 0; width: 100%; min-width: 0; padding: 0; }
-.pw-drawer-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 16px max(16px,env(safe-area-inset-bottom,0px)); background: var(--pw-surface); box-shadow: 0 -6px 18px -16px rgb(0 0 0 / 18%); }
-.pw-drawer-actions > button { min-height: 44px; min-width: 0; }
-.pw-attachment-drawer > .pw-drawer-body, .pw-model-drawer > .pw-drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-.pw-attachment-drawer .pw-attachment-objects { min-width: 0; }
-.pw-attachment-drawer .pw-attachment-object { padding: 10px 0; border: 0; }
-.pw-attachment-drawer .pw-attachment-copy { padding-inline: 2px 8px; }
-.pw-task-filter-options { max-width: 320px; }
-.pw-redesign .pw-depth-tasks { padding-top: 12px; }
-.pw-redesign .pw-depth-tasks .pw-task-results { gap: 24px; }
-.pw-redesign .pw-depth-tasks .pw-task-row.button-press-motion { min-height: 68px; }
-.pw-depth-tasks .pw-task-collection > h3 { margin-bottom: 8px; font-size: 13px; line-height: 20px; }
-.pw-projects-page .pw-project-tools { position: sticky; top: 0; z-index: 2; margin-block: 0 8px; padding-block: 8px; background: var(--pw-canvas); }
 @media (max-width: 719px) {
- .pw-redesign .pw-app-header { min-height: 56px; padding-block: 4px; }
- .pw-conversation-title { font-size: 15px; line-height: 22px; }
+ .pw-redesign .pw-app-header { min-height: 60px; padding-block: 6px; }
+ .pw-conversation-title { font-size: 16px; line-height: 23px; }
  .pw-conversation-model { font-size: 12px; line-height: 18px; }
  .pw-model-drawer .pw-drawer-actions > button { flex: 1 1 120px; }
  .pw-task-body { padding: 16px 16px 24px; }
+}
+@media (max-width: 359px) {
+ .pw-redesign .pw-depth-tasks { padding-inline: 16px; }
+ .pw-redesign .pw-conversation-work { padding-inline: 16px; }
+ .pw-task-status-filters { gap: 0; }
 }

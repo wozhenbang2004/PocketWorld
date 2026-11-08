@@ -14,16 +14,15 @@ const taskState = (value: string) => ({ awaiting_user: '等待确认输入', run
 const unknownReceipt = (receipt: Data) => !receipt.status || ['unknown', 'prepared', 'submitting', 'not_found', 'host_receipt_unavailable'].includes(receipt.status);
 const inputText = (input: Data) => input.prompt || input.text || (input.workflow ? JSON.stringify(input.workflow, null, 2) : '原输入暂不可读取');
 
-/** BoardUI source controls and the retained attachment-row composition, with
- * OpenMuse LinkRow's title/detail/chevron hierarchy (61796eb2, ui.tsx:368).
- * Only presentation changes; the native media owner holds every operation. */
+/** BoardUI source controls and the retained attachment-row composition.
+ * The native media owner holds every operation and exact source identity. */
 export function MediaWorkspace({ state, run, registerTransientBack }: { state: Data; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void }) {
   const [snapshot, setSnapshot] = useState<Data>({}), [snapshotReady, setSnapshotReady] = useState(false);
   const [reading, setReading] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null);
   const [settings, setSettings] = useState<Data | null>(null), [settingsOpen, setSettingsOpen] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false), [busy, setBusy] = useState(false), [panel, setPanel] = useState<Panel>('library');
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [kind, setKind] = useState('image'), [text, setText] = useState(''), [graph, setGraph] = useState('');
-  const [imageId, setImageId] = useState(''), [maskId, setMaskId] = useState(''), [observe, setObserve] = useState(true);
+  const [imageId, setImageId] = useState(''), [maskId, setMaskId] = useState(''), [observe, setObserve] = useState(true), [mediaFilter, setMediaFilter] = useState('all');
   const [preparedTask, setPreparedTask] = useState(''), [submittedTask, setSubmittedTask] = useState(''), [submissionUnknown, setSubmissionUnknown] = useState(false);
   const acknowledgement = useRef(false);
   const alive = useRef(true), pending = useRef(false), generation = useRef(0), selected = useRef<Data | null>(null), reviewRef = useRef<Data | null>(null);
@@ -143,8 +142,11 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
   }, [presentation, busy]);
 
   const mediaTasks = rows(state.tasks).filter(task => object(task.raw).feature === 'media' || object(object(task.raw).nativeEventTypeFlags).media_owner_prepared === true || rows(object(task.raw).events).some(event => event.type === 'media_owner_prepared'));
-  const mediaWaiting = mediaTasks.filter(task => ['awaiting_user', 'needs_confirmation', 'reconciling'].includes(task.status)).length;
-  const mediaRunning = mediaTasks.filter(task => ['running', 'preparing'].includes(task.status)).length;
+  const mediaNeedsReview = (task: Data) => ['awaiting_user', 'needs_confirmation', 'reconciling'].includes(task.status);
+  const mediaIsRunning = (task: Data) => ['running', 'preparing', 'queued'].includes(task.status);
+  const mediaEnded = (task: Data) => ['completed', 'failed', 'cancelled', 'stopped'].includes(task.status);
+  const visibleMedia = mediaTasks.filter(task => mediaFilter==='all'||mediaFilter==='review'&&mediaNeedsReview(task)||mediaFilter==='running'&&mediaIsRunning(task)||mediaFilter==='ended'&&mediaEnded(task));
+  const mediaGroups = [{id:'review',label:'待你核对',items:visibleMedia.filter(mediaNeedsReview)},{id:'running',label:'正在处理',items:visibleMedia.filter(mediaIsRunning)},{id:'records',label:'其他记录',items:visibleMedia.filter(task=>!mediaNeedsReview(task)&&!mediaIsRunning(task))}];
   const images = rows(object(object(state.features).attachments).attachments).filter(file => ['image/png', 'image/jpeg', 'image/webp'].includes(file.mimeType) && file.size > 0 && file.size <= 4 * 1024 * 1024);
   const kindOptions = [{ id: 'image', label: '生成图片' }, ...(comfy ? [{ id: 'workflow', label: '运行 ComfyUI API 图' }, ...(config.hasVideoWorkflow ? [{ id: 'video', label: '生成视频' }] : [])] : [{ id: 'speech', label: '生成语音文件' }, ...(snapshot.imageEditingSupported ? [{ id: 'edit', label: '编辑原图' }] : [])])];
   const kindAvailable = kindOptions.some(option => option.id === kind);
@@ -221,9 +223,9 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
     {submittedTask && <div className="pw-media-submission" role={submissionUnknown ? 'status' : undefined}><div><strong>{submissionUnknown ? '原提交回执尚待核对' : '本次提交保留在原任务中'}</strong><p>{submissionUnknown ? '先读取同一原任务，不会自动重发，也不代表服务未收到。' : '受理不代表生成完成，产物和实际效果请在原任务核对。'}</p><small>原任务 · {submittedTask}</small></div><Button variant="secondary" disabled={busy} onClick={() => readTask(submittedTask)}>核对刚才的原提交</Button></div>}
 
     <div data-media-panel="library" hidden={panel !== 'library'}>
-      {mediaTasks.length > 0 && <div className="pw-media-paper-overview" aria-label="当前已读媒体记录概览"><div><span>当前记录</span><strong>{mediaTasks.length}</strong></div><div><span>待你核对</span><strong>{mediaWaiting}</strong></div><div><span>正在处理</span><strong>{mediaRunning}</strong></div></div>}
       <div className="pw-media-section-heading"><h3 tabIndex={-1} data-media-heading>原媒体任务</h3><Button variant="ghost" size="small" leadingIcon={RefreshCw} disabled={busy} onClick={refresh}>刷新原记录</Button></div>
-      {mediaTasks.length ? <div className="pw-media-task-list">{mediaTasks.map(task => <Button key={task.id} variant="ghost" className="pw-media-task-row" leadingIcon={Image} trailingIcon={ChevronRight} disabled={busy} aria-label={'查看原媒体任务：' + (task.goal || task.id)} onClick={() => readTask(task.id)}><span className="pw-media-row-copy"><strong>{task.goal || '未命名媒体任务'}</strong><small>{taskState(task.status)}</small>{task.summary && <span className="pw-media-row-summary">{task.summary}</span>}</span></Button>)}</div> : <div className="pw-media-empty"><Image size={24} aria-hidden /><h3>尚无媒体任务</h3><p>输入会先保存为任务，确认后再发送到服务。</p><Button variant="secondary" leadingIcon={ArrowRight} disabled={busy} onClick={openCreate}>准备第一份创作</Button></div>}
+      {mediaTasks.length>0&&<div className="pw-media-filters" role="group" aria-label="媒体任务筛选">{[{id:'all',label:'全部'},{id:'review',label:'待核对'},{id:'running',label:'处理中'},{id:'ended',label:'已结束'}].map(option=><Button key={option.id} variant="ghost" aria-pressed={mediaFilter===option.id} onClick={()=>setMediaFilter(option.id)}>{option.label}</Button>)}</div>}
+      {mediaTasks.length ? <div className="pw-media-task-list">{mediaGroups.filter(group=>group.items.length>0).map(group=><section className="pw-media-task-group" key={group.id} aria-label={group.label}><h4>{group.label}<span>{group.items.length}</span></h4>{group.items.map(task => <Button key={task.id} variant="ghost" className="pw-media-task-row" leadingIcon={Image} trailingIcon={ChevronRight} disabled={busy} aria-label={'查看原媒体任务：' + (task.goal || task.id)} onClick={() => readTask(task.id)}><span className="pw-media-row-copy"><strong>{task.goal || '未命名媒体任务'}</strong><small>{taskState(task.status)}</small>{task.summary && <span className="pw-media-row-summary">{task.summary}</span>}</span></Button>)}</section>)}{!visibleMedia.length&&<p className="pw-media-note" role="status">当前已读记录中没有这类媒体任务。</p>}</div> : <div className="pw-media-empty"><Image size={24} aria-hidden /><h3>尚无媒体任务</h3><p>输入会先保存为任务，确认后再发送到服务。</p><Button variant="secondary" leadingIcon={ArrowRight} disabled={busy} onClick={openCreate}>准备第一份创作</Button></div>}
       {preparedTask && !mediaTasks.some(task => task.id === preparedTask) && preparedTask !== submittedTask && <Button variant="ghost" className="pw-media-task-row" leadingIcon={File} trailingIcon={ChevronRight} disabled={busy} onClick={() => readTask(preparedTask)}><span className="pw-media-row-copy"><strong>已准备的原输入</strong><small>原任务 · {preparedTask} · 尚待核对提交</small></span></Button>}
     </div>
 

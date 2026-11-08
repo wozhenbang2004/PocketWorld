@@ -41,7 +41,7 @@ function fixture(component = 'ConnectionWorkspace', supplied: any = {}) {
     if (action === 'ssh.confirmOperation') return new Promise(resolve => deferred.push(resolve));
     return Promise.resolve({ status: 'completed' });
   };
-  const names = ['Accordion', 'AccordionItem', 'Button', 'CheckboxField', 'SelectField', 'SettingsDialog', 'TextAreaField', 'TextField', 'TerminalSurface', 'RemoteProjectBaseline', 'RemoteInputFlow', 'HarnessEvidence', 'ArrowLeft', 'ArrowUp', 'ChevronRight', 'FileText', 'Folder', 'History', 'Monitor', 'Plus', 'Server', 'ShieldCheck', 'Terminal', 'Wrench'];
+  const names = ['Accordion', 'AccordionItem', 'Button', 'CheckboxField', 'SearchField', 'SelectField', 'SettingsDialog', 'TextAreaField', 'TextField', 'TerminalSurface', 'RemoteProjectBaseline', 'RemoteInputFlow', 'HarnessEvidence', 'ArrowLeft', 'ArrowUp', 'ChevronRight', 'FileText', 'Folder', 'History', 'Monitor', 'Plus', 'Server', 'ShieldCheck', 'Terminal', 'Wrench'];
   const components = new Function('h', 'Fragment', 'useState', 'useRef', 'useEffect', 'useLayoutEffect', 'useDataSettingsJourney', 'bridge', 'document', 'window', ...Object.keys(harnessCapabilities), ...names, code + ';return { ConnectionWorkspace, SshWork, RemoteWork };')(
     h, 'Fragment', useState, useRef, useEffect, useEffect, useDataSettingsJourney, bridge, document, window, ...Object.values(harnessCapabilities), ...names,
   );

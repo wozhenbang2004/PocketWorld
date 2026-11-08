@@ -50,3 +50,46 @@
  .pw-skill-workspace .pw-affect-library-detail{padding:16px;gap:10px}
 }
 .pw-skill-workspace .pw-affect-library-detail footer > button { min-height: 44px; }
+
+/* PocketWorld Paper / Graphite directory pass. Preserve the Affect reader and
+ * native review controls while grouping installations by their real state. */
+.pw-ecosystem-depth { font-size: 16px; line-height: 1.75; }
+.pw-ecosystem-depth :is(button, [role=tab]) { min-height: 48px; }
+.pw-ecosystem-depth .pw-eco-workspace-heading { align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+.pw-ecosystem-depth .pw-eco-workspace-heading > div:first-child { min-width: 0; flex: 1 1 auto; }
+.pw-ecosystem-depth .pw-eco-workspace-heading > .pw-form-actions { flex: 0 1 auto; margin: 0; }
+.pw-ecosystem-depth .pw-eco-workspace-heading button[aria-label] { min-width: 48px; }
+.pw-ecosystem-depth :is(.pw-eco-object-heading h3, .pw-skill-detail h2) { font-size: 20px; line-height: 29px; font-weight: 600; }
+.pw-ecosystem-depth :is(.pw-eco-object-heading p, .pw-eco-tool p, .pw-skill-document .pw-markdown) { font-size: 16px; line-height: 1.8; }
+.pw-ecosystem-depth :is(.pw-field-hint, .pw-muted, .pw-eco-state, .pw-eco-record-meta, .pw-eco-record > header > span, .pw-eco-status-strip dt, .pw-eco-status-strip dd, .pw-eco-facts dt, .pw-eco-facts dd) { font-size: 13px; line-height: 22px; }
+.pw-ecosystem-depth .pw-eco-record > header { gap: 10px; align-items: baseline; }
+.pw-ecosystem-depth .pw-eco-record > header h3 { font-size: 16px; line-height: 25px; font-weight: 600; }
+.pw-ecosystem-depth .pw-eco-record > header > span { max-width: 50%; }
+.pw-eco-directory-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; }
+.pw-eco-filters { display: flex; gap: 6px; max-width: 100%; overflow-x: auto; scrollbar-width: none; overscroll-behavior-inline: contain; margin: 8px 0 12px; }
+.pw-eco-filters > button { flex: none; padding: 10px 14px; font-size: 13px; border-radius: 12px; color: var(--pw-copy); }
+.pw-eco-filters > button[aria-pressed=true] { background: var(--pw-selected); color: var(--pw-ink); }
+.pw-eco-filters > button > span { display: flex; gap: 7px; }
+.pw-eco-filters > button span[aria-hidden] { font-variant-numeric: tabular-nums; color: var(--pw-copy); }
+.pw-eco-directory-toolbar > .pw-skill-batch-toggle { font-size: 13px; padding-inline: 8px; margin-left: auto; }
+.pw-eco-directory-group { margin: 20px 0 28px; min-width: 0; }
+.pw-eco-group-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+.pw-eco-group-heading > h3, .pw-eco-group-heading > span { margin: 0; color: var(--pw-copy); font-size: 13px; line-height: 22px; }
+.pw-eco-group-heading > h3 { font-weight: 600; }
+.pw-ecosystem-depth .pw-eco-directory-group > .pw-eco-record { border: 0; padding: 16px 0; }
+.pw-ecosystem-depth .pw-eco-directory-group > .pw-eco-record + .pw-eco-record { border-top: 1px solid var(--pw-hairline); }
+.pw-eco-directory-empty { margin: 16px 0; font-size: 14px; color: var(--pw-copy); }
+.pw-ecosystem-depth .pw-eco-pending-file { margin: 0 0 24px; padding: 16px; background: var(--pw-inset); border: 0; border-radius: 12px; }
+.pw-ecosystem-depth .pw-eco-pending-file h3 { font-size: 16px; line-height: 25px; font-weight: 600; }
+.pw-ecosystem-depth .pw-eco-pending-file p { font-size: 16px; line-height: 26px; }
+.pw-ecosystem-depth .pw-eco-plugin-detail { padding: 20px 0 0; background: transparent; border-top: 1px solid var(--pw-hairline); border-radius: 0; }
+.pw-skill-workspace .pw-affect-library-entry > button { min-height: 72px; padding: 14px 10px; }
+.pw-skill-workspace .pw-affect-library-entry > button strong { font-size: 16px; line-height: 25px; font-weight: 600; }
+.pw-skill-workspace .pw-affect-library-entry > button :is(small, .pw-affect-tag) { font-size: 13px; line-height: 22px; }
+.pw-skill-workspace .pw-affect-library-detail { padding: 20px 0; background: transparent; border-radius: 0; border-top: 1px solid var(--pw-hairline); }
+.pw-skill-workspace .pw-affect-library-detail > p { font-size: 16px; line-height: 1.8; }
+.pw-skill-workspace .pw-affect-library-heading h3 { font-size: 18px; line-height: 27px; font-weight: 600; }
+.pw-skill-workspace :is(.pw-affect-library-heading > span, .pw-affect-library-facts dt, .pw-affect-library-facts dd) { font-size: 13px; line-height: 22px; }
+.pw-skill-workspace .pw-affect-library-detail footer > button { min-height: 48px; }
+.pw-skill-workspace .pw-eco-reading-main .pw-skill-document { padding: 0; background: transparent; border-radius: 0; }
+@media (min-width: 761px) { .pw-skill-workspace .pw-affect-library-detail { border-top: 0; border-left: 1px solid var(--pw-hairline); padding: 16px 0 16px 24px; } }
