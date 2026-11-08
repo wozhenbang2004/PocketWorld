@@ -6,6 +6,7 @@ import argparse
 import base64
 import contextlib
 import concurrent.futures
+import copy
 import ctypes
 import hashlib
 import http.client
@@ -30,6 +31,9 @@ PART_BYTES = 16 * 1024 * 1024
 APP_PATHS = ("app/src/main", "app/src/pendingAdb/java", "app/build.gradle", "app/gradle.lockfile", "web-ui", "display-helper",
              "third-party", "gradle", "gradle.lockfile", "gradle.properties", "build.gradle", "settings.gradle",
              ":(glob)tools/build*", ":(glob)tools/*runtime*")
+PYTHON_CHECK_FILES = tuple("tools/tests/" + name + ".py" for name in (
+    "test_app_version", "test_apk_workflow_paths", "test_packaged_web_receipt", "test_update_artifact_preflight",
+    "test_update_release_bundle", "test_update_manifest_signing", "test_windows_release", "test_release_orchestrator"))
 
 
 class ReleaseError(RuntimeError):
@@ -137,9 +141,12 @@ class Runner:
             # Node 24 fetch opts into these existing proxy settings at startup.
             self.env["NODE_USE_ENV_PROXY"] = "1"
 
-    def command(self, command, cwd=None, capture=False, input_text=None, check=True):
+    def command(self, command, cwd=None, capture=False, input_text=None, check=True, log_name=None):
         if self.directory:
             Path(self.env["TEMP"]).mkdir(parents=True, exist_ok=True)
+        separate_log = owned(self.directory / log_name, self.directory) if log_name else None
+        if separate_log:
+            separate_log.write_text("", encoding="utf-8")
         lines = []
         with subprocess.Popen(list(map(str, command)), cwd=cwd or self.repo, env=self.env,
                               stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
@@ -157,6 +164,9 @@ class Runner:
                 if self.directory:
                     with (self.directory / "commands.log").open("a", encoding="utf-8") as log:
                         log.write(safe + "\n")
+                if separate_log:
+                    with separate_log.open("a", encoding="utf-8") as log:
+                        log.write(safe + "\n")
             code = process.wait()
         if check and code:
             if capture:
@@ -172,7 +182,7 @@ class Runner:
         return self.command([self.c["python"], "-B", self.repo / "tools/windows-release.py",
                              "--repo", self.repo, "--java-home", self.c["java_home"],
                              "--build-tools", self.c["build_tools"], "--temp-dir", self.env["TEMP"],
-                             "--openssl", self.c["openssl"], name, *args])
+                             "--openssl", self.c["openssl"], name, *args], capture=True)
 
     def build(self, version, targets):
         # All variable data travels as JSON stdin; it never becomes shell source.
@@ -409,6 +419,156 @@ def check_host_xml(directory):
     return count
 
 
+def python_validation_inputs(runner):
+    files = (*PYTHON_CHECK_FILES, "tools/app-version.py", "tools/release.py", "tools/release.config.example.json",
+             "tools/windows-release.py", "tools/apk-delta.py", "tools/apk-delta", "third-party/archive-patcher",
+             "tools/inspect-update-artifacts.py", "tools/prepare-update-release.py", "tools/sign-update-manifest.py",
+             "tools/verify-update-host.py", "tools/ci/verify-web-ui.py", "tools/tests/fixtures/apk-build-paths.json",
+             ".github/workflows/build-apk.yml", "gradle.properties", "app/build.gradle",
+             "app/src/main/java/dev/pocketengine/features/updates/UpdateManifest.java",
+             "app/src/main/java/dev/pocketengine/features/updates/ApkDelta.java",
+             "app/src/main/java/dev/pocketengine/features/updates/UpdateDownloads.java")
+    return [runner.repo / name for name in files] + [Path(runner.c["build_script"])] + [Path(name) for name in runner.c["org_json_classpath"].split(os.pathsep)]
+
+
+def validation_environment(runner):
+    # Hash relevant environment in memory only. Dynamic external Python/Node code
+    # injection has no bounded dependency inventory, so it cannot use this cache.
+    if any(runner.env.get(name) for name in ("PYTHONPATH", "PYTHONHOME", "NODE_PATH", "NODE_OPTIONS")):
+        return None
+    if any(value in runner.env.get("JAVA_TOOL_OPTIONS", "") for value in ("javaagent", "agentpath", "bootclasspath")):
+        return None
+
+    def normalize(value):
+        for path, replacement in ((runner.env.get("TEMP"), "<RUN_TEMP>"), (str(runner.directory), "<RUN>")):
+            if path:
+                value = value.replace(path, replacement).replace(path.replace("\\", "/"), replacement)
+        return value
+
+    prefixes = ("PYTHON", "NODE", "NPM_CONFIG_", "JAVA", "JDK", "_JAVA", "GIT_", "OPENSSL", "LC_")
+    names = {"PATH", "PATHEXT", "OS", "PROCESSOR_ARCHITECTURE", "LANG", "TZ", "CI", "HOME", "USERPROFILE",
+             "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"}
+    environment = {name.upper(): normalize(value) for name, value in runner.env.items()
+                   if name.upper().startswith(prefixes) or name.upper() in names}
+    tools = [(runner.c["python"], "--version"), (runner.c["node"], "--version"),
+             (runner.c["openssl"], "version"), (runner.c.get("git", "git"), "--version")]
+    suffix = ".exe" if os.name == "nt" else ""
+    tools += [(str(Path(runner.c["java_home"]) / "bin" / (name + suffix)), "-version") for name in ("java", "javac")]
+    # JVM version banners can echo environment options. Hash them in memory,
+    # rather than putting potentially sensitive option values in command logs.
+    metadata = copy.copy(runner)
+    metadata.directory = None
+    Path(runner.env["TEMP"]).mkdir(parents=True, exist_ok=True)
+    versions = []
+    for executable, option in tools:
+        path = Path(shutil.which(executable, path=runner.env.get("PATH")) or executable).resolve()
+        if not path.is_file():
+            return None
+        code, output = metadata.command([path, option], capture=True, check=False)
+        if code or not output.strip() or len(output) > 4096:
+            return None
+        versions.append((str(path), digest(path), normalize(output)))
+    return hashlib.sha256(json.dumps([environment, versions], sort_keys=True).encode()).hexdigest()
+
+
+def python_validation_key(runner):
+    try:
+        paths = set()
+        for root in python_validation_inputs(runner):
+            if not root.exists() or root.is_symlink() or root.is_junction():
+                return None
+            for path in ([root] if root.is_file() else root.rglob("*")):
+                if path.is_symlink() or path.is_junction():
+                    return None
+                if path.is_file():
+                    paths.add(path.resolve())
+        files = []
+        for path in sorted(paths):
+            before = path.stat()
+            value = digest(path)
+            after = path.stat()
+            if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                return None
+            files.append((str(path), after.st_size, value))
+        environment = validation_environment(runner)
+        code, tracked = runner.git("ls-files", "-z", "--", "app/src/main", "app/src/pendingAdb/java", "display-helper/src", "gradle", check=False)
+        if environment is None or code:
+            return None
+        configuration = {key: runner.c.get(key) for key in ("python", "node", "npm_cli", "java_home", "openssl", "build_tools",
+                          "git", "org_json_classpath", "build_script", "apk_signer_sha256", "public_pin_sha256", "origin",
+                          "manifest_path", "package_name", "version_prefix", "minimum_version", "host_test_groups", "upload_concurrency")}
+        data = [1, files, environment, configuration, tracked, PYTHON_CHECK_FILES]
+        return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
+    except (OSError, ValueError, TypeError, KeyError, ReleaseError):
+        return None
+
+
+def validation_count(kind, code, output):
+    if kind == "python":
+        summary = re.search(r"(?m)^-{5,}\r?\nRan (\d+) tests? in [0-9]+(?:\.[0-9]+)?s\r?\n\r?\nOK[ \t]*(?:\r?\n)*\Z", output)
+        if code or not summary or int(summary[1]) < 1:
+            final = re.search(r"(?m)^-{5,}\r?\nRan (\d+) tests? in [0-9]+(?:\.[0-9]+)?s\r?\n\r?\n(OK(?: \([^\r\n]{1,160}\))?|FAILED(?: \([^\r\n]{1,160}\))?)[ \t]*(?:\r?\n)*\Z", output)
+            detail = final[1] + " 项；" + final[2] if final else "缺少有效最终汇总"
+            raise ReleaseError("Python 检查失败（退出码 " + str(code) + "；" + detail + "）。")
+        return int(summary[1])
+    if kind != "web":
+        raise ReleaseError("未知发布检查。")
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", output)
+    counts = {key: re.findall(r"(?m)^[#\u2139]\s*" + key + r"\s+(\d+)\s*$", plain) for key in ("tests", "fail", "cancelled", "skipped")}
+    if code or not counts["tests"] or int(counts["tests"][-1]) < 1 or any(not counts[key] or int(counts[key][-1]) for key in ("fail", "cancelled", "skipped")):
+        detail = "，".join(key + "=" + values[-1] for key, values in counts.items() if values)
+        raise ReleaseError("Web 检查失败（退出码 " + str(code) + "；" + (detail or "缺少有效最终汇总") + "）。")
+    return int(counts["tests"][-1])
+
+
+def run_validation(runner, kind, head):
+    if kind not in ("web", "python"):
+        raise ReleaseError("未知发布检查。")
+    # Hashing 20,670 installed Web dependency files took 15.34s locally versus
+    # about 5s for the tests. Run those tests rather than trust an install marker.
+    key = python_validation_key(runner) if kind == "python" else None
+    cache = Path(runner.c["cache_root"]) / "release-validation/python.json"
+    log = runner.directory / (kind + "-checks.log")
+    if key:
+        if source_state(runner) != head:
+            raise ReleaseError("检查前源码已变化。")
+        try:
+            if not cache.is_file() or cache.is_symlink() or cache.stat().st_size > 64 * 1024:
+                raise ValueError("Unknown check cache")
+            record = read_json(cache)
+            if not isinstance(record, dict):
+                raise ValueError("Unknown check cache")
+            proof = owned(record["log"], runner.c["work_root"])
+            if type(record.get("schema")) is int and record["schema"] == 1 and record.get("status") == "passed" and record.get("key") == key \
+                    and type(record.get("tests")) is int and record["tests"] > 0 and type(record.get("skipped")) is int and record["skipped"] == 0 \
+                    and proof.name == "python-checks.log" and not proof.is_symlink() and 0 < proof.stat().st_size <= 16 * 1024 * 1024 \
+                    and digest(proof) == record.get("logSha256") and validation_count(kind, 0, proof.read_text(encoding="utf-8")) == record["tests"]:
+                if python_validation_key(runner) != key or source_state(runner) != head:
+                    raise ReleaseError("复用检查时输入或源码已变化。")
+                print("Python 检查复用通过记录（" + str(record["tests"]) + " 项）；日志：" + str(proof), flush=True)
+                return record["tests"]
+        except (OSError, ValueError, TypeError, KeyError, ReleaseError):
+            pass
+    command = [runner.c["node"], runner.c["npm_cli"], "test"] if kind == "web" else [runner.c["python"], "-B", "-m", "unittest", "-v", *PYTHON_CHECK_FILES]
+    print(("Web" if kind == "web" else "Python") + " 检查运行中；完整日志：" + str(log), flush=True)
+    code, output = runner.command(command, cwd=runner.repo / "web-ui" if kind == "web" else runner.repo,
+                                  capture=True, check=False, log_name=log.name)
+    log.write_text(output + "\n", encoding="utf-8")
+    try:
+        count = validation_count(kind, code, output)
+    except ReleaseError as error:
+        print(str(error) + " 日志：" + str(log), flush=True)
+        raise ReleaseError(str(error) + " 日志：" + str(log)) from None
+    if key:
+        if python_validation_key(runner) != key or source_state(runner) != head:
+            raise ReleaseError("检查期间输入或源码变化，没有保存通过缓存。")
+        owned(log, runner.c["work_root"])
+        write_json(cache, {"schema": 1, "key": key, "status": "passed", "tests": count, "skipped": 0,
+                          "log": str(log), "logSha256": digest(log), "sourceCommit": head})
+    print(("Web" if kind == "web" else "Python") + " 检查通过（" + str(count) + " 项）；日志：" + str(log), flush=True)
+    return count
+
+
 def make_bundle(runner, head, version, base_apk):
     c, run = runner.c, runner.directory
     runner.env["GITHUB_SHA"] = head
@@ -417,29 +577,12 @@ def make_bundle(runner, head, version, base_apk):
     if not (web / "node_modules").is_dir() or not (Path(c["cache_root"]) / "release-web-lock.sha256").is_file() or (Path(c["cache_root"]) / "release-web-lock.sha256").read_text().strip() != digest(lock):
         runner.command([c["node"], c["npm_cli"], "ci"], cwd=web)
         (Path(c["cache_root"]) / "release-web-lock.sha256").write_text(digest(lock))
-    _, web_tests = runner.command([c["node"], c["npm_cli"], "test"], cwd=web, capture=True)
-    for line in web_tests.splitlines():
-        print(line, flush=True)
-    plain = re.sub(r"\x1b\[[0-9;]*m", "", web_tests)
-    counts = {key: re.findall(r"(?m)^[#\u2139]\s*" + key + r"\s+(\d+)\s*$", plain)
-              for key in ("tests", "fail", "cancelled", "skipped")}
-    if not counts["tests"] or int(counts["tests"][-1]) < 1 or any(not counts[key] or int(counts[key][-1]) for key in ("fail", "cancelled", "skipped")):
-        raise ReleaseError("Web 测试没有有效的零失败、零跳过结果。")
+    run_validation(runner, "web", head)
     runner.command([c["node"], c["npm_cli"], "run", "build"], cwd=web)
     identity = read_json(runner.repo / "app/src/main/assets/pocket-ui/build-identity.json")
     if identity.get("sourceRevision") != head:
         raise ReleaseError("Web 资产没有对应当前源码。")
-    _, python_tests = runner.command([c["python"], "-B", "-m", "unittest", "-v", "tools/tests/test_app_version.py",
-                    "tools/tests/test_apk_workflow_paths.py", "tools/tests/test_packaged_web_receipt.py",
-                    "tools/tests/test_update_artifact_preflight.py", "tools/tests/test_update_release_bundle.py",
-                    "tools/tests/test_update_manifest_signing.py", "tools/tests/test_windows_release.py",
-                    "tools/tests/test_release_orchestrator.py"], capture=True)
-    print(python_tests, flush=True)
-    # Fixture stdout may contain its own skipped/FAILED samples. Only the final
-    # unittest summary is authoritative; bare OK also excludes actual skip/fail counts.
-    summary = re.search(r"(?m)^-{5,}\r?\nRan (\d+) tests? in [0-9]+(?:\.[0-9]+)?s\r?\n\r?\nOK[ \t]*(?:\r?\n)*\Z", python_tests)
-    if not summary or int(summary[1]) < 1:
-        raise ReleaseError("Python 发布检查没有有效的正测试数、零失败和零跳过最终汇总。")
+    run_validation(runner, "python", head)
     host = run / "host-tests"
     targets = [":app:testDebugUnitTest", ":app:assembleDebug", "-PpocketworldHostTests=" + c["host_test_groups"],
                "-PpocketworldHostReport=" + host.as_posix(), "--no-daemon", "--stacktrace", "-Dorg.gradle.jvmargs=-Xmx1024m -Dfile.encoding=UTF-8"]
@@ -473,16 +616,6 @@ def make_bundle(runner, head, version, base_apk):
     plan = read_json(bundle / "release-plan.json")
     if plan["manifestUrl"] != c["origin"] + c["manifest_path"]:
         raise ReleaseError("APK 更新地址与上传目标不一致。")
-    if plan.get("inefficientDeltaOmitted"):
-        meta = proof["delta"]
-        relative = "artifacts/" + meta["sha256"] + "/from-" + str(proof["base"]["versionCode"]) + "-to-" + str(version) + ".patch.gz"
-        destination = owned(bundle / relative, bundle)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with patch.open("rb") as source, destination.open("xb") as output:
-            shutil.copyfileobj(source, output)
-        plan["artifactUploads"].append({"file": relative, "url": c["origin"] + "/" + relative,
-                                       "sha256": meta["sha256"], "bytes": meta["bytes"], "contentType": "application/gzip"})
-        write_json(bundle / "release-plan.json", plan)
     runner.tool("sign", "--payload", bundle / "unsigned-payload.json", "--private-key", c["manifest_private_key"],
                 "--public-key", c["manifest_public_key"], "--output", bundle / "release.json")
     runner.tool("verify-envelope", "--envelope", bundle / "release.json", "--classpath", c["org_json_classpath"],

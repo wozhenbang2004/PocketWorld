@@ -95,6 +95,23 @@ class WindowsReleaseTest(unittest.TestCase):
         self.assertEqual(old_temp, tempfile.tempdir)
         self.assertEqual(before, {name: os.environ.get(name) for name in before})
 
+    def test_environment_replaces_parent_java_temp_once_and_preserves_other_options(self):
+        parent = '-Dhttp.proxyHost=127.0.0.1 -Djava.io.tmpdir="E:/old scratch" -Xmx256m -Duser.note="two words" -Duser.literal="keep -Djava.io.tmpdir=literal" -Djava.io.tmpdir=E:/stale'
+        with mock.patch.dict(os.environ, {"JAVA_TOOL_OPTIONS": parent}):
+            with self.runtime.environment():
+                options = os.environ["JAVA_TOOL_OPTIONS"]
+                self.assertEqual('-Dhttp.proxyHost=127.0.0.1 -Xmx256m -Duser.note="two words" '
+                                 '-Duser.literal="keep -Djava.io.tmpdir=literal" -Djava.io.tmpdir="'
+                                 + self.runtime.temp_dir.as_posix() + '"', options)
+                self.assertIn(self.runtime.temp_dir.as_posix(), options)
+                self.assertIn('-Dhttp.proxyHost=127.0.0.1', options)
+                self.assertIn('-Xmx256m', options)
+                self.assertIn('-Duser.note="two words"', options)
+                self.assertIn('-Duser.literal="keep -Djava.io.tmpdir=literal"', options)
+                self.assertNotIn("E:/old scratch", options)
+                self.assertNotIn("E:/stale", options)
+            self.assertEqual(parent, os.environ["JAVA_TOOL_OPTIONS"])
+
     def test_original_pinned_sources_and_generator_are_not_replaced(self):
         module = self.runtime.existing("apk-delta")
         sources = module.verify_sources()

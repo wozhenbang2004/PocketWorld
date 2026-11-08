@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "kind": "exact-npm-package-license-inspection",
+  "package": "client-only",
+  "version": "0.0.1",
+  "declared_license": "MIT",
+  "registry_url": "https://registry.npmjs.org/client-only/0.0.1",
+  "registry_sha256": "8acb6bcedb32e69c38d9d6377e521ee757beb95161b7a6258fa38bf867b9588a",
+  "tarball_url": "https://registry.npmjs.org/client-only/-/client-only-0.0.1.tgz",
+  "archive": {
+    "file": "client-only-0.0.1.tgz",
+    "bytes": 481,
+    "sha1": "38bba5d403c41ab150bff64a95c85013cf73bca1",
+    "sha256": "dcd7bc3868e2d3518d08944559952e4a68f581d89a84b6892de9fd8f40860b19",
+    "integrity": "sha512-IV3Ou0jSMzZrd3pZ48nLkT9DA7Ag1pnPzaiQhpW7c3RbcqqzvzzVu+L8gfqMp/8IM2MQtSiqaCxrrcfu8I8rMA=="
+  },
+  "files": [
+    {
+      "path": "error.js",
+      "bytes": 144,
+      "sha256": "7d211552731db17e1ff8635eea0970ef57ecc91b04b95536b9fa5abbfafaec26"
+    },
+    {
+      "path": "index.js",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "package.json",
+      "bytes": 467,
+      "sha256": "4d6342705767832f299b9a59c28e4275bcf02db19472732f93f67d979441df8f"
+    }
+  ],
+  "installed_files_match_archive": true,
+  "package_json_sha256": "4d6342705767832f299b9a59c28e4275bcf02db19472732f93f67d979441df8f",
+  "publisher": "sebmarkbage",
+  "registry_git_head": null,
+  "registry_repository": null,
+  "published_copyright_notice": null,
+  "published_license_text_files": [],
+  "notice_status": "unresolved",
+  "limitation": "MIT is declared, but this published archive supplies no copyright line or license body. Publisher identity and React homepage/bugs links do not establish ownership; do not substitute a React or Next.js root license."
+}

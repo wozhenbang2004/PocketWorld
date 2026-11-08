@@ -242,7 +242,22 @@
     {
       "package": "client-only",
       "version": "0.0.1",
-      "reason": "No exact official release identity/legal body established; retain missing."
+      "reason": "Exact official npm archive and installed bytes are established. This MIT-declared release supplies no copyright line or license body; no attributable upstream notice has been established. Retain missing rather than substituting a React or Next.js root license.",
+      "distribution_evidence": {
+        "file": "client-only-0.0.1/evidence/distribution.json",
+        "sha256": "e7ddd719e418d20d34af9baf42f07d6fbf20780d99ec5be8feb426c8928ed12e",
+        "source_url": "https://registry.npmjs.org/client-only/-/client-only-0.0.1.tgz"
+      },
+      "version_evidence": {
+        "file": "client-only-0.0.1/evidence/package.json",
+        "sha256": "4d6342705767832f299b9a59c28e4275bcf02db19472732f93f67d979441df8f",
+        "source_url": "https://registry.npmjs.org/client-only/-/client-only-0.0.1.tgz"
+      },
+      "registry_evidence": {
+        "file": "client-only-0.0.1/evidence/registry.json",
+        "sha256": "8acb6bcedb32e69c38d9d6377e521ee757beb95161b7a6258fa38bf867b9588a",
+        "source_url": "https://registry.npmjs.org/client-only/0.0.1"
+      }
     }
   ]
 }

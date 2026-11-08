@@ -78,7 +78,7 @@ async function prepare(entry) {
   try {
     bytes = await readFile(destination);
     verify(entry, bytes);
-    console.log(`[fonts] verified cache: ${entry.file}`);
+    if (process.argv.includes('--verbose')) console.log(`[fonts] verified cache: ${entry.file}`);
   } catch (error) {
     if (process.argv.includes('--verify-only')) throw new Error(`Bundled font unavailable or invalid: ${entry.file}`, { cause: error });
     console.log(`[fonts] downloading ${entry.file} (${entry.bytes} bytes)`);

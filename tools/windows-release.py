@@ -63,7 +63,9 @@ class Runtime:
                 os.environ[name] = str(self.temp_dir)
             tempfile.tempdir = str(self.temp_dir)
             temporary_option = '-Djava.io.tmpdir="' + self.temp_dir.as_posix() + '"'
-            os.environ["JAVA_TOOL_OPTIONS"] = (os.environ.get("JAVA_TOOL_OPTIONS", "") + " " + temporary_option).strip()
+            options = re.findall(r'''(?:[^\s"']+|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')+''', os.environ.get("JAVA_TOOL_OPTIONS", ""))
+            options = [option for option in options if not option.startswith("-Djava.io.tmpdir=")]
+            os.environ["JAVA_TOOL_OPTIONS"] = " ".join([*options, temporary_option])
             if self.java_home:
                 os.environ["JAVA_HOME"] = str(Path(self.java_home).resolve())
                 os.environ["PATH"] = str(Path(self.java_home).resolve() / "bin") + os.pathsep + os.environ.get("PATH", "")

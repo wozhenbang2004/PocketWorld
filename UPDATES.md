@@ -21,6 +21,26 @@ generates the Google BSDIFF43/GZIP delta, reconstructs and hashes the whole targ
 and signs the new manifest with the existing publisher RSA key. The original APK
 and manifest keys are never regenerated.
 
+Successful checks print one console summary rather than each test's output.
+Detailed Web and release-tool results are retained in the run's `web-checks.log`
+and `python-checks.log`, as well as `commands.log`; simulated uploads and failures
+from regression fixtures do not appear as real release operations.
+
+The fixed release-tool regression suite can reuse a local passed record in
+`cache_root/release-validation/python.json`. Reuse requires the same content
+fingerprint, check recipe, tools and relevant environment, plus the original
+untampered passing log and a clean source snapshot. Missing, corrupt, failed,
+zero-test or skipped results are rerun. Runtime APK signatures, hashes, delta
+reconstruction, upload checks and conditional activation are never replaced by
+this test cache. The complete tests remain independently runnable under
+`tools/tests`; this workflow does not start GitHub CI.
+
+Web tests still run for a newly prepared application batch and only their
+summary is printed. Locally, hashing all installed Web dependencies took 15.34
+seconds while the tests took about 5 seconds, so that cache would make release
+slower. Unchanged, already published application inputs and valid staged bundles
+are reused before reaching the build stages.
+
 With the configured proxy, Node 24 font downloads use the existing HTTP(S) proxy.
 Complete pinned fonts are cached on the project volume. Downloads show byte
 progress, allow 180 seconds without new data and at most 30 minutes overall,
@@ -34,8 +54,9 @@ assembled object through SHA-256 before marking it ready. The publisher checks
 the public HEAD length and a 64-byte Range against the local artifact, without
 downloading the whole APK or delta again. Only then does one conditional
 activation replace the ed896 manifest. The old stable channel and
-historical objects remain available. An inefficient delta is still retained and
-uploaded, but omitted from the App's delta choices so the full APK is used.
+historical objects remain available. A delta that is not smaller than the full
+APK remains in the local run evidence but is neither uploaded nor referenced by
+the manifest; clients use the full APK instead.
 If uploading fails after preparation, the next run with the same source reuses
 the signed bundle and reconciles existing parts instead of rebuilding it.
 
@@ -100,6 +121,13 @@ Legacy `uploaded_waiting_acceptance` records are also resumable by a normal run;
 they no longer require editing a QA file or a separate manual activation step.
 Already published, unchanged application inputs return `up_to_date` without a
 new build. Plan and readiness checks do not start builds or publication.
+
+The license inventory records one unresolved upstream omission:
+`client-only@0.0.1` declares MIT, but its exact npm archive has no license body or
+copyright notice. Exact registry, archive and installed-file evidence is retained
+under `web-ui/licenses/client-only-0.0.1/evidence`. The missing entry remains
+visible, and strict inventory mode still fails; no unrelated upstream license
+is substituted to manufacture a passing result.
 
 The application now has a Settings → 应用更新 entry. It checks a signed
 release manifest, announces an available version, downloads an exact-base delta

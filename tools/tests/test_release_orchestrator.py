@@ -198,6 +198,191 @@ class ParallelPublisherFixture(PublisherFixture):
 
 
 class ReleaseOrchestratorTest(unittest.TestCase):
+    def validation_runner(self):
+        runner = self.runner()
+        runner.directory = Path(self.c["work_root"]) / "check-run"
+        runner.directory.mkdir(exist_ok=True)
+        runner.command = mock.Mock(return_value=(0, "fixture FAILED sample; # skipped 1\n" + "-" * 70 + "\nRan 3 tests in 0.001s\n\nOK"))
+        return runner
+
+    def test_validation_pass_cache_is_quiet_and_rechecks_bad_records(self):
+        runner = self.validation_runner()
+        secret = "synthetic-secret-do-not-persist"
+        runner.env["HTTP_PROXY"] = "http://user:" + secret + "@proxy.invalid"
+        with mock.patch.object(RELEASE, "python_validation_key", return_value="a" * 64), \
+                mock.patch.object(RELEASE, "source_state", return_value=HEAD), \
+                mock.patch("sys.stdout", new=io.StringIO()) as console:
+            self.assertEqual(3, RELEASE.run_validation(runner, "python", HEAD))
+            self.assertEqual(3, RELEASE.run_validation(runner, "python", HEAD))
+            self.assertEqual(1, runner.command.call_count)
+            self.assertNotIn("fixture FAILED", console.getvalue())
+            self.assertIn("复用", console.getvalue())
+            cache = Path(self.c["cache_root"]) / "release-validation/python.json"
+            good = RELEASE.read_json(cache)
+            self.assertNotIn(secret, cache.read_text(encoding="utf-8"))
+            for field, value in (("status", "failed"), ("tests", 0), ("skipped", 1), ("key", "b" * 64), ("logSha256", "0" * 64)):
+                with self.subTest(field=field):
+                    RELEASE.write_json(cache, good | {field: value})
+                    runner.command.reset_mock()
+                    self.assertEqual(3, RELEASE.run_validation(runner, "python", HEAD))
+                    runner.command.assert_called_once()
+            cache.write_bytes(b"broken JSON")
+            runner.command.reset_mock()
+            RELEASE.run_validation(runner, "python", HEAD)
+            runner.command.assert_called_once()
+            with mock.patch.object(RELEASE, "python_validation_key", return_value=None):
+                runner.command.reset_mock()
+                RELEASE.run_validation(runner, "python", HEAD)
+                RELEASE.run_validation(runner, "python", HEAD)
+                self.assertEqual(2, runner.command.call_count)
+
+    def test_validation_failure_or_changing_inputs_never_creates_pass_cache(self):
+        runner = self.validation_runner()
+        cache = Path(self.c["cache_root"]) / "release-validation/python.json"
+        for output in ("Ran 0 tests in 0.001s\n\nOK", "Ran 3 tests in 0.001s\n\nOK (skipped=1)", "Ran 3 tests in 0.001s\n\nFAILED (errors=1)"):
+            with self.subTest(output=output), mock.patch.object(RELEASE, "python_validation_key", return_value="a" * 64), \
+                    mock.patch.object(RELEASE, "source_state", return_value=HEAD), mock.patch("sys.stdout", new=io.StringIO()) as console:
+                runner.command.return_value = 0, "-" * 70 + "\n" + output
+                with self.assertRaises(RELEASE.ReleaseError):
+                    RELEASE.run_validation(runner, "python", HEAD)
+                self.assertFalse(cache.exists())
+                self.assertIn("python-checks.log", console.getvalue())
+        runner.command.return_value = 0, "-" * 70 + "\nRan 3 tests in 0.001s\n\nOK"
+        with mock.patch.object(RELEASE, "python_validation_key", side_effect=["a" * 64, "b" * 64]), \
+                mock.patch.object(RELEASE, "source_state", return_value=HEAD), mock.patch("sys.stdout", new=io.StringIO()):
+            with self.assertRaises(RELEASE.ReleaseError):
+                RELEASE.run_validation(runner, "python", HEAD)
+        self.assertFalse(cache.exists())
+        with mock.patch.object(RELEASE, "python_validation_key", return_value="a" * 64), \
+                mock.patch.object(RELEASE, "source_state", side_effect=[HEAD, "c" * 40]), mock.patch("sys.stdout", new=io.StringIO()):
+            with self.assertRaises(RELEASE.ReleaseError):
+                RELEASE.run_validation(runner, "python", HEAD)
+        self.assertFalse(cache.exists())
+
+    def test_validation_key_uses_content_dependency_recipe_config_and_environment(self):
+        runner = self.runner()
+        inputs = self.root / "validation-inputs"
+        inputs.mkdir()
+        source = inputs / "source.py"
+        source.write_bytes(b"AAAA")
+        runner.git = mock.Mock(return_value=(0, "app/src/main/Original.java\0"))
+        with mock.patch.object(RELEASE, "python_validation_inputs", return_value=[inputs]), \
+                mock.patch.object(RELEASE, "validation_environment", return_value="a" * 64) as environment:
+            first = RELEASE.python_validation_key(runner)
+            self.assertRegex(first, r"^[a-f0-9]{64}$")
+            timestamp = source.stat().st_mtime_ns
+            source.write_bytes(b"BBBB")
+            os.utime(source, ns=(timestamp, timestamp))
+            changed = RELEASE.python_validation_key(runner)
+            self.assertNotEqual(first, changed)
+            (inputs / "dependency.json").write_bytes(b"new dependency")
+            dependency = RELEASE.python_validation_key(runner)
+            self.assertNotEqual(changed, dependency)
+            runner.c["public_pin_sha256"] = "d" * 64
+            config = RELEASE.python_validation_key(runner)
+            self.assertNotEqual(dependency, config)
+            environment.return_value = "e" * 64
+            self.assertNotEqual(config, RELEASE.python_validation_key(runner))
+
+    def test_command_check_output_is_preserved_in_both_logs_without_console_spam(self):
+        runner = self.runner()
+        Path(self.c["repo"]).mkdir()
+        with mock.patch("sys.stdout", new=io.StringIO()) as console:
+            code, output = runner.command([RELEASE.sys.executable, "-c", "print('synthetic fixture FAILED; success log')"],
+                                          capture=True, check=False, log_name="python-checks.log")
+        self.assertEqual(0, code)
+        self.assertEqual("", console.getvalue())
+        self.assertIn("synthetic fixture FAILED", output)
+        for filename in ("commands.log", "python-checks.log"):
+            self.assertIn("synthetic fixture FAILED", (runner.directory / filename).read_text(encoding="utf-8"))
+
+    def test_validation_environment_binds_tool_bytes_versions_and_relevant_settings(self):
+        runner = self.runner()
+        for name in ("python", "node", "openssl", "git"):
+            path = self.root / (name + ".exe")
+            path.write_bytes(("synthetic " + name).encode())
+            runner.c[name] = str(path)
+        runner.c["java_home"] = str(self.root / "jdk")
+        binary = Path(runner.c["java_home"]) / "bin"
+        binary.mkdir(parents=True)
+        for name in ("java", "javac"):
+            (binary / (name + ".exe")).write_bytes(b"synthetic Java tool")
+        for name in ("PYTHONPATH", "PYTHONHOME", "NODE_PATH", "NODE_OPTIONS"):
+            runner.env.pop(name, None)
+        version = "version-one"
+        runner.command = mock.Mock(side_effect=lambda args, **kwargs: (0, version))
+        first = RELEASE.validation_environment(runner)
+        self.assertRegex(first, r"^[a-f0-9]{64}$")
+        self.assertEqual(6, runner.command.call_count)
+        version = "version-two"
+        changed_version = RELEASE.validation_environment(runner)
+        self.assertNotEqual(first, changed_version)
+        Path(runner.c["node"]).write_bytes(b"changed binary with same displayed version")
+        changed_binary = RELEASE.validation_environment(runner)
+        self.assertNotEqual(changed_version, changed_binary)
+        runner.env["HTTP_PROXY"] = "http://user:synthetic-secret@example.invalid"
+        self.assertNotEqual(changed_binary, RELEASE.validation_environment(runner))
+        runner.env["NODE_OPTIONS"] = "--require external-uninventoried-code.js"
+        self.assertIsNone(RELEASE.validation_environment(runner))
+
+    def test_inefficient_delta_stays_local_and_is_not_restored_to_upload_plan(self):
+        runner = self.runner()
+        web = runner.repo / "web-ui"
+        (web / "node_modules").mkdir(parents=True)
+        (web / "package-lock.json").write_bytes(b"{}")
+        (Path(self.c["cache_root"]) / "release-web-lock.sha256").write_text(RELEASE.digest(web / "package-lock.json"))
+        RELEASE.write_json(runner.repo / "app/src/main/assets/pocket-ui/build-identity.json", {"sourceRevision": HEAD})
+        built = runner.repo / "app/build/outputs/apk/debug/app-debug.apk"
+        built.parent.mkdir(parents=True)
+        built.write_bytes(b"synthetic APK")
+        base = self.root / "base.apk"
+        base.write_bytes(b"synthetic base")
+        host = runner.directory / "host-tests/junit"
+        host.mkdir(parents=True)
+        (host / "TEST-synthetic.xml").write_text('<testsuite tests="1"><testcase name="real-body"/></testsuite>')
+        evidence = runner.directory / "build-evidence"
+        RELEASE.write_json(evidence / "result.json", {"head": HEAD})
+        runner.command = mock.Mock(return_value=(0, "Synthetic Web build"))
+        runner.build = mock.Mock(return_value="Build evidence: " + str(evidence))
+        target_metadata = {"versionCode": 255, "bytes": built.stat().st_size, "sha256": RELEASE.digest(built),
+                           "signerCertificateSha256": [self.c["apk_signer_sha256"]]}
+        patch = runner.directory / "from-baseline-to-255.patch.gz"
+
+        def tool(name, *args):
+            if name == "preflight":
+                RELEASE.write_json(args[args.index("--output") + 1], {"sameSignerSet": True, "strictlyNewerVersion": True,
+                                   "target": target_metadata})
+            elif name == "delta":
+                patch.write_bytes(b"inefficient synthetic patch" * 100)
+            elif name == "prepare":
+                bundle = Path(args[args.index("--output-dir") + 1])
+                relative = "artifacts/" + target_metadata["sha256"] + "/app-255.apk"
+                output = bundle / relative
+                output.parent.mkdir(parents=True)
+                output.write_bytes(built.read_bytes())
+                row = {"file": relative, "url": self.c["origin"] + "/" + relative, "contentType": "application/vnd.android.package-archive",
+                       "bytes": target_metadata["bytes"], "sha256": target_metadata["sha256"]}
+                RELEASE.write_json(bundle / "artifact-evidence.json", {"target": target_metadata, "base": {"versionCode": 253},
+                                   "delta": {"bytes": patch.stat().st_size, "sha256": RELEASE.digest(patch), "reconstructedByteExact": True}})
+                RELEASE.write_json(bundle / "release-plan.json", {"manifestUrl": self.c["origin"] + self.c["manifest_path"],
+                                   "artifactUploads": [row], "inefficientDeltaOmitted": True})
+                RELEASE.write_json(bundle / "unsigned-payload.json", {"deltas": []})
+            elif name == "sign":
+                Path(args[args.index("--output") + 1]).write_bytes(b"synthetic signed manifest")
+            elif name not in ("verify-apk", "verify-envelope"):
+                self.fail("Unexpected tool " + name)
+
+        runner.tool = mock.Mock(side_effect=tool)
+        with mock.patch.object(RELEASE, "run_validation", return_value=3), mock.patch.object(RELEASE, "source_state", return_value=HEAD):
+            bundle = RELEASE.make_bundle(runner, HEAD, 255, base)
+        self.assertTrue(patch.is_file())
+        self.assertGreater(patch.stat().st_size, built.stat().st_size)
+        self.assertEqual([], RELEASE.read_json(bundle / "unsigned-payload.json")["deltas"])
+        self.assertEqual(1, len(RELEASE.artifact_descriptors(bundle)))
+        self.assertFalse(list(bundle.rglob("*.patch.gz")))
+        self.assertTrue(RELEASE.read_json(bundle / "artifact-evidence.json")["delta"]["reconstructedByteExact"])
+        self.assertEqual(1, sum(call.args[0] == "delta" for call in runner.tool.call_args_list))
+
     def test_node_fetch_uses_configured_proxy_without_external_network(self):
         seen = []
         Path(self.c["repo"]).mkdir()
