@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { backgroundConnection, wirelessEndpoints, wirelessPort } from '../src/forms-library/host-contracts.ts';
+import { workspaceForRoute } from '../src/workspace-directory.ts';
 // Execute production JSX/handlers with explicit lifecycle/control doubles. Not DOM, graphics or Android verification.
 type Data = Record<string, any>;
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
@@ -83,6 +84,14 @@ test('returning from background retains the phone presentation choice without st
   assert.ok(button); assert.equal(f.views.at(-1), 'execution');
   const source = read('../src/Secondary.tsx'); assert.match(source, /initialView=\{phonePresentation\.current\}/); assert.match(source, /setCode\(''\); onReturn\(\)/);
 });
+test('a direct preference opens its real controls and delegates Back to its entry parent', () => {
+  const f = fixture('PhoneSettings', { initialView: 'appearance', direct: true });
+  assert.equal(f.view, 'appearance');
+  assert.equal(f.back(), false);
+  assert.equal(f.view, 'appearance');
+  assert.equal(f.calls.length, 0, 'opening appearance does not write a preference');
+  assert.equal(f.visibleText.includes('返回手机能力'), false);
+});
 const display = (extra: Data = {}) => ({ supportedAndroid: true, authorizationBackend: 'wireless_adb', helperConnected: false, adb: { phase: 'needs_pairing', identityPresent: false, discovery: {} }, ...extra });
 const background = (extra: Data = {}) => ({ backgroundSetupOpen: true, accessibilityEnabled: true, notificationsEnabled: true, phoneReadiness: { groups: [{ id: 'background', title: '后台显示', state: 'blocked', checks: [{ id: 'input', state: 'unknown', message: '输入能力尚未核实', action: 'retry' }] }] }, features: { display: display() }, ...extra });
 test('background setup leads with one current connection stage and hides audit details until selected', () => {
@@ -149,7 +158,7 @@ test('background return consumes the original phone entry and does not reopen se
     const state: Data = { page: route, query: '', modelView: { kind: 'list' }, candidateTarget: null };
     const trail = { current: [] as Data[] }, modelTrail = { current: [] as Data[] }, generation = { current: 0 };
     const handlers = () => {
-      const deps: Data = { ...state, route, trail, modelTrail, generation, transientBack: { current: null }, isModelPage: false, normalize: (value: string) => value, rememberScroll() {}, setNotice() {}, setError() {} };
+      const deps: Data = { ...state, route, trail, modelTrail, generation, transientBack: { current: null }, isModelPage: false, workspace: workspaceForRoute(state.page), workspaceForRoute, normalize: (value: string) => value, rememberScroll() {}, setNotice() {}, setError() {} };
       for (const key of ['page', 'query', 'modelView', 'candidateTarget']) deps['set' + key[0].toUpperCase() + key.slice(1)] = (value: any) => { state[key] = value; };
       return new Function(...Object.keys(deps), code + '\nreturn { navigate, returnToPhone, consumeBack };')(...Object.values(deps));
     };

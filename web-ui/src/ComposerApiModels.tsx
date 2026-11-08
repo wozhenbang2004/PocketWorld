@@ -96,9 +96,9 @@ export function ComposerApiModels({ state, can, act, onSelected, onSelectionPend
       {!apiModelReviewCurrent(review, projection, state.modelSelectionRevision) && <p className="pw-error" role="alert">原模型记录已变化，请重新读取。</p>}
       <div className="pw-action-row"><Button variant="secondary" disabled={locked || !favorite || needsRead} onClick={() => void write('favorite')}>{row.favorite ? '取消收藏' : '收藏此模型'}</Button></div>
     </PermissionReview> : current && !needsRead ? <>
-      <RadioOptions label="模型列表" value={filter} isDisabled={locked} options={[{ id: 'all', label: '全部' }, { id: 'favorites', label: '收藏' }, { id: 'recent', label: '最近使用' }]} onChange={value => setFilter(value as ApiModelFilter)} />
-      <ModelPicker label="API 连接与模型" models={models.map(row => ({ id: apiModelKey(row), name: String(row.modelId), disabled: locked,
-        description: [row.connectionName || row.connectionId, [row.selected ? '当前使用' : '', row.favorite ? '已收藏' : '', recent(row) ? '最近使用' : ''].filter(Boolean).join(' · '), apiModelUnavailable(row), `图片：${apiCapability(row.imageInput)} · 工具：${apiCapability(row.toolCalls)}`].filter(Boolean).join('\n') }))}
+
+      <ModelPicker label="API 连接与模型" toolbar={<div className="pw-model-filter"><RadioOptions label="模型列表" value={filter} isDisabled={locked} options={[{ id: 'all', label: '全部' }, { id: 'favorites', label: '收藏' }, { id: 'recent', label: '最近使用' }]} onChange={value => setFilter(value as ApiModelFilter)} /></div>} models={models.map(row => ({ id: apiModelKey(row), name: String(row.modelId), disabled: locked,
+        description: [row.connectionName || row.connectionId, [row.selected ? '当前使用' : '', row.favorite ? '已收藏' : '', recent(row) ? '最近使用' : ''].filter(Boolean).join(' · '), apiModelUnavailable(row)].filter(Boolean).join('\n') }))}
         value={selected ? apiModelKey(selected) : undefined} onChange={reviewModel} />
       {models.length === 0 && <p className="pw-muted">{filter === 'favorites' ? '尚无收藏模型。可在全部列表中打开模型并收藏。' : filter === 'recent' ? '尚无成功使用记录。选择模型不会新增使用记录。' : '尚无 API 连接，请先在连接管理中添加。'}</p>}
       {projection?.preferencesAvailable !== true && <p className="pw-muted">收藏与最近使用记录暂不可读取，请重新读取后核对。</p>}

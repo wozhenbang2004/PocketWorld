@@ -1,0 +1,40 @@
+{
+  "scope": "Production React app and synthetic native receipts; not Android device or real model-provider validation.",
+  "bundle": "index-B-HPcbsJ.js",
+  "bundleSha256": "9611279c221daab77879a13c497f1e29d21933309b6d61dc84be544743efa3c0",
+  "checks": [
+    {
+      "scene": "390-light-home",
+      "passed": true
+    },
+    {
+      "scene": "390-light-conversation",
+      "passed": true
+    },
+    {
+      "scene": "320-light-home",
+      "passed": true
+    },
+    {
+      "scene": "390-dark-home",
+      "passed": true
+    },
+    {
+      "scene": "1280-light-home",
+      "passed": true
+    }
+  ],
+  "screenshots": [
+    "390-light-home-screen.png",
+    "390-light-home-reasoning.png",
+    "390-light-home-model-picker.png",
+    "390-light-home-model-review.png",
+    "390-light-home-navigation.png",
+    "390-light-home-settings.png",
+    "390-light-conversation-screen.png",
+    "320-light-home-screen.png",
+    "390-dark-home-screen.png",
+    "1280-light-home-screen.png"
+  ],
+  "errors": []
+}

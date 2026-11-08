@@ -1,0 +1,13 @@
+{
+  "scope": "Production App and synthetic native receipts, headless Chromium. Not an Android device test.",
+  "asset": "index-CqjI3Gdk.js",
+  "sha256": "e52219950e9ea3b055081ffa271606886af7c1e77ad7907383fdbde3bccddebc",
+  "checks": [
+    "Assistant copy copies exactly the original reply",
+    "More menu closes on bridge back without changing the original draft",
+    "Reply reading returns focus to the original More trigger and retains draft",
+    "Inline proposal expansion reads the original task only",
+    "Nonempty draft retains voice entry and original phone=false argument"
+  ],
+  "errors": []
+}

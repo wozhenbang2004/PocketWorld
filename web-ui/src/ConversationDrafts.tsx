@@ -26,7 +26,7 @@ export function ConversationDrafts({ taskId, open, refreshRevision = 0 }: { task
     else { attemptedRevision.current = refreshRevision; setDrafts(null); }
   }, [refreshRevision, busy, expanded]);
   const status: Record<string, string> = { pending_owner: '待审阅', saved: '已处理', cancelled: '已放弃', rejected: '未保存', unknown: '结果待核对', applying_unknown: '结果待核对' };
-  return <section className="pw-conversation-drafts" aria-label="这次回答的提案">
+  return <section className="pw-conversation-drafts" data-expanded={expanded} aria-label="这次回答的提案">
     <Accordion variant="divided" expandedKeys={expanded ? ['drafts'] : []} onExpandedChange={keys => {
       const next = keys.has('drafts'); setExpanded(next);
       // Disclosure only reads the original proposal window. It never applies a draft.

@@ -16,10 +16,10 @@ export async function stabilizeSceneTarget(page,target,label){
 export async function assertEcosystemScene(page,workspace,scene){
  const button=name=>page.getByRole('button',{name,exact:true}),heading=name=>page.getByRole('heading',{name,exact:true}),text=value=>page.getByText(value,{exact:true});
  const dialog=page.getByRole('dialog');let target,label;const set=(locator,name)=>{target=locator;label=name};
- const modal=workspace==='skills'&&scene==='enable-review'||workspace==='plugins'&&['grant-review','enable-review','manifest-editor','js-review'].includes(scene)||workspace==='catalog'&&['source-editor','source-save-error','install-review'].includes(scene)||workspace==='packs'&&['remove-review','journal','install-review'].includes(scene)||workspace==='task'&&['script-review','script-source','tool-review'].includes(scene)||workspace==='draft';
+ const modal=workspace==='skills'&&['enable-review','import','git-import'].includes(scene)||workspace==='plugins'&&['grant-review','enable-review','manifest-editor','js-review'].includes(scene)||workspace==='catalog'&&['source-editor','source-save-error','install-review'].includes(scene)||workspace==='packs'&&['remove-review','journal','install-review'].includes(scene)||workspace==='task'&&['script-review','script-source','tool-review'].includes(scene)||workspace==='draft';
  assert.equal(await dialog.count(),modal?1:0,`${workspace}/${scene}: expected current modal`);
  if(workspace==='skills'){
-  if(scene==='collection'){await visible(button('阅读这份技能'));set(text('技能库'),'current skill collection');}
+  if(scene==='collection'){await visible(button('阅读技能：资料核对与报告'));set(text('技能库'),'current skill collection');}
   if(scene==='reading'){set(page.getByRole('region',{name:'当前已读取资源正文'}),'read original resource');await visible(heading('核对顺序'));}
   if(scene==='policy-history'){await visible(text('修订 3 · v1.3'));set(button('读取保留的修订'),'original revision history');}
   if(scene==='enable-review'){set(dialog.getByRole('heading',{name:'核对本次技能操作',exact:true}),'skill enable review');assert.equal(await button('确认这次原操作').isDisabled(),true);}

@@ -1,0 +1,171 @@
+/* Actionable results precede the calendar. Receipt mechanics stay in disclosures. */
+.pw-reminder-workspace .pw-reminder-attention {
+  margin: 4px 0 26px;
+  padding: 0 16px;
+  border-radius: 16px;
+  background: var(--pw-surface);
+}
+.pw-reminder-workspace .pw-reminder-attention-heading,
+.pw-reminder-workspace .pw-reminder-plan-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.pw-reminder-workspace .pw-reminder-attention-heading > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.pw-reminder-workspace .pw-reminder-attention-heading h3,
+.pw-reminder-workspace .pw-reminder-plan-heading h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 24px;
+}
+.pw-reminder-workspace .pw-reminder-attention-heading span,
+.pw-reminder-workspace .pw-reminder-plan-heading > span {
+  color: var(--pw-copy);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.pw-reminder-workspace .pw-reminder-attention-heading > button {
+  min-height: 44px;
+  padding-inline: 0;
+  font-size: 13px;
+}
+.pw-reminder-workspace .pw-reminder-result {
+  padding: 12px 0;
+}
+.pw-reminder-workspace .pw-reminder-result header {
+  gap: 4px 10px;
+}
+.pw-reminder-workspace .pw-reminder-result header h3 {
+  flex: 1 1 150px;
+  font-size: 15px;
+  line-height: 23px;
+}
+.pw-reminder-workspace .pw-reminder-result-state {
+  font-size: 12px;
+  line-height: 23px;
+}
+.pw-reminder-workspace .pw-reminder-result .pw-reminder-result-message,
+.pw-reminder-workspace .pw-reminder-result .pw-reminder-result-goal {
+  margin-top: 5px;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--pw-copy);
+}
+.pw-reminder-workspace .pw-reminder-result .pw-form-actions {
+  margin: 9px 0 0;
+  gap: 8px;
+}
+.pw-reminder-workspace .pw-reminder-result .pw-form-actions > button {
+  min-height: 44px;
+  height: auto;
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 20px;
+  white-space: normal;
+  background: var(--pw-inset);
+  color: var(--pw-ink);
+}
+.pw-reminder-workspace .pw-reminder-query-note {
+  margin: 2px 0 0;
+  color: var(--pw-copy);
+  font-size: 12px;
+  line-height: 20px;
+}
+.pw-reminder-workspace .pw-reminder-delivery-details {
+  margin: 0;
+}
+.pw-reminder-workspace .pw-reminder-delivery-details [slot=trigger] {
+  min-height: 44px;
+  padding-block: 9px;
+}
+.pw-reminder-workspace .pw-reminder-delivery-details section {
+  margin: 0 0 16px;
+}
+.pw-reminder-workspace .pw-reminder-delivery-details h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  line-height: 22px;
+  font-weight: 600;
+}
+.pw-reminder-workspace .pw-reminder-receipt-facts {
+  margin: 8px 0 0;
+  color: var(--pw-copy);
+  font-size: 12px;
+  line-height: 20px;
+}
+.pw-reminder-workspace .pw-reminder-receipt-facts > div {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 3px;
+}
+.pw-reminder-workspace .pw-reminder-receipt-facts :is(dt, dd) {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.pw-reminder-workspace .pw-reminder-plan-tools {
+  margin-top: 4px;
+}
+.pw-reminder-workspace .pw-reminder-plan-tools .pw-secondary-search {
+  margin-top: 12px;
+}
+.pw-reminder-workspace .pw-reminder-plan-tools .pw-knowledge-filters {
+  margin-bottom: 8px;
+}
+.pw-reminder-workspace .pw-reminder-plan-group {
+  margin: 20px 0;
+}
+.pw-reminder-workspace .pw-reminder-rule-row {
+  padding: 14px 0;
+  min-height: 82px;
+}
+.pw-reminder-workspace .pw-reminder-rule-row .pw-reminder-rule-layout {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-width: 0;
+}
+.pw-reminder-workspace .pw-reminder-rule-time {
+  display: flex;
+  flex: 0 0 64px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding-right: 10px;
+  border-right: 1px solid var(--pw-hairline);
+  font-variant-numeric: tabular-nums;
+}
+.pw-reminder-workspace .pw-reminder-rule-time strong {
+  font-size: 18px;
+  font-weight: 550;
+  line-height: 25px;
+}
+.pw-reminder-workspace .pw-reminder-rule-time small {
+  font-size: 12px;
+  line-height: 19px;
+  color: var(--pw-copy);
+}
+.pw-reminder-workspace .pw-reminder-rule-row-copy strong {
+  font-size: 15px;
+  line-height: 23px;
+}
+.pw-reminder-workspace .pw-reminder-rule-row-copy small {
+  font-size: 13px;
+  line-height: 21px;
+}
+.pw-reminder-workspace .pw-reminder-rule-row-copy .pw-reminder-rule-warning {
+  color: var(--pw-ink);
+}
+@media (max-width: 360px) {
+  .pw-reminder-workspace .pw-reminder-attention { padding-inline: 12px; }
+  .pw-reminder-workspace .pw-reminder-rule-row .pw-reminder-rule-layout { gap: 10px; }
+  .pw-reminder-workspace .pw-reminder-rule-time { flex-basis: 60px; padding-right: 6px; }
+}

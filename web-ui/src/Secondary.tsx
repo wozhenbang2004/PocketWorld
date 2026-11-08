@@ -38,6 +38,8 @@ import './secondary-refactor.css';
 import './model-data-settings.css';
 import './phone-workspace.css';
 import './settings-depth.css';
+import './workspace-navigation.css';
+import { normalizeWorkspaceRoute, workspaceForRoute, workspacePageForRoute } from './workspace-directory';
 import { DataOperationHeading, DataOperationRow, useDataSettingsJourney } from './DataSettingsJourney';
 import { backgroundConnection, modelConnectionCommand, wirelessEndpoints, wirelessPort } from './forms-library/host-contracts';
 import { ModelConnectionOptions, ModelConnectionTestFeedback } from './ModelConnectionOptions';
@@ -76,28 +78,28 @@ const timeText = (value: any) => {
 };
 
 export const SECONDARY_DOMAINS = [
-  { id: 'models', title: 'API 模型目录', detail: '连接、能力、模型组与用途', group: '模型与连接', icon: RiKey2Line },
-  { id: 'workProfiles', title: '工作配置', detail: '模型、技能与工具来源，恢复后重新绑定', group: '模型与连接', icon: RiFileList3Line },
-  { id: 'accounts', title: 'ChatGPT 账号', detail: '授权、模型目录与套餐用量', group: '模型与连接', icon: RiKey2Line },
-  { id: 'devices', title: '我的设备', detail: '手机与电脑、配对、接收和权限', group: '模型与连接', icon: RiComputerLine },
-  { id: 'remote', title: '电脑与服务器', detail: 'Companion 环境与原任务', group: '模型与连接', icon: RiComputerLine },
-  { id: 'ssh', title: 'SSH 工作区', detail: '主机公钥、文件与终端', group: '模型与连接', icon: RiComputerLine },
-  { id: 'local', title: '本机开发', detail: '运行时、项目、依赖与执行回执', group: '模型与连接', icon: RiSmartphoneLine },
-  { id: 'memory', title: '私人记忆', detail: '来源、作用域与正式记录', group: '记忆与主动任务', icon: RiDatabase2Line },
-  { id: 'memoryReview', title: '学习候选审核', detail: '核对来源、接受、纠正和遗忘', group: '记忆与主动任务', icon: RiShieldCheckLine },
-  { id: 'learning', title: '经验技能审核', detail: '从已审记忆整理方法，审阅后启用', group: '记忆与主动任务', icon: RiShieldCheckLine },
-  { id: 'automation', title: '提醒与主动任务', detail: '时间、目标和原发生回执', group: '记忆与主动任务', icon: RiFileList3Line },
-  { id: 'commitments', title: '承诺与跟进', detail: '期限、静默时段与真实跟进回执', group: '记忆与主动任务', icon: RiFileList3Line },
-  { id: 'channels', title: '消息渠道', detail: 'QQ、微信、主人绑定与接收', group: '协作与扩展', icon: RiLink },
-  { id: 'skills', title: '技能', detail: '正文、来源、版本与启用状态', group: '协作与扩展', icon: RiFileList3Line },
-  { id: 'plugins', title: '插件', detail: '已安装工具、范围与运行状态', group: '协作与扩展', icon: RiPuzzle2Line },
-  { id: 'pluginCatalog', title: '我的插件目录', detail: '安装、源码历史与恢复审阅', group: '协作与扩展', icon: RiPuzzle2Line },
-  { id: 'mcp', title: 'MCP 工具', detail: '配置导入、权限预览和授权', group: '协作与扩展', icon: RiPuzzle2Line },
-  { id: 'teams', title: '团队', detail: '成员、共同对话和工作分配', group: '协作与扩展', icon: RiTeamLine },
-  { id: 'groups', title: '群协作', detail: '参与者、任务、材料与成果投递', group: '协作与扩展', icon: RiTeamLine },
-  { id: 'media', title: '媒体', detail: '提供方、原提交和结果附件', group: '语音与媒体', icon: RiMicLine },
-  { id: 'realtime', title: '实时通话', detail: '邀请、当前会话与音视频权限', group: '语音与媒体', icon: RiMicLine },
-  { id: 'proxy', title: '本机模型服务', detail: '运行状态、端点与近期调用', group: '语音与媒体', icon: RiComputerLine },
+  { id: 'models', title: 'API 模型目录', detail: '连接、能力、模型组与用途', group: '设置', icon: RiKey2Line },
+  { id: 'workProfiles', title: '工作配置', detail: '模型、技能与工具来源，恢复后重新绑定', group: '技能与工具', icon: RiFileList3Line },
+  { id: 'accounts', title: 'ChatGPT 账号', detail: '授权、模型目录与套餐用量', group: '设置', icon: RiKey2Line },
+  { id: 'devices', title: '我的设备', detail: '手机与电脑、配对、接收和权限', group: '设备连接', icon: RiComputerLine },
+  { id: 'remote', title: '电脑与服务器', detail: 'Companion 环境与原任务', group: '设备连接', icon: RiComputerLine },
+  { id: 'ssh', title: 'SSH 工作区', detail: '主机公钥、文件与终端', group: '设备连接', icon: RiComputerLine },
+  { id: 'local', title: '本机开发', detail: '运行时、项目、依赖与执行回执', group: '设备连接', icon: RiSmartphoneLine },
+  { id: 'memory', title: '记忆', detail: '来源、作用域与正式记录', group: '记忆', icon: RiDatabase2Line },
+  { id: 'memoryReview', title: '待审候选', detail: '核对来源、接受、纠正和遗忘', group: '记忆', icon: RiShieldCheckLine },
+  { id: 'learning', title: '学习与经验', detail: '从已审记忆整理方法，审阅后启用', group: '记忆', icon: RiShieldCheckLine },
+  { id: 'automation', title: '提醒', detail: '时间、目标和原发生回执', group: '自动化', icon: RiFileList3Line },
+  { id: 'commitments', title: '委托与目标', detail: '期限、静默时段与真实跟进回执', group: '自动化', icon: RiFileList3Line },
+  { id: 'channels', title: '消息渠道', detail: 'QQ、微信、主人绑定与接收', group: '团队', icon: RiLink },
+  { id: 'skills', title: '技能', detail: '正文、来源、版本与启用状态', group: '技能与工具', icon: RiFileList3Line },
+  { id: 'plugins', title: '插件', detail: '已安装工具、范围与运行状态', group: '技能与工具', icon: RiPuzzle2Line },
+  { id: 'pluginCatalog', title: '我的插件目录', detail: '安装、源码历史与恢复审阅', group: '技能与工具', icon: RiPuzzle2Line },
+  { id: 'mcp', title: 'MCP 工具', detail: '配置导入、权限预览和授权', group: '技能与工具', icon: RiPuzzle2Line },
+  { id: 'teams', title: '团队', detail: '成员、共同对话和工作分配', group: '团队', icon: RiTeamLine },
+  { id: 'groups', title: '群协作', detail: '参与者、任务、材料与成果投递', group: '团队', icon: RiTeamLine },
+  { id: 'media', title: '生成与文件', detail: '提供方、原提交和结果附件', group: '媒体', icon: RiMicLine },
+  { id: 'realtime', title: '实时通话', detail: '邀请、当前会话与音视频权限', group: '媒体', icon: RiMicLine },
+  { id: 'proxy', title: '本机模型服务', detail: '运行状态、端点与近期调用', group: '设备连接', icon: RiComputerLine },
 ] as const;
 
 function Card({ title, description, children, className = '' }: { title?: string; description?: string; children: ReactNode; className?: string }) {
@@ -546,13 +548,13 @@ function ExecutionControls({ state, supported, run }: { state: Data; supported: 
   </Card>;
 }
 
-function PhoneSettings({ state, supported, run, navigate, registerTransientBack, initialView = 'list', onViewChange }: { state: Data; supported: (action: string) => boolean; run: Run; navigate: (route: string) => void; registerTransientBack: BackHandlerRegistration; initialView?: string; onViewChange?: (view: string) => void }) {
+function PhoneSettings({ state, supported, run, navigate, registerTransientBack, initialView = 'list', onViewChange, direct = false }: { state: Data; supported: (action: string) => boolean; run: Run; navigate: (route: string) => void; registerTransientBack: BackHandlerRegistration; initialView?: string; onViewChange?: (view: string) => void; direct?: boolean }) {
   const ready = object(state.phoneReadiness), screenshotPolicy = object(state.taskScreenshotPolicy);
   const latestReply = list(state.messages).filter(row => row.role === 'assistant' && typeof row.id === 'string' && row.content).at(-1);
   const appearance = text(object(state.appearance).mode), readout = object(object(state.taskAnnouncements).readout);
   const journey = useDataSettingsJourney(initialView);
   useEffect(() => { onViewChange?.(journey.view); }, [journey.view, onViewChange]);
-  useEffect(() => { registerTransientBack(() => journey.back()); return () => registerTransientBack(null); }, [journey.view, registerTransientBack]);
+  useEffect(() => { registerTransientBack(() => direct && journey.view === initialView ? false : journey.back()); return () => registerTransientBack(null); }, [journey.view, initialView, direct, registerTransientBack]);
   const flag = (value: unknown, yes = '已开启', no = '未开启') => value === true ? yes : value === false ? no : '尚未核实';
   const observationKnown = typeof state.localCaptureAllowed === 'boolean' && typeof state.localOcrAllowed === 'boolean';
   const sections: Record<string, { title: string; description: string }> = {
@@ -575,7 +577,7 @@ function PhoneSettings({ state, supported, run, navigate, registerTransientBack,
         <DataOperationRow id="speech" title="语音与朗读" detail={state.speaking ? '正在朗读' : state.speechAvailable === true ? '系统听写可用' : '听写、朗读与任务状态提示'} onOpen={journey.open}/>
       </div></section>
       <div className="pw-phone-app-entry"><CapabilityAction row action="settings.openAppUpdates" supported={supported} run={run}><span><span>应用更新</span><small>检查新版本与管理下载</small></span></CapabilityAction></div>
-    </> : <DataOperationHeading title={sections[journey.view]?.title || '手机能力'} parent="手机能力" description="" onBack={() => journey.open('list')}/>}
+    </> : !direct && <DataOperationHeading title={sections[journey.view]?.title || '手机能力'} parent="手机能力" description="" onBack={() => journey.open('list')}/>}
     {(state.speaking || readout.active) && <section className="pw-phone-live-audio" aria-label="当前朗读"><span role="status">{state.speaking ? '正在朗读回复' : '正在播报任务状态'}</span><div>{state.speaking && <CapabilityAction action="speech.stop" supported={supported} run={run}>停止朗读</CapabilityAction>}{readout.active && <CapabilityAction action="speech.stopTaskAnnouncement" args={{ readoutId: readout.readoutId }} supported={supported} run={run}>停止这次状态提示</CapabilityAction>}</div></section>}
     {journey.view === 'execution' && <section className="pw-phone-detail" aria-label="执行权限与连接">
       <p className="pw-detail-status" role="status">{first(ready, ['message', 'summary', 'status'], '尚未核对执行能力')}</p>
@@ -1346,20 +1348,23 @@ function DataManagement({ kind, ...props }: DataPageProps & { kind: 'archives' |
 }
 
 const SETTINGS_GROUPS = [
-  { id: 'models', title: '模型与连接', detail: '当前模型、API 与 ChatGPT 账号', icon: RiKey2Line, entries: ['model-settings', 'accounts', 'workProfiles'] },
-  { id: 'devices', title: '设备与执行', detail: '手机、电脑、服务器与本机环境', icon: RiComputerLine, entries: ['phone', 'devices', 'remote', 'ssh', 'local'] },
-  { id: 'work', title: '工作与数据', detail: '历史、调用记录、存储与备份', icon: RiFileList3Line, entries: ['history', 'usage', 'storage', 'archives'] },
-  { id: 'memory', title: '记忆与主动任务', detail: '私人记忆、学习、提醒与跟进', icon: RiDatabase2Line, entries: ['memory', 'memoryReview', 'learning', 'automation', 'commitments'] },
-  { id: 'extensions', title: '协作与扩展', detail: '渠道、团队、技能、插件与工具', icon: RiPuzzle2Line, entries: ['channels', 'teams', 'groups', 'skills', 'plugins', 'pluginCatalog', 'mcp'] },
-  { id: 'media', title: '语音与媒体', detail: '语音文件、实时通话与本机服务', icon: RiMicLine, entries: ['media', 'realtime', 'proxy'] },
+  { id: 'models', title: '模型与账号', entries: ['model-settings', 'accounts'] },
+  { id: 'preferences', title: '使用偏好', entries: ['phone:appearance', 'phone:speech'] },
+  { id: 'privacy', title: '权限与运行', entries: ['phone:execution', 'phone:observation', 'background'] },
+  { id: 'data', title: '数据与应用', entries: ['usage', 'storage', 'archives', 'updates'] },
 ];
 const COMMON_SETTINGS = [
-  { id: 'model-settings', title: '选择模型', detail: '模型能力、API 与账号连接', icon: RiKey2Line },
-  { id: 'phone', title: '手机能力与字体', detail: '外观、字体、观察与后台连接', icon: RiSmartphoneLine },
-  { id: 'history', title: '任务历史', detail: '查看原任务与结果', icon: RiFileList3Line },
+  { id: 'model-settings', title: 'API 连接与模型', detail: '管理服务商、模型目录与用量预算', icon: RiKey2Line },
+  { id: 'accounts', title: 'ChatGPT 账号', detail: '登录、授权与套餐用量', icon: RiKey2Line },
+  { id: 'phone:appearance', title: '外观与字体', detail: '主题、中文、英数与代码字体', icon: RiSettings3Line },
+  { id: 'phone:speech', title: '语音与朗读', detail: '系统听写、声音与任务播报', icon: RiMicLine },
+  { id: 'phone:execution', title: '系统权限', detail: '界面读取、任务通知与无线调试', icon: RiShieldCheckLine },
+  { id: 'phone:observation', title: '观察与隐私', detail: '本地取图、OCR 与截图留存', icon: RiShieldCheckLine },
+  { id: 'background', title: '后台运行', detail: '助手连接、独立屏幕与音频', icon: RiSmartphoneLine },
   { id: 'usage', title: '模型调用记录', detail: '查看实际调用与用量', icon: RiFileList3Line },
   { id: 'archives', title: '备份与迁移', detail: '导出或恢复原数据', icon: RiDatabase2Line },
   { id: 'storage', title: '项目存储', detail: '占用与清理审阅', icon: RiDatabase2Line },
+  { id: 'updates', title: '应用更新', detail: '检查新版本与管理下载', icon: RiRefreshLine },
 ];
 
 export default function Secondary({ route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange }: Props) {
@@ -1367,7 +1372,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const state: Data = { ...object(snapshot.state), webWorkspaceResumeRevision: Number(snapshot.view?.resumeRevision || 0), webWorkspaceTaskOpen: !!snapshot.view?.taskId };
   const commands = snapshot.capabilities?.commands || [];
   const supported = (action: string) => commands.includes(action);
-  const normalize = (next: string) => (next || 'settings').replace(/^connections[:/]/, '').replace(/^settings[:/]/, '');
+  const normalize = normalizeWorkspaceRoute;
   const [page, setPage] = useState(normalize(route));
   const [candidateTarget, setCandidateTarget] = useState<LearningCandidateTarget | null>(null);
   const [modelView, setModelView] = useState<ModelView>({ kind: 'list' });
@@ -1395,17 +1400,27 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   };
   const rememberScroll = () => scrollPositions.current.set(page + ((page === 'models' || page === 'model-settings') ? ':' + modelView.kind + ':' + (modelView.id || '') : ''), scroll.current?.scrollTop || 0);
   const navigate = (next: string, candidate: LearningCandidateTarget | null = null) => { rememberScroll(); generation.current++; trail.current.push({ page, query, modelView, modelTrail: [...modelTrail.current], candidateTarget }); modelTrail.current = []; setNotice(''); setError(''); setQuery(''); setModelView({ kind: 'list' }); setCandidateTarget(candidate); setPage(next); };
+  const switchWorkspacePage = (next: string) => {
+    if (next === workspacePageForRoute(page)) return;
+    rememberScroll(); generation.current++;
+    const family = workspaceForRoute(page)?.key;
+    // Peer pages do not build a false hierarchy or return through Settings.
+    // Keep the real entry parent and each page's own scroll position.
+    trail.current = trail.current.filter(item => workspaceForRoute(item.page)?.key !== family);
+    modelTrail.current = []; setNotice(''); setError(''); setQuery('');
+    setModelView({ kind: 'list' }); setCandidateTarget(null); setPage(next);
+  };
   const returnToPhone = () => {
     rememberScroll(); generation.current++;
     // Returning from setup consumes its original phone entry, rather than
     // pushing background again and reopening it on the next Back.
     let index = trail.current.length - 1;
-    while (index >= 0 && trail.current[index].page !== 'phone') index--;
-    const previous = index >= 0 ? trail.current.splice(index)[0] : undefined;
+    while (index >= 0 && trail.current[index].page !== 'phone' && !trail.current[index].page.startsWith('phone:')) index--;
+    const previous = index >= 0 ? trail.current.splice(index)[0] : trail.current.pop();
     modelTrail.current = previous?.modelTrail || [];
     setNotice(''); setError(''); setQuery(previous?.query || '');
     setModelView(previous?.modelView || { kind: 'list' });
-    setCandidateTarget(previous?.candidateTarget || null); setPage('phone');
+    setCandidateTarget(previous?.candidateTarget || null); setPage(previous?.page || 'phone');
   };
   const openModel = (view: ModelView) => { rememberScroll(); generation.current++; modelTrail.current.push(modelView); setNotice(''); setError(''); setModelView(view); };
   const finishModelEdit = (view: ModelView) => {
@@ -1413,6 +1428,9 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
     generation.current++; setError(''); setModelView(view);
   };
   const isModelPage = page === 'models' || page === 'model-settings';
+  const isPhonePage = page === 'phone' || page.startsWith('phone:');
+  const phoneView = page.startsWith('phone:') ? page.slice('phone:'.length) : phonePresentation.current;
+  const workspace = workspaceForRoute(page);
   const domain = SECONDARY_DOMAINS.find(x => x.id === page);
   const hostSection = isModelPage ? 'models' : domain?.id;
   const canEnter = supported('connections.enter'), canLeave = supported('connections.leave');
@@ -1448,14 +1466,11 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const connection = modelConnectionRows(data).find(row => recordId(row) === modelView.id);
   const editConnection = modelView.id ? connection : modelConnectionRows(data).find(row => recordId(row) === text(object(data.connections).selectedConnectionId));
   const modelDraftKey = modelView.kind + ':' + (modelView.kind === 'add' ? 'new' : recordId(editConnection || {}));
+  const phoneTitle = ({ appearance: '外观与字体', speech: '语音与朗读', execution: '系统权限', observation: '观察与隐私', browser: '浏览器' } as Data)[phoneView];
   const pageTitle = isModelPage ? ({ list: '模型与连接', connections: '管理连接', edit: '编辑 API 连接', add: '添加 API 连接', connection: first(connection || {}, ['name', 'label'], '已保存连接'), catalog: '模型目录', model: modelView.id || '模型详情' }[modelView.kind])
-    : settingsGroup?.title || (page === 'settings' || page === 'connections' ? '设置' : page === 'phone' ? '手机能力' : page === 'background' ? '后台运行设置' : page === 'history' ? '任务历史' : page === 'usage' ? '模型调用记录' : page === 'archives' ? '备份与迁移' : page === 'storage' ? '项目存储' : domain?.title || '设置');
-  const settingsEntries = [...COMMON_SETTINGS, ...SECONDARY_DOMAINS.filter(item => item.id !== 'models')];
+    : workspace?.title || settingsGroup?.title || (page === 'settings' || page === 'connections' ? '设置' : isPhonePage ? phoneTitle || '手机能力' : page === 'background' ? '后台运行' : page === 'history' ? '任务历史' : page === 'usage' ? '模型调用记录' : page === 'archives' ? '备份与迁移' : page === 'storage' ? '项目存储' : domain?.title || 'PocketWorld');
+  const settingsEntries = COMMON_SETTINGS.map(item => item.id === 'phone:appearance' ? { ...item, detail: [({ system: '跟随系统', light: '浅色', dark: '深色' } as Data)[text(object(state.appearance).mode)], '中文、英数与代码字体'].filter(Boolean).join(' · ') } : item);
   const filtered = settingsEntries.filter(item => (item.title + item.detail).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
-  const frequentSettings = [
-    { id: 'model-settings', title: '当前模型', detail: text(state.modelName) || '尚未连接', icon: RiKey2Line },
-    { id: 'phone', title: '手机能力与字体', detail: [({ system: '跟随系统', light: '浅色', dark: '深色' } as Data)[text(object(state.appearance).mode)], state.accessibilityEnabled === true ? '界面读取已连接' : state.accessibilityEnabled === false ? '界面读取未连接' : '权限尚未核实'].filter(Boolean).join(' · '), icon: RiSmartphoneLine },
-  ];
   const viewKey = page + (isModelPage ? ':' + modelView.kind + ':' + (modelView.id || '') : '');
   const modelBrowseActive = ['list', 'catalog', 'model'].includes(modelView.kind);
   const modelParent = modelTrail.current.at(-1)?.kind;
@@ -1472,8 +1487,9 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
     const previous = trail.current.pop();
     if (previous) { generation.current++; setNotice(''); setError(''); setPage(previous.page); setCandidateTarget(previous.candidateTarget); setQuery(previous.query); modelTrail.current = previous.modelTrail; setModelView(previous.modelView); return true; }
     if (page === normalize(route)) return false;
+    if (workspace && workspaceForRoute(normalize(route))?.key === workspace.key) return false;
     if (page === 'settings' || page === 'connections') return false;
-    generation.current++; setCandidateTarget(null); setPage(page === 'background' ? 'phone' : 'settings'); setModelView({ kind: 'list' }); return true;
+    generation.current++; setCandidateTarget(null); setPage(page === 'background' ? 'phone' : workspace?.route || 'settings'); setModelView({ kind: 'list' }); return true;
   };
   // Both the Android back event and the visible back button consume the same
   // current layer. Only the settings root delegates to the enclosing app.
@@ -1484,18 +1500,16 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
     return () => registerBackHandler?.(null);
   }, [registerBackHandler]);
   const back = () => { if (!consumeBack()) onBack(); };
-  const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof RiKey2Line }>) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" onClick={() => navigate(item.id)}><span className="pw-settings-row-copy"><span>{item.title}</span><small>{item.detail}</small></span></Button>)}</div>;
+  const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof RiKey2Line }>) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" disabled={item.id === 'updates' && !supported('settings.openAppUpdates')} onClick={() => { if (item.id === 'updates') { void run('settings.openAppUpdates', {}).catch(() => {}); } else navigate(item.id); }}><span className="pw-settings-row-copy"><span>{item.title}</span><small>{item.detail}</small></span></Button>)}</div>;
   const refreshAction = page === 'background' ? 'background.refresh' : isModelPage ? 'models.snapshot' : page === 'memory' ? 'memory.list' : 'app.refresh';
-  return <section className="pw-secondary pw-secondary-refactor" data-secondary-page={page} aria-label={pageTitle}>
-    <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label={isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} onClick={back} /><div><h1>{pageTitle}</h1></div>{!['memory', 'memoryReview', 'teams'].includes(page) && <IconButton icon={RiRefreshLine} aria-label="刷新当前状态" title="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} />}{navigationTrigger}</header>
-    <div className="pw-secondary-scroll" ref={scroll}>
+  const content = <div className="pw-secondary-scroll" ref={scroll}>
       {notice && <p className="pw-request-notice" role="status">{notice}</p>}
       {(error || domainError) && <p className="pw-field-error" role="alert">{error || domainError}</p>}
       <div className="pw-secondary-page" data-secondary-view={viewKey}>
-        {(page === 'settings' || page === 'connections') ? <div className="pw-settings-home">
+        {(page === 'settings' || page === 'connections') ? <div className="pw-settings-home pw-settings-preferences">
           <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="搜索设置" placeholder="搜索设置" value={query} onChange={setQuery} shape="rounded" />
           {query.trim() ? <section className="pw-settings-results" aria-label="匹配的设置">{settingRows(filtered)}{filtered.length === 0 && <Empty>没有匹配的设置。</Empty>}</section>
-            : <><div className="pw-settings-primary"><section className="pw-settings-frequent" aria-label="常用设置"><h2>常用设置</h2>{settingRows(frequentSettings)}</section><section className="pw-settings-execution" aria-label="执行控制"><ExecutionControls state={state} supported={supported} run={run}/></section></div><section className="pw-settings-purpose"><h2>全部设置</h2><nav className="pw-settings-groups pw-settings-links" aria-label="按目的浏览设置">{SETTINGS_GROUPS.map(group => <Button key={group.id} variant="ghost" leadingIcon={group.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link pw-settings-group-entry h-auto whitespace-normal" data-settings-group={group.id} onClick={() => navigate('group:' + group.id)}><span className="pw-settings-row-copy"><span>{group.title}</span></span></Button>)}</nav></section></>}
+            : <div className="pw-settings-categories">{SETTINGS_GROUPS.map(group => <section key={group.id} className="pw-settings-category" data-settings-group={group.id} aria-label={group.title}><h2>{group.title}</h2>{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}{group.id === 'privacy' && <div className="pw-settings-execution" aria-label="执行控制"><ExecutionControls state={state} supported={supported} run={run}/></div>}</section>)}</div>}
         </div> : settingsGroup ? <section className="pw-settings-group-page">{settingRows(settingsGroup.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</section>
           : isModelPage ? <>
             <div className="pw-model-list" data-model-layer={modelView.kind === 'model' ? 'model' : 'list'} hidden={!modelBrowseActive}>
@@ -1509,12 +1523,19 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
               : modelView.kind === 'connection' ? <ModelConnectionDetail connection={connection} data={data} state={state} supported={supported} run={run} open={openModel} busy={Boolean(state.modelSelectionBusy || state.modelSaving || state.modelTesting || state.chatSubmitting || state.phoneSubmitting)} /> : null}
           </>
           : page === 'phone' ? <PhoneSettings state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phonePresentation.current} onViewChange={view => { phonePresentation.current = view; }} />
+          : isPhonePage ? <PhoneSettings key={page} state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phoneView} direct />
           : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} onReturn={returnToPhone} registerTransientBack={registerTransientBack} />
           : page === 'history' || page === 'usage' ? <HistoryPage key={page} usage={page === 'usage'} supported={supported} run={run} />
           : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} registerTransientBack={registerTransientBack} navigate={navigate} />
           : domain ? <DomainPage key={page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} alreadyShownError={error || domainError} />
-          : <Empty>此入口未找到，可返回设置。</Empty>}
+          : <Empty>此页面暂不可用，请从导航重新打开。</Empty>}
       </div>
-    </div>
+    </div>;
+  return <section className="pw-secondary pw-secondary-refactor" data-secondary-page={page} data-workspace={workspace?.key} aria-label={pageTitle}>
+    <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label={isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} onClick={back} /><div><h1>{pageTitle}</h1></div>{!workspace && <IconButton icon={RiRefreshLine} aria-label="刷新当前状态" title="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} />}{navigationTrigger}</header>
+    {workspace ? <Tabs className="pw-workspace-navigation" selectedKey={workspacePageForRoute(page)} onSelectionChange={key => switchWorkspacePage(String(key))}>
+      <TabList aria-label={workspace.title + '工作区'}>{workspace.pages.map(item => <Tab key={item.route} id={item.route}>{item.title}</Tab>)}</TabList>
+      <TabPanel id={workspacePageForRoute(page) || workspace.route} className="pw-workspace-panel">{content}</TabPanel>
+    </Tabs> : content}
   </section>;
 }

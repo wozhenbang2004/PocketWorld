@@ -1,0 +1,69 @@
+{
+  "scope": "Production Web bundle and synthetic native receipts. Android IME, system back, TalkBack and durable host execution are not exercised.",
+  "bundle": "index-CqjI3Gdk.js",
+  "bundleSha256": "e52219950e9ea3b055081ffa271606886af7c1e77ad7907383fdbde3bccddebc",
+  "checks": [
+    {
+      "scenario": "390-light",
+      "status": "passed",
+      "touchEnter": "newline",
+      "draftAndFilterReturn": true,
+      "originalSendIdentity": true,
+      "horizontalOverflow": false
+    },
+    {
+      "scenario": "320-light",
+      "status": "passed",
+      "touchEnter": "newline",
+      "draftAndFilterReturn": true,
+      "originalSendIdentity": true,
+      "horizontalOverflow": false
+    },
+    {
+      "scenario": "390-dark",
+      "status": "passed",
+      "touchEnter": "newline",
+      "draftAndFilterReturn": true,
+      "originalSendIdentity": true,
+      "horizontalOverflow": false
+    },
+    {
+      "scenario": "1280-light",
+      "status": "passed",
+      "touchEnter": "desktop unchanged",
+      "draftAndFilterReturn": true,
+      "originalSendIdentity": true,
+      "horizontalOverflow": false
+    },
+    {
+      "scenario": "first-use",
+      "status": "passed",
+      "emptyDraft": true,
+      "emptyWork": true,
+      "modelConnectionEntry": true
+    }
+  ],
+  "screenshots": [
+    "390-light-conversation.png",
+    "390-light-navigation.png",
+    "390-light-tasks.png",
+    "390-light-settings.png",
+    "390-light-project-files.png",
+    "390-light-short-viewport.png",
+    "320-light-conversation.png",
+    "320-light-navigation.png",
+    "320-light-tasks.png",
+    "320-light-project-files.png",
+    "320-light-short-viewport.png",
+    "390-dark-conversation.png",
+    "390-dark-navigation.png",
+    "390-dark-tasks.png",
+    "390-dark-project-files.png",
+    "390-dark-short-viewport.png",
+    "1280-light-conversation.png",
+    "1280-light-tasks.png",
+    "1280-light-project-files.png",
+    "390-first-use.png"
+  ],
+  "errors": []
+}

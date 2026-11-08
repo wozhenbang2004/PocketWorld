@@ -1,0 +1,77 @@
+/* Real peer workspaces use the retained BoardUI/React Aria tabs. The active
+ * page keeps its own native owner, scroll area and exact mutation handlers. */
+.pw-secondary-refactor .pw-workspace-navigation {
+  flex: 1;
+  min-height: 0;
+  gap: 0;
+}
+.pw-workspace-navigation > div:first-child {
+  flex: none;
+  width: calc(100% - 32px);
+  max-width: calc(100% - 32px);
+  margin-inline: 16px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: none;
+}
+.pw-workspace-navigation > div:first-child::-webkit-scrollbar { display: none; }
+.pw-workspace-navigation > div:first-child > [role="tablist"] {
+  width: max-content;
+  min-width: 100%;
+  gap: 4px;
+  border-color: var(--pw-edge);
+}
+.pw-secondary-refactor .pw-workspace-navigation > div:first-child [role="tab"] {
+  flex: none;
+  min-width: 0;
+  min-height: 48px;
+  padding: 12px;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--pw-copy);
+  background: transparent;
+  border-radius: 0;
+}
+.pw-secondary-refactor .pw-workspace-navigation > div:first-child [role="tab"][data-selected] { color: var(--pw-ink); }
+.pw-workspace-navigation > div:first-child [role="tab"] > span { color: inherit; }
+.pw-secondary-refactor .pw-workspace-navigation > div:first-child > span[aria-hidden] {
+  top: auto;
+  bottom: 0;
+  height: 2px;
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--pw-ink);
+}
+.pw-workspace-panel {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+}
+.pw-secondary-refactor[data-workspace] .pw-secondary-scroll { padding-top: 20px; }
+.pw-secondary-refactor[data-workspace] .pw-secondary-page {
+  width: 100%;
+  max-width: 1040px;
+  margin-inline: auto;
+}
+
+/* The shell owns the workspace title. Keep the collection's real scope and
+ * read action, without repeating the same title above its first records. */
+.pw-secondary-refactor[data-secondary-page="memory"] .pw-memory-collection > .pw-knowledge-directory-heading h2,
+.pw-secondary-refactor[data-secondary-page="memoryReview"] .pw-memory-collection > .pw-knowledge-directory-heading h2 { display: none; }
+.pw-secondary-refactor[data-workspace="memory"] .pw-memory-collection > .pw-knowledge-directory-heading {
+  min-height: 48px;
+  margin: -8px 0 4px;
+}
+.pw-secondary-refactor[data-workspace="memory"] .pw-memory-collection > .pw-knowledge-directory-heading .pw-detail-location { margin: 0; }
+.pw-secondary-refactor[data-workspace="memory"] .pw-knowledge-directory-group { margin-block: 18px; }
+.pw-secondary-refactor[data-workspace="memory"] .pw-knowledge-filters { margin-bottom: 8px; }
+
+@media (min-width: 900px) {
+  .pw-workspace-navigation > div:first-child { width: calc(100% - 80px); max-width: calc(100% - 80px); margin-inline: 40px; }
+  .pw-secondary-refactor[data-workspace] .pw-secondary-scroll { padding-top: 28px; }
+}
+@media (max-width: 380px) {
+  .pw-secondary-refactor .pw-workspace-navigation > div:first-child [role="tab"] { padding-inline: 11px; }
+}

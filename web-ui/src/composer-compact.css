@@ -1,9 +1,9 @@
 /* Compact host for the retained Affect composer and Josh press controls.
  * This file follows the theme stylesheet so its layout wins existing host rules. */
 .pw-composer-host.pw-compact-composer .afa-composer > .afa-card.pw-composer-card {
-  padding: 8px;
+  padding: 10px;
   border: 0;
-  border-radius: 20px;
+  border-radius: 24px;
   background: var(--pw-surface, #fff);
   box-shadow: var(--pw-shadow-surface, 0 12px 40px rgb(0 0 0 / 4%));
 }
@@ -34,6 +34,9 @@
 }
 .pw-composer-host.pw-compact-composer .pw-composer-leading { grid-row: 2; grid-column: 1; }
 .pw-composer-host.pw-compact-composer .pw-composer-row > .afa-toolbar { grid-row: 2; grid-column: 2; justify-self: end; }
+.pw-composer-host.pw-compact-composer .pw-composer-with-controls { grid-template-columns: 48px minmax(0,1fr) auto; gap: 4px; }
+.pw-composer-host.pw-compact-composer .pw-composer-with-controls > .afa-toolbar { grid-column: 3; }
+.pw-composer-controls { grid-row: 2; grid-column: 2; min-width: 0; align-self: center; }
 
 .pw-composer-host.pw-compact-composer .afa-composer .pw-composer-row > textarea {
   box-sizing: border-box;
@@ -45,7 +48,7 @@
   min-height: 48px;
   max-height: 120px;
   margin: 0;
-  padding: 10px 10px 8px;
+  padding: 10px 10px 12px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -68,7 +71,7 @@
   margin: 0;
   padding: 10px;
   border: 0;
-  border-radius: 14px;
+  border-radius: 50%;
 }
 
 .pw-composer-host.pw-compact-composer .pw-composer-row .pw-press {
@@ -79,14 +82,14 @@
   height: 48px;
   min-height: 48px;
   padding: 2px !important;
-  border-radius: 13px;
+  border-radius: 50%;
 }
 
 .pw-composer-host.pw-compact-composer .pw-composer-row .pw-press-front {
   box-sizing: border-box;
   min-height: 44px;
   padding: 9px 7px;
-  border-radius: 13px;
+  border-radius: 50%;
 }
 
 .pw-composer-host.pw-compact-composer .pw-composer-row .pw-press-material {
@@ -183,4 +186,10 @@
   color: var(--pw-muted, #737373);
   font-size: 12px;
   line-height: 18px;
+}
+
+@media (max-width: 360px) {
+ .pw-composer-host.pw-compact-composer .pw-composer-with-controls .pw-composer-controls { grid-row: 2; grid-column: 1 / -1; }
+ .pw-composer-host.pw-compact-composer .pw-composer-with-controls .pw-composer-leading,
+ .pw-composer-host.pw-compact-composer .pw-composer-with-controls > .afa-toolbar { grid-row: 3; }
 }

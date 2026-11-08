@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { RiArrowRightSLine, RiBookOpenLine, RiCheckLine, RiCloseLine, RiFileList3Line } from '@remixicon/react';
 import { Button, CheckboxField, SearchField } from '../forms-library';
 import { failureOutcome, outcomeLabel, probeObservations, runtimeAttempts, skillMatches, stageLabel } from './affect-workflow-data';
@@ -6,23 +6,26 @@ import type { WorkflowData } from './affect-workflow-data';
 import './affect-workflows.css';
 
 /** PromptLibraryDemo list/search/detail composition; all entries and actions come from SkillBook. */
-export function SkillLibrary({ skills, query, onQuery, disabled, loaded, onOpen, checkingSources, selectedIds, onToggle }: {
+export function SkillLibrary({ skills, query, onQuery, disabled, loaded, onOpen, checkingSources, selectedIds, onToggle, filters, hideHeading = false, directOpen = false }: {
   skills: WorkflowData[]; query: string; onQuery: (query: string) => void; disabled: boolean; loaded: boolean;
   onOpen: (id: string) => void; checkingSources: boolean; selectedIds: string[]; onToggle: (skill: WorkflowData, selected: boolean) => void;
+  filters?: ReactNode; hideHeading?: boolean; directOpen?: boolean;
 }) {
   const [activeId, setActiveId] = useState('');
   const filtered = skills.filter(row => skillMatches(row, query));
   const active = filtered.find(row => row.id === activeId) || filtered[0];
-  return <div className="pw-affect-workflow pw-affect-library">
+  return <div className="pw-affect-workflow pw-affect-library" data-library-mode={directOpen ? 'directory' : 'preview'}>
     <div className="pw-affect-library-layout">
       <aside className="pw-affect-library-list">
-        <div className="pw-affect-library-heading"><strong>技能库</strong><span>{skills.length} 项</span></div>
+        {!hideHeading && <div className="pw-affect-library-heading"><strong>技能库</strong><span>{skills.length} 项</span></div>}
         <SearchField aria-label="查找已登记技能" value={query} onChange={onQuery} placeholder="名称、来源或能力" />
+        {filters}
         <div className="pw-affect-library-options" aria-label="已登记技能">
           {filtered.map(row => <div className="pw-affect-library-entry" key={row.id}>
-            <button type="button" data-skill-id={row.id} aria-pressed={active?.id === row.id} disabled={disabled} onClick={() => setActiveId(row.id)}>
+            <button type="button" data-skill-id={row.id} aria-pressed={directOpen ? undefined : active?.id === row.id} aria-label={directOpen ? `阅读技能：${row.name || '未命名技能'}` : undefined} disabled={disabled} onClick={() => directOpen ? onOpen(row.id) : setActiveId(row.id)}>
               <RiBookOpenLine size={18} aria-hidden="true"/><span><strong>{row.name || '未命名技能'}</strong>{row.description && <small>{row.description}</small>}</span>
               <span className="pw-affect-tag" data-tone={row.enabled ? 'passed' : 'neutral'}>{row.enabled ? '启用' : '停用'}</span>
+              {directOpen && <RiArrowRightSLine size={18} aria-hidden="true"/>}
             </button>
             {checkingSources && row.gitSource && !row.origin && <CheckboxField isSelected={selectedIds.includes(row.id)} isDisabled={disabled || (!selectedIds.includes(row.id) && selectedIds.length >= 8)} onChange={checked => onToggle(row, checked)}>加入来源检查</CheckboxField>}
           </div>)}
@@ -30,13 +33,13 @@ export function SkillLibrary({ skills, query, onQuery, disabled, loaded, onOpen,
           {!loaded && <p className="pw-affect-empty">正在读取技能清单…</p>}
         </div>
       </aside>
-      <div className="pw-affect-library-detail" aria-label="技能摘要">
+      {!directOpen && <div className="pw-affect-library-detail" aria-label="技能摘要">
         {active ? <><div className="pw-affect-library-heading"><RiBookOpenLine size={20} aria-hidden="true"/><h3>{active.name || '未命名技能'}</h3><span className="pw-affect-tag" data-tone={active.enabled ? 'passed' : 'neutral'}>{active.enabled ? '已启用' : '停用'}</span></div>
           <footer>{query.trim() && <span>{filtered.length} 项匹配</span>}<Button disabled={disabled} trailingIcon={RiArrowRightSLine} onClick={() => onOpen(active.id)}>阅读这份技能</Button></footer>
           <p>{active.description || '这份技能尚未提供说明。'}</p>
           <dl className="pw-affect-library-facts"><div><dt>来源</dt><dd>{active.source || '未注明来源'}</dd></div><div><dt>修订</dt><dd>{active.revision ?? '未注明'}{active.sourceVersion ? ` · ${active.sourceVersion}` : ''}</dd></div>{active.enabled && active.active === false && <div><dt>可用性</dt><dd>当前不可用，阅读详情核对</dd></div>}</dl>
         </> : <div className="pw-affect-library-placeholder"><RiBookOpenLine size={28} aria-hidden="true"/><p>选择一份技能，查看真实登记信息。</p></div>}
-      </div>
+      </div>}
     </div>
   </div>;
 }

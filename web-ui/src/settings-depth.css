@@ -187,3 +187,19 @@
 
 .pw-model-editor-footer>.pw-field-error{margin:0 0 10px;padding:10px 12px}
 .pw-connection-profile-editor-footer>p,.pw-budget-editor-footer>p{margin:0 0 10px;font-size:13px;line-height:21px;overflow-wrap:anywhere}
+
+/* Preferences are directly editable destinations. Daily work has its own
+ * navigation, so Settings no longer acts as the app's hidden feature menu. */
+.pw-secondary-refactor .pw-settings-preferences{display:block;max-width:900px;margin-inline:auto}
+.pw-settings-preferences>.pw-secondary-search{max-width:none;margin:0 0 24px}
+.pw-settings-categories{display:grid;grid-template-columns:minmax(0,1fr);gap:28px}
+.pw-settings-category{min-width:0}
+.pw-secondary-refactor .pw-settings-category>h2{margin:0 0 8px;padding-inline:2px;font-size:12px;line-height:20px;font-weight:600;color:var(--pw-copy)}
+.pw-secondary-refactor .pw-settings-category .pw-settings-links>.pw-domain-link{min-height:64px;padding:10px 2px;gap:14px}
+.pw-settings-category .pw-settings-links>.pw-domain-link+.pw-domain-link{border-top:1px solid var(--pw-edge)}
+.pw-settings-category .pw-domain-link>svg:first-child{color:var(--pw-copy)}
+.pw-settings-category .pw-domain-link>svg:last-child{width:16px;height:16px;color:var(--pw-copy)}
+.pw-settings-category .pw-settings-execution{margin-top:14px;padding-top:18px;border-top:1px solid var(--pw-edge)}
+.pw-settings-category .pw-settings-execution>.pw-settings-section{margin-bottom:0}
+.pw-secondary-refactor[data-secondary-page^="phone:"] .pw-secondary-page{max-width:800px;margin-inline:auto;padding-bottom:20px}
+@media(min-width:900px){.pw-settings-categories{grid-template-columns:repeat(2,minmax(0,1fr));gap:36px 56px}.pw-settings-preferences>.pw-secondary-search{max-width:420px;margin-bottom:32px}}

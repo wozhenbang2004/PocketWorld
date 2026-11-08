@@ -22,13 +22,14 @@ function fixture(name: string, initial: Data = {}) {
   // The library pane is a presentation double here; its real search/selection/reading
   // is exercised in affect-workflows-ui.mjs. Keep original native handle/focus checks.
   const SkillLibrary = (props: any) => React.createElement('SkillLibrary', props,
+    props.filters,
     ...props.skills.map((row: any) => React.createElement('div', {},
-      React.createElement('Button', { 'data-skill-id': row.id, disabled: props.disabled, onClick() {} }, `预览技能：${row.name}`),
+      React.createElement('Button', { 'data-skill-id': row.id, disabled: props.disabled, onClick: () => props.directOpen && props.onOpen(row.id) }, `${props.directOpen ? '阅读' : '预览'}技能：${row.name}`),
       props.checkingSources && row.gitSource && !row.origin && React.createElement('CheckboxField', { onChange: (selected: boolean) => props.onToggle(row, selected) }),
     )),
-    props.skills.length > 0 && React.createElement('Button', { disabled: props.disabled, onClick: () => props.onOpen(props.skills[0].id) }, '阅读这份技能'),
+    !props.directOpen && props.skills.length > 0 && React.createElement('Button', { disabled: props.disabled, onClick: () => props.onOpen(props.skills[0].id) }, '阅读这份技能'),
   );
-  const controls = Object.fromEntries(['Tabs', 'TabList', 'Tab', 'TabPanel', 'Accordion', 'AccordionItem', 'Button', 'CheckboxField', 'HostFileUpload', 'IconButton', 'SearchField', 'SelectField', 'SettingsDialog', 'TextAreaField', 'TextField', 'MemoryAssertionFields', 'MemoryHistoryWorkspace', 'MarkdownBody', 'RiArrowLeftSLine', 'RiArrowRightSLine', 'RiBookOpenLine', 'RiRefreshLine'].map(key => [key, key]));
+  const controls = Object.fromEntries(['Tabs', 'TabList', 'Tab', 'TabPanel', 'Accordion', 'AccordionItem', 'Button', 'CheckboxField', 'HostFileUpload', 'IconButton', 'SearchField', 'SelectField', 'SettingsDialog', 'Popover', 'PopoverTrigger', 'TextAreaField', 'TextField', 'MemoryAssertionFields', 'MemoryHistoryWorkspace', 'MarkdownBody', 'RiArrowLeftSLine', 'RiArrowRightSLine', 'RiBookOpenLine', 'RiAddLine', 'RiMoreLine', 'RiRefreshLine'].map(key => [key, key]));
   const dependencies = { React, useState, useRef, useCallback, useEffect: effect(effects), useLayoutEffect: effect(layouts), SkillLibrary, ...controls };
   const Component = new Function(...Object.keys(dependencies), compiled + '\nreturn ' + name + ';')(...Object.values(dependencies));
   const props = { state: {}, domain: 'memory', registerTransientBack: () => {}, ...initial, run: (action: string, args: Data = {}) => new Promise(resolve => { calls.push({ action, args, resolve }); if (action.endsWith('.close')) resolve({}); }) };
@@ -49,7 +50,7 @@ const record = { id: 'memory-a', text: '完整原记忆\n第二行内容', layer
 test('explicit skill reading uses the original object; returning restores the collection position and focus', async () => {
   const f = fixture('SkillsWorkspace'); await f.settle(f.calls[0], { skills: [skill] });
   assert.equal(f.all.some(node => node.type === 'CheckboxField'), false);
-  f.scroller.scrollTop = 260; f.click('阅读这份技能');
+  f.scroller.scrollTop = 260; f.click('阅读技能：原技能');
   const read = f.calls.findLast(call => call.action === 'skills.get')!; assert.deepEqual(read.args, { id: 'skill-a' });
   await f.settle(read, { skill, skillHandle: 'original-skill-handle' });
   assert.equal(f.find(node => node.props['aria-label'] === '技能管理').props.hidden, true); assert.equal(f.scroller.scrollTop, 0);
@@ -60,7 +61,7 @@ test('explicit skill reading uses the original object; returning restores the co
 test('skill status filtering opens the matching original object and retains the filter on return', async () => {
   const enabled = { ...skill, id: 'skill-enabled', name: '已启用的另一份技能', enabled: true };
   const f = fixture('SkillsWorkspace'); await f.settle(f.calls[0], { skills: [skill, enabled] });
-  f.click('已启用1'); f.click('阅读这份技能');
+  f.click('已启用1'); f.click('阅读技能：已启用的另一份技能');
   const read = f.calls.findLast(call => call.action === 'skills.get')!;
   assert.deepEqual(read.args, { id: enabled.id });
   await f.settle(read, { skill: enabled, skillHandle: 'enabled-original-handle' });
@@ -70,7 +71,7 @@ test('skill status filtering opens the matching original object and retains the 
   assert.equal(f.calls.some(call => /\.confirm$|\.review$/.test(call.action)), false);
 });
 test('Markdown reading preserves the complete original resource and does not submit an approval', async () => {
-  const f = fixture('SkillsWorkspace'); await f.settle(f.calls[0], { skills: [skill] }); f.click('阅读这份技能');
+  const f = fixture('SkillsWorkspace'); await f.settle(f.calls[0], { skills: [skill] }); f.click('阅读技能：原技能');
   await f.settle(f.calls.findLast(call => call.action === 'skills.get')!, { skill, skillHandle: 'original-skill-handle' });
   f.click('读取原资源正文'); const read = f.calls.findLast(call => call.action === 'skills.read')!;
   assert.deepEqual(read.args, { skillHandle: 'original-skill-handle', path: 'SKILL.md', offset: 0 });
@@ -81,13 +82,34 @@ test('Markdown reading preserves the complete original resource and does not sub
 });
 test('batch-source selection is explicit and cancelling it releases the read handles', async () => {
   const f = fixture('SkillsWorkspace'); await f.settle(f.calls[0], { skills: [{ ...skill, gitSource: { source: {} } }] });
+  f.find(node => node.type === 'PopoverTrigger').props.onOpenChange(true); f.render();
   f.click('批量检查来源'); const checkbox = f.find(node => node.type === 'CheckboxField'); checkbox.props.onChange(true); f.render();
   await f.settle(f.calls.findLast(call => call.action === 'skills.get')!, { skill, skillHandle: 'batch-original-handle' });
   f.click('退出多选'); assert.ok(f.calls.some(call => call.action === 'skills.close' && call.args.handle === 'batch-original-handle'));
   assert.equal(f.all.some(node => node.type === 'CheckboxField'), false); assert.equal(f.calls.some(call => call.action === 'skills.batch.confirm'), false);
 });
+test('import opens explicitly and choosing a file keeps the exact current target without reading it', async () => {
+  const f = fixture('SkillsWorkspace'); await f.settle(f.calls[0], { skills: [skill] });
+  assert.equal(f.visibleAll.some(node => node.type === 'HostFileUpload'), false);
+  f.click('导入技能');
+  assert.equal(f.calls.length, 1, 'opening the importer is only presentation');
+  const upload = f.visibleAll.find(node => node.type === 'HostFileUpload' && node.props.label === '选择完整技能 ZIP');
+  assert.ok(upload); upload.props.onChoose(); f.render();
+  assert.deepEqual(f.calls.at(-1)!.args, { format: 'package', targetHandle: '' });
+  assert.equal(f.calls.at(-1)!.action, 'skills.chooseFile');
+  assert.equal(f.visibleAll.some(node => node.type === 'HostFileUpload'), false);
+  assert.equal(f.calls.some(call => /inspect|confirm|read/.test(call.action)), false);
+  const current = fixture('SkillsWorkspace'); await current.settle(current.calls[0], { skills: [skill] });
+  current.click('阅读技能：原技能');
+  await current.settle(current.calls.findLast(call => call.action === 'skills.get')!, { skill, skillHandle: 'bound-current-skill' });
+  current.click('更新来源');
+  const update = current.visibleAll.find(node => node.type === 'HostFileUpload' && node.props.label === '选择单独的 SKILL.md');
+  assert.ok(update); update.props.onChoose(); current.render();
+  assert.deepEqual(current.calls.at(-1)!.args, { format: 'document', targetHandle: 'bound-current-skill' });
+  assert.equal(current.calls.at(-1)!.action, 'skills.chooseFile');
+});
 test('skill mutation restores focus only after the refreshed list is enabled', async () => {
-  const f = fixture('SkillsWorkspace'); await f.settle(f.calls[0], { skills: [skill] }); f.click('阅读这份技能');
+  const f = fixture('SkillsWorkspace'); await f.settle(f.calls[0], { skills: [skill] }); f.click('阅读技能：原技能');
   await f.settle(f.calls.findLast(call => call.action === 'skills.get')!, { skill, skillHandle: 'original-skill-handle' });
   f.click('核对并启用当前内容'); await f.settle(f.calls.findLast(call => call.action === 'skills.enabled.review')!, { reviewHandle: 'review-a', reviewKind: 'enabled', before: skill, enabled: true });
   f.find(node => node.type === 'CheckboxField').props.onChange(true); f.render(); f.click('确认这次原操作');

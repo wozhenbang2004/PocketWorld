@@ -55,16 +55,23 @@
 .pw-linked-task.button-press-motion > span { display: flex; gap: 14px; justify-content: space-between; width: 100%; min-width: 0; padding: 0; }
 .pw-linked-task-copy { flex: 1; min-width: 0; }
 .pw-linked-task-action { flex-shrink: 0; }
-.pw-redesign .pw-chat-start { margin-top: clamp(32px,12dvh,96px); width: min(100%,760px); }
-.pw-redesign .pw-chat-start h2 { font-size: 24px; line-height: 34px; letter-spacing: -.025em; }
-.pw-chat-start .pw-start-actions { margin-top: 4px; gap: 4px; }
-.pw-chat-start .pw-start-actions button { min-height: 48px; font-size: 14px; }
+.pw-chat-empty .pw-conversation-scroll { display: flex; flex-direction: column; }
+.pw-redesign .pw-chat-empty .pw-chat-start { align-items: center; justify-content: center; margin: auto; padding: 40px 20px 64px; width: min(100%,760px); gap: 26px; }
+.pw-redesign .pw-chat-start h2 { margin: 0; font-size: clamp(26px,6.8vw,34px); line-height: 1.4; letter-spacing: -.035em; font-weight: 550; text-align: center; }
+.pw-chat-start .pw-start-actions { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; margin: 0; max-width: 100%; }
+.pw-chat-start .pw-start-actions .button-press-motion { min-height: 48px; padding: 10px; gap: 6px; border: 1px solid var(--pw-edge); border-radius: 24px; background: transparent; box-shadow: none; color: var(--pw-copy); font-size: 14px; font-weight: 400; }
+.pw-chat-start .pw-start-actions .button-press-motion:hover { background: var(--pw-selected); color: var(--pw-ink); }
+.pw-chat-start .pw-start-actions .button-press-motion > span { padding: 0; }
+.pw-chat-start .pw-start-actions svg { width: 18px; height: 18px; }
+.pw-redesign .pw-chat-title h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; font-size: 18px; line-height: 28px; font-weight: 600; letter-spacing: -.025em; }
+.pw-redesign[data-route="chat"] .pw-app-header { gap: 4px; }
+@media (min-width: 720px) {
+ .pw-redesign .pw-chat-empty .pw-chat-start { padding-bottom: 80px; }
+}
 
 /* Bounded AppShell header and sheets keep reading and commit actions reachable. */
 .pw-primary-tools { display: flex; align-items: center; gap: 2px; flex: none; }
 .pw-primary-tools > button { width: 48px; min-width: 48px; height: 48px; }
-.pw-redesign .pw-conversation-context.button-press-motion { width: 100%; height: auto; min-height: 48px; padding: 2px 6px; }
-.pw-conversation-context.button-press-motion > span { display: flex; flex-direction: column; align-items: center; gap: 0; width: 100%; min-width: 0; padding: 0; }
 .pw-drawer-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 16px max(16px,env(safe-area-inset-bottom,0px)); background: var(--pw-surface); box-shadow: 0 -6px 18px -16px rgb(0 0 0 / 18%); }
 .pw-drawer-actions > button { min-height: 48px; min-width: 0; }
 .pw-attachment-drawer > .pw-drawer-body, .pw-model-drawer > .pw-drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }

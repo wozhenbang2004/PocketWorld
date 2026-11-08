@@ -53,7 +53,7 @@ try{
    assert.equal(await filters.getByRole('button').count(),4);
    assert.equal(await filters.getByRole('button').evaluateAll(rows=>rows.every(row=>row.getBoundingClientRect().height>=48)),true,'Visible task filters need complete touch targets');
    await screenshot('tasks');
-   if(width===390&&!dark){await navigate('设置');await page.locator('[data-secondary-page="settings"]').waitFor();assert.equal(await page.locator('[data-settings-group]').count(),6);await screenshot('settings');await navigate('任务');}
+   if(width===390&&!dark){await navigate('设置');await page.locator('[data-secondary-page="settings"]').waitFor();await page.getByRole('button',{name:/外观与字体/}).waitFor();assert.equal(await page.getByRole('button',{name:/外观与字体/}).count(),1);assert.deepEqual(await page.locator('[data-settings-group]').evaluateAll(groups=>groups.map(group=>[group.tagName,group.getAttribute('data-settings-group')])),[['SECTION','models'],['SECTION','preferences'],['SECTION','privacy'],['SECTION','data']]);await screenshot('settings');await navigate('任务');}
    await filters.getByRole('button',{name:'已结束',exact:true}).click();assert.equal(await page.locator('.pw-task-row').count(),1);
    await page.locator('[data-task-id="completed-work"]').click();await page.getByRole('button',{name:'返回原工作',exact:true}).click();
    assert.equal(await filters.getByRole('button',{name:'已结束',exact:true}).getAttribute('aria-pressed'),'true','Return keeps collection filter');
@@ -79,11 +79,11 @@ try{
  const firstPage=await fresh.newPage();firstPage.on('pageerror',error=>record.errors.push(`first-use: ${error.message}`));
  try{
   await firstPage.goto(origin,{waitUntil:'networkidle'});await firstPage.waitForFunction(()=>document.documentElement.dataset.pocketUi==='ready');
-  await firstPage.getByRole('button',{name:'连接模型',exact:true}).waitFor();
+  await firstPage.getByRole('button',{name:'选择模型，开始对话',exact:true}).waitFor();
   assert.equal(await firstPage.getByRole('textbox',{name:'工作输入',exact:true}).inputValue(),'','First use must not fabricate a draft');
   assert.equal(await firstPage.locator('.pw-work-row').count(),0,'First use must not fabricate running tasks');
   await firstPage.evaluate(()=>document.fonts.ready);await firstPage.screenshot({path:path.join(output,'390-first-use.png'),animations:'disabled'});record.screenshots.push('390-first-use.png');
-  await firstPage.getByRole('button',{name:'连接模型',exact:true}).click();await firstPage.locator('[data-secondary-page="models"]').waitFor();
+  await firstPage.getByRole('button',{name:'选择模型，开始对话',exact:true}).click();await firstPage.getByRole('button',{name:'管理 API 连接',exact:true}).click();await firstPage.locator('[data-secondary-page="models"]').waitFor();
   record.checks.push({scenario:'first-use',status:'passed',emptyDraft:true,emptyWork:true,modelConnectionEntry:true});
  }catch(error){record.checks.push({scenario:'first-use',status:'failed',error:String(error.stack||error)});}
  finally{await fresh.close();}
