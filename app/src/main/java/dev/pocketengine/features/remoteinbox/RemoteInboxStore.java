@@ -120,9 +120,14 @@ public final class RemoteInboxStore {
             throw new IllegalArgumentException("令牌至少 32 位，必须是无空格的 ASCII 字符");
         JSONObject existing = load(settings);
         boolean same = url.equals(existing.optString("endpoint")) && token.equals(existing.has("token") ? decrypt(existing.getString("token")) : "");
-        JSONObject next = new JSONObject().put("endpoint", url).put("token", encrypt(token)).put("live", same && existing.optBoolean("live"));
-        if (!same) write(journal, new JSONObject().put("cursor", 0).put("events", new JSONArray()));
+        String configId = same && !existing.optString("configId").isEmpty()
+            ? existing.getString("configId") : java.util.UUID.randomUUID().toString();
+        JSONObject next = new JSONObject().put("endpoint", url).put("token", encrypt(token))
+            .put("configId", configId).put("live", same && existing.optBoolean("live"));
+        // First commit the account identity. If a crash intervenes, the journal's
+        // mismatched identity causes a safe cursor reset, not cross-account replay.
         write(settings, next);
+        if (!same) write(journal, new JSONObject().put("configId", configId).put("cursor", 0).put("events", new JSONArray()));
     }
     public synchronized void disconnect() throws Exception {
         write(settings, new JSONObject());
@@ -141,10 +146,18 @@ public final class RemoteInboxStore {
         config.put("live", enabled);
         write(settings, config);
     }
-    public synchronized long cursor() throws Exception { return load(journal).optLong("cursor", 0); }
+    public synchronized String configId() throws Exception { return load(settings).optString("configId"); }
+    private JSONObject activeJournal() throws Exception {
+        JSONObject saved = load(journal);
+        String configuredIdentity = configId();
+        if (configuredIdentity.isEmpty() || !configuredIdentity.equals(saved.optString("configId")))
+            return new JSONObject().put("configId", configuredIdentity).put("cursor", 0).put("events", new JSONArray());
+        return saved;
+    }
+    public synchronized long cursor() throws Exception { return activeJournal().optLong("cursor", 0); }
     public synchronized void signalOpen() { openRevision++; }
     public synchronized JSONObject snapshot() throws Exception {
-        JSONObject state = load(journal);
+        JSONObject state = activeJournal();
         JSONObject config = load(settings);
         JSONArray all = state.optJSONArray("events");
         int unread = 0;
@@ -155,8 +168,10 @@ public final class RemoteInboxStore {
             .put("events", all == null ? new JSONArray() : all);
     }
     /** Batch is validated in its entirety before one atomic journal write and cursor advance. */
-    public synchronized List<JSONObject> ingest(JSONArray events) throws Exception {
-        JSONObject state = load(journal);
+    public synchronized List<JSONObject> ingest(JSONArray events, String expectedConfigId) throws Exception {
+        if (expectedConfigId == null || expectedConfigId.isEmpty() || !expectedConfigId.equals(configId()))
+            throw new SecurityException("远程通知连接已改变，本次旧请求已丢弃");
+        JSONObject state = activeJournal();
         JSONArray current = state.optJSONArray("events");
         if (current == null) current = new JSONArray();
         if (events.length() > 100) throw new SecurityException("一次同步结果超过限制");
@@ -186,7 +201,7 @@ public final class RemoteInboxStore {
             JSONObject notice = new JSONObject().put("seq", seq).put("source_key", sourceKey).put("kind", kind)
                 .put("title", title).put("body", body).put("origin", origin).put("url", link)
                 .put("priority", "attention".equals(remote.optString("priority")) ? "attention" : "normal")
-                .put("created_at", bounded(remote.optString("created_at"), 40)).put("read", false);
+                .put("created_at", bounded(remote.optString("created_at"), 40)).put("read", false).put("alerted", false);
             if (keys.add(sourceKey)) admitted.add(notice);
             highest = seq;
         }
@@ -195,11 +210,11 @@ public final class RemoteInboxStore {
         for (int i = Math.max(0, keepFrom); i < current.length(); i++) next.put(current.getJSONObject(i));
         int skipNew = Math.max(0, keepFrom - current.length());
         for (int i = skipNew; i < admitted.size(); i++) next.put(admitted.get(i));
-        write(journal, new JSONObject().put("cursor", highest).put("events", next));
+        write(journal, new JSONObject().put("configId", expectedConfigId).put("cursor", highest).put("events", next));
         return admitted;
     }
     public synchronized JSONObject find(long seq) throws Exception {
-        JSONArray entries = load(journal).optJSONArray("events");
+        JSONArray entries = activeJournal().optJSONArray("events");
         if (entries == null) throw new IllegalArgumentException("通知已不在保留范围");
         for (int i = 0; i < entries.length(); i++) {
             JSONObject notice = entries.getJSONObject(i);
@@ -208,7 +223,7 @@ public final class RemoteInboxStore {
         throw new IllegalArgumentException("通知已不在保留范围");
     }
     public synchronized void read(long seq) throws Exception {
-        JSONObject state = load(journal);
+        JSONObject state = activeJournal();
         JSONArray entries = state.optJSONArray("events");
         if (entries == null) throw new IllegalArgumentException("没有可读取的通知");
         boolean found = false;
@@ -218,6 +233,25 @@ public final class RemoteInboxStore {
         }
         if (!found) throw new IllegalArgumentException("通知已不在保留范围");
         write(journal, state);
+    }
+    public synchronized List<JSONObject> pendingAlerts() throws Exception {
+        JSONArray entries = activeJournal().optJSONArray("events");
+        List<JSONObject> pending = new ArrayList<>();
+        if (entries != null) for (int i = 0; i < entries.length(); i++) {
+            JSONObject event = entries.getJSONObject(i);
+            if (!event.optBoolean("alerted") && !event.optBoolean("read")) pending.add(new JSONObject(event.toString()));
+        }
+        return pending;
+    }
+    public synchronized void alertPosted(long seq, String expectedConfigId) throws Exception {
+        if (!expectedConfigId.equals(configId())) throw new SecurityException("远程通知连接已改变");
+        JSONObject state = activeJournal();
+        JSONArray entries = state.getJSONArray("events");
+        for (int i = 0; i < entries.length(); i++) if (entries.getJSONObject(i).optLong("seq") == seq) {
+            entries.getJSONObject(i).put("alerted", true);
+            write(journal, state);
+            return;
+        }
     }
     private static String bounded(String raw, int max) {
         if (raw == null || raw.length() > max || raw.indexOf('\u0000') >= 0) throw new SecurityException("通知文本长度无效");
