@@ -11,6 +11,20 @@ public final class OwnerComposerStateTest {
     private static JSONArray file()throws Exception{return new JSONArray().put(new JSONObject().put("id",id()).put("sha256","a".repeat(64)).put("name","原中文文件.png").put("mimeType","image/png").put("size",24));}
     private static OwnerComposerState.Draft text(OwnerComposerState state,String value)throws Exception{var d=state.active();return state.edit(d.key,d.revision,value,d.mode,d.attachments());}
     private static OwnerComposerState.Pending prepared(OwnerComposerState state)throws Exception{var d=state.active();return state.prepare(id(),d.key,d.revision,"b".repeat(64),null);}
+    @Test public void attachmentOnlyDraftMustKeepNativeSelectionAndDurablePendingIdentity()throws Exception{
+        var state=OwnerComposerState.empty();var empty=state.active();
+        assertThrows(IllegalArgumentException.class,()->state.prepare(id(),empty.key,empty.revision,"a".repeat(64),null));
+        state.edit(empty.key,empty.revision,"","queue",file());
+        var draft=state.active();
+        var pending=state.prepare(id(),draft.key,draft.revision,"b".repeat(64),null);
+        assertEquals("",state.active().text);assertEquals(1,state.active().attachments().length());
+        var restored=OwnerComposerState.fromJson(state.toJson());
+        assertEquals(pending.clientId,restored.pending().get(0).clientId);
+        assertEquals("",restored.active().text);assertEquals(1,restored.active().attachments().length());
+        var acknowledgement=restored.acknowledge(pending.clientId,id());
+        assertTrue(acknowledgement.matched);assertTrue(acknowledgement.cleared);
+        assertEquals(0,restored.active().attachments().length());
+    }
     @Test public void eachConversationKeepsTextAttachmentAnchorAndFinalVoiceAcrossRoundTrip()throws Exception{
         var state=OwnerComposerState.empty();String a=id(),b=id();var first=state.selectConversation(a);state.edit(first.key,first.revision,"A中文草稿🧭","steer",file());state.reading(first.key,4,21,"original-message","seen-tail",true);state.retainVoice(first.key,id(),"仅属于A的最终听写");
         var second=state.selectConversation(b);state.edit(second.key,second.revision,"B的新目标","queue",new JSONArray());var restored=OwnerComposerState.fromJson(new JSONObject(state.toJson().toString()));assertEquals(b,restored.active().conversationId);
