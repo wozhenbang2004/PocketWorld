@@ -74,7 +74,7 @@ def verify_handoff(folder,head,run_id):
   raise ValueError('Cross-run or cross-SHA artifact rejected')
  if h.get('pin')!=first.PIN or h.get('repository')!=publisher.REPO:
   raise ValueError('Artifact trust configuration mismatch')
- if h.get('tag')!='v'+str(h.get('payload',{}).get('versionCode')):
+ if h.get('tag')!=first.version_tag(h.get('payload',{}).get('versionCode')):
   raise ValueError('Tag/version mismatch')
  first.require_version_floor(h['payload']['versionCode'],h['minimumVersion'])
  if h['minimumVersion']<258:raise ValueError('Version floor below observed reference')
@@ -115,11 +115,11 @@ def prepare(args,env):
   runtime=runtime_module.Runtime(repo,work/'temp',c['java_home'],c['build_tools'],c['openssl'])
   inspector=runtime.existing('inspect-update-artifacts')
   c['minimum_version']=args.minimum_version
-  result=first.prepare(core,runner,inspector,args.apk.resolve(),args.receipt,args.head,args.public_der,'v'+str(args.version),args.now)
+  result=first.prepare(core,runner,inspector,args.apk.resolve(),args.receipt,args.head,args.public_der,first.version_tag(args.version),args.now)
   payload=result['payload'];sources=[{'file':result['apk'],'name':payload['apk']['url'].rsplit('/',1)[1]}]
  else:
   if args.base_apk is None or args.base_envelope is None:raise ValueError('Delta requires both exact baseline APK and signed envelope')
-  result=delta.prepare(core,runner,args.base_envelope,args.base_apk.resolve(),args.apk.resolve(),args.receipt,args.head,'v'+str(args.version))
+  result=delta.prepare(core,runner,args.base_envelope,args.base_apk.resolve(),args.apk.resolve(),args.receipt,args.head,first.version_tag(args.version))
   payload=read(work/'github-unsigned-payload.json');sources=result['assets']
  if payload['versionCode']!=args.version:raise ValueError('Built APK differs from selected version')
  output=work/'handoff';output.mkdir()
@@ -133,7 +133,7 @@ def prepare(args,env):
   assets.append({'name':name,'bytes':target.stat().st_size,'sha256':sha(target)})
  write(output/'handoff.json',{'schema':1,'sourceCommit':args.head,'runId':run_id,'repository':publisher.REPO,
        'pin':first.PIN,'minimumVersion':args.minimum_version,'floorEvidence':'operator_configured; observed258_not_signature_verified',
-       'tag':'v'+str(args.version),'payload':payload,'assets':assets})
+       'tag':first.version_tag(args.version),'payload':payload,'assets':assets})
  verify_handoff(output,args.head,run_id)
  return {'status':'prepared','directory':str(output),'published':False}
 
