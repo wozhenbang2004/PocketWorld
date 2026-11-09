@@ -2,7 +2,7 @@ name: AI services integration checks
 
 on:
   push:
-    branches: [main, 'uiux/ai-center-*']
+    branches: ['uiux/ai-center-*']
     paths:
       - 'app/src/main/java/dev/pocketengine/runtime/models/**'
       - 'app/src/main/java/dev/pocketengine/store/SettingsStore.java'
