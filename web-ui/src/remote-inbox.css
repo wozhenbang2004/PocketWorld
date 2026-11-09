@@ -1,4 +1,5 @@
 .pw-remote-inbox{padding:clamp(16px,4vw,28px);max-width:1040px;margin:0 auto;width:100%;display:grid;align-content:start;gap:16px;color:var(--color-text-primary,inherit)}
+.pw-remote-navigation{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:32px}
 .pw-remote-inbox-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}
 .pw-remote-inbox-head h1{font-size:1.6rem;line-height:1.25;letter-spacing:-.04em;font-weight:650;margin:3px 0}
 .pw-remote-inbox-head p,.pw-remote-receiver p,.pw-remote-config-footer>span,.pw-remote-footnote{font-size:.82rem;color:var(--color-text-secondary,#777);line-height:1.6;margin:0}
