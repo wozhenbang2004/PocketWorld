@@ -1,0 +1,35 @@
+name: Account integration workspace
+on:
+  push:
+    branches: [work/unified-account-access-20261109]
+    paths: [.github/workflows/account-integration-workspace.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22.22.0'
+          cache: npm
+          cache-dependency-path: web-ui/package-lock.json
+      - name: Prepare source and locked frontend dependencies
+        run: |
+          set -euo pipefail
+          mkdir -p workspace-bundle
+          git archive --format=tar HEAD | gzip -n > workspace-bundle/source.tar.gz
+          npm ci --prefix web-ui --ignore-scripts --no-audit --no-fund
+          tar -czf workspace-bundle/frontend-dependencies.tar.gz web-ui/node_modules
+          git rev-parse HEAD > workspace-bundle/revision.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: account-integration-workspace
+          path: workspace-bundle/
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
