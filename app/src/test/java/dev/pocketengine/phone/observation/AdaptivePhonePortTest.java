@@ -108,6 +108,39 @@ public class AdaptivePhonePortTest {
         JSONObject result=p.execute("phone_click_node",args("first"),c);assertTrue(result.isNull("accepted"));assertTrue(result.getBoolean("requiresPause"));
         error(p.observe(true,c),"reconciliation_required");assertEquals(1,f.executions);
     }
+    @Test public void repeatedChangingScreenPausesObservationWithoutDispatchingAnyAction() throws Exception {
+        JSONObject changing = new JSONObject().put("ok", false).put("error", "screen_changed")
+                .put("message", "页面在截图观察期间变化");
+        Fixture f = new Fixture(changing, changing, changing);
+        AdaptivePhonePort p = port(f, true, true); RunControl c = control();
+        for (int i = 1; i <= 2; i++) {
+            JSONObject result = p.observe(true, c);
+            error(result, "screen_changed");
+            assertFalse(result.getBoolean("requiresPause"));
+            assertEquals(i, result.getInt("consecutiveScreenChanges"));
+        }
+        JSONObject stopped = p.observe(true, c);
+        error(stopped, "screen_unstable");
+        assertTrue(stopped.getBoolean("requiresPause"));
+        assertEquals("pause", stopped.getString("nextObservationAction"));
+        assertEquals(3, stopped.getInt("consecutiveScreenChanges"));
+        error(p.observe(true, c), "screen_unstable");
+        error(p.execute("phone_click_node", args("old"), c), "screen_unstable");
+        assertEquals(Arrays.asList(false, false, false), f.includes);
+        assertEquals(0, f.executions);
+    }
+    @Test public void successfulReadResetsScreenChangeCircuit() throws Exception {
+        JSONObject changing = new JSONObject().put("ok", false).put("error", "screen_changed");
+        Fixture f = new Fixture(changing, observation("stable", 2, false), changing, changing);
+        AdaptivePhonePort p = port(f, true, true); RunControl c = control();
+        error(p.observe(true, c), "screen_changed");
+        assertTrue(p.observe(true, c).getBoolean("ok"));
+        JSONObject first = p.observe(true, c), second = p.observe(true, c);
+        error(first, "screen_changed"); error(second, "screen_changed");
+        assertEquals(1, first.getInt("consecutiveScreenChanges"));
+        assertEquals(2, second.getInt("consecutiveScreenChanges"));
+        assertFalse(second.getBoolean("requiresPause"));
+    }
     @Test public void missingTargetUpgradeIsBoundToCurrentObservation() throws Exception {
         Fixture f=new Fixture(observation("first",1,false),observation("second",1,false),observation("pixels",1,true));AdaptivePhonePort p=port(f,true,true);RunControl c=control();p.observe(true,c);
         error(p.requestUpgrade("old",Need.TARGET_MISSING,c),"stale_observation");assertEquals(1,f.includes.size());
