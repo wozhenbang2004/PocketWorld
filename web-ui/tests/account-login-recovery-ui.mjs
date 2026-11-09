@@ -57,6 +57,18 @@ try {
       assert.equal((await calls(page, 'accounts.reauthorize')).length, 0);
     });
   }
+  await check('connected-account-explicit-reauthorization', 430, false, async page => {
+    const connected = { ...original, status: 'connected', error: '', planUsageEnabled: true };
+    await publish(page, [connected], null);
+    const account = page.getByRole('button', { name: /账号管理与授权/ });
+    await account.click();
+    const authorize = page.getByRole('button', { name: '重新授权此账号', exact: true });
+    await authorize.waitFor();
+    assert.equal((await calls(page, 'accounts.reauthorize')).length, 0, 'Opening management must not silently reauthorize');
+    await authorize.click();
+    assert.deepEqual((await calls(page, 'accounts.reauthorize')).map(x => x.args), [{ accountId: original.id, expectedVersion: 7 }]);
+    assert.equal((await calls(page, 'accounts.beginLogin')).length, 0);
+  });
   await check('registered-expired-single-retry', 430, false, async page => {
     await publish(page, [original]);
     const retry = page.getByRole('button', { name: '重新登录此账号', exact: true });

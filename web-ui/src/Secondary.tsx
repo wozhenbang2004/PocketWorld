@@ -999,6 +999,7 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack,
           <div className="pw-form-actions">
           {row.planUsageEnabled && act('accounts.manageUsage', {}, '管理套餐用量')}
           {row.enabled && !loginActive && row.status === 'connected' && act('accounts.refreshAuthorization', {accountId: row.id, expectedVersion: row.version}, '刷新授权')}
+          {row.enabled && !loginActive && ['connected', 'cooldown'].includes(text(row.status)) && act('accounts.reauthorize', {accountId: row.id, expectedVersion: row.version}, '重新授权此账号')}
           <Button variant="secondary" disabled={locked || !supported('accounts.logout.review')} onClick={() => prepare('logout', { accountId: row.id, expectedVersion: row.version })}>核对并退出</Button>
           </div>
         </AccordionItem></Accordion>
