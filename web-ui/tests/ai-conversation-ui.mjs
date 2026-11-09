@@ -503,6 +503,8 @@ async function runScene(origin, { width, height, dark }) {
       await work.getByRole('button', { name: '展开全部', exact: true }).click();
       await expect(rows).toHaveCount(4);
       await expect(work.locator('[data-work-task-id="background-queued"]').getByRole('progressbar')).toHaveCount(0);
+      await rows.last().scrollIntoViewIfNeeded();
+      await expect(rows.last()).toBeInViewport({ ratio: 1 });
       await shot('background-expanded', work);
       await page.evaluate(() => window.mainChatFixture.setBackgroundWork(false));
       await expect(work).toHaveCount(0);
@@ -598,11 +600,25 @@ async function runScene(origin, { width, height, dark }) {
     passed(scene, 'Twenty long answer proposals read once on expansion; the last item and refresh remain reachable inside the message popover', proposalReachability);
 
     if (width === 390 && !dark || width === 320 && dark) {
+      await longReply.getByRole('button', { name: '消息操作与来源', exact: true }).click();
+      await page.getByRole('button', { name: '查看任务详情：整理本周的设计反馈', exact: true }).click();
+      await expect(taskDrawer).toHaveAttribute('data-task-layer', 'overview');
+      await expect(taskDrawer.getByRole('heading', { name: '整理本周的设计反馈', exact: true })).toBeVisible();
+      assert.deepEqual((await chatCalls('tasks.open')).at(-1).args, { id: 'fixture-completed', requestNavigation: false });
+      await taskDrawer.getByRole('button', { name: '返回原工作', exact: true }).click();
+      await expect(taskDrawer).toHaveCount(0);
+      await assertDraft(draft);
+      passed(scene, 'A completed assistant reply keeps its original task overview in the message menu');
+
       await page.evaluate(() => window.mainChatFixture.setAttachmentOnly(true));
       const attachment = page.locator('[data-message-id="fixture-attachment-only"]');
-      await expect(attachment.locator('.pw-user-text')).toBeEmpty();
-      await attachment.getByRole('button', { name: '消息操作与来源', exact: true }).click();
-      await page.getByRole('button', { name: '查看任务详情：核对单独发送的附件', exact: true }).click();
+      await expect(attachment.locator('.pw-user-text')).toHaveCount(0);
+      await expect(attachment.getByRole('button', { name: '消息操作与来源', exact: true })).toHaveCount(0);
+      const detail = attachment.getByRole('button', { name: '查看任务详情：核对单独发送的附件', exact: true });
+      await expect(detail).toContainText('已完成');
+      await detail.scrollIntoViewIfNeeded();
+      await shot('attachment-only-feedback');
+      await detail.click();
       await expect(taskDrawer).toHaveAttribute('data-task-layer', 'overview');
       await expect(taskDrawer.getByRole('heading', { name: '核对单独发送的附件', exact: true })).toBeVisible();
       assert.deepEqual((await chatCalls('tasks.open')).at(-1).args, { id: 'fixture-attachment-completed', requestNavigation: false });
@@ -1023,11 +1039,14 @@ async function runOverlayScene(origin, { width, height, dark }) {
     await expect(save).toBeInViewport({ ratio: 1 });
     const shortGeometry = await save.evaluate(node => {
       const rect = node.getBoundingClientRect(), hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-      const body = node.closest('.pw-permission-sheet-body');
+      const body = node.closest('.pw-permission-sheet-body'), footer = node.closest('.pw-permission-actions');
+      const scope = body.querySelector('.pw-composer-permission-detail');
       return { viewportHeight: innerHeight, top: rect.top, bottom: rect.bottom, receivesPointer: !!hit && (hit === node || node.contains(hit)),
+        scopeBottom: scope.getBoundingClientRect().bottom, footerTop: footer.getBoundingClientRect().top,
         scrollTop: body.scrollTop, clientHeight: body.clientHeight, scrollHeight: body.scrollHeight };
     });
     assert.equal(shortGeometry.receivesPointer, true, 'The short-screen save action must receive the pointer, not merely have a DOM box');
+    assert.ok(shortGeometry.scopeBottom <= shortGeometry.footerTop + 1, 'Task scope must visually precede the final save action, including at short heights');
     assert.ok(shortGeometry.scrollHeight > shortGeometry.clientHeight && shortGeometry.scrollTop > 0, 'Expanded permission rules must be reachable in the sheet scroll area');
     await shot('permission-short-viewport', permission);
 
