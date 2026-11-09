@@ -4,44 +4,122 @@ on:
     branches: [work/phone-control-reliability-20261109]
     paths:
       - .github/workflows/phone-control-workbench.yml
-      - tools/ci/phone-control-workbench.py
+      - tools/ci/phone-control-*.py
 permissions:
   contents: read
+concurrency:
+  group: phone-control-workbench
+  cancel-in-progress: true
 jobs:
-  source:
+  native:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
-      - name: Capture tracked source and reference revisions
-        shell: bash
+      - name: Apply reviewed production changes and regressions
+        run: python3 tools/ci/phone-control-workbench.py
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Prepare declared compile SDK
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/phone-control-sources/pocketworld"
-          git archive HEAD | tar -x -C "$RUNNER_TEMP/phone-control-sources/pocketworld"
-          git rev-parse HEAD > "$RUNNER_TEMP/phone-control-sources/pocketworld-revision.txt"
-          git clone --depth 1 --filter=blob:none https://github.com/wangzan101/Mika.git "$RUNNER_TEMP/mika-reference"
-          git clone --depth 1 --filter=blob:none https://github.com/ccch1mneyyy/dsh-Go.git "$RUNNER_TEMP/dsh-reference"
-          for name in mika dsh; do
-            mkdir -p "$RUNNER_TEMP/phone-control-sources/$name"
-            git -C "$RUNNER_TEMP/$name-reference" rev-parse HEAD > "$RUNNER_TEMP/phone-control-sources/$name-revision.txt"
-            git -C "$RUNNER_TEMP/$name-reference" archive HEAD | tar -x -C "$RUNNER_TEMP/phone-control-sources/$name"
-          done
-          python3 - <<'PY'
-          import os, pathlib, zipfile
-          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'phone-control-sources'
-          allowed = {'.java','.kt','.kts','.gradle','.json','.xml','.properties','.md','.yml','.yaml','.py','.sh','.ts','.tsx','.mjs','.aidl','.c','.h','.cpp','.bat'}
-          with zipfile.ZipFile('phone-control-sources.zip','w',zipfile.ZIP_DEFLATED) as archive:
-              for p in sorted(root.rglob('*')):
-                  if p.is_file() and not any(x in p.parts for x in ('.git','node_modules')) and (p.suffix in allowed or p.name.endswith('-revision.txt') or p.name in ('gradlew','LICENSE','NOTICE')):
-                      archive.write(p,p.relative_to(root))
-          print('Source snapshot bytes:', pathlib.Path('phone-control-sources.zip').stat().st_size)
-          PY
-      - uses: actions/upload-artifact@v4
+          : "${ANDROID_HOME:?Android SDK is required}"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses > /dev/null
+          set -o pipefail
+          "$SDKMANAGER" 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
+          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
+      - name: Run actual native phone-control regression groups
+        env:
+          ORG_GRADLE_PROJECT_pocketworldVersionCode: '2000000000'
+          ORG_GRADLE_PROJECT_pocketworldVersionName: '0.3.0-host-tests'
+        run: |
+          set -euo pipefail
+          mkdir -p build-artifacts/phone-control
+          python3 -B tools/host-tests.py --group phone-control-reliability --group phone-observation-boundaries --group conversation-phone-handoff --group phone-input-extensions --group phone-setup-recovery --group phone-team-sessions --online --output build-artifacts/phone-control/native 2>&1 | tee build-artifacts/phone-control/native.log
+      - name: Preserve native reports and exact patch
+        if: always()
+        run: |
+          mkdir -p build-artifacts/phone-control
+          git add -N app/src docs/verification tools/host-tests.json
+          git diff -- app/src docs/verification tools/host-tests.json > build-artifacts/phone-control/production.patch
+          git status --short > build-artifacts/phone-control/status.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
         with:
-          name: phone-control-source-snapshot
-          path: phone-control-sources.zip
-          retention-days: 2
+          name: phone-control-native-${{ github.run_number }}
+          path: build-artifacts/phone-control/
+          retention-days: 7
           if-no-files-found: error
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - run: python3 tools/ci/phone-control-workbench.py
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22.22.0'
+          cache: npm
+          cache-dependency-path: web-ui/package-lock.json
+      - name: Build production renderer and run frontend unit tests
+        run: |
+          set -euo pipefail
+          npm ci --prefix web-ui
+          npm run build --prefix web-ui
+          npm test --prefix web-ui
+      - name: Check phone-mode renderer journeys
+        run: |
+          set -euo pipefail
+          npm exec --prefix web-ui -- playwright install --with-deps chromium
+          node web-ui/tests/phone-composer-ui.mjs --output build-artifacts/phone-composer
+          node web-ui/tests/phone-handoff-ui.mjs --output build-artifacts/phone-handoff
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: phone-control-frontend-${{ github.run_number }}
+          path: build-artifacts/
+          retention-days: 7
+          if-no-files-found: warn
+  retain:
+    needs: [native, frontend]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: true
+      - name: Retain tested source on work branch only
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          WORK_BRANCH: work/phone-control-reliability-20261109
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$WORK_BRANCH"
+          python3 tools/ci/phone-control-workbench.py
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src docs/verification tools/host-tests.json
+          git diff --cached --stat
+          git commit -m 'fix: verify service binding and bounded observation on both phone displays'
+          remote=$(git ls-remote origin "refs/heads/$WORK_BRANCH" | cut -f1)
+          test "$remote" = "$EXPECTED_SHA"
+          git push origin "HEAD:refs/heads/$WORK_BRANCH"
+          echo "Tested source commit: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
