@@ -12,6 +12,20 @@ PIN='f869eae76eab3da1e0ab6f914da94f75b10f382e06c41338e887e06caee2d960'
 SIGNER='b58e014e2a2e49b2e85ebd5b47a034a28cb0d313d71f379a5208d21afe388e58'
 MANIFEST='https://github.com/wozhenbang2004/PocketWorld/releases/latest/download/release.json'
 
+def version_tag(code):
+    if type(code) is not int or not 1000 <= code <= 2100000000:
+        raise ValueError('Public release requires Android versionCode >= 1000')
+    return 'v0.1.' + str(code - 1000)
+
+def version_code(tag):
+    match = re.fullmatch(r'v0\.1\.(0|[1-9][0-9]*)', tag) if isinstance(tag, str) else None
+    if match is None:
+        raise ValueError('Expected canonical public release tag v0.1.N')
+    code = 1000 + int(match.group(1))
+    if code > 2100000000:
+        raise ValueError('Public release exceeds Android versionCode bound')
+    return code
+
 def public_key(path):
     data=Path(path).read_bytes()
     if hashlib.sha256(data).hexdigest()!=PIN:raise ValueError('Unapproved bootstrap public key')
@@ -46,7 +60,7 @@ def payload(metadata,tag,now,minimum_version):
         type(metadata.get('bytes')) is not int or not 1<=metadata['bytes']<=256*1024*1024 or
         not re.fullmatch('[a-f0-9]{64}',metadata.get('sha256','')) or
         type(now) is not int or now<=0):raise ValueError('Invalid inspected APK identity')
-    if tag!='v'+str(metadata['versionCode']):raise ValueError('First-release tag must bind explicit APK version')
+    if tag!=version_tag(metadata['versionCode']):raise ValueError('First-release tag must bind explicit APK version')
     filename=metadata['sha256']+'-app-'+str(metadata['versionCode'])+'.apk'
     return {'schema':1,'packageName':'dev.pocketengine','versionCode':metadata['versionCode'],
             'versionName':metadata['versionName'],'minSdk':metadata['minSdk'],'issuedAt':now,
