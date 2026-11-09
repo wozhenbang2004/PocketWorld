@@ -8506,6 +8506,79 @@ public final class TaskStore {
         if(origin==null||!"team_phone".equals(origin.optString("kind"))||!("phone".equals(task.optString("kind"))&&"background".equals(mode)||"assistant".equals(task.optString("kind"))&&"capabilities".equals(mode)))throw new SecurityException("需要原团队手机分工及其准确执行位置");
         return startAttempt(id,mode,allocation,true);
     }
+    /** Resume only a reviewed, undispatched local document call on its original run.
+     * The grant, checkpoint, deadline, tools and consumed budgets are never replaced. */
+    public synchronized JSONObject resumeApprovedCapabilityAttempt(String id,String run,int epoch,String approvalId,RunControl original)throws Exception {
+        requireExecutionEnabled();
+        if(original==null||original.hasHostRun()||original.isPaused()||run==null||run.isBlank()||epoch<1||approvalId==null||approvalId.isBlank())
+            throw new SecurityException("原审批续接身份或控制器无效");
+        original.check();
+        db.beginTransaction();try{
+            JSONObject task=required(id);requirePrivateOwner(task);
+            if(!"assistant".equals(task.optString("kind"))||!"capabilities".equals(task.optString("executionMode"))
+                    ||task.optJSONObject("origin")!=null||OwnerWorkTask.isOwnerWork(task)||task.has("workProfileRef")||task.has("workProfileIntent")
+                    ||task.has("teamWriteScope")||task.has("teamAssignment")||task.has("developmentContext")||task.has("evaluation")
+                    ||TaskStoreDeviceTasks.deviceTask(task)||task.has("sourceLearningJob")||task.has("ownerLocalTerminal")||task.has(RuntimeSetupHost.KEY))
+                throw new SecurityException("专用任务不能使用普通文档审批续接");
+            if(!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")||task.optBoolean("cancelRequested")
+                    ||!task.optString("status").matches("awaiting_user|needs_confirmation")||hasUnresolved(id))
+                throw new SecurityException("原审批执行已变化、已停止或存在未决操作");
+            JSONObject approved=null;JSONArray approvals=task.optJSONArray("approvals");long now=System.currentTimeMillis();
+            for(int i=0;approvals!=null&&i<approvals.length();i++){
+                JSONObject candidate=approvals.getJSONObject(i);
+                if(approvalId.equals(candidate.optString("id"))){approved=candidate;break;}
+            }
+            if(approved==null||!run.equals(approved.optString("runId"))||!"approved".equals(approved.optString("state"))
+                    ||approved.optLong("expiresAt")<=now||!approved.optString("tool").matches("attachments_create_text|attachments_create_document"))
+                throw new SecurityException("原文档审批已变化、过期或已消费");
+            JSONObject permission=grant(run);executionScopeCurrent(task,run,permission);
+            if(!"owner".equals(permission.optString("principalId"))||!"private".equals(permission.optString("spaceId"))
+                    ||!"capabilities".equals(permission.optString("mode"))||permission.optBoolean("gatewayOnly")
+                    ||permission.optLong("expiresAt")<=now||permission.optInt("remainingOperations")<1||!toolGranted(run,approved.getString("tool")))
+                throw new SecurityException("原文档执行授权已失效或预算耗尽，审批不会补充权限");
+            JSONObject scope=task.optJSONObject("executionScope");
+            if(scope!=null&&(scope.getInt("toolLimit")-scope.getInt("toolsUsed")-deviceTasks.heldBudget(id,run,false)<1
+                    ||TaskExecutionScope.planning(scope)))throw new SecurityException("原文档执行范围没有剩余工具额度");
+            try(Cursor active=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND status='running' LIMIT 1",new String[]{id})){
+                if(active.moveToFirst())throw new SecurityException("原任务已有执行，未创建第二执行器");
+            }
+            String conversation=task.optString("conversationId");
+            if(conversation.isBlank())throw new SecurityException("原文档任务缺少私人会话");
+            dev.pocketengine.features.memory.TaskStoreMemoryQuery.requireOutputContext(db,outputSources,id,run);
+            dev.pocketengine.features.memory.TaskStoreMemoryQuery.requireOwnerSourceContinuation(db,conversationRepository,id,run,conversation);
+            ContentValues resumed=new ContentValues();resumed.put("status","running");resumed.put("updated_at",now);
+            if(db.update("runs",resumed,"task_id=? AND run_id=? AND epoch=? AND status IN ('awaiting_user','needs_confirmation')",new String[]{id,run,Integer.toString(epoch)})!=1)
+                throw new SecurityException("原审批等待已被接手，未重复恢复");
+            task.put("capabilityApprovalContinuation",new JSONObject().put("runId",run).put("epoch",epoch).put("approvalId",approvalId).put("phase","claimed"))
+                    .put("status","preparing").put("summary","已批准原文档操作，正在沿原执行继续");
+            write(task);
+            appendEvent(task,new JSONObject().put("type","capability_approval_continuation_claimed").put("runId",run).put("coordinatorEpoch",epoch)
+                    .put("approvalId",approvalId).put("newGrant",false));
+            original.check();original.bindHostRun(id,run,epoch);
+            db.setTransactionSuccessful();return copy(task,false);
+        }finally{db.endTransaction();}
+    }
+    /** Reconstructed ports must use the original pinned tool grant for this same-run claim. */
+    public synchronized boolean approvedCapabilityContinuationActive(String id,String run,int epoch,RunControl original)throws Exception {
+        JSONObject task=required(id),marker=task.optJSONObject("capabilityApprovalContinuation");
+        if(marker==null||!run.equals(marker.optString("runId"))||epoch!=marker.optInt("epoch"))return false;
+        if(!"claimed".equals(marker.optString("phase"))||original==null||!original.matchesHostRun(id,run,epoch)
+                ||!task.optString("status").matches("preparing|running"))throw new SecurityException("原审批续接身份已改变");
+        return true;
+    }
+    /** A rejected worker or failed port construction settles only this unstarted claim. */
+    public synchronized void approvedCapabilityContinuationUnavailable(String id,String run,int epoch,String approvalId,RunControl original)throws Exception {
+        db.beginTransaction();try{
+            JSONObject task=required(id),marker=task.optJSONObject("capabilityApprovalContinuation");
+            if(marker==null||original==null||!original.matchesHostRun(id,run,epoch)||!run.equals(task.optString("runId"))
+                    ||epoch!=task.optInt("coordinatorEpoch")||!run.equals(marker.optString("runId"))||epoch!=marker.optInt("epoch")
+                    ||!approvalId.equals(marker.optString("approvalId"))||!"claimed".equals(marker.optString("phase"))
+                    ||!"preparing".equals(task.optString("status")))return;
+            marker.put("phase","unavailable");write(task);
+            endAttempt(id,run,original.isCancelled()?"cancelled":"awaiting_user","审批已保存，原文档执行未能启动；未消费或续期审批，未自动重试",task.optJSONObject("evidence")==null?new JSONObject():task.getJSONObject("evidence"));
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
     /** Reserve the reviewed original capability continuation and its feedback in the same SQL gate. */
     public synchronized JSONObject startOriginalCapabilityAttempt(String id,String expectedRun,int expectedEpoch,int allocation,RunControl original,String feedback)throws Exception {
         if(expectedRun==null||expectedEpoch<0||expectedRun.isEmpty()!=(expectedEpoch==0)||original==null||original.hasHostRun()||original.isPaused())throw new SecurityException("原能力续接身份或控制器无效");

@@ -42,6 +42,10 @@ import java.util.Set;
 
 /** One bounded phone task. The caller owns its worker thread and foreground lifecycle. */
 public final class AgentRunner {
+    /** Native host only: a single approved call recovered from the original durable history. */
+    public interface ApprovedCall {JSONObject take(JSONArray history,RunControl original)throws Exception;}
+    private ApprovedCall approvedCall;
+    public void bindApprovedCall(ApprovedCall call){if(lifecycleBegun||approvedCall!=null)throw new IllegalStateException("审批续接只能在启动前绑定一次");approvedCall=java.util.Objects.requireNonNull(call);}
     private static final int MAX_IMAGES = 2;
     private static final int MAX_IMAGE_CHARS = 8 * 1024 * 1024;
 
@@ -548,7 +552,7 @@ public final class AgentRunner {
                 final ExecutionPlanning.Snapshot turnPlanning=planning==null?null:planning.capture();
                 // One final model response may summarize the last receipt; the dispatch budget below
                 // still rejects every additional tool effect once the cumulative ceiling is reached.
-                emit(taskId, "model", "running", "正在决定下一步操作。", null, null, config, sink);
+                emit(taskId, approvedCall==null?"model":"approval_continuation", "running", approvedCall==null?"正在决定下一步操作。":"正在恢复主人已批准的原准确调用；未请求模型重新生成参数。", null, null, config, sink);
                 JSONArray requestHistory=history;
                 JSONObject memoryDependency=null;
                 JSONObject inputClock=ownerInputs==null?null:ownerInputs.clockContext(ownerMessageIds(history),control);
@@ -613,6 +617,10 @@ public final class AgentRunner {
                 // their rows. Budgeting may evict only proven duplicate native observations.
                 JSONArray nativeProvenance=requestHistory;
                 java.util.List<String> requestedOwnerIds=ownerMessageIds(requestHistory);
+                final String[] nativeRequest={""}, nativeTraceMember={""}, nativeTraceTurn={""};JSONObject response;
+                boolean nativeApprovedResponse=approvedCall!=null;
+                if(nativeApprovedResponse){response=approvedCall.take(history,control);approvedCall=null;}
+                else {
                 final RequestHistoryProjection materializedHistory=RequestHistoryProjection.prepare(requestProjection,nativeProvenance,config,control);
                 requestHistory=materializedHistory.messages();
                 contextBudget.projected(nativeProvenance,requestHistory);
@@ -651,7 +659,6 @@ public final class AgentRunner {
                 emit(taskId,"context_budget","running",projection.plan().removed.isEmpty()
                         ? projection.diagnostics().optBoolean("summaryProjectionUsed")?"已使用原任务有界历史整理；主人原话、未决项和最新尾部保留，原件可按内容指纹回读。":"已检查当前请求的上下文安全上限。" : "已按预算移除本轮可证明内容相同的重复旧观察；目标、审批和工具回执保持不变。",
                         null,projection.diagnostics(),config,sink);
-                final String[] nativeRequest={""}, nativeTraceMember={""}, nativeTraceTurn={""};JSONObject response;
                 int turnRetries=0;boolean contextRecoveryUsed=false;
                 while(true){
                     if(turnRetries>0||contextRecoveryUsed){
@@ -799,9 +806,11 @@ public final class AgentRunner {
                         if(capabilities!=null&&!capabilities.responseCurrent(control))continue modelTurns;
                     }
                 }
+                }
                 resumed = afterPause(taskId, config, control, sink, pauseSeen, intent, history, journal, goal,planning);
                 if (resumed != null) {
                     stepRouting.ownerBoundary();
+                    if(nativeApprovedResponse)throw new SecurityException("原审批续接期间任务已暂停，未改用模型重新生成调用");
                     if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);
                     withdrawHistoricalImages(screens,history,control);historyTurnPrepared.set(false);
                     latest = resumed; evidence = resumed; appendCapturedObservation(history, resumed, config, contextBudget,screens,control);
@@ -810,6 +819,7 @@ public final class AgentRunner {
                 control.check();
                 requirePlanningCurrent(planning,turnPlanning);
                 if(capabilities!=null&&!capabilities.responseCurrent(control)){
+                    if(nativeApprovedResponse)throw new SecurityException("原审批能力已变化，未改用模型重新生成调用");
                     capabilities.modelRequestAbandoned(nativeRequest[0]);
                     emit(taskId,"capability_changed","running","能力或扩展参考已改变，旧模型答复未执行，正在按当前状态重新规划。",null,null,config,sink);continue;
                 }
@@ -820,14 +830,15 @@ public final class AgentRunner {
                     appendOwnerInputs(history,steering,config);
                     recallIntent=latestOwnerRecallQuery(history,recallIntent);
                     checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);
+                    if(nativeApprovedResponse)return finish(taskId,"awaiting_user","主人补充已保留；原审批调用未派发，请按新要求继续。",evidence,steps,config,sink);
                     emit(taskId,"owner_input","running","已收到主人补充；旧模型决定未派发，正在按原任务重新规划。",null,null,config,sink);
                     continue;
                 }
                 if(routes!=null)routes.requireCurrentSources(control);
-                try{stepRouting.requireLightCurrent();}catch(ModelGateway.RequestRefreshRequired changed){
+                try{if(!nativeApprovedResponse)stepRouting.requireLightCurrent();}catch(ModelGateway.RequestRefreshRequired changed){
                     if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);continue modelTurns;
                 }
-                if(!stepRouting.acceptLightResponse(response,capabilities)){
+                if(!nativeApprovedResponse&&!stepRouting.acceptLightResponse(response,capabilities)){
                     if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);
                     stepRouting.rejectLight();
                     emit(taskId,"model_route","running","轻量决定包含风险、未知行为或最终答复，已整份拒绝并回原主候选；没有派发其中工具，实际用量仍保留。",null,stepRouting.diagnostics(),config,sink);
@@ -835,7 +846,7 @@ public final class AgentRunner {
                 }
                 JSONArray calls = response.optJSONArray("tool_calls");
                 String answer = assistantText(response);
-                JSONObject memoryReference=capabilities==null?null:capabilities.afterModelResponse(nativeRequest[0],java.util.UUID.randomUUID().toString(),control);
+                JSONObject memoryReference=capabilities==null||nativeApprovedResponse?null:capabilities.afterModelResponse(nativeRequest[0],java.util.UUID.randomUUID().toString(),control);
                 requirePlanningCurrent(planning,turnPlanning);
                 if(memoryReference!=null)evidence.put("memoryReference",memoryReference);
                 if(memoryDependency!=null)evidence.put("memoryContext",memoryDependency);
@@ -887,6 +898,7 @@ public final class AgentRunner {
                 validateCalls(calls);
                 int preparedPlans=0;for(int i=0;i<calls.length();i++)if(java.util.Set.of("phone_prepare_sequence","browser_task_prepare_sequence",PhoneRouteSession.REPLAY).contains(calls.getJSONObject(i).getJSONObject("function").optString("name"))&&++preparedPlans>1)throw new ModelGateway.GatewayException("每批只能准备一个原生短序列；尚未执行本批动作。");
                 JSONObject assistant = new JSONObject().put("role", "assistant").put("tool_calls", safeArray(calls, config, false)).put("nativeTraceCallId",nativeRequest[0]);
+                if(nativeApprovedResponse)assistant.put("nativeApprovalContinuation",response.getString("nativeApprovalId"));
                 if(memoryDependency!=null)assistant.put("memoryContext",memoryDependency);if(memoryReference!=null)assistant.put("memoryReference",memoryReference);
                 if(response.optJSONObject("provider_data")!=null)assistant.put("provider_data",safeJson(response.getJSONObject("provider_data"),config,false));
                 if (!answer.isEmpty()) assistant.put("content", clean(answer, config));
@@ -894,7 +906,7 @@ public final class AgentRunner {
                 repeatedTools.beginRound(calls.length());
                 checkpoint(taskId, journal, history, steps, latest, config, sink, contextBudget,repeatedTools);
                 executionTrace.assistant(nativeRequest[0],nativeTraceSite[0],assistant,steps);
-                boolean observed = false;
+                boolean observed = false;boolean nativeApprovalCompleted=false;
                 long batchSurfaceRevision=control.surfaceRevision();
                 dev.pocketengine.core.NativeToolPlan activePlan=null;dev.pocketengine.core.NativeToolPlan.Step activeStep=null;
                 do {
@@ -1163,6 +1175,7 @@ public final class AgentRunner {
                     }
                     ToolReceiptSettlement.Decision settlement=settleToolDecision(journal,recordedOperation,receipt);
                     ToolOutcome toolOutcome=settlement.outcome;
+                    if(nativeApprovedResponse&&toolOutcome.successful())nativeApprovalCompleted=true;
                     boolean projectRunning=settlement.projectRunning,nativeRunning=settlement.nativeRunning;
                     if(nativeRunning&&!ownedServiceOperations.contains(recordedOperation))ownedServiceOperations.add(recordedOperation);
                     repeatedTools.afterTool(name,args,receipt,planningReadIssued||!sideEffecting(name)&&(capabilities==null||!capabilities.supports(name)||!capabilities.sideEffecting(name)),false);
@@ -1205,6 +1218,14 @@ public final class AgentRunner {
                     // The real operation receipt and text checkpoint already committed above.
                     // Unknown/approval/pause outcomes stop before any extension code is invoked.
                     if(capabilities!=null&&ToolReceiptSettlement.continuationCurrent(control,pauseSeen[0]))capabilities.afterTool(name,safeJson(args,config,false),safeToolReceipt(name,receipt,config),control);
+                    // afterTool may retire the old request snapshot after a real scope change.
+                    // Keep the committed receipt; do not read plans/observations through that snapshot.
+                    if(capabilities!=null&&!capabilities.responseCurrent(control)){
+                        batchContinuation.stopSequenceAndObservations();
+                        appendUnissuedReplies(history,calls,index+1,failure("stale_capability_snapshot","原动作回执已保留；能力范围已更新，旧批次余项未派发，下一轮重新取得能力。")
+                                .put("accepted",false).put("nativeDispatched",false).put("effectStatus","not_dispatched"),config);
+                        break;
+                    }
                     stepRouting.completedRead(name,receipt,latest,StepModelRouting.knownRead(name,capabilities));
                     try{contextBudget.completedRead(call,committedToolMessage);}catch(Exception unavailable){/* Optional request projection never replaces a committed receipt. */}
                     // A successful read can still time out with an unmet predicate. Only this
@@ -1279,6 +1300,7 @@ public final class AgentRunner {
                 checkpoint(taskId,journal,history,steps,latest,config,sink,contextBudget,repeatedTools);
                 emit(taskId,"native_sequence","running","正在执行原生短序列第 "+(activeStep.index+1)+" / "+activeStep.total+" 步；每步分别核对当前目标和权限。",activeStep.tool.name,null,config,sink);
                 }while(true);
+                if(nativeApprovedResponse&&!nativeApprovalCompleted)return finish(taskId,"awaiting_user","原准确审批调用未成功完成，已有回执已保存；未改用模型重新生成参数。",evidence,steps,config,sink);
             }
             return finish(taskId, "needs_confirmation", "已达到本次模型调用上限，请查看当前结果。", evidence, steps, initialConfig, sink);
         } catch(PlanningChanged changed){
@@ -1915,3 +1937,4 @@ public final class AgentRunner {
                         .put("additionalProperties", false))));
     }
 }
+
