@@ -3,7 +3,7 @@
  * All data and receipts are synthetic. This wraps the public native bridge; it does
  * not render UI, replace production components, or access React state.
  */
-export function installAiConversationHost({ representative = false, phoneComposer = null } = {}) {
+export function installAiConversationHost({ representative = false, phoneComposer = null, singleModel = false, permissions = false } = {}) {
   if (!window.aiCenterFixture || !window.PocketNative) throw new Error('Install the AI center host first');
   const clone = value => structuredClone(value);
   const documentToken = window.__pocketDocumentToken;
@@ -14,13 +14,29 @@ export function installAiConversationHost({ representative = false, phoneCompose
   const conversationId = phoneComposer?.freshConversation ? '' : 'fixture-conversation-1';
   const phoneDraft = { text: '', revision: 0, epoch: 1, phone: false, mode: 'background', channelOrigin: false };
   let phoneSubmitting = false;
-  const facts = { REASONING: { known: true, value: true }, REASONING_LEVELS: { known: true, value: ['low', 'medium', 'high'] } };
+  const serviceDefault = { mode: 'DEFAULT', level: '', budgetTokens: 0 };
+  const facts = singleModel
+    ? { REASONING: { known: true, value: false }, REASONING_LEVELS: { known: true, value: [] } }
+    : { REASONING: { known: true, value: true }, REASONING_LEVELS: { known: true, value: ['low', 'medium', 'high'] } };
   let preference = {
     scopeKey: conversationId ? 'conversation:' + conversationId : 'draft:fixture-draft', revision: 4, inherited: false, modelName: 'fixture-reasoner-B',
     target: { kind: 'api', connectionId: 'fixture-openai', connectionRevision: 3,
       binding: { connectionId: 'fixture-openai', connectionRevision: 3, catalogRevision: 11 }, modelId: 'fixture-reasoner-B',
       outputTokens: 2048, imageTokenReserve: 256, reasoning: { mode: 'OPENAI_EFFORT', level: 'low', budgetTokens: 0 } },
   };
+  if (singleModel) {
+    preference.modelName = 'fixture-reasoner';
+    preference.target.modelId = 'fixture-reasoner';
+    preference.target.reasoning = clone(serviceDefault);
+  }
+  // This policy exists only inside the synthetic host. A save cannot dispatch a
+  // tool, change a task's captured scope, or modify the fixture's global policy.
+  const permissionGlobal = { version: 1, mode: 'ask', tools: { browser_click: 'ask', ssh_execute: 'deny' } };
+  let permissionRevision = 12, permissionConversation = null, pendingPermissionWrite = null, holdNextPermission = false;
+  const permissionSnapshot = () => ({ revision: permissionRevision, conversationId,
+    global: clone(permissionGlobal), conversation: clone(permissionConversation),
+    effective: { ...clone(permissionConversation || permissionGlobal),
+      tools: { ...clone(permissionGlobal.tools), ...clone(permissionConversation?.tools || {}) } } });
   const conversations = [
     { id: conversationId, title: '继续整理上次的设计反馈', pinOrder: 1, updatedAt: 1794204000000 },
     { id: 'fixture-conversation-2', title: '周末短途旅行：交通、住宿和可步行路线', pinOrder: 0, updatedAt: 1794203000000 },
@@ -31,6 +47,7 @@ export function installAiConversationHost({ representative = false, phoneCompose
   const commands = ['conversation.select', 'conversation.new', 'models.conversation.snapshot',
     'models.conversation.api.select', 'models.conversation.reasoning', 'models.conversation.reset'];
   if (phoneComposer) commands.push('composer.intent', 'phone.draft.edit', 'phone.prepare');
+  if (permissions) commands.push('permissions.snapshot', 'permissions.save');
   const task = (id, goal, status, summary) => ({ id, goal, status, summary, updatedAt: 1794205000000,
     raw: { id, goal, status, summary, kind: 'assistant', actorId: 'owner', spaceId: 'private', conversationId,
       executionRole: 'foreground', runId: id + '-run', coordinatorEpoch: 2, operations: [], events: [] } });
@@ -43,6 +60,9 @@ export function installAiConversationHost({ representative = false, phoneCompose
   ];
   taskRows.at(-1).raw.events = [{ id: 'fixture-progress-event', runId: 'fixture-progress-run', type: 'observation',
     status: 'running', at: 1794205001000, message: '正在比对两份已读取的资料' }];
+  if (permissions) taskRows.at(-1).raw.executionScope = {
+    executionPhase: 'execution', toolsUsed: 3, toolLimit: 20, modelCallsUsed: 2, modelCallLimit: 32, deadlineAt: 0,
+  };
   const messages = [
     { id: 'fixture-request', role: 'user', content: '先把本周的设计反馈整理成可以行动的结论。没有读到的资料和结果不确定的动作，保留原来的状态。' },
     { id: 'fixture-answer-completed', role: 'assistant', taskId: 'fixture-completed', content:
@@ -56,15 +76,17 @@ export function installAiConversationHost({ representative = false, phoneCompose
   const withModels = value => {
     const data = clone(value);
     if (Array.isArray(data.models)) {
+      if (singleModel) data.models = data.models.filter(row => row.connectionId === 'fixture-openai' && row.modelId === 'fixture-reasoner');
       const global = data.models.find(row => row.modelId === 'fixture-reasoner');
-      if (global && !data.models.some(row => row.modelId === 'fixture-reasoner-B')) {
+      if (!singleModel && global && !data.models.some(row => row.modelId === 'fixture-reasoner-B')) {
         data.models.push({ ...clone(global), modelId: 'fixture-reasoner-B', selected: false, favorite: false, lastUsedAt: 0 });
       }
       // Keep A marked globally selected. The renderer must independently mark conversation B.
     }
     if (Array.isArray(data.connections?.connections)) {
+      if (singleModel) data.connections.connections = data.connections.connections.filter(row => row.id === 'fixture-openai');
       const base = data.connections.connections.find(row => row.id === 'fixture-openai');
-      for (let index = 1; index <= 3; index++) {
+      for (let index = 1; !singleModel && index <= 3; index++) {
         const id = 'fixture-archive-' + index;
         if (base && !data.connections.connections.some(row => row.id === id)) data.connections.connections.push({
           ...clone(base), id, revision: 1, name: '归档 API · 测试 ' + index,
@@ -72,6 +94,8 @@ export function installAiConversationHost({ representative = false, phoneCompose
         });
       }
     }
+    if (singleModel && data.modelGroups) data.modelGroups = { ...data.modelGroups, groups: [], purposeBindings: {} };
+    if (singleModel && data.nativeSelection) data.nativeSelection.reasoning = clone(serviceDefault);
     if (Object.hasOwn(data, 'selectionRevision')) data.selectionRevision = selectionRevision;
     return data;
   };
@@ -85,6 +109,10 @@ export function installAiConversationHost({ representative = false, phoneCompose
   const patchState = snapshot => {
     const next = clone(snapshot);
     next.capabilities.commands = [...new Set([...next.capabilities.commands, ...commands])];
+    if (singleModel) {
+      next.capabilities.commands = next.capabilities.commands.filter(action => !/^models\.(accounts|groups)\./.test(action));
+      next.state.ownerSnapshots.accounts = { accounts: [], login: {} };
+    }
     next.state.conversationModel = clone(preference);
     next.state.modelSelectionRevision = selectionRevision;
     next.state.modelSelectionBusy = !!pendingWrite;
@@ -158,10 +186,43 @@ export function installAiConversationHost({ representative = false, phoneCompose
     const hold = holdNext; holdNext = false;
     if (!hold) queueMicrotask(() => finishWrite('saved'));
   };
+  const finishPermissionWrite = outcome => {
+    requireThat(pendingPermissionWrite, 'No synthetic permission save is pending');
+    requireThat(outcome === 'saved' || outcome === 'unknown', 'Unsupported synthetic permission receipt');
+    const write = pendingPermissionWrite; pendingPermissionWrite = null;
+    if (outcome === 'saved') {
+      permissionConversation = clone(write.policy); permissionRevision++;
+      reply(write.request, permissionSnapshot());
+    } else {
+      injectedOutcomes.push({ action: write.request.action, outcome, requestId: write.request.id });
+      reply(write.request, null, { code: 'outcome_unknown', message: '测试宿主未确认本次权限保存。' });
+    }
+  };
   const handle = request => {
     const { action, args = {} } = request;
     requireThat(request.hostDocumentToken === documentToken, 'Conversation document identity changed');
     switch (action) {
+      case 'permissions.snapshot':
+        requireThat(permissions, 'Permission fixture is not enabled'); requireKeys(args, []);
+        reply(request, permissionSnapshot()); return true;
+      case 'permissions.save': {
+        requireThat(permissions && !pendingPermissionWrite, 'Permission fixture is disabled or a save is pending');
+        requireKeys(args, ['conversationId', 'global', 'policy', 'expectedRevision']);
+        requireThat(args.conversationId === conversationId && args.global === false && args.expectedRevision === permissionRevision,
+          'Permission save changed its original conversation, scope or revision');
+        if (args.policy !== null) {
+          requireThat(args.policy && typeof args.policy === 'object' && !Array.isArray(args.policy), 'Invalid synthetic policy');
+          requireKeys(args.policy, ['version', 'mode', 'tools']);
+          requireThat(args.policy.version === 1 && ['ask', 'controlled', 'auto'].includes(args.policy.mode) &&
+            args.policy.tools && typeof args.policy.tools === 'object' && !Array.isArray(args.policy.tools), 'Invalid synthetic policy values');
+          requireThat(Object.entries(args.policy.tools).every(([name, decision]) =>
+            /^(browser|ssh|attachments)_[A-Za-z0-9_]+$/.test(name) && ['allow', 'ask', 'deny'].includes(decision)), 'Invalid synthetic tool rule');
+        }
+        pendingPermissionWrite = { request, policy: clone(args.policy) };
+        const hold = holdNextPermission; holdNextPermission = false;
+        if (!hold) queueMicrotask(() => finishPermissionWrite('saved'));
+        return true;
+      }
       case 'composer.intent':
         requireThat(phoneComposer, 'Phone composer fixture is not enabled');
         phoneDraft.phone = args.phone;
@@ -217,7 +278,9 @@ export function installAiConversationHost({ representative = false, phoneCompose
         const review = reasoningReviews.get(args.reviewHandle);
         requireThat(review && review.scopeKey === preference.scopeKey && review.revision === preference.revision && review.selectionRevision === selectionRevision, 'Original reasoning review was not preserved');
         requireKeys(args.reasoning, ['mode', 'level', 'budgetTokens']);
-        requireThat(args.reasoning.mode === 'OPENAI_EFFORT' && ['low', 'medium', 'high'].includes(args.reasoning.level) && args.reasoning.budgetTokens === 0, 'Unsupported synthetic reasoning choice');
+        const isDefault = args.reasoning.mode === 'DEFAULT' && args.reasoning.level === '' && args.reasoning.budgetTokens === 0;
+        const isEffort = !singleModel && args.reasoning.mode === 'OPENAI_EFFORT' && ['low', 'medium', 'high'].includes(args.reasoning.level) && args.reasoning.budgetTokens === 0;
+        requireThat(isDefault || isEffort, 'Unsupported synthetic reasoning choice');
         reasoningReviews.delete(args.reviewHandle);
         beginWrite(request, { ...clone(preference), target: { ...clone(preference.target), reasoning: clone(args.reasoning) } });
         return true;
@@ -237,7 +300,7 @@ export function installAiConversationHost({ representative = false, phoneCompose
   window.PocketNative.postMessage = raw => {
     const request = JSON.parse(raw); calls.push(clone(request)); requests.set(request.id, clone(request));
     if (request.action === 'connections.leave') { windows.clear(); apiReviews.clear(); }
-    if (!request.action.startsWith('models.conversation.') && request.action !== 'models.api.review' && !request.action.startsWith('conversation.') &&
+    if (!request.action.startsWith('models.conversation.') && request.action !== 'models.api.review' && !request.action.startsWith('conversation.') && !request.action.startsWith('permissions.') &&
       !(phoneComposer && ['composer.intent', 'phone.draft.edit', 'phone.prepare'].includes(request.action))) return originalPost(raw);
     queueMicrotask(() => {
       try { if (!handle(request)) originalPost(raw); }
@@ -250,9 +313,13 @@ export function installAiConversationHost({ representative = false, phoneCompose
     setChannelOrigin(value) { requireThat(phoneComposer, 'Phone composer fixture is not enabled'); phoneDraft.channelOrigin = value; publish(); },
     holdNextWrite() { requireThat(!pendingWrite && !holdNext, 'A synthetic write is already held'); holdNext = true; },
     resolveWrite: finishWrite,
+    holdNextPermissionSave() { requireThat(permissions && !pendingPermissionWrite && !holdNextPermission, 'A synthetic permission save is disabled or already held'); holdNextPermission = true; },
+    resolvePermissionSave: finishPermissionWrite,
     summary() { return { synthetic: true, preference: clone(preference), selectionRevision,
       globalModel: lastSnapshot?.state.modelName, globalNativeSelection: clone(lastSnapshot?.state.modelConnections?.nativeSelection),
       composerText: lastSnapshot?.composer.text, phoneDraft: clone(phoneDraft), pending: pendingWrite?.request.action || null,
+      permission: permissions ? permissionSnapshot() : null, pendingPermission: pendingPermissionWrite?.request.action || null,
+      taskScope: clone(taskRows.at(-1).raw.executionScope || null),
       injectedOutcomes: clone(injectedOutcomes), errors: [...errors, ...window.aiCenterFixture.errors],
       calls: calls.map(({ action, args }) => ({ action, args: clone(args) })) }; },
   };

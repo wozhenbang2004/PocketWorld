@@ -120,7 +120,8 @@ async function runScene(origin, dark, empty) {
     }
     await picker.getByRole('button', { name: '管理 AI 接入', exact: true }).click();
     await center().getByRole('heading', { name: '你的服务', exact: true }).waitFor();
-    await expect(page.getByRole('dialog', { name: '模型与推理', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('dialog', { name: '选择模型', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('dialog', { name: '推理强度', exact: true })).toHaveCount(0);
     await expect(page.locator('.pw-secondary-header').getByRole('heading', { name: 'AI 接入', exact: true })).toBeVisible();
     assert.equal(await page.evaluate(() => window.aiCenterFixture.summary().synthetic), true);
     if (empty) await center().getByRole('heading', { name: '连接你的第一个 AI 服务', exact: true }).waitFor();

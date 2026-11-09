@@ -185,6 +185,71 @@
 }
 .pw-composer-host.pw-squircle-composer .pw-composer-file-track { stroke: color-mix(in srgb, var(--pw-ink) 10%, transparent); }
 .pw-composer-host.pw-squircle-composer .pw-composer-file-value { stroke: var(--pw-copy, #666); transition: stroke-dashoffset 200ms ease; }
+/* Permission controls keep one content-sized sheet and their own compact rhythm. */
+.pw-drawer.pw-permission-drawer {
+  width: 100%; max-width: 560px; height: auto; max-height: min(82dvh, 760px);
+  margin-inline: auto; border: 0; background: var(--pw-surface, #fff);
+}
+.pw-permission-drawer > .pw-drawer-header { flex: none; padding: 12px 20px; border: 0; }
+.pw-permission-drawer > .pw-permission-sheet-body {
+  display: flex; flex-direction: column; gap: 12px; flex: 0 1 auto;
+  min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 20px 16px;
+}
+.pw-permission-sheet-body > * { flex: 0 0 auto; }
+.pw-permission-sheet-body > .pw-composer-permission-detail { width: 100%; min-width: 0; max-width: none; }
+.pw-permission-sheet-body .pw-composer-permission-detail [slot="trigger"] { padding-inline: 0; }
+.pw-permission-sheet-body .pw-composer-permission-detail dl { margin-block: 8px; }
+.pw-permission-sheet-body .pw-composer-permission-note { max-width: none; padding: 8px 0; }
+.pw-permission-pending-review { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--pw-copy); font: 400 12px/18px var(--pw-font); }
+.pw-permission-pending-review > button { min-height: 44px; flex-shrink: 0; }
+.pw-permission-policy { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.pw-permission-policy .pw-selection-field { min-width: 0; gap: 6px; }
+.pw-permission-policy .pw-field-label { color: var(--pw-copy); font: 500 12px/18px var(--pw-font); }
+.pw-permission-policy .pw-radio-option {
+  min-width: 0; min-height: 44px; padding: 8px 12px; gap: 10px;
+  border: 0; border-radius: 12px; background: transparent;
+}
+.pw-permission-policy .pw-radio-option[data-selected] { background: var(--pw-inset); }
+.pw-permission-policy .pw-radio-option[data-hovered]:not([data-disabled]) { background: var(--pw-hover); }
+.pw-permission-policy .pw-radio-option[data-focus-visible] { outline: 2px solid var(--pw-copy); outline-offset: -2px; }
+.pw-permission-policy .pw-radio-option > span:last-child { flex: 1; min-width: 0; }
+.pw-permission-policy .pw-option-copy { gap: 1px; }
+.pw-permission-policy .pw-option-copy > span { font: 400 14px/20px var(--pw-font); color: var(--pw-ink); }
+.pw-permission-policy .pw-option-copy > small { font: 400 12px/18px var(--pw-font); color: var(--pw-copy); }
+.pw-permission-scope .pw-selection-field { display: grid; grid-template-columns: 60px minmax(0, 1fr); align-items: center; gap: 8px; }
+.pw-permission-scope [role="radiogroup"] { display: flex; flex-direction: row; gap: 4px; min-width: 0; }
+.pw-permission-scope .pw-radio-option { flex: 1; justify-content: center; padding: 8px 6px; gap: 6px; }
+.pw-permission-scope .pw-option-copy > span { font-size: 13px; white-space: nowrap; }
+.pw-permission-scope > .pw-permission-hint { margin-top: 4px; }
+.pw-permission-modes [role="radiogroup"] { display: flex; flex-direction: column; gap: 4px; }
+.pw-permission-modes .pw-radio-option { min-height: 56px; }
+.pw-permission-modes > .pw-permission-hint { margin-top: 6px; }
+.pw-permission-hint,
+.pw-permission-inherited,
+.pw-permission-read-status,
+.pw-permission-notice,
+.pw-permission-error { margin: 0; color: var(--pw-muted); font: 400 12px/18px var(--pw-font); overflow-wrap: anywhere; }
+.pw-permission-rules [slot="trigger"] { min-height: 44px; padding: 10px 0; }
+.pw-permission-rules [slot="trigger"] .text-headline-medium { font: 500 14px/20px var(--pw-font); }
+.pw-permission-rules .pw-permission-hint,
+.pw-permission-inherited { margin-bottom: 8px; }
+.pw-permission-tool-rule { display: flex; flex-direction: column; align-items: stretch; gap: 2px; margin: 12px 0; }
+.pw-permission-tool-rule .pw-field-label { overflow-wrap: anywhere; }
+.pw-permission-tool-rule [role="radiogroup"] { display: flex; flex-direction: row; gap: 4px; }
+.pw-permission-tool-rule .pw-radio-option { flex: 1; justify-content: center; padding-inline: 8px; }
+.pw-permission-tool-rule > button { align-self: flex-end; min-height: 44px; }
+.pw-permission-add-rule { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; margin: 12px 0; }
+.pw-permission-add-rule > :first-child { min-width: 0; width: 100%; }
+.pw-permission-add-rule > button { min-height: 44px; }
+.pw-permission-actions {
+  position: sticky; bottom: 0; z-index: 1; display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 0 2px; background: var(--pw-surface, #fff);
+}
+.pw-permission-action-row { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.pw-permission-action-row > button { min-height: 44px; }
+.pw-permission-notice { color: var(--pw-copy); }
+.pw-permission-error,
+.pw-permission-read-status[role="alert"] { color: var(--pw-danger); }
 .pw-composer-permission-note {
   max-width: 280px; padding: 4px 12px 10px; color: var(--pw-muted, #777);
   font: 400 12px/1.65 var(--pw-font);

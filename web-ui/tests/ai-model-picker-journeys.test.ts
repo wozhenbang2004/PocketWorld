@@ -43,7 +43,7 @@ function fixture(overrides: Data = {}, extra: Data = {}) {
   const render = () => { let rounds = 0; do { assert.ok(rounds++ < 30); dirty = false; index = 0; tree = Component(props); effects.splice(0).forEach(effect => effect()); } while (dirty); };
   const find = (predicate: (node: any) => boolean) => { const node = nodes(tree).find(predicate); assert.ok(node, 'expected production picker control'); return node; };
   render();
-  return { calls, selections, pending, props, responses, find, get text() { return text(tree); }, get selected() { return selected; },
+  return { calls, selections, pending, props, responses, find, has: (predicate: (node: any) => boolean) => nodes(tree).some(predicate), get text() { return text(tree); }, get selected() { return selected; },
     click(label: string) { const node = find(node => ['Button', 'IconButton'].includes(node.type) && (text(node) === label || node.props['aria-label'] === label)); assert.ok(!node.props.disabled, label + ' should be enabled'); node.props.onClick(); render(); },
     row(label: string) { const node = find(node => node.type === 'Button' && ['pw-ai-model-row'].includes(node.props.className) && text(node).startsWith(label)); assert.ok(!node.props.disabled); node.props.onClick(); render(); },
     change(state: Data) { props.state = { ...props.state, ...state }; render(); },
@@ -233,4 +233,69 @@ test('a saved conversation choice remains visible and rereads fresh windows only
   assert.equal(f.find(node => node.props['aria-label'] === '选择模型：configured-model，工作 API').props['aria-pressed'], true);
   assert.equal(f.calls.filter(call => call.action === 'models.api.open').length, 2);
   assert.equal(writes, 1); assert.equal(f.selected, 1);
+});
+
+const explicitPreference = { scopeKey: 'conversation:a', revision: 3, inherited: false,
+  target: { kind: 'api', connectionId: apiRow.connectionId, connectionRevision: 4, modelId: 'conversation-model' } };
+const resetState = { modelSelectionRevision: 7, modelName: apiRow.modelId, conversationModel: explicitPreference };
+const resetReceipt = { status: 'saved', scope: 'conversation', preference: { ...explicitPreference, revision: 4, inherited: true, target: null } };
+
+test('restoring the default from the model picker preserves original conversation/source revisions and retires its windows', async () => {
+  const f = fixture({ 'models.conversation.reset': resetReceipt }, { state: resetState }); await f.flush();
+  f.click('恢复使用默认模型'); await f.flush();
+  assert.deepEqual(f.calls.find(call => call.action === 'models.conversation.reset')?.args,
+    { expectedPreferenceRevision: 3, expectedSelectionRevision: 7 });
+  assert.match(f.text, /已恢复使用默认模型/); assert.equal(f.selections.length, 0);
+  assert.equal(f.calls.some(call => call.action === 'models.conversation.reasoning'), false);
+  assert.deepEqual(f.pending, [true, false]);
+  f.unmount(); assert.equal(f.calls.filter(call => /models\.(api|accounts)\.close/.test(call.action)).length, 2);
+});
+
+test('an unknown model reset cannot be submitted again until an explicit successful reread', async () => {
+  const f = fixture({ 'models.conversation.reset': () => Promise.reject(new Error('回执未知')) }, { state: resetState }); await f.flush();
+  f.click('恢复使用默认模型'); await f.flush();
+  assert.equal(f.find(node => node.props.className === 'pw-conversation-model-reset').props.disabled, true);
+  assert.match(f.text, /保存结果待核对/); assert.match(f.text, /没有自动重试/); assert.doesNotMatch(f.text, /已恢复使用默认模型/);
+  f.click('重新读取'); await f.flush();
+  assert.equal(f.find(node => node.props.className === 'pw-conversation-model-reset').props.disabled, false);
+  assert.equal(f.calls.filter(call => call.action === 'models.conversation.reset').length, 1);
+});
+
+test('a pending model reset blocks duplicate writes and never confirms a late receipt in another conversation', async () => {
+  let finish!: (value: any) => void;
+  const f = fixture({ 'models.conversation.reset': () => new Promise(resolve => { finish = resolve; }) }, { state: resetState }); await f.flush();
+  const reset = f.find(node => node.props.className === 'pw-conversation-model-reset').props.onClick;
+  reset(); reset(); await f.flush();
+  assert.equal(f.calls.filter(call => call.action === 'models.conversation.reset').length, 1);
+  assert.match(f.text, /正在保存模型/); assert.doesNotMatch(f.text, /已恢复使用默认模型/);
+  f.change({ conversationModel: { ...explicitPreference, scopeKey: 'conversation:b' } }); finish(resetReceipt); await f.flush();
+  assert.doesNotMatch(f.text, /已恢复使用默认模型/); assert.equal(f.selected, 0); f.unmount();
+});
+
+test('reset requires an exact inherited receipt with no remaining conversation target', async () => {
+  for (const patch of [{ scopeKey: 'conversation:b' }, { revision: 7 }, { inherited: false }, { target: explicitPreference.target }]) {
+    const f = fixture({ 'models.conversation.reset': { ...resetReceipt, preference: { ...resetReceipt.preference, ...patch } } }, { state: resetState }); await f.flush();
+    f.click('恢复使用默认模型'); await f.flush();
+    assert.match(f.text, /保存结果待核对/); assert.doesNotMatch(f.text, /已恢复使用默认模型/);
+    assert.equal(f.find(node => node.props.className === 'pw-conversation-model-reset').props.disabled, true);
+    assert.equal(f.calls.filter(call => call.action === 'models.conversation.reset').length, 1); f.unmount();
+  }
+});
+
+test('model reset is absent for inherited conversations and the global management picker', async () => {
+  for (const extra of [{ state: { ...resetState, conversationModel: resetReceipt.preference } }, { scope: 'default', state: resetState }]) {
+    const f = fixture({}, extra); await f.flush();
+    assert.equal(f.has(node => node.props.className === 'pw-conversation-model-reset'), false);
+    assert.equal(f.calls.some(call => call.action === 'models.conversation.reset'), false); f.unmount();
+  }
+});
+
+test('account details expose reasoning edits only in AI management, never in the conversation model sheet', async () => {
+  for (const scope of ['conversation', 'default']) {
+    const f = fixture({}, { scope }); await f.flush(); f.row('个人账号'); await f.flush();
+    f.find(node => node.type === 'IconButton' && node.props['aria-label']?.startsWith('查看模型详情：套餐目录模型')).props.onClick(); await f.flush();
+    assert.equal(f.has(node => node.type === 'SelectField' && node.props.label === '推理设置'), scope === 'default');
+    assert.equal(f.has(node => node.type === 'TextField' && node.props.label === '输出预留'), true);
+    assert.equal(f.selections.length, 0); f.unmount();
+  }
 });

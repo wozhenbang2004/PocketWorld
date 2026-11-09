@@ -5,7 +5,7 @@ import { Tabs, Tab, TabList, TabPanel } from './shell-library';
 import { ShimmerText } from './library';
 import { apiCapability, apiModelFavorite, apiModelKey, apiModelProjectionCurrent, apiModelReviewCurrent, apiModelReviewRequest, apiModelRows, apiModelSelection, apiModelUnavailable, type ApiModelFilter } from './composer-api-models';
 import { accountModelAccountRows, accountModelCatalog, accountModelProjectionCurrent, accountModelReadRequest, accountModelReasoningLevels, accountModelReviewCurrent, accountModelReviewRequest, accountModelSelection, type AccountModelOptions } from './composer-account-models';
-import { conversationModelName, conversationModelStamp, modelPickerSelected, modelPickerSourceChanged, type PickerModelIdentity } from './conversation-model-selection';
+import { conversationModelName, conversationModelStamp, conversationSelectionReceipt, modelPickerSelected, modelPickerSourceChanged, type PickerModelIdentity } from './conversation-model-selection';
 import './ai-center.css';
 import './conversation-model-controls.css';
 
@@ -188,6 +188,22 @@ export function AIModelPicker({ state, can, act, scope = 'conversation', onSelec
     } catch (failure) { unknown(failure, request); }
     finally { pending.current = false; latest.current.onSelectionPending(false); if (alive.current && request === generation.current) setWriting(false); }
   };
+  const reset = async () => {
+    const preference = state.conversationModel;
+    if (scope !== 'conversation' || pending.current || locked || needsRead || preference?.inherited !== false || !can('models.conversation.reset')) return;
+    if (context(state) !== context(latest.current.state)) return;
+    const originalScope = preference.scopeKey, originalRevision = preference.revision, request = ++generation.current;
+    pending.current = true; setWriting(true); setError(''); setNotice(''); latest.current.onSelectionPending(true);
+    try {
+      const value = await latest.current.act('models.conversation.reset', { expectedPreferenceRevision: originalRevision, expectedSelectionRevision: state.modelSelectionRevision });
+      const cleared = conversationSelectionReceipt(value, originalScope, originalRevision), current = latest.current.state.conversationModel;
+      if (!alive.current || request !== generation.current || current?.scopeKey !== originalScope) return;
+      if (![originalRevision, cleared.revision].includes(current.revision) || cleared.inherited !== true || cleared.target != null) throw new Error('恢复默认的结果待核对，请重新读取。');
+      confirmed.current = cleared; setReview(null); setGroupReview(null); setApi(null); setAccount(null); setGroups([]); setNeedsRead(true);
+      setNotice('已恢复使用默认模型');
+    } catch (failure) { if (latest.current.state.conversationModel?.scopeKey === originalScope) unknown(failure, request); }
+    finally { pending.current = false; latest.current.onSelectionPending(false); if (alive.current && request === generation.current) setWriting(false); }
+  };
   const currentRevision = state.modelSelectionRevision, q = query.trim().toLocaleLowerCase();
   const visibleGroups = filter === 'all' ? groups.filter(group => [group.name, group.groupId].some(value => String(value || '').toLocaleLowerCase().includes(q))) : [];
   const apiRows = apiModelRows(api, currentRevision, filter).filter(row => [row.modelId, row.connectionName, row.connectionId].some(value => String(value || '').toLocaleLowerCase().includes(q)));
@@ -203,7 +219,7 @@ export function AIModelPicker({ state, can, act, scope = 'conversation', onSelec
   let selectable = false, favoritable = false;
   try { if (!review) throw new Error(); selection(review, options); selectable = true; } catch {}
   try { if (review?.kind !== 'api') throw new Error(); selection(review, options, true); favoritable = true; } catch {}
-  return <section className="pw-ai-picker pw-model-selection-picker" aria-label="统一模型目录">
+  return <section className={`pw-ai-picker pw-model-selection-picker${scope === 'conversation' ? ' pw-conversation-model-picker' : ''}`} aria-label="统一模型目录">
     {scope === 'conversation' && <p className="pw-model-selection-scope">{inherited ? `沿用默认 · ${conversationModelName(state) || '尚未设置'}` : `此对话 · ${conversationModelName(state) || '尚未选择模型'}`}</p>}
     {groupReview ? <div className="pw-ai-model-review"><Button variant="ghost" leadingIcon={ArrowLeft} disabled={writing} onClick={() => setGroupReview(null)}>返回模型</Button><header><h3>{groupReview.name}</h3><p>模型组 · {Array.isArray(groupReview.candidates) ? groupReview.candidates.length : 0} 个候选</p></header><div className="pw-ai-model-rows">{(Array.isArray(groupReview.candidates) ? groupReview.candidates : []).map((candidate: Data, index: number) => <div className="pw-ai-group-candidate-preview" key={candidate.candidateId}><span>{index + 1}</span><span className="pw-ai-row-copy"><strong>{candidate.target?.modelId || '原候选'}</strong><small>{candidate.target?.connectionId}{candidate.enabled === false ? ' · 已停用' : ''}</small></span></div>)}</div><p className="pw-ai-muted">{groupReview.attemptPolicy?.maxRouteSwitches === 1 ? '失败时可切换至下一候选。' : '失败切换未开启。'}</p><div className="pw-ai-picker-actions"><Button disabled={locked || scope === 'conversation' && !onSelectTarget} onClick={() => void selectGroup(groupReview)}>{scope === 'conversation' ? '用于本对话' : '设为默认模型组'}</Button></div></div> : review ? <div className="pw-ai-model-review">
       <Button variant="ghost" leadingIcon={ArrowLeft} disabled={writing} onClick={() => setReview(null)}>返回模型</Button>
@@ -211,12 +227,12 @@ export function AIModelPicker({ state, can, act, scope = 'conversation', onSelec
       <dl className="pw-ai-model-facts"><div><dt>图片输入</dt><dd>{review.kind === 'api' ? apiCapability(model.imageInput) : known('IMAGE_INPUT') === undefined ? '未声明' : known('IMAGE_INPUT') ? '支持，仍需任务授权' : '不支持'}</dd></div>{review.kind === 'api' && <div><dt>工具调用</dt><dd>{apiCapability(model.toolCalls)}</dd></div>}</dl>
       {review.kind === 'api' && !model.available && <p role="alert">{apiModelUnavailable(model)}</p>}
       {review.kind === 'account' && <>
-        {levels.length > 0 && <SelectField label="推理设置" value={options.reasoningEffort || 'service-default'} options={[{ id: 'service-default', label: '服务默认' }, ...levels.map(level => ({ id: level, label: level }))]} onChange={value => setOptions(old => ({ ...old, reasoningEffort: value === 'service-default' ? '' : value }))} isDisabled={writing} />}
+        {scope === 'default' && levels.length > 0 && <SelectField label="推理设置" value={options.reasoningEffort || 'service-default'} options={[{ id: 'service-default', label: '服务默认' }, ...levels.map(level => ({ id: level, label: level }))]} onChange={value => setOptions(old => ({ ...old, reasoningEffort: value === 'service-default' ? '' : value }))} isDisabled={writing} />}
         <Accordion><AccordionItem id="local-reserve" title="输入与输出预算"><TextField label="输出预留" inputMode="numeric" value={options.outputReserve} onChange={value => setOptions(old => ({ ...old, outputReserve: value.replace(/\D/g, '').slice(0, 5) }))} hint="128–32768 tokens，用于本地输入准入。" isDisabled={writing} /><TextField label="每张图片预留" inputMode="numeric" value={options.imageTokenReserve} onChange={value => setOptions(old => ({ ...old, imageTokenReserve: value.replace(/\D/g, '').slice(0, 7) }))} hint="0–2000000 tokens。" isDisabled={writing} /></AccordionItem></Accordion>
       </>}
       <div className="pw-ai-picker-actions">{review.kind === 'api' && <Button variant="ghost" leadingIcon={Star} disabled={locked || !favoritable} onClick={() => void write(true)}>{model.favorite ? '取消收藏' : '收藏'}</Button>}<Button disabled={locked || !selectable || scope === 'conversation' && !onSelectTarget} onClick={() => void write()}>{scope === 'conversation' ? '用于本对话' : '设为默认模型'}</Button></div>
     </div> : <>
-      <SearchField aria-label="搜索模型或来源" placeholder="搜索模型或来源" value={query} onChange={value => present({ query: value })} className="pw-ai-search" />
+      <SearchField aria-label="搜索模型或来源" placeholder="搜索模型或来源" value={query} onChange={value => present({ query: value })} className="pw-ai-search" shape={scope === 'conversation' ? 'rounded' : 'pill'} fieldClassName={scope === 'conversation' ? 'pw-conversation-model-search-field' : undefined} />
       <Tabs selectedKey={filter} onSelectionChange={key => present({ filter: String(key) as ApiModelFilter })} className="pw-ai-filter-tabs"><div className="pw-ai-filter"><TabList aria-label="模型筛选"><Tab id="all">全部</Tab><Tab id="favorites">收藏</Tab><Tab id="recent">最近使用</Tab></TabList></div><TabPanel id={filter} className="pw-ai-tab-panel">
       {loading && <p className="pw-ai-loading" aria-busy="true"><ShimmerText>正在读取模型</ShimmerText></p>}
       {!needsRead && <div className="pw-ai-model-rows">
@@ -232,6 +248,7 @@ export function AIModelPicker({ state, can, act, scope = 'conversation', onSelec
     {writing && <p role="status" aria-busy="true" className="pw-model-selection-status">正在保存模型…</p>}
     {notice && <p role="status" className="pw-model-selection-status">{notice}</p>}
     {error && <p className="pw-field-error" role="alert">{error}</p>}
+    {!review && !groupReview && scope === 'conversation' && state.conversationModel?.inherited === false && can('models.conversation.reset') && <Button variant="ghost" className="pw-conversation-model-reset" disabled={locked || needsRead} onClick={() => void reset()}>恢复使用默认模型</Button>}
     {!review && !groupReview && <footer className="pw-ai-picker-footer"><Button variant="ghost" leadingIcon={RefreshCw} disabled={locked} onClick={() => void refresh()}>重新读取</Button>{onManage && <Button variant="ghost" trailingIcon={ChevronRight} disabled={locked} onClick={onManage}>管理 AI 接入</Button>}</footer>}
   </section>;
 }

@@ -3,7 +3,7 @@ import { RiArrowDownSLine, RiSparklingLine, RiBox3Line } from '@remixicon/react'
 import { Button } from './forms-library';
 import { Radio, RadioGroup } from './forms-library/boardui/components/base/radio/radio';
 import { ShimmerText } from './library';
-import { nativeReasoning, reasoningChoices, reasoningLabel } from './conversation-model-controls';
+import { nativeReasoning, reasoningAvailability, reasoningChoices, reasoningLabel } from './conversation-model-controls';
 import { conversationModelName, conversationModelStamp, conversationSelectionReceipt } from './conversation-model-selection';
 import type { ConversationModelControlsProps } from './ConversationModelControls';
 
@@ -26,7 +26,7 @@ function savedReasoningCurrent(preference: Row, reviewed: Row, intended: Row): b
   return native.modelRoute === 'account' && target.kind === 'account' && canonical(target.nativeRef) === canonical(native.nativeRef);
 }
 
-/** Both composer chips enter the same sheet. Only native values are summarized. */
+/** Each composer chip opens its own focused sheet. Only native values are summarized. */
 export function ScopedConversationModelControls({ state, can, act, onOpenModel, disabled = false }: ConversationModelControlsProps) {
   const [defaultReasoning, setDefaultReasoning] = useState<Row | null>(null);
   const preference = record(state.conversationModel), target = record(preference.target), stamp = conversationModelStamp(state);
@@ -52,7 +52,7 @@ export function ScopedConversationModelControls({ state, can, act, onOpenModel, 
 type ReasoningPanelProps = Pick<ConversationModelControlsProps, 'state' | 'can' | 'act' | 'disabled'> & {
   onSelectionPending: (pending: boolean) => void;
 };
-/** Embedded in the model sheet. A changed choice consumes one original scoped review. */
+/** A changed reasoning choice consumes one original scoped review. */
 export function ScopedConversationReasoningPanel({ state, can, act, disabled = false, onSelectionPending }: ReasoningPanelProps) {
   const [loading, setLoading] = useState(false), [saving, setSaving] = useState(false);
   const [review, setReview] = useState<Row | null>(null), [choice, setChoice] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState('');
@@ -122,30 +122,16 @@ export function ScopedConversationReasoningPanel({ state, can, act, disabled = f
     } catch (failure) { if (alive.current && request === reads.current && record(latest.current.state.conversationModel).scopeKey === originalScope) { confirmed.current = null; setReview(null); setNeedsRead(true); setError(`保存结果待核对。${failure instanceof Error ? failure.message : ''} 没有自动重试，请重新读取。`); } }
     finally { pending.current = false; latest.current.onSelectionPending(false); if (alive.current && request === reads.current) setSaving(false); }
   };
-  const reset = async () => {
-    if (pending.current || locked || loading || needsRead || preference.inherited === true || !can('models.conversation.reset')) return;
-    if (current !== conversationModelStamp(latest.current.state)) return;
-    const originalScope = preference.scopeKey, originalRevision = preference.revision, request = ++reads.current;
-    pending.current = true; setSaving(true); setError(''); setNotice(''); latest.current.onSelectionPending(true);
-    try {
-      const value = await latest.current.act('models.conversation.reset', { expectedPreferenceRevision: originalRevision, expectedSelectionRevision: state.modelSelectionRevision });
-      const saved = conversationSelectionReceipt(value, originalScope, originalRevision), latestPreference = record(latest.current.state.conversationModel);
-      if (!alive.current || request !== reads.current || latestPreference.scopeKey !== originalScope) return;
-      if (![originalRevision, saved.revision].includes(latestPreference.revision) || saved.inherited !== true || saved.target != null) throw new Error('恢复默认的结果待核对，请重新读取。');
-      confirmed.current = saved; setReview(null); setNeedsRead(true); setSavedReasoning(null); setNotice('已恢复使用默认模型');
-    } catch (failure) { if (alive.current && request === reads.current && record(latest.current.state.conversationModel).scopeKey === originalScope) { confirmed.current = null; setReview(null); setNeedsRead(true); setError(`保存结果待核对。${failure instanceof Error ? failure.message : ''} 没有自动重试，请重新读取。`); } }
-    finally { pending.current = false; latest.current.onSelectionPending(false); if (alive.current && request === reads.current) setSaving(false); }
-  };
+  const onlyServiceDefault = review?.choices.length === 1 && review.choices[0].value.mode === 'DEFAULT';
   return <section className="pw-scoped-reasoning-panel" aria-label="此对话推理设置">
     <p className="pw-model-selection-scope">{preference.inherited === true ? '沿用默认 · ' : '此对话 · '}{conversationModelName(state) || '尚未选择模型'}</p>
-    {loading ? <div role="status" aria-busy="true"><ShimmerText>正在读取推理设置…</ShimmerText></div> : review?.restriction ? <p className="pw-conversation-reasoning-note">{review.restriction}</p> : review && <RadioGroup aria-label="可用推理强度" value={choice} onChange={id => void apply(id)} isDisabled={locked || needsRead} className="pw-conversation-reasoning-options">{review.choices.map((item: Row) => <Radio key={item.id} value={item.id} isDisabled={item.readOnly} className="pw-conversation-reasoning-option"><span><b>{item.label}</b>{item.detail && <small>{item.detail}</small>}</span></Radio>)}</RadioGroup>}
+    {loading ? <div role="status" aria-busy="true"><ShimmerText>正在读取推理设置…</ShimmerText></div> : review?.restriction ? <p className="pw-conversation-reasoning-note">{review.restriction}</p> : onlyServiceDefault ? <div className="pw-conversation-reasoning-default" role="status"><strong>服务默认</strong><p>{reasoningAvailability(record(review.facts))}</p></div> : review && <RadioGroup aria-label="可用推理强度" value={choice} onChange={id => void apply(id)} isDisabled={locked || needsRead} className="pw-conversation-reasoning-options">{review.choices.map((item: Row) => <Radio key={item.id} value={item.id} isDisabled={item.readOnly} className="pw-conversation-reasoning-option"><span><b>{item.label}</b>{item.detail && <small>{item.detail}</small>}</span></Radio>)}</RadioGroup>}
     {saving && <p role="status" aria-busy="true" className="pw-model-selection-status">正在保存推理…</p>}
     {notice && <p role="status" className="pw-model-selection-status">{notice}</p>}
     {savedReasoning && !review && !loading && <p className="pw-conversation-reasoning-current">当前推理 <b>{reasoningLabel(nativeReasoning(savedReasoning))}</b></p>}
     {error && <p role="alert" className="pw-conversation-reasoning-error">{error}</p>}
     <div className="pw-scoped-reasoning-actions">
       {(error || needsRead) && <Button variant="secondary" onClick={() => void read()} disabled={locked || loading}>重新读取</Button>}
-      {preference.inherited === false && can('models.conversation.reset') && <Button variant="ghost" onClick={() => void reset()} disabled={locked || loading || needsRead}>恢复使用默认模型</Button>}
     </div>
   </section>;
 }

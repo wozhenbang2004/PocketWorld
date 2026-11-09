@@ -79,23 +79,23 @@
   .pw-conversation-model-controls :is(.pw-conversation-model-chip, .pw-conversation-reasoning-chip)::before { transition: none; }
 }
 
-/* The existing Vaul sheet and BoardUI controls share one model/effort surface. */
+/* Independent model and reasoning sheets retain the existing Vaul/BoardUI controls. */
 .pw-conversation-model-drawer.pw-drawer {
   display: flex;
   flex-direction: column;
-  width: min(100%, 520px);
-  max-height: min(720px, calc(100dvh - 24px));
+  width: min(100%, 480px);
+  max-height: min(560px, calc(100dvh - 24px));
   min-height: 0;
   padding: 0;
   overflow: hidden;
+  border: 0;
+  background: var(--pw-surface);
 }
-.pw-conversation-model-drawer > .pw-drawer-header { flex: 0 0 auto; padding: 8px 20px 12px; }
-.pw-model-selection-tabs { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; gap: 0; }
-.pw-model-selection-tabs > div:has(> [role="tablist"]) { flex: 0 0 auto; width: auto; min-width: 0; margin: 0 20px 12px; }
-.pw-model-selection-tabs [role="tablist"][aria-label="此对话模型设置"] { display: flex; gap: 4px; padding: 3px; border-radius: 14px; background: var(--pw-inset); }
-.pw-model-selection-tabs [role="tablist"][aria-label="此对话模型设置"] [role="tab"] { flex: 1; justify-content: center; min-height: 44px; border-radius: 11px; color: var(--pw-muted); }
-.pw-model-selection-tabs [role="tablist"][aria-label="此对话模型设置"] [role="tab"][data-selected] { background: var(--pw-surface); color: var(--pw-ink); box-shadow: 0 1px 5px color-mix(in srgb, var(--pw-ink) 6%, transparent); }
-.pw-model-selection-tabs > .pw-model-selection-panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 20px calc(16px + env(safe-area-inset-bottom, 0px)); }
+.pw-conversation-model-drawer[data-picker-section="reasoning"] { max-height: min(440px, calc(100dvh - 24px)); }
+.pw-conversation-model-drawer > .pw-drawer-header { flex: 0 0 auto; padding: 0 16px 8px; border: 0; }
+.pw-conversation-model-drawer > .pw-drawer-header h2 { margin: 0; font: 600 17px/24px var(--pw-font); }
+.pw-conversation-model-drawer > .pw-drawer-header > button { flex: 0 0 44px; width: 44px; height: 44px; min-height: 44px; }
+.pw-conversation-model-drawer > .pw-model-selection-panel { flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 16px calc(16px + env(safe-area-inset-bottom, 0px)); }
 .pw-model-selection-picker .pw-model-selection-scope,
 .pw-scoped-reasoning-panel .pw-model-selection-scope { margin: 0; color: var(--pw-muted); font: 400 13px/20px var(--pw-font); overflow-wrap: anywhere; }
 .pw-model-selection-picker .pw-ai-model-option { display: flex; align-items: center; gap: 2px; min-width: 0; border-radius: 12px; }
@@ -106,9 +106,41 @@
 .pw-model-selection-picker .pw-ai-row-end { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; }
 .pw-model-selection-picker .pw-ai-row-copy strong { font-size: 15px; line-height: 22px; }
 .pw-model-selection-picker .pw-ai-row-copy small { font-size: 12px; line-height: 18px; }
+.pw-conversation-model-picker { gap: 8px; }
+.pw-conversation-model-picker .pw-ai-filter-tabs,
+.pw-conversation-model-picker .pw-ai-tab-panel { gap: 4px; }
+.pw-conversation-model-picker .pw-conversation-model-search-field { height: 44px; min-height: 44px; border-radius: 12px; padding: 0 10px; }
+.pw-conversation-model-picker .pw-ai-search input { min-width: 0; height: 44px; font: 400 14px/20px var(--pw-font); }
+.pw-conversation-model-picker .pw-ai-filter { max-width: 100%; }
+.pw-conversation-model-picker .pw-ai-filter [role="tablist"] { width: fit-content; max-width: 100%; gap: 4px; padding: 0; border-radius: 0; background: transparent; }
+.pw-conversation-model-picker .pw-ai-filter [role="tab"] { flex: 0 0 auto; min-height: 44px; padding: 8px 10px; background: transparent; font: 400 13px/20px var(--pw-font); }
+.pw-conversation-model-picker .pw-ai-filter [role="tab"] > span { font: inherit; color: inherit; }
+.pw-conversation-model-picker .pw-ai-filter [role="tab"][data-selected] { font-weight: 600; color: var(--pw-ink); text-decoration: underline; text-underline-offset: 6px; text-decoration-thickness: 2px; }
+.pw-conversation-model-picker .pw-ai-filter [role="tab"]:focus-visible,
+.pw-conversation-model-picker button:focus-visible { background: var(--pw-hover); }
+.pw-conversation-model-picker .pw-ai-filter [role="tablist"] + span { display: none; }
+.pw-conversation-model-picker .pw-ai-model-option { gap: 0; border-radius: 10px; }
+.pw-conversation-model-picker .pw-ai-model-option > .pw-ai-model-row,
+.pw-conversation-model-picker .pw-ai-model-rows > .pw-ai-model-row { min-height: 58px; padding: 9px 8px; border-radius: 10px; }
+.pw-conversation-model-picker .pw-ai-row-copy { gap: 2px; }
+.pw-conversation-model-picker .pw-ai-row-copy :is(strong, small) { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pw-conversation-model-picker .pw-ai-row-copy strong { font-size: 14px; line-height: 20px; }
+.pw-conversation-model-picker .pw-ai-row-copy small { font-size: 12px; line-height: 18px; }
+.pw-conversation-model-picker .pw-ai-model-option > button:last-child:not(.pw-ai-model-row) { flex-basis: 44px; width: 44px; height: 44px; min-height: 44px; padding: 12px; border-radius: 10px; }
+.pw-conversation-model-picker .pw-ai-picker-footer { gap: 8px; padding-top: 0; flex-wrap: wrap; }
+.pw-conversation-model-picker .pw-ai-picker-footer > button { min-height: 44px; padding-inline: 6px; font-size: 12px; }
+.pw-conversation-model-picker .pw-conversation-model-reset { align-self: flex-start; min-height: 44px; padding: 8px 6px; font: 400 13px/20px var(--pw-font); color: var(--pw-copy); }
 .pw-model-selection-picker .pw-model-selection-status,
 .pw-scoped-reasoning-panel .pw-model-selection-status { margin: 0; font: 500 13px/21px var(--pw-font); color: var(--pw-copy); overflow-wrap: anywhere; }
-.pw-scoped-reasoning-panel { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.pw-scoped-reasoning-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.pw-conversation-model-drawer .pw-scoped-reasoning-panel .pw-conversation-reasoning-options { display: flex; flex-direction: column; flex-wrap: nowrap; gap: 2px; }
+.pw-scoped-reasoning-panel .pw-conversation-reasoning-option { min-height: 52px; padding: 8px 10px; border-radius: 10px; }
+.pw-scoped-reasoning-panel .pw-conversation-reasoning-option b { font-size: 15px; line-height: 22px; }
+.pw-scoped-reasoning-panel .pw-conversation-reasoning-option small { font-size: 12px; line-height: 18px; }
+.pw-scoped-reasoning-panel .pw-conversation-reasoning-option > span:last-child > span { flex-wrap: wrap; gap: 2px 12px; }
+.pw-conversation-reasoning-default { padding: 6px 0 8px; }
+.pw-conversation-reasoning-default strong { display: block; font: 500 15px/22px var(--pw-font); color: var(--pw-ink); }
+.pw-conversation-reasoning-default p { margin: 4px 0 0; font: 400 13px/20px var(--pw-font); color: var(--pw-muted); overflow-wrap: anywhere; }
 .pw-scoped-reasoning-panel .pw-conversation-reasoning-note,
 .pw-scoped-reasoning-panel .pw-conversation-reasoning-error { margin-top: 0; }
 .pw-scoped-reasoning-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }

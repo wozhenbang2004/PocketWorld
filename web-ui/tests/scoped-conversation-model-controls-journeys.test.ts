@@ -37,7 +37,7 @@ function fixture(overrides: Data = {}, extra: Data = {}) {
   const render = () => { let rounds = 0; do { assert.ok(rounds++ < 30); dirty = false; index = 0; tree = Component(props); effects.splice(0).forEach(effect => effect()); } while (dirty); };
   const find = (predicate: (node: any) => boolean) => { const node = nodes(tree).find(predicate); assert.ok(node, 'expected real scoped model control'); return node; };
   render();
-  return { calls, props, responses, find, get text() { return content(tree); }, get modelOpened() { return modelOpened; },
+  return { calls, props, responses, find, has: (predicate: (node: any) => boolean) => nodes(tree).some(predicate), get text() { return content(tree); }, get modelOpened() { return modelOpened; },
     begin() { render(); },
     click(label: string) { const node = find(node => ['Button', 'IconButton'].includes(node.type) && (content(node) === label || node.props['aria-label'] === label)); assert.ok(!node.props.disabled, `${label} enabled`); node.props.onClick(); render(); },
     choose(value = controls.reasoningId(high)) { find(node => node.type === 'RadioGroup').props.onChange(value); render(); },
@@ -57,10 +57,10 @@ test('the scoped controls use real exported reasoning helpers and write only the
   assert.match(f.text, /推理已保存/); f.unmount(); assert.ok(f.calls.some(call => call.action === 'models.conversation.close'));
 });
 
-test('restoring the default sends only the original conversation and source revisions then closes its review', async () => {
-  const f = fixture(); f.begin(); await f.flush(); f.click('恢复使用默认模型'); await f.flush();
-  assert.deepEqual(f.calls.find(call => call.action === 'models.conversation.reset')?.args, { expectedPreferenceRevision: 3, expectedSelectionRevision: 8 });
-  assert.match(f.text, /已恢复使用默认模型/); f.unmount(); assert.ok(f.calls.some(call => call.action === 'models.conversation.close'));
+test('the reasoning sheet cannot reset the selected model or show model navigation', async () => {
+  const f = fixture(); await f.flush();
+  assert.doesNotMatch(f.text, /恢复使用默认模型|管理 AI 接入|选择模型/);
+  assert.equal(f.calls.some(call => call.action === 'models.conversation.reset'), false); f.unmount();
 });
 
 test('wrong selection revisions, empty handles, and a swapped target cannot become editable reviews', async () => {
@@ -105,12 +105,15 @@ test('an unknown reasoning receipt retires its handle and cannot silently retry 
   assert.match(f.text, /保存结果待核对/); assert.doesNotMatch(f.text, /推理已保存/); assert.match(f.text, /没有自动重试/); assert.equal(f.calls.filter(call => call.action === 'models.conversation.reasoning').length, 1);
 });
 
-test('an unknown reset cannot be submitted again until an explicit successful reread', async () => {
-  const f = fixture({ 'models.conversation.reset': () => Promise.reject(new Error('回执未知')) });
-  f.begin(); await f.flush(); f.click('恢复使用默认模型'); await f.flush();
-  assert.equal(f.find(node => node.type === 'Button' && node.children.join('') === '恢复使用默认模型').props.disabled, true);
-  f.click('重新读取'); await f.flush();
-  assert.equal(f.find(node => node.type === 'Button' && node.children.join('') === '恢复使用默认模型').props.disabled, false);
+test('a lone service default is a truthful read-only explanation rather than an editable strength choice', async () => {
+  for (const [facts, expected] of [[{ REASONING: { known: true, value: false } }, '这个模型不提供推理强度选项。'], [{}, '这个模型尚未声明可选的推理强度。']] as const) {
+    const f = fixture({ 'models.conversation.review': { ...review, facts } }); await f.flush();
+    assert.equal(f.has(node => node.type === 'RadioGroup'), false);
+    assert.equal(f.find(node => node.props.className === 'pw-conversation-reasoning-default').props.role, 'status');
+    assert.match(f.text, /服务默认/); assert.ok(f.text.includes(expected));
+    assert.doesNotMatch(f.text, /恢复使用默认模型/);
+    assert.equal(f.calls.some(call => ['models.conversation.reasoning', 'models.conversation.reset'].includes(call.action)), false); f.unmount();
+  }
 });
 
 test('changing conversations during a write retires the old review without applying a late receipt to the new scope', async () => {

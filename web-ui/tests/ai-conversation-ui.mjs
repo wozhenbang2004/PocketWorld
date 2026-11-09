@@ -26,14 +26,71 @@ function argument(name, fallback) {
 const bundle = argument('--bundle', path.resolve(root, '../app/src/main/assets/pocket-ui'));
 const output = argument('--output', path.resolve(root, '../build-artifacts/ai-conversation-visual'));
 const matrix = [390, 320, 360, 1280].flatMap(width => [false, true].map(dark => ({ width, height: 844, dark })));
+const overlayMatrix = [{ width: 390, height: 844, dark: false }, { width: 320, height: 844, dark: true }];
 const record = {
-  scope: 'Production renderer: conversation/navigation at 320, 360, 390 and 1280px in light/dark, plus empty main at 320/390px in light mode; synthetic native receipts. Not Android, IME, real provider or listener validation.',
+  scope: 'Production renderer: conversation/navigation at 320, 360, 390 and 1280px in light/dark; empty main at 320/390px; separate single-model/default-reasoning and permission sheets at 390-light/320-dark including 480px short viewports. Synthetic native receipts, not Android, IME, real provider or permission execution validation.',
   synthetic: true, outcome: 'not_run', visualReview: 'not_performed_by_runner',
-  startedAt: new Date().toISOString(), matrix, checks: [], screenshots: [], errors: [], scenes: [], emptyScenes: [],
+  startedAt: new Date().toISOString(), matrix, overlayMatrix, checks: [], screenshots: [], errors: [], scenes: [], emptyScenes: [], overlayScenes: [],
 };
 let browser, server;
 await fs.mkdir(output, { recursive: true });
 const passed = (scene, name, evidence) => record.checks.push({ scene, name, passed: true, ...(evidence ? { evidence } : {}) });
+
+async function captureScene(page, scene, label, surface = page.locator('.pw-app')) {
+  await page.evaluate(() => document.fonts.ready);
+  await page.mouse.move(0, 0);
+  const geometry = await surface.evaluate(node => {
+    const controls = [...node.querySelectorAll('button, input, textarea, [role="tab"]')].filter(element => {
+      const rect = element.getBoundingClientRect(), style = getComputedStyle(element);
+      return !element.closest('[hidden], [aria-hidden="true"]') && style.visibility !== 'hidden' && style.display !== 'none'
+        && rect.width > 2 && rect.height > 2 && rect.bottom > 0 && rect.top < innerHeight;
+    });
+    return { viewportWidth: innerWidth, documentWidth: document.documentElement.scrollWidth,
+      clippedControls: controls.map(element => ({ name: element.getAttribute('aria-label') || element.textContent?.trim().slice(0, 80),
+        left: element.getBoundingClientRect().left, right: element.getBoundingClientRect().right }))
+        .filter(rect => rect.left < -1 || rect.right > innerWidth + 1) };
+  });
+  const file = `${scene}-${label}.png`;
+  await page.screenshot({ path: path.join(output, file), animations: 'disabled' });
+  record.screenshots.push({ scene, file, synthetic: true });
+  assert.ok(geometry.documentWidth <= geometry.viewportWidth + 1, `${file}: document horizontal overflow`);
+  assert.deepEqual(geometry.clippedControls, [], `${file}: visible controls extend beyond the viewport`);
+  return geometry;
+}
+
+async function assertPickerSurface(page, section) {
+  const models = section === 'models';
+  const panel = page.getByRole('dialog', { name: models ? '选择模型' : '推理强度', exact: true });
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute('data-picker-section', section);
+  await expect(panel.locator('.pw-model-selection-panel')).toHaveCount(1);
+  await expect(panel.getByRole('tablist', { name: '此对话模型设置', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: models ? '推理强度' : '选择模型', exact: true })).toHaveCount(0);
+  if (models) {
+    await expect(panel.getByRole('radiogroup', { name: '可用推理强度', exact: true })).toHaveCount(0);
+    await expect(panel.getByLabel('推理设置', { exact: true })).toHaveCount(0);
+  } else {
+    await expect(panel.getByRole('region', { name: '统一模型目录', exact: true })).toHaveCount(0);
+    await expect(panel.getByRole('button', { name: '恢复使用默认模型', exact: true })).toHaveCount(0);
+  }
+  return panel;
+}
+
+async function assertReasoningRows(panel) {
+  const group = panel.getByRole('radiogroup', { name: '可用推理强度', exact: true });
+  await group.waitFor();
+  const geometry = await group.evaluate(node => {
+    const box = element => { const rect = element.getBoundingClientRect(); return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width }; };
+    return { group: box(node), rows: [...node.querySelectorAll('.pw-conversation-reasoning-option')].map(box) };
+  });
+  assert.ok(geometry.rows.length > 1, 'The multi-strength fixture must expose its real choices');
+  for (const [index, row] of geometry.rows.entries()) {
+    assert.ok(row.width >= geometry.group.width - 2 && row.left >= geometry.group.left - 1 && row.right <= geometry.group.right + 1,
+      'Each reasoning choice must use the full group width');
+    if (index) assert.ok(row.top >= geometry.rows[index - 1].bottom - 1, 'Reasoning choices must occupy separate vertical rows');
+  }
+  return geometry;
+}
 
 /** Extend only native envelopes. Production App, composer, Markdown and task views
  * stay mounted; these display records and read receipts cannot execute a task. */
@@ -226,64 +283,47 @@ async function runScene(origin, { width, height, dark }) {
   const count = async action => (await calls(action)).length;
   const chatCalls = action => page.evaluate(action => window.mainChatFixture.calls.filter(row => row.action === action), action);
   const receipts = action => page.evaluate(action => window.aiConversationFixture.receipts.filter(row => row.action === action && row.ok).map(row => row.value), action);
-  const panel = () => page.getByRole('dialog', { name: '模型与推理', exact: true });
-  const panelTab = name => panel().getByRole('tablist', { name: '此对话模型设置', exact: true }).getByRole('tab', { name, exact: true });
-  const modelRow = model => panel().getByRole('button', { name: `选择模型：${model}，工作 OpenAI · 测试`, exact: true });
+  const modelPanel = () => page.getByRole('dialog', { name: '选择模型', exact: true });
+  const reasoningPanel = () => page.getByRole('dialog', { name: '推理强度', exact: true });
+  const modelRow = model => modelPanel().getByRole('button', { name: `选择模型：${model}，工作 OpenAI · 测试`, exact: true });
+  const openModels = () => page.locator('.pw-composer-card').getByRole('button', { name: /^切换此对话模型：/ }).click();
+  const openReasoning = () => page.locator('.pw-composer-card').getByRole('button', { name: /^推理强度/ }).click();
   const chosen = model => modelRow(model).getByLabel('此对话已选模型', { exact: true });
   const openNavigation = async () => { if (width < 1024) await page.getByRole('button', { name: '打开导航', exact: true }).click(); };
   const closeNavigation = async () => { if (width < 1024) await page.getByRole('button', { name: '关闭导航', exact: true }).click(); };
   const center = () => page.locator('.pw-ai-center');
   const aiTab = name => center().getByRole('tablist', { name: 'AI 接入管理', exact: true }).getByRole('tab', { name, exact: true });
   const backToCenter = () => page.locator('.pw-secondary-header').getByRole('button', { name: '返回 AI 接入', exact: true }).click();
-  const shot = async (label, surface = page.locator('.pw-app')) => {
-    await page.evaluate(() => document.fonts.ready);
-    await page.mouse.move(0, 0);
-    const geometry = await surface.evaluate(node => {
-      const controls = [...node.querySelectorAll('button, input, textarea, [role="tab"]')].filter(element => {
-        const rect = element.getBoundingClientRect(), style = getComputedStyle(element);
-        return !element.closest('[hidden], [aria-hidden="true"]') && style.visibility !== 'hidden' && style.display !== 'none'
-          && rect.width > 2 && rect.height > 2 && rect.bottom > 0 && rect.top < innerHeight;
-      });
-      return { viewportWidth: innerWidth, documentWidth: document.documentElement.scrollWidth,
-        clippedControls: controls.map(element => ({ name: element.getAttribute('aria-label') || element.textContent?.trim().slice(0,80),
-          left: element.getBoundingClientRect().left, right: element.getBoundingClientRect().right }))
-          .filter(rect => rect.left < -1 || rect.right > innerWidth + 1) };
-    });
-    const file = `${scene}-${label}.png`;
-    await page.screenshot({ path: path.join(output, file), animations: 'disabled' });
-    record.screenshots.push({ scene, file, synthetic: true });
-    assert.ok(geometry.documentWidth <= geometry.viewportWidth + 1, `${file}: document horizontal overflow`);
-    assert.deepEqual(geometry.clippedControls, [], `${file}: visible controls extend beyond the viewport`);
-    return geometry;
-  };
+  const shot = (label, surface) => captureScene(page, scene, label, surface);
   const assertDraft = async draft => {
     await expect(page.getByRole('textbox', { name: '工作输入', exact: true })).toHaveValue(draft);
     assert.equal((await summary()).composerText, draft);
   };
   const assertReasoningWire = async (previous, level) => {
+    const reasoning = typeof level === 'string' ? { mode: 'OPENAI_EFFORT', level, budgetTokens: 0 } : level;
     const writes = await calls('models.conversation.reasoning'), write = writes.at(-1);
     const review = (await receipts('models.conversation.review')).find(row => row.reviewHandle === write.args.reviewHandle);
     assert.ok(review, 'Reasoning write must use an actually issued native review');
     assert.equal(review.scopeKey, previous.scopeKey); assert.equal(review.revision, previous.revision);
-    assert.deepEqual(write.args, { reviewHandle: review.reviewHandle, reasoning: { mode: 'OPENAI_EFFORT', level, budgetTokens: 0 } });
+    assert.deepEqual(write.args, { reviewHandle: review.reviewHandle, reasoning });
     const after = (await summary()).preference;
     assert.equal(after.revision, previous.revision + 1);
-    assert.deepEqual(after.target, { ...previous.target, reasoning: { mode: 'OPENAI_EFFORT', level, budgetTokens: 0 } }, 'Reasoning must retain model identity and output/image budgets');
+    assert.deepEqual(after.target, { ...previous.target, reasoning }, 'Reasoning must retain model identity and output/image budgets');
     return { args: write.args, scopeKey: after.scopeKey, preferenceRevision: after.revision };
   };
   const chooseReasoning = async label => {
-    const group = panel().getByRole('radiogroup', { name: '可用推理强度', exact: true });
+    const group = reasoningPanel().getByRole('radiogroup', { name: '可用推理强度', exact: true });
     await group.waitFor();
     // React Aria's real input is visually hidden; activate its visible label.
     await group.getByText(label, { exact: true }).click();
   };
-  const assertNoPrematureSuccess = async previous => {
+  const assertNoPrematureSuccess = async (previous, surface) => {
     assert.deepEqual((await summary()).preference, previous, 'Pending/unknown must not change the confirmed preference');
-    await expect(panel().getByText(/^(模型|推理)已保存$/)).toHaveCount(0);
+    await expect(surface.getByText(/^(模型|推理)已保存$/)).toHaveCount(0);
   };
-  const returnFromPanel = async draft => {
+  const returnFromPanel = async (draft, surface) => {
     await page.keyboard.press('Escape');
-    await expect(panel()).toHaveCount(0);
+    await expect(surface).toHaveCount(0);
     await assertDraft(draft);
   };
   try {
@@ -569,102 +609,161 @@ async function runScene(origin, { width, height, dark }) {
     }
 
     await page.getByRole('button', { name: '切换此对话模型：fixture-reasoner-B', exact: true }).click();
-    await panel().waitFor();
-    const originalPanel = await panel().elementHandle();
+    await assertPickerSurface(page, 'models');
     await expect(chosen('fixture-reasoner-B')).toBeVisible();
     await expect(chosen('fixture-reasoner')).toHaveCount(0);
     assert.equal((await summary()).globalModel, 'fixture-reasoner');
-    await shot('model-picker', panel());
+    await shot('model-picker', modelPanel());
     const writesBeforeDetails = await count('models.conversation.api.select');
-    await panel().getByRole('button', { name: '查看模型详情：fixture-reasoner-B，工作 OpenAI · 测试', exact: true }).click();
-    await panel().getByRole('button', { name: '返回模型', exact: true }).click();
+    await modelPanel().getByRole('button', { name: '查看模型详情：fixture-reasoner-B，工作 OpenAI · 测试', exact: true }).click();
+    await assertPickerSurface(page, 'models');
+    await modelPanel().getByRole('button', { name: '返回模型', exact: true }).click();
     assert.equal(await count('models.conversation.api.select'), writesBeforeDetails, 'Opening details must not choose a model');
     passed(scene, 'A global default and a different model on the same connection mark only the conversation choice');
 
-    await panelTab('推理').click();
+    await returnFromPanel(draft, modelPanel());
+    await openReasoning();
+    await assertPickerSurface(page, 'reasoning');
+    const reasoningRows = await assertReasoningRows(reasoningPanel());
     const beforeReasoning = (await summary()).preference;
     await chooseReasoning('高');
-    await expect(panel().getByText('推理已保存', { exact: true })).toBeVisible();
-    await expect(panel().getByRole('button', { name: /^(应用|应用到此对话)$/ })).toHaveCount(0);
+    await expect(reasoningPanel().getByText('推理已保存', { exact: true })).toBeVisible();
+    await expect(reasoningPanel().getByRole('button', { name: /^(应用|应用到此对话)$/ })).toHaveCount(0);
     const reasoningEvidence = await assertReasoningWire(beforeReasoning, 'high');
     assert.equal((await summary()).preference.target.outputTokens, 2048);
     assert.equal((await summary()).preference.target.imageTokenReserve, 256);
-    await shot('reasoning-saved', panel());
-    await panelTab('模型').click();
+    await shot('reasoning-saved', reasoningPanel());
+    await returnFromPanel(draft, reasoningPanel());
+    await openModels();
+    await assertPickerSurface(page, 'models');
     await modelRow('fixture-reasoner').waitFor();
     const beforeSelection = (await summary()).preference;
     await page.evaluate(() => window.aiConversationFixture.holdNextWrite());
     await modelRow('fixture-reasoner').click();
     await expect.poll(() => count('models.conversation.api.select')).toBe(writesBeforeDetails + 1);
-    await expect(panel().getByText('正在保存模型…', { exact: true })).toBeVisible();
-    await assertNoPrematureSuccess(beforeSelection);
+    await expect(modelPanel().getByText('正在保存模型…', { exact: true })).toBeVisible();
+    await expect(modelPanel().getByRole('button', { name: '关闭模型选择', exact: true })).toBeDisabled();
+    await assertNoPrematureSuccess(beforeSelection, modelPanel());
+    assert.equal(await page.evaluate(() => window.PocketWeb.handleBack()), true);
+    await expect(modelPanel()).toBeVisible();
+    await assertNoPrematureSuccess(beforeSelection, modelPanel());
+    assert.equal(await count('models.conversation.api.select'), writesBeforeDetails + 1, 'Native Back must not resubmit a pending model write');
+    await shot('model-pending', modelPanel());
     const write = (await calls('models.conversation.api.select')).at(-1);
     const issuedReview = (await receipts('models.api.review')).find(row => row.reviewHandle === write.args.reviewHandle);
     assert.ok(issuedReview);
     assert.equal(issuedReview.model.modelId, 'fixture-reasoner');
     assert.deepEqual(write.args, { windowId: issuedReview.windowId, reviewHandle: issuedReview.reviewHandle, expectedPreferenceRevision: beforeSelection.revision });
     await page.evaluate(() => window.aiConversationFixture.resolveWrite('saved'));
-    await expect(panel().getByText('模型已保存', { exact: true })).toBeVisible();
+    await expect(modelPanel().getByText('模型已保存', { exact: true })).toBeVisible();
     await expect(chosen('fixture-reasoner')).toBeVisible();
     await expect(chosen('fixture-reasoner-B')).toHaveCount(0);
-    await expect(panel().getByRole('button', { name: '用于本对话', exact: true })).toHaveCount(0);
+    await expect(modelPanel().getByRole('button', { name: '用于本对话', exact: true })).toHaveCount(0);
     assert.equal((await summary()).preference.target.modelId, 'fixture-reasoner');
     assert.equal((await summary()).preference.revision, beforeSelection.revision + 1);
     assert.equal(await count('models.api.select'), 0, 'Conversation selection must never write the global default');
-    await panelTab('推理').click();
+    await returnFromPanel(draft, modelPanel());
+    await openReasoning();
+    await assertPickerSurface(page, 'reasoning');
     const selectedPreference = (await summary()).preference;
     await chooseReasoning('高');
-    await expect(panel().getByText('推理已保存', { exact: true })).toBeVisible();
+    await expect(reasoningPanel().getByText('推理已保存', { exact: true })).toBeVisible();
     await assertReasoningWire(selectedPreference, 'high');
-    assert.equal(await originalPanel.evaluate(node => node.isConnected), true, 'Model and reasoning changes must stay in the same panel');
-    passed(scene, 'One model click obtains and consumes the original review; reasoning saves immediately in the same panel', { modelWrite: write.args, reasoning: reasoningEvidence });
-    await returnFromPanel(draft);
+    passed(scene, 'Separate composer entries preserve original model/reasoning receipts and the same draft; native Back cannot dismiss a pending model write', { modelWrite: write.args, reasoning: reasoningEvidence, reasoningRows });
+    await returnFromPanel(draft, reasoningPanel());
     await expect(page.getByRole('button', { name: '推理强度：高', exact: true })).toBeVisible();
 
     if (width === 390 && !dark) {
       // Explicitly hold native receipts. Pending and unknown are not optimistic success.
       await page.getByRole('button', { name: '推理强度：高', exact: true }).click();
+      await assertPickerSurface(page, 'reasoning');
       const beforeUnknown = (await summary()).preference, reasoningCount = await count('models.conversation.reasoning');
       await page.evaluate(() => window.aiConversationFixture.holdNextWrite());
       await chooseReasoning('低');
       await expect.poll(() => count('models.conversation.reasoning')).toBe(reasoningCount + 1);
-      await expect(panel().getByText('正在保存推理…', { exact: true })).toBeVisible();
-      await assertNoPrematureSuccess(beforeUnknown);
-      await expect(panelTab('模型')).toBeDisabled();
+      await expect(reasoningPanel().getByText('正在保存推理…', { exact: true })).toBeVisible();
+      await assertNoPrematureSuccess(beforeUnknown, reasoningPanel());
+      await expect(reasoningPanel().getByRole('button', { name: '关闭推理设置', exact: true })).toBeDisabled();
       assert.equal(await page.evaluate(() => window.PocketWeb.handleBack()), true);
-      await expect(panel()).toBeVisible();
-      await assertNoPrematureSuccess(beforeUnknown);
-      await shot('reasoning-pending', panel());
+      await expect(reasoningPanel()).toBeVisible();
+      await assertNoPrematureSuccess(beforeUnknown, reasoningPanel());
+      assert.equal(await count('models.conversation.reasoning'), reasoningCount + 1, 'Native Back must not resubmit a pending reasoning write');
+      await shot('reasoning-pending', reasoningPanel());
       await page.evaluate(() => window.aiConversationFixture.resolveWrite('unknown'));
-      await expect(panel().getByRole('alert')).toContainText('保存结果待核对');
-      await expect(panel().getByRole('alert')).toContainText('没有自动重试');
-      await assertNoPrematureSuccess(beforeUnknown);
-      await shot('reasoning-unknown', panel());
-      await panel().getByRole('button', { name: '重新读取', exact: true }).click();
-      await panel().getByRole('radiogroup', { name: '可用推理强度', exact: true }).waitFor();
+      await expect(reasoningPanel().getByRole('alert')).toContainText('保存结果待核对');
+      await expect(reasoningPanel().getByRole('alert')).toContainText('没有自动重试');
+      await assertNoPrematureSuccess(beforeUnknown, reasoningPanel());
+      await shot('reasoning-unknown', reasoningPanel());
+      await reasoningPanel().getByRole('button', { name: '重新读取', exact: true }).click();
+      await reasoningPanel().getByRole('radiogroup', { name: '可用推理强度', exact: true }).waitFor();
       assert.equal(await count('models.conversation.reasoning'), reasoningCount + 1, 'Read-after-unknown must not replay a reasoning write');
-      await assertNoPrematureSuccess(beforeUnknown);
+      await assertNoPrematureSuccess(beforeUnknown, reasoningPanel());
 
-      await panelTab('模型').click();
+      await returnFromPanel(draft, reasoningPanel());
+      await openModels();
+      await assertPickerSurface(page, 'models');
       await modelRow('fixture-reasoner-B').waitFor();
       const modelCount = await count('models.conversation.api.select');
       await page.evaluate(() => window.aiConversationFixture.holdNextWrite());
       await modelRow('fixture-reasoner-B').click();
       await expect.poll(() => count('models.conversation.api.select')).toBe(modelCount + 1);
-      await expect(panel().getByText('正在保存模型…', { exact: true })).toBeVisible();
-      await assertNoPrematureSuccess(beforeUnknown);
+      await expect(modelPanel().getByText('正在保存模型…', { exact: true })).toBeVisible();
+      await assertNoPrematureSuccess(beforeUnknown, modelPanel());
       await page.keyboard.press('Escape');
-      await expect(panel()).toBeVisible();
+      await expect(modelPanel()).toBeVisible();
+      assert.equal(await page.evaluate(() => window.PocketWeb.handleBack()), true);
+      await expect(modelPanel()).toBeVisible();
       await page.evaluate(() => window.aiConversationFixture.resolveWrite('unknown'));
-      await expect(panel().getByRole('alert')).toContainText('没有自动重试');
-      await assertNoPrematureSuccess(beforeUnknown);
-      await shot('model-unknown', panel());
-      await panel().getByRole('button', { name: '重新读取', exact: true }).click();
+      await expect(modelPanel().getByRole('alert')).toContainText('没有自动重试');
+      await assertNoPrematureSuccess(beforeUnknown, modelPanel());
+      await shot('model-unknown', modelPanel());
+      await modelPanel().getByRole('button', { name: '重新读取', exact: true }).click();
       await expect(chosen('fixture-reasoner')).toBeVisible();
       await expect(chosen('fixture-reasoner-B')).toHaveCount(0);
       assert.equal(await count('models.conversation.api.select'), modelCount + 1, 'Read-after-unknown must not replay a model write');
-      await returnFromPanel(draft);
+      await returnFromPanel(draft, modelPanel());
       passed(scene, 'Pending and unknown keep the last confirmed choice; back cannot dismiss a pending write; reread never resubmits');
+
+      await openReasoning();
+      await assertPickerSurface(page, 'reasoning');
+      const beforeServiceDefault = (await summary()).preference;
+      await chooseReasoning('服务默认');
+      await expect(reasoningPanel().getByText('推理已保存', { exact: true })).toBeVisible();
+      const defaultEvidence = await assertReasoningWire(beforeServiceDefault, { mode: 'DEFAULT', level: '', budgetTokens: 0 });
+      assert.equal((await summary()).preference.inherited, false, 'Service-default reasoning must retain the explicit conversation model');
+      assert.equal(await count('models.conversation.reset'), 0, 'Service-default reasoning must not reset the conversation model');
+      await shot('reasoning-service-default-saved', reasoningPanel());
+      await returnFromPanel(draft, reasoningPanel());
+
+      await openModels();
+      await assertPickerSurface(page, 'models');
+      await modelPanel().getByLabel('搜索模型或来源', { exact: true }).fill('fixture-reasoner');
+      await modelPanel().getByRole('tablist', { name: '模型筛选', exact: true }).getByRole('tab', { name: '收藏', exact: true }).click();
+      const managedWindow = (await receipts('models.api.open')).at(-1)?.windowId;
+      assert.ok(managedWindow);
+      const managedPreference = (await summary()).preference, writesBeforeManagement = await count('models.conversation.api.select');
+      await modelPanel().getByRole('button', { name: '管理 AI 接入', exact: true }).click();
+      await expect(modelPanel()).toHaveCount(0);
+      await expect(reasoningPanel()).toHaveCount(0);
+      await expect(center()).toBeVisible();
+      await page.locator('.pw-secondary-header').getByRole('button', { name: '返回', exact: true }).click();
+      await assertDraft(draft);
+      await expect(modelPanel()).toHaveCount(0);
+      await expect(reasoningPanel()).toHaveCount(0);
+      await openModels();
+      await assertPickerSurface(page, 'models');
+      await expect(modelPanel().getByLabel('搜索模型或来源', { exact: true })).toHaveValue('fixture-reasoner');
+      await expect(modelPanel().getByRole('tablist', { name: '模型筛选', exact: true }).getByRole('tab', { name: '收藏', exact: true })).toHaveAttribute('aria-selected', 'true');
+      await expect(chosen('fixture-reasoner')).toBeVisible();
+      const returnedWindow = (await receipts('models.api.open')).at(-1)?.windowId;
+      assert.ok(returnedWindow && returnedWindow !== managedWindow, 'Reopening after management must obtain a fresh native window');
+      assert.ok((await calls('models.api.close')).some(row => row.args.windowId === managedWindow));
+      await modelRow('fixture-reasoner').click();
+      assert.equal(await count('models.conversation.api.select'), writesBeforeManagement, 'Returning or clicking the confirmed model must not reset its reasoning');
+      assert.deepEqual((await summary()).preference, managedPreference);
+      await shot('model-management-return', modelPanel());
+      await returnFromPanel(draft, modelPanel());
+      passed(scene, 'Default reasoning retains the model; management returns to the same draft and reopens only models with a fresh window', { defaultEvidence, managedWindow, returnedWindow });
     }
     const result = await summary();
     assert.equal(result.globalModel, 'fixture-reasoner');
@@ -682,6 +781,190 @@ async function runScene(origin, { width, height, dark }) {
     const file = `${scene}-failure.png`;
     try { await page.screenshot({ path: path.join(output, file), animations: 'disabled' }); record.screenshots.push({ scene, file, synthetic: true, failure: true }); } catch {}
     record.scenes.push({ scene, passed: false, fixture: await summary().catch(() => null) });
+  } finally { await context.close(); }
+}
+
+async function runOverlayScene(origin, { width, height, dark }) {
+  const scene = `${width}-${dark ? 'dark' : 'light'}-overlays`;
+  const context = await browser.newContext({ viewport: { width, height }, isMobile: true, hasTouch: true,
+    deviceScaleFactor: 1, locale: 'zh-CN', timezoneId: 'Asia/Shanghai', colorScheme: dark ? 'dark' : 'light',
+    reducedMotion: 'reduce', serviceWorkers: 'block' });
+  const externalRequests = [];
+  await context.route('**/*', route => {
+    if (new URL(route.request().url()).origin === origin) return route.continue();
+    externalRequests.push(route.request().url()); return route.abort();
+  });
+  await context.addInitScript({ content: `(${installAiCenterHost.toString()})(${JSON.stringify({ dark })});(${installAiConversationHost.toString()})({representative:true,singleModel:true,permissions:true});` });
+  const page = await context.newPage();
+  page.setDefaultTimeout(12000);
+  page.on('pageerror', error => record.errors.push({ scene, error: error.message }));
+  const summary = () => page.evaluate(() => window.aiConversationFixture.summary());
+  const calls = action => page.evaluate(action => window.aiConversationFixture.calls.filter(row => row.action === action), action);
+  const shot = (label, surface) => captureScene(page, scene, label, surface);
+  try {
+    await page.goto(origin, { waitUntil: 'networkidle' });
+    const editor = page.getByRole('textbox', { name: '工作输入', exact: true });
+    const draft = '保留这个对话草稿：查看模型、推理和权限后继续编辑。';
+    await editor.fill(draft);
+    await expect.poll(async () => (await summary()).composerText).toBe(draft);
+    const initial = await summary();
+    const modelTrigger = page.locator('.pw-composer-card').getByRole('button', { name: '切换此对话模型：fixture-reasoner', exact: true });
+    const reasoningTrigger = page.locator('.pw-composer-card').getByRole('button', { name: '推理强度：默认', exact: true });
+    const permissionTrigger = page.locator('.pw-composer-card').getByRole('button', { name: '执行权限', exact: true });
+    const closeWithNativeBack = async (panel, trigger) => {
+      assert.equal(await page.evaluate(() => window.PocketWeb.handleBack()), true);
+      await expect(panel).toHaveCount(0);
+      await expect(editor).toHaveValue(draft);
+      await expect(trigger).toBeFocused();
+      assert.equal((await summary()).composerText, draft);
+    };
+
+    await modelTrigger.click();
+    const models = await assertPickerSurface(page, 'models');
+    const onlyModel = models.getByRole('button', { name: '选择模型：fixture-reasoner，工作 OpenAI · 测试', exact: true });
+    await expect(models.getByRole('button', { name: /^选择模型：/ })).toHaveCount(1);
+    await expect(onlyModel.getByLabel('此对话已选模型', { exact: true })).toBeVisible();
+    await onlyModel.click();
+    assert.equal((await calls('models.conversation.api.select')).length, 0, 'The selected single model must not be resubmitted');
+    await shot('model-single', models);
+    await closeWithNativeBack(models, modelTrigger);
+
+    await reasoningTrigger.click();
+    const reasoning = await assertPickerSurface(page, 'reasoning');
+    const defaultNotice = reasoning.locator('.pw-conversation-reasoning-default');
+    await expect(defaultNotice).toHaveAttribute('role', 'status');
+    await expect(defaultNotice.getByText('服务默认', { exact: true })).toBeVisible();
+    await expect(defaultNotice).toContainText('这个模型不提供推理强度选项。');
+    await expect(reasoning.getByRole('radiogroup', { name: '可用推理强度', exact: true })).toHaveCount(0);
+    const reasoningSize = await reasoning.boundingBox();
+    assert.ok(reasoningSize && reasoningSize.height <= 360, 'A single read-only default must not occupy a large mostly-empty model sheet');
+    await shot('reasoning-service-default', reasoning);
+    await closeWithNativeBack(reasoning, reasoningTrigger);
+    assert.equal((await calls('models.conversation.reasoning')).length, 0, 'Opening read-only reasoning must not write a setting');
+    assert.ok((await calls('models.conversation.close')).length > 0, 'Closing reasoning must retire its native review');
+    assert.deepEqual((await summary()).preference, initial.preference);
+
+    await modelTrigger.click();
+    await assertPickerSurface(page, 'models');
+    const beforeReset = await summary();
+    await models.getByRole('button', { name: '恢复使用默认模型', exact: true }).click();
+    await expect(models.getByText('已恢复使用默认模型', { exact: true })).toBeVisible();
+    const reset = (await calls('models.conversation.reset')).at(-1);
+    assert.deepEqual(reset.args, { expectedPreferenceRevision: beforeReset.preference.revision, expectedSelectionRevision: beforeReset.selectionRevision });
+    const afterReset = await summary();
+    assert.equal(afterReset.preference.scopeKey, beforeReset.preference.scopeKey);
+    assert.equal(afterReset.preference.revision, beforeReset.preference.revision + 1);
+    assert.equal(afterReset.preference.inherited, true);
+    assert.equal(afterReset.preference.target, null);
+    assert.equal(afterReset.globalModel, initial.globalModel);
+    assert.deepEqual(afterReset.globalNativeSelection, initial.globalNativeSelection);
+    await expect(onlyModel.getByLabel('沿用默认模型', { exact: true })).toBeVisible();
+    await closeWithNativeBack(models, modelTrigger);
+    passed(scene, 'Single-model and read-only default reasoning use separate compact sheets; only models can restore the inherited default', { reasoningSize, reset: reset.args });
+
+    assert.equal((await calls('permissions.snapshot')).length, 0, 'Permissions must load only after their entry is opened');
+    await permissionTrigger.click();
+    const permission = page.getByRole('dialog', { name: '执行权限', exact: true });
+    await expect(permission).toHaveClass(/\bpw-permission-drawer\b/);
+    await expect(permission.locator('.pw-permission-sheet-body')).toHaveCount(1);
+    await expect(permission.getByRole('heading', { name: '执行权限', exact: true })).toBeVisible();
+    await expect(permission.getByRole('radiogroup', { name: '应用范围', exact: true }).getByRole('radio', { name: '此对话', exact: true })).toBeChecked();
+    const modes = permission.getByRole('radiogroup', { name: '审批模式', exact: true });
+    await expect(modes.getByRole('radio', { name: /^每次询问/ })).toBeChecked();
+    for (const name of ['每次询问', '受控自动', '完全自动']) await expect(modes.getByText(name, { exact: true })).toBeInViewport({ ratio: 1 });
+    const taskScope = permission.getByRole('button', { name: '本次任务范围', exact: true });
+    const toolRules = permission.getByRole('button', { name: '工具规则', exact: true });
+    await expect(taskScope).toHaveAttribute('aria-expanded', 'false');
+    await expect(toolRules).toHaveAttribute('aria-expanded', 'false');
+    assert.equal((await calls('permissions.snapshot')).length, 1);
+    assert.equal((await calls('permissions.save')).length, 0);
+    await shot('permission-default', permission);
+
+    await taskScope.click();
+    await expect(taskScope).toHaveAttribute('aria-expanded', 'true');
+    await expect(permission.getByText('比较已经读取的两份资料', { exact: true })).toBeVisible();
+    await expect(permission.getByText('执行中', { exact: true })).toBeVisible();
+    await expect(permission.getByText('running', { exact: true })).toHaveCount(0);
+    await expect(permission.locator('dl')).toContainText('3 / 20');
+    await expect(permission.locator('dl')).toContainText('2 / 32');
+    await expect(permission.locator('dl')).toContainText('未设置');
+    await permission.locator('dl').scrollIntoViewIfNeeded();
+    await shot('permission-task-scope', permission);
+    await taskScope.click();
+
+    await modes.getByText('受控自动', { exact: true }).click();
+    await toolRules.click();
+    await expect(toolRules).toHaveAttribute('aria-expanded', 'true');
+    await expect(permission.getByText('browser_click · 继承全局：询问', { exact: true })).toBeVisible();
+    await expect(permission.getByText('ssh_execute · 继承全局：禁止', { exact: true })).toBeVisible();
+    await permission.getByRole('textbox', { name: '精确工具名', exact: true }).fill('attachments_create_document');
+    await permission.getByRole('button', { name: '添加规则', exact: true }).click();
+    const rule = permission.getByRole('radiogroup', { name: 'attachments_create_document', exact: true });
+    await rule.getByText('禁止', { exact: true }).click();
+    await expect(rule.getByRole('radio', { name: '禁止', exact: true })).toBeChecked();
+    assert.equal((await calls('permissions.save')).length, 0, 'Editing rules must not save or authorize a task before the explicit save');
+    await shot('permission-tool-rules', permission);
+
+    await page.setViewportSize({ width, height: 480 });
+    const body = permission.locator('.pw-permission-sheet-body');
+    await permission.getByRole('textbox', { name: '精确工具名', exact: true }).scrollIntoViewIfNeeded();
+    const save = permission.getByRole('button', { name: '保存权限', exact: true });
+    await save.scrollIntoViewIfNeeded();
+    await expect(save).toBeInViewport({ ratio: 1 });
+    const shortGeometry = await save.evaluate(node => {
+      const rect = node.getBoundingClientRect(), hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      const body = node.closest('.pw-permission-sheet-body');
+      return { viewportHeight: innerHeight, top: rect.top, bottom: rect.bottom, receivesPointer: !!hit && (hit === node || node.contains(hit)),
+        scrollTop: body.scrollTop, clientHeight: body.clientHeight, scrollHeight: body.scrollHeight };
+    });
+    assert.equal(shortGeometry.receivesPointer, true, 'The short-screen save action must receive the pointer, not merely have a DOM box');
+    assert.ok(shortGeometry.scrollHeight > shortGeometry.clientHeight && shortGeometry.scrollTop > 0, 'Expanded permission rules must be reachable in the sheet scroll area');
+    await shot('permission-short-viewport', permission);
+
+    const beforePermissionSave = await summary();
+    await page.evaluate(() => window.aiConversationFixture.holdNextPermissionSave());
+    await save.click();
+    await expect.poll(async () => (await summary()).pendingPermission).toBe('permissions.save');
+    await expect(permission.locator('.pw-permission-policy')).toHaveAttribute('aria-busy', 'true');
+    await expect(permission.getByRole('button', { name: '关闭执行权限', exact: true })).toBeDisabled();
+    await expect(permission.getByRole('button', { name: '保存中…', exact: true })).toBeDisabled();
+    assert.equal(await page.evaluate(() => window.PocketWeb.handleBack()), true);
+    await expect(permission).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(permission).toBeVisible();
+    assert.deepEqual((await summary()).permission, beforePermissionSave.permission, 'A pending receipt must not become confirmed permission state');
+    const permissionWrites = await calls('permissions.save');
+    assert.equal(permissionWrites.length, 1, 'Back and Escape must not replay a permission save');
+    const policy = { version: 1, mode: 'controlled', tools: { attachments_create_document: 'deny' } };
+    assert.deepEqual(permissionWrites[0].args, { conversationId: 'fixture-conversation-1', global: false,
+      policy, expectedRevision: beforePermissionSave.permission.revision });
+    await shot('permission-pending', permission);
+    await page.evaluate(() => window.aiConversationFixture.resolvePermissionSave('saved'));
+    await expect(permission.getByRole('status')).toHaveText('权限设置已保存；已有任务不在此重新派发');
+    const savedPermission = await summary();
+    assert.equal(savedPermission.permission.revision, beforePermissionSave.permission.revision + 1);
+    assert.deepEqual(savedPermission.permission.conversation, policy);
+    assert.deepEqual(savedPermission.permission.global, beforePermissionSave.permission.global);
+    assert.deepEqual(savedPermission.taskScope, beforePermissionSave.taskScope, 'Saving approval preferences must not change the captured task scope');
+    await closeWithNativeBack(permission, permissionTrigger);
+    await page.setViewportSize({ width, height });
+    passed(scene, 'Permission disclosure, tool edits and a short-screen save preserve scope/revision and consume pending native Back without dispatching work', { shortGeometry, save: permissionWrites[0].args });
+
+    const final = await summary();
+    assert.equal(final.globalModel, initial.globalModel);
+    assert.deepEqual(final.globalNativeSelection, initial.globalNativeSelection);
+    assert.equal(final.pending, null); assert.equal(final.pendingPermission, null);
+    assert.deepEqual(final.errors, []);
+    for (const action of ['composer.send', 'phone.prepare', 'phone.start', 'tasks.review', 'tasks.approve', 'models.api.select',
+      'models.accounts.select', 'models.conversation.api.select', 'models.conversation.reasoning', 'proxy.confirmStart'])
+      assert.equal((await calls(action)).length, 0, `Overlay journey unexpectedly dispatched ${action}`);
+    assert.deepEqual(externalRequests, []);
+    record.overlayScenes.push({ scene, passed: true, fixture: final });
+  } catch (error) {
+    record.checks.push({ scene, name: 'Separate overlay journey', passed: false, error: String(error.stack || error) });
+    const file = `${scene}-failure.png`;
+    try { await page.screenshot({ path: path.join(output, file), animations: 'disabled' }); record.screenshots.push({ scene, file, synthetic: true, failure: true }); } catch {}
+    record.overlayScenes.push({ scene, passed: false, fixture: await summary().catch(() => null) });
   } finally { await context.close(); }
 }
 
@@ -782,6 +1065,7 @@ try {
   browser = await chromium.launch({ headless: true });
   record.outcome = 'executed';
   for (const scene of matrix) await runScene(origin, scene);
+  for (const scene of overlayMatrix) await runOverlayScene(origin, scene);
   for (const width of [320, 390]) await runEmptyMainScene(origin, width);
 } catch (error) {
   record.errors.push({ stage: browser ? 'runner' : 'setup', error: String(error.stack || error) });
@@ -790,7 +1074,8 @@ try {
   if (server?.listening) await new Promise(resolve => server.close(resolve));
   record.finishedAt = new Date().toISOString();
   record.passed = record.outcome === 'executed' && record.scenes.length === matrix.length && record.scenes.every(scene => scene.passed)
-    && record.emptyScenes.length === 2 && record.emptyScenes.every(scene => scene.passed) && !record.errors.length;
+    && record.emptyScenes.length === 2 && record.emptyScenes.every(scene => scene.passed)
+    && record.overlayScenes.length === overlayMatrix.length && record.overlayScenes.every(scene => scene.passed) && !record.errors.length;
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify(record, null, 2) + '\n');
 }
 console.log(JSON.stringify(record));
