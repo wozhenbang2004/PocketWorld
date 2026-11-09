@@ -2,7 +2,7 @@ name: Remote inbox integration checks
 
 on:
   push:
-    branches: [main, 'work/remote-inbox-*']
+    branches: ['work/remote-inbox-*']
     paths:
       - 'integrations/issue-radar/**'
       - 'app/src/main/java/dev/pocketengine/features/remoteinbox/**'
