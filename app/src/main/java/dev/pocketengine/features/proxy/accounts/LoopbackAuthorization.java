@@ -26,6 +26,8 @@ final class LoopbackAuthorization implements AutoCloseable {
     private volatile boolean closed,consumed;
     private volatile Socket peer;
     volatile long accountVersion;
+    /** A returning login must not displace an existing usable grant before publication. */
+    volatile boolean preserveExisting;
     volatile String status="pending",error="";
     LoopbackAuthorization(String accountId,long accountVersion,long ttlMillis,Handler handler)throws GatewayFailure {
         this.accountId=accountId;this.accountVersion=accountVersion;this.handler=handler;
@@ -54,8 +56,13 @@ final class LoopbackAuthorization implements AutoCloseable {
                     Map<String,String> args=parse(socket);
                     if(!MessageDigest.isEqual(state.getBytes(StandardCharsets.UTF_8),args.getOrDefault("state","").getBytes(StandardCharsets.UTF_8))){reply(socket,400);continue;}
                     if(System.nanoTime()>=deadline){reply(socket,410);break;}
+                    boolean hasCode=args.containsKey("code"),hasError=args.containsKey("error");
+                    if(hasCode==hasError||hasCode&&(args.get("code").isEmpty()||args.get("code").length()>4096)||hasError&&args.get("error").isEmpty()){reply(socket,400);continue;}
                     synchronized(this){if(closed||consumed){reply(socket,410);break;}consumed=true;}
-                    try{handler.complete(this,args);reply(socket,"complete".equals(status)?200:400);}catch(GatewayFailure failure){reply(socket,400);}
+                    // A valid callback is not a completed token exchange. Send the receipt first;
+                    // the native account snapshot, not the browser page, owns the final outcome.
+                    try{reply(socket,200);}catch(Exception browserClosed){/* A closed tab must not lose the authorization code. */}
+                    try{handler.complete(this,args);}catch(GatewayFailure failure){/* The owner records the failure. */}
                 }catch(java.net.SocketTimeoutException waiting){}catch(Exception invalid){if(peer!=null)try{reply(peer,400);}catch(Exception ignored){}}
                 finally{peer=null;}
             }
@@ -79,8 +86,10 @@ final class LoopbackAuthorization implements AutoCloseable {
         while((b=input.read())!=-1){if(System.nanoTime()>deadline||bytes.size()>8192)throw new Exception();if(b=='\n'){byte[] value=bytes.toByteArray();int n=value.length;if(n==0||value[n-1]!='\r')throw new Exception();return new String(value,0,n-1,StandardCharsets.US_ASCII);}if(b<32&&b!='\r')throw new Exception();if(b>126)throw new Exception();bytes.write(b);}throw new Exception();
     }
     private static void reply(Socket socket,int status)throws Exception {
-        byte[] body=(status==200?"Authorization completed. Return to Pocket World.":"Authorization was not completed. Return to Pocket World.").getBytes(StandardCharsets.UTF_8);
-        String headers="HTTP/1.1 "+status+" Result\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'\r\nConnection: close\r\nContent-Length: "+body.length+"\r\n\r\n";
+        String heading=status==200?"Authorization response received":"Authorization was not completed";
+        String detail=status==200?"Return to Pocket World to check whether sign-in has finished.":"Return to Pocket World to check the login error.";
+        byte[] body=("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Pocket World sign-in</title><body><main><h1>"+heading+"</h1><p>"+detail+"</p></main></body></html>").getBytes(StandardCharsets.UTF_8);
+        String headers="HTTP/1.1 "+status+" Result\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'none'; frame-ancestors 'none'\r\nConnection: close\r\nContent-Length: "+body.length+"\r\n\r\n";
         socket.getOutputStream().write(headers.getBytes(StandardCharsets.US_ASCII));socket.getOutputStream().write(body);socket.getOutputStream().flush();
     }
     private static String random(){byte[] bytes=new byte[32];new SecureRandom().nextBytes(bytes);return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);}

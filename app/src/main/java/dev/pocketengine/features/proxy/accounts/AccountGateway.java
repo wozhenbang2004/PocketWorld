@@ -65,17 +65,25 @@ public final class AccountGateway implements AutoCloseable {
         JSONObject row=accountId==null||accountId.isEmpty()?book.create(label):book.row(accountId);String id=row.optString("id");
         if(!row.optBoolean("enabled"))throw new GatewayFailure("ACCOUNT_DISABLED");
         if(refreshes.containsKey(id))throw new GatewayFailure("ACCOUNT_BUSY");
+        String idTokenHint="",loginHint="";
+        if(!row.optString("clientId").isEmpty()&&!row.optString("slot").isEmpty())try{
+            idTokenHint=book.credentials(id,row.optLong("version")).idToken();
+            loginHint=row.optString("email");
+        }catch(GatewayFailure unavailable){/* Never reuse a missing or inaccessible credential. */}
+        boolean preserveExisting=!row.optString("slot").isEmpty()&&java.util.Set.of("connected","cooldown").contains(row.optString("status"));
         LoopbackAuthorization next=new LoopbackAuthorization(id,row.optLong("version"),ttlMillis,new LoopbackAuthorization.Handler(){
             public void complete(LoopbackAuthorization session,Map<String,String> callback)throws GatewayFailure {completeLogin(session,callback);}
             public void expired(LoopbackAuthorization session){expireLogin(session);}
         });
         try{
-            row=book.update(id,row.optLong("version"),AccountBook.json("status","authorizing","error","","cooldownUntil",0));next.accountVersion=row.optLong("version");
-            String url=provider.authorizationUrl(book.hostId(),row.optString("clientId"),next.callback,next.state,next.nonce,next.challenge());
+            next.preserveExisting=preserveExisting;
+            if(!preserveExisting)row=book.update(id,row.optLong("version"),AccountBook.json("status","authorizing","error","","cooldownUntil",0));
+            next.accountVersion=row.optLong("version");
+            String url=provider.authorizationUrl(book.hostId(),row.optString("clientId"),next.callback,next.state,next.nonce,next.challenge(),idTokenHint,loginHint);
             login=next;book.login(loginView(next));next.start();
             diagnostic.finish("accepted","AUTHORIZATION_PENDING");
             return AccountBook.json("sessionId",next.id,"accountId",id,"status","pending","expiresAt",next.expiresAt,"authorizationUrl",url);
-        }catch(GatewayFailure error){next.status="failed";next.error=error.code;next.close();if(login==next)login=null;try{book.finishAuthorization(id,next.accountVersion,loginView(next),error.code);}catch(GatewayFailure ignored){}throw error;}
+        }catch(GatewayFailure error){next.status="failed";next.error=error.code;next.close();if(login==next)login=null;try{book.finishAuthorization(id,next.accountVersion,loginView(next),error.code,next.preserveExisting);}catch(GatewayFailure ignored){}throw error;}
         }catch(GatewayFailure failure){observeAccountFailure(diagnostic,failure);throw failure;}finally{diagnostic.close();}
     }
     private void completeLogin(LoopbackAuthorization session,Map<String,String> callback)throws GatewayFailure {
@@ -91,7 +99,7 @@ public final class AccountGateway implements AutoCloseable {
                     java.util.Set.of("temporarily_unavailable","server_error").contains(callback.get("error"))?"PROVIDER_UNAVAILABLE":"INVALID_AUTHORIZATION_CALLBACK");
                 String code=callback.getOrDefault("code","");if(code.isEmpty()||code.length()>4096)throw new GatewayFailure("INVALID_AUTHORIZATION_CALLBACK");
                 String saved=row.optString("clientId"),issued=callback.getOrDefault("client_id",saved);
-                if(!issued.matches("oaiapp_[A-Za-z0-9_-]{1,200}")||(!saved.isEmpty()&&!saved.equals(issued)))throw new GatewayFailure("REGISTRATION_MISMATCH");
+                if(!issued.matches("[A-Za-z0-9_-]{1,200}")||"dynamic_agent_client".equals(issued)||(!saved.isEmpty()&&!saved.equals(issued)))throw new GatewayFailure("REGISTRATION_MISMATCH");
                 // Retain the registration before exchange; a consumed/expired code is never tried twice.
                 if(saved.isEmpty()){row=book.update(session.accountId,session.accountVersion,AccountBook.json("clientId",issued));session.accountVersion=row.optLong("version");}
                 client=issued;session.status="exchanging";book.login(loginView(session));
@@ -112,7 +120,7 @@ public final class AccountGateway implements AutoCloseable {
             synchronized(this){
                 if(login==session&&("pending".equals(session.status)||"exchanging".equals(session.status))){
                     session.status="failed";session.error=error.code;
-                    try{book.finishAuthorization(session.accountId,session.accountVersion,loginView(session),error.code);}catch(GatewayFailure storage){session.error=storage.code;}
+                    try{book.finishAuthorization(session.accountId,session.accountVersion,loginView(session),error.code,session.preserveExisting);}catch(GatewayFailure storage){session.error=storage.code;}
                 }
             }
             throw error;
@@ -136,7 +144,7 @@ public final class AccountGateway implements AutoCloseable {
     }
     private void endLogin(LoopbackAuthorization session,String status,String error)throws GatewayFailure {
         session.status=status;session.error=error;session.close();
-        book.finishAuthorization(session.accountId,session.accountVersion,loginView(session),error);
+        book.finishAuthorization(session.accountId,session.accountVersion,loginView(session),error,session.preserveExisting);
     }
     private static JSONObject loginView(LoopbackAuthorization session)throws GatewayFailure {
         return AccountBook.json("sessionId",session.id,"accountId",session.accountId,"status",session.status,"expiresAt",session.expiresAt,"error",session.error);

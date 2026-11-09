@@ -126,9 +126,12 @@ final class AccountBook {
         try{JSONObject next=copy(data);next.put("login",copy(state));commit(next);}catch(GatewayFailure error){throw error;}catch(Exception error){throw new GatewayFailure("ACCOUNT_STORE_UNAVAILABLE");}
     }
     synchronized void finishAuthorization(String id,long expected,JSONObject login,String error)throws GatewayFailure {
+        finishAuthorization(id,expected,login,error,false);
+    }
+    synchronized void finishAuthorization(String id,long expected,JSONObject login,String error,boolean preserveExisting)throws GatewayFailure {
         try{
             JSONObject next=copy(data),rows=next.getJSONObject("accounts"),row=rows.optJSONObject(id);
-            if(row!=null&&row.optLong("version")==expected){
+            if(!preserveExisting&&row!=null&&row.optLong("version")==expected){
                 if(unregistered(row)){rows.remove(id);if(id.equals(next.optString("selected")))next.put("selected","");}
                 else row.put("version",expected+1).put("authorizationEpoch",expected+1).put("status","reauthorization_required").put("error",error);
             }

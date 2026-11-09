@@ -1674,6 +1674,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     try {
                         dev.pocketengine.features.proxy.accounts.ChatGptSignInService.start(activity, sessionId)
                         activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE))
+                        authorizationOpening = null // A later tap may reopen this same pending sign-in.
                     }
                     catch (_: Exception) { authorizationOpening = null; state = state.copy(ownerErrors = state.ownerErrors + ("accounts" to "无法打开系统浏览器，请取消本次授权后重试")) }
                 }

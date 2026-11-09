@@ -66,7 +66,7 @@ internal fun accountConnectionsAuthorization(snapshot: JSONObject, now: Long): S
     val id = login.optString("sessionId")
     val row = accountConnectionsRow(snapshot, login.optString("accountId")) ?: return null
     return id.takeIf { it.isNotBlank() && login.optString("status") == "pending" && login.optLong("expiresAt") > now &&
-        row.optBoolean("enabled") && row.optString("status") == "authorizing" && accountConnectionsVersion(row) >= 0 }
+        row.optBoolean("enabled") && row.optString("status") in setOf("authorizing", "connected", "cooldown") && accountConnectionsVersion(row) >= 0 }
 }
 
 /** Rebuilds and page re-entry have no originating request, so never reopen the browser automatically. */
