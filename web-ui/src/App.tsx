@@ -7,7 +7,7 @@ import { FluidValueSlider } from './forms-library/uiux/FluidValueSlider';
  * remain in the host; a bridge acceptance never becomes a fabricated success.
  */
 import {useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
-import {RiArrowLeftLine,RiArrowRightSLine,RiArrowDownSLine,RiChatAiLine,RiCloseLine,RiCodeSSlashLine,RiFileLine,RiFolderLine,RiHistoryLine,RiLayoutGridLine,RiMenuLine,RiMoreLine,RiPlayLine,RiRefreshLine,RiSearchLine,RiSettings4Line,RiTeamLine,RiTerminalBoxLine,RiToolsLine,RiAddLine,RiInformationLine,RiCheckboxCircleLine,RiPauseCircleLine,RiErrorWarningLine,RiTimeLine,RiDoubleQuotesL,RiLinksLine,RiBookOpenLine,RiCalendarCheckLine,RiComputerLine,RiImage2Line,RiChatNewLine} from '@remixicon/react';
+import {RiArrowLeftLine,RiArrowRightSLine,RiArrowDownSLine,RiChatAiLine,RiCloseLine,RiCodeSSlashLine,RiFileLine,RiFolderLine,RiHistoryLine,RiLayoutGridLine,RiMenuLine,RiMoreLine,RiPlayLine,RiRefreshLine,RiSearchLine,RiSettings4Line,RiTeamLine,RiTerminalBoxLine,RiToolsLine,RiAddLine,RiInformationLine,RiCheckboxCircleLine,RiPauseCircleLine,RiErrorWarningLine,RiTimeLine,RiDoubleQuotesL,RiLinksLine,RiBookOpenLine,RiCalendarCheckLine,RiComputerLine,RiImage2Line,RiChatNewLine,RiNotification3Line} from '@remixicon/react';
 import {bridge} from './bridge';
 import {usePocketSnapshot} from './usePocketSnapshot';
 import {usePocketAppearance} from './usePocketAppearance';
@@ -22,6 +22,7 @@ import {Button,IconButton,TextField,TextAreaField,SearchField,SelectField,RadioO
 import {Drawer,PopoverTrigger,Popover,PopoverHeader,TreeView,WorkSidebar,CommandMenu,FilesBrowser,Tabs,TabList,Tab,TabPanel,DecisionInbox,PermissionReview,type WorkCommand,type WorkNavItem} from './shell-library';
 import Secondary from './Secondary';
 import {AttachmentWorkspace} from './AttachmentWorkspace';
+import RemoteInboxWorkspace from './RemoteInboxWorkspace';
 import {ConversationOrganization,orderConversations} from './ConversationOrganization';
 import {TaskCapabilityWorkspace} from './TaskCapabilityWorkspace';
 import {ProjectRuntimeHealth} from './ProjectRuntimeHealth';
@@ -250,6 +251,9 @@ export default function App(){
  const closeTask=useCallback(()=>{rememberTaskPosition();invalidateContinuation();reviewWindow.current=null;reviewRequest.current++;openedTaskId.current=null;setTaskOpening(false);const closed=can('tasks.close')?act('tasks.close').then(()=>true,()=>false):Promise.resolve(false);setTaskOpen(false);setTaskLayer('overview');setReview(null);setReviewPending(false);setReviewSubmitted(false);setReviewReceipt('');setQuestionAnswer('');return closed;},[can,act,rememberTaskPosition,invalidateContinuation]);
  const changeNavigation=useCallback((open:boolean)=>{setWorkOpen(open);if(!open)setCommandOpen(false)},[]);
  const navigate=useCallback((next:string)=>{rememberChatPosition();setWorkOpen(false);setCommandOpen(false);const closed=taskOpen?closeTask():Promise.resolve(true);navigationWindow.current++;setNavigationRevision(navigationWindow.current);setRoute(next);return closed;},[taskOpen,closeTask,rememberChatPosition]);
+ const remoteInboxOpenRevision=Number(state.remoteInbox?.openRevision||0);
+ const lastRemoteInboxOpen=useRef(0);
+ useEffect(()=>{if(remoteInboxOpenRevision>0&&remoteInboxOpenRevision!==lastRemoteInboxOpen.current){lastRemoteInboxOpen.current=remoteInboxOpenRevision;navigate('remoteInbox');}},[remoteInboxOpenRevision,navigate]);
  const loadTaskReview=useCallback((id:string)=>{
   if(!can('tasks.review')||openedTaskId.current!==id)return;invalidateContinuation();const request=++reviewRequest.current;setReviewPending(true);setReviewSubmitted(false);setReviewReceipt('');setQuestionPending(false);
   const window={taskId:id,request,documentEpoch:bridge.getDocumentEpoch(),resumeRevision:Number(obj(bridge.getState().view).resumeRevision||0)};reviewWindow.current=window;
@@ -439,6 +443,7 @@ export default function App(){
  const workNav:WorkNavItem[]=useMemo(()=>[
   {key:'chat',label:'对话',icon:RiChatAiLine,group:'日常'},
   {key:'tasks',label:'任务',icon:RiLayoutGridLine,group:'日常',count:attentionTasks.length||undefined},
+  {key:'remoteInbox',label:'通知',icon:RiNotification3Line,group:'日常',count:Number(state.remoteInbox?.unread||0)||undefined},
   {key:'projects',label:'项目',icon:RiFolderLine,group:'日常'},
   {key:'memory',label:'记忆',icon:RiBookOpenLine,group:'工作区'},
   {key:'automation',label:'自动化',icon:RiCalendarCheckLine,group:'工作区'},
@@ -447,7 +452,7 @@ export default function App(){
   {key:'devices',label:'设备',icon:RiComputerLine,group:'工作区'},
   {key:'media',label:'媒体',icon:RiImage2Line,group:'工作区'},
   {key:'settings',label:'设置',icon:RiSettings4Line,group:'偏好'}
- ],[attentionTasks.length]);
+ ],[attentionTasks.length,state.remoteInbox?.unread]);
  const workCommands:WorkCommand[]=useMemo(()=>[
   ...workNav.map(item=>({id:item.key,group:item.group||'功能',title:item.label,icon:item.icon,onSelect:()=>navigate(item.key)})),
   {id:'history',group:'日常',title:'任务历史',icon:RiHistoryLine,onSelect:()=>navigate('history')},
@@ -734,7 +739,7 @@ export default function App(){
    {route==='chat'&&can('conversation.new')?<IconButton icon={RiChatNewLine} aria-label="新建工作" title="新对话" disabled={!!state.chatSubmitting} onClick={()=>run('conversation.new')}/>:route==='tasks'?<div className="pw-primary-tools">{can('tasks.refresh')&&<IconButton icon={RiRefreshLine} aria-label="刷新任务" onClick={()=>{taskHistory.reset();run('tasks.refresh')}}/>}<IconButton icon={RiSearchLine} aria-label="搜索与筛选任务" aria-expanded={taskFiltersOpen} aria-controls="pw-task-filters" onClick={()=>setTaskFiltersOpen(value=>!value)}/></div>:route==='projects'&&(state.filePath||state.projectTaskReturn?.taskId)?navigationTrigger:<span className="pw-header-spacer" aria-hidden="true"/>}
   </header>}
   {(state.chatBusy&&!composerHasChatStop||activeTask&&!terminal(activeTask))&&<div className="pw-active-bar">{state.chatBusy&&!composerHasChatStop&&<span className="pw-inline-status"><ProgressCircle aria-label="当前对话执行状态" isIndeterminate size="sm"/>{state.chatActiveTurn?.resourceState==='queued'?'等待执行位置':state.chatActiveTurn?.resourceState==='retained'?'原任务等待补充':state.chatActiveTurn?.resourceState==='stopping'?'正在停止':'正在回复'}</span>}{activeTask&&!terminal(activeTask)&&<button type="button" onClick={()=>openTask(activeTask.id)}>{labelStatus(activeTask.status)} · {activeTask.goal}<RiArrowRightSLine size={14}/></button>}<span className="pw-grow"/>{currentCancelIdentity&&can('chat.cancel')&&!composerHasChatStop&&<Button variant="ghost" size="small" onClick={stopOriginalChat}>停止回复</Button>}{activeTask&&activePhoneIdentity&&activeTask.status==='running'&&can('phone.pause')&&<Button variant="ghost" size="small" onClick={()=>run('phone.pause',activePhoneIdentity)}>暂停手机任务</Button>}{activeTask&&activePhoneIdentity&&activeTask.status==='paused'&&can('phone.resume')&&<Button variant="ghost" size="small" onClick={()=>run('phone.resume',activePhoneIdentity)}>继续原任务</Button>}{activeTask&&!terminal(activeTask)&&can('phone.stop')&&<Button variant="ghost" size="small" onClick={()=>{if(activePhoneIdentity)run('phone.stop',activePhoneIdentity)}} disabled={!activePhoneIdentity||activeTask.status==='stopping'}>{activeTask.status==='stopping'?'正在停止':'停止手机任务'}</Button>}</div>}{currentCancelFeedback&&<div className={currentCancelFeedback.error?'pw-banner pw-banner-error':'pw-banner'} role={currentCancelFeedback.error?'alert':'status'}><p>{currentCancelFeedback.message}</p></div>}{(localError||state.error)&&<div className="pw-banner pw-banner-error" role="alert"><RiInformationLine size={17}/><p>{localError||state.error}</p>{localError&&<IconButton icon={RiCloseLine} aria-label="关闭这条操作提示" onClick={()=>setLocalError('')}/>}</div>}{Object.entries(obj(state.attachmentOpens)).filter(([,value])=>value.error).map(([key,value])=><div className="pw-banner pw-banner-error" role="alert" key={key}><p>{value.error}</p></div>)}{(localStatus||state.notice)&&<div className="pw-banner" role="status"><p>{localStatus||state.notice}</p>{localStatus&&<IconButton icon={RiCloseLine} aria-label="关闭这条提示" onClick={()=>setLocalStatus('')}/>}</div>}
-  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='chat'?chatPage:route==='tasks'?tasksPage:projectsPage}</div>:<Secondary route={route} onBack={()=>navigate('chat')} snapshot={snapshot} registerBackHandler={registerSecondaryBack} navigationTrigger={navigationTrigger} navigationRevision={navigationRevision} onNavigationPageChange={setSecondaryPage}/> }
+  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='chat'?chatPage:route==='tasks'?tasksPage:projectsPage}</div>:route==='remoteInbox'&&can('remoteInbox.state')?<div className="pw-workspace pw-route-workspace"><RemoteInboxWorkspace state={state.remoteInbox}/></div>:<Secondary route={route} onBack={()=>navigate('chat')} snapshot={snapshot} registerBackHandler={registerSecondaryBack} navigationTrigger={navigationTrigger} navigationRevision={navigationRevision} onNavigationPageChange={setSecondaryPage}/> }
   </div>{allWork}
   <AttachmentWorkspace state={state} registerBack={registerAttachmentBack}/>
   {organizationTarget&&<ConversationOrganization key={organizationTarget} conversationId={organizationTarget} onClose={()=>setOrganizationTarget(null)}/>}
