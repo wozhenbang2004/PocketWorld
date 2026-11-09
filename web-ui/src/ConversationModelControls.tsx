@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { RiArrowDownSLine, RiSparklingLine, RiBox3Line, RiCloseLine, RiErrorWarningLine } from '@remixicon/react';
+import { RiArrowDownSLine, RiBox3Line, RiCloseLine } from '@remixicon/react';
 import { Button, IconButton } from './forms-library';
 import { Radio, RadioGroup } from './forms-library/boardui/components/base/radio/radio';
 import { Drawer } from './shell-library';
@@ -10,6 +10,7 @@ import { accountReasoningReview, apiReasoningReview, currentReasoningTarget, mod
   type ModelControlRecord, type ReasoningReview, type ReasoningTarget } from './conversation-model-controls';
 import './conversation-model-controls.css';
 import { ScopedConversationModelControls } from './ScopedConversationModelControls';
+import { ReasoningIndicator } from './ReasoningIndicator';
 
 export type ConversationModelControlsProps = {
   state: ModelControlRecord;
@@ -180,16 +181,18 @@ function LegacyConversationModelControls({ state, can, act, onOpenModel, disable
   };
   const selectedChoice = session?.choices.find(item => item.id === choiceId);
   const canApply = !!session && !!selectedChoice && !selectedChoice.readOnly && choiceId !== session.currentId && session.revision === state.modelSelectionRevision && Date.now() < session.expiresAt;
-  const strengthUnknown = !effort && !currentSummary?.loading && !!currentSummary?.error;
-  const strengthLabel = effort ? `推理强度：${reasoningLabel(currentTarget?.reasoning || null)}` : currentSummary?.loading ? '推理强度：正在读取' : strengthUnknown ? '推理强度：读取失败，点按重新读取' : '推理强度';
+  const strengthReading = !!currentSummary?.loading || loading;
+  const strengthLabel = saving ? '推理强度：正在保存' : strengthReading ? '推理强度：正在读取'
+    : currentSummary?.error ? '推理强度：读取失败，点按重新读取'
+    : effort ? `推理强度：${reasoningLabel(currentTarget?.reasoning || null)}` : '推理强度：尚未读取';
 
   return <div className="pw-conversation-model-controls" aria-label="模型与推理">
     <Button variant="ghost" className="pw-conversation-model-chip" onClick={selectModel} disabled={locked || loading} aria-label={`切换模型：${modelName}`} title={modelName}>
       <RiBox3Line size={19} aria-hidden="true" /><span className="pw-conversation-model-chip-name">{modelName}</span><RiArrowDownSLine size={14} aria-hidden="true" />
     </Button>
     <Drawer.Root open={open} onOpenChange={next => next ? openPanel() : closePanel()} dismissible={!saving && !state.modelSelectionBusy} shouldScaleBackground={false}>
-      <Drawer.Trigger asChild><Button variant="ghost" className="pw-conversation-reasoning-chip" disabled={locked || !state.modelName} aria-label={strengthLabel} title={currentSummary?.error || strengthLabel}>
-        <RiSparklingLine size={19} aria-hidden="true" /><span>推理</span>{effort ? <><span aria-hidden="true">·</span><b>{effort}</b></> : currentSummary?.loading ? <span aria-hidden="true">…</span> : strengthUnknown ? <RiErrorWarningLine size={14} aria-hidden="true" /> : <RiArrowDownSLine size={13} aria-hidden="true" />}
+      <Drawer.Trigger asChild><Button variant="ghost" className="pw-conversation-reasoning-chip" disabled={locked || !state.modelName} aria-label={strengthLabel} aria-busy={strengthReading || saving || undefined} title={strengthLabel}>
+        <ReasoningIndicator reasoning={currentTarget?.reasoning || null} loading={strengthReading || saving} error={!!currentSummary?.error} /><span>推理</span>{effort && <><span aria-hidden="true">·</span><b>{effort}</b></>}
       </Button></Drawer.Trigger>
       <Drawer.Portal><Drawer.Overlay className="pw-overlay" /><Drawer.Content className="pw-drawer pw-conversation-reasoning-drawer" aria-describedby="pw-conversation-reasoning-model">
         <div className="pw-drawer-handle" />

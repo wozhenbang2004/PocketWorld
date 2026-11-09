@@ -16,11 +16,11 @@ const preference = { scopeKey: 'conversation:a', revision: 3, inherited: false, 
 const review = { ...preference, selectionRevision: 8, reviewHandle: 'conversation-review-a', expiresInMs: 120_000, nativeSelection: { modelRoute: 'api_key', model: target.modelId, provider: 'openai_responses', capabilityBinding: binding, maxOutputTokens: 4096, imageTokenReserve: 0, reasoning: defaultReasoning }, facts: { REASONING: { known: true, value: true }, REASONING_LEVELS: { known: true, value: ['low', 'high'] } }, restriction: '' };
 const receipt = { status: 'saved', scope: 'conversation', preference: { ...preference, revision: 4, target: { ...target, reasoning: high } } };
 
-function fixture(overrides: Data = {}, extra: Data = {}) {
+function fixture(overrides: Data = {}, extra: Data = {}, component: 'panel' | 'controls' = 'panel') {
   const ast = ts.createSourceFile('ScopedConversationModelControls.tsx', readFileSync(new URL('../src/ScopedConversationModelControls.tsx', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const source = ast.statements.filter(node => !ts.isImportDeclaration(node)).map(node => node.getText(ast).replace(/^export /, '')).join('\n');
   const code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText;
-  const slots: any[] = [], effects: Array<() => void> = [], calls: Data[] = [], timers = new Map<number, () => void>();
+  const slots: any[] = [], effects: Array<() => void> = [], calls: Data[] = [], timers = new Map<number, () => void>(), modelSections: Array<string | undefined> = [];
   let index = 0, dirty = false, tree: any, timerId = 0, back: (() => boolean) | null = null, modelOpened = 0;
   const responses: Data = { 'models.conversation.review': review, 'models.conversation.reasoning': receipt, 'models.conversation.reset': { ...receipt, preference: { ...receipt.preference, inherited: true, target: null } }, 'models.snapshot': { nativeSelection: review.nativeSelection }, ...overrides };
   const useState = (initial: any) => { const i = index++; slots[i] ??= { value: typeof initial === 'function' ? initial() : initial }; return [slots[i].value, (value: any) => { const next = typeof value === 'function' ? value(slots[i].value) : value; if (!Object.is(next, slots[i].value)) { slots[i].value = next; dirty = true; } }]; };
@@ -28,16 +28,16 @@ function fixture(overrides: Data = {}, extra: Data = {}) {
   const useEffect = (effect: () => any, deps?: any[]) => { const i = index++, old = slots[i]; if (!deps || !old?.deps || deps.some((value, at) => !Object.is(value, old.deps[at]))) { const slot = slots[i] = { deps, cleanup: old?.cleanup }; effects.push(() => { slot.cleanup?.(); slot.cleanup = effect(); }); } };
   const React = { Fragment: 'Fragment', createElement: (type: any, props: any, ...children: any[]) => ({ type, props: props || {}, children: children.flat(Infinity).filter(child => child !== null && child !== undefined && child !== false) }) };
   const dependencies: Data = { React, useState, useRef, useEffect, ...controls, ...selection, window: { setTimeout(callback: () => void) { const id = ++timerId; timers.set(id, callback); return id; }, clearTimeout(id: number) { timers.delete(id); } } };
-  for (const key of ['RiArrowDownSLine', 'RiBrainLine', 'RiCloseLine', 'RiCpuLine', 'Button', 'IconButton', 'Radio', 'RadioGroup', 'ShimmerText']) dependencies[key] = key;
+  for (const key of ['RiArrowDownSLine', 'RiBox3Line', 'RiBrainLine', 'RiCloseLine', 'RiCpuLine', 'ReasoningIndicator', 'Button', 'IconButton', 'Radio', 'RadioGroup', 'ShimmerText']) dependencies[key] = key;
   dependencies.Drawer = Object.fromEntries(['Root', 'Trigger', 'Portal', 'Overlay', 'Content', 'Title', 'Description'].map(key => [key, `Drawer.${key}`]));
-  const Component = new Function(...Object.keys(dependencies), code + '\nreturn ScopedConversationReasoningPanel;')(...Object.values(dependencies));
-  const props = { state: { modelName: 'global-model', modelSelectionRevision: 8, conversationModel: preference }, can: () => true, act: async (action: string, args: Data = {}) => { calls.push({ action, args }); const value = responses[action]; return typeof value === 'function' ? value(args) : value || {}; }, onOpenModel: () => { modelOpened++; }, onSelectionPending: (value: boolean) => { back = value ? () => true : null; }, ...extra };
+  const Component = new Function(...Object.keys(dependencies), code + `\nreturn ${component === 'controls' ? 'ScopedConversationModelControls' : 'ScopedConversationReasoningPanel'};`)(...Object.values(dependencies));
+  const props = { state: { modelName: 'global-model', modelSelectionRevision: 8, conversationModel: preference }, can: () => true, act: async (action: string, args: Data = {}) => { calls.push({ action, args }); const value = responses[action]; return typeof value === 'function' ? value(args) : value || {}; }, onOpenModel: (section?: string) => { modelOpened++; modelSections.push(section); }, onSelectionPending: (value: boolean) => { back = value ? () => true : null; }, ...extra };
   const content = (node: any): string => !node || typeof node !== 'object' ? String(node ?? '') : node.children.map(content).join('');
   const nodes = (node: any): any[] => !node || typeof node !== 'object' ? [] : [node, ...node.children.flatMap(nodes)];
   const render = () => { let rounds = 0; do { assert.ok(rounds++ < 30); dirty = false; index = 0; tree = Component(props); effects.splice(0).forEach(effect => effect()); } while (dirty); };
   const find = (predicate: (node: any) => boolean) => { const node = nodes(tree).find(predicate); assert.ok(node, 'expected real scoped model control'); return node; };
   render();
-  return { calls, props, responses, find, has: (predicate: (node: any) => boolean) => nodes(tree).some(predicate), get text() { return content(tree); }, get modelOpened() { return modelOpened; },
+  return { calls, props, responses, find, modelSections, has: (predicate: (node: any) => boolean) => nodes(tree).some(predicate), get text() { return content(tree); }, get modelOpened() { return modelOpened; },
     begin() { render(); },
     click(label: string) { const node = find(node => ['Button', 'IconButton'].includes(node.type) && (content(node) === label || node.props['aria-label'] === label)); assert.ok(!node.props.disabled, `${label} enabled`); node.props.onClick(); render(); },
     choose(value = controls.reasoningId(high)) { find(node => node.type === 'RadioGroup').props.onChange(value); render(); },
@@ -48,6 +48,44 @@ function fixture(overrides: Data = {}, extra: Data = {}) {
     async flush() { for (let i = 0; i < 20; i++) { await Promise.resolve(); if (dirty) render(); } },
   };
 }
+
+test('opening a failed inherited reasoning chip rereads its summary and restores the confirmed icon', async () => {
+  const inherited = { ...preference, inherited: true, target: null };
+  const f = fixture({ 'models.snapshot': () => Promise.reject(new Error('read unavailable')) },
+    { state: { modelName: target.modelId, modelSelectionRevision: 8, conversationModel: inherited } }, 'controls');
+  const icon = () => f.find(node => node.type === 'ReasoningIndicator').props;
+  await f.flush(); assert.equal(icon().error, true); assert.equal(icon().reasoning, null);
+  f.responses['models.snapshot'] = { nativeSelection: { ...review.nativeSelection, reasoning: high } };
+  f.click('推理强度：读取失败，点按重新读取');
+  assert.deepEqual(f.modelSections, ['reasoning']);
+  assert.equal(icon().loading, true); assert.equal(icon().error, false); assert.equal(icon().reasoning, null);
+  await f.flush();
+  assert.deepEqual(icon().reasoning, high); assert.equal(icon().loading, false); assert.equal(icon().error, false);
+  assert.equal(f.find(node => node.props.className === 'pw-conversation-reasoning-chip').props['aria-label'], '推理强度：高');
+  assert.deepEqual(f.calls.map(call => call.action), ['models.snapshot', 'models.snapshot']); f.unmount();
+});
+
+test('a retried summary cannot replace a newer model or conversation with a late success or failure', async () => {
+  for (const change of ['model', 'scope']) {
+    const inherited = { ...preference, inherited: true, target: null }, low = { ...high, level: 'low' };
+    const f = fixture({ 'models.snapshot': () => Promise.reject(new Error('read unavailable')) },
+      { state: { modelName: target.modelId, modelSelectionRevision: 8, conversationModel: inherited } }, 'controls');
+    const icon = () => f.find(node => node.type === 'ReasoningIndicator').props;
+    await f.flush();
+    let resolve!: (value: Data) => void, reject!: (reason: Error) => void;
+    f.responses['models.snapshot'] = () => new Promise((done, fail) => { resolve = done; reject = fail; });
+    f.click('推理强度：读取失败，点按重新读取'); assert.equal(icon().loading, true);
+    const model = change === 'model' ? 'new-model' : target.modelId;
+    f.responses['models.snapshot'] = { nativeSelection: { ...review.nativeSelection, model, reasoning: low } };
+    f.change(change === 'model' ? { modelName: model } : { conversationModel: { ...inherited, scopeKey: 'conversation:b' } });
+    await f.flush(); assert.deepEqual(icon().reasoning, low);
+    if (change === 'scope') resolve({ nativeSelection: { ...review.nativeSelection, reasoning: high } });
+    else reject(new Error('old read failed'));
+    await f.flush();
+    assert.deepEqual(icon().reasoning, low); assert.equal(icon().loading, false); assert.equal(icon().error, false);
+    assert.equal(f.calls.length, 3); assert.ok(f.calls.every(call => call.action === 'models.snapshot')); f.unmount();
+  }
+});
 
 test('the scoped controls use real exported reasoning helpers and write only the reviewed conversation handle', async () => {
   assert.equal(typeof controls.nativeReasoning, 'function'); assert.equal(typeof controls.reasoningChoices, 'function'); assert.equal(typeof controls.reasoningLabel, 'function');

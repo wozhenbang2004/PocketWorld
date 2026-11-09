@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { backgroundConversationWork, conversationActivityLabel, conversationTaskCompact, foregroundConversationTurn, messageReplyContext, messageTaskResult, ownerWorkIdentity } from '../src/conversation-work.ts';
+import { backgroundConversationWork, conversationActivityLabel, conversationTaskCompact, conversationWorkActionLabel, conversationWorkNeedsAttention, foregroundConversationTurn, messageReplyContext, messageTaskResult, ownerWorkIdentity } from '../src/conversation-work.ts';
 
 const work = (id = 'work-a', status = 'running') => ({ id, goal: '整理明天的安排', status, updatedAt: 42, raw: {
   id, actorId: 'owner', spaceId: 'private', conversationId: 'conversation', executionRole: 'owner_work', runId: 'work-run', coordinatorEpoch: 2,
@@ -68,6 +68,42 @@ test('multiple original work items survive a bounded task page without importing
   assert.deepEqual(backgroundConversationWork([], [interrupted], 'conversation').map(task => task.id), ['interrupted']);
   interrupted.raw.controls.canContinue = false;
   assert.deepEqual(backgroundConversationWork([], [interrupted], 'conversation'), []);
+});
+
+test('older attention and resumable work stay ahead of newer activity in the two-row summary', () => {
+  const running = { ...work('running'), updatedAt: 900 }, queued = { ...work('queued', 'queued'), updatedAt: 800 };
+  const waiting = { ...work('waiting', 'awaiting_user'), updatedAt: 700 }, paused = { ...work('paused', 'paused'), updatedAt: 600 };
+  const failed = { ...work('failed', 'failed'), updatedAt: 500 }; failed.raw.controls.canContinue = true;
+  const unknown = { ...work('unknown'), updatedAt: 400, raw: { ...work('unknown').raw, historyHasUnconfirmedOperations: true } };
+  const tasks = [running, queued, failed, paused, unknown, waiting], originalOrder = [...tasks];
+  const selected = backgroundConversationWork(tasks, [], 'conversation');
+  assert.deepEqual(selected.map(task => task.id), ['waiting', 'paused', 'failed', 'unknown', 'running', 'queued']);
+  assert.deepEqual(selected.slice(0, 2), [waiting, paused]);
+  assert.equal(selected[2], failed, 'sorting must retain the original task object and its control identity');
+  assert.deepEqual(tasks, originalOrder, 'presentation ordering must not mutate the authoritative task list');
+});
+
+test('work summary priority uses native attention and the original resumable failure control', () => {
+  for (const status of ['needs_confirmation', 'awaiting_user', 'waiting_user', 'waiting_approval', 'awaiting_approval', 'waiting_permission', 'paused', 'interrupted', 'unknown']) {
+    assert.equal(conversationWorkNeedsAttention(work('task', status)), true, status);
+  }
+  for (const status of ['running', 'queued', 'completed', 'failed']) assert.equal(conversationWorkNeedsAttention(work('task', status)), false, status);
+  const failed = work('failed', 'failed'); failed.raw.controls.canContinue = true;
+  assert.equal(conversationWorkNeedsAttention(failed), true);
+  assert.equal(conversationWorkNeedsAttention({ ...failed, raw: { ...failed.raw, executionRole: 'conversation_turn' } }), false);
+  const running = work();
+  assert.equal(conversationWorkNeedsAttention({ ...running, raw: { ...running.raw, approvals: [{ state: 'pending' }] } }), true);
+});
+
+test('work row actions distinguish waiting, paused and unresolved states without promising a replay', () => {
+  for (const [status, action] of [['needs_confirmation', '核对结果'], ['waiting_approval', '处理授权'], ['awaiting_user', '补充信息'], ['paused', '继续处理'], ['interrupted', '继续处理'], ['failed', '查看原因'], ['queued', '查看排队'], ['running', '查看进展'], ['unknown', '核对操作']]) {
+    assert.equal(conversationWorkActionLabel(work('task', status)), action, status);
+  }
+  const running = work();
+  assert.equal(conversationWorkActionLabel({ ...running, raw: { ...running.raw, hasUnresolvedOperations: true } }), '核对操作');
+  assert.equal(conversationWorkActionLabel({ ...running, raw: { ...running.raw, approvals: [{ state: 'pending' }] } }), '查看待办');
+  const failed = work('failed', 'failed'); failed.raw.controls.canContinue = true;
+  assert.equal(conversationWorkActionLabel(failed), '查看原因');
 });
 
 test('old delivery status and original request stay frozen while the current task has a later run', () => {

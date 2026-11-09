@@ -44,6 +44,30 @@
 .pw-conversation-model-controls svg { flex-shrink: 0; }
 .pw-conversation-model-controls .pw-conversation-reasoning-chip { flex: 0 1 auto; min-width: 64px; max-width: 100px; padding-inline: 7px; color: var(--pw-copy); }
 .pw-conversation-reasoning-chip b { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.pw-conversation-model-controls .pw-reasoning-indicator {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  font-style: normal;
+  line-height: 0;
+}
+.pw-conversation-model-controls .pw-reasoning-indicator > svg { display: block; width: 20px; height: 20px; }
+.pw-reasoning-indicator .pw-reasoning-level-base { opacity: 0.2; }
+.pw-reasoning-indicator .pw-reasoning-level-active { position: absolute; inset: 0; clip-path: inset(0 var(--pw-reasoning-hidden, 0%) 0 0); }
+/* Original Remix bars occupy x=2–4, 5–7, 9–11, 12–14, 16–18, 19–21 in its 24-unit viewBox.
+   Each cut falls inside the next gap, preserving every revealed bar's full path. */
+.pw-reasoning-indicator[data-reasoning-level="1"] { --pw-reasoning-hidden: 81.25%; }
+.pw-reasoning-indicator[data-reasoning-level="2"] { --pw-reasoning-hidden: 66.666667%; }
+.pw-reasoning-indicator[data-reasoning-level="3"] { --pw-reasoning-hidden: 52.083333%; }
+.pw-reasoning-indicator[data-reasoning-level="4"] { --pw-reasoning-hidden: 37.5%; }
+.pw-reasoning-indicator[data-reasoning-level="5"] { --pw-reasoning-hidden: 22.916667%; }
+.pw-reasoning-indicator[data-reasoning-state="loading"] > svg { animation: pw-reasoning-loading 900ms linear infinite; }
+@keyframes pw-reasoning-loading { to { transform: rotate(1turn); } }
+:root[data-pw-motion-paused="true"] .pw-reasoning-indicator[data-reasoning-state="loading"] > svg { animation: none; }
 .pw-conversation-reasoning-drawer.pw-drawer {
   display: flex;
   flex-direction: column;
@@ -77,6 +101,7 @@
 .pw-conversation-reasoning-drawer .pw-conversation-reasoning-actions > button { height: 48px; min-height: 48px; min-width: 80px; font: 500 13px/20px var(--pw-font); }
 @media (prefers-reduced-motion: reduce) {
   .pw-conversation-model-controls :is(.pw-conversation-model-chip, .pw-conversation-reasoning-chip)::before { transition: none; }
+  .pw-reasoning-indicator[data-reasoning-state="loading"] > svg { animation: none; }
 }
 
 /* Independent model and reasoning sheets retain the existing Vaul/BoardUI controls. */

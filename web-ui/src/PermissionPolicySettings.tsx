@@ -1,9 +1,9 @@
-import {useEffect,useRef,useState} from 'react';
+import {useEffect,useRef,useState,type ReactNode} from 'react';
 import {Button,TextField,RadioOptions,Accordion,AccordionItem} from './forms-library';
 
 type Policy={version:1;mode:'ask'|'controlled'|'auto';tools:Record<string,'allow'|'ask'|'deny'>};
 type Snapshot={revision:number;conversationId:string;global:Policy;conversation:Policy|null;effective:Policy};
-type Props={conversationId:string;act:(action:string,args?:Record<string,any>)=>Promise<any>;onPendingChange?:(pending:boolean)=>void};
+type Props={conversationId:string;act:(action:string,args?:Record<string,any>)=>Promise<any>;onPendingChange?:(pending:boolean)=>void;children?:ReactNode};
 const clone=(p:Policy):Policy=>({...p,tools:{...p.tools}});
 const conversationDraft=(s:Snapshot):Policy=>s.conversation?clone(s.conversation):{...s.effective,tools:{}};
 const modes=[
@@ -11,7 +11,7 @@ const modes=[
  {id:'controlled',label:'受控自动',description:'授权内新建本地附件自动，其余写入询问'},
  {id:'auto',label:'完全自动',description:'已挂载且获授权的工具不再逐项询问'},
 ];
-export function PermissionPolicySettings({conversationId,act,onPendingChange}:Props){
+export function PermissionPolicySettings({conversationId,act,onPendingChange,children}:Props){
  const actRef=useRef(act);actRef.current=act;
  const generation=useRef(0),pendingRef=useRef(false),pendingChangeRef=useRef(onPendingChange);pendingChangeRef.current=onPendingChange;
  const [snapshot,setSnapshot]=useState<Snapshot|null>(null),[scope,setScope]=useState('conversation');
@@ -28,7 +28,7 @@ export function PermissionPolicySettings({conversationId,act,onPendingChange}:Pr
    setSnapshot(result);setDraft(scope==='global'?clone(result.global):conversationDraft(result));setNotice(reset?'已恢复继承全局设置':'权限设置已保存；已有任务不在此重新派发');
   }catch(e){if(generation.current===saveGeneration)setError(e instanceof Error?e.message:String(e));}finally{if(generation.current===saveGeneration){pendingRef.current=false;setBusy(false);pendingChangeRef.current?.(false)}}
  };
- if(!snapshot||!draft)return <p className="pw-permission-read-status" role={error?'alert':'status'}>{error||'读取权限设置…'}</p>;
+ if(!snapshot||!draft)return <><p className="pw-permission-read-status" role={error?'alert':'status'}>{error||'读取权限设置…'}</p>{children}</>;
  const add=()=>{if(pendingRef.current)return;const name=tool.trim();if(!/^(browser|ssh|attachments)_[A-Za-z0-9_]+$/.test(name)){setError('填写精确工具名，例如 attachments_create_document');return;}edit({...draft,tools:{...draft.tools,[name]:'ask'}});setTool('');setError('');};
  return <section className="pw-permission-policy" aria-label="审批策略" aria-busy={busy}>
   <div className="pw-permission-scope">
@@ -52,6 +52,7 @@ export function PermissionPolicySettings({conversationId,act,onPendingChange}:Pr
    </div>
    {scope==='conversation'&&<p className="pw-permission-hint">移除会话规则后沿用同名全局规则；没有全局规则时按模式执行。</p>}
   </AccordionItem></Accordion>
+  {children}
   <footer className="pw-permission-actions">
    {error&&<p className="pw-permission-error" role="alert">{error}</p>}{notice&&<p className="pw-permission-notice" role="status">{notice}</p>}
    <div className="pw-permission-action-row">

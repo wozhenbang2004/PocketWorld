@@ -18,9 +18,6 @@
   flex: 0 1 auto; min-width: 0; max-width: 100%;
 }
 .pw-composer-host.pw-squircle-composer .pw-context-meter-button > span { flex: none; }
-.pw-composer-host.pw-squircle-composer .pw-context-meter-button > .pw-context-meter-draft {
-  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-}
 .pw-composer-host.pw-squircle-composer .pw-composer-context-usage {
   display: flex; align-items: center; gap: 6px; margin-left: auto;
   font: 500 11px/15px var(--pw-font); letter-spacing: 0; white-space: nowrap;
@@ -196,7 +193,7 @@
   min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 20px 16px;
 }
 .pw-permission-sheet-body > * { flex: 0 0 auto; }
-.pw-permission-sheet-body > .pw-composer-permission-detail { width: 100%; min-width: 0; max-width: none; }
+.pw-permission-sheet-body .pw-composer-permission-detail { width: 100%; min-width: 0; max-width: none; }
 .pw-permission-sheet-body .pw-composer-permission-detail [slot="trigger"] { padding-inline: 0; }
 .pw-permission-sheet-body .pw-composer-permission-detail dl { margin-block: 8px; }
 .pw-permission-sheet-body .pw-composer-permission-note { max-width: none; padding: 8px 0; }

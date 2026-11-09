@@ -45,10 +45,12 @@
 .pw-work-heading h3 { margin: 0; font-size: 13px; line-height: 20px; font-weight: 600; color: var(--pw-copy); }
 .pw-work-count { font-size: 12px; font-variant-numeric: tabular-nums; }
 .pw-work-heading > button { margin-left: auto; min-height: 48px; }
-.pw-conversation-work ol { gap: 0; border-top: 1px solid var(--pw-edge); }
-.pw-conversation-work li + li { border-top: 1px solid var(--pw-edge); }
+.pw-conversation-work ol { gap: 4px; border: 0; }
+.pw-conversation-work li + li { border: 0; }
 .pw-redesign .pw-conversation-work .pw-work-row.button-press-motion { width: 100%; min-width: 0; height: auto; min-height: 60px; padding: 10px 0; border-radius: 8px; background: transparent; box-shadow: none; }
-.pw-conversation-work .pw-work-row.button-press-motion > span { display: grid; grid-template-columns: 18px minmax(0,1fr) 16px; align-items: center; gap: 12px; width: 100%; min-width: 0; padding: 0; }
+.pw-conversation-work .pw-work-row.button-press-motion > span { display: grid; grid-template-columns: 18px minmax(0,1fr) auto; align-items: center; gap: 10px; width: 100%; min-width: 0; padding: 0; }
+.pw-work-action { display: inline-flex; align-items: center; gap: 2px; color: var(--pw-copy); font-size: 12px; line-height: 20px; white-space: nowrap; }
+.pw-conversation-work [data-work-attention="true"] .pw-work-action { color: var(--pw-ink); font-weight: 500; }
 .pw-conversation-work .pw-work-copy { display: grid; gap: 4px; min-width: 0; }
 .pw-conversation-work .pw-work-copy b { font-size: 14px; line-height: 22px; font-weight: 500; overflow-wrap: anywhere; white-space: normal; }
 .pw-conversation-work .pw-work-copy small { font-size: 12px; line-height: 19px; }

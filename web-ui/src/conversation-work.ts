@@ -1,5 +1,5 @@
 import { phoneConversationId } from './phone-start.ts';
-import { getRecentTaskProgress, taskNeedsAttention } from './task-presentation.ts';
+import { getRecentTaskProgress, taskNeedsAttention, taskNeedsReconciliation } from './task-presentation.ts';
 
 type Data = Record<string, any>;
 const object = (value: unknown): Data | null => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Data : null;
@@ -83,6 +83,24 @@ export function conversationTaskCompact(task: Data): boolean {
   return task.status === 'completed' && !taskNeedsAttention(task);
 }
 
+/** Summary priority only; opening the original task still owns all decisions. */
+export function conversationWorkNeedsAttention(task: Data): boolean {
+  return taskNeedsAttention(task) || task.status === 'failed' && task.raw?.executionRole === 'owner_work' && task.raw?.controls?.canContinue === true;
+}
+
+export function conversationWorkActionLabel(task: Data): string {
+  if (taskNeedsReconciliation(task)) return '核对操作';
+  if (task.status === 'needs_confirmation') return '核对结果';
+  if (['waiting_approval', 'awaiting_approval', 'waiting_permission'].includes(task.status)) return '处理授权';
+  if (['awaiting_user', 'waiting_user'].includes(task.status)) return '补充信息';
+  if (task.status === 'failed') return '查看原因';
+  if (['paused', 'interrupted'].includes(task.status)) return '继续处理';
+  if (taskNeedsAttention(task)) return '查看待办';
+  if (task.status === 'queued') return '查看排队';
+  if (['running', 'preparing', 'verifying', 'pausing', 'stopping', 'cancelling'].includes(task.status)) return '查看进展';
+  return '查看详情';
+}
+
 export function backgroundConversationWork<T extends Data>(tasks: T[], ownerWork: T[], conversationId: unknown): T[] {
   if (!id(conversationId)) return [];
   const selected = new Map<string, T>();
@@ -96,5 +114,7 @@ export function backgroundConversationWork<T extends Data>(tasks: T[], ownerWork
     if ((!phone && !associated) || ['completed', 'failed', 'cancelled', 'canceled', 'stopped', 'interrupted'].includes(task.status) && !resumable) continue;
     selected.set(task.id, task);
   }
-  return [...selected.values()].sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+  return [...selected.values()].map(task => ({ task, attention: conversationWorkNeedsAttention(task) }))
+    .sort((a, b) => Number(b.attention) - Number(a.attention) || Number(b.task.updatedAt || 0) - Number(a.task.updatedAt || 0))
+    .map(({ task }) => task);
 }

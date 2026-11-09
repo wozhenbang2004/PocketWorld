@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { SettingsDialog } from './forms-library';
+import { Accordion, AccordionItem, SettingsDialog } from './forms-library';
 import { usePocketSnapshot } from './usePocketSnapshot';
 import { composerContextMetric, composerDraftPreview, contextPercentLabel } from './composer-context-metric';
 import './composer-native-detail.css';
@@ -21,27 +21,29 @@ export function ComposerContextMeter({ composerKey, draftText = '', attachmentCo
       </svg>
       <span className="pw-context-meter-caption">{metric.available ? '上次' : ''}</span>
       <span>{metric.available ? `≈${contextPercentLabel(metric.windowPercent)}` : '未测得'}</span>
-      <span className="pw-context-meter-draft" title={draft.reason}>{draft.tokens === null ? '草稿待核对' : `草稿≈${draft.tokens.toLocaleString('zh-CN')}`}</span>
     </button>
     <SettingsDialog isOpen={open} onClose={() => setOpen(false)} title="上下文占用">
       <section className="pw-context-meter-detail" aria-label="原请求上下文检查">
-        <p>{metric.reason}</p>
-        <p role="status">当前草稿：{draft.tokens===null?'未能估算':`约 ${number(draft.tokens)} tokens`}。{draft.reason}</p>
-        {metric.available && <>
-          <dl>
-            <div><dt>输入占模型窗口</dt><dd>≈{contextPercentLabel(metric.windowPercent)}</dd></div>
-            <div><dt>输入预算占用</dt><dd>≈{contextPercentLabel(metric.inputPercent)}</dd></div>
-            <div><dt>估算输入</dt><dd>{number(metric.inputTokens)} tokens</dd></div>
-            <div><dt>输入预算</dt><dd>{number(metric.inputLimit)} tokens</dd></div>
-            <div><dt>模型窗口</dt><dd>{number(metric.windowTokens)} tokens</dd></div>
-            <div><dt>输出预留</dt><dd>{number(metric.outputReserve)} tokens</dd></div>
-          </dl>
-          <p>{metric.summaryUsed ? '该次请求使用过上下文摘要。' : '该次检查未证明使用过上下文摘要。'}</p>
-          {metric.attention && <p role="status">原检查需要处理，不会在这里继续执行、扩展预算或自动重试。</p>}
-          <p>圆环展示的是最近一次已核对请求。草稿数字随输入变化，但不叠加为虚假的「当前总占比」；模型切换、历史回复及附件必须等下一次原生请求检查。</p>
-        </>}
-        {metric.at !== null && <p>检查时间：{new Date(metric.at).toLocaleString('zh-CN')}</p>}
-        {!metric.available && <p>没有可靠检查记录时不显示 0%，也不使用累计 token 用量代替上下文占用。</p>}
+        <div className="pw-context-meter-overview">
+          <div><span>上次请求占用</span><strong>{metric.available ? `≈${contextPercentLabel(metric.windowPercent)}` : '未测得'}</strong></div>
+          <div><span>当前草稿估算</span><strong>{draft.tokens === null ? '待核对' : <>{number(draft.tokens)} <small>tokens</small></>}</strong></div>
+        </div>
+        <p>{metric.available ? '占用来自上次请求；草稿单独估算，发送时重新核对。' : metric.reason}</p>
+        {metric.attention && <p className="pw-context-meter-attention" role="status">上次检查需要处理，请核对原请求。</p>}
+        <Accordion defaultExpandedKeys={[]}><AccordionItem id="context-details" title="用量明细">
+          <div className="pw-context-meter-breakdown">
+            {metric.available && <dl>
+              <div><dt>输入预算占用</dt><dd>≈{contextPercentLabel(metric.inputPercent)}</dd></div>
+              <div><dt>估算输入</dt><dd>{number(metric.inputTokens)} tokens</dd></div>
+              <div><dt>输入预算</dt><dd>{number(metric.inputLimit)} tokens</dd></div>
+              <div><dt>模型窗口</dt><dd>{number(metric.windowTokens)} tokens</dd></div>
+              <div><dt>输出预留</dt><dd>{number(metric.outputReserve)} tokens</dd></div>
+            </dl>}
+            <p>{draft.reason}</p>
+            {metric.available && <><p>{metric.reason}</p><p>{metric.summaryUsed ? '上次请求使用了上下文摘要。' : '上次记录未确认使用上下文摘要。'}</p></>}
+            {metric.at !== null && <p>检查时间：{new Date(metric.at).toLocaleString('zh-CN')}</p>}
+          </div>
+        </AccordionItem></Accordion>
       </section>
     </SettingsDialog>
   </>;

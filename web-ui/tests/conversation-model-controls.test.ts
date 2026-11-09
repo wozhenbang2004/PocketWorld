@@ -1,7 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import React from 'react';
+import ts from 'typescript';
+import * as remix from '@remixicon/react';
 import { accountReasoningReview, apiReasoningReview, currentReasoningTarget, nativeReasoning, reasoningChoices,
   reasoningId, reasoningLabel, reasoningSavedSnapshot, reasoningSelection, sameAccountTarget } from '../src/conversation-model-controls.ts';
+
+// This pure render exercises state semantics; the browser checks the final pixels.
+const indicatorAst = ts.createSourceFile('ReasoningIndicator.tsx', readFileSync(new URL('../src/ReasoningIndicator.tsx', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const indicatorSource = indicatorAst.statements.filter(node => !ts.isImportDeclaration(node)).map(node => node.getText(indicatorAst).replace(/^export /, '')).join('\n');
+const indicatorCode = ts.transpileModule(indicatorSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText;
+const indicatorImports = { React, nativeReasoning, RiBarChartGroupedFill: remix.RiBarChartGroupedFill, RiEqualizerLine: remix.RiEqualizerLine,
+  RiErrorWarningLine: remix.RiErrorWarningLine, RiLoader4Line: remix.RiLoader4Line, RiQuestionLine: remix.RiQuestionLine, RiSparklingLine: remix.RiSparklingLine };
+const indicator = new Function(...Object.keys(indicatorImports), indicatorCode + '\nreturn ReasoningIndicator;')(...Object.values(indicatorImports));
 
 const defaults = { mode: 'DEFAULT', level: '', budgetTokens: 0 };
 const medium = { mode: 'OPENAI_EFFORT', level: 'medium', budgetTokens: 0 };
@@ -49,6 +61,36 @@ test('only declared levels become choices; DEFAULT is not advertised as thinking
   assert.equal(reasoningLabel(defaults), '服务默认');
   assert.equal(reasoningLabel(null), '');
   assert.equal(nativeReasoning({ mode: 'DEFAULT', level: 'high', budgetTokens: 0 }), null);
+});
+test('the indicator distinguishes native defaults, ranked levels, budgets and unread states without inventing strength', () => {
+  for (const [reasoning, expected] of [[null, 'unknown'], [defaults, 'default'], [{ ...defaults, level: 'high' }, 'unknown'],
+    [{ ...high, mode: 'UNDECLARED' }, 'unknown'], [{ ...high, level: 'future-level' }, 'custom'], [{ mode: 'ANTHROPIC_BUDGET', level: '', budgetTokens: 2048 }, 'budget']] as const) {
+    const result = indicator({ reasoning });
+    assert.equal(result.props['data-reasoning-state'], expected);
+    assert.equal(result.props['data-reasoning-level'], undefined);
+    assert.equal(result.props['aria-hidden'], 'true');
+  }
+  assert.equal(indicator({ reasoning: defaults, loading: true }).props['data-reasoning-state'], 'loading');
+  assert.equal(indicator({ reasoning: defaults, error: true }).props['data-reasoning-state'], 'error');
+  for (const [index, level] of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'].entries()) {
+    const result = indicator({ reasoning: { ...high, level } });
+    assert.equal(result.props['data-reasoning-state'], 'level');
+    assert.equal(result.props['data-reasoning-level'], index + 1);
+  }
+});
+test('each ordinal reveals whole existing Remix bars in left-to-right geometric order', () => {
+  const path = (remix.RiBarChartGroupedFill({}) as any).props.children.props.d as string;
+  const bars = [...path.matchAll(/M(\d+) (\d+)H(\d+)V(\d+)H(\d+)V(\d+)Z/g)]
+    .map(match => ({ left: Number(match[1]), right: Number(match[3]) })).sort((a, b) => a.left - b.left);
+  assert.equal(bars.length, 6, 'an upstream icon change requires rechecking the reveal geometry');
+  const css = readFileSync(new URL('../src/conversation-model-controls.css', import.meta.url), 'utf8');
+  for (let level = 1; level <= 6; level++) {
+    const rule = css.match(new RegExp(`data-reasoning-level="${level}"\\] \\{ --pw-reasoning-hidden: ([\\d.]+)%`));
+    assert.ok(rule || level === 6, 'all partial reveals need an explicit boundary');
+    const cutoff = 24 * (1 - Number(rule?.[1] || 0) / 100);
+    assert.equal(bars.filter(bar => bar.right < cutoff).length, level);
+    assert.equal(bars.some(bar => bar.left < cutoff && bar.right > cutoff), false, 'no cutoff may cross an original bar');
+  }
 });
 test('a retained budget is displayed accurately but is never converted to an invented strength', () => {
   const budget = { mode: 'ANTHROPIC_BUDGET', level: '', budgetTokens: 2048 };

@@ -711,6 +711,13 @@ export default function App(){
  const permissionView=composerPermissionView(state);
  const permissionReviewLabel=permissionView&&['waiting_approval','awaiting_approval','waiting_permission'].includes(permissionView.status)?'审阅本次授权':'查看待处理事项';
  const openPermissionTask=()=>{if(permissionWriting.current||!permissionView||!can('tasks.open'))return;setPermissionOptionsOpen(false);openTask(permissionView.taskId,permissionView.needsReview&&can('tasks.review')?'review':'scope')};
+ const permissionTaskDetails=<Accordion className="pw-composer-permission-detail"><AccordionItem title="本次任务范围">
+    {permissionView?<><strong className="pw-composer-permission-goal">{permissionView.goal}</strong><p>{labelStatus(permissionView.status)}{permissionView.phase==='planning'?' · 只读规划':''}</p>
+     {permissionView.scopeVerified?<dl><div><dt>工具次数</dt><dd>{permissionView.toolsUsed??'未核对'} / {permissionView.toolLimit??'未核对'}</dd></div><div><dt>模型调用</dt><dd>{permissionView.modelCallsUsed??'未核对'} / {permissionView.modelCallLimit??'未核对'}</dd></div><div><dt>截止时间</dt><dd>{permissionView.deadlineAt===0?'未设置':permissionView.deadlineAt===null?'未核对':new Date(permissionView.deadlineAt).toLocaleString('zh-CN')}</dd></div></dl>:<p>尚无可核对的任务执行范围。</p>}
+     <p className="pw-composer-permission-note">审批设置不会扩大此任务的范围、资源许可或预算。</p>
+     {!permissionView.needsReview&&can('tasks.open')&&<Button variant="ghost" disabled={permissionPending} onClick={openPermissionTask}>查看原任务权限</Button>}
+    </>:<p>当前对话还没有任务。任务开始后可在这里查看执行范围。</p>}
+   </AccordionItem></Accordion>;
  // Only surface a decision that belongs to a task anchored in this conversation.
  const conversationAttention=intent==='chat'?tasks.reduce<Task|undefined>((latest,task)=>{const anchor=messageTaskAnchors.get(task.id);if(!attention(task)||anchor===undefined)return latest;return !latest||anchor>messageTaskAnchors.get(latest.id)!?task:latest;},undefined):undefined;
  const navigationTrigger=desktopNavigation?<span className="pw-header-spacer" aria-hidden="true"/>:<Drawer.Trigger asChild><IconButton icon={RiMenuLine} aria-label="打开导航" data-testid="all_work"/></Drawer.Trigger>;
@@ -763,20 +770,26 @@ export default function App(){
     const phoneResult=messagePhoneResult(m),taskResult=messageTaskResult(m),replyContext=messageReplyContext(m);
     const linked=tasks.find(t=>t.id===(m.taskId||m.submission?.taskId));
     const traceTaskId=phoneResult?.taskId||taskResult?.taskId||m.taskId;
+    const linkedFeedback=linked&&!phoneResult&&!taskResult&&linked.id!==conversationAttention?.id&&messageTaskAnchors.get(linked.id)===index?linked:null;
+    const completedFeedback=linkedFeedback&&conversationTaskCompact(linkedFeedback);
+    const traceInMenu=!!(phoneResult||taskResult||linkedFeedback&&!completedFeedback);
     const canQuote=intent==='chat'&&m.quoteAvailable&&can('messageQuote.open')&&can('messageQuote.stage')&&can('messageQuote.close');
     return <article key={id} tabIndex={-1} data-message-index={index} data-message-id={id} className={`pw-message pw-message-${m.role}`} aria-label={m.role==='assistant'?(phoneResult||taskResult?'任务结果':'助手回复'):'你的消息'}>
      {m.role==='assistant'?(refs.length?<CitedAnswer text={m.content} onCopyCode={copyText} sources={refs as any} onOpenSource={()=>openSource(m)}/>:<AIAnswer text={m.content} onCopyCode={copyText} busy={false} showActions={false}/>):<div className="pw-user-text">{m.content}</div>}
      {asArray<Json>(m.attachments).length>0&&<div className="pw-message-files">{asArray<Json>(m.attachments).map(file=><Button key={file.id||file.name} variant="secondary" size="small" leadingIcon={RiFileLine} disabled={!can('attachments.open')||!file.sha256||!!state.attachmentOpens?.[`${file.id}:${file.sha256}`]?.checking} onClick={()=>run('attachments.open',{messageId:m.id,id:file.id,sha256:file.sha256})}>{file.name||'原附件'}</Button>)}</div>}
      {m.submission&&<Receipt receipt={m.submission}/>}
      <div className="pw-message-footer">
-     {(m.content||m.role==='assistant'||canQuote||(m.retainedSources&&can('sources.open')))&&<div className="pw-message-tools">
+     {linkedFeedback&&!completedFeedback&&<Button variant="ghost" className="pw-message-work-action" leadingIcon={attention(linkedFeedback)||linkedFeedback.status==='failed'?RiErrorWarningLine:RiTimeLine} aria-label={`查看任务详情：${linkedFeedback.goal}`} title={linkedFeedback.goal} disabled={!can('tasks.open')} onClick={()=>openTask(linkedFeedback.id,attention(linkedFeedback)&&can('tasks.review')?'review':'overview')}><span className="pw-message-work-status">{labelStatus(linkedFeedback.status)}</span><span className="pw-message-work-next">{attention(linkedFeedback)?taskActionLabel(linkedFeedback):linkedFeedback.status==='failed'?'查看失败原因':terminal(linkedFeedback)?'查看详情':'查看进展'}<RiArrowRightSLine size={15} aria-hidden="true"/></span></Button>}
+     {(m.content||m.role==='assistant'||canQuote||(m.retainedSources&&can('sources.open'))||(completedFeedback&&can('tasks.open')))&&<div className="pw-message-tools">
       {m.role==='assistant'&&!!m.content&&<MessageActions onCopy={()=>copyText(m.content)} onSpeak={can('speech.speak')&&m.id&&m===messages.filter(x=>x.role==='assistant').at(-1)?playing=>run(playing?'speech.speak':'speech.stop',{messageId:m.id}):undefined} speaking={!!state.speaking}/>}
-      {m.role==='assistant'&&traceTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={RiToolsLine} aria-label="查看这条回复的执行轨迹" onClick={()=>openTask(traceTaskId,'process')}>执行轨迹</Button>}
+      {m.role==='assistant'&&traceTaskId&&!traceInMenu&&can('tasks.open')&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={completedFeedback?RiCheckboxCircleLine:RiToolsLine} aria-label="查看这条回复的执行轨迹" onClick={()=>openTask(traceTaskId,'process')}>{completedFeedback&&<span className="pw-message-work-status">已完成<span aria-hidden="true"> · </span></span>}<span>执行轨迹</span></Button>}
       <PopoverTrigger isOpen={messageMenu===id} onOpenChange={value=>setMessageMenu(value?id:null)}>
        <IconButton icon={RiMoreLine} size="small" aria-label="消息操作与来源"/>
        <Popover className="pw-message-popover" aria-label="消息操作与来源"><div className="pw-message-menu">
+        {m.role==='assistant'&&traceTaskId&&traceInMenu&&can('tasks.open')&&<Button variant="ghost" leadingIcon={RiToolsLine} aria-label="查看这条回复的执行轨迹" onClick={()=>{setMessageMenu(null);openTask(traceTaskId,'process')}}>执行轨迹</Button>}
+        {completedFeedback&&linkedFeedback&&can('tasks.open')&&<Button variant="ghost" aria-label={`查看任务详情：${linkedFeedback.goal}`} onClick={()=>{setMessageMenu(null);openTask(linkedFeedback.id)}}>查看任务详情</Button>}
         {!!m.content&&<Button variant="ghost" leadingIcon={RiBookOpenLine} onClick={()=>{const source=Array.from(scroll.current?.querySelectorAll<HTMLElement>('[data-message-id]')||[]).find(row=>row.dataset.messageId===id);openReading({kind:'message',title:m.role==='assistant'?'阅读回复':'阅读消息',text:m.content,returnFocus:source?.querySelector<HTMLElement>('button[aria-label="消息操作与来源"]')});setMessageMenu(null)}}>阅读与选字</Button>}
-        {m.role!=='assistant'&&<MessageActions onCopy={()=>copyText(m.content)}/>}
+        {m.role!=='assistant'&&!!m.content&&<MessageActions onCopy={()=>copyText(m.content)}/>}
 
         {canQuote&&<Button variant="ghost" leadingIcon={RiDoubleQuotesL} disabled={!draftKey||!!state.chatSubmitting} onClick={()=>{setMessageMenu(null);openQuote(m)}}>引用到草稿</Button>}
         {m.retainedSources&&can('sources.open')&&<Button variant="ghost" leadingIcon={RiLinksLine} onClick={()=>{setMessageMenu(null);openSource(m)}}>回答来源</Button>}
@@ -789,7 +802,7 @@ export default function App(){
      {phoneResult&&<div className="pw-phone-result" data-delivery-id={phoneResult.deliveryId}><span>本次执行：{labelStatus(phoneResult.status)}</span><span>{timeLabel(phoneResult.endedAt)}</span>{phoneResult.summaryTruncated&&<span title={`原结果 ${phoneResult.summaryChars} 字`}>本次结果已截取</span>}{can('tasks.open')&&<Button variant="ghost" size="small" onClick={()=>openTask(phoneResult.taskId)}>查看当前任务<RiArrowRightSLine size={15}/></Button>}</div>}
      {replyContext&&replyContext.replyToMessageIds.length>0&&<div className="pw-reply-origin" aria-label="答复对应的原请求">{replyContext.replyToMessageIds.map((source,index)=><Button key={source} variant="ghost" size="small" onClick={()=>openReplyOrigin(m,source)}><RiArrowLeftLine size={13}/>{replyContext.replyToMessageIds.length===1?'查看原请求':`原请求 ${index+1}`}</Button>)}</div>}
      {taskResult&&<div className="pw-task-result" data-delivery-id={taskResult.deliveryId}><span>{taskResult.noticeKind==='capacity_cancel'?'停止通知 · 生成时状态：':taskResult.noticeKind==='capacity_recovery'?'容量恢复通知 · 生成时状态：':taskResult.kind==='automation'?'计划结果 · ':taskResult.kind==='team'?'团队结果 · ':'这件事的结果 · '}{labelStatus(taskResult.status)}</span><span>{taskResult.noticeKind?'通知生成时间：':''}{timeLabel(taskResult.endedAt)}</span>{taskResult.summaryTruncated&&<span title={`${taskResult.noticeKind?'原通知':'原结果'} ${taskResult.summaryChars} 字`}>{taskResult.noticeKind?'通知已截取':'结果已截取'}</span>}{can('tasks.open')&&<Button variant="ghost" size="small" onClick={()=>openTask(taskResult.taskId)}>查看当前任务<RiArrowRightSLine size={15}/></Button>}</div>}
-     {linked&&!phoneResult&&!taskResult&&linked.id!==conversationAttention?.id&&messageTaskAnchors.get(linked.id)===index&&<Button variant="ghost" className={`pw-linked-task${conversationTaskCompact(linked)?' pw-linked-task-complete':''}`} aria-label={`查看任务详情：${linked.goal}`} disabled={!can('tasks.open')} onClick={()=>openTask(linked.id,attention(linked)&&can('tasks.review')?'review':'overview')}>{conversationTaskCompact(linked)?<><RiCheckboxCircleLine size={17} aria-hidden="true"/><span className="pw-linked-task-summary">已完成</span><span className="pw-linked-task-action">查看详情<RiArrowRightSLine size={17} aria-hidden="true"/></span></>:<><span className="pw-linked-task-copy"><b>{linked.goal}</b><small>{labelStatus(linked.status)}</small></span><span className="pw-linked-task-action">{attention(linked)?taskActionLabel(linked):linked.status==='failed'?'查看失败原因':terminal(linked)?'查看详情':'查看进展'}<RiArrowRightSLine size={17} aria-hidden="true"/></span></>}</Button>}
+
     </article>;
    })}</div>}
    {chatPhoneTask&&!taskOpen&&<div className="pw-conversation-phone-viewer">{phoneViewerFor(chatPhoneTask,true)}</div>}
@@ -868,15 +881,9 @@ export default function App(){
   <div className="pw-drawer-handle"/>
   <header className="pw-drawer-header"><div><Drawer.Title>执行权限</Drawer.Title><Drawer.Description id="pw-permission-description" className="sr-only">设置工具操作的审批方式，查看本次任务范围。</Drawer.Description></div><IconButton icon={RiCloseLine} aria-label="关闭执行权限" onClick={closePermissionOptions} disabled={permissionPending}/></header>
   <div className="pw-drawer-body pw-permission-sheet-body">{permissionOptionsOpen&&<>
-   {can('permissions.snapshot')?<PermissionPolicySettings key={String(state.conversationId||'')} conversationId={String(state.conversationId||'')} act={act} onPendingChange={permissionSaving}/>:<p className="pw-muted">当前版本暂不支持修改审批设置。</p>}
    {permissionView?.needsReview&&<div className="pw-permission-pending-review"><span role="status">{labelStatus(permissionView.status)}</span>{can('tasks.open')&&<Button variant="ghost" disabled={permissionPending} onClick={openPermissionTask}>{permissionReviewLabel}</Button>}</div>}
-   <Accordion className="pw-composer-permission-detail"><AccordionItem title="本次任务范围">
-    {permissionView?<><strong className="pw-composer-permission-goal">{permissionView.goal}</strong><p>{labelStatus(permissionView.status)}{permissionView.phase==='planning'?' · 只读规划':''}</p>
-     {permissionView.scopeVerified?<dl><div><dt>工具次数</dt><dd>{permissionView.toolsUsed??'未核对'} / {permissionView.toolLimit??'未核对'}</dd></div><div><dt>模型调用</dt><dd>{permissionView.modelCallsUsed??'未核对'} / {permissionView.modelCallLimit??'未核对'}</dd></div><div><dt>截止时间</dt><dd>{permissionView.deadlineAt===0?'未设置':permissionView.deadlineAt===null?'未核对':new Date(permissionView.deadlineAt).toLocaleString('zh-CN')}</dd></div></dl>:<p>尚无可核对的任务执行范围。</p>}
-     <p className="pw-composer-permission-note">审批设置不会扩大此任务的范围、资源许可或预算。</p>
-     {!permissionView.needsReview&&can('tasks.open')&&<Button variant="ghost" disabled={permissionPending} onClick={openPermissionTask}>查看原任务权限</Button>}
-    </>:<p>当前对话还没有任务。任务开始后可在这里查看执行范围。</p>}
-   </AccordionItem></Accordion>
+   {can('permissions.snapshot')?<PermissionPolicySettings key={String(state.conversationId||'')} conversationId={String(state.conversationId||'')} act={act} onPendingChange={permissionSaving}>{permissionTaskDetails}</PermissionPolicySettings>:<><p className="pw-muted">当前版本暂不支持修改审批设置。</p>{permissionTaskDetails}</>}
+
   </>}</div>
  </Drawer.Content></Drawer.Portal></Drawer.Root>
  <Drawer.Root open={modelPickerOpen} onOpenChange={open=>{if(!open)closeModelPicker()}} dismissible={!modelSelectPending&&!state.modelSelectionBusy} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-model-drawer pw-conversation-model-drawer" data-picker-section={modelPickerSection} aria-describedby="pw-model-description" onCloseAutoFocus={modelPickerExit.onCloseAutoFocus}>

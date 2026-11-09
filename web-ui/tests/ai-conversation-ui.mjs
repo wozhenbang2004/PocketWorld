@@ -121,7 +121,7 @@ function installMainChatHost() {
     '',
     '这些只是渲染测试资料；长代码可以在代码区域内滚动，正文和附件不能撑宽整个对话。',
   ].join('\n');
-  let lastSnapshot, idle = false, unread = 0;
+  let lastSnapshot, idle = false, unread = 0, measuredContext = false, showBackground = false, attachmentOnly = false;
   const publish = () => window.PocketWeb.receive({ v: 1, kind: 'state', revision: 0, snapshot: clone(lastSnapshot) });
   Object.defineProperty(window, 'PocketWeb', {
     configurable: true,
@@ -141,6 +141,32 @@ function installMainChatHost() {
             { id: 'fixture-reference-notes', name: '本周设计反馈与原始材料逐项核对记录（保留未确认结论和返回位置）.md', sha256: 'a'.repeat(64) },
             { id: 'fixture-reference-data', name: 'original_conversation_attachment_' + 'source_reference_'.repeat(6) + '.json', sha256: 'b'.repeat(64) },
           ];
+          snapshot.state.messages = snapshot.state.messages.filter(row => row.id !== 'fixture-attachment-only');
+          snapshot.state.tasks = snapshot.state.tasks.filter(row => row.id !== 'fixture-attachment-completed');
+          if (attachmentOnly) {
+            const id = 'fixture-attachment-completed', goal = '核对单独发送的附件', status = 'completed';
+            snapshot.state.tasks.push({ id, goal, status, summary: '附件已核对。', raw: { id, goal, status,
+              kind: 'assistant', executionRole: 'foreground', actorId: 'owner', spaceId: 'private',
+              conversationId: snapshot.state.conversationId, runId: id + '-run', coordinatorEpoch: 1, operations: [], events: [] } });
+            snapshot.state.messages.push({ id: 'fixture-attachment-only', role: 'user', content: '', taskId: id,
+              attachments: [{ id: 'fixture-only-file', name: '只有附件的消息.md', sha256: 'c'.repeat(64) }] });
+          }
+          for (const task of snapshot.state.tasks || []) {
+            if (!task.raw) continue;
+            task.raw.events = (task.raw.events || []).filter(event => event.id !== 'fixture-context-check');
+            if (measuredContext) task.raw.events.unshift({ id: 'fixture-context-check', type: 'context_budget', taskId: task.id,
+              runId: task.raw.runId, epoch: task.raw.coordinatorEpoch, at: 1794205000000,
+              receipt: { status: 'ready', modelWindowKnown: true, modelContextTokens: 100000,
+                inputLimitTokens: 96000, outputReserveTokens: 4000, after: { estimatedInputTokens: 32000 } } });
+          }
+          snapshot.state.ownerWork = showBackground ? [
+            ['background-running', '继续比较已读取的参考资料', 'running', 40],
+            ['background-queued', '等待空闲后整理附件', 'queued', 30],
+            ['background-paused', '你暂停的资料整理', 'paused', 20],
+            ['background-review', '等待你确认更新结果', 'needs_confirmation', 10],
+          ].map(([id, goal, status, updatedAt]) => ({ id, goal, status, updatedAt, raw: { id, goal, status,
+            kind: 'assistant', executionRole: 'owner_work', actorId: 'owner', spaceId: 'private',
+            conversationId: snapshot.state.conversationId, runId: id + '-run', coordinatorEpoch: 1 } })) : [];
           if (idle) Object.assign(snapshot.state, { chatBusy: false, chatActiveTurn: null, foregroundTurn: null });
           lastSnapshot = clone(snapshot);
         }
@@ -162,8 +188,8 @@ function installMainChatHost() {
         const args = request.args || {};
         let value;
         if (request.action === 'tasks.open') {
-          if (args.id !== taskId || args.requestNavigation !== false || Object.keys(args).length !== 2) throw new Error('Trace entry changed the original task or navigation intent');
-          value = { taskId, readOnly: true, executionAuthorized: false };
+          if (![taskId, 'fixture-attachment-completed'].includes(args.id) || args.requestNavigation !== false || Object.keys(args).length !== 2) throw new Error('Task entry changed the original task or navigation intent');
+          value = { taskId: args.id, readOnly: true, executionAuthorized: false };
         } else if (request.action === 'trace.read') {
           if (args.taskId !== taskId || args.runId && args.runId !== runId || args.cursor !== '' || args.limit !== 100) throw new Error('Trace read changed the original task or run');
           const at = 1794205000000;
@@ -201,6 +227,9 @@ function installMainChatHost() {
     synthetic: true, calls, errors,
     setIdle(value) { idle = value; publish(); },
     setUnread(value) { unread = value; publish(); },
+    setMeasuredContext(value) { measuredContext = value; publish(); },
+    setBackgroundWork(value) { showBackground = value; publish(); },
+    setAttachmentOnly(value) { attachmentOnly = value; publish(); },
   };
 }
 
@@ -230,6 +259,11 @@ async function composerGeometry(page, scene, label, hasText) {
   const names = ['输入方式与选项', '执行权限', '切换此对话模型：fixture-reasoner-B', '推理强度：低', '语音输入', ...(hasText ? ['发送'] : [])];
   for (const name of names) await expect(surface.getByRole('button', { name, exact: true })).toBeVisible();
   await expect(surface.getByRole('button', { name: '发送', exact: true })).toHaveCount(hasText ? 1 : 0);
+  const indicator = surface.locator('.pw-reasoning-indicator');
+  await expect(indicator).toHaveAttribute('data-reasoning-state', 'level');
+  await expect(indicator).toHaveAttribute('data-reasoning-level', '2');
+  await expect(indicator.locator('.pw-reasoning-level-base')).toBeVisible();
+  await expect(indicator.locator('.pw-reasoning-level-active')).toBeVisible();
   const geometry = await surface.evaluate((card, names) => {
     const box = node => { const r = node.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height }; };
     const buttons = [...card.querySelectorAll('button')];
@@ -355,6 +389,32 @@ async function runScene(origin, { width, height, dark }) {
     await expect(header.getByRole('button', { name: /^(查看通知|通知 ·)/ })).toHaveCount(0);
     passed(scene, 'Conversation title owns organization; only unread notifications occupy the header');
 
+    if (width === 390 && !dark || width === 320 && dark) {
+      const contextMeter = page.locator('.pw-context-meter-button');
+      await expect(contextMeter).toHaveText('未测得');
+      await page.evaluate(() => window.mainChatFixture.setMeasuredContext(true));
+      await expect(contextMeter).toContainText('≈32%');
+      await expect(contextMeter).not.toContainText('草稿');
+      await contextMeter.click();
+      const contextDialog = page.getByRole('dialog', { name: '上下文占用', exact: true });
+      await expect(contextDialog.locator('.pw-context-meter-overview')).toContainText('≈32%');
+      await expect(contextDialog.locator('.pw-context-meter-overview')).toContainText('当前草稿估算');
+      const details = contextDialog.getByRole('button', { name: '用量明细', exact: true });
+      await expect(details).toHaveAttribute('aria-expanded', 'false');
+      await shot('context-summary', contextDialog);
+      await details.click();
+      await expect(contextDialog.locator('dl')).toContainText('100,000 tokens');
+      await expect(contextDialog).toContainText('检查时间');
+      await shot('context-details', contextDialog);
+      await contextDialog.getByRole('button', { name: '关闭设置', exact: true }).click();
+      await expect(contextDialog).toHaveCount(0);
+      await assertDraft(draft);
+      await page.evaluate(() => window.mainChatFixture.setMeasuredContext(false));
+      await expect(contextMeter).toHaveText('未测得');
+      passed(scene, 'Context rail shows one measured summary; draft and budget details progressively disclose without changing the draft');
+    }
+
+
     await page.evaluate(() => window.mainChatFixture.setIdle(true));
     await input.fill('');
     await expect(page.getByRole('button', { name: '语音输入', exact: true })).toBeVisible();
@@ -402,9 +462,10 @@ async function runScene(origin, { width, height, dark }) {
       assert.deepEqual(bounds.escaped, [], `${bounds.id}: Markdown or attachment escaped its message`);
     }
     passed(scene, 'Long Markdown, nested lists, code and original user attachment names stay inside their messages', contentBounds);
-    const completed = page.getByRole('button', { name: '查看任务详情：整理本周的设计反馈', exact: true });
-    await expect(completed).toHaveClass(/pw-linked-task-complete/);
-    await expect(completed).toContainText('已完成'); await expect(completed).toContainText('查看详情');
+    const completed = longReply.getByRole('button', { name: '查看这条回复的执行轨迹', exact: true });
+    await expect(completed).toContainText('已完成'); await expect(completed).toContainText('执行轨迹');
+    await expect(longReply.locator('.pw-linked-task')).toHaveCount(0);
+    await expect(longReply.getByRole('button', { name: '查看任务详情：整理本周的设计反馈', exact: true })).toHaveCount(0);
     await expect(completed.getByText('整理本周的设计反馈', { exact: true })).toHaveCount(0);
     await page.locator('.pw-conversation-scroll').evaluate(node => node.scrollTo({ top: 0 }));
     await shot('long-answer');
@@ -413,10 +474,12 @@ async function runScene(origin, { width, height, dark }) {
     await completed.scrollIntoViewIfNeeded();
     await shot('completed-detail-link');
     const failed = page.getByRole('button', { name: '查看任务详情：读取缺失的参考资料', exact: true });
-    await expect(failed).not.toHaveClass(/pw-linked-task-complete/);
-    await expect(failed).toContainText('读取缺失的参考资料'); await expect(failed).toContainText('查看失败原因');
+    await expect(failed).toHaveClass(/pw-message-work-action/);
+    await expect(failed).toHaveAttribute('title', '读取缺失的参考资料');
+    await expect(failed).toContainText('未完成'); await expect(failed).toContainText('查看失败原因');
+    await expect(page.locator('[data-message-id="fixture-answer-failed"] .pw-message-trace')).toHaveCount(0);
     const unknown = page.getByRole('button', { name: '查看任务详情：核对第一个更新回执', exact: true });
-    await expect(unknown).not.toHaveClass(/pw-linked-task-complete/);
+    await expect(unknown).toHaveClass(/pw-message-work-action/);
     await expect(unknown).toContainText('等待核对动作'); await expect(unknown).toContainText('核对操作结果');
     await unknown.scrollIntoViewIfNeeded();
     await shot('unresolved-tasks');
@@ -426,6 +489,27 @@ async function runScene(origin, { width, height, dark }) {
     await expect(page.getByRole('button', { name: '查看当前回复的执行过程', exact: true })).toBeVisible();
     await shot('current-progress');
     passed(scene, 'Long answers retain full content; successful tasks collapse while failed/unknown actions and exact-run progress remain visible');
+    if (width === 390 && !dark || width === 320 && dark) {
+      await page.evaluate(() => window.mainChatFixture.setBackgroundWork(true));
+      const work = page.getByRole('region', { name: '对话任务', exact: true });
+      const rows = work.locator('[data-work-task-id]');
+      await expect(rows).toHaveCount(2);
+      assert.deepEqual(await rows.evaluateAll(items => items.map(item => item.dataset.workTaskId)), ['background-paused', 'background-review']);
+      await expect(work).toContainText('2 待处理 · 4 项');
+      await expect(work.getByText('正在办理', { exact: true })).toHaveCount(0);
+      await expect(work.getByRole('progressbar')).toHaveCount(0);
+      await work.scrollIntoViewIfNeeded();
+      await shot('background-attention', work);
+      await work.getByRole('button', { name: '展开全部', exact: true }).click();
+      await expect(rows).toHaveCount(4);
+      await expect(work.locator('[data-work-task-id="background-queued"]').getByRole('progressbar')).toHaveCount(0);
+      await shot('background-expanded', work);
+      await page.evaluate(() => window.mainChatFixture.setBackgroundWork(false));
+      await expect(work).toHaveCount(0);
+      await assertDraft(draft);
+      passed(scene, 'Background summary prioritizes unresolved and paused work, labels states truthfully, and expands without dispatching work');
+    }
+
 
     const trace = longReply.getByRole('button', { name: '查看这条回复的执行轨迹', exact: true });
     await trace.scrollIntoViewIfNeeded();
@@ -470,6 +554,7 @@ async function runScene(origin, { width, height, dark }) {
     await expect(page.locator('.pw-message-footer .pw-conversation-drafts')).toHaveCount(0);
     assert.equal((await chatCalls('conversation.drafts')).length, 0, 'Message display must not load proposal lists');
     await longReply.getByRole('button', { name: '消息操作与来源', exact: true }).click();
+    await expect(page.getByRole('button', { name: '查看任务详情：整理本周的设计反馈', exact: true })).toBeVisible();
     const proposals = page.getByRole('region', { name: '这次回答的提案', exact: true });
     await expect(proposals).toBeVisible();
     assert.equal((await chatCalls('conversation.drafts')).length, 0, 'Opening message actions must not load a collapsed proposal list');
@@ -511,6 +596,23 @@ async function runScene(origin, { width, height, dark }) {
     await expect(proposals).toHaveCount(0);
     await assertDraft(draft);
     passed(scene, 'Twenty long answer proposals read once on expansion; the last item and refresh remain reachable inside the message popover', proposalReachability);
+
+    if (width === 390 && !dark || width === 320 && dark) {
+      await page.evaluate(() => window.mainChatFixture.setAttachmentOnly(true));
+      const attachment = page.locator('[data-message-id="fixture-attachment-only"]');
+      await expect(attachment.locator('.pw-user-text')).toBeEmpty();
+      await attachment.getByRole('button', { name: '消息操作与来源', exact: true }).click();
+      await page.getByRole('button', { name: '查看任务详情：核对单独发送的附件', exact: true }).click();
+      await expect(taskDrawer).toHaveAttribute('data-task-layer', 'overview');
+      await expect(taskDrawer.getByRole('heading', { name: '核对单独发送的附件', exact: true })).toBeVisible();
+      assert.deepEqual((await chatCalls('tasks.open')).at(-1).args, { id: 'fixture-attachment-completed', requestNavigation: false });
+      await shot('attachment-task-detail', taskDrawer);
+      await taskDrawer.getByRole('button', { name: '返回原工作', exact: true }).click();
+      await expect(taskDrawer).toHaveCount(0);
+      await assertDraft(draft);
+      await page.evaluate(() => window.mainChatFixture.setAttachmentOnly(false));
+      passed(scene, 'An attachment-only user message retains its completed original task entry and returns with the draft intact');
+    }
 
     await openNavigation();
     const recent = page.getByRole('region', { name: '最近对话', exact: true });
@@ -809,7 +911,9 @@ async function runOverlayScene(origin, { width, height, dark }) {
     await expect.poll(async () => (await summary()).composerText).toBe(draft);
     const initial = await summary();
     const modelTrigger = page.locator('.pw-composer-card').getByRole('button', { name: '切换此对话模型：fixture-reasoner', exact: true });
-    const reasoningTrigger = page.locator('.pw-composer-card').getByRole('button', { name: '推理强度：默认', exact: true });
+    const reasoningTrigger = page.locator('.pw-composer-card').getByRole('button', { name: '推理强度：服务默认', exact: true });
+    await expect(reasoningTrigger.locator('.pw-reasoning-indicator')).toHaveAttribute('data-reasoning-state', 'default');
+    await expect(reasoningTrigger.locator('.pw-reasoning-indicator > svg')).toBeVisible();
     const permissionTrigger = page.locator('.pw-composer-card').getByRole('button', { name: '执行权限', exact: true });
     const closeWithNativeBack = async (panel, trigger) => {
       assert.equal(await page.evaluate(() => window.PocketWeb.handleBack()), true);
@@ -878,6 +982,12 @@ async function runOverlayScene(origin, { width, height, dark }) {
     await expect(toolRules).toHaveAttribute('aria-expanded', 'false');
     assert.equal((await calls('permissions.snapshot')).length, 1);
     assert.equal((await calls('permissions.save')).length, 0);
+    const permissionOrder = await permission.evaluate(node => {
+      const policy = node.querySelector('.pw-permission-policy'), scope = node.querySelector('.pw-composer-permission-detail'), footer = node.querySelector('.pw-permission-actions');
+      return { sameGroup: !!policy?.contains(scope), finalAction: policy?.lastElementChild === footer,
+        scopeBeforeSave: !!(scope.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING) };
+    });
+    assert.deepEqual(permissionOrder, { sameGroup: true, finalAction: true, scopeBeforeSave: true });
     await shot('permission-default', permission);
 
     await taskScope.click();

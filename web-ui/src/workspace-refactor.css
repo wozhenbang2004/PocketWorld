@@ -31,7 +31,7 @@
 .pw-redesign .pw-message-user > header { display: none; }
 .pw-message-tools { display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 2px; min-width: 0; margin: 0; }
 .pw-message-user .pw-message-tools { justify-content: flex-end; }
-.pw-message-footer { display: flex; align-items: center; min-width: 0; margin-top: 4px; }
+.pw-message-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 0 12px; min-width: 0; margin-top: 6px; }
 .pw-message-footer:empty { display: none; }
 .pw-message-user .pw-message-footer { justify-content: flex-end; }
 .pw-message-footer .pw-message-tools { flex: 0 1 auto; }
@@ -49,8 +49,17 @@
   padding: 8px 10px; gap: 6px; border: 0; border-radius: 12px;
   font-size: 12px; line-height: 20px; font-weight: 400; color: var(--pw-copy); background: transparent;
 }
-.pw-message-tools .pw-message-trace > span { min-width: 0; padding: 0; }
+.pw-message-tools .pw-message-trace > span { min-width: 0; padding: 0; display: flex; align-items: baseline; gap: 3px; }
 .pw-message-tools .pw-message-trace > svg { width: 16px; height: 16px; }
+.pw-message-work-status { color: var(--pw-copy); font-size: 12px; font-weight: 400; }
+.pw-redesign .pw-message-work-action.button-press-motion {
+  width: auto; max-width: 100%; min-width: 0; min-height: 44px; height: auto;
+  padding: 6px 0; gap: 7px; border: 0; border-radius: 8px;
+  background: transparent; box-shadow: none; color: var(--pw-copy); font: 400 12px/20px var(--pw-font);
+}
+.pw-message-work-action.button-press-motion > span { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; gap: 4px 12px; padding: 0; white-space: normal; }
+.pw-message-work-action > svg { width: 16px; height: 16px; flex: none; }
+.pw-message-work-next { display: inline-flex; align-items: center; gap: 2px; color: var(--pw-ink); font-weight: 500; }
 .pw-message-tools button:hover:not(:disabled) { background: var(--pw-hover); color: var(--pw-ink); }
 .pw-message-popover { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .pw-message-menu .pw-conversation-drafts { margin-top: 6px; min-width: 0; }

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { RiArrowDownSLine, RiSparklingLine, RiBox3Line } from '@remixicon/react';
+import { RiArrowDownSLine, RiBox3Line } from '@remixicon/react';
 import { Button } from './forms-library';
 import { Radio, RadioGroup } from './forms-library/boardui/components/base/radio/radio';
 import { ShimmerText } from './library';
-import { nativeReasoning, reasoningAvailability, reasoningChoices, reasoningLabel } from './conversation-model-controls';
+import { nativeReasoning, reasoningAvailability, reasoningChoices, reasoningLabel, type ReasoningValue } from './conversation-model-controls';
 import { conversationModelName, conversationModelStamp, conversationSelectionReceipt } from './conversation-model-selection';
 import type { ConversationModelControlsProps } from './ConversationModelControls';
+import { ReasoningIndicator } from './ReasoningIndicator';
 
 type Row = Record<string, any>;
 const record = (value: any): Row => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -28,23 +29,39 @@ function savedReasoningCurrent(preference: Row, reviewed: Row, intended: Row): b
 
 /** Each composer chip opens its own focused sheet. Only native values are summarized. */
 export function ScopedConversationModelControls({ state, can, act, onOpenModel, disabled = false }: ConversationModelControlsProps) {
-  const [defaultReasoning, setDefaultReasoning] = useState<Row | null>(null);
+  const [summary, setSummary] = useState<{ stamp: string; reasoning: ReasoningValue | null; status: 'loading' | 'ready' | 'error' } | null>(null);
+  const [summaryAttempt, setSummaryAttempt] = useState(0);
   const preference = record(state.conversationModel), target = record(preference.target), stamp = conversationModelStamp(state);
-  const modelName = conversationModelName(state) || '选择模型', locked = disabled || busy(state);
+  const modelName = conversationModelName(state) || '选择模型', isBusy = busy(state), locked = disabled || isBusy;
+  const inherited = preference.inherited === true && !target.kind, canRead = can('models.snapshot');
+  const summaryStamp = JSON.stringify([stamp, inherited, state.modelName, state.modelRoute, state.modelProvider]);
   useEffect(() => {
-    setDefaultReasoning(null);
-    if (preference.inherited !== true || !state.modelName || busy(state) || !can('models.snapshot')) return;
+    if (!inherited || !state.modelName || !canRead) { setSummary(null); return; }
+    if (isBusy) { setSummary(current => current?.stamp === summaryStamp && current.status === 'ready' ? current : null); return; }
     let active = true;
-    void act('models.snapshot').then(value => { if (active) setDefaultReasoning(record(value?.nativeSelection).reasoning || null); }).catch(() => {});
+    setSummary({ stamp: summaryStamp, reasoning: null, status: 'loading' });
+    void act('models.snapshot').then(value => {
+      if (!active) return;
+      const selection = record(value?.nativeSelection), reasoning = nativeReasoning(selection.reasoning);
+      if (value?.selectionUnavailable === true || selection.model !== state.modelName ||
+          state.modelRoute && selection.modelRoute !== state.modelRoute || state.modelProvider && selection.provider !== state.modelProvider || !reasoning)
+        throw new Error('当前推理设置暂不可读取。');
+      setSummary({ stamp: summaryStamp, reasoning, status: 'ready' });
+    }).catch(() => { if (active) setSummary({ stamp: summaryStamp, reasoning: null, status: 'error' }); });
     return () => { active = false; };
-  }, [stamp, preference.inherited, state.modelName, state.modelSelectionBusy]);
-  const reasoning = nativeReasoning(target.reasoning || defaultReasoning), effort = reasoningLabel(reasoning, true);
+  }, [summaryStamp, canRead, isBusy, summaryAttempt]);
+  const currentSummary = summary?.stamp === summaryStamp ? summary : null;
+  const reasoning = inherited ? currentSummary?.reasoning || null
+    : preference.inherited === false && ['api', 'account'].includes(target.kind) ? nativeReasoning(target.reasoning) : null;
+  const effort = reasoningLabel(reasoning, true), loading = inherited && currentSummary?.status === 'loading', failed = inherited && currentSummary?.status === 'error';
+  const strengthLabel = loading ? '推理强度：正在读取' : failed ? '推理强度：读取失败，点按重新读取'
+    : reasoning ? `推理强度：${reasoningLabel(reasoning)}` : target.kind === 'group' ? '推理强度：由模型组候选设置决定' : '推理强度：尚未读取';
   return <div className="pw-conversation-model-controls" aria-label="此对话的模型与推理">
     <Button variant="ghost" className="pw-conversation-model-chip" onClick={() => onOpenModel('models')} disabled={locked} aria-label={`切换此对话模型：${modelName}`} title={modelName}>
       <RiBox3Line size={19} aria-hidden="true" /><span className="pw-conversation-model-chip-name">{modelName}</span><RiArrowDownSLine size={14} aria-hidden="true" />
     </Button>
-    <Button variant="ghost" className="pw-conversation-reasoning-chip" onClick={() => onOpenModel('reasoning')} disabled={locked || !conversationModelName(state)} aria-label={`推理强度${effort ? `：${effort}` : ''}`}>
-      <RiSparklingLine size={19} aria-hidden="true" /><span>推理</span>{effort && <><span aria-hidden="true">·</span><b>{effort}</b></>}
+    <Button variant="ghost" className="pw-conversation-reasoning-chip" onClick={() => { if (failed) setSummaryAttempt(attempt => attempt + 1); onOpenModel('reasoning'); }} disabled={locked || !conversationModelName(state)} aria-label={strengthLabel} aria-busy={loading || undefined} title={strengthLabel}>
+      <ReasoningIndicator reasoning={reasoning} loading={loading} error={failed} /><span>推理</span>{effort && <><span aria-hidden="true">·</span><b>{effort}</b></>}
     </Button>
   </div>;
 }
