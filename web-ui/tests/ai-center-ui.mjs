@@ -202,7 +202,10 @@ async function runScene(origin, dark, empty) {
       await review.waitFor();
       await expect(review.getByRole('button', { name: '启动本机 API', exact: true })).toBeDisabled();
       await shot('local-api-review');
-      await review.getByRole('checkbox', { name: '确认本次模型与本机访问范围', exact: true }).check();
+      // React Aria renders a visually hidden input; drive the visible label as a user does.
+      const consent = review.getByRole('checkbox', { name: '确认本次模型与本机访问范围', exact: true });
+      await review.getByText('确认本次模型与本机访问范围', { exact: true }).click();
+      await expect(consent).toBeChecked();
       await review.getByRole('button', { name: '启动本机 API', exact: true }).click();
       await proxy.getByRole('heading', { name: '服务正在运行', exact: true }).waitFor();
       await expect(proxy.getByText('http://127.0.0.1:18743', { exact: true })).toBeVisible();

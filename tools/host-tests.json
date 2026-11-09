@@ -2185,7 +2185,10 @@
       "dev.pocketengine.runtime.models.ConversationModelPreferencesTest",
       "dev.pocketengine.features.proxy.accounts.NativeAccountPreferenceCaptureTest",
       "dev.pocketengine.features.ProxyReviewedOwnerTest",
-      "dev.pocketengine.ui.web.UnifiedWorkspaceHostTest"
+      "dev.pocketengine.ui.web.UnifiedWorkspaceHostTest",
+      "dev.pocketengine.features.proxy.accounts.AccountGatewayTest",
+      "dev.pocketengine.features.proxy.accounts.ChatGptLoginLifetimeTest",
+      "dev.pocketengine.ui.AccountConnectionsStateTest"
     ],
     "helpers": [
       "dev.pocketengine.features.proxy.accounts.AccountGatewayTest",
