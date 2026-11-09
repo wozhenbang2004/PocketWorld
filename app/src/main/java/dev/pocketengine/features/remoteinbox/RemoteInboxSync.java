@@ -22,6 +22,7 @@ public final class RemoteInboxSync {
         RemoteInboxStore store = RemoteInboxStore.get(context);
         try {
             if (!store.configured()) return new JSONObject().put("status", "not_configured");
+            String configuredIdentity = store.configId();
             ArrayList<JSONObject> admitted = new ArrayList<>();
             boolean more = false;
             int pages = 0;
@@ -56,12 +57,24 @@ public final class RemoteInboxSync {
                 JSONArray rows = response.getJSONArray("events");
                 more = response.getBoolean("hasMore");
                 if (rows.length() == 0 && more) throw new IllegalStateException("通知分页未推进");
-                List<JSONObject> batch = store.ingest(rows);
+                List<JSONObject> batch = store.ingest(rows, configuredIdentity);
                 admitted.addAll(batch);
                 if (store.cursor() <= previous && more) throw new IllegalStateException("通知同步游标未推进");
             } while (more);
-            for (JSONObject event : admitted) try { RemoteInboxNotifications.post(context, event); }
-                catch (RuntimeException failure) { Log.w("PocketRemoteInbox", "Native notification not displayed", failure); }
+            if (!configuredIdentity.equals(store.configId())) throw new SecurityException("通知连接已改变，本次旧消息未推送");
+            // A crash after durable ingest but before NotifyManager delivery must not silently
+            // lose the system alert. Notification IDs are stable, so duplicate attempts replace.
+            List<JSONObject> pending = store.pendingAlerts();
+            if (pending.size() > 8) {
+                try {
+                    if (RemoteInboxNotifications.postSummary(context, pending.size()))
+                        for (JSONObject event : pending) store.alertPosted(event.getLong("seq"), configuredIdentity);
+                } catch (RuntimeException failure) { Log.w("PocketRemoteInbox", "Inbox summary was not displayed", failure); }
+            } else for (JSONObject event : pending) {
+                try {
+                    if (RemoteInboxNotifications.post(context, event)) store.alertPosted(event.getLong("seq"), configuredIdentity);
+                } catch (RuntimeException failure) { Log.w("PocketRemoteInbox", "Native notification not displayed", failure); }
+            }
             return new JSONObject().put("status", more ? "more_pending" : "synced")
                 .put("newCount", admitted.size()).put("cursor", store.cursor());
         } finally { busy.set(false); }
