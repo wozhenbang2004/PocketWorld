@@ -60,7 +60,7 @@ def archive(source, cache, offline):
                      "--connect-timeout", "10", "--max-time", "75",
                      "--speed-limit", "1024", "--speed-time", "20",
                      "--silent", "--show-error", url, "--output", temporary], cache, os.environ.copy())
-                if (temporary.stat().st_size != source["archiveBytes"] or digest(temporary) != source["sha256"]:
+                if temporary.stat().st_size != source["archiveBytes"] or digest(temporary) != source["sha256"]:
                     raise RuntimeError("Archive differs from reviewed source lock")
                 temporary.replace(path)
                 break
