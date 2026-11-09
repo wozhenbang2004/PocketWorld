@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { RiArrowDownSLine, RiCloseLine, RiErrorWarningLine } from '@remixicon/react';
+import { RiArrowDownSLine, RiBrainLine, RiRobot2Line, RiCloseLine, RiErrorWarningLine } from '@remixicon/react';
 import { Button, IconButton } from './forms-library';
 import { Radio, RadioGroup } from './forms-library/boardui/components/base/radio/radio';
 import { Drawer } from './shell-library';
@@ -179,11 +179,11 @@ export function ConversationModelControls({ state, can, act, onOpenModel, disabl
 
   return <div className="pw-conversation-model-controls" aria-label="模型与推理">
     <Button variant="ghost" className="pw-conversation-model-chip" onClick={selectModel} disabled={locked || loading} aria-label={`切换模型：${modelName}`} title={modelName}>
-      <span className="pw-conversation-model-chip-name">{modelName}</span><RiArrowDownSLine size={14} aria-hidden="true" />
+      <RiRobot2Line size={16} aria-hidden="true" /><span className="pw-conversation-model-chip-name">{modelName}</span><RiArrowDownSLine size={14} aria-hidden="true" />
     </Button>
     <Drawer.Root open={open} onOpenChange={next => next ? openPanel() : closePanel()} dismissible={!saving && !state.modelSelectionBusy} shouldScaleBackground={false}>
       <Drawer.Trigger asChild><Button variant="ghost" className="pw-conversation-reasoning-chip" disabled={locked || !state.modelName} aria-label={strengthLabel} title={currentSummary?.error || strengthLabel}>
-        <span>推理</span>{effort ? <><span aria-hidden="true">·</span><b>{effort}</b></> : currentSummary?.loading ? <span aria-hidden="true">…</span> : strengthUnknown ? <RiErrorWarningLine size={14} aria-hidden="true" /> : <RiArrowDownSLine size={13} aria-hidden="true" />}
+        <RiBrainLine size={16} aria-hidden="true" /><span>推理</span>{effort ? <><span aria-hidden="true">·</span><b>{effort}</b></> : currentSummary?.loading ? <span aria-hidden="true">…</span> : strengthUnknown ? <RiErrorWarningLine size={14} aria-hidden="true" /> : <RiArrowDownSLine size={13} aria-hidden="true" />}
       </Button></Drawer.Trigger>
       <Drawer.Portal><Drawer.Overlay className="pw-overlay" /><Drawer.Content className="pw-drawer pw-conversation-reasoning-drawer" aria-describedby="pw-conversation-reasoning-model">
         <div className="pw-drawer-handle" />
