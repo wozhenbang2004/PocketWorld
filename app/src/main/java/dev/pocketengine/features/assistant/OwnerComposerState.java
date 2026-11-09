@@ -141,7 +141,7 @@ public final class OwnerComposerState {
     }
     public synchronized Draft discardVoice(String key,long expected)throws Exception{Draft prior=require(key,expected);Draft next=prior.content(prior.text,prior.mode,prior.attachments(),"","");drafts.put(key,next);revision=increment(revision);return next;}
     public synchronized Pending prepare(String client,String key,long expected,String fingerprint,JSONObject target)throws Exception {
-        Draft draft=require(key,expected);if(blank(draft.text)||draft.text.trim().length()>12000)throw new IllegalArgumentException("请保留草稿并将本条输入缩至12000字内");
+        Draft draft=require(key,expected);if((blank(draft.text)&&draft.attachments().length()==0)||draft.text.trim().length()>12000)throw new IllegalArgumentException("请保留草稿并将本条输入缩至12000字内；纯附件消息必须已有真实附件选择");
         Pending duplicate=matchingPending(key,fingerprint);if(duplicate!=null)return duplicate;
         if(pending.containsKey(client)||pending.size()>=MAX_PENDING)throw new IllegalStateException("待核对输入已达本机上限，请先查询原回执；未发送新输入");
         Pending next=new Pending(client,key,draft.revision,fingerprint,draft.conversationId,draft.mode,target);pending.put(client,next);revision=increment(revision);return next;
