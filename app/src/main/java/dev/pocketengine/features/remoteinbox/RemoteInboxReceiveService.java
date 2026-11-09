@@ -51,6 +51,7 @@ public final class RemoteInboxReceiveService extends Service {
             return START_NOT_STICKY;
         } catch (Exception failure) {
             Log.w("PocketRemoteInbox", "Could not start foreground receiver", failure);
+            try { RemoteInboxStore.get(this).live(false); } catch (Exception ignored) { }
             stopSelfResult(startId);
             return START_NOT_STICKY;
         }
