@@ -53,6 +53,13 @@ class Client:
    route=urllib.parse.urlsplit(path).path
    if re.fullmatch(r'[A-Za-z0-9_./-]+',route):
     print('PWERROR GitHub HTTP '+str(code)+' '+method+' '+route,file=sys.stderr)
+   try:
+    message=json.loads(body).get('message','')
+    if isinstance(message,str):
+     message=message.replace(self.token,'[redacted]')
+     message=re.sub(r'(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]+','[redacted]',message)
+     print('PWERROR GitHub message '+json.dumps(message[:500]),file=sys.stderr)
+   except (ValueError,TypeError):pass
    raise Stop('GitHub API operation failed')
   return json.loads(body)
  def upload(self,release_id,name,path):
