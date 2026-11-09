@@ -88,6 +88,16 @@ export function composerContextMetric(snapshot: unknown, composerKey: string | u
     attention: inputTokens > inputLimit || typeof receipt.status === 'string' && receipt.status !== '' && receipt.status !== 'ready' };
 }
 
+/** A live, text-only draft estimate, not an input-token billing value or an authorization decision.
+ * Attachments and visual payloads cannot safely be priced on the browser side. */
+export function composerDraftPreview(text: string, attachmentCount: number): {tokens: number | null; reason: string} {
+  if (!Number.isSafeInteger(attachmentCount) || attachmentCount < 0) return {tokens:null,reason:'草稿附件状态未核对。'};
+  if (attachmentCount > 0) return {tokens:null,reason:'草稿含附件，图像与文档预算须由原生请求检查。'};
+  if (!text.trim()) return {tokens:0,reason:'草稿为空。'};
+  // UTF-8 approximation deliberately displayed as an estimate and not added to the last request.
+  const bytes = new TextEncoder().encode(text).length;
+  return {tokens:Math.max(1,Math.ceil(bytes/3)),reason:'文本字节估算；模型分词、工具定义和历史回复尚未重新核对。'};
+}
 export function contextPercentLabel(value: number | null): string {
   if (value === null || !Number.isFinite(value) || value < 0) return '未测得';
   if (value > 0 && value < 1) return '<1%';

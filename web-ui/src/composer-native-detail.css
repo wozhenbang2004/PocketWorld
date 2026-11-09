@@ -41,3 +41,12 @@
 @media (forced-colors: active) {
   .pw-composer-host.pw-squircle-composer .pw-continuous-surface path { fill: Canvas; stroke: CanvasText; stroke-width: 1; }
 }
+
+/* Native-sourced permission details, no faux toggle or heavy card border. */
+.pw-composer-permission-detail{display:grid;gap:9px;min-width:220px;max-width:min(86vw,340px);font:400 12px/1.55 var(--pw-font);color:var(--pw-copy,#666)}
+.pw-composer-permission-detail p{margin:0;overflow-wrap:anywhere}
+.pw-composer-permission-detail .pw-composer-permission-goal{font-size:13px;font-weight:600;color:var(--pw-ink,#222);overflow-wrap:anywhere}
+.pw-composer-permission-detail dl{margin:0;display:grid;gap:4px}
+.pw-composer-permission-detail dl>div{display:flex;justify-content:space-between;gap:14px}
+.pw-composer-permission-detail dt{color:var(--pw-muted,#777)}
+.pw-composer-permission-detail dd{margin:0;color:var(--pw-ink,#222);text-align:right;font-variant-numeric:tabular-nums}

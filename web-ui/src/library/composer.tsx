@@ -10,6 +10,7 @@ import {MarkdownBody} from './MarkdownBody';
 import {ProgressCircle} from './adapted/boardui-progress';
 import {ComposerContextMeter} from '../ComposerContextMeter';
 import {SmoothComposerSurface} from './SmoothComposerSurface';
+import {composerHasPayload} from '../composer-send-policy';
 function sizeComposerEditor(editor:HTMLTextAreaElement|null){
  if(!editor)return;
  editor.style.height='0px';
@@ -33,7 +34,8 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
   observer.observe(el);
   return()=>observer.disconnect();
  },[listening,composerKey]);
- const canSend=!disabled&&!submitting&&!sendDisabled&&!!value.trim();
+ const hasContent=composerHasPayload(value,attachments.length);
+ const canSend=!disabled&&!submitting&&!sendDisabled&&hasContent;
  const hasText=!!value.trim();
  const measuredContext=typeof contextPercent==='number'&&Number.isFinite(contextPercent)&&contextPercent>=0&&contextPercent<=100?Math.round(contextPercent):null;
  return <FrameA className={`pw-composer-host pw-compact-composer pw-squircle-composer ${className}`}>
@@ -41,7 +43,7 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
    <div className="pw-composer-context-rail" aria-label="当前对话上下文">
     <SmoothComposerSurface radius={24} tone="context"/>
     <span className="pw-composer-context-icons">{contextStatus}</span>
-    {contextStatus!==undefined&&contextPercent===undefined?<ComposerContextMeter composerKey={composerKey}/>:<span className="pw-composer-context-usage" role="status" aria-label={measuredContext===null?'上下文占用暂无可核对数据':'上下文已使用 '+measuredContext+'%'} title={measuredContext===null?'上下文占用暂无可核对数据':'上下文占用 '+measuredContext+'%'}>
+    {contextStatus!==undefined&&contextPercent===undefined?<ComposerContextMeter composerKey={composerKey} draftText={value} attachmentCount={attachments.length}/>:<span className="pw-composer-context-usage" role="status" aria-label={measuredContext===null?'上下文占用暂无可核对数据':'上下文已使用 '+measuredContext+'%'} title={measuredContext===null?'上下文占用暂无可核对数据':'上下文占用 '+measuredContext+'%'}>
      <i className="pw-composer-context-ring" aria-hidden="true"/>{measuredContext!==null&&<span>{measuredContext}%</span>}
     </span>}
    </div>
@@ -67,7 +69,7 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
      {controls&&<div className="pw-composer-controls">{controls}</div>}
      <div className="afa-toolbar">
       {onVoice&&!busy&&<ToolButton label={listening?'结束听写':'语音输入'} icon="mic" onClick={onVoice} disabled={disabled||submitting}/>}
-      {hasText&&(!busy||!onStop||hasText)&&!listening&&<PressButton compact aria-label={submitting?'正在登记':sendLabel||(busy?'补充给当前工作':'发送')} disabled={!canSend} onClick={onSend}><Icon name="arrow" size={18}/></PressButton>}
+      {hasContent&&(!busy||!onStop||hasContent)&&!listening&&<PressButton compact aria-label={submitting?'正在登记':sendLabel||(busy?'补充给当前工作':'发送')} disabled={!canSend} onClick={onSend}><Icon name="arrow" size={18}/></PressButton>}
       {busy&&onStop&&<button type="button" className="afa-stop pw-stop-motion" onClick={onStop} aria-label="停止当前回复"><span className="pw-stop-ring" aria-hidden="true"><ProgressCircle isIndeterminate size="md" aria-label="当前回复状态"/></span><span className="pw-stop-mark" aria-hidden="true">■</span></button>}
      </div>
     </div>

@@ -98,3 +98,10 @@ test('reading does not mutate the native snapshot or infer from cumulative usage
   const value: any = fixture(); value.state.totalTokens = 900000000; value.state.composerDraft = 'x'.repeat(10000);
   const before = JSON.stringify(value); assert.ok(Math.abs(read(value).windowPercent! - 57) < 1e-10); assert.equal(JSON.stringify(value), before);
 });
+
+test('draft estimate updates on text and remains unknown for attachment payloads', async () => {
+ const {composerDraftPreview} = await import('../src/composer-context-metric.ts');
+ assert.equal(composerDraftPreview('',0).tokens,0);
+ assert.ok((composerDraftPreview('现在输入',0).tokens??0)>0);
+ assert.equal(composerDraftPreview('hi',1).tokens,null);
+});

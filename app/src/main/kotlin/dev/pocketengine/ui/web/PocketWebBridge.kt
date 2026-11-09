@@ -547,7 +547,7 @@ internal class PocketWebBridge(
             if (action == "ownerWork.input") {
                 checkedPayload(args, setOf("taskId", "runId", "epoch", "clientMessageId", "message", "mode"))
                 require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到管家输入框补充原任务" }
-                controller.sendOwnerWorkInput(args, requiredString(args, "clientMessageId"), requiredString(args, "message"), requiredString(args, "mode")) { result, error ->
+                controller.sendOwnerWorkInput(args, requiredString(args, "clientMessageId"), requiredString(args, "message", true), requiredString(args, "mode")) { result, error ->
                     complete(id, result, error, "outcome_unknown"); publishState()
                 }
                 return
@@ -871,7 +871,7 @@ internal class PocketWebBridge(
                     "composer.edit" -> controller.editComposerText(key, epoch, requiredString(args, "text", true))
                     "composer.mode" -> { val mode = requiredString(args, "mode"); require(mode in setOf("queue", "steer")); controller.setChatSendMode(mode, key, epoch) }
                     else -> {
-                        val text = requiredString(args, "text")
+                        val text = requiredString(args, "text", true)
                         require(controller.composerDraft?.text == text && ChatInputRules.canSend(controller.state, false, text)) { "原输入尚不可发送，请核对保留草稿与原任务" }
                         controller.sendChat(text, key, epoch)
                     }

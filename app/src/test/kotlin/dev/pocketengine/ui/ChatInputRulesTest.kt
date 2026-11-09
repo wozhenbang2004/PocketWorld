@@ -4,6 +4,17 @@ import org.junit.Test
 import org.junit.Assert.*
 class ChatInputRulesTest {
  private fun receipt(status:String="queued",client:String="client")=JSONObject().put("clientMessageId",client).put("status",status).put("messageId","message").put("conversationId","conversation").put("taskId","task").put("runId","run").put("epoch",1)
+ @Test fun attachmentOnlyRequiresAnOriginalSelectionAndNeverEnablesPhone(){
+  val file=UiChatAttachment("123e4567-e89b-12d3-a456-426614174000","a".repeat(64),"photo.png","image/png",1024)
+  val empty=PocketUiState()
+  assertFalse(ChatInputRules.canSend(empty,false,""))
+  assertTrue(ChatInputRules.canSend(empty.copy(selectedChatAttachments=listOf(file)),false,""))
+  assertFalse(ChatInputRules.canSend(empty.copy(selectedChatAttachments=listOf(file)),true,""))
+  assertFalse(ChatInputRules.canSend(empty.copy(selectedChatAttachments=listOf(file),chatSubmitting=true),false,""))
+  assertEquals("请查看附件。",ChatInputRules.submittedText("",listOf(file)))
+  assertEquals("自定义问题",ChatInputRules.submittedText("  自定义问题  ",listOf(file)))
+  assertEquals("",ChatInputRules.submittedText("",emptyList()))
+ }
  @Test fun busyNativeTurnCanReceiveInputButPhoneAndUnboundOrPendingCannot(){val features=JSONObject().put("assistant",JSONObject().put("sendAcknowledgements",true));val busy=PocketUiState(features=features,chatBusy=true,chatActiveTurn=JSONObject().put("taskId","task"));assertTrue(ChatInputRules.canSend(busy,false,"追加输入"));assertFalse(ChatInputRules.canSend(busy,true,"手机目标"));assertFalse(ChatInputRules.canSend(busy.copy(chatActiveTurn=null),false,"追加"));assertFalse(ChatInputRules.canSend(busy.copy(chatSubmitting=true),false,"追加"));assertFalse(ChatInputRules.canSend(busy,false,"x".repeat(12001)))}
  @Test fun knownReceiptCannotRegressOrRebindAndUnknownDoesNotInventTask(){val known=receipt();assertSame(known,ChatInputRules.mergeReceipt(known,receipt("unconfirmed")));assertNull(ChatInputRules.mergeReceipt(known,receipt().put("runId","another")));assertNull(ChatInputRules.mergeReceipt(known,receipt(client="another")));val unknown=ChatInputRules.mergeReceipt(null,JSONObject().put("clientMessageId","client").put("status","unconfirmed"))!!;assertFalse(unknown.has("taskId"));assertNotNull(ChatInputRules.mergeReceipt(unknown,known))}
  @Test fun durableOriginalTargetMustMatchBeforeTheFirstAcknowledgementCanClearADraft(){

@@ -46,5 +46,7 @@ internal object ChatInputRules {
   return incoming.opt("taskId")==target.opt("taskId")&&incoming.opt("runId")==target.opt("runId")&&
    (epoch is Int||epoch is Long)&&(expected is Int||expected is Long)&&(epoch as Number).toLong()==(expected as Number).toLong()
  }
- fun canSend(state:PocketUiState,phone:Boolean,text:String):Boolean=text.isNotBlank()&&text.trim().length<=12000&&!state.chatSubmitting&&(if(phone)!state.chatBusy&&state.activeTaskId==null&&!state.phoneSubmitting else !state.chatBusy||state.feature("assistant").optBoolean("sendAcknowledgements")&&state.chatActiveTurn!=null)
+ fun canSend(state:PocketUiState,phone:Boolean,text:String):Boolean=(text.isNotBlank()||!phone&&state.selectedChatAttachments.isNotEmpty())&&text.trim().length<=12000&&!state.chatSubmitting&&(if(phone)!state.chatBusy&&state.activeTaskId==null&&!state.phoneSubmitting else !state.chatBusy||state.feature("assistant").optBoolean("sendAcknowledgements")&&state.chatActiveTurn!=null)
+ /** Only the native, already selected attachments can supply a body for an empty original draft. */
+ fun submittedText(text:String,files:List<UiChatAttachment>):String=if(text.isBlank()&&files.isNotEmpty())"请查看附件。" else text.trim()
 }

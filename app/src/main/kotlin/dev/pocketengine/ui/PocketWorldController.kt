@@ -2311,7 +2311,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
     }
     fun sendChat(text:String,key:String,viewEpoch:Int) {
-        if(text.isBlank()||text.trim().length>12000||state.chatSubmitting)return
+        if((text.isBlank()&&state.selectedChatAttachments.isEmpty())||text.trim().length>12000||state.chatSubmitting)return
         val model=ownerComposer ?: run{state=state.copy(error="原草稿尚未读取，未发送");return}
         val draft=model.active()
         if(draft.key!=key||chatViewEpoch!=viewEpoch||text!=draft.text||draft.conversationId!=state.conversationId.orEmpty()){state=state.copy(error="原输入视图已变化，请核对保留草稿；没有发送到其他对话");return}
@@ -2325,7 +2325,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val unresolved=model.matchingPending(draft.key,fingerprint) ?: matchingOriginalOwnerWorkInput(model,draft.key,fingerprint)
         if(unresolved!=null){if(canRetryLocallyUnsent(unresolved.clientId))state=state.copy(notice="本进程确认这条原输入尚未派发；修复保存问题后，请明确点击原输入下的重新保存并发送")else{queryChatSubmission(unresolved.clientId);state=state.copy(notice="正在查询同一输入的原回执，没有用新消息身份重发")};return}
         val client=try{voiceInput.claimMessageId(voiceTarget(false),voiceOwnerAuthority())?:UUID.randomUUID().toString()}catch(error:Exception){state=state.copy(error=message(error));return}
-        val input=JSONObject().put("message",text.trim()).put("clientMessageId",client).put("mode",draft.mode).put("attachments",org.json.JSONArray().also{a->selected.forEach{a.put(it.selection())}});if(selectedSources.length()>0)input.put("ownerSourceRefs",selectedSources);if(selectedPreviews.length()>0)input.put("ownerPreviewRefs",selectedPreviews)
+        val input=JSONObject().put("message",ChatInputRules.submittedText(text,selected)).put("clientMessageId",client).put("mode",draft.mode).put("attachments",org.json.JSONArray().also{a->selected.forEach{a.put(it.selection())}});if(selectedSources.length()>0)input.put("ownerSourceRefs",selectedSources);if(selectedPreviews.length()>0)input.put("ownerPreviewRefs",selectedPreviews)
         if(!state.chatBusy)input.put("executionScope",newTaskExecutionScope())
         state.conversationId?.let{input.put("conversationId",it)}
         if(state.chatBusy)for(key in listOf("taskId","runId","epoch"))input.put(key,binding!!.get(key))
@@ -2342,7 +2342,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val binding = originalOwnerWorkBinding(expected, state.conversationId, state.tasks)
         val model = ownerComposer ?: error("原草稿尚未读取，未发送")
         val draft = model.active()
-        require(draft.conversationId == state.conversationId && text == draft.text && text.isNotBlank() && text.trim().length <= 12000 && mode == draft.mode) { "原草稿或补充方式已变化，请核对保留内容" }
+        require(draft.conversationId == state.conversationId && text == draft.text && (text.isNotBlank() || state.selectedChatAttachments.isNotEmpty()) && text.trim().length <= 12000 && mode == draft.mode) { "原草稿或补充方式已变化，请核对保留内容" }
         require(draft.sourceRefs().length() == 0 && draft.previewRefs().length() == 0) { "本次任务补充支持文字和已选附件；原文或预览引用仍保留，请先在管家对话中处理" }
         val selected = state.selectedChatAttachments.toList()
         val fingerprint = ownerWorkDraftFingerprint(ChatInputRules.fingerprint(text.trim(), state.conversationId, mode, selected, draft.sourceRefs(), draft.previewRefs()), binding)
@@ -2354,7 +2354,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
         require(model.pending(client) == null) { "这条输入身份已登记，请查询原回执" }
         model.prepare(client, draft.key, draft.revision, fingerprint, binding)
-        val input = JSONObject(binding.toString()).put("message", text.trim()).put("clientMessageId", client).put("mode", mode)
+        val input = JSONObject(binding.toString()).put("message", ChatInputRules.submittedText(text, selected)).put("clientMessageId", client).put("mode", mode)
             .put("attachments", org.json.JSONArray().also { files -> selected.forEach { files.put(it.selection()) } }).put("_ownerWorkTargeted", true)
         ownerWorkInputCallbacks[client] = done
         publishComposer(); submittingChatClient = client; composerSaving = true
