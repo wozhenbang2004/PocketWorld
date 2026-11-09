@@ -92,6 +92,17 @@ try {
       await expect(page.getByRole('button', { name: `切换此对话模型：${selectedModel}`, exact: true })).toBeDisabled();
       await page.evaluate(() => window.aiConversationFixture.setPhoneSubmitting(false));
       await expect(page.getByRole('button', { name: `切换此对话模型：${selectedModel}`, exact: true })).toBeEnabled();
+      await page.getByRole('button', { name: `切换此对话模型：${selectedModel}`, exact: true }).click();
+      await expect(panel).toBeVisible();
+      await page.evaluate(() => window.aiConversationFixture.setChannelOrigin(true));
+      await expect(panel).toBeHidden();
+      await expect(page.getByRole('button', { name: `渠道默认模型：${fixture.defaultModel || '未选择'}`, exact: true })).toBeDisabled();
+      await expect(page.getByRole('button', { name: /^切换此对话模型：/ })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: '选择模型，开始对话', exact: true })).toHaveCount(0);
+      assert.equal(await page.getByRole('button', { name: fixture.defaultModel ? '发送' : '请先连接模型', exact: true }).isDisabled(), !fixture.defaultModel);
+      await page.evaluate(() => window.aiConversationFixture.setChannelOrigin(false));
+      await expect(page.getByRole('button', { name: `切换此对话模型：${selectedModel}`, exact: true })).toBeEnabled();
+      await expect(editor).toHaveValue(goal);
       const final = await page.evaluate(() => window.aiConversationFixture.summary());
       const prepares = final.calls.filter(call => call.action === 'phone.prepare');
       assert.deepEqual(prepares.map(call => call.args), [{ goal, mode, epoch: 1 }]);

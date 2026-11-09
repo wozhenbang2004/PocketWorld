@@ -12,7 +12,7 @@ export function installAiConversationHost({ representative = false, phoneCompose
   const requests = new Map(), windows = new Map(), apiReviews = new Map(), reasoningReviews = new Map();
   let bridge, lastSnapshot, stateRevision = 0, selectionRevision = 8, sequence = 0, pendingWrite = null, holdNext = false;
   const conversationId = phoneComposer?.freshConversation ? '' : 'fixture-conversation-1';
-  const phoneDraft = { text: '', revision: 0, epoch: 1, phone: false, mode: 'background' };
+  const phoneDraft = { text: '', revision: 0, epoch: 1, phone: false, mode: 'background', channelOrigin: false };
   let phoneSubmitting = false;
   const facts = { REASONING: { known: true, value: true }, REASONING_LEVELS: { known: true, value: ['low', 'medium', 'high'] } };
   let preference = {
@@ -247,6 +247,7 @@ export function installAiConversationHost({ representative = false, phoneCompose
   window.aiConversationFixture = {
     synthetic: true, calls, receipts,
     setPhoneSubmitting(value) { requireThat(phoneComposer, 'Phone composer fixture is not enabled'); phoneSubmitting = value; publish(); },
+    setChannelOrigin(value) { requireThat(phoneComposer, 'Phone composer fixture is not enabled'); phoneDraft.channelOrigin = value; publish(); },
     holdNextWrite() { requireThat(!pendingWrite && !holdNext, 'A synthetic write is already held'); holdNext = true; },
     resolveWrite: finishWrite,
     summary() { return { synthetic: true, preference: clone(preference), selectionRevision,

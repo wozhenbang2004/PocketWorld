@@ -1,5 +1,7 @@
 package dev.pocketengine.ui.web
 
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import dev.pocketengine.EngineApplication
 import dev.pocketengine.ui.PocketWorldController
@@ -21,7 +23,9 @@ internal class PocketWebPhoneComposer(
     private data class PhoneReview(val goal: String, val mode: String, val tools: Int, val models: Int, val minutes: Int,
         val viewEpoch: Int, val expires: Long, val window: PocketWebWindowTicket, val composerKey: String,
         val conversation: String, val draftEpoch: Int, val draftRevision: Long, val reviewGeneration: Long, val originRevision: Long,
-        val linked: EngineApplication.ConversationPhoneStartReview?)
+        val modelRevision: Long, val linked: EngineApplication.ConversationPhoneStartReview? = null,
+        val draft: EngineApplication.DraftPhoneStartReview? = null)
+    private val main = Handler(Looper.getMainLooper())
     private val phoneReviews = mutableMapOf<String, PhoneReview>()
     // Main-thread invalidation also revokes a review already captured by a queued worker.
     @Volatile private var reviewGeneration = 0L
@@ -39,7 +43,7 @@ internal class PocketWebPhoneComposer(
     fun documentChanged() { presentationEpoch++ }
 
     fun snapshot(): JSONObject = JSONObject().put("text", phoneDraft).put("revision", phoneDraftRevision)
-        .put("epoch", presentationEpoch).put("phone", phoneIntent).put("mode", phoneExecutionMode).put("startReceipt", phoneStartReceipt)
+        .put("epoch", presentationEpoch).put("phone", phoneIntent).put("mode", phoneExecutionMode).put("startReceipt", phoneStartReceipt).put("channelOrigin", controller.hasChannelPhoneOrigin)
 
     fun appendVoice(text: String) {
         phoneDraft = if (phoneDraft.isBlank()) text else phoneDraft + "\n" + text
@@ -59,7 +63,7 @@ internal class PocketWebPhoneComposer(
         phoneDraft = text; phoneDraftRevision++; clearReviews()
     }
 
-    fun prepare(args: JSONObject): JSONObject {
+    fun prepare(id: String, args: JSONObject) {
         checkedPayload(args, setOf("goal", "mode", "epoch"))
         require(controller.webPrivateOwnerVisible() && requiredInt(args, "epoch") == presentationEpoch) { "原手机输入窗口已变化，请重新核对保留草稿" }
         val goal = requiredString(args, "goal"); val mode = requiredString(args, "mode")
@@ -70,17 +74,47 @@ internal class PocketWebPhoneComposer(
         clearReviews()
         val handle = UUID.randomUUID().toString()
         val conversation = controller.state.conversationId.orEmpty()
-        val linked = if (conversation.isNotBlank() && !controller.hasChannelPhoneOrigin) controller.prepareConversationPhoneStart(conversation, goal, mode) else null
-        val shown = linked?.view()
-        val review = PhoneReview(goal, mode, shown?.getInt("toolLimit") ?: controller.newTaskToolBudget,
-            shown?.getInt("modelCallLimit") ?: controller.newTaskModelBudget, shown?.getInt("scopeMinutes") ?: controller.newTaskScopeMinutes,
+        val channel = controller.hasChannelPhoneOrigin
+        val modelScope = if (channel) null else controller.conversationModelScope()
+        val modelStatus = controller.nativeModelSelection().status()
+        check(!modelStatus.pending()) { "请等待原模型设置回执" }
+        val original = PhoneReview(goal, mode, controller.newTaskToolBudget,
+            controller.newTaskModelBudget, controller.newTaskScopeMinutes,
             controller.composerViewEpoch, SystemClock.elapsedRealtime() + 120_000L, captureWindow(),
-            controller.composerDraft?.key.orEmpty(), conversation, presentationEpoch, phoneDraftRevision, reviewGeneration, controller.phoneOriginRevision, linked)
-        phoneReviews[handle] = review
-        return (shown ?: JSONObject()).put("reviewHandle", handle).put("goal", goal).put("mode", mode)
+            controller.composerDraft?.key.orEmpty(), conversation, presentationEpoch, phoneDraftRevision, reviewGeneration, controller.phoneOriginRevision, modelStatus.revision())
+        // Account refresh/model resolution may use the network. Keep it off the WebView's main thread.
+        controller.runModelConnectionWork(Runnable {
+            val prepared = runCatching {
+                check(phoneReviewCurrent(original)) { "原手机草稿或模型设置已变化，请重新核对" }
+                when {
+                    channel -> original
+                    conversation.isNotBlank() -> original.copy(linked = controller.prepareConversationPhoneStart(conversation, goal, mode))
+                    else -> original.copy(draft = controller.prepareDraftPhoneStart(modelScope!!, goal, mode))
+                }.also { review ->
+                    val native = review.linked?.view() ?: review.draft?.view()
+                    check(native == null || native.getInt("toolLimit") == original.tools &&
+                        native.getInt("modelCallLimit") == original.models && native.getInt("scopeMinutes") == original.minutes) {
+                        "原手机执行范围已变化，请重新核对；草稿仍保留"
+                    }
+                }
+            }
+            main.post {
+                if (runCatching { phoneReviewCurrent(original) }.getOrDefault(false)) prepared.fold({ review ->
+                    phoneReviews[handle] = review
+                    complete(id, reviewView(handle, review), null)
+                }, { error -> complete(id, null, error.message ?: "本次手机模型暂不可核对，草稿仍保留") })
+                else complete(id, null, "原手机草稿或模型设置已变化，请重新核对；草稿仍保留")
+                publishState()
+            }
+        })
+    }
+
+    private fun reviewView(handle: String, review: PhoneReview): JSONObject {
+        val shown = review.linked?.view() ?: review.draft?.view()
+        return (shown ?: JSONObject()).put("reviewHandle", handle).put("goal", review.goal).put("mode", review.mode)
             .put("toolLimit", review.tools).put("modelCallLimit", review.models).put("scopeMinutes", review.minutes)
             .put("expiresInMs", 120000).put("screenDisclosure", shown?.optString("screenDisclosure") ?: "执行时，屏幕与可见文字会发送到本次配置的模型。")
-            .put("message", if (mode == "background") "在后台独立屏处理这个目标；连接不可用时等待，不切换到手机主屏。" else "在手机主屏处理这个目标，会使用当前屏幕。")
+            .put("message", if (review.mode == "background") "在后台独立屏处理这个目标；连接不可用时等待，不切换到手机主屏。" else "在手机主屏处理这个目标，会使用当前屏幕。")
     }
 
     /** Equivalent to the former Activity saveable presentation state, never an execution grant. */
@@ -106,6 +140,7 @@ internal class PocketWebPhoneComposer(
         SystemClock.elapsedRealtime() < review.expires && acceptsWindow(review.window) &&
         review.viewEpoch == controller.composerViewEpoch && review.composerKey == controller.composerDraft?.key.orEmpty() &&
         review.conversation == controller.state.conversationId.orEmpty() && review.draftEpoch == presentationEpoch && review.draftRevision == phoneDraftRevision &&
+        !controller.nativeModelSelection().status().pending() && review.modelRevision == controller.nativeModelSelection().status().revision() &&
         review.tools == controller.newTaskToolBudget && review.models == controller.newTaskModelBudget && review.minutes == controller.newTaskScopeMinutes && review.reviewGeneration == reviewGeneration &&
         review.originRevision == controller.phoneOriginRevision
 
@@ -171,6 +206,7 @@ internal class PocketWebPhoneComposer(
             publishState()
         }
         val admitted = review.linked?.let { controller.startConversationPhone(it, { phoneReviewCurrent(review) }, completed) }
+            ?: review.draft?.let { controller.startDraftPhone(it, { phoneReviewCurrent(review) }, completed) }
             ?: controller.startReviewedPhone(review.goal, review.mode, { phoneReviewCurrent(review) }, completed)
         if (admitted) {
             phoneReviews.remove(handle)

@@ -761,6 +761,7 @@ internal class PocketWebBridge(
             if (action == "models.select") { selectModel(id, args); return }
             if (action in PocketWebAccountCommands.COMMANDS) { accountOwnerCommand(id, action, args); return }
             if (action in PocketWebModelConnectionCommands.COMMANDS) { modelConnection(id, action, args); return }
+            if (action == "phone.prepare") { phoneComposer.prepare(id, args); return }
             if (action == "phone.start") { phoneComposer.start(id, args); return }
             if (action == "phone.query") { phoneComposer.query(id, args); return }
             if (action in setOf("phone.pause", "phone.resume", "phone.stop")) {
@@ -994,7 +995,6 @@ internal class PocketWebBridge(
                 if (section == previous) { leaveConnection(); reviews.clear() }
             }
             "usage.close" -> controller.closeNativeInferenceHistory()
-            "phone.prepare" -> return phoneComposer.prepare(args)
             "phone.draft.edit" -> phoneComposer.editDraft(args)
             "phone.deadline" -> controller.selectNewTaskDeadline(requiredInt(args, "minutes"))
             "background.refresh" -> controller.refreshBackgroundSetup()
