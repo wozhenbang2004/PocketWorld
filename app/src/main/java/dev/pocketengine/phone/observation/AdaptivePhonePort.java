@@ -43,6 +43,7 @@ public final class AdaptivePhonePort implements PhonePort {
     private Need pendingNeed = Need.AUTOMATIC;
     private boolean imageCeiling, reconciliationRequired;
     private String safetyPause;
+    private int consecutiveScreenChanges;
     private PhoneTreeCollection.State collection;
     private final java.util.concurrent.atomic.AtomicBoolean actionEffectInFlight=new java.util.concurrent.atomic.AtomicBoolean();
     private final java.util.Map<String,OcrTextTarget> textTargets=new java.util.LinkedHashMap<>();
@@ -590,7 +591,7 @@ public final class AdaptivePhonePort implements PhonePort {
                 .put("visionAvailable", visionAvailable).put("ocrAvailable", ocrAvailable())
                 .put("ocrReason", ocrAvailable() ? "mounted_local_engine" : "engine_not_installed")
                 .put("localCaptureAllowed",localCaptureAllowed).put("localOcrAllowed",localOcrAllowed).put("ocrTextMayBeSentToModel",true).put("uploadImageAllowed",imageCeiling).put("screenshotsAllowed", imageCeiling).put("automaticReplayAllowed", false));
-        latest = new JSONObject(out.toString()); pendingNeed = Need.AUTOMATIC;
+        latest = new JSONObject(out.toString()); pendingNeed = Need.AUTOMATIC; consecutiveScreenChanges = 0;
         if(practice!=null)practice.observation(out);
         return out;
     }
@@ -678,6 +679,14 @@ public final class AdaptivePhonePort implements PhonePort {
         return now >= at && now - at <= MAX_AGE_MS;
     }
     private JSONObject rejectedObservation(JSONObject result) throws Exception {
+        String code = result.optString("error", result.optString("code"));
+        if ("screen_changed".equals(code)) {
+            consecutiveScreenChanges++;
+            if (consecutiveScreenChanges >= 3) {
+                result = failure("screen_unstable", "页面连续变化，已暂停自动观察。请等待页面稳定后在原任务中继续。")
+                        .put("consecutiveScreenChanges", consecutiveScreenChanges).put("originalError", code);
+            } else result.put("consecutiveScreenChanges", consecutiveScreenChanges);
+        } else consecutiveScreenChanges = 0;
         clearReferences(); ObservationReport.annotateFailure(result); retainSafetyFence(result);
         return result.put("observationScope", scopeJson());
     }

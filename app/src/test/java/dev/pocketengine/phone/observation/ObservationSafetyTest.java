@@ -27,6 +27,11 @@ public class ObservationSafetyTest {
         assertTrue(ObservationSafety.requiresPause("tree_read_busy"));
         assertTrue(ObservationSafety.requiresPause("display_ownership_unknown"));
     }
+    @Test public void changingSnapshotIsRetryableButExhaustedReadCircuitPauses() {
+        assertFalse(ObservationSafety.requiresPause("screen_changed"));
+        assertTrue(ObservationSafety.requiresPause("screen_unstable"));
+        assertFalse(ObservationSafety.unknownEffect("screen_unstable"));
+    }
     @Test public void exactLiveIsolatedSessionIsRequired() {
         assertNull(ObservationSafety.isolationFailure(5,"session",5,"session",true,true,true,true));
         assertEquals("wrong_display",ObservationSafety.isolationFailure(5,"session",0,"session",true,true,true,true));

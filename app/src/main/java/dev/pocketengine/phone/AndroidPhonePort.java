@@ -254,12 +254,21 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
         long revision = control.pauseRevision();
         try {
             PhoneAccessibilityService service = requireService();
-            Tree before = onTreeRead(() -> guard(service,control,revision), () -> readTree(service));
-            CapturedImage image = includeImage ? capture(service, control, revision) : null;
-            Tree after = includeImage ? onTreeRead(() -> guard(service,control,revision), () -> readTree(service)) : before;
-            if (!before.sameScreen(after)) throw new PhoneFailure("screen_changed", "页面在观察期间发生变化，请重新观察。");
-            if (image != null && (image.fullWidth != after.screen.width || image.fullHeight != after.screen.height))
-                throw new PhoneFailure("screen_changed", "截图与当前屏幕尺寸不一致，请重新观察。");
+            Tree after = null;
+            CapturedImage image = null;
+            // Retry the complete read once after a transient capture-time tree change.
+            // Never publish an older tree or pixel reference, and never replay a device action.
+            for (int attempt = 0; attempt < (includeImage ? 2 : 1); attempt++) {
+                if (attempt > 0) sleepRead(() -> guard(service, control, revision), 180);
+                Tree before = onTreeRead(() -> guard(service,control,revision), () -> readTree(service));
+                image = includeImage ? capture(service, control, revision) : null;
+                after = includeImage ? onTreeRead(() -> guard(service,control,revision), () -> readTree(service)) : before;
+                boolean changed = !before.sameScreen(after)
+                        || image != null && (image.fullWidth != after.screen.width || image.fullHeight != after.screen.height);
+                if (!changed) break;
+                if (attempt == 0 && includeImage) continue;
+                throw new PhoneFailure("screen_changed", "页面在截图观察期间持续变化，请等页面稳定后重新观察。");
+            }
             control.check();
             if (control.isPaused() || control.pauseRevision() != revision || service != PhoneAccessibilityService.get())
                 throw new PhoneFailure("observation_expired", "任务状态已改变，请重新观察。");

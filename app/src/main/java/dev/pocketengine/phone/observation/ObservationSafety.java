@@ -15,7 +15,7 @@ public final class ObservationSafety {
             case "background_unavailable": case "metadata_only_unavailable": case "main_screen_conflict": case "identity_mismatch":
             case "observation_metadata_missing": case "image_unavailable":
             case "reconciliation_required": case "display_ownership_unknown":
-            case "tree_read_timeout": case "tree_read_busy": return true;
+            case "tree_read_timeout": case "tree_read_busy": case "screen_unstable": return true;
             default: return false;
         }
     }

@@ -1692,12 +1692,14 @@ public final class AgentRunner {
                 control.check();requirePlanningCurrent(planning,expected);
                 if(observation==null)observation=failure("empty_observation","手机没有返回观察结果。");
                 boolean ok=observation.optBoolean("ok",true);
-                emit(taskId,"observation",ok?"completed":"failed",ok?"已读取当前页面。":observation.optString("message","观察未成功。"),"phone_observe",observation,config,sink);
-                // Planning returns this one actual read receipt. Another observation needs its
-                // own admitted read and budget; the ordinary capture retry stays unchanged.
+                // A discarded read-only retry stays in diagnostics, not as a second user-facing failure.
+                // Planning reads retain their one admitted receipt and are never retried here.
                 if(read==null&&!ok&&attempt==0&&"screen_changed".equals(observation.optString("code",observation.optString("error")))){
+                    RuntimeDiagnostics.event("phone_observation","retrying","SCREEN_CHANGED_READ_ONLY",control,null);
                     control.sleep(150);continue;
                 }
+                if(attempt>0)observation.put("readOnlyRetries",attempt);
+                emit(taskId,"observation",ok?"completed":"failed",ok?"已读取当前页面。":observation.optString("message","观察未成功。"),"phone_observe",observation,config,sink);
                 if(ownRead){
                     String operation=read.operationId;ExecutionPlanning.ReadOutcome outcome=planningReadOutcome(observation);
                     completePlanningRead(planning,read,observation,config);read=null;

@@ -134,7 +134,7 @@ internal class PocketWebPhoneComposer(
         if (phoneStartReceipt?.optString("status") == "pending") phoneStartReceipt?.put("status", "unknown")
     }
 
-    private fun phoneReviewCurrent(review: PhoneReview): Boolean = review.reviewGeneration == reviewGeneration &&
+    private fun phoneReviewCurrent(review: PhoneReview): Boolean = phoneIntent && phoneExecutionMode == review.mode && review.reviewGeneration == reviewGeneration &&
         review.originRevision == controller.phoneOriginRevision &&
         !isClosed() && controller.webPrivateOwnerVisible() &&
         SystemClock.elapsedRealtime() < review.expires && acceptsWindow(review.window) &&

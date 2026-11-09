@@ -885,6 +885,7 @@ internal class PocketWebBridge(
             "composer.reading" -> controller.saveComposerReading(requiredString(args, "key"), requiredInt(args, "index"), requiredInt(args, "offset"), args.optString("anchor"), args.optString("observed"), args.optBoolean("unread"))
             "composer.intent" -> {
                 phoneComposer.changeIntent(args)
+                controller.dismissError()
                 voiceInput.clear()
                 controller.voiceInputTypeChanged(phoneComposer.intent)
             }
