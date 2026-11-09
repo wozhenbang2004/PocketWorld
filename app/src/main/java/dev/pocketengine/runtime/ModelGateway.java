@@ -115,7 +115,7 @@ public final class ModelGateway {
         try(GatewayCall operation=new GatewayCall(remaining)){
             AutoCloseable cancellation=cancelTransport(original,null,operation::cancel);
             try{return prepareAccount(captured,original,operation,false);}
-            catch(GatewayFailure failure){original.check();throw new GatewayException(AccountFailureMessages.describe(failure.code),InferenceFailure.account(failure.code,failure.httpStatus,failure.retryAt,System.currentTimeMillis()));}
+            catch(GatewayFailure failure){original.check();throw new GatewayException(AccountFailureMessages.describe(failure.code),InferenceFailure.account(failure.code,failure.httpStatus,failure.retryAt,System.currentTimeMillis())).causedBy(failure);}
             finally{cancellation.close();}
         }
     }
@@ -691,7 +691,7 @@ public final class ModelGateway {
                 try{body = StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
                         .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
                         .decode(java.nio.ByteBuffer.wrap(buffer.toByteArray())).toString();}
-                catch(java.nio.charset.CharacterCodingException invalidUtf8){throw localFailure("模型回复包含无效UTF-8，未派发工具。",InferenceFailure.Kind.PROTOCOL,status);}
+                catch(java.nio.charset.CharacterCodingException invalidUtf8){throw localFailure("模型回复包含无效UTF-8，未派发工具。",InferenceFailure.Kind.PROTOCOL,status).causedBy(invalidUtf8);}
             }
             control.check();
             if (lifetime.expired()) throw localFailure("模型请求超时，请检查网络或提高请求超时。",InferenceFailure.Kind.TIMEOUT);
@@ -706,18 +706,18 @@ public final class ModelGateway {
                 return assistant;
             } catch (GatewayException known) {
                 if(known.failure!=null)throw known;
-                throw new GatewayException(known.getMessage(),InferenceFailure.local(InferenceFailure.Kind.PROTOCOL,status,System.currentTimeMillis()));
+                throw new GatewayException(known.getMessage(),InferenceFailure.local(InferenceFailure.Kind.PROTOCOL,status,System.currentTimeMillis())).causedBy(known);
             } catch (InterruptedException stopped) {
                 throw stopped;
             } catch (Exception malformed) {
-                throw localFailure("接口返回的 JSON 或消息结构无法读取，请检查所选模型协议。",InferenceFailure.Kind.PROTOCOL,status);
+                throw localFailure("接口返回的 JSON 或消息结构无法读取，请检查所选模型协议。",InferenceFailure.Kind.PROTOCOL,status).causedBy(malformed);
             }
         } catch (IOException error) {
             control.check();
             if (lifetime.expired() || error instanceof SocketTimeoutException) {
-                throw localFailure("模型请求超时，请检查网络或提高请求超时。",InferenceFailure.Kind.TIMEOUT);
+                throw localFailure("模型请求超时，请检查网络或提高请求超时。",InferenceFailure.Kind.TIMEOUT).causedBy(error);
             }
-            throw localFailure("无法连接模型接口，请检查地址、网络和 HTTPS 证书。",error instanceof javax.net.ssl.SSLException?InferenceFailure.Kind.PROTOCOL:InferenceFailure.Kind.NETWORK);
+            throw localFailure("无法连接模型接口，请检查地址、网络和 HTTPS 证书。",error instanceof javax.net.ssl.SSLException?InferenceFailure.Kind.PROTOCOL:InferenceFailure.Kind.NETWORK).causedBy(error);
         } catch (RuntimeException transportFailure) {
             // Some HttpURLConnection implementations throw a runtime failure when the native
             // cancellation watchdog disconnects a concurrent header/body read. Keep cancellation
@@ -836,14 +836,14 @@ public final class ModelGateway {
                     throw localFailure(invalid.kind==BedrockEventStream.Kind.INCOMPLETE?"Bedrock 事件流未完整结束；请在原任务核对，没有自动重发或派发工具。":"Bedrock 事件流的完整性或格式无法核对；本次未派发工具。",invalid.kind==BedrockEventStream.Kind.INCOMPLETE?InferenceFailure.Kind.INCOMPLETE_STREAM:InferenceFailure.Kind.PROTOCOL,response.code());
                 }catch(GatewayException known){
                     if(known.failure!=null){
-                        if(known.failure.kind==InferenceFailure.Kind.INCOMPLETE_STREAM&&known.failure.httpStatus==0)throw new GatewayException(known.getMessage(),InferenceFailure.local(InferenceFailure.Kind.INCOMPLETE_STREAM,response.code(),known.failure.observedAt).withPartialText(known.failure.partialTextReceived));
+                        if(known.failure.kind==InferenceFailure.Kind.INCOMPLETE_STREAM&&known.failure.httpStatus==0)throw new GatewayException(known.getMessage(),InferenceFailure.local(InferenceFailure.Kind.INCOMPLETE_STREAM,response.code(),known.failure.observedAt).withPartialText(known.failure.partialTextReceived)).causedBy(known);
                         throw known;
                     }
-                    throw new GatewayException(known.getMessage(),InferenceFailure.local(InferenceFailure.Kind.PROTOCOL,response.code(),System.currentTimeMillis()));
+                    throw new GatewayException(known.getMessage(),InferenceFailure.local(InferenceFailure.Kind.PROTOCOL,response.code(),System.currentTimeMillis())).causedBy(known);
                 }
                 catch(InterruptedException stopped){throw stopped;}
                 catch(IOException network){throw network;}
-                catch(Exception malformed){throw localFailure("模型流的事件、终态、工具参数或显示回调无法核对；未派发工具，没有自动重试。",InferenceFailure.Kind.PROTOCOL,response.code());}
+                catch(Exception malformed){throw localFailure("模型流的事件、终态、工具参数或显示回调无法核对；未派发工具，没有自动重试。",InferenceFailure.Kind.PROTOCOL,response.code()).causedBy(malformed);}
                 stream.check();
                 if(System.nanoTime()>=deadline)throw localFailure("模型请求超时；本次未派发工具。是否有界恢复由原任务范围决定。",InferenceFailure.Kind.TIMEOUT);
                 return assistant;
@@ -851,8 +851,8 @@ public final class ModelGateway {
         }catch(IOException network){
             stream.check();
             if(network instanceof java.io.InterruptedIOException||System.nanoTime()>=deadline)
-                throw localFailure("模型请求超时；本次未派发工具。是否有界恢复由原任务范围决定。",InferenceFailure.Kind.TIMEOUT);
-            throw localFailure("模型流连接中断；本次未派发工具。",network instanceof javax.net.ssl.SSLException?InferenceFailure.Kind.PROTOCOL:InferenceFailure.Kind.NETWORK);
+                throw localFailure("模型请求超时；本次未派发工具。是否有界恢复由原任务范围决定。",InferenceFailure.Kind.TIMEOUT).causedBy(network);
+            throw localFailure("模型流连接中断；本次未派发工具。",network instanceof javax.net.ssl.SSLException?InferenceFailure.Kind.PROTOCOL:InferenceFailure.Kind.NETWORK).causedBy(network);
         }finally{cancellation.close();}
     }
 
@@ -955,7 +955,7 @@ public final class ModelGateway {
                 // native refusal before translating generic account failures.
                 refusals.rethrowCaptured();
                 if(stream!=null&&"CANCELLED".equals(failure.code))throw new java.util.concurrent.CancellationException(AccountFailureMessages.describe(failure.code));
-                throw new GatewayException(AccountFailureMessages.describe(failure.code),InferenceFailure.account(failure.code,failure.httpStatus,failure.retryAt,System.currentTimeMillis()));
+                throw new GatewayException(AccountFailureMessages.describe(failure.code),InferenceFailure.account(failure.code,failure.httpStatus,failure.retryAt,System.currentTimeMillis())).causedBy(failure);
             }finally{cancellation.close();}
         }
     }
@@ -1082,8 +1082,10 @@ public final class ModelGateway {
     static URL endpoint(String baseUrl)throws GatewayException{return endpoint(new ModelConfig(baseUrl,"","validation",false,1,10));}
 
     static String safeMessage(Exception error, ModelConfig config) {
-        String message = error instanceof GatewayException ? error.getMessage() : "执行遇到错误，请检查模型设置和手机权限后重试。";
-        return config==null?message:config.redactSensitive(message);
+        java.io.StringWriter detail = new java.io.StringWriter();
+        error.printStackTrace(new java.io.PrintWriter(detail));
+        String message = detail.toString();
+        return config == null ? message : config.redactSensitive(message);
     }
 
     public static String redact(String value, String key) {
@@ -1129,5 +1131,6 @@ public final class ModelGateway {
         public GatewayException(String message) { this(message,null); }
         private GatewayException(String message,InferenceFailure failure){this(message,failure,"UNKNOWN");}
         private GatewayException(String message,InferenceFailure failure,String diagnosticReason){super(message);this.failure=failure;this.diagnosticReason=diagnosticReason;}
+        private GatewayException causedBy(Throwable cause){initCause(cause);return this;}
     }
 }
