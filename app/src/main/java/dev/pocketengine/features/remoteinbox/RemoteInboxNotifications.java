@@ -43,10 +43,13 @@ public final class RemoteInboxNotifications {
             .setContentIntent(open).addAction(new Notification.Action.Builder(null, "停止", stop).build())
             .setVisibility(Notification.VISIBILITY_PRIVATE).setOngoing(true).setOnlyAlertOnce(true).build();
     }
-    public static void post(Context context, JSONObject event) {
+    private static boolean canNotify(Context context, NotificationManager manager) {
+        return manager != null && manager.areNotificationsEnabled()
+            && (Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED);
+    }
+    public static boolean post(Context context, JSONObject event) {
         NotificationManager manager = context.getSystemService(NotificationManager.class);
-        if (manager == null || !manager.areNotificationsEnabled()) return;
-        if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return;
+        if (!canNotify(context, manager)) return false;
         channels(context);
         String channel = "attention".equals(event.optString("priority")) ? ATTENTION : NORMAL;
         PendingIntent open = PendingIntent.getActivity(context, 3081, open(context), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
@@ -58,5 +61,19 @@ public final class RemoteInboxNotifications {
             .setVisibility(Notification.VISIBILITY_PRIVATE).setCategory(Notification.CATEGORY_STATUS).build();
         long seq = event.optLong("seq", 0);
         manager.notify("remote-inbox:" + seq, 3080, notification);
+        return true;
+    }
+    public static boolean postSummary(Context context, int count) {
+        NotificationManager manager = context.getSystemService(NotificationManager.class);
+        if (!canNotify(context, manager)) return false;
+        channels(context);
+        PendingIntent open = PendingIntent.getActivity(context, 3081, open(context),
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        Notification notice = new Notification.Builder(context, ATTENTION)
+            .setSmallIcon(R.drawable.ic_task_notice).setContentTitle("PocketWorld 收到 " + count + " 条新通知")
+            .setContentText("点击打开收件箱查看，避免大量提醒打断当前工作")
+            .setContentIntent(open).setAutoCancel(true).setVisibility(Notification.VISIBILITY_PRIVATE).build();
+        manager.notify("remote-inbox:summary", 3080, notice);
+        return true;
     }
 }
