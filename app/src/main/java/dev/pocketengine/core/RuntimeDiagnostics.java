@@ -140,10 +140,25 @@ public final class RuntimeDiagnostics {
 
     /** Large, redacted archive. Call from a worker, not from the Android UI thread. */
     public static JSONObject developerLogPage(String mode, String cursor, int limit) throws java.io.IOException {
-        return recorder.archive.page(mode, cursor, limit);
+        JSONObject page = recorder.archive.page(mode, cursor, limit);
+        if (!recorder.archive.enabled() && !"before".equals(mode)) {
+            // Off means "keep the existing lightweight recorder", not "stop diagnostics".
+            // No extra archive writes or task state mutations occur in this mode.
+            JSONArray recent = recorder.snapshot().optJSONArray("events");
+            JSONArray visible = new JSONArray();
+            if (recent != null) for (int i = Math.max(0, recent.length() - Math.min(200, limit)); i < recent.length(); i++)
+                visible.put(recent.optJSONObject(i));
+            page.put("entries", visible).put("older", JSONObject.NULL)
+                .put("next", JSONObject.NULL).put("hasOlder", false).put("expired", false)
+                .put("lightweight", true);
+        }
+        return page;
     }
     public static JSONObject developerLogCapacity(int miB) throws java.io.IOException {
         return recorder.archive.capacity(miB);
+    }
+    public static JSONObject developerLogCapture(boolean enabled) throws java.io.IOException {
+        return recorder.archive.capture(enabled);
     }
     public static void exportDeveloperLogs(java.io.OutputStream target) throws java.io.IOException {
         recorder.archive.export(target);
