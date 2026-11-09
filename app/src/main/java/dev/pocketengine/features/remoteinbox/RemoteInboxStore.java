@@ -198,6 +198,15 @@ public final class RemoteInboxStore {
         write(journal, new JSONObject().put("cursor", highest).put("events", next));
         return admitted;
     }
+    public synchronized JSONObject find(long seq) throws Exception {
+        JSONArray entries = load(journal).optJSONArray("events");
+        if (entries == null) throw new IllegalArgumentException("通知已不在保留范围");
+        for (int i = 0; i < entries.length(); i++) {
+            JSONObject notice = entries.getJSONObject(i);
+            if (notice.optLong("seq") == seq) return new JSONObject(notice.toString());
+        }
+        throw new IllegalArgumentException("通知已不在保留范围");
+    }
     public synchronized void read(long seq) throws Exception {
         JSONObject state = load(journal);
         JSONArray entries = state.optJSONArray("events");
