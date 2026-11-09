@@ -1,0 +1,46 @@
+name: Composer integration verification
+on:
+  push:
+    branches: [work/composer-integration-20261109]
+    paths:
+      - '.github/workflows/composer-integration-check.yml'
+      - 'tools/ci/composer-integration.patch'
+      - 'tools/ci/composer-integration-check.py'
+permissions:
+  contents: read
+concurrency:
+  group: composer-integration-check
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.repository == 'wozhenbang2004/PocketWorld'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22.22.0'
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install locked Web UI dependencies
+        run: npm ci --prefix web-ui
+      - name: Prepare verification source and dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/composer-workspace"
+          git rev-parse HEAD > "$RUNNER_TEMP/composer-workspace/revision.txt"
+          git archive HEAD | gzip > "$RUNNER_TEMP/composer-workspace/source.tar.gz"
+          tar -czf "$RUNNER_TEMP/composer-workspace/web-dependencies.tar.gz" -C web-ui node_modules
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: composer-verification-workspace
+          path: ${{ runner.temp }}/composer-workspace/
+          retention-days: 2
+          compression-level: 0
+          if-no-files-found: error
