@@ -177,7 +177,7 @@ public final class ApiTurnStream {
 
     private static JSONObject normalize(String protocol, ProviderAdapter adapter, JSONObject wire,
                                         JSONArray tools) throws Exception {
-        if(wire.has("error")&&!wire.isNull("error"))throw invalid("AST-L180-1");
+        if (!wire.isNull("error")) throw serverFailure(protocol, wire);
         switch (protocol) {
             case "openai_chat": {
                 JSONArray choices = wire.getJSONArray("choices");
@@ -188,7 +188,7 @@ public final class ApiTurnStream {
                 break;
             }
             case "openai_responses":
-                if (!"completed".equals(wire.optString("status"))) throw interrupted();
+                if (!"completed".equals(wire.optString("status"))) throw serverFailure(protocol, wire);
                 JSONArray output = wire.getJSONArray("output");
                 for (int i = 0; i < output.length(); i++) {
                     JSONObject item = output.getJSONObject(i);
@@ -285,7 +285,8 @@ public final class ApiTurnStream {
                 return true;
             }
             JSONObject chunk = eventObject(frame.data);
-            if (!chunk.isNull("error") || !"chat.completion.chunk".equals(chunk.optString("object"))) throw invalid("AST-L288-1");
+            if (!chunk.isNull("error")) throw serverFailure("openai_chat", chunk);
+            if (!"chat.completion.chunk".equals(chunk.optString("object"))) throw invalid("AST-L288-1");
             if (chunk.has("id")) {
                 String id = identity(chunk, "id");
                 if (responseId != null && !responseId.equals(id)) throw invalid("AST-L291-1");
@@ -321,23 +322,24 @@ public final class ApiTurnStream {
                     if (!frameIndexes.add(index)) throw invalid("AST-L321-1");
                     ChatCall call = calls.get(index);
                     if (call == null) { call = new ChatCall(); calls.put(index, call); }
-                    if (fragment.has("type") && !"function".equals(fragment.optString("type"))) throw invalid("AST-L324-1");
-                    if (fragment.has("id")) {
+                    if (!fragment.isNull("type") && !"function".equals(fragment.optString("type"))) throw invalid("AST-L324-1");
+                    if (!fragment.isNull("id")) {
                         String id = identity(fragment, "id");
                         if (call.id != null && !call.id.equals(id)) throw invalid("AST-L327-1");
                         for(ChatCall other:calls.values())if(other!=call&&id.equals(other.id))throw invalid("AST-L328-1");
                         call.id = id;
                     }
                     JSONObject function = fragment.optJSONObject("function");
+                    if (!fragment.isNull("function") && function == null) throw invalid("CHAT_FUNCTION_OBJECT");
                     if (function != null) {
-                        if (function.has("name")) {
+                        if (!function.isNull("name")) {
                             String name = text(function, "name", 256);
                             String assembled=call.name==null?name:call.name+name;
                             boolean prefix=false;for(String offered:names)if(offered.startsWith(assembled)){prefix=true;break;}
                             if(!prefix)throw invalid("AST-L337-1");call.name=assembled;
                             if (call.name.length() > 256) throw invalid("AST-L338-1");
                         }
-                        if (function.has("arguments")) append(call.arguments,
+                        if (!function.isNull("arguments")) append(call.arguments,
                                 text(function, "arguments", MAX_ARGUMENT_CHARS), MAX_ARGUMENT_CHARS);
                     }
                 }
@@ -394,12 +396,12 @@ public final class ApiTurnStream {
                 long next = nonnegative(event, "sequence_number");
                 if (next <= sequence) throw invalid("AST-L395-1"); sequence = next;
             }
-            if(type.equals("error"))throw interrupted();
+            if(type.equals("error"))throw serverFailure(type, event);
             if(type.equals("response.failed")||type.equals("response.incomplete")||type.equals("response.cancelled")){
                 JSONObject response=event.getJSONObject("response");
                 if(responseId==null||!responseId.equals(identity(response,"id")))throw invalid("AST-L400-1");
                 usage.terminal(type.substring("response.".length()));
-                usage.observe(response,ProviderUsage.Stage.FINAL);throw interrupted();
+                usage.observe(response,ProviderUsage.Stage.FINAL);throw serverFailure(type, response);
             }
             if (type.equals("response.created")) {
                 JSONObject response = event.getJSONObject("response");
@@ -445,6 +447,12 @@ public final class ApiTurnStream {
                         throw invalid("AST-L445-1");
                     String initial = part.has("text") ? text(part, "text", MAX_TEXT_CHARS) : "";
                     item.parts.put(index, new TextPart(initial)); if (!initial.isEmpty()) sink.text(initial); break;
+                }
+                case "response.output_text.annotation.added": {
+                    part(event); // Validate the message/item/content identity without changing text.
+                    nonnegative(event, "annotation_index");
+                    event.getJSONObject("annotation");
+                    break;
                 }
                 case "response.output_text.delta": {
                     TextPart part = part(event); if (part.done || part.textDone) throw invalid("AST-L450-1");
@@ -555,7 +563,7 @@ public final class ApiTurnStream {
         }
         boolean accept(JSONObject event)throws Exception {return accept(event,identity(event,"type"));}
         private boolean accept(JSONObject event,String type)throws Exception {
-            if ("error".equals(type)) throw interrupted();
+            if ("error".equals(type)) throw serverFailure("anthropic", event);
             if ("ping".equals(type)) return false;
             if ("message_start".equals(type)) {
                 if (message != null) throw invalid("AST-L561-1"); message = copy(event.getJSONObject("message"));
@@ -641,7 +649,7 @@ public final class ApiTurnStream {
         public boolean accept(Frame frame) throws Exception {
             if (!frame.event.isEmpty() && !"message".equals(frame.event)) throw invalid("AST-L642-1");
             JSONObject event = eventObject(frame.data);
-            if (event.has("error")) throw interrupted();
+            if (!event.isNull("error")) throw serverFailure("gemini", event);
             if (event.has("responseId")) {
                 String id = identity(event, "responseId");
                 if (responseId != null && !responseId.equals(id)) throw invalid("AST-L647-1"); responseId = id;
@@ -846,6 +854,15 @@ public final class ApiTurnStream {
         } else if (value instanceof JSONArray) {
             JSONArray array = (JSONArray) value; for (int i = 0; i < array.length(); i++) unicodeTree(array.get(i), depth + 1);
         }
+    }
+    /** Preserve provider failure evidence; ModelGateway redacts configured credentials before display. */
+    private static GatewayException serverFailure(String event, JSONObject payload) throws Exception {
+        JSONObject details = new JSONObject();
+        for (String key : new String[]{"type", "status", "code", "message", "param", "reason"})
+            if (!payload.isNull(key)) details.put(key, payload.get(key));
+        if (!payload.isNull("error")) details.put("error", payload.get("error"));
+        if (!payload.isNull("incomplete_details")) details.put("incomplete_details", payload.get("incomplete_details"));
+        return new GatewayException("模型服务端失败 [" + event + "]: " + details.toString());
     }
     private static GatewayException invalid(String checkpoint) {
         StackTraceElement[] trace = new Throwable().getStackTrace();
