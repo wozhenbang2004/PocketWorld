@@ -1,0 +1,47 @@
+name: Unified access review
+on:
+  push:
+    branches: [work/unified-access-20261109]
+    paths:
+      - '.github/workflows/unified-access-review.yml'
+      - 'web-ui/**'
+      - 'app/src/**'
+      - 'tools/unified-access/**'
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22.22.0'
+      - name: Prepare source and locked development dependencies
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/unified-access-review"
+          git archive --format=tar HEAD | gzip > "$RUNNER_TEMP/unified-access-review/pocketworld-source.tar.gz"
+          git rev-parse HEAD > "$RUNNER_TEMP/unified-access-review/source-commit.txt"
+          npm ci --prefix web-ui --ignore-scripts --no-audit --no-fund
+          tar -C web-ui -czf "$RUNNER_TEMP/unified-access-review/web-dependencies.tar.gz" node_modules
+      - name: Capture read-only reference sources outside the product tree
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/ccch1mneyyy/dsh-Go.git "$RUNNER_TEMP/dsh-reference"
+          git -C "$RUNNER_TEMP/dsh-reference" sparse-checkout set islands scripts app/lib/data app/lib/ui/settings app/lib/services docs/guide
+          git -C "$RUNNER_TEMP/dsh-reference" rev-parse HEAD > "$RUNNER_TEMP/unified-access-review/reference-commit.txt"
+          tar --exclude=.git -C "$RUNNER_TEMP/dsh-reference" -czf "$RUNNER_TEMP/unified-access-review/dsh-reference.tar.gz" .
+          git clone --depth 1 https://github.com/ccch1mneyyy/dsh-auth.git "$RUNNER_TEMP/dsh-auth-reference"
+          tar --exclude=.git -C "$RUNNER_TEMP/dsh-auth-reference" -czf "$RUNNER_TEMP/unified-access-review/dsh-auth-reference.tar.gz" .
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: unified-access-review-${{ github.sha }}
+          path: ${{ runner.temp }}/unified-access-review/
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0
