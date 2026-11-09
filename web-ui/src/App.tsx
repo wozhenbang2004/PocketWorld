@@ -105,10 +105,13 @@ function useNativeDraft(owner:string,text:string,revision:any){
  useEffect(()=>{const c=current.current;if(c.owner!==owner){current.current={owner,dirty:false,value:text};sent.current=null;setValue(text);return;}if(text===c.value){c.dirty=false;return;}if(!c.dirty||(sent.current!==null&&c.value===sent.current&&text==='')){c.value=text;c.dirty=false;sent.current=null;setValue(text);}},[owner,text,revision]);
  return {value,set:(next:string)=>{sent.current=null;current.current={owner,dirty:true,value:next};setValue(next)},markSent:()=>{sent.current=current.current.value},owner};
 }
+/** Only exceptional delivery states belong in the reading stream; successful receipts stay in native history. */
 function Receipt({receipt}:{receipt:Json}){
- const status=String(receipt.status||receipt.state||'');const detail=receipt.message||receipt.reason;
- const labels:Record<string,string>={accepted:'已收到',consumed:'本轮已采用 · 答复已保存',withdrawn:'已撤回',queued:'等待处理',adopted:'已采用',applied:'已采用',pending:'正在确认结果',unconfirmed:'结果待确认',unknown:'结果待确认',rejected:'未采用',failed:'提交未确认'};
- return <div className="pw-input-receipt"><span>{labels[status]||status||'发送状态'}</span>{detail&&<small>{detail}</small>}</div>;
+ const status=String(receipt.status||receipt.state||'');
+ if(!['failed','rejected','unconfirmed','unknown','pending','withdrawn'].includes(status))return null;
+ const labels:Record<string,string>={failed:'发送未确认',rejected:'未发送',unconfirmed:'结果待确认',unknown:'结果待确认',pending:'正在确认',withdrawn:'已撤回'};
+ const detail=receipt.message||receipt.reason;
+ return <div className="pw-input-receipt" role="status"><span>{labels[status]}</span>{detail&&<small>{detail}</small>}</div>;
 }
 
 export default function App(){
@@ -779,16 +782,16 @@ export default function App(){
      {asArray<Json>(m.attachments).length>0&&<div className="pw-message-files">{asArray<Json>(m.attachments).map(file=><Button key={file.id||file.name} variant="secondary" size="small" leadingIcon={RiFileLine} disabled={!can('attachments.open')||!file.sha256||!!state.attachmentOpens?.[`${file.id}:${file.sha256}`]?.checking} onClick={()=>run('attachments.open',{messageId:m.id,id:file.id,sha256:file.sha256})}>{file.name||'原附件'}</Button>)}</div>}
      {m.submission&&<Receipt receipt={m.submission}/>}
      <div className="pw-message-footer">
-     {linkedFeedback&&(!completedFeedback||m.role!=='assistant')&&<Button variant="ghost" className="pw-message-work-action" leadingIcon={completedFeedback?RiCheckboxCircleLine:attention(linkedFeedback)||linkedFeedback.status==='failed'?RiErrorWarningLine:RiTimeLine} aria-label={`查看任务详情：${linkedFeedback.goal}`} title={linkedFeedback.goal} disabled={!can('tasks.open')} onClick={()=>openTask(linkedFeedback.id,attention(linkedFeedback)&&can('tasks.review')?'review':'overview')}><span className="pw-message-work-status">{labelStatus(linkedFeedback.status)}</span><span className="pw-message-work-next">{attention(linkedFeedback)?taskActionLabel(linkedFeedback):linkedFeedback.status==='failed'?'查看失败原因':terminal(linkedFeedback)?'查看详情':'查看进展'}<RiArrowRightSLine size={15} aria-hidden="true"/></span></Button>}
+     {linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')&&<Button variant="ghost" className="pw-message-work-action" leadingIcon={completedFeedback?RiCheckboxCircleLine:attention(linkedFeedback)||linkedFeedback.status==='failed'?RiErrorWarningLine:RiTimeLine} aria-label={`查看任务详情：${linkedFeedback.goal}`} title={linkedFeedback.goal} disabled={!can('tasks.open')} onClick={()=>openTask(linkedFeedback.id,attention(linkedFeedback)&&can('tasks.review')?'review':'overview')}><span className="pw-message-work-status">{labelStatus(linkedFeedback.status)}</span><span className="pw-message-work-next">{attention(linkedFeedback)?taskActionLabel(linkedFeedback):linkedFeedback.status==='failed'?'查看失败原因':terminal(linkedFeedback)?'查看详情':'查看进展'}<RiArrowRightSLine size={15} aria-hidden="true"/></span></Button>}
      {(m.content||m.role==='assistant'||canQuote||(m.retainedSources&&can('sources.open')))&&<div className="pw-message-tools">
       {m.role==='assistant'&&!!m.content&&<MessageActions onCopy={()=>copyText(m.content)} onSpeak={can('speech.speak')&&m.id&&m===messages.filter(x=>x.role==='assistant').at(-1)?playing=>run(playing?'speech.speak':'speech.stop',{messageId:m.id}):undefined} speaking={!!state.speaking}/>}
-      {m.role==='assistant'&&traceTaskId&&!traceInMenu&&can('tasks.open')&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={completedFeedback?RiCheckboxCircleLine:RiToolsLine} aria-label="查看这条回复的执行轨迹" onClick={()=>openTask(traceTaskId,'process')}>{completedFeedback&&<span className="pw-message-work-status">已完成<span aria-hidden="true"> · </span></span>}<span>执行轨迹</span></Button>}
       <PopoverTrigger isOpen={messageMenu===id} onOpenChange={value=>setMessageMenu(value?id:null)}>
        <IconButton icon={RiMoreLine} size="small" aria-label="消息操作与来源"/>
        <Popover className="pw-message-popover" aria-label="消息操作与来源"><div className="pw-message-menu">
-        {m.role==='assistant'&&traceTaskId&&traceInMenu&&can('tasks.open')&&<Button variant="ghost" leadingIcon={RiToolsLine} aria-label="查看这条回复的执行轨迹" onClick={()=>{setMessageMenu(null);openTask(traceTaskId,'process')}}>执行轨迹</Button>}
+        {m.role==='assistant'&&traceTaskId&&can('tasks.open')&&<Button variant="ghost" leadingIcon={RiToolsLine} aria-label="查看这条回复的执行轨迹" onClick={()=>{setMessageMenu(null);openTask(traceTaskId,'process')}}>执行轨迹</Button>}
         {m.role==='assistant'&&completedFeedback&&linkedFeedback&&can('tasks.open')&&<Button variant="ghost" aria-label={`查看任务详情：${linkedFeedback.goal}`} onClick={()=>{setMessageMenu(null);openTask(linkedFeedback.id)}}>查看任务详情</Button>}
         {!!m.content&&<Button variant="ghost" leadingIcon={RiBookOpenLine} onClick={()=>{const source=Array.from(scroll.current?.querySelectorAll<HTMLElement>('[data-message-id]')||[]).find(row=>row.dataset.messageId===id);openReading({kind:'message',title:m.role==='assistant'?'阅读回复':'阅读消息',text:m.content,returnFocus:source?.querySelector<HTMLElement>('button[aria-label="消息操作与来源"]')});setMessageMenu(null)}}>阅读与选字</Button>}
+        {m.role==='assistant'&&replyContext?.replyToMessageIds?.length>0&&replyContext.replyToMessageIds.map((source,index)=><Button key={source} variant="ghost" leadingIcon={RiArrowLeftLine} onClick={()=>{setMessageMenu(null);openReplyOrigin(m,source)}}>{replyContext.replyToMessageIds.length===1?'原请求':`原请求 ${index+1}`}</Button>)}
         {m.role!=='assistant'&&!!m.content&&<MessageActions onCopy={()=>copyText(m.content)}/>}
 
         {canQuote&&<Button variant="ghost" leadingIcon={RiDoubleQuotesL} disabled={!draftKey||!!state.chatSubmitting} onClick={()=>{setMessageMenu(null);openQuote(m)}}>引用到草稿</Button>}
@@ -799,9 +802,6 @@ export default function App(){
       </PopoverTrigger>
      </div>}
      </div>
-     {phoneResult&&<div className="pw-phone-result" data-delivery-id={phoneResult.deliveryId}><span>本次执行：{labelStatus(phoneResult.status)}</span><span>{timeLabel(phoneResult.endedAt)}</span>{phoneResult.summaryTruncated&&<span title={`原结果 ${phoneResult.summaryChars} 字`}>本次结果已截取</span>}{can('tasks.open')&&<Button variant="ghost" size="small" onClick={()=>openTask(phoneResult.taskId)}>查看当前任务<RiArrowRightSLine size={15}/></Button>}</div>}
-     {replyContext&&replyContext.replyToMessageIds.length>0&&<div className="pw-reply-origin" aria-label="答复对应的原请求">{replyContext.replyToMessageIds.map((source,index)=><Button key={source} variant="ghost" size="small" onClick={()=>openReplyOrigin(m,source)}><RiArrowLeftLine size={13}/>{replyContext.replyToMessageIds.length===1?'查看原请求':`原请求 ${index+1}`}</Button>)}</div>}
-     {taskResult&&<div className="pw-task-result" data-delivery-id={taskResult.deliveryId}><span>{taskResult.noticeKind==='capacity_cancel'?'停止通知 · 生成时状态：':taskResult.noticeKind==='capacity_recovery'?'容量恢复通知 · 生成时状态：':taskResult.kind==='automation'?'计划结果 · ':taskResult.kind==='team'?'团队结果 · ':'这件事的结果 · '}{labelStatus(taskResult.status)}</span><span>{taskResult.noticeKind?'通知生成时间：':''}{timeLabel(taskResult.endedAt)}</span>{taskResult.summaryTruncated&&<span title={`${taskResult.noticeKind?'原通知':'原结果'} ${taskResult.summaryChars} 字`}>{taskResult.noticeKind?'通知已截取':'结果已截取'}</span>}{can('tasks.open')&&<Button variant="ghost" size="small" onClick={()=>openTask(taskResult.taskId)}>查看当前任务<RiArrowRightSLine size={15}/></Button>}</div>}
 
     </article>;
    })}</div>}
