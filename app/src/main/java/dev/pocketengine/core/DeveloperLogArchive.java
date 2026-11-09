@@ -23,6 +23,7 @@ public final class DeveloperLogArchive implements AutoCloseable {
     private long lastFlush;
     private int buffered;
     private int capacityMiB = 512;
+    private boolean enabled;
     private long writeFailures, rejectedRows;
 
     public DeveloperLogArchive(File diagnosticsDirectory) {
@@ -34,6 +35,28 @@ public final class DeveloperLogArchive implements AutoCloseable {
             int value = Integer.parseInt(new String(raw, 0, Math.max(0, read), StandardCharsets.US_ASCII).trim());
             if (supported(value)) capacityMiB = value;
         } catch (Exception ignored) { /* Retain safe default. */ }
+        try (FileInputStream stream = new FileInputStream(new File(directory, "capture-enabled.txt"))) {
+            enabled = stream.read() == '1';
+        } catch (IOException ignored) { enabled = false; }
+    }
+
+    public synchronized boolean enabled() { return enabled; }
+
+    /** Capture is opt-in. Disabling keeps the existing archive and lightweight logs intact. */
+    public synchronized JSONObject capture(boolean value) throws IOException {
+        if (directory == null || !directory.isDirectory() && !directory.mkdirs())
+            throw new IOException("archive unavailable");
+        File target = new File(directory, "capture-enabled.txt");
+        File temporary = new File(directory, "capture-enabled.tmp");
+        try (FileOutputStream stream = new FileOutputStream(temporary)) {
+            stream.write(value ? '1' : '0');
+            stream.getFD().sync();
+        }
+        if (target.exists() && !target.delete() || !temporary.renameTo(target))
+            throw new IOException("capture preference not persisted");
+        if (!value) flush();
+        enabled = value;
+        return stats();
     }
 
     private static boolean supported(int n) { return n == 256 || n == 512 || n == 1024 || n == 2048; }
@@ -93,7 +116,7 @@ public final class DeveloperLogArchive implements AutoCloseable {
 
     /** Called on the existing single disk writer, never on the main thread. */
     public synchronized void append(String sanitizedJson) {
-        if (directory == null) return;
+        if (directory == null || !enabled) return;
         try {
             JSONObject row = new JSONObject(sanitizedJson);
             if (!RuntimeDiagnostics.safeStoredRow(row)) { rejectedRows++; return; }
@@ -129,7 +152,7 @@ public final class DeveloperLogArchive implements AutoCloseable {
         for (File file : all) bytes += file.length();
         return new JSONObject().put("format", FORMAT).put("bytes", bytes).put("capacityMiB", capacityMiB)
             .put("segments", all.length).put("writeFailures", writeFailures).put("rejectedRows", rejectedRows)
-            .put("available", directory != null);
+            .put("available", directory != null).put("enabled", enabled);
     }
 
     private static final class Position {
@@ -166,22 +189,42 @@ public final class DeveloperLogArchive implements AutoCloseable {
         } catch (Exception unavailable) { return null; }
     }
 
-    // Read at most one 4 MiB file at a time, retaining only the requested newest rows.
+    /** Seek backwards through 64 KiB blocks, then parse only the newest page. */
     private static List<Row> preceding(File file, long until, int count) throws IOException {
-        ArrayDeque<Row> ring = new ArrayDeque<>();
+        ArrayDeque<Row> rows = new ArrayDeque<>();
         try (RandomAccessFile reader = new RandomAccessFile(file, "r")) {
-            while (reader.getFilePointer() < until) {
-                long start = reader.getFilePointer();
+            long limit = Math.min(reader.length(), until);
+            if (limit <= 0) return new ArrayList<>();
+            byte[] chunk = new byte[65536];
+            long cursor = limit;
+            long start = 0;
+            int newlines = 0;
+            boolean skipTrailingNewline = true;
+            boolean located = false;
+            while (cursor > 0 && !located) {
+                int n = (int) Math.min(chunk.length, cursor);
+                cursor -= n;
+                reader.seek(cursor);
+                reader.readFully(chunk, 0, n);
+                for (int i = n - 1; i >= 0; i--) {
+                    if (chunk[i] != '\n') { skipTrailingNewline = false; continue; }
+                    if (skipTrailingNewline) { skipTrailingNewline = false; continue; }
+                    if (++newlines == count) { start = cursor + i + 1; located = true; break; }
+                }
+            }
+            reader.seek(start);
+            while (reader.getFilePointer() < limit) {
+                long from = reader.getFilePointer();
                 String line = reader.readLine();
-                if (line == null || reader.getFilePointer() > until) break;
-                JSONObject json = parseRow(line);
-                if (json != null) {
-                    ring.addLast(new Row(json, file, start, reader.getFilePointer()));
-                    while (ring.size() > count) ring.removeFirst();
+                if (line == null || reader.getFilePointer() > limit) break;
+                JSONObject value = parseRow(line);
+                if (value != null) {
+                    rows.addLast(new Row(value, file, from, reader.getFilePointer()));
+                    while (rows.size() > count) rows.removeFirst();
                 }
             }
         }
-        return new ArrayList<>(ring);
+        return new ArrayList<>(rows);
     }
     private static void following(File file, long after, List<Row> list, int count) throws IOException {
         try (RandomAccessFile reader = new RandomAccessFile(file, "r")) {
