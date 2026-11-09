@@ -18,7 +18,6 @@ import './secondary.css';
 import './product.css';
 import './workspace-refactor.css';
 import './presentation-theme.css';
-import './composer-compact.css';
 import './motion.css';
 import './uiux-surfaces.css';
 import './uiux-page-depth.css';

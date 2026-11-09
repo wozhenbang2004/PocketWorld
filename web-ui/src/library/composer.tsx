@@ -1,5 +1,5 @@
 // PW-02/03/04/05: controlled ports of actual saved Affect library v3 JSX/CSS.
-// Source DOM classes and hierarchy retained; all sample data and business timers removed.
+// Source controls retained; the host separates full-width editing from its toolbar.
 import {useLayoutEffect,useRef,useState,type ReactNode} from 'react';
 import type {ChatComposerProps,ModelOption,DataPanelProps,Step} from './types';
 import {FrameA,FrameB,Card,Icon,ToolButton,statusLabel,records,textOf} from './core';
@@ -38,7 +38,7 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
  const canSend=!disabled&&!submitting&&!sendDisabled&&hasContent;
  const hasText=!!value.trim();
  const measuredContext=typeof contextPercent==='number'&&Number.isFinite(contextPercent)&&contextPercent>=0&&contextPercent<=100?Math.round(contextPercent):null;
- return <FrameA className={`pw-composer-host pw-compact-composer pw-squircle-composer ${className}`}>
+ return <FrameA className={`pw-composer-host pw-squircle-composer ${className}`}>
   <section className="afa-composer" aria-label={label} data-composer-key={composerKey}>
    <div className="pw-composer-context-rail" aria-label="当前对话上下文">
     <SmoothComposerSurface radius={24} tone="context"/>
@@ -63,14 +63,18 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
      </span>;
     })}</div>}
     {onSelectModel&&<div className="pw-composer-model"><button type="button" className="afa-btn pw-model-trigger" onClick={onSelectModel}><Icon name="spark"/><span>{modelName||'选择模型'}</span><Icon name="chevron" size={12}/></button></div>}
-    <div className={`pw-composer-row${controls?' pw-composer-with-controls':''}`}>
+    <div className="pw-composer-row">
      {listening?<div className="afa-recording" role="status"><i aria-hidden="true"/><span>{voiceStatus||'正在听写…'}</span>{onDiscardVoice&&<ToolButton label="取消本次听写" icon="close" onClick={onDiscardVoice}/>}</div>:<textarea ref={editor} rows={1} aria-label={label} enterKeyHint="enter" placeholder={placeholder} value={value} disabled={disabled} onChange={e=>onChange(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing&&e.nativeEvent.keyCode!==229&&(!matchMedia('(pointer: coarse)').matches||e.ctrlKey||e.metaKey)){e.preventDefault();if(canSend)onSend()}}}/>}
+    </div>
+    <div className="pw-composer-toolbar">
      {(toolbar||onAttach)&&<div className="pw-composer-leading">{toolbar}{onAttach&&<ToolButton label="添加附件" icon="plus" onClick={onAttach} disabled={submitting}/>}</div>}
-     {controls&&<div className="pw-composer-controls">{controls}</div>}
-     <div className="afa-toolbar">
-      {onVoice&&!busy&&<ToolButton label={listening?'结束听写':'语音输入'} icon="mic" onClick={onVoice} disabled={disabled||submitting}/>}
-      {hasContent&&(!busy||!onStop||hasContent)&&!listening&&<PressButton compact aria-label={submitting?'正在登记':sendLabel||(busy?'补充给当前工作':'发送')} disabled={!canSend} onClick={onSend}><Icon name="arrow" size={18}/></PressButton>}
-      {busy&&onStop&&<button type="button" className="afa-stop pw-stop-motion" onClick={onStop} aria-label="停止当前回复"><span className="pw-stop-ring" aria-hidden="true"><ProgressCircle isIndeterminate size="md" aria-label="当前回复状态"/></span><span className="pw-stop-mark" aria-hidden="true">■</span></button>}
+     <div className="pw-composer-trailing">
+      {controls&&<div className="pw-composer-controls">{controls}</div>}
+      <div className="afa-toolbar">
+       {onVoice&&!busy&&<ToolButton label={listening?'结束听写':'语音输入'} icon="mic" onClick={onVoice} disabled={disabled||submitting}/>}
+       {hasContent&&!listening&&<PressButton compact aria-label={submitting?'正在登记':sendLabel||(busy?'补充给当前工作':'发送')} disabled={!canSend} onClick={onSend}><Icon name="arrow" size={18}/></PressButton>}
+       {busy&&onStop&&<button type="button" className="afa-stop pw-stop-motion" onClick={onStop} aria-label="停止当前回复"><span className="pw-stop-ring" aria-hidden="true"><ProgressCircle isIndeterminate size="md" aria-label="当前回复状态"/></span><span className="pw-stop-mark" aria-hidden="true">■</span></button>}
+      </div>
      </div>
     </div>
    </div>

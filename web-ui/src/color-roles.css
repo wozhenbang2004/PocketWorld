@@ -71,7 +71,7 @@
   border-color: var(--pw-divider);
 }
 
-/* Popovers use a raised plane; the composer surface belongs to composer-compact.css. */
+/* Popovers use a raised plane; the composer surface belongs to composer-squircle.css. */
 :is(.pw-create-drawer, .pw-model-drawer, .pw-settings-dialog) {
   background: var(--pw-surface);
   border-color: var(--pw-edge);

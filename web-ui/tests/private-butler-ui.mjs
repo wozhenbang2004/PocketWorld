@@ -133,7 +133,8 @@ try {
   assert.deepEqual(continued, { taskId: 'work-b', runId: 'work-b-run', epoch: 1, action: 'continue' });
   await page.getByRole('button', { name: '返回原工作', exact: true }).click(); assert.equal(await input.inputValue(), '不要误发给新的执行轮次。');
   record.checks.push('An interrupted work remains reachable when native continuation is available; explicit continue uses its original tuple and preserves the independent conversation draft.');
-  await page.locator('[data-message-id="answer-a"]').getByRole('button', { name: /记忆与技能提案/ }).click();
+  await page.locator('[data-message-id="answer-a"]').getByRole('button', { name: '消息操作与来源', exact: true }).click();
+  await page.getByRole('button', { name: /记忆与技能提案/ }).click();
   await page.getByRole('button', { name: /记住你下午不喝咖啡/ }).click(); const memory = page.getByRole('dialog', { name: '保存这条记忆', exact: true }); await memory.waitFor();
   await memory.getByRole('button', { name: /^主体与依据/ }).click();
   await memory.getByRole('button', { name: /^适用条件与时间/ }).click();

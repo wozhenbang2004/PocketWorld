@@ -15,7 +15,7 @@ import {TeamHarnessFields} from '../src/TeamHarnessFields';
 import {TeamProductionFields} from '../src/TeamProductionFields';
 import {teamProductionDraft} from '../src/team-production';
 import {DesktopViewer} from '../src/DesktopViewer';
-import '../src/fonts.css';import '../src/app.css';import '../src/library.css';import '../src/secondary.css';import '../src/product.css';import '../src/workspace-refactor.css';import '../src/presentation-theme.css';import '../src/composer-compact.css';import '../src/motion.css';import '../src/uiux-surfaces.css';
+import '../src/fonts.css';import '../src/app.css';import '../src/library.css';import '../src/secondary.css';import '../src/product.css';import '../src/workspace-refactor.css';import '../src/presentation-theme.css';import '../src/composer-squircle.css';import '../src/motion.css';import '../src/uiux-surfaces.css';
 type Data=Record<string,any>;
 const copy=(value:any)=>structuredClone(value),now=Date.now(),hash='a'.repeat(64),calls:Data[]=[];
 const members=[{id:'research',name:'资料查询',role:'逐条核对原始材料，标记可靠出处。',assignment:'阅读本周新增资料，留下引用位置。',runner:'model',model:'研究模型',status:'running'},{id:'check',name:'结论核对',role:'比较结论与原文，指出需要补证的地方。',assignment:'等待资料查询完成后核对结论。',runner:'model',model:'核对模型',status:'waiting_dependency',dependsOn:['research']}];

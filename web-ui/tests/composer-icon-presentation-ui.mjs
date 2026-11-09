@@ -24,17 +24,19 @@ function documentFor(theme, state) {
   :root.dark{--pw-ink:#e8e8e8;--pw-copy:#bcbcbc;--pw-muted:#999;--pw-canvas:#181818;--pw-inset:#303030;--pw-surface:#242424;--pw-strong:#eee;--pw-on-strong:#111}
   button{font:inherit;border:0;display:flex;align-items:center;justify-content:center;cursor:pointer}button:disabled{opacity:.5;cursor:default}
   .pw-composer-region{width:100%;max-width:768px;margin:auto}.pw-composer-intent{display:flex;gap:0}.pw-press-front{display:flex;align-items:center;justify-content:center}svg{flex-shrink:0}
-  ${borderless}\n${styles}</style></head><body><div class="pw-composer-region"><div class="pw-composer-host pw-compact-composer pw-squircle-composer"><section class="afa-composer">
+  ${borderless}\n${styles}</style></head><body><div class="pw-composer-region"><div class="pw-composer-host pw-squircle-composer"><section class="afa-composer">
   <div class="pw-composer-context-rail"><span class="pw-composer-context-icons">${icon('context')}</span><span class="pw-composer-context-usage" aria-label="上下文已使用 57%"><i class="pw-composer-context-ring" aria-hidden="true"></i><span>57%</span></span></div>
-  <div class="afa-card pw-composer-card"><div class="pw-composer-row pw-composer-with-controls">
+  <div class="afa-card pw-composer-card"><div class="pw-composer-row">
   <textarea aria-label="工作输入" placeholder="问点什么…">${state === 'filled' ? '帮我分析' : ''}</textarea>
+  </div><div class="pw-composer-toolbar">
   <div class="pw-composer-leading"><div class="pw-composer-intent"><button aria-label="输入方式与选项">${icon('add')}</button><button aria-label="执行权限">${icon('permission')}</button></div></div>
+  <div class="pw-composer-trailing">
   <div class="pw-composer-controls"><div class="pw-conversation-model-controls">${chip('model', '切换模型：测试模型', locked)}${chip('reasoning', '推理强度：高', locked)}</div></div>
   <div class="afa-toolbar"><button class="afa-iconbtn" aria-label="语音输入">${icon('mic')}</button>${state === 'filled' ? `<button class="pw-press" aria-label="发送"><span class="pw-press-front">${icon('send')}</span></button>` : ''}</div>
-  </div></div></section></div></div><script>window.clicks=[];document.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>window.clicks.push(b.getAttribute('aria-label'))));</script></body></html>`;
+  </div></div></div></section></div></div><script>window.clicks=[];document.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>window.clicks.push(b.getAttribute('aria-label'))));</script></body></html>`;
 }
 try {
-  for (const width of [320, 350, 390, 430, 768]) for (const theme of ['light', 'dark']) for (const state of ['empty', 'filled', 'disabled']) {
+  for (const width of [320, 360, 390, 430, 768]) for (const theme of ['light', 'dark']) for (const state of ['empty', 'filled', 'disabled']) {
     const name = `${width}-${theme}-${state}`;
     const page = await browser.newPage({viewport: {width, height: 640}, reducedMotion: 'reduce'});
     try {
@@ -54,6 +56,19 @@ try {
       assert.ok(geometry.model < geometry.reasoning && geometry.reasoning < geometry.mic, 'controls out of order');
       assert.equal(geometry.overflow, false, 'composer overflows viewport');
       assert.equal(geometry.editorBorder, '0px');
+      const layout = await page.evaluate(() => {
+        const editor = document.querySelector('textarea').getBoundingClientRect();
+        const toolbar = document.querySelector('.pw-composer-toolbar').getBoundingClientRect();
+        const targets = [...document.querySelectorAll('.pw-composer-toolbar button')].map(node => {
+          const {x, y, width, height} = node.getBoundingClientRect();
+          return {x, y, width, height};
+        });
+        return {editorWidth:editor.width, toolbarWidth:toolbar.width, editorBottom:editor.bottom, toolbarTop:toolbar.top, targets};
+      });
+      assert.ok(Math.abs(layout.editorWidth-layout.toolbarWidth)<1, 'editing must have the full toolbar width');
+      assert.ok(layout.editorBottom<=layout.toolbarTop, 'editing must sit above the toolbar');
+      assert.ok(layout.targets.every(target=>target.width>=44&&target.height>=44), 'every action needs a 44px target');
+      assert.ok(layout.targets.every((target,index)=>index===0||layout.targets[index-1].x+layout.targets[index-1].width<=target.x+.5), 'toolbar targets must not overlap');
       if (state !== 'disabled') { await model.click(); await reasoning.click(); assert.deepEqual(await page.evaluate(()=>window.clicks), ['切换模型：测试模型','推理强度：高']); }
       if (width===390 && state==='empty') await page.screenshot({path:path.join(output, name+'.png')});
       checks.push({name,passed:true});

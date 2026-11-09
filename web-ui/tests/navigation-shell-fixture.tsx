@@ -14,7 +14,7 @@ import '../src/secondary.css';
 import '../src/product.css';
 import '../src/workspace-refactor.css';
 import '../src/presentation-theme.css';
-import '../src/composer-compact.css';
+import '../src/composer-squircle.css';
 import '../src/motion.css';
 import '../src/uiux-surfaces.css';
 
