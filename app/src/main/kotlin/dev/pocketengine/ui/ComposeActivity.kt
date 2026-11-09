@@ -79,7 +79,7 @@ class ComposeActivity : ComponentActivity() {
     private val developerLogExporter = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "developer-log-export").apply { isDaemon = true }
     }
-    private val developerLogPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("application/x-ndjson")) { uri ->
+    private val developerLogPicker = activityResultRegistry.register("pocketworld.developerLogExport", this, ActivityResultContracts.CreateDocument("application/x-ndjson")) { uri ->
         if (acceptBusinessResult("developerLogExport") && uri != null) {
             developerLogExporter.execute {
                 try {
