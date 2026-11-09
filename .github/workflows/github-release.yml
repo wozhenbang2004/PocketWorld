@@ -119,6 +119,8 @@ jobs:
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '22.22.0'
+          cache: npm
+          cache-dependency-path: web-ui/package-lock.json
 
       - name: Build and check the selected Web components
         run: |
@@ -152,7 +154,6 @@ jobs:
           : "${ANDROID_HOME:?Android SDK is required}"
           export ANDROID_SDK_ROOT="$ANDROID_HOME"
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
-          echo "GRADLE_USER_HOME=$RUNNER_TEMP/gradle-user-home" >> "$GITHUB_ENV"
           # The runner's defaults change; install the versions declared by this project.
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           set +o pipefail
@@ -209,7 +210,7 @@ jobs:
           # Compile only; retry transient transport failures without changing dependency sources.
           for attempt in 1 2 3; do
           set +e
-          ./gradlew --no-daemon --no-parallel --max-workers=1 --console=plain \
+          ./gradlew --no-daemon --build-cache --no-parallel --max-workers=2 --console=plain \
             -Pkotlin.compiler.execution.strategy=in-process \
             -Dorg.gradle.vfs.watch=false \
             -PpocketworldVersionCode="$RELEASE_VERSION_CODE" \
@@ -316,11 +317,13 @@ jobs:
           cp "$APK" build-artifacts/app-debug.apk
           cp app/build/generated/android-runtime/native-build-receipt.json build-artifacts/native-build-receipt.json
 
-      - name: Retain private APK and verification evidence
+      - name: Retain lightweight build evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pocketworld-debug-arm64-${{ github.run_number }}-${{ github.run_attempt }}
-          path: build-artifacts/
+          path: |
+            build-artifacts/
+            !build-artifacts/*.apk
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
@@ -347,7 +350,18 @@ jobs:
         with:
           name: pocketworld-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.release_prepare.outputs.handoff }}
+          compression-level: 0
           if-no-files-found: error
+          retention-days: 7
+
+      - name: Preserve signed APK if release preparation fails
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pocketworld-recovery-apk-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build-artifacts/app-debug.apk
+          if-no-files-found: ignore
+          compression-level: 0
           retention-days: 7
 
   publish:
