@@ -256,25 +256,7 @@ jobs:
       - name: Assemble installable debug APK
         run: |
           set -euo pipefail
-          # Compile only; retry transient transport failures without changing dependency sources.
-          for attempt in 1 2 3; do
-          set +e
-          ./gradlew --init-script "$RUNNER_TEMP/kotlin-central.init.gradle" --no-daemon --build-cache --no-parallel --max-workers=2 --console=plain \
-            -Pkotlin.compiler.execution.strategy=in-process \
-            -Dorg.gradle.vfs.watch=false \
-            -PpocketworldVersionCode="$RELEASE_VERSION_CODE" \
-            -PpocketworldVersionName="0.4.$RELEASE_VERSION_CODE" \
-            -PpocketworldUpdateManifestUrl="https://github.com/wozhenbang2004/PocketWorld/releases/latest/download/release.json" \
-            -PpocketworldUpdatePublicKey="$RELEASE_PUBLIC_SPKI" :app:assembleDebug 2>&1 | tee build-artifacts/build.log
-          result=${PIPESTATUS[0]}
-          set -e
-          if [[ "$result" == 0 ]]; then break; fi
-          if [[ "$attempt" == 3 ]] || ! grep -Eq "(504|502|503|timed out|Connection reset)" build-artifacts/build.log; then exit "$result"; fi
-          sleep $((attempt * 10))
-          done
-
-      - name: Resolve production manifest verifier dependency without running tests
-        run: |
+          # Resolve the manifest verifier in the same Gradle invocation; no test tasks.
           cat > "$RUNNER_TEMP/manifest-verifier.init.gradle" <<'GRADLE'
           gradle.projectsEvaluated {
               def app = gradle.rootProject.project(':app')
@@ -288,7 +270,22 @@ jobs:
               }
           }
           GRADLE
-          ./gradlew --no-daemon -I "$RUNNER_TEMP/manifest-verifier.init.gradle" resolveManifestVerifierDependency
+          # Compile only; retry transient transport failures without changing dependency sources.
+          for attempt in 1 2 3; do
+          set +e
+          ./gradlew --init-script "$RUNNER_TEMP/kotlin-central.init.gradle" --init-script "$RUNNER_TEMP/manifest-verifier.init.gradle" --no-daemon --build-cache --no-parallel --max-workers=2 --console=plain \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.vfs.watch=false \
+            -PpocketworldVersionCode="$RELEASE_VERSION_CODE" \
+            -PpocketworldVersionName="0.4.$RELEASE_VERSION_CODE" \
+            -PpocketworldUpdateManifestUrl="https://github.com/wozhenbang2004/PocketWorld/releases/latest/download/release.json" \
+            -PpocketworldUpdatePublicKey="$RELEASE_PUBLIC_SPKI" :app:assembleDebug resolveManifestVerifierDependency 2>&1 | tee build-artifacts/build.log
+          result=${PIPESTATUS[0]}
+          set -e
+          if [[ "$result" == 0 ]]; then break; fi
+          if [[ "$attempt" == 3 ]] || ! grep -Eq "(504|502|503|timed out|Connection reset)" build-artifacts/build.log; then exit "$result"; fi
+          sleep $((attempt * 10))
+          done
 
       - name: Apply stable project signing key
         env:
