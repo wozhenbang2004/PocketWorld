@@ -199,7 +199,7 @@ public final class ApiTurnStream {
                 }
                 break;
             case "anthropic": case "bedrock_anthropic":
-                terminalAnthropic(text(wire, "stop_reason", 64));
+                if (!Set.of("end_turn", "tool_use", "stop_sequence").contains(text(wire, "stop_reason", 64))) throw serverFailure(protocol, wire);
                 if(wire.has("role")&&!"assistant".equals(wire.optString("role")))throw invalid("AST-L203-1");
                 break;
             case "gemini": {
@@ -405,11 +405,17 @@ public final class ApiTurnStream {
             }
             if (type.equals("response.created")) {
                 JSONObject response = event.getJSONObject("response");
-                if (responseId != null || !"in_progress".equals(response.optString("status"))) throw invalid("AST-L406-1");
+                if (responseId != null || !Set.of("in_progress", "queued").contains(response.optString("status"))) throw invalid("AST-L406-1");
                 responseId = identity(response, "id"); return false;
             }
             if (responseId == null) throw invalid("AST-L409-1");
             switch (type) {
+                case "response.queued": {
+                    JSONObject response = event.getJSONObject("response");
+                    if (!responseId.equals(identity(response, "id")) || !"queued".equals(response.optString("status")))
+                        throw invalid("RESPONSES_QUEUED_IDENTITY");
+                    break;
+                }
                 case "response.in_progress": {
                     JSONObject response = event.getJSONObject("response");
                     if (!responseId.equals(identity(response, "id")) || !"in_progress".equals(response.optString("status")))
@@ -443,6 +449,7 @@ public final class ApiTurnStream {
                 case "response.content_part.added": {
                     ResponseItem item = item(event, "message"); int index = integer(event, "content_index", MAX_ITEMS);
                     JSONObject part = event.getJSONObject("part");
+                    if ("refusal".equals(part.optString("type"))) throw refused();
                     if (!"output_text".equals(part.optString("type")) || item.parts.containsKey(index) || item.done != null)
                         throw invalid("AST-L445-1");
                     String initial = part.has("text") ? text(part, "text", MAX_TEXT_CHARS) : "";
@@ -593,6 +600,13 @@ public final class ApiTurnStream {
                         append(block.arguments, text(delta, "partial_json", MAX_ARGUMENT_CHARS), MAX_ARGUMENT_CHARS); block.argumentDeltas = true;
                     } else if ("thinking_delta".equals(change) && "thinking".equals(kind)) {
                         extend(block.raw, "thinking", text(delta, "thinking", MAX_TEXT_CHARS), MAX_TEXT_CHARS);
+                    } else if ("citations_delta".equals(change) && "text".equals(kind)) {
+                        JSONObject citation = copy(delta.getJSONObject("citation"));
+                        JSONArray citations = block.raw.optJSONArray("citations");
+                        if (!block.raw.isNull("citations") && citations == null) throw invalid("ANTHROPIC_CITATIONS_TYPE");
+                        if (citations == null) { citations = new JSONArray(); block.raw.put("citations", citations); }
+                        if (citations.length() >= MAX_ITEMS) throw tooLarge();
+                        citations.put(citation);
                     } else if ("signature_delta".equals(change) && "thinking".equals(kind)) {
                         extend(block.raw, "signature", text(delta, "signature", MAX_TEXT_CHARS), MAX_TEXT_CHARS);
                     } else throw invalid("AST-L590-1");
@@ -609,7 +623,7 @@ public final class ApiTurnStream {
                     JSONObject counters=event.optJSONObject("usage");if(counters!=null){JSONObject merged=message.optJSONObject("usage");if(merged==null)merged=new JSONObject();for(Iterator<String> it=counters.keys();it.hasNext();){String key=it.next();merged.put(key,counters.get(key));}message.put("usage",merged);}
                     if (delta.has("stop_reason") && !delta.isNull("stop_reason")) {
                         for (AnthropicBlock block : blocks.values()) if (!block.done) throw invalid("AST-L603-1");
-                        if (finish != null) throw invalid("AST-L604-1"); finish = text(delta, "stop_reason", 64);usage.terminal(finish); terminalAnthropic(finish);
+                        if (finish != null) throw invalid("AST-L604-1"); finish = text(delta, "stop_reason", 64);usage.terminal(finish); if (!Set.of("end_turn", "tool_use", "stop_sequence").contains(finish)) throw serverFailure("anthropic.stop", delta);
                     }
                     break;
                 }
@@ -674,10 +688,9 @@ public final class ApiTurnStream {
                         if (!part.optBoolean("thought", false)) sink.text(value);
                     }
                     JSONObject previous = parts.length() == 0 ? null : parts.getJSONObject(parts.length() - 1);
-                    if (part.has("text") && previous != null && previous.has("text") && !previous.has("thoughtSignature")
+                    if (part.has("text") && previous != null && previous.has("text") && !previous.has("thoughtSignature") && !part.has("thoughtSignature")
                             && part.optBoolean("thought", false) == previous.optBoolean("thought", false)) {
                         extend(previous, "text", part.getString("text"), MAX_TEXT_CHARS);
-                        if (part.has("thoughtSignature")) previous.put("thoughtSignature", text(part, "thoughtSignature", MAX_TEXT_CHARS));
                     } else {
                         if (parts.length() >= MAX_ITEMS) throw tooLarge(); parts.put(part);
                     }
@@ -686,7 +699,7 @@ public final class ApiTurnStream {
             if (candidate.has("finishReason")) {
                 usage.terminal(candidate.optString("finishReason"));
                 usage.observe(event,ProviderUsage.Stage.FINAL);
-                if (!"STOP".equals(candidate.optString("finishReason"))) throw interrupted();
+                if (!"STOP".equals(candidate.optString("finishReason"))) throw serverFailure("gemini.finish", new JSONObject().put("reason", candidate.opt("finishReason")).put("message", candidate.opt("finishMessage")));
                 completed = new JSONObject().put("candidates", new JSONArray().put(new JSONObject().put("finishReason", "STOP")
                         .put("content", new JSONObject().put("role", "model").put("parts", parts))));
                 return true;
@@ -761,10 +774,10 @@ public final class ApiTurnStream {
         } else throw invalid("AST-L753-1");
     }
     private static void terminalChat(String reason) throws Exception {
-        if (!Set.of("stop", "tool_calls").contains(reason)) throw interrupted();
+        if (!Set.of("stop", "tool_calls").contains(reason)) throw new GatewayException("Chat终止原因: " + reason + "；本轮未提交工具执行。");
     }
     private static void terminalAnthropic(String reason) throws Exception {
-        if (!Set.of("end_turn", "tool_use", "stop_sequence").contains(reason)) throw interrupted();
+        if (!Set.of("end_turn", "tool_use", "stop_sequence").contains(reason)) throw new GatewayException("Anthropic终止原因: " + reason + "；本轮未提交工具执行。");
     }
     private static void extend(JSONObject target, String key, String delta, int max) throws Exception {
         String old = target.has(key) ? text(target, key, max) : "";
@@ -858,7 +871,7 @@ public final class ApiTurnStream {
     /** Preserve provider failure evidence; ModelGateway redacts configured credentials before display. */
     private static GatewayException serverFailure(String event, JSONObject payload) throws Exception {
         JSONObject details = new JSONObject();
-        for (String key : new String[]{"type", "status", "code", "message", "param", "reason"})
+        for (String key : new String[]{"type", "status", "code", "message", "param", "reason", "stop_reason", "stop_details", "finishReason", "finishMessage"})
             if (!payload.isNull(key)) details.put(key, payload.get(key));
         if (!payload.isNull("error")) details.put("error", payload.get("error"));
         if (!payload.isNull("incomplete_details")) details.put("incomplete_details", payload.get("incomplete_details"));
