@@ -20,6 +20,16 @@ jobs:
           persist-credentials: false
       - name: Apply reviewed production changes and regressions
         run: python3 tools/ci/phone-control-workbench.py
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22.22.0'
+          cache: npm
+          cache-dependency-path: web-ui/package-lock.json
+      - name: Prepare actual packaged Web assets required by native compilation
+        run: |
+          set -euo pipefail
+          npm ci --prefix web-ui
+          npm run build --prefix web-ui
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
         with:
           distribution: temurin
@@ -51,8 +61,8 @@ jobs:
         if: always()
         run: |
           mkdir -p build-artifacts/phone-control
-          git add -N app/src docs/verification tools/host-tests.json
-          git diff -- app/src docs/verification tools/host-tests.json > build-artifacts/phone-control/production.patch
+          git add -N app/src docs/verification tools/host-tests.json web-ui/src web-ui/tests
+          git diff -- app/src docs/verification tools/host-tests.json web-ui/src web-ui/tests > build-artifacts/phone-control/production.patch
           git status --short > build-artifacts/phone-control/status.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
@@ -85,7 +95,7 @@ jobs:
           set -euo pipefail
           npm exec --prefix web-ui -- playwright install --with-deps chromium
           node web-ui/tests/phone-composer-ui.mjs --output build-artifacts/phone-composer
-          node web-ui/tests/phone-handoff-ui.mjs --output build-artifacts/phone-handoff
+          node web-ui/tests/phone-handoff-ui.mjs --bundle app/src/main/assets/pocket-ui --output build-artifacts/phone-handoff
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -116,7 +126,7 @@ jobs:
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/src docs/verification tools/host-tests.json
+          git add app/src docs/verification tools/host-tests.json web-ui/src web-ui/tests
           git diff --cached --stat
           git commit -m 'fix: verify service binding and bounded observation on both phone displays'
           remote=$(git ls-remote origin "refs/heads/$WORK_BRANCH" | cut -f1)
