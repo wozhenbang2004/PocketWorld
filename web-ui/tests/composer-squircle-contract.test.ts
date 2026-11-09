@@ -7,9 +7,9 @@ const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
 const styles = readFileSync(new URL('../src/composer-squircle.css', import.meta.url), 'utf8');
 const scoped = readFileSync(new URL('../src/ScopedConversationModelControls.tsx', import.meta.url), 'utf8');
 
-test('composer retains native draft submission and shows send only for entered text', () => {
-  assert.match(composer, /const canSend=!disabled&&!submitting&&!sendDisabled&&!!value\.trim\(\)/);
-  assert.match(composer, /\{hasText&&\(!busy\|\|!onStop\|\|hasText\)&&!listening&&<PressButton/);
+test('composer retains native draft submission and shows send only for available content', () => {
+  assert.match(composer, /const canSend=!disabled&&!submitting&&!sendDisabled&&hasContent/);
+  assert.match(composer, /\{hasContent&&\(!busy\|\|!onStop\|\|hasContent\)&&!listening&&<PressButton/);
   assert.match(composer, /onKeyDown=\{e=>\{/);
   assert.match(app, /run\('composer\.send',\{key:draftKey,epoch:draftEpoch,text\}\)/);
 });

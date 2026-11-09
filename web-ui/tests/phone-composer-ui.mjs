@@ -77,7 +77,8 @@ try {
       await expect(reasoning).toBeVisible();
       await reasoning.getByText('高', { exact: true }).click();
       await expect.poll(() => page.evaluate(() => window.aiConversationFixture.summary().preference.target.reasoning.level)).toBe('high');
-      await page.evaluate(() => window.PocketWeb.handleBack());
+      await expect(panel.getByRole('button', { name: '关闭模型选择', exact: true })).toBeEnabled();
+      assert.equal(await page.evaluate(() => window.PocketWeb.handleBack()), true);
       await expect(panel).toBeHidden();
       await expect(editor).toHaveValue(goal);
       await page.getByRole('button', { name: '发送', exact: true }).click();
