@@ -74,7 +74,8 @@ export default function RemoteInboxWorkspace({state}: {state?:State}) {
     </section>
     {state?.configured&&<section className="pw-remote-receiver">
       <div><strong>主动接收</strong><p>可选的前台接收服务，适合需要快速发现新 Issue 时使用。会显示常驻系统通知。</p></div>
-      {state?.live?<Button variant="secondary" disabled={working} onClick={()=>void act('remoteInbox.stopLive')}>停止接收</Button>
+      <Button variant="ghost" disabled={working} onClick={()=>void act('remoteInbox.notificationPermission')}>通知权限</Button>
+      {state?.live&&state?.running?<Button variant="secondary" disabled={working} onClick={()=>void act('remoteInbox.stopLive')}>停止接收</Button>
         :<Button variant="secondary" disabled={working} onClick={()=>void act('remoteInbox.startLive')}>开启接收</Button>}
     </section>}
     {(configOpen||!state?.configured)&&<section className="pw-remote-config" aria-label="通知服务配置">
@@ -110,7 +111,7 @@ export default function RemoteInboxWorkspace({state}: {state?:State}) {
           <h3>{item.title}</h3>
           {item.body&&<p>{item.body}</p>}
           <div className="pw-remote-item-actions">
-            {safeUrl(item.url)&&<a href={safeUrl(item.url)} target="_blank" rel="noopener noreferrer">查看来源 <RiArrowRightUpLine size={14}/></a>}
+            {safeUrl(item.url)&&<Button variant="ghost" disabled={working} onClick={()=>void act('remoteInbox.open',{seq:item.seq})}>查看来源 <RiArrowRightUpLine size={14}/></Button>}
             {!item.read&&<Button variant="ghost" disabled={working} onClick={()=>void act('remoteInbox.mark',{seq:item.seq})}><RiCheckLine size={14}/>标记已读</Button>}
           </div>
         </div>
