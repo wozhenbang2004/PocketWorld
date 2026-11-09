@@ -8,6 +8,8 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import android.app.Activity
 import dev.pocketengine.EngineApplication
+import dev.pocketengine.core.RuntimeDiagnostics
+import java.util.concurrent.Executors
 import dev.pocketengine.media.MediaController
 import dev.pocketengine.features.attachments.OwnerAttachmentImport
 
@@ -74,6 +76,35 @@ class ComposeActivity : ComponentActivity() {
     private val ownerArchiveExportPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri -> if (acceptBusinessResult("archiveExport")) controller.ownerArchives.exportResult(uri) }
     internal fun pickOwnerDataArchive() { armBusinessPicker("archiveImport"); try { ownerArchiveImportPicker.launch(arrayOf("application/zip", "application/octet-stream")) } catch (_: RuntimeException) { pickerOwners.remove("archiveImport"); controller.ownerArchives.importResult(null) } }
     internal fun createOwnerDataArchive(name: String) { armBusinessPicker("archiveExport"); try { ownerArchiveExportPicker.launch(name) } catch (_: RuntimeException) { pickerOwners.remove("archiveExport"); controller.ownerArchives.exportResult(null) } }
+    private val developerLogExporter = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "developer-log-export").apply { isDaemon = true }
+    }
+    private val developerLogPicker = activityResultRegistry.register("pocketworld.developerLogExport", this, ActivityResultContracts.CreateDocument("application/x-ndjson")) { uri ->
+        if (acceptBusinessResult("developerLogExport") && uri != null) {
+            developerLogExporter.execute {
+                try {
+                    val stream = contentResolver.openOutputStream(uri, "w") ?: error("output unavailable")
+                    stream.use { RuntimeDiagnostics.exportDeveloperLogs(it) }
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed)
+                            android.widget.Toast.makeText(this, "开发诊断日志已保存", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } catch (failure: Exception) {
+                    RuntimeDiagnostics.event("diagnostics", "failed", "DEVELOPER_LOG_EXPORT_FAILED", null, failure)
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed)
+                            android.widget.Toast.makeText(this, "日志导出失败，请检查剩余空间", android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+    }
+    internal fun createDeveloperLogExport() {
+        armBusinessPicker("developerLogExport")
+        try { developerLogPicker.launch("pocketworld-developer-logs.jsonl") }
+        catch (failure: Exception) { pickerOwners.remove("developerLogExport"); throw failure }
+    }
+
     private var storageDiagnosticTicket: dev.pocketengine.features.local.runtime.NativeDiagnosticWindow.Ticket? = null
     private val storageDiagnosticPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         val original = storageDiagnosticTicket; storageDiagnosticTicket = null
@@ -420,5 +451,5 @@ class ComposeActivity : ComponentActivity() {
         controller.projectGitImports.save(outState)
         super.onSaveInstanceState(outState)
     }
-    override fun onDestroy() { if (::webHost.isInitialized) webHost.close(); attachmentPicker.close(); outcomeExportPicker.close(); if (functionalPackDocumentSlot.isInitialized()) functionalPackDocuments.close(); workingFilePickers.values.toList().forEach { it.unregister() };workingFilePickers.clear();if (::controller.isInitialized) runCatching { controller.detach() }; businessMounted=false; if (::media.isInitialized) media.close(); super.onDestroy() }
+    override fun onDestroy() { developerLogExporter.shutdown(); if (::webHost.isInitialized) webHost.close(); attachmentPicker.close(); outcomeExportPicker.close(); if (functionalPackDocumentSlot.isInitialized()) functionalPackDocuments.close(); workingFilePickers.values.toList().forEach { it.unregister() };workingFilePickers.clear();if (::controller.isInitialized) runCatching { controller.detach() }; businessMounted=false; if (::media.isInitialized) media.close(); super.onDestroy() }
 }

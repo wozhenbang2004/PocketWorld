@@ -138,6 +138,32 @@ public final class RuntimeDiagnostics {
     /** Owner UI only. Callers must retain their original visible native owner-window guard. */
     public static JSONObject snapshot() { return recorder.snapshot(); }
 
+    /** Large, redacted archive. Call from a worker, not from the Android UI thread. */
+    public static JSONObject developerLogPage(String mode, String cursor, int limit) throws java.io.IOException {
+        JSONObject page = recorder.archive.page(mode, cursor, limit);
+        if (!recorder.archive.enabled() && !"before".equals(mode)) {
+            // Off means "keep the existing lightweight recorder", not "stop diagnostics".
+            // No extra archive writes or task state mutations occur in this mode.
+            JSONArray recent = recorder.snapshot().optJSONArray("events");
+            JSONArray visible = new JSONArray();
+            if (recent != null) for (int i = Math.max(0, recent.length() - Math.min(200, limit)); i < recent.length(); i++)
+                visible.put(recent.optJSONObject(i));
+            page.put("entries", visible).put("older", JSONObject.NULL)
+                .put("next", JSONObject.NULL).put("hasOlder", false).put("expired", false)
+                .put("lightweight", true);
+        }
+        return page;
+    }
+    public static JSONObject developerLogCapacity(int miB) throws java.io.IOException {
+        return recorder.archive.capacity(miB);
+    }
+    public static JSONObject developerLogCapture(boolean enabled) throws java.io.IOException {
+        return recorder.archive.capture(enabled);
+    }
+    public static void exportDeveloperLogs(java.io.OutputStream target) throws java.io.IOException {
+        recorder.archive.export(target);
+    }
+
     public static final class Span implements AutoCloseable {
         private final Recorder owner;
         private final String stage, reference, operationId = UUID.randomUUID().toString();
@@ -207,14 +233,16 @@ public final class RuntimeDiagnostics {
         private final File directory;
         private final LineSink sink;
         private final ThreadPoolExecutor writer;
+        private final DeveloperLogArchive archive;
         private final AtomicLong droppedWrites = new AtomicLong(), writeFailures = new AtomicLong(), unreadableRecords = new AtomicLong();
         private final AtomicLong invalidMetadataEvents = new AtomicLong();
 
         Recorder(File directory, LineSink sink) {
             this.directory = directory; this.sink = sink;
+            this.archive = new DeveloperLogArchive(directory);
             if (directory == null) writer = null;
             else {
-                writer = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(MAX_EVENTS), work -> {
+                writer = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(4096), work -> {
                     Thread thread = new Thread(work, "runtime-diagnostics"); thread.setDaemon(true); return thread;
                 }, (work, pool) -> droppedWrites.incrementAndGet());
                 writer.execute(this::restore);
@@ -275,7 +303,7 @@ public final class RuntimeDiagnostics {
                 // A caller-provided sink is observational, including when it throws an Error.
                 // Never let it suppress a host recovery callback or replace the original failure.
                 if (sink != null) try { sink.write(line); } catch (Throwable ignored) { /* Never log a sink failure through itself. */ }
-                if (writer != null) writer.execute(() -> append(line));
+                if (writer != null) writer.execute(() -> { archive.append(line); append(line); });
             } catch (Exception ignored) {
                 // In particular, never replace the original failure with a diagnostic encoding failure.
                 writeFailures.incrementAndGet();
@@ -346,13 +374,19 @@ public final class RuntimeDiagnostics {
         }
 
         /** Test/process teardown only; ordinary reads never wait for the writer. */
-        @Override public void close() { if (writer != null) writer.shutdown(); }
+        @Override public void close() {
+            if (writer != null) {
+                try { writer.execute(archive::close); }
+                catch (java.util.concurrent.RejectedExecutionException unavailable) { archive.close(); }
+                writer.shutdown();
+            } else archive.close();
+        }
         boolean awaitWrites(long milliseconds) throws InterruptedException {
             return writer == null || writer.awaitTermination(milliseconds, TimeUnit.MILLISECONDS);
         }
     }
 
-    private static boolean safeStoredRow(JSONObject row) {
+    static boolean safeStoredRow(JSONObject row) {
         Set<String> keys = Set.of("format", "sessionId", "eventId", "operationId", "time", "stage", "outcome", "code",
                 "durationMs", "referenceHash", "logicalRequestHash", "nativeOperationHash", "taskId", "runId", "epoch", "exceptionTypes", "frames");
         for (java.util.Iterator<String> names = row.keys(); names.hasNext();) if (!keys.contains(names.next())) return false;
