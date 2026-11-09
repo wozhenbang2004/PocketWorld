@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -34,6 +35,8 @@ class Client:
   try:response=self.opener.open(req,timeout=90)
   except urllib.error.HTTPError as e:response=e
   with response:
+   if response.code in (301,302,303,307,308):
+    return response.code,dict(response.headers.items()),b''
    data=response.read(limit+1)
    if len(data)>limit:raise Stop('Response exceeds bound')
    return response.code,dict(response.headers.items()),data
@@ -42,7 +45,11 @@ class Client:
   data=None if value is None else json.dumps(value).encode()
   code,headers,body=self.response(API+path,method,data,{'Content-Type':'application/json'})
   if code==404 and allow404:return None
-  if code not in (200,201):raise Stop('GitHub API operation failed: HTTP '+str(code))
+  if code not in (200,201):
+   route=urllib.parse.urlsplit(path).path
+   if re.fullmatch(r'[A-Za-z0-9_./-]+',route):
+    print('PWERROR GitHub HTTP '+str(code)+' '+method+' '+route,file=sys.stderr)
+   raise Stop('GitHub API operation failed')
   return json.loads(body)
  def upload(self,release_id,name,path):
   data=Path(path).read_bytes()
@@ -144,7 +151,7 @@ def publish(client,tag,head,assets,verify_manifest,activate=False,resume_release
  existing={a['name']:a for a in draft.get('assets',[])}
  if len(existing)!=len(draft.get('assets',[])) or set(existing)-{x['name'] for x in assets}:raise Stop('Unexpected existing draft assets')
  uploaded=[]
- for item in assets:
+ for item in sorted(assets,key=lambda a:(a['name']=='release.json',a['name'].endswith('.apk'),a['name'])):
   a=existing.get(item['name'])
   if a is None:
    try:a=client.upload(rid,item['name'],item['file'])
