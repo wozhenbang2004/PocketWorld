@@ -33,12 +33,13 @@ public final class ApiConnectionProfile {
     /** Native storage only; credential values live in the existing SecretVault. */
     public JSONObject toJson()throws Exception{return new JSONObject().put("format","pocketworld.api-connection.v1").put("name",name)
         .put("revision",revision).put("enabled",enabled).put("secretSlot",secretSlot).put("credentialExpiresAtEpochMillis",credentialExpiresAtEpochMillis).put("config",configuration.publicJson());}
-    public JSONObject publicJson()throws Exception{return new JSONObject().put("id",id()).put("name",name).put("revision",revision)
+    public JSONObject publicJson()throws Exception{String status=credentialStatus();return new JSONObject().put("id",id()).put("name",name).put("revision",revision)
         .put("enabled",enabled).put("hasApiKey",!secretSlot.isEmpty()).put("provider",configuration.provider).put("baseUrl",configuration.baseUrl)
         .put("model",configuration.model).put("selectionReady",enabled&&!configuration.model.isEmpty()&&(!configuration.usesBedrock()||!secretSlot.isEmpty()&&System.currentTimeMillis()<credentialExpiresAtEpochMillis)).put("catalogEnabled",configuration.catalogEnforced).put("binding",configuration.capabilityBinding.toJson())
         .put("configuration",publicConfiguration()).put("credentialKind",configuration.usesBedrock()?"aws_sts_session":"api_key")
         .put("hasAwsSession",configuration.usesBedrock()&&!secretSlot.isEmpty()).put("bedrockRegion",configuration.bedrockRegion)
-        .put("credentialExpiresAt",expiry()).put("credentialStatus",credentialStatus()).put("hasApiKey",!configuration.usesBedrock()&&!secretSlot.isEmpty());}
+        .put("credentialExpiresAt",expiry()).put("credentialStatus",status).put("hasApiKey",!configuration.usesBedrock()&&!secretSlot.isEmpty())
+        .put("source",InferenceSourceDescriptor.forApi(configuration.provider,configuration.baseUrl,configuration.bedrockRegion,status));}
     private Object expiry(){return credentialExpiresAtEpochMillis<1?JSONObject.NULL:java.time.Instant.ofEpochMilli(credentialExpiresAtEpochMillis).toString();}
     private String credentialStatus(){return secretSlot.isEmpty()?"not_configured":!enabled?"disabled":configuration.usesBedrock()&&System.currentTimeMillis()>=credentialExpiresAtEpochMillis?"expired":"saved_unverified";}
     private JSONObject publicConfiguration()throws Exception{return configuration.publicJson().put("hasApiKey",!configuration.usesBedrock()&&!secretSlot.isEmpty())

@@ -395,3 +395,37 @@ DSH-Go 的可选分步准备作为旅程下限；PocketWorld 的单一 Web UI、
 沿最新“不要跑任何测试，直接构建发布”的发布要求，本轮不重新运行测试或另推测试分支。旧 `ai-services-checks`、`remote-inbox-checks` 和 `build-apk` 取消 main 的自动 push 触发，保留远端最新的特性分支触发、手动/原有 PR 入口与原测试内容；新发布流程不依赖这三个旧工作流，避免 main 提交重复测试和打包。既有路径契约的读取对象随实际自动入口调整为 `github-release.yml`；该入口当前没有路径过滤，因此所有 main 提交都触发发布。
 
 上表 809 项前端、14 项 Java 与 31 项定向回归是前一检查点的实际结果，本轮不冒称重新执行。业务源码相对此前已验证实现未再改变；新版浏览器画面、Android 实机及真实模型接入仍为未验证。当前执行普通非强制推送到 main，推送与构建发布的实际状态以远端提交和同次 Actions 回读为准，不将授权或排队当作发布成功。
+
+## 2026-11-09 AI 来源与调度接续
+
+### 接续目标与本批范围
+
+接续“深度研究UIUX”已确认的统一账号/API 接入方向：应用内使用已授权来源推理，本机 API 是独立出口。此前会话主路径改动已经合入 main，本批从 `47ae8be1` 接续，不重复迁移旧工作副本。继续沿单一 React UI、原生凭据与执行权威、现有 BoardUI/React Aria 和黑白灰无装饰描边规则。
+
+本批关闭三项实际缺口：来源归属混在品牌分组中、账号读取失败看似没有账号、模型组保存后缺少所选来源授权。保留现有模型协议、流式/工具执行、原生准入和有界重试机制。跨账号自动调度、供应商剩余额度查询及 Claude 订阅接入没有在本批宣称完成。
+
+### 用户可见行为与原生契约
+
+- 服务列表按“账号登录 / 官方 API / 第三方网关 / 本地服务 / 云平台”归类。官方 API 身份需要精确 HTTPS 主机及匹配协议；OpenAI 兼容协议不代表官方 OpenAI 服务。旧宿主由界面做显示回退，新宿主以公开 `source` 描述为准。
+- 原生 `InferenceSourceDescriptor` 只投影来源类别、供应商、认证方式、应用内用途、外部 relay 资格和既有凭据状态。它不读取凭据、不做 DNS、不改变存储格式、不授权请求。ChatGPT 套餐账号与 Bedrock 的外部 relay 资格为 false；实际启动仍由已有原生 gate 决定。
+- 账号摘要区分停用、需重新登录、已观察到的用量限制/限流、授权待核对、待允许模型使用和授权待续期。未知额度保持 unknown，不生成剩余额度数字。读取失败保留已有账号并提供“重新读取账号”，首次失败不显示误导性的空账号成功状态；迟到读取不能覆盖新快照，每个已返回窗口单独关闭。
+- 模型组保存时，`allowedAccounts` 精确取自当前已启用候选的去重来源。加入候选同步加入来源；移除最后一个启用候选即移除该来源；停用候选保留配置但不额外授权。已有空授权组通过打开并保存修复。原生 `captureModelTarget` 的准入规则不放宽，取消、修订变化和未知保存结果保持原行为。
+
+### Claude 登录研究结论与边界
+
+DSH-Go 确有 Claude OAuth 桥接：[固定版本的 AuthBridge](https://github.com/ccch1mneyyy/dsh-Go/blob/d15858a210381fa769ae6c89669f93c83dc35e45/app/assets/engine/auth/bridge.mjs) 调用 `authorization.begin` 的 `llm-pi-ai/anthropic` 流程。其锁定的 Pi 1.4.0 [Anthropic 推理适配](https://github.com/earendil-works/pi/blob/v1.4.0/packages/ai/src/api/anthropic-messages.ts) 为 OAuth 请求添加 Claude Code 身份头、CLI User-Agent、身份系统文本和工具名映射。代码存在不等于 PocketWorld 获得了第三方订阅接入授权，也未证明在本应用完成真实登录和推理。
+
+2026-11-09 核对 [Anthropic 认证与凭据说明](https://code.claude.com/docs/en/legal-and-compliance) 及 [Agent SDK 说明](https://code.claude.com/docs/en/agent-sdk/overview)：自有产品默认使用 API key 或支持的云供应商，第三方 Claude.ai 登录需事先批准；用户通过未修改的官方 Claude Code 登录是另一种允许的承载方式。本批不复制 CLI 身份伪装，也不增加不可用的订阅登录按钮。添加服务页明确说明 Claude API 密钥可接入、Claude 订阅尚未开放给本应用。官方 CLI 执行入口尚未实现，不以该备选路线替代已完成的原生统一推理能力。
+
+### 本批验证与继续入口
+
+| 检查 | 本批实际证据与限制 |
+| --- | --- |
+| 前端定向回归 | `ai-center.test.ts`、`ai-center-navigation.test.ts`、`ai-model-groups-journeys.test.ts` 共 **26/26 通过**。模型组缺陷修复前新增旅程用例为 5 失败/3 通过，同一组修复后 8/8 通过。 |
+| Web 构建 | `npm run build` 退出 0，含字体、许可归集、TypeScript、Vite 和构建回执。既有 bundle 体积提示与 `client-only` 许可 unknown 仍存在。 |
+| 原生来源描述 | 真实 `InferenceSourceDescriptorTest` **6/6 通过**，Java 21 编译器以 `-source 17 -target 17` 执行；不是完整 Android 编译或 Java 17 API 校验。 |
+| 原生集成 | 新增 Profile/AccountBook 投影检查已独立核对真实 API 与签名；本地缺少完整 Android/JDK17/OkHttp/Okio 依赖，未运行完整集成检查。模型组原生 host 流程同样未在本机跑通。 |
+| 独立审阅 | 来源投影不取 secret，订阅/Bedrock relay 边界与现有 gate 一致；额外乱序读取、切页返回、窗口关闭检查未发现本批流程阻断。 |
+| 视觉与实机 | **未验收**。本机 Chromium 受套接字限制；共享浏览器无法连接隔离进程的本地 QA 服务，提升进程权限的申请被当前环境策略拒绝。未取得本版截图，不以旧图或 handler 检查冒充视觉、WebView 或真实供应商验收。 |
+
+后续从本次 main 对应的 `GitHub Release` 运行回执核对 Android 构建/发布，不重复启动测试工作流。取得可用浏览器或 Android WebView 后，检查本版来源分组、账号错误重读及模型组保存→选用的真实旅程。自动额度调度必须先取得供应商真实额度/失败语义，不能把 unknown 当健康或可用余额；Claude 订阅的下一决定是可用授权路线及承载方式，不是补一个按钮。此次主线合入须保留并发输入框、流解析与发布改动，推送/构建成功分别以远端结果为准。

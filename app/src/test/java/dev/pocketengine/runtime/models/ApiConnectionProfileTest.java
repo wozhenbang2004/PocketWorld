@@ -35,5 +35,14 @@ public final class ApiConnectionProfileTest {
         JSONObject invalid=new ApiConnectionProfile("valid",1,true,"",manual()).toJson().put("revision",1.5);assertThrows(IllegalArgumentException.class,()->ApiConnectionProfile.fromJson(invalid));
         JSONObject downgrade=new ApiConnectionProfile("valid",1,true,"",manual()).toJson();downgrade.getJSONObject("config").put("catalogEnforced","false");assertThrows(IllegalArgumentException.class,()->ApiConnectionProfile.fromJson(downgrade));
     }
+    @Test public void publicSourceIsAdditiveAndNeverChangesStoredIdentityOrReadsASecret()throws Exception {
+        ApiConnectionProfile profile=new ApiConnectionProfile("OpenAI 官方",3,false,"model.api."+"b".repeat(64)+".0",manual());
+        String stored=profile.toJson().toString();JSONObject publicRow=profile.publicJson(),source=publicRow.getJSONObject("source");
+        assertEquals("third_party_gateway",source.getString("kind"));assertEquals("custom",source.getString("providerId"));
+        assertEquals("disabled",source.getString("credentialState"));assertEquals(publicRow.getString("credentialStatus"),source.getString("credentialState"));
+        assertEquals(profile.id(),publicRow.getString("id"));assertEquals(profile.revision,publicRow.getLong("revision"));
+        assertFalse(publicRow.toString().contains(profile.secretSlot));assertFalse(profile.toJson().has("source"));
+        assertEquals(stored,profile.toJson().toString());assertEquals(stored,ApiConnectionProfile.fromJson(profile.toJson()).toJson().toString());
+    }
 }
 

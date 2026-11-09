@@ -84,7 +84,8 @@ final class AccountBook {
                     .put("planUsageEnabled",row.optBoolean("planUsageEnabled")).put("cooldownUntil",row.optLong("cooldownUntil"))
                     .put("error",row.optString("error")).put("usageLimited",row.optBoolean("usageLimited"))
                     .put("diagnostics",row.optJSONObject("diagnostics")==null?new JSONObject():copy(row.getJSONObject("diagnostics")))
-                    .put("remoteRevocationConfirmed",row.optBoolean("remoteRevocationConfirmed")));
+                    .put("remoteRevocationConfirmed",row.optBoolean("remoteRevocationConfirmed"))
+                    .put("source",dev.pocketengine.runtime.models.InferenceSourceDescriptor.forChatGptAccount(row.getString("status"),row.optBoolean("usageLimited"))));
             }
             JSONObject result=new JSONObject().put("accounts",accounts).put("selectedAccountId",selected()).put("credentialCleanupRequired",cleanupRequired).put("planWelcomeRequired",!data.optBoolean("planWelcomeAcknowledged")&&hasPlanConnection());
             if(data.optJSONObject("login")!=null)result.put("login",copy(data.getJSONObject("login")));

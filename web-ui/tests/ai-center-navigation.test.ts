@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
-import { aiCatalogCurrent, aiConnections, aiCredentialStatus, aiObject, aiRows, aiServiceBrand, aiText } from '../src/ai-center-data.ts';
+import { aiAccountStatus, aiCatalogCurrent, aiConnections, aiConnectionSource, aiCredentialStatus, aiObject, aiRows, aiServiceBrand, aiSourceGroups, aiSourceLabel, aiText } from '../src/ai-center-data.ts';
 import { backgroundConnection } from '../src/forms-library/host-contracts.ts';
 import { normalizeWorkspaceRoute, workspaceForRoute, workspaceNavigationKey } from '../src/workspace-directory.ts';
 
@@ -27,8 +27,7 @@ function centerFixture(initial: Data = {}) {
     return { type, props: props || {}, children: children.flat(Infinity).filter(child => child !== false && child !== undefined && child !== null) };
   } };
   const deps: Data = { React, useState, useRef, useEffect, useLayoutEffect: useEffect, useCallback,
-    object: aiObject, rows: aiRows, text: aiText, aiCatalogCurrent, aiConnections, aiCredentialStatus, aiServiceBrand,
-    accountStatusText: (value: string) => value };
+    object: aiObject, rows: aiRows, text: aiText, aiAccountStatus, aiCatalogCurrent, aiConnections, aiConnectionSource, aiCredentialStatus, aiServiceBrand, aiSourceGroups, aiSourceLabel };
   for (const name of ['ChevronRight', 'KeyRound', 'Plus', 'RefreshCw', 'Server', 'Settings2', 'UserRound', 'Accordion', 'AccordionItem', 'Button', 'SearchField', 'SettingsDialog', 'StretchSwitch', 'TextField', 'Tabs', 'Tab', 'TabList', 'TabPanel', 'AIModelPicker', 'AIModelGroups']) deps[name] = name;
   const Component = new Function(...Object.keys(deps), compile(body) + '\nreturn AICenter;')(...Object.values(deps));
   const props: Data = { state: { modelName: 'original-model', modelSelectionRevision: 5 }, data: { connections: Array.from({ length: 6 }, (_, i) => ({ id: 'source-' + i, revision: 1, name: i ? 'Other ' + i : 'Anthropic', enabled: true, hasApiKey: true, provider: 'openai_chat', baseUrl: 'https://example.test/v1' })) },
@@ -43,7 +42,8 @@ function centerFixture(initial: Data = {}) {
   const find = (predicate: (node: any) => boolean) => { const node = walk(tree).find(node => node.visible && predicate(node)); assert.ok(node, 'expected production control'); return node; };
   render();
   return { props, calls, hosts, scroller, focused, find, render,
-    get view() { return tree.props['data-ai-view']; }, get nodes() { return walk(tree).filter(node => node.visible); },
+    get view() { return tree.props['data-ai-view']; }, get nodes() { return walk(tree).filter(node => node.visible); }, get text() { return content(tree); },
+    async flush() { for (let i = 0; i < 20; i++) { await Promise.resolve(); if (dirty) render(); } },
     click(label: string) { const node = find(node => node.type === 'Button' && content(node) === label); assert.ok(!node.props.disabled); node.props.onClick(); render(); },
     query(value: string) { find(node => node.type === 'SearchField' && node.props['aria-label'] === '搜索服务或账号').props.onChange(value); render(); },
     tab(value: string) { find(node => node.type === 'Tabs').props.onSelectionChange(value); render(); },
@@ -52,6 +52,36 @@ function centerFixture(initial: Data = {}) {
     back() { const handled = back?.(); render(); return handled; },
   };
 }
+
+test('failed account reads do not masquerade as an empty account center and can be reread', async () => {
+  let attempt = 0;
+  const calls: string[] = [];
+  const f = centerFixture({ data: { connections: [] }, supported: (action: string) => action === 'models.accounts.open',
+    run: async (action: string) => {
+      calls.push(action);
+      if (action === 'models.accounts.close') return {};
+      if (++attempt === 1) throw new Error('temporarily unavailable');
+      return { windowId: 'account-window-2', accountSnapshot: { accounts: [{ id: 'owner', label: '原来的账号', enabled: true, status: 'connected', planUsageEnabled: true }] } };
+    } });
+  await f.flush();
+  assert.match(f.text, /当前还不能确认已保存的账号/);
+  assert.doesNotMatch(f.text, /连接你的第一个 AI 服务/);
+  f.click('重新读取账号'); await f.flush();
+  assert.match(f.text, /原来的账号/); assert.match(f.text, /已登录/);
+  assert.doesNotMatch(f.text, /账号状态暂未更新/);
+  assert.deepEqual(calls, ['models.accounts.open', 'models.accounts.open', 'models.accounts.close']);
+});
+
+test('source categories remain distinct even when their model protocols are identical', async () => {
+  const f = centerFixture({ data: { connections: [
+    { id: 'official', name: '官方服务', provider: 'openai_responses', baseUrl: 'https://api.openai.com/v1', hasApiKey: true },
+    { id: 'gateway', name: '我的网关', provider: 'openai_responses', baseUrl: 'https://gateway.example/v1', hasApiKey: true },
+    { id: 'local', name: '本机模型', provider: 'openai_chat', baseUrl: 'http://127.0.0.1:11434/v1', hasApiKey: false },
+  ] } });
+  const groups = f.nodes.filter(node => node.type === 'section' && node.props.className === 'pw-ai-service-group');
+  assert.deepEqual(groups.map(node => node.props['aria-label']), ['官方 API', '第三方网关', '本地服务']);
+  assert.match(f.text, /官方服务/); assert.match(f.text, /我的网关/); assert.match(f.text, /本机模型/);
+});
 
 test('a pending model selection consumes Back before its busy render and releases it afterward', () => {
   const f = centerFixture(); f.tab('models');

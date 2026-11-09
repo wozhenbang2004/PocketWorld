@@ -65,6 +65,9 @@ export function AIModelGroups({ state, data, supported, run, registerTransientBa
   const existing = editor?.groupId ? groups.find(row => row.groupId === editor.groupId) : null;
   const stale = Boolean(editor && (editorSelectionRevision !== state.modelSelectionRevision || editor.groupId && (!existing || existing.revision !== editor.revision)));
   const invalidCandidates = candidates.some(candidate => !connections.some(connection => connection.id === candidate.target.connectionId && connection.provider !== 'bedrock_anthropic') || candidate.target.kind !== 'exact' || candidate.target.connectionId.startsWith('account:'));
+  // Saving grants this group only the sources of its current enabled candidates.
+  // Retained refs may be empty or name a source the owner has since removed.
+  const allowedSources = [...new Set(candidates.filter(candidate => candidate.enabled === true).map(candidate => candidate.target.connectionId))];
   const boundPurposes = removing ? Object.entries(bindings).filter(([, ref]) => object(ref).groupId === removing.groupId).map(([purpose]) => purpose) : [];
   return <section className="pw-ai-groups">
     {editor ? <>
@@ -82,7 +85,7 @@ export function AIModelGroups({ state, data, supported, run, registerTransientBa
       {invalidCandidates && <p className="pw-field-error" role="alert">此组含本界面暂不支持编辑的账号或 Bedrock 来源。保留原配置，请先核对用途。</p>}
       {stale && <p className="pw-field-error" role="alert">服务或模型组已在其他位置变化，请返回重新打开。</p>}
       <div className="pw-ai-picker-actions"><Button variant="ghost" disabled={busy} onClick={() => setEditor(null)}>取消</Button><Button disabled={busy || unknown || stale || invalidCandidates || !name.trim() || !candidates.length || !supported('models.groups.save')} onClick={() => void mutate('models.groups.save', {
-        id: text(editor.groupId), expectedRevision: Number(editor.revision || 0), name: name.trim(), definition: { allowedAccounts: editor.allowedAccounts || { mode: 'EXPLICIT', refs: [] },
+        id: text(editor.groupId), expectedRevision: Number(editor.revision || 0), name: name.trim(), definition: { allowedAccounts: { mode: 'EXPLICIT', refs: allowedSources },
           candidates: candidates.map(({ id: _id, ...row }) => row), attemptPolicy: { maxAttempts: switching ? Number(attempts) : 1, maxRouteSwitches: switching ? 1 : 0 } },
       }, '模型组已保存，尚未更改默认模型。')}>保存模型组</Button></div>
     </> : <>
