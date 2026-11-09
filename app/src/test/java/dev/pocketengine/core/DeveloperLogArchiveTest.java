@@ -22,6 +22,8 @@ public final class DeveloperLogArchiveTest {
         File folder = Files.createTempDirectory("pw-dev-log").toFile();
         String first = "", last = "";
         try (DeveloperLogArchive logs = new DeveloperLogArchive(folder)) {
+            assertFalse(logs.enabled());
+            logs.capture(true);
             JSONObject prototype = safe();
             for (int i = 0; i < 1800; i++) {
                 JSONObject row = new JSONObject(prototype.toString())
@@ -55,6 +57,7 @@ public final class DeveloperLogArchiveTest {
     @Test public void unknownFieldsAndSecretsAreNotWrittenOrExported() throws Exception {
         File folder = Files.createTempDirectory("pw-dev-log-private").toFile();
         try (DeveloperLogArchive logs = new DeveloperLogArchive(folder)) {
+            logs.capture(true);
             JSONObject safe = safe();
             logs.append(safe.toString());
             logs.append(new JSONObject(safe.toString()).put("prompt", "very-private-secret").toString());
@@ -65,9 +68,12 @@ public final class DeveloperLogArchiveTest {
             logs.export(output);
             assertFalse(output.toString(StandardCharsets.UTF_8).contains("very-private-secret"));
             logs.capacity(2048);
+            logs.capture(false);
+            assertFalse(logs.enabled());
         }
         try (DeveloperLogArchive restored = new DeveloperLogArchive(folder)) {
             assertEquals(2048, restored.stats().getInt("capacityMiB"));
+            assertFalse(restored.enabled());
         }
     }
 }
