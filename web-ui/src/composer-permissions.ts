@@ -28,7 +28,7 @@ export function composerPermissionView(nativeState: unknown): ComposerPermission
     if (!selected) return null; // Never substitute an unrelated old task for a currently running turn.
   } else {
     const anchored = new Set(messages.map(m => m.taskId).filter(identifier));
-    const eligible = tasks.filter(t => isOwner(t) && anchored.has(t.id));
+    const eligible = tasks.filter(t => isOwner(t) && identifier(t.id) && anchored.has(t.id));
     selected = eligible.reverse().find(t => ['awaiting_approval','waiting_approval','waiting_permission','awaiting_user','needs_confirmation'].includes(String(t.status))) ?? eligible[0];
   }
   if (!selected) return null;
