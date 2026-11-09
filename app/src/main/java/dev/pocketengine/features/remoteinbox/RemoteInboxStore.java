@@ -30,6 +30,10 @@ public final class RemoteInboxStore {
     private final AtomicFile journal;
     private final AtomicFile settings;
     private long openRevision = 0;
+    private final java.util.concurrent.CopyOnWriteArrayList<Runnable> observers = new java.util.concurrent.CopyOnWriteArrayList<>();
+    public void observe(Runnable observer) { observers.addIfAbsent(observer); }
+    public void unobserve(Runnable observer) { observers.remove(observer); }
+    private void announce() { for (Runnable observer : observers) observer.run(); }
 
     private RemoteInboxStore(Context context) {
         File directory = new File(context.getNoBackupFilesDir(), "remote-inbox");
@@ -128,10 +132,12 @@ public final class RemoteInboxStore {
         // mismatched identity causes a safe cursor reset, not cross-account replay.
         write(settings, next);
         if (!same) write(journal, new JSONObject().put("configId", configId).put("cursor", 0).put("events", new JSONArray()));
+        announce();
     }
     public synchronized void disconnect() throws Exception {
         write(settings, new JSONObject());
         write(journal, new JSONObject().put("cursor", 0).put("events", new JSONArray()));
+        announce();
     }
     public synchronized boolean configured() throws Exception {
         JSONObject cfg = load(settings);
@@ -145,6 +151,7 @@ public final class RemoteInboxStore {
         if (!config.has("token")) throw new IllegalStateException("尚未配置远程通知");
         config.put("live", enabled);
         write(settings, config);
+        announce();
     }
     public synchronized String configId() throws Exception { return load(settings).optString("configId"); }
     private JSONObject activeJournal() throws Exception {
@@ -155,7 +162,7 @@ public final class RemoteInboxStore {
         return saved;
     }
     public synchronized long cursor() throws Exception { return activeJournal().optLong("cursor", 0); }
-    public synchronized void signalOpen() { openRevision++; }
+    public synchronized void signalOpen() { openRevision++; announce(); }
     public synchronized JSONObject snapshot() throws Exception {
         JSONObject state = activeJournal();
         JSONObject config = load(settings);
@@ -211,6 +218,7 @@ public final class RemoteInboxStore {
         int skipNew = Math.max(0, keepFrom - current.length());
         for (int i = skipNew; i < admitted.size(); i++) next.put(admitted.get(i));
         write(journal, new JSONObject().put("configId", expectedConfigId).put("cursor", highest).put("events", next));
+        if (!admitted.isEmpty()) announce();
         return admitted;
     }
     public synchronized JSONObject find(long seq) throws Exception {
@@ -233,6 +241,7 @@ public final class RemoteInboxStore {
         }
         if (!found) throw new IllegalArgumentException("通知已不在保留范围");
         write(journal, state);
+        announce();
     }
     public synchronized List<JSONObject> pendingAlerts() throws Exception {
         JSONArray entries = activeJournal().optJSONArray("events");
