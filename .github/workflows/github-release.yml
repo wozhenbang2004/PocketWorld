@@ -207,20 +207,26 @@ jobs:
       - name: Acquire pinned Kotlin compiler from official Maven Central direct endpoint
         run: |
           python3 - <<'PY_COMPILER'
-          import hashlib, os, pathlib, urllib.request, time
+          import hashlib, os, pathlib, urllib.request, urllib.parse, time
           expected = 'c54a00718c8c0e3ee858bf42771c7f401c5e3c1738861e18e9536371042fa1b3'
           sha1 = '4ef56b3316798316bfac7a0ae443391c9e900ea1'
           home = pathlib.Path(os.environ.get('GRADLE_USER_HOME', str(pathlib.Path.home()/'.gradle')))
           target = home/'caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-compiler-embeddable/2.1.20'/sha1/'kotlin-compiler-embeddable-2.1.20.jar'
           target.parent.mkdir(parents=True, exist_ok=True)
           if not target.exists() or hashlib.sha256(target.read_bytes()).hexdigest() != expected:
-              class NoRedirect(urllib.request.HTTPRedirectHandler):
-                  def redirect_request(self, *args): return None
-              url = 'https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-compiler-embeddable/2.1.20/kotlin-compiler-embeddable-2.1.20.jar'
+              class SafeRedirect(urllib.request.HTTPRedirectHandler):
+                  max_redirections = 4
+                  def redirect_request(self, req, fp, code, msg, headers, newurl):
+                      parsed = urllib.parse.urlsplit(newurl)
+                      hosts = {'repo1.maven.org', 'repo.maven.apache.org', 'maven-central.storage-download.googleapis.com', 'github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com'}
+                      if parsed.scheme != 'https' or parsed.hostname not in hosts or parsed.username or parsed.password:
+                          raise ValueError('Untrusted compiler download redirect')
+                      return super().redirect_request(req, fp, code, msg, headers, newurl)
+              url = 'https://maven-central.storage-download.googleapis.com/maven2/org/jetbrains/kotlin/kotlin-compiler-embeddable/2.1.20/kotlin-compiler-embeddable-2.1.20.jar'
               temp = target.with_suffix('.part')
               for attempt in range(3):
                   try:
-                      with urllib.request.build_opener(NoRedirect).open(url, timeout=120) as response, temp.open('wb') as out:
+                      with urllib.request.build_opener(SafeRedirect).open(url, timeout=120) as response, temp.open('wb') as out:
                           while chunk := response.read(1024*1024): out.write(chunk)
                       break
                   except Exception:
@@ -237,7 +243,7 @@ jobs:
           gradle.settingsEvaluated { settings ->
               settings.dependencyResolutionManagement.repositories.exclusiveContent {
                   forRepository {
-                      maven { url = uri('https://repo1.maven.org/maven2') }
+                      maven { url = uri('https://maven-central.storage-download.googleapis.com/maven2') }
                   }
                   filter { includeModule('org.jetbrains.kotlin', 'kotlin-compiler-embeddable') }
               }
