@@ -52,6 +52,8 @@ def download_baseline(repo,work,c,env):
  runner.tool('verify-envelope','--envelope',envelope,'--classpath',c['org_json_classpath'],'--allow-expired-baseline','--output',verified)
  proof=cli.read(verified)
  if proof.get('signatureVerified') is not True or proof.get('pinSpkiSha256')!=cli.first.PIN:raise ValueError('Baseline trust mismatch')
+ if cli.first.version_code(release['tag_name']) != proof['versionCode']:
+  raise ValueError('Baseline public tag differs from signed Android versionCode')
  artifact=proof['apk']
  prefix='https://github.com/'+cli.publisher.REPO+'/releases/download/'+release['tag_name']+'/'
  if not artifact['url'].startswith(prefix):raise ValueError('Baseline URL not bound to current release')
