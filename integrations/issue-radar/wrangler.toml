@@ -1,0 +1,15 @@
+name = "pocketworld-notice-relay"
+main = "src/worker.mjs"
+compatibility_date = "2026-11-01"
+
+[triggers]
+crons = ["* * * * *"]
+
+# Bind your own D1 database ID here. Never commit tokens.
+[[d1_databases]]
+binding = "DB"
+database_name = "pocketworld-notices"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+[vars]
+WATCH_REPOS = "mybatis/mybatis-3,vuejs/core,netty/netty,apache/dubbo"
