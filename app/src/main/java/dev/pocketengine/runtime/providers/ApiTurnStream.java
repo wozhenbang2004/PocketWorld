@@ -485,7 +485,7 @@ public final class ApiTurnStream {
                         if (entry.getKey() >= output.length()) throw invalid("AST-L485-1");
                         JSONObject finalItem = output.getJSONObject(entry.getKey());
                         checkItem(entry.getValue(), finalItem,true);
-                        if (entry.getValue().done != null && !same(entry.getValue().done, finalItem)) throw invalid("AST-L488-1");
+                        if (entry.getValue().done != null && !same(responseSemantics(entry.getValue().done), responseSemantics(finalItem))) throw invalid("AST-L488-1");
                     }
                     completed = copy(raw); return true;
                 }
@@ -786,6 +786,38 @@ public final class ApiTurnStream {
     }
     private static JSONObject eventObject(String value)throws Exception{try{return ProtocolJson.parseEvent(value);}catch(Exception bad){GatewayException failure=invalid("AST-L787-1");failure.initCause(bad);throw failure;}}
     private static JSONObject copy(JSONObject value) throws Exception { return eventObject(value.toString()); }
+    /** Compare execution/display payloads, not transport metadata or opaque reasoning state. */
+    private static JSONObject responseSemantics(JSONObject item) throws Exception {
+        String type = identity(item, "type");
+        JSONObject value = new JSONObject().put("id", identity(item, "id")).put("type", type);
+        switch (type) {
+            case "function_call":
+                value.put("call_id", identity(item, "call_id")).put("name", identity(item, "name"))
+                        .put("arguments", text(item, "arguments", MAX_ARGUMENT_CHARS));
+                if (!item.isNull("namespace") && !text(item, "namespace", 256).isEmpty())
+                    throw invalid("RESPONSES_FUNCTION_NAMESPACE");
+                break;
+            case "message":
+                value.put("role", item.optString("role", "assistant"));
+                JSONArray content = item.getJSONArray("content"), payload = new JSONArray();
+                for (int i = 0; i < content.length(); i++) {
+                    JSONObject part = content.getJSONObject(i);
+                    if (!"output_text".equals(part.optString("type")))
+                        throw invalid("RESPONSES_MESSAGE_CONTENT_TYPE");
+                    payload.put(new JSONObject().put("type", "output_text")
+                            .put("text", text(part, "text", MAX_TEXT_CHARS)));
+                }
+                value.put("content", payload);
+                break;
+            case "reasoning":
+                // The native adapter does not display or execute reasoning items.
+                // encrypted_content/summary metadata can be finalized on completion.
+                break;
+            default: throw invalid("RESPONSES_OUTPUT_ITEM_TYPE");
+        }
+        return value;
+    }
+
     private static boolean same(Object a, Object b) throws Exception {
         if (a instanceof JSONObject && b instanceof JSONObject) {
             JSONObject left = (JSONObject) a, right = (JSONObject) b;
