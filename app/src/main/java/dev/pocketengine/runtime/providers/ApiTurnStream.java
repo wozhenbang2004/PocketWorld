@@ -184,7 +184,7 @@ public final class ApiTurnStream {
                 if (choices.length() != 1) throw invalid();
                 JSONObject choice = choices.getJSONObject(0);
                 terminalChat(text(choice, "finish_reason", 64));
-                if (choice.getJSONObject("message").has("function_call")) throw invalid();
+                if (!choice.getJSONObject("message").isNull("function_call")) throw invalid();
                 break;
             }
             case "openai_responses":
@@ -285,7 +285,7 @@ public final class ApiTurnStream {
                 return true;
             }
             JSONObject chunk = eventObject(frame.data);
-            if (chunk.has("error") || !"chat.completion.chunk".equals(chunk.optString("object"))) throw invalid();
+            if (!chunk.isNull("error") || !"chat.completion.chunk".equals(chunk.optString("object"))) throw invalid();
             if (chunk.has("id")) {
                 String id = identity(chunk, "id");
                 if (responseId != null && !responseId.equals(id)) throw invalid();
@@ -300,10 +300,10 @@ public final class ApiTurnStream {
             JSONObject choice = choices.getJSONObject(0);
             if (integer(choice, "index", 1) != 0) throw invalid();
             JSONObject delta = choice.getJSONObject("delta");
-            if (delta.has("role") && !"assistant".equals(delta.optString("role"))) throw invalid();
+            if (!delta.isNull("role") && !"assistant".equals(delta.optString("role"))) throw invalid();
             // Numeric evidence from this parsed response is independent of presentation callbacks.
             usage.observe(chunk,ProviderUsage.Stage.PARTIAL);
-            if (delta.has("function_call")) throw invalid(); // Legacy calls have no stable tool identity.
+            if (!delta.isNull("function_call")) throw invalid(); // Legacy calls have no stable tool identity.
             if (delta.has("refusal") && !delta.isNull("refusal") && !text(delta, "refusal", MAX_TEXT_CHARS).isEmpty())
                 throw refused();
             if (delta.has("content") && !delta.isNull("content")) {
@@ -312,7 +312,7 @@ public final class ApiTurnStream {
             }
             if (delta.has("reasoning_content") && !delta.isNull("reasoning_content"))
                 append(reasoning, text(delta, "reasoning_content", MAX_TEXT_CHARS), MAX_TEXT_CHARS);
-            if (delta.has("tool_calls")) {
+            if (!delta.isNull("tool_calls")) {
                 JSONArray fragments = delta.getJSONArray("tool_calls");
                 Set<Integer> frameIndexes = new HashSet<>();
                 for (int i = 0; i < fragments.length(); i++) {
@@ -815,7 +815,11 @@ public final class ApiTurnStream {
             JSONArray array = (JSONArray) value; for (int i = 0; i < array.length(); i++) unicodeTree(array.get(i), depth + 1);
         }
     }
-    private static GatewayException invalid() { return new GatewayException("模型流的结构、调用身份或参数不一致；未派发工具，也没有自动重试。"); }
+    private static GatewayException invalid() {
+        StackTraceElement[] trace = new Throwable().getStackTrace();
+        String location = trace.length > 1 ? trace[1].getClassName() + "." + trace[1].getMethodName() + ":" + trace[1].getLineNumber() : "unknown";
+        return new GatewayException("模型流校验失败 [" + location + "]；未派发工具，也没有自动重试。");
+    }
     private static GatewayException interrupted() { return new GatewayException("模型流没有取得可验证的完整终态；临时输出不能作为完成结果，未派发工具，没有自动重试。"); }
     private static GatewayException tooLarge() { return new GatewayException("模型流超过本次大小或事件限制；未派发工具，没有自动重试。"); }
     private static GatewayException refused() { return new GatewayException("模型拒绝或阻止了本次请求；未派发工具，也没有自动换模型重试。"); }
