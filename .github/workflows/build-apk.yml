@@ -1,4 +1,4 @@
-name: Build private debug APK
+name: Build debug APK
 run-name: ${{ github.event_name == 'pull_request' && (github.head_ref == 'feature/phone-team-sessions-20261104' && 'phone-team-sessions' || github.head_ref == 'feature/desktop-hybrid-control-20261104' && 'Desktop hybrid integration tests' || (github.head_ref == 'pro/workpack-02-phone-control' || github.head_ref == 'integrate/pr8-pr15-20261103') && 'Phone control integration tests' || github.head_ref == 'pro/workpack-06-model-quality' && 'Model quality host tests' || github.head_ref == 'pro/aion-alma-full-report-takeover' && 'Aion/ALMA host tests' || (github.head_ref == 'pro/workpack-04-mcp-skills' || github.head_ref == 'pro/operit-full-takeover-20261103') && 'MCP, Skills, profiles, phone and memory host tests' || 'Bounded phone/memory host tests') || github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' && format('Host tests · {0}', inputs.host_groups != '' && 'selected batch' || inputs.host_group) || 'Debug APK' }} · ${{ github.ref_name }} · ${{ github.run_number }}
 
 on:
@@ -62,7 +62,7 @@ concurrency:
 
 jobs:
   apk:
-    if: ${{ github.event.repository.private && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.target != 'host-tests') }}
+    if: ${{ github.repository == 'wozhenbang2004/PocketWorld' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.target == 'apk')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     outputs:
@@ -280,7 +280,7 @@ jobs:
   host-tests:
     # Preserve each same-repository workpack's explicit batch and the original manual selection.
     # Preserve Workpack 04 batches; takeover adds exact project/runtime checks. PRs never package an APK.
-    if: ${{ github.event.repository.private && (github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.head_ref == 'feature/phone-team-sessions-20261104' || github.head_ref == 'feature/desktop-hybrid-control-20261104' || github.head_ref == 'integrate/mika-issues-batch-20261103' || github.head_ref == 'pro/operit-full-takeover-20261103' || github.head_ref == 'pro/workpack-04-mcp-skills' || github.head_ref == 'pro/dsh-runtime-continuity' || github.head_ref == 'pro/workpack-06-model-quality' || github.head_ref == 'pro/workpack-05-memory-quality' || github.head_ref == 'pro/workpack-03-phone-api-cli' || github.head_ref == 'pro/magpie-core-closure-20261103' || github.head_ref == 'pro/workpack-02-phone-control' || github.head_ref == 'pro/mika-full-takeover-20261103' || github.head_ref == 'integrate/pr8-pr15-20261103' || github.head_ref == 'pro/memory-full-report-takeover' || github.head_ref == 'pro/aion-alma-full-report-takeover' || github.head_ref == 'recovery/finish-restored-workspace-20261104' || (github.head_ref == 'uiux/pr32-restored-integration-20261104' || github.head_ref == 'uiux/pr33-bootstrap-progress-20261104'))) }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.target == 'host-tests' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.head_ref == 'feature/phone-team-sessions-20261104' || github.head_ref == 'feature/desktop-hybrid-control-20261104' || github.head_ref == 'integrate/mika-issues-batch-20261103' || github.head_ref == 'pro/operit-full-takeover-20261103' || github.head_ref == 'pro/workpack-04-mcp-skills' || github.head_ref == 'pro/dsh-runtime-continuity' || github.head_ref == 'pro/workpack-06-model-quality' || github.head_ref == 'pro/workpack-05-memory-quality' || github.head_ref == 'pro/workpack-03-phone-api-cli' || github.head_ref == 'pro/magpie-core-closure-20261103' || github.head_ref == 'pro/workpack-02-phone-control' || github.head_ref == 'pro/mika-full-takeover-20261103' || github.head_ref == 'integrate/pr8-pr15-20261103' || github.head_ref == 'pro/memory-full-report-takeover' || github.head_ref == 'pro/aion-alma-full-report-takeover' || github.head_ref == 'recovery/finish-restored-workspace-20261104' || (github.head_ref == 'uiux/pr32-restored-integration-20261104' || github.head_ref == 'uiux/pr33-bootstrap-progress-20261104'))) }}
     name: Host tests (${{ matrix.batch }})
     strategy:
       fail-fast: false
