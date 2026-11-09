@@ -130,6 +130,41 @@ public final class AndroidRuntimePreparationTest {
             AndroidRuntimePreparation repair=new AndroidRuntimePreparation(root.toFile(),nativeLib.toFile(),approved,environment,home.toFile(),tmp.toFile());assertFalse(repair.ready());assertEquals("repair_required",repair.describe(true).getJSONObject("preparation").getString("phase"));assertTrue(Files.isDirectory(old));assertTrue(Files.exists(generation.resolve("rootfs/usr/bin/sh")));assertEquals("fixture sh",new String(Files.readAllBytes(generation.resolve("rootfs/usr/bin/sh")),StandardCharsets.UTF_8));
         }finally{cleanup(root);}
     }
+    @Test public void healthySameCatalogRecheckClearsFailedProgressAndRetainsOriginalSealWithoutDownloadOrDispatch() throws Exception {
+        Path root=Files.createTempDirectory("runtime-healthy-recheck-");ManagedProcessJobs jobs=null;
+        try {
+            Path workspace=Files.createDirectory(root.resolve("workspace")),home=Files.createDirectory(root.resolve("home")),tmp=Files.createDirectory(root.resolve("tmp")),nativeLib=Files.createDirectory(root.resolve("native"));
+            // Synthetic checksum fixtures only: neither these engines nor the sealed tools may execute.
+            Path proot=Files.writeString(nativeLib.resolve("libproot.so"),"synthetic engine, never exec"),loader=Files.writeString(nativeLib.resolve("libloader.so"),"synthetic loader, never exec");
+            assertTrue(proot.toFile().setExecutable(true));assertTrue(loader.toFile().setExecutable(true));
+            JSONObject descriptor=catalog();descriptor.getJSONObject("engine").put("prootSha256",RuntimeFiles.sha256(proot.toFile())).put("loaderSha256",RuntimeFiles.sha256(loader.toFile()));AndroidRuntimeCatalog approved=new AndroidRuntimeCatalog(descriptor);
+            jobs=new ManagedProcessJobs(root.toFile(),new NativeProcessSupervisor());RuntimeEnvironment environment=new RuntimeEnvironment(root.toFile(),jobs::requireEnvironmentIdle);
+            Path androidRoot=Files.createDirectory(root.resolve("android-runtime"));RuntimeLinkStorage storage=new RuntimeLinkStorage(androidRoot.toFile());JSONObject binding=storage.allocate(approved.identity);Path backing=storage.require(binding,approved.identity).toPath();JSONArray tools=new JSONArray();
+            for(String name:List.of("sh","node","npm","python3","git")){
+                Path file=Files.writeString(backing.resolve(".l2s."+name+"0001.0001"),"synthetic sealed "+name);
+                tools.put(new JSONObject().put("name",name).put("path","/usr/bin/"+name).put("sha256",RuntimeFiles.sha256(file.toFile())).put("bytes",Files.size(file)).put("modifiedAt",file.toFile().lastModified()).put("observedVersion","fixture-only saved version "+name));
+            }
+            JSONObject seal=new JSONObject().put("schema","pocketworld.runtime-generation.v1").put("catalogIdentity",approved.identity).put("catalog",descriptor).put("linkStorage",binding).put("tools",tools).put("syntheticFixture",true);
+            String identity=ProjectSources.digest(seal);seal.put("generationIdentity",identity);Path generation=Files.createDirectory(environment.generationStorage().toPath().resolve(identity)),bin=Files.createDirectories(generation.resolve("rootfs/usr/bin"));
+            for(int i=0;i<tools.length();i++){String name=tools.getJSONObject(i).getString("name");Files.createSymbolicLink(bin.resolve(name),backing.resolve(".l2s."+name+"0001.0001"));}
+            Path sealFile=generation.resolve("generation.json"),pointer=androidRoot.resolve("active.json"),progress=androidRoot.resolve("preparation.json");
+            RuntimeFiles.write(sealFile.toFile(),seal);RuntimeFiles.write(pointer.toFile(),new JSONObject().put("generationIdentity",identity).put("catalogIdentity",approved.identity));
+            RuntimeFiles.write(progress.toFile(),new JSONObject().put("phase","failed").put("catalogIdentity",approved.identity).put("error","fixture_prior_failure"));
+            byte[] originalSeal=Files.readAllBytes(sealFile),originalPointer=Files.readAllBytes(pointer);AtomicInteger downloads=new AtomicInteger();
+            AndroidRuntimePreparation preparation=new AndroidRuntimePreparation(root.toFile(),nativeLib.toFile(),approved,environment,home.toFile(),tmp.toFile(),request->{downloads.incrementAndGet();throw new IllegalStateException("healthy_recheck_must_not_download");});
+            assertTrue(preparation.ready());assertEquals("failed",preparation.describe(true).getJSONObject("preparation").getString("phase"));
+            long startedAt=System.currentTimeMillis();RuntimeInvocation original=invocation(workspace,"healthy-recheck");
+            jobs.startPreparation(original,approved.identity,preparation::prepare,preparation.beginPreparation());JSONObject receipt=await(jobs,original).json();
+            assertEquals(receipt.toString(),"completed",receipt.getString("status"));assertTrue(receipt.getBoolean("receiptReceived"));assertTrue(receipt.getBoolean("resourcesReleased"));
+            assertEquals(0,downloads.get());assertFalse(receipt.getBoolean("processDispatchAttempted"));assertFalse(receipt.getBoolean("processLaunched"));assertFalse(receipt.getBoolean("processExited"));
+            assertEquals(identity,preparation.identity());assertEquals(identity,receipt.getString("preparedEnvironmentIdentity"));assertEquals(approved.identity,receipt.getString("catalogIdentity"));
+            assertEquals(ProjectSources.canonical(seal),ProjectSources.canonical(receipt.getJSONObject("toolProbeReceipt")));assertFalse(receipt.getBoolean("businessVerified"));
+            assertEquals("sealed_tool_hash_recheck",receipt.getString("verificationKind"));long verifiedAt=receipt.getLong("verifiedAt");assertTrue(verifiedAt>=startedAt&&verifiedAt<=System.currentTimeMillis());
+            JSONObject saved=RuntimeFiles.read(progress.toFile());assertEquals("ready",saved.getString("phase"));assertEquals(identity,saved.getString("generationIdentity"));assertEquals("sealed_tool_hash_recheck",saved.getString("verificationKind"));assertEquals(verifiedAt,saved.getLong("verifiedAt"));assertFalse(saved.has("error"));
+            assertEquals("ready",preparation.describe(true).getJSONObject("preparation").getString("phase"));assertFalse(preparation.preparationInProgressForHost());
+            assertArrayEquals(originalSeal,Files.readAllBytes(sealFile));assertArrayEquals(originalPointer,Files.readAllBytes(pointer));
+        }finally{if(jobs!=null)jobs.close();cleanup(root);}
+    }
     @Test public void traversalSymlinkWritesAndSpecialFilesCannotEscapeStaging() throws Exception {
         Path root=Files.createTempDirectory("runtime-tar-invalid-");try {
             Path sentinel=Files.write(root.resolve("sentinel"),("retained").getBytes(StandardCharsets.UTF_8));

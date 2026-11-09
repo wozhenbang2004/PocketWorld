@@ -604,6 +604,10 @@ public final class LocalModule implements EngineModule {
     public synchronized ManagedProjectRuntime managedSkillRuntimeForHost()throws Exception {
         if(closed||!(projectRuntime instanceof ManagedProjectRuntime))throw new SecurityException("本机托管Skill运行环境不可用");return (ManagedProjectRuntime)projectRuntime;
     }
+    /** Application-owned setup observes and prepares this same runtime without selecting a project. */
+    public synchronized ManagedProjectRuntime managedRuntimeSetupForHost()throws Exception {
+        if(closed||!(projectRuntime instanceof ManagedProjectRuntime))throw new SecurityException("本机工具准备环境不可用");return (ManagedProjectRuntime)projectRuntime;
+    }
     public synchronized JSONArray managedSkillCheckoutsForHost()throws Exception {
         if(closed)throw new SecurityException("原项目宿主已关闭");JSONArray result=new JSONArray();File[] rows=new File(root,"checkouts").listFiles();if(rows==null)return result;
         java.util.Arrays.sort(rows,java.util.Comparator.comparing(File::getName));

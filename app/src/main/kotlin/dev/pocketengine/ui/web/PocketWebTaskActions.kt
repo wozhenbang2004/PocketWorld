@@ -161,7 +161,14 @@ internal class PocketWebTaskActions(
         }
 
         fun unresolvedForReview(task: UiTask): List<JSONObject> = unresolvedOperations(task).filterNot { it.optString("tool") in setOf("device_invoke_tool", "device_delegate_goal", "device_operation_get") }
-        fun specialOwnerTask(task: UiTask) = setOf("ownerLocalTerminal", "ownerBackupUpload", "ownerStorageCleanup", "ownerArchivePhase", "ownerGit", "ownerGitImport", "ownerGitPublication", "ownerMcpDiscovery").any(task.raw::has) || MediaOwnerUi.isTask(task.raw) || task.raw.optJSONObject("sourceLearningJob") != null || task.raw.optJSONObject("nativeEventTypeFlags")?.optBoolean("memory_owner_consolidation") == true || task.raw.optJSONArray("events").objects().any { it.optString("type") == "memory_owner_consolidation" }
+        fun specialOwnerTask(task: UiTask) = setOf("ownerRuntimeSetup", "ownerLocalTerminal", "ownerBackupUpload", "ownerStorageCleanup", "ownerArchivePhase", "ownerGit", "ownerGitImport", "ownerGitPublication", "ownerMcpDiscovery").any(task.raw::has) || MediaOwnerUi.isTask(task.raw) || task.raw.optJSONObject("sourceLearningJob") != null || task.raw.optJSONObject("nativeEventTypeFlags")?.optBoolean("memory_owner_consolidation") == true || task.raw.optJSONArray("events").objects().any { it.optString("type") == "memory_owner_consolidation" }
+
+        fun runtimeSetupTask(task: UiTask) = task.raw.optJSONObject("ownerRuntimeSetup") != null &&
+            task.raw.optString("kind") == "tool" && task.raw.optString("actorId") == "owner" &&
+            task.raw.optString("spaceId") == "private" && (!task.raw.has("origin") || task.raw.isNull("origin"))
+
+        fun canStopDirectly(task: UiTask) = runtimeSetupTask(task) || !specialOwnerTask(task) &&
+            task.raw.optString("executionRole") != "owner_work" && (isPhoneTask(task) || task.raw.optString("kind") == "assistant")
 
         private fun isGroup(task: UiTask) = task.raw.optJSONObject("origin")?.optString("kind") == "group"
         private fun checkedPayload(args: JSONObject, allowed: Set<String>): JSONObject {

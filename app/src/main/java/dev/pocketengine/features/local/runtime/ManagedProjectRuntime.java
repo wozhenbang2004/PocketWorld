@@ -57,6 +57,25 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
     public RuntimeEnvironment environmentManager() {return environments;}
     /** Body-free owner storage view with the same original package/generation leases. */
     public RuntimeStorage ownerStorageForHost(){return new RuntimeStorage(this,androidRuntime,environments,jobs,home,tmp);}
+    /** Read-only owner setup admission facts. Original live/unknown jobs are never cleared here. */
+    public JSONObject runtimeSetupAvailabilityForHost()throws Exception {
+        JSONObject facts=describe();boolean inProgress=androidRuntime!=null&&androidRuntime.preparationInProgressForHost();
+        String blocker="";if(!facts.optBoolean("preparationAvailable"))blocker=facts.optString("configurationProblem","runtime_preparation_unavailable");
+        else if(inProgress)blocker="runtime_preparation_already_running";
+        else try{jobs.requireEnvironmentIdle(null);}catch(Exception busy){blocker=busy.getMessage()==null?"runtime_environment_idle_unconfirmed":busy.getMessage();}
+        return new JSONObject().put("canPrepare",facts.optBoolean("preparationAvailable")&&blocker.isEmpty())
+                .put("preparationInProgress",inProgress).put("blocker",blocker).put("automaticReplay",false);
+    }
+    /** Typed owner review, same installer/jobs. Preflight finishes before the original SQL claim. */
+    public RuntimeReceipt prepareSetupForHost(RuntimeSetupHost.Confirmed confirmed,RuntimeInvocation invocation,ProjectRuntime.LiveGate claim)throws Exception {
+        java.util.Objects.requireNonNull(confirmed).requireCurrent(this);
+        if(!RuntimeSetupHost.exact(invocation.exact())||!ProjectSources.canonical(confirmed.exact()).equals(ProjectSources.canonical(invocation.exact()))||!confirmed.requestId().equals(invocation.executionRef().operationId()))throw new SecurityException("runtime_setup_original_review_required");
+        requireProvider(invocation.executionRef());invocation.checkCurrent();invocation.workspace().verify(invocation);
+        if(androidRuntime==null)throw new IllegalStateException("runtime_preparation_unavailable");
+        jobs.requireEnvironmentIdle(null);AutoCloseable lease=preparationLease(invocation);boolean transferred=false;
+        try{claim.check();invocation.checkCurrent();transferred=true;return jobs.startPreparation(invocation,androidRuntime.catalogIdentity(),androidRuntime::prepare,lease);}
+        finally{if(!transferred)lease.close();}
+    }
     /** Native composition only. These read-only facts deliberately never enter
      * describe(), runtime identity, command environment or an approved plan hash. */
     public synchronized void bindLogObservationForHost(dev.pocketengine.features.local.runtime.android.AndroidRuntimeThermalObservation original){
@@ -97,7 +116,7 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
     /** Native Skill description from this same installed generation/tools. No
      * argv/executable/env is accepted from model or downloaded Skill metadata. */
     public synchronized JSONObject skillToolsForHost(String interpreter)throws Exception {
-        if(!java.util.Set.of("python3","sh").contains(interpreter))throw new SecurityException("本机Skill只选择已核对的Python或Shell解释器");JSONObject observed=describe();if(!observed.optBoolean("canExecute"))throw new IllegalStateException("本机托管工具尚未实际准备，请从原项目工具准备入口检查和修复");JSONArray actual=observed.getJSONArray("tools");JSONObject chosen=null,python=null;
+        if(!java.util.Set.of("python3","sh").contains(interpreter))throw new SecurityException("本机Skill只选择已核对的Python或Shell解释器");JSONObject observed=describe();if(!observed.optBoolean("canExecute"))throw new IllegalStateException("本机托管工具尚未实际准备，请打开准备中心检查、安装或修复手机开发工具");JSONArray actual=observed.getJSONArray("tools");JSONObject chosen=null,python=null;
         for(int i=0;i<actual.length();i++){JSONObject row=actual.getJSONObject(i);if(row.optBoolean("hashVerified")||row.optBoolean("probeVerified")){if(interpreter.equals(row.optString("name")))chosen=row;if("python3".equals(row.optString("name")))python=row;}}
         if(chosen==null||python==null)throw new IllegalStateException("原托管环境缺少已核对的解释器或Python原生派发辅助，未换到电脑或任意shell");JSONArray argv=new JSONArray(),bootstrap=new JSONArray();String path;
         if(androidRuntime!=null){argv.put(androidRuntime.guestTool(interpreter));bootstrap.put(androidRuntime.guestTool("python3"));path="/opt/node/bin:/usr/local/bin:/usr/bin:/bin";}
@@ -191,6 +210,7 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
         if(!toolReady)throw new IllegalStateException("runtime_pipe_registered_tool_not_ready");
     }
     @Override public RuntimeReceipt dispatch(RuntimeInvocation invocation) throws Exception {
+        if(RuntimeSetupHost.exact(invocation.exact()))throw new SecurityException("runtime_setup_native_owner_review_required");
         if(NativePipeAdmission.exact(invocation.exact()))throw new SecurityException("runtime_mcp_native_pipe_admission_required");
         if(dev.pocketengine.features.local.project.ProjectGitImport.exact(invocation.exact()))throw new SecurityException("Git网络导入需要原生主人一次性租约；普通项目命令不能自报该intent");return dispatchOriginal(invocation,null);
     }
@@ -249,15 +269,8 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
         if(!identity().equals(invocation.exact().getString("runtimeIdentity")))throw new SecurityException("runtime_reviewed_environment_changed");
         RuntimeWorkspace workspace=invocation.workspace();workspace.verify(invocation);
         if(invocation.executionRef().phase()==RuntimeExecutionRef.Phase.STAGE) {
-            if(!profile.describe(jobs.available()).getBoolean("preparationAvailable"))throw new IllegalStateException("runtime_apk_engine_or_supervisor_unavailable");
-            JSONObject reviewedCatalog=invocation.exact().getJSONObject("payload").optJSONObject("preparationCatalog");
-            if(reviewedCatalog==null||!profile.catalogIdentity().equals(reviewedCatalog.optString("catalogIdentity")))throw new SecurityException("runtime_reviewed_download_catalog_required");
-            if(!ProjectSources.canonical(reviewedCatalog).equals(ProjectSources.canonical(profile.describe(jobs.available()).getJSONObject("preparationEffects"))))throw new SecurityException("runtime_reviewed_download_catalog_changed");
             RuntimeReceipt previous=jobs.existing(invocation.executionRef());if(previous!=null)return previous;
-            // With no loaded active generation, a cached old job belongs to its
-            // generation SHA, not this catalog SHA. Do not start a new preparation
-            // worker while that original owner/cleanup remains unresolved.
-            jobs.requireEnvironmentIdle(profile.ready()?profile.catalogIdentity():null);AutoCloseable preparation=profile.beginPreparation();
+            AutoCloseable preparation=preparationLease(invocation);
             return jobs.startPreparation(invocation,profile.catalogIdentity(),profile::prepare,preparation);
         }
         List<String> command;Map<String,String> environment;File cwd;long timeout;AutoCloseable lease;
@@ -282,6 +295,16 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
         }
         passedToJobs=true;return pipeAdmission==null?jobs.start(invocation,command,environment,cwd,timeout,lease):jobs.startPipes(invocation,command,environment,cwd,timeout,lease,pipeAdmission);
         }finally{if(nativeImportLease!=null&&!passedToJobs)nativeImportLease.close();}
+    }
+    private AutoCloseable preparationLease(RuntimeInvocation invocation)throws Exception {
+        AndroidRuntimePreparation profile=androidRuntime;
+        if(profile==null||!identity().equals(invocation.exact().getString("runtimeIdentity")))throw new SecurityException("runtime_reviewed_environment_changed");
+        if(!profile.describe(jobs.available()).getBoolean("preparationAvailable"))throw new IllegalStateException("runtime_apk_engine_or_supervisor_unavailable");
+        JSONObject reviewedCatalog=invocation.exact().getJSONObject("payload").optJSONObject("preparationCatalog");
+        if(reviewedCatalog==null||!profile.catalogIdentity().equals(reviewedCatalog.optString("catalogIdentity")))throw new SecurityException("runtime_reviewed_download_catalog_required");
+        if(!ProjectSources.canonical(reviewedCatalog).equals(ProjectSources.canonical(profile.describe(jobs.available()).getJSONObject("preparationEffects"))))throw new SecurityException("runtime_reviewed_download_catalog_changed");
+        // A restart leaves old-generation uncertainty intact; do not launch over that owner.
+        jobs.requireEnvironmentIdle(profile.ready()?profile.catalogIdentity():null);return profile.beginPreparation();
     }
     private static void requireProvider(RuntimeExecutionRef ref) throws Exception {
         if(!RUNTIME_ID.equals(ref.exact().optString("runtimeId")))throw new SecurityException("runtime_original_provider_required");

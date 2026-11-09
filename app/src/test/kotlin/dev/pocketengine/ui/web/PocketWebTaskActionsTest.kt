@@ -66,4 +66,71 @@ class PocketWebTaskActionsTest {
             assertThrows(IllegalStateException::class.java) { reviews.take(view.getString("reviewHandle"), "tasks.resolve", listOf(original)) }
         }
     }
+
+    private fun runtimeSetup(status: String = "running"): UiTask = task("native_runtime_prepare").let { original ->
+        original.raw.put("kind", "tool").put("feature", "local").put("command", "runtime.setup.owner")
+            .put("status", status).put("nativeExecutionMode", "OWNER_RUNTIME_SETUP")
+            .put("ownerRuntimeSetup", JSONObject().put("requestId", original.id).put("modelDispatchAllowed", false))
+        original.copy(status = status)
+    }
+
+    @Test fun originalPrivateRuntimeSetupCanBeStoppedFromItsTaskWindow() {
+        val original = runtimeSetup()
+        assertTrue(PocketWebTaskActions.runtimeSetupTask(original))
+        assertTrue(PocketWebTaskActions.specialOwnerTask(original))
+        assertTrue(PocketWebTaskActions.canStopDirectly(original))
+        assertEquals("tool", original.raw.getString("kind"))
+        assertEquals("original-run", original.raw.getString("runId"))
+        assertEquals(7, original.raw.getInt("coordinatorEpoch"))
+    }
+
+    @Test fun runtimeSetupUnknownStaysVisibleWithoutGenericResolutionOrResumeAuthority() {
+        val original = runtimeSetup("interrupted")
+        val reviews = PocketWebTaskReviews { 1_000L }
+        val view = PocketWebTaskActions.review(original, JSONArray(), reviews, null, true)
+        assertTrue(actions(view).isEmpty())
+        assertEquals("original-operation", view.getJSONArray("unresolvedOperations").getJSONObject(0).getString("operationId"))
+        assertEquals("native_runtime_prepare", view.getJSONArray("unresolvedOperations").getJSONObject(0).getString("tool"))
+        for (action in listOf("tasks.resolve", "tasks.resume", "tasks.scope", "tasks.approve")) {
+            val fresh = PocketWebTaskActions.review(original, JSONArray(), reviews, null, true)
+            assertThrows(IllegalStateException::class.java) {
+                reviews.take(fresh.getString("reviewHandle"), action, listOf(original))
+            }
+        }
+        assertTrue(PocketWebTaskActions.canStopDirectly(original))
+    }
+
+    @Test fun runtimeMarkerCannotMakeForeignOrMalformedTasksDirectlyStoppable() {
+        val invalid = listOf<Pair<String, (JSONObject) -> Unit>>(
+            "foreign actor" to { it.put("actorId", "someone-else") },
+            "shared space" to { it.put("spaceId", "shared") },
+            "assistant kind" to { it.put("kind", "assistant") },
+            "phone kind" to { it.put("kind", "phone") },
+            "missing kind" to { it.remove("kind") },
+            "group origin" to { it.put("origin", JSONObject().put("kind", "group")) },
+            "paired-device origin" to { it.put("origin", JSONObject().put("kind", "paired_device")) },
+            "untyped origin" to { it.put("origin", JSONObject()) },
+            "boolean marker" to { it.put("ownerRuntimeSetup", true) },
+            "string marker" to { it.put("ownerRuntimeSetup", "true") },
+            "null marker" to { it.put("ownerRuntimeSetup", JSONObject.NULL) },
+        )
+        for ((label, mutate) in invalid) {
+            val original = runtimeSetup().apply { mutate(raw) }
+            assertFalse(label, PocketWebTaskActions.runtimeSetupTask(original))
+            assertFalse(label, PocketWebTaskActions.canStopDirectly(original))
+        }
+    }
+
+    @Test fun runtimeStopExceptionKeepsOrdinaryAndOtherDedicatedTaskRules() {
+        val ordinary = task().copy(status = "running")
+        val phone = task().let { original -> original.raw.put("kind", "phone"); original.copy(status = "running", executionMode = "background") }
+        assertTrue(PocketWebTaskActions.canStopDirectly(ordinary))
+        assertTrue(PocketWebTaskActions.canStopDirectly(phone))
+        assertFalse(PocketWebTaskActions.runtimeSetupTask(ordinary))
+        for (original in listOf(
+            task().apply { raw.put("executionRole", "owner_work") },
+            task().apply { raw.put("ownerLocalTerminal", JSONObject()) },
+            task().apply { raw.put("kind", "tool") },
+        )) assertFalse(PocketWebTaskActions.canStopDirectly(original))
+    }
 }

@@ -13,7 +13,7 @@ const statusLabel = (value: any) => ({ running: '运行中', completed: '已完�
 
 /** BoardUI's retained fields, disclosure and navigation-row composition around
  * the original local checkout/PTY workflow. No replacement terminal or authority. */
-export function LocalWorkspace({ state, data, run, supported, registerTransientBack }: { state: Data; data: Data; run: Run; supported: (name: string) => boolean; registerTransientBack: (handler: (() => boolean) | null) => void }) {
+export function LocalWorkspace({ state, data, run, supported, registerTransientBack, onPrepareTools }: { state: Data; data: Data; run: Run; supported: (name: string) => boolean; registerTransientBack: (handler: (() => boolean) | null) => void; onPrepareTools?: () => void }) {
   const [project, setProject] = useState(''), [checkout, setCheckout] = useState(''), [source, setSource] = useState<Data | null>(null);
   const [cwd, setCwd] = useState('.'), [env, setEnv] = useState('{}'), [seconds, setSeconds] = useState('300');
   const [review, setReview] = useState<Data | null>(null), [acknowledged, setAcknowledged] = useState(false), [original, setOriginal] = useState<Data | null>(null), [receipt, setReceipt] = useState<Data | null>(null);
@@ -107,7 +107,7 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
   const resultUnknown = !!original && (!receipt || !/^(running|completed|failed|paused|stopped)$/.test(String(receipt.status)) || /^(unknown|prepared)$/.test(String(receipt.operationState)));
   const executionMessage = receipt?.message || receipt?.receipt?.message;
   return <section ref={readingRoot} className="pw-local-workspace pw-settings-section" data-local-view={panel}>
-    <header className="pw-local-heading"><div><h2>本机终端</h2></div></header>
+    <header className="pw-local-heading"><div><h2>本机终端</h2></div>{onPrepareTools && <Button variant="secondary" trailingIcon={ChevronRight} onClick={onPrepareTools}>准备开发工具</Button>}</header>
     {error && <p role="alert" className="pw-local-feedback pw-secondary-error">{error}</p>}
     {knownResults['local.probe']?.message && <p className="pw-local-runtime-message" role="status">{knownResults['local.probe'].message}</p>}
     {legacyReceiptRecovery && <div className="pw-local-feedback" role="status"><p>{legacyReceiptRecovery.message || '原只读命令的恢复清单只用于核对既有记录。'}</p><p className="pw-field-hint">可读原记录 {legacyReceiptRecovery.readableOriginalRecords ?? '尚未返回'} 条 · 冷恢复待核 {legacyReceiptRecovery.coldUnconfirmedRecords ?? '尚未返回'} 条 · 保留的不可读原记录 {legacyReceiptRecovery.unreadableOriginalRecordsRetained ?? '尚未返回'} 条。</p>{(legacyReceiptRecovery.originalInventoryUnconfirmed || legacyReceiptRecovery.coldUnconfirmedRecords > 0) && <p className="pw-field-hint">{legacyReceiptRecovery.blockingScope === 'all_checkouts' ? '全部工作副本的原写入范围仍受阻止。' : '相关原工作副本仍保持占用。'}重新打开页面不证明进程已经退出，也不会恢复执行权限。</p>}</div>}

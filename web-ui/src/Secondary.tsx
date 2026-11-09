@@ -10,6 +10,7 @@ import {
   RiSettings3Line, RiShieldCheckLine, RiSmartphoneLine, RiTeamLine,
 } from '@remixicon/react';
 import { bridge } from './bridge';
+import type {SetupCapability} from './setup-contract';
 import ReminderWorkspace from './ReminderWorkspace';
 import ConnectionWorkspace from './ConnectionWorkspace';
 import { AppearanceSettings, SystemSpeechSettings } from './PresentationSettings';
@@ -57,7 +58,7 @@ import { ACCOUNT_RECEIPT_ACTIONS, accountActionReceipt, accountLoginArguments, a
 type Data = Record<string, any>;
 type Snapshot = { state?: Data; view?: { resumeRevision?: number; taskId?: string | null }; composer?: Data | null; capabilities?: { commands?: string[] } };
 type BackHandlerRegistration = (handler: (() => boolean) | null) => void;
-type Props = { route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration; navigationTrigger?: ReactNode; navigationRevision?: number; onNavigationPageChange?: (page: string) => void };
+type Props = { route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration; navigationTrigger?: ReactNode; navigationRevision?: number; onNavigationPageChange?: (page: string) => void; onOpenSetup?: (capability?: SetupCapability) => void; onReturnToSetup?: () => void };
 type Run = (action: string, args?: Data) => Promise<any>;
 const object = (value: any): Data => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const list = (value: any): Data[] => Array.isArray(value) ? value.filter(x => x && typeof x === 'object' && !Array.isArray(x)) : [];
@@ -629,7 +630,7 @@ function PhoneSettings({ state, supported, run, navigate, registerTransientBack,
 /** Original BackgroundPhoneSetup flow composed with the selected BoardUI
  * fields, radio options, accordion and SettingsModal. It reads the existing
  * display state; this page does not create a task or a second connection. */
-function BackgroundSettings({ state, supported, run, onReturn, registerTransientBack }: { state: Data; supported: (action: string) => boolean; run: Run; onReturn: () => void; registerTransientBack: BackHandlerRegistration }) {
+function BackgroundSettings({ state, supported, run, onReturn, returnLabel = '手机能力', registerTransientBack }: { state: Data; supported: (action: string) => boolean; run: Run; onReturn: () => void; returnLabel?: string; registerTransientBack: BackHandlerRegistration }) {
   const display = object(object(state.features).display), adb = object(display.adb), discovery = object(adb.discovery);
   const audioRecovery = object(object(object(state.features).phone_setup).audioRecovery), audioPending = audioRecovery.pendingCount;
   const pending = Array.isArray(state.moduleBusy) ? state.moduleBusy.map(String) : [];
@@ -766,7 +767,7 @@ function BackgroundSettings({ state, supported, run, onReturn, registerTransient
 </TabPanel>
     </Tabs>
     <section className="pw-background-preferences" aria-label="后台偏好"><h3>后台偏好</h3><BackgroundAudioSettings state={state} supported={supported} run={run} registerBack={handler => { ownerBack.current.audio = handler; }}/></section>
-    <div className="pw-background-return"><Button variant={connection.helperConnected && !requiresCheck ? 'primary' : 'ghost'} onClick={() => { setCode(''); onReturn(); }}>{connection.helperConnected && !requiresCheck ? '助手已连接，返回手机能力' : '返回手机能力'}</Button></div>
+    <div className="pw-background-return"><Button variant={connection.helperConnected && !requiresCheck ? 'primary' : 'ghost'} onClick={() => { setCode(''); onReturn(); }}>{connection.helperConnected && !requiresCheck ? `助手已连接，返回${returnLabel}` : `返回${returnLabel}`}</Button></div>
     <SettingsDialog isOpen={mainScreenConsent} title="改用主屏兼容模式？" onClose={() => setMainScreenConsent(false)}><p>助手执行时会切换应用并占用当前屏幕。请先完成界面读取与任务通知授权；此处只选择模式，不会开始原目标。</p><div className="pw-form-actions"><Button variant="secondary" onClick={() => setMainScreenConsent(false)}>暂不使用</Button><CapabilityAction action="background.selectMainScreen" supported={supported} run={run} disabled={connection.taskOwned || connection.busy} primary>明确选择主屏模式</CapabilityAction></div></SettingsDialog>
   </div>;
 }
@@ -1106,7 +1107,7 @@ function McpWorkspace({ state, data, supported, run, registerTransientBack }: { 
   </>;
 }
 
-function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate, onOpenModels, onNavigate, alreadyShownError }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void; onOpenModels: () => void; onNavigate: (domain: 'plugins' | 'pluginCatalog' | 'mcp' | 'skills') => void; alreadyShownError?: string }) {
+function DomainPage({ domain, state, data, supported, run, registerTransientBack, candidateTarget, onReviewCandidate, onOpenModels, onNavigate, onPrepareTools, alreadyShownError }: { domain: string; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; candidateTarget: LearningCandidateTarget | null; onReviewCandidate: (target: LearningCandidateTarget) => void; onOpenModels: () => void; onNavigate: (domain: 'plugins' | 'pluginCatalog' | 'mcp' | 'skills') => void; onPrepareTools?: () => void; alreadyShownError?: string }) {
   const title = SECONDARY_DOMAINS.find(x => x.id === domain)?.title || '连接与能力';
   if (domain === 'accounts') return <AccountsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'devices') return <DevicesWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} openModels={onOpenModels} />;
@@ -1118,14 +1119,14 @@ function DomainPage({ domain, state, data, supported, run, registerTransientBack
   if (domain === 'commitments') return <CommitmentsWorkspace state={state} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'channels') return <ChannelsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'mcp') return <McpWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
-  if (domain === 'skills') return <SkillsWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
+  if (domain === 'skills') return <SkillsWorkspace state={state} run={run} registerTransientBack={registerTransientBack} onPrepareTools={onPrepareTools} />;
   if (domain === 'plugins' || domain === 'pluginCatalog') return <PluginsWorkspace mode={domain} state={state} supported={supported} run={run} registerTransientBack={registerTransientBack} onNavigate={onNavigate} />;
   if (domain === 'teams') return <TeamsWorkspace state={state} run={run} registerTransientBack={registerTransientBack} alreadyShownError={alreadyShownError} />;
   if (domain === 'groups') return <GroupsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'media') return <MediaWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'realtime') return <RealtimeWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'proxy') return <ProxyWorkspace state={state} run={run} registerTransientBack={registerTransientBack} />;
-  if (domain === 'local') return <LocalWorkspace state={state} data={data} run={run} supported={supported} registerTransientBack={registerTransientBack} />;
+  if (domain === 'local') return <LocalWorkspace state={state} data={data} run={run} supported={supported} registerTransientBack={registerTransientBack} onPrepareTools={onPrepareTools} />;
   return <Card title={title}><Empty>尚未读取此能力的当前记录。</Empty></Card>;
 }
 
@@ -1367,11 +1368,12 @@ function DataManagement({ kind, ...props }: DataPageProps & { kind: 'archives' |
 
 const SETTINGS_GROUPS = [
   { id: 'models', title: 'AI 接入', entries: ['model-settings', 'proxy'] },
-  { id: 'preferences', title: '使用偏好', entries: ['phone:appearance', 'phone:speech'] },
+  { id: 'preferences', title: '使用偏好', entries: ['setup', 'phone:appearance', 'phone:speech'] },
   { id: 'privacy', title: '权限与运行', entries: ['phone:execution', 'phone:observation', 'background'] },
   { id: 'data', title: '数据与应用', entries: ['usage', 'storage', 'archives', 'updates'] },
 ];
 const COMMON_SETTINGS = [
+  { id: 'setup', title: '准备中心', detail: '模型、手机权限、开发工具与首次使用', icon: RiCheckLine },
   { id: 'model-settings', title: 'AI 接入', detail: '服务、账号、模型与调度', icon: RiKey2Line },
   { id: 'proxy', title: '本机 API', detail: '访问地址、客户端连接与近期调用', icon: RiComputerLine },
   { id: 'accounts', title: 'ChatGPT 账号', detail: '登录、授权与套餐用量', icon: RiKey2Line },
@@ -1386,7 +1388,7 @@ const COMMON_SETTINGS = [
   { id: 'updates', title: '应用更新', detail: '检查新版本与管理下载', icon: RiRefreshLine },
 ];
 
-export default function Secondary({ route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange }: Props) {
+export default function Secondary({ route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange, onOpenSetup, onReturnToSetup }: Props) {
   const phonePresentation = useRef('list');
   const state: Data = { ...object(snapshot.state), webWorkspaceResumeRevision: Number(snapshot.view?.resumeRevision || 0), webWorkspaceTaskOpen: !!snapshot.view?.taskId };
   const commands = snapshot.capabilities?.commands || [];
@@ -1489,7 +1491,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const phoneTitle = ({ appearance: '外观与字体', speech: '语音与朗读', execution: '系统权限', observation: '观察与隐私', browser: '浏览器' } as Data)[phoneView];
   const pageTitle = isModelPage ? 'AI 接入'
     : workspace?.title || settingsGroup?.title || (page === 'settings' || page === 'connections' ? '设置' : isPhonePage ? phoneTitle || '手机能力' : page === 'background' ? '后台运行' : page === 'history' ? '任务历史' : page === 'usage' ? '模型调用记录' : page === 'archives' ? '备份与迁移' : page === 'storage' ? '项目存储' : domain?.title || 'PocketWorld');
-  const settingsEntries = COMMON_SETTINGS.map(item => item.id === 'phone:appearance' ? { ...item, detail: [({ system: '跟随系统', light: '浅色', dark: '深色' } as Data)[text(object(state.appearance).mode)], '中文、英数与代码字体'].filter(Boolean).join(' · ') } : item);
+  const settingsEntries = COMMON_SETTINGS.filter(item => item.id !== 'setup' || !!onOpenSetup).map(item => item.id === 'phone:appearance' ? { ...item, detail: [({ system: '跟随系统', light: '浅色', dark: '深色' } as Data)[text(object(state.appearance).mode)], '中文、英数与代码字体'].filter(Boolean).join(' · ') } : item);
   const filtered = settingsEntries.filter(item => (item.title + item.detail).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const viewKey = page + (isModelPage ? ':' + modelView.kind + ':' + (modelView.id || '') : '');
   const modelBrowseActive = ['list', 'catalog', 'model'].includes(modelView.kind);
@@ -1520,7 +1522,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
     return () => registerBackHandler?.(null);
   }, [registerBackHandler]);
   const back = () => { if (!consumeBack()) onBack(); };
-  const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof RiKey2Line }>) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" disabled={item.id === 'updates' && !supported('settings.openAppUpdates')} onClick={() => { if (item.id === 'updates') { void run('settings.openAppUpdates', {}).catch(() => {}); } else navigate(item.id); }}><span className="pw-settings-row-copy"><span>{item.title}</span><small>{item.detail}</small></span></Button>)}</div>;
+  const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof RiKey2Line }>) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" disabled={item.id === 'updates' && !supported('settings.openAppUpdates')} onClick={() => { if (item.id === 'updates') { void run('settings.openAppUpdates', {}).catch(() => {}); } else if (item.id === 'setup') onOpenSetup?.(); else navigate(item.id); }}><span className="pw-settings-row-copy"><span>{item.title}</span><small>{item.detail}</small></span></Button>)}</div>;
   const refreshAction = page === 'background' ? 'background.refresh' : isModelPage ? 'models.snapshot' : page === 'memory' ? 'memory.list' : 'app.refresh';
   const content = <div className="pw-secondary-scroll" ref={scroll}>
       {notice && <p className="pw-request-notice" role="status">{notice}</p>}
@@ -1540,10 +1542,10 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
               renderTools={registerBack => <section className="pw-model-connection-tools"><TokenBudgetsWorkspace supported={supported} registerTransientBack={registerBack} /><ModelDiagnosticsWorkspace state={state} supported={supported} /></section>} />
           : page === 'phone' ? <PhoneSettings state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phonePresentation.current} onViewChange={view => { phonePresentation.current = view; }} />
           : isPhonePage ? <PhoneSettings key={page} state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phoneView} direct />
-          : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} onReturn={returnToPhone} registerTransientBack={registerTransientBack} />
+          : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} onReturn={onReturnToSetup || returnToPhone} returnLabel={onReturnToSetup ? '准备中心' : '手机能力'} registerTransientBack={registerTransientBack} />
           : page === 'history' || page === 'usage' ? <HistoryPage key={page} usage={page === 'usage'} supported={supported} run={run} />
           : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} registerTransientBack={registerTransientBack} navigate={navigate} />
-          : domain ? <DomainPage key={page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} alreadyShownError={error || domainError} />
+          : domain ? <DomainPage key={page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} onPrepareTools={onOpenSetup?()=>onOpenSetup('tools'):undefined} alreadyShownError={error || domainError} />
           : <Empty>此页面暂不可用，请从导航重新打开。</Empty>}
       </div>
     </div>;

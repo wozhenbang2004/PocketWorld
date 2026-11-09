@@ -71,6 +71,7 @@ final class AndroidRuntimePreparation {
     synchronized String identity() {return active==null?catalog.identity:active.optString("generationIdentity");}
     String catalogIdentity() {return catalog.identity;}
     synchronized boolean ready() {return active!=null;}
+    synchronized boolean preparationInProgressForHost(){return preparing;}
     synchronized JSONObject describe(boolean supervisorAvailable) throws Exception {
         boolean engine=engineVerified();JSONArray tools=new JSONArray();
         if(active!=null) {
@@ -155,8 +156,11 @@ final class AndroidRuntimePreparation {
         context.check();if(!engineVerified())throw new SecurityException("runtime_apk_engine_missing_or_changed");
         final JSONObject originalActive;synchronized(this){originalActive=active;}
         if(originalActive!=null&&catalog.identity.equals(originalActive.optString("catalogIdentity"))) {
+            phase(context,"verifying_installed_tools",0,originalActive.getJSONArray("tools").length());
             boolean unchanged=true;try{verifyTools(originalActive,true);}catch(SecurityException changed){unchanged=false;/* Repair builds a fresh generation, never mutates or deletes this one. */}
-            if(unchanged){context.check();synchronized(this){if(active!=originalActive)throw new SecurityException("runtime_reviewed_environment_changed");return preparedResult(originalActive);}}
+            if(unchanged){context.check();synchronized(this){if(active!=originalActive)throw new SecurityException("runtime_reviewed_environment_changed");
+                long checkedAt=System.currentTimeMillis();progress=new JSONObject().put("phase","ready").put("generationIdentity",originalActive.getString("generationIdentity")).put("verificationKind","sealed_tool_hash_recheck").put("verifiedAt",checkedAt);
+                RuntimeFiles.write(new File(root,"preparation.json"),progress);return preparedResult(originalActive).put("verificationKind","sealed_tool_hash_recheck").put("verifiedAt",checkedAt);}}
         }
         // A new layout never reuses a pre-L2S partially extracted rootfs. Old staging
         // and generations are retained, not silently deleted or modified by repair.

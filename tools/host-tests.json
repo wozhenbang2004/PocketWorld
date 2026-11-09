@@ -1,4 +1,31 @@
 {
+  "first-use-state": {
+    "class": "dev.pocketengine.ui.setup.SetupPreferencesTest",
+    "helpers": [],
+    "description": "First-use revision CAS, interrupted saves and exact model-test evidence; SharedPreferences test double, no permission grant or provider call."
+  },
+  "first-use-storage": {
+    "class": "dev.pocketengine.ui.setup.SetupInitializationTest",
+    "helpers": [],
+    "robolectric": true,
+    "description": "Real Android storage paths under SDK35 host: clean installation, existing settings/database and resumed first-use preferences; no device or system permission claim.",
+    "additionalClasses": [
+      "dev.pocketengine.ui.web.PocketWebTaskActionsTest"
+    ]
+  },
+  "runtime-owner-setup": {
+    "class": "dev.pocketengine.features.local.runtime.RuntimeSetupAuthorityTest",
+    "additionalClasses": [
+      "dev.pocketengine.features.local.runtime.RuntimeSetupStateTest",
+      "dev.pocketengine.features.local.runtime.AndroidRuntimePreparationTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.local.runtime.RuntimeContractsTest"
+    ],
+    "native": true,
+    "robolectric": true,
+    "description": "Native-owner runtime setup over real TaskStore SQL, typed review, process admission, cancellation and unknown recovery. Real JNI with synthetic never-executed APK engines; no ARM64 device claim."
+  },
   "project-approval-context": {
     "helpers": [],
     "class": "dev.pocketengine.features.local.project.ProjectApprovalContextTest",

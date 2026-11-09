@@ -23,6 +23,7 @@ import './motion.css';
 import './uiux-surfaces.css';
 import './uiux-page-depth.css';
 import './color-roles.css';
+import './setup.css';
 import './borderless-surfaces.css';
 
 const element = document.getElementById('app');
