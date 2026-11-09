@@ -63,6 +63,23 @@ public class AccountGatewayTest {
     @Test public void reauthorizationMustKeepTheVerifiedIdentity()throws Exception {
         try(Rig rig=new Rig()){String id=rig.connect();String slot=rig.book.row(id).getString("slot"),before=rig.vault.get(slot);rig.fake.subject="different-subject";JSONObject retry=rig.begin(id);assertEquals("connected",rig.book.row(id).getString("status"));callback(retry,parameters(retry).get("state"),"oaiapp_fixture");assertEquals("ACCOUNT_IDENTITY_MISMATCH",rig.gateway.snapshot().getJSONObject("login").getString("error"));assertEquals(before,rig.vault.get(slot));assertEquals("connected",rig.book.row(id).getString("status"));assertEquals("fixture-subject",rig.book.row(id).getString("subject"));}
     }
+    @Test public void missingPlanPermissionRequestsConsentOnlyOnExplicitReturningSignIn()throws Exception {
+        try(Rig rig=new Rig()){
+            rig.fake.scope="openid profile email offline_access";
+            String id=rig.connect();
+            assertFalse(rig.book.row(id).optBoolean("planUsageEnabled"));
+            JSONObject retry=rig.begin(id);
+            assertEquals("consent",parameters(retry).get("prompt"));
+            assertEquals(rig.book.hostId(),parameters(retry).get("ext_agent_host_id"));
+            rig.gateway.cancelLogin(retry.getString("sessionId"));
+        }
+        try(Rig rig=new Rig()){
+            String id=rig.connect();
+            JSONObject retry=rig.begin(id);
+            assertFalse(parameters(retry).containsKey("prompt"));
+            rig.gateway.cancelLogin(retry.getString("sessionId"));
+        }
+    }
     @Test public void returningLoginKeepsTheExistingGrantWhenCancelled()throws Exception {
         try(Rig rig=new Rig()){
             String id=rig.connect();JSONObject before=rig.book.row(id);String slot=before.getString("slot"),secret=rig.vault.get(slot);

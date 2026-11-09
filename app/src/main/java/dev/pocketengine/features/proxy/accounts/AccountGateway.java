@@ -79,7 +79,8 @@ public final class AccountGateway implements AutoCloseable {
             next.preserveExisting=preserveExisting;
             if(!preserveExisting)row=book.update(id,row.optLong("version"),AccountBook.json("status","authorizing","error","","cooldownUntil",0));
             next.accountVersion=row.optLong("version");
-            String url=provider.authorizationUrl(book.hostId(),row.optString("clientId"),next.callback,next.state,next.nonce,next.challenge(),idTokenHint,loginHint);
+            boolean requestConsent=!row.optString("clientId").isEmpty()&&!row.optString("slot").isEmpty()&&!row.optBoolean("planUsageEnabled");
+            String url=provider.authorizationUrl(book.hostId(),row.optString("clientId"),next.callback,next.state,next.nonce,next.challenge(),idTokenHint,loginHint,requestConsent);
             login=next;book.login(loginView(next));next.start();
             diagnostic.finish("accepted","AUTHORIZATION_PENDING");
             return AccountBook.json("sessionId",next.id,"accountId",id,"status","pending","expiresAt",next.expiresAt,"authorizationUrl",url);

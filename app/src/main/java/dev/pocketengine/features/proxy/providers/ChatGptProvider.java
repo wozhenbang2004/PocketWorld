@@ -44,15 +44,18 @@ public final class ChatGptProvider implements AutoCloseable {
     }
     private static boolean isFixture(String value){HttpUrl url=HttpUrl.parse(value);return url!=null&&url.scheme().equals("http")&&url.host().equals("127.0.0.1")&&url.username().isEmpty()&&url.password().isEmpty();}
     public String authorizationUrl(String hostId,String clientId,String callback,String state,String nonce,String challenge)throws GatewayFailure {
-        return authorizationUrl(hostId,clientId,callback,state,nonce,challenge,"","");
+        return authorizationUrl(hostId,clientId,callback,state,nonce,challenge,"","",false);
     }
     /** Returning sign-in hints are tied to the previously registered client and verified identity. */
     public String authorizationUrl(String hostId,String clientId,String callback,String state,String nonce,String challenge,String idTokenHint,String loginHint)throws GatewayFailure {
+        return authorizationUrl(hostId,clientId,callback,state,nonce,challenge,idTokenHint,loginHint,false);
+    }
+    /** Request consent only on an explicit reauthorization after plan sharing was previously missing. */
+    public String authorizationUrl(String hostId,String clientId,String callback,String state,String nonce,String challenge,String idTokenHint,String loginHint,boolean requestConsent)throws GatewayFailure {
         if(hostId==null||!hostId.matches("urn:uuid:[0-9a-f-]{36}"))throw new GatewayFailure("INVALID_HOST_ID");
         HttpUrl uri=HttpUrl.parse(callback);
         if(uri==null||!"http".equals(uri.scheme())||!"127.0.0.1".equals(uri.host())||!"/auth/callback".equals(uri.encodedPath())||uri.query()!=null||uri.fragment()!=null||!uri.username().isEmpty()||!uri.password().isEmpty())throw new GatewayFailure("INVALID_CALLBACK");
-        // Keep the persisted host ID local, matching the official devkit's sendHostId=false default.
-        // https://github.com/openai/sign-in-with-chatgpt-devkit/blob/0a36fefeb913055c8c7a1a29b63d82b96b2e841a/packages/local/src/types.ts#L63-L67
+        // This is a stable host identifier, never an access or refresh token.
         HttpUrl.Builder url=HttpUrl.get(issuer+"/api/accounts/authorize").newBuilder().addQueryParameter("client_id",clientId.isEmpty()?"dynamic_agent_client":clientId)
             .addQueryParameter("response_type","code").addQueryParameter("redirect_uri",callback)
             .addQueryParameter("scope",SCOPES).addQueryParameter("resource",RESOURCE).addQueryParameter("state",state).addQueryParameter("nonce",nonce)
@@ -61,6 +64,7 @@ public final class ChatGptProvider implements AutoCloseable {
         if(clientId.isEmpty())url.addQueryParameter("agent_name_hint","Pocket World");
         if(!clientId.isEmpty()&&idTokenHint!=null&&!idTokenHint.isBlank())url.addQueryParameter("id_token_hint",idTokenHint);
         if(!clientId.isEmpty()&&loginHint!=null&&!loginHint.isBlank())url.addQueryParameter("login_hint",loginHint);
+        if(!clientId.isEmpty()&&requestConsent)url.addQueryParameter("prompt","consent");
         // Do not expose retained ID tokens through an authorization URL returned to the UI bridge.
         return url.build().toString();
     }
