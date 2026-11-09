@@ -1,0 +1,43 @@
+/* Additive native-receipt display and browser-independent surface geometry. */
+.pw-composer-host.pw-squircle-composer .afa-composer > .afa-card.pw-composer-card[data-continuous-shape="true"],
+.pw-composer-host.pw-squircle-composer .afa-composer > .pw-composer-context-rail[data-continuous-shape="true"] {
+  background: transparent !important;
+  box-shadow: none !important;
+  isolation: isolate;
+}
+.pw-composer-host.pw-squircle-composer .pw-continuous-surface {
+  position: absolute; inset: 0; z-index: -1; overflow: visible;
+  pointer-events: none; display: block;
+  filter: drop-shadow(0 3px 5px rgb(0 0 0 / 3%)) drop-shadow(0 9px 14px rgb(0 0 0 / 5%));
+}
+.pw-composer-host.pw-squircle-composer .pw-continuous-surface path { fill: var(--pw-surface, #fff); }
+.pw-composer-host.pw-squircle-composer .pw-continuous-surface[data-tone="context"] { filter: none; }
+.pw-composer-host.pw-squircle-composer .pw-continuous-surface[data-tone="context"] path {
+  fill: var(--pw-inset, #e4e4e4);
+  fill: color-mix(in srgb, var(--pw-ink, #242424) 10%, var(--pw-canvas, #f7f7f6));
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-context-rail > .pw-context-meter-button {
+  position: relative; display: inline-flex; align-items: center; justify-content: flex-end;
+  gap: 5px; flex: 0 0 auto; min-width: 76px; min-height: 22px; height: 22px;
+  margin: 0 0 0 auto; padding: 0; border: 0; border-radius: 8px;
+  background: transparent; box-shadow: none; color: var(--pw-copy, #626262);
+  font: 500 11px/16px var(--pw-font); font-variant-numeric: tabular-nums; cursor: pointer;
+}
+/* Expand upward, not over the editing surface. The visible rail remains thin. */
+.pw-context-meter-button::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; top: -22px; }
+.pw-context-meter-button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.pw-context-meter-caption { font-size: 10px; opacity: .8; }
+.pw-composer-host .pw-context-meter-ring { flex: none; fill: none; stroke-width: 1.8; }
+.pw-composer-host .pw-context-meter-track { stroke: currentColor; opacity: .32; }
+.pw-composer-host .pw-context-meter-value { stroke: currentColor; stroke-linecap: round; }
+.pw-context-meter-detail { display: grid; gap: 14px; color: var(--pw-copy); font: 400 13px/1.7 var(--pw-font); }
+.pw-context-meter-detail dl { display: grid; gap: 8px; margin: 0; }
+.pw-context-meter-detail dl > div { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.pw-context-meter-detail dd { margin: 0; color: var(--pw-ink); font-variant-numeric: tabular-nums; text-align: right; }
+.pw-context-meter-detail p { margin: 0; overflow-wrap: anywhere; }
+:root.dark .pw-composer-host.pw-squircle-composer .pw-continuous-surface[data-tone="context"] path {
+  fill: color-mix(in srgb, var(--pw-surface, #222) 52%, var(--pw-inset, #303030));
+}
+@media (forced-colors: active) {
+  .pw-composer-host.pw-squircle-composer .pw-continuous-surface path { fill: Canvas; stroke: CanvasText; stroke-width: 1; }
+}

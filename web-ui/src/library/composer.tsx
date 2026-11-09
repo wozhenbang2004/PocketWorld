@@ -8,6 +8,8 @@ import {MessageActions} from './message';
 import {CitedAnswer} from './context';
 import {MarkdownBody} from './MarkdownBody';
 import {ProgressCircle} from './adapted/boardui-progress';
+import {ComposerContextMeter} from '../ComposerContextMeter';
+import {SmoothComposerSurface} from './SmoothComposerSurface';
 function sizeComposerEditor(editor:HTMLTextAreaElement|null){
  if(!editor)return;
  editor.style.height='0px';
@@ -37,12 +39,14 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
  return <FrameA className={`pw-composer-host pw-compact-composer pw-squircle-composer ${className}`}>
   <section className="afa-composer" aria-label={label} data-composer-key={composerKey}>
    <div className="pw-composer-context-rail" aria-label="当前对话上下文">
+    <SmoothComposerSurface radius={24} tone="context"/>
     <span className="pw-composer-context-icons">{contextStatus}</span>
-    <span className="pw-composer-context-usage" role="status" aria-label={measuredContext===null?'上下文占用暂无可核对数据':'上下文已使用 '+measuredContext+'%'} title={measuredContext===null?'上下文占用暂无可核对数据':'上下文占用 '+measuredContext+'%'}>
+    {contextStatus!==undefined&&contextPercent===undefined?<ComposerContextMeter composerKey={composerKey}/>:<span className="pw-composer-context-usage" role="status" aria-label={measuredContext===null?'上下文占用暂无可核对数据':'上下文已使用 '+measuredContext+'%'} title={measuredContext===null?'上下文占用暂无可核对数据':'上下文占用 '+measuredContext+'%'}>
      <i className="pw-composer-context-ring" aria-hidden="true"/>{measuredContext!==null&&<span>{measuredContext}%</span>}
-    </span>
+    </span>}
    </div>
    <div className="afa-card pw-composer-card" data-has-text={hasText} data-has-attachments={attachments.length>0}>
+    <SmoothComposerSurface/>
     {attachments.length>0&&<div className="afa-filechips" aria-label="已附加文件" role="list">{attachments.map(f=>{
      const originalPreview=typeof f.thumbnailDataUrl==='string'?f.thumbnailDataUrl:typeof f.thumbnail==='string'?f.thumbnail:'';
      const thumbnail=/^(data:image\/(?:jpeg|png|webp|gif);base64,|blob:)/i.test(originalPreview)?originalPreview:'';
