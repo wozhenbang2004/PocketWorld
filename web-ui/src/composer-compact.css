@@ -3,14 +3,18 @@
 .pw-composer-host.pw-compact-composer .afa-composer > .afa-card.pw-composer-card {
   padding: 10px;
   border: 0;
-  border-radius: 24px;
+  border-radius: 20px;
   background: var(--pw-surface, #fff);
-  box-shadow: var(--pw-shadow-surface, 0 12px 40px rgb(0 0 0 / 4%));
+  box-shadow: var(--pw-shadow-input, 0 4px 22px rgb(0 0 0 / 5%));
 }
 
 .pw-composer-host.pw-compact-composer .afa-composer > .afa-card.pw-composer-card:focus-within {
   background: var(--pw-surface, #fff);
-  box-shadow: var(--pw-shadow-surface, 0 12px 40px rgb(0 0 0 / 4%));
+  box-shadow: var(--pw-shadow-input, 0 4px 22px rgb(0 0 0 / 5%)), 0 3px 16px color-mix(in srgb, var(--pw-ink) 9%, transparent);
+}
+
+:root.dark .pw-composer-host.pw-compact-composer .afa-composer > .afa-card.pw-composer-card {
+  background: var(--pw-inset);
 }
 
 .pw-composer-host.pw-compact-composer .pw-composer-row {

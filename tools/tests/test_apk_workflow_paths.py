@@ -1,4 +1,4 @@
-"""Single-file changes which must (and must not) select the existing APK workflow.
+"""Single-file changes which select the automatic main release workflow.
 
 Only literal paths and GitHub's * / ** globs are used by this workflow. Fail closed
 if that contract is changed to a richer syntax, rather than silently mis-testing it.
@@ -12,6 +12,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/build-apk.yml"
+AUTOMATIC_WORKFLOW = ROOT / ".github/workflows/github-release.yml"
 
 
 def push_paths(text):
@@ -20,6 +21,9 @@ def push_paths(text):
         raise ValueError("expected on.push mapping")
     paths = re.search(r"(?m)^    paths:\n(?P<items>(?:^      - '[^']+'[ ]*\n)+)", push["body"])
     if not paths:
+        if not re.search(r"(?m)^    paths(?:-ignore)?:", push["body"]):
+            # GitHub runs all main commits when no path filter is declared.
+            return ["**"]
         # The former one-line declaration remains parseable for red/green probes.
         inline = re.search(r"(?m)^    paths: (\[[^\n]+\])$", push["body"])
         if not inline:
@@ -38,7 +42,7 @@ def matches(path, patterns):
 
 class ApkWorkflowPathsTest(unittest.TestCase):
     def setUp(self):
-        self.patterns = push_paths(WORKFLOW.read_text())
+        self.patterns = push_paths(AUTOMATIC_WORKFLOW.read_text())
         self.fixtures = json.loads((ROOT / "tools/tests/fixtures/apk-build-paths.json").read_text())
 
     def test_stable_signing_is_ephemeral_and_passwords_use_environment(self):
@@ -63,10 +67,10 @@ class ApkWorkflowPathsTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(matches(path, self.patterns), "APK build misses production input: " + path)
 
-    def test_unrelated_single_file_changes_do_not_package(self):
+    def test_main_documentation_and_test_commits_also_release(self):
         for path in self.fixtures["ignore"]:
             with self.subTest(path=path):
-                self.assertFalse(matches(path, self.patterns), "unrelated change selects APK build: " + path)
+                self.assertTrue(matches(path, self.patterns), "main commit is excluded from automatic release: " + path)
 
     def test_all_current_production_sources_and_gradle_inputs_are_covered(self):
         tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode().split("\0")

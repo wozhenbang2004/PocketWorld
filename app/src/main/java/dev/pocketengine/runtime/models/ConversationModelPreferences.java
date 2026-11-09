@@ -159,6 +159,18 @@ public final class ConversationModelPreferences {
         });
     }
 
+    /** Retain options only for an explicit recheck of the same native choice. The caller must capture a fresh binding and validate its current capabilities. */
+    public static JSONObject apiReselectionTarget(JSONObject preference, String expectedScope, long expectedRevision,
+                                                   String connectionId, String modelId) throws Exception {
+        if (!scope(expectedScope).equals(preference.getString("scopeKey")) || expectedRevision < 0
+                || positive(preference, "revision", 0, Long.MAX_VALUE) != expectedRevision)
+            throw new IllegalStateException("此对话的模型设置已变化，请重新读取");
+        if (preference.getBoolean("inherited")) return null;
+        JSONObject target = checkedTarget(preference.getJSONObject("target"));
+        return "api".equals(target.getString("kind")) && connectionId.equals(target.getString("connectionId"))
+                && modelId.equals(target.getString("modelId")) ? target : null;
+    }
+
     public static JSONObject checkedTarget(JSONObject source) throws Exception {
         JSONObject value = copy(source); String kind = value.getString("kind");
         Set<String> keys = new HashSet<>(); value.keys().forEachRemaining(keys::add);

@@ -202,4 +202,6 @@
 .pw-settings-category .pw-settings-execution{margin-top:14px;padding-top:18px;border-top:1px solid var(--pw-edge)}
 .pw-settings-category .pw-settings-execution>.pw-settings-section{margin-bottom:0}
 .pw-secondary-refactor[data-secondary-page^="phone:"] .pw-secondary-page{max-width:800px;margin-inline:auto;padding-bottom:20px}
+.pw-secondary-refactor[data-secondary-page="proxy"] .pw-secondary-page{max-width:1040px;margin-inline:auto;padding-bottom:20px}
+.pw-secondary-refactor .pw-settings-links>.pw-domain-link:not(:has(.pw-settings-row-copy>small)){min-height:56px}
 @media(min-width:900px){.pw-settings-categories{grid-template-columns:repeat(2,minmax(0,1fr));gap:36px 56px}.pw-settings-preferences>.pw-secondary-search{max-width:420px;margin-bottom:32px}}

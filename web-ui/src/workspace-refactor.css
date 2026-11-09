@@ -227,14 +227,14 @@
 .pw-navigation-drawer .pw-nav-item a:focus-visible { outline: 2px solid var(--pw-focus); outline-offset: -3px; background: var(--pw-selected); }
 .pw-navigation-drawer .pw-nav-item a svg { width: 19px; height: 19px; }
 .pw-navigation-drawer .pw-nav-count { min-width: 22px; padding: 0 4px; border: 0; background: transparent; color: var(--pw-copy); font-size: 12px; }
-.pw-navigation-drawer .pw-work-recent { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--pw-edge); }
+.pw-navigation-drawer .pw-work-recent { margin: 0 0 18px; padding: 0; border: 0; }
 .pw-navigation-drawer .pw-conversation-group + .pw-conversation-group { margin-top: 18px; }
 .pw-navigation-drawer .pw-work-recent .pw-section-heading { padding-inline: 12px; margin-bottom: 6px; }
 .pw-navigation-drawer .pw-work-recent h3 { font-size: 12px; line-height: 20px; font-weight: 500; color: var(--pw-muted); }
 .pw-navigation-drawer .pw-recent-work .pw-conversation-row > .button-press-motion:first-child { min-height: 48px; padding: 12px; border-radius: 12px; justify-content: flex-start; }
 .pw-navigation-drawer .pw-recent-work .pw-conversation-row > .button-press-motion:first-child > span { display: block; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; font-size: 14px; line-height: 22px; }
 .pw-navigation-drawer .pw-recent-work .pw-conversation-row > .is-current { background: var(--pw-selected); }
-.pw-navigation-drawer .pw-all-conversations { width: 100%; padding: 10px 12px; justify-content: flex-start; gap: 8px; color: var(--pw-copy); font-size: 12px; }
+.pw-navigation-drawer .pw-all-conversations { width: 100%; min-height: 44px; padding: 10px 12px; justify-content: flex-start; gap: 8px; color: var(--pw-copy); font-size: 13px; }
 .pw-all-conversations > svg:last-child { margin-left: auto; }
 .pw-navigation-footer { flex: none; padding: 8px 14px max(12px,env(safe-area-inset-bottom)); }
 .pw-navigation-footer .pw-work-sidebar nav section { margin: 0; }

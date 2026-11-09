@@ -3,7 +3,9 @@ package dev.pocketengine.ui.web
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import dev.pocketengine.runtime.models.ConversationModelPreferences
 import dev.pocketengine.runtime.models.ModelBinding
+import dev.pocketengine.runtime.models.ReasoningOptions
 import dev.pocketengine.ui.PocketWorldController
 import java.util.UUID
 import org.json.JSONObject
@@ -209,8 +211,12 @@ internal class PocketWebComposerModels(
                 val service = controller.nativeModelConnections() ?: error("模型来源尚未准备")
                 val review = service.reviewConnectionModel(row.getString("connectionId"), row.getLong("connectionRevision"), row.getString("modelId"))
                 val options = review.getJSONObject("options")
+                val retained = ConversationModelPreferences.apiReselectionTarget(controller.conversationModelPreference(), scope,
+                    original.preferenceRevision, row.getString("connectionId"), row.getString("modelId"))
                 service.captureConnectionModel(row.getString("connectionId"), row.getLong("connectionRevision"), row.getString("modelId"),
-                    options.getInt("maxOutputTokens"), dev.pocketengine.runtime.models.ReasoningOptions.DEFAULT, options.getInt("imageTokenReserve"))
+                    retained?.getInt("outputTokens") ?: options.getInt("maxOutputTokens"),
+                    retained?.let { ReasoningOptions.fromJson(it.getJSONObject("reasoning")) } ?: ReasoningOptions.DEFAULT,
+                    retained?.getInt("imageTokenReserve") ?: options.getInt("imageTokenReserve"))
             } else original.accounts!!.captureModel(accountChoice!!)
             check(current(original) && scope == controller.conversationModelScope()) { "原对话模型窗口已关闭" }
             controller.saveConversationModel(scope, original.preferenceRevision, controller.conversationTarget(captured))

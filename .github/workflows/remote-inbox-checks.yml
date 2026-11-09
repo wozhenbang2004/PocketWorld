@@ -1,6 +1,8 @@
 name: Remote inbox integration checks
 
+# Automatic main builds and publishing belong to github-release.yml.
 on:
+  workflow_dispatch:
   push:
     branches: ['work/remote-inbox-*']
     paths:

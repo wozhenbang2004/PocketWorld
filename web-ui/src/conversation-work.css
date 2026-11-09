@@ -16,4 +16,11 @@
 .pw-memory-assertion blockquote{margin:12px 0 0;padding-left:12px;border-left:2px solid var(--pw-border)}
 .pw-memory-assertion blockquote p{margin:0 0 4px}
 .pw-redesign .pw-composer-region .pw-new-replies{position:relative;display:flex;left:auto;right:auto;bottom:auto;margin:0 auto 8px}
+.pw-redesign .pw-linked-task.pw-linked-task-complete.button-press-motion{width:fit-content;max-width:100%;min-height:44px;margin-top:8px;padding:8px 0;background:transparent;box-shadow:none;color:var(--pw-muted);border-radius:8px}
+.pw-redesign .pw-linked-task.pw-linked-task-complete.button-press-motion>span{display:flex;align-items:center;justify-content:flex-start;gap:8px;min-width:0}
+.pw-linked-task-complete .pw-linked-task-summary{font-size:13px;font-weight:500;color:var(--pw-copy)}
+.pw-linked-task-complete .pw-linked-task-action{font-size:12px;color:var(--pw-muted)}
+.pw-redesign .pw-current-thinking{display:flex;align-items:center;gap:12px;width:min(100%,760px);min-width:0;padding:4px 20px 12px}
+.pw-current-thinking .pw-current-activity{flex:1;min-width:0;overflow:hidden}
+.pw-current-thinking>.button-press-motion{flex:none;min-height:44px;color:var(--pw-muted)}
 @media(prefers-reduced-motion:reduce){.pw-conversation-work *{scroll-behavior:auto}}

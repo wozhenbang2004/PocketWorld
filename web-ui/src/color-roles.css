@@ -71,16 +71,7 @@
   border-color: var(--pw-divider);
 }
 
-/* Composer and popovers use the softest raised plane, not thick card outlines. */
-.pw-redesign .pw-composer-region .pw-composer-host .afa-composer > .afa-card {
-  background: var(--pw-surface);
-  border: 1px solid var(--pw-edge);
-  box-shadow: var(--pw-shadow-input);
-}
-.pw-redesign .pw-composer-region .pw-composer-host .afa-composer > .afa-card:focus-within {
-  border-color: var(--pw-edge-hover);
-  box-shadow: 0 0 0 2px var(--pw-focus), var(--pw-shadow-input);
-}
+/* Popovers use a raised plane; the composer surface belongs to composer-compact.css. */
 :is(.pw-create-drawer, .pw-model-drawer, .pw-settings-dialog) {
   background: var(--pw-surface);
   border-color: var(--pw-edge);

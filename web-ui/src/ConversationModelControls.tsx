@@ -15,7 +15,7 @@ export type ConversationModelControlsProps = {
   state: ModelControlRecord;
   can: (action: string) => boolean;
   act: (action: string, args?: ModelControlRecord) => Promise<any>;
-  onOpenModel: () => void;
+  onOpenModel: (section?: 'models' | 'reasoning') => void;
   disabled?: boolean;
   registerBackHandler?: (handler: (() => boolean) | null) => void;
 };

@@ -56,7 +56,7 @@ async function runScene(origin, dark, empty) {
   const center = () => page.locator('.pw-ai-center');
   const count = action => page.evaluate(action => window.aiCenterFixture.calls.filter(row => row.action === action).length, action);
   const calls = action => page.evaluate(action => window.aiCenterFixture.calls.filter(row => row.action === action).map(row => row.args), action);
-  const back = () => page.locator('.pw-secondary-header').getByRole('button', { name: '返回', exact: true }).click();
+  const back = (name = '返回') => page.locator('.pw-secondary-header').getByRole('button', { name, exact: true }).click();
   try {
     await page.goto(origin, { waitUntil: 'networkidle' });
     const input = page.getByRole('textbox', { name: '工作输入', exact: true });
@@ -80,9 +80,14 @@ async function runScene(origin, dark, empty) {
     assert.ok(layout.borders.every(edge => edge.width === 0 || edge.color === 'transparent' || /rgba\([^)]*,\s*0\)$/.test(edge.color)), 'Composer has a visible border');
     await input.focus();
     const focused = await page.locator('.pw-composer-card').evaluate(node => {
-      const s = getComputedStyle(node); return ['Top', 'Right', 'Bottom', 'Left'].map(side => ({ width: parseFloat(s['border' + side + 'Width']), color: s['border' + side + 'Color'] }));
+      const s = getComputedStyle(node);
+      const solidRings = s.boxShadow.replace(/(?:rgba?|hsla?)\([^)]*\)/g, '').split(',')
+        .map(layer => [...layer.matchAll(/(-?[\d.]+)px/g)].map(match => Number(match[1])))
+        .filter(lengths => lengths.length >= 4 && Math.abs(lengths[0]) < .01 && Math.abs(lengths[1]) < .01 && Math.abs(lengths[2]) < .01 && Math.abs(lengths[3]) >= 2);
+      return { borders: ['Top', 'Right', 'Bottom', 'Left'].map(side => ({ width: parseFloat(s['border' + side + 'Width']), color: s['border' + side + 'Color'] })), boxShadow: s.boxShadow, solidRings };
     });
-    assert.ok(focused.every(edge => edge.width === 0 || edge.color === 'transparent' || /rgba\([^)]*,\s*0\)$/.test(edge.color)), 'Focused composer has a visible frame');
+    assert.ok(focused.borders.every(edge => edge.width === 0 || edge.color === 'transparent' || /rgba\([^)]*,\s*0\)$/.test(edge.color)), 'Focused composer has a visible frame');
+    assert.deepEqual(focused.solidRings, [], 'Focused composer has a solid shadow ring: ' + focused.boxShadow);
     await input.evaluate(node => node.blur());
     passed(scene, 'Native-inset shell has no repeated top padding; composer is borderless at rest and focus', layout);
     await shot('chat');
@@ -90,29 +95,32 @@ async function runScene(origin, dark, empty) {
     await page.locator('.pw-conversation-model-chip').click();
     const picker = page.getByRole('region', { name: '统一模型目录', exact: true });
     await picker.waitFor();
-    await expect(picker.getByText('正在读取来源与模型', { exact: true })).toHaveCount(0);
+    await expect(picker.locator('.pw-ai-loading')).toHaveCount(0);
     await expect(picker.getByRole('tab', { name: '全部', exact: true })).toBeVisible();
     await expect(picker.getByRole('tab', { name: '收藏', exact: true })).toBeVisible();
     await expect(picker.getByRole('tab', { name: '最近使用', exact: true })).toBeVisible();
     if (empty) await picker.getByRole('heading', { name: '添加你的第一个 AI 服务', exact: true }).waitFor();
     else {
-      await picker.getByRole('button', { name: /fixture-reasoner/ }).waitFor();
+      await picker.getByRole('button', { name: '选择模型：fixture-reasoner，工作 OpenAI · 测试', exact: true }).waitFor();
       await picker.getByRole('button', { name: /个人 ChatGPT · 测试/ }).waitFor();
-      await picker.getByRole('button', { name: /日常任务 · 测试/ }).waitFor();
+      await picker.getByRole('button', { name: '选择模型组：日常任务 · 测试', exact: true }).waitFor();
     }
     await shot('unified-picker');
     if (!empty) {
-      await picker.getByRole('button', { name: /fixture-reasoner/ }).click();
+      // Inspect through the explicit detail action; a primary row now selects directly.
+      await picker.getByRole('button', { name: '查看模型详情：fixture-reasoner，工作 OpenAI · 测试', exact: true }).click();
       await picker.getByRole('button', { name: '用于本对话', exact: true }).waitFor();
+      assert.equal(await count('models.api.select'), 0);
+      assert.equal(await count('models.conversation.api.select'), 0);
       await shot('model-review');
       await picker.getByRole('button', { name: '返回模型', exact: true }).click();
       await picker.getByRole('button', { name: /个人 ChatGPT · 测试/ }).click();
-      await picker.getByRole('button', { name: /套餐模型 · 测试/ }).waitFor();
+      await picker.getByRole('button', { name: /^选择模型：套餐模型 · 测试，/ }).waitFor();
       passed(scene, 'Unified picker renders API, group and same-window account catalog identities');
     }
     await picker.getByRole('button', { name: '管理 AI 接入', exact: true }).click();
     await center().getByRole('heading', { name: '你的服务', exact: true }).waitFor();
-    await expect(page.getByRole('dialog', { name: '选择模型', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('dialog', { name: '模型与推理', exact: true })).toHaveCount(0);
     await expect(page.locator('.pw-secondary-header').getByRole('heading', { name: 'AI 接入', exact: true })).toBeVisible();
     assert.equal(await page.evaluate(() => window.aiCenterFixture.summary().synthetic), true);
     if (empty) await center().getByRole('heading', { name: '连接你的第一个 AI 服务', exact: true }).waitFor();
@@ -120,7 +128,7 @@ async function runScene(origin, dark, empty) {
     await shot('services');
     await center().getByRole('tab', { name: '模型', exact: true }).click();
     if (empty) await center().getByRole('heading', { name: '添加你的第一个 AI 服务', exact: true }).waitFor();
-    else await center().getByRole('button', { name: /fixture-reasoner/ }).waitFor();
+    else await center().getByRole('button', { name: '选择模型：fixture-reasoner，工作 OpenAI · 测试', exact: true }).waitFor();
     await shot('models');
     await center().getByRole('tab', { name: '调度', exact: true }).click();
     await center().getByRole('heading', { name: '模型组', exact: true }).waitFor();
@@ -229,7 +237,9 @@ async function runScene(origin, dark, empty) {
     assert.deepEqual(summary.errors, []);
     assert.deepEqual(externalRequests, [], 'Renderer fixture must not contact a real provider or service');
     assert.equal(await page.evaluate(() => window.aiCenterFixture.calls.some(row => row.action === 'composer.send')), false);
-    await back();
+    await back('返回 AI 接入');
+    await expect(page.locator('.pw-secondary-header').getByRole('heading', { name: 'AI 接入', exact: true })).toBeVisible();
+    await expect(center()).toHaveAttribute('data-ai-view', 'main');
     // A real navigation return, rather than changing React state in the test fixture.
     await back();
     await input.waitFor();

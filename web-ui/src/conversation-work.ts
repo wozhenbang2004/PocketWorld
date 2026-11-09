@@ -1,4 +1,5 @@
 import { phoneConversationId } from './phone-start.ts';
+import { getRecentTaskProgress, taskNeedsAttention } from './task-presentation.ts';
 
 type Data = Record<string, any>;
 const object = (value: unknown): Data | null => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Data : null;
@@ -50,6 +51,36 @@ export function foregroundConversationTurn(state: Data): Data | null {
       || !id(value.runId) || !positive(value.epoch)) return null;
   const task = Array.isArray(state.tasks) ? state.tasks.find((row: Data) => row.id === value.taskId) : null;
   return task?.raw?.executionRole === 'owner_work' ? null : value;
+}
+
+/** A visible activity belongs to the exact foreground run, not another task or
+ * an earlier attempt. Recorded details stay labelled as recent progress. */
+export function conversationActivityLabel(state: Data): string {
+  const turn = foregroundConversationTurn(state);
+  if (!turn) return '';
+  if (turn.resourceState === 'queued') return '等待执行';
+  if (turn.resourceState === 'retained') return '等待补充';
+  if (turn.resourceState === 'stopping') return '正在停止';
+  const task = Array.isArray(state.tasks) ? state.tasks.find((row: Data) => row.id === turn.taskId) : null;
+  const raw = object(task?.raw);
+  if (!task || raw?.runId !== turn.runId || raw?.coordinatorEpoch !== turn.epoch) return '正在处理这次回复';
+  const progress = getRecentTaskProgress(task);
+  if (progress.runId !== turn.runId) return '正在处理这次回复';
+  if (progress.status === 'unknown' && progress.source === 'task') return progress.title;
+  if (progress.source !== 'task' && ['unknown', 'error', 'waiting', 'stopped'].includes(progress.status)) {
+    const label = progress.status === 'unknown' ? '结果待核对' : progress.stateLabel;
+    const detail = progress.source === 'event' ? progress.detail : progress.title;
+    return detail && detail !== label ? `${label} · ${detail}` : label;
+  }
+  if (progress.source === 'operation') return `最近调用 · ${progress.title}`;
+  if (progress.source === 'event' && progress.detail) return `最近进展 · ${progress.detail}`;
+  return '正在处理这次回复';
+}
+
+/** Only authoritative success with no unresolved work may give space back to
+ * the answer. A completed label never hides a reconciliation requirement. */
+export function conversationTaskCompact(task: Data): boolean {
+  return task.status === 'completed' && !taskNeedsAttention(task);
 }
 
 export function backgroundConversationWork<T extends Data>(tasks: T[], ownerWork: T[], conversationId: unknown): T[] {

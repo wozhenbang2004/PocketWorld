@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { backgroundConversationWork, foregroundConversationTurn, messageReplyContext, messageTaskResult, ownerWorkIdentity } from '../src/conversation-work.ts';
+import { backgroundConversationWork, conversationActivityLabel, conversationTaskCompact, foregroundConversationTurn, messageReplyContext, messageTaskResult, ownerWorkIdentity } from '../src/conversation-work.ts';
 
 const work = (id = 'work-a', status = 'running') => ({ id, goal: '整理明天的安排', status, updatedAt: 42, raw: {
   id, actorId: 'owner', spaceId: 'private', conversationId: 'conversation', executionRole: 'owner_work', runId: 'work-run', coordinatorEpoch: 2,
@@ -9,6 +9,44 @@ const work = (id = 'work-a', status = 'running') => ({ id, goal: '整理明天�
 const reply = (kind = 'owner_work') => ({ role: 'assistant', taskId: 'work-a', content: '当时核对的结果',
   replyContext: { taskId: 'work-a', runId: 'old-run', epoch: 1, deliveryId: kind === 'owner_work' ? 'b3f065b7-e049-4192-b798-39d01a8b69c7' : `${kind}:work-a:old-run:1`, replyToMessageIds: ['request-a'] },
   taskResult: { kind, taskId: 'work-a', runId: 'old-run', epoch: 1, deliveryId: kind === 'owner_work' ? 'b3f065b7-e049-4192-b798-39d01a8b69c7' : `${kind}:work-a:old-run:1`, status: 'failed', endedAt: 1793764860000, summaryChars: 8, summaryTruncated: false },
+});
+
+test('the conversation activity never borrows an older run or another conversation', () => {
+  const foreground = { conversationId: 'conversation', taskId: 'reply-task', runId: 'reply-run', epoch: 2, executionRole: 'conversation_turn' };
+  const task = { id: 'reply-task', status: 'running', raw: { id: 'reply-task', runId: 'reply-run', coordinatorEpoch: 2,
+    events: [{ runId: 'reply-run', type: 'tool', status: 'completed', message: '已读取这次选择的文件', at: 42 }] } };
+  const state = { conversationId: 'conversation', foregroundTurn: foreground, tasks: [task] };
+  assert.equal(conversationActivityLabel(state), '最近进展 · 已读取这次选择的文件');
+  assert.equal(conversationActivityLabel({ ...state, conversationId: 'elsewhere' }), '');
+  assert.equal(conversationActivityLabel({ ...state, tasks: [{ ...task, raw: { ...task.raw, runId: 'old-run' } }] }), '正在处理这次回复');
+  assert.equal(conversationActivityLabel({ ...state, tasks: [{ ...task, raw: { ...task.raw, coordinatorEpoch: 1 } }] }), '正在处理这次回复');
+  assert.equal(conversationActivityLabel({ ...state, tasks: [] }), '正在处理这次回复');
+});
+
+test('foreground queue and stop feedback take precedence over recent records', () => {
+  const turn = { conversationId: 'conversation', taskId: 'reply-task', runId: 'reply-run', epoch: 1 };
+  for (const [resourceState, expected] of [['queued', '等待执行'], ['retained', '等待补充'], ['stopping', '正在停止']]) {
+    assert.equal(conversationActivityLabel({ conversationId: 'conversation', foregroundTurn: { ...turn, resourceState } }), expected);
+  }
+});
+
+test('activity summaries retain unresolved, failed and waiting event states', () => {
+  const turn = { conversationId: 'conversation', taskId: 'reply-task', runId: 'reply-run', epoch: 2 };
+  for (const [status, label] of [['unknown', '结果待核对'], ['failed', '该记录返回错误'], ['awaiting_user', '需要你处理'], ['paused', '已暂停'], ['stopped', '已停止']]) {
+    const task = { id: 'reply-task', status: 'running', raw: { runId: 'reply-run', coordinatorEpoch: 2,
+      events: [{ runId: 'reply-run', type: 'tool', status, message: '请求已发送给外部服务', at: 42 }] } };
+    assert.equal(conversationActivityLabel({ conversationId: 'conversation', foregroundTurn: turn, tasks: [task] }), `${label} · 请求已发送给外部服务`);
+  }
+});
+
+test('only settled success becomes a compact conversation summary', () => {
+  assert.equal(conversationTaskCompact(work('done', 'completed')), true);
+  for (const status of ['running', 'failed', 'stopped', 'interrupted', 'waiting_approval', 'unknown']) {
+    assert.equal(conversationTaskCompact(work('task', status)), false, status);
+  }
+  const done = work('unconfirmed', 'completed');
+  assert.equal(conversationTaskCompact({ ...done, raw: { ...done.raw, historyHasUnconfirmedOperations: true } }), false);
+  assert.equal(conversationTaskCompact({ ...done, raw: { ...done.raw, hasUnresolvedOperations: true } }), false);
 });
 
 test('background work never supplies the foreground typing or stop identity', () => {

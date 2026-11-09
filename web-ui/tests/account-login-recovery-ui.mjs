@@ -23,7 +23,8 @@ async function check(name, width, dark, work) {
   page.setDefaultTimeout(5000);
   const errors = []; page.on('pageerror', error => errors.push(String(error)));
   try {
-    await page.goto(server.resolvedUrls.local[0] + 'tests/model-account-fixture.html?view=accounts');
+    // Vite compiles this large fixture on its first request; keep interaction checks at 5s.
+    await page.goto(server.resolvedUrls.local[0] + 'tests/model-account-fixture.html?view=accounts', { timeout: 30000 });
     await page.getByRole('button', { name: '添加账号', exact: true }).waitFor();
     await page.evaluate(dark => document.documentElement.classList.toggle('dark', dark), dark);
     await work(page);

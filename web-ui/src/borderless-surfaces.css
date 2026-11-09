@@ -21,12 +21,6 @@ body :is(.pw-app-header, .pw-secondary-header, .pw-drawer, .pw-drawer-actions,
   .pw-pending-input, .pw-composer-region, .pw-form-group) {
   border: 0;
 }
-.pw-redesign .pw-composer-region .pw-composer-host .afa-composer > .afa-card,
-.pw-redesign .pw-composer-region .pw-composer-host .afa-composer > .afa-card:focus-within {
-  border: 0 !important;
-  background: var(--pw-surface);
-  box-shadow: var(--pw-shadow-input) !important;
-}
 .pw-redesign .pw-app-header, .pw-secondary .pw-secondary-header {
   min-height: 56px;
   padding-block: 6px;
@@ -35,7 +29,7 @@ body :is(.pw-app-header, .pw-secondary-header, .pw-drawer, .pw-drawer-actions,
 }
 .pw-conversation-model-controls { gap: 4px; }
 .pw-conversation-model-controls > button,
-.pw-conversation-model-controls .pw-conversation-reasoning-chip { min-height: 40px; }
+.pw-conversation-model-controls .pw-conversation-reasoning-chip { min-height: 44px; }
 .pw-conversation-model-controls .pw-conversation-model-chip { gap: 6px; }
 .pw-conversation-model-controls .pw-conversation-reasoning-chip { gap: 6px; padding-inline: 10px; }
 .pw-redesign .pw-composer-region { padding-top: 8px; }

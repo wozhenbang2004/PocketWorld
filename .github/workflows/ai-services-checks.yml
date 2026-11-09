@@ -1,5 +1,6 @@
 name: AI services integration checks
 
+# Automatic main builds and publishing belong to github-release.yml.
 on:
   push:
     branches: ['uiux/ai-center-*']
@@ -55,14 +56,22 @@ jobs:
           npm ci --prefix web-ui
           npm run build --prefix web-ui
           npm test --prefix web-ui
-      - name: Verify the actual AI management views with isolated host fixtures
+      - name: Install the browser for UI checks
+        id: browser
         run: |
           set -euo pipefail
           npm exec --prefix web-ui -- playwright install --with-deps chromium
-          node web-ui/tests/ai-center-ui.mjs --output build-artifacts/ai-center-visual
-          ACCOUNT_RECOVERY_EVIDENCE=build-artifacts/account-login-recovery node web-ui/tests/account-login-recovery-ui.mjs
+      - name: Verify AI management views with isolated host fixtures
+        if: ${{ always() && steps.frontend.outcome == 'success' && steps.browser.outcome == 'success' }}
+        run: node web-ui/tests/ai-center-ui.mjs --output build-artifacts/ai-center-visual
+      - name: Verify conversation navigation, model selection and return continuity
+        if: ${{ always() && steps.frontend.outcome == 'success' && steps.browser.outcome == 'success' }}
+        run: node web-ui/tests/ai-conversation-ui.mjs --output build-artifacts/ai-conversation-visual
+      - name: Verify account login recovery
+        if: ${{ always() && steps.frontend.outcome == 'success' && steps.browser.outcome == 'success' }}
+        run: ACCOUNT_RECOVERY_EVIDENCE=build-artifacts/account-login-recovery node web-ui/tests/account-login-recovery-ui.mjs
       - name: Verify first-use and preparation journeys in the production renderer
-        if: ${{ always() && steps.frontend.outcome == 'success' }}
+        if: ${{ always() && steps.frontend.outcome == 'success' && steps.browser.outcome == 'success' }}
         run: node web-ui/tests/setup-renderer.mjs --output build-artifacts/setup-visual
       - name: Prepare declared Android compile toolchains
         id: native_tools
@@ -93,6 +102,7 @@ jobs:
           name: pocketworld-ai-services-${{ github.run_number }}-${{ github.run_attempt }}
           path: |
             build-artifacts/ai-center-visual/
+            build-artifacts/ai-conversation-visual/
             build-artifacts/account-login-recovery/
             build-artifacts/setup-visual/
             build-artifacts/ai-services-native/

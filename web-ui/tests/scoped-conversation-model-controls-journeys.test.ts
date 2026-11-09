@@ -30,16 +30,15 @@ function fixture(overrides: Data = {}, extra: Data = {}) {
   const dependencies: Data = { React, useState, useRef, useEffect, ...controls, ...selection, window: { setTimeout(callback: () => void) { const id = ++timerId; timers.set(id, callback); return id; }, clearTimeout(id: number) { timers.delete(id); } } };
   for (const key of ['RiArrowDownSLine', 'RiBrainLine', 'RiCloseLine', 'RiCpuLine', 'Button', 'IconButton', 'Radio', 'RadioGroup', 'ShimmerText']) dependencies[key] = key;
   dependencies.Drawer = Object.fromEntries(['Root', 'Trigger', 'Portal', 'Overlay', 'Content', 'Title', 'Description'].map(key => [key, `Drawer.${key}`]));
-  const Component = new Function(...Object.keys(dependencies), code + '\nreturn ScopedConversationModelControls;')(...Object.values(dependencies));
-  const props = { state: { modelName: 'global-model', modelSelectionRevision: 8, conversationModel: preference }, can: () => true, act: async (action: string, args: Data = {}) => { calls.push({ action, args }); const value = responses[action]; return typeof value === 'function' ? value(args) : value || {}; }, onOpenModel: () => { modelOpened++; }, registerBackHandler: (value: any) => { back = value; }, ...extra };
+  const Component = new Function(...Object.keys(dependencies), code + '\nreturn ScopedConversationReasoningPanel;')(...Object.values(dependencies));
+  const props = { state: { modelName: 'global-model', modelSelectionRevision: 8, conversationModel: preference }, can: () => true, act: async (action: string, args: Data = {}) => { calls.push({ action, args }); const value = responses[action]; return typeof value === 'function' ? value(args) : value || {}; }, onOpenModel: () => { modelOpened++; }, onSelectionPending: (value: boolean) => { back = value ? () => true : null; }, ...extra };
   const content = (node: any): string => !node || typeof node !== 'object' ? String(node ?? '') : node.children.map(content).join('');
   const nodes = (node: any): any[] => !node || typeof node !== 'object' ? [] : [node, ...node.children.flatMap(nodes)];
   const render = () => { let rounds = 0; do { assert.ok(rounds++ < 30); dirty = false; index = 0; tree = Component(props); effects.splice(0).forEach(effect => effect()); } while (dirty); };
   const find = (predicate: (node: any) => boolean) => { const node = nodes(tree).find(predicate); assert.ok(node, 'expected real scoped model control'); return node; };
   render();
   return { calls, props, responses, find, get text() { return content(tree); }, get modelOpened() { return modelOpened; },
-    get open() { return find(node => node.type === 'Drawer.Root').props.open; },
-    begin() { find(node => node.type === 'Drawer.Root').props.onOpenChange(true); render(); },
+    begin() { render(); },
     click(label: string) { const node = find(node => ['Button', 'IconButton'].includes(node.type) && (content(node) === label || node.props['aria-label'] === label)); assert.ok(!node.props.disabled, `${label} enabled`); node.props.onClick(); render(); },
     choose(value = controls.reasoningId(high)) { find(node => node.type === 'RadioGroup').props.onChange(value); render(); },
     change(state: Data) { props.state = { ...props.state, ...state }; render(); },
@@ -52,16 +51,16 @@ function fixture(overrides: Data = {}, extra: Data = {}) {
 
 test('the scoped controls use real exported reasoning helpers and write only the reviewed conversation handle', async () => {
   assert.equal(typeof controls.nativeReasoning, 'function'); assert.equal(typeof controls.reasoningChoices, 'function'); assert.equal(typeof controls.reasoningLabel, 'function');
-  const f = fixture(); f.begin(); await f.flush(); f.choose(); f.click('应用到此对话'); await f.flush();
+  const f = fixture(); f.begin(); await f.flush(); f.choose(); await f.flush();
   assert.deepEqual(f.calls.find(call => call.action === 'models.conversation.reasoning'), { action: 'models.conversation.reasoning', args: { reviewHandle: 'conversation-review-a', reasoning: high } });
   assert.equal(f.calls.some(call => /^(models\.(select|api\.select|accounts\.select)|settings\.)/.test(call.action)), false);
-  assert.equal(f.open, false); assert.ok(f.calls.some(call => call.action === 'models.conversation.close'));
+  assert.match(f.text, /推理已保存/); f.unmount(); assert.ok(f.calls.some(call => call.action === 'models.conversation.close'));
 });
 
 test('restoring the default sends only the original conversation and source revisions then closes its review', async () => {
   const f = fixture(); f.begin(); await f.flush(); f.click('恢复使用默认模型'); await f.flush();
   assert.deepEqual(f.calls.find(call => call.action === 'models.conversation.reset')?.args, { expectedPreferenceRevision: 3, expectedSelectionRevision: 8 });
-  assert.equal(f.open, false); assert.ok(f.calls.some(call => call.action === 'models.conversation.close'));
+  assert.match(f.text, /已恢复使用默认模型/); f.unmount(); assert.ok(f.calls.some(call => call.action === 'models.conversation.close'));
 });
 
 test('wrong selection revisions, empty handles, and a swapped target cannot become editable reviews', async () => {
@@ -82,10 +81,10 @@ test('a late read from an earlier conversation revision is discarded', async () 
   assert.equal(f.find(node => node.type === 'Button' && node.children.join('') === '重新读取').props.disabled, false);
 });
 
-test('Back and unmount retire the original native review and discard a late response', async () => {
+test('unmount retires the original native review and discards a late response', async () => {
   let finish!: (value: any) => void;
   const f = fixture({ 'models.conversation.review': () => new Promise(resolve => { finish = resolve; }) }); f.begin(); await f.flush();
-  assert.equal(f.back(), true); assert.equal(f.open, false); finish(review); await f.flush();
+  f.unmount(); finish(review); await f.flush();
   assert.equal(f.calls.filter(call => call.action === 'models.conversation.close').length, 1);
   const second = fixture(); second.begin(); await second.flush(); second.unmount(); await second.flush();
   assert.equal(second.calls.filter(call => call.action === 'models.conversation.close').length, 1);
@@ -96,14 +95,14 @@ test('model groups keep native candidate parameters and never expose generic rea
   const groupReview = { ...review, ...group, nativeSelection: { ...review.nativeSelection, modelRoutePlan: { requestedAlias: 'group-a', groupRevision: 6 } }, restriction: '模型组按各候选的原生参数执行，请在 AI 中心管理候选。' };
   const f = fixture({ 'models.conversation.review': groupReview }, { state: { modelName: 'global-model', modelSelectionRevision: 8, conversationModel: group } }); f.begin(); await f.flush();
   assert.match(f.text, /模型组按各候选的原生参数执行/);
-  assert.equal(f.find(node => node.type === 'Button' && node.children.join('') === '应用到此对话').props.disabled, true);
+  assert.doesNotMatch(f.text, /服务默认|应用到此对话/);
   assert.equal(f.calls.some(call => call.action === 'models.conversation.reasoning'), false);
 });
 
 test('an unknown reasoning receipt retires its handle and cannot silently retry or close as success', async () => {
   const f = fixture({ 'models.conversation.reasoning': { ...receipt, preference: { ...receipt.preference, scopeKey: 'conversation:b' } } });
-  f.begin(); await f.flush(); f.choose(); f.click('应用到此对话'); await f.flush();
-  assert.equal(f.open, true); assert.match(f.text, /没有自动重试/); assert.equal(f.calls.filter(call => call.action === 'models.conversation.reasoning').length, 1);
+  f.begin(); await f.flush(); f.choose(); await f.flush();
+  assert.match(f.text, /保存结果待核对/); assert.doesNotMatch(f.text, /推理已保存/); assert.match(f.text, /没有自动重试/); assert.equal(f.calls.filter(call => call.action === 'models.conversation.reasoning').length, 1);
 });
 
 test('an unknown reset cannot be submitted again until an explicit successful reread', async () => {
@@ -114,15 +113,64 @@ test('an unknown reset cannot be submitted again until an explicit successful re
   assert.equal(f.find(node => node.type === 'Button' && node.children.join('') === '恢复使用默认模型').props.disabled, false);
 });
 
-test('changing conversations during a write closes the old surface without applying a late receipt to the new scope', async () => {
+test('changing conversations during a write retires the old review without applying a late receipt to the new scope', async () => {
   let finish!: (value: any) => void;
-  const f = fixture({ 'models.conversation.reasoning': () => new Promise(resolve => { finish = resolve; }) }); f.begin(); await f.flush(); f.choose(); f.click('应用到此对话'); await f.flush();
+  const f = fixture({ 'models.conversation.reasoning': () => new Promise(resolve => { finish = resolve; }) }); f.begin(); await f.flush(); f.choose(); await f.flush();
   f.change({ conversationModel: { ...preference, scopeKey: 'conversation:b', revision: 0, inherited: true, target: null } });
-  assert.equal(f.open, false); finish(receipt); await f.flush(); assert.equal(f.open, false);
+  assert.match(f.text, /对话已切换/); finish(receipt); await f.flush(); assert.doesNotMatch(f.text, /推理已保存/);
   assert.equal(f.calls.filter(call => call.action === 'models.conversation.reasoning').length, 1);
 });
 
 test('expiry removes the reviewed strength choices and requires another explicit read', async () => {
   const f = fixture(); f.begin(); await f.flush(); f.expire();
   assert.match(f.text, /审阅已过期/); assert.equal(f.calls.filter(call => call.action === 'models.conversation.review').length, 1);
+});
+
+test('clicking a strength writes immediately, keeps the old check while pending and rejects duplicate clicks', async () => {
+  let finish!: (value: any) => void;
+  const f = fixture({ 'models.conversation.reasoning': () => new Promise(resolve => { finish = resolve; }) }); await f.flush();
+  const group = f.find(node => node.type === 'RadioGroup'), previous = group.props.value;
+  group.props.onChange(controls.reasoningId(high)); group.props.onChange(controls.reasoningId(high)); await f.flush();
+  assert.equal(f.calls.filter(call => call.action === 'models.conversation.reasoning').length, 1);
+  assert.equal(f.find(node => node.type === 'RadioGroup').props.value, previous);
+  assert.match(f.text, /正在保存推理/); assert.doesNotMatch(f.text, /推理已保存/);
+  finish(receipt); await f.flush(); assert.match(f.text, /推理已保存/);
+});
+
+test('the current or unsupported strength is never submitted', async () => {
+  const f = fixture(); await f.flush(); f.choose(controls.reasoningId(defaultReasoning)); f.choose('invented-effort'); await f.flush();
+  assert.equal(f.calls.some(call => call.action === 'models.conversation.reasoning'), false);
+});
+
+test('saved status alone cannot confirm different reasoning, model identity or output reserves', async () => {
+  for (const patch of [{ reasoning: defaultReasoning }, { modelId: 'another-model' }, { outputTokens: 8000 }, { imageTokenReserve: 999 }, { binding: { ...binding, credentialGeneration: 2 } }]) {
+    const f = fixture({ 'models.conversation.reasoning': { ...receipt, preference: { ...receipt.preference, target: { ...receipt.preference.target, ...patch } } } }); await f.flush(); f.choose(); await f.flush();
+    assert.match(f.text, /保存结果待核对/); assert.doesNotMatch(f.text, /推理已保存/); assert.equal(f.calls.filter(call => call.action === 'models.conversation.reasoning').length, 1); f.unmount();
+  }
+});
+
+test('a confirmed save waits for the published preference then reads a new handle without rewriting', async () => {
+  const f = fixture(); await f.flush(); f.choose(); await f.flush(); assert.match(f.text, /推理已保存/);
+  assert.equal(f.calls.filter(call => call.action === 'models.conversation.review').length, 1);
+  f.responses['models.conversation.review'] = { ...review, ...receipt.preference, selectionRevision: 10, reviewHandle: 'new-review', nativeSelection: { ...review.nativeSelection, reasoning: high } };
+  f.change({ modelSelectionRevision: 10, conversationModel: receipt.preference }); await f.flush();
+  assert.equal(f.calls.filter(call => call.action === 'models.conversation.review').length, 2);
+  assert.equal(f.calls.filter(call => call.action === 'models.conversation.reasoning').length, 1);
+  assert.equal(f.find(node => node.type === 'RadioGroup').props.value, controls.reasoningId(high));
+});
+
+test('an unknown write cannot auto-reread or replay after native source revisions change', async () => {
+  const f = fixture({ 'models.conversation.reasoning': { status: 'unknown' } }); await f.flush(); f.choose(); await f.flush();
+  f.change({ modelSelectionRevision: 10 }); await f.flush();
+  assert.match(f.text, /没有自动重试/); assert.equal(f.calls.filter(call => call.action === 'models.conversation.review').length, 1);
+  f.responses['models.conversation.review'] = { ...review, selectionRevision: 10 };
+  f.click('重新读取'); await f.flush(); assert.equal(f.calls.filter(call => call.action === 'models.conversation.reasoning').length, 1);
+});
+
+test('an inherited model may become a scoped reasoning choice while retaining its reviewed native identity', async () => {
+  const inherited = { ...preference, revision: 0, inherited: true, target: null };
+  const f = fixture({ 'models.conversation.review': { ...review, ...inherited }, 'models.conversation.reasoning': { ...receipt, preference: { ...receipt.preference, revision: 1 } } },
+    { state: { modelSelectionRevision: 8, modelName: target.modelId, conversationModel: inherited } });
+  await f.flush(); assert.match(f.text, /沿用默认/); f.choose(); await f.flush(); assert.match(f.text, /推理已保存/);
+  assert.equal(f.calls.some(call => /models\.(api|accounts)\.select/.test(call.action)), false);
 });

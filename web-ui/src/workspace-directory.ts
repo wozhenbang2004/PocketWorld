@@ -35,7 +35,6 @@ export const WORKSPACE_SECTIONS: ReadonlyArray<WorkspaceSection> = [
     { route: 'remote', title: '电脑' },
     { route: 'ssh', title: 'SSH' },
     { route: 'local', title: '本机开发' },
-    { route: 'proxy', title: '模型服务' },
   ] },
   { key: 'media', title: '媒体', route: 'media', pages: [
     { route: 'media', title: '生成与文件' },
@@ -71,5 +70,6 @@ export function workspaceNavigationKey(route: string): string {
   const page = normalizeWorkspaceRoute(route);
   if (['chat', 'tasks', 'projects'].includes(page)) return page;
   if (page === 'history') return 'tasks';
+  if (['models', 'model-settings', 'accounts', 'proxy'].includes(page)) return 'model-settings';
   return workspaceForRoute(page)?.route || 'settings';
 }

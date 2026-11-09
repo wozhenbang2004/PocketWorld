@@ -1388,16 +1388,57 @@ const COMMON_SETTINGS = [
   { id: 'updates', title: '应用更新', detail: '检查新版本与管理下载', icon: RiRefreshLine },
 ];
 
+/** Summaries describe observed host state; search keeps the original keywords. */
+function settingsEntryDetail(id: string, state: Data): string {
+  const flag = (value: unknown) => value === true ? '已开' : value === false ? '未开' : '待核实';
+  if (id === 'model-settings') {
+    if (typeof state.modelName !== 'string') return '默认模型尚未读取';
+    return state.modelName.trim() ? `默认模型 · ${state.modelName}` : '尚未选择默认模型';
+  }
+  if (id === 'proxy') {
+    const proxy = { ...object(object(state.features).proxy), ...object(object(state.ownerSnapshots).proxy) };
+    const unresolved = Object.entries(object(state.moduleErrors)).some(([action, value]) => action.startsWith('proxy.') && value) || object(state.ownerErrors).proxy;
+    if (unresolved) return '服务状态待核对';
+    if (Array.isArray(state.moduleBusy) && state.moduleBusy.some((action: unknown) => typeof action === 'string' && action.startsWith('proxy.'))) return '服务操作处理中';
+    return proxy.running === true ? '正在运行 · 仅本机访问' : proxy.running === false ? '尚未运行' : '尚未读取服务状态';
+  }
+  if (id === 'accounts') {
+    const accounts = object(object(state.ownerSnapshots).accounts).accounts;
+    return Array.isArray(accounts) ? accounts.length ? `已保存 ${accounts.length} 个账号` : '尚未添加账号' : '账号状态尚未读取';
+  }
+  if (id === 'phone:appearance') return ({ system: '跟随系统', light: '浅色', dark: '深色' } as Data)[text(object(state.appearance).mode)] || '尚未读取当前外观';
+  if (id === 'phone:speech') {
+    if (state.speaking === true) return '正在朗读';
+    if (object(object(state.taskAnnouncements).readout).active === true) return '正在播报任务状态';
+    const speech = ({ ready: '中文朗读已就绪', initializing: '正在准备中文朗读', language_data_missing: '需安装中文语音资源', language_unsupported: '系统引擎不支持中文朗读', unavailable: '朗读引擎暂不可用', closed: '朗读窗口已关闭' } as Data)[text(object(state.systemSpeech).ttsStatus)];
+    return speech || (state.speechAvailable === true ? '系统听写可用' : state.speechAvailable === false ? '系统听写暂不可用' : '语音状态尚未读取');
+  }
+  if (id === 'phone:execution') return `界面读取${flag(state.accessibilityEnabled)} · 通知${flag(state.notificationsEnabled)}`;
+  if (id === 'phone:observation') return `取图${flag(state.localCaptureAllowed)} · OCR ${flag(state.localOcrAllowed)}`;
+  if (id === 'background') {
+    const display = object(object(state.features).display), connection = backgroundConnection(display, state.activeTaskId, Array.isArray(state.moduleBusy) ? state.moduleBusy : []);
+    if (connection.requiresConnectionCheck) return '后台连接需要核对';
+    if (connection.busy) return '正在处理后台连接';
+    return display.helperConnected === true ? '助手已连接' : display.helperConnected === false ? '助手未连接' : '后台连接状态尚未读取';
+  }
+  return '';
+}
+
 export default function Secondary({ route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange, onOpenSetup, onReturnToSetup }: Props) {
   const phonePresentation = useRef('list');
   const state: Data = { ...object(snapshot.state), webWorkspaceResumeRevision: Number(snapshot.view?.resumeRevision || 0), webWorkspaceTaskOpen: !!snapshot.view?.taskId };
   const commands = snapshot.capabilities?.commands || [];
   const supported = (action: string) => commands.includes(action);
   const normalize = normalizeWorkspaceRoute;
-  const [page, setPage] = useState(normalize(route));
+  const [entry, setEntry] = useState({ route, revision: navigationRevision });
+  const [storedPage, setPage] = useState(normalize(route));
+  const entryChanged = entry.route !== route || entry.revision !== navigationRevision;
+  // A new drawer/deep-link entry must not briefly mount the previous owner's
+  // child while the effect below clears its local presentation trail.
+  const page = entryChanged ? normalize(route) : storedPage;
   const [candidateTarget, setCandidateTarget] = useState<LearningCandidateTarget | null>(null);
   const [modelView, setModelView] = useState<ModelView>({ kind: 'list' });
-  const [modelHostSection, setModelHostSection] = useState<'models' | 'accounts'>('models');
+  const [modelHostSection, setModelHostSection] = useState<'models' | 'accounts' | 'proxy'>(normalize(route) === 'proxy' ? 'proxy' : 'models');
   const modelTrail = useRef<ModelView[]>([]);
   const modelDrafts = useRef<Partial<Record<string, ModelDraft>>>({});
   const transientBack = useRef<(() => boolean) | null>(null);
@@ -1405,7 +1446,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const [query, setQuery] = useState(''), [notice, setNotice] = useState(''), [error, setError] = useState('');
   const trail = useRef<Array<{ page: string; query: string; modelView: ModelView; modelTrail: ModelView[]; candidateTarget: LearningCandidateTarget | null }>>([]), scroll = useRef<HTMLDivElement>(null), scrollPositions = useRef(new Map<string, number>());
   const mounted = useRef(true), generation = useRef(0);
-  useEffect(() => { generation.current++; trail.current = []; modelTrail.current = []; setPage(normalize(route)); setCandidateTarget(null); setModelView({ kind: 'list' }); setModelHostSection('models'); setNotice(''); setError(''); }, [route, navigationRevision]);
+  useEffect(() => { generation.current++; trail.current = []; modelTrail.current = []; setEntry({ route, revision: navigationRevision }); setPage(normalize(route)); setCandidateTarget(null); setModelView({ kind: 'list' }); setModelHostSection(normalize(route) === 'proxy' ? 'proxy' : 'models'); setNotice(''); setError(''); }, [route, navigationRevision]);
   useEffect(() => { onNavigationPageChange?.(page); }, [page, onNavigationPageChange]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; }; }, []);
   const run: Run = async (action, args = {}) => {
@@ -1413,7 +1454,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
     const current = generation.current; setError('');
     try {
       const value = await bridge.command(action, args);
-      if (mounted.current && generation.current === current && object(value).accepted === true) setNotice('请求已登记，等待原操作回执。');
+      if (mounted.current && generation.current === current && object(value).accepted === true) setNotice('已提交，结果尚未确认。');
       return value;
     } catch (failure) {
       if (mounted.current && generation.current === current) setError(failure instanceof Error ? failure.message : String(failure));
@@ -1421,7 +1462,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
     }
   };
   const rememberScroll = () => scrollPositions.current.set(page + ((page === 'models' || page === 'model-settings') ? ':' + modelView.kind + ':' + (modelView.id || '') : ''), scroll.current?.scrollTop || 0);
-  const navigate = (next: string, candidate: LearningCandidateTarget | null = null) => { rememberScroll(); generation.current++; trail.current.push({ page, query, modelView, modelTrail: [...modelTrail.current], candidateTarget }); modelTrail.current = []; setNotice(''); setError(''); setQuery(''); setModelView({ kind: 'list' }); setCandidateTarget(candidate); setPage(next); };
+  const navigate = (next: string, candidate: LearningCandidateTarget | null = null) => { rememberScroll(); generation.current++; trail.current.push({ page, query, modelView, modelTrail: [...modelTrail.current], candidateTarget }); modelTrail.current = []; setNotice(''); setError(''); setQuery(''); setModelView({ kind: 'list' }); setModelHostSection(next === 'proxy' ? 'proxy' : 'models'); setCandidateTarget(candidate); setPage(next); };
   const switchWorkspacePage = (next: string) => {
     if (next === workspacePageForRoute(page)) return;
     rememberScroll(); generation.current++;
@@ -1450,11 +1491,12 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
     generation.current++; setError(''); setModelView(view);
   };
   const isModelPage = page === 'models' || page === 'model-settings';
+  const isAIPage = isModelPage || page === 'proxy';
   const isPhonePage = page === 'phone' || page.startsWith('phone:');
   const phoneView = page.startsWith('phone:') ? page.slice('phone:'.length) : phonePresentation.current;
   const workspace = workspaceForRoute(page);
   const domain = SECONDARY_DOMAINS.find(x => x.id === page);
-  const hostSection = isModelPage ? modelHostSection : domain?.id;
+  const hostSection = page === 'proxy' ? 'proxy' : isModelPage ? entryChanged ? 'models' : modelHostSection : domain?.id;
   const canEnter = supported('connections.enter'), canLeave = supported('connections.leave');
   useLayoutEffect(() => {
     if (!hostSection || !canEnter) return;
@@ -1474,25 +1516,26 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
     void bridge.command('settings.openSystem', { section: 'background' }).catch(failure => { if (mounted.current) setError(failure instanceof Error ? failure.message : String(failure)); });
     return () => { if (canCloseBackground) void bridge.command('background.close', {}).catch(() => {}); };
   }, [page, canOpenBackground, canCloseBackground]);
-  const dataPage = isModelPage ? 'models' : page;
+  const dataPage = isAIPage ? 'models' : page;
   const feature = object(object(state.features)[dataPage === 'commitments' ? 'automation' : dataPage]);
   const owner = object(object(state.ownerSnapshots)[dataPage]);
-  const specialized = isModelPage ? object(state.modelConnections) : page === 'devices' ? object(state.deviceWorkspace) : {};
+  const specialized = isAIPage ? object(state.modelConnections) : page === 'devices' ? object(state.deviceWorkspace) : {};
   // MemoryModule.snapshot is summary-only. Its actual list reply lives in
   // moduleResults; an in-flight or failed reread must not present an old list.
   const memoryListReady = !object(state.moduleErrors)['memory.list'] && !(Array.isArray(state.moduleBusy) && state.moduleBusy.includes('memory.list'));
   const memoryList = memoryListReady ? object(object(state.moduleResults)['memory.list']) : {};
   const data: Data = { ...feature, ...owner, ...specialized, ...(page === 'memory' ? { records: memoryList.records } : {}) };
-  const domainError = text(object(state.ownerErrors)[dataPage]) || Object.entries(object(state.moduleErrors)).filter(([key]) => key.startsWith(dataPage + '.')).map(([, value]) => text(value)).filter(Boolean).join('\n');
+  const errorPage = isAIPage ? hostSection || 'models' : dataPage;
+  const domainError = text(object(state.ownerErrors)[errorPage]) || Object.entries(object(state.moduleErrors)).filter(([key]) => key.startsWith(errorPage + '.')).map(([, value]) => text(value)).filter(Boolean).join('\n');
   const settingsGroup = SETTINGS_GROUPS.find(group => page === 'group:' + group.id);
   const connection = modelConnectionRows(data).find(row => recordId(row) === modelView.id);
   const editConnection = modelView.id ? connection : modelConnectionRows(data).find(row => recordId(row) === text(object(data.connections).selectedConnectionId));
   const modelDraftKey = modelView.kind + ':' + (modelView.kind === 'add' ? 'new' : recordId(editConnection || {}));
   const phoneTitle = ({ appearance: '外观与字体', speech: '语音与朗读', execution: '系统权限', observation: '观察与隐私', browser: '浏览器' } as Data)[phoneView];
-  const pageTitle = isModelPage ? 'AI 接入'
+  const pageTitle = isAIPage ? 'AI 接入'
     : workspace?.title || settingsGroup?.title || (page === 'settings' || page === 'connections' ? '设置' : isPhonePage ? phoneTitle || '手机能力' : page === 'background' ? '后台运行' : page === 'history' ? '任务历史' : page === 'usage' ? '模型调用记录' : page === 'archives' ? '备份与迁移' : page === 'storage' ? '项目存储' : domain?.title || 'PocketWorld');
-  const settingsEntries = COMMON_SETTINGS.filter(item => item.id !== 'setup' || !!onOpenSetup).map(item => item.id === 'phone:appearance' ? { ...item, detail: [({ system: '跟随系统', light: '浅色', dark: '深色' } as Data)[text(object(state.appearance).mode)], '中文、英数与代码字体'].filter(Boolean).join(' · ') } : item);
-  const filtered = settingsEntries.filter(item => (item.title + item.detail).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const settingsEntries = COMMON_SETTINGS.filter(item => item.id !== 'setup' || !!onOpenSetup).map(item => ({ ...item, searchText: item.detail, detail: settingsEntryDetail(item.id, state) }));
+  const filtered = settingsEntries.filter(item => (item.title + item.detail + item.searchText).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const viewKey = page + (isModelPage ? ':' + modelView.kind + ':' + (modelView.id || '') : '');
   const modelBrowseActive = ['list', 'catalog', 'model'].includes(modelView.kind);
   const modelParent = modelTrail.current.at(-1)?.kind;
@@ -1507,7 +1550,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
     rememberScroll();
     if (isModelPage && modelView.kind !== 'list') { generation.current++; setNotice(''); setError(''); setModelView(modelTrail.current.pop() || { kind: 'list' }); return true; }
     const previous = trail.current.pop();
-    if (previous) { generation.current++; setNotice(''); setError(''); setPage(previous.page); setCandidateTarget(previous.candidateTarget); setQuery(previous.query); modelTrail.current = previous.modelTrail; setModelView(previous.modelView); return true; }
+    if (previous) { generation.current++; setNotice(''); setError(''); setModelHostSection(previous.page === 'proxy' ? 'proxy' : 'models'); setPage(previous.page); setCandidateTarget(previous.candidateTarget); setQuery(previous.query); modelTrail.current = previous.modelTrail; setModelView(previous.modelView); return true; }
     if (page === normalize(route)) return false;
     if (workspace && workspaceForRoute(normalize(route))?.key === workspace.key) return false;
     if (page === 'settings' || page === 'connections') return false;
@@ -1522,7 +1565,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
     return () => registerBackHandler?.(null);
   }, [registerBackHandler]);
   const back = () => { if (!consumeBack()) onBack(); };
-  const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof RiKey2Line }>) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" disabled={item.id === 'updates' && !supported('settings.openAppUpdates')} onClick={() => { if (item.id === 'updates') { void run('settings.openAppUpdates', {}).catch(() => {}); } else if (item.id === 'setup') onOpenSetup?.(); else navigate(item.id); }}><span className="pw-settings-row-copy"><span>{item.title}</span><small>{item.detail}</small></span></Button>)}</div>;
+  const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof RiKey2Line }>) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={RiArrowRightSLine} className="pw-domain-link h-auto whitespace-normal" disabled={item.id === 'updates' && !supported('settings.openAppUpdates')} onClick={() => { if (item.id === 'updates') { void run('settings.openAppUpdates', {}).catch(() => {}); } else if (item.id === 'setup') onOpenSetup?.(); else navigate(item.id); }}><span className="pw-settings-row-copy"><span>{item.title}</span>{item.detail && <small>{item.detail}</small>}</span></Button>)}</div>;
   const refreshAction = page === 'background' ? 'background.refresh' : isModelPage ? 'models.snapshot' : page === 'memory' ? 'memory.list' : 'app.refresh';
   const content = <div className="pw-secondary-scroll" ref={scroll}>
       {notice && <p className="pw-request-notice" role="status">{notice}</p>}
@@ -1533,13 +1576,14 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
           {query.trim() ? <section className="pw-settings-results" aria-label="匹配的设置">{settingRows(filtered)}{filtered.length === 0 && <Empty>没有匹配的设置。</Empty>}</section>
             : <div className="pw-settings-categories">{SETTINGS_GROUPS.map(group => <section key={group.id} className="pw-settings-category" data-settings-group={group.id} aria-label={group.title}><h2>{group.title}</h2>{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}{group.id === 'privacy' && <div className="pw-settings-execution" aria-label="执行控制"><ExecutionControls state={state} supported={supported} run={run}/></div>}</section>)}</div>}
         </div> : settingsGroup ? <section className="pw-settings-group-page">{settingRows(settingsGroup.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</section>
-          : isModelPage ? <AICenter state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} navigate={navigate} onHostSectionChange={setModelHostSection}
+          : isAIPage ? <AICenter key={page + ':' + (navigationRevision || 0)} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} initialView={page === 'proxy' ? 'proxy' : 'main'} onHostSectionChange={setModelHostSection}
               renderEditor={(row, preset, close, saved, registerBack) => {
                 const draftKey = 'ai-service:' + (row?.id || preset?.name || 'new');
                 return <ModelSettings key={draftKey} state={state} connection={row} preset={preset} supported={supported} run={run} adding={!row} draft={modelDrafts.current[draftKey]} onDraftChange={value => { if (value) modelDrafts.current[draftKey] = value; else delete modelDrafts.current[draftKey]; }} onInspect={close} onSaved={saved} registerTransientBack={registerBack} />;
               }}
               renderAccounts={(accountId, adding, registerBack) => <AccountsWorkspace key={accountId || 'new-account'} state={state} data={{ ...object(object(state.features).accounts), ...object(object(state.ownerSnapshots).accounts) }} supported={supported} run={run} registerTransientBack={registerBack} onlyAccountId={accountId} startAdding={adding} />}
-              renderTools={registerBack => <section className="pw-model-connection-tools"><TokenBudgetsWorkspace supported={supported} registerTransientBack={registerBack} /><ModelDiagnosticsWorkspace state={state} supported={supported} /></section>} />
+              renderTools={registerBack => <section className="pw-model-connection-tools"><TokenBudgetsWorkspace supported={supported} registerTransientBack={registerBack} /><ModelDiagnosticsWorkspace state={state} supported={supported} /></section>}
+              renderProxy={registerBack => <ProxyWorkspace state={state} run={run} registerTransientBack={registerBack} />} />
           : page === 'phone' ? <PhoneSettings state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phonePresentation.current} onViewChange={view => { phonePresentation.current = view; }} />
           : isPhonePage ? <PhoneSettings key={page} state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phoneView} direct />
           : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} onReturn={onReturnToSetup || returnToPhone} returnLabel={onReturnToSetup ? '准备中心' : '手机能力'} registerTransientBack={registerTransientBack} />
@@ -1550,7 +1594,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
       </div>
     </div>;
   return <section className="pw-secondary pw-secondary-refactor" data-secondary-page={page} data-workspace={workspace?.key} aria-label={pageTitle}>
-    <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label={isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} onClick={back} /><div><h1>{pageTitle}</h1></div>{!workspace && <IconButton icon={RiRefreshLine} aria-label="刷新当前状态" title="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} />}{navigationTrigger}</header>
+    <header className="pw-secondary-header"><IconButton icon={RiArrowLeftLine} aria-label={isModelPage && hostSection === 'proxy' ? '返回 AI 接入' : isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} onClick={back} /><div><h1>{pageTitle}</h1></div>{!workspace && !(isAIPage && hostSection !== 'models') && <IconButton icon={RiRefreshLine} aria-label="刷新当前状态" title="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} />}{navigationTrigger}</header>
     {workspace ? <Tabs className="pw-workspace-navigation" selectedKey={workspacePageForRoute(page)} onSelectionChange={key => switchWorkspacePage(String(key))}>
       <TabList aria-label={workspace.title + '工作区'}>{workspace.pages.map(item => <Tab key={item.route} id={item.route}>{item.title}</Tab>)}</TabList>
       <TabPanel id={workspacePageForRoute(page) || workspace.route} className="pw-workspace-panel">{content}</TabPanel>

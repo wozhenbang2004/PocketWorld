@@ -78,3 +78,40 @@
 @media (prefers-reduced-motion: reduce) {
   .pw-conversation-model-controls :is(.pw-conversation-model-chip, .pw-conversation-reasoning-chip)::before { transition: none; }
 }
+
+/* The existing Vaul sheet and BoardUI controls share one model/effort surface. */
+.pw-conversation-model-drawer.pw-drawer {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 520px);
+  max-height: min(720px, calc(100dvh - 24px));
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.pw-conversation-model-drawer > .pw-drawer-header { flex: 0 0 auto; padding: 8px 20px 12px; }
+.pw-model-selection-tabs { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; gap: 0; }
+.pw-model-selection-tabs > div:has(> [role="tablist"]) { flex: 0 0 auto; margin: 0 20px 12px; }
+.pw-model-selection-tabs [role="tablist"][aria-label="此对话模型设置"] { display: flex; gap: 4px; padding: 3px; border-radius: 14px; background: var(--pw-inset); }
+.pw-model-selection-tabs [role="tablist"][aria-label="此对话模型设置"] [role="tab"] { flex: 1; justify-content: center; min-height: 44px; border-radius: 11px; color: var(--pw-muted); }
+.pw-model-selection-tabs [role="tablist"][aria-label="此对话模型设置"] [role="tab"][data-selected] { background: var(--pw-surface); color: var(--pw-ink); box-shadow: 0 1px 5px color-mix(in srgb, var(--pw-ink) 6%, transparent); }
+.pw-model-selection-tabs > .pw-model-selection-panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 20px calc(16px + env(safe-area-inset-bottom, 0px)); }
+.pw-model-selection-picker .pw-model-selection-scope,
+.pw-scoped-reasoning-panel .pw-model-selection-scope { margin: 0; color: var(--pw-muted); font: 400 13px/20px var(--pw-font); overflow-wrap: anywhere; }
+.pw-model-selection-picker .pw-ai-model-option { display: flex; align-items: center; gap: 2px; min-width: 0; border-radius: 12px; }
+.pw-model-selection-picker .pw-ai-model-option[data-selected] { background: var(--pw-inset); }
+.pw-model-selection-picker .pw-ai-model-option > .pw-ai-model-row { flex: 1 1 auto; min-width: 0; width: auto; min-height: 64px; padding: 10px 8px; }
+.pw-model-selection-picker .pw-ai-model-option > button:last-child:not(.pw-ai-model-row) { flex: 0 0 48px; width: 48px; height: 48px; min-height: 48px; padding: 12px; border-radius: 12px; color: var(--pw-muted); background: transparent; }
+.pw-model-selection-picker .pw-ai-model-option > button:last-child:not(.pw-ai-model-row):hover { background: var(--pw-hover); }
+.pw-model-selection-picker .pw-ai-row-end { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; }
+.pw-model-selection-picker .pw-ai-row-copy strong { font-size: 15px; line-height: 22px; }
+.pw-model-selection-picker .pw-ai-row-copy small { font-size: 12px; line-height: 18px; }
+.pw-model-selection-picker .pw-model-selection-status,
+.pw-scoped-reasoning-panel .pw-model-selection-status { margin: 0; font: 500 13px/21px var(--pw-font); color: var(--pw-copy); overflow-wrap: anywhere; }
+.pw-scoped-reasoning-panel { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.pw-scoped-reasoning-panel .pw-conversation-reasoning-note,
+.pw-scoped-reasoning-panel .pw-conversation-reasoning-error { margin-top: 0; }
+.pw-scoped-reasoning-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.pw-scoped-reasoning-actions:empty { display: none; }
+.pw-scoped-reasoning-actions > button { min-height: 48px; }
+.pw-model-selection-running { flex: 0 0 auto; margin: 0; padding: 10px 20px calc(12px + env(safe-area-inset-bottom, 0px)); color: var(--pw-muted); font: 400 12px/19px var(--pw-font); }

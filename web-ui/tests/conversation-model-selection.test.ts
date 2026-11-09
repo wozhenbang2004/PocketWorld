@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { conversationModelName, conversationSelectionRequest, conversationSelectionReceipt } from '../src/conversation-model-selection.ts';
+import { conversationModelName, conversationSelectionRequest, conversationSelectionReceipt, modelPickerSelected } from '../src/conversation-model-selection.ts';
 
 const state = { modelSelectionRevision: 8, modelName: '全局默认', conversationModel: { scopeKey: 'conversation:a', revision: 3, inherited: false, target: { kind: 'api', modelId: 'A 的模型' } } };
 
@@ -63,4 +63,29 @@ test('receipt verification rejects missing original identity and unsafe or impos
   assert.throws(() => conversationSelectionReceipt({ status: 'saved', scope: 'conversation', preference: { scopeKey: '', revision: 1 } }, '', 0));
   assert.throws(() => conversationSelectionReceipt({ status: 'saved', scope: 'conversation', preference: { scopeKey: 'conversation:a', revision: 0 } }, 'conversation:a', -1));
   assert.throws(() => conversationSelectionReceipt({ status: 'saved', scope: 'conversation', preference: { scopeKey: 'conversation:a', revision: Number.MAX_SAFE_INTEGER + 1 } }, 'conversation:a', Number.MAX_SAFE_INTEGER));
+});
+
+
+test('picker checks the explicit conversation target, including same-source different models, rather than the global row flag', () => {
+  const current = { ...state, conversationModel: { ...state.conversationModel, target: { kind: 'api', connectionId: 'service-a', modelId: 'B' } } };
+  assert.equal(modelPickerSelected(current, 'conversation', { kind: 'api', connectionId: 'service-a', modelId: 'A' }, true), false);
+  assert.equal(modelPickerSelected(current, 'conversation', { kind: 'api', connectionId: 'service-a', modelId: 'B' }, false), true);
+  assert.equal(modelPickerSelected(current, 'conversation', { kind: 'api', connectionId: 'service-b', modelId: 'B' }, false), false);
+  assert.equal(modelPickerSelected(current, 'default', { kind: 'api', connectionId: 'service-a', modelId: 'A' }, true), true);
+});
+
+test('only an explicit inherited preference may borrow the default check', () => {
+  const candidate = { kind: 'api' as const, connectionId: 'service-a', modelId: 'A' };
+  assert.equal(modelPickerSelected({ conversationModel: { inherited: true, target: null } }, 'conversation', candidate, true), true);
+  for (const conversationModel of [{}, { inherited: false, target: null }, { inherited: true, target: { kind: 'api' } }]) assert.equal(modelPickerSelected({ conversationModel }, 'conversation', candidate, true), false);
+});
+
+test('account and group checks retain their exact native version identities', () => {
+  const nativeRef = { provider: 'chatgpt_plan', accountId: 'owner-a', accountVersion: 4, modelId: 'plan-model' };
+  const account = { conversationModel: { inherited: false, target: { kind: 'account', nativeRef } } };
+  assert.equal(modelPickerSelected(account, 'conversation', { kind: 'account', nativeRef }), true);
+  assert.equal(modelPickerSelected(account, 'conversation', { kind: 'account', nativeRef: { ...nativeRef, accountVersion: 5 } }, true), false);
+  const group = { conversationModel: { inherited: false, target: { kind: 'group', groupId: 'a', groupRevision: 3 } } };
+  assert.equal(modelPickerSelected(group, 'conversation', { kind: 'group', groupId: 'a', groupRevision: 3 }), true);
+  assert.equal(modelPickerSelected(group, 'conversation', { kind: 'group', groupId: 'a', groupRevision: 4 }, true), false);
 });

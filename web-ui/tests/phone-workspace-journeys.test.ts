@@ -158,7 +158,7 @@ test('background return consumes the original phone entry and does not reopen se
     const state: Data = { page: route, query: '', modelView: { kind: 'list' }, candidateTarget: null };
     const trail = { current: [] as Data[] }, modelTrail = { current: [] as Data[] }, generation = { current: 0 };
     const handlers = () => {
-      const deps: Data = { ...state, route, trail, modelTrail, generation, transientBack: { current: null }, isModelPage: false, workspace: workspaceForRoute(state.page), workspaceForRoute, normalize: (value: string) => value, rememberScroll() {}, setNotice() {}, setError() {} };
+      const deps: Data = { ...state, route, trail, modelTrail, generation, transientBack: { current: null }, isModelPage: false, workspace: workspaceForRoute(state.page), workspaceForRoute, normalize: (value: string) => value, rememberScroll() {}, setNotice() {}, setError() {}, setModelHostSection() {} };
       for (const key of ['page', 'query', 'modelView', 'candidateTarget']) deps['set' + key[0].toUpperCase() + key.slice(1)] = (value: any) => { state[key] = value; };
       return new Function(...Object.keys(deps), code + '\nreturn { navigate, returnToPhone, consumeBack };')(...Object.values(deps));
     };

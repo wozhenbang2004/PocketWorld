@@ -1,6 +1,7 @@
 package dev.pocketengine.runtime.models;
 
 import dev.pocketengine.core.ModelConfig;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -34,6 +35,74 @@ public final class ConversationModelPreferencesTest {
         return new JSONObject().put("kind", "account").put("nativeRef", reference)
                 .put("outputTokens", 4096).put("reasoning", ReasoningOptions.DEFAULT.toJson())
                 .put("imageTokenReserve", 0);
+    }
+    private static JSONObject apiChoice(String connection, String model) throws Exception {
+        ModelBinding binding = new ModelBinding(connection, "provider-a", ModelBinding.Protocol.OPENAI_CHAT,
+                ModelBinding.Format.OPENAI, URI.create("https://api.example.test/v1/models"), "credential-a", 1,
+                "installation-a", 1, false);
+        return new JSONObject().put("kind", "api").put("connectionId", connection).put("connectionRevision", 3)
+                .put("binding", binding.toJson()).put("modelId", model).put("outputTokens", 2048)
+                .put("reasoning", new ReasoningOptions(ReasoningOptions.Mode.OPENAI_EFFORT, "low", 0).toJson())
+                .put("imageTokenReserve", 256);
+    }
+
+    @Test public void explicitApiRecheckRetainsNativeOptionsWithoutEditingAnotherScopeOrAnInFlightChoice() throws Exception {
+        String a = conversation("a"), b = conversation("b");
+        preferences.save(a, 0, apiChoice("service-a", "model-m"));
+        preferences.save(b, 0, apiChoice("service-b", "model-n").put("outputTokens", 8192));
+        preferences.pinSubmission("input-a", a);
+        JSONObject original = preferences.snapshot(a);
+        byte[] before = Files.readAllBytes(file);
+
+        JSONObject retained = ConversationModelPreferences.apiReselectionTarget(original, a, 1, "service-a", "model-m");
+        assertNotNull(retained);
+        assertEquals(2048, retained.getInt("outputTokens"));
+        assertEquals(new ReasoningOptions(ReasoningOptions.Mode.OPENAI_EFFORT, "low", 0),
+                ReasoningOptions.fromJson(retained.getJSONObject("reasoning")));
+        assertEquals(256, retained.getInt("imageTokenReserve"));
+        assertEquals("A metadata revision is not a binding validity decision", 3, retained.getLong("connectionRevision"));
+        assertTrue(retained.similar(original.getJSONObject("target")));
+
+        retained.put("outputTokens", 4096);
+        retained.getJSONObject("reasoning").put("level", "high");
+        assertEquals("Returned options are a copy, not live preference state", 2048, original.getJSONObject("target").getInt("outputTokens"));
+        assertEquals("low", original.getJSONObject("target").getJSONObject("reasoning").getString("level"));
+        assertEquals(2048, reopen().targetForAdmission("a", "input-a").getInt("outputTokens"));
+        assertEquals(8192, reopen().snapshot(b).getJSONObject("target").getInt("outputTokens"));
+        assertArrayEquals(before, Files.readAllBytes(file));
+    }
+
+    @Test public void differentApiTargetsAndInheritedOrAccountChoicesDoNotBorrowTheOriginalOptions() throws Exception {
+        String key = conversation("a");
+        assertNull(ConversationModelPreferences.apiReselectionTarget(preferences.snapshot(key), key, 0, "service-a", "model-m"));
+        preferences.save(key, 0, apiChoice("service-a", "model-m"));
+        JSONObject original = preferences.snapshot(key);
+        assertNull(ConversationModelPreferences.apiReselectionTarget(original, key, 1, "service-b", "model-m"));
+        assertNull(ConversationModelPreferences.apiReselectionTarget(original, key, 1, "service-a", "model-n"));
+        preferences.save(key, 1, choice("account-a", "model-m"));
+        assertNull(ConversationModelPreferences.apiReselectionTarget(preferences.snapshot(key), key, 2, "service-a", "model-m"));
+        preferences.save(key, 2, null);
+        assertNull(ConversationModelPreferences.apiReselectionTarget(preferences.snapshot(key), key, 3, "service-a", "model-m"));
+    }
+
+    @Test public void apiRecheckRejectsForeignOrStaleScopeAndInvalidStoredOptions() throws Exception {
+        String key = conversation("a");
+        preferences.save(key, 0, apiChoice("service-a", "model-m"));
+        JSONObject original = preferences.snapshot(key);
+        assertThrows(IllegalStateException.class, () -> ConversationModelPreferences.apiReselectionTarget(original,
+                conversation("b"), 1, "service-a", "model-m"));
+        assertThrows(IllegalStateException.class, () -> ConversationModelPreferences.apiReselectionTarget(original,
+                key, 0, "service-a", "model-m"));
+        for (Object invalid : List.of("1", 1.5, -1)) {
+            JSONObject wrongRevision = new JSONObject(original.toString()).put("revision", invalid);
+            assertThrows(Exception.class, () -> ConversationModelPreferences.apiReselectionTarget(wrongRevision,
+                    key, 1, "service-a", "model-m"));
+        }
+        JSONObject invalidTarget = new JSONObject(original.toString());
+        invalidTarget.getJSONObject("target").put("outputTokens", 1);
+        assertThrows(IllegalArgumentException.class, () -> ConversationModelPreferences.apiReselectionTarget(invalidTarget,
+                key, 1, "service-a", "model-m"));
+        assertTrue(reopen().snapshot(key).similar(original));
     }
     private static void assertChoice(JSONObject actual, String account, String model) throws Exception {
         assertNotNull("An explicit native selection must not become inherited", actual);

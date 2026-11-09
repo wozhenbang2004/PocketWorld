@@ -2,6 +2,31 @@ type Row = Record<string, any>;
 const row = (value: any): Row => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const revision = (value: any): value is number => Number.isSafeInteger(value) && value >= 0;
 const identity = (value: any): value is string => typeof value === 'string' && value.trim().length > 0 && !/[\u0000-\u001f]/.test(value);
+export type PickerModelIdentity = { kind: 'api' | 'account' | 'group'; connectionId?: string; connectionRevision?: number; modelId?: string; nativeRef?: Row; groupId?: string; groupRevision?: number };
+/** The catalog's `selected` flag belongs to the default, never to an explicit conversation preference. */
+export function modelPickerSelected(state: Row, scope: 'conversation' | 'default', candidate: PickerModelIdentity, defaultSelected = false): boolean {
+  if (scope === 'default') return defaultSelected;
+  const preference = row(state.conversationModel), target = row(preference.target);
+  if (preference.inherited === true && !target.kind) return defaultSelected;
+  if (preference.inherited !== false || target.kind !== candidate.kind) return false;
+  if (candidate.kind === 'api') return identity(candidate.connectionId) && identity(candidate.modelId) && target.connectionId === candidate.connectionId && target.modelId === candidate.modelId;
+  if (candidate.kind === 'account') {
+    const original = row(target.nativeRef), current = row(candidate.nativeRef);
+    return current.provider === 'chatgpt_plan' && identity(current.accountId) && identity(current.modelId) && revision(current.accountVersion) &&
+      original.provider === current.provider && original.accountId === current.accountId && original.accountVersion === current.accountVersion && original.modelId === current.modelId;
+  }
+  return identity(candidate.groupId) && revision(candidate.groupRevision) && target.groupId === candidate.groupId && target.groupRevision === candidate.groupRevision;
+}
+/** A metadata change offers an explicit recheck; it does not prove the saved binding is invalid. */
+export function modelPickerSourceChanged(state: Row, scope: 'conversation' | 'default', candidate: PickerModelIdentity): boolean {
+  const preference = row(state.conversationModel), target = row(preference.target);
+  return scope === 'conversation' && preference.inherited === false && candidate.kind === 'api' && modelPickerSelected(state, scope, candidate) &&
+    revision(target.connectionRevision) && target.connectionRevision > 0 && revision(candidate.connectionRevision) && candidate.connectionRevision > 0 && target.connectionRevision !== candidate.connectionRevision;
+}
+export function conversationModelStamp(state: Row): string {
+  const preference = row(state.conversationModel);
+  return JSON.stringify([state.modelSelectionRevision, preference.scopeKey, preference.revision]);
+}
 export function conversationModelName(state: Row): string {
   const preference = row(state.conversationModel), target = row(preference.target);
   if (target.kind === 'api') return String(target.modelId || '');

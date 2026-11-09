@@ -22,16 +22,6 @@
 }
 .pw-redesign .pw-task-row.button-press-motion { border-radius: 12px; padding-inline: 10px; }
 .pw-redesign .pw-composer-region { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
-.pw-redesign .pw-composer-region .pw-composer-host .afa-composer > .afa-card {
-  background: var(--pw-surface);
-  border: 0;
-  border-radius: 20px;
-  box-shadow: var(--pw-shadow-input);
-}
-.pw-redesign .pw-composer-region .pw-composer-host .afa-composer > .afa-card:focus-within {
-  background: var(--pw-surface);
-  box-shadow: 0 0 0 1.5px var(--pw-focus), var(--pw-shadow-input);
-}
 .pw-redesign .pw-chat-attention.button-press-motion,
 .pw-redesign .pw-priority-decisions .ui-dic__card {
   background: var(--pw-surface);
@@ -168,7 +158,6 @@
   --pw-shadow-input: 0 2px 8px -2px rgb(0 0 0 / 12%), 0 12px 26px -8px rgb(0 0 0 / 27%);
   --pw-shadow-surface: 0 3px 12px -4px rgb(0 0 0 / 18%), 0 15px 32px -10px rgb(0 0 0 / 30%);
 }
-:root.dark .pw-redesign .pw-composer-region .pw-composer-host .afa-composer > .afa-card { background: var(--pw-inset); }
 
 @media (prefers-reduced-motion: reduce) {
   .pw-desktop-navigation,
