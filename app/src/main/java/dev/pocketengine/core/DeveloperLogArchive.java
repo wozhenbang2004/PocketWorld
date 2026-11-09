@@ -150,9 +150,13 @@ public final class DeveloperLogArchive implements AutoCloseable {
         File[] all = segments();
         long bytes = buffered;
         for (File file : all) bytes += file.length();
-        return new JSONObject().put("format", FORMAT).put("bytes", bytes).put("capacityMiB", capacityMiB)
-            .put("segments", all.length).put("writeFailures", writeFailures).put("rejectedRows", rejectedRows)
-            .put("available", directory != null).put("enabled", enabled);
+        try {
+            return new JSONObject().put("format", FORMAT).put("bytes", bytes).put("capacityMiB", capacityMiB)
+                .put("segments", all.length).put("writeFailures", writeFailures).put("rejectedRows", rejectedRows)
+                .put("available", directory != null).put("enabled", enabled);
+        } catch (org.json.JSONException malformed) {
+            return new JSONObject();
+        }
     }
 
     private static final class Position {
@@ -264,11 +268,15 @@ public final class DeveloperLogArchive implements AutoCloseable {
         for (Row row : rows) events.put(row.json);
         Position first = rows.isEmpty() ? null : rows.get(0).start;
         Position last = rows.isEmpty() ? null : rows.get(rows.size() - 1).end;
-        return new JSONObject().put("format", FORMAT).put("entries", events).put("expired", expired)
-            .put("older", first == null ? JSONObject.NULL : first.token())
-            .put("next", last == null ? original == null ? JSONObject.NULL : original.token() : last.token())
-            .put("hasOlder", first != null && (first.offset > 0 || locate(all, first) > 0))
-            .put("storage", stats());
+        try {
+            return new JSONObject().put("format", FORMAT).put("entries", events).put("expired", expired)
+                .put("older", first == null ? JSONObject.NULL : first.token())
+                .put("next", last == null ? original == null ? JSONObject.NULL : original.token() : last.token())
+                .put("hasOlder", first != null && (first.offset > 0 || locate(all, first) > 0))
+                .put("storage", stats());
+        } catch (org.json.JSONException malformed) {
+            throw new IOException("Unable to serialize diagnostic archive page", malformed);
+        }
     }
 
     /** No giant String, byte[], or clipboard payload; open small file streams sequentially. */
