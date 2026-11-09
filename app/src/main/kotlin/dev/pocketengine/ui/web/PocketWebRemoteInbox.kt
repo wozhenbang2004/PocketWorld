@@ -22,7 +22,7 @@ internal class PocketWebRemoteInbox(
     companion object {
         val COMMANDS = setOf(
             "remoteInbox.state", "remoteInbox.configure", "remoteInbox.sync",
-            "remoteInbox.mark", "remoteInbox.startLive", "remoteInbox.stopLive",
+            "remoteInbox.mark", "remoteInbox.open", "remoteInbox.startLive", "remoteInbox.stopLive",
             "remoteInbox.disconnect", "remoteInbox.notificationPermission"
         )
     }
@@ -83,6 +83,21 @@ internal class PocketWebRemoteInbox(
                 store().disconnect()
                 activity.stopService(Intent(activity, RemoteInboxReceiveService::class.java))
                 RemoteInboxJobService.cancel(activity)
+                done(snapshot(), null)
+                changed()
+            }
+            "remoteInbox.open" -> {
+                fields("seq")
+                val raw = args.opt("seq")
+                require(raw is Number && raw.toLong() > 0) { "通知序号无效" }
+                val seq = raw.toLong()
+                val event = store().find(seq)
+                val url = android.net.Uri.parse(event.getString("url"))
+                check(url.scheme == "https" && url.host != null &&
+                    (!event.getString("kind").startsWith("github_") || url.host == "github.com")) { "通知链接无效" }
+                val view = Intent(Intent.ACTION_VIEW, url).addCategory(Intent.CATEGORY_BROWSABLE)
+                activity.startActivity(view)
+                store().read(seq)
                 done(snapshot(), null)
                 changed()
             }
