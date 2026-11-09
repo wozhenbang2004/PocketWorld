@@ -56,5 +56,15 @@ def main():
  with runtime.environment():return dispatch(tools,runtime,args.command,forwarded,args.public_key_der) or 0
 if __name__=='__main__':
  try:sys.exit(main())
- except Exception:
+ except Exception as error:
+  import traceback
+  print('PWTRACE exception '+type(error).__name__,file=sys.stderr)
+  import ast
+  safe_messages=set()
+  for source in Path(__file__).parent.glob('*.py'):
+   for node in ast.walk(ast.parse(source.read_text())):
+    if isinstance(node,ast.Raise) and isinstance(node.exc,ast.Call) and node.exc.args and isinstance(node.exc.args[0],ast.Constant) and isinstance(node.exc.args[0].value,str):safe_messages.add(node.exc.args[0].value)
+  if str(error) in safe_messages:print('PWERROR '+str(error),file=sys.stderr)
+  for frame in traceback.extract_tb(error.__traceback__):
+   print('PWTRACE frame '+Path(frame.filename).name+':'+str(frame.lineno)+':'+frame.name,file=sys.stderr)
   print('CI update verification/preparation rejected input; no checkout configuration changed.',file=sys.stderr);sys.exit(1)

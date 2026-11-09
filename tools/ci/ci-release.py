@@ -43,6 +43,10 @@ class Runner:
         result = subprocess.run(list(map(str, command)), cwd=self.repo, env=self.env,
                                 capture_output=True, text=True)
         if check and result.returncode:
+            if any(Path(str(arg)).name == 'ci-update-tools.py' for arg in command):
+                for line in result.stderr.splitlines():
+                    if re.fullmatch(r'PWTRACE (?:exception [A-Za-z_]+|frame [A-Za-z0-9_.-]+:[0-9]+:[A-Za-z_<>]+)',line) or (line.startswith('PWERROR ') and len(line)<300):print(line,file=sys.stderr)
+            print('PWTRACE frame ci-release.py:0:subprocess_failed',file=sys.stderr)
             # No secret-bearing stdout/stderr or command arguments in exceptions/logs.
             raise Stop('Release subprocess failed; output withheld')
         return result.returncode, result.stdout.strip()
@@ -55,6 +59,7 @@ class Runner:
                 '--repo', self.repo, '--public-key-der', self.c['manifest_public_der'],
                 '--java-home', self.c['java_home'], '--build-tools', self.c['build_tools'],
                 '--temp-dir', self.directory / 'temp', '--openssl', self.c['openssl'], name, *args])
+        print('PWTRACE frame ci-release.py:0:'+name.replace('-','_'),file=sys.stderr)
         return self.command([sys.executable, '-B', self.repo / 'tools/windows-release.py',
             '--repo', self.repo, '--java-home', self.c['java_home'],
             '--build-tools', self.c['build_tools'], '--temp-dir', self.directory / 'temp',

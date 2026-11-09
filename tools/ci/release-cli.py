@@ -169,5 +169,15 @@ def main():
  print(json.dumps(result))
 if __name__=='__main__':
  try:main()
- except Exception:
+ except Exception as error:
+  import traceback
+  print('PWTRACE exception '+type(error).__name__,file=sys.stderr)
+  import ast
+  safe_messages=set()
+  for source in Path(__file__).parent.glob('*.py'):
+   for node in ast.walk(ast.parse(source.read_text())):
+    if isinstance(node,ast.Raise) and isinstance(node.exc,ast.Call) and node.exc.args and isinstance(node.exc.args[0],ast.Constant) and isinstance(node.exc.args[0].value,str):safe_messages.add(node.exc.args[0].value)
+  if str(error) in safe_messages:print('PWERROR '+str(error),file=sys.stderr)
+  for frame in traceback.extract_tb(error.__traceback__):
+   print('PWTRACE frame '+Path(frame.filename).name+':'+str(frame.lineno)+':'+frame.name,file=sys.stderr)
   print('Release stopped; do not infer success. Inspect retained draft/artifacts before retry.',file=sys.stderr);sys.exit(1)

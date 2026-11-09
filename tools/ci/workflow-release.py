@@ -20,7 +20,11 @@ cli=importlib.util.module_from_spec(spec);spec.loader.exec_module(cli)
 
 def run(command,env):
  result=subprocess.run(list(map(str,command)),env=env,capture_output=True,text=True)
- if result.returncode:raise ValueError('Release subprocess failed; output withheld')
+ if result.returncode:
+  import re
+  for line in result.stderr.splitlines():
+   if re.fullmatch(r'PWTRACE (?:exception [A-Za-z_]+|frame [A-Za-z0-9_.-]+:[0-9]+:[A-Za-z_<>]+)',line) or (line.startswith('PWERROR ') and len(line)<300):print(line,file=sys.stderr)
+  raise ValueError('Release subprocess failed; output withheld')
  return result.stdout
 
 def clean_env(env):
@@ -138,5 +142,15 @@ def main():
   publish(os.environ,a.handoff,a.activate,a.resume_release_id,a.recover_orphan_tag)
 if __name__=='__main__':
  try:main()
- except Exception:
+ except Exception as error:
+  import traceback
+  print('PWTRACE exception '+type(error).__name__,file=sys.stderr)
+  import ast
+  safe_messages=set()
+  for source in Path(__file__).parent.glob('*.py'):
+   for node in ast.walk(ast.parse(source.read_text())):
+    if isinstance(node,ast.Raise) and isinstance(node.exc,ast.Call) and node.exc.args and isinstance(node.exc.args[0],ast.Constant) and isinstance(node.exc.args[0].value,str):safe_messages.add(node.exc.args[0].value)
+  if str(error) in safe_messages:print('PWERROR '+str(error),file=sys.stderr)
+  for frame in traceback.extract_tb(error.__traceback__):
+   print('PWTRACE frame '+Path(frame.filename).name+':'+str(frame.lineno)+':'+frame.name,file=sys.stderr)
   print('Workflow release stage stopped; no success claimed.',file=sys.stderr);sys.exit(1)
