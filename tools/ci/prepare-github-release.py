@@ -63,6 +63,8 @@ def prepare(core,runner,base_envelope,old,new,receipt,head,tag):
                 '--build-tools',c['build_tools'],'--java-home',c['java_home'],'--valid-hours','168','--output-dir',bundle)
     if read(bundle/'release-plan.json').get('manifestUrl')!=MANIFEST:
         raise ValueError('Checkout still configures a different update endpoint')
+    if tag != first.version_tag(target['versionCode']):
+        raise ValueError('Public release tag does not match APK versionCode')
     planned=planner.plan(bundle,tag)
     payload=work/'github-unsigned-payload.json'
     with payload.open('x') as f:json.dump(planned['payload'],f,separators=(',',':'))
