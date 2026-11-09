@@ -6,7 +6,7 @@ import {Button,IconButton} from './forms-library';
 import './developer-diagnostics.css';
 
 type Event = {eventId:string;time:number;stage:string;outcome:string;code:string;durationMs?:number;taskId?:string;exceptionTypes?:string[];frames?:string[]};
-type Storage = {bytes:number;capacityMiB:number;segments:number;writeFailures:number;rejectedRows:number};
+type Storage = {bytes:number;capacityMiB:number;segments:number;writeFailures:number;rejectedRows:number;enabled:boolean};
 type Page = {entries:Event[];older?:string|null;next?:string|null;hasOlder:boolean;expired:boolean;storage:Storage};
 const DISPLAY_CAP = 600;
 const bytesLabel = (count:number) => count>=1073741824?(count/1073741824).toFixed(2)+' GB':(count/1048576).toFixed(1)+' MB';
@@ -29,6 +29,7 @@ export default function DeveloperDiagnosticsWorkspace({
   const [query,setQuery] = useState('');
   const [onlyErrors,setOnlyErrors] = useState(false);
   const [busy,setBusy] = useState(false);
+  const [captureBusy,setCaptureBusy] = useState(false);
   const [error,setError] = useState('');
   const [notice,setNotice] = useState('');
   const viewport=useRef<HTMLPreElement>(null);
@@ -55,22 +56,30 @@ export default function DeveloperDiagnosticsWorkspace({
   useEffect(()=>{
     mounted.current=true;documentEpoch.current=bridge.getDocumentEpoch();
     let wasHidden=false;
+    let lastEpoch=documentEpoch.current;
     const visibility=()=>{
       active.current=document.visibilityState==='visible';
       if(!active.current)wasHidden=true;
       else if(wasHidden){
         wasHidden=false;
-        revision.current++;
-        nextCursor.current=null;
-        void open(true);
+        if(documentEpoch.current!==bridge.getDocumentEpoch()){documentEpoch.current=bridge.getDocumentEpoch();revision.current++;nextCursor.current=null;void open(true);}
       }
     };
     visibility();
     document.addEventListener('visibilitychange',visibility);
+    const unsubscribe=bridge.subscribe(()=>{
+      const epoch=bridge.getDocumentEpoch();
+      if(epoch!==lastEpoch && bridge.getState().capabilities.commands.includes('developerLogs.open')){
+        lastEpoch=epoch; documentEpoch.current=epoch;revision.current++;
+        currentWindow.current='';setWindowId('');nextCursor.current=null;setEvents([]);
+        void open(true);
+      }
+    });
     void open(false);
     return ()=>{
       mounted.current=false;revision.current++;
       document.removeEventListener('visibilitychange',visibility);
+      unsubscribe();
       const id=currentWindow.current;
       if(id)void bridge.command('developerLogs.close',{windowId:id}).catch(()=>{});
     };
@@ -160,6 +169,18 @@ export default function DeveloperDiagnosticsWorkspace({
       setNotice('系统保存窗口已打开，选择位置后将流式写入完整归档');
     }catch{setError('系统保存窗口不可用');}
   };
+  const toggleCapture=async(enabled:boolean)=>{
+    if(!windowId||captureBusy)return;
+    setCaptureBusy(true);
+    try {
+      const result=await bridge.command<Storage>('developerLogs.capture',{windowId,enabled});
+      if(!mounted.current)return;
+      setStorage(result);nextCursor.current=null;setEvents([]);setOlder(null);setHasOlder(false);
+      setNotice(enabled?'深度归档已启用，后续运行日志持续写入本机':'深度归档已停止写入；基础错误日志和已存历史继续保留');
+      setError('');
+    }catch{if(mounted.current)setError('日志采集模式未能保存');}
+    finally{if(mounted.current)setCaptureBusy(false);}
+  };
   const setCapacity=async(miB:number)=>{
     setBusy(true);
     try{
@@ -188,7 +209,7 @@ export default function DeveloperDiagnosticsWorkspace({
       </div>
     </header>
     <div className="pw-developer-stats">
-      <i className="pw-developer-live-dot"/>{follow?'实时更新':'视图已暂停'}
+      <i className="pw-developer-live-dot"/>{follow?'实时更新':'视图已暂停'} · {storage?.enabled?'深度归档中':'基础诊断常开'}
       <span>{storage?bytesLabel(storage.bytes):'…'} / {storage?.capacityMiB||512} MB</span>
       <span>{storage?.segments||0} 个片段</span>
       <span>屏幕缓存 {events.length} 条</span>
@@ -211,11 +232,14 @@ export default function DeveloperDiagnosticsWorkspace({
       <pre ref={viewport} role="log" aria-live="off">{shown.length?shown.map(formatEvent).join('\n'):'当前没有匹配的日志，等待新的诊断事件…'}</pre>
     </section>
     <footer className="pw-developer-footer">
+      <label className="pw-developer-capture"><input type="checkbox" checked={storage?.enabled===true} disabled={!windowId||captureBusy}
+        onChange={event=>void toggleCapture(event.target.checked)}/> 深度日志归档</label>
+      <small>默认关闭深度写盘，基础诊断始终运行。开启后持续保存大量脱敏运行事件；关闭只停止新增归档，不删除现有记录。</small>
       <span>保留容量</span>
       {[256,512,1024,2048].map(miB=><button key={miB} type="button"
         className={storage?.capacityMiB===miB?'active':''} disabled={!windowId||busy}
         onClick={()=>void setCapacity(miB)}>{miB>=1024?miB/1024+' GB':miB+' MB'}</button>)}
-      <small>持续写入，超过容量只轮换最早的完整片段。屏幕只渲染最近 600 条；归档独立保存，完整内容可导出。</small>
+      <small>开启归档时超过容量只轮换最早的完整片段；屏幕最多显示 600 条。导出全部仅包含已归档历史，不包含系统 Logcat 的其他应用日志。</small>
       {Boolean(storage?.writeFailures||storage?.rejectedRows)&&
         <small>写入失败 {storage?.writeFailures||0} · 过滤异常记录 {storage?.rejectedRows||0}</small>}
     </footer>
