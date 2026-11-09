@@ -66,6 +66,7 @@ try {
       await model.click();
       const panel = page.getByRole('dialog', { name: '模型与推理', exact: true });
       await expect(panel).toBeVisible();
+      await page.screenshot({ path: path.join(output, `${scene}-models.png`), animations: 'disabled' });
       await panel.getByRole('button', { name: '选择模型：fixture-reasoner，工作 OpenAI · 测试', exact: true }).click();
       await expect.poll(() => page.evaluate(() => window.aiConversationFixture.summary().preference.modelName)).toBe('fixture-reasoner');
       if (freshConversation) {

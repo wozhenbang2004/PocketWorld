@@ -17,6 +17,7 @@ on:
       - 'app/src/main/java/dev/pocketengine/store/TaskStore.java'
       - 'app/src/main/kotlin/dev/pocketengine/ui/web/**'
       - 'app/src/test/**'
+      - 'app/src/hostTest/**'
       - 'web-ui/src/**'
       - 'web-ui/tests/ai-*'
       - 'web-ui/tests/phone-composer-*'
@@ -91,6 +92,12 @@ jobs:
           set -o pipefail
           "$SDKMANAGER" 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
           printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
+      - name: Verify native phone model capture and conversation handoff
+        if: ${{ always() && steps.native_tools.outcome == 'success' }}
+        env:
+          ORG_GRADLE_PROJECT_pocketworldVersionCode: '2000000000'
+          ORG_GRADLE_PROJECT_pocketworldVersionName: '0.3.0-host-tests'
+        run: python3 -B tools/host-tests.py --group conversation-phone-handoff --online --output build-artifacts/phone-composer-native
       - name: Run AI service, first-use and native runtime preparation regressions
         if: ${{ always() && steps.native_tools.outcome == 'success' }}
         # This job runs host-only tests, never publishes an APK. Supply an explicit,
@@ -98,7 +105,7 @@ jobs:
         env:
           ORG_GRADLE_PROJECT_pocketworldVersionCode: '2000000000'
           ORG_GRADLE_PROJECT_pocketworldVersionName: '0.3.0-host-tests'
-        run: python3 -B tools/host-tests.py --group ai-services --group conversation-phone-handoff --group first-use-state --group first-use-storage --group runtime-owner-setup --group runtime-preparation-cancel --group runtime-recovery-admission --online --output build-artifacts/ai-services-native
+        run: python3 -B tools/host-tests.py --group ai-services --group first-use-state --group first-use-storage --group runtime-owner-setup --group runtime-preparation-cancel --group runtime-recovery-admission --online --output build-artifacts/ai-services-native
       - name: Preserve verification evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -108,6 +115,7 @@ jobs:
             build-artifacts/ai-center-visual/
             build-artifacts/ai-conversation-visual/
             build-artifacts/phone-composer-visual/
+            build-artifacts/phone-composer-native/
             build-artifacts/account-login-recovery/
             build-artifacts/setup-visual/
             build-artifacts/ai-services-native/
