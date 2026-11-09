@@ -41,7 +41,7 @@ jobs:
       RELEASE_VERSION_CODE: ${{ inputs.version_code || vars.POCKETWORLD_RELEASE_VERSION_CODE }}
       RELEASE_VERSION_FLOOR: ${{ inputs.version_floor || vars.POCKETWORLD_RELEASE_VERSION_FLOOR }}
     outputs:
-      release_artifact_id: ${{ steps.release_handoff.outputs.artifact-id }}
+      build_artifact_id: ${{ steps.verified_build.outputs.artifact-id }}
     defaults:
       run:
         shell: bash
@@ -383,6 +383,91 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Freeze verified build inputs
+        run: |
+          python3 - <<'PY_BUILD'
+          import hashlib, json, os, pathlib, shutil
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])/'verified-build'
+          root.mkdir()
+          apk = pathlib.Path('build-artifacts/app-debug.apk')
+          receipt = json.loads(pathlib.Path('build-artifacts/apk-identity.json').read_text())
+          assert receipt['commit'] == os.environ['GITHUB_SHA'] and receipt['run_id'] == os.environ['GITHUB_RUN_ID']
+          assert receipt['sha256'] == hashlib.sha256(apk.read_bytes()).hexdigest() and receipt['bytes'] == apk.stat().st_size
+          jars = list((pathlib.Path.home()/'.gradle').glob('caches/modules-2/files-2.1/org.json/json/20240303/*/*.jar'))
+          assert len(jars) == 1
+          shutil.copyfile(apk, root/'app-debug.apk')
+          shutil.copyfile('build-artifacts/apk-identity.json', root/'apk-identity.json')
+          shutil.copyfile(jars[0], root/'org.json.jar')
+          plan = {'sourceCommit':os.environ['GITHUB_SHA'],'runId':os.environ['GITHUB_RUN_ID'],'buildAttempt':os.environ['GITHUB_RUN_ATTEMPT'],'mode':os.environ['RELEASE_MODE'],'version':int(os.environ['RELEASE_VERSION_CODE']),'floor':int(os.environ['RELEASE_VERSION_FLOOR']),'orgJsonSha256':hashlib.sha256(jars[0].read_bytes()).hexdigest()}
+          (root/'build-plan.json').write_text(json.dumps(plan))
+          PY_BUILD
+      - name: Retain immutable signed build for preparation retries
+        id: verified_build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pocketworld-verified-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/verified-build
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  prepare:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      release_artifact_id: ${{ steps.release_handoff.outputs.artifact-id }}
+    steps:
+      - name: Check out the frozen source SHA
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Java 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Download immutable build artifact from this run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.build.outputs.build_artifact_id }}
+          path: ${{ runner.temp }}/verified-build
+          merge-multiple: true
+      - name: Verify original build identity and restore inputs
+        run: |
+          python3 - <<'PY_RESTORE'
+          import hashlib, json, os, pathlib, shutil
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])/'verified-build'
+          plan = json.loads((root/'build-plan.json').read_text())
+          receipt = json.loads((root/'apk-identity.json').read_text())
+          assert plan['sourceCommit'] == receipt['commit'] == os.environ['GITHUB_SHA']
+          assert plan['runId'] == receipt['run_id'] == os.environ['GITHUB_RUN_ID']
+          assert plan['buildAttempt'] == receipt['run_attempt']
+          apk = root/'app-debug.apk'
+          assert receipt['sha256'] == hashlib.sha256(apk.read_bytes()).hexdigest() and receipt['bytes'] == apk.stat().st_size
+          assert receipt['certificate_sha256'] == 'b58e014e2a2e49b2e85ebd5b47a034a28cb0d313d71f379a5208d21afe388e58'
+          assert plan['mode'] in ('first','delta') and type(plan['floor']) is int and type(plan['version']) is int and 258 <= plan['floor'] < plan['version'] <= 2100000000
+          jar = root/'org.json.jar'
+          assert hashlib.sha256(jar.read_bytes()).hexdigest() == plan['orgJsonSha256']
+          target = pathlib.Path('app/build/outputs/apk/debug/app-debug.apk'); target.parent.mkdir(parents=True)
+          shutil.copyfile(apk, target)
+          pathlib.Path('build-artifacts').mkdir()
+          shutil.copyfile(root/'apk-identity.json','build-artifacts/apk-identity.json')
+          cache = pathlib.Path(os.environ['RUNNER_TEMP'])/'verifier-gradle'
+          destination = cache/'caches/modules-2/files-2.1/org.json/json/20240303'/hashlib.sha1(jar.read_bytes()).hexdigest()/'json-20240303.jar'
+          destination.parent.mkdir(parents=True); shutil.copyfile(jar,destination)
+          with open(os.environ['GITHUB_ENV'],'a') as out:
+              out.write('GRADLE_USER_HOME='+str(cache)+'\nRELEASE_MODE='+plan['mode']+'\nRELEASE_VERSION_CODE='+str(plan['version'])+'\nRELEASE_VERSION_FLOOR='+str(plan['floor'])+'\n')
+          PY_RESTORE
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'build-tools;35.0.0'
+
       - name: Prepare full first release or verified delta and signed handoff
         id: release_prepare
         env:
@@ -400,18 +485,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Preserve signed APK if release preparation fails
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: pocketworld-recovery-apk-${{ github.run_id }}-${{ github.run_attempt }}
-          path: build-artifacts/app-debug.apk
-          if-no-files-found: ignore
-          compression-level: 0
-          retention-days: 7
 
   publish:
-    needs: build
+    needs: prepare
     if: ${{ github.repository == 'wozhenbang2004/PocketWorld' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-24.04
     permissions:
@@ -437,7 +513,7 @@ jobs:
       - name: Download only the producing job artifact ID in this run
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          artifact-ids: ${{ needs.build.outputs.release_artifact_id }}
+          artifact-ids: ${{ needs.prepare.outputs.release_artifact_id }}
           path: ${{ runner.temp }}/release-handoff
           merge-multiple: true
 
