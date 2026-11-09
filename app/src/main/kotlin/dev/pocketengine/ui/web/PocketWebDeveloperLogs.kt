@@ -18,7 +18,7 @@ internal class PocketWebDeveloperLogs(
     private val ownerCurrent: () -> Boolean
 ) : AutoCloseable {
     companion object {
-        val COMMANDS = setOf("developerLogs.open", "developerLogs.page",
+        val COMMANDS = setOf("developerLogs.open", "developerLogs.page", "developerLogs.capture",
             "developerLogs.capacity", "developerLogs.export", "developerLogs.close")
     }
     private val main = Handler(Looper.getMainLooper())
@@ -62,7 +62,7 @@ internal class PocketWebDeveloperLogs(
                 activity.createDeveloperLogExport()
                 done(JSONObject().put("pickerOpened", true), null)
             }
-            "developerLogs.page", "developerLogs.capacity" -> {
+            "developerLogs.page", "developerLogs.capacity", "developerLogs.capture" -> {
                 val mode = args.optString("mode", "tail")
                 val cursor = args.optString("cursor", "")
                 val limit = args.optInt("limit", 150)
@@ -70,15 +70,21 @@ internal class PocketWebDeveloperLogs(
                 if (action == "developerLogs.page") {
                     fields(args, "windowId", "mode", "cursor", "limit")
                     require(mode in setOf("tail", "after", "before") && limit in 1..200 && cursor.length <= 64)
-                } else {
+                } else if (action == "developerLogs.capacity") {
                     fields(args, "windowId", "miB")
                     require(miB in setOf(256, 512, 1024, 2048))
+                } else {
+                    fields(args, "windowId", "enabled")
+                    require(args.opt("enabled") is Boolean)
                 }
                 try {
                     worker.execute {
                         val result = runCatching {
-                            if (action == "developerLogs.page") RuntimeDiagnostics.developerLogPage(mode, cursor, limit)
-                            else RuntimeDiagnostics.developerLogCapacity(miB)
+                            when(action) {
+                                "developerLogs.page" -> RuntimeDiagnostics.developerLogPage(mode, cursor, limit)
+                                "developerLogs.capacity" -> RuntimeDiagnostics.developerLogCapacity(miB)
+                                else -> RuntimeDiagnostics.developerLogCapture(args.getBoolean("enabled"))
+                            }
                         }
                         main.post {
                             if (!current(opened)) {
