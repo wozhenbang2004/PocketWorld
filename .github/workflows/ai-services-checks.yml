@@ -54,6 +54,7 @@ jobs:
           set -euo pipefail
           npm exec --prefix web-ui -- playwright install --with-deps chromium
           node web-ui/tests/ai-center-ui.mjs --output build-artifacts/ai-center-visual
+          ACCOUNT_RECOVERY_EVIDENCE=build-artifacts/account-login-recovery node web-ui/tests/account-login-recovery-ui.mjs
       - name: Prepare declared Android compile toolchains
         id: native_tools
         if: ${{ always() && steps.frontend.outcome == 'success' }}
@@ -70,6 +71,11 @@ jobs:
           printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
       - name: Run source, conversation, account and local API regressions
         if: ${{ always() && steps.native_tools.outcome == 'success' }}
+        # This job runs host-only tests, never publishes an APK. Supply an explicit,
+        # non-release CI version instead of bypassing the production version guard.
+        env:
+          ORG_GRADLE_PROJECT_pocketworldVersionCode: '2000000000'
+          ORG_GRADLE_PROJECT_pocketworldVersionName: '0.3.0-host-tests'
         run: python3 -B tools/host-tests.py --group ai-services --online --output build-artifacts/ai-services-native
       - name: Preserve verification evidence
         if: always()
@@ -78,6 +84,7 @@ jobs:
           name: pocketworld-ai-services-${{ github.run_number }}-${{ github.run_attempt }}
           path: |
             build-artifacts/ai-center-visual/
+            build-artifacts/account-login-recovery/
             build-artifacts/ai-services-native/
           if-no-files-found: ignore
           retention-days: 14
