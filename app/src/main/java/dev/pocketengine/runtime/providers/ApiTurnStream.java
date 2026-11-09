@@ -97,7 +97,7 @@ public final class ApiTurnStream {
             String decoded;
             try{decoded=StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
                     .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(payload)).toString();}
-            catch(java.nio.charset.CharacterCodingException invalidUtf8){throw invalid();}
+            catch(java.nio.charset.CharacterCodingException invalidUtf8){GatewayException failure=invalid();failure.initCause(invalidUtf8);throw failure;}
             JSONObject event=eventObject(decoded);
             if(!event.has("type")){
                 if(!terminal||event.length()!=1)throw invalid();
@@ -727,7 +727,7 @@ public final class ApiTurnStream {
             }
             try { return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
                     .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes.toByteArray())).toString(); }
-            catch (java.nio.charset.CharacterCodingException badUtf8) { throw invalid(); }
+            catch (java.nio.charset.CharacterCodingException badUtf8) { GatewayException failure=invalid();failure.initCause(badUtf8);throw failure; }
         }
     }
 
@@ -782,9 +782,9 @@ public final class ApiTurnStream {
         long value = nonnegative(object, key); if (value >= upperExclusive) throw invalid(); return (int) value;
     }
     private static JSONObject object(String value) throws Exception {
-        try{return ProtocolJson.parse(value);}catch(Exception bad){throw invalid();}
+        try{return ProtocolJson.parse(value);}catch(Exception bad){GatewayException failure=invalid();failure.initCause(bad);throw failure;}
     }
-    private static JSONObject eventObject(String value)throws Exception{try{return ProtocolJson.parseEvent(value);}catch(Exception bad){throw invalid();}}
+    private static JSONObject eventObject(String value)throws Exception{try{return ProtocolJson.parseEvent(value);}catch(Exception bad){GatewayException failure=invalid();failure.initCause(bad);throw failure;}}
     private static JSONObject copy(JSONObject value) throws Exception { return eventObject(value.toString()); }
     private static boolean same(Object a, Object b) throws Exception {
         if (a instanceof JSONObject && b instanceof JSONObject) {
