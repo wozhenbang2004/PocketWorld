@@ -3,6 +3,7 @@ This module never creates keys/builds APKs. Publication requires an explicit fla
 GitHub has no cross-writer compare-and-swap publish API: workflow concurrency
 serializes our jobs; latest identity is checked again but other writers remain a risk.
 """
+import importlib.util
 import hashlib
 import json
 from pathlib import Path
@@ -11,6 +12,9 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+
+_version_spec=importlib.util.spec_from_file_location('github_release_version',Path(__file__).with_name('first-github-release.py'))
+_version=importlib.util.module_from_spec(_version_spec);_version_spec.loader.exec_module(_version)
 
 REPO='wozhenbang2004/PocketWorld'
 API='https://api.github.com'
@@ -98,7 +102,7 @@ def bind_manifest(verification,tag,assets):
  if not isinstance(verification,dict) or verification.get('verified') is not True:
   raise Stop('Manifest verifier did not explicitly approve')
  payload=verification.get('payload')
- if not isinstance(payload,dict) or type(payload.get('versionCode')) is not int or tag!='v'+str(payload['versionCode']) or payload.get('packageName')!='dev.pocketengine':
+ if not isinstance(payload,dict) or type(payload.get('versionCode')) is not int or tag!=_version.version_tag(payload['versionCode']) or payload.get('packageName')!='dev.pocketengine':
   raise Stop('Signed version/tag/package mismatch')
  expected={}
  for item in [payload.get('apk',{}),*payload.get('deltas',[])]:
@@ -116,14 +120,14 @@ def publish(client,tag,head,assets,verify_manifest,activate=False,resume_release
  All bytes are fetched from uploaded draft asset IDs, not trusted upload responses.
  Failures preserve the draft for inspection; this function never deletes/replaces.
  """
- if not re.fullmatch(r'v[1-9][0-9]*',tag) or not re.fullmatch('[a-f0-9]{40}',head):raise Stop('Invalid immutable identity')
+ _version.version_code(tag)
+ if not re.fullmatch('[a-f0-9]{40}',head):raise Stop('Invalid immutable identity')
  validate_assets(assets)
  manifest=next(x for x in assets if x['name']=='release.json')
  bind_manifest(verify_manifest(Path(manifest['file']).read_bytes()),tag,assets)
  before=latest_identity(client)
  if before is not None:
-  if not re.fullmatch(r'v[1-9][0-9]*',before[1]):raise Stop('Existing latest version cannot be ordered safely')
-  if int(tag[1:])<=int(before[1][1:]):raise Stop('Release tag must exceed current GitHub latest tag')
+  if _version.version_code(tag)<=_version.version_code(before[1]):raise Stop('Release tag must exceed current GitHub latest tag')
  if resume_release_id is None:
   if client.json('/repos/'+REPO+'/releases/tags/'+tag,allow404=True) is not None:raise Stop('Tag already has a release; do not overwrite')
   existing_ref=client.json('/repos/'+REPO+'/git/ref/tags/'+tag,allow404=True)
