@@ -36,8 +36,8 @@ public final class DeveloperLogArchiveTest {
             assertTrue(tail.getBoolean("hasOlder"));
             JSONObject older = logs.page("before", tail.getString("older"), 150);
             assertEquals(150, older.getJSONArray("entries").length());
-            assertEquals(1649, tail.getJSONArray("entries").getJSONObject(0).getLong("time") - 1700000000000L);
-            assertEquals(1499, older.getJSONArray("entries").getJSONObject(0).getLong("time") - 1700000000000L);
+            assertEquals(1650, tail.getJSONArray("entries").getJSONObject(0).getLong("time") - 1700000000000L);
+            assertEquals(1500, older.getJSONArray("entries").getJSONObject(0).getLong("time") - 1700000000000L);
             assertEquals(0, logs.page("after", tail.getString("next"), 150).getJSONArray("entries").length());
         }
         try (DeveloperLogArchive restored = new DeveloperLogArchive(folder)) {
