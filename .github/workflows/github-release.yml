@@ -204,13 +204,53 @@ jobs:
               path.write(str(home / 'bin') + '\n')
           PY
 
+      - name: Acquire pinned Kotlin compiler from official Maven Central direct endpoint
+        run: |
+          python3 - <<'PY_COMPILER'
+          import hashlib, os, pathlib, urllib.request, time
+          expected = 'c54a00718c8c0e3ee858bf42771c7f401c5e3c1738861e18e9536371042fa1b3'
+          sha1 = '4ef56b3316798316bfac7a0ae443391c9e900ea1'
+          home = pathlib.Path(os.environ.get('GRADLE_USER_HOME', str(pathlib.Path.home()/'.gradle')))
+          target = home/'caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-compiler-embeddable/2.1.20'/sha1/'kotlin-compiler-embeddable-2.1.20.jar'
+          target.parent.mkdir(parents=True, exist_ok=True)
+          if not target.exists() or hashlib.sha256(target.read_bytes()).hexdigest() != expected:
+              class NoRedirect(urllib.request.HTTPRedirectHandler):
+                  def redirect_request(self, *args): return None
+              url = 'https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-compiler-embeddable/2.1.20/kotlin-compiler-embeddable-2.1.20.jar'
+              temp = target.with_suffix('.part')
+              for attempt in range(3):
+                  try:
+                      with urllib.request.build_opener(NoRedirect).open(url, timeout=120) as response, temp.open('wb') as out:
+                          while chunk := response.read(1024*1024): out.write(chunk)
+                      break
+                  except Exception:
+                      temp.unlink(missing_ok=True)
+                      if attempt == 2: raise
+                      time.sleep(5*(attempt+1))
+              if temp.stat().st_size != 56909275 or hashlib.sha256(temp.read_bytes()).hexdigest() != expected:
+                  temp.unlink(missing_ok=True)
+                  raise ValueError('Official Kotlin compiler digest mismatch')
+              temp.replace(target)
+          print('Verified official Kotlin compiler 2.1.20 SHA-256', expected)
+          PY_COMPILER
+          cat > "$RUNNER_TEMP/kotlin-central.init.gradle" <<'GRADLE'
+          gradle.settingsEvaluated { settings ->
+              settings.dependencyResolutionManagement.repositories.exclusiveContent {
+                  forRepository {
+                      maven { url = uri('https://repo1.maven.org/maven2') }
+                  }
+                  filter { includeModule('org.jetbrains.kotlin', 'kotlin-compiler-embeddable') }
+              }
+          }
+          GRADLE
+
       - name: Assemble installable debug APK
         run: |
           set -euo pipefail
           # Compile only; retry transient transport failures without changing dependency sources.
           for attempt in 1 2 3; do
           set +e
-          ./gradlew --no-daemon --build-cache --no-parallel --max-workers=2 --console=plain \
+          ./gradlew --init-script "$RUNNER_TEMP/kotlin-central.init.gradle" --no-daemon --build-cache --no-parallel --max-workers=2 --console=plain \
             -Pkotlin.compiler.execution.strategy=in-process \
             -Dorg.gradle.vfs.watch=false \
             -PpocketworldVersionCode="$RELEASE_VERSION_CODE" \
