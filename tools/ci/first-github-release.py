@@ -34,7 +34,7 @@ def build_command(der,version,name,minimum_version):
 
 def check_resources(text,spki):
     for key,wanted in [('pocketworld_update_manifest_url',MANIFEST),('pocketworld_update_public_key',spki)]:
-        blocks=re.findall(r'(?m)^.*resource\s+0x[0-9a-fA-F]+\s+[^\n]*string/'+key+r'[^\n]*\n(?:(?![^\n]*resource\s+0x)[^\n]*\n?)*',text)
+        blocks=re.findall(r'(?m)^[ \t]*resource\s+0x[0-9a-fA-F]+\s+[^\n]*string/'+re.escape(key)+r'(?=[:\s])[^\n]*\n(?:(?![^\n]*resource\s+0x)[^\n]*\n?)*',text)
         if len(blocks)!=1:raise ValueError('Missing or duplicate packaged update resource')
         values=re.findall(r'\(string(?:8|16)?\)\s+"([^"\n]*)"',blocks[0])
         if not values or any(v!=wanted for v in values):raise ValueError('Packaged update configuration mismatch')
