@@ -1,4 +1,4 @@
-import {useEffect,useMemo,useState} from 'react';
+import {useEffect,useMemo,useState,type ReactNode} from 'react';
 import {RiAlarmWarningLine,RiArrowRightUpLine,RiCheckLine,RiNotification3Line,RiRefreshLine,RiSettings4Line} from '@remixicon/react';
 import {Button,TextField} from './forms-library';
 import {bridge} from './bridge';
@@ -24,7 +24,7 @@ function when(iso:string) {
   const ms=Date.parse(iso);
   return Number.isFinite(ms)?new Date(ms).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'时间未知';
 }
-export default function RemoteInboxWorkspace({state}: {state?:State}) {
+export default function RemoteInboxWorkspace({state,navigationTrigger,onBack}: {state?:State;navigationTrigger?:ReactNode;onBack:()=>void}) {
   const [endpoint,setEndpoint]=useState('');
   const [token,setToken]=useState('');
   const [configOpen,setConfigOpen]=useState(false);
@@ -55,6 +55,7 @@ export default function RemoteInboxWorkspace({state}: {state?:State}) {
     finally{setWorking(false)}
   }
   return <main className="pw-remote-inbox pw-page" aria-label="远程通知中心">
+    <div className="pw-remote-navigation">{navigationTrigger}<Button variant="ghost" onClick={onBack}>返回对话</Button></div>
     <header className="pw-remote-inbox-head">
       <div><span className="pw-remote-overline">POCKETWORLD / INBOX</span><h1>通知</h1>
         <p>远程 Issue、PR 回复与服务事件。接收消息不会启动 Agent 或执行任务。</p></div>
