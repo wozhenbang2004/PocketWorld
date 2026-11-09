@@ -1,0 +1,193 @@
+/* PocketWorld single-plane dual-layer composer.
+   The short contextual lip stays behind the primary editing plane.
+   Newer Chromium WebViews use CSS continuous/superellipse corners; older
+   WebViews retain the same geometry with standard rounded corners. */
+.pw-composer-region .pw-composer-host.pw-squircle-composer { min-width: 0; width: 100%; }
+.pw-composer-host.pw-squircle-composer .afa-composer { position: relative; width: 100%; isolation: isolate; }
+.pw-composer-host.pw-squircle-composer .pw-composer-context-rail {
+  position: relative; z-index: 0; width: 76%; max-width: 540px;
+  height: 38px; margin: 0 auto -16px; padding: 4px 20px 17px;
+  display: flex; align-items: center; justify-content: space-between;
+  border: 0; border-radius: 24px 24px 12px 12px;
+  background: color-mix(in srgb, var(--pw-ink, #242424) 10%, var(--pw-canvas, #f7f7f6));
+  color: var(--pw-copy, #777); box-shadow: 0 2px 7px rgb(0 0 0 / 2%);
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-context-icons {
+  display: flex; align-items: center; gap: 9px; flex: 0 1 auto; min-width: 0;
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-context-usage {
+  display: flex; align-items: center; gap: 6px; margin-left: auto;
+  font: 500 11px/15px var(--pw-font); letter-spacing: 0; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-context-ring {
+  position: relative; display: block; width: 14px; height: 14px;
+  border: 1.65px solid currentColor; border-radius: 50%; opacity: .86;
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-context-ring::before {
+  content: ''; position: absolute; width: 4px; height: 4px; left: 50%; top: -2.7px;
+  transform: translateX(-50%); border-radius: 50%; background: currentColor;
+}
+.pw-composer-region .pw-composer-host.pw-squircle-composer .afa-composer > .afa-card.pw-composer-card,
+:root.dark .pw-composer-region .pw-composer-host.pw-squircle-composer .afa-composer > .afa-card.pw-composer-card {
+  position: relative; z-index: 1; padding: 10px 12px;
+  border: 0 !important; outline: 0; border-radius: 30px;
+  background: var(--pw-surface, #fff);
+  box-shadow: 0 3px 8px -5px rgb(0 0 0 / 12%), 0 12px 30px -13px rgb(0 0 0 / 15%);
+  transition: box-shadow 230ms ease, background-color 230ms ease;
+}
+.pw-composer-region .pw-composer-host.pw-squircle-composer .afa-composer > .afa-card.pw-composer-card:focus-within {
+  border: 0 !important; outline: 0; background: var(--pw-surface, #fff);
+  box-shadow: 0 3px 10px -5px rgb(0 0 0 / 13%), 0 14px 34px -12px rgb(0 0 0 / 18%);
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-row,
+.pw-composer-host.pw-squircle-composer .pw-composer-with-controls {
+  display: flex; align-items: center; flex-wrap: nowrap; gap: 2px;
+  min-width: 0; width: 100%; min-height: 48px; grid-template-columns: none;
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-row > textarea {
+  order: 2; flex: 1 1 45px; display: block; align-self: center;
+  min-width: 30px; width: auto; max-width: none; min-height: 46px; max-height: 120px;
+  height: 46px; margin: 0; padding: 10px 4px; border: 0 !important;
+  border-radius: 0; background: transparent !important;
+  color: var(--pw-ink, #242424); font: 400 15px/25px var(--pw-font);
+  resize: none; overflow-wrap: anywhere; overflow-y: auto; scrollbar-width: thin;
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-row > textarea::placeholder {
+  color: var(--pw-muted, #999); opacity: .9;
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-leading {
+  order: 1; flex: 0 0 auto; display: flex; align-items: center; gap: 1px;
+  min-width: 0; padding: 0; min-height: 42px;
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-controls {
+  order: 3; flex: 0 0 auto; align-self: center; min-width: 0;
+}
+.pw-composer-host.pw-squircle-composer .afa-toolbar {
+  order: 4; flex: 0 0 auto; display: flex; align-items: center; gap: 0;
+  min-width: 0; min-height: 42px; padding: 0; flex-wrap: nowrap !important;
+}
+.pw-composer-region .pw-composer-host.pw-squircle-composer .pw-composer-intent button,
+.pw-composer-host.pw-squircle-composer .pw-composer-row :is(.afa-iconbtn, .afa-stop) {
+  box-sizing: border-box; flex: 0 0 38px; width: 38px; height: 42px;
+  min-width: 38px !important; min-height: 42px !important;
+  margin: 0; padding: 9px !important; border: 0 !important; border-radius: 50%;
+  background: transparent !important; box-shadow: none !important;
+  color: var(--pw-copy, #505050);
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-intent > :first-child button {
+  background: var(--pw-inset, #f2f2f2) !important; color: var(--pw-ink, #252525);
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-intent button:hover,
+.pw-composer-host.pw-squircle-composer .pw-composer-row .afa-iconbtn:hover {
+  background: var(--pw-hover, #f5f5f5) !important;
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-intent svg,
+.pw-composer-host.pw-squircle-composer .afa-toolbar svg { width: 20px; height: 20px; }
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls {
+  gap: 0; display: flex; flex-wrap: nowrap; max-width: none;
+}
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button:is(.pw-conversation-model-chip,.pw-conversation-reasoning-chip) {
+  box-sizing: border-box; display: flex; align-items: center; justify-content: center;
+  flex: 0 0 37px; min-width: 37px; max-width: 37px;
+  width: 37px; height: 42px; min-height: 42px;
+  padding: 0; border: 0; border-radius: 50%; box-shadow: none;
+  background: transparent; color: var(--pw-copy, #555);
+}
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button::before { display: none; }
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > span,
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > b,
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > svg:not(:first-child) { display: none; }
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > svg:first-child {
+  display: block; width: 20px; height: 20px;
+}
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button:hover:not(:disabled) {
+  background: var(--pw-hover, #f6f6f6);
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-row .pw-press {
+  box-sizing: border-box; flex: 0 0 42px; min-width: 42px; width: 42px; height: 42px;
+  min-height: 42px; padding: 2px !important; border-radius: 50%;
+  animation: pw-send-appear 180ms cubic-bezier(.2,.85,.2,1) both;
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-row .pw-press-front {
+  min-height: 38px; height: 38px; padding: 7px; border-radius: 50%;
+  background: var(--pw-strong, #222); color: var(--pw-on-strong, #fff);
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-row .pw-press-label { display: flex; align-items: center; justify-content: center; }
+.pw-composer-host.pw-squircle-composer .pw-composer-row .pw-press-label svg { width: 20px; height: 20px; }
+.pw-composer-host.pw-squircle-composer .pw-composer-row .afa-recording {
+  order: 2; flex: 1 1 auto; grid-row: auto; grid-column: auto;
+  min-width: 0; min-height: 42px; padding: 4px; align-self: center;
+}
+.pw-composer-host.pw-squircle-composer .afa-filechips {
+  display: flex; flex-wrap: wrap; gap: 7px; max-height: min(25dvh, 186px);
+  margin: 0 1px 5px; padding: 1px 1px 5px; overflow: auto;
+}
+.pw-composer-host.pw-squircle-composer .afa-filechips > .pw-composer-attachment {
+  position: relative; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; width: 72px; max-width: 72px; min-width: 72px;
+  height: 70px; min-height: 70px; padding: 6px; gap: 3px;
+  border: 0; border-radius: 17px; background: var(--pw-inset, #f4f4f4);
+  box-shadow: none; color: var(--pw-copy, #555);
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-file-preview {
+  position: relative; display: grid; place-items: center; width: 42px; height: 42px;
+  overflow: hidden; border-radius: 11px; color: var(--pw-copy, #555);
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-file-preview img {
+  display: block; width: 100%; height: 100%; object-fit: cover;
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-file-name {
+  display: block; width: 100%; min-width: 0; max-width: 100%;
+  font: 400 10px/13px var(--pw-font); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-align: center;
+}
+.pw-composer-host.pw-squircle-composer .afa-filechips .pw-composer-attachment > button {
+  position: absolute; top: 0; right: 0; z-index: 2;
+  display: grid; place-items: center; flex: none;
+  width: 20px; height: 20px; min-width: 20px; min-height: 20px;
+  padding: 0; border: 0; border-radius: 50%;
+  background: var(--pw-copy, #777); color: var(--pw-surface, #fff);
+  font: 500 14px/1 var(--pw-font); box-shadow: 0 1px 3px rgb(0 0 0 / 9%);
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-file-progress {
+  position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible;
+  pointer-events: none; transform: rotate(-90deg);
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-file-progress circle {
+  fill: none; stroke-width: 2; stroke-linecap: round;
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-file-track { stroke: color-mix(in srgb, var(--pw-ink) 10%, transparent); }
+.pw-composer-host.pw-squircle-composer .pw-composer-file-value { stroke: var(--pw-copy, #666); transition: stroke-dashoffset 200ms ease; }
+.pw-composer-permission-note {
+  max-width: 280px; padding: 4px 12px 10px; color: var(--pw-muted, #777);
+  font: 400 12px/1.65 var(--pw-font);
+}
+@supports (corner-shape: superellipse(2)) {
+  .pw-composer-host.pw-squircle-composer .pw-composer-context-rail,
+  .pw-composer-region .pw-composer-host.pw-squircle-composer .afa-composer > .afa-card.pw-composer-card,
+  .pw-composer-host.pw-squircle-composer .afa-filechips > .pw-composer-attachment,
+  .pw-composer-host.pw-squircle-composer .pw-composer-file-preview {
+    corner-shape: superellipse(2);
+  }
+}
+@keyframes pw-send-appear { from { opacity: 0; transform: scale(.74); } to { opacity: 1; transform: scale(1); } }
+@media (max-width: 360px) {
+ .pw-composer-host.pw-squircle-composer .pw-composer-row { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 0 4px; }
+ .pw-composer-host.pw-squircle-composer .pw-composer-row > textarea,
+ .pw-composer-host.pw-squircle-composer .pw-composer-row > .afa-recording { grid-row: 1; grid-column: 1 / -1; width: 100%; }
+ .pw-composer-host.pw-squircle-composer .pw-composer-row > .pw-composer-leading { grid-row: 2; grid-column: 1; }
+ .pw-composer-host.pw-squircle-composer .pw-composer-row > .pw-composer-controls { grid-row: 2; grid-column: 2; justify-self: end; }
+ .pw-composer-host.pw-squircle-composer .pw-composer-row > .afa-toolbar { grid-row: 2; grid-column: 3; }
+ .pw-composer-host.pw-squircle-composer .pw-composer-context-rail { width: 78%; padding-inline: 16px; }
+}
+:root.dark .pw-composer-host.pw-squircle-composer .pw-composer-context-rail {
+ background: color-mix(in srgb, var(--pw-surface, #222) 52%, var(--pw-inset, #303030));
+ box-shadow: none;
+}
+@media (prefers-reduced-motion: reduce) {
+ .pw-composer-host.pw-squircle-composer .pw-composer-row .pw-press { animation: none; }
+ .pw-composer-region .pw-composer-host.pw-squircle-composer .afa-composer > .afa-card.pw-composer-card,
+ .pw-composer-host.pw-squircle-composer .pw-composer-file-value { transition: none; }
+}
+:root[data-pw-motion-paused="true"] .pw-composer-host.pw-squircle-composer .pw-composer-row .pw-press { animation: none; }

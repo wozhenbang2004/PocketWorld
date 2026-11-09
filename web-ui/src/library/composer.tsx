@@ -16,7 +16,7 @@ function sizeComposerEditor(editor:HTMLTextAreaElement|null){
  editor.style.overflowY=height>120?'auto':'hidden';
 }
 
-export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disabled,placeholder='输入目标，或补充上下文…',attachments=[],onRemoveAttachment,onAttach,onVoice,listening,voiceStatus,onDiscardVoice,modelName,onSelectModel,toolbar,controls,children,status,label='工作输入',composerKey,className='',sendDisabled=false,sendLabel}:ChatComposerProps&{sendDisabled?:boolean;sendLabel?:string}){
+export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disabled,placeholder='输入目标，或补充上下文…',attachments=[],onRemoveAttachment,onAttach,onVoice,listening,voiceStatus,onDiscardVoice,modelName,onSelectModel,toolbar,controls,contextStatus,contextPercent,children,status,label='工作输入',composerKey,className='',sendDisabled=false,sendLabel}:ChatComposerProps&{sendDisabled?:boolean;sendLabel?:string}){
  const editor=useRef<HTMLTextAreaElement>(null);
  useLayoutEffect(()=>{sizeComposerEditor(editor.current)},[value,listening,composerKey]);
  useLayoutEffect(()=>{
@@ -32,18 +32,38 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
   return()=>observer.disconnect();
  },[listening,composerKey]);
  const canSend=!disabled&&!submitting&&!sendDisabled&&!!value.trim();
- return <FrameA className={`pw-composer-host pw-compact-composer ${className}`}>
+ const hasText=!!value.trim();
+ const measuredContext=typeof contextPercent==='number'&&Number.isFinite(contextPercent)&&contextPercent>=0&&contextPercent<=100?Math.round(contextPercent):null;
+ return <FrameA className={`pw-composer-host pw-compact-composer pw-squircle-composer ${className}`}>
   <section className="afa-composer" aria-label={label} data-composer-key={composerKey}>
-   <div className="afa-card pw-composer-card">
-    {attachments.length>0&&<div className="afa-filechips" aria-label="已附加文件" role="list">{attachments.map(f=><span key={f.id} role="listitem"><Icon name="file"/><span className="pw-composer-file-name" title={f.name}>{f.name}</span>{f.status&&<small>{f.status}</small>}{onRemoveAttachment&&<button type="button" aria-label={`移除 ${f.name}`} onClick={()=>onRemoveAttachment(f.id)}>×</button>}</span>)}</div>}
+   <div className="pw-composer-context-rail" aria-label="当前对话上下文">
+    <span className="pw-composer-context-icons">{contextStatus}</span>
+    <span className="pw-composer-context-usage" role="status" aria-label={measuredContext===null?'上下文占用暂无可核对数据':'上下文已使用 '+measuredContext+'%'} title={measuredContext===null?'上下文占用暂无可核对数据':'上下文占用 '+measuredContext+'%'}>
+     <i className="pw-composer-context-ring" aria-hidden="true"/>{measuredContext!==null&&<span>{measuredContext}%</span>}
+    </span>
+   </div>
+   <div className="afa-card pw-composer-card" data-has-text={hasText} data-has-attachments={attachments.length>0}>
+    {attachments.length>0&&<div className="afa-filechips" aria-label="已附加文件" role="list">{attachments.map(f=>{
+     const originalPreview=typeof f.thumbnailDataUrl==='string'?f.thumbnailDataUrl:typeof f.thumbnail==='string'?f.thumbnail:'';
+     const thumbnail=/^(data:image\/(?:jpeg|png|webp|gif);base64,|blob:)/i.test(originalPreview)?originalPreview:'';
+     const kind=String(f.mimeType||'').startsWith('image/')?'image':/\.(?:tsx?|jsx?|java|kt|py|go|rs|css|html|json|xml|yaml|yml|sh)$/i.test(f.name)?'code':'file';
+     const progress=typeof f.progressPercent==='number'&&Number.isFinite(f.progressPercent)&&f.progressPercent>=0&&f.progressPercent<100?Math.round(f.progressPercent):null;
+     return <span key={f.id} role="listitem" className="pw-composer-attachment" data-kind={kind}>
+      <span className="pw-composer-file-preview">{thumbnail?<img src={thumbnail} alt="" loading="lazy"/>:<Icon name="file" size={21}/>}
+       {progress!==null&&<svg viewBox="0 0 48 48" className="pw-composer-file-progress" aria-label={'上传 '+progress+'%'}><circle cx="24" cy="24" r="21" className="pw-composer-file-track"/><circle cx="24" cy="24" r="21" className="pw-composer-file-value" strokeDasharray={String(2*Math.PI*21)} strokeDashoffset={String((1-progress/100)*2*Math.PI*21)}/></svg>}
+      </span>
+      <span className="pw-composer-file-name" title={f.name}>{f.name}</span>
+      {onRemoveAttachment&&<button type="button" aria-label={'移除 '+f.name} onClick={()=>onRemoveAttachment(f.id)}>×</button>}
+     </span>;
+    })}</div>}
     {onSelectModel&&<div className="pw-composer-model"><button type="button" className="afa-btn pw-model-trigger" onClick={onSelectModel}><Icon name="spark"/><span>{modelName||'选择模型'}</span><Icon name="chevron" size={12}/></button></div>}
     <div className={`pw-composer-row${controls?' pw-composer-with-controls':''}`}>
      {listening?<div className="afa-recording" role="status"><i aria-hidden="true"/><span>{voiceStatus||'正在听写…'}</span>{onDiscardVoice&&<ToolButton label="取消本次听写" icon="close" onClick={onDiscardVoice}/>}</div>:<textarea ref={editor} rows={1} aria-label={label} enterKeyHint="enter" placeholder={placeholder} value={value} disabled={disabled} onChange={e=>onChange(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing&&e.nativeEvent.keyCode!==229&&(!matchMedia('(pointer: coarse)').matches||e.ctrlKey||e.metaKey)){e.preventDefault();if(canSend)onSend()}}}/>}
      {(toolbar||onAttach)&&<div className="pw-composer-leading">{toolbar}{onAttach&&<ToolButton label="添加附件" icon="plus" onClick={onAttach} disabled={submitting}/>}</div>}
      {controls&&<div className="pw-composer-controls">{controls}</div>}
      <div className="afa-toolbar">
-      {onVoice&&(!value.trim()||listening)&&!busy&&<ToolButton label={listening?'结束听写':'语音输入'} icon="mic" onClick={onVoice} disabled={disabled||submitting}/>}
-      {(!busy||!onStop||!!value.trim())&&(!onVoice||!!value.trim()||busy)&&!listening&&<PressButton compact aria-label={submitting?'正在登记':sendLabel||(busy?'补充给当前工作':'发送')} disabled={!canSend} onClick={onSend}><Icon name="arrow" size={18}/></PressButton>}
+      {onVoice&&!busy&&<ToolButton label={listening?'结束听写':'语音输入'} icon="mic" onClick={onVoice} disabled={disabled||submitting}/>}
+      {hasText&&(!busy||!onStop||hasText)&&!listening&&<PressButton compact aria-label={submitting?'正在登记':sendLabel||(busy?'补充给当前工作':'发送')} disabled={!canSend} onClick={onSend}><Icon name="arrow" size={18}/></PressButton>}
       {busy&&onStop&&<button type="button" className="afa-stop pw-stop-motion" onClick={onStop} aria-label="停止当前回复"><span className="pw-stop-ring" aria-hidden="true"><ProgressCircle isIndeterminate size="md" aria-label="当前回复状态"/></span><span className="pw-stop-mark" aria-hidden="true">■</span></button>}
      </div>
     </div>

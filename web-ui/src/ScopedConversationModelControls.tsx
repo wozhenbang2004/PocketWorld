@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { RiArrowDownSLine, RiBrainLine, RiCpuLine } from '@remixicon/react';
+import { RiArrowDownSLine, RiSparklingLine, RiBox3Line } from '@remixicon/react';
 import { Button } from './forms-library';
 import { Radio, RadioGroup } from './forms-library/boardui/components/base/radio/radio';
 import { ShimmerText } from './library';
@@ -41,10 +41,10 @@ export function ScopedConversationModelControls({ state, can, act, onOpenModel, 
   const reasoning = nativeReasoning(target.reasoning || defaultReasoning), effort = reasoningLabel(reasoning, true);
   return <div className="pw-conversation-model-controls" aria-label="此对话的模型与推理">
     <Button variant="ghost" className="pw-conversation-model-chip" onClick={() => onOpenModel('models')} disabled={locked} aria-label={`切换此对话模型：${modelName}`} title={modelName}>
-      <RiCpuLine size={16} aria-hidden="true" /><span className="pw-conversation-model-chip-name">{modelName}</span><RiArrowDownSLine size={14} aria-hidden="true" />
+      <RiBox3Line size={19} aria-hidden="true" /><span className="pw-conversation-model-chip-name">{modelName}</span><RiArrowDownSLine size={14} aria-hidden="true" />
     </Button>
     <Button variant="ghost" className="pw-conversation-reasoning-chip" onClick={() => onOpenModel('reasoning')} disabled={locked || !conversationModelName(state)} aria-label={`推理强度${effort ? `：${effort}` : ''}`}>
-      <RiBrainLine size={17} aria-hidden="true" /><span>推理</span>{effort && <><span aria-hidden="true">·</span><b>{effort}</b></>}
+      <RiSparklingLine size={19} aria-hidden="true" /><span>推理</span>{effort && <><span aria-hidden="true">·</span><b>{effort}</b></>}
     </Button>
   </div>;
 }
