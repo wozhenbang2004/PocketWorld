@@ -29,10 +29,14 @@ def run(command, cwd, env):
     subprocess.run(list(map(str, command)), cwd=cwd, env=env, check=True)
 
 
-# A second upstream-owned distribution host for one strictly pinned source.
+# Upstream and distribution caches for one strictly pinned source.
 # Every byte is still checked against source-lock.json before being accepted.
 TALLOC_PRIMARY = "https://www.samba.org/ftp/talloc/talloc-2.5.0.tar.gz"
 TALLOC_MIRROR = "https://download.samba.org/pub/talloc/talloc-2.5.0.tar.gz"
+TALLOC_DISTFILE_MIRRORS = (
+    "https://distfiles.macports.org/talloc/talloc-2.5.0.tar.gz",
+    "https://distfiles.gentoo.org/distfiles/32/talloc-2.5.0.tar.gz",
+)
 TALLOC_SHA256 = "912afa237510ae542a7733998eb18a12bcda35ab6729c8e2ddb43e8d0ebab007"
 
 
@@ -40,7 +44,7 @@ def source_urls(source):
     primary = source["url"]
     if (source["name"] == "talloc" and primary == TALLOC_PRIMARY
             and source["sha256"] == TALLOC_SHA256 and source["archiveBytes"] == 690172):
-        return (primary, TALLOC_MIRROR)
+        return (primary, TALLOC_MIRROR, *TALLOC_DISTFILE_MIRRORS)
     return (primary,)
 
 

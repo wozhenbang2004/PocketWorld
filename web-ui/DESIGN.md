@@ -448,3 +448,6 @@ DSH-Go 确有 Claude OAuth 桥接：[固定版本的 AuthBridge](https://github.
 - 同一修复运行的独立 `conversation-phone-handoff` 组完成真实生产 Kotlin/Java 编译、Robolectric/JUnit 执行及报告核验：**8 类、76 项通过，0 失败、0 错误、0 跳过**；`result.json` 为 `status=passed`、`executionVerified=true`。其中 `ConversationPhoneStartNativeTest` 为原有 6 项加新增 5 项，共 11 项通过。原任务身份、模型/推理捕获、偏好失效、分配后不确定结果与防重复创建均有实际用例。
 
 整个 AI services 工作流仍因两类既有检查失败而显示失败：准备页高度断言，以及其他 AI/运行时测试组的旧测试编译错误；二者在修改前基线同样失败。本批保留这些失败回执，独立执行注册的手机组而不屏蔽无关旧测试或放宽生产验证。浏览器使用模拟宿主，原生组为 Android host 测试；真实 Android WebView、输入法、真实供应商及手机控制尚未实机验证。
+
+
+发布续接：`99510cfe` 的 [正式发布运行](https://github.com/wozhenbang2004/PocketWorld/actions/runs/42628014633) 前两次尝试均在 talloc 源码下载时遇到两个 Samba 官方地址的低速超时。已实际从 [MacPorts](https://distfiles.macports.org/talloc/talloc-2.5.0.tar.gz) 与 [Gentoo](https://distfiles.gentoo.org/distfiles/32/talloc-2.5.0.tar.gz) 下载，并分别验证为原锁定的 690172 字节、SHA-256 `912afa237510ae542a7733998eb18a12bcda35ab6729c8e2ddb43e8d0ebab007`。这两个地址加入同一精确版本/摘要/大小条件下的备用链，所有下载继续走原字节数与摘要验证。现有 runtime build 检查 11/11 通过；发布继续采用上述已验证的手机业务实现。
