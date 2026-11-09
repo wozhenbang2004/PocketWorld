@@ -69,6 +69,26 @@ public final class ChatGptSignInServiceTest {
             assertEquals("complete",rig.gateway.snapshot().getJSONObject("login").getString("status"));assertEquals(1,rig.fake.exchanges.get());replacement.destroy();
         }
     }
+    @Test public void transientSnapshotFailureDoesNotEndActiveBrowserCallbackProtection()throws Exception {
+        try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
+            EngineApplication app=install(rig);JSONObject login=rig.begin("");
+            var controller=Robolectric.buildService(ChatGptSignInService.class).create();
+            ChatGptSignInService service=controller.get();
+            service.onStartCommand(new Intent().putExtra("sessionId",login.getString("sessionId")),0,1);
+            NativeOwnerWorkflows original=app.nativeOwnerWorkflows;
+            try {
+                app.nativeOwnerWorkflows=null;
+                call(service,"observe",new Class<?>[0]);
+                assertFalse(Shadows.shadowOf(service).isStoppedBySelf());
+            }finally{app.nativeOwnerWorkflows=original;}
+            call(service,"observe",new Class<?>[0]);
+            assertFalse(Shadows.shadowOf(service).isStoppedBySelf());
+            rig.gateway.cancelLogin(login.getString("sessionId"));
+            call(service,"observe",new Class<?>[0]);
+            assertTrue(Shadows.shadowOf(service).isStoppedBySelf());
+            controller.destroy();
+        }
+    }
     @Test public void notificationCancellationTargetsOnlyItsOriginalAttempt()throws Exception {
         try(AccountGatewayTest.Rig rig=new AccountGatewayTest.Rig()){
             install(rig);JSONObject old=rig.begin("");rig.gateway.cancelLogin(old.getString("sessionId"));JSONObject current=rig.begin("");

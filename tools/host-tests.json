@@ -2188,7 +2188,8 @@
       "dev.pocketengine.ui.web.UnifiedWorkspaceHostTest",
       "dev.pocketengine.features.proxy.accounts.AccountGatewayTest",
       "dev.pocketengine.features.proxy.accounts.ChatGptLoginLifetimeTest",
-      "dev.pocketengine.ui.AccountConnectionsStateTest"
+      "dev.pocketengine.ui.AccountConnectionsStateTest",
+      "dev.pocketengine.features.proxy.accounts.ChatGptSignInServiceTest"
     ],
     "helpers": [
       "dev.pocketengine.features.proxy.accounts.AccountGatewayTest",

@@ -25,6 +25,7 @@ public final class ChatGptSignInService extends Service {
     private ScheduledExecutorService watcher;
     private volatile String session="";
     private volatile int latestStartId;
+    private volatile int consecutiveSnapshotFailures;
     public static void start(Context context,String sessionId){
         if(sessionId==null||!sessionId.matches("[0-9a-f-]{36}"))throw new IllegalArgumentException("INVALID_LOGIN_SESSION");
         Intent intent=new Intent(context,ChatGptSignInService.class).putExtra(SESSION,sessionId);
@@ -39,7 +40,10 @@ public final class ChatGptSignInService extends Service {
         String requested=intent==null?"":intent.getStringExtra(SESSION);
         if(requested==null||!requested.matches("[0-9a-f-]{36}")){stopSelf(startId);return START_NOT_STICKY;}
         latestStartId=startId;boolean cancelling=CANCEL.equals(intent.getAction());
-        if(!cancelling||session.isEmpty())session=requested;
+        if(!cancelling||session.isEmpty()){
+            if(!requested.equals(session))consecutiveSnapshotFailures=0;
+            session=requested;
+        }
         Notification notification=notification(session);
         if(Build.VERSION.SDK_INT>=34)startForeground(NOTIFICATION,notification,ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);else startForeground(NOTIFICATION,notification);
         if(cancelling)watcher.execute(()->cancelExact(requested));
@@ -56,8 +60,17 @@ public final class ChatGptSignInService extends Service {
     }
     private void observe(){
         String expected=session;int startId=latestStartId;
-        try{NativeOwnerWorkflows workflows=workflows();if(workflows!=null&&active(workflows.accountSnapshot().optJSONObject("login"),expected))return;}
-        catch(Exception ignored){}finish(expected,startId);
+        try{
+            NativeOwnerWorkflows workflows=workflows();
+            if(workflows==null)throw new IllegalStateException("ACCOUNT_OWNER_NOT_READY");
+            JSONObject login=workflows.accountSnapshot().optJSONObject("login");
+            consecutiveSnapshotFailures=0;
+            if(active(login,expected))return;
+        }catch(Exception unavailable){
+            // Do not tear down a live browser login because one native snapshot read failed.
+            if(++consecutiveSnapshotFailures<5)return;
+        }
+        finish(expected,startId);
     }
     private static boolean active(JSONObject login,String id){return login!=null&&id.equals(login.optString("sessionId"))&&
         ("pending".equals(login.optString("status"))||"exchanging".equals(login.optString("status")));}
