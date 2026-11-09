@@ -18,7 +18,7 @@ public final class ModelRequestPolicy {
             if (config.capabilityBinding == null || config.catalogEnforced || config.awsSession == null)
                 throw new Rejected("bedrock_saved_session_required", "请先保存原 Bedrock 连接与临时凭据，再从该连接发起请求。");
             try { config.awsSession.requireValidAt(System.currentTimeMillis()); }
-            catch (IllegalArgumentException expired) { throw new Rejected("bedrock_session_expired", "原 Bedrock 临时凭据已过期或不可用，请在原连接更换整组凭据后重新审阅任务。"); }
+            catch (IllegalArgumentException expired) { throw new Rejected("bedrock_session_expired", "原 Bedrock 临时凭据已过期或不可用，请在原连接更换整组凭据后重新审阅任务。", expired); }
         }
         if (config.capabilityBinding == null) return null;
         Source current = source;
@@ -27,7 +27,7 @@ public final class ModelRequestPolicy {
         try { view = current.resolve(config); }
         catch (Rejected known) { throw known; }
         catch (InterruptedException stopped) { throw stopped; }
-        catch (Exception unavailable) { throw new Rejected("catalog_state_unavailable", "当前精确模型能力状态无法读取，请回模型页核对；没有改用旧能力。"); }
+        catch (Exception unavailable) { throw new Rejected("catalog_state_unavailable", "当前精确模型能力状态无法读取，请回模型页核对；没有改用旧能力。", unavailable); }
         if (config.usesBedrock() && current != source) throw new Rejected("catalog_host_changed", "原模型宿主已变化，请回模型页核对当前连接。");
         if (view == null && !config.catalogEnforced) return null; // Native host still checked this exact enabled connection.
         if (view == null || !view.key().binding().equals(config.capabilityBinding) || !view.key().modelId().equals(config.model))
@@ -55,7 +55,7 @@ public final class ModelRequestPolicy {
 
     private static JSONObject projectCompatibility(ModelConfig config,JSONArray messages,JSONArray tools,JSONObject wire)throws Exception {
         try{return dev.pocketengine.runtime.providers.ProviderCompatibility.project(config,messages,tools,wire);}
-        catch(dev.pocketengine.runtime.providers.ProviderCompatibility.Rejected rejected){throw new Rejected(rejected.code,rejected.getMessage());}
+        catch(dev.pocketengine.runtime.providers.ProviderCompatibility.Rejected rejected){throw new Rejected(rejected.code,rejected.getMessage(),rejected);}
     }
 
     /** Native accounting-only diagnostics ask about unknown capabilities without changing facts.
@@ -120,13 +120,13 @@ public final class ModelRequestPolicy {
         ReasoningOptions options = config.reasoning;
         if (options.mode() == ReasoningOptions.Mode.DEFAULT) return;
         requireTrue(facts.reasoning(), "reasoning_capability", "该模型推理能力未知或不支持，不能发送额外推理设置。");
-        String expected = switch (options.mode()) {
-            case OPENAI_EFFORT -> "openai";
-            case ANTHROPIC_ADAPTIVE, ANTHROPIC_BUDGET -> "anthropic";
-            case GEMINI_LEVEL, GEMINI_BUDGET -> "gemini";
-            default -> "";
+        boolean matchingProtocol = switch (options.mode()) {
+            case OPENAI_EFFORT -> config.provider.equals("openai_chat") || config.provider.equals("openai_responses");
+            case ANTHROPIC_ADAPTIVE, ANTHROPIC_BUDGET -> config.provider.equals("anthropic") || config.usesBedrock();
+            case GEMINI_LEVEL, GEMINI_BUDGET -> config.provider.equals("gemini");
+            default -> false;
         };
-        if (!config.provider.startsWith(expected)) throw new Rejected("reasoning_protocol_mismatch", "推理设置与所选原生协议不一致。");
+        if (!matchingProtocol) throw new Rejected("reasoning_protocol_mismatch", "推理设置与所选原生协议不一致。");
         if (!options.level().isEmpty() && (!facts.reasoningLevels().known || !facts.reasoningLevels().value.contains(options.level())))
             throw new Rejected("reasoning_level_unknown", "该精确模型没有声明此推理级别，请从已知级别中选择或保留服务默认。");
         if (options.mode() == ReasoningOptions.Mode.ANTHROPIC_BUDGET && options.budgetTokens() >= config.maxOutputTokens
@@ -151,12 +151,19 @@ public final class ModelRequestPolicy {
     private static boolean hasToolHistory(JSONArray messages) {
         for (int i = 0; i < messages.length(); i++) {
             JSONObject row = messages.optJSONObject(i);
-            if (row != null && ("tool".equals(row.optString("role")) || row.has("tool_calls"))) return true;
+            if (row == null) continue;
+            if ("tool".equals(row.optString("role"))) return true;
+            if (row.has("tool_calls") && !row.isNull("tool_calls")) {
+                JSONArray calls = row.optJSONArray("tool_calls");
+                // Malformed non-null values must not bypass the tool capability gate.
+                if (calls == null || calls.length() > 0) return true;
+            }
         }
         return false;
     }
     public static final class Rejected extends Exception {
         public final String code;
         public Rejected(String code, String message) { super(message); this.code = code; }
+        public Rejected(String code, String message, Throwable cause) { super(message, cause); this.code = code; }
     }
 }
