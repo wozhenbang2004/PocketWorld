@@ -144,6 +144,19 @@ public class AccountConnectionsStateTest {
         assertNull(AccountConnectionsPageKt.accountConnectionsAuthorization(state, NOW));
     }
 
+    @Test public void returningLoginCanOpenBrowserWhileTheOriginalGrantRemainsConnected() throws Exception {
+        JSONObject state = authorizing();
+        firstRow(state).put("status", "connected");
+        JSONObject result = new JSONObject(state.getJSONObject("login").toString());
+        assertEquals("session-new", AccountConnectionsPageKt.accountConnectionsAuthorization(state, NOW));
+        assertEquals("session-new", AccountConnectionsPageKt.accountConnectionsBrowserRequest(
+            request("beginLogin", 7), envelope("beginLogin", 7, result), state, NOW));
+        firstRow(state).put("status", "cooldown");
+        assertEquals("session-new", AccountConnectionsPageKt.accountConnectionsAuthorization(state, NOW));
+        firstRow(state).put("status", "reauthorization_required");
+        assertNull(AccountConnectionsPageKt.accountConnectionsAuthorization(state, NOW));
+    }
+
     @Test public void cancelledAuthorizationReceiptCannotReplaceNewSessionOrCompletion() throws Exception {
         JSONObject state = authorizing();
         state.getJSONObject("login").put("status", "cancelled");

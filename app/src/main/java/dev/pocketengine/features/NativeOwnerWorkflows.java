@@ -538,7 +538,9 @@ public final class NativeOwnerWorkflows {
     public String authorizationUrl(String sessionId)throws Exception{
         JSONObject snapshot=accountSnapshot(),login=snapshot.optJSONObject("login");
         if(login==null||!sessionId.equals(login.optString("sessionId"))||!"pending".equals(login.optString("status"))||login.optLong("expiresAt")<=System.currentTimeMillis())throw new GatewayFailure("STALE_LOGIN_SESSION");
-        JSONObject row=findAccount(snapshot,login.optString("accountId"));if(row==null||!row.optBoolean("enabled")||!"authorizing".equals(row.optString("status")))throw new GatewayFailure("STALE_LOGIN_SESSION");
+        JSONObject row=findAccount(snapshot,login.optString("accountId"));
+        // Returning sign-in preserves the connected/cooldown grant until a verified replacement is committed.
+        if(row==null||!row.optBoolean("enabled")||!Set.of("authorizing","connected","cooldown").contains(row.optString("status")))throw new GatewayFailure("STALE_LOGIN_SESSION");
         String value;synchronized(this){value=authorizationUrls.get(sessionId);}if(value==null)throw new GatewayFailure("LOGIN_URL_UNAVAILABLE");
         URI uri=new URI(value);if(!"https".equals(uri.getScheme())||!"auth.openai.com".equals(uri.getHost())||!"/api/accounts/authorize".equals(uri.getPath())||uri.getUserInfo()!=null||uri.getFragment()!=null)throw new GatewayFailure("INVALID_AUTHORIZATION_URL");return value;
     }

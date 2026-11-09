@@ -61,6 +61,27 @@ public final class NativeAccountPreferenceCaptureTest {
         public void close(){account.close();host.close();tasks.close();}
     }
 
+    @Test public void nativeBrowserHandoffAllowsReturningSessionWithoutDisablingOriginalAccount()throws Exception{
+        try(Rig rig=new Rig()){
+            String id=rig.account.connect();
+            JSONObject original=rig.account.book.row(id);
+            JSONObject result;
+            try(GatewayCall call=new GatewayCall(5000)){
+                result=rig.flows.account("beginLogin",new JSONObject()
+                    .put("accountId",id).put("expectedVersion",original.getLong("version")).put("label","Returning"),call);
+            }
+            String session=result.getString("sessionId");
+            assertFalse(result.has("authorizationUrl"));
+            String url=rig.flows.authorizationUrl(session);
+            assertTrue(url.startsWith("https://auth.openai.com/api/accounts/authorize?"));
+            assertEquals("connected",rig.account.book.row(id).getString("status"));
+            assertEquals(original.getString("slot"),rig.account.book.row(id).getString("slot"));
+            rig.account.gateway.cancelLogin(session);
+            assertThrows(GatewayFailure.class,()->rig.flows.authorizationUrl(session));
+            assertEquals("connected",rig.account.book.row(id).getString("status"));
+        }
+    }
+
     @Test public void reviewedConversationCaptureLeavesGlobalApiAndBookSelectionUntouched()throws Exception{
         try(Rig rig=new Rig()){
             String original=rig.account.connect();rig.account.fake.subject="fixture-second";String other=rig.account.connect();
