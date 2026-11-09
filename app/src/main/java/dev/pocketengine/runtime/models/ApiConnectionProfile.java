@@ -20,7 +20,9 @@ public final class ApiConnectionProfile {
         this.name=checkedName(name);this.revision=revision;this.enabled=enabled;this.secretSlot=Objects.requireNonNull(secretSlot);
         this.configuration=Objects.requireNonNull(configuration);
         this.credentialExpiresAtEpochMillis=credentialExpiresAtEpochMillis;
-        if(configuration.capabilityBinding!=null)new ModelCatalog.ModelKey(configuration.capabilityBinding,configuration.model);
+        // A saved source can be ready to read its catalog before a model has been chosen.
+        if(configuration.capabilityBinding!=null&&!configuration.model.isEmpty())new ModelCatalog.ModelKey(configuration.capabilityBinding,configuration.model);
+        if(configuration.usesBedrock()&&configuration.model.isEmpty())throw new IllegalArgumentException("Bedrock 连接仍需明确填写模型 ID");
         if(configuration.baseUrl.length()>4096)throw new IllegalArgumentException("API接口地址过长");
         if(revision<1||configuration.usesAccount()||!configuration.apiKey.isEmpty()||configuration.awsSession!=null||configuration.capabilityBinding==null
                 ||!secretSlot.isEmpty()&&!secretSlot.matches("model\\.api\\.[a-f0-9]{64}\\.[01]"))throw new IllegalArgumentException("API连接原生身份无效");
@@ -33,7 +35,7 @@ public final class ApiConnectionProfile {
         .put("revision",revision).put("enabled",enabled).put("secretSlot",secretSlot).put("credentialExpiresAtEpochMillis",credentialExpiresAtEpochMillis).put("config",configuration.publicJson());}
     public JSONObject publicJson()throws Exception{return new JSONObject().put("id",id()).put("name",name).put("revision",revision)
         .put("enabled",enabled).put("hasApiKey",!secretSlot.isEmpty()).put("provider",configuration.provider).put("baseUrl",configuration.baseUrl)
-        .put("model",configuration.model).put("catalogEnabled",configuration.catalogEnforced).put("binding",configuration.capabilityBinding.toJson())
+        .put("model",configuration.model).put("selectionReady",enabled&&!configuration.model.isEmpty()&&(!configuration.usesBedrock()||!secretSlot.isEmpty()&&System.currentTimeMillis()<credentialExpiresAtEpochMillis)).put("catalogEnabled",configuration.catalogEnforced).put("binding",configuration.capabilityBinding.toJson())
         .put("configuration",publicConfiguration()).put("credentialKind",configuration.usesBedrock()?"aws_sts_session":"api_key")
         .put("hasAwsSession",configuration.usesBedrock()&&!secretSlot.isEmpty()).put("bedrockRegion",configuration.bedrockRegion)
         .put("credentialExpiresAt",expiry()).put("credentialStatus",credentialStatus()).put("hasApiKey",!configuration.usesBedrock()&&!secretSlot.isEmpty());}

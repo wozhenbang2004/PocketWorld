@@ -98,6 +98,7 @@ function receive(input: NativeMessage | string) {
       capabilities: { commands: documentBound ? advertisedCommands : [] },
       host: { ...current.host, ...next.host, connected: true, ready: documentBound },
     };
+    document.documentElement.dataset.pocketNativeInsets = String(current.host?.insetsHandledByNative === true);
     publish();
     return;
   }
@@ -204,6 +205,7 @@ window.PocketWeb = {
     acceptHostDocumentToken(value.documentToken);
     const { documentToken: _documentToken, ...presentation } = value;
     current = { ...current, host: { ...current.host, ...presentation } };
+    document.documentElement.dataset.pocketNativeInsets = String(current.host?.insetsHandledByNative === true);
     if (typeof value.keyboardVisible === 'boolean') {
       document.documentElement.dataset.pocketKeyboard = String(value.keyboardVisible);
     }

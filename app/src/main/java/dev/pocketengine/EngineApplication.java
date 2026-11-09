@@ -45,6 +45,85 @@ public final class EngineApplication extends Application implements dev.pocketen
     private volatile boolean bootstrapCleanupConfirmed=true,hasReachedBusinessReady,adbBootstrapProcess;
     public SettingsStore settings;
     public dev.pocketengine.runtime.models.ModelConnectionService modelConnections;
+    private dev.pocketengine.runtime.models.ConversationModelPreferences conversationModelPreferences;
+    public synchronized dev.pocketengine.runtime.models.ConversationModelPreferences conversationModels() {
+        if(conversationModelPreferences==null)conversationModelPreferences=new dev.pocketengine.runtime.models.ConversationModelPreferences(new java.io.File(getFilesDir(),"conversation-model-preferences.json").toPath());
+        return conversationModelPreferences;
+    }
+    public int conversationModelStepLimit(String scope)throws Exception {
+        JSONObject target=conversationModels().snapshot(scope).optJSONObject("target");
+        return (target==null?settings.get():captureConversationTarget(target,false)).maxSteps;
+    }
+    /** Native admission reads a conversation reference once; an active task retains its original config. */
+    public ModelConfig captureConversationModel(String conversationId,String clientMessageId)throws Exception {
+        settings.modelSelection().requireAvailable();
+        JSONObject target=conversationModels().targetForAdmission(conversationId,clientMessageId);
+        if(target==null)return settings.get();
+        ModelConfig selected=captureConversationTarget(target,true);
+        var summary=settings.modelPurposeTarget("SUMMARY");
+        ModelConfig summaryModel=summary==null?selected.withRoutePlan(dev.pocketengine.runtime.models.ModelRoutePlan.exact(selected,"SUMMARY","APP_OWNER")):
+                settings.captureModelTarget(summary,"SUMMARY","APP_OWNER",selected);
+        return selected.withPurposePlans(java.util.Map.of("SUMMARY",summaryModel.routePlan,"DEFAULT",dev.pocketengine.runtime.models.ModelRoutePlan.exact(selected.withRoutePlan(null),"DEFAULT","APP_OWNER")));
+    }
+    private ModelConfig captureConversationTarget(JSONObject value,boolean prepareAccount)throws Exception {
+        return captureConversationTarget(value,prepareAccount,null);
+    }
+    private ModelConfig captureConversationTarget(JSONObject value,boolean prepareAccount,dev.pocketengine.features.proxy.accounts.GatewayCall reviewCall)throws Exception {
+        JSONObject target=dev.pocketengine.runtime.models.ConversationModelPreferences.checkedTarget(value);
+        String kind=target.getString("kind");
+        if(kind.equals("group"))return modelConnections.captureConversationGroup(target.getString("groupId"),target.getLong("groupRevision"));
+        var reasoning=dev.pocketengine.runtime.models.ReasoningOptions.fromJson(target.getJSONObject("reasoning"));
+        int output=target.getInt("outputTokens"),images=target.getInt("imageTokenReserve");
+        if(kind.equals("api")) {
+            if(modelConnections==null)throw new IllegalStateException("模型来源尚未准备");
+            return modelConnections.captureBoundConnectionModel(
+                    dev.pocketengine.runtime.models.ModelBinding.fromJson(target.getJSONObject("binding")),
+                    target.getString("modelId"),output,reasoning,images);
+        }
+        var reference=ModelConfig.AccountModelRef.fromJson(target.getJSONObject("nativeRef"));
+        if(prepareAccount) {
+            if(reviewCall!=null)return nativeOwnerWorkflows.captureSavedModel(reference,reasoning,images,output,reviewCall);
+            try(var call=new dev.pocketengine.features.proxy.accounts.GatewayCall(60_000)) {
+                return nativeOwnerWorkflows.captureSavedModel(reference,reasoning,images,output,call);
+            }
+        }
+        ModelConfig captured=settings.captureAccountModel(reference,reasoning,images,output);
+        try {var facts=nativeOwnerWorkflows.modelFactsForPreference(reference);if(facts!=null)captured=captured.withAccountImageInput(facts.facts.imageInput().known&&Boolean.TRUE.equals(facts.facts.imageInput().value));}
+        catch(dev.pocketengine.features.proxy.accounts.GatewayFailure stale) { /* Inference verifies the original grant and refreshed facts under its own control. */ }
+        return captured;
+    }
+    public JSONObject conversationTarget(ModelConfig config)throws Exception {
+        if(config.routePlan!=null&&config.routePlan.groupRevision>0)return json("kind","group","groupId",config.routePlan.requestedAlias,"groupRevision",config.routePlan.groupRevision);
+        JSONObject target=json("kind",config.usesAccount()?"account":"api","outputTokens",config.maxOutputTokens,"reasoning",config.reasoning.toJson(),"imageTokenReserve",config.imageTokenReserve);
+        if(config.usesAccount())return target.put("nativeRef",config.accountModel.toJson());
+        if(config.capabilityBinding==null)throw new IllegalStateException("请先将当前模型保存为服务连接");
+        String id=config.capabilityBinding.connectionId();JSONArray rows=settings.apiConnectionsSnapshot().getJSONArray("connections");
+        for(int i=0;i<rows.length();i++)if(id.equals(rows.getJSONObject(i).getString("id")))return target.put("connectionId",id).put("connectionRevision",rows.getJSONObject(i).getLong("revision")).put("binding",config.capabilityBinding.toJson()).put("modelId",config.model);
+        throw new IllegalStateException("原模型来源已不存在，请重新选择");
+    }
+    public JSONObject saveConversationModel(String scope,long revision,JSONObject target,java.util.function.BooleanSupplier currentOwner)throws Exception {
+        settings.modelSelection().requireAvailable();
+        JSONObject checked=target==null?null:conversationTarget(captureConversationTarget(target,true));
+        if(currentOwner==null||!currentOwner.getAsBoolean())throw new SecurityException("原对话模型窗口已关闭，未保存迟到结果");
+        return conversationModels().save(scope,revision,checked);
+    }
+    /** Explicit parameter review only. Periodic state publication never performs account/network discovery. */
+    public JSONObject reviewConversationModel(String scope,dev.pocketengine.features.proxy.accounts.GatewayCall call)throws Exception {
+        call.check();
+        JSONObject preference=conversationModels().snapshot(scope),target=preference.optJSONObject("target");
+        ModelConfig config=target==null?settings.get():captureConversationTarget(target,true,call);
+        if(config.usesAccount()&&target==null) {
+            config=nativeOwnerWorkflows.captureSavedModel(config.accountModel,config.reasoning,config.imageTokenReserve,config.maxOutputTokens,call);
+        }
+        call.check();
+        JSONObject nativeTarget=conversationTarget(config),facts=new JSONObject();
+        if(config.routePlan==null||config.routePlan.groupRevision==0) {
+            if(config.usesAccount()) {var account=nativeOwnerWorkflows.modelFactsForPreference(config.accountModel);if(account!=null)facts=account.facts.toJson();}
+            else facts=modelConnections.reviewConnectionModel(nativeTarget.getString("connectionId"),nativeTarget.getLong("connectionRevision"),config.model).getJSONObject("model").getJSONObject("facts");
+        }
+        return preference.put("targetForReview",nativeTarget).put("nativeSelection",config.publicJson()).put("facts",facts)
+                .put("restriction",nativeTarget.getString("kind").equals("group")?"模型组按各候选的原生参数执行，请在 AI 中心管理候选。":"");
+    }
     public TaskStore tasks;
     /** Native owner-only budget settings, outside featureRequest/model tools. */
     private JSONArray tokenBudgetRoutesForOwner()throws Exception{
@@ -880,6 +959,10 @@ public final class EngineApplication extends Application implements dev.pocketen
     private void initializeFeatures(){
         groupOwnerWorkflows=new dev.pocketengine.features.NativeGroupOwnerWorkflows(this,dev.pocketengine.ui.ComposeActivity.class);
         features=new FeatureHost(this::publish,tasks,()->activeId()!=null,resources);features.setTaskNotices(new dev.pocketengine.features.assistant.notifications.ImmediateTaskNotifications(this));FeatureContext context=new FeatureContext(this,settings,new SecretVault(this),this::publish);
+        context.installConversationModels(new FeatureContext.ConversationModels(){
+            public ModelConfig capture(String conversationId,String clientMessageId)throws Exception{return captureConversationModel(conversationId,clientMessageId);}
+            public void allocated(String clientMessageId,String conversationId)throws Exception{conversationModels().bindAllocatedConversation(clientMessageId,conversationId);}
+        });
         context.installTeamProfileModels(new FeatureContext.TeamProfileModels(){
             public dev.pocketengine.features.teams.TeamParentPlan plan(dev.pocketengine.features.teams.TeamParentPlan actual,RunControl original)throws Exception {
                 JSONObject parent=actual.origin().view(),task=tasks.get(parent.getString("parentTaskId"),false);if(task.optJSONObject("workProfileRef")==null)return actual;
@@ -1320,7 +1403,10 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(minutes!=0&&minutes!=30&&minutes!=120)throw new SecurityException("本次手机任务时限无效");
         int tools=dev.pocketengine.store.TaskExecutionScope.exactInt(scopeChoices,"toolLimit",1,400);
         int models=dev.pocketengine.store.TaskExecutionScope.exactInt(scopeChoices,"modelCallLimit",1,512);
-        var selected=settings.modelSelection().readStable(()->settings.get());ModelConfig config=selected.value();
+        var status=settings.modelSelection().status();if(status.pending())throw new IllegalStateException("请等待原模型设置回执");
+        ModelConfig config=captureConversationModel(conversationId,"");
+        if(!status.equals(settings.modelSelection().status()))throw new IllegalStateException("模型设置已变化，请重新核对手机任务");
+        var selected=new dev.pocketengine.runtime.models.ModelSelectionCoordinator.Projection<ModelConfig>(status.revision(),config);
         SettingsStore.validate(config);dev.pocketengine.runtime.ModelGateway.validate(config);
         JSONObject source=assistant.preparePhoneHandoffSource(conversationId);
         JSONObject facts=json("modelName",config.model,"provider",config.provider,"toolLimit",tools,"modelCallLimit",models,"scopeMinutes",minutes,"modelSelectionRevision",selected.revision());

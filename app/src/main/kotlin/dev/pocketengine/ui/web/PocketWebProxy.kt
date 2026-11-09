@@ -11,7 +11,7 @@ internal class PocketWebProxy(private val controller: PocketWorldController) {
     @Volatile private var generation = 0L
     private var snapshot = JSONObject()
     private val reviews = mutableMapOf<String, Review>()
-    companion object { val COMMANDS = setOf("proxy.snapshot", "proxy.status", "proxy.reviewStart", "proxy.confirmStart", "proxy.stop", "proxy.closeReview") }
+    companion object { val COMMANDS = setOf("proxy.snapshot", "proxy.status", "proxy.reviewStart", "proxy.confirmStart", "proxy.stop", "proxy.closeReview", "proxy.generateToken", "proxy.copyToken") }
     fun clear() { generation++; snapshot = JSONObject(); reviews.clear() }
     private fun fields(args: JSONObject, vararg names: String) { require(args.keys().asSequence().all { it in names }) { "本机服务操作包含不适用的字段" } }
     private fun text(args: JSONObject, key: String, max: Int = 256): String {
@@ -33,19 +33,39 @@ internal class PocketWebProxy(private val controller: PocketWorldController) {
         }
         when (action) {
             "proxy.snapshot", "proxy.status" -> { fields(args); native("snapshot") }
+            "proxy.generateToken" -> {
+                fields(args, "tokenRevision")
+                check(!snapshot.optBoolean("running")) { "请先停止服务，再更换本机访问令牌" }
+                val revision = text(args, "tokenRevision")
+                check(revision == snapshot.optString("tokenRevision")) { "本机访问令牌已变化，请刷新后重试" }
+                reviews.clear()
+                native("generateToken", JSONObject().put("tokenRevision", revision))
+            }
+            "proxy.copyToken" -> {
+                fields(args, "tokenRevision", "sessionId")
+                val revision = text(args, "tokenRevision")
+                check(revision == snapshot.optString("tokenRevision") && snapshot.optBoolean("hasToken")) { "请先刷新或生成本机访问令牌" }
+                val session = if (snapshot.optBoolean("running")) text(args, "sessionId") else ""
+                native("copyToken", JSONObject().put("tokenRevision", revision), session = session)
+            }
             "proxy.reviewStart" -> {
                 fields(args, "port", "token")
-                check(controller.state.moduleBusy.none { it in setOf("proxy.start", "proxy.stop") }) { "原服务操作还在等待回执，请先核对" }
+                check(controller.state.moduleBusy.none { it in setOf("proxy.start", "proxy.stop", "proxy.generateToken") }) { "原服务操作还在等待回执，请先核对" }
                 check(snapshot.has("selectionRevision") && !snapshot.optBoolean("running")) { "请先刷新本机服务和当前模型选择" }
-                check(snapshot.optBoolean("externalRelayAllowed")) { "当前账号模型仅供本应用使用，请明确选择自己的 API-key 连接" }
+                check(snapshot.optBoolean("externalRelayAllowed")) { "请先选择支持本机反代的 API-key 模型或已授权模型组" }
                 val port = args.opt("port")
-                require(port is Number && java.math.BigDecimal(port.toString()).intValueExact() in 0..65535) { "端口须为 0（自动）或 1–65535" }
-                require(text(args, "token").matches(Regex("[A-Za-z0-9_-]{24,256}"))) { "访问令牌须为 24–256 位字母、数字、下划线或短横线" }
+                val parsedPort = if (port is Number) runCatching { java.math.BigDecimal(port.toString()).intValueExact() }.getOrNull() else null
+                require(parsedPort == 0 || parsedPort != null && parsedPort in 1024..65535) { "端口须为 0（自动）或 1024–65535" }
+                val suppliedToken = if (args.has("token")) args.opt("token") else ""
+                require(suppliedToken is String && (suppliedToken.isEmpty() || suppliedToken.matches(Regex("[A-Za-z0-9_-]{24,256}")))) { "访问令牌须为 24–256 位字母、数字、下划线或短横线" }
+                check(suppliedToken.isNotEmpty() || snapshot.optBoolean("hasToken")) { "请先生成或填写本机访问令牌" }
+                val reviewed = JSONObject(args.toString()).put("tokenRevision", snapshot.getString("tokenRevision"))
                 reviews.clear()
                 val handle = UUID.randomUUID().toString()
-                reviews[handle] = Review(JSONObject(args.toString()).toString(), snapshot.getLong("selectionRevision"), SystemClock.elapsedRealtime() + 120_000, generation)
+                reviews[handle] = Review(reviewed.toString(), snapshot.getLong("selectionRevision"), SystemClock.elapsedRealtime() + 120_000, generation)
                 done(JSONObject().put("reviewHandle", handle).put("port", port).put("model", snapshot.optString("model"))
                     .put("protocol", snapshot.optString("protocol")).put("endpoints", snapshot.optJSONArray("endpoints"))
+                    .put("clientConfigurations", snapshot.optJSONArray("clientConfigurations"))
                     .put("scope", "loopback_only").put("phoneExecution", false).put("tokenProvided", true), null)
             }
             "proxy.confirmStart" -> {

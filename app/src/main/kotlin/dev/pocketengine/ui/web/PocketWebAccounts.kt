@@ -142,6 +142,15 @@ internal class PocketWebAccounts(
 
     /** Worker, inside Controller.runModelSelectionWrite(action.selectionRevision, ...). */
     fun selectModel(action: Selection): JSONObject {
+        val reference = claimModel(action)
+        return originalCall({ reviews.requireCurrent(action.entry, PocketWebAccountReviews.Kind.MODEL) }) { call -> native.selectModel(reference, call) }
+    }
+    /** Same one-use owner review, captured for the conversation without changing global selection. */
+    fun captureModel(action: Selection): dev.pocketengine.core.ModelConfig {
+        val reference = claimModel(action)
+        return originalCall({ reviews.requireCurrent(action.entry, PocketWebAccountReviews.Kind.MODEL) }) { call -> native.captureModel(reference, call) }
+    }
+    private fun claimModel(action: Selection): JSONObject {
         requireMutation()
         val reviewed = reviews.claim(action.entry, PocketWebAccountReviews.Kind.MODEL)
         val reference = reviewed.getJSONObject("reference")
@@ -149,7 +158,7 @@ internal class PocketWebAccounts(
         check(accountConnectionsCanUse(row, wallMillis()) && accountConnectionsVersion(row) == reference.getLong("accountVersion")) { "原账号版本或可用状态已变化" }
         val options = JSONObject(action.options)
         options.keys().forEach { reference.put(it, options.get(it)) }
-        return originalCall({ reviews.requireCurrent(action.entry, PocketWebAccountReviews.Kind.MODEL) }) { call -> native.selectModel(reference, call) }
+        return reference
     }
 
     /** Worker only. Logout remains a separate explicit review with the exact original version. */

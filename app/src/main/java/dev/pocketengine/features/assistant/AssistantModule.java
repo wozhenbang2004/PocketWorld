@@ -460,7 +460,7 @@ public final class AssistantModule implements EngineModule {
             if((starting||resuming)&&pendingCancellations.values().stream().anyMatch(value->requested.equals(value.conversation())))
                 throw new IllegalStateException("原对话停止回执仍待核对，未创建另一个执行");
             JSONObject expectedTurn=resuming?retained.binding():existing==null?null:existing.original().binding;
-            final ModelConfig config=starting?context.model():resuming?retained.config():existing.original().model;
+            final ModelConfig config=starting?context.conversationModel(requested,client):resuming?retained.config():existing.original().model;
             if(config==null)throw new IllegalStateException("原任务模型绑定不可读取，请核对原任务");
             final String safe=redact(text,config);
             if(!starting&&(expectedTurn==null||requested.isEmpty()||!requested.equals(expectedTurn.getString("conversationId"))))
@@ -470,6 +470,7 @@ public final class AssistantModule implements EngineModule {
             final RunControl live=starting?new RunControl():resuming?retained.control():existing.original().control;
             live.check();
             final String cid=starting&&requested.isEmpty()?UUID.randomUUID().toString():requested;
+            if(starting)context.conversationAllocated(client,cid);
             final ConversationTurnSlots.Lease<LiveTurn> lease=starting||resuming?reserveLive(cid,config,live):existing;
             final JSONObject expected=new JSONObject();
             final JSONObject saved;

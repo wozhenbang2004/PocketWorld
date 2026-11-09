@@ -927,6 +927,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         state=state.copy(chatReceipts=retainedReceipts,chatSubmitting=if(ownsPending)false else state.chatSubmitting)
         if(receipt.optString("status") in setOf("accepted","queued","consumed","withdrawn")) {
             locallyUnsent.remove(client)
+            val acceptedConversation=receipt.getString("conversationId")
+            io.execute { runCatching { app.conversationModels().confirmSubmission(client,acceptedConversation); app.settings.modelSelection().changed() }.onFailure { failure ->
+                main.post { if(!closed)state=state.copy(notice="原输入已接收，对话模型偏好回执仍待核对："+message(failure)) }
+            } }
             try {
                 val model=ownerComposer;val oldKey=model?.activeKey();val ack=model?.acknowledge(client,receipt.getString("conversationId"))
                 if(ack?.matched==true){publishComposer(oldKey==ack.previousKey);if(ack.migrated&&oldKey==ack.previousKey){chatViewEpoch++;voiceInputViewChanged()};scheduleComposerSave()}
@@ -935,6 +939,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             if(state.conversationId==receipt.optString("conversationId"))feature("assistant","get",JSONObject().put("conversationId",state.conversationId))
         } else if(receipt.optString("status")=="rejected") {
             locallyUnsent.remove(client)
+            val rejectedConversation=receipt.getString("conversationId")
+            io.execute { runCatching { app.conversationModels().rejectSubmission(client,rejectedConversation) }.onFailure { failure ->
+                main.post { if(!closed)state=state.copy(notice="原输入确定未接收，模型偏好回执仍待清理："+message(failure)) }
+            } }
             try {
                 if(ownerComposer?.rejectNotAdmitted(client,receipt.getString("conversationId"))==true){publishComposer();scheduleComposerSave()}
                 refreshCurrentConversationTurn()
@@ -1181,6 +1189,34 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun nativeModelConnections(): dev.pocketengine.runtime.models.ModelConnectionService? = app.modelConnections
     internal fun nativeAccountWorkflows(): dev.pocketengine.features.NativeOwnerWorkflows = app.nativeOwnerWorkflows
     internal fun nativeModelSelection(): dev.pocketengine.runtime.models.ModelSelectionCoordinator = app.settings.modelSelection()
+    internal fun conversationModelScope(): String {
+        check(webPrivateOwnerVisible()) { "请回到原私人对话" }
+        val draft = composerDraft ?: error("原对话草稿尚未准备")
+        return if (draft.conversationId.isNotBlank()) dev.pocketengine.runtime.models.ConversationModelPreferences.conversation(draft.conversationId)
+        else dev.pocketengine.runtime.models.ConversationModelPreferences.draft(draft.key)
+    }
+    internal fun conversationModelPreference(): JSONObject {
+        val preference = app.conversationModels().snapshot(conversationModelScope())
+        val target = preference.optJSONObject("target")
+        val name = when (target?.optString("kind")) {
+            "api" -> target.optString("modelId")
+            "account" -> target.optJSONObject("nativeRef")?.optString("modelId").orEmpty()
+            "group" -> {
+                val groups = app.settings.modelGroupsSnapshot().getJSONArray("groups")
+                (0 until groups.length()).map { groups.getJSONObject(it) }.firstOrNull { it.optString("groupId") == target.optString("groupId") }?.optString("name") ?: "原模型组"
+            }
+            else -> state.modelName
+        }
+        return preference.put("modelName", name)
+    }
+    internal fun reviewConversationModel(call: dev.pocketengine.features.proxy.accounts.GatewayCall): JSONObject = app.reviewConversationModel(conversationModelScope(), call)
+    internal fun conversationTarget(config: dev.pocketengine.core.ModelConfig): JSONObject = app.conversationTarget(config)
+    internal fun saveConversationModel(scope: String, revision: Long, target: JSONObject?): JSONObject {
+        check(scope == conversationModelScope()) { "原对话已切换，未更改其他对话" }
+        val owner = webWindowTicket()
+        val preference = app.saveConversationModel(scope, revision, target) { webPrivateOwnerVisible() && owner == webWindowTicket() && scope == conversationModelScope() }
+        return JSONObject().put("status", "saved").put("scope", "conversation").put("preference", preference)
+    }
     fun runModelConnectionWork(work: Runnable) { check(!closed); io.execute(work) }
     fun modelConnectionChanged() { if (!closed) try { io.execute { if (!modelSelectionPending()) app.sendState() } } catch (_: java.util.concurrent.RejectedExecutionException) { } }
     internal fun modelSelectionPending(): Boolean = app.settings.modelSelection().status().pending()
@@ -2391,7 +2427,21 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         getTask(nativeInput.getString("taskId"))
                     } }
                 }
-            } else feature("assistant","send",input)
+            } else {
+                val scope=if(originalPending.conversationId.isNotBlank())dev.pocketengine.runtime.models.ConversationModelPreferences.conversation(originalPending.conversationId)
+                    else dev.pocketengine.runtime.models.ConversationModelPreferences.draft(originalPending.draftKey)
+                io.execute {
+                    val pinned=runCatching { app.conversationModels().pinSubmission(client,scope) }
+                    main.post {
+                        if(closed)return@post
+                        if(pinned.isFailure) {
+                            locallyUnsent[client]=LocalUnsent(input.toString(),originalPending.draftKey,originalPending.draftRevision)
+                            if(submittingChatClient==client)submittingChatClient=null
+                            state=state.copy(chatSubmitting=false,error="模型偏好尚未固定，本次未发送；原输入仍保留："+message(pinned.exceptionOrNull()!!))
+                        } else if(ownerComposer?.pending(client)?.fingerprint==originalPending.fingerprint) feature("assistant","send",input)
+                    }
+                }
+            }
         } }
     }
     /** Web stop is bound to the exact rendered conversation/run and rechecked by AssistantModule. */
@@ -2432,7 +2482,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     // Presentation-only native-state projection. Task admission and reviews use the fenced getters below.
     val displayNewTaskToolBudget: Int get() = state.modelMaxSteps
     val displayNewTaskModelBudget: Int get() = dev.pocketengine.store.TaskExecutionScope.defaultModelBudget(displayNewTaskToolBudget)
-    val newTaskToolBudget: Int get() = app.settings.get().maxSteps
+    val newTaskToolBudget: Int get() = app.conversationModelStepLimit(conversationModelScope())
     val newTaskModelBudget: Int get() = dev.pocketengine.store.TaskExecutionScope.defaultModelBudget(newTaskToolBudget)
     fun selectNewTaskDeadline(minutes: Int) { require(minutes in setOf(0,30,120)); newTaskScopeMinutes = minutes }
     private fun newTaskExecutionScope(): JSONObject = JSONObject().put("deadlineAt", if (newTaskScopeMinutes == 0) 0L else System.currentTimeMillis() + newTaskScopeMinutes * 60_000L).put("toolLimit", newTaskToolBudget).put("modelCallLimit", newTaskModelBudget)
@@ -3330,15 +3380,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         io.execute { try { app.settings.saveLocalObservation(capture, ocr); app.sendState() }
             catch (error: Exception) { main.post { if (!closed) state = state.copy(error = message(error)) } } }
     }
-    internal fun saveApiConnection(adding: Boolean, id: String, revision: Long, name: String, input: JSONObject, completed: (Result<JSONObject>) -> Unit) {
+    internal fun saveApiConnection(adding: Boolean, id: String, revision: Long, name: String, input: JSONObject, completed: (Result<JSONObject>) -> Unit, useForNewTasks: Boolean = adding) {
         check(!state.modelSaving && !state.modelTesting && !state.chatSubmitting && !state.phoneSubmitting) { "请先等待原提交和模型设置回执" }
         val service = app.modelConnections ?: error("本机模型连接尚未准备")
         val captured = JSONObject(input.toString())
         state = state.copy(modelSaving = true, error = null)
         try { runModelSelectionWrite({
-            if (adding) service.addAndSelectConnection(name, captured) else service.saveConnection(id, revision, name, captured)
+            if (adding && useForNewTasks) service.addAndSelectConnection(name, captured) else if (!useForNewTasks) service.saveSource(id, revision, name, captured) else service.saveConnection(id, revision, name, captured)
         }) { result ->
-            if (!closed) result.fold({ state = state.copy(modelSaving = false, modelSavedRevision = state.modelSavedRevision + 1, notice = if (adding) "新 API 连接已保存，后续任务将使用它" else "原 API 连接已保存") }, { state = state.copy(modelSaving = false, error = "保存结果待核对，请刷新原连接。" + message(it)) })
+            if (!closed) result.fold({ state = state.copy(modelSaving = false, modelSavedRevision = state.modelSavedRevision + 1, notice = if (adding && useForNewTasks) "新 API 连接已保存，后续任务将使用它" else "服务连接已保存") }, { state = state.copy(modelSaving = false, error = "保存结果待核对，请刷新原连接。" + message(it)) })
             completed(result)
         } } catch (error: Exception) { state = state.copy(modelSaving = false, error = message(error)); throw error }
     }

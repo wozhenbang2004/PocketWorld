@@ -241,8 +241,12 @@ public final class AccountGateway implements AutoCloseable {
     }
     /** Pin only facts from this gateway's completed same-token catalog; UI cannot supply capability booleans. */
     public synchronized JSONObject selectModelReviewed(String accountId,long version,String modelId)throws GatewayFailure {
+        captureModelReviewed(accountId,version,modelId);book.select(accountId);return snapshot();
+    }
+    /** Capture reviewed evidence for a conversation without changing the account book's default. */
+    public synchronized dev.pocketengine.runtime.models.AccountCatalogFacts captureModelReviewed(String accountId,long version,String modelId)throws GatewayFailure {
         open();JSONObject row=reviewedRow(accountId,version);usable(row);
-        modelCatalog.pinReviewed(accountId,version,modelId);book.select(accountId);return snapshot();
+        modelCatalog.pinReviewed(accountId,version,modelId);return book.modelFacts(accountId,version,modelId);
     }
     public synchronized boolean supportsImageInput(String accountId,long version,String modelId){
         try{open();JSONObject row=reviewedRow(accountId,version);usable(row);

@@ -2,6 +2,9 @@ package dev.pocketengine.ui.web
 
 import android.os.Bundle
 import android.view.ViewGroup
+import android.view.View
+import android.view.WindowInsets
+import android.graphics.Insets
 import dev.pocketengine.EngineApplication
 import dev.pocketengine.testutil.ReadyApplicationFixture
 import dev.pocketengine.ui.ComposeActivity
@@ -94,6 +97,46 @@ class UnifiedWorkspaceHostTest {
             assertEquals("CONSOLE_ERROR", JSONObject(diagnostics.single()).getString("code"))
         } finally {
             dev.pocketengine.core.RuntimeDiagnostics.install(null, null)
+            try { owner.close() } finally { ReadyApplicationFixture.closeHost(app) }
+        }
+    }
+
+    @Test fun nativeInsetsAreAppliedOnceWithoutConsumingSiblingPreviewInsets() {
+        val app = RuntimeEnvironment.getApplication() as EngineApplication
+        ReadyApplicationFixture.initializeHost(app)
+        val owner = Robolectric.buildActivity(ComposeActivity::class.java)
+        try {
+            val activity = owner.create().get()
+            val host = ComposeActivity::class.java.getDeclaredField("webHost").apply { isAccessible = true }.get(activity) as PocketWebHost
+            val web = PocketWebHost::class.java.getDeclaredField("web").apply { isAccessible = true }.get(host) as android.webkit.WebView
+            var siblingInsets: WindowInsets? = null
+            host.view.addView(View(activity).apply {
+                setOnApplyWindowInsetsListener { _, insets -> siblingInsets = insets; insets }
+            })
+            val incoming = WindowInsets.Builder()
+                .setInsets(WindowInsets.Type.systemBars(), Insets.of(4, 24, 6, 32))
+                .setInsets(WindowInsets.Type.displayCutout(), Insets.of(0, 48, 0, 0))
+                .setInsets(WindowInsets.Type.ime(), Insets.of(0, 0, 0, 300))
+                .setVisible(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout(), true)
+                .setVisible(WindowInsets.Type.ime(), true)
+                .build()
+            host.view.dispatchApplyWindowInsets(incoming)
+            assertEquals(4, host.view.paddingLeft); assertEquals(48, host.view.paddingTop)
+            assertEquals(6, host.view.paddingRight); assertEquals(300, host.view.paddingBottom)
+            assertEquals(incoming.getInsets(WindowInsets.Type.systemBars()), requireNotNull(siblingInsets).getInsets(WindowInsets.Type.systemBars()))
+            assertEquals(300, requireNotNull(siblingInsets).getInsets(WindowInsets.Type.ime()).bottom)
+            val delivered = web.dispatchApplyWindowInsets(incoming)
+            assertEquals(Insets.NONE, delivered.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout() or WindowInsets.Type.ime()))
+            assertNull(delivered.displayCutout)
+
+            // A document that has not loaded must retain the ownership contract in its initial state.
+            PocketWebHost::class.java.getDeclaredField("documentLoaded").apply { isAccessible = true }.setBoolean(host, false)
+            val initial = JSONObject().put("kind", "state").put("snapshot", JSONObject().put("host", JSONObject().put("surface", "workspace")))
+            PocketWebHost::class.java.getDeclaredMethod("send", JSONObject::class.java).apply { isAccessible = true }.invoke(host, initial)
+            val pending = PocketWebHost::class.java.getDeclaredField("pendingState").apply { isAccessible = true }.get(host) as JSONObject
+            assertTrue(pending.getJSONObject("snapshot").getJSONObject("host").getBoolean("insetsHandledByNative"))
+            assertEquals("workspace", pending.getJSONObject("snapshot").getJSONObject("host").getString("surface"))
+        } finally {
             try { owner.close() } finally { ReadyApplicationFixture.closeHost(app) }
         }
     }

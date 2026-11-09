@@ -1,0 +1,57 @@
+/* User requirement: surfaces and spacing carry grouping; no persistent outline frames. */
+:root,
+:root.dark {
+  --pw-edge: transparent;
+  --pw-edge-hover: transparent;
+  --pw-divider: transparent;
+  --pw-shadow-input: 0 4px 22px rgb(0 0 0 / 5%);
+}
+html[data-pocket-native-insets="true"] {
+  --pocket-inset-top: 0px;
+  --pocket-inset-bottom: 0px;
+}
+body *, body *::before, body *::after {
+  border-color: transparent !important;
+  --tw-ring-color: transparent;
+  --tw-inset-ring-color: transparent;
+}
+/* Preserve semantic separators through spacing rather than hairlines. */
+body :is(.pw-app-header, .pw-secondary-header, .pw-drawer, .pw-drawer-actions,
+  .pw-settings-group, .pw-domain-link, .pw-task-row, .pw-message-actions,
+  .pw-pending-input, .pw-composer-region, .pw-form-group) {
+  border: 0;
+}
+.pw-redesign .pw-composer-region .pw-composer-host .afa-composer > .afa-card,
+.pw-redesign .pw-composer-region .pw-composer-host .afa-composer > .afa-card:focus-within {
+  border: 0 !important;
+  background: var(--pw-surface);
+  box-shadow: var(--pw-shadow-input) !important;
+}
+.pw-redesign .pw-app-header, .pw-secondary .pw-secondary-header {
+  min-height: 56px;
+  padding-block: 6px;
+  background: var(--pw-canvas);
+  box-shadow: none;
+}
+.pw-conversation-model-controls { gap: 4px; }
+.pw-conversation-model-controls > button,
+.pw-conversation-model-controls .pw-conversation-reasoning-chip { min-height: 40px; }
+.pw-conversation-model-controls .pw-conversation-model-chip { gap: 6px; }
+.pw-conversation-model-controls .pw-conversation-reasoning-chip { gap: 6px; padding-inline: 10px; }
+.pw-redesign .pw-composer-region { padding-top: 8px; }
+html[data-pocket-native-insets="true"] .pw-app { padding-block: 0; }
+html[data-pocket-native-insets="true"] .pw-redesign .pw-composer-region { padding-bottom: 12px; }
+html[data-pocket-native-insets="true"] .pw-drawer { padding-bottom: 12px; }
+html[data-pocket-native-insets="true"] .pw-task-drawer { padding-top: 0; padding-bottom: 0; }
+html[data-pocket-native-insets="true"] .pw-task-footer { padding-bottom: 12px; }
+/* Keyboard focus remains visible as an illuminated surface, without a stroked ring. */
+body :is(button, a, input, select, [tabindex]):focus-visible {
+  outline: none !important;
+  box-shadow: 0 2px 16px color-mix(in srgb, var(--pw-ink) 28%, transparent) !important;
+}
+body :is(textarea, input):focus-visible { background-color: var(--pw-inset); }
+body textarea:focus-visible { outline: none !important; }
+body :is([role="progressbar"], .pw-spinner) { border-top-color: currentColor !important; }
+@media (prefers-reduced-motion: reduce) {
+  .pw-conversation-model-controls * { transition: none; }
+}

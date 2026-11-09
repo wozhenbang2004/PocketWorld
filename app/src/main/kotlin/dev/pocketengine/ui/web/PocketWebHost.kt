@@ -2,6 +2,7 @@ package dev.pocketengine.ui.web
 
 import android.annotation.SuppressLint
 import android.graphics.Color
+import android.graphics.Insets
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
@@ -91,13 +92,24 @@ internal class PocketWebHost private constructor(
     init {
         applyWorkspaceBackground()
         view.setOnApplyWindowInsetsListener { target, insets ->
-            val bars = insets.getInsets(WindowInsets.Type.systemBars())
+            val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
             val keyboard = insets.getInsets(WindowInsets.Type.ime())
             // An embedded browser toolbar shares the BrowserActivity root's inset owner.
             // Applying bars or IME padding again would consume its narrow content band.
             if (ownsSystemInsets) target.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, keyboard.bottom))
             if (keyboardVisible != insets.isVisible(WindowInsets.Type.ime())) sendConfiguration(insets)
             insets
+        }
+        // Only the bundled UI has already been laid out inside the native safe area.
+        // Keep the parent's original dispatch intact for sibling native previews.
+        web.setOnApplyWindowInsetsListener { target, insets ->
+            val bars = WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
+            val handled = WindowInsets.Builder(insets)
+                .setInsets(bars or WindowInsets.Type.ime(), Insets.NONE)
+                .setInsetsIgnoringVisibility(bars, Insets.NONE)
+                .setDisplayCutout(null)
+                .build()
+            target.onApplyWindowInsets(handled)
         }
     }
 
@@ -298,7 +310,15 @@ internal class PocketWebHost private constructor(
     private fun send(message: JSONObject) {
         if (closed) return
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post { send(message) }; return }
-        if (message.optString("kind") == "state") applyWorkspaceBackground()
+        if (message.optString("kind") == "state") {
+            applyWorkspaceBackground()
+            // This is part of every initial/replayed snapshot, not a one-shot JS event.
+            // Embedded browser surfaces share BrowserActivity's native inset owner.
+            message.optJSONObject("snapshot")?.let { snapshot ->
+                val host = snapshot.optJSONObject("host") ?: JSONObject()
+                snapshot.put("host", host.put("insetsHandledByNative", true))
+            }
+        }
         if (readerFailure != null && message.optString("kind") == "state") {
             val stateKey = when (bridge.surface) {
                 "browser_chrome" -> "browserChrome"
@@ -328,7 +348,7 @@ internal class PocketWebHost private constructor(
         Log.i(TAG, "host source=library-web provider=$version")
         val values = JSONObject().put("webViewVersion", version).put("fontScale", activity.resources.configuration.fontScale)
             .put("keyboardVisible", keyboardVisible).put("surface", bridge.surface)
-            .put("bridgeAvailable", listenerRegistered)
+            .put("bridgeAvailable", listenerRegistered).put("insetsHandledByNative", true)
         runCatching { values.put("appearance", JSONObject()
             .put("mode", dev.pocketengine.ui.UiAppearance.mode(dev.pocketengine.ui.UiAppearance.preferences(activity)))
             .put("dark", dev.pocketengine.ui.UiAppearance.dark(activity))

@@ -13,6 +13,14 @@ public final class ApiConnectionProfileTest {
         ApiConnectionProfile original=new ApiConnectionProfile("原 API",2,true,"model.api."+"a".repeat(64)+".1",manual());ApiConnectionProfile restored=ApiConnectionProfile.fromJson(original.toJson());
         assertEquals(original.toJson().toString(),restored.toJson().toString());assertFalse(restored.configuration.catalogEnforced);assertTrue(restored.configuration.supportsImageInput);assertEquals("",restored.configuration.apiKey);assertTrue(restored.publicJson().getBoolean("hasApiKey"));assertFalse(restored.publicJson().has("secretSlot"));
     }
+    @Test public void sourceWithoutModelRoundTripsWithoutBecomingASelection()throws Exception {
+        ModelConfig config=new ModelConfig("https://a.fixture/v1","","",false,12,60).withApiConnection(binding());
+        ApiConnectionProfile source=new ApiConnectionProfile("待选模型的来源",1,true,"",config);
+        ApiConnectionProfile restored=ApiConnectionProfile.fromJson(source.toJson());
+        assertEquals("",restored.configuration.model);assertFalse(restored.publicJson().getBoolean("selectionReady"));
+        assertFalse(restored.configuration.catalogEnforced);assertEquals(binding(),restored.configuration.capabilityBinding);
+        assertThrows(IllegalArgumentException.class,()->new ModelCatalog.ModelKey(binding(),""));
+    }
     @Test public void strictProfileAndEveryNativeCopyKeepTheStrictBitAndChosenOptions()throws Exception{
         ReasoningOptions options=new ReasoningOptions(ReasoningOptions.Mode.OPENAI_EFFORT,"high",0);ModelConfig config=manual().withNativeCatalog(binding(),options,2000);
         for(ModelConfig copy:new ModelConfig[]{config.withModel("actual-model"),config.withModel("next-model"),config.withOwnerImageInput(false),config.withStepCeiling(300),config.withRequestOutputLimit(512),config.withCleartextConsent("")}){assertTrue(copy.catalogEnforced);assertEquals(binding(),copy.capabilityBinding);}
@@ -28,3 +36,4 @@ public final class ApiConnectionProfileTest {
         JSONObject downgrade=new ApiConnectionProfile("valid",1,true,"",manual()).toJson();downgrade.getJSONObject("config").put("catalogEnforced","false");assertThrows(IllegalArgumentException.class,()->ApiConnectionProfile.fromJson(downgrade));
     }
 }
+

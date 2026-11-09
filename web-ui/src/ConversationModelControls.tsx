@@ -9,6 +9,7 @@ import { accountReasoningReview, apiReasoningReview, currentReasoningTarget, mod
   reasoningAvailability, reasoningLabel, reasoningSavedSnapshot, reasoningSelection, sameAccountTarget,
   type ModelControlRecord, type ReasoningReview, type ReasoningTarget } from './conversation-model-controls';
 import './conversation-model-controls.css';
+import { ScopedConversationModelControls } from './ScopedConversationModelControls';
 
 export type ConversationModelControlsProps = {
   state: ModelControlRecord;
@@ -24,6 +25,11 @@ const message = (failure: unknown, fallback: string) => failure instanceof Error
 
 /** Compact conversation controls; every edit retains the original native model review. */
 export function ConversationModelControls({ state, can, act, onOpenModel, disabled = false, registerBackHandler }: ConversationModelControlsProps) {
+  return can('models.conversation.review')
+    ? <ScopedConversationModelControls state={state} can={can} act={act} onOpenModel={onOpenModel} disabled={disabled} registerBackHandler={registerBackHandler} />
+    : <LegacyConversationModelControls state={state} can={can} act={act} onOpenModel={onOpenModel} disabled={disabled} registerBackHandler={registerBackHandler} />;
+}
+function LegacyConversationModelControls({ state, can, act, onOpenModel, disabled = false, registerBackHandler }: ConversationModelControlsProps) {
   const [open, setOpen] = useState(false), [loading, setLoading] = useState(false), [saving, setSaving] = useState(false);
   const [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [session, setSession] = useState<ReasoningReview | null>(null), [choiceId, setChoiceId] = useState('');

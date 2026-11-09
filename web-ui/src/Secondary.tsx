@@ -1,4 +1,5 @@
 import { ModelDiagnosticsWorkspace } from './ModelDiagnosticsWorkspace';
+import { AICenter, type AIServicePreset } from './AICenter';
 import SkillsWorkspace from './SkillsWorkspace';
 import { BackgroundAudioSettings, BackgroundOwnerSettings, BackgroundChecks } from './BackgroundOwnerSettings';
 import ChannelsWorkspace from './ChannelsWorkspace';
@@ -78,7 +79,7 @@ const timeText = (value: any) => {
 };
 
 export const SECONDARY_DOMAINS = [
-  { id: 'models', title: 'API 模型目录', detail: '连接、能力、模型组与用途', group: '设置', icon: RiKey2Line },
+  { id: 'models', title: 'AI 接入', detail: '服务、账号、模型与调度', group: '设置', icon: RiKey2Line },
   { id: 'workProfiles', title: '工作配置', detail: '模型、技能与工具来源，恢复后重新绑定', group: '技能与工具', icon: RiFileList3Line },
   { id: 'accounts', title: 'ChatGPT 账号', detail: '授权、模型目录与套餐用量', group: '设置', icon: RiKey2Line },
   { id: 'devices', title: '我的设备', detail: '手机与电脑、配对、接收和权限', group: '设备连接', icon: RiComputerLine },
@@ -99,7 +100,7 @@ export const SECONDARY_DOMAINS = [
   { id: 'groups', title: '群协作', detail: '参与者、任务、材料与成果投递', group: '团队', icon: RiTeamLine },
   { id: 'media', title: '生成与文件', detail: '提供方、原提交和结果附件', group: '媒体', icon: RiMicLine },
   { id: 'realtime', title: '实时通话', detail: '邀请、当前会话与音视频权限', group: '媒体', icon: RiMicLine },
-  { id: 'proxy', title: '本机模型服务', detail: '运行状态、端点与近期调用', group: '设备连接', icon: RiComputerLine },
+  { id: 'proxy', title: '本机 API', detail: '访问地址、客户端连接与近期调用', group: '设置', icon: RiComputerLine },
 ] as const;
 
 function Card({ title, description, children, className = '' }: { title?: string; description?: string; children: ReactNode; className?: string }) {
@@ -128,11 +129,11 @@ function CapabilityAction({ action, supported, run, args = {}, children, primary
     : <Button variant={row ? "ghost" : "secondary"} className={row ? "pw-domain-link h-auto whitespace-normal" : undefined} trailingIcon={row ? RiArrowRightSLine : undefined} disabled={inactive} onClick={click} title={!supported(action) ? '当前页面尚未开放此操作' : undefined}>{waiting ? '处理中…' : children}</Button>;
 }
 
-type ModelDraft = { url: string; model: string; provider: string; bedrockRegion: string; expiresAt: string; screenshots: boolean; supportsImageInput: boolean; maxOutputTokens: string; compatibility: CompatibilityDraft };
+type ModelDraft = { name: string; url: string; model: string; provider: string; bedrockRegion: string; expiresAt: string; screenshots: boolean; supportsImageInput: boolean; maxOutputTokens: string; compatibility: CompatibilityDraft };
 // This explicit allowlist is the only model-edit state retained by Secondary.
 // Secret fields, transport consent and review objects never enter this cache.
 const ordinaryModelDraft = (value: ModelDraft): ModelDraft => ({
-  url: value.url, model: value.model, provider: value.provider, screenshots: value.screenshots,
+  name: value.name, url: value.url, model: value.model, provider: value.provider, screenshots: value.screenshots,
   bedrockRegion: value.bedrockRegion, expiresAt: value.expiresAt,
   supportsImageInput: value.supportsImageInput, maxOutputTokens: value.maxOutputTokens,
   compatibility: {
@@ -141,17 +142,18 @@ const ordinaryModelDraft = (value: ModelDraft): ModelDraft => ({
     maxRequestBytes: value.compatibility.maxRequestBytes, cacheMode: value.compatibility.cacheMode, cacheSupport: value.compatibility.cacheSupport,
   },
 });
-function ModelSettings({ state, connection, supported, run, adding = false, draft, onDraftChange, onSaved, onInspect, registerTransientBack }: {
+function ModelSettings({ state, connection, supported, run, adding = false, preset, draft, onDraftChange, onSaved, onInspect, registerTransientBack }: {
   state: Data; supported: (action: string) => boolean; run: Run; adding?: boolean;
-  connection?: Data; draft?: ModelDraft; onDraftChange: (draft: ModelDraft | null) => void; onSaved: (snapshot: Data) => void; onInspect: () => void; registerTransientBack: BackHandlerRegistration;
+  connection?: Data; preset?: AIServicePreset; draft?: ModelDraft; onDraftChange: (draft: ModelDraft | null) => void; onSaved: (snapshot: Data) => void; onInspect: () => void; registerTransientBack: BackHandlerRegistration;
 }) {
   const original = useRef(!adding && connection ? { ...connection } : undefined);
   const config = object(original.current?.configuration);
-  const saveAction = adding ? 'models.connection.add' : 'models.connection.edit';
+  const saveAction = adding ? 'models.connections.add' : 'models.connections.update';
   const [form, setForm] = useState(() => ({
     ...(draft || {
-      url: adding ? '' : text(connection?.baseUrl), model: adding ? '' : text(connection?.model),
-      provider: adding ? 'openai_chat' : text(connection?.provider, 'openai_chat'),
+      name: adding ? preset?.name || '' : text(connection?.name),
+      url: adding ? preset?.url || '' : text(connection?.baseUrl), model: adding ? '' : text(connection?.model),
+      provider: adding ? preset?.provider || 'openai_chat' : text(connection?.provider, 'openai_chat'),
       bedrockRegion: adding ? '' : text(config.bedrockRegion), expiresAt: '',
       screenshots: adding ? state.screenshots !== false : config.sendScreenshots !== false, supportsImageInput: adding ? false : Boolean(config.supportsImageInput),
       maxOutputTokens: text(config.maxOutputTokens, '4096'), compatibility: compatibilityDraft(config.compatibility),
@@ -159,14 +161,16 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
   }));
   const editRevision = useRef(0);
   const submitted = useRef<{ editRevision: number } | null>(null);
-  const pendingOperation = useRef<'save' | 'test' | null>(null);
+  const pendingOperation = useRef<'save' | 'test' | 'catalog' | null>(null);
   const ownerGeneration = useRef(0);
   const [transport, setTransport] = useState<Data | null>(null);
   const [formError, setFormError] = useState('');
   const [requesting, setRequesting] = useState(false);
+  const [requestedAction, setRequestedAction] = useState('');
   const [unknownSave, setUnknownSave] = useState(false);
   const [editorId] = useState(() => crypto.randomUUID());
   const [testResult, setTestResult] = useState<Data | null>(null);
+  const [draftModels, setDraftModels] = useState<Data[] | null>(null);
   const testResultView = useRef<HTMLDivElement>(null);
   const [unknownTest, setUnknownTest] = useState(false);
   const outcomeNotice = useRef<HTMLDivElement>(null);
@@ -213,7 +217,7 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
     if (pendingOperation.current === 'save') setUnknownSave(true);
     if (pendingOperation.current === 'test') setUnknownTest(true);
     pendingOperation.current = null; submitted.current = null;
-    setTransport(null); setTestResult(null);
+    setTransport(null); setTestResult(null); setDraftModels(null);
     setForm(current => ({ ...current, apiKey: '', accessKeyId: '', secretAccessKey: '', sessionToken: '' }));
   };
   useEffect(() => {
@@ -236,6 +240,7 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
     setTestResult(null); setFormError('');
     const next = { ...form, [key]: value };
     if (key === 'provider' || key === 'url' || key === 'bedrockRegion') { setConsentTarget(''); setTransport(null); next.apiKey = ''; next.accessKeyId = ''; next.secretAccessKey = ''; next.sessionToken = ''; next.expiresAt = ''; }
+    if (key === 'provider' || key === 'url' || key === 'bedrockRegion' || key === 'apiKey') setDraftModels(null);
     if (key === 'provider') { if (form.provider === 'bedrock_anthropic' || value === 'bedrock_anthropic') next.url = ''; next.bedrockRegion = ''; }
     if (key === 'provider' || key === 'url' || key === 'model' || key === 'bedrockRegion') next.supportsImageInput = false;
     if (key === 'provider' || key === 'url' || key === 'model' || key === 'bedrockRegion' || ['apiKey', 'accessKeyId', 'secretAccessKey', 'sessionToken'].includes(key) && Boolean(value)) {
@@ -256,14 +261,15 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
   const perform = async (action: string, consent: string) => {
     if (stale || unknownSave) throw new Error('请先返回连接列表核对原保存结果，再明确打开要编辑的连接。');
     const testing = action === 'models.connection.test';
+    const reading = action === 'models.catalog.preview';
     if (testing && unknownTest) throw new Error('原测试结果待核对；本表单不会重复发起测试。');
     if (policyError) throw new Error(policyError);
     if (testing && policyNeedsSave) throw new Error('先保存兼容与缓存设置，再测试原连接。');
     if (testing && bedrockNeedsSave) throw new Error('请先保存原 Bedrock 连接与有效短期凭据，再进行测试。');
     const url = bedrock ? bedrockUrl : form.url.trim();
     const output = Number(form.maxOutputTokens);
-    if (!url || !form.model.trim() || !Number.isInteger(output) || output < 128 || output > 32768) {
-      setFormError('请填写接口地址、模型名称，以及 128–32768 的输出上限。'); return;
+    if (!form.name.trim() || !url || (testing || bedrock) && !form.model.trim() || !Number.isInteger(output) || output < 128 || output > 32768) {
+      setFormError(testing || bedrock ? '请填写服务名称、接口地址、模型 ID，以及 128–32768 的输出上限。' : '请填写服务名称、接口地址，以及 128–32768 的输出上限。'); return;
     }
     if (bedrock && !['anthropic.claude-sonnet-4-6', 'anthropic.claude-opus-4-6-v1'].includes(form.model.trim())) { setFormError('请填写当前支持的 Sonnet 4.6 或 Opus 4.6 普通模型 ID；不支持 ARN 或推理配置文件。'); return; }
     if (bedrock && awsReplacement && (!form.accessKeyId || !form.secretAccessKey || !form.sessionToken || !form.expiresAt.trim().endsWith('Z') || !Number.isFinite(Date.parse(form.expiresAt)) || Date.parse(form.expiresAt) <= Date.now())) {
@@ -272,21 +278,27 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
     if (bedrock && !awsReplacement && (!savedAws || savedAwsExpired || form.bedrockRegion.trim() !== config.bedrockRegion)) { setFormError('请填写这项区域连接的完整 STS 临时凭据与 UTC 到期时间。'); return; }
     const command = modelConnectionCommand(adding, testing, original.current);
     const testedDraft = testing ? testDraft() : null;
+    const catalogDraft = reading ? testDraft() : null;
     if (action === saveAction) submitted.current = { editRevision: editRevision.current };
     const originalGeneration = ownerGeneration.current;
-    pendingOperation.current = testing ? 'test' : 'save';
+    pendingOperation.current = testing ? 'test' : reading ? 'catalog' : 'save';
     if (testing) setTestResult(null);
     try {
-      const payload: Data = { ...command.identity, name: text(original.current?.name, form.model.trim()), url, model: form.model.trim(), provider: form.provider,
+      const payload: Data = { ...command.identity, name: form.name.trim(), url, model: form.model.trim(), provider: form.provider,
         apiKey: bedrock ? '' : form.apiKey, screenshots: form.screenshots, supportsImageInput: form.supportsImageInput, maxOutputTokens: output, cleartextConsent: bedrock ? '' : consent };
       if (bedrock) {
         payload.bedrockRegion = form.bedrockRegion.trim();
         if (awsReplacement) payload.awsSession = { accessKeyId: form.accessKeyId, secretAccessKey: form.secretAccessKey, sessionToken: form.sessionToken, expiresAt: form.expiresAt.trim() };
       } else if (!adding) payload.compatibility = compatibilityOptions(form.compatibility, form.provider);
       if (testedDraft) { payload.editorId = testedDraft.editorId; payload.draftRevision = testedDraft.draftRevision; }
-      const result = await run(command.action, payload);
+      if (catalogDraft) { payload.editorId = catalogDraft.editorId; payload.draftRevision = catalogDraft.draftRevision; }
+      const result = await run(reading ? 'models.catalog.preview' : testing ? command.action : saveAction, payload);
       if (!alive.current || originalGeneration !== ownerGeneration.current) return;
       pendingOperation.current = null;
+      if (catalogDraft && catalogDraft.draftRevision === editRevision.current && !currentStale.current) {
+        if (result?.format !== 'pocketworld.draft-catalog.v1' || result?.status !== 'succeeded' || result?.saved !== false || result?.selectionChanged !== false || result?.editorId !== catalogDraft.editorId || result?.draftRevision !== catalogDraft.draftRevision || !Array.isArray(result?.models)) throw new Error('目录回执不属于当前服务草稿，请重新核对。');
+        setDraftModels(list(result.models).filter(row => typeof row.modelId === 'string' && row.modelId));
+      }
       if (testedDraft && alive.current) {
         const originalResult = connectionTestResult(result, testedDraft, testedDraft);
         if (originalResult?.connectionTest.outcome === 'unknown' || !originalResult && !currentStale.current) setUnknownTest(true);
@@ -302,7 +314,7 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
         if (alive.current && submission) {
           if (submission.editRevision === editRevision.current) onDraftChange(null);
           setForm(current => ({ ...current, apiKey: '', accessKeyId: '', secretAccessKey: '', sessionToken: '' }));
-          onSaved(object(result.snapshot));
+          onSaved(result);
         }
       }
     } catch (failure) {
@@ -321,7 +333,7 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
   const request = async (action: string) => {
     if (!supported(action) || requesting) return;
     const requestedDraftRevision = editRevision.current;
-    setFormError(''); setRequesting(true);
+    setFormError(''); setRequesting(true); setRequestedAction(action);
     try {
       if (!bedrock && supported('settings.reviewModelTransport')) {
         const originalEdit = editRevision.current;
@@ -338,7 +350,7 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
         await perform(action, '');
       }
     } catch (error) { if (alive.current && requestedDraftRevision === editRevision.current) setFormError(error instanceof Error ? error.message : String(error)); }
-    finally { if (alive.current) setRequesting(false); }
+    finally { if (alive.current) { setRequesting(false); setRequestedAction(''); } }
   };
   const awsFields = <div className="pw-form-grid">
     <TextField label="临时 Access Key ID" type="password" value={form.accessKeyId} onChange={value => change('accessKeyId', value)} autoComplete="new-password" />
@@ -351,13 +363,11 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
   return <div data-model-layer="edit" className="pw-model-edit-layer">
     <section className="pw-model-editor" aria-label={adding ? '新连接配置' : '当前连接配置'}>
       <div className="pw-model-editor-scroll">
-      <header className="pw-connection-editor-heading"><h2>{adding ? '新连接' : first(original.current || {}, ['name', 'label', 'id'], 'API 连接')}</h2></header>
-      <section className="pw-model-form-section" aria-label="连接身份"><h3>服务与模型</h3><div className="pw-form-grid">
-        <SelectField label="接口协议" options={providers} value={form.provider} onChange={value => change('provider', value)} />
+      <section className="pw-model-form-section" aria-label="服务身份"><div className="pw-form-grid">
+        <TextField label="服务名称" value={form.name} onChange={value => change('name', value)} maxLength={80} autoComplete="off" placeholder="便于辨认的名称" />
         {bedrock && <TextField label="AWS 区域" value={form.bedrockRegion} onChange={value => change('bedrockRegion', value)} placeholder="例如 us-east-1" autoComplete="off" />}
         <TextField label={bedrock ? '区域端点（自动生成）' : '接口地址'} type="url" value={bedrock ? bedrockUrl : form.url} onChange={value => { if (!bedrock) change('url', value); }} isReadOnly={bedrock} placeholder={bedrock ? '填写区域后显示' : 'https://…'} autoComplete="off" />
-        <TextField label="模型名称" value={form.model} onChange={value => change('model', value)} placeholder={bedrock ? 'anthropic.claude-sonnet-4-6' : undefined} autoComplete="off"
-          hint={bedrock ? '目前接入 anthropic.claude-sonnet-4-6 和 anthropic.claude-opus-4-6-v1 两个普通模型 ID。账号与区域是否可用需保存后测试；不提供模型目录或推理配置文件。' : undefined} />
+        {bedrock && <TextField label="模型 ID" value={form.model} onChange={value => change('model', value)} autoComplete="off" hint="填写当前账号与区域可用的普通模型 ID，保存后单独测试。" />}
       </div></section>
       <section className="pw-model-form-section" aria-label="连接凭据"><h3>访问凭据</h3>{bedrock ? <>
         <p className="pw-field-hint">使用本人已取得的正式 STS 临时会话。手机不会自动登录 AWS、读取 CLI 凭据或刷新身份。</p>
@@ -366,10 +376,16 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
           <Accordion key={savedAwsExpired ? 'expired' : 'saved'} defaultExpandedKeys={savedAwsExpired ? ['aws-session'] : []} variant="divided"><AccordionItem id="aws-session" title="替换短期凭据" description="整组替换三项凭据与到期时间">{awsFields}</AccordionItem></Accordion>
         </> : awsFields}
       </> : canRetainApiKey ? <><p className="pw-credential-summary"><RiShieldCheckLine size={16} aria-hidden="true" />密钥已保存，留空保留原密钥。</p><Accordion variant="divided"><AccordionItem id="api-credential" title="替换 API 密钥" description="仅在明确保存后更换">{apiKeyField}</AccordionItem></Accordion></> : <div className="pw-form-grid">{apiKeyField}</div>}</section>
-      <div className="pw-model-options-heading"><h3>能力与请求选项</h3></div>
+      {!bedrock && <section className="pw-model-form-section pw-ai-draft-catalog" aria-label="草稿模型目录"><div className="pw-ai-section-heading"><h3>模型</h3><Button variant="secondary" disabled={requesting || stale || unknownSave || !form.url.trim() || !supported('models.catalog.preview')} onClick={() => request('models.catalog.preview')}>{requesting && requestedAction === 'models.catalog.preview' ? '读取中…' : '读取模型'}</Button></div>
+        {draftModels && (draftModels.length ? <SelectField label="选择模型" options={draftModels.map(row => ({ id: row.modelId, label: row.modelId, ...(row.protocolCompatibility === 'declared_incompatible' ? { disabled: true, description: '目录已声明使用其他协议' } : {}) }))} value={form.model} onChange={value => { if (draftModels.some(row => row.modelId === value && row.protocolCompatibility !== 'declared_incompatible')) change('model', value); }} isDisabled={requesting} placeholder="从这次目录中选择" /> : <p className="pw-field-hint">服务没有返回模型，可在高级设置中手动填写模型 ID。</p>)}
+        {!draftModels && <p className="pw-field-hint">可先读取目录，也可以直接保存服务。{form.model ? `当前模型：${form.model}` : ''}</p>}
+        {draftModels && <p className="pw-field-hint">目录已读取，服务草稿尚未保存；读取目录不代表推理测试通过。</p>}
+      </section>}
       <Accordion className="pw-model-advanced" variant="divided">
-        <AccordionItem id="advanced" title="高级设置" description="输出上限、图像输入与截图">
+        <AccordionItem id="advanced" title="高级设置" description="协议、手动模型与请求选项">
           <div className="pw-form-grid">
+            <SelectField label="接口协议" options={providers} value={form.provider} onChange={value => change('provider', value)} />
+            {!bedrock && <TextField label="手动模型 ID（可选）" value={form.model} onChange={value => change('model', value)} autoComplete="off" hint="可以先保存并读取模型目录；推理测试需要明确的模型 ID。" />}
             <TextField label="每次回复的输出上限" value={form.maxOutputTokens} onChange={value => change('maxOutputTokens', value.replace(/\D/g, '').slice(0, 5))} inputMode="numeric"
               isDisabled={!adding && Boolean(original.current?.catalogEnabled)} hint={!adding && original.current?.catalogEnabled ? '在原连接的模型目录中核对精确参数和容量。' : '128–32768 tokens'} />
             <CheckboxField isSelected={form.supportsImageInput} onChange={value => change('supportsImageInput', value)} isDisabled={!adding && Boolean(original.current?.catalogEnabled)}>此模型支持图像输入</CheckboxField>
@@ -395,8 +411,8 @@ function ModelSettings({ state, connection, supported, run, adding = false, draf
       </div>}
       {unknownTest && <div ref={outcomeNotice} className="pw-request-notice" role="status"><p>原测试结果待核对；本表单不会自动重试或再次发送。请先核对原调用与连接，再明确开始新的测试。</p><Button variant="secondary" onClick={onInspect}>返回核对连接</Button></div>}
       </div>
-      <footer className="pw-model-editor-footer">{(formError || state.error) && <p role="alert" className="pw-field-error">{formError || text(state.error)}</p>}<p className="pw-field-hint pw-model-test-cost">测试可能产生费用。{adding ? '添加后用于后续任务。' : '保存不会切换模型。'}保存不代表测试通过。</p>
-      <div className="pw-form-actions pw-model-save-actions"><Button variant="ghost" disabled={requesting || state.modelSaving || state.modelTesting} onClick={onInspect}>返回</Button><Button variant="secondary" disabled={stale || unknownSave || unknownTest || bedrockNeedsSave || policyNeedsSave || Boolean(policyError) || requesting || state.modelTesting || state.modelSelectionBusy || !supported('models.connection.test')} onClick={() => request('models.connection.test')}>{state.modelTesting ? '测试中…' : '测试连接'}</Button><PressButton compact disabled={stale || unknownSave || Boolean(policyError) || requesting || state.modelSaving || state.modelTesting || state.modelSelectionBusy || !supported(saveAction)} onClick={() => request(saveAction)}>{state.modelSaving ? '保存中…' : adding ? '添加并使用' : '保存连接'}</PressButton></div></footer>
+      <footer className="pw-model-editor-footer">{(formError || state.error) && <p role="alert" className="pw-field-error">{formError || text(state.error)}</p>}<p className="pw-field-hint pw-model-test-cost">保存不会切换默认模型。推理测试可能产生费用。</p>
+      <div className="pw-form-actions pw-model-save-actions"><Button variant="ghost" disabled={requesting || state.modelSaving || state.modelTesting} onClick={onInspect}>取消</Button><Button variant="secondary" disabled={!form.model.trim() || stale || unknownSave || unknownTest || bedrockNeedsSave || policyNeedsSave || Boolean(policyError) || requesting || state.modelTesting || state.modelSelectionBusy || !supported('models.connection.test')} onClick={() => request('models.connection.test')}>{state.modelTesting ? '测试中…' : '测试推理'}</Button><PressButton compact disabled={stale || unknownSave || Boolean(policyError) || requesting || state.modelSaving || state.modelTesting || state.modelSelectionBusy || !supported(saveAction)} onClick={() => request(saveAction)}>{state.modelSaving ? '保存中…' : '保存服务'}</PressButton></div></footer>
     </section>
     <SettingsDialog isOpen={Boolean(transport)} title="允许这个明文模型连接？" onClose={clearSecret}>
       {transport && <><Facts items={[[ '协议', providers.find(x => x.id === transport.provider)?.label ], ['地址', transport.displayTarget || transport.url]]} />
@@ -882,11 +898,11 @@ function TeamWorkspace({ domain, data, supported, run, registerTransientBack }: 
   </section>;
 }
 
-function AccountsWorkspace({ state, data, supported, run, registerTransientBack }: { state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration }) {
+function AccountsWorkspace({ state, data, supported, run, registerTransientBack, onlyAccountId, startAdding = false }: { state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration; onlyAccountId?: string; startAdding?: boolean }) {
   const [catalog, setCatalog] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null);
   const [busy, setBusy] = useState(false), [receipt, setReceipt] = useState<Data | null>(null), [query, setQuery] = useState('');
   const [options, setOptions] = useState({ reasoningEffort: '', outputReserve: '4096', imageTokenReserve: '0' });
-  const [adding, setAdding] = useState(false), [accountLabel, setAccountLabel] = useState(''), [needsAccountRead, setNeedsAccountRead] = useState(false);
+  const [adding, setAdding] = useState(startAdding), [accountLabel, setAccountLabel] = useState(''), [needsAccountRead, setNeedsAccountRead] = useState(false);
   const [accountFeedback, setAccountFeedback] = useState<{ message: string; error: boolean } | null>(null);
   const alive = useRef(true), generation = useRef(0), operationPending = useRef(false);
   const closeReview = () => { generation.current++; setReview(null); };
@@ -963,12 +979,12 @@ function AccountsWorkspace({ state, data, supported, run, registerTransientBack 
   const loginActive = ['pending', 'exchanging'].includes(text(login.status));
   return <>
     <Card className="pw-accounts-workspace" ><div hidden={Boolean(catalog)} className="pw-accounts-overview">
-      <header className="pw-settings-object-heading"><div><h2>你的账号</h2><p>读取可用模型，用于之后的新任务。</p></div><div className="pw-form-actions"><PressButton compact disabled={locked || loginActive || needsAccountRead || !supported('accounts.beginLogin')} onClick={() => { setAccountFeedback(null); setAdding(true); }}>添加账号</PressButton>{act('accounts.refresh', {}, '刷新账号状态')}</div></header>
+      <header className="pw-settings-object-heading"><div><h2>{onlyAccountId ? '账号与授权' : '你的账号'}</h2></div><div className="pw-form-actions">{!onlyAccountId && <PressButton compact disabled={locked || loginActive || needsAccountRead || !supported('accounts.beginLogin')} onClick={() => { setAccountFeedback(null); setAdding(true); }}>添加账号</PressButton>}{act('accounts.refresh', {}, '刷新状态')}</div></header>
       {needsAccountRead && <p className="pw-field-hint">请先刷新账号状态，核对上次操作后再添加账号。</p>}
       {accountFeedback && !adding && <p className={accountFeedback.error ? 'pw-field-error' : 'pw-receipt-copy'} role={accountFeedback.error ? 'alert' : 'status'}>{accountFeedback.message}</p>}
       {state.modelRoute === 'account' && data.selectedModelRef && <div className="pw-selected-object"><h3>当前账号模型</h3><Facts items={[[ '模型', selected.modelId ], ['账号', accounts.find(row => row.id === selected.accountId)?.label ], ['可用状态', data.selectedModelUsable ? '当前引用可用' : '需要重新读取目录并选择' ]]} /></div>}
       {data.planWelcomeRequired === true && welcomeAccount && <div className="pw-receipt-copy"><h3>已通过 ChatGPT 登录</h3><p>在本应用选择账号模型后，推理使用你的 ChatGPT 套餐，并受套餐和此应用的使用限制。登录不授予手机操作权限；图片仍需任务授权和目录支持。</p><div className="pw-form-actions">{act('accounts.acknowledgePlanWelcome', {accountId: welcomeAccount.id, expectedVersion: welcomeAccount.version}, '知道了')}{act('accounts.manageUsage', {}, '管理用量')}</div></div>}
-      <Collection data={data} keys={['accounts']} label="账号" formatStatus={accountStatusText}>{row => <>
+      <Collection data={onlyAccountId ? { ...data, accounts: accounts.filter(row => row.id === onlyAccountId) } : data} keys={['accounts']} label="账号" formatStatus={accountStatusText}>{row => <>
         <Facts items={[[ '套餐', row.plan || row.planName ], ['套餐使用权限', row.planUsageEnabled ? '已授予' : '尚未授予'], ['状态', accountStatusText(row.status)], ['冷却至', timeText(row.cooldownUntil)], ['本机选择', data.selectedAccountId === row.id ? '当前账号' : undefined]]} />
         {row.usageLimited && <p className="pw-field-hint">套餐请求已暂停。明确允许再试后，仍需回到原任务继续；不会自动发送请求。</p>}
         {row.error && <p className="pw-field-error" role="alert">{row.error === 'LOGIN_EXPIRED' ? '上次登录授权已过期，请重新登录。' : text(row.error)}</p>}
@@ -1348,13 +1364,14 @@ function DataManagement({ kind, ...props }: DataPageProps & { kind: 'archives' |
 }
 
 const SETTINGS_GROUPS = [
-  { id: 'models', title: '模型与账号', entries: ['model-settings', 'accounts'] },
+  { id: 'models', title: 'AI 接入', entries: ['model-settings', 'proxy'] },
   { id: 'preferences', title: '使用偏好', entries: ['phone:appearance', 'phone:speech'] },
   { id: 'privacy', title: '权限与运行', entries: ['phone:execution', 'phone:observation', 'background'] },
   { id: 'data', title: '数据与应用', entries: ['usage', 'storage', 'archives', 'updates'] },
 ];
 const COMMON_SETTINGS = [
-  { id: 'model-settings', title: 'API 连接与模型', detail: '管理服务商、模型目录与用量预算', icon: RiKey2Line },
+  { id: 'model-settings', title: 'AI 接入', detail: '服务、账号、模型与调度', icon: RiKey2Line },
+  { id: 'proxy', title: '本机 API', detail: '访问地址、客户端连接与近期调用', icon: RiComputerLine },
   { id: 'accounts', title: 'ChatGPT 账号', detail: '登录、授权与套餐用量', icon: RiKey2Line },
   { id: 'phone:appearance', title: '外观与字体', detail: '主题、中文、英数与代码字体', icon: RiSettings3Line },
   { id: 'phone:speech', title: '语音与朗读', detail: '系统听写、声音与任务播报', icon: RiMicLine },
@@ -1376,6 +1393,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const [page, setPage] = useState(normalize(route));
   const [candidateTarget, setCandidateTarget] = useState<LearningCandidateTarget | null>(null);
   const [modelView, setModelView] = useState<ModelView>({ kind: 'list' });
+  const [modelHostSection, setModelHostSection] = useState<'models' | 'accounts'>('models');
   const modelTrail = useRef<ModelView[]>([]);
   const modelDrafts = useRef<Partial<Record<string, ModelDraft>>>({});
   const transientBack = useRef<(() => boolean) | null>(null);
@@ -1383,7 +1401,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const [query, setQuery] = useState(''), [notice, setNotice] = useState(''), [error, setError] = useState('');
   const trail = useRef<Array<{ page: string; query: string; modelView: ModelView; modelTrail: ModelView[]; candidateTarget: LearningCandidateTarget | null }>>([]), scroll = useRef<HTMLDivElement>(null), scrollPositions = useRef(new Map<string, number>());
   const mounted = useRef(true), generation = useRef(0);
-  useEffect(() => { generation.current++; trail.current = []; modelTrail.current = []; setPage(normalize(route)); setCandidateTarget(null); setModelView({ kind: 'list' }); setNotice(''); setError(''); }, [route, navigationRevision]);
+  useEffect(() => { generation.current++; trail.current = []; modelTrail.current = []; setPage(normalize(route)); setCandidateTarget(null); setModelView({ kind: 'list' }); setModelHostSection('models'); setNotice(''); setError(''); }, [route, navigationRevision]);
   useEffect(() => { onNavigationPageChange?.(page); }, [page, onNavigationPageChange]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; }; }, []);
   const run: Run = async (action, args = {}) => {
@@ -1432,7 +1450,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const phoneView = page.startsWith('phone:') ? page.slice('phone:'.length) : phonePresentation.current;
   const workspace = workspaceForRoute(page);
   const domain = SECONDARY_DOMAINS.find(x => x.id === page);
-  const hostSection = isModelPage ? 'models' : domain?.id;
+  const hostSection = isModelPage ? modelHostSection : domain?.id;
   const canEnter = supported('connections.enter'), canLeave = supported('connections.leave');
   useLayoutEffect(() => {
     if (!hostSection || !canEnter) return;
@@ -1467,7 +1485,7 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
   const editConnection = modelView.id ? connection : modelConnectionRows(data).find(row => recordId(row) === text(object(data.connections).selectedConnectionId));
   const modelDraftKey = modelView.kind + ':' + (modelView.kind === 'add' ? 'new' : recordId(editConnection || {}));
   const phoneTitle = ({ appearance: '外观与字体', speech: '语音与朗读', execution: '系统权限', observation: '观察与隐私', browser: '浏览器' } as Data)[phoneView];
-  const pageTitle = isModelPage ? ({ list: '模型与连接', connections: '管理连接', edit: '编辑 API 连接', add: '添加 API 连接', connection: first(connection || {}, ['name', 'label'], '已保存连接'), catalog: '模型目录', model: modelView.id || '模型详情' }[modelView.kind])
+  const pageTitle = isModelPage ? 'AI 接入'
     : workspace?.title || settingsGroup?.title || (page === 'settings' || page === 'connections' ? '设置' : isPhonePage ? phoneTitle || '手机能力' : page === 'background' ? '后台运行' : page === 'history' ? '任务历史' : page === 'usage' ? '模型调用记录' : page === 'archives' ? '备份与迁移' : page === 'storage' ? '项目存储' : domain?.title || 'PocketWorld');
   const settingsEntries = COMMON_SETTINGS.map(item => item.id === 'phone:appearance' ? { ...item, detail: [({ system: '跟随系统', light: '浅色', dark: '深色' } as Data)[text(object(state.appearance).mode)], '中文、英数与代码字体'].filter(Boolean).join(' · ') } : item);
   const filtered = settingsEntries.filter(item => (item.title + item.detail).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
@@ -1511,17 +1529,13 @@ export default function Secondary({ route, onBack, snapshot, registerBackHandler
           {query.trim() ? <section className="pw-settings-results" aria-label="匹配的设置">{settingRows(filtered)}{filtered.length === 0 && <Empty>没有匹配的设置。</Empty>}</section>
             : <div className="pw-settings-categories">{SETTINGS_GROUPS.map(group => <section key={group.id} className="pw-settings-category" data-settings-group={group.id} aria-label={group.title}><h2>{group.title}</h2>{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}{group.id === 'privacy' && <div className="pw-settings-execution" aria-label="执行控制"><ExecutionControls state={state} supported={supported} run={run}/></div>}</section>)}</div>}
         </div> : settingsGroup ? <section className="pw-settings-group-page">{settingRows(settingsGroup.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</section>
-          : isModelPage ? <>
-            <div className="pw-model-list" data-model-layer={modelView.kind === 'model' ? 'model' : 'list'} hidden={!modelBrowseActive}>
-              {modelView.kind !== 'model' && <header className="pw-model-current"><div><span className="pw-model-eyebrow">后续任务默认模型</span><strong>{text(state.modelName) || '尚未连接'}</strong><span className="pw-model-origin">{state.modelRoute === 'account' ? 'ChatGPT 账号' : MODEL_PROVIDERS[text(state.modelProvider)] || 'API 连接'}</span></div><IconButton className="pw-utility-icon" icon={RiSettings3Line} aria-label="管理连接" title="管理连接" onClick={() => openModel({ kind: 'connections' })} /></header>}
-              {modelView.kind !== 'model' && state.modelRoute === 'account' && <div className="pw-account-model-entry"><Button variant="secondary" trailingIcon={RiArrowRightSLine} onClick={() => navigate('accounts')}>打开账号模型</Button><p className="pw-field-hint">下面是保留的 API 模型目录。</p></div>}
-              {state.activeTaskId && modelView.kind !== 'model' && <p className="pw-field-hint pw-model-task-context">进行中的任务保留原模型与连接。这里的选择不会替换原任务身份。</p>}
-              <ModelCatalog key={page} state={state} data={data} active={modelBrowseActive} selectedId={modelView.kind === 'model' ? modelView.id : undefined} supported={supported} run={run} open={openModel} registerTransientBack={registerTransientBack} />
-            </div>
-            {modelView.kind === 'connections' ? <><ModelConnections state={state} data={data} supported={supported} run={run} navigate={navigate} open={openModel} /><section className="pw-model-connection-tools" aria-label="连接用量与排查"><h2>用量与排查</h2><TokenBudgetsWorkspace supported={supported} registerTransientBack={registerTransientBack} /><ModelDiagnosticsWorkspace state={state} supported={supported} /></section></>
-              : modelView.kind === 'edit' || modelView.kind === 'add' ? <ModelSettings key={modelDraftKey} state={state} connection={editConnection} supported={supported} run={run} adding={modelView.kind === 'add'} draft={modelDrafts.current[modelDraftKey]} onDraftChange={value => { if (value) modelDrafts.current[modelDraftKey] = value; else delete modelDrafts.current[modelDraftKey]; }} onInspect={() => { void run('models.snapshot', {}).catch(() => {}); finishModelEdit(modelView.kind === 'add' ? { kind: 'connections' } : { kind: 'connection', id: recordId(editConnection || {}) }); }} onSaved={saved => { const id = modelView.kind === 'add' ? text(object(saved.connections).selectedConnectionId) : recordId(editConnection || {}); finishModelEdit(id ? { kind: 'connection', id } : { kind: 'connections' }); setNotice('已收到原连接保存回执。当前修订可在详情核对；保存不代表测试通过。'); }} registerTransientBack={registerTransientBack} />
-              : modelView.kind === 'connection' ? <ModelConnectionDetail connection={connection} data={data} state={state} supported={supported} run={run} open={openModel} busy={Boolean(state.modelSelectionBusy || state.modelSaving || state.modelTesting || state.chatSubmitting || state.phoneSubmitting)} /> : null}
-          </>
+          : isModelPage ? <AICenter state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} navigate={navigate} onHostSectionChange={setModelHostSection}
+              renderEditor={(row, preset, close, saved, registerBack) => {
+                const draftKey = 'ai-service:' + (row?.id || preset?.name || 'new');
+                return <ModelSettings key={draftKey} state={state} connection={row} preset={preset} supported={supported} run={run} adding={!row} draft={modelDrafts.current[draftKey]} onDraftChange={value => { if (value) modelDrafts.current[draftKey] = value; else delete modelDrafts.current[draftKey]; }} onInspect={close} onSaved={saved} registerTransientBack={registerBack} />;
+              }}
+              renderAccounts={(accountId, adding, registerBack) => <AccountsWorkspace key={accountId || 'new-account'} state={state} data={{ ...object(object(state.features).accounts), ...object(object(state.ownerSnapshots).accounts) }} supported={supported} run={run} registerTransientBack={registerBack} onlyAccountId={accountId} startAdding={adding} />}
+              renderTools={registerBack => <section className="pw-model-connection-tools"><TokenBudgetsWorkspace supported={supported} registerTransientBack={registerBack} /><ModelDiagnosticsWorkspace state={state} supported={supported} /></section>} />
           : page === 'phone' ? <PhoneSettings state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phonePresentation.current} onViewChange={view => { phonePresentation.current = view; }} />
           : isPhonePage ? <PhoneSettings key={page} state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phoneView} direct />
           : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} onReturn={returnToPhone} registerTransientBack={registerTransientBack} />

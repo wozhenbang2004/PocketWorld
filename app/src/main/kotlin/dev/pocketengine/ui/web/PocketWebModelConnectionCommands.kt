@@ -2,9 +2,9 @@ package dev.pocketengine.ui.web
 
 import org.json.JSONObject
 
-/** Parse only the existing API connection commands; no native service, credential I/O or dispatch. */
+/** Typed source save/test commands; no native service, credential I/O or dispatch. */
 internal object PocketWebModelConnectionCommands {
-    val COMMANDS: Set<String> = setOf("models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select")
+    val COMMANDS: Set<String> = setOf("models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select", "models.connections.add", "models.connections.update")
 
     sealed interface Command {
         val id: String
@@ -17,7 +17,8 @@ internal object PocketWebModelConnectionCommands {
         override val id: String,
         override val expectedRevision: Long,
         val name: String,
-        val input: JSONObject
+        val input: JSONObject,
+        val useForNewTasks: Boolean = false
     ) : Command
     class Test(
         override val id: String,
@@ -30,13 +31,15 @@ internal object PocketWebModelConnectionCommands {
     fun prepare(action: String, args: JSONObject): Command {
         require(action in COMMANDS) { "这项操作没有已接入的宿主实现" }
         val testing = action == "models.connection.test"
+        val saveSourceOnly = action == "models.connections.add" || action == "models.connections.update"
         checkedPayload(args, setOf("id", "expectedRevision", "name", "url", "model", "apiKey", "bedrockRegion", "awsSession", "screenshots", "supportsImageInput", "provider", "maxOutputTokens", "cleartextConsent", "compatibility") +
             if (testing) setOf("editorId", "draftRevision") else emptySet())
-        val adding = action == "models.connection.add" || testing && args.optString("id").isEmpty()
+        val adding = action == "models.connection.add" || action == "models.connections.add" || testing && args.optString("id").isEmpty()
         val id = if (adding) "" else requiredString(args, "id")
         val expected = if (adding) 0L else requiredInt(args, "expectedRevision").also { require(it > 0) { "请重新读取原连接修订" } }.toLong()
         if (action == "models.connection.select") return Select(id, expected)
-        val input = JSONObject().put("baseUrl", requiredString(args, "url")).put("model", requiredString(args, "model"))
+        val model = if (saveSourceOnly) optionalString(args, "model") else requiredString(args, "model")
+        val input = JSONObject().put("baseUrl", requiredString(args, "url")).put("model", model)
             .put("apiKey", args.optString("apiKey")).put("sendScreenshots", requiredBoolean(args, "screenshots"))
             .put("supportsImageInput", requiredBoolean(args, "supportsImageInput")).put("provider", requiredString(args, "provider"))
             .put("maxOutputTokens", requiredInt(args, "maxOutputTokens")).put("cleartextConsent", args.optString("cleartextConsent"))
@@ -48,7 +51,7 @@ internal object PocketWebModelConnectionCommands {
             val draftRevision = requiredInt(args, "draftRevision").also { require(it >= 0) { "草稿修订无效，请重新打开连接" } }.toLong()
             return Test(id, expected, input, editorId, draftRevision)
         }
-        return Save(adding, id, expected, args.optString("name", input.getString("model")), input)
+        return Save(adding, id, expected, args.optString("name", model.ifBlank { input.getString("provider") }), input, action == "models.connection.add")
     }
 
     private fun checkedProviderCompatibility(options: JSONObject): JSONObject {
@@ -70,6 +73,10 @@ internal object PocketWebModelConnectionCommands {
     }
     private fun requiredString(args: JSONObject, name: String): String {
         val value = args.opt(name); require(value is String && value.isNotBlank()) { "缺少有效参数 $name" }; return value
+    }
+    private fun optionalString(args: JSONObject, name: String): String {
+        if (!args.has(name)) return ""
+        val value = args.opt(name); require(value is String) { "参数 $name 必须是文本" }; return value
     }
     private fun requiredInt(args: JSONObject, name: String): Int {
         val value = args.opt(name); require(value is Number && value.toDouble().isFinite() && value.toDouble() == value.toInt().toDouble()) { "缺少有效整数参数 $name" }; return value.toInt()

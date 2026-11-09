@@ -57,7 +57,7 @@ public final class OwnerSettingsBackup {
         OwnerConfigurationBackupSections.fields(c,"provider","baseUrl","model","maxSteps","requestTimeoutSeconds","maxOutputTokens","catalogEnabled","catalogFormat","modelsEndpoint","reasoning","imageTokenReserve","compatibility","bedrockRegion");
         if(!(c.get("catalogEnabled") instanceof Boolean))throw new SecurityException("归档目录开关必须明确");
         String provider=OwnerConfigurationBackupSections.text(c,"provider",80);if(!ModelConfig.PROVIDERS.contains(provider))throw new SecurityException("归档API协议不支持");
-        String model=OwnerConfigurationBackupSections.text(c,"model",200);if(!model.equals(model.trim())||model.chars().anyMatch(Character::isISOControl))throw new SecurityException("归档模型名无效");
+        Object rawModel=c.opt("model");if(!(rawModel instanceof String model)||model.length()>200||!model.equals(model.trim())||model.chars().anyMatch(Character::isISOControl))throw new SecurityException("归档模型名无效");
         integer(c,"maxSteps",1,40);integer(c,"requestTimeoutSeconds",10,120);integer(c,"maxOutputTokens",128,32768);integer(c,"imageTokenReserve",0,2000000);
         ModelBinding.Format format=ModelBinding.Format.valueOf(c.getString("catalogFormat"));ModelBinding.Protocol protocol=ModelCatalogRoutes.protocol(provider);
         if(ModelConfig.BEDROCK_PROVIDER.equals(provider)){
@@ -130,3 +130,4 @@ public final class OwnerSettingsBackup {
     private static String mappedApi(Map<String,String> mapping,String action,String source)throws Exception{return mapping.containsKey(source)?mapping.get(source):id(action,"unavailable",source);}
     private static void historical(JSONArray history,Set<String> seen,String kind,JSONObject reference)throws Exception{JSONObject row=new JSONObject().put("kind",kind).put("reference",new JSONObject(reference.toString()));if(seen.add(WorkProfile.fingerprint(row)))history.put(row);}
 }
+

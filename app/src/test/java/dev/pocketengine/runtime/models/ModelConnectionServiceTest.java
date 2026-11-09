@@ -71,6 +71,110 @@ public final class ModelConnectionServiceTest {
     private void field(ModelBinding binding,String model,Field field,OwnerValue value,boolean clear)throws Exception{service.editField(binding,model,row(model).getLong("ownerRevision"),field,value,clear);}
     private JSONArray messages()throws Exception{return new JSONArray().put(new JSONObject().put("role","user").put("content","实际文字请求"));}
     private JSONObject richModel()throws Exception{return new JSONObject().put("data",new JSONArray().put(new JSONObject().put("id","remote-model").put("context_length",8192).put("top_provider",new JSONObject().put("max_completion_tokens",2048)).put("architecture",new JSONObject().put("input_modalities",new JSONArray().put("text").put("image"))).put("supported_parameters",new JSONArray().put("tools").put("reasoning_effort").put("max_completion_tokens")).put("reasoning",new JSONObject().put("supported_efforts",new JSONArray().put("low").put("high")))));}
+    private JSONObject source(String name,String model)throws Exception{return service.saveSource("",0,name,new JSONObject().put("baseUrl",base()).put("provider","openai_chat").put("model",model).put("sendScreenshots",false).put("maxOutputTokens",512)).getJSONObject("savedConnection");}
+
+    @Test public void firstSourceCanPersistBeforeAModelAndOnlyExplicitSelectionCreatesDefault()throws Exception {
+        Context context=RuntimeEnvironment.getApplication();context.getSharedPreferences("private_settings",0).edit().clear().commit();settings=new SettingsStore(context);
+        service=new ModelConnectionService(settings,cache,Clock.systemUTC());service.install();
+        JSONObject saved=source("先保存来源","");String id=saved.getString("id");long revision=saved.getLong("revision");
+        assertFalse(saved.getBoolean("selectionReady"));assertEquals("",settings.apiConnectionsSnapshot().getString("selectedConnectionId"));
+        assertEquals(0,service.modelPickerSnapshot().getJSONArray("models").length());assertEquals(0,modelCalls.get());assertEquals(0,inferences.get());
+        assertThrows(IllegalArgumentException.class,()->settings.selectApiConnection(id,revision));
+        SettingsStore reopened=new SettingsStore(context);assertEquals("",reopened.apiConnectionMetadata(id,revision).configuration.model);
+        ModelConfig captured=service.captureConnectionModel(id,revision,"manual-only",512,ReasoningOptions.DEFAULT,0);
+        assertFalse(captured.catalogEnforced);assertEquals(captured.capabilityBinding,settings.currentForCaptured(captured).capabilityBinding);
+        assertEquals("",settings.apiConnectionsSnapshot().getString("selectedConnectionId"));
+        service.selectConnectionModel(id,revision,"manual-only",512,ReasoningOptions.DEFAULT,0);
+        assertEquals("manual-only",settings.get().model);assertEquals(id,settings.apiConnectionsSnapshot().getString("selectedConnectionId"));
+        assertEquals("manual-only",settings.get().purposePlans.get("SUMMARY").primary().model);assertEquals(0,inferences.get());
+    }
+    @Test public void savedSourceRefreshDoesNotSelectOrEnableStrictAndSurvivesUnrelatedSelection()throws Exception {
+        service.connections();String original=settings.apiConnectionsSnapshot().getString("selectedConnectionId");
+        JSONObject source=source("独立目录","");String id=source.getString("id");long revision=source.getLong("revision");
+        entered=new CountDownLatch(1);release=new CountDownLatch(1);ExecutorService caller=Executors.newSingleThreadExecutor();
+        try{
+            Future<JSONObject> pending=caller.submit(()->service.refreshConnection(id,revision,new RunControl()));assertTrue(entered.await(2,TimeUnit.SECONDS));
+            settings.selectAccountModel(new JSONObject().put("provider","chatgpt_plan").put("accountId","other-account").put("accountVersion",1).put("modelId","account-model"));
+            release.countDown();JSONObject result=pending.get(3,TimeUnit.SECONDS);
+            assertEquals("remote-model",result.getJSONArray("models").getJSONObject(0).getString("modelId"));assertFalse(result.getBoolean("selectionChanged"));
+            assertFalse(result.getJSONObject("connection").getBoolean("catalogEnabled"));assertEquals(original,settings.apiConnectionsSnapshot().getString("selectedConnectionId"));assertNotNull(settings.selectedAccountModel());
+            JSONObject picker=service.modelPickerSnapshot();boolean found=false;for(int i=0;i<picker.getJSONArray("models").length();i++){JSONObject model=picker.getJSONArray("models").getJSONObject(i);if(id.equals(model.getString("connectionId"))){assertEquals("remote-model",model.getString("modelId"));assertTrue(model.getBoolean("available"));found=true;}}
+            assertTrue(found);assertEquals(0,inferences.get());
+        }finally{release.countDown();caller.shutdownNow();}
+    }
+    @Test public void sourceRevisionRejectsLateRefreshWhileRetainingLastSuccessfulDirectory()throws Exception {
+        JSONObject source=source("原目录","");String id=source.getString("id");long revision=source.getLong("revision");
+        service.refreshConnection(id,revision,new RunControl());modelBody="{\"data\":[{\"id\":\"stale-result\"}]}";
+        entered=new CountDownLatch(1);release=new CountDownLatch(1);ExecutorService caller=Executors.newSingleThreadExecutor();
+        try{
+            Future<?> pending=caller.submit(()->assertThrows(CatalogException.class,()->service.refreshConnection(id,revision,new RunControl())));assertTrue(entered.await(2,TimeUnit.SECONDS));
+            JSONObject changed=settings.saveApiConnection(id,revision,"新名称",new JSONObject());release.countDown();pending.get(3,TimeUnit.SECONDS);
+            JSONObject current=service.connectionSnapshot(id,changed.getLong("revision"));assertTrue(current.toString().contains("remote-model"));assertFalse(current.toString().contains("stale-result"));assertTrue(current.isNull("refreshAttempt"));
+            assertThrows(IllegalStateException.class,()->service.captureConnectionModel(id,revision,"remote-model",512,ReasoningOptions.DEFAULT,0));
+        }finally{release.countDown();caller.shutdownNow();}
+    }
+    @Test public void independentRefreshFailureKeepsCacheAndManualModelRemainsExecutable()throws Exception {
+        JSONObject source=source("失败保留","");String id=source.getString("id");long revision=source.getLong("revision");
+        JSONObject first=service.refreshConnection(id,revision,new RunControl());long fetched=first.getJSONArray("models").getJSONObject(0).getLong("catalogFetchedAtMillis");
+        modelStatus=429;assertThrows(CatalogException.class,()->service.refreshConnection(id,revision,new RunControl()));
+        JSONObject retained=service.connectionSnapshot(id,revision);assertEquals(fetched,retained.getJSONArray("models").getJSONObject(0).getLong("catalogFetchedAtMillis"));assertEquals("failed",retained.getJSONObject("refreshAttempt").getString("status"));
+        ModelConfig captured=service.captureConnectionModel(id,revision,"remote-model",512,ReasoningOptions.DEFAULT,0);assertFalse(captured.catalogEnforced);SettingsStore.validate(captured);
+        assertThrows(ModelRequestPolicy.Rejected.class,()->service.captureConnectionModel(id,revision,"remote-model",512,new ReasoningOptions(ReasoningOptions.Mode.OPENAI_EFFORT,"high",0),0));
+        assertEquals("manual-model",settings.get().model);assertEquals(0,inferences.get());
+    }
+    @Test public void draftCatalogUsesTemporaryIdentityAndLeavesSavedSourcesAndCacheUntouched()throws Exception {
+        String before=settings.apiConnectionsSnapshot().toString();String selected=settings.get().model;
+        JSONObject result=service.previewConnectionCatalog("",0,new JSONObject().put("baseUrl",base()).put("provider","openai_chat").put("model",""),new RunControl());
+        assertEquals("succeeded",result.getString("status"));assertEquals("remote-model",result.getJSONArray("models").getJSONObject(0).getString("modelId"));assertFalse(result.getBoolean("saved"));assertFalse(result.getBoolean("selectionChanged"));
+        assertFalse(result.toString().contains("draft-key-"));assertEquals(before,settings.apiConnectionsSnapshot().toString());assertEquals(selected,settings.get().model);assertFalse(Files.exists(cache));assertEquals(1,modelCalls.get());assertEquals(0,inferences.get());
+    }
+    @Test public void strictCaptureOnlyStrengthensExactNativeBindingAndCannotSurviveDisableReenable()throws Exception {
+        JSONObject source=source("原生能力","");String id=source.getString("id");long revision=source.getLong("revision");
+        settings.configureApiCatalog(id,revision,ModelBinding.Format.OPENROUTER,URI.create(base()+"/models"));revision++;
+        modelBody=richModel().toString();service.refreshConnection(id,revision,new RunControl());
+        assertFalse(service.captureConnectionModel(id,revision,"remote-model",512,ReasoningOptions.DEFAULT,0).supportsImageInput);
+        ModelConfig captured=service.captureConnectionModel(id,revision,"remote-model",512,new ReasoningOptions(ReasoningOptions.Mode.OPENAI_EFFORT,"high",0),0);
+        assertTrue(captured.catalogEnforced);assertTrue(captured.supportsImageInput);assertFalse(settings.apiConnectionMetadata(id,revision).configuration.catalogEnforced);assertTrue(settings.matchesApiCatalogRoute(captured));assertSame(captured,settings.currentForCaptured(captured));
+        long reviewedRevision=revision;
+        assertThrows(IllegalArgumentException.class,()->service.selectConnectionModel(id,reviewedRevision,"remote-model",512,new ReasoningOptions(ReasoningOptions.Mode.OPENAI_EFFORT,"high",0),0));
+        assertFalse(settings.apiConnectionMetadata(id,revision).configuration.catalogEnforced);assertEquals("manual-model",settings.get().model);
+        JSONObject disabled=settings.setApiConnectionEnabled(id,revision,false);settings.setApiConnectionEnabled(id,disabled.getLong("revision"),true);
+        assertFalse(settings.matchesApiCatalogRoute(captured));assertThrows(SecurityException.class,()->settings.currentForCaptured(captured));assertEquals(0,inferences.get());
+    }
+    @Test public void modelSpecificCompatibilityPreventsGlobalSwitchButAllowsConversationCapture()throws Exception {
+        service.connections();JSONObject first=settings.apiConnectionsSnapshot().getJSONArray("connections").getJSONObject(0);String id=first.getString("id");
+        JSONObject saved=settings.saveApiConnection(id,first.getLong("revision"),"原模型兼容设置",new JSONObject().put("compatibility",new JSONObject().put("tokenField","MAX_TOKENS")));
+        long revision=saved.getLong("revision");ModelConfig running=settings.get();String before=settings.apiConnectionsSnapshot().toString();assertNotNull(running.compatibility);
+        ModelConfig conversation=service.captureConnectionModel(id,revision,"another-model",512,ReasoningOptions.DEFAULT,0);
+        assertEquals("another-model",conversation.model);assertNull(conversation.compatibility);
+        IllegalArgumentException denied=assertThrows(IllegalArgumentException.class,()->service.selectConnectionModel(id,revision,"another-model",512,ReasoningOptions.DEFAULT,0));
+        assertTrue(denied.getMessage().contains("此对话"));assertThrows(IllegalArgumentException.class,()->settings.selectConnectionModel(id,revision,conversation));
+        assertEquals(before,settings.apiConnectionsSnapshot().toString());assertEquals("manual-model",settings.get().model);assertTrue(settings.matchesApiCatalogRoute(running));assertSame(running,settings.currentForCaptured(running));
+        service.selectConnectionModel(id,revision,"manual-model",384,ReasoningOptions.DEFAULT,0);
+        assertEquals(384,settings.get().maxOutputTokens);assertEquals(512,settings.currentForCaptured(running).maxOutputTokens);assertTrue(settings.matchesApiCatalogRoute(running));assertEquals(0,inferences.get());
+    }
+    @Test public void boundConversationModelSurvivesRenameAndDefaultChangeButRejectsANewBinding()throws Exception {
+        JSONObject source=source("会话原来源","model-m");String id=source.getString("id");ModelBinding original=ModelBinding.fromJson(source.getJSONObject("binding"));
+        JSONObject renamed=settings.saveApiConnection(id,source.getLong("revision"),"来源新名称",new JSONObject());
+        assertEquals(original,ModelBinding.fromJson(renamed.getJSONObject("binding")));
+        ModelConfig afterRename=service.captureBoundConnectionModel(original,"model-m",512,ReasoningOptions.DEFAULT,0);assertEquals("model-m",afterRename.model);
+        service.selectConnectionModel(id,renamed.getLong("revision"),"model-n",384,ReasoningOptions.DEFAULT,0);assertEquals("model-n",settings.get().model);
+        ModelConfig afterDefault=service.captureBoundConnectionModel(original,"model-m",512,ReasoningOptions.DEFAULT,0);
+        assertEquals("model-m",afterDefault.model);assertEquals(512,afterDefault.maxOutputTokens);assertEquals(original,afterDefault.capabilityBinding);assertTrue(settings.matchesApiCatalogRoute(afterDefault));
+        JSONObject current=null;JSONArray rows=settings.apiConnectionsSnapshot().getJSONArray("connections");for(int i=0;i<rows.length();i++)if(id.equals(rows.getJSONObject(i).getString("id")))current=rows.getJSONObject(i);assertNotNull(current);
+        assertEquals(id,current.getString("id"));assertEquals(original,ModelBinding.fromJson(current.getJSONObject("binding")));
+        JSONObject changed=settings.saveApiConnection(id,current.getLong("revision"),"地址已更新",new JSONObject().put("baseUrl",base()+"/changed"));
+        assertNotEquals(original,ModelBinding.fromJson(changed.getJSONObject("binding")));
+        assertThrows(SecurityException.class,()->service.captureBoundConnectionModel(original,"model-m",512,ReasoningOptions.DEFAULT,0));assertEquals(0,inferences.get());
+    }
+    @Test public void legacyCatalogDefaultSelectionCannotRemoveModelSpecificCompatibility()throws Exception {
+        service.connections();enable(ModelBinding.Format.OPENAI);JSONObject source=settings.apiConnectionsSnapshot().getJSONArray("connections").getJSONObject(0);
+        settings.saveApiConnection(source.getString("id"),source.getLong("revision"),"原生兼容目录",new JSONObject().put("compatibility",new JSONObject().put("tokenField","MAX_TOKENS")));
+        ModelConfig running=settings.get();ModelBinding binding=running.capabilityBinding;String before=settings.apiConnectionsSnapshot().toString();
+        assertThrows(IllegalArgumentException.class,()->service.select(binding,"another-model",512,ReasoningOptions.DEFAULT));
+        assertThrows(IllegalArgumentException.class,()->settings.selectCatalogModel(binding,"another-model",512,ReasoningOptions.DEFAULT,0));
+        assertEquals(before,settings.apiConnectionsSnapshot().toString());assertTrue(settings.matchesApiCatalogRoute(running));assertSame(running,settings.currentForCaptured(running));assertEquals(0,inferences.get());
+    }
 
     @Test public void batchFavoritesPreviewExactReferencesWithoutSelectingCopyingSecretsOrCallingModels()throws Exception{
         service.connections();modelBody="{\"data\":[{\"id\":\"remote-model\",\"supported_endpoints\":[\"/chat/completions\"]},{\"id\":\"other-protocol\",\"supported_endpoints\":[\"/messages\"]}]}";

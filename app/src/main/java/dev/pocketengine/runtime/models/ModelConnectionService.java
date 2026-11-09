@@ -33,7 +33,10 @@ public final class ModelConnectionService {
     private volatile dev.pocketengine.store.TaskStore ownerTasks;
     private JSONObject lastProbe;
     private Attempt attempt;
-    private record Attempt(ModelBinding binding, ModelCatalog.Ticket ticket, long started, String status, String code) { }
+    private final Map<String,Attempt> connectionAttempts=new java.util.LinkedHashMap<>();
+    private record Attempt(ModelBinding binding, ModelCatalog.Ticket ticket, long started, String status, String code,long sourceRevision) {
+        private Attempt(ModelBinding binding,ModelCatalog.Ticket ticket,long started,String status,String code){this(binding,ticket,started,status,code,0);}
+    }
 
     public ModelConnectionService(SettingsStore settings, Path privateCache, Clock clock) throws IOException {
         this(settings, new ModelCatalog(privateCache, clock), new CatalogHttpClient(clock, 15000), clock);
@@ -225,7 +228,7 @@ public final class ModelConnectionService {
                 boolean selected=false;
                 for(ModelCatalog.View view:catalog.list(binding,MAX_CATALOG_AGE_MILLIS)){models.put(view.toJson());selected|=view.key().modelId().equals(current.model);}
                 if(!selected&&!current.model.isEmpty())models.put(catalog.get(new ModelCatalog.ModelKey(binding,current.model),MAX_CATALOG_AGE_MILLIS).toJson());
-                out.put("selected",catalog.get(new ModelCatalog.ModelKey(binding,current.model),MAX_CATALOG_AGE_MILLIS).toJson());
+                if(!current.model.isEmpty())out.put("selected",catalog.get(new ModelCatalog.ModelKey(binding,current.model),MAX_CATALOG_AGE_MILLIS).toJson());
             }
             JSONObject connections=out.getJSONObject("connections");JSONArray profiles=connections.getJSONArray("connections");
             for(int i=0;i<profiles.length();i++){JSONObject profile=profiles.getJSONObject(i);profile.put("inferenceObservation",inferenceObservations.snapshot(ModelBinding.fromJson(profile.getJSONObject("binding")),profile.getString("model")));}
@@ -247,6 +250,148 @@ public final class ModelConnectionService {
 
     private static String defaultEndpoint(ModelConfig config) {
         try{return ModelCatalogRoutes.modelsEndpoint(config).toASCIIString();}catch(Exception unconfigured){return "";}
+    }
+    /** One saved source's public directory, independent of every current task/default selection. */
+    public JSONObject connectionSnapshot(String connectionId,long expectedRevision)throws Exception {
+        synchronized(settings){
+            ApiConnectionProfile profile=settings.apiConnectionMetadata(connectionId,expectedRevision);ModelConfig config=profile.configuration;
+            ModelBinding binding=config.capabilityBinding;catalog.bind(binding);JSONArray models=new JSONArray();boolean configured=false;
+            if(!config.usesBedrock())for(ModelCatalog.View view:catalog.list(binding,MAX_CATALOG_AGE_MILLIS)){
+                models.put(view.toJson());configured|=view.key().modelId().equals(config.model);
+            }
+            if(!configured&&!config.model.isEmpty())models.put(catalog.get(new ModelCatalog.ModelKey(binding,config.model),MAX_CATALOG_AGE_MILLIS).toJson());
+            JSONObject out=new JSONObject().put("format","pocketworld.connection-catalog.v1").put("connection",profile.publicJson()).put("binding",binding.toJson())
+                    .put("models",models).put("catalogAvailable",!config.usesBedrock()).put("canRefresh",profile.enabled&&!config.usesBedrock())
+                    .put("catalogUnavailableReason",config.usesBedrock()?"Bedrock 当前使用明确的模型 ID，未接入模型目录":"")
+                    .put("modelsEndpoint",binding.modelsEndpoint().toASCIIString()).put("catalogFormat",binding.format().name())
+                    .put("maxCatalogAgeMillis",MAX_CATALOG_AGE_MILLIS).put("catalogTimeoutMillis",http.totalBudgetMillis()).put("selectionChanged",false);
+            Attempt observed;synchronized(this){observed=connectionAttempts.get(connectionId);}
+            out.put("refreshAttempt",observed!=null&&observed.sourceRevision==expectedRevision&&observed.binding.equals(binding)?new JSONObject().put("startedAtMillis",observed.started).put("status",observed.status).put("code",observed.code):JSONObject.NULL);
+            return out;
+        }
+    }
+    /** GET-only directory refresh. A switch to another source does not invalidate this source's work. */
+    public JSONObject refreshConnection(String connectionId,long expectedRevision,RunControl control)throws Exception {
+        final ModelConfig source;final ModelBinding binding;final ModelCatalog.Ticket ticket;
+        synchronized(settings){
+            source=settings.apiConfigForConnection(connectionId,expectedRevision);binding=source.capabilityBinding;
+            if(source.usesBedrock())throw new ModelRequestPolicy.Rejected("catalog_unavailable","Bedrock 当前未接入模型目录，请手动填写支持的模型 ID");
+            catalog.bind(binding);ticket=catalog.beginRefresh(binding);
+            synchronized(this){connectionAttempts.put(connectionId,new Attempt(binding,ticket,clock.millis(),"refreshing","",expectedRevision));}
+        }
+        try{
+            control.check();CatalogHttpClient.Headers headers=CatalogHttpClient.Headers.inference(ProviderAdapters.selected(source.provider).headers(source));
+            CatalogHttpClient.Snapshot fetched=http.fetch(binding,headers,()->readCurrent(control)&&catalog.isCurrent(ticket)&&stillConnection(connectionId,expectedRevision,binding));
+            requirePublicCatalog(source,fetched);
+            synchronized(settings){
+                control.check();if(!stillConnection(connectionId,expectedRevision,binding))throw new CatalogException(CatalogException.Code.CANCELLED);
+                if(catalog.commitRefresh(ticket,fetched)!=ModelCatalog.RefreshResult.APPLIED)throw new CatalogException(CatalogException.Code.CANCELLED);
+                setConnectionAttempt(connectionId,expectedRevision,binding,ticket,"succeeded","");
+            }
+        }catch(Exception failure){
+            setConnectionAttempt(connectionId,expectedRevision,binding,ticket,"failed",failure instanceof CatalogException known?known.code.name():failure instanceof InterruptedException?"CANCELLED":"CATALOG_UNAVAILABLE");
+            throw failure;
+        }
+        return connectionSnapshot(connectionId,expectedRevision);
+    }
+    /** Draft-only GET with a temporary identity. Neither credentials nor results enter the saved catalog. */
+    public JSONObject previewConnectionCatalog(String id,long expectedRevision,JSONObject input,RunControl control)throws Exception {
+        final ModelConfig draft;final ModelBinding binding;
+        synchronized(settings){
+            draft=settings.previewApiSource(id,expectedRevision,input);
+            if(draft.usesBedrock())throw new IllegalArgumentException("Bedrock 当前使用明确的模型 ID，未接入模型目录");
+            ModelConfig original=id==null||id.isEmpty()?null:settings.apiConnectionMetadata(id,expectedRevision).configuration;
+            ModelBinding retained=original!=null&&original.provider.equals(draft.provider)&&original.baseUrl.equals(draft.baseUrl)?original.capabilityBinding:null;
+            binding=new ModelBinding("draft-"+java.util.UUID.randomUUID(),draft.provider,ModelCatalogRoutes.protocol(draft.provider),retained==null?ModelCatalogRoutes.defaultFormat(draft.provider):retained.format(),retained==null?ModelCatalogRoutes.modelsEndpoint(draft):retained.modelsEndpoint(),
+                    "draft-key-"+java.util.UUID.randomUUID(),1,"draft-install-"+java.util.UUID.randomUUID(),1,!ModelConfig.cleartextConsentFor(draft.provider,draft.baseUrl).isEmpty());
+        }
+        control.check();CatalogHttpClient.Snapshot fetched=http.fetch(binding,CatalogHttpClient.Headers.inference(ProviderAdapters.selected(draft.provider).headers(draft)),
+                ()->readCurrent(control)&&(id==null||id.isEmpty()||draftSourceCurrent(id,expectedRevision)));
+        control.check();if(id!=null&&!id.isEmpty()&&!draftSourceCurrent(id,expectedRevision))throw new CatalogException(CatalogException.Code.CANCELLED);
+        requirePublicCatalog(draft,fetched);
+        JSONArray rows=new JSONArray();
+        for(var entry:fetched.models().entrySet()){
+            ModelEndpointSupport support=fetched.endpointSupport().get(entry.getKey());
+            rows.put(new JSONObject().put("modelId",entry.getKey()).put("facts",entry.getValue().toJson()).put("endpointSupport",support==null?JSONObject.NULL:support.toJson())
+                    .put("protocolCompatibility",support==null?"unknown":support.supports(binding.protocol())?"declared_compatible":"declared_incompatible"));
+        }
+        return new JSONObject().put("format","pocketworld.draft-catalog.v1").put("status","succeeded").put("models",rows).put("saved",false).put("selectionChanged",false);
+    }
+    private boolean draftSourceCurrent(String id,long revision){try{settings.apiConnectionMetadata(id,revision);return true;}catch(Exception stale){return false;}}
+    private static boolean readCurrent(RunControl control){try{control.check();return true;}catch(Exception unavailable){return false;}}
+    public boolean connectionCurrent(String id,long revision,ModelBinding binding){try{return binding.equals(settings.apiConnectionMetadata(id,revision).configuration.capabilityBinding);}catch(Exception stale){return false;}}
+    private static void requirePublicCatalog(ModelConfig source,CatalogHttpClient.Snapshot fetched)throws Exception {
+        for(var entry:fetched.models().entrySet())if(source.containsSensitive(entry.getKey())||source.containsSensitive(entry.getValue().toJson().toString()))throw new CatalogException(CatalogException.Code.INVALID_CATALOG);
+        for(var entry:fetched.prices().entrySet())if(source.containsSensitive(entry.getValue().toJson().toString()))throw new CatalogException(CatalogException.Code.INVALID_CATALOG);
+    }
+    public JSONObject reviewConnectionModel(String connectionId,long expectedRevision,String model)throws Exception {
+        synchronized(settings){
+            ApiConnectionProfile profile=settings.apiConnectionMetadata(connectionId,expectedRevision);ModelConfig config=profile.configuration;ModelBinding binding=config.capabilityBinding;
+            catalog.bind(binding);ModelCatalog.View view=catalog.get(new ModelCatalog.ModelKey(binding,model),MAX_CATALOG_AGE_MILLIS);
+            boolean compatible=view.endpointSupport()==null||view.endpointSupport().supports(binding.protocol());
+            String unavailable=!profile.enabled?"connection_disabled":!compatible?"catalog_protocol_mismatch":"";
+            if(unavailable.isEmpty()&&config.usesBedrock())unavailable=profile.secretSlot.isEmpty()?"credential_not_configured":System.currentTimeMillis()>=profile.credentialExpiresAtEpochMillis?"credential_expired":"";
+            JSONObject row=view.toJson().put("connectionId",connectionId).put("connectionName",profile.name).put("connectionRevision",profile.revision)
+                    .put("provider",config.provider).put("available",unavailable.isEmpty()).put("unavailableReason",unavailable);
+            return new JSONObject().put("model",row).put("connection",profile.publicJson()).put("selectionChanged",false)
+                    .put("options",new JSONObject().put("maxOutputTokens",config.maxOutputTokens).put("reasoning",ReasoningOptions.DEFAULT.toJson()).put("imageTokenReserve",config.catalogEnforced?config.imageTokenReserve:0));
+        }
+    }
+    /** Native capture for conversation/run admission. It never changes source, defaults or catalog policy. */
+    public ModelConfig captureBoundConnectionModel(ModelBinding original,String model,int output,ReasoningOptions reasoning,int imageTokenReserve)throws Exception {
+        synchronized(settings){
+            if(original==null)throw new SecurityException("原会话模型缺少来源绑定，请重新选择模型");
+            JSONArray rows=settings.apiConnectionsSnapshot().getJSONArray("connections");
+            for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);
+                if(original.connectionId().equals(row.getString("id"))){
+                    if(!original.equals(ModelBinding.fromJson(row.getJSONObject("binding"))))throw new SecurityException("原会话模型的来源、凭据或启停代次已变化，请重新选择模型");
+                    return captureConnectionModel(original.connectionId(),row.getLong("revision"),model,output,reasoning,imageTokenReserve);
+                }
+            }
+            throw new SecurityException("原会话模型来源已不可用，请重新选择模型");
+        }
+    }
+    /** A fresh picker review additionally pins the exact source metadata revision it displayed. */
+    public ModelConfig captureConnectionModel(String connectionId,long expectedRevision,String model,int output,ReasoningOptions reasoning,int imageTokenReserve)throws Exception {
+        synchronized(settings){
+            ModelConfig current=settings.apiConfigForConnection(connectionId,expectedRevision);ModelBinding binding=current.capabilityBinding;
+            ModelCatalog.ModelKey key=new ModelCatalog.ModelKey(binding,model);
+            if(output<128||output>32768)throw new IllegalArgumentException("输出上限需在128–32768之间");
+            if(imageTokenReserve<0||imageTokenReserve>2000000)throw new IllegalArgumentException("图片预留需在0–2000000之间");
+            Objects.requireNonNull(reasoning);catalog.bind(binding);ModelCatalog.View view=catalog.get(key,MAX_CATALOG_AGE_MILLIS);
+            if(view.endpointSupport()!=null&&!view.endpointSupport().supports(binding.protocol()))throw new IllegalStateException("此模型明确声明使用其他协议，请重新核对原连接");
+            boolean strict=current.catalogEnforced||reasoning.mode()!=ReasoningOptions.Mode.DEFAULT||imageTokenReserve>0;
+            if(current.usesBedrock()&&strict)throw new IllegalArgumentException("此 Bedrock 接入尚不支持目录推理参数，请保留默认参数");
+            boolean image=current.model.equals(model)&&current.supportsImageInput;
+            // Catalog evidence cannot silently become a durable manual owner declaration.
+            if(strict)image=view.facts().imageInput().known&&Boolean.TRUE.equals(view.facts().imageInput().value);
+            else if(view.facts().imageInput().known&&!Boolean.TRUE.equals(view.facts().imageInput().value))image=false;
+            ModelConfig selected=new ModelConfig(current.baseUrl,current.apiKey,model,current.sendScreenshots,current.maxSteps,current.requestTimeoutSeconds,current.provider,output);
+            if(current.usesBedrock())selected=selected.withBedrockSession(current.bedrockRegion,current.awsSession);
+            selected=selected.withCleartextConsent(current.cleartextConsent).withOwnerImageInput(image).withLocalObservation(current.localCaptureAllowed,current.localOcrAllowed)
+                    .withProviderCompatibility(current.model.equals(model)?current.compatibility:null);
+            selected=strict?selected.withNativeCatalog(binding,reasoning,imageTokenReserve):selected.withApiConnection(binding);
+            SettingsStore.validate(selected);ModelRequestPolicy.validateOutput(selected,view.facts());return selected;
+        }
+    }
+    /** Explicit default selection, separate from saving a source and reading its models. */
+    public JSONObject selectConnectionModel(String connectionId,long expectedRevision,String model,int output,ReasoningOptions reasoning,int imageTokenReserve)throws Exception {
+        synchronized(settings){
+            ModelConfig source=settings.apiConnectionMetadata(connectionId,expectedRevision).configuration;
+            if(source.compatibility!=null&&!source.model.equals(model))throw new IllegalArgumentException("此来源保留了当前模型专属的兼容设置，请在此对话选择其他模型；运行中的任务会继续使用原设置");
+            if(!source.catalogEnforced
+                    &&(reasoning.mode()!=ReasoningOptions.Mode.DEFAULT||imageTokenReserve>0))
+                throw new IllegalArgumentException("请在此对话设置推理参数；若要设为服务默认，请先明确启用该来源能力目录");
+            ModelConfig captured=captureConnectionModel(connectionId,expectedRevision,model,output,reasoning,imageTokenReserve);
+            settings.selectConnectionModel(connectionId,expectedRevision,captured);return snapshot();
+        }
+    }
+    private boolean stillConnection(String id,long revision,ModelBinding binding){
+        synchronized(settings){try{ApiConnectionProfile row=settings.apiConnectionMetadata(id,revision);return row.enabled&&binding.equals(row.configuration.capabilityBinding);}catch(Exception unavailable){return false;}}
+    }
+    private void setConnectionAttempt(String id,long revision,ModelBinding binding,ModelCatalog.Ticket ticket,String status,String code){
+        if(!stillConnection(id,revision,binding))return;
+        synchronized(this){Attempt current=connectionAttempts.get(id);if(current!=null&&current.ticket==ticket)connectionAttempts.put(id,new Attempt(binding,ticket,current.started,status,code,revision));}
     }
     /** Explicit owner opt-in/configuration; never called automatically by a task or refresh failure. */
     public JSONObject configure(ModelBinding expected,ModelBinding.Format format,URI modelsEndpoint) throws Exception {
@@ -306,6 +451,7 @@ public final class ModelConnectionService {
     public JSONObject select(ModelBinding expected,String model,int output,ReasoningOptions reasoning,int imageTokenReserve) throws Exception {
         synchronized(settings){
             requireBinding(expected);ModelConfig current=settings.apiConfigForCatalog();
+            if(current.compatibility!=null&&!current.model.equals(model))throw new IllegalArgumentException("此来源保留了当前模型专属的兼容设置，请在此对话选择其他模型；运行中的任务会继续使用原设置");
             ModelConfig selection=new ModelConfig(current.baseUrl,current.apiKey,model,current.sendScreenshots,current.maxSteps,current.requestTimeoutSeconds,current.provider,output)
                     .withCleartextConsent(current.cleartextConsent).withNativeCatalog(expected,reasoning,imageTokenReserve).withProviderCompatibility(current.model.equals(model)?current.compatibility:null);
             ModelCatalog.View view=resolve(selection);if(view.endpointSupport()!=null&&!view.endpointSupport().supports(expected.protocol()))throw new IllegalStateException("此目录模型明确声明使用其他协议；请修改原连接的协议或手动核对模型，原配置仍保留。");ModelRequestPolicy.validateOutput(selection,view.facts());
@@ -329,12 +475,23 @@ public final class ModelConnectionService {
     /** Existing owner model page, no feature/model tool and no automatic network request. */
     public JSONObject connections()throws Exception{synchronized(settings){settings.apiConnections();return snapshot();}}
     public JSONObject saveConnection(String id,long revision,String name,JSONObject input)throws Exception{synchronized(settings){settings.saveApiConnection(id,revision,name,input);return snapshot();}}
+    public JSONObject saveSource(String id,long revision,String name,JSONObject input)throws Exception{synchronized(settings){
+        JSONObject saved=settings.saveApiConnection(id,revision,name,input);
+        return new JSONObject().put("status","saved").put("savedConnection",saved).put("snapshot",snapshot())
+                .put("catalog",connectionSnapshot(saved.getString("id"),saved.getLong("revision"))).put("selectionChanged",false);
+    }}
     public JSONObject selectConnection(String id,long revision)throws Exception{synchronized(settings){settings.selectApiConnection(id,revision);return snapshot();}}
     public JSONObject addAndSelectConnection(String name,JSONObject input)throws Exception{synchronized(settings){settings.addAndSelectApiConnection(name,input);return snapshot();}}
     public JSONObject enableConnection(String id,long revision,boolean enabled)throws Exception{synchronized(settings){settings.setApiConnectionEnabled(id,revision,enabled);return snapshot();}}
+    public JSONObject enableSource(String id,long revision,boolean enabled)throws Exception{synchronized(settings){
+        JSONObject saved=settings.setApiConnectionEnabled(id,revision,enabled);
+        return new JSONObject().put("status","saved").put("savedConnection",saved).put("snapshot",snapshot()).put("selectionChanged",false);
+    }}
     public JSONObject saveGroup(String id,long revision,String name,JSONObject definition)throws Exception{synchronized(settings){settings.saveModelGroup(id,revision,name,definition);return snapshot();}}
+    public JSONObject deleteGroup(String id,long revision)throws Exception{synchronized(settings){settings.deleteModelGroup(id,revision);return snapshot();}}
     public JSONObject selectPurpose(String purpose,ModelTargetRef target)throws Exception{synchronized(settings){settings.selectModelPurpose(purpose,target);return snapshot();}}
     public ModelConfig captureTarget(ModelTargetRef target,String purpose,String audience,ModelConfig capturedGlobal)throws Exception{return settings.captureModelTarget(target,purpose,audience,capturedGlobal);}
+    public ModelConfig captureConversationGroup(String groupId,long groupRevision)throws Exception{return settings.captureConversationGroup(groupId,groupRevision);}
     /** Inputs are already captured native policy references. Never reads a later global default. */
     public ModelConfig capturePurpose(ModelTargetRef member,java.util.Map<String,ModelTargetRef> task,java.util.Map<String,ModelTargetRef> profile,String purpose,String audience,ModelConfig capturedGlobal)throws Exception{
         ModelTargetRef chosen=member!=null?member:task!=null&&task.containsKey(purpose)?task.get(purpose):profile==null?null:profile.get(purpose);
@@ -350,8 +507,8 @@ public final class ModelConnectionService {
             try{ModelConfig active=settings.get();selectedConnection=active.usesAccount()?"account:"+active.accountModel.accountId:active.capabilityBinding==null?"":active.capabilityBinding.connectionId();selectedModel=active.model;}catch(Exception unavailable){/* An invalid selection is shown, never replaced. */}
             for(int i=0;i<profiles.length();i++){
                 JSONObject profile=profiles.getJSONObject(i);ModelBinding binding=ModelBinding.fromJson(profile.getJSONObject("binding"));catalog.bind(binding);
-                java.util.LinkedHashSet<String> models=new java.util.LinkedHashSet<>();models.add(profile.getString("model"));
-                if(profile.optBoolean("catalogEnabled"))for(ModelCatalog.View view:catalog.list(binding,MAX_CATALOG_AGE_MILLIS))models.add(view.key().modelId());
+                java.util.LinkedHashSet<String> models=new java.util.LinkedHashSet<>();if(!profile.getString("model").isEmpty())models.add(profile.getString("model"));
+                if(!ModelConfig.BEDROCK_PROVIDER.equals(profile.getString("provider")))for(ModelCatalog.View view:catalog.list(binding,MAX_CATALOG_AGE_MILLIS))models.add(view.key().modelId());
                 for(ModelSelectionPreferences.Entry preference:modelPreferences.entries())if(preference.key().connectionId().equals(binding.connectionId()))models.add(preference.key().modelId());
                 for(String model:models){
                     ModelCatalog.View view=catalog.get(new ModelCatalog.ModelKey(binding,model),MAX_CATALOG_AGE_MILLIS);
@@ -366,7 +523,7 @@ public final class ModelConnectionService {
                     JSONObject row=new JSONObject().put("connectionId",binding.connectionId()).put("connectionName",profile.getString("name")).put("connectionRevision",profile.getLong("revision"))
                             .put("binding",binding.toJson()).put("modelId",model).put("provider",profile.getString("provider")).put("available",reason.isEmpty()).put("unavailableReason",reason)
                             .put("favorite",pref.favorite()).put("lastUsedAt",pref.lastUsedAt()).put("selected",binding.connectionId().equals(selectedConnection)&&model.equals(selectedModel))
-                            .put("catalogFresh",view.catalogFresh()).put("toolCalls",view.facts().toolCalls().toJson()).put("imageInput",view.facts().imageInput().toJson())
+                            .put("catalogFresh",view.catalogFresh()).put("facts",view.facts().toJson()).put("toolCalls",view.facts().toolCalls().toJson()).put("imageInput",view.facts().imageInput().toJson())
                             .put("endpointSupport",view.endpointSupport()==null?JSONObject.NULL:view.endpointSupport().toJson());
                     rows.put(key,row);
                 }

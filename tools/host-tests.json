@@ -7,8 +7,16 @@
   },
   "account-history-origin": {
     "class": "dev.pocketengine.store.AccountHistoryOriginTest",
-    "additionalClasses": ["dev.pocketengine.features.proxy.accounts.AccountInferenceRenewalTest", "dev.pocketengine.features.proxy.accounts.AccountRefreshCheckpointTest"],
-    "helpers": ["dev.pocketengine.features.proxy.accounts.AccountGatewayTest", "dev.pocketengine.features.proxy.providers.FakeChatGpt", "dev.pocketengine.features.proxy.providers.ResponsesFixtures", "dev.pocketengine.testutil.HttpServer"],
+    "additionalClasses": [
+      "dev.pocketengine.features.proxy.accounts.AccountInferenceRenewalTest",
+      "dev.pocketengine.features.proxy.accounts.AccountRefreshCheckpointTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.proxy.accounts.AccountGatewayTest",
+      "dev.pocketengine.features.proxy.providers.FakeChatGpt",
+      "dev.pocketengine.features.proxy.providers.ResponsesFixtures",
+      "dev.pocketengine.testutil.HttpServer"
+    ],
     "robolectric": true,
     "description": "Native SQL completed-receipt provenance for same-task ChatGPT history after renewal; no live account or tool effects."
   },
@@ -45,7 +53,8 @@
       "dev.pocketengine.features.proxy.accounts.AccountCatalogJourneyTest",
       "dev.pocketengine.features.proxy.accounts.AccountLoopbackRelayTest",
       "dev.pocketengine.features.proxy.accounts.AccountInferenceRecoveryJourneyTest",
-      "dev.pocketengine.features.proxy.NativeRelayRedactorTest"
+      "dev.pocketengine.features.proxy.NativeRelayRedactorTest",
+      "dev.pocketengine.features.proxy.accounts.NativeAccountPreferenceCaptureTest"
     ],
     "helpers": [
       "dev.pocketengine.features.proxy.providers.FakeChatGpt",
@@ -158,7 +167,11 @@
       "dev.pocketengine.runtime.models.ModelProbeDeadlineTest",
       "dev.pocketengine.runtime.models.ModelSelectionPreferencesTest",
       "dev.pocketengine.store.ModelPreferencesNativeJourneyTest",
-      "dev.pocketengine.runtime.models.ModelSelectionCoordinatorTest"
+      "dev.pocketengine.runtime.models.ModelSelectionCoordinatorTest",
+      "dev.pocketengine.runtime.models.ApiConnectionProfileTest",
+      "dev.pocketengine.store.AiSourceSettingsTest",
+      "dev.pocketengine.ui.web.PocketWebModelConnectionCommandsTest",
+      "dev.pocketengine.runtime.models.ConversationModelPreferencesTest"
     ],
     "helpers": [],
     "robolectric": true,
@@ -1785,7 +1798,9 @@
   },
   "pocket-web-bundle": {
     "class": "dev.pocketengine.ui.web.PocketWebBundleTest",
-    "additionalClasses": ["dev.pocketengine.ui.UiTypographyTest"],
+    "additionalClasses": [
+      "dev.pocketengine.ui.UiTypographyTest"
+    ],
     "helpers": [],
     "description": "Original runtime resource allowlist, exact origin, canonical paths and bounded receipt admission. No mounted Android WebView or APK acceptance."
   },
@@ -2160,5 +2175,28 @@
     ],
     "robolectric": true,
     "description": "Original TaskStore/Runner/Gateway and epoch-zero TeamCoordinator trajectories, native turns and physical retries, source-current lazy details and historical run paging, schema-11 migration, measured model/tool/visible-text timing, raw provider usage, native operation authority, and redacted OTLP delivery. Loopback HTTP/native SQLite fixtures; physical Android, live provider and cloud collector acceptance remain separate."
+  },
+  "ai-services": {
+    "class": "dev.pocketengine.runtime.models.ModelConnectionServiceTest",
+    "additionalClasses": [
+      "dev.pocketengine.runtime.models.ApiConnectionProfileTest",
+      "dev.pocketengine.store.AiSourceSettingsTest",
+      "dev.pocketengine.ui.web.PocketWebModelConnectionCommandsTest",
+      "dev.pocketengine.runtime.models.ConversationModelPreferencesTest",
+      "dev.pocketengine.features.proxy.accounts.NativeAccountPreferenceCaptureTest",
+      "dev.pocketengine.features.ProxyReviewedOwnerTest",
+      "dev.pocketengine.ui.web.UnifiedWorkspaceHostTest"
+    ],
+    "helpers": [
+      "dev.pocketengine.features.proxy.accounts.AccountGatewayTest",
+      "dev.pocketengine.features.proxy.providers.FakeChatGpt",
+      "dev.pocketengine.features.proxy.providers.ResponsesFixtures",
+      "dev.pocketengine.testutil.HttpServer",
+      "dev.pocketengine.testutil.ReadyApplicationFixture",
+      "dev.pocketengine.features.channels.ChannelTaskHostTest",
+      "dev.pocketengine.features.channels.ChannelSecurityTest"
+    ],
+    "robolectric": true,
+    "description": "Unified AI source/catalog, conversation preference durability and original account capture, local relay credential lifecycle and native/Web inset ownership. Real production classes with isolated loopback and Android host fixtures; no live provider or physical-device claim."
   }
 }

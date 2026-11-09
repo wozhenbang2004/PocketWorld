@@ -70,6 +70,9 @@ public final class SettingsStore {
         ModelConfig selected=getSelected(),global=selected;
         ModelTargetRef target=modelPurposeTarget("MAIN");
         if(target!=null)selected=captureModelTarget(target,"MAIN","APP_OWNER",selected);
+        // First-run sources need not have a global default yet. Only an explicitly empty
+        // default uses this admission's valid MAIN as an exact fallback; revoked selections still fail.
+        if(global.model.isEmpty()&&!selected.model.isEmpty())global=selected.withRoutePlan(null);
         ModelTargetRef summary=modelPurposeTarget("SUMMARY");
         ModelConfig capturedSummary=summary==null?global.withRoutePlan(ModelRoutePlan.exact(global,"SUMMARY","APP_OWNER")):captureModelTarget(summary,"SUMMARY","APP_OWNER",global);
         selected=selected.withPurposePlans(java.util.Map.of("SUMMARY",capturedSummary.routePlan,"DEFAULT",ModelRoutePlan.exact(global,"DEFAULT","APP_OWNER")));
@@ -134,6 +137,14 @@ public final class SettingsStore {
         return "account".equals(prefs.getString("modelRoute","api_key"))
             ?ModelConfig.AccountModelRef.fromJson(new JSONObject(prefs.getString("accountModelRef",""))):null;
     }
+    /** Native reviewed account capture without reading API secrets or changing a global selection. */
+    public synchronized ModelConfig captureAccountModel(ModelConfig.AccountModelRef ref,ReasoningOptions reasoning,int imageReserve,int outputReserve)throws Exception {
+        requireConfirmed();java.util.Objects.requireNonNull(ref);java.util.Objects.requireNonNull(reasoning);
+        boolean screenshots=prefs.getBoolean("sendScreenshots",true);
+        return new ModelConfig("","","",screenshots,prefs.getInt("maxSteps",20),prefs.getInt("requestTimeoutSeconds",60),ModelConfig.DEFAULT_PROVIDER,outputReserve)
+                .withAccountModel(ref).withAccountOptions(reasoning,imageReserve,outputReserve)
+                .withLocalObservation(prefs.getBoolean("localCaptureAllowed",screenshots),prefs.getBoolean("localOcrAllowed",screenshots));
+    }
     /** Separate retained API configuration: choosing an account does not decrypt or erase this key. */
     private ModelConfig getApiKeyConfig() throws Exception {
         requireConfirmed();
@@ -163,7 +174,7 @@ public final class SettingsStore {
         requireConfirmed();Profiles profiles=profiles();
         if(profiles!=null){
             ApiConnectionProfile row=captured.capabilityBinding==null?null:profiles.rows.get(captured.capabilityBinding.connectionId());
-            if(row==null||!row.enabled||!captured.capabilityBinding.equals(row.configuration.capabilityBinding)||captured.catalogEnforced!=row.configuration.catalogEnforced||!sameCompatibility(captured.compatibility,captured.model.equals(row.configuration.model)?row.configuration.compatibility:null))return false;
+            if(row==null||!row.enabled||!captured.capabilityBinding.equals(row.configuration.capabilityBinding)||row.configuration.catalogEnforced&&!captured.catalogEnforced||!sameCompatibility(captured.compatibility,captured.model.equals(row.configuration.model)?row.configuration.compatibility:null))return false;
             ModelConfig current=materialize(row,false);if(current.usesBedrock()&&(current.awsSession==null||System.currentTimeMillis()>=current.awsSession.expiresAtEpochMillis()))return false;return captured.provider.equals(current.provider)&&captured.baseUrl.equals(current.baseUrl)&&captured.bedrockRegion.equals(current.bedrockRegion)&&captured.sameCredentials(current);
         }
         if(captured.capabilityBinding==null||!captured.capabilityBinding.equals(apiCatalogBinding())
@@ -253,6 +264,7 @@ public final class SettingsStore {
         Profiles profiles=profiles();
         if(profiles!=null){
             ApiConnectionProfile row=selectedProfile(profiles);ModelConfig old=materialize(row,true);
+            if(old.compatibility!=null&&!old.model.equals(model))throw new IllegalArgumentException("此来源保留了当前模型专属的兼容设置，请在此对话选择其他模型；运行中的任务会继续使用原设置");
             ModelConfig selected=new ModelConfig(old.baseUrl,"",model,old.sendScreenshots,old.maxSteps,old.requestTimeoutSeconds,old.provider,output).withCleartextConsent(old.cleartextConsent).withNativeCatalog(expected,reasoning,imageTokenReserve).withProviderCompatibility(old.model.equals(model)?old.compatibility:null);
             profiles.rows.put(row.id(),new ApiConnectionProfile(row.name,Math.addExact(row.revision,1),row.enabled,row.secretSlot,selected));
             commitProfiles(profiles,Math.addExact(profiles.selectionRevision,1),true);return getApiKeyConfig();
@@ -301,6 +313,40 @@ public final class SettingsStore {
             .put("maximumConnections",ApiConnectionProfile.MAX_CONNECTIONS);
     }
     public synchronized long apiSelectionRevision()throws Exception{requireConfirmed();Profiles p=profiles();return p==null?0:p.selectionRevision;}
+    /** Exact saved-source metadata. Does not decrypt a credential, select a source or migrate settings. */
+    public synchronized ApiConnectionProfile apiConnectionMetadata(String id,long expectedRevision)throws Exception{
+        requireConfirmed();return requireProfile(requireProfiles(),id,expectedRevision);
+    }
+    /** Native-only credential materialization for a reviewed source, independent of the global selection. */
+    public synchronized ModelConfig apiConfigForConnection(String id,long expectedRevision)throws Exception{
+        ApiConnectionProfile row=apiConnectionMetadata(id,expectedRevision);
+        if(!row.enabled)throw new IllegalStateException("此API连接已停用，请先明确启用");
+        ModelConfig config=materialize(row,false);validateConnection(config);requireBedrockCredentials(config);
+        return config.withLocalObservation(prefs.getBoolean("localCaptureAllowed",config.sendScreenshots),prefs.getBoolean("localOcrAllowed",config.sendScreenshots));
+    }
+    /** Directory configuration belongs to its source; changing it never selects that source. */
+    public synchronized ModelConfig configureApiCatalog(String id,long expectedRevision,ModelBinding.Format format,URI endpoint)throws Exception{
+        ApiConnectionProfile row=apiConnectionMetadata(id,expectedRevision);ModelConfig config=apiConfigForConnection(id,expectedRevision);
+        if(config.usesBedrock())throw new IllegalArgumentException("Bedrock 当前使用明确的模型 ID，未接入模型目录");
+        ModelCatalogRoutes.requireSameOrigin(config,endpoint);ModelBinding old=config.capabilityBinding;
+        if(old.format()==format&&old.modelsEndpoint().equals(endpoint))return config;
+        ModelBinding next=new ModelBinding(old.connectionId(),old.providerId(),old.protocol(),format,endpoint,old.credentialId(),old.credentialRevision(),old.installationId(),Math.addExact(old.installationRevision(),1),old.cleartextApproved());
+        ModelConfig stored=withoutSecret(config);stored=config.catalogEnforced?stored.withNativeCatalog(next,ReasoningOptions.DEFAULT,0):stored.withApiConnection(next);
+        Profiles state=requireProfiles();state.rows.put(id,new ApiConnectionProfile(row.name,Math.addExact(row.revision,1),row.enabled,row.secretSlot,stored,row.credentialExpiresAtEpochMillis));
+        commitProfiles(state,Math.addExact(state.selectionRevision,1),false);return apiConfigForConnection(id,Math.addExact(row.revision,1));
+    }
+    /** Explicit global-default write after native model review. Source save and catalog reads never call this. */
+    public synchronized ModelConfig selectConnectionModel(String id,long expectedRevision,ModelConfig captured)throws Exception{
+        ApiConnectionProfile row=apiConnectionMetadata(id,expectedRevision);
+        if(row.configuration.compatibility!=null&&!row.configuration.model.equals(captured.model))throw new IllegalArgumentException("此来源保留了当前模型专属的兼容设置，请在此对话选择其他模型；运行中的任务会继续使用原设置");
+        ModelConfig original=apiConfigForConnection(id,expectedRevision);
+        if(captured.usesAccount()||!original.capabilityBinding.equals(captured.capabilityBinding)||!matchesApiCatalogRoute(captured))throw new SecurityException("原连接或凭据修订已变化，请重新核对模型");
+        if(captured.catalogEnforced!=original.catalogEnforced)throw new IllegalArgumentException("默认模型选择不能改变来源的能力目录策略，请先明确配置原来源");
+        validate(captured);requireBedrockCredentials(captured);
+        ModelConfig stored=withoutSecret(captured);stored=captured.catalogEnforced?stored.withNativeCatalog(captured.capabilityBinding,captured.reasoning,captured.imageTokenReserve):stored.withApiConnection(captured.capabilityBinding);
+        Profiles state=requireProfiles();state.rows.put(id,new ApiConnectionProfile(row.name,Math.addExact(row.revision,1),true,row.secretSlot,stored,row.credentialExpiresAtEpochMillis));
+        commitProfiles(new Profiles(state.rows,id,state.selectionRevision),Math.addExact(state.selectionRevision,1),true);return getApiKeyConfig();
+    }
     /** A settings switch chooses future calls; an existing task keeps its original enabled profile. */
     public synchronized ModelConfig currentForCaptured(ModelConfig captured)throws Exception{
         requireConfirmed();java.util.Objects.requireNonNull(captured);
@@ -312,7 +358,7 @@ public final class SettingsStore {
             ApiConnectionProfile row=state.rows.get(captured.capabilityBinding.connectionId());
             if(row==null||!row.enabled||!row.configuration.capabilityBinding.equals(captured.capabilityBinding))throw new SecurityException("原API连接已停用或凭据/地址代次已变化，未切换连接");
             ModelConfig live=materialize(row,true);requireBedrockCredentials(live);
-            if(!captured.provider.equals(live.provider)||!captured.baseUrl.equals(live.baseUrl)||captured.catalogEnforced!=live.catalogEnforced
+            if(!captured.provider.equals(live.provider)||!captured.baseUrl.equals(live.baseUrl)||live.catalogEnforced&&!captured.catalogEnforced
                     ||!captured.bedrockRegion.equals(live.bedrockRegion)||(captured.usesBedrock()?captured.awsSession!=null:!captured.apiKey.isEmpty())&&!captured.sameCredentials(live))
                 throw new SecurityException("原API连接的身份或凭据已变化，未切换连接");
             if(captured.sameCredentials(live))return captured;
@@ -346,6 +392,13 @@ public final class SettingsStore {
     }
     /** Unsaved connection test input: add has no previous secret; edit is bound to the reviewed row. */
     public synchronized ModelConfig previewApiConnection(String id,long expectedRevision,JSONObject input)throws Exception{
+        return previewApiConnection(id,expectedRevision,input,true);
+    }
+    /** Unsaved directory input: allows no model, retains only the exact edited source's credential. */
+    public synchronized ModelConfig previewApiSource(String id,long expectedRevision,JSONObject input)throws Exception{
+        return previewApiConnection(id,expectedRevision,input,false);
+    }
+    private ModelConfig previewApiConnection(String id,long expectedRevision,JSONObject input,boolean requireModel)throws Exception{
         requireConfirmed();boolean adding=id==null||id.isEmpty();
         if(adding&&expectedRevision!=0)throw new IllegalStateException("新增连接不能复用旧连接修订");
         ModelConfig old=unconfiguredApi();
@@ -356,14 +409,14 @@ public final class SettingsStore {
                 old=row.configuration;
             }
         }
-        ModelConfig next=mergeApi(old,input);validate(next);
+        ModelConfig next=mergeApi(old,input);if(requireModel)validate(next);else validateConnection(next);
         if(next.usesBedrock()){
             requireBedrockCredentials(next);
             if(adding||old.capabilityBinding==null||!old.usesBedrock()||!old.baseUrl.equals(next.baseUrl)||!old.model.equals(next.model)||!old.sameCredentials(next)||input.has("awsSession")
                     ||old.maxOutputTokens!=next.maxOutputTokens||old.sendScreenshots!=next.sendScreenshots||old.supportsImageInput!=next.supportsImageInput)
                 throw new IllegalStateException("请先保存这项 Bedrock 连接及完整短期会话，再测试原连接");
         }
-        if(input.has("compatibility")){
+        if(requireModel&&input.has("compatibility")){
             if(adding)throw new IllegalStateException("请先保存原连接，再设置兼容与缓存选项");
             ProviderCompatProfile reviewed=input.isNull("compatibility")?null:ProviderCompatProfile.reviewed(input.getJSONObject("compatibility"),next.provider,next.model,old.compatibility);
             // An unsaved profile is not catalog authority. Keep the saved binding and its daily budget.
@@ -387,7 +440,7 @@ public final class SettingsStore {
         if(useApi&&input.has("compatibility"))throw new SecurityException("兼容档案只能通过本机原API连接的修订保存");
         ModelConfig next=mergeApi(previous,input);
         if(input.has("compatibility"))next=next.withProviderCompatibility(input.isNull("compatibility")?null:dev.pocketengine.runtime.providers.ProviderCompatProfile.reviewed(input.getJSONObject("compatibility"),next.provider,next.model,previous.compatibility));
-        validate(next);requireBedrockCredentials(next);
+        if(useApi)validate(next);else validateConnection(next);requireBedrockCredentials(next);
         if(next.containsSensitive(checkedName)||next.containsSensitive(withoutSecret(next).publicJson().toString()))throw new IllegalArgumentException("连接名称或公开配置不能包含原凭据");
         boolean projection=!sameCompatibility(previous.compatibility,next.compatibility);
         boolean route=prior==null||!previous.provider.equals(next.provider)||!previous.baseUrl.equals(next.baseUrl),credential=prior==null||unreadableCredential||!previous.sameCredentials(next);
@@ -509,6 +562,15 @@ public final class SettingsStore {
         if(found<0)rows.put(checked.toJson());else rows.put(found,checked.toJson());
         saveModelGroups(root);return checked.toJson();
     }
+    public synchronized void deleteModelGroup(String id,long expectedRevision)throws Exception {
+        requireConfirmed();JSONObject root=modelGroupsDocument();JSONArray rows=root.getJSONArray("groups");int found=-1;
+        for(int i=0;i<rows.length();i++)if(rows.getJSONObject(i).getString("groupId").equals(id))found=i;
+        if(found<0||rows.getJSONObject(found).getLong("revision")!=expectedRevision)throw new IllegalStateException("模型组已变化，请重新打开原记录");
+        JSONObject bindings=root.getJSONObject("purposeBindings");
+        for(var names=bindings.keys();names.hasNext();){String purpose=names.next();ModelTargetRef target=ModelTargetRef.fromJson(bindings.getJSONObject(purpose));
+            if(target.kind()==ModelTargetRef.Kind.GROUP&&id.equals(target.groupId()))throw new IllegalStateException("此模型组仍用于 "+purpose+"，请先解除该用途的选择再删除");}
+        rows.remove(found);saveModelGroups(root);
+    }
     public synchronized void selectModelPurpose(String purpose,ModelTargetRef ref)throws Exception {
         requireConfirmed();if(!purpose.matches("MAIN|SUMMARY|RELAY|MEMBER(?:\\.[A-Za-z0-9_-]{1,60})?"))throw new IllegalArgumentException("无效模型用途");
         if(ref!=null)captureModelTarget(ref,purpose,"RELAY".equals(purpose)?"EXTERNAL_RELAY":"APP_OWNER",getSelected());
@@ -535,12 +597,30 @@ public final class SettingsStore {
     }
     /** Both counters are monotonic; change-away-and-back still requires the original service restart. */
     public synchronized long relaySelectionRevision()throws Exception {return Math.addExact(apiSelectionRevision(),prefs.getLong("modelGroupSelectionRevision",0));}
+    /** Conversation-only API group capture. Its baseline never reads the unrelated global API credential. */
+    public synchronized ModelConfig captureConversationGroup(String groupId,long groupRevision)throws Exception {
+        requireConfirmed();ModelTargetRef target=ModelTargetRef.group(groupId,groupRevision);ModelGroup group=requireModelGroup(groupId,groupRevision);
+        Profiles sources=null;
+        for(ModelGroup.Candidate candidate:group.candidates){
+            String connection=candidate.target().connectionId();
+            if(connection.startsWith("account:"))throw new IllegalArgumentException("当前会话模型组仅支持普通 API 来源，ChatGPT 账号请单独选择");
+            if(sources==null)sources=requireProfiles();ApiConnectionProfile source=sources.rows.get(connection);
+            if(source!=null&&source.configuration.usesBedrock())throw new IllegalArgumentException("当前会话模型组尚不支持 Bedrock，请单独选择该模型");
+        }
+        ModelConfig baseline=unconfiguredApi();
+        baseline=baseline.withLocalObservation(prefs.getBoolean("localCaptureAllowed",baseline.sendScreenshots),prefs.getBoolean("localOcrAllowed",baseline.sendScreenshots));
+        return captureModelTarget(target,"MAIN","APP_OWNER",baseline);
+    }
+    private ModelGroup requireModelGroup(String id,long revision)throws Exception {
+        JSONArray rows=modelGroupsDocument().getJSONArray("groups");
+        for(int i=0;i<rows.length();i++){ModelGroup candidate=ModelGroup.fromJson(rows.getJSONObject(i));if(candidate.groupId.equals(id)&&candidate.revision==revision)return candidate;}
+        throw new IllegalStateException("所选模型组修订已失效，请重新选择；未使用最新版本替代");
+    }
     /** Capture once at native run admission. Edits cannot add candidates to this returned plan. */
     public synchronized ModelConfig captureModelTarget(ModelTargetRef ref,String purpose,String audience,ModelConfig capturedFallback)throws Exception {
         requireConfirmed();if(ref==null)return capturedFallback;
         if(ref.kind()==ModelTargetRef.Kind.EXACT){ModelConfig exact=resolveExactModel(ref,capturedFallback);if(exact.usesAccount()&&!"APP_OWNER".equals(audience))throw new SecurityException("CHATGPT_PLAN_APP_ONLY");return exact.withRoutePlan(ModelRoutePlan.exact(exact,purpose,audience));}
-        ModelGroup group=null;JSONArray rows=modelGroupsDocument().getJSONArray("groups");for(int i=0;i<rows.length();i++){ModelGroup candidate=ModelGroup.fromJson(rows.getJSONObject(i));if(candidate.groupId.equals(ref.groupId()))group=candidate;}
-        if(group==null||group.revision!=ref.groupRevision())throw new IllegalStateException("所选模型组修订已失效，请重新选择；未使用最新版本替代");
+        ModelGroup group=requireModelGroup(ref.groupId(),ref.groupRevision());
         java.util.List<ModelRoutePlan.Candidate> frozen=new java.util.ArrayList<>();
         for(ModelGroup.Candidate c:group.candidates){String reason=!c.enabled()?"candidate_disabled":!group.allowedAccounts.contains(c.target().connectionId())?"account_not_allowed":!c.allowedAudiences().contains(audience)?"audience_not_allowed":!c.allowedPurposes().contains(purpose)&&!(purpose.startsWith("MEMBER.")&&c.allowedPurposes().contains("MEMBER"))?"purpose_not_allowed":"";ModelConfig config=null;
             if(reason.isEmpty())try{config=resolveExactModel(c.target(),capturedFallback);if(config.usesAccount()&&!"APP_OWNER".equals(audience))reason="CHATGPT_PLAN_APP_ONLY";}catch(Exception unavailable){reason="original_connection_unavailable";}
@@ -580,7 +660,7 @@ public final class SettingsStore {
             next=next.withBedrockSession(c.bedrockRegion,session);
         }
         next=next.withCleartextConsent(c.cleartextConsent).withOwnerImageInput(c.supportsImageInput).withProviderCompatibility(c.compatibility);
-        if(c.catalogEnforced){next=next.withOwnerImageInput(false).withNativeCatalog(c.capabilityBinding,c.reasoning,c.imageTokenReserve);if(imageCapabilities!=null&&requireEnabled)next=next.withOwnerImageInput(imageCapabilities.supported(next));}
+        if(c.catalogEnforced){next=next.withOwnerImageInput(false).withNativeCatalog(c.capabilityBinding,c.reasoning,c.imageTokenReserve);if(imageCapabilities!=null&&requireEnabled&&!c.model.isEmpty())next=next.withOwnerImageInput(imageCapabilities.supported(next));}
         else next=next.withApiConnection(c.capabilityBinding);return next;
     }
     private static ModelConfig withoutSecret(ModelConfig c){
@@ -743,11 +823,15 @@ public final class SettingsStore {
         if(result.getBoolean("found")&&plan.getJSONArray("requiresRecreation").length()>0)result.put("status","completed_with_pending_recreation");return result;
     }
     public static void validate(ModelConfig c) throws Exception {
+        validateConnection(c);
+        if(!c.usesAccount()&&c.model.isEmpty())throw new IllegalArgumentException("请先选择或填写模型名称");
+    }
+    /** Source validation permits an empty ordinary API model; execution validation does not. */
+    public static void validateConnection(ModelConfig c) throws Exception {
         if(c.usesAccount())return; // Account lifecycle/version is checked atomically by the native gateway.
         if(c.usesBedrock()){dev.pocketengine.runtime.providers.bedrock.BedrockEndpoint.validate(c.bedrockRegion,c.model);if(!c.baseUrl.equals(dev.pocketengine.runtime.providers.bedrock.BedrockEndpoint.baseUrl(c.bedrockRegion))||c.catalogEnforced||!c.apiKey.isEmpty())throw new IllegalArgumentException("Bedrock 原连接目标或凭据类型不匹配");return;}
         URI uri=new URI(c.baseUrl);
         if (!("https".equalsIgnoreCase(uri.getScheme()) || "http".equalsIgnoreCase(uri.getScheme())) || uri.getHost()==null || uri.getUserInfo()!=null || uri.getQuery()!=null || uri.getFragment()!=null) throw new IllegalArgumentException("请输入有效的 http/https 模型接口地址");
-        if (c.model.isEmpty()) throw new IllegalArgumentException("请填写模型名称");
         c.requireTransportConsent(uri.toURL());
     }
     static boolean sameOrigin(String first,String second) {

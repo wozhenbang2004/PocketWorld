@@ -460,6 +460,23 @@ public final class NativeOwnerWorkflows {
         synchronized(this){catalogs.put(id,new JSONObject().put("accountId",id).put("accountVersion",version).put("models",reviewedIds));}return publicResult;
     }
     public JSONObject selectModel(JSONObject payload,GatewayCall operation)throws Exception{
+        dev.pocketengine.core.ModelConfig selection=reviewedAccountModel(payload,operation,true);
+        dev.pocketengine.core.ModelConfig.AccountModelRef nativeRef=selection.accountModel;
+        JSONObject reference=nativeRef.toJson();dev.pocketengine.runtime.models.ReasoningOptions reasoning=selection.reasoning;
+        int imageReserve=selection.imageTokenReserve,outputReserve=selection.maxOutputTokens;
+        accounts().selectModelReviewed(nativeRef.accountId,nativeRef.accountVersion,nativeRef.modelId);operation.check();
+        if(accountInferenceInstalled)context.settings.selectAccountModel(reference,reasoning,imageReserve,outputReserve);
+        synchronized(this){selectedModel=new JSONObject(reference.toString());}
+        return new JSONObject().put("nativeRef",new JSONObject(reference.toString())).put("selected",true).put("mainInferenceReady",accountInferenceInstalled)
+            .put("reasoning",reasoning.toJson()).put("imageTokenReserve",imageReserve).put("outputReserve",outputReserve).put("outputLimitSent",false)
+            .put("message",accountInferenceInstalled?"已选择此账号模型与当前目录声明的推理选项；输出与图片数值仅作本地预留，不发送不支持的输出上限字段。API key设置仍保留。":"已核对账号模型和选项；主模型宿主尚未连接，没有替换主模型设置。");
+    }
+    /** Reviewed native conversation selection. It never changes either global model/account default. */
+    public dev.pocketengine.core.ModelConfig captureModel(JSONObject payload,GatewayCall operation)throws Exception{
+        return reviewedAccountModel(payload,operation,false);
+    }
+    private dev.pocketengine.core.ModelConfig reviewedAccountModel(JSONObject payload,GatewayCall operation,boolean useGlobalOutputDefault)throws Exception{
+        java.util.Objects.requireNonNull(operation).check();
         Set<String> allowed=Set.of("provider","accountId","accountVersion","modelId","reasoningEffort","imageTokenReserve","outputReserve");
         if(!allowed.containsAll(keys(payload))||!ChatGptProvider.ID.equals(payload.optString("provider")))throw new GatewayFailure("INVALID_NATIVE_MODEL_REFERENCE");
         JSONObject reference=new JSONObject().put("provider",payload.getString("provider")).put("accountId",payload.getString("accountId"))
@@ -470,22 +487,43 @@ public final class NativeOwnerWorkflows {
         dev.pocketengine.runtime.models.ReasoningOptions reasoning=((String)effort).isEmpty()?dev.pocketengine.runtime.models.ReasoningOptions.DEFAULT:
                 new dev.pocketengine.runtime.models.ReasoningOptions(dev.pocketengine.runtime.models.ReasoningOptions.Mode.OPENAI_EFFORT,(String)effort,0);
         int imageReserve=accountReserve(payload,"imageTokenReserve",0,0,2000000);
-        int outputReserve=accountReserve(payload,"outputReserve",payload.has("outputReserve")?4096:context.settings.get().maxOutputTokens,128,32768);
+        int defaultOutput=payload.has("outputReserve")||!useGlobalOutputDefault?4096:context.settings.get().maxOutputTokens;
+        int outputReserve=accountReserve(payload,"outputReserve",defaultOutput,128,32768);
         synchronized(this){if(!catalogContains(catalogs.get(id),version,model))throw new GatewayFailure("STALE_MODEL_CATALOG");}
         JSONObject fresh=catalog(accounts().modelsReviewed(id,version,operation));
         if(!catalogContains(fresh,version,model))throw new GatewayFailure("STALE_MODEL_CATALOG");
         dev.pocketengine.runtime.models.AccountCatalogFacts facts=null;JSONArray rows=fresh.getJSONArray("models");
         for(int i=0;i<rows.length();i++)if(model.equals(rows.getJSONObject(i).optString("id")))facts=dev.pocketengine.runtime.models.AccountCatalogFacts.fromJson(rows.getJSONObject(i).getJSONObject("catalogFacts"));
         if(facts==null)throw new GatewayFailure("STALE_MODEL_CATALOG");
-        facts.validateOptions(reasoning);
-        dev.pocketengine.core.ModelConfig selection=new dev.pocketengine.core.ModelConfig("","","",false,1,10).withAccountModel(nativeRef).withAccountOptions(reasoning,imageReserve,outputReserve);
-        facts.budget(selection); // Validate the local reserve before changing either native selection.
-        accounts().selectModelReviewed(id,version,model);operation.check();
-        if(accountInferenceInstalled)context.settings.selectAccountModel(reference,reasoning,imageReserve,outputReserve);
-        synchronized(this){selectedModel=new JSONObject(reference.toString());}
-        return new JSONObject().put("nativeRef",new JSONObject(reference.toString())).put("selected",true).put("mainInferenceReady",accountInferenceInstalled)
-            .put("reasoning",reasoning.toJson()).put("imageTokenReserve",imageReserve).put("outputReserve",outputReserve).put("outputLimitSent",false)
-            .put("message",accountInferenceInstalled?"已选择此账号模型与当前目录声明的推理选项；输出与图片数值仅作本地预留，不发送不支持的输出上限字段。API key设置仍保留。":"已核对账号模型和选项；主模型宿主尚未连接，没有替换主模型设置。");
+        dev.pocketengine.core.ModelConfig selection=context.settings.captureAccountModel(nativeRef,reasoning,imageReserve,outputReserve);
+        checkedAccountModel(selection,facts); // Validate before pinning or changing either native selection.
+        operation.check();
+        facts=accounts().captureModelReviewed(id,version,model);operation.check();
+        return checkedAccountModel(selection,facts);
+    }
+    /** Task admission/user review only: prepare the same saved grant/model, including same-grant renewal. */
+    public dev.pocketengine.core.ModelConfig captureSavedModel(dev.pocketengine.core.ModelConfig.AccountModelRef reference,
+            dev.pocketengine.runtime.models.ReasoningOptions reasoning,int imageReserve,int outputReserve,GatewayCall operation)throws Exception{
+        java.util.Objects.requireNonNull(operation).check();
+        dev.pocketengine.core.ModelConfig captured=context.settings.captureAccountModel(reference,reasoning,imageReserve,outputReserve);
+        AccountGateway gateway=accounts();AccountGateway.PreparedModel prepared=gateway.prepareForInference(reference.accountId,reference.accountVersion,reference.modelId,operation);
+        operation.check();
+        dev.pocketengine.core.ModelConfig.AccountModelRef actual=reference.withVersion(prepared.accountVersion);
+        if(!gateway.authorizationCurrent(reference.accountId,reference.accountVersion)||!gateway.inferenceIdentityCurrent(actual.accountId,actual.accountVersion))throw new GatewayFailure("STALE_ACCOUNT_VERSION");
+        dev.pocketengine.core.ModelConfig result=checkedAccountModel(captured.withAccountModel(actual),gateway.modelFacts(actual.accountId,actual.accountVersion,actual.modelId));
+        operation.check();return result;
+    }
+    /** Local pinned metadata for a saved preference; no token refresh, catalog request or selection. */
+    public dev.pocketengine.runtime.models.AccountCatalogFacts modelFactsForPreference(dev.pocketengine.core.ModelConfig.AccountModelRef reference)throws GatewayFailure{
+        java.util.Objects.requireNonNull(reference);
+        var facts=accounts().modelFacts(reference.accountId,reference.accountVersion,reference.modelId);
+        if(facts==null)throw new GatewayFailure("STALE_MODEL_CATALOG");return facts;
+    }
+    private static dev.pocketengine.core.ModelConfig checkedAccountModel(dev.pocketengine.core.ModelConfig selected,
+            dev.pocketengine.runtime.models.AccountCatalogFacts facts)throws Exception{
+        if(facts==null||!selected.model.equals(facts.modelId))throw new GatewayFailure("STALE_MODEL_CATALOG");
+        facts.validateOptions(selected.reasoning);facts.budget(selected);
+        return selected.withAccountImageInput(facts.facts.imageInput().known&&Boolean.TRUE.equals(facts.facts.imageInput().value));
     }
     private static int accountReserve(JSONObject payload,String key,int fallback,int min,int max)throws Exception {
         if(!payload.has(key))return fallback;Object value=payload.get(key);

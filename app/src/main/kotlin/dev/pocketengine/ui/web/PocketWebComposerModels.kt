@@ -13,21 +13,23 @@ internal class PocketWebComposerModels(
     private val controller: PocketWorldController,
     private val ownerCurrent: () -> Boolean
 ) : AutoCloseable {
-    private class Window(val id: String, val owner: Pair<Triple<Long, Int, Long>, Long>, val api: Boolean = false) {
+    private class Window(val id: String, val owner: Pair<Triple<Long, Int, Long>, Long>, val api: Boolean = false, val scope: String? = null, val preferenceRevision: Long = -1) {
         var accounts: PocketWebAccounts? = null
         var models: PocketWebApiModels? = null
     }
-    @Volatile private var window: Window? = null
+    @Volatile private var apiWindow: Window? = null
+    @Volatile private var accountWindow: Window? = null
     @Volatile private var closed = false
     private val main = Handler(Looper.getMainLooper())
 
     companion object {
         val COMMANDS = setOf("models.accounts.open", "models.accounts.close", "models.accounts.models", "models.accounts.review", "models.accounts.select",
-            "models.api.open", "models.api.close", "models.api.review", "models.api.select", "models.api.favorite")
+            "models.api.open", "models.api.close", "models.api.review", "models.api.select", "models.api.favorite",
+            "models.conversation.api.select", "models.conversation.accounts.select")
     }
-    private fun current(original: Window?): Boolean = !closed && original != null && window === original && ownerCurrent() &&
+    private fun current(original: Window?): Boolean = !closed && original != null && (if (original.api) apiWindow else accountWindow) === original && ownerCurrent() &&
         controller.webPrivateOwnerVisible() && controller.webWindowTicket() == original.owner
-    private fun requireWindow(id: String, api: Boolean = false): Window = window?.takeIf { it.id == id && it.api == api && current(it) }
+    private fun requireWindow(id: String, api: Boolean = false): Window = (if (api) apiWindow else accountWindow)?.takeIf { it.id == id && it.api == api && current(it) }
         ?: error("原聊天模型窗口已关闭，请重新打开并核对")
     private fun idle() {
         val state = controller.state
@@ -44,23 +46,28 @@ internal class PocketWebComposerModels(
         require(value is String && value.isNotBlank() && value.length <= 200 && '\u0000' !in value) { "请重新读取原模型窗口" }
         return value
     }
-    fun clear() { val retiring = window; window = null; retiring?.accounts?.close(); retiring?.models?.close() }
+    fun clear(api: Boolean? = null) {
+        if (api != false) { val retiring = apiWindow; apiWindow = null; retiring?.models?.close() }
+        if (api != true) { val retiring = accountWindow; accountWindow = null; retiring?.accounts?.close() }
+    }
     override fun close() { closed = true; clear() }
 
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?, String) -> Unit) {
         require(action in COMMANDS) { "不是聊天模型选择操作" }
         check(!closed && ownerCurrent() && controller.webPrivateOwnerVisible()) { "请回到原私人聊天选择模型" }
+        if (action.startsWith("models.conversation.")) { selectForConversation(action == "models.conversation.api.select", args, done); return }
         if (action.startsWith("models.api.")) { dispatchApi(action, args, done); return }
         if (action == "models.accounts.close") {
-            fields(args, "windowId"); requireWindow(string(args, "windowId")); clear()
+            fields(args, "windowId"); requireWindow(string(args, "windowId")); clear(false)
             done(JSONObject().put("closed", true), null, "not_accepted"); return
         }
         idle()
         val original = if (action == "models.accounts.open") {
-            fields(args); clear()
-            Window(UUID.randomUUID().toString(), controller.webWindowTicket()).also { original ->
+            fields(args); clear(false)
+            val preference = runCatching { controller.conversationModelPreference() }.getOrNull()
+            Window(UUID.randomUUID().toString(), controller.webWindowTicket(), false, preference?.optString("scopeKey"), preference?.optLong("revision", -1) ?: -1).also { original ->
                 original.accounts = PocketWebAccounts(controller.nativeAccountWorkflows(), controller.nativeModelSelection(), { current(original) })
-                window = original
+                accountWindow = original
             }
         } else requireWindow(string(args, "windowId"))
         if (action == "models.accounts.select") {
@@ -115,17 +122,18 @@ internal class PocketWebComposerModels(
 
     private fun dispatchApi(action: String, args: JSONObject, done: (JSONObject?, String?, String) -> Unit) {
         if (action == "models.api.close") {
-            fields(args, "windowId"); requireWindow(string(args, "windowId"), true); clear()
+            fields(args, "windowId"); requireWindow(string(args, "windowId"), true); clear(true)
             done(JSONObject().put("closed", true), null, "not_accepted"); return
         }
         idle()
         val service = controller.nativeModelConnections() ?: error("本机模型连接目录尚未准备")
         val selection = controller.nativeModelSelection()
         val original = if (action == "models.api.open") {
-            fields(args); clear()
-            Window(UUID.randomUUID().toString(), controller.webWindowTicket(), true).also { original ->
+            fields(args); clear(true)
+            val preference = runCatching { controller.conversationModelPreference() }.getOrNull()
+            Window(UUID.randomUUID().toString(), controller.webWindowTicket(), true, preference?.optString("scopeKey"), preference?.optLong("revision", -1) ?: -1).also { original ->
                 original.models = PocketWebApiModels(SystemClock::elapsedRealtime, { current(original) })
-                window = original
+                apiWindow = original
             }
         } else requireWindow(string(args, "windowId"), true)
         val models = original.models ?: error("原 API 模型窗口不可用")
@@ -180,6 +188,37 @@ internal class PocketWebComposerModels(
                 }, { error -> done(null, error.message ?: "原模型列表暂不可读取", "not_accepted") })
             }
         })
+    }
+    private fun selectForConversation(api: Boolean, args: JSONObject, done: (JSONObject?, String?, String) -> Unit) {
+        idle()
+        fields(args, "windowId", "reviewHandle", "expectedPreferenceRevision", *(if (api) emptyArray<String>() else arrayOf("options")))
+        require(!args.has("options") || args.opt("options") is JSONObject) { "模型选项必须来自原审核" }
+        val original = requireWindow(string(args, "windowId"), api)
+        val scope = original.scope ?: error("原对话草稿尚未读取，请重新打开模型列表")
+        val expected = args.opt("expectedPreferenceRevision")
+        require((expected is Int || expected is Long) && (expected as Number).toLong() == original.preferenceRevision) { "此对话模型偏好已变化，请重新打开列表" }
+        check(scope == controller.conversationModelScope()) { "原对话已切换" }
+        val coordinator = controller.nativeModelSelection()
+        val apiChoice = if (api) original.models!!.take(string(args, "reviewHandle"), coordinator.status().revision()) else null
+        val accountChoice = if (!api) original.accounts!!.takeModelSelection(string(args, "reviewHandle"), args.optJSONObject("options") ?: JSONObject()) else null
+        val revision = apiChoice?.selectionRevision() ?: accountChoice!!.selectionRevision
+        controller.runModelSelectionWrite(revision, {
+            requireWindow(original.id, api)
+            val captured = if (api) {
+                val row = original.models!!.claim(apiChoice!!)
+                val service = controller.nativeModelConnections() ?: error("模型来源尚未准备")
+                val review = service.reviewConnectionModel(row.getString("connectionId"), row.getLong("connectionRevision"), row.getString("modelId"))
+                val options = review.getJSONObject("options")
+                service.captureConnectionModel(row.getString("connectionId"), row.getLong("connectionRevision"), row.getString("modelId"),
+                    options.getInt("maxOutputTokens"), dev.pocketengine.runtime.models.ReasoningOptions.DEFAULT, options.getInt("imageTokenReserve"))
+            } else original.accounts!!.captureModel(accountChoice!!)
+            check(current(original) && scope == controller.conversationModelScope()) { "原对话模型窗口已关闭" }
+            controller.saveConversationModel(scope, original.preferenceRevision, controller.conversationTarget(captured))
+        }) { result ->
+            controller.modelConnectionChanged()
+            if (!current(original)) done(null, "原对话窗口已变化，请核对模型设置；没有自动重试", "outcome_unknown")
+            else result.fold({ done(it, null, "not_accepted") }, { done(null, it.message ?: "此对话模型保存结果待核对", "outcome_unknown") })
+        }
     }
     private fun connectionRevision(args: JSONObject): Long {
         val raw = args.opt("expectedRevision")
