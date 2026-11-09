@@ -1,0 +1,71 @@
+name: Remote inbox integration checks
+
+on:
+  push:
+    branches: [main, 'work/remote-inbox-*']
+    paths:
+      - 'integrations/issue-radar/**'
+      - 'app/src/main/java/dev/pocketengine/features/remoteinbox/**'
+      - 'app/src/main/kotlin/dev/pocketengine/ui/web/PocketWebRemoteInbox.kt'
+      - 'app/src/main/kotlin/dev/pocketengine/ui/web/PocketWebBridge.kt'
+      - 'app/src/main/kotlin/dev/pocketengine/ui/ComposeActivity.kt'
+      - 'app/src/main/AndroidManifest.xml'
+      - 'web-ui/src/RemoteInboxWorkspace.tsx'
+      - 'web-ui/src/remote-inbox.css'
+      - 'web-ui/src/App.tsx'
+      - '.github/workflows/remote-inbox-checks.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'integrations/issue-radar/**'
+      - 'app/src/main/java/dev/pocketengine/features/remoteinbox/**'
+      - 'app/src/main/kotlin/dev/pocketengine/ui/web/**'
+      - 'app/src/main/AndroidManifest.xml'
+      - 'web-ui/src/**'
+      - '.github/workflows/remote-inbox-checks.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  worker-and-ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.22.0'
+      - name: Test cloud relay contract
+        run: node --test integrations/issue-radar/test/*.test.mjs
+      - name: Check single-frontend TypeScript
+        run: |
+          npm ci --prefix web-ui
+          npm run typecheck --prefix web-ui
+  native-compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.22.0'
+      - name: Build the verified web asset needed by native compile
+        run: |
+          npm ci --prefix web-ui
+          npm run build --prefix web-ui
+      - name: Compile Android Kotlin and Java without producing an unverified APK
+        run: |
+          echo "GRADLE_USER_HOME=$RUNNER_TEMP/pocketworld-remote-inbox-gradle" >> "$GITHUB_ENV"
+          ./gradlew --no-daemon --max-workers=1 --console=plain \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.vfs.watch=false \
+            :app:compileDebugKotlin :app:compileDebugJavaWithJavac

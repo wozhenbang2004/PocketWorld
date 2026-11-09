@@ -202,7 +202,7 @@ class ComposeActivity : ComponentActivity() {
                 pending?.removeExtra(dev.pocketengine.features.assistant.CompatibilityChatHandoff.EXTRA)
             }
             if (needsNewRequest) engine.error("此前文件选择、听写或继续请求没有重放。请回原入口核对后重新选择；原操作结果仍需查询。")
-            deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverAccountEntry(intent); deliverLegacyPanel(intent)
+            deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverRemoteInbox(intent); deliverAccountEntry(intent); deliverLegacyPanel(intent)
             // Original content-only import/inspection paths; no old task target, grant or continue token.
             deliverSharedFiles(freshContent); deliverSkillDocument(freshContent)
             startupSaved?.getString("channelPhoneEventId")?.let { controller.prepareChannelPhone(it) }
@@ -212,6 +212,7 @@ class ComposeActivity : ComponentActivity() {
         deliverPhoneTask(intent)
         deliverRemoteAttention(intent)
         deliverGoal(intent)
+        deliverRemoteInbox(intent)
         deliverSharedFiles(intent)
         deliverSkillDocument(intent)
         deliverAccountEntry(intent)
@@ -270,7 +271,7 @@ class ComposeActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent); setIntent(intent)
         if (!businessCurrent()) { retainFreshBootstrapContent(intent); return }
-        deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverSharedFiles(intent)
+        deliverPhoneTask(intent); deliverRemoteAttention(intent); deliverGoal(intent); deliverRemoteInbox(intent); deliverSharedFiles(intent)
         deliverSkillDocument(intent); deliverAccountEntry(intent); deliverLegacyPanel(intent); deliverCompatibilityChat(intent)
     }
     private fun retainFreshBootstrapContent(incoming: Intent?) {
@@ -282,6 +283,12 @@ class ComposeActivity : ComponentActivity() {
         val id = intent?.getStringExtra(dev.pocketengine.features.assistant.CompatibilityChatHandoff.EXTRA) ?: return
         intent.removeExtra(dev.pocketengine.features.assistant.CompatibilityChatHandoff.EXTRA)
         controller.continueCompatibilityChat(id)
+    }
+    private fun deliverRemoteInbox(intent: Intent?) {
+        if (intent?.action != dev.pocketengine.features.remoteinbox.RemoteInboxNotifications.OPEN) return
+        intent.action = null
+        dev.pocketengine.features.remoteinbox.RemoteInboxStore.get(this).signalOpen()
+        if (::controller.isInitialized) controller.refresh()
     }
     private fun deliverRemoteAttention(intent: Intent?) {
         dev.pocketengine.features.remote.RemoteAttentionNotifications.openRequestedTask((application as EngineApplication).tasks, intent) { controller.showRemoteAttention(it) }
