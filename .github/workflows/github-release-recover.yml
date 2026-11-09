@@ -1,0 +1,78 @@
+name: Recover GitHub Release
+on:
+  workflow_dispatch:
+    inputs:
+      source_run:
+        type: string
+        default: '42584548174'
+        required: true
+      source_attempt:
+        type: string
+        default: '1'
+        required: true
+      source_sha:
+        type: string
+        default: '3a087a0e6477417cdc3f2c7e4a6296f8b89fd799'
+        required: true
+      artifact_id:
+        type: string
+        default: '13659375655'
+        required: true
+      artifact_sha256:
+        type: string
+        default: '36d9fd7be652c0c4481a6d81c6cb08813bd959ff656ee83cbe4824f06bd7b4c8'
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: pocketworld-github-release
+  cancel-in-progress: false
+jobs:
+  recover:
+    if: ${{ github.repository == 'wozhenbang2004/PocketWorld' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check out original APK source separately
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ inputs.source_sha }}
+          path: original-source
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install APK inspection tools only
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;35.0.0"'
+      - name: Recover immutable APK and re-sign public version manifest
+        id: recovery
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          POCKETWORLD_MANIFEST_PRIVATE_KEY_B64: ${{ secrets.POCKETWORLD_MANIFEST_PRIVATE_KEY_B64 }}
+          SOURCE_RUN: ${{ inputs.source_run }}
+          SOURCE_ATTEMPT: ${{ inputs.source_attempt }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_ARTIFACT: ${{ inputs.artifact_id }}
+          SOURCE_ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
+          SOURCE_CHECKOUT: ${{ github.workspace }}/original-source
+        run: python3 -B tools/ci/recover-release.py
+      - name: Preserve recovery evidence and signed outputs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pocketworld-recovered-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/recovery/prepared
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 14
