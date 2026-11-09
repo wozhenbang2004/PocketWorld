@@ -20,13 +20,12 @@
   font: 500 11px/15px var(--pw-font); letter-spacing: 0; white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+/* This is a semantic glyph, not a surface border. The borderless theme must
+   not erase it. An inset ring works on older WebViews without CSS masking. */
 .pw-composer-host.pw-squircle-composer .pw-composer-context-ring {
-  position: relative; display: block; width: 14px; height: 14px;
-  border: 1.65px solid currentColor; border-radius: 50%; opacity: .86;
-}
-.pw-composer-host.pw-squircle-composer .pw-composer-context-ring::before {
-  content: ''; position: absolute; width: 4px; height: 4px; left: 50%; top: -2.7px;
-  transform: translateX(-50%); border-radius: 50%; background: currentColor;
+  display: block; flex: 0 0 14px; width: 14px; height: 14px;
+  border: 0; border-radius: 50%; opacity: .86;
+  background: transparent; box-shadow: inset 0 0 0 1.65px currentColor;
 }
 .pw-composer-region .pw-composer-host.pw-squircle-composer .afa-composer > .afa-card.pw-composer-card,
 :root.dark .pw-composer-region .pw-composer-host.pw-squircle-composer .afa-composer > .afa-card.pw-composer-card {
@@ -95,11 +94,20 @@
   background: transparent; color: var(--pw-copy, #555);
 }
 .pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button::before { display: none; }
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > span,
+/* BoardUI Button wraps JSX children in its label span. Keep that wrapper:
+   hiding it also hides the model and reasoning SVGs. Only hide visual labels
+   and secondary glyphs; each button retains its native accessible name. */
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > span {
+  display: flex; align-items: center; justify-content: center; gap: 0;
+  flex: 0 0 auto; min-width: 0; padding: 0;
+}
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > span > :is(span, b),
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > span > svg:not(:first-child),
 .pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > b,
 .pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > svg:not(:first-child) { display: none; }
-.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > svg:first-child {
-  display: block; width: 20px; height: 20px;
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > svg:first-child,
+.pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button > span > svg:first-child {
+  display: block; flex: none; width: 20px; height: 20px;
 }
 .pw-composer-host.pw-squircle-composer .pw-conversation-model-controls button:hover:not(:disabled) {
   background: var(--pw-hover, #f6f6f6);
