@@ -148,9 +148,13 @@ public final class RuntimeDiagnostics {
             JSONArray visible = new JSONArray();
             if (recent != null) for (int i = Math.max(0, recent.length() - Math.min(200, limit)); i < recent.length(); i++)
                 visible.put(recent.optJSONObject(i));
-            page.put("entries", visible).put("older", JSONObject.NULL)
-                .put("next", JSONObject.NULL).put("hasOlder", false).put("expired", false)
-                .put("lightweight", true);
+            try {
+                page.put("entries", visible).put("older", JSONObject.NULL)
+                    .put("next", JSONObject.NULL).put("hasOlder", false).put("expired", false)
+                    .put("lightweight", true);
+            } catch (org.json.JSONException malformed) {
+                throw new java.io.IOException("Unable to serialize lightweight diagnostic page", malformed);
+            }
         }
         return page;
     }
