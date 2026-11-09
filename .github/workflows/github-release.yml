@@ -241,10 +241,10 @@ jobs:
           PY_COMPILER
           cat > "$RUNNER_TEMP/kotlin-central.init.gradle" <<'GRADLE'
           gradle.settingsEvaluated { settings ->
-              settings.dependencyResolutionManagement.repositories.exclusiveContent {
-                  forRepository {
-                      maven { url = uri('https://maven-central.storage-download.googleapis.com/maven2') }
-                  }
+              def repos = settings.dependencyResolutionManagement.repositories
+              def central = repos.maven { url = new URI('https://maven-central.storage-download.googleapis.com/maven2') }
+              repos.exclusiveContent {
+                  forRepositories(central)
                   filter { includeModule('org.jetbrains.kotlin', 'kotlin-compiler-embeddable') }
               }
           }
